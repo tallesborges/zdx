@@ -9,6 +9,7 @@ use eventsource_stream::{EventStream, Eventsource};
 use futures_util::Stream;
 use serde_json::Value;
 use uuid::Uuid;
+use zdx_types::messages::IdOrigin;
 
 use crate::{
     ContentBlockType, ProviderError, ProviderErrorKind, ProviderResult, SignatureProvider,
@@ -26,21 +27,35 @@ pub struct GeminiSseParser<S> {
     tool_id_prefix: String,
     pending: VecDeque<StreamEvent>,
     next_index: usize,
-    text_index: Option<usize>,
-    last_text: String,
-    /// Current reasoning block index (when processing thought parts)
-    reasoning_index: Option<usize>,
-    /// Accumulated reasoning text for delta calculation
-    last_reasoning: String,
-    /// Accumulated thought signature to emit at block completion
-    pending_signature: Option<String>,
-    /// Whether the pending signature originated from a function call part
-    signature_from_function_call: bool,
+    /// The currently-open text or reasoning block. Closed (with its own
+    /// signature attached on completion) when a new non-continuation part of
+    /// any kind arrives, or at finalize. Function-call parts are atomic and
+    /// do not flow through this slot.
+    open_part: Option<OpenPart>,
     saw_tool: bool,
     emitted_tool_calls: HashSet<String>,
     final_usage: Option<Usage>,
     final_finish_reason: Option<String>,
     emitted_done: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenPartKind {
+    Reasoning,
+    Text,
+}
+
+#[derive(Debug, Clone)]
+struct OpenPart {
+    /// Stream block index assigned to this Gemini part.
+    block_index: usize,
+    kind: OpenPartKind,
+    /// Latest accumulated text seen on this part (used to compute deltas
+    /// across rolling-cumulative chunks where Gemini re-emits the same
+    /// part with growing text).
+    accumulated_text: String,
+    /// Latest `thoughtSignature` seen on this part, if any.
+    signature: Option<String>,
 }
 
 impl<S> GeminiSseParser<S> {
@@ -59,12 +74,7 @@ impl<S> GeminiSseParser<S> {
             tool_id_prefix: tool_id_prefix.to_string(),
             pending: VecDeque::new(),
             next_index: 0,
-            text_index: None,
-            last_text: String::new(),
-            reasoning_index: None,
-            last_reasoning: String::new(),
-            pending_signature: None,
-            signature_from_function_call: false,
+            open_part: None,
             saw_tool: false,
             emitted_tool_calls: HashSet::new(),
             final_usage: None,
@@ -244,172 +254,243 @@ impl<S> GeminiSseParser<S> {
         true
     }
 
-    #[allow(clippy::too_many_lines)]
+    /// Walks the chunk's parts in original order, emitting one
+    /// `ContentBlock*` event sequence per Gemini part. Each part carries
+    /// its own `thoughtSignature` end-to-end (no cross-part signature
+    /// merging). Function-call parts are atomic; text/reasoning parts may
+    /// span multiple chunks via rolling-cumulative re-emission, in which
+    /// case the second chunk is treated as a continuation of the open
+    /// part and only the new tail is emitted as a delta.
     fn process_parts(&mut self, parts: &[Value]) {
-        // Capture thought signatures from any part (text, thought, or functionCall).
-        // Prefer signatures attached to function calls when present.
         for part in parts {
-            let mut signature = part
+            // Per-part signature. Gemini may attach `thoughtSignature` at
+            // the part top level or under `functionCall`; both are valid.
+            let signature = part
                 .get("thoughtSignature")
-                .and_then(serde_json::Value::as_str)
-                .map(|sig| (sig, part.get("functionCall").is_some()));
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    part.get("functionCall")
+                        .and_then(|c| c.get("thoughtSignature"))
+                        .and_then(Value::as_str)
+                })
+                .map(str::to_string);
 
-            if signature.is_none() {
-                signature = part
-                    .get("functionCall")
-                    .and_then(|call| call.get("thoughtSignature"))
-                    .and_then(serde_json::Value::as_str)
-                    .map(|sig| (sig, true));
-            }
-
-            if let Some((sig, is_function_call)) = signature
-                && (is_function_call || !self.signature_from_function_call)
-            {
-                self.pending_signature = Some(sig.to_string());
-                self.signature_from_function_call = is_function_call;
-            }
-        }
-
-        // First pass: thought parts (reasoning).
-        let mut combined_reasoning = String::new();
-        for part in parts {
-            let is_thought = part
-                .get("thought")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            if is_thought && let Some(text) = part.get("text").and_then(|v| v.as_str()) {
-                combined_reasoning.push_str(text);
-            }
-        }
-
-        if !combined_reasoning.is_empty() {
-            if self.reasoning_index.is_none() {
-                let index = self.next_index;
-                self.next_index += 1;
-                self.reasoning_index = Some(index);
-                self.pending.push_back(StreamEvent::ContentBlockStart {
-                    index,
-                    block_type: ContentBlockType::Reasoning,
-                    id: None,
-                    name: None,
-                    data: None,
-                });
-            }
-
-            let delta = if combined_reasoning.starts_with(&self.last_reasoning) {
-                combined_reasoning[self.last_reasoning.len()..].to_string()
-            } else {
-                combined_reasoning.clone()
-            };
-            self.last_reasoning = combined_reasoning;
-            if !delta.is_empty() {
-                self.pending.push_back(StreamEvent::ReasoningDelta {
-                    index: self.reasoning_index.unwrap_or(0),
-                    reasoning: delta,
-                });
-            }
-        }
-
-        // Second pass: regular text parts (non-thought).
-        let mut combined_text = String::new();
-        for part in parts {
-            let is_thought = part
-                .get("thought")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            if !is_thought && let Some(text) = part.get("text").and_then(|v| v.as_str()) {
-                combined_text.push_str(text);
-            }
-        }
-
-        if !combined_text.is_empty() {
-            if self.text_index.is_none() {
-                let index = self.next_index;
-                self.next_index += 1;
-                self.text_index = Some(index);
-                self.pending.push_back(StreamEvent::ContentBlockStart {
-                    index,
-                    block_type: ContentBlockType::Text,
-                    id: None,
-                    name: None,
-                    data: None,
-                });
-            }
-
-            let delta = if combined_text.starts_with(&self.last_text) {
-                combined_text[self.last_text.len()..].to_string()
-            } else {
-                combined_text.clone()
-            };
-            self.last_text = combined_text;
-            if !delta.is_empty() {
-                self.pending.push_back(StreamEvent::TextDelta {
-                    index: self.text_index.unwrap_or(0),
-                    text: delta,
-                });
-            }
-        }
-
-        // Third pass: function calls.
-        for part in parts {
             if let Some(call) = part.get("functionCall") {
-                let name = call.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                // Gemini occasionally emits malformed `{ "functionCall": {} }`
-                // (or with only a signature). Skip — an empty-name tool call
-                // would propagate as a bogus invocation to the engine.
-                if name.is_empty() {
-                    continue;
-                }
-                let args = call.get("args").unwrap_or(&Value::Null);
+                self.handle_function_call_part(call, signature);
+                continue;
+            }
 
-                // Prefer Gemini 3's real `functionCall.id` so it can be replayed
-                // in the subsequent `functionResponse`. Older models omit it;
-                // fall back to a synthesized local id in that case.
-                let real_id = call
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string);
+            let is_thought = part
+                .get("thought")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let text = part.get("text").and_then(Value::as_str).unwrap_or("");
 
-                // Dedup only by real id: Gemini can internally retry and re-emit
-                // the same functionCall in a later chunk. Within a single chunk
-                // each part is iterated once, so no content-keyed dedup is
-                // needed for legacy models without an id.
-                if let Some(id) = &real_id
-                    && !self.emitted_tool_calls.insert(id.clone())
-                {
-                    continue;
-                }
+            // A non-thought part with no text and no signature is metadata
+            // we don't render — skip. Empty thought parts with a signature
+            // are real (signature-only parts) and must open a block so the
+            // signature survives end-to-end.
+            if !is_thought && text.is_empty() && signature.is_none() {
+                continue;
+            }
 
-                let tool_id = real_id.unwrap_or_else(|| {
-                    format!(
-                        "{}-{}-{}",
-                        self.tool_id_prefix, self.run_id, self.next_index
-                    )
-                });
-                let index = self.next_index;
-                self.next_index += 1;
-                self.saw_tool = true;
+            let kind = if is_thought {
+                OpenPartKind::Reasoning
+            } else {
+                OpenPartKind::Text
+            };
+            self.handle_text_or_reasoning_part(kind, text, signature);
+        }
+    }
 
-                self.pending.push_back(StreamEvent::ContentBlockStart {
-                    index,
-                    block_type: ContentBlockType::ToolUse,
-                    id: Some(tool_id.clone()),
-                    name: Some(name.to_string()),
-                    data: None,
-                });
+    fn handle_text_or_reasoning_part(
+        &mut self,
+        kind: OpenPartKind,
+        text: &str,
+        signature: Option<String>,
+    ) {
+        // Continuation = same kind as the currently-open part AND the new
+        // text is a prefix-extension of the accumulated text. Covers the
+        // rolling-cumulative streaming variant where Gemini re-emits the
+        // same part with growing text plus an eventual signature.
+        let is_continuation = match self.open_part.as_ref() {
+            Some(open) => open.kind == kind && text.starts_with(&open.accumulated_text),
+            None => false,
+        };
 
-                let args_json = if args.is_null() {
-                    "{}".to_string()
-                } else {
-                    args.to_string()
+        if is_continuation {
+            let open = self
+                .open_part
+                .as_mut()
+                .expect("open_part is Some by continuation guard");
+            let delta = text[open.accumulated_text.len()..].to_string();
+            open.accumulated_text = text.to_string();
+            if signature.is_some() {
+                open.signature = signature;
+            }
+            if !delta.is_empty() {
+                let event = match kind {
+                    OpenPartKind::Reasoning => StreamEvent::ReasoningDelta {
+                        index: open.block_index,
+                        reasoning: delta,
+                    },
+                    OpenPartKind::Text => StreamEvent::TextDelta {
+                        index: open.block_index,
+                        text: delta,
+                    },
                 };
-                self.pending.push_back(StreamEvent::InputJsonDelta {
-                    index,
-                    partial_json: args_json,
+                self.pending.push_back(event);
+            }
+            return;
+        }
+
+        // Non-continuation: close any open part first (so its signature is
+        // attached to its own ContentBlockCompleted), then open a new one.
+        self.close_open_part();
+
+        let block_index = self.next_index;
+        self.next_index += 1;
+
+        let block_type = match kind {
+            OpenPartKind::Reasoning => ContentBlockType::Reasoning,
+            OpenPartKind::Text => ContentBlockType::Text,
+        };
+        self.pending.push_back(StreamEvent::ContentBlockStart {
+            index: block_index,
+            block_type,
+            id: None,
+            name: None,
+            data: None,
+            id_origin: None,
+        });
+
+        if !text.is_empty() {
+            let event = match kind {
+                OpenPartKind::Reasoning => StreamEvent::ReasoningDelta {
+                    index: block_index,
+                    reasoning: text.to_string(),
+                },
+                OpenPartKind::Text => StreamEvent::TextDelta {
+                    index: block_index,
+                    text: text.to_string(),
+                },
+            };
+            self.pending.push_back(event);
+        }
+
+        self.open_part = Some(OpenPart {
+            block_index,
+            kind,
+            accumulated_text: text.to_string(),
+            signature,
+        });
+    }
+
+    fn handle_function_call_part(&mut self, call: &Value, signature: Option<String>) {
+        let name = call.get("name").and_then(Value::as_str).unwrap_or("");
+        // Gemini occasionally emits malformed `{ "functionCall": {} }`
+        // (or with only a signature). Skip — an empty-name tool call
+        // would propagate as a bogus invocation to the engine.
+        if name.is_empty() {
+            return;
+        }
+        let args = call.get("args").unwrap_or(&Value::Null);
+
+        // Prefer Gemini 3's real `functionCall.id` so it can be replayed
+        // in the subsequent `functionResponse`. Older models omit it; fall
+        // back to a synthesized local id and mark `id_origin: Synthesized`
+        // so the request builder knows to omit it on replay.
+        let real_id = call
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+
+        // Dedup only by real id: Gemini can internally retry and re-emit
+        // the same functionCall in a later chunk. Without an id there is
+        // no reliable cross-chunk identity; trust the protocol not to
+        // duplicate.
+        if let Some(id) = &real_id
+            && !self.emitted_tool_calls.insert(id.clone())
+        {
+            return;
+        }
+
+        // A function call atomically closes any text/reasoning part that
+        // came before it.
+        self.close_open_part();
+
+        let (tool_id, id_origin) = match real_id {
+            Some(id) => (id, IdOrigin::Real),
+            None => (
+                format!(
+                    "{}-{}-{}",
+                    self.tool_id_prefix, self.run_id, self.next_index
+                ),
+                IdOrigin::Synthesized,
+            ),
+        };
+
+        let block_index = self.next_index;
+        self.next_index += 1;
+        self.saw_tool = true;
+
+        self.pending.push_back(StreamEvent::ContentBlockStart {
+            index: block_index,
+            block_type: ContentBlockType::ToolUse,
+            id: Some(tool_id),
+            name: Some(name.to_string()),
+            data: None,
+            id_origin: Some(id_origin),
+        });
+
+        let args_json = if args.is_null() {
+            "{}".to_string()
+        } else {
+            args.to_string()
+        };
+        self.pending.push_back(StreamEvent::InputJsonDelta {
+            index: block_index,
+            partial_json: args_json,
+        });
+
+        let sig_payload = signature.map(|s| (SignatureProvider::Gemini, s));
+        self.pending.push_back(StreamEvent::ContentBlockCompleted {
+            index: block_index,
+            signature: sig_payload,
+        });
+    }
+
+    /// Closes the currently-open text or reasoning part (if any), attaching
+    /// its per-part signature on completion. Reasoning parts emit the
+    /// signature via `ReasoningSignatureDelta` (consumed by the existing
+    /// `ReasoningBlock` path); text parts ride the generalized
+    /// `ContentBlockCompleted.signature` field.
+    fn close_open_part(&mut self) {
+        let Some(open) = self.open_part.take() else {
+            return;
+        };
+        match open.kind {
+            OpenPartKind::Reasoning => {
+                if let Some(sig) = open.signature {
+                    self.pending
+                        .push_back(StreamEvent::ReasoningSignatureDelta {
+                            index: open.block_index,
+                            signature: sig,
+                            provider: SignatureProvider::Gemini,
+                        });
+                }
+                self.pending.push_back(StreamEvent::ContentBlockCompleted {
+                    index: open.block_index,
+                    signature: None,
                 });
-                self.pending
-                    .push_back(StreamEvent::ContentBlockCompleted { index });
+            }
+            OpenPartKind::Text => {
+                let signature = open.signature.map(|s| (SignatureProvider::Gemini, s));
+                self.pending.push_back(StreamEvent::ContentBlockCompleted {
+                    index: open.block_index,
+                    signature,
+                });
             }
         }
     }
@@ -423,38 +504,8 @@ impl<S> GeminiSseParser<S> {
         }
         self.emitted_done = true;
 
-        // Close reasoning block with signature if present.
-        if self.reasoning_index.is_none() && self.pending_signature.is_some() {
-            let index = self.next_index;
-            self.next_index += 1;
-            self.reasoning_index = Some(index);
-            self.pending.push_back(StreamEvent::ContentBlockStart {
-                index,
-                block_type: ContentBlockType::Reasoning,
-                id: None,
-                name: None,
-                data: None,
-            });
-        }
-
-        if let Some(index) = self.reasoning_index.take() {
-            if let Some(signature) = self.pending_signature.take() {
-                self.pending
-                    .push_back(StreamEvent::ReasoningSignatureDelta {
-                        index,
-                        signature,
-                        provider: SignatureProvider::Gemini,
-                    });
-                self.signature_from_function_call = false;
-            }
-            self.pending
-                .push_back(StreamEvent::ContentBlockCompleted { index });
-        }
-
-        if let Some(index) = self.text_index.take() {
-            self.pending
-                .push_back(StreamEvent::ContentBlockCompleted { index });
-        }
+        // Close any text/reasoning part still open at finishReason.
+        self.close_open_part();
 
         let usage = self.final_usage.clone().unwrap_or_default();
         let stop_reason = if self.saw_tool {
@@ -604,16 +655,24 @@ mod tests {
             } if reasoning == "Let me think about this..."
         ));
 
-        // Verify reasoning_index is set
-        assert_eq!(parser.reasoning_index, Some(0));
+        // Verify the open part is a Reasoning block at index 0
+        assert!(matches!(
+            parser.open_part,
+            Some(OpenPart {
+                block_index: 0,
+                kind: OpenPartKind::Reasoning,
+                ..
+            })
+        ));
     }
 
-    /// Test: Part with `thought: true` and empty text captures signature, emits no reasoning block.
-    ///
-    /// When a thought part has empty text but has a signature, we should capture the signature
-    /// but not emit a reasoning block (no `ContentBlockStart`, no `ReasoningDelta`).
+    /// Test: Part with `thought: true`, empty text, and a signature opens an
+    /// empty Reasoning block whose signature is attached on completion.
+    /// Per-part fidelity requires the signature to survive end-to-end —
+    /// the engine builder is responsible for keeping or dropping
+    /// empty-text-with-signature blocks.
     #[test]
-    fn test_thought_part_empty_text_with_signature_captures_signature_only() {
+    fn test_thought_part_empty_text_with_signature_opens_block() {
         let mut parser = create_test_parser();
 
         // Simulate a chunk with thought part but empty text (signature-only)
@@ -631,27 +690,30 @@ mod tests {
 
         parser.handle_chunk(chunk).unwrap();
 
-        // Should not emit any events (empty thought text)
-        assert!(
-            parser.pending.is_empty(),
-            "Should not emit events for empty thought text"
-        );
+        // ContentBlockStart is emitted (no ReasoningDelta — empty text).
+        assert_eq!(parser.pending.len(), 1);
+        let event = parser.pending.pop_front().unwrap();
+        assert!(matches!(
+            event,
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::Reasoning,
+                ..
+            }
+        ));
 
-        // But signature should be captured
-        assert_eq!(
-            parser.pending_signature,
-            Some("base64signature==".to_string())
-        );
-
-        // reasoning_index should NOT be set since we didn't start a block
-        assert!(parser.reasoning_index.is_none());
+        // The signature is recorded on the open part and will be flushed
+        // via ReasoningSignatureDelta when the block closes.
+        let open = parser.open_part.as_ref().expect("open_part must be set");
+        assert_eq!(open.kind, OpenPartKind::Reasoning);
+        assert_eq!(open.signature.as_deref(), Some("base64signature=="));
     }
 
     /// Test: Signature arriving in separate chunk after text is captured and emitted at completion.
     ///
-    /// This tests the real-world scenario where:
+    /// This tests the rolling-cumulative streaming variant where:
     /// 1. First chunk has thought text
-    /// 2. Second chunk has signature (possibly with empty text)
+    /// 2. Second chunk has the same thought text plus a signature
     /// 3. Third chunk has finishReason which triggers block completion with signature
     #[test]
     fn test_signature_arriving_in_separate_chunk() {
@@ -672,9 +734,11 @@ mod tests {
 
         // Clear the pending events from chunk 1
         parser.pending.clear();
-        assert!(parser.pending_signature.is_none());
+        let open = parser.open_part.as_ref().expect("open_part after chunk 1");
+        assert_eq!(open.kind, OpenPartKind::Reasoning);
+        assert!(open.signature.is_none());
 
-        // Chunk 2: Signature arrives (may have empty or same text due to rolling)
+        // Chunk 2: Signature arrives (rolling-cumulative — same text body).
         let chunk2 = json!({
             "candidates": [{
                 "content": {
@@ -688,15 +752,17 @@ mod tests {
         });
         parser.handle_chunk(chunk2).unwrap();
 
-        // No new delta since text is the same (rolling incremental)
-        // But signature should be captured
-        assert_eq!(
-            parser.pending_signature,
-            Some("late_arriving_signature_base64".to_string())
+        // No new delta since text is the same (continuation), but the
+        // signature is now captured on the open part.
+        assert!(
+            parser.pending.is_empty(),
+            "no events on signature-only continuation"
         );
-
-        // Clear any events
-        parser.pending.clear();
+        let open = parser.open_part.as_ref().expect("open_part still set");
+        assert_eq!(
+            open.signature.as_deref(),
+            Some("late_arriving_signature_base64")
+        );
 
         // Chunk 3: Finish reason triggers completion
         let chunk3 = json!({
@@ -733,21 +799,30 @@ mod tests {
         );
 
         // Find the reasoning block completion
-        let has_block_completed = events
-            .iter()
-            .any(|e| matches!(e, StreamEvent::ContentBlockCompleted { index: 0 }));
+        let has_block_completed = events.iter().any(|e| {
+            matches!(
+                e,
+                StreamEvent::ContentBlockCompleted {
+                    index: 0,
+                    signature: None
+                }
+            )
+        });
         assert!(
             has_block_completed,
             "Should emit ContentBlockCompleted for reasoning block"
         );
     }
 
-    /// Test: functionCall parts can carry thoughtSignature; emit reasoning signature on completion.
+    /// Test: A `functionCall` part carrying its own `thoughtSignature`
+    /// emits the signature on the tool-use's `ContentBlockCompleted` (not
+    /// on a separate Reasoning block). Per-part fidelity: the signature
+    /// stays attached to the part that produced it.
     #[test]
     fn test_function_call_signature_emitted_on_completion() {
         let mut parser = create_test_parser();
 
-        // Chunk 1: Function call with thoughtSignature (no thought text)
+        // Function call with thoughtSignature (no thought text)
         let chunk1 = json!({
             "candidates": [{
                 "content": {
@@ -763,28 +838,39 @@ mod tests {
         });
         parser.handle_chunk(chunk1).unwrap();
 
-        // Tool events are emitted; clear them for focused assertions
-        parser.pending.clear();
-
-        // Signature should be captured and marked as function-call origin
-        assert_eq!(
-            parser.pending_signature,
-            Some("func_call_signature_base64".to_string())
-        );
-        assert!(parser.signature_from_function_call);
-
-        // Chunk 2: Finish reason triggers reasoning block completion with signature
-        let chunk2 = json!({
-            "candidates": [{
-                "finishReason": "STOP",
-                "content": { "parts": [] }
-            }]
-        });
-        parser.handle_chunk(chunk2).unwrap();
-
         let events: Vec<_> = parser.pending.drain(..).collect();
 
-        let has_start = events.iter().any(|e| {
+        // ToolUse start, args delta, then completed-with-signature.
+        let tool_start_index = events
+            .iter()
+            .position(|e| {
+                matches!(
+                    e,
+                    StreamEvent::ContentBlockStart {
+                        block_type: ContentBlockType::ToolUse,
+                        ..
+                    }
+                )
+            })
+            .expect("ToolUse start must be emitted");
+
+        let completed_with_sig = events.iter().find_map(|e| match e {
+            StreamEvent::ContentBlockCompleted {
+                signature: Some((SignatureProvider::Gemini, sig)),
+                ..
+            } => Some(sig.as_str()),
+            _ => None,
+        });
+        assert_eq!(
+            completed_with_sig,
+            Some("func_call_signature_base64"),
+            "function-call signature must ride the tool-use ContentBlockCompleted"
+        );
+
+        // Critical: NO Reasoning block is emitted for a function-call
+        // signature. The "function-call signature wins → reasoning block"
+        // hack is gone.
+        let has_reasoning_start = events.iter().any(|e| {
             matches!(
                 e,
                 StreamEvent::ContentBlockStart {
@@ -794,27 +880,16 @@ mod tests {
             )
         });
         assert!(
-            has_start,
-            "Should start a reasoning block for signature-only output"
+            !has_reasoning_start,
+            "function-call signatures must NOT spawn a synthetic Reasoning block"
         );
-
-        let has_signature_delta = events.iter().any(|e| {
-            matches!(
-                e,
-                StreamEvent::ReasoningSignatureDelta { signature, .. }
-                    if signature == "func_call_signature_base64"
-            )
-        });
-        assert!(
-            has_signature_delta,
-            "Should emit ReasoningSignatureDelta for functionCall signatures"
-        );
+        let _ = tool_start_index;
     }
 
-    /// Test: Mixed thought and regular text parts are processed separately.
-    ///
-    /// Gemini may return both thought parts and regular text parts in the same response.
-    /// They should be processed into separate content blocks.
+    /// Test: Mixed thought and regular text parts are processed as
+    /// separate, ordered blocks. The reasoning block must close (with its
+    /// `ContentBlockCompleted`) before the text block opens, so each part
+    /// keeps its own per-part signature attribution downstream.
     #[test]
     fn test_mixed_thought_and_text_parts() {
         let mut parser = create_test_parser();
@@ -840,10 +915,16 @@ mod tests {
 
         let events: Vec<_> = parser.pending.drain(..).collect();
 
-        // Should have 4 events: reasoning start + delta, text start + delta
-        assert_eq!(events.len(), 4);
+        // Five events: reasoning start + delta + completed (closes the
+        // reasoning part when the text part begins), then text start + delta.
+        // The text block stays open until the next non-continuation part
+        // or finalize.
+        assert_eq!(
+            events.len(),
+            5,
+            "expected 5 events for [thought, text]; got: {events:#?}"
+        );
 
-        // First two should be reasoning
         assert!(matches!(
             &events[0],
             StreamEvent::ContentBlockStart {
@@ -856,10 +937,15 @@ mod tests {
             &events[1],
             StreamEvent::ReasoningDelta { index: 0, .. }
         ));
-
-        // Second two should be text
         assert!(matches!(
             &events[2],
+            StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature: None,
+            }
+        ));
+        assert!(matches!(
+            &events[3],
             StreamEvent::ContentBlockStart {
                 index: 1,
                 block_type: ContentBlockType::Text,
@@ -867,7 +953,7 @@ mod tests {
             }
         ));
         assert!(matches!(
-            &events[3],
+            &events[4],
             StreamEvent::TextDelta { index: 1, .. }
         ));
     }
@@ -1514,5 +1600,338 @@ mod tests {
         assert_eq!(error.0, "PERMISSION_DENIED");
         assert!(error.1.contains("auth failed"));
         assert!(parser.emitted_done);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Gate 2.2: per-part fidelity — one ContentBlock* event sequence per
+    // Gemini part, in original order, with per-part signatures and
+    // `IdOrigin` attribution on tool-use blocks.
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// Two consecutive text parts each carrying their own `thoughtSignature`
+    /// must produce two distinct `ContentBlockCompleted` events with the
+    /// matching per-part signatures, in original order. Today's parser
+    /// merged everything into a single text block — this test guards the
+    /// new in-order walk.
+    #[test]
+    fn test_per_part_signatures_emitted_in_order() {
+        let mut parser = create_test_parser();
+
+        // Two text parts arriving in separate chunks. A function-call part
+        // between them forces the first text block to close (so its
+        // signature is attached) and the second text block to open as a
+        // fresh part.
+        parser
+            .handle_chunk(json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "text": "first sentence.",
+                            "thoughtSignature": "c2lnX3RleHRfMQ=="
+                        }]
+                    }
+                }]
+            }))
+            .unwrap();
+        parser
+            .handle_chunk(json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "functionCall": {
+                                "id": "call_real_001",
+                                "name": "noop",
+                                "args": {}
+                            },
+                            "thoughtSignature": "c2lnX2NhbGw="
+                        }]
+                    }
+                }]
+            }))
+            .unwrap();
+        parser
+            .handle_chunk(json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "text": "second sentence.",
+                            "thoughtSignature": "c2lnX3RleHRfMg=="
+                        }]
+                    }
+                }]
+            }))
+            .unwrap();
+        parser
+            .handle_chunk(json!({
+                "candidates": [{ "finishReason": "STOP" }]
+            }))
+            .unwrap();
+
+        let events: Vec<_> = parser.pending.drain(..).collect();
+
+        // Collect ContentBlockCompleted events with their (provider, sig)
+        // payload, in order.
+        let completions: Vec<(usize, Option<(SignatureProvider, String)>)> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ContentBlockCompleted { index, signature } => {
+                    Some((*index, signature.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            completions.len(),
+            3,
+            "expected 3 ContentBlockCompleted events (text, tool_use, text), got: {completions:#?}"
+        );
+
+        let text_sigs: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ContentBlockCompleted {
+                    signature: Some((SignatureProvider::Gemini, sig)),
+                    ..
+                } => Some(sig.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            text_sigs,
+            vec!["c2lnX3RleHRfMQ==", "c2lnX2NhbGw=", "c2lnX3RleHRfMg=="],
+            "per-part signatures must ride their own ContentBlockCompleted events in order"
+        );
+    }
+
+    /// A `functionCall` part with a real `id` must produce a
+    /// `ContentBlockStart` carrying `id_origin: Some(Real)` so the request
+    /// builder later replays the id verbatim.
+    #[test]
+    fn test_function_call_id_origin_real() {
+        let mut parser = create_test_parser();
+
+        parser
+            .handle_chunk(json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "functionCall": {
+                                "id": "call_real_001",
+                                "name": "read_file",
+                                "args": {"path": "README.md"}
+                            }
+                        }]
+                    }
+                }]
+            }))
+            .unwrap();
+
+        let start = parser
+            .pending
+            .iter()
+            .find(|e| {
+                matches!(
+                    e,
+                    StreamEvent::ContentBlockStart {
+                        block_type: ContentBlockType::ToolUse,
+                        ..
+                    }
+                )
+            })
+            .expect("ToolUse start expected");
+
+        match start {
+            StreamEvent::ContentBlockStart { id, id_origin, .. } => {
+                assert_eq!(id.as_deref(), Some("call_real_001"));
+                assert_eq!(*id_origin, Some(IdOrigin::Real));
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// A `functionCall` part WITHOUT an `id` must still produce a
+    /// `ContentBlockStart`, but with `id_origin: Some(Synthesized)`. The
+    /// id itself is synthesized from `(prefix, run_id, index)` for engine
+    /// correlation; the origin marker is what tells the request builder
+    /// to omit it on replay.
+    #[test]
+    fn test_function_call_id_origin_synthesized() {
+        let mut parser = create_test_parser();
+
+        parser
+            .handle_chunk(json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "functionCall": {
+                                "name": "list_dir",
+                                "args": {"path": "src"}
+                            }
+                        }]
+                    }
+                }]
+            }))
+            .unwrap();
+
+        let start = parser
+            .pending
+            .iter()
+            .find(|e| {
+                matches!(
+                    e,
+                    StreamEvent::ContentBlockStart {
+                        block_type: ContentBlockType::ToolUse,
+                        ..
+                    }
+                )
+            })
+            .expect("ToolUse start expected");
+
+        match start {
+            StreamEvent::ContentBlockStart { id, id_origin, .. } => {
+                let id = id.as_deref().expect("synthesized id must be set");
+                assert!(!id.is_empty());
+                assert!(
+                    id.starts_with(&format!("test-{}", parser.run_id)),
+                    "synthesized id should use the parser's prefix+run_id, got {id}"
+                );
+                assert_eq!(*id_origin, Some(IdOrigin::Synthesized));
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Two consecutive thought parts must each open their own Reasoning
+    /// block (closing the prior one with its own signature first).
+    /// Pre-2.2 the parser merged all thought parts in a chunk into a
+    /// single Reasoning block, which destroyed per-part signature
+    /// attribution.
+    #[test]
+    fn test_thought_part_emits_own_block() {
+        let mut parser = create_test_parser();
+
+        // Two thought parts in different chunks, each with its own
+        // signature. They must NOT be merged into a single Reasoning block.
+        parser
+            .handle_chunk(json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "thought": true,
+                            "text": "first thought.",
+                            "thoughtSignature": "c2lnXzE="
+                        }]
+                    }
+                }]
+            }))
+            .unwrap();
+
+        // A function call between the two thoughts forces the first
+        // reasoning block to close so its signature can be attached.
+        parser
+            .handle_chunk(json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "functionCall": {
+                                "id": "call_x",
+                                "name": "noop",
+                                "args": {}
+                            }
+                        }]
+                    }
+                }]
+            }))
+            .unwrap();
+
+        parser
+            .handle_chunk(json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "thought": true,
+                            "text": "second thought.",
+                            "thoughtSignature": "c2lnXzI="
+                        }]
+                    }
+                }]
+            }))
+            .unwrap();
+
+        parser
+            .handle_chunk(json!({
+                "candidates": [{ "finishReason": "STOP" }]
+            }))
+            .unwrap();
+
+        let events: Vec<_> = parser.pending.drain(..).collect();
+
+        let reasoning_starts = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    StreamEvent::ContentBlockStart {
+                        block_type: ContentBlockType::Reasoning,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            reasoning_starts, 2,
+            "two thought parts must emit two distinct Reasoning blocks"
+        );
+
+        let signature_deltas: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ReasoningSignatureDelta { signature, .. } => Some(signature.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            signature_deltas,
+            vec!["c2lnXzE=", "c2lnXzI="],
+            "each Reasoning block must carry its own signature in order"
+        );
+    }
+
+    /// The full multipart fixture used by the engine-level golden test
+    /// must produce one `ContentBlockStart` per Gemini part, in original
+    /// order: `[Reasoning, Text, ToolUse, Text, ToolUse]`.
+    #[tokio::test]
+    async fn test_multipart_fixture_per_part_order() {
+        use ContentBlockType::{Reasoning, Text, ToolUse};
+        use futures_util::StreamExt;
+
+        let fixture = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../zdx-engine/tests/fixtures/gemini/multipart_turn.sse"),
+        )
+        .expect("fixture must exist");
+
+        let byte_stream = stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(fixture))]);
+        let mut parser =
+            GeminiSseParser::new(byte_stream, "gemini-3-pro-preview".to_string(), "gemini");
+        let mut events = Vec::new();
+        while let Some(item) = parser.next().await {
+            events.push(item.expect("fixture is valid"));
+        }
+
+        let block_types: Vec<ContentBlockType> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ContentBlockStart { block_type, .. } => Some(*block_type),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            block_types,
+            vec![Reasoning, Text, ToolUse, Text, ToolUse],
+            "per-part order must match the original Gemini stream"
+        );
     }
 }

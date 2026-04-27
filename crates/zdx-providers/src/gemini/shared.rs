@@ -12,7 +12,8 @@ use serde_json::{Value, json};
 use zdx_types::{ThinkingLevel, ToolDefinition, ToolResultBlock, ToolResultContent};
 
 use crate::{
-    ChatContentBlock, ChatMessage, MessageContent, ProviderError, ProviderErrorKind, ReplayToken,
+    ChatContentBlock, ChatMessage, IdOrigin, MessageContent, ProviderError, ProviderErrorKind,
+    ReplayToken,
 };
 
 /// Thinking configuration for Gemini models.
@@ -231,10 +232,19 @@ pub fn build_contents(messages: &[ChatMessage], model: &str) -> Vec<Value> {
     builder.contents
 }
 
+/// Per-tool-use metadata captured when a `ToolUse` block is serialized so
+/// that the matching `functionResponse` can be emitted with byte-identical
+/// id semantics. `id_origin == Real` means the id is replayed on both sides;
+/// `Synthesized` means it is omitted on both sides (cache-friendly symmetry).
+struct ToolMeta {
+    name: String,
+    id_origin: IdOrigin,
+}
+
 struct GeminiContentsBuilder {
     model: String,
     contents: Vec<Value>,
-    tool_name_map: HashMap<String, String>,
+    tool_meta_map: HashMap<String, ToolMeta>,
 }
 
 impl GeminiContentsBuilder {
@@ -242,7 +252,7 @@ impl GeminiContentsBuilder {
         Self {
             model: model.to_string(),
             contents: Vec::new(),
-            tool_name_map: HashMap::new(),
+            tool_meta_map: HashMap::new(),
         }
     }
 
@@ -264,53 +274,78 @@ impl GeminiContentsBuilder {
         }
     }
 
+    /// Walks assistant blocks in original order, emitting one Gemini part per
+    /// block. Per-part `thoughtSignature` comes from the block's own
+    /// `replay` field — never moved across parts. `Reasoning` blocks are
+    /// re-emitted with `thought: true` only when the model gate passes and
+    /// the signature is valid base64; otherwise dropped. `ToolUse` blocks
+    /// fall back to `SYNTHETIC_THOUGHT_SIGNATURE` only on Gemini 3 and only
+    /// when no valid real signature is available. `Text` blocks never get
+    /// the synthetic sentinel. `functionCall.id` is emitted only when
+    /// `id_origin == Real`; the matching `functionResponse.id` mirrors that
+    /// decision via `tool_meta_map`.
     fn append_assistant_blocks(&mut self, blocks: &[ChatContentBlock]) {
         let mut parts = Vec::new();
-        let mut added_signature = false;
-        let real_signature = gemini_signature(blocks);
-        let has_tool_use = blocks
-            .iter()
-            .any(|b| matches!(b, ChatContentBlock::ToolUse { .. }));
-
-        // Use the real Gemini signature when available, otherwise fall back to
-        // the synthetic sentinel. The fallback is message-local and stable:
-        // the same historical assistant message serializes identically on
-        // every turn, which is required for implicit prompt caching.
-        let signature_to_use: &str = real_signature
-            .as_deref()
-            .unwrap_or(SYNTHETIC_THOUGHT_SIGNATURE);
 
         for block in blocks {
             match block {
-                ChatContentBlock::Text(text) => {
+                ChatContentBlock::Reasoning(reasoning) => {
+                    let Some(sig) = gemini_replay_signature(reasoning.replay.as_ref(), &self.model)
+                    else {
+                        // Model mismatch or invalid signature — drop the block.
+                        continue;
+                    };
+                    let text = reasoning.text.as_deref().unwrap_or("");
+                    parts.push(json!({
+                        "thought": true,
+                        "text": text,
+                        "thoughtSignature": sig,
+                    }));
+                }
+                ChatContentBlock::Text { text, replay } => {
                     let mut part = text_part(text);
-                    // Only attach signature to text if there is no tool use in this message
-                    // (Gemini prefers attaching signature to functionCall if present)
-                    if !added_signature && !has_tool_use {
-                        part["thoughtSignature"] = json!(signature_to_use);
-                        added_signature = true;
+                    if let Some(sig) = gemini_replay_signature(replay.as_ref(), &self.model) {
+                        part["thoughtSignature"] = json!(sig);
                     }
+                    // Synthetic sentinel never applied to text parts (pi-mono
+                    // applies it only to Gemini-3 functionCall parts).
                     parts.push(part);
                 }
                 ChatContentBlock::Image { mime_type, data } => {
                     parts.push(inline_data_part(mime_type, data));
                 }
-                ChatContentBlock::ToolUse { id, name, input } => {
-                    self.tool_name_map.insert(id.clone(), name.clone());
-                    let mut part = json!({
-                        "functionCall": {
-                            "id": id,
-                            "name": name,
-                            "args": input
-                        }
-                    });
-                    if !added_signature {
-                        part["thoughtSignature"] = json!(signature_to_use);
-                        added_signature = true;
+                ChatContentBlock::ToolUse {
+                    id,
+                    name,
+                    input,
+                    id_origin,
+                    replay,
+                } => {
+                    self.tool_meta_map.insert(
+                        id.clone(),
+                        ToolMeta {
+                            name: name.clone(),
+                            id_origin: *id_origin,
+                        },
+                    );
+
+                    let mut function_call = serde_json::Map::new();
+                    if matches!(id_origin, IdOrigin::Real) {
+                        function_call.insert("id".to_string(), json!(id));
                     }
+                    function_call.insert("name".to_string(), json!(name));
+                    function_call.insert("args".to_string(), input.clone());
+
+                    let mut part = json!({ "functionCall": Value::Object(function_call) });
+                    if let Some(sig) = gemini_replay_signature(replay.as_ref(), &self.model) {
+                        part["thoughtSignature"] = json!(sig);
+                    } else if is_gemini_3(&self.model) {
+                        part["thoughtSignature"] = json!(SYNTHETIC_THOUGHT_SIGNATURE);
+                    }
+
                     parts.push(part);
                 }
-                ChatContentBlock::Reasoning(_) | ChatContentBlock::ToolResult(_) => {}
+                ChatContentBlock::ToolResult(_) => {}
             }
         }
 
@@ -320,7 +355,7 @@ impl GeminiContentsBuilder {
     }
 
     fn append_user_blocks(&mut self, blocks: &[ChatContentBlock]) {
-        let is_gemini_3 = self.model.contains("gemini-3");
+        let model_is_gemini_3 = is_gemini_3(&self.model);
         let mut parts = Vec::new();
         let mut tool_results = Vec::new();
         // On Gemini 2.5 and older, tool-result images cannot live inside
@@ -330,7 +365,7 @@ impl GeminiContentsBuilder {
 
         for block in blocks {
             match block {
-                ChatContentBlock::Text(text) => parts.push(text_part(text)),
+                ChatContentBlock::Text { text, .. } => parts.push(text_part(text)),
                 ChatContentBlock::Image { mime_type, data } => {
                     parts.push(inline_data_part(mime_type, data));
                 }
@@ -340,21 +375,31 @@ impl GeminiContentsBuilder {
         }
 
         for result in tool_results {
-            let Some(name) = self.tool_name_map.get(&result.tool_use_id) else {
+            let Some(meta) = self.tool_meta_map.get(&result.tool_use_id) else {
                 continue;
             };
 
             let (text, image) = extract_tool_result_with_image(&result.content);
-            let mut function_response = json!({
-                "id": result.tool_use_id,
-                "name": name,
-                "response": {
+
+            let mut function_response = serde_json::Map::new();
+            // Symmetric id emission: only echo the id if the matching
+            // `functionCall.id` was emitted (i.e. Gemini originally returned
+            // a real id). Synthesized ids stay off the wire on both sides.
+            if matches!(meta.id_origin, IdOrigin::Real) {
+                function_response.insert("id".to_string(), json!(result.tool_use_id));
+            }
+            function_response.insert("name".to_string(), json!(meta.name));
+            function_response.insert(
+                "response".to_string(),
+                json!({
                     "content": text,
-                    "is_error": result.is_error
-                }
-            });
+                    "is_error": result.is_error,
+                }),
+            );
+
+            let mut function_response = Value::Object(function_response);
             if let Some((mime_type, data)) = image {
-                if is_gemini_3 {
+                if model_is_gemini_3 {
                     function_response["parts"] = json!([inline_data_part(&mime_type, &data)]);
                 } else {
                     pending_images.push(inline_data_part(&mime_type, &data));
@@ -377,16 +422,61 @@ impl GeminiContentsBuilder {
     }
 }
 
-fn gemini_signature(blocks: &[ChatContentBlock]) -> Option<String> {
-    blocks.iter().find_map(|block| match block {
-        ChatContentBlock::Reasoning(reasoning) => reasoning.replay.as_ref().and_then(|replay| {
-            let ReplayToken::Gemini { signature } = replay else {
-                return None;
-            };
-            Some(signature.clone())
-        }),
-        _ => None,
-    })
+/// Returns the per-part Gemini `thoughtSignature` to attach when replaying
+/// `replay` against a request targeting `current_model`. Returns `None` (drop
+/// the signature, or — for `Reasoning` blocks — drop the entire part) when:
+///
+/// - the block has no `ReplayToken::Gemini`,
+/// - the captured `model` is non-empty and does not match `current_model`
+///   (Gemini's implicit cache requires byte-identical replay against the
+///   exact same model), or
+/// - the signature is not a valid base64 string per `is_valid_thought_signature`.
+///
+/// An empty captured `model` (old transcripts that pre-date model threading)
+/// is treated as "unknown — replay normally" so single-model sessions are
+/// unaffected by the migration.
+fn gemini_replay_signature<'a>(
+    replay: Option<&'a ReplayToken>,
+    current_model: &str,
+) -> Option<&'a str> {
+    let token = replay?;
+    let ReplayToken::Gemini { signature, model } = token else {
+        return None;
+    };
+    let model_matches = model.is_empty() || model == current_model;
+    if !model_matches {
+        return None;
+    }
+    if !is_valid_thought_signature(signature) {
+        return None;
+    }
+    Some(signature.as_str())
+}
+
+/// Conservative shape check for a Gemini `thoughtSignature` payload —
+/// length divisible by 4 and every byte in the union of standard +
+/// URL-safe base64 alphabets (plus `=`). This mirrors pi-mono's
+/// `isValidThoughtSignature` and is **not** a full base64 validator: it
+/// does not enforce padding position, padding count, or single-alphabet
+/// purity, and it does not attempt to decode. The goal is to drop
+/// obviously-malformed values before sending so the API doesn't 400; the
+/// final acceptance/rejection happens server-side. The synthetic sentinel
+/// (`SYNTHETIC_THOUGHT_SIGNATURE`) is intentionally exempt from this
+/// check and is applied directly by callers.
+fn is_valid_thought_signature(sig: &str) -> bool {
+    if sig.is_empty() || !sig.len().is_multiple_of(4) {
+        return false;
+    }
+    sig.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | b'-' | b'_'))
+}
+
+/// Returns true when `model` is in the Gemini 3 family. The
+/// `SYNTHETIC_THOUGHT_SIGNATURE` sentinel is only valid on Gemini 3
+/// `functionCall` parts (older models reject it), so this gate keeps the
+/// fallback narrowly scoped.
+fn is_gemini_3(model: &str) -> bool {
+    model.contains("gemini-3")
 }
 
 fn text_part(text: &str) -> Value {
@@ -766,107 +856,429 @@ mod tests {
         assert_eq!(json["thinkingBudget"], 8192);
     }
 
-    /// `build_contents` uses real Gemini thought signature when available.
+    /// Each text block keeps its own per-part `thoughtSignature` — signatures
+    /// must never be moved across parts.
     #[test]
-    fn test_build_contents_uses_real_gemini_signature() {
-        use crate::{ReasoningBlock, ReplayToken};
-
-        // Case 1: Assistant message with reasoning block (Gemini signature) + tool use
+    fn test_text_part_carries_own_signature() {
         let messages = vec![
-            ChatMessage::user("What files are here?"),
+            ChatMessage::user("hi"),
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
                 content: MessageContent::Blocks(vec![
-                    ChatContentBlock::Reasoning(ReasoningBlock {
-                        text: Some("I'll check the files".to_string()),
+                    ChatContentBlock::Text {
+                        text: "first".to_string(),
                         replay: Some(ReplayToken::Gemini {
-                            signature: "real_thought_signature_base64".to_string(),
+                            signature: "AAAAAAAAAAAAAAAA".to_string(),
+                            model: "gemini-3-pro-preview".to_string(),
                         }),
-                    }),
-                    ChatContentBlock::ToolUse {
-                        id: "tool-1".to_string(),
-                        name: "bash".to_string(),
-                        input: serde_json::json!({"command": "ls"}),
+                    },
+                    ChatContentBlock::Text {
+                        text: "second".to_string(),
+                        replay: Some(ReplayToken::Gemini {
+                            signature: "BBBBBBBBBBBBBBBB".to_string(),
+                            model: "gemini-3-pro-preview".to_string(),
+                        }),
                     },
                 ]),
             },
         ];
 
-        let contents = build_contents(&messages, "gemini-3-flash-preview");
+        let contents = build_contents(&messages, "gemini-3-pro-preview");
+        let parts = contents[1]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["text"], "first");
+        assert_eq!(parts[0]["thoughtSignature"], "AAAAAAAAAAAAAAAA");
+        assert_eq!(parts[1]["text"], "second");
+        assert_eq!(parts[1]["thoughtSignature"], "BBBBBBBBBBBBBBBB");
+    }
 
-        // The assistant message should have the real signature attached to functionCall
-        let assistant_msg = &contents[1];
-        let parts = assistant_msg["parts"].as_array().unwrap();
-
-        // Should have one part (just the functionCall, reasoning is skipped)
-        assert_eq!(parts.len(), 1);
-
-        let function_call_part = &parts[0];
-        assert!(function_call_part.get("functionCall").is_some());
-        assert_eq!(
-            function_call_part["thoughtSignature"],
-            "real_thought_signature_base64"
-        );
-
-        // Case 2: Assistant message with reasoning block (Gemini signature) + ONLY text
+    /// Each tool-use block keeps its own per-part `thoughtSignature`.
+    #[test]
+    fn test_tool_use_carries_own_signature() {
         let messages = vec![
-            ChatMessage::user("Hi"),
+            ChatMessage::user("do two things"),
+            ChatMessage {
+                role: "assistant".to_string(),
+                phase: None,
+                content: MessageContent::Blocks(vec![
+                    ChatContentBlock::ToolUse {
+                        id: "call_a".to_string(),
+                        name: "bash".to_string(),
+                        input: json!({"cmd": "ls"}),
+                        id_origin: IdOrigin::Real,
+                        replay: Some(ReplayToken::Gemini {
+                            signature: "CCCCCCCCCCCCCCCC".to_string(),
+                            model: "gemini-3-pro-preview".to_string(),
+                        }),
+                    },
+                    ChatContentBlock::ToolUse {
+                        id: "call_b".to_string(),
+                        name: "bash".to_string(),
+                        input: json!({"cmd": "pwd"}),
+                        id_origin: IdOrigin::Real,
+                        replay: Some(ReplayToken::Gemini {
+                            signature: "DDDDDDDDDDDDDDDD".to_string(),
+                            model: "gemini-3-pro-preview".to_string(),
+                        }),
+                    },
+                ]),
+            },
+        ];
+
+        let contents = build_contents(&messages, "gemini-3-pro-preview");
+        let parts = contents[1]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["functionCall"]["id"], "call_a");
+        assert_eq!(parts[0]["thoughtSignature"], "CCCCCCCCCCCCCCCC");
+        assert_eq!(parts[1]["functionCall"]["id"], "call_b");
+        assert_eq!(parts[1]["thoughtSignature"], "DDDDDDDDDDDDDDDD");
+    }
+
+    /// Per-part signatures must NOT migrate across parts. A signature on a
+    /// `Reasoning` block stays on the `thought: true` part; the next text
+    /// part gets only its own signature (or none if it has no replay).
+    #[test]
+    fn test_signature_not_moved_across_parts() {
+        use crate::ReasoningBlock;
+
+        let messages = vec![
+            ChatMessage::user("q"),
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
                 content: MessageContent::Blocks(vec![
                     ChatContentBlock::Reasoning(ReasoningBlock {
-                        text: Some("Thinking...".to_string()),
+                        text: Some("thinking".to_string()),
                         replay: Some(ReplayToken::Gemini {
-                            signature: "text_only_signature".to_string(),
+                            signature: "EEEEEEEEEEEEEEEE".to_string(),
+                            model: "gemini-3-pro-preview".to_string(),
                         }),
                     }),
-                    ChatContentBlock::Text("Hello!".to_string()),
+                    ChatContentBlock::text("answer"),
                 ]),
             },
         ];
 
-        let contents = build_contents(&messages, "gemini-3-flash-preview");
+        let contents = build_contents(&messages, "gemini-3-pro-preview");
+        let parts = contents[1]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 2);
 
-        let assistant_msg = &contents[1];
-        let parts = assistant_msg["parts"].as_array().unwrap();
+        let reasoning = &parts[0];
+        assert_eq!(reasoning["thought"], true);
+        assert_eq!(reasoning["text"], "thinking");
+        assert_eq!(reasoning["thoughtSignature"], "EEEEEEEEEEEEEEEE");
 
-        // Should have one text part with the signature
-        assert_eq!(parts.len(), 1);
-        let text_part = &parts[0];
-        assert_eq!(text_part["text"], "Hello!");
-        assert_eq!(text_part["thoughtSignature"], "text_only_signature");
+        let text = &parts[1];
+        assert_eq!(text["text"], "answer");
+        assert!(
+            text.get("thoughtSignature").is_none(),
+            "signature must not migrate from reasoning to text"
+        );
     }
 
-    /// `build_contents` falls back to synthetic signature when no Gemini signature available.
+    /// `SYNTHETIC_THOUGHT_SIGNATURE` is only emitted on Gemini 3
+    /// `functionCall` parts — never on text/reasoning, never on Gemini 2.5.
     #[test]
-    fn test_build_contents_fallback_to_synthetic_signature() {
-        // Create a message history without reasoning blocks
+    fn test_synthetic_only_on_gemini_3_function_call() {
+        let blocks = vec![ChatContentBlock::ToolUse {
+            id: "call_x".to_string(),
+            name: "bash".to_string(),
+            input: json!({}),
+            id_origin: IdOrigin::Synthesized,
+            replay: None,
+        }];
         let messages = vec![
-            ChatMessage::user("What files are here?"),
+            ChatMessage::user("q"),
+            ChatMessage::assistant_blocks(blocks.clone()),
+        ];
+
+        // Gemini 3: synthetic sentinel applied.
+        let contents = build_contents(&messages, "gemini-3-pro-preview");
+        let parts = contents[1]["parts"].as_array().unwrap();
+        assert_eq!(parts[0]["thoughtSignature"], SYNTHETIC_THOUGHT_SIGNATURE);
+
+        // Gemini 2.5: no signature attached.
+        let contents = build_contents(&messages, "gemini-2.5-flash");
+        let parts = contents[1]["parts"].as_array().unwrap();
+        assert!(
+            parts[0].get("thoughtSignature").is_none(),
+            "Gemini 2.5 must not receive the synthetic sentinel"
+        );
+    }
+
+    /// The synthetic sentinel must never appear on text parts, even on
+    /// Gemini 3 (pi-mono only emits it on `functionCall` parts).
+    #[test]
+    fn test_synthetic_never_on_text_parts() {
+        let messages = vec![
+            ChatMessage::user("hi"),
+            ChatMessage {
+                role: "assistant".to_string(),
+                phase: None,
+                content: MessageContent::Blocks(vec![ChatContentBlock::text("hello")]),
+            },
+        ];
+
+        let contents = build_contents(&messages, "gemini-3-pro-preview");
+        let parts = contents[1]["parts"].as_array().unwrap();
+        assert_eq!(parts[0]["text"], "hello");
+        assert!(
+            parts[0].get("thoughtSignature").is_none(),
+            "text parts must never receive the synthetic sentinel"
+        );
+    }
+
+    /// Invalid base64 signatures are dropped (better than a 400 from the
+    /// API). On a `ToolUse` we still fall back to the synthetic sentinel on
+    /// Gemini 3; on `Text` we just emit no signature; on `Reasoning` we drop
+    /// the entire part.
+    #[test]
+    fn test_invalid_base64_signature_dropped() {
+        use crate::ReasoningBlock;
+
+        // Length not divisible by 4 → invalid.
+        let bad = "not-base64".to_string();
+
+        let messages = vec![
+            ChatMessage::user("q"),
+            ChatMessage {
+                role: "assistant".to_string(),
+                phase: None,
+                content: MessageContent::Blocks(vec![
+                    ChatContentBlock::Reasoning(ReasoningBlock {
+                        text: Some("thinking".to_string()),
+                        replay: Some(ReplayToken::Gemini {
+                            signature: bad.clone(),
+                            model: "gemini-3-pro-preview".to_string(),
+                        }),
+                    }),
+                    ChatContentBlock::Text {
+                        text: "hello".to_string(),
+                        replay: Some(ReplayToken::Gemini {
+                            signature: bad.clone(),
+                            model: "gemini-3-pro-preview".to_string(),
+                        }),
+                    },
+                    ChatContentBlock::ToolUse {
+                        id: "call_z".to_string(),
+                        name: "bash".to_string(),
+                        input: json!({}),
+                        id_origin: IdOrigin::Real,
+                        replay: Some(ReplayToken::Gemini {
+                            signature: bad,
+                            model: "gemini-3-pro-preview".to_string(),
+                        }),
+                    },
+                ]),
+            },
+        ];
+
+        let contents = build_contents(&messages, "gemini-3-pro-preview");
+        let parts = contents[1]["parts"].as_array().unwrap();
+        // Reasoning dropped, text + tool_use remain.
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["text"], "hello");
+        assert!(parts[0].get("thoughtSignature").is_none());
+        assert_eq!(parts[1]["functionCall"]["id"], "call_z");
+        assert_eq!(parts[1]["thoughtSignature"], SYNTHETIC_THOUGHT_SIGNATURE);
+    }
+
+    /// `IdOrigin::Synthesized` → `functionCall.id` is omitted. The model
+    /// never gave us a real id, so replaying a fabricated one would break
+    /// implicit caching across turns.
+    #[test]
+    fn test_synthesized_id_omitted_on_function_call() {
+        let messages = vec![
+            ChatMessage::user("q"),
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
                 content: MessageContent::Blocks(vec![ChatContentBlock::ToolUse {
-                    id: "tool-1".to_string(),
+                    id: "synth-1".to_string(),
                     name: "bash".to_string(),
-                    input: serde_json::json!({"command": "ls"}),
+                    input: json!({"cmd": "ls"}),
+                    id_origin: IdOrigin::Synthesized,
+                    replay: None,
                 }]),
             },
         ];
-
-        let contents = build_contents(&messages, "gemini-3-flash-preview");
-
-        let assistant_msg = &contents[1];
-        let parts = assistant_msg["parts"].as_array().unwrap();
-        let function_call_part = &parts[0];
-
-        // Should fall back to synthetic signature
-        assert_eq!(
-            function_call_part["thoughtSignature"],
-            SYNTHETIC_THOUGHT_SIGNATURE
+        let contents = build_contents(&messages, "gemini-3-pro-preview");
+        let function_call = &contents[1]["parts"][0]["functionCall"];
+        assert!(
+            function_call.get("id").is_none(),
+            "synthesized ids must not appear on the wire"
         );
+        assert_eq!(function_call["name"], "bash");
+    }
+
+    /// Symmetry: when `functionCall.id` was omitted because the id was
+    /// synthesized, the matching `functionResponse.id` must also be omitted.
+    /// This is the cache-fidelity invariant the `IdOrigin` gate exists to
+    /// preserve.
+    #[test]
+    fn test_synthesized_id_omitted_on_function_response() {
+        use zdx_types::{ToolResult, ToolResultContent};
+
+        let messages = vec![
+            ChatMessage::user("q"),
+            ChatMessage {
+                role: "assistant".to_string(),
+                phase: None,
+                content: MessageContent::Blocks(vec![ChatContentBlock::ToolUse {
+                    id: "synth-1".to_string(),
+                    name: "bash".to_string(),
+                    input: json!({"cmd": "ls"}),
+                    id_origin: IdOrigin::Synthesized,
+                    replay: None,
+                }]),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                phase: None,
+                content: MessageContent::Blocks(vec![ChatContentBlock::ToolResult(ToolResult {
+                    tool_use_id: "synth-1".to_string(),
+                    content: ToolResultContent::Text("ok".to_string()),
+                    is_error: false,
+                })]),
+            },
+        ];
+        let contents = build_contents(&messages, "gemini-3-pro-preview");
+        let function_response = &contents[2]["parts"][0]["functionResponse"];
+        assert!(
+            function_response.get("id").is_none(),
+            "functionResponse id must mirror the synthesized functionCall (omitted)"
+        );
+        assert_eq!(function_response["name"], "bash");
+        assert_eq!(function_response["response"]["content"], "ok");
+    }
+
+    /// Real ids are preserved on both `functionCall.id` and the matching
+    /// `functionResponse.id`.
+    #[test]
+    fn test_real_id_preserved_on_both() {
+        use zdx_types::{ToolResult, ToolResultContent};
+
+        let messages = vec![
+            ChatMessage::user("q"),
+            ChatMessage {
+                role: "assistant".to_string(),
+                phase: None,
+                content: MessageContent::Blocks(vec![ChatContentBlock::ToolUse {
+                    id: "real-1".to_string(),
+                    name: "bash".to_string(),
+                    input: json!({"cmd": "ls"}),
+                    id_origin: IdOrigin::Real,
+                    replay: None,
+                }]),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                phase: None,
+                content: MessageContent::Blocks(vec![ChatContentBlock::ToolResult(ToolResult {
+                    tool_use_id: "real-1".to_string(),
+                    content: ToolResultContent::Text("ok".to_string()),
+                    is_error: false,
+                })]),
+            },
+        ];
+        let contents = build_contents(&messages, "gemini-3-pro-preview");
+        assert_eq!(contents[1]["parts"][0]["functionCall"]["id"], "real-1");
+        assert_eq!(contents[2]["parts"][0]["functionResponse"]["id"], "real-1");
+    }
+
+    /// `Reasoning` blocks are re-emitted as `{thought:true,...}` only when
+    /// the captured model matches the current request model.
+    #[test]
+    fn test_thought_reemitted_on_same_model() {
+        use crate::ReasoningBlock;
+
+        let messages = vec![
+            ChatMessage::user("q"),
+            ChatMessage {
+                role: "assistant".to_string(),
+                phase: None,
+                content: MessageContent::Blocks(vec![ChatContentBlock::Reasoning(
+                    ReasoningBlock {
+                        text: Some("hmm".to_string()),
+                        replay: Some(ReplayToken::Gemini {
+                            signature: "FFFFFFFFFFFFFFFF".to_string(),
+                            model: "gemini-3-pro-preview".to_string(),
+                        }),
+                    },
+                )]),
+            },
+        ];
+        let contents = build_contents(&messages, "gemini-3-pro-preview");
+        let parts = contents[1]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0]["thought"], true);
+        assert_eq!(parts[0]["text"], "hmm");
+        assert_eq!(parts[0]["thoughtSignature"], "FFFFFFFFFFFFFFFF");
+    }
+
+    /// `Reasoning` blocks are dropped entirely when the captured model does
+    /// not match the current request model — Gemini's implicit cache
+    /// requires byte-identical replay against the same model.
+    #[test]
+    fn test_thought_dropped_on_different_model() {
+        use crate::ReasoningBlock;
+
+        let messages = vec![
+            ChatMessage::user("q"),
+            ChatMessage {
+                role: "assistant".to_string(),
+                phase: None,
+                content: MessageContent::Blocks(vec![
+                    ChatContentBlock::Reasoning(ReasoningBlock {
+                        text: Some("hmm".to_string()),
+                        replay: Some(ReplayToken::Gemini {
+                            signature: "FFFFFFFFFFFFFFFF".to_string(),
+                            model: "gemini-3-flash-preview".to_string(),
+                        }),
+                    }),
+                    ChatContentBlock::text("answer"),
+                ]),
+            },
+        ];
+        let contents = build_contents(&messages, "gemini-3-pro-preview");
+        let parts = contents[1]["parts"].as_array().unwrap();
+        assert_eq!(
+            parts.len(),
+            1,
+            "reasoning must be dropped on model mismatch"
+        );
+        assert_eq!(parts[0]["text"], "answer");
+    }
+
+    /// Old transcripts (pre model-threading) carry an empty `model` string in
+    /// `ReplayToken::Gemini`. The gate must treat empty as "unknown — replay
+    /// normally" so single-model sessions are unaffected by the migration.
+    #[test]
+    fn test_empty_model_replays_as_same_model() {
+        use crate::ReasoningBlock;
+
+        let messages = vec![
+            ChatMessage::user("q"),
+            ChatMessage {
+                role: "assistant".to_string(),
+                phase: None,
+                content: MessageContent::Blocks(vec![ChatContentBlock::Reasoning(
+                    ReasoningBlock {
+                        text: Some("hmm".to_string()),
+                        replay: Some(ReplayToken::Gemini {
+                            signature: "FFFFFFFFFFFFFFFF".to_string(),
+                            model: String::new(),
+                        }),
+                    },
+                )]),
+            },
+        ];
+        let contents = build_contents(&messages, "gemini-3-pro-preview");
+        let parts = contents[1]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0]["thought"], true);
+        assert_eq!(parts[0]["thoughtSignature"], "FFFFFFFFFFFFFFFF");
     }
 
     /// The synthetic thought signature must be message-local and stable: a
@@ -887,6 +1299,8 @@ mod tests {
                         id: "call_sig_stable".to_string(),
                         name: "bash".to_string(),
                         input: serde_json::json!({"command": "ls"}),
+                        id_origin: zdx_types::IdOrigin::Synthesized,
+                        replay: None,
                     }]),
                 },
                 ChatMessage {
@@ -935,70 +1349,9 @@ mod tests {
         );
     }
 
-    /// `build_contents` includes thought signature for historical messages.
-    #[test]
-    fn test_build_contents_includes_signature_for_history() {
-        use crate::{ReasoningBlock, ReplayToken};
-
-        // Message 1: Assistant with signature (simulating history)
-        let msg1 = ChatMessage {
-            role: "assistant".to_string(),
-            phase: None,
-            content: MessageContent::Blocks(vec![
-                ChatContentBlock::Reasoning(ReasoningBlock {
-                    text: Some("Thinking...".to_string()),
-                    replay: Some(ReplayToken::Gemini {
-                        signature: "hist_sig".to_string(),
-                    }),
-                }),
-                ChatContentBlock::Text("Hello".to_string()),
-            ]),
-        };
-
-        // Message 2: User (makes msg1 "history")
-        let msg2 = ChatMessage::user("Next");
-
-        let messages = vec![msg1, msg2];
-        let contents = build_contents(&messages, "gemini-3-flash-preview");
-
-        let assistant_part = &contents[0]["parts"][0];
-        assert_eq!(assistant_part["text"], "Hello");
-        assert_eq!(
-            assistant_part["thoughtSignature"], "hist_sig",
-            "History should keep signature"
-        );
-    }
-
-    /// `functionCall` parts must echo the original tool-use `id` so Gemini 3
-    /// can correlate parallel calls with their responses.
-    #[test]
-    fn test_assistant_tool_use_includes_id() {
-        let messages = vec![
-            ChatMessage::user("run a command"),
-            ChatMessage {
-                role: "assistant".to_string(),
-                phase: None,
-                content: MessageContent::Blocks(vec![ChatContentBlock::ToolUse {
-                    id: "call_123".to_string(),
-                    name: "bash".to_string(),
-                    input: serde_json::json!({"command": "ls"}),
-                }]),
-            },
-        ];
-
-        let contents = build_contents(&messages, "gemini-3-flash-preview");
-
-        let assistant_msg = &contents[1];
-        let parts = assistant_msg["parts"].as_array().unwrap();
-        let function_call = parts
-            .iter()
-            .find_map(|p| p.get("functionCall"))
-            .expect("functionCall part should exist");
-        assert_eq!(function_call["id"], "call_123");
-        assert_eq!(function_call["name"], "bash");
-    }
-
-    /// `functionResponse` parts must echo the original `tool_use_id` as `id`.
+    /// `functionResponse` parts must echo the original `tool_use_id` as `id`
+    /// when the corresponding `functionCall` was emitted with a real id
+    /// (`IdOrigin::Real`).
     #[test]
     fn test_function_response_includes_id() {
         use zdx_types::{ToolResult, ToolResultContent};
@@ -1012,6 +1365,8 @@ mod tests {
                     id: "call_123".to_string(),
                     name: "bash".to_string(),
                     input: serde_json::json!({"command": "ls"}),
+                    id_origin: IdOrigin::Real,
+                    replay: None,
                 }]),
             },
             ChatMessage {
@@ -1059,6 +1414,8 @@ mod tests {
                     id: "call_img".to_string(),
                     name: "screenshot".to_string(),
                     input: serde_json::json!({}),
+                    id_origin: IdOrigin::Real,
+                    replay: None,
                 }]),
             },
             ChatMessage {
@@ -1123,6 +1480,8 @@ mod tests {
                     id: "call_img".to_string(),
                     name: "screenshot".to_string(),
                     input: serde_json::json!({}),
+                    id_origin: zdx_types::IdOrigin::Synthesized,
+                    replay: None,
                 }]),
             },
             ChatMessage {
@@ -1192,11 +1551,15 @@ mod tests {
                         id: "call_a".to_string(),
                         name: "bash".to_string(),
                         input: serde_json::json!({"cmd": "ls"}),
+                        id_origin: IdOrigin::Real,
+                        replay: None,
                     },
                     ChatContentBlock::ToolUse {
                         id: "call_b".to_string(),
                         name: "screenshot".to_string(),
                         input: serde_json::json!({}),
+                        id_origin: IdOrigin::Real,
+                        replay: None,
                     },
                 ]),
             },
@@ -1271,11 +1634,15 @@ mod tests {
                         id: "call_a".to_string(),
                         name: "bash".to_string(),
                         input: serde_json::json!({"cmd": "ls"}),
+                        id_origin: zdx_types::IdOrigin::Synthesized,
+                        replay: None,
                     },
                     ChatContentBlock::ToolUse {
                         id: "call_b".to_string(),
                         name: "screenshot".to_string(),
                         input: serde_json::json!({}),
+                        id_origin: zdx_types::IdOrigin::Synthesized,
+                        replay: None,
                     },
                 ]),
             },

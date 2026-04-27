@@ -149,6 +149,7 @@ fn parse_content_block_start(data: &str) -> ProviderResult<StreamEvent> {
         id: parsed.content_block.id,
         name: parsed.content_block.name,
         data: parsed.content_block.data,
+        id_origin: None,
     })
 }
 
@@ -192,6 +193,7 @@ fn parse_content_block_stop(data: &str) -> ProviderResult<StreamEvent> {
     let parsed: SseContentBlockCompleted = parse_event_json("content_block_stop", data)?;
     Ok(StreamEvent::ContentBlockCompleted {
         index: parsed.index,
+        signature: None,
     })
 }
 
@@ -486,7 +488,13 @@ data: {"type":"error","error":{"type":"overloaded_error","message":"API is tempo
                 text: "!".to_string()
             }
         );
-        assert_eq!(events[6], StreamEvent::ContentBlockCompleted { index: 0 });
+        assert_eq!(
+            events[6],
+            StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature: None
+            }
+        );
         assert!(matches!(
             &events[7],
             StreamEvent::MessageDelta {
@@ -848,7 +856,13 @@ data: {"type":"message_stop"}
         );
 
         // Check thinking block stop
-        assert_eq!(events[5], StreamEvent::ContentBlockCompleted { index: 0 });
+        assert_eq!(
+            events[5],
+            StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature: None
+            }
+        );
 
         // Check text block start
         assert!(matches!(
@@ -870,7 +884,13 @@ data: {"type":"message_stop"}
         );
 
         // Check text block stop
-        assert_eq!(events[8], StreamEvent::ContentBlockCompleted { index: 1 });
+        assert_eq!(
+            events[8],
+            StreamEvent::ContentBlockCompleted {
+                index: 1,
+                signature: None
+            }
+        );
 
         // Check message delta and stop
         assert!(matches!(
@@ -943,9 +963,16 @@ data: {"type":"message_stop"}
                 id: None,
                 name: None,
                 data: Some(data),
+                id_origin: None,
             } if data == "encrypted_blob_xyz=="
         ));
-        assert_eq!(events[2], StreamEvent::ContentBlockCompleted { index: 0 });
+        assert_eq!(
+            events[2],
+            StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature: None
+            }
+        );
 
         // Subsequent text block is unaffected.
         assert!(matches!(
@@ -1029,6 +1056,7 @@ data: {"type":"message_stop"}
                 id: None,
                 name: None,
                 data: None,
+                id_origin: None,
             }
         ));
         assert_eq!(
@@ -1046,7 +1074,13 @@ data: {"type":"message_stop"}
                 provider: SignatureProvider::Anthropic,
             }
         );
-        assert_eq!(events[4], StreamEvent::ContentBlockCompleted { index: 0 });
+        assert_eq!(
+            events[4],
+            StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature: None
+            }
+        );
 
         // `redacted_thinking` start is the ONLY block with a non-None `data`.
         assert!(matches!(
@@ -1057,9 +1091,16 @@ data: {"type":"message_stop"}
                 id: None,
                 name: None,
                 data: Some(data),
+                id_origin: None,
             } if data == "redacted_blob"
         ));
-        assert_eq!(events[6], StreamEvent::ContentBlockCompleted { index: 1 });
+        assert_eq!(
+            events[6],
+            StreamEvent::ContentBlockCompleted {
+                index: 1,
+                signature: None
+            }
+        );
 
         // Regular text block: no `data`, no signature.
         assert!(matches!(
@@ -1070,6 +1111,7 @@ data: {"type":"message_stop"}
                 id: None,
                 name: None,
                 data: None,
+                id_origin: None,
             }
         ));
         assert_eq!(
@@ -1079,7 +1121,13 @@ data: {"type":"message_stop"}
                 text: "Answer.".to_string()
             }
         );
-        assert_eq!(events[9], StreamEvent::ContentBlockCompleted { index: 2 });
+        assert_eq!(
+            events[9],
+            StreamEvent::ContentBlockCompleted {
+                index: 2,
+                signature: None
+            }
+        );
     }
 
     /// SSE fixture where a `redacted_thinking` `content_block_start`

@@ -153,6 +153,7 @@ impl<S> ResponsesSseParser<S> {
                             id: None,
                             name: None,
                             data: None,
+                            id_origin: None,
                         })
                     }
                     "function_call" => {
@@ -178,6 +179,7 @@ impl<S> ResponsesSseParser<S> {
                             id: Some(tool_id),
                             name: Some(name.to_string()),
                             data: None,
+                            id_origin: None,
                         })
                     }
                     "reasoning" => {
@@ -200,6 +202,7 @@ impl<S> ResponsesSseParser<S> {
                             id: None,
                             name: None,
                             data: None,
+                            id_origin: None,
                         })
                     }
                     _ => Ok(StreamEvent::Ping),
@@ -239,7 +242,10 @@ impl<S> ResponsesSseParser<S> {
 
                     let index = self.state.current_index.take().unwrap_or(0);
                     self.state.current_kind = None;
-                    return Ok(StreamEvent::ContentBlockCompleted { index });
+                    return Ok(StreamEvent::ContentBlockCompleted {
+                        index,
+                        signature: None,
+                    });
                 };
 
                 let index = self.state.current_index.take().unwrap_or(0);
@@ -254,10 +260,16 @@ impl<S> ResponsesSseParser<S> {
                         index,
                         partial_json: remainder.to_string(),
                     });
-                    return Ok(StreamEvent::ContentBlockCompleted { index });
+                    return Ok(StreamEvent::ContentBlockCompleted {
+                        index,
+                        signature: None,
+                    });
                 }
 
-                Ok(StreamEvent::ContentBlockCompleted { index })
+                Ok(StreamEvent::ContentBlockCompleted {
+                    index,
+                    signature: None,
+                })
             }
             "response.reasoning_summary_text.delta" => {
                 // Stream reasoning summary text incrementally
@@ -333,16 +345,20 @@ impl<S> ResponsesSseParser<S> {
                                 encrypted_content,
                                 summary,
                             });
-                            self.pending
-                                .push_back(StreamEvent::ContentBlockCompleted { index });
+                            self.pending.push_back(StreamEvent::ContentBlockCompleted {
+                                index,
+                                signature: None,
+                            });
                             return Ok(StreamEvent::ReasoningDelta {
                                 index,
                                 reasoning: reasoning_text,
                             });
                         }
 
-                        self.pending
-                            .push_back(StreamEvent::ContentBlockCompleted { index });
+                        self.pending.push_back(StreamEvent::ContentBlockCompleted {
+                            index,
+                            signature: None,
+                        });
                         return Ok(StreamEvent::ReasoningCompleted {
                             index,
                             id,
@@ -372,17 +388,26 @@ impl<S> ResponsesSseParser<S> {
                                 index,
                                 partial_json: remainder.to_string(),
                             });
-                            return Ok(StreamEvent::ContentBlockCompleted { index });
+                            return Ok(StreamEvent::ContentBlockCompleted {
+                                index,
+                                signature: None,
+                            });
                         }
                     }
 
-                    return Ok(StreamEvent::ContentBlockCompleted { index });
+                    return Ok(StreamEvent::ContentBlockCompleted {
+                        index,
+                        signature: None,
+                    });
                 }
 
                 if let Some(index) = self.state.current_index.take() {
                     self.state.current_kind = None;
                     self.state.current_tool_argument_bytes = 0;
-                    Ok(StreamEvent::ContentBlockCompleted { index })
+                    Ok(StreamEvent::ContentBlockCompleted {
+                        index,
+                        signature: None,
+                    })
                 } else {
                     Ok(StreamEvent::Ping)
                 }
@@ -534,7 +559,10 @@ mod tests {
 
         assert!(matches!(
             event,
-            StreamEvent::ContentBlockCompleted { index: 0 }
+            StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature: None
+            }
         ));
         assert!(matches!(
             parser.pending.pop_front(),
@@ -581,7 +609,10 @@ mod tests {
 
         assert!(matches!(
             second,
-            StreamEvent::ContentBlockCompleted { index: 0 }
+            StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature: None
+            }
         ));
         assert!(matches!(
             parser.pending.pop_front(),
@@ -614,7 +645,10 @@ mod tests {
 
         assert!(matches!(
             done,
-            StreamEvent::ContentBlockCompleted { index: 0 }
+            StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature: None
+            }
         ));
         assert!(matches!(
             parser.pending.pop_front(),
@@ -690,7 +724,10 @@ mod tests {
             .unwrap();
         assert!(matches!(
             final_done,
-            StreamEvent::ContentBlockCompleted { index: 0 }
+            StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature: None
+            }
         ));
         assert!(matches!(
             parser.pending.pop_front(),
@@ -733,7 +770,10 @@ mod tests {
 
         assert!(matches!(
             done,
-            StreamEvent::ContentBlockCompleted { index: 0 }
+            StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature: None
+            }
         ));
         assert!(parser.pending.is_empty());
     }

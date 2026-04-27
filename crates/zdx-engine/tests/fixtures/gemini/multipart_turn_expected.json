@@ -1,0 +1,33 @@
+{
+  "role": "model",
+  "parts": [
+    {
+      "thought": true,
+      "text": "Let me check the file then list dir.",
+      "thoughtSignature": "c2lnX3Rob3VnaHQ="
+    },
+    {
+      "text": "I'll start by reading the README.",
+      "thoughtSignature": "c2lnX3RleHRfMQ=="
+    },
+    {
+      "functionCall": {
+        "id": "call_real_001",
+        "name": "read_file",
+        "args": {"path": "README.md"}
+      },
+      "thoughtSignature": "c2lnX2NhbGxfcmVhbA=="
+    },
+    {
+      "text": " Then I'll list the source dir.",
+      "thoughtSignature": "c2lnX3RleHRfMg=="
+    },
+    {
+      "functionCall": {
+        "name": "list_dir",
+        "args": {"path": "src"}
+      },
+      "thoughtSignature": "c2lnX2NhbGxfc3ludGg="
+    }
+  ]
+}

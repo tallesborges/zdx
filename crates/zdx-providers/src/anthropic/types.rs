@@ -260,7 +260,7 @@ impl ApiMessage {
 fn api_content_block(block: &ChatContentBlock, use_cache_control: bool) -> Option<ApiContentBlock> {
     match block {
         ChatContentBlock::Reasoning(reasoning) => api_reasoning_block(reasoning),
-        ChatContentBlock::Text(text) => Some(ApiContentBlock::Text {
+        ChatContentBlock::Text { text, .. } => Some(ApiContentBlock::Text {
             text: text.clone(),
             cache_control: use_cache_control.then(CacheControl::ephemeral),
         }),
@@ -268,7 +268,9 @@ fn api_content_block(block: &ChatContentBlock, use_cache_control: bool) -> Optio
             source: api_image_source(mime_type, data),
             cache_control: use_cache_control.then(CacheControl::ephemeral),
         }),
-        ChatContentBlock::ToolUse { id, name, input } => Some(ApiContentBlock::ToolUse {
+        ChatContentBlock::ToolUse {
+            id, name, input, ..
+        } => Some(ApiContentBlock::ToolUse {
             id: id.clone(),
             name: name.clone(),
             input: input.clone(),

@@ -377,6 +377,7 @@ mod tests {
             status: crate::core::events::TurnStatus::Completed,
             final_text: "final answer".to_string(),
             messages: Vec::new(),
+            prior_message_count: 0,
         })
         .unwrap();
         let output = std::process::Output {

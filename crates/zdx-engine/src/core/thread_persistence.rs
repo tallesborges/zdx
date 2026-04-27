@@ -151,6 +151,12 @@ pub enum ThreadEvent {
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         phase: Option<String>,
+        /// Provider-specific replay metadata (e.g. Gemini per-text-part
+        /// `thoughtSignature`). Persisted so the request builder can replay
+        /// the signature exactly on the next turn. Defaults to `None` for
+        /// older transcripts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replay: Option<crate::providers::ReplayToken>,
         ts: String,
     },
 
@@ -159,6 +165,16 @@ pub enum ThreadEvent {
         id: String,
         name: String,
         input: Value,
+        /// Whether `id` was emitted by the provider (`Real`) or synthesized
+        /// locally because the provider omitted one (`Synthesized`). Used by
+        /// the Gemini request builder to decide whether to replay the id on
+        /// the wire. Defaults to `Synthesized` for migration safety.
+        #[serde(default)]
+        id_origin: zdx_types::IdOrigin,
+        /// Provider-specific replay metadata (e.g. Gemini per-tool-call
+        /// `thoughtSignature`). Defaults to `None` for older transcripts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replay: Option<crate::providers::ReplayToken>,
         ts: String,
     },
 
@@ -176,9 +192,6 @@ pub enum ThreadEvent {
         role: String,
         #[serde(default = "default_interrupted_text")]
         text: String,
-        /// Partial assistant content received before interruption.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        partial_content: Option<String>,
         ts: String,
     },
 
@@ -251,6 +264,7 @@ impl ThreadEvent {
             role: "user".to_string(),
             text: text.into(),
             phase: None,
+            replay: None,
             ts: chrono_timestamp(),
         }
     }
@@ -266,16 +280,19 @@ impl ThreadEvent {
             role: "assistant".to_string(),
             text: text.into(),
             phase,
+            replay: None,
             ts: chrono_timestamp(),
         }
     }
 
-    /// Creates a new tool use event.
+    /// Creates a new tool use event with synthesized id and no replay metadata.
     pub fn tool_use(id: impl Into<String>, name: impl Into<String>, input: Value) -> Self {
         Self::ToolUse {
             id: id.into(),
             name: name.into(),
             input,
+            id_origin: zdx_types::IdOrigin::Synthesized,
+            replay: None,
             ts: chrono_timestamp(),
         }
     }
@@ -291,11 +308,10 @@ impl ThreadEvent {
     }
 
     /// Creates a new interrupted event.
-    pub fn interrupted(partial_content: Option<String>) -> Self {
+    pub fn interrupted() -> Self {
         Self::Interrupted {
             role: default_interrupted_role(),
             text: default_interrupted_text(),
-            partial_content,
             ts: chrono_timestamp(),
         }
     }
@@ -320,35 +336,32 @@ impl ThreadEvent {
         }
     }
 
-    /// Converts an `EngineEvent` to a `ThreadEvent` if applicable.
+    /// Converts an `AgentEvent` to a `ThreadEvent` if applicable.
     ///
-    /// Not all agent events are persisted. This returns `None` for events
-    /// that don't need to be saved (e.g., `AssistantDelta`, `ToolStarted`).
+    /// Streaming `AgentEvent`s (text/reasoning/tool-input deltas and their
+    /// `*Completed` siblings) are intentionally not persisted here.
+    /// `UsagePersistor` consumes `TurnCheckpoint` / `TurnFinished` and
+    /// writes ordered batches of `ThreadEvent`s by walking the snapshot
+    /// `messages: Vec<ChatMessage>` from `prior_message_count..` (see
+    /// `flush_messages`). This guarantees on-disk block order matches what
+    /// the provider streamed, which Gemini's implicit prompt cache
+    /// depends on.
     ///
-    /// Note: `AssistantCompleted` and user messages are handled separately by the
-    /// chat/agent modules since they have additional context.
+    /// This function still produces:
+    /// - `ThreadEvent::Interrupted` as an interruption marker. Partial
+    ///   assistant blocks for the interrupted turn are flushed by
+    ///   `flush_messages` as a `commentary`-phased `Message` event before
+    ///   this marker, so consumers can detect interruption without the
+    ///   marker itself carrying any payload.
+    /// - `ThreadEvent::Notice` for non-fatal informational notices.
     pub fn from_agent(event: &crate::core::events::AgentEvent) -> Option<Self> {
         use crate::core::events::AgentEvent;
 
         match event {
-            // ToolInputCompleted has the complete input (ToolRequested is emitted early with empty input)
-            AgentEvent::ToolInputCompleted { id, name, input } => {
-                Some(Self::tool_use(id.clone(), name.clone(), input.clone()))
-            }
-            AgentEvent::ToolCompleted { id, result } => {
-                let output = serde_json::to_value(result).unwrap_or_default();
-                Some(Self::tool_result(id.clone(), output, result.is_ok()))
-            }
             AgentEvent::TurnFinished {
                 status: crate::core::events::TurnStatus::Interrupted,
-                final_text,
                 ..
-            } => Some(Self::interrupted(
-                (!final_text.is_empty()).then(|| final_text.clone()),
-            )),
-            AgentEvent::ReasoningCompleted { block } => {
-                Some(Self::reasoning(block.text.clone(), block.replay.clone()))
-            }
+            } => Some(Self::interrupted()),
             // Persist informational notices (refusal, context window
             // exceeded) as a non-replayable thread event so they survive
             // reload but are NEVER re-sent to the provider as part of
@@ -358,13 +371,9 @@ impl ThreadEvent {
                 message: message.clone(),
                 ts: chrono_timestamp(),
             }),
-            // These are not persisted via this path:
-            // - AssistantDelta: streamed chunks, not final
-            // - AssistantCompleted: handled by caller with full context
-            // - ReasoningDelta: streamed chunks, not final
-            // - ToolRequested: early notification with empty input (ToolInputCompleted has full input)
-            // - ToolStarted: UI-only, not persisted
-            // - Error: not persisted (may be in future)
+            // Streaming events are consumed by the TUI directly; persistence
+            // batches them via `flush_messages` on `TurnCheckpoint` /
+            // `TurnFinished`.
             _ => None,
         }
     }
@@ -977,18 +986,9 @@ fn generate_thread_id() -> String {
 ///
 /// persist_handle.await.unwrap(); // Wait for persistence to finish
 /// ```
-pub fn spawn_thread_persist_task(thread: Thread, rx: AgentEventRx) -> JoinHandle<()> {
-    spawn_thread_persist_task_with_completed_messages(thread, rx, false)
-}
-
-/// Spawns a persistence task with optional assistant-final-message persistence.
-pub fn spawn_thread_persist_task_with_completed_messages(
-    mut thread: Thread,
-    mut rx: AgentEventRx,
-    persist_completed_messages: bool,
-) -> JoinHandle<()> {
+pub fn spawn_thread_persist_task(mut thread: Thread, mut rx: AgentEventRx) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut usage_persistor = UsagePersistor::new(persist_completed_messages);
+        let mut usage_persistor = UsagePersistor::new();
         while let Some(event) = rx.recv().await {
             for thread_event in usage_persistor.handle_event(&event) {
                 // Best-effort persistence - log errors but don't panic
@@ -1009,19 +1009,20 @@ pub fn spawn_thread_persist_task_with_completed_messages(
 #[derive(Debug, Default)]
 struct UsagePersistor {
     pending: Option<Usage>,
-    persist_completed_messages: bool,
+    /// Index into `messages` already flushed to disk for this run.
+    /// Combined with the run-entry `prior_message_count` cursor (carried on
+    /// every `TurnCheckpoint`/`TurnFinished`), this makes flushes idempotent
+    /// across repeated checkpoints — `start = max(prior_count, last_persisted)`.
+    last_persisted_index: usize,
 }
 
 impl UsagePersistor {
-    fn new(persist_completed_messages: bool) -> Self {
-        Self {
-            pending: None,
-            persist_completed_messages,
-        }
+    fn new() -> Self {
+        Self::default()
     }
 
     fn handle_event(&mut self, event: &crate::core::events::AgentEvent) -> Vec<ThreadEvent> {
-        use crate::core::events::{AgentEvent, TurnStatus};
+        use crate::core::events::AgentEvent;
 
         let mut events = Vec::new();
 
@@ -1054,21 +1055,22 @@ impl UsagePersistor {
                     }
                 }
             }
-            AgentEvent::TurnFinished {
-                status, final_text, ..
+            AgentEvent::TurnCheckpoint {
+                messages,
+                prior_message_count,
             } => {
                 self.flush_pending(&mut events);
+                self.flush_messages(messages, *prior_message_count, &mut events);
+            }
+            AgentEvent::TurnFinished {
+                messages,
+                prior_message_count,
+                ..
+            } => {
+                self.flush_pending(&mut events);
+                self.flush_messages(messages, *prior_message_count, &mut events);
                 if let Some(thread_event) = ThreadEvent::from_agent(event) {
                     events.push(thread_event);
-                }
-                if self.persist_completed_messages
-                    && matches!(status, TurnStatus::Completed)
-                    && !final_text.is_empty()
-                {
-                    events.push(ThreadEvent::assistant_message_with_phase(
-                        final_text,
-                        Some("final_answer".to_string()),
-                    ));
                 }
             }
             _ => {
@@ -1079,6 +1081,29 @@ impl UsagePersistor {
         }
 
         events
+    }
+
+    /// Walks the new turn-suffix of `messages` (from `max(prior_count,
+    /// last_persisted_index)` to the end) and emits ordered `ThreadEvent`s
+    /// for each block of each `ChatMessage`. Idempotent across repeated
+    /// checkpoints because `last_persisted_index` advances monotonically.
+    fn flush_messages(
+        &mut self,
+        full: &[crate::providers::ChatMessage],
+        prior_count: usize,
+        events: &mut Vec<ThreadEvent>,
+    ) {
+        let start = std::cmp::max(prior_count, self.last_persisted_index);
+        debug_assert!(start <= full.len());
+        if start >= full.len() {
+            return;
+        }
+
+        for msg in &full[start..] {
+            emit_message_events(msg, events);
+        }
+
+        self.last_persisted_index = full.len();
     }
 
     fn flush_pending(&mut self, events: &mut Vec<ThreadEvent>) {
@@ -1338,6 +1363,7 @@ pub fn search_thread_tools(options: &ThreadToolSearchOptions) -> Result<Vec<Thre
                     name,
                     input,
                     ts,
+                    ..
                 } => {
                     if !matches_tool_name_filter(&name, normalized_tool.as_deref()) {
                         continue;
@@ -1760,109 +1786,92 @@ pub fn load_thread_as_messages(id: &str) -> Result<Vec<crate::providers::ChatMes
 
 /// Converts chat messages back into thread events for replay/fork bootstrapping.
 pub fn messages_to_events(messages: &[crate::providers::ChatMessage]) -> Vec<ThreadEvent> {
-    use crate::providers::{ChatContentBlock, MessageContent};
-
     let mut events = Vec::new();
     for message in messages {
-        match (&message.role[..], &message.content) {
-            ("user", MessageContent::Text(text)) => {
-                events.push(ThreadEvent::user_message(text));
-            }
-            ("assistant", MessageContent::Text(text)) => {
-                events.push(ThreadEvent::assistant_message_with_phase(
-                    text,
-                    message.phase.clone(),
-                ));
-            }
-            ("assistant", MessageContent::Blocks(blocks)) => {
-                for block in blocks {
-                    match block {
-                        ChatContentBlock::Reasoning(reasoning) => {
-                            events.push(ThreadEvent::reasoning(
-                                reasoning.text.clone(),
-                                reasoning.replay.clone(),
-                            ));
-                        }
-                        ChatContentBlock::Text(text) => {
-                            events.push(ThreadEvent::assistant_message_with_phase(
-                                text,
-                                message.phase.clone(),
-                            ));
-                        }
-                        ChatContentBlock::ToolUse { id, name, input } => {
-                            events.push(ThreadEvent::tool_use(
-                                id.clone(),
-                                name.clone(),
-                                input.clone(),
-                            ));
-                        }
-                        ChatContentBlock::ToolResult(result) => {
-                            events.push(ThreadEvent::tool_result(
-                                result.tool_use_id.clone(),
-                                tool_result_content_to_value(&result.content),
-                                !result.is_error,
-                            ));
-                        }
-                        ChatContentBlock::Image { .. } => {}
-                    }
-                }
-            }
-            ("user", MessageContent::Blocks(blocks)) => {
-                let mut user_text_parts = Vec::new();
-                for block in blocks {
-                    match block {
-                        ChatContentBlock::Text(text) => user_text_parts.push(text.clone()),
-                        ChatContentBlock::ToolResult(result) => {
-                            if !user_text_parts.is_empty() {
-                                events
-                                    .push(ThreadEvent::user_message(user_text_parts.join("\n\n")));
-                                user_text_parts.clear();
-                            }
-                            events.push(ThreadEvent::tool_result(
-                                result.tool_use_id.clone(),
-                                tool_result_content_to_value(&result.content),
-                                !result.is_error,
-                            ));
-                        }
-                        ChatContentBlock::Image { .. } => {}
-                        ChatContentBlock::Reasoning(reasoning) => {
-                            events.push(ThreadEvent::reasoning(
-                                reasoning.text.clone(),
-                                reasoning.replay.clone(),
-                            ));
-                        }
-                        ChatContentBlock::ToolUse { id, name, input } => {
-                            events.push(ThreadEvent::tool_use(
-                                id.clone(),
-                                name.clone(),
-                                input.clone(),
-                            ));
-                        }
-                    }
-                }
-                if !user_text_parts.is_empty() {
-                    events.push(ThreadEvent::user_message(user_text_parts.join("\n\n")));
-                }
-            }
-            _ => {}
-        }
+        emit_message_events(message, &mut events);
     }
     events
 }
 
-fn tool_result_content_to_value(content: &crate::tools::ToolResultContent) -> Value {
-    let text = match content {
-        crate::tools::ToolResultContent::Text(text) => text.as_str(),
-        crate::tools::ToolResultContent::Blocks(blocks) => blocks
-            .iter()
-            .find_map(|block| match block {
-                crate::tools::ToolResultBlock::Text { text } => Some(text.as_str()),
-                crate::tools::ToolResultBlock::Image { .. } => None,
-            })
-            .unwrap_or(""),
-    };
+/// Walks a single `ChatMessage` and appends the per-block `ThreadEvent`s it
+/// represents, preserving original block order and per-part replay metadata.
+///
+/// Shared by `UsagePersistor::flush_messages` (the live write path) and the
+/// public `messages_to_events` converter so any caller round-tripping
+/// `ChatMessage`s produces the same on-disk shape. Per-part Gemini
+/// `thoughtSignature`s and tool-use `id_origin` data must survive both
+/// paths or implicit-cache replay breaks.
+fn emit_message_events(msg: &crate::providers::ChatMessage, events: &mut Vec<ThreadEvent>) {
+    use crate::providers::{ChatContentBlock, MessageContent};
 
-    serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_string()))
+    match &msg.content {
+        MessageContent::Text(text) => {
+            events.push(ThreadEvent::Message {
+                role: msg.role.clone(),
+                text: text.clone(),
+                phase: msg.phase.clone(),
+                replay: None,
+                ts: chrono_timestamp(),
+            });
+        }
+        MessageContent::Blocks(blocks) => {
+            for block in blocks {
+                match block {
+                    ChatContentBlock::Text { text, replay } => {
+                        events.push(ThreadEvent::Message {
+                            role: msg.role.clone(),
+                            text: text.clone(),
+                            phase: msg.phase.clone(),
+                            replay: replay.clone(),
+                            ts: chrono_timestamp(),
+                        });
+                    }
+                    ChatContentBlock::ToolUse {
+                        id,
+                        name,
+                        input,
+                        id_origin,
+                        replay,
+                    } => {
+                        events.push(ThreadEvent::ToolUse {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input: input.clone(),
+                            id_origin: *id_origin,
+                            replay: replay.clone(),
+                            ts: chrono_timestamp(),
+                        });
+                    }
+                    ChatContentBlock::Reasoning(rb) => {
+                        events.push(ThreadEvent::Reasoning {
+                            text: rb.text.clone(),
+                            replay: rb.replay.clone(),
+                            ts: chrono_timestamp(),
+                        });
+                    }
+                    ChatContentBlock::ToolResult(tr) => {
+                        let output = tr
+                            .content
+                            .as_text()
+                            .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                            .unwrap_or(Value::Null);
+                        events.push(ThreadEvent::ToolResult {
+                            tool_use_id: tr.tool_use_id.clone(),
+                            output,
+                            ok: !tr.is_error,
+                            ts: chrono_timestamp(),
+                        });
+                    }
+                    // Image content is not persisted in thread files.
+                    // Tool-result image bytes are dropped on the way through
+                    // `ToolResult.content.as_text()` already; user-side image
+                    // attachments are not part of the current persistence
+                    // schema.
+                    ChatContentBlock::Image { .. } => {}
+                }
+            }
+        }
+    }
 }
 
 /// Updates a thread's title by ID.
@@ -1890,8 +1899,16 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
 
 struct MessageReplay {
     messages: Vec<crate::providers::ChatMessage>,
-    pending_reasoning: Vec<crate::providers::ReasoningBlock>,
-    pending_tool_uses: Vec<(String, String, Value)>,
+    /// Ordered buffer of assistant-side blocks accumulated since the last
+    /// flush. Preserves the exact arrival order of `Reasoning`, `Text`, and
+    /// `ToolUse` events on disk — required so Gemini per-part replay
+    /// metadata stays attached to the right block.
+    pending_assistant_blocks: Vec<crate::providers::ChatContentBlock>,
+    /// Phase to attach when the pending assistant blocks are flushed
+    /// (e.g. `Some("commentary")` for an interrupted turn). Set when the
+    /// first phase-bearing assistant `Message` event of the batch arrives,
+    /// or explicitly by `Interrupted` handling.
+    pending_assistant_phase: Option<String>,
     pending_tool_results: Vec<crate::tools::ToolResult>,
     open_tool_uses: Vec<String>,
 }
@@ -1900,8 +1917,8 @@ impl MessageReplay {
     fn new() -> Self {
         Self {
             messages: Vec::new(),
-            pending_reasoning: Vec::new(),
-            pending_tool_uses: Vec::new(),
+            pending_assistant_blocks: Vec::new(),
+            pending_assistant_phase: None,
             pending_tool_results: Vec::new(),
             open_tool_uses: Vec::new(),
         }
@@ -1914,19 +1931,37 @@ impl MessageReplay {
             // provider as part of the conversation).
             ThreadEvent::Meta { .. } | ThreadEvent::Usage { .. } | ThreadEvent::Notice { .. } => {}
             ThreadEvent::Message {
-                role, text, phase, ..
-            } => self.handle_message(role, text, phase),
+                role,
+                text,
+                phase,
+                replay,
+                ..
+            } => self.handle_message(role, text, phase, replay),
             ThreadEvent::Reasoning { text, replay, .. } => {
                 self.flush_tool_results();
-                self.pending_reasoning
-                    .push(crate::providers::ReasoningBlock { text, replay });
+                self.pending_assistant_blocks
+                    .push(crate::providers::ChatContentBlock::Reasoning(
+                        crate::providers::ReasoningBlock { text, replay },
+                    ));
             }
             ThreadEvent::ToolUse {
-                id, name, input, ..
+                id,
+                name,
+                input,
+                id_origin,
+                replay,
+                ..
             } => {
                 self.flush_tool_results();
                 self.open_tool_uses.push(id.clone());
-                self.pending_tool_uses.push((id, name, input));
+                self.pending_assistant_blocks
+                    .push(crate::providers::ChatContentBlock::ToolUse {
+                        id,
+                        name,
+                        input,
+                        id_origin,
+                        replay,
+                    });
             }
             ThreadEvent::ToolResult {
                 tool_use_id,
@@ -1934,32 +1969,34 @@ impl MessageReplay {
                 ok,
                 ..
             } => self.handle_tool_result(tool_use_id, &output, ok),
-            ThreadEvent::Interrupted {
-                partial_content, ..
-            } => self.handle_interrupted(partial_content),
+            ThreadEvent::Interrupted { .. } => self.handle_interrupted(),
         }
     }
 
-    fn handle_message(&mut self, role: String, text: String, phase: Option<String>) {
+    fn handle_message(
+        &mut self,
+        role: String,
+        text: String,
+        phase: Option<String>,
+        replay: Option<crate::providers::ReplayToken>,
+    ) {
         use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
 
-        if role == "assistant"
-            && !self.pending_reasoning.is_empty()
-            && self.pending_tool_uses.is_empty()
-        {
+        if role == "assistant" {
+            // Append to ordered pending blocks; capture the message-level
+            // phase if any. Subsequent flushes will attach this phase to the
+            // assembled assistant message.
             self.flush_tool_results();
-            let mut blocks = self.take_assistant_blocks();
-            if !text.is_empty() {
-                blocks.push(ChatContentBlock::Text(text));
+            if self.pending_assistant_phase.is_none() {
+                self.pending_assistant_phase = phase;
             }
-            self.messages.push(ChatMessage {
-                role: "assistant".to_string(),
-                phase,
-                content: MessageContent::Blocks(blocks),
-            });
+            self.pending_assistant_blocks
+                .push(ChatContentBlock::Text { text, replay });
             return;
         }
 
+        // Non-assistant Message: flush any in-flight assistant blocks first,
+        // cancel orphaned tool_uses, then push the user/system message.
         self.flush_pending_assistant_blocks();
         self.cancel_open_tool_uses();
         self.messages.push(ChatMessage {
@@ -1981,23 +2018,13 @@ impl MessageReplay {
         });
     }
 
-    fn handle_interrupted(&mut self, partial_content: Option<String>) {
-        use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
-
+    fn handle_interrupted(&mut self) {
         self.flush_tool_results();
-        let mut blocks = self.take_assistant_blocks();
-        if let Some(content) = partial_content
-            && !content.is_empty()
-        {
-            blocks.push(ChatContentBlock::Text(content));
-        }
-        if !blocks.is_empty() {
-            self.messages.push(ChatMessage {
-                role: "assistant".to_string(),
-                phase: Some("commentary".to_string()),
-                content: MessageContent::Blocks(blocks),
-            });
-        }
+        // Mark the in-flight assistant batch as commentary: partial text
+        // arrives via earlier `Message` events, and the request builder
+        // tags an interrupted turn's text as commentary on replay.
+        self.pending_assistant_phase = Some("commentary".to_string());
+        self.flush_pending_assistant_blocks();
 
         for tool_use_id in std::mem::take(&mut self.open_tool_uses) {
             self.pending_tool_results
@@ -2023,23 +2050,18 @@ impl MessageReplay {
         self.flush_tool_results();
     }
 
-    fn take_assistant_blocks(&mut self) -> Vec<crate::providers::ChatContentBlock> {
-        let mut blocks = Vec::new();
-        for reasoning in std::mem::take(&mut self.pending_reasoning) {
-            blocks.push(crate::providers::ChatContentBlock::Reasoning(reasoning));
-        }
-        for (id, name, input) in std::mem::take(&mut self.pending_tool_uses) {
-            blocks.push(crate::providers::ChatContentBlock::ToolUse { id, name, input });
-        }
-        blocks
-    }
-
     fn flush_pending_assistant_blocks(&mut self) {
-        let blocks = self.take_assistant_blocks();
-        if !blocks.is_empty() {
-            self.messages
-                .push(crate::providers::ChatMessage::assistant_blocks(blocks));
+        if self.pending_assistant_blocks.is_empty() {
+            self.pending_assistant_phase = None;
+            return;
         }
+        let blocks = std::mem::take(&mut self.pending_assistant_blocks);
+        let phase = self.pending_assistant_phase.take();
+        self.messages.push(crate::providers::ChatMessage {
+            role: "assistant".to_string(),
+            phase,
+            content: crate::providers::MessageContent::Blocks(blocks),
+        });
         self.flush_tool_results();
     }
 
@@ -2353,7 +2375,7 @@ mod tests {
         assert!(json.contains("\"type\":\"tool_result\""));
         assert!(json.contains("\"ok\":true"));
 
-        let interrupted = ThreadEvent::interrupted(None);
+        let interrupted = ThreadEvent::interrupted();
         let json = serde_json::to_string(&interrupted).unwrap();
         assert!(json.contains("\"type\":\"interrupted\""));
         assert!(json.contains("\"role\":\"system\""));
@@ -2385,6 +2407,7 @@ mod tests {
             Some("thought summary".to_string()),
             Some(crate::providers::ReplayToken::Gemini {
                 signature: "base64sig".to_string(),
+                model: String::new(),
             }),
         );
         let json = serde_json::to_string(&reasoning_gemini).unwrap();
@@ -2521,7 +2544,7 @@ mod tests {
                 ));
                 assert!(matches!(
                     blocks.last(),
-                    Some(ChatContentBlock::Text(text)) if text == "Here is the answer."
+                    Some(ChatContentBlock::Text { text, .. }) if text == "Here is the answer."
                 ));
             }
             MessageContent::Text(_) => panic!("Expected assistant message with blocks"),
@@ -2615,6 +2638,7 @@ mod tests {
                     replay,
                     Some(crate::providers::ReplayToken::Gemini {
                         signature: "base64sig".to_string(),
+                        model: String::new(),
                     })
                 );
             }
@@ -2702,7 +2726,7 @@ mod tests {
                 "First block should be reasoning"
             );
             assert!(
-                matches!(&blocks[1], ChatContentBlock::Text(text) if text == "Here's my explanation."),
+                matches!(&blocks[1], ChatContentBlock::Text { text, .. } if text == "Here's my explanation."),
                 "Second block should be text"
             );
         } else {
@@ -2795,7 +2819,7 @@ mod tests {
                 "First block should be reasoning2 (not attached to tool_use message!)"
             );
             assert!(
-                matches!(&blocks[1], ChatContentBlock::Text(text)
+                matches!(&blocks[1], ChatContentBlock::Text { text, .. }
                     if text == "The command output was 'hello'."
                 ),
                 "Second block should be text"
@@ -3116,6 +3140,7 @@ mod tests {
             status: TurnStatus::Completed,
             final_text: "done".to_string(),
             messages: Vec::new(),
+            prior_message_count: 0,
         }))
         .unwrap();
         drop(tx);
@@ -3153,7 +3178,11 @@ mod tests {
         tx.send(Arc::new(AgentEvent::TurnFinished {
             status: TurnStatus::Interrupted,
             final_text: "partial".to_string(),
-            messages: Vec::new(),
+            messages: vec![crate::providers::ChatMessage::assistant_text(
+                "partial",
+                Some("commentary".to_string()),
+            )],
+            prior_message_count: 0,
         }))
         .unwrap();
         drop(tx);
@@ -3164,13 +3193,24 @@ mod tests {
         let (cumulative, latest) = extract_usage_from_thread_events(&events);
         assert_eq!(cumulative, Usage::new(500, 0, 100, 25));
         assert_eq!(latest, Usage::new(500, 0, 100, 25));
+        // Partial assistant text is flushed via `flush_messages` from the
+        // snapshot, not embedded in the `Interrupted` event itself. The
+        // `Interrupted` event is emitted as a marker; the partial text
+        // appears as an `assistant` `Message` event with
+        // `phase: Some("commentary")`.
         assert!(matches!(
             events.last(),
-            Some(ThreadEvent::Interrupted {
-                partial_content: Some(content),
-                ..
-            }) if content == "partial"
+            Some(ThreadEvent::Interrupted { .. })
         ));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            ThreadEvent::Message {
+                role,
+                text,
+                phase: Some(phase),
+                ..
+            } if role == "assistant" && text == "partial" && phase == "commentary"
+        )));
     }
 
     #[tokio::test]
@@ -3203,6 +3243,612 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // Persistence: checkpoint-batched message flush
+    // ---------------------------------------------------------------------
+
+    /// `TurnFinished` with `[reasoning, text, tool_use, text, tool_use]`
+    /// ordered blocks → JSONL on disk → rehydrate → same order.
+    #[tokio::test]
+    async fn test_persistence_round_trip_preserves_order() {
+        use crate::providers::{ChatContentBlock, ChatMessage, MessageContent, ReasoningBlock};
+
+        let _temp = setup_temp_zdx_home();
+
+        let thread = Thread::with_id(unique_thread_id("rt-order")).unwrap();
+        let (tx, rx) = create_event_channel();
+        let persist_handle = spawn_thread_persist_task(thread.clone(), rx);
+
+        let assistant = ChatMessage {
+            role: "assistant".to_string(),
+            phase: None,
+            content: MessageContent::Blocks(vec![
+                ChatContentBlock::Reasoning(ReasoningBlock {
+                    text: Some("first thoughts".to_string()),
+                    replay: None,
+                }),
+                ChatContentBlock::Text {
+                    text: "first text".to_string(),
+                    replay: None,
+                },
+                ChatContentBlock::tool_use("t1", "bash", json!({"command": "ls"})),
+                ChatContentBlock::Text {
+                    text: "second text".to_string(),
+                    replay: None,
+                },
+                ChatContentBlock::tool_use("t2", "bash", json!({"command": "pwd"})),
+            ]),
+        };
+
+        tx.send(Arc::new(AgentEvent::TurnFinished {
+            status: TurnStatus::Completed,
+            final_text: "second text".to_string(),
+            messages: vec![assistant],
+            prior_message_count: 0,
+        }))
+        .unwrap();
+        drop(tx);
+        persist_handle.await.unwrap();
+
+        let events = thread.read_events().unwrap();
+        // Skip the meta event and inspect the assistant-side events in order.
+        let kinds: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                ThreadEvent::Reasoning { .. } => Some("reasoning"),
+                ThreadEvent::Message { role, .. } if role == "assistant" => Some("text"),
+                ThreadEvent::ToolUse { .. } => Some("tool_use"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["reasoning", "text", "tool_use", "text", "tool_use"],
+            "events on disk: {events:#?}"
+        );
+    }
+
+    /// Per-part `replay` and `id_origin` survive a JSONL round-trip.
+    #[tokio::test]
+    async fn test_persistence_carries_per_part_signatures_and_id_origin() {
+        use crate::providers::{ChatContentBlock, ChatMessage, MessageContent, ReplayToken};
+
+        let _temp = setup_temp_zdx_home();
+
+        let thread = Thread::with_id(unique_thread_id("rt-sig")).unwrap();
+        let (tx, rx) = create_event_channel();
+        let persist_handle = spawn_thread_persist_task(thread.clone(), rx);
+
+        let assistant = ChatMessage {
+            role: "assistant".to_string(),
+            phase: None,
+            content: MessageContent::Blocks(vec![
+                ChatContentBlock::Text {
+                    text: "answer".to_string(),
+                    replay: Some(ReplayToken::Gemini {
+                        signature: "txt-sig".to_string(),
+                        model: "gemini-3-pro-preview".to_string(),
+                    }),
+                },
+                ChatContentBlock::ToolUse {
+                    id: "real-id".to_string(),
+                    name: "bash".to_string(),
+                    input: json!({"command": "ls"}),
+                    id_origin: zdx_types::IdOrigin::Real,
+                    replay: Some(ReplayToken::Gemini {
+                        signature: "tu-sig".to_string(),
+                        model: "gemini-3-pro-preview".to_string(),
+                    }),
+                },
+            ]),
+        };
+
+        tx.send(Arc::new(AgentEvent::TurnFinished {
+            status: TurnStatus::Completed,
+            final_text: "answer".to_string(),
+            messages: vec![assistant],
+            prior_message_count: 0,
+        }))
+        .unwrap();
+        drop(tx);
+        persist_handle.await.unwrap();
+
+        let events = thread.read_events().unwrap();
+        let mut text_replay = None;
+        let mut tool_replay = None;
+        let mut tool_origin = None;
+        for e in &events {
+            match e {
+                ThreadEvent::Message {
+                    role, text, replay, ..
+                } if role == "assistant" && text == "answer" => {
+                    text_replay = replay.clone();
+                }
+                ThreadEvent::ToolUse {
+                    id_origin, replay, ..
+                } => {
+                    tool_replay = replay.clone();
+                    tool_origin = Some(*id_origin);
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            text_replay,
+            Some(ReplayToken::Gemini {
+                signature: "txt-sig".to_string(),
+                model: "gemini-3-pro-preview".to_string(),
+            })
+        );
+        assert_eq!(
+            tool_replay,
+            Some(ReplayToken::Gemini {
+                signature: "tu-sig".to_string(),
+                model: "gemini-3-pro-preview".to_string(),
+            })
+        );
+        assert_eq!(tool_origin, Some(zdx_types::IdOrigin::Real));
+    }
+
+    /// Old transcripts (no `id_origin`/`replay` on `tool_use`) load with
+    /// `id_origin: Synthesized` and `replay: None`.
+    #[test]
+    fn test_old_transcript_loads_with_synthesized_default() {
+        let line = r#"{"type":"tool_use","id":"abc","name":"bash","input":{"command":"ls"},"ts":"2024-01-01T00:00:00Z"}"#;
+        let event: ThreadEvent = serde_json::from_str(line).unwrap();
+        match event {
+            ThreadEvent::ToolUse {
+                id_origin, replay, ..
+            } => {
+                assert_eq!(id_origin, zdx_types::IdOrigin::Synthesized);
+                assert_eq!(replay, None);
+            }
+            other => panic!("expected ToolUse, got {other:?}"),
+        }
+    }
+
+    /// Streaming `ToolInputCompleted` followed by `TurnFinished` produces
+    /// exactly one `ThreadEvent::ToolUse` (from the batched flush), not two.
+    #[tokio::test]
+    async fn test_streaming_events_no_longer_persisted() {
+        use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
+
+        let _temp = setup_temp_zdx_home();
+
+        let thread = Thread::with_id(unique_thread_id("no-stream-persist")).unwrap();
+        let (tx, rx) = create_event_channel();
+        let persist_handle = spawn_thread_persist_task(thread.clone(), rx);
+
+        // Streaming ToolInputCompleted should NOT be persisted any more.
+        tx.send(Arc::new(AgentEvent::ToolInputCompleted {
+            id: "t1".to_string(),
+            name: "bash".to_string(),
+            input: json!({"command": "ls"}),
+        }))
+        .unwrap();
+
+        // ReasoningCompleted should NOT be persisted either.
+        tx.send(Arc::new(AgentEvent::ReasoningCompleted {
+            block: crate::providers::ReasoningBlock {
+                text: Some("thinking".to_string()),
+                replay: None,
+            },
+        }))
+        .unwrap();
+
+        let assistant = ChatMessage {
+            role: "assistant".to_string(),
+            phase: None,
+            content: MessageContent::Blocks(vec![ChatContentBlock::tool_use(
+                "t1",
+                "bash",
+                json!({"command": "ls"}),
+            )]),
+        };
+
+        tx.send(Arc::new(AgentEvent::TurnFinished {
+            status: TurnStatus::Completed,
+            final_text: String::new(),
+            messages: vec![assistant],
+            prior_message_count: 0,
+        }))
+        .unwrap();
+        drop(tx);
+        persist_handle.await.unwrap();
+
+        let events = thread.read_events().unwrap();
+        let tool_use_count = events
+            .iter()
+            .filter(|e| matches!(e, ThreadEvent::ToolUse { .. }))
+            .count();
+        let reasoning_count = events
+            .iter()
+            .filter(|e| matches!(e, ThreadEvent::Reasoning { .. }))
+            .count();
+        assert_eq!(
+            tool_use_count, 1,
+            "expected exactly one ToolUse from batched flush, got {tool_use_count}: {events:#?}"
+        );
+        assert_eq!(
+            reasoning_count, 0,
+            "ReasoningCompleted should not be persisted as a streaming event"
+        );
+    }
+
+    /// `TurnFinished` containing `assistant→tool_use→user→tool_result` produces
+    /// `ThreadEvent`s in that order.
+    #[tokio::test]
+    async fn test_tool_result_persisted_with_tool_use_in_order() {
+        use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
+        use crate::tools::{ToolResult, ToolResultContent};
+
+        let _temp = setup_temp_zdx_home();
+
+        let thread = Thread::with_id(unique_thread_id("tool-order")).unwrap();
+        let (tx, rx) = create_event_channel();
+        let persist_handle = spawn_thread_persist_task(thread.clone(), rx);
+
+        let assistant = ChatMessage {
+            role: "assistant".to_string(),
+            phase: None,
+            content: MessageContent::Blocks(vec![ChatContentBlock::tool_use(
+                "t1",
+                "bash",
+                json!({"command": "ls"}),
+            )]),
+        };
+        let tool_results = ChatMessage::tool_results(vec![ToolResult {
+            tool_use_id: "t1".to_string(),
+            content: ToolResultContent::Text(r#"{"ok":true,"data":"file.txt"}"#.to_string()),
+            is_error: false,
+        }]);
+
+        tx.send(Arc::new(AgentEvent::TurnFinished {
+            status: TurnStatus::Completed,
+            final_text: String::new(),
+            messages: vec![assistant, tool_results],
+            prior_message_count: 0,
+        }))
+        .unwrap();
+        drop(tx);
+        persist_handle.await.unwrap();
+
+        let events = thread.read_events().unwrap();
+        let positions: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                ThreadEvent::ToolUse { .. } => Some("tool_use"),
+                ThreadEvent::ToolResult { .. } => Some("tool_result"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            positions,
+            vec!["tool_use", "tool_result"],
+            "events: {events:#?}"
+        );
+    }
+
+    /// `messages_to_events` (the public ChatMessage→ThreadEvent converter
+    /// used by external callers + the Gemini golden test) and the live
+    /// `flush_messages` write path must produce identical event sequences
+    /// for the same input. Specifically, intermixed user `Text + ToolResult`
+    /// blocks must NOT coalesce text into a single joined message — that
+    /// drops per-text `replay` and reorders against the on-disk schema.
+    #[test]
+    fn test_messages_to_events_matches_flush_messages_for_user_blocks() {
+        use crate::providers::{
+            ChatContentBlock, ChatMessage, MessageContent, ReplayToken, ReasoningBlock,
+        };
+        use crate::tools::{ToolResult, ToolResultContent};
+
+        let messages = vec![
+            // Assistant turn: reasoning + per-part text + real-id tool_use.
+            ChatMessage {
+                role: "assistant".to_string(),
+                phase: None,
+                content: MessageContent::Blocks(vec![
+                    ChatContentBlock::Reasoning(ReasoningBlock {
+                        text: Some("planning".to_string()),
+                        replay: Some(ReplayToken::Gemini {
+                            signature: "AAAAAAAAAAAAAAAA".to_string(),
+                            model: "gemini-3-pro-preview".to_string(),
+                        }),
+                    }),
+                    ChatContentBlock::Text {
+                        text: "first".to_string(),
+                        replay: Some(ReplayToken::Gemini {
+                            signature: "BBBBBBBBBBBBBBBB".to_string(),
+                            model: "gemini-3-pro-preview".to_string(),
+                        }),
+                    },
+                    ChatContentBlock::ToolUse {
+                        id: "call_real_001".to_string(),
+                        name: "read_file".to_string(),
+                        input: serde_json::json!({"path": "README.md"}),
+                        id_origin: zdx_types::IdOrigin::Real,
+                        replay: Some(ReplayToken::Gemini {
+                            signature: "CCCCCCCCCCCCCCCC".to_string(),
+                            model: "gemini-3-pro-preview".to_string(),
+                        }),
+                    },
+                ]),
+            },
+            // User turn with intermixed text + tool_result + text — the
+            // case the old `messages_to_events` coalesced into a single
+            // joined `user_message`, dropping the second text's `replay`
+            // and the per-text ordering.
+            ChatMessage {
+                role: "user".to_string(),
+                phase: None,
+                content: MessageContent::Blocks(vec![
+                    ChatContentBlock::Text {
+                        text: "before".to_string(),
+                        replay: Some(ReplayToken::Gemini {
+                            signature: "DDDDDDDDDDDDDDDD".to_string(),
+                            model: "gemini-3-pro-preview".to_string(),
+                        }),
+                    },
+                    ChatContentBlock::ToolResult(ToolResult {
+                        tool_use_id: "call_real_001".to_string(),
+                        content: ToolResultContent::Text("\"# zdx\"".to_string()),
+                        is_error: false,
+                    }),
+                    ChatContentBlock::Text {
+                        text: "after".to_string(),
+                        replay: Some(ReplayToken::Gemini {
+                            signature: "EEEEEEEEEEEEEEEE".to_string(),
+                            model: "gemini-3-pro-preview".to_string(),
+                        }),
+                    },
+                ]),
+            },
+        ];
+
+        // Direct path used by external callers (bot/handoff/golden helper).
+        let via_messages_to_events = messages_to_events(&messages);
+
+        // Same input run through the live write path's flush helper. The
+        // two MUST produce identical event sequences modulo timestamps.
+        let mut via_flush = Vec::new();
+        let mut persistor = UsagePersistor::new();
+        persistor.flush_messages(&messages, 0, &mut via_flush);
+
+        assert_eq!(
+            via_messages_to_events.len(),
+            via_flush.len(),
+            "event count mismatch: m2e={:#?}\nflush={:#?}",
+            via_messages_to_events,
+            via_flush,
+        );
+
+        for (a, b) in via_messages_to_events.iter().zip(via_flush.iter()) {
+            // Compare structurally, ignoring `ts` (clock-based, will differ).
+            assert_eq!(
+                strip_ts(a),
+                strip_ts(b),
+                "event payload mismatch:\nm2e={a:#?}\nflush={b:#?}"
+            );
+        }        // Spot-check that the user-side per-text `replay` survived the
+        // conversion (the regression the old coalescing code introduced).
+        let user_msgs: Vec<&ThreadEvent> = via_messages_to_events
+            .iter()
+            .filter(|e| matches!(e, ThreadEvent::Message { role, .. } if role == "user"))
+            .collect();
+        assert_eq!(user_msgs.len(), 2, "expected two separate user text events");
+        if let ThreadEvent::Message {
+            text,
+            replay: Some(ReplayToken::Gemini { signature, .. }),
+            ..
+        } = user_msgs[0]
+        {
+            assert_eq!(text, "before");
+            assert_eq!(signature, "DDDDDDDDDDDDDDDD");
+        } else {
+            panic!("first user text lost its replay metadata: {:#?}", user_msgs[0]);
+        }
+        if let ThreadEvent::Message {
+            text,
+            replay: Some(ReplayToken::Gemini { signature, .. }),
+            ..
+        } = user_msgs[1]
+        {
+            assert_eq!(text, "after");
+            assert_eq!(signature, "EEEEEEEEEEEEEEEE");
+        } else {
+            panic!("second user text lost its replay metadata: {:#?}", user_msgs[1]);
+        }
+    }
+
+    /// Returns a `serde_json::Value` representation of `event` with the
+    /// `ts` field cleared so two events recorded at slightly different
+    /// clock instants compare equal by payload alone.
+    fn strip_ts(event: &ThreadEvent) -> serde_json::Value {
+        let mut value = serde_json::to_value(event).expect("serialize event");
+        if let Some(map) = value.as_object_mut() {
+            map.remove("ts");
+        }
+        value
+    }
+
+    /// `TurnCheckpoint` flushes messages 0..3, then `TurnFinished` with
+    /// messages 0..5 flushes only 3..5 — no re-write of 0..3. Both events
+    /// carry the same `prior_message_count` (run-entry cursor).
+    #[tokio::test]
+    async fn test_checkpoint_then_turn_finished_idempotent() {
+        use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
+        use crate::tools::{ToolResult, ToolResultContent};
+
+        let _temp = setup_temp_zdx_home();
+
+        let thread = Thread::with_id(unique_thread_id("checkpoint-idempotent")).unwrap();
+        let (tx, rx) = create_event_channel();
+        let persist_handle = spawn_thread_persist_task(thread.clone(), rx);
+
+        let user_msg = ChatMessage::user("do two things");
+        let assistant_t1 = ChatMessage {
+            role: "assistant".to_string(),
+            phase: None,
+            content: MessageContent::Blocks(vec![ChatContentBlock::tool_use(
+                "t1",
+                "bash",
+                json!({"command": "echo one"}),
+            )]),
+        };
+        let tool_result_t1 = ChatMessage::tool_results(vec![ToolResult {
+            tool_use_id: "t1".to_string(),
+            content: ToolResultContent::Text(r#"{"ok":true,"data":"one"}"#.to_string()),
+            is_error: false,
+        }]);
+
+        // Caller appended user_msg directly before kicking off the engine, so
+        // `prior_message_count` is 1 (covers user_msg). The engine then
+        // appended assistant_t1 + tool_result_t1, giving 3 total messages.
+        tx.send(Arc::new(AgentEvent::TurnCheckpoint {
+            messages: vec![
+                user_msg.clone(),
+                assistant_t1.clone(),
+                tool_result_t1.clone(),
+            ],
+            prior_message_count: 1,
+        }))
+        .unwrap();
+
+        // Second tool turn:
+        let assistant_t2 = ChatMessage {
+            role: "assistant".to_string(),
+            phase: None,
+            content: MessageContent::Blocks(vec![ChatContentBlock::tool_use(
+                "t2",
+                "bash",
+                json!({"command": "echo two"}),
+            )]),
+        };
+        let tool_result_t2 = ChatMessage::tool_results(vec![ToolResult {
+            tool_use_id: "t2".to_string(),
+            content: ToolResultContent::Text(r#"{"ok":true,"data":"two"}"#.to_string()),
+            is_error: false,
+        }]);
+
+        tx.send(Arc::new(AgentEvent::TurnFinished {
+            status: TurnStatus::Completed,
+            final_text: String::new(),
+            messages: vec![
+                user_msg,
+                assistant_t1,
+                tool_result_t1,
+                assistant_t2,
+                tool_result_t2,
+            ],
+            prior_message_count: 1,
+        }))
+        .unwrap();
+        drop(tx);
+        persist_handle.await.unwrap();
+
+        let events = thread.read_events().unwrap();
+        let tool_use_ids: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                ThreadEvent::ToolUse { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let tool_result_ids: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                ThreadEvent::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            tool_use_ids,
+            vec!["t1", "t2"],
+            "each tool_use should appear exactly once: {events:#?}"
+        );
+        assert_eq!(
+            tool_result_ids,
+            vec!["t1", "t2"],
+            "each tool_result should appear exactly once: {events:#?}"
+        );
+        // The user message at index 0 was already persisted by the caller
+        // (prior_message_count=1), so flush_messages must not re-emit it.
+        let user_message_count = events
+            .iter()
+            .filter(|e| matches!(e, ThreadEvent::Message { role, .. } if role == "user"))
+            .count();
+        // Tool-result messages have role="user" but `Blocks` content; only
+        // `MessageContent::Text` user messages serialize as `Message{role:"user"}`.
+        assert_eq!(
+            user_message_count, 0,
+            "caller-persisted user message must not be flushed again: {events:#?}"
+        );
+    }
+
+    /// Crash simulation: emit `TurnCheckpoint` after tool turn 1, drop the
+    /// consumer (simulating crash), reload from disk; messages from tool
+    /// turn 1 must be present, in-flight tool turn 2 must not.
+    #[tokio::test]
+    async fn test_checkpoint_persistence_survives_crash_simulation() {
+        use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
+        use crate::tools::{ToolResult, ToolResultContent};
+
+        let _temp = setup_temp_zdx_home();
+
+        let thread = Thread::with_id(unique_thread_id("checkpoint-crash")).unwrap();
+        let (tx, rx) = create_event_channel();
+        let persist_handle = spawn_thread_persist_task(thread.clone(), rx);
+
+        let user_msg = ChatMessage::user("two things");
+        let assistant_t1 = ChatMessage {
+            role: "assistant".to_string(),
+            phase: None,
+            content: MessageContent::Blocks(vec![ChatContentBlock::tool_use(
+                "t1",
+                "bash",
+                json!({"command": "echo one"}),
+            )]),
+        };
+        let tool_result_t1 = ChatMessage::tool_results(vec![ToolResult {
+            tool_use_id: "t1".to_string(),
+            content: ToolResultContent::Text(r#"{"ok":true,"data":"one"}"#.to_string()),
+            is_error: false,
+        }]);
+
+        tx.send(Arc::new(AgentEvent::TurnCheckpoint {
+            messages: vec![user_msg, assistant_t1, tool_result_t1],
+            prior_message_count: 1,
+        }))
+        .unwrap();
+
+        // Simulate crash: drop the sender without sending TurnFinished. The
+        // in-flight second tool turn (t2) is never persisted.
+        drop(tx);
+        persist_handle.await.unwrap();
+
+        let events = thread.read_events().unwrap();
+        let tool_use_ids: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                ThreadEvent::ToolUse { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            tool_use_ids,
+            vec!["t1"],
+            "only the completed tool turn should be on disk: {events:#?}"
+        );
+        let tool_result_ids: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                ThreadEvent::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tool_result_ids, vec!["t1"]);
     }
 
     #[test]
@@ -3291,7 +3937,9 @@ mod tests {
 
     /// Verifies that when a turn is interrupted mid-stream, the partial assistant
     /// content (reasoning, tool calls, and streamed text) is preserved in the
-    /// reconstructed messages so the model sees them on the next request.
+    /// reconstructed messages so the model sees them on the next request. The
+    /// production write path emits partial assistant text as a `Message` event
+    /// with `phase: Some("commentary")` before the `Interrupted` marker.
     #[test]
     fn test_interrupted_turn_preserves_reasoning_tools_and_partial_text() {
         use crate::providers::{ChatContentBlock, MessageContent};
@@ -3307,8 +3955,17 @@ mod tests {
             ),
             // Tool was requested but not completed
             ThreadEvent::tool_use("t1", "bash", json!({"command": "find . -name '*.rs'"})),
-            // User interrupted here — no tool_result, no assistant_message
-            ThreadEvent::interrupted(Some("Here are the files I found so far".to_string())),
+            // Partial assistant text streamed before the interrupt — written
+            // as a `commentary`-phase Message by the production write path.
+            ThreadEvent::Message {
+                role: "assistant".to_string(),
+                text: "Here are the files I found so far".to_string(),
+                phase: Some("commentary".to_string()),
+                replay: None,
+                ts: chrono_timestamp(),
+            },
+            // User interrupted here — no tool_result, no final assistant message.
+            ThreadEvent::interrupted(),
             // User sends a new message
             ThreadEvent::user_message("actually, just focus on the tests"),
         ];
@@ -3350,7 +4007,7 @@ mod tests {
             assert!(
                 blocks
                     .iter()
-                    .any(|b| matches!(b, ChatContentBlock::Text(t) if t.contains("files I found"))),
+                    .any(|b| matches!(b, ChatContentBlock::Text { text: t, .. } if t.contains("files I found"))),
                 "Missing partial text in interrupted assistant message"
             );
         } else {
@@ -3390,7 +4047,7 @@ mod tests {
             ThreadEvent::tool_result("t1", json!({"ok": true, "data": "fn main() {}"}), true),
             // Second tool requested but user interrupted before completion
             ThreadEvent::tool_use("t2", "bash", json!({"command": "cargo test"})),
-            ThreadEvent::interrupted(None),
+            ThreadEvent::interrupted(),
             ThreadEvent::user_message("stop, let me rethink"),
         ];
 
@@ -3399,10 +4056,10 @@ mod tests {
         // Expected: user, assistant(t1+t2), tool_results(t1), assistant(t2 only), cancelled(t2), user
         // Actually let me trace through MessageReplay:
         // - user_message → messages.push(user)
-        // - tool_use t1 → open_tool_uses=[t1], pending_tool_uses=[(t1,...)]
+        // - tool_use t1 → open_tool_uses=[t1], pending_assistant_blocks=[(t1,...)]
         // - tool_result t1 → removes t1 from open, adds to pending_results, flushes assistant blocks (t1 tool_use), then flushes tool_results
-        // - tool_use t2 → open_tool_uses=[t2], pending_tool_uses=[(t2,...)]
-        // - interrupted(None) → flush_tool_results (empty), take_assistant_blocks → [t2 tool_use], push assistant, cancel open t2
+        // - tool_use t2 → open_tool_uses=[t2], pending_assistant_blocks=[(t2,...)]
+        // - interrupted(None) → flush_tool_results (empty), drain pending_assistant_blocks → [t2 tool_use], push assistant, cancel open t2
         // - user_message → push user
         //
         // Result: user, assistant(tool_use t1), user(tool_result t1), assistant(tool_use t2), user(cancelled t2), user

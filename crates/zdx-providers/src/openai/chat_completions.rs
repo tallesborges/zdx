@@ -377,8 +377,10 @@ fn assistant_blocks_message(
 
     for block in blocks {
         match block {
-            ChatContentBlock::Text(value) => text.push_str(value),
-            ChatContentBlock::ToolUse { id, name, input } => {
+            ChatContentBlock::Text { text: value, .. } => text.push_str(value),
+            ChatContentBlock::ToolUse {
+                id, name, input, ..
+            } => {
                 let arguments = serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string());
                 tool_calls.push(ChatToolCall {
                     id: id.clone(),
@@ -431,7 +433,7 @@ fn user_blocks_messages(blocks: &[ChatContentBlock]) -> Vec<ChatCompletionMessag
 
     for block in blocks {
         match block {
-            ChatContentBlock::Text(value) => {
+            ChatContentBlock::Text { text: value, .. } => {
                 content_parts.push(ChatContentPart::Text {
                     text: value.clone(),
                 });
@@ -631,6 +633,7 @@ impl<S> ChatCompletionsSseParser<S> {
             id: None,
             name: None,
             data: None,
+            id_origin: None,
         });
         index
     }
@@ -669,13 +672,17 @@ impl<S> ChatCompletionsSseParser<S> {
         self.emitted_done = true;
 
         if let Some(index) = self.text_index.take() {
-            self.pending
-                .push_back(StreamEvent::ContentBlockCompleted { index });
+            self.pending.push_back(StreamEvent::ContentBlockCompleted {
+                index,
+                signature: None,
+            });
         }
 
         if let Some(index) = self.reasoning_index.take() {
-            self.pending
-                .push_back(StreamEvent::ContentBlockCompleted { index });
+            self.pending.push_back(StreamEvent::ContentBlockCompleted {
+                index,
+                signature: None,
+            });
         }
 
         let tool_indices: Vec<usize> = self
@@ -684,8 +691,10 @@ impl<S> ChatCompletionsSseParser<S> {
             .map(|state| state.stream_index)
             .collect();
         for index in tool_indices {
-            self.pending
-                .push_back(StreamEvent::ContentBlockCompleted { index });
+            self.pending.push_back(StreamEvent::ContentBlockCompleted {
+                index,
+                signature: None,
+            });
         }
 
         let usage = self.final_usage.clone().unwrap_or_default();
@@ -802,6 +811,7 @@ impl<S> ChatCompletionsSseParser<S> {
                     id: None,
                     name: None,
                     data: None,
+                    id_origin: None,
                 });
             }
             if !text.is_empty() {
@@ -866,6 +876,7 @@ impl<S> ChatCompletionsSseParser<S> {
                         id: Some(tool_id.clone()),
                         name: Some(name.to_string()),
                         data: None,
+                        id_origin: None,
                     });
                     ToolCallState { stream_index }
                 });
@@ -1076,6 +1087,8 @@ mod tests {
                 id: "call_1".to_string(),
                 name: "some_tool".to_string(),
                 input: json!({"arg": "value"}),
+                id_origin: zdx_types::IdOrigin::Synthesized,
+                replay: None,
             }]),
         ];
 
@@ -1107,6 +1120,8 @@ mod tests {
                 id: "call_1".to_string(),
                 name: "some_tool".to_string(),
                 input: json!({"arg": "value"}),
+                id_origin: zdx_types::IdOrigin::Synthesized,
+                replay: None,
             }]),
         ];
 
@@ -1143,6 +1158,8 @@ mod tests {
                     id: "call_1".to_string(),
                     name: "some_tool".to_string(),
                     input: json!({"arg": "value"}),
+                    id_origin: zdx_types::IdOrigin::Synthesized,
+                    replay: None,
                 },
             ]),
         ];
@@ -1168,7 +1185,7 @@ mod tests {
         let config = test_config(true);
         let messages = vec![
             ChatMessage::user("hi"),
-            ChatMessage::assistant_blocks(vec![ChatContentBlock::Text("hello".to_string())]),
+            ChatMessage::assistant_blocks(vec![ChatContentBlock::text("hello")]),
         ];
 
         let request = ChatCompletionRequest::new(&config, &HashMap::new(), &messages, &[], None);

@@ -47,3 +47,7 @@ zdx-types.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+
+[dev-dependencies]
+bytes.workspace = true
+futures-util.workspace = true

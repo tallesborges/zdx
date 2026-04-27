@@ -6,7 +6,7 @@ use futures_util::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::messages::{ContentBlockType, SignatureProvider};
+use crate::messages::{ContentBlockType, IdOrigin, SignatureProvider};
 
 /// Categories of provider errors for consistent error handling.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -246,6 +246,13 @@ pub enum StreamEvent {
         /// that must be replayed back to the provider unchanged on
         /// subsequent turns. `None` for every other block type.
         data: Option<String>,
+        /// For `tool_use` blocks: whether the `id` was emitted by the
+        /// provider (`Real`) or synthesized locally because the provider
+        /// omitted one (`Synthesized`). `None` for non-`tool_use` blocks
+        /// and for providers that do not distinguish (Anthropic / `OpenAI`).
+        /// Used by the Gemini request builder to decide whether to replay
+        /// the id on the wire — see `IdOrigin` docs.
+        id_origin: Option<IdOrigin>,
     },
     /// Text delta within a content block
     TextDelta { index: usize, text: String },
@@ -267,8 +274,18 @@ pub enum StreamEvent {
         /// Human-readable summary of the reasoning (for display)
         summary: Option<String>,
     },
-    /// A content block has ended
-    ContentBlockCompleted { index: usize },
+    /// A content block has ended.
+    ///
+    /// `signature` carries a per-part replay signature when the provider
+    /// emits one (currently: Gemini's `thoughtSignature` on text and
+    /// `tool_use` parts). Anthropic and `OpenAI` signatures continue to flow
+    /// through their dedicated events (`ReasoningSignatureDelta` /
+    /// `ReasoningCompleted`); this field exists for the cross-provider case
+    /// where no dedicated signature event applies.
+    ContentBlockCompleted {
+        index: usize,
+        signature: Option<(SignatureProvider, String)>,
+    },
     /// Message delta (e.g., `stop_reason` update, final usage)
     MessageDelta {
         stop_reason: Option<String>,

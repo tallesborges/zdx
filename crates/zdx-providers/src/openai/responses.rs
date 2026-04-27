@@ -189,7 +189,7 @@ fn append_assistant_blocks(
     let phase = explicit_phase.unwrap_or_else(|| assistant_phase_for_blocks(blocks));
     for block in blocks {
         match block {
-            ChatContentBlock::Text(text) => {
+            ChatContentBlock::Text { text, .. } => {
                 input.push(message_item(
                     "assistant",
                     Some(phase),
@@ -205,6 +205,7 @@ fn append_assistant_blocks(
                 id,
                 name,
                 input: arguments,
+                ..
             } => input.push(function_call_item(id, name, arguments)),
             ChatContentBlock::ToolResult(result) => append_tool_result(result, input),
             ChatContentBlock::Image { .. } => {}
@@ -216,7 +217,7 @@ fn append_user_blocks(blocks: &[ChatContentBlock], input: &mut Vec<InputItem>) {
     let mut content_parts = Vec::new();
     for block in blocks {
         match block {
-            ChatContentBlock::Text(text) => {
+            ChatContentBlock::Text { text, .. } => {
                 content_parts.push(InputContent::InputText { text: text.clone() });
             }
             ChatContentBlock::Image { mime_type, data } => {
@@ -416,11 +417,13 @@ mod tests {
     #[test]
     fn assistant_tool_preambles_are_marked_as_commentary() {
         let messages = vec![ChatMessage::assistant_blocks(vec![
-            ChatContentBlock::Text("I’ll inspect the file first.".to_string()),
+            ChatContentBlock::text("I’ll inspect the file first."),
             ChatContentBlock::ToolUse {
                 id: "call_1".to_string(),
                 name: "read".to_string(),
                 input: serde_json::json!({"file_path": "src/main.rs"}),
+                id_origin: zdx_types::IdOrigin::Synthesized,
+                replay: None,
             },
         ])];
 

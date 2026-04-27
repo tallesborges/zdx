@@ -111,6 +111,26 @@ pub enum AgentEvent {
         final_text: String,
         /// Updated message history (includes assistant responses and tool results).
         messages: Vec<ChatMessage>,
+        /// Number of messages in `messages` that already existed prior to this
+        /// agent turn. Used by persistence to slice the new turn-suffix and
+        /// avoid re-persisting historical context. Defaults to `0` for old
+        /// transcripts/tests that constructed `TurnFinished` directly.
+        #[serde(default)]
+        prior_message_count: usize,
+    },
+
+    /// Non-terminal incremental message snapshot emitted between tool turns
+    /// inside a single agent run. Persistence consumes this to flush messages
+    /// in order without waiting for the terminal `TurnFinished`. UI consumers
+    /// already track live state from streaming events and can ignore this.
+    TurnCheckpoint {
+        /// Updated message history at this checkpoint (includes assistant
+        /// responses and tool results emitted so far in this agent run).
+        messages: Vec<ChatMessage>,
+        /// Number of messages in `messages` that already existed prior to this
+        /// agent turn (run-entry cursor). Stays stable across all checkpoints
+        /// emitted within a single run.
+        prior_message_count: usize,
     },
 
     /// Token usage update from the provider.
