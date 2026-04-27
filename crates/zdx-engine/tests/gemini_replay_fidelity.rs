@@ -74,43 +74,7 @@ fn apply_stream_event(turn: &mut AssistantTurnBuilder, event: StreamEvent) {
             name,
             id_origin,
             data,
-        } => match block_type {
-            ContentBlockType::ToolUse => {
-                turn.push_tool_use(ToolUseBuilder {
-                    index,
-                    id: id.unwrap_or_default(),
-                    name: name.unwrap_or_default().to_ascii_lowercase(),
-                    input_json: String::new(),
-                    input_preview_len: 0,
-                    id_origin: id_origin.unwrap_or_default(),
-                    replay: None,
-                });
-            }
-            ContentBlockType::Text => {
-                let _ = turn.ensure_text_part_mut(index);
-            }
-            ContentBlockType::Reasoning => {
-                turn.push_reasoning(ThinkingBuilder {
-                    index,
-                    text: String::new(),
-                    signature: String::new(),
-                    signature_provider: None,
-                    replay: None,
-                    had_delta: false,
-                });
-            }
-            ContentBlockType::RedactedThinking => {
-                let data = data.unwrap_or_default();
-                turn.push_reasoning(ThinkingBuilder {
-                    index,
-                    text: String::new(),
-                    signature: String::new(),
-                    signature_provider: None,
-                    replay: Some(ReplayToken::AnthropicRedacted { data }),
-                    had_delta: false,
-                });
-            }
-        },
+        } => apply_content_block_start(turn, index, block_type, id, name, id_origin, data),
         StreamEvent::TextDelta { index, text } => {
             let part = turn.ensure_text_part_mut(index);
             part.text.push_str(&text);
@@ -142,40 +106,7 @@ fn apply_stream_event(turn: &mut AssistantTurnBuilder, event: StreamEvent) {
             }
         }
         StreamEvent::ContentBlockCompleted { index, signature } => {
-            let model_for_promotion = turn.model.clone();
-            // Promote a pending reasoning signature into a `ReplayToken` so
-            // the round-tripped reasoning block carries it on disk too.
-            if let Some(tb) = turn.find_thinking_mut(index)
-                && !tb.signature.is_empty()
-                && tb.replay.is_none()
-            {
-                let token = match tb.signature_provider {
-                    Some(SignatureProvider::Gemini) => ReplayToken::Gemini {
-                        signature: std::mem::take(&mut tb.signature),
-                        model: model_for_promotion,
-                    },
-                    Some(SignatureProvider::Anthropic) | None => ReplayToken::Anthropic {
-                        signature: std::mem::take(&mut tb.signature),
-                    },
-                };
-                tb.replay = Some(token);
-            }
-            // Per-part Gemini signatures (text / tool_use) ride this channel.
-            if let Some((sig_provider, sig)) = signature {
-                let model = turn.model.clone();
-                let token = match sig_provider {
-                    SignatureProvider::Gemini => ReplayToken::Gemini {
-                        signature: sig,
-                        model,
-                    },
-                    SignatureProvider::Anthropic => ReplayToken::Anthropic { signature: sig },
-                };
-                if let Some(text_part) = turn.find_text_mut(index) {
-                    text_part.replay = Some(token);
-                } else if let Some(tool_part) = turn.find_tool_use_mut(index) {
-                    tool_part.replay = Some(token);
-                }
-            }
+            apply_content_block_completed(turn, index, signature);
         }
         // Lifecycle / unrelated events: no replay-relevant state to capture.
         StreamEvent::MessageStart { .. }
@@ -185,6 +116,95 @@ fn apply_stream_event(turn: &mut AssistantTurnBuilder, event: StreamEvent) {
         | StreamEvent::Ignored { .. }
         | StreamEvent::ReasoningCompleted { .. }
         | StreamEvent::Error { .. } => {}
+    }
+}
+
+fn apply_content_block_start(
+    turn: &mut AssistantTurnBuilder,
+    index: usize,
+    block_type: ContentBlockType,
+    id: Option<String>,
+    name: Option<String>,
+    id_origin: Option<IdOrigin>,
+    data: Option<String>,
+) {
+    match block_type {
+        ContentBlockType::ToolUse => {
+            turn.push_tool_use(ToolUseBuilder {
+                index,
+                id: id.unwrap_or_default(),
+                name: name.unwrap_or_default().to_ascii_lowercase(),
+                input_json: String::new(),
+                input_preview_len: 0,
+                id_origin: id_origin.unwrap_or_default(),
+                replay: None,
+            });
+        }
+        ContentBlockType::Text => {
+            let _ = turn.ensure_text_part_mut(index);
+        }
+        ContentBlockType::Reasoning => {
+            turn.push_reasoning(ThinkingBuilder {
+                index,
+                text: String::new(),
+                signature: String::new(),
+                signature_provider: None,
+                replay: None,
+                had_delta: false,
+            });
+        }
+        ContentBlockType::RedactedThinking => {
+            let data = data.unwrap_or_default();
+            turn.push_reasoning(ThinkingBuilder {
+                index,
+                text: String::new(),
+                signature: String::new(),
+                signature_provider: None,
+                replay: Some(ReplayToken::AnthropicRedacted { data }),
+                had_delta: false,
+            });
+        }
+    }
+}
+
+fn apply_content_block_completed(
+    turn: &mut AssistantTurnBuilder,
+    index: usize,
+    signature: Option<(SignatureProvider, String)>,
+) {
+    let model_for_promotion = turn.model.clone();
+    // Promote a pending reasoning signature into a `ReplayToken` so
+    // the round-tripped reasoning block carries it on disk too.
+    if let Some(tb) = turn.find_thinking_mut(index)
+        && !tb.signature.is_empty()
+        && tb.replay.is_none()
+    {
+        let token = match tb.signature_provider {
+            Some(SignatureProvider::Gemini) => ReplayToken::Gemini {
+                signature: std::mem::take(&mut tb.signature),
+                model: model_for_promotion,
+            },
+            Some(SignatureProvider::Anthropic) | None => ReplayToken::Anthropic {
+                signature: std::mem::take(&mut tb.signature),
+            },
+        };
+        tb.replay = Some(token);
+    }
+    // Per-part Gemini signatures (text / tool_use) ride this channel.
+    if let Some((sig_provider, sig)) = signature {
+        let model = turn.model.clone();
+        let token = match sig_provider {
+            SignatureProvider::Gemini => ReplayToken::Gemini {
+                signature: sig,
+                model,
+            },
+            SignatureProvider::Anthropic => ReplayToken::Anthropic { signature: sig },
+        };
+        if let Some(text_part) = turn.find_text_mut(index) {
+            text_part.replay = Some(token);
+        } else if let Some(tool_part) = turn.find_tool_use_mut(index) {
+            tool_part.replay = Some(token);
+        }
     }
 }
 

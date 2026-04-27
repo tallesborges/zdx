@@ -3540,12 +3540,74 @@ mod tests {
     /// drops per-text `replay` and reorders against the on-disk schema.
     #[test]
     fn test_messages_to_events_matches_flush_messages_for_user_blocks() {
+        let messages = get_test_messages();
+
+        // Direct path used by external callers (bot/handoff/golden helper).
+        let via_messages_to_events = messages_to_events(&messages);
+
+        // Same input run through the live write path's flush helper. The
+        // two MUST produce identical event sequences modulo timestamps.
+        let mut via_flush = Vec::new();
+        let mut persistor = UsagePersistor::new();
+        persistor.flush_messages(&messages, 0, &mut via_flush);
+
+        assert_eq!(
+            via_messages_to_events.len(),
+            via_flush.len(),
+            "event count mismatch: m2e={via_messages_to_events:#?}\nflush={via_flush:#?}",
+        );
+
+        for (a, b) in via_messages_to_events.iter().zip(via_flush.iter()) {
+            // Compare structurally, ignoring `ts` (clock-based, will differ).
+            assert_eq!(
+                strip_ts(a),
+                strip_ts(b),
+                "event payload mismatch:\nm2e={a:#?}\nflush={b:#?}"
+            );
+        } // Spot-check that the user-side per-text `replay` survived the
+        // conversion (the regression the old coalescing code introduced).
+        let user_msgs: Vec<&ThreadEvent> = via_messages_to_events
+            .iter()
+            .filter(|e| matches!(e, ThreadEvent::Message { role, .. } if role == "user"))
+            .collect();
+        assert_eq!(user_msgs.len(), 2, "expected two separate user text events");
+        if let ThreadEvent::Message {
+            text,
+            replay: Some(ReplayToken::Gemini { signature, .. }),
+            ..
+        } = user_msgs[0]
+        {
+            assert_eq!(text, "before");
+            assert_eq!(signature, "DDDDDDDDDDDDDDDD");
+        } else {
+            panic!(
+                "first user text lost its replay metadata: {:#?}",
+                user_msgs[0]
+            );
+        }
+        if let ThreadEvent::Message {
+            text,
+            replay: Some(ReplayToken::Gemini { signature, .. }),
+            ..
+        } = user_msgs[1]
+        {
+            assert_eq!(text, "after");
+            assert_eq!(signature, "EEEEEEEEEEEEEEEE");
+        } else {
+            panic!(
+                "second user text lost its replay metadata: {:#?}",
+                user_msgs[1]
+            );
+        }
+    }
+
+    fn get_test_messages() -> Vec<crate::providers::ChatMessage> {
         use crate::providers::{
-            ChatContentBlock, ChatMessage, MessageContent, ReplayToken, ReasoningBlock,
+            ChatContentBlock, ChatMessage, MessageContent, ReasoningBlock, ReplayToken,
         };
         use crate::tools::{ToolResult, ToolResultContent};
 
-        let messages = vec![
+        vec![
             // Assistant turn: reasoning + per-part text + real-id tool_use.
             ChatMessage {
                 role: "assistant".to_string(),
@@ -3606,61 +3668,7 @@ mod tests {
                     },
                 ]),
             },
-        ];
-
-        // Direct path used by external callers (bot/handoff/golden helper).
-        let via_messages_to_events = messages_to_events(&messages);
-
-        // Same input run through the live write path's flush helper. The
-        // two MUST produce identical event sequences modulo timestamps.
-        let mut via_flush = Vec::new();
-        let mut persistor = UsagePersistor::new();
-        persistor.flush_messages(&messages, 0, &mut via_flush);
-
-        assert_eq!(
-            via_messages_to_events.len(),
-            via_flush.len(),
-            "event count mismatch: m2e={:#?}\nflush={:#?}",
-            via_messages_to_events,
-            via_flush,
-        );
-
-        for (a, b) in via_messages_to_events.iter().zip(via_flush.iter()) {
-            // Compare structurally, ignoring `ts` (clock-based, will differ).
-            assert_eq!(
-                strip_ts(a),
-                strip_ts(b),
-                "event payload mismatch:\nm2e={a:#?}\nflush={b:#?}"
-            );
-        }        // Spot-check that the user-side per-text `replay` survived the
-        // conversion (the regression the old coalescing code introduced).
-        let user_msgs: Vec<&ThreadEvent> = via_messages_to_events
-            .iter()
-            .filter(|e| matches!(e, ThreadEvent::Message { role, .. } if role == "user"))
-            .collect();
-        assert_eq!(user_msgs.len(), 2, "expected two separate user text events");
-        if let ThreadEvent::Message {
-            text,
-            replay: Some(ReplayToken::Gemini { signature, .. }),
-            ..
-        } = user_msgs[0]
-        {
-            assert_eq!(text, "before");
-            assert_eq!(signature, "DDDDDDDDDDDDDDDD");
-        } else {
-            panic!("first user text lost its replay metadata: {:#?}", user_msgs[0]);
-        }
-        if let ThreadEvent::Message {
-            text,
-            replay: Some(ReplayToken::Gemini { signature, .. }),
-            ..
-        } = user_msgs[1]
-        {
-            assert_eq!(text, "after");
-            assert_eq!(signature, "EEEEEEEEEEEEEEEE");
-        } else {
-            panic!("second user text lost its replay metadata: {:#?}", user_msgs[1]);
-        }
+        ]
     }
 
     /// Returns a `serde_json::Value` representation of `event` with the
