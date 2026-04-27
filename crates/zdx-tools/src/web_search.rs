@@ -15,7 +15,7 @@ const PARALLEL_BETA_HEADER: &str = "search-extract-2025-10-10";
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Web_Search".to_string(),
-        description: "Search the web for current information and return ranked URLs with LLM-optimized excerpts. At least one of `objective` or `search_queries` is required. Use `objective` for the natural-language research goal and `search_queries` for concrete keyword searches; prefer providing both. Do not send a `query` field. `search_queries` must be a JSON array of strings — each query is one string. If a query uses literal double quotes for exact-phrase search, escape the inner quotes (for example: \"\\\"Rust 2024\\\" edition guide\"). Do not write bare unquoted terms inside the array. Example: {\"objective\":\"Find official docs for the Rust 2024 edition\",\"search_queries\":[\"\\\"Rust 2024\\\" edition guide\",\"site:doc.rust-lang.org edition 2024\"],\"max_results\":5}.".to_string(),
+        description: "Search the web for current information and return ranked URLs with LLM-optimized excerpts. At least one of `objective` or `search_queries` is required. Use `objective` for the natural-language research goal and `search_queries` for concrete keyword searches; prefer providing both. Do not send a `query` field. `search_queries` must be a JSON array of complete query strings — each array item is one whole query. Put all keywords and search operators for a query inside the same string; never write bare tokens between strings. Prefer plain strings without exact-phrase quotes unless quotes are necessary. Example: {\"objective\":\"Find official docs for the Rust 2024 edition\",\"search_queries\":[\"Rust 2024 edition guide\",\"site:doc.rust-lang.org Rust 2024 edition\"],\"max_results\":5}.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
@@ -27,7 +27,7 @@ pub fn definition() -> ToolDefinition {
                     "type": "array",
                     "items": { "type": "string" },
                     "minItems": 1,
-                    "description": "Keyword queries to supplement the objective. Each item is one JSON string — to use exact-phrase search, escape inner double quotes (for example: \"\\\"Rust 2024\\\" edition guide\"). Use specific terms and search operators. Providing both objective and search_queries yields best results. If you only have keywords, send them here instead of using a `query` field."
+                    "description": "Keyword queries to supplement the objective. Each item must be one complete JSON string containing the full query, including any search operators such as site:github.com. Do not split one query into separate quoted and unquoted tokens. Prefer plain strings without exact-phrase quotes unless quotes are necessary. Providing both objective and search_queries yields best results. If you only have keywords, send them here instead of using a `query` field."
                 },
                 "max_results": {
                     "type": "integer",
@@ -329,16 +329,17 @@ mod tests {
         );
         let sq_desc = props["search_queries"]["description"].as_str().unwrap();
         assert!(
-            sq_desc.contains("escape"),
-            "search_queries description should explain quote-escaping: {sq_desc}"
+            sq_desc.contains("one complete JSON string"),
+            "search_queries description should emphasize complete query strings: {sq_desc}"
         );
         assert!(
-            sq_desc.contains(r#"\"Rust 2024\""#),
-            "search_queries description should include an escaped-quote example: {sq_desc}"
+            sq_desc.contains("Do not split one query"),
+            "search_queries description should warn against token-splitting: {sq_desc}"
         );
         assert!(
-            def.description.contains(r#"\"Rust 2024\""#),
-            "tool description should include an escaped-quote example: {}",
+            def.description
+                .contains("never write bare tokens between strings"),
+            "tool description should warn against malformed JSON token sequences: {}",
             def.description
         );
         assert_eq!(props["search_queries"]["minItems"], json!(1));
