@@ -400,7 +400,7 @@ fn convert_style(style: TranscriptStyle) -> Style {
         TranscriptStyle::Thinking | TranscriptStyle::Timing => Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::DIM | Modifier::ITALIC),
-        TranscriptStyle::Interrupted => Style::default()
+        TranscriptStyle::Interrupted | TranscriptStyle::TableBorder => Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::DIM),
 
@@ -416,9 +416,6 @@ fn convert_style(style: TranscriptStyle) -> Style {
         TranscriptStyle::Link => Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::UNDERLINED),
-        TranscriptStyle::TableBorder => Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::DIM),
         TranscriptStyle::ListBullet | TranscriptStyle::ListNumber => {
             Style::default().fg(Color::Yellow)
         }

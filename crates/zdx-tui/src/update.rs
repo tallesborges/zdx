@@ -945,7 +945,7 @@ fn create_btw_tab(
 
 fn create_main_tab(tab_id: TabId, parent: &TuiState) -> TuiState {
     let mut config = parent.config.clone();
-    config.model = parent.base_model.clone();
+    config.model.clone_from(&parent.base_model);
     config.thinking_level = parent.base_thinking_level;
 
     let mut tab = TuiState::with_history(
@@ -957,7 +957,7 @@ fn create_main_tab(tab_id: TabId, parent: &TuiState) -> TuiState {
         None,
         Vec::new(),
     );
-    tab.last_skill_repo = parent.last_skill_repo.clone();
+    tab.last_skill_repo.clone_from(&parent.last_skill_repo);
     tab.show_debug_status = parent.show_debug_status;
     tab
 }
