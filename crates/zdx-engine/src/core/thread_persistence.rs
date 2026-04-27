@@ -1087,6 +1087,8 @@ impl UsagePersistor {
     /// last_persisted_index)` to the end) and emits ordered `ThreadEvent`s
     /// for each block of each `ChatMessage`. Idempotent across repeated
     /// checkpoints because `last_persisted_index` advances monotonically.
+    /// Interrupted turns may produce a final snapshot shorter than an earlier
+    /// checkpoint; in that case there is nothing new to flush.
     fn flush_messages(
         &mut self,
         full: &[crate::providers::ChatMessage],
@@ -1094,7 +1096,6 @@ impl UsagePersistor {
         events: &mut Vec<ThreadEvent>,
     ) {
         let start = std::cmp::max(prior_count, self.last_persisted_index);
-        debug_assert!(start <= full.len());
         if start >= full.len() {
             return;
         }
@@ -3785,6 +3786,85 @@ mod tests {
             user_message_count, 0,
             "caller-persisted user message must not be flushed again: {events:#?}"
         );
+    }
+
+    /// A final interrupted snapshot can be shorter than the most recent
+    /// checkpoint when the stream is interrupted before a durable final turn
+    /// is assembled. Persistence should keep the checkpointed messages and
+    /// append the interruption marker instead of asserting on the shrink.
+    #[tokio::test]
+    async fn test_interrupted_turn_finished_allows_shorter_snapshot_than_checkpoint() {
+        use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
+
+        let _temp = setup_temp_zdx_home();
+
+        let thread = Thread::with_id(unique_thread_id("checkpoint-interrupted-shrink")).unwrap();
+        let (tx, rx) = create_event_channel();
+        let persist_handle = spawn_thread_persist_task(thread.clone(), rx);
+
+        let user_msg = ChatMessage::user("start streaming");
+        let checkpointed_assistant = ChatMessage {
+            role: "assistant".to_string(),
+            phase: Some("commentary".to_string()),
+            content: MessageContent::Blocks(vec![ChatContentBlock::Text {
+                text: "partial".to_string(),
+                replay: None,
+            }]),
+        };
+
+        tx.send(Arc::new(AgentEvent::TurnCheckpoint {
+            messages: vec![user_msg.clone(), checkpointed_assistant],
+            prior_message_count: 1,
+        }))
+        .unwrap();
+
+        tx.send(Arc::new(AgentEvent::TurnFinished {
+            status: TurnStatus::Interrupted,
+            final_text: String::new(),
+            messages: vec![user_msg],
+            prior_message_count: 1,
+        }))
+        .unwrap();
+        drop(tx);
+        persist_handle.await.unwrap();
+
+        let events = thread.read_events().unwrap();
+        let partial_assistant_indices: Vec<usize> = events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| match event {
+                ThreadEvent::Message {
+                    role,
+                    text,
+                    phase: Some(phase),
+                    ..
+                } if role == "assistant" && text == "partial" && phase == "commentary" => {
+                    Some(index)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            partial_assistant_indices.len(),
+            1,
+            "partial assistant message should be persisted exactly once: {events:#?}"
+        );
+        assert!(matches!(
+            events.last(),
+            Some(ThreadEvent::Interrupted { .. })
+        ));
+        assert!(
+            partial_assistant_indices[0] < events.len() - 1,
+            "partial assistant message should appear before interrupted marker: {events:#?}"
+        );
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            ThreadEvent::Message {
+                role,
+                text,
+                ..
+            } if role == "user" && text == "start streaming"
+        )));
     }
 
     /// Crash simulation: emit `TurnCheckpoint` after tool turn 1, drop the
