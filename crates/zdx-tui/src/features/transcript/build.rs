@@ -78,21 +78,9 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
                 }
                 // If no matching tool cell found, skip (incomplete pair)
             }
-            ThreadEvent::Interrupted {
-                partial_content, ..
-            } => {
-                // Show partial content if present (with interrupted styling)
-                if let Some(content) = partial_content
-                    && !content.is_empty()
-                {
-                    cells.push(super::HistoryCell::Assistant {
-                        id: super::CellId::new(),
-                        created_at: chrono::Utc::now(),
-                        content: content.clone(),
-                        is_streaming: false,
-                        is_interrupted: true,
-                    });
-                }
+            ThreadEvent::Interrupted { .. } => {
+                // Marker only — partial assistant content is rendered by
+                // the preceding `Message` event with `phase: commentary`.
             }
         }
     }
@@ -139,12 +127,14 @@ mod tests {
                 role: "user".to_string(),
                 text: "Hello".to_string(),
                 phase: None,
+                replay: None,
                 ts: "2024-01-01T00:00:01Z".to_string(),
             },
             ThreadEvent::Message {
                 role: "assistant".to_string(),
                 text: "Hi there!".to_string(),
                 phase: None,
+                replay: None,
                 ts: "2024-01-01T00:00:02Z".to_string(),
             },
         ];
@@ -176,6 +166,8 @@ mod tests {
                 id: "tool-1".to_string(),
                 name: "read".to_string(),
                 input: json!({"file_path": "test.txt"}),
+                id_origin: zdx_engine::providers::IdOrigin::Synthesized,
+                replay: None,
                 ts: "2024-01-01T00:00:01Z".to_string(),
             },
             ThreadEvent::ToolResult {
@@ -212,6 +204,8 @@ mod tests {
             id: "tool-1".to_string(),
             name: "apply_patch".to_string(),
             input: json!({"patch": "*** Begin Patch\n*** Update File: src/main.rs\n*** End Patch"}),
+            id_origin: zdx_engine::providers::IdOrigin::Synthesized,
+            replay: None,
             ts: "2024-01-01T00:00:01Z".to_string(),
         }];
 
@@ -277,6 +271,7 @@ mod tests {
                 role: "user".to_string(),
                 text: "Read the file".to_string(),
                 phase: None,
+                replay: None,
                 ts: "2024-01-01T00:00:01Z".to_string(),
             },
             ThreadEvent::Reasoning {
@@ -290,6 +285,8 @@ mod tests {
                 id: "t1".to_string(),
                 name: "read".to_string(),
                 input: json!({"file_path": "file.txt"}),
+                id_origin: zdx_engine::providers::IdOrigin::Synthesized,
+                replay: None,
                 ts: "2024-01-01T00:00:03Z".to_string(),
             },
             ThreadEvent::ToolResult {
@@ -303,12 +300,12 @@ mod tests {
                 role: "assistant".to_string(),
                 text: "Done!".to_string(),
                 phase: None,
+                replay: None,
                 ts: "2024-01-01T00:00:05Z".to_string(),
             },
             ThreadEvent::Interrupted {
                 role: "system".to_string(),
                 text: "Interrupted".to_string(),
-                partial_content: None,
                 ts: "2024-01-01T00:00:06Z".to_string(),
             },
         ];
@@ -333,6 +330,7 @@ mod tests {
                 role: "user".to_string(),
                 text: "hi".to_string(),
                 phase: None,
+                replay: None,
                 ts: "2026-04-16T00:00:00Z".to_string(),
             },
             ThreadEvent::Notice {

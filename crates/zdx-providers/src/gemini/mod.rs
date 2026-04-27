@@ -3,7 +3,7 @@
 pub mod api;
 pub mod cli;
 pub mod shared;
-mod sse;
+pub mod sse;
 
 pub use api::{
     GeminiClient, GeminiConfig, GeminiImageGenerationOptions, GenerateImageResponse,

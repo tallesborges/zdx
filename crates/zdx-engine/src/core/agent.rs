@@ -266,6 +266,14 @@ pub struct ToolUseBuilder {
     pub name: String,
     pub input_json: String,
     pub input_preview_len: usize,
+    /// Whether the provider emitted `id` (`Real`) or the SSE parser
+    /// synthesized one (`Synthesized`). Threaded into the resulting
+    /// `ChatContentBlock::ToolUse` so the request builder can decide whether
+    /// to replay the id on the next turn.
+    pub id_origin: zdx_types::IdOrigin,
+    /// Per-part replay metadata (e.g. Gemini `thoughtSignature`) captured
+    /// when the stream emits a `ContentBlockCompleted` for this index.
+    pub replay: Option<ReplayToken>,
 }
 
 /// Builder for accumulating thinking block data from streaming events.
@@ -279,87 +287,277 @@ pub struct ThinkingBuilder {
     pub had_delta: bool,
 }
 
+/// Builder for accumulating a single text part's content + per-part replay
+/// metadata. Each Gemini text part with its own `thoughtSignature` becomes
+/// one of these, preserving the per-part fidelity required for implicit
+/// prompt-cache hits.
+#[derive(Debug, Clone)]
+pub struct TextPartBuilder {
+    pub index: usize,
+    pub text: String,
+    pub replay: Option<ReplayToken>,
+}
+
+/// One ordered part within an assistant turn. The variant order in `parts`
+/// reflects the original stream order so persistence and request replay can
+/// reconstruct the assistant message byte-identically.
+#[derive(Debug, Clone)]
+pub enum AssistantPart {
+    Reasoning(ThinkingBuilder),
+    Text(TextPartBuilder),
+    ToolUse(ToolUseBuilder),
+}
+
 /// Finalized tool use with parsed input (ready for execution).
 #[derive(Debug, Clone)]
 pub struct ToolUse {
     pub id: String,
     pub name: String,
     pub input: Value,
+    pub id_origin: zdx_types::IdOrigin,
+    pub replay: Option<ReplayToken>,
 }
 
 /// Builder for accumulating all assistant turn content from streaming events.
-/// Consolidates thinking, reasoning, text, and tool use into a single struct.
-#[derive(Debug, Default)]
+///
+/// `parts` preserves the original stream order across text, reasoning, and
+/// tool-use parts. The Gemini implicit prompt cache requires byte-identical
+/// replay of assistant turns, so category-bucketed reordering (the previous
+/// design) is no longer permitted — the persistence and request layers walk
+/// `parts` in arrival order.
+///
+/// `model` is the source model id for this turn; it is threaded into any
+/// per-part `ReplayToken::Gemini` so the next-turn request builder can gate
+/// signature replay to the same model (Gemini's exact-model match).
+#[derive(Debug, Clone, Default)]
 pub struct AssistantTurnBuilder {
-    pub thinking_blocks: Vec<ThinkingBuilder>,
-    pub text: String,
-    pub tool_uses: Vec<ToolUseBuilder>,
+    pub model: String,
+    pub parts: Vec<AssistantPart>,
 }
 
 impl AssistantTurnBuilder {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(model: String) -> Self {
+        Self {
+            model,
+            parts: Vec::new(),
+        }
     }
 
-    /// Converts accumulated content into `ChatContentBlocks` for API messages.
-    pub fn into_blocks(self, finalized_tools: Vec<ToolUse>) -> Vec<ChatContentBlock> {
-        let mut blocks = Vec::with_capacity(self.thinking_blocks.len() + 1 + finalized_tools.len());
+    /// Returns the concatenated text from all `Text` parts (in stream order).
+    /// Used for the cumulative `final_text` carried on `AssistantCompleted`
+    /// and `TurnFinished` events.
+    pub fn final_text(&self) -> String {
+        let mut out = String::new();
+        for part in &self.parts {
+            if let AssistantPart::Text(tb) = part {
+                out.push_str(&tb.text);
+            }
+        }
+        out
+    }
 
-        // Add reasoning blocks first (order matters for API)
-        for tb in self.thinking_blocks {
-            let text = if tb.text.is_empty() {
-                None
-            } else {
-                Some(tb.text)
-            };
-            blocks.push(ChatContentBlock::Reasoning(ReasoningBlock {
-                text,
-                replay: tb.replay,
+    /// Returns true when at least one tool-use part is present.
+    pub fn has_tool_uses(&self) -> bool {
+        self.parts
+            .iter()
+            .any(|p| matches!(p, AssistantPart::ToolUse(_)))
+    }
+
+    /// Iterator over tool-use builders in stream order.
+    pub fn tool_uses(&self) -> impl Iterator<Item = &ToolUseBuilder> {
+        self.parts.iter().filter_map(|p| match p {
+            AssistantPart::ToolUse(t) => Some(t),
+            _ => None,
+        })
+    }
+
+    /// Finds a tool use builder by stream index.
+    pub fn find_tool_use_mut(&mut self, index: usize) -> Option<&mut ToolUseBuilder> {
+        self.parts.iter_mut().find_map(|p| match p {
+            AssistantPart::ToolUse(t) if t.index == index => Some(t),
+            _ => None,
+        })
+    }
+
+    /// Finds a thinking block by stream index.
+    pub fn find_thinking_mut(&mut self, index: usize) -> Option<&mut ThinkingBuilder> {
+        self.parts.iter_mut().find_map(|p| match p {
+            AssistantPart::Reasoning(t) if t.index == index => Some(t),
+            _ => None,
+        })
+    }
+
+    /// Finds a text-part builder by stream index.
+    pub fn find_text_mut(&mut self, index: usize) -> Option<&mut TextPartBuilder> {
+        self.parts.iter_mut().find_map(|p| match p {
+            AssistantPart::Text(t) if t.index == index => Some(t),
+            _ => None,
+        })
+    }
+
+    /// Returns a mutable reference to the text part for `index`, creating it
+    /// if missing. This is the path used by `TextDelta` events from
+    /// providers (Anthropic / `OpenAI`) that don't always emit an explicit
+    /// `ContentBlockStart` for text blocks before deltas arrive.
+    ///
+    /// # Panics
+    /// Panics only if the just-pushed text part cannot be found again on
+    /// the trailing scan; this is impossible by construction.
+    pub fn ensure_text_part_mut(&mut self, index: usize) -> &mut TextPartBuilder {
+        let exists = self
+            .parts
+            .iter()
+            .any(|p| matches!(p, AssistantPart::Text(t) if t.index == index));
+        if !exists {
+            self.parts.push(AssistantPart::Text(TextPartBuilder {
+                index,
+                text: String::new(),
+                replay: None,
             }));
         }
-
-        // Add text block if any
-        if !self.text.is_empty() {
-            blocks.push(ChatContentBlock::Text(self.text));
-        }
-
-        // Add tool_use blocks
-        for tu in finalized_tools {
-            blocks.push(ChatContentBlock::ToolUse {
-                id: tu.id,
-                name: tu.name,
-                input: tu.input,
-            });
-        }
-
-        blocks
+        self.parts
+            .iter_mut()
+            .rev()
+            .find_map(|p| match p {
+                AssistantPart::Text(t) if t.index == index => Some(t),
+                _ => None,
+            })
+            .expect("text part just pushed or already present")
     }
 
-    /// Finds a tool use builder by index.
-    pub fn find_tool_use_mut(&mut self, index: usize) -> Option<&mut ToolUseBuilder> {
-        self.tool_uses.iter_mut().find(|t| t.index == index)
+    /// Pushes a new `ToolUseBuilder`. Caller is responsible for setting
+    /// `id_origin` to `Real` when the provider emitted an id; defaults to
+    /// `Synthesized` for the engine-side path that fills in a placeholder.
+    pub fn push_tool_use(&mut self, builder: ToolUseBuilder) {
+        self.parts.push(AssistantPart::ToolUse(builder));
     }
 
-    /// Finds a thinking block by index.
-    pub fn find_thinking_mut(&mut self, index: usize) -> Option<&mut ThinkingBuilder> {
-        self.thinking_blocks.iter_mut().find(|t| t.index == index)
+    /// Pushes a new `ThinkingBuilder`.
+    pub fn push_reasoning(&mut self, builder: ThinkingBuilder) {
+        self.parts.push(AssistantPart::Reasoning(builder));
+    }
+
+    /// Walks `parts` in stream order and produces the finalized assistant
+    /// content. Tool-use parts with malformed JSON inputs are emitted as
+    /// `ChatContentBlock::ToolUse` with a sentinel `__zdx_invalid_json__`
+    /// input so persistence and downstream diagnostics retain the raw
+    /// payload; their ids are also collected separately as malformed.
+    pub fn finalize(self) -> FinalizedAssistantTurn {
+        let mut blocks: Vec<ChatContentBlock> = Vec::with_capacity(self.parts.len());
+        let mut executable: Vec<ToolUse> = Vec::new();
+        let mut all_tool_uses: Vec<ToolUse> = Vec::new();
+        let mut malformed_results: Vec<ToolResult> = Vec::new();
+        let mut malformed_tools: Vec<(String, String, ToolOutput)> = Vec::new();
+        let mut diagnostics: Vec<TurnDiagnostic> = Vec::new();
+        let mut final_text = String::new();
+
+        for part in self.parts {
+            match part {
+                AssistantPart::Reasoning(tb) => {
+                    if tb.text.is_empty() && tb.replay.is_none() {
+                        // Drop empty reasoning placeholders that never received
+                        // any deltas or replay metadata; they would otherwise
+                        // serialize as `{ "type": "reasoning" }` with no body.
+                        continue;
+                    }
+                    let text = (!tb.text.is_empty()).then_some(tb.text);
+                    blocks.push(ChatContentBlock::Reasoning(ReasoningBlock {
+                        text,
+                        replay: tb.replay,
+                    }));
+                }
+                AssistantPart::Text(tb) => {
+                    if tb.text.is_empty() {
+                        continue;
+                    }
+                    final_text.push_str(&tb.text);
+                    blocks.push(ChatContentBlock::Text {
+                        text: tb.text,
+                        replay: tb.replay,
+                    });
+                }
+                AssistantPart::ToolUse(tu) => {
+                    let id_origin = tu.id_origin;
+                    let replay = tu.replay.clone();
+                    match serde_json::from_str::<Value>(&tu.input_json) {
+                        Ok(input) => {
+                            let tool_use = ToolUse {
+                                id: tu.id.clone(),
+                                name: tu.name.clone(),
+                                input: input.clone(),
+                                id_origin,
+                                replay: replay.clone(),
+                            };
+                            executable.push(tool_use.clone());
+                            all_tool_uses.push(tool_use);
+                            blocks.push(ChatContentBlock::ToolUse {
+                                id: tu.id,
+                                name: tu.name,
+                                input,
+                                id_origin,
+                                replay,
+                            });
+                        }
+                        Err(err) => {
+                            diagnostics.push(TurnDiagnostic::Parse {
+                                message: format!(
+                                    "Invalid tool input JSON for {}: {}",
+                                    tu.name, err
+                                ),
+                                details: Some(truncate_for_error(&tu.input_json, 500)),
+                            });
+                            let sentinel = malformed_tool_input_value(&tu.input_json);
+                            let error_output = invalid_tool_output(&tu.input_json, &err);
+                            malformed_results
+                                .push(ToolResult::from_output(tu.id.clone(), &error_output));
+                            malformed_tools.push((tu.id.clone(), tu.name.clone(), error_output));
+                            all_tool_uses.push(ToolUse {
+                                id: tu.id.clone(),
+                                name: tu.name.clone(),
+                                input: sentinel.clone(),
+                                id_origin,
+                                replay: replay.clone(),
+                            });
+                            blocks.push(ChatContentBlock::ToolUse {
+                                id: tu.id,
+                                name: tu.name,
+                                input: sentinel,
+                                id_origin,
+                                replay,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        FinalizedAssistantTurn {
+            blocks,
+            executable,
+            all_tool_uses,
+            malformed_results,
+            malformed_tools,
+            diagnostics,
+            final_text,
+        }
     }
 }
 
-impl ToolUseBuilder {
-    /// Finalizes the builder by parsing the accumulated JSON input.
-    /// Returns an error if the JSON is malformed.
-    ///
-    /// # Errors
-    /// Returns an error if the operation fails.
-    pub fn finalize(self) -> Result<ToolUse, serde_json::Error> {
-        let input = serde_json::from_str(&self.input_json)?;
-        Ok(ToolUse {
-            id: self.id,
-            name: self.name,
-            input,
-        })
-    }
+/// Result of finalizing an `AssistantTurnBuilder`. `blocks` is the ordered
+/// assistant message content (`Reasoning`, `Text`, and `ToolUse` parts in
+/// stream order, including malformed sentinels for unparseable tool inputs).
+/// `executable` and `all_tool_uses` carry only the tool-use parts in the
+/// same order; `executable` excludes malformed parts, while `all_tool_uses`
+/// is used by interrupt-path message synthesis (which must produce a
+/// matching `tool_results` block for every tool the assistant requested).
+pub struct FinalizedAssistantTurn {
+    pub blocks: Vec<ChatContentBlock>,
+    pub executable: Vec<ToolUse>,
+    pub all_tool_uses: Vec<ToolUse>,
+    pub malformed_results: Vec<ToolResult>,
+    pub malformed_tools: Vec<(String, String, ToolOutput)>,
+    pub(crate) diagnostics: Vec<TurnDiagnostic>,
+    pub final_text: String,
 }
 
 fn extract_partial_tool_input(name: &str, input_json: &str) -> Option<String> {
@@ -470,7 +668,7 @@ enum TurnError {
 }
 
 #[derive(Debug, Clone)]
-enum TurnDiagnostic {
+pub(crate) enum TurnDiagnostic {
     Parse {
         message: String,
         details: Option<String>,
@@ -516,7 +714,7 @@ impl TurnError {
     }
 }
 
-fn emit_turn_error(err: &TurnError, sender: &EventSender) {
+fn emit_turn_error(err: &TurnError, sender: &EventSender, prior_message_count: usize) {
     match err {
         TurnError::Interrupted {
             partial_content,
@@ -535,6 +733,7 @@ fn emit_turn_error(err: &TurnError, sender: &EventSender) {
                 status: TurnStatus::Interrupted,
                 final_text,
                 messages,
+                prior_message_count,
             });
         }
         TurnError::Provider(provider_err) => {
@@ -546,6 +745,7 @@ fn emit_turn_error(err: &TurnError, sender: &EventSender) {
                 },
                 final_text: String::new(),
                 messages: Vec::new(),
+                prior_message_count,
             });
         }
         TurnError::Parse { message, details } => {
@@ -557,6 +757,7 @@ fn emit_turn_error(err: &TurnError, sender: &EventSender) {
                 },
                 final_text: String::new(),
                 messages: Vec::new(),
+                prior_message_count,
             });
         }
         TurnError::Internal(err) => {
@@ -568,12 +769,18 @@ fn emit_turn_error(err: &TurnError, sender: &EventSender) {
                 },
                 final_text: String::new(),
                 messages: Vec::new(),
+                prior_message_count,
             });
         }
     }
 }
 
-fn emit_turn_error_with_messages(err: &TurnError, messages: &[ChatMessage], sender: &EventSender) {
+fn emit_turn_error_with_messages(
+    err: &TurnError,
+    messages: &[ChatMessage],
+    sender: &EventSender,
+    prior_message_count: usize,
+) {
     match err {
         TurnError::Provider(provider_err) => {
             sender.send(AgentEvent::TurnFinished {
@@ -584,11 +791,12 @@ fn emit_turn_error_with_messages(err: &TurnError, messages: &[ChatMessage], send
                 },
                 final_text: String::new(),
                 messages: messages.to_vec(),
+                prior_message_count,
             });
         }
         other => {
             // For non-Provider errors, fall back to default behavior (no messages)
-            emit_turn_error(other, sender);
+            emit_turn_error(other, sender, prior_message_count);
         }
     }
 }
@@ -691,6 +899,7 @@ pub async fn run_turn_with_cancel(
     cancel: Option<CancellationToken>,
 ) -> Result<(String, Vec<ChatMessage>)> {
     let sender = EventSender::new(tx);
+    let initial_message_count = messages.len();
     match run_turn_inner(
         messages,
         config,
@@ -705,9 +914,14 @@ pub async fn run_turn_with_cancel(
         Ok(result) => Ok(result),
         Err((err, committed_messages)) => {
             if committed_messages.is_empty() {
-                emit_turn_error(&err, &sender);
+                emit_turn_error(&err, &sender, initial_message_count);
             } else {
-                emit_turn_error_with_messages(&err, &committed_messages, &sender);
+                emit_turn_error_with_messages(
+                    &err,
+                    &committed_messages,
+                    &sender,
+                    initial_message_count,
+                );
             }
             Err(err.into_anyhow())
         }
@@ -735,6 +949,7 @@ async fn run_turn_inner(
         Some(setup.model.as_str()),
     );
     let mut messages = messages;
+    let initial_message_count = messages.len();
     let mut consecutive_malformed_tool_turns = 0usize;
 
     loop {
@@ -763,11 +978,16 @@ async fn run_turn_inner(
                     )
                     .await
                     {
-                        Ok(stream) => match consume_stream(stream, &messages, sender, cancel).await
-                        {
-                            Ok(state) => Ok(state),
-                            Err((err, state)) => Err((err, can_transparently_retry_stream(&state))),
-                        },
+                        Ok(stream) => {
+                            match consume_stream(stream, &messages, sender, cancel, &setup.model)
+                                .await
+                            {
+                                Ok(state) => Ok(state),
+                                Err((err, state)) => {
+                                    Err((err, can_transparently_retry_stream(&state)))
+                                }
+                            }
+                        }
                         Err(err) => Err((err, true)),
                     };
 
@@ -823,6 +1043,7 @@ async fn run_turn_inner(
                 &setup,
                 sender,
                 cancel,
+                initial_message_count,
             )
             .await
             .map_err(|e| (e, messages.clone()))?;
@@ -850,6 +1071,7 @@ async fn run_turn_inner(
             &mut messages,
             stream_state.turn,
             sender,
+            initial_message_count,
         ));
     }
 }
@@ -1415,9 +1637,9 @@ struct StreamState {
 }
 
 impl StreamState {
-    fn new() -> Self {
+    fn new(model: String) -> Self {
         Self {
-            turn: AssistantTurnBuilder::new(),
+            turn: AssistantTurnBuilder::new(model),
             stop_reason: None,
             usage_seen: crate::providers::Usage::default(),
             emitted_events: false,
@@ -1425,7 +1647,7 @@ impl StreamState {
     }
 
     fn needs_tool_execution(&self) -> bool {
-        self.stop_reason.as_deref() == Some("tool_use") && !self.turn.tool_uses.is_empty()
+        self.stop_reason.as_deref() == Some("tool_use") && self.turn.has_tool_uses()
     }
 }
 
@@ -1482,8 +1704,9 @@ async fn consume_stream(
     prior_messages: &[ChatMessage],
     sender: &EventSender,
     cancel: Option<&CancellationToken>,
+    model: &str,
 ) -> std::result::Result<StreamState, (TurnError, StreamState)> {
-    let mut state = StreamState::new();
+    let mut state = StreamState::new(model.to_string());
 
     loop {
         if interrupt::is_interrupted() || cancel.is_some_and(CancellationToken::is_cancelled) {
@@ -1513,8 +1736,9 @@ fn handle_stream_event(
     state: &mut StreamState,
 ) -> TurnResult<()> {
     match event {
-        StreamEvent::TextDelta { text, .. } if !text.is_empty() => {
-            state.turn.text.push_str(&text);
+        StreamEvent::TextDelta { index, text } if !text.is_empty() => {
+            let part = state.turn.ensure_text_part_mut(index);
+            part.text.push_str(&text);
             sender.send(AgentEvent::AssistantDelta { text });
             state.emitted_events = true;
         }
@@ -1523,10 +1747,21 @@ fn handle_stream_event(
             block_type: ContentBlockType::ToolUse,
             id,
             name,
+            id_origin,
             ..
         } => {
-            handle_tool_content_start(index, id, name, sender, &mut state.turn);
+            handle_tool_content_start(index, id, name, id_origin, sender, &mut state.turn);
             state.emitted_events = true;
+        }
+        StreamEvent::ContentBlockStart {
+            index,
+            block_type: ContentBlockType::Text,
+            ..
+        } => {
+            // Lazily create the text part so subsequent `TextDelta`s and the
+            // matching `ContentBlockCompleted` can attach to it. Idempotent
+            // for providers that emit deltas without an explicit start.
+            let _ = state.turn.ensure_text_part_mut(index);
         }
         StreamEvent::ContentBlockStart {
             index,
@@ -1582,12 +1817,19 @@ fn handle_stream_event(
                 tb.signature_provider = Some(provider);
             }
         }
-        StreamEvent::ContentBlockCompleted { index } => {
+        StreamEvent::ContentBlockCompleted { index, signature } => {
             if emit_reasoning_completion(sender, &mut state.turn, index) {
                 state.emitted_events = true;
             }
             if emit_tool_input_completion(sender, &state.turn, index) {
                 state.emitted_events = true;
+            }
+            // Per-part Gemini signatures (text + tool_use) ride this channel.
+            // Reasoning signatures still flow through `ReasoningSignatureDelta`
+            // and were attached during `emit_reasoning_completion` above, so
+            // we ignore signatures on reasoning indices here.
+            if let Some((sig_provider, sig)) = signature {
+                attach_part_signature(&mut state.turn, index, sig_provider, sig);
             }
         }
         StreamEvent::MessageDelta { stop_reason, usage } => {
@@ -1622,10 +1864,6 @@ fn handle_stream_event(
             encrypted_content,
             summary,
         ),
-        StreamEvent::ContentBlockStart {
-            block_type: ContentBlockType::Text,
-            ..
-        } => {}
         StreamEvent::TextDelta { .. }
         | StreamEvent::MessageCompleted
         | StreamEvent::Ping
@@ -1638,6 +1876,7 @@ fn handle_tool_content_start(
     index: usize,
     id: Option<String>,
     name: Option<String>,
+    id_origin: Option<zdx_types::IdOrigin>,
     sender: &EventSender,
     turn: &mut AssistantTurnBuilder,
 ) {
@@ -1648,13 +1887,39 @@ fn handle_tool_content_start(
         name: tool_name.clone(),
         input: serde_json::json!({}),
     });
-    turn.tool_uses.push(ToolUseBuilder {
+    turn.push_tool_use(ToolUseBuilder {
         index,
         id: tool_id,
         name: tool_name,
         input_json: String::new(),
         input_preview_len: 0,
+        id_origin: id_origin.unwrap_or_default(),
+        replay: None,
     });
+}
+
+/// Attaches a per-part Gemini signature (delivered on `ContentBlockCompleted`
+/// for text and tool-use parts) as a `ReplayToken::Gemini` carrying the
+/// source model. Reasoning parts route their signature through
+/// `ReasoningSignatureDelta` and are not handled here.
+fn attach_part_signature(
+    turn: &mut AssistantTurnBuilder,
+    index: usize,
+    provider: crate::providers::SignatureProvider,
+    signature: String,
+) {
+    let model = turn.model.clone();
+    let token = match provider {
+        crate::providers::SignatureProvider::Gemini => ReplayToken::Gemini { signature, model },
+        crate::providers::SignatureProvider::Anthropic => ReplayToken::Anthropic { signature },
+    };
+    if let Some(text_part) = turn.find_text_mut(index) {
+        text_part.replay = Some(token);
+        return;
+    }
+    if let Some(tool_part) = turn.find_tool_use_mut(index) {
+        tool_part.replay = Some(token);
+    }
 }
 
 /// Appends a new `ThinkingBuilder` to a turn for a reasoning-style
@@ -1667,7 +1932,7 @@ fn start_reasoning_block(
     index: usize,
     replay: Option<ReplayToken>,
 ) {
-    turn.thinking_blocks.push(ThinkingBuilder {
+    turn.push_reasoning(ThinkingBuilder {
         index,
         text: String::new(),
         signature: String::new(),
@@ -1764,6 +2029,7 @@ fn emit_reasoning_completion(
     turn: &mut AssistantTurnBuilder,
     index: usize,
 ) -> bool {
+    let model = turn.model.clone();
     if let Some(tb) = turn.find_thinking_mut(index) {
         if tb.replay.is_none()
             && !tb.signature.is_empty()
@@ -1772,6 +2038,7 @@ fn emit_reasoning_completion(
             tb.replay = Some(match signature_provider {
                 crate::providers::SignatureProvider::Gemini => ReplayToken::Gemini {
                     signature: tb.signature.clone(),
+                    model: model.clone(),
                 },
                 crate::providers::SignatureProvider::Anthropic => ReplayToken::Anthropic {
                     signature: tb.signature.clone(),
@@ -1793,7 +2060,7 @@ fn emit_tool_input_completion(
     turn: &AssistantTurnBuilder,
     index: usize,
 ) -> bool {
-    if let Some(tu) = turn.tool_uses.iter().find(|t| t.index == index) {
+    if let Some(tu) = turn.tool_uses().find(|t| t.index == index) {
         // With fine-grained tool streaming (`eager_input_streaming: true`),
         // Anthropic may legitimately deliver partial/invalid JSON if a tool
         // call is truncated (e.g. `max_tokens` reached). Preserve the raw
@@ -1819,28 +2086,12 @@ fn malformed_tool_input_value(input_json: &str) -> Value {
     })
 }
 
-fn malformed_tool_use(builder: &ToolUseBuilder) -> ToolUse {
-    ToolUse {
-        id: builder.id.clone(),
-        name: builder.name.clone(),
-        input: malformed_tool_input_value(&builder.input_json),
-    }
-}
-
 fn invalid_tool_output(input_json: &str, error: &serde_json::Error) -> ToolOutput {
     ToolOutput::failure(
         "invalid_json",
         format!("Failed to parse tool arguments: {error}"),
         Some(truncate_for_error(input_json, 500)),
     )
-}
-
-struct ToolTurnOutcome {
-    executable: Vec<ToolUse>,
-    assistant_tools: Vec<ToolUse>,
-    malformed_results: Vec<ToolResult>,
-    malformed_tools: Vec<(String, String, ToolOutput)>,
-    diagnostics: Vec<TurnDiagnostic>,
 }
 
 struct ToolTurnStats {
@@ -1854,21 +2105,20 @@ async fn process_tool_turn(
     setup: &RunTurnSetup,
     sender: &EventSender,
     cancel: Option<&CancellationToken>,
+    prior_message_count: usize,
 ) -> TurnResult<ToolTurnStats> {
-    let outcome = finalize_tool_calls(turn);
-    let executable_count = outcome.executable.len();
-    let malformed_count = outcome.malformed_results.len();
-    emit_assistant_completed_if_present(sender, &turn.text);
-    emit_turn_diagnostics(&outcome.diagnostics, sender);
-    emit_malformed_tool_events(sender, outcome.malformed_tools);
+    let finalized = std::mem::take(turn).finalize();
+    let executable_count = finalized.executable.len();
+    let malformed_count = finalized.malformed_results.len();
+    emit_assistant_completed_if_present(sender, &finalized.final_text);
+    emit_turn_diagnostics(&finalized.diagnostics, sender);
+    emit_malformed_tool_events(sender, finalized.malformed_tools);
 
-    let turn_text = turn.text.clone();
-    messages.push(ChatMessage::assistant_blocks(
-        std::mem::take(turn).into_blocks(outcome.assistant_tools),
-    ));
+    let turn_text = finalized.final_text;
+    messages.push(ChatMessage::assistant_blocks(finalized.blocks));
 
     let mut tool_results = execute_tools_async(
-        &outcome.executable,
+        &finalized.executable,
         &setup.tool_ctx,
         &setup.enabled_tools,
         sender,
@@ -1876,7 +2126,7 @@ async fn process_tool_turn(
         cancel,
     )
     .await;
-    tool_results.extend(outcome.malformed_results);
+    tool_results.extend(finalized.malformed_results);
     messages.push(ChatMessage::tool_results(tool_results));
 
     if interrupt::is_interrupted() || cancel.is_some_and(CancellationToken::is_cancelled) {
@@ -1886,6 +2136,16 @@ async fn process_tool_turn(
             messages.clone(),
         ));
     }
+
+    // Emit a non-terminal checkpoint so persistence flushes the new turn
+    // suffix (assistant blocks + tool_results) without waiting for the
+    // terminal `TurnFinished`. Long tool loops persist incrementally between
+    // tool turns. UI consumers can ignore this; they get live state from
+    // streaming events.
+    sender.send(AgentEvent::TurnCheckpoint {
+        messages: messages.clone(),
+        prior_message_count,
+    });
 
     Ok(ToolTurnStats {
         executable: executable_count,
@@ -1897,17 +2157,19 @@ fn finalize_non_tool_turn(
     messages: &mut Vec<ChatMessage>,
     turn: AssistantTurnBuilder,
     sender: &EventSender,
+    prior_message_count: usize,
 ) -> (String, Vec<ChatMessage>) {
-    let final_text = turn.text.clone();
+    let finalized = turn.finalize();
+    let final_text = finalized.final_text;
     emit_assistant_completed_if_present(sender, &final_text);
-    let assistant_blocks = turn.into_blocks(Vec::new());
-    if !assistant_blocks.is_empty() {
-        messages.push(ChatMessage::assistant_blocks(assistant_blocks));
+    if !finalized.blocks.is_empty() {
+        messages.push(ChatMessage::assistant_blocks(finalized.blocks));
     }
     sender.send(AgentEvent::TurnFinished {
         status: TurnStatus::Completed,
         final_text: final_text.clone(),
         messages: messages.clone(),
+        prior_message_count,
     });
     (final_text, messages.clone())
 }
@@ -1916,7 +2178,7 @@ fn interrupted_turn_from_stream(
     prior_messages: &[ChatMessage],
     turn: AssistantTurnBuilder,
 ) -> TurnError {
-    let final_text = turn.text.clone();
+    let final_text = turn.final_text();
     let messages = build_interrupted_messages(prior_messages, turn);
     TurnError::interrupted_with_completion(
         (!final_text.is_empty()).then_some(final_text.clone()),
@@ -1927,42 +2189,53 @@ fn interrupted_turn_from_stream(
 
 fn build_interrupted_messages(
     prior_messages: &[ChatMessage],
-    mut turn: AssistantTurnBuilder,
+    turn: AssistantTurnBuilder,
 ) -> Vec<ChatMessage> {
-    let mut assistant_tools = Vec::with_capacity(turn.tool_uses.len());
-    let mut tool_results = Vec::with_capacity(turn.tool_uses.len());
-
-    for tu in turn.tool_uses.drain(..) {
-        match tu.clone().finalize() {
-            Ok(tool_use) => {
-                let interrupted_output = ToolOutput::canceled("Interrupted by user");
-                tool_results.push(ToolResult::from_output(
-                    tool_use.id.clone(),
-                    &interrupted_output,
-                ));
-                assistant_tools.push(tool_use);
-            }
-            Err(err) => {
-                assistant_tools.push(malformed_tool_use(&tu));
-                let error_output = invalid_tool_output(&tu.input_json, &err);
-                tool_results.push(ToolResult::from_output(tu.id, &error_output));
-            }
-        }
-    }
-
-    let assistant_blocks = turn.into_blocks(assistant_tools);
+    let finalized = turn.finalize();
     let mut messages = prior_messages.to_vec();
 
-    if !assistant_blocks.is_empty() {
+    if !finalized.blocks.is_empty() {
         messages.push(ChatMessage {
             role: "assistant".to_string(),
             phase: Some("commentary".to_string()),
-            content: crate::providers::MessageContent::Blocks(assistant_blocks),
+            content: crate::providers::MessageContent::Blocks(finalized.blocks),
         });
     }
 
-    if !tool_results.is_empty() {
-        messages.push(ChatMessage::tool_results(tool_results));
+    // For every tool the assistant requested (parseable or malformed), the
+    // interrupted path must also surface a matching tool_result so the
+    // assistant→user pair stays balanced for the next-turn replay. Parseable
+    // tools get a `canceled` output; malformed tools keep their parse-error
+    // output (already collected during `finalize`).
+    if !finalized.all_tool_uses.is_empty() {
+        let mut tool_results: Vec<ToolResult> = Vec::with_capacity(finalized.all_tool_uses.len());
+        let mut malformed_results = finalized.malformed_results.into_iter();
+        for tu in finalized.all_tool_uses {
+            // Detect malformed by checking the sentinel input shape; if so,
+            // pull the matching parse-error result. Otherwise synthesize a
+            // canceled result.
+            let is_malformed = tu
+                .input
+                .get("__zdx_invalid_json__")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if is_malformed {
+                if let Some(result) = malformed_results.next() {
+                    tool_results.push(result);
+                }
+            } else {
+                let interrupted_output = ToolOutput::canceled("Interrupted by user");
+                tool_results.push(ToolResult::from_output(tu.id, &interrupted_output));
+            }
+        }
+        // Drain any extra malformed results that were not paired (defensive;
+        // should not happen with the in-order walk above).
+        for extra in malformed_results {
+            tool_results.push(extra);
+        }
+        if !tool_results.is_empty() {
+            messages.push(ChatMessage::tool_results(tool_results));
+        }
     }
 
     messages
@@ -1989,41 +2262,6 @@ fn emit_malformed_tool_events(
             id,
             result: error_output,
         });
-    }
-}
-
-fn finalize_tool_calls(turn: &mut AssistantTurnBuilder) -> ToolTurnOutcome {
-    let mut executable = Vec::with_capacity(turn.tool_uses.len());
-    let mut assistant_tools = Vec::with_capacity(turn.tool_uses.len());
-    let mut malformed_results = Vec::new();
-    let mut malformed_tools = Vec::new();
-    let mut diagnostics = Vec::new();
-
-    for tu in turn.tool_uses.drain(..) {
-        match tu.clone().finalize() {
-            Ok(tool_use) => {
-                assistant_tools.push(tool_use.clone());
-                executable.push(tool_use);
-            }
-            Err(e) => {
-                diagnostics.push(TurnDiagnostic::Parse {
-                    message: format!("Invalid tool input JSON for {}: {}", tu.name, e),
-                    details: Some(truncate_for_error(&tu.input_json, 500)),
-                });
-                assistant_tools.push(malformed_tool_use(&tu));
-                let error_output = invalid_tool_output(&tu.input_json, &e);
-                malformed_results.push(ToolResult::from_output(tu.id.clone(), &error_output));
-                malformed_tools.push((tu.id, tu.name, error_output));
-            }
-        }
-    }
-
-    ToolTurnOutcome {
-        executable,
-        assistant_tools,
-        malformed_results,
-        malformed_tools,
-        diagnostics,
     }
 }
 
@@ -2434,13 +2672,15 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = EventSender::new(tx);
 
-        let mut turn = AssistantTurnBuilder::new();
-        turn.tool_uses.push(ToolUseBuilder {
+        let mut turn = AssistantTurnBuilder::new(String::new());
+        turn.push_tool_use(ToolUseBuilder {
             index: 0,
             id: "toolu_xyz".to_string(),
             name: "write".to_string(),
             input_json: "{\"path\":\"a.txt\",\"content\":\"hel".to_string(), // truncated
             input_preview_len: 0,
+            id_origin: zdx_types::IdOrigin::Synthesized,
+            replay: None,
         });
 
         emit_tool_input_completion(&sender, &turn, 0);
@@ -2464,13 +2704,15 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = EventSender::new(tx);
 
-        let mut turn = AssistantTurnBuilder::new();
-        turn.tool_uses.push(ToolUseBuilder {
+        let mut turn = AssistantTurnBuilder::new(String::new());
+        turn.push_tool_use(ToolUseBuilder {
             index: 0,
             id: "toolu_ok".to_string(),
             name: "read".to_string(),
             input_json: "{\"path\":\"a.txt\"}".to_string(),
             input_preview_len: 0,
+            id_origin: zdx_types::IdOrigin::Synthesized,
+            replay: None,
         });
 
         emit_tool_input_completion(&sender, &turn, 0);
@@ -2485,24 +2727,23 @@ mod tests {
     }
 
     #[test]
-    fn finalize_tool_calls_reuses_malformed_tool_input_sentinel() {
-        let mut turn = AssistantTurnBuilder {
-            thinking_blocks: Vec::new(),
-            text: String::new(),
-            tool_uses: vec![ToolUseBuilder {
-                index: 0,
-                id: "tool_bad".to_string(),
-                name: "write".to_string(),
-                input_json: "{\"path\":\"a.txt\",\"content\":\"hel".to_string(),
-                input_preview_len: 0,
-            }],
-        };
+    fn finalize_reuses_malformed_tool_input_sentinel() {
+        let mut turn = AssistantTurnBuilder::new(String::new());
+        turn.push_tool_use(ToolUseBuilder {
+            index: 0,
+            id: "tool_bad".to_string(),
+            name: "write".to_string(),
+            input_json: "{\"path\":\"a.txt\",\"content\":\"hel".to_string(),
+            input_preview_len: 0,
+            id_origin: zdx_types::IdOrigin::Synthesized,
+            replay: None,
+        });
 
-        let outcome = finalize_tool_calls(&mut turn);
-        assert_eq!(outcome.executable.len(), 0);
-        assert_eq!(outcome.assistant_tools.len(), 1);
+        let finalized = turn.finalize();
+        assert_eq!(finalized.executable.len(), 0);
+        assert_eq!(finalized.all_tool_uses.len(), 1);
         assert_eq!(
-            outcome.assistant_tools[0].input,
+            finalized.all_tool_uses[0].input,
             malformed_tool_input_value("{\"path\":\"a.txt\",\"content\":\"hel")
         );
     }
@@ -2511,7 +2752,7 @@ mod tests {
     fn message_delta_usage_is_emitted_as_delta_from_cumulative_counts() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = EventSender::new(tx);
-        let mut state = StreamState::new();
+        let mut state = StreamState::new(String::new());
 
         handle_stream_event(
             StreamEvent::MessageStart {
@@ -2588,7 +2829,7 @@ mod tests {
     fn handle_stream_event_captures_redacted_thinking_block() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = EventSender::new(tx);
-        let mut state = StreamState::new();
+        let mut state = StreamState::new(String::new());
 
         handle_stream_event(
             StreamEvent::ContentBlockStart {
@@ -2597,6 +2838,7 @@ mod tests {
                 id: None,
                 name: None,
                 data: Some("enc".to_string()),
+                id_origin: None,
             },
             &sender,
             &mut state,
@@ -2604,14 +2846,26 @@ mod tests {
         .expect("redacted_thinking start should be accepted");
 
         handle_stream_event(
-            StreamEvent::ContentBlockCompleted { index: 0 },
+            StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature: None,
+            },
             &sender,
             &mut state,
         )
         .expect("content_block_stop should be accepted");
 
-        assert_eq!(state.turn.thinking_blocks.len(), 1);
-        let tb = &state.turn.thinking_blocks[0];
+        let reasoning_parts: Vec<&ThinkingBuilder> = state
+            .turn
+            .parts
+            .iter()
+            .filter_map(|p| match p {
+                AssistantPart::Reasoning(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reasoning_parts.len(), 1);
+        let tb = reasoning_parts[0];
         assert_eq!(tb.index, 0);
         assert!(tb.text.is_empty());
         assert_eq!(
@@ -2637,10 +2891,11 @@ mod tests {
             other => panic!("unexpected event: {other:?}"),
         }
 
-        // `into_blocks` should emit a `Reasoning` block with empty text
-        // and the redacted replay token — exactly what the outbound
-        // request path needs to serialize as `redacted_thinking`.
-        let blocks = state.turn.into_blocks(Vec::new());
+        // Finalizing should emit a `Reasoning` block with empty text and
+        // the redacted replay token — exactly what the outbound request
+        // path needs to serialize as `redacted_thinking`.
+        let finalized = state.turn.finalize();
+        let blocks = finalized.blocks;
         assert_eq!(blocks.len(), 1);
         assert!(matches!(
             &blocks[0],
@@ -2659,7 +2914,7 @@ mod tests {
     fn handle_stream_event_rejects_redacted_thinking_without_data() {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = EventSender::new(tx);
-        let mut state = StreamState::new();
+        let mut state = StreamState::new(String::new());
 
         let err = handle_stream_event(
             StreamEvent::ContentBlockStart {
@@ -2668,6 +2923,7 @@ mod tests {
                 id: None,
                 name: None,
                 data: None,
+                id_origin: None,
             },
             &sender,
             &mut state,
@@ -2685,7 +2941,11 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
         assert!(
-            state.turn.thinking_blocks.is_empty(),
+            !state
+                .turn
+                .parts
+                .iter()
+                .any(|p| matches!(p, AssistantPart::Reasoning(_))),
             "no thinking block should be recorded on parse error"
         );
     }
@@ -2700,7 +2960,7 @@ mod tests {
     fn handle_stream_event_rejects_redacted_thinking_with_empty_data() {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = EventSender::new(tx);
-        let mut state = StreamState::new();
+        let mut state = StreamState::new(String::new());
 
         let err = handle_stream_event(
             StreamEvent::ContentBlockStart {
@@ -2709,6 +2969,7 @@ mod tests {
                 id: None,
                 name: None,
                 data: Some(String::new()),
+                id_origin: None,
             },
             &sender,
             &mut state,
@@ -2727,7 +2988,11 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
         assert!(
-            state.turn.thinking_blocks.is_empty(),
+            !state
+                .turn
+                .parts
+                .iter()
+                .any(|p| matches!(p, AssistantPart::Reasoning(_))),
             "no thinking block should be recorded on parse error"
         );
     }
@@ -2764,6 +3029,8 @@ mod tests {
             id: "tool1".to_string(),
             name: "read".to_string(),
             input: serde_json::json!({"file_path": "test.txt"}),
+            id_origin: zdx_types::IdOrigin::Synthesized,
+            replay: None,
         }];
 
         let (tx, mut rx) = create_event_channel();
@@ -2818,6 +3085,8 @@ mod tests {
                         {"op": "add", "content": "Inspect codebase", "status": "in_progress"}
                     ]
                 }),
+                id_origin: zdx_types::IdOrigin::Synthesized,
+                replay: None,
             },
             ToolUse {
                 id: "tool2".to_string(),
@@ -2828,6 +3097,8 @@ mod tests {
                         {"op": "add", "content": "Ship fix"}
                     ]
                 }),
+                id_origin: zdx_types::IdOrigin::Synthesized,
+                replay: None,
             },
         ];
 
@@ -2929,7 +3200,7 @@ mod tests {
         let sender = EventSender::new(tx);
 
         let err = TurnError::Provider(ProviderError::api_error("overloaded_error", "HTTP 502"));
-        emit_turn_error(&err, &sender);
+        emit_turn_error(&err, &sender, 0);
 
         let event = timeout(Duration::from_secs(1), rx.recv())
             .await
@@ -2945,6 +3216,7 @@ mod tests {
                 },
                 final_text,
                 messages,
+                ..
             } if message == "overloaded_error: HTTP 502"
                 && final_text.is_empty()
                 && messages.is_empty()
@@ -2992,7 +3264,7 @@ mod tests {
             "partial".to_string(),
             messages.clone(),
         );
-        emit_turn_error(&err, &sender);
+        emit_turn_error(&err, &sender, 0);
 
         let event = timeout(Duration::from_secs(1), rx.recv())
             .await
@@ -3004,6 +3276,7 @@ mod tests {
                 status: TurnStatus::Interrupted,
                 final_text,
                 messages: event_messages,
+                ..
             } if final_text == "partial" && event_messages == &messages
         ));
         assert!(rx.try_recv().is_err());
@@ -3015,26 +3288,29 @@ mod tests {
         use crate::tools::ToolResultContent;
 
         let prior_messages = vec![ChatMessage::user("analyze the repo")];
-        let turn = AssistantTurnBuilder {
-            thinking_blocks: vec![ThinkingBuilder {
-                index: 0,
-                text: "Let me inspect the project first.".to_string(),
-                signature: String::new(),
-                signature_provider: None,
-                replay: Some(ReplayToken::Anthropic {
-                    signature: "sig123".to_string(),
-                }),
-                had_delta: true,
-            }],
-            text: "I found the provider loop.".to_string(),
-            tool_uses: vec![ToolUseBuilder {
-                index: 1,
-                id: "tool_1".to_string(),
-                name: "read".to_string(),
-                input_json: r#"{"file_path":"src/main.rs"}"#.to_string(),
-                input_preview_len: 0,
-            }],
-        };
+        let mut turn = AssistantTurnBuilder::new(String::new());
+        turn.push_reasoning(ThinkingBuilder {
+            index: 0,
+            text: "Let me inspect the project first.".to_string(),
+            signature: String::new(),
+            signature_provider: None,
+            replay: Some(ReplayToken::Anthropic {
+                signature: "sig123".to_string(),
+            }),
+            had_delta: true,
+        });
+        // Append a Text part that mimics what `TextDelta` would produce
+        // for the assistant's accumulated text.
+        turn.ensure_text_part_mut(2).text = "I found the provider loop.".to_string();
+        turn.push_tool_use(ToolUseBuilder {
+            index: 1,
+            id: "tool_1".to_string(),
+            name: "read".to_string(),
+            input_json: r#"{"file_path":"src/main.rs"}"#.to_string(),
+            input_preview_len: 0,
+            id_origin: zdx_types::IdOrigin::Synthesized,
+            replay: None,
+        });
 
         let messages = build_interrupted_messages(&prior_messages, turn);
 
@@ -3058,11 +3334,13 @@ mod tests {
                 ))
                 && blocks.iter().any(|block| matches!(
                     block,
-                    ChatContentBlock::Text(text) if text == "I found the provider loop."
+                    ChatContentBlock::Text { text, .. } if text == "I found the provider loop."
                 ))
                 && blocks.iter().any(|block| matches!(
                     block,
-                    ChatContentBlock::ToolUse { id, name, input }
+                    ChatContentBlock::ToolUse { id, name, input,
+                            id_origin: zdx_types::IdOrigin::Synthesized,
+                            replay: None }
                         if id == "tool_1"
                             && name == "read"
                             && input == &serde_json::json!({"file_path": "src/main.rs"})
@@ -3088,19 +3366,26 @@ mod tests {
         ));
     }
 
-    /// Verifies `ToolUseBuilder` finalization fails on invalid JSON.
+    /// Verifies that finalizing a turn with malformed tool-use JSON
+    /// produces a malformed sentinel rather than an executable tool.
     #[tokio::test]
-    async fn test_tool_use_builder_finalize_fails_on_invalid_json() {
-        let builder = ToolUseBuilder {
+    async fn test_finalize_records_malformed_tool_use_input() {
+        let mut turn = AssistantTurnBuilder::new(String::new());
+        turn.push_tool_use(ToolUseBuilder {
             index: 0,
             id: "tool1".to_string(),
             name: "test".to_string(),
             input_json: "{invalid json}".to_string(),
             input_preview_len: 0,
-        };
+            id_origin: zdx_types::IdOrigin::Synthesized,
+            replay: None,
+        });
 
-        let result = builder.finalize();
-        assert!(result.is_err());
+        let finalized = turn.finalize();
+        assert!(finalized.executable.is_empty());
+        assert_eq!(finalized.malformed_results.len(), 1);
+        assert_eq!(finalized.all_tool_uses.len(), 1);
+        assert_eq!(finalized.blocks.len(), 1);
     }
 
     /// Verifies broadcaster removes closed channels.
@@ -3134,7 +3419,7 @@ mod tests {
     /// event to the UI/persistence pipeline.
     #[test]
     fn test_can_transparently_retry_stream_requires_no_emitted_events() {
-        let mut state = StreamState::new();
+        let mut state = StreamState::new(String::new());
         assert!(can_transparently_retry_stream(&state));
 
         state.emitted_events = true;
@@ -3155,7 +3440,7 @@ mod tests {
         )];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None).await;
+        let result = consume_stream(provider_stream, &[], &sender, None, "").await;
         let Err((err, state)) = result else {
             panic!("stream should error out");
         };
@@ -3188,7 +3473,7 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None).await;
+        let result = consume_stream(provider_stream, &[], &sender, None, "").await;
         let Err((_err, state)) = result else {
             panic!("stream should error out");
         };
@@ -3213,8 +3498,12 @@ mod tests {
                 id: None,
                 name: None,
                 data: Some("enc".to_string()),
+                id_origin: None,
             }),
-            Ok(StreamEvent::ContentBlockCompleted { index: 0 }),
+            Ok(StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature: None,
+            }),
             Err(ProviderError::api_error(
                 "overloaded_error",
                 "API is temporarily overloaded",
@@ -3222,7 +3511,7 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None).await;
+        let result = consume_stream(provider_stream, &[], &sender, None, "").await;
         let Err((_err, state)) = result else {
             panic!("stream should error out");
         };
@@ -3231,5 +3520,551 @@ mod tests {
             !can_transparently_retry_stream(&state),
             "reasoning completion is persisted and makes retry unsafe"
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // Engine builder + model threading + checkpoint contracts.
+    // ---------------------------------------------------------------------
+
+    /// Feeds an interleaved stream of `[reasoning, text, tool_use, text,
+    /// tool_use]` block starts/completions through the engine and asserts
+    /// the resulting assistant blocks come out in the **same** stream order
+    /// — never bucketed by category.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn test_assistant_turn_preserves_part_order() {
+        let (tx, _rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+        let mut state = StreamState::new("gemini-3-pro-preview".to_string());
+
+        // index 0: reasoning
+        handle_stream_event(
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::Reasoning,
+                id: None,
+                name: None,
+                data: None,
+                id_origin: None,
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::ReasoningDelta {
+                index: 0,
+                reasoning: "thinking".to_string(),
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature: None,
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+
+        // index 1: text
+        handle_stream_event(
+            StreamEvent::ContentBlockStart {
+                index: 1,
+                block_type: ContentBlockType::Text,
+                id: None,
+                name: None,
+                data: None,
+                id_origin: None,
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::TextDelta {
+                index: 1,
+                text: "before-tool".to_string(),
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::ContentBlockCompleted {
+                index: 1,
+                signature: None,
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+
+        // index 2: tool_use (real id)
+        handle_stream_event(
+            StreamEvent::ContentBlockStart {
+                index: 2,
+                block_type: ContentBlockType::ToolUse,
+                id: Some("call_real_001".to_string()),
+                name: Some("read_file".to_string()),
+                data: None,
+                id_origin: Some(zdx_types::IdOrigin::Real),
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::InputJsonDelta {
+                index: 2,
+                partial_json: "{\"path\":\"a\"}".to_string(),
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::ContentBlockCompleted {
+                index: 2,
+                signature: None,
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+
+        // index 3: text
+        handle_stream_event(
+            StreamEvent::ContentBlockStart {
+                index: 3,
+                block_type: ContentBlockType::Text,
+                id: None,
+                name: None,
+                data: None,
+                id_origin: None,
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::TextDelta {
+                index: 3,
+                text: "between".to_string(),
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::ContentBlockCompleted {
+                index: 3,
+                signature: None,
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+
+        // index 4: tool_use (synthesized id)
+        handle_stream_event(
+            StreamEvent::ContentBlockStart {
+                index: 4,
+                block_type: ContentBlockType::ToolUse,
+                id: Some("synth_a".to_string()),
+                name: Some("list_dir".to_string()),
+                data: None,
+                id_origin: Some(zdx_types::IdOrigin::Synthesized),
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::InputJsonDelta {
+                index: 4,
+                partial_json: "{}".to_string(),
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::ContentBlockCompleted {
+                index: 4,
+                signature: None,
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+
+        let blocks = state.turn.finalize().blocks;
+        assert_eq!(blocks.len(), 5, "got blocks: {blocks:#?}");
+        let kinds: Vec<&'static str> = blocks
+            .iter()
+            .map(|b| match b {
+                ChatContentBlock::Reasoning(_) => "reasoning",
+                ChatContentBlock::Text { .. } => "text",
+                ChatContentBlock::ToolUse { .. } => "tool_use",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["reasoning", "text", "tool_use", "text", "tool_use"]
+        );
+
+        // Verify id_origin was preserved per part.
+        match &blocks[2] {
+            ChatContentBlock::ToolUse { id, id_origin, .. } => {
+                assert_eq!(id, "call_real_001");
+                assert_eq!(*id_origin, zdx_types::IdOrigin::Real);
+            }
+            _ => panic!("expected tool_use at index 2"),
+        }
+        match &blocks[4] {
+            ChatContentBlock::ToolUse { id_origin, .. } => {
+                assert_eq!(*id_origin, zdx_types::IdOrigin::Synthesized);
+            }
+            _ => panic!("expected tool_use at index 4"),
+        }
+    }
+
+    /// `ContentBlockCompleted.signature` carrying a Gemini signature on a
+    /// text part must populate the resulting block's `replay` with a
+    /// `ReplayToken::Gemini { signature, model }` where `model` matches the
+    /// turn's source model.
+    #[test]
+    fn test_assistant_turn_gemini_signature_includes_model_on_text() {
+        let (tx, _rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+        let mut state = StreamState::new("gemini-3-pro-preview".to_string());
+
+        handle_stream_event(
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::Text,
+                id: None,
+                name: None,
+                data: None,
+                id_origin: None,
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::TextDelta {
+                index: 0,
+                text: "hi".to_string(),
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature: Some((
+                    crate::providers::SignatureProvider::Gemini,
+                    "sig_text".to_string(),
+                )),
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+
+        let blocks = state.turn.finalize().blocks;
+        match &blocks[0] {
+            ChatContentBlock::Text { text, replay } => {
+                assert_eq!(text, "hi");
+                assert_eq!(
+                    replay,
+                    &Some(ReplayToken::Gemini {
+                        signature: "sig_text".to_string(),
+                        model: "gemini-3-pro-preview".to_string(),
+                    })
+                );
+            }
+            other => panic!("expected text block, got {other:?}"),
+        }
+    }
+
+    /// Same per-part signature contract for `tool_use` parts. The
+    /// `ChatContentBlock::ToolUse.replay` field must carry the Gemini
+    /// signature with the source model.
+    #[test]
+    fn test_assistant_turn_gemini_signature_includes_model_on_tool_use() {
+        let (tx, _rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+        let mut state = StreamState::new("gemini-3-pro-preview".to_string());
+
+        handle_stream_event(
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::ToolUse,
+                id: Some("call_real_001".to_string()),
+                name: Some("read".to_string()),
+                data: None,
+                id_origin: Some(zdx_types::IdOrigin::Real),
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::InputJsonDelta {
+                index: 0,
+                partial_json: "{}".to_string(),
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature: Some((
+                    crate::providers::SignatureProvider::Gemini,
+                    "sig_tool".to_string(),
+                )),
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+
+        let blocks = state.turn.finalize().blocks;
+        match &blocks[0] {
+            ChatContentBlock::ToolUse { replay, .. } => {
+                assert_eq!(
+                    replay,
+                    &Some(ReplayToken::Gemini {
+                        signature: "sig_tool".to_string(),
+                        model: "gemini-3-pro-preview".to_string(),
+                    })
+                );
+            }
+            other => panic!("expected tool_use block, got {other:?}"),
+        }
+    }
+
+    /// Reasoning blocks pick up their Gemini signature via the dedicated
+    /// `ReasoningSignatureDelta` channel — the resulting `ReplayToken::Gemini`
+    /// must also carry the source model.
+    #[test]
+    fn test_reasoning_completion_gemini_signature_includes_model() {
+        let (tx, _rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+        let mut state = StreamState::new("gemini-3-pro-preview".to_string());
+
+        handle_stream_event(
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::Reasoning,
+                id: None,
+                name: None,
+                data: None,
+                id_origin: None,
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::ReasoningDelta {
+                index: 0,
+                reasoning: "thinking".to_string(),
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::ReasoningSignatureDelta {
+                index: 0,
+                signature: "sig_reason".to_string(),
+                provider: crate::providers::SignatureProvider::Gemini,
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature: None,
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+
+        let blocks = state.turn.finalize().blocks;
+        match &blocks[0] {
+            ChatContentBlock::Reasoning(ReasoningBlock { replay, .. }) => {
+                assert_eq!(
+                    replay,
+                    &Some(ReplayToken::Gemini {
+                        signature: "sig_reason".to_string(),
+                        model: "gemini-3-pro-preview".to_string(),
+                    })
+                );
+            }
+            other => panic!("expected reasoning block, got {other:?}"),
+        }
+    }
+
+    /// `TurnCheckpoint` is emitted after every completed tool turn and
+    /// carries the run-entry `prior_message_count` (the cursor stays
+    /// stable across all checkpoints emitted within a single run).
+    #[tokio::test]
+    async fn test_turn_checkpoint_emitted_after_tool_turn() {
+        use std::collections::HashSet;
+
+        use crate::tools::{ToolContext, ToolRegistry};
+
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        let mut turn = AssistantTurnBuilder::new("gemini-3-pro-preview".to_string());
+        turn.push_tool_use(ToolUseBuilder {
+            index: 0,
+            id: "tool_no_op".to_string(),
+            name: "nonexistent".to_string(),
+            input_json: "{}".to_string(),
+            input_preview_len: 0,
+            id_origin: zdx_types::IdOrigin::Real,
+            replay: None,
+        });
+
+        let setup = RunTurnSetup {
+            model: "gemini-3-pro-preview".to_string(),
+            client: ProviderClient::Gemini(GeminiClient::new(GeminiConfig {
+                api_key: "x".to_string(),
+                base_url: "https://example.invalid".to_string(),
+                model: "gemini-3-pro-preview".to_string(),
+                max_output_tokens: None,
+                thinking_config: None,
+            })),
+            tools: Vec::new(),
+            enabled_tools: HashSet::new(),
+            tool_ctx: ToolContext::new(std::path::PathBuf::from("."), None),
+            tool_registry: ToolRegistry::builtins(),
+        };
+
+        let mut messages: Vec<ChatMessage> = vec![ChatMessage::user("first turn")];
+        let prior_count = messages.len();
+
+        // Run the tool turn; the unknown tool name produces a tool_result
+        // (failure) but the path still emits a TurnCheckpoint when it
+        // completes successfully (no interrupt).
+        process_tool_turn(&mut messages, &mut turn, &setup, &sender, None, prior_count)
+            .await
+            .expect("tool turn should complete");
+
+        // Drain events looking for a TurnCheckpoint with our prior_count.
+        let mut saw_checkpoint = false;
+        while let Ok(event) = rx.try_recv() {
+            if let AgentEvent::TurnCheckpoint {
+                messages: cp_messages,
+                prior_message_count,
+            } = &*event
+            {
+                assert_eq!(*prior_message_count, prior_count);
+                assert!(cp_messages.len() > prior_count);
+                saw_checkpoint = true;
+            }
+        }
+        assert!(
+            saw_checkpoint,
+            "process_tool_turn must emit a TurnCheckpoint after a successful tool turn"
+        );
+    }
+
+    /// Provider errors after a partial run carry the run-entry
+    /// `prior_message_count` on the terminal `TurnFinished`. The cursor is
+    /// captured at run entry, not at error time, so persistence can slice
+    /// the new turn-suffix correctly.
+    #[tokio::test]
+    async fn test_turn_finished_cursor_in_provider_error_path() {
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        let messages = vec![
+            ChatMessage::user("hi"),
+            ChatMessage::assistant_text("partial reply", None),
+        ];
+        let err = TurnError::Provider(ProviderError::api_error("overloaded_error", "HTTP 502"));
+        emit_turn_error_with_messages(&err, &messages, &sender, /* prior_message_count */ 1);
+
+        let event = rx.try_recv().expect("expected event");
+        match &*event {
+            AgentEvent::TurnFinished {
+                prior_message_count,
+                messages: tf_messages,
+                ..
+            } => {
+                assert_eq!(*prior_message_count, 1);
+                assert_eq!(tf_messages.len(), 2);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    /// Even the no-message error path threads `prior_message_count` —
+    /// callers that didn't accumulate any messages still pass the run-entry
+    /// cursor. Persistence consumers tolerate `prior_count <= last_persisted`.
+    #[tokio::test]
+    async fn test_turn_finished_cursor_in_setup_failure() {
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        let err = TurnError::Internal(anyhow!("setup failed"));
+        emit_turn_error(&err, &sender, /* prior_message_count */ 3);
+
+        let event = rx.try_recv().expect("expected event");
+        match &*event {
+            AgentEvent::TurnFinished {
+                prior_message_count,
+                ..
+            } => {
+                assert_eq!(*prior_message_count, 3);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    /// `AssistantTurnBuilder::final_text` returns the concatenation of all
+    /// text parts in stream order — used by the cumulative `final_text`
+    /// carried on `AssistantCompleted` and `TurnFinished`.
+    #[test]
+    fn test_assistant_turn_final_text_concatenates_text_parts_in_order() {
+        let mut turn = AssistantTurnBuilder::new("gemini-3-pro-preview".to_string());
+        turn.ensure_text_part_mut(0).text = "first ".to_string();
+        turn.push_reasoning(ThinkingBuilder {
+            index: 1,
+            text: "thinking".to_string(),
+            signature: String::new(),
+            signature_provider: None,
+            replay: None,
+            had_delta: true,
+        });
+        turn.ensure_text_part_mut(2).text = "second".to_string();
+
+        assert_eq!(turn.final_text(), "first second");
+    }
+
+    /// Sanity: `AssistantTurnBuilder::new` stores the model so per-part
+    /// Gemini replay tokens can pick it up via `attach_part_signature`.
+    #[test]
+    fn test_assistant_turn_builder_stores_model() {
+        let turn = AssistantTurnBuilder::new("gemini-3-pro-preview".to_string());
+        assert_eq!(turn.model, "gemini-3-pro-preview");
     }
 }

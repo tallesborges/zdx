@@ -39,11 +39,8 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
         let (persist_tx, persist_rx) = zdx_engine::core::agent::create_event_channel();
         let _broadcaster =
             zdx_engine::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx, persist_tx]);
-        let _persist = thread_persistence::spawn_thread_persist_task_with_completed_messages(
-            thread_handle,
-            persist_rx,
-            true,
-        );
+        let _persist =
+            thread_persistence::spawn_thread_persist_task(thread_handle, persist_rx);
     } else {
         let _broadcaster = zdx_engine::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx]);
     }
@@ -100,11 +97,8 @@ fn spawn_btw_tab_turn(tui: &TuiState, base_messages: &[ChatMessage]) -> UiEvent 
     let (persist_tx, persist_rx) = zdx_engine::core::agent::create_event_channel();
     let _broadcaster =
         zdx_engine::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx, persist_tx]);
-    let _persist = thread_persistence::spawn_thread_persist_task_with_completed_messages(
-        prepared.thread_handle,
-        persist_rx,
-        true,
-    );
+    let _persist =
+        thread_persistence::spawn_thread_persist_task(prepared.thread_handle, persist_rx);
 
     let run_messages = prepared.run_messages;
     tokio::spawn(async move {

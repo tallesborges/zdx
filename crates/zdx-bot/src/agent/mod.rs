@@ -57,7 +57,7 @@ pub(crate) fn record_user_message(
     }
 
     let mut blocks = Vec::with_capacity(1 + incoming.images.len());
-    blocks.push(ChatContentBlock::Text(text));
+    blocks.push(ChatContentBlock::text(text));
     for image in &incoming.images {
         blocks.push(ChatContentBlock::Image {
             mime_type: image.mime_type.clone(),
@@ -167,11 +167,7 @@ pub(crate) fn spawn_agent_turn(
     let (persist_tx, persist_rx) = agent::create_event_channel();
 
     agent::spawn_broadcaster(agent_rx, vec![bot_tx, persist_tx]);
-    thread_persistence::spawn_thread_persist_task_with_completed_messages(
-        thread.clone(),
-        persist_rx,
-        true,
-    );
+    thread_persistence::spawn_thread_persist_task(thread.clone(), persist_rx);
 
     // Spawn agent in background — owned values moved in
     let config = bot_config;

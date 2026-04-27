@@ -138,8 +138,16 @@ Threads are append-only **JSONL** event logs (thread events are never modified o
 - First line is `meta` with `schema_version` and optional `title`.
 - Timestamps are RFC3339 UTC.
 - Event types: `meta`, `message`, `tool_use`, `tool_result`, `interrupted`, `reasoning`, `usage`, `notice`.
+- `tool_use` events carry `id_origin` (`real` when the provider emitted the id, `synthesized` when zdx generated one because the provider omitted it; default `synthesized` for old transcripts) and an optional `replay` token (e.g. Gemini per-part `thoughtSignature`). Replay metadata is preserved verbatim so multi-turn provider caches (e.g. Gemini's implicit prompt cache) can hit on subsequent turns.
+- `message` and `reasoning` events also carry an optional `replay` token for the same reason.
 - `notice` events (e.g. model `refusal`, `model_context_window_exceeded`) are persisted for UI replay and MUST NOT be rehydrated as conversation messages sent back to providers.
 - Threads remain readable even if interrupted mid-stream.
+
+### Durability
+
+- The persistence layer flushes ordered batches at tool-turn boundaries (after each `process_tool_turn` completes) and at terminal `TurnFinished`. Streaming text/reasoning/tool-input deltas are no longer persisted directly.
+- A hard crash can lose any assistant content streamed since the last checkpoint or terminal flush; completed prior tool turns are durable. Long tool loops persist incrementally between turns, so an interrupted multi-tool run keeps everything up to the last completed tool turn.
+- Within a flushed batch, blocks are persisted in the exact stream order the provider produced them. This preserves Gemini's per-part replay fidelity and is required for implicit-cache hits on the next turn.
 
 ### Metadata Updates
 

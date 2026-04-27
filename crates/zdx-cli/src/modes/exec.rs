@@ -291,6 +291,7 @@ fn event_type_name(event: &AgentEvent) -> &'static str {
         AgentEvent::Notice { .. } => "notice",
         AgentEvent::ProviderRetry { .. } => "provider_retry",
         AgentEvent::TurnFinished { .. } => "turn_finished",
+        AgentEvent::TurnCheckpoint { .. } => "turn_checkpoint",
         AgentEvent::UsageUpdate { .. } => "usage_update",
     }
 }
@@ -301,6 +302,7 @@ fn sanitize_exec_event(event: &AgentEvent) -> Option<AgentEvent> {
         | AgentEvent::ReasoningDelta { .. }
         | AgentEvent::ToolOutputDelta { .. }
         | AgentEvent::ToolInputDelta { .. }
+        | AgentEvent::TurnCheckpoint { .. }
         | AgentEvent::TurnFinished { .. } => None,
         AgentEvent::ReasoningCompleted { block } => {
             let sanitized = zdx_engine::providers::ReasoningBlock {
@@ -330,6 +332,7 @@ fn emit_final_turn_finished(final_text: &str, event_filter: &[String]) {
         status: TurnStatus::Completed,
         final_text: final_text.to_string(),
         messages: Vec::new(),
+        prior_message_count: 0,
     };
     if let Ok(line) = serde_json::to_string(&event) {
         let mut out = stdout();

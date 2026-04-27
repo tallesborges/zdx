@@ -113,6 +113,7 @@ pub fn handle_agent_event(
             status,
             final_text,
             messages,
+            ..
         } => {
             // Apply any pending delta before resetting agent state to ensure no
             // content is lost. This handles edge cases where AssistantCompleted wasn't
@@ -189,6 +190,12 @@ pub fn handle_agent_event(
         }
         AgentEvent::ToolOutputDelta { id, chunk } => {
             transcript.append_tool_output_delta_for(id, chunk);
+            vec![]
+        }
+        AgentEvent::TurnCheckpoint { .. } => {
+            // Non-terminal incremental snapshot used by persistence to flush
+            // messages between tool turns. The TUI gets live state from
+            // streaming events and does not need to react to checkpoints.
             vec![]
         }
     };
@@ -824,6 +831,7 @@ mod tests {
                 status: TurnStatus::Completed,
                 final_text: String::new(),
                 messages: Vec::new(),
+                prior_message_count: 0,
             },
         );
 
@@ -875,6 +883,7 @@ mod tests {
                 status: TurnStatus::Completed,
                 final_text: String::new(),
                 messages: Vec::new(),
+                prior_message_count: 0,
             },
         );
 

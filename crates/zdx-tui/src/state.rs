@@ -491,7 +491,7 @@ impl TuiState {
                                         transcript.push(cell);
                                     }
                                 }
-                                ChatContentBlock::Text(text) => {
+                                ChatContentBlock::Text { text, .. } => {
                                     if !text_buffer.is_empty() {
                                         text_buffer.push('\n');
                                     }
@@ -508,7 +508,7 @@ impl TuiState {
                         let text = blocks
                             .iter()
                             .filter_map(|b| match b {
-                                ChatContentBlock::Text(t) => Some(t.as_str()),
+                                ChatContentBlock::Text { text: t, .. } => Some(t.as_str()),
                                 _ => None,
                             })
                             .collect::<Vec<_>>()

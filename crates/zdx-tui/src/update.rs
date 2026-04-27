@@ -1333,6 +1333,7 @@ mod tests {
                 status: zdx_engine::core::events::TurnStatus::Completed,
                 final_text: String::new(),
                 messages: Vec::new(),
+                prior_message_count: 0,
             }),
         );
 

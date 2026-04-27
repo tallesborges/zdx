@@ -1028,6 +1028,7 @@ where
                     },
                     final_text: String::new(),
                     messages: Vec::new(),
+                    prior_message_count: 0,
                 }));
                 break;
             }
@@ -1329,6 +1330,7 @@ mod tests {
             status: TurnStatus::Completed,
             final_text: "hello!".to_string(),
             messages: Vec::new(),
+            prior_message_count: 0,
         }))
         .unwrap();
 
@@ -1359,6 +1361,7 @@ mod tests {
                 status: TurnStatus::Completed,
                 final_text,
                 messages,
+                ..
             }) if final_text == "hello!" && messages.is_empty()
         ));
     }
@@ -1395,6 +1398,7 @@ mod tests {
                 },
                 final_text,
                 messages,
+                ..
             }) if message == "Agent event stream disconnected unexpectedly"
                 && final_text.is_empty()
                 && messages.is_empty()
@@ -1417,6 +1421,7 @@ mod tests {
             status: TurnStatus::Completed,
             final_text: "done".to_string(),
             messages: Vec::new(),
+            prior_message_count: 0,
         }))
         .unwrap();
         drop(tx);
@@ -1435,6 +1440,7 @@ mod tests {
                 status: TurnStatus::Completed,
                 final_text,
                 messages,
+                ..
             }) if final_text == "done" && messages.is_empty()
         ));
     }

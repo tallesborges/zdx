@@ -14,8 +14,8 @@ pub use events::{
     AgentEvent, ErrorKind, ImageContent, NoticeKind, ToolError, ToolOutput, TurnStatus,
 };
 pub use messages::{
-    ChatContentBlock, ChatMessage, ContentBlockType, MessageContent, ReasoningBlock, ReplayToken,
-    SignatureProvider,
+    ChatContentBlock, ChatMessage, ContentBlockType, IdOrigin, MessageContent, ReasoningBlock,
+    ReplayToken, SignatureProvider,
 };
 pub use providers::{
     ProviderError, ProviderErrorKind, ProviderResult, ProviderStream, StreamEvent, Usage,

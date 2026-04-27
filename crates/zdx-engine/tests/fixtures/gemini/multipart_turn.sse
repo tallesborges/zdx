@@ -1,0 +1,14 @@
+data: {"candidates":[{"content":{"parts":[{"thought":true,"text":"Let me check the file then list dir.","thoughtSignature":"c2lnX3Rob3VnaHQ="}]}}]}
+
+data: {"candidates":[{"content":{"parts":[{"text":"I'll start by reading the README.","thoughtSignature":"c2lnX3RleHRfMQ=="}]}}]}
+
+data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call_real_001","name":"read_file","args":{"path":"README.md"}},"thoughtSignature":"c2lnX2NhbGxfcmVhbA=="}]}}]}
+
+data: {"candidates":[{"content":{"parts":[{"text":" Then I'll list the source dir.","thoughtSignature":"c2lnX3RleHRfMg=="}]}}]}
+
+data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"list_dir","args":{"path":"src"}},"thoughtSignature":"c2lnX2NhbGxfc3ludGg="}]}}]}
+
+data: {"candidates":[{"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":120,"candidatesTokenCount":40,"thoughtsTokenCount":15,"totalTokenCount":175}}
+
+data: [DONE]
+

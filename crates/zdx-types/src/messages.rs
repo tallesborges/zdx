@@ -25,9 +25,43 @@ pub enum ReplayToken {
         id: String,
         encrypted_content: String,
     },
-    /// Gemini thought signature - required for multi-turn function calling
+    /// Gemini thought signature - required for multi-turn function calling.
+    ///
+    /// `model` is the source model id that produced this signature; it is
+    /// used to gate replay to the same model on the next turn (Gemini's
+    /// implicit prompt cache requires byte-identical replay against the same
+    /// model). Old transcripts deserialize with `model: ""`; the request
+    /// builder treats empty as "unknown — replay normally" so single-model
+    /// sessions are unaffected by the migration.
     #[serde(rename = "gemini")]
-    Gemini { signature: String },
+    Gemini {
+        signature: String,
+        #[serde(default)]
+        model: String,
+    },
+}
+
+/// Origin of a tool-use id: did the provider emit it, or did the SSE parser
+/// synthesize it because the provider omitted one?
+///
+/// Used by the Gemini request builder to decide whether to replay the id on
+/// the wire (`functionCall.id` and matching `functionResponse.id` are emitted
+/// for `Real`, omitted for `Synthesized`). This keeps replay byte-identical
+/// to what the provider originally produced — critical for Gemini's implicit
+/// prompt cache.
+///
+/// **Default is `Synthesized`** so old transcripts (which were stored without
+/// this field, and where Gemini may have synthesized ids) automatically opt
+/// into the cache-friendly omit-on-replay behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum IdOrigin {
+    /// Provider did not emit an id; SSE parser synthesized one for engine
+    /// correlation. Omit on replay.
+    #[default]
+    Synthesized,
+    /// Provider emitted a real id. Replay verbatim.
+    Real,
 }
 
 /// Provider-agnostic reasoning/thinking content with optional replay token.
@@ -85,7 +119,14 @@ pub enum ChatContentBlock {
     #[serde(rename = "reasoning")]
     Reasoning(ReasoningBlock),
     #[serde(rename = "text")]
-    Text(String),
+    Text {
+        text: String,
+        /// Provider-specific replay metadata (e.g. Gemini per-part
+        /// `thoughtSignature`). `None` for messages from providers that don't
+        /// produce per-text-part replay data.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replay: Option<ReplayToken>,
+    },
     #[serde(rename = "image")]
     Image {
         /// MIME type (e.g., "image/png", "image/jpeg")
@@ -98,9 +139,44 @@ pub enum ChatContentBlock {
         id: String,
         name: String,
         input: Value,
+        /// Whether `id` was emitted by the provider (`Real`) or synthesized
+        /// locally because the provider omitted one (`Synthesized`). Used by
+        /// the Gemini request builder to decide whether to replay the id on
+        /// the wire. Defaults to `Synthesized` for migration safety — see
+        /// `IdOrigin` docs.
+        #[serde(default)]
+        id_origin: IdOrigin,
+        /// Provider-specific replay metadata (e.g. Gemini per-part
+        /// `thoughtSignature`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replay: Option<ReplayToken>,
     },
     #[serde(rename = "tool_result")]
     ToolResult(ToolResult),
+}
+
+impl ChatContentBlock {
+    /// Constructs a plain text block with no replay metadata. Use this in
+    /// non-Gemini code paths and tests to keep call sites compact.
+    pub fn text(s: impl Into<String>) -> Self {
+        Self::Text {
+            text: s.into(),
+            replay: None,
+        }
+    }
+
+    /// Constructs a tool-use block with a synthesized id (the default for
+    /// most call sites; the SSE parser explicitly sets `Real` when the
+    /// provider emitted an id).
+    pub fn tool_use(id: impl Into<String>, name: impl Into<String>, input: Value) -> Self {
+        Self::ToolUse {
+            id: id.into(),
+            name: name.into(),
+            input,
+            id_origin: IdOrigin::Synthesized,
+            replay: None,
+        }
+    }
 }
 
 /// Message content - either simple text or structured blocks.
@@ -150,7 +226,7 @@ impl ChatMessage {
                     i + 1
                 )
             };
-            blocks.push(ChatContentBlock::Text(description));
+            blocks.push(ChatContentBlock::text(description));
 
             // Add the actual image block
             blocks.push(ChatContentBlock::Image {
@@ -160,7 +236,7 @@ impl ChatMessage {
         }
 
         if !text.is_empty() {
-            blocks.push(ChatContentBlock::Text(text.to_string()));
+            blocks.push(ChatContentBlock::text(text));
         }
 
         Self {
@@ -209,27 +285,42 @@ impl ChatMessage {
 mod tests {
     use super::*;
 
-    /// Test: `ReplayToken::Gemini` serialization round-trips correctly.
+    /// Test: `ReplayToken::Gemini` serialization round-trips correctly with
+    /// the new `model` field.
     #[test]
-    fn test_replay_token_gemini_roundtrip() {
+    fn test_replay_token_gemini_with_model_roundtrip() {
         let token = ReplayToken::Gemini {
             signature: "base64_encoded_thought_signature".to_string(),
+            model: "gemini-3-pro-preview".to_string(),
         };
 
         let json = serde_json::to_string(&token).unwrap();
-
         assert!(json.contains(r#""provider":"gemini""#));
         assert!(json.contains(r#""signature":"base64_encoded_thought_signature""#));
+        assert!(json.contains(r#""model":"gemini-3-pro-preview""#));
 
         let parsed: ReplayToken = serde_json::from_str(&json).unwrap();
         assert_eq!(token, parsed);
     }
 
+    /// Test: old `ReplayToken::Gemini` JSON without a `model` field still
+    /// deserializes (via `#[serde(default)]`) with `model: ""`. This is the
+    /// migration safety net: existing transcripts continue to load and the
+    /// request builder treats empty model as "unknown — replay normally".
+    #[test]
+    fn test_replay_token_gemini_old_format_deserializes_with_empty_model() {
+        let old_json = r#"{"provider":"gemini","signature":"abc"}"#;
+        let parsed: ReplayToken = serde_json::from_str(old_json).unwrap();
+        assert_eq!(
+            parsed,
+            ReplayToken::Gemini {
+                signature: "abc".to_string(),
+                model: String::new(),
+            }
+        );
+    }
+
     /// Test: `ReplayToken::AnthropicRedacted` serialization round-trips correctly.
-    ///
-    /// The opaque `data` blob carries the server's encrypted reasoning
-    /// payload and MUST survive a JSON round-trip unchanged so it can be
-    /// replayed back to Anthropic on the next turn.
     #[test]
     fn test_replay_token_anthropic_redacted_roundtrip() {
         let token = ReplayToken::AnthropicRedacted {
@@ -243,6 +334,52 @@ mod tests {
 
         let parsed: ReplayToken = serde_json::from_str(&json).unwrap();
         assert_eq!(token, parsed);
+    }
+
+    /// Test: `IdOrigin` defaults to `Synthesized` so old transcripts (which
+    /// don't have the field) automatically opt into the cache-friendly
+    /// omit-on-replay behavior.
+    #[test]
+    fn test_id_origin_default_is_synthesized() {
+        assert_eq!(IdOrigin::default(), IdOrigin::Synthesized);
+
+        // Old ToolUse JSON without id_origin field deserializes as Synthesized.
+        let old_json = r#"{"type":"tool_use","id":"abc","name":"bash","input":{}}"#;
+        let parsed: ChatContentBlock = serde_json::from_str(old_json).unwrap();
+        let ChatContentBlock::ToolUse {
+            id_origin, replay, ..
+        } = parsed
+        else {
+            panic!("expected ToolUse");
+        };
+        assert_eq!(id_origin, IdOrigin::Synthesized);
+        assert_eq!(replay, None);
+    }
+
+    /// Test: `ChatContentBlock::text(...)` constructor produces the
+    /// `Text { text, replay: None }` shape expected by non-Gemini call sites.
+    #[test]
+    fn test_chat_content_block_text_constructor_helper() {
+        let block = ChatContentBlock::text("hello");
+        match block {
+            ChatContentBlock::Text { text, replay } => {
+                assert_eq!(text, "hello");
+                assert_eq!(replay, None);
+            }
+            _ => panic!("expected Text variant"),
+        }
+    }
+
+    /// Test: new `ChatContentBlock::Text` struct variant round-trips JSON
+    /// with the explicit `text` field.
+    #[test]
+    fn test_chat_content_block_text_struct_variant_roundtrip() {
+        let block = ChatContentBlock::text("hi");
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(json.contains(r#""type":"text""#));
+        assert!(json.contains(r#""text":"hi""#));
+        let parsed: ChatContentBlock = serde_json::from_str(&json).unwrap();
+        assert_eq!(block, parsed);
     }
 
     #[test]
