@@ -6,7 +6,6 @@
     clippy::cast_sign_loss
 )]
 
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Utc};
@@ -16,19 +15,8 @@ use zdx_engine::core::events::ToolOutput;
 use zdx_engine::providers::ReplayToken;
 
 use super::style::{Style, StyledLine, StyledSpan};
-use super::wrap::{WrapCache, render_prefixed_content, wrap_chars, wrap_text};
-use crate::common::{sanitize_for_display, truncate_with_ellipsis};
-
-fn tool_input_delta<'a>(name: &str, input: &'a Value) -> Option<&'a str> {
-    match name {
-        "write" => input.get("content")?.as_str(),
-        "edit" => input
-            .get("new_string")
-            .or_else(|| input.get("new"))?
-            .as_str(),
-        _ => None,
-    }
-}
+use super::wrap::{WrapCache, render_prefixed_content, wrap_text};
+use crate::common::truncate_with_ellipsis;
 
 fn value_as_trimmed_str<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
     let value = input.get(key)?.as_str()?.trim();
@@ -147,30 +135,6 @@ fn tool_key_arg(name: &str, input: &Value) -> Option<String> {
             .or_else(|| value_as_trimmed_str(input, "model").map(|m| format!("model={m}"))),
         _ => None,
     }
-}
-
-fn tail_rendered_rows(text: &str, width: usize, max_rows: usize) -> (Vec<String>, usize) {
-    let mut total_rows = 0;
-    let mut tail: VecDeque<String> = VecDeque::with_capacity(max_rows);
-
-    for line in text.lines() {
-        let safe_line = sanitize_for_display(line);
-        let wrapped: Vec<String> = if safe_line.width() > width {
-            wrap_chars(&safe_line, width)
-        } else {
-            vec![safe_line.into_owned()]
-        };
-
-        for row in wrapped {
-            total_rows += 1;
-            if tail.len() == max_rows {
-                tail.pop_front();
-            }
-            tail.push_back(row);
-        }
-    }
-
-    (tail.into_iter().collect(), total_rows)
 }
 
 /// Regex pattern matching `[Image N]` placeholders in text (e.g., `[Image 1]`, `[Image 23]`).
@@ -802,8 +766,6 @@ impl HistoryCell {
                 name,
                 state,
                 input,
-                input_delta,
-                output_delta,
                 result,
                 ..
             } => {
@@ -855,64 +817,10 @@ impl HistoryCell {
                     spans: header_spans,
                 });
 
-                // input_delta rows (write/edit streaming preview)
-                let delta_text = input_delta
-                    .as_deref()
-                    .or_else(|| tool_input_delta(name, input));
-                if let Some(delta_text) = delta_text {
-                    let max_preview_rows = 7;
-                    let (rows, total_rows) =
-                        tail_rendered_rows(delta_text, width, max_preview_rows);
-                    if !rows.is_empty() {
-                        let truncated = total_rows > rows.len();
-
-                        if truncated {
-                            lines.push(StyledLine {
-                                spans: vec![StyledSpan {
-                                    text: format!("[{} more rows ...]", total_rows - rows.len()),
-                                    style: Style::ToolBracket,
-                                }],
-                            });
-                        }
-
-                        for row in rows {
-                            lines.push(StyledLine {
-                                spans: vec![StyledSpan {
-                                    text: row,
-                                    style: Style::ToolOutput,
-                                }],
-                            });
-                        }
-                    }
-                }
-
-                // output_delta rows (streaming tool output preview)
-                if let Some(output_text) = output_delta.as_deref() {
-                    let max_preview_rows = 7;
-                    let (rows, total_rows) =
-                        tail_rendered_rows(output_text, width, max_preview_rows);
-                    if !rows.is_empty() {
-                        let truncated = total_rows > rows.len();
-
-                        if truncated {
-                            lines.push(StyledLine {
-                                spans: vec![StyledSpan {
-                                    text: format!("[{} more rows ...]", total_rows - rows.len()),
-                                    style: Style::ToolBracket,
-                                }],
-                            });
-                        }
-
-                        for row in rows {
-                            lines.push(StyledLine {
-                                spans: vec![StyledSpan {
-                                    text: row,
-                                    style: Style::ToolOutput,
-                                }],
-                            });
-                        }
-                    }
-                }
+                // Live `input_delta` / `output_delta` streaming is rendered only
+                // in the tool detail overlay (`overlays/tool_detail.rs`) to keep
+                // the transcript clean. The cell still accumulates both fields
+                // so the overlay can show them live.
 
                 // Error details
                 if *state == ToolState::Error {
