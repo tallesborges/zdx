@@ -277,22 +277,27 @@ pub fn spawn_exec_renderer_task_with_filter(
 fn event_type_name(event: &AgentEvent) -> &'static str {
     match event {
         AgentEvent::TurnStarted => "turn_started",
-        AgentEvent::ReasoningDelta { .. } => "reasoning_delta",
         AgentEvent::ReasoningCompleted { .. } => "reasoning_completed",
-        AgentEvent::AssistantDelta { .. } => "assistant_delta",
         AgentEvent::AssistantCompleted { .. } => "assistant_completed",
         AgentEvent::ToolRequested { .. } => "tool_requested",
         AgentEvent::ToolInputCompleted { .. } => "tool_input_completed",
-        AgentEvent::ToolInputDelta { .. } => "tool_input_delta",
         AgentEvent::ToolStarted { .. } => "tool_started",
-        AgentEvent::ToolOutputDelta { .. } => "tool_output_delta",
         AgentEvent::ToolCompleted { .. } => "tool_completed",
         AgentEvent::Error { .. } => "error",
         AgentEvent::Notice { .. } => "notice",
         AgentEvent::ProviderRetry { .. } => "provider_retry",
-        AgentEvent::TurnFinished { .. } => "turn_finished",
-        AgentEvent::TurnCheckpoint { .. } => "turn_checkpoint",
         AgentEvent::UsageUpdate { .. } => "usage_update",
+        // These variants are filtered out earlier by `sanitize_exec_event`,
+        // so they are not addressable via `--filter`. If the sanitization
+        // policy changes, give them concrete names here.
+        AgentEvent::AssistantDelta { .. }
+        | AgentEvent::ReasoningDelta { .. }
+        | AgentEvent::ToolInputDelta { .. }
+        | AgentEvent::ToolOutputDelta { .. }
+        | AgentEvent::TurnCheckpoint { .. }
+        | AgentEvent::TurnFinished { .. } => {
+            unreachable!("dropped by sanitize_exec_event before filter check")
+        }
     }
 }
 
