@@ -968,32 +968,40 @@ async fn run_turn_inner(
             'retry: loop {
                 ensure_not_interrupted(None, cancel).map_err(|e| (e, messages.clone()))?;
 
-                let outcome: std::result::Result<StreamState, (TurnError, bool)> =
-                    match request_stream(
-                        &setup.client,
-                        &messages,
-                        &setup.tools,
-                        system_prompt,
-                        cancel,
-                    )
-                    .await
-                    {
-                        Ok(stream) => {
-                            match consume_stream(stream, &messages, sender, cancel, &setup.model)
-                                .await
-                            {
-                                Ok(state) => Ok(state),
-                                Err((err, state)) => {
-                                    Err((err, can_transparently_retry_stream(&state)))
-                                }
+                let outcome: std::result::Result<
+                    StreamState,
+                    (TurnError, bool, Option<StreamState>),
+                > = match request_stream(
+                    &setup.client,
+                    &messages,
+                    &setup.tools,
+                    system_prompt,
+                    cancel,
+                )
+                .await
+                {
+                    Ok(stream) => {
+                        match consume_stream(stream, &messages, sender, cancel, &setup.model).await
+                        {
+                            Ok(state) => Ok(state),
+                            Err((err, state)) => {
+                                let can_retry = can_transparently_retry_stream(&state);
+                                Err((err, can_retry, Some(state)))
                             }
                         }
-                        Err(err) => Err((err, true)),
-                    };
+                    }
+                    Err(err) => Err((err, true, None)),
+                };
 
                 match outcome {
-                    Ok(state) => break 'retry state,
-                    Err((err, can_retry)) => {
+                    Ok(mut state) => {
+                        // Commit the attempt: flush any buffered usage that
+                        // hadn't yet hit a visible event (e.g. tool-only or
+                        // pure-stop turns).
+                        state.flush_pending_usage(sender);
+                        break 'retry state;
+                    }
+                    Err((err, can_retry, state)) => {
                         let retry_err = match &err {
                             TurnError::Provider(p) if p.is_retryable() && can_retry => {
                                 Some(p.clone())
@@ -1001,11 +1009,50 @@ async fn run_turn_inner(
                             _ => None,
                         };
                         let Some(retry_err) = retry_err else {
-                            return Err((err, messages.clone()));
+                            // Terminal failure (non-retryable, or retryable
+                            // but already past the visible-content gate).
+                            // Bill the partial attempt's buffered usage,
+                            // then build a snapshot for provider failures
+                            // so manual continue/retry resumes from a
+                            // balanced thread state. Interruption errors
+                            // already carry their own recovery messages
+                            // inside the `TurnError::Interrupted` payload,
+                            // so we never reuse the snapshot path for
+                            // those.
+                            let final_messages = match state {
+                                Some(mut state) => {
+                                    state.flush_pending_usage(sender);
+                                    match &err {
+                                        TurnError::Provider(_) => {
+                                            build_provider_failed_messages(&messages, state.turn)
+                                        }
+                                        _ => messages.clone(),
+                                    }
+                                }
+                                None => messages.clone(),
+                            };
+                            return Err((err, final_messages));
                         };
                         if attempt >= MAX_RETRIES {
-                            return Err((err, messages.clone()));
+                            // Max retries reached: same flush-then-snapshot
+                            // discipline as the non-retryable branch.
+                            let final_messages = match state {
+                                Some(mut state) => {
+                                    state.flush_pending_usage(sender);
+                                    match &err {
+                                        TurnError::Provider(_) => {
+                                            build_provider_failed_messages(&messages, state.turn)
+                                        }
+                                        _ => messages.clone(),
+                                    }
+                                }
+                                None => messages.clone(),
+                            };
+                            return Err((err, final_messages));
                         }
+                        // Retryable continue: drop `state` (and its
+                        // `pending_usage`) implicitly. The next attempt
+                        // creates a fresh `StreamState`.
                         attempt += 1;
                         let delay = RETRY_BASE_DELAY_MS * 2u64.pow(attempt - 1);
                         tracing::warn!(
@@ -1633,7 +1680,32 @@ struct StreamState {
     turn: AssistantTurnBuilder,
     stop_reason: Option<String>,
     usage_seen: crate::providers::Usage,
-    emitted_events: bool,
+    /// Buffered usage deltas accumulated since the last flush. Emitted as a
+    /// single combined `AgentEvent::UsageUpdate` at commit boundaries
+    /// (immediately before the first user-visible event of an attempt, on
+    /// `consume_stream` EOF success, on user interruption, or on terminal
+    /// failure in the retry loop). Discarded silently when an attempt is
+    /// transparently retried, eliminating the double-counting that would
+    /// otherwise occur when usage ticks arrive before any visible content.
+    ///
+    /// Invariant: every `handle_stream_event` arm that performs a visible
+    /// `sender.send(...)` MUST call `state.flush_pending_usage(sender)`
+    /// immediately beforehand. `consume_stream` and the retry loop also
+    /// flush before returning on terminal paths.
+    pending_usage: crate::providers::Usage,
+    /// Whether any *visible* assistant content (text, reasoning, tool
+    /// start/input/completion, persisted reasoning completion) has been
+    /// emitted to the UI/persistence pipeline. Once true, transparent
+    /// retries are no longer safe because the next attempt would duplicate
+    /// content already shown to the user or appended to the transcript.
+    ///
+    /// Metadata-only emissions (usage updates) intentionally do **not**
+    /// flip this flag, so a transport failure that arrives after a
+    /// `MessageStart` / `MessageDelta` usage tick can still retry
+    /// transparently. Buffered usage on the discarded attempt is dropped
+    /// in `pending_usage`, so the retry contributes no leftover usage
+    /// events.
+    emitted_visible_content: bool,
 }
 
 impl StreamState {
@@ -1642,12 +1714,31 @@ impl StreamState {
             turn: AssistantTurnBuilder::new(model),
             stop_reason: None,
             usage_seen: crate::providers::Usage::default(),
-            emitted_events: false,
+            pending_usage: crate::providers::Usage::default(),
+            emitted_visible_content: false,
         }
     }
 
     fn needs_tool_execution(&self) -> bool {
         self.stop_reason.as_deref() == Some("tool_use") && self.turn.has_tool_uses()
+    }
+
+    /// Emits one combined `AgentEvent::UsageUpdate` for any buffered usage
+    /// since the last flush, then resets the buffer. No-op when the buffer
+    /// is empty. Downstream consumers (TUI status bar, persistence, CLI
+    /// exec) are additive, so a single combined event is equivalent to
+    /// emitting each accumulated delta separately.
+    fn flush_pending_usage(&mut self, sender: &EventSender) {
+        if self.pending_usage.is_empty() {
+            return;
+        }
+        let usage = std::mem::take(&mut self.pending_usage);
+        sender.send(AgentEvent::UsageUpdate {
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cache_read_input_tokens: usage.cache_read_input_tokens,
+            cache_creation_input_tokens: usage.cache_creation_input_tokens,
+        });
     }
 }
 
@@ -1710,13 +1801,23 @@ async fn consume_stream(
 
     loop {
         if interrupt::is_interrupted() || cancel.is_some_and(CancellationToken::is_cancelled) {
+            // User interruption is terminal, not a transparent retry: bill
+            // the partial attempt's buffered usage before returning.
+            state.flush_pending_usage(sender);
             let turn = std::mem::take(&mut state.turn);
             return Err((interrupted_turn_from_stream(prior_messages, turn), state));
         }
         let event = match timeout(STREAM_POLL_TIMEOUT, stream.next()).await {
             Ok(Some(Ok(event))) => event,
             Ok(Some(Err(err))) => return Err((TurnError::Provider(err), state)),
-            Ok(None) => return Ok(state),
+            Ok(None) => {
+                // EOF without an explicit `MessageCompleted`: defensive
+                // flush so any buffered usage from a `MessageStart` /
+                // `MessageDelta` tick that hadn't yet hit a visible event
+                // still reaches downstream consumers on success.
+                state.flush_pending_usage(sender);
+                return Ok(state);
+            }
             Err(_) => continue,
         };
         if let Err(err) = handle_stream_event(event, sender, &mut state) {
@@ -1726,7 +1827,7 @@ async fn consume_stream(
 }
 
 fn can_transparently_retry_stream(state: &StreamState) -> bool {
-    !state.emitted_events
+    !state.emitted_visible_content
 }
 
 #[allow(clippy::too_many_lines, clippy::match_same_arms)]
@@ -1739,8 +1840,9 @@ fn handle_stream_event(
         StreamEvent::TextDelta { index, text } if !text.is_empty() => {
             let part = state.turn.ensure_text_part_mut(index);
             part.text.push_str(&text);
+            state.flush_pending_usage(sender);
             sender.send(AgentEvent::AssistantDelta { text });
-            state.emitted_events = true;
+            state.emitted_visible_content = true;
         }
         StreamEvent::ContentBlockStart {
             index,
@@ -1750,8 +1852,9 @@ fn handle_stream_event(
             id_origin,
             ..
         } => {
+            state.flush_pending_usage(sender);
             handle_tool_content_start(index, id, name, id_origin, sender, &mut state.turn);
-            state.emitted_events = true;
+            state.emitted_visible_content = true;
         }
         StreamEvent::ContentBlockStart {
             index,
@@ -1793,18 +1896,28 @@ fn handle_stream_event(
             index,
             partial_json,
         } => {
-            if handle_input_json_delta(index, &partial_json, sender, &mut state.turn) {
-                state.emitted_events = true;
+            if let Some(event) = build_input_json_delta(index, &partial_json, &mut state.turn) {
+                state.flush_pending_usage(sender);
+                sender.send(event);
+                state.emitted_visible_content = true;
             }
         }
         StreamEvent::ReasoningDelta { index, reasoning } => {
-            if let Some(tb) = state.turn.find_thinking_mut(index) {
-                if !reasoning.is_empty() {
-                    tb.had_delta = true;
-                }
+            let event_opt = if let Some(tb) = state.turn.find_thinking_mut(index) {
                 tb.text.push_str(&reasoning);
-                sender.send(AgentEvent::ReasoningDelta { text: reasoning });
-                state.emitted_events = true;
+                if reasoning.is_empty() {
+                    None
+                } else {
+                    tb.had_delta = true;
+                    Some(AgentEvent::ReasoningDelta { text: reasoning })
+                }
+            } else {
+                None
+            };
+            if let Some(event) = event_opt {
+                state.flush_pending_usage(sender);
+                sender.send(event);
+                state.emitted_visible_content = true;
             }
         }
         StreamEvent::ReasoningSignatureDelta {
@@ -1818,15 +1931,21 @@ fn handle_stream_event(
             }
         }
         StreamEvent::ContentBlockCompleted { index, signature } => {
-            if emit_reasoning_completion(sender, &mut state.turn, index) {
-                state.emitted_events = true;
-            }
-            if emit_tool_input_completion(sender, &state.turn, index) {
-                state.emitted_events = true;
+            let reasoning_event = build_reasoning_completion(&mut state.turn, index);
+            let tool_event = build_tool_input_completion(&state.turn, index);
+            if reasoning_event.is_some() || tool_event.is_some() {
+                state.flush_pending_usage(sender);
+                if let Some(event) = reasoning_event {
+                    sender.send(event);
+                }
+                if let Some(event) = tool_event {
+                    sender.send(event);
+                }
+                state.emitted_visible_content = true;
             }
             // Per-part Gemini signatures (text + tool_use) ride this channel.
             // Reasoning signatures still flow through `ReasoningSignatureDelta`
-            // and were attached during `emit_reasoning_completion` above, so
+            // and were attached during `build_reasoning_completion` above, so
             // we ignore signatures on reasoning indices here.
             if let Some((sig_provider, sig)) = signature {
                 attach_part_signature(&mut state.turn, index, sig_provider, sig);
@@ -1834,9 +1953,11 @@ fn handle_stream_event(
         }
         StreamEvent::MessageDelta { stop_reason, usage } => {
             state.stop_reason = stop_reason;
-            if emit_message_delta_usage(sender, &mut state.usage_seen, usage) {
-                state.emitted_events = true;
-            }
+            // Usage updates are metadata-only: they accumulate into the
+            // pending-usage buffer and only flush at commit boundaries, so
+            // they do not block transparent retry and are discarded if the
+            // attempt is retried before any visible content emits.
+            buffer_message_delta_usage(state, usage);
         }
         StreamEvent::Error {
             error_type,
@@ -1848,9 +1969,9 @@ fn handle_stream_event(
             )));
         }
         StreamEvent::MessageStart { usage, .. } => {
-            if emit_message_start_usage(sender, &mut state.usage_seen, &usage) {
-                state.emitted_events = true;
-            }
+            // `MessageStart` only emits a usage tick: metadata-only, buffered
+            // until the first visible event commits the attempt.
+            buffer_message_start_usage(state, &usage);
         }
         StreamEvent::ReasoningCompleted {
             index,
@@ -1942,65 +2063,60 @@ fn start_reasoning_block(
     });
 }
 
-fn handle_input_json_delta(
+fn build_input_json_delta(
     index: usize,
     partial_json: &str,
-    sender: &EventSender,
     turn: &mut AssistantTurnBuilder,
-) -> bool {
-    if let Some(tu) = turn.find_tool_use_mut(index) {
-        tu.input_json.push_str(partial_json);
-        if let Some(delta) = extract_partial_tool_input(&tu.name, &tu.input_json)
-            && !delta.is_empty()
-            && delta.len() > tu.input_preview_len
-        {
-            tu.input_preview_len = delta.len();
-            sender.send(AgentEvent::ToolInputDelta {
-                id: tu.id.clone(),
-                name: tu.name.clone(),
-                delta,
-            });
-            return true;
-        }
+) -> Option<AgentEvent> {
+    let tu = turn.find_tool_use_mut(index)?;
+    tu.input_json.push_str(partial_json);
+    let delta = extract_partial_tool_input(&tu.name, &tu.input_json)?;
+    if delta.is_empty() || delta.len() <= tu.input_preview_len {
+        return None;
     }
-    false
+    tu.input_preview_len = delta.len();
+    Some(AgentEvent::ToolInputDelta {
+        id: tu.id.clone(),
+        name: tu.name.clone(),
+        delta,
+    })
 }
 
-fn emit_message_delta_usage(
-    sender: &EventSender,
-    usage_seen: &mut crate::providers::Usage,
+/// Folds a `MessageDelta` usage tick into the stream state's pending-usage
+/// buffer (additive on each field) and updates `usage_seen` so subsequent
+/// sparse cumulative deltas compute correctly. Does not emit. The buffer
+/// is flushed by `StreamState::flush_pending_usage` at commit boundaries.
+fn buffer_message_delta_usage(
+    state: &mut StreamState,
     usage: Option<crate::providers::UsageDelta>,
-) -> bool {
+) {
     if let Some(u) = usage {
-        let delta = u.incremental_from(usage_seen);
-        u.apply_to(usage_seen);
+        let delta = u.incremental_from(&state.usage_seen);
+        u.apply_to(&mut state.usage_seen);
 
         if !delta.is_empty() {
-            sender.send(AgentEvent::UsageUpdate {
-                input_tokens: delta.input_tokens,
-                output_tokens: delta.output_tokens,
-                cache_read_input_tokens: delta.cache_read_input_tokens,
-                cache_creation_input_tokens: delta.cache_creation_input_tokens,
-            });
-            return true;
+            accumulate_usage(&mut state.pending_usage, &delta);
         }
     }
-    false
 }
 
-fn emit_message_start_usage(
-    sender: &EventSender,
-    usage_seen: &mut crate::providers::Usage,
-    usage: &crate::providers::Usage,
-) -> bool {
-    *usage_seen = usage.clone();
-    sender.send(AgentEvent::UsageUpdate {
-        input_tokens: usage.input_tokens,
-        output_tokens: usage.output_tokens,
-        cache_read_input_tokens: usage.cache_read_input_tokens,
-        cache_creation_input_tokens: usage.cache_creation_input_tokens,
-    });
-    true
+/// Folds a `MessageStart` usage tick into the stream state's pending-usage
+/// buffer (additive on each field) and seeds `usage_seen` with the cumulative
+/// totals reported by the provider. Does not emit.
+fn buffer_message_start_usage(state: &mut StreamState, usage: &crate::providers::Usage) {
+    state.usage_seen = usage.clone();
+    accumulate_usage(&mut state.pending_usage, usage);
+}
+
+fn accumulate_usage(target: &mut crate::providers::Usage, delta: &crate::providers::Usage) {
+    target.input_tokens = target.input_tokens.saturating_add(delta.input_tokens);
+    target.output_tokens = target.output_tokens.saturating_add(delta.output_tokens);
+    target.cache_read_input_tokens = target
+        .cache_read_input_tokens
+        .saturating_add(delta.cache_read_input_tokens);
+    target.cache_creation_input_tokens = target
+        .cache_creation_input_tokens
+        .saturating_add(delta.cache_creation_input_tokens);
 }
 
 fn apply_openai_reasoning_completion(
@@ -2024,59 +2140,45 @@ fn apply_openai_reasoning_completion(
     }
 }
 
-fn emit_reasoning_completion(
-    sender: &EventSender,
-    turn: &mut AssistantTurnBuilder,
-    index: usize,
-) -> bool {
+fn build_reasoning_completion(turn: &mut AssistantTurnBuilder, index: usize) -> Option<AgentEvent> {
     let model = turn.model.clone();
-    if let Some(tb) = turn.find_thinking_mut(index) {
-        if tb.replay.is_none()
-            && !tb.signature.is_empty()
-            && let Some(signature_provider) = tb.signature_provider
-        {
-            tb.replay = Some(match signature_provider {
-                crate::providers::SignatureProvider::Gemini => ReplayToken::Gemini {
-                    signature: tb.signature.clone(),
-                    model: model.clone(),
-                },
-                crate::providers::SignatureProvider::Anthropic => ReplayToken::Anthropic {
-                    signature: tb.signature.clone(),
-                },
-            });
-        }
-        let block = ReasoningBlock {
-            text: (!tb.text.is_empty()).then(|| tb.text.clone()),
-            replay: tb.replay.clone(),
-        };
-        sender.send(AgentEvent::ReasoningCompleted { block });
-        return true;
+    let tb = turn.find_thinking_mut(index)?;
+    if tb.replay.is_none()
+        && !tb.signature.is_empty()
+        && let Some(signature_provider) = tb.signature_provider
+    {
+        tb.replay = Some(match signature_provider {
+            crate::providers::SignatureProvider::Gemini => ReplayToken::Gemini {
+                signature: tb.signature.clone(),
+                model: model.clone(),
+            },
+            crate::providers::SignatureProvider::Anthropic => ReplayToken::Anthropic {
+                signature: tb.signature.clone(),
+            },
+        });
     }
-    false
+    let block = ReasoningBlock {
+        text: (!tb.text.is_empty()).then(|| tb.text.clone()),
+        replay: tb.replay.clone(),
+    };
+    Some(AgentEvent::ReasoningCompleted { block })
 }
 
-fn emit_tool_input_completion(
-    sender: &EventSender,
-    turn: &AssistantTurnBuilder,
-    index: usize,
-) -> bool {
-    if let Some(tu) = turn.tool_uses().find(|t| t.index == index) {
-        // With fine-grained tool streaming (`eager_input_streaming: true`),
-        // Anthropic may legitimately deliver partial/invalid JSON if a tool
-        // call is truncated (e.g. `max_tokens` reached). Preserve the raw
-        // payload under a sentinel field so persistence and downstream
-        // diagnostics can still see what was emitted, instead of silently
-        // collapsing to `{}` and discarding the evidence.
-        let input: Value = serde_json::from_str(&tu.input_json)
-            .unwrap_or_else(|_| malformed_tool_input_value(&tu.input_json));
-        sender.send(AgentEvent::ToolInputCompleted {
-            id: tu.id.clone(),
-            name: tu.name.clone(),
-            input,
-        });
-        return true;
-    }
-    false
+fn build_tool_input_completion(turn: &AssistantTurnBuilder, index: usize) -> Option<AgentEvent> {
+    let tu = turn.tool_uses().find(|t| t.index == index)?;
+    // With fine-grained tool streaming (`eager_input_streaming: true`),
+    // Anthropic may legitimately deliver partial/invalid JSON if a tool
+    // call is truncated (e.g. `max_tokens` reached). Preserve the raw
+    // payload under a sentinel field so persistence and downstream
+    // diagnostics can still see what was emitted, instead of silently
+    // collapsing to `{}` and discarding the evidence.
+    let input: Value = serde_json::from_str(&tu.input_json)
+        .unwrap_or_else(|_| malformed_tool_input_value(&tu.input_json));
+    Some(AgentEvent::ToolInputCompleted {
+        id: tu.id.clone(),
+        name: tu.name.clone(),
+        input,
+    })
 }
 
 fn malformed_tool_input_value(input_json: &str) -> Value {
@@ -2185,6 +2287,49 @@ fn interrupted_turn_from_stream(
         final_text,
         messages,
     )
+}
+
+/// Builds a thread snapshot for a mid-stream **provider** failure.
+///
+/// Unlike `build_interrupted_messages` (used for user-initiated interrupts),
+/// this MUST NOT synthesize `tool_result` blocks or any other recovery
+/// scaffolding. Provider-failure recovery and interruption recovery are
+/// distinct cases:
+///
+/// * Interruption owns the turn — the user explicitly stopped streaming, so
+///   surfacing "Interrupted by user" tool results keeps the assistant↔tool
+///   pairing balanced and accurately reflects what happened.
+/// * Provider failure does not own the turn — the upstream simply died, and
+///   no tool was actually canceled by the user. Emitting "Interrupted by
+///   user" results would misrepresent the failure mode and could poison the
+///   next turn's context.
+///
+/// Pending `ToolUse` blocks are also dropped: persisting them without
+/// matching `tool_results` would unbalance the next provider request, so we
+/// keep only fully safe partial output (text + reasoning). The user can then
+/// manually continue or retry from that balanced snapshot.
+fn build_provider_failed_messages(
+    prior_messages: &[ChatMessage],
+    turn: AssistantTurnBuilder,
+) -> Vec<ChatMessage> {
+    let finalized = turn.finalize();
+    let mut messages = prior_messages.to_vec();
+
+    let safe_blocks: Vec<ChatContentBlock> = finalized
+        .blocks
+        .into_iter()
+        .filter(|block| !matches!(block, ChatContentBlock::ToolUse { .. }))
+        .collect();
+
+    if !safe_blocks.is_empty() {
+        messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            phase: Some("commentary".to_string()),
+            content: crate::providers::MessageContent::Blocks(safe_blocks),
+        });
+    }
+
+    messages
 }
 
 fn build_interrupted_messages(
@@ -2664,14 +2809,11 @@ mod tests {
     }
 
     #[test]
-    fn emit_tool_input_completion_preserves_malformed_json_under_sentinel() {
+    fn build_tool_input_completion_preserves_malformed_json_under_sentinel() {
         // With eager_input_streaming GA, Anthropic may legitimately emit
         // truncated/invalid JSON when max_tokens is reached mid-tool.
         // We must not silently collapse the payload to `{}` and lose the
         // raw evidence — persistence and diagnostics need to see it.
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let sender = EventSender::new(tx);
-
         let mut turn = AssistantTurnBuilder::new(String::new());
         turn.push_tool_use(ToolUseBuilder {
             index: 0,
@@ -2683,9 +2825,8 @@ mod tests {
             replay: None,
         });
 
-        emit_tool_input_completion(&sender, &turn, 0);
-        let evt = rx.try_recv().expect("expected event");
-        match &*evt {
+        let evt = build_tool_input_completion(&turn, 0).expect("expected event");
+        match evt {
             AgentEvent::ToolInputCompleted { id, name, input } => {
                 assert_eq!(id, "toolu_xyz");
                 assert_eq!(name, "write");
@@ -2700,10 +2841,7 @@ mod tests {
     }
 
     #[test]
-    fn emit_tool_input_completion_passes_through_valid_json() {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let sender = EventSender::new(tx);
-
+    fn build_tool_input_completion_passes_through_valid_json() {
         let mut turn = AssistantTurnBuilder::new(String::new());
         turn.push_tool_use(ToolUseBuilder {
             index: 0,
@@ -2715,9 +2853,8 @@ mod tests {
             replay: None,
         });
 
-        emit_tool_input_completion(&sender, &turn, 0);
-        let evt = rx.try_recv().expect("expected event");
-        match &*evt {
+        let evt = build_tool_input_completion(&turn, 0).expect("expected event");
+        match evt {
             AgentEvent::ToolInputCompleted { input, .. } => {
                 assert_eq!(input["path"], serde_json::json!("a.txt"));
                 assert!(input.get("__zdx_invalid_json__").is_none());
@@ -2750,6 +2887,12 @@ mod tests {
 
     #[test]
     fn message_delta_usage_is_emitted_as_delta_from_cumulative_counts() {
+        // Buffered semantics: per-tick deltas accumulate into
+        // `pending_usage` (no immediate emission) and flush as a single
+        // combined `UsageUpdate` at commit boundaries. Verifies the
+        // sparse-cumulative → incremental conversion still folds correctly:
+        // start=(100,2,5,1), +delta(_,+8,_,_)=(0,8,0,0),
+        // +delta(120,15,8,1)=(20,5,3,0). Sum: (120,15,8,1).
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = EventSender::new(tx);
         let mut state = StreamState::new(String::new());
@@ -2797,6 +2940,15 @@ mod tests {
         )
         .unwrap();
 
+        // Nothing emitted yet — usage is buffered.
+        assert!(rx.try_recv().is_err(), "usage must be buffered, not sent");
+        assert_eq!(state.pending_usage.input_tokens, 120);
+        assert_eq!(state.pending_usage.output_tokens, 15);
+        assert_eq!(state.pending_usage.cache_read_input_tokens, 8);
+        assert_eq!(state.pending_usage.cache_creation_input_tokens, 1);
+
+        // Flush emits one combined event and resets the buffer.
+        state.flush_pending_usage(&sender);
         let usage_updates: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok())
             .filter_map(|event| match &*event {
                 AgentEvent::UsageUpdate {
@@ -2813,11 +2965,8 @@ mod tests {
                 _ => None,
             })
             .collect();
-
-        assert_eq!(
-            usage_updates,
-            vec![(100, 2, 5, 1), (0, 8, 0, 0), (20, 5, 3, 0)]
-        );
+        assert_eq!(usage_updates, vec![(120, 15, 8, 1)]);
+        assert!(state.pending_usage.is_empty());
     }
 
     /// Feeds a `redacted_thinking` `content_block_start` (with opaque
@@ -3366,6 +3515,162 @@ mod tests {
         ));
     }
 
+    /// Provider-failure recovery MUST NOT reuse the interruption-style
+    /// synthesis: the user did not stop the stream, so synthesizing
+    /// "Interrupted by user" `tool_results` would misrepresent the failure
+    /// mode and could poison the next turn's context. Pending `ToolUse`
+    /// blocks are also dropped because persisting them without matching
+    /// `tool_results` would unbalance the next provider request. We keep
+    /// only the safe partial output (text + reasoning) so the user can
+    /// manually continue/retry from a balanced thread state.
+    #[test]
+    fn provider_failed_snapshot_preserves_text_and_reasoning_only() {
+        use crate::providers::{ChatContentBlock, MessageContent};
+
+        let prior_messages = vec![ChatMessage::user("analyze the repo")];
+        let mut turn = AssistantTurnBuilder::new(String::new());
+        turn.push_reasoning(ThinkingBuilder {
+            index: 0,
+            text: "Inspecting the project first.".to_string(),
+            signature: String::new(),
+            signature_provider: None,
+            replay: Some(ReplayToken::Anthropic {
+                signature: "sig-r".to_string(),
+            }),
+            had_delta: true,
+        });
+        turn.ensure_text_part_mut(1).text = "Found the loop.".to_string();
+        // Pending tool use that never received a tool_result; the
+        // provider-failure snapshot MUST drop this to keep the
+        // assistant↔tool_result pairing balanced.
+        turn.push_tool_use(ToolUseBuilder {
+            index: 2,
+            id: "tool_pending".to_string(),
+            name: "read".to_string(),
+            input_json: r#"{"file_path":"src/main.rs"}"#.to_string(),
+            input_preview_len: 0,
+            id_origin: zdx_types::IdOrigin::Synthesized,
+            replay: None,
+        });
+
+        let messages = build_provider_failed_messages(&prior_messages, turn);
+
+        // Expect exactly: prior user message + one assistant snapshot.
+        // No synthetic tool_result message should be appended.
+        assert_eq!(messages.len(), 2, "messages: {messages:#?}");
+        assert_eq!(messages[0], prior_messages[0]);
+
+        let ChatMessage {
+            role,
+            phase,
+            content,
+        } = &messages[1];
+        assert_eq!(role, "assistant");
+        assert_eq!(phase.as_deref(), Some("commentary"));
+        let MessageContent::Blocks(blocks) = content else {
+            panic!("expected blocks content, got {content:?}");
+        };
+
+        // Reasoning + text are preserved.
+        assert!(blocks.iter().any(|b| matches!(
+            b,
+            ChatContentBlock::Reasoning(ReasoningBlock {
+                text: Some(text),
+                replay: Some(ReplayToken::Anthropic { signature }),
+            }) if text == "Inspecting the project first." && signature == "sig-r"
+        )));
+        assert!(blocks.iter().any(|b| matches!(
+            b,
+            ChatContentBlock::Text { text, .. } if text == "Found the loop."
+        )));
+
+        // Pending tool use is dropped — no ToolUse block AND no synthetic
+        // ToolResult message.
+        assert!(
+            !blocks
+                .iter()
+                .any(|b| matches!(b, ChatContentBlock::ToolUse { .. })),
+            "pending tool_use must be dropped from provider-failure snapshot",
+        );
+        assert!(
+            !messages.iter().any(|m| matches!(
+                &m.content,
+                MessageContent::Blocks(bs)
+                    if bs.iter().any(|b| matches!(b, ChatContentBlock::ToolResult(_)))
+            )),
+            "provider-failure snapshot must NOT synthesize tool_results",
+        );
+    }
+
+    /// When the assistant emitted no visible content yet (only metadata),
+    /// the provider-failure snapshot reduces to the prior messages with no
+    /// extra assistant block. This keeps the failed-turn payload empty for
+    /// pre-output failures so `emit_turn_error` (not the
+    /// `_with_messages` variant) handles them.
+    #[test]
+    fn provider_failed_snapshot_is_empty_when_no_visible_blocks() {
+        let prior = vec![ChatMessage::user("hi")];
+        let turn = AssistantTurnBuilder::new(String::new());
+        let messages = build_provider_failed_messages(&prior, turn);
+        assert_eq!(messages, prior);
+    }
+
+    /// Even when a `ToolUse` block was fully assembled (parseable JSON,
+    /// would have been executable) but the provider fails before
+    /// `MessageCompleted`, the snapshot MUST still drop it. The tool was
+    /// never executed, so there is no honest `tool_result` to pair it with;
+    /// preserving the orphan tool call would unbalance the next provider
+    /// request and synthesizing a fake result would misrepresent the
+    /// failure mode (see `build_provider_failed_messages` doc comment).
+    #[test]
+    fn provider_failed_snapshot_drops_completed_tool_use_without_result() {
+        use crate::providers::{ChatContentBlock, MessageContent};
+
+        let prior = vec![ChatMessage::user("read it")];
+        let mut turn = AssistantTurnBuilder::new(String::new());
+        turn.ensure_text_part_mut(0).text = "Reading…".to_string();
+        // Complete, parseable tool input — `finalize()` would emit it as a
+        // proper `ToolUse` block. Provider died before `MessageCompleted`,
+        // so it never reached `process_tool_turn`.
+        turn.push_tool_use(ToolUseBuilder {
+            index: 1,
+            id: "tool_done".to_string(),
+            name: "read".to_string(),
+            input_json: r#"{"file_path":"src/main.rs"}"#.to_string(),
+            input_preview_len: 0,
+            id_origin: zdx_types::IdOrigin::Synthesized,
+            replay: None,
+        });
+
+        let messages = build_provider_failed_messages(&prior, turn);
+
+        assert_eq!(messages.len(), 2, "messages: {messages:#?}");
+        let MessageContent::Blocks(blocks) = &messages[1].content else {
+            panic!("expected blocks content, got {:?}", messages[1].content);
+        };
+        assert!(
+            blocks
+                .iter()
+                .any(|b| matches!(b, ChatContentBlock::Text { text, .. } if text == "Reading…")),
+            "text content must survive",
+        );
+        assert!(
+            !blocks
+                .iter()
+                .any(|b| matches!(b, ChatContentBlock::ToolUse { .. })),
+            "fully-formed but unexecuted tool_use must still be dropped",
+        );
+        // No synthetic tool_result message either.
+        assert!(
+            !messages.iter().any(|m| matches!(
+                &m.content,
+                MessageContent::Blocks(bs)
+                    if bs.iter().any(|b| matches!(b, ChatContentBlock::ToolResult(_)))
+            )),
+            "provider-failure snapshot must NOT synthesize tool_results",
+        );
+    }
+
     /// Verifies that finalizing a turn with malformed tool-use JSON
     /// produces a malformed sentinel rather than an executable tool.
     #[tokio::test]
@@ -3415,14 +3720,15 @@ mod tests {
         assert!(matches!(&*ev, AgentEvent::AssistantDelta { text } if text == "test"));
     }
 
-    /// Transparent retries are only safe before the stream emits any external
-    /// event to the UI/persistence pipeline.
+    /// Transparent retries are only safe before the stream emits any visible
+    /// assistant content. Metadata-only emissions (usage ticks) intentionally
+    /// do not flip the gate; see `test_consume_stream_keeps_usage_only_retry_safe`.
     #[test]
     fn test_can_transparently_retry_stream_requires_no_emitted_events() {
         let mut state = StreamState::new(String::new());
         assert!(can_transparently_retry_stream(&state));
 
-        state.emitted_events = true;
+        state.emitted_visible_content = true;
         assert!(!can_transparently_retry_stream(&state));
     }
 
@@ -3454,8 +3760,52 @@ mod tests {
         );
     }
 
+    /// SSE transport-level failures emitted by the parser before any stream
+    /// events have been forwarded MUST satisfy the engine's transparent-retry
+    /// gate so the unified retry loop can recover. This pins the contract that
+    /// parser-side transport errors flow through `is_retryable` + the retry
+    /// gate together.
     #[tokio::test]
-    async fn test_consume_stream_marks_usage_update_as_retry_unsafe() {
+    async fn test_consume_stream_treats_sse_transport_error_as_retryable() {
+        use futures_util::stream;
+
+        use crate::providers::ProviderErrorKind;
+
+        let (tx, _rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        // Mirrors the message shape produced by the OpenAI/Anthropic/Gemini
+        // SSE parsers when the underlying byte stream errors mid-poll.
+        let transport_err = ProviderError::new(
+            ProviderErrorKind::Timeout,
+            "SSE stream network error: connection reset by peer",
+        );
+        let events: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![Err(transport_err)];
+        let provider_stream: ProviderStream = Box::pin(stream::iter(events));
+
+        let result = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let Err((err, state)) = result else {
+            panic!("stream should error out");
+        };
+        assert!(matches!(
+            &err,
+            TurnError::Provider(p)
+                if p.is_retryable()
+                    && p.kind == ProviderErrorKind::Timeout
+                    && p.message.contains("network error")
+        ));
+        assert!(
+            can_transparently_retry_stream(&state),
+            "transport error before any emitted events must remain retry-safe"
+        );
+    }
+
+    /// `MessageStart` only emits a usage tick, which is metadata-only: the UI
+    /// status bar accumulates token counters but no transcript content is
+    /// appended. A transport failure right after `MessageStart` MUST therefore
+    /// remain retry-safe so the engine can transparently retry the turn.
+    #[tokio::test]
+    async fn test_consume_stream_keeps_usage_only_retry_safe() {
         use futures_util::stream;
 
         let (tx, _rx) = create_event_channel();
@@ -3464,7 +3814,17 @@ mod tests {
         let events: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![
             Ok(StreamEvent::MessageStart {
                 model: "claude-test".to_string(),
-                usage: crate::providers::Usage::default(),
+                usage: crate::providers::Usage {
+                    input_tokens: 12,
+                    ..crate::providers::Usage::default()
+                },
+            }),
+            Ok(StreamEvent::MessageDelta {
+                stop_reason: None,
+                usage: Some(crate::providers::UsageDelta {
+                    output_tokens: Some(3),
+                    ..crate::providers::UsageDelta::default()
+                }),
             }),
             Err(ProviderError::api_error(
                 "overloaded_error",
@@ -3479,8 +3839,630 @@ mod tests {
         };
 
         assert!(
-            !can_transparently_retry_stream(&state),
-            "usage updates are externally emitted and make retry unsafe"
+            can_transparently_retry_stream(&state),
+            "metadata-only usage updates must not block transparent retry"
+        );
+    }
+
+    /// `flush_pending_usage` emits ONE combined `UsageUpdate` carrying the
+    /// accumulated buffer and resets `pending_usage` to default. Downstream
+    /// consumers are additive, so a single combined event is equivalent to
+    /// emitting each per-tick delta separately.
+    #[test]
+    fn flush_pending_usage_emits_combined_event_then_resets() {
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+        let mut state = StreamState::new(String::new());
+        state.pending_usage = crate::providers::Usage {
+            input_tokens: 11,
+            output_tokens: 7,
+            cache_read_input_tokens: 3,
+            cache_creation_input_tokens: 2,
+        };
+
+        state.flush_pending_usage(&sender);
+
+        let evt = rx.try_recv().expect("expected a flushed UsageUpdate");
+        match &*evt {
+            AgentEvent::UsageUpdate {
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+            } => {
+                assert_eq!(*input_tokens, 11);
+                assert_eq!(*output_tokens, 7);
+                assert_eq!(*cache_read_input_tokens, 3);
+                assert_eq!(*cache_creation_input_tokens, 2);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "exactly one event should flush");
+        assert!(
+            state.pending_usage.is_empty(),
+            "buffer must reset after flush"
+        );
+    }
+
+    #[test]
+    fn flush_pending_usage_is_noop_when_empty() {
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+        let mut state = StreamState::new(String::new());
+
+        state.flush_pending_usage(&sender);
+
+        assert!(
+            rx.try_recv().is_err(),
+            "no event should be emitted when the buffer is empty"
+        );
+    }
+
+    /// `MessageStart` + `MessageDelta` deltas BEFORE any visible content
+    /// accumulate into `pending_usage` and never reach the channel.
+    /// Combined with the existing retry-gate test, this pins the discard
+    /// invariant that eliminates double-counting on transparent retry.
+    #[tokio::test]
+    async fn usage_buffer_accumulates_message_start_plus_message_delta_pre_content() {
+        use futures_util::stream;
+
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        let events: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![
+            Ok(StreamEvent::MessageStart {
+                model: "claude-test".to_string(),
+                usage: crate::providers::Usage {
+                    input_tokens: 10,
+                    ..crate::providers::Usage::default()
+                },
+            }),
+            Ok(StreamEvent::MessageDelta {
+                stop_reason: None,
+                usage: Some(crate::providers::UsageDelta {
+                    output_tokens: Some(5),
+                    ..crate::providers::UsageDelta::default()
+                }),
+            }),
+            Err(ProviderError::api_error(
+                "overloaded_error",
+                "API is temporarily overloaded",
+            )),
+        ];
+        let provider_stream: ProviderStream = Box::pin(stream::iter(events));
+
+        let result = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let Err((_err, state)) = result else {
+            panic!("stream should error out");
+        };
+
+        assert_eq!(state.pending_usage.input_tokens, 10);
+        assert_eq!(state.pending_usage.output_tokens, 5);
+        assert!(
+            can_transparently_retry_stream(&state),
+            "buffered usage must not flip the retry gate"
+        );
+        // No `UsageUpdate` should have been emitted: the buffer is dropped
+        // when the next attempt creates a fresh `StreamState`.
+        let leaked: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter(|e| matches!(&**e, AgentEvent::UsageUpdate { .. }))
+            .collect();
+        assert!(
+            leaked.is_empty(),
+            "no UsageUpdate must leak from a discarded attempt"
+        );
+    }
+
+    /// Buffered usage flushes immediately before the first user-visible
+    /// `AssistantDelta`, preserving event ordering for downstream consumers
+    /// that rely on usage arriving with the streaming delta.
+    #[tokio::test]
+    async fn usage_flushed_before_first_assistant_delta() {
+        use futures_util::stream;
+
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        let events: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![
+            Ok(StreamEvent::MessageStart {
+                model: "claude-test".to_string(),
+                usage: crate::providers::Usage {
+                    input_tokens: 10,
+                    ..crate::providers::Usage::default()
+                },
+            }),
+            Ok(StreamEvent::TextDelta {
+                index: 0,
+                text: "hi".to_string(),
+            }),
+        ];
+        let provider_stream: ProviderStream = Box::pin(stream::iter(events));
+
+        let _ = consume_stream(provider_stream, &[], &sender, None, "").await;
+
+        let usage_evt = rx.try_recv().expect("expected UsageUpdate first");
+        assert!(
+            matches!(
+                &*usage_evt,
+                AgentEvent::UsageUpdate {
+                    input_tokens: 10,
+                    ..
+                }
+            ),
+            "first event must be the flushed UsageUpdate, got {usage_evt:?}"
+        );
+        let delta_evt = rx.try_recv().expect("expected AssistantDelta next");
+        assert!(
+            matches!(
+                &*delta_evt,
+                AgentEvent::AssistantDelta { text } if text == "hi"
+            ),
+            "second event must be the AssistantDelta, got {delta_evt:?}"
+        );
+    }
+
+    /// Buffered usage flushes immediately before the first
+    /// `ToolRequested` event triggered by a `tool_use` `ContentBlockStart`.
+    #[tokio::test]
+    async fn usage_flushed_before_first_tool_requested() {
+        use futures_util::stream;
+
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        let events: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![
+            Ok(StreamEvent::MessageStart {
+                model: "claude-test".to_string(),
+                usage: crate::providers::Usage {
+                    input_tokens: 7,
+                    ..crate::providers::Usage::default()
+                },
+            }),
+            Ok(StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::ToolUse,
+                id: Some("toolu_a".to_string()),
+                name: Some("read".to_string()),
+                data: None,
+                id_origin: Some(zdx_types::IdOrigin::Real),
+            }),
+        ];
+        let provider_stream: ProviderStream = Box::pin(stream::iter(events));
+
+        let _ = consume_stream(provider_stream, &[], &sender, None, "").await;
+
+        let usage_evt = rx.try_recv().expect("expected UsageUpdate first");
+        assert!(
+            matches!(
+                &*usage_evt,
+                AgentEvent::UsageUpdate {
+                    input_tokens: 7,
+                    ..
+                }
+            ),
+            "first event must be the flushed UsageUpdate, got {usage_evt:?}"
+        );
+        // Drain remaining; ensure ToolRequested is among them and arrives
+        // after the usage event.
+        let saw_tool_requested = std::iter::from_fn(|| rx.try_recv().ok())
+            .any(|e| matches!(&*e, AgentEvent::ToolRequested { .. }));
+        assert!(
+            saw_tool_requested,
+            "expected a ToolRequested event after the flushed UsageUpdate"
+        );
+    }
+
+    /// Buffered usage flushes immediately before the first `ToolInputDelta`
+    /// — only when the helper actually has a non-empty preview to emit.
+    #[tokio::test]
+    async fn usage_flushed_before_first_tool_input_delta() {
+        use futures_util::stream;
+
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        let events: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![
+            Ok(StreamEvent::MessageStart {
+                model: "claude-test".to_string(),
+                usage: crate::providers::Usage {
+                    input_tokens: 9,
+                    ..crate::providers::Usage::default()
+                },
+            }),
+            Ok(StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::ToolUse,
+                id: Some("toolu_w".to_string()),
+                name: Some("write".to_string()),
+                data: None,
+                id_origin: Some(zdx_types::IdOrigin::Real),
+            }),
+            Ok(StreamEvent::InputJsonDelta {
+                index: 0,
+                partial_json: "{\"path\":\"a.txt\",\"content\":\"hi\"".to_string(),
+            }),
+        ];
+        let provider_stream: ProviderStream = Box::pin(stream::iter(events));
+
+        let _ = consume_stream(provider_stream, &[], &sender, None, "").await;
+
+        // First event must be the flushed UsageUpdate (triggered by the
+        // ToolUse start arm). The subsequent InputJsonDelta does not need
+        // its own flush — the buffer is already empty.
+        let first = rx.try_recv().expect("expected first event");
+        assert!(
+            matches!(
+                &*first,
+                AgentEvent::UsageUpdate {
+                    input_tokens: 9,
+                    ..
+                }
+            ),
+            "first event must be the flushed UsageUpdate, got {first:?}"
+        );
+        // Drain and confirm a ToolInputDelta arrived with the partial preview.
+        let saw_input_delta = std::iter::from_fn(|| rx.try_recv().ok()).any(|e| {
+            matches!(
+                &*e,
+                AgentEvent::ToolInputDelta { name, delta, .. }
+                    if name == "write" && delta == "hi"
+            )
+        });
+        assert!(
+            saw_input_delta,
+            "expected ToolInputDelta carrying the write tool's content preview"
+        );
+    }
+
+    /// Buffered usage flushes immediately before the first non-empty
+    /// `ReasoningDelta`.
+    #[tokio::test]
+    async fn usage_flushed_before_first_reasoning_delta() {
+        use futures_util::stream;
+
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        let events: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![
+            Ok(StreamEvent::MessageStart {
+                model: "claude-test".to_string(),
+                usage: crate::providers::Usage {
+                    input_tokens: 4,
+                    ..crate::providers::Usage::default()
+                },
+            }),
+            Ok(StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::Reasoning,
+                id: None,
+                name: None,
+                data: None,
+                id_origin: None,
+            }),
+            Ok(StreamEvent::ReasoningDelta {
+                index: 0,
+                reasoning: "thinking".to_string(),
+            }),
+        ];
+        let provider_stream: ProviderStream = Box::pin(stream::iter(events));
+
+        let _ = consume_stream(provider_stream, &[], &sender, None, "").await;
+
+        let first = rx.try_recv().expect("expected first event");
+        assert!(
+            matches!(
+                &*first,
+                AgentEvent::UsageUpdate {
+                    input_tokens: 4,
+                    ..
+                }
+            ),
+            "first event must be the flushed UsageUpdate, got {first:?}"
+        );
+        let second = rx.try_recv().expect("expected ReasoningDelta next");
+        assert!(
+            matches!(&*second, AgentEvent::ReasoningDelta { text } if text == "thinking"),
+            "second event must be the ReasoningDelta, got {second:?}"
+        );
+    }
+
+    /// Buffered usage flushes immediately before the first
+    /// `ReasoningCompleted` produced by `build_reasoning_completion` on a
+    /// `ContentBlockCompleted`.
+    #[tokio::test]
+    async fn usage_flushed_before_first_reasoning_completed() {
+        use futures_util::stream;
+
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        let events: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![
+            Ok(StreamEvent::MessageStart {
+                model: "claude-test".to_string(),
+                usage: crate::providers::Usage {
+                    input_tokens: 6,
+                    ..crate::providers::Usage::default()
+                },
+            }),
+            Ok(StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::RedactedThinking,
+                id: None,
+                name: None,
+                data: Some("enc".to_string()),
+                id_origin: None,
+            }),
+            Ok(StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature: None,
+            }),
+        ];
+        let provider_stream: ProviderStream = Box::pin(stream::iter(events));
+
+        let _ = consume_stream(provider_stream, &[], &sender, None, "").await;
+
+        let first = rx.try_recv().expect("expected first event");
+        assert!(
+            matches!(
+                &*first,
+                AgentEvent::UsageUpdate {
+                    input_tokens: 6,
+                    ..
+                }
+            ),
+            "first event must be the flushed UsageUpdate, got {first:?}"
+        );
+        let second = rx.try_recv().expect("expected ReasoningCompleted next");
+        assert!(
+            matches!(&*second, AgentEvent::ReasoningCompleted { .. }),
+            "second event must be the ReasoningCompleted, got {second:?}"
+        );
+    }
+
+    /// An empty `ReasoningDelta` MUST NOT flush buffered usage and MUST
+    /// NOT flip the retry gate. The TUI already filters empty deltas at
+    /// render time, so flipping the gate on a no-op event was a small
+    /// Slice-2 bug — corrected here.
+    #[tokio::test]
+    async fn empty_reasoning_delta_does_not_flush_or_flip_gate() {
+        use futures_util::stream;
+
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        let events: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![
+            Ok(StreamEvent::MessageStart {
+                model: "claude-test".to_string(),
+                usage: crate::providers::Usage {
+                    input_tokens: 5,
+                    ..crate::providers::Usage::default()
+                },
+            }),
+            Ok(StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::Reasoning,
+                id: None,
+                name: None,
+                data: None,
+                id_origin: None,
+            }),
+            Ok(StreamEvent::ReasoningDelta {
+                index: 0,
+                reasoning: String::new(),
+            }),
+            Err(ProviderError::api_error(
+                "overloaded_error",
+                "API is temporarily overloaded",
+            )),
+        ];
+        let provider_stream: ProviderStream = Box::pin(stream::iter(events));
+
+        let result = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let Err((_err, state)) = result else {
+            panic!("stream should error out");
+        };
+
+        assert_eq!(state.pending_usage.input_tokens, 5);
+        assert!(
+            can_transparently_retry_stream(&state),
+            "empty reasoning delta must not flip the retry gate"
+        );
+        let leaked: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter(|e| matches!(&**e, AgentEvent::UsageUpdate { .. }))
+            .collect();
+        assert!(
+            leaked.is_empty(),
+            "buffered usage must not flush on an empty reasoning delta"
+        );
+    }
+
+    /// EOF without an explicit `MessageCompleted` MUST still flush buffered
+    /// usage on the success path so TUI/persistence consumers see the final
+    /// counter values.
+    #[tokio::test]
+    async fn usage_flushed_on_eof_success_without_message_completed() {
+        use futures_util::stream;
+
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        let events: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![
+            Ok(StreamEvent::MessageStart {
+                model: "claude-test".to_string(),
+                usage: crate::providers::Usage {
+                    input_tokens: 3,
+                    ..crate::providers::Usage::default()
+                },
+            }),
+            Ok(StreamEvent::MessageDelta {
+                stop_reason: Some("end_turn".to_string()),
+                usage: Some(crate::providers::UsageDelta {
+                    output_tokens: Some(2),
+                    ..crate::providers::UsageDelta::default()
+                }),
+            }),
+        ];
+        let provider_stream: ProviderStream = Box::pin(stream::iter(events));
+
+        let result = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let Ok(state) = result else {
+            panic!("stream should succeed on EOF");
+        };
+        assert!(state.pending_usage.is_empty(), "buffer must be flushed");
+
+        let evt = rx.try_recv().expect("expected a flushed UsageUpdate");
+        match &*evt {
+            AgentEvent::UsageUpdate {
+                input_tokens,
+                output_tokens,
+                ..
+            } => {
+                assert_eq!(*input_tokens, 3);
+                assert_eq!(*output_tokens, 2);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    /// User interruption is terminal (not transparent retry): the partial
+    /// attempt's buffered usage MUST flush before `consume_stream` returns
+    /// the `TurnError::Interrupted`.
+    #[tokio::test]
+    async fn usage_flushed_on_user_interruption_pre_content() {
+        use futures_util::stream::{self, StreamExt};
+
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+        let cancel = CancellationToken::new();
+
+        // Yield `MessageStart` (gets buffered), then stay pending so the
+        // loop hits `STREAM_POLL_TIMEOUT` and re-checks the cancel token.
+        let provider_stream: ProviderStream = Box::pin(
+            stream::iter(vec![Ok(StreamEvent::MessageStart {
+                model: "claude-test".to_string(),
+                usage: crate::providers::Usage {
+                    input_tokens: 8,
+                    ..crate::providers::Usage::default()
+                },
+            })])
+            .chain(stream::pending()),
+        );
+
+        // Cancel mid-flight, after `MessageStart` has been processed.
+        let canceller = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            canceller.cancel();
+        });
+
+        let result = consume_stream(provider_stream, &[], &sender, Some(&cancel), "").await;
+        let Err((err, state)) = result else {
+            panic!("stream should be interrupted");
+        };
+        assert!(matches!(err, TurnError::Interrupted { .. }));
+        assert!(
+            state.pending_usage.is_empty(),
+            "buffer must be flushed before interruption return"
+        );
+
+        let evt = rx.try_recv().expect("expected a flushed UsageUpdate");
+        assert!(
+            matches!(
+                &*evt,
+                AgentEvent::UsageUpdate {
+                    input_tokens: 8,
+                    ..
+                }
+            ),
+            "user interruption must bill the partial attempt, got {evt:?}"
+        );
+    }
+
+    /// Simulates a transparent retry at the `consume_stream` layer:
+    /// the first attempt buffers usage and fails retryably (state is
+    /// discarded by the retry loop). The second attempt streams text and
+    /// commits its own usage. End-to-end, the channel observes exactly ONE
+    /// `UsageUpdate` — the discarded attempt left no leak.
+    #[tokio::test]
+    async fn usage_emitted_once_after_transparent_retry_success() {
+        use futures_util::stream;
+
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        // Attempt 1: MessageStart + retryable error. State is dropped.
+        let attempt1: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![
+            Ok(StreamEvent::MessageStart {
+                model: "claude-test".to_string(),
+                usage: crate::providers::Usage {
+                    input_tokens: 10,
+                    ..crate::providers::Usage::default()
+                },
+            }),
+            Err(ProviderError::api_error(
+                "overloaded_error",
+                "API is temporarily overloaded",
+            )),
+        ];
+        let s1: ProviderStream = Box::pin(stream::iter(attempt1));
+        let r1 = consume_stream(s1, &[], &sender, None, "").await;
+        let Err((_, discarded)) = r1 else {
+            panic!("attempt 1 should fail");
+        };
+        assert!(
+            can_transparently_retry_stream(&discarded),
+            "attempt 1 must be retry-safe"
+        );
+        // Drop discarded state: simulates the retry loop's behavior.
+        drop(discarded);
+
+        // Attempt 2: succeeds with the same MessageStart + text + EOF.
+        let attempt2: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![
+            Ok(StreamEvent::MessageStart {
+                model: "claude-test".to_string(),
+                usage: crate::providers::Usage {
+                    input_tokens: 10,
+                    ..crate::providers::Usage::default()
+                },
+            }),
+            Ok(StreamEvent::TextDelta {
+                index: 0,
+                text: "ok".to_string(),
+            }),
+        ];
+        let s2: ProviderStream = Box::pin(stream::iter(attempt2));
+        let r2 = consume_stream(s2, &[], &sender, None, "").await;
+        assert!(r2.is_ok(), "attempt 2 should succeed");
+
+        // Drain rx and pin the strict ordering: exactly one UsageUpdate
+        // (from attempt 2) emitted BEFORE the AssistantDelta, and nothing
+        // else carrying usage data.
+        let mut events = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            events.push(e);
+        }
+        let usage_positions: Vec<_> = events
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| match &**e {
+                AgentEvent::UsageUpdate { input_tokens, .. } => Some((i, *input_tokens)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            usage_positions.len(),
+            1,
+            "exactly one UsageUpdate must reach the channel; got {usage_positions:?}"
+        );
+        let (usage_idx, usage_input) = usage_positions[0];
+        assert_eq!(usage_input, 10, "UsageUpdate must carry attempt 2's input");
+        let delta_idx = events
+            .iter()
+            .position(|e| matches!(&**e, AgentEvent::AssistantDelta { text } if text == "ok"))
+            .expect("attempt 2's AssistantDelta must reach the channel");
+        assert!(
+            usage_idx < delta_idx,
+            "UsageUpdate (idx {usage_idx}) must precede AssistantDelta (idx {delta_idx})"
         );
     }
 
@@ -3519,6 +4501,44 @@ mod tests {
         assert!(
             !can_transparently_retry_stream(&state),
             "reasoning completion is persisted and makes retry unsafe"
+        );
+    }
+
+    /// Visible assistant text MUST block transparent retry: the user has
+    /// already seen the partial output, so a second attempt would duplicate
+    /// content. This pins the contract complementary to
+    /// `test_consume_stream_keeps_usage_only_retry_safe`.
+    #[tokio::test]
+    async fn test_consume_stream_marks_text_delta_as_retry_unsafe() {
+        use futures_util::stream;
+
+        let (tx, _rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        let events: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![
+            Ok(StreamEvent::MessageStart {
+                model: "claude-test".to_string(),
+                usage: crate::providers::Usage::default(),
+            }),
+            Ok(StreamEvent::TextDelta {
+                index: 0,
+                text: "Hello".to_string(),
+            }),
+            Err(ProviderError::api_error(
+                "overloaded_error",
+                "API is temporarily overloaded",
+            )),
+        ];
+        let provider_stream: ProviderStream = Box::pin(stream::iter(events));
+
+        let result = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let Err((_err, state)) = result else {
+            panic!("stream should error out");
+        };
+
+        assert!(
+            !can_transparently_retry_stream(&state),
+            "visible assistant text must block transparent retry"
         );
     }
 
