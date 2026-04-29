@@ -145,11 +145,13 @@ impl ThreadUsage {
     ///
     /// Updates cumulative totals (for cost) and latest values (for context %).
     ///
-    /// Note: Usage updates for a single API request come in two parts:
-    /// 1. `MessageStart`: `input_tokens`, `cache_read`, `cache_write` (`output_tokens=0`)
-    /// 2. `MessageDelta`: `output_tokens` (other fields=0)
-    ///
-    /// We accumulate the latest values to handle split updates correctly.
+    /// Note: As of the usage-buffer-on-retry change in `zdx-engine`, a single
+    /// committed API attempt typically arrives as ONE combined `UsageUpdate`
+    /// event carrying both input/cache and output tokens. Older/external
+    /// producers may still split usage across separate updates
+    /// (`MessageStart` with input + cache fields, `MessageDelta` with
+    /// output). Both shapes are handled: the latest-request fields reset
+    /// when input/cache fields appear and accumulate output additively.
     pub fn add(&mut self, input: u64, output: u64, cache_read: u64, cache_write: u64) {
         // Cumulative totals for cost calculation
         self.input_tokens += input;
@@ -157,15 +159,19 @@ impl ThreadUsage {
         self.cache_read_tokens += cache_read;
         self.cache_write_tokens += cache_write;
 
-        // Latest request for context window calculation
-        // Accumulate (don't replace) to handle split updates from MessageStart + MessageDelta
+        // Latest request for context window calculation.
+        // Reset latest_input on input/cache (new request), accumulate
+        // latest_output additively. This handles both the new combined
+        // `UsageUpdate` (input + output in one event) and the legacy split
+        // shape (`MessageStart` then `MessageDelta`).
         if input > 0 || cache_read > 0 || cache_write > 0 {
-            // This is a new request (MessageStart) - reset and set input
+            // New request boundary: reset and seed input.
             self.latest_input = input + cache_read + cache_write;
-            self.latest_output = 0; // Will be updated by MessageDelta
+            self.latest_output = 0;
         }
         if output > 0 {
-            // This is the output update (MessageDelta) - add to latest
+            // Output portion (combined event sets it in the same call;
+            // legacy split sets it on the following `MessageDelta`).
             self.latest_output += output;
         }
     }
