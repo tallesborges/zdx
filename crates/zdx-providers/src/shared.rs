@@ -1,6 +1,7 @@
 //! Provider-agnostic shared helpers. Pure value types live in `zdx_types`.
 
 use anyhow::{Context, Result};
+use eventsource_stream::EventStreamError;
 use serde_json::Value;
 pub use zdx_types::providers::UsageDelta;
 pub use zdx_types::{
@@ -109,6 +110,37 @@ pub fn error_message_from_payload(error: &Value, message_keys: &[&str]) -> Strin
     format!("Upstream error payload: {compact}")
 }
 
+/// Maps an `EventStreamError` from the `eventsource-stream` SSE parser into a
+/// `ProviderError`, distinguishing transport-level failures (retryable) from
+/// SSE framing/UTF-8 parser failures (non-retryable).
+///
+/// Transport failures (socket reset, connection dropped, etc.) are classified
+/// as `ProviderErrorKind::Timeout` with an explicit `"network error"` token
+/// so `ProviderError::is_retryable()` matches them via `RETRYABLE_PATTERNS`
+/// and the engine's transparent retry loop can recover before any visible
+/// output. UTF-8 / SSE-parser errors stay as `ProviderErrorKind::Parse` and
+/// remain non-retryable, matching the contract that real protocol/decoding
+/// bugs should surface as fatal turn failures rather than auto-retried.
+pub fn map_event_stream_error<E>(err: EventStreamError<E>) -> ProviderError
+where
+    E: std::fmt::Display,
+{
+    match err {
+        EventStreamError::Transport(e) => ProviderError::new(
+            ProviderErrorKind::Timeout,
+            format!("SSE stream network error: {e}"),
+        ),
+        EventStreamError::Utf8(e) => ProviderError::new(
+            ProviderErrorKind::Parse,
+            format!("SSE stream UTF-8 error: {e}"),
+        ),
+        EventStreamError::Parser(e) => ProviderError::new(
+            ProviderErrorKind::Parse,
+            format!("SSE stream parse error: {e}"),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,6 +152,33 @@ mod tests {
         assert_eq!(
             merge_system_prompt(Some("  hello world  ")),
             Some("hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn test_map_event_stream_error_transport_is_retryable() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "broken pipe");
+        let err: EventStreamError<std::io::Error> = EventStreamError::Transport(io_err);
+        let mapped = map_event_stream_error(err);
+
+        assert_eq!(mapped.kind, ProviderErrorKind::Timeout);
+        assert!(mapped.message.contains("network error"));
+        assert!(
+            mapped.is_retryable(),
+            "transport-level SSE failures must be retryable, got {mapped:?}",
+        );
+    }
+
+    #[test]
+    fn test_map_event_stream_error_utf8_is_not_retryable() {
+        let utf8_err = String::from_utf8(vec![0xF0, 0x9F]).unwrap_err();
+        let err: EventStreamError<std::io::Error> = EventStreamError::Utf8(utf8_err);
+        let mapped = map_event_stream_error(err);
+
+        assert_eq!(mapped.kind, ProviderErrorKind::Parse);
+        assert!(
+            !mapped.is_retryable(),
+            "UTF-8 framing errors must stay non-retryable, got {mapped:?}",
         );
     }
 }

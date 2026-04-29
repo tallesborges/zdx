@@ -13,7 +13,7 @@ use zdx_types::messages::IdOrigin;
 
 use crate::{
     ContentBlockType, ProviderError, ProviderErrorKind, ProviderResult, SignatureProvider,
-    StreamEvent, Usage, error_message_from_payload,
+    StreamEvent, Usage, error_message_from_payload, map_event_stream_error,
 };
 
 /// Gemini SSE stream parser.
@@ -552,16 +552,10 @@ where
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
-                    // Transport-level failure during streaming (socket reset,
-                    // connection dropped, etc.). Classify as `Timeout` (not `Parse`)
-                    // so `ProviderError::is_retryable()` can see it as transient, and
-                    // include an explicit "network error" token in the message so the
-                    // pattern match in `RETRYABLE_PATTERNS` catches arbitrary
-                    // underlying transport errors.
-                    return Poll::Ready(Some(Err(ProviderError::new(
-                        ProviderErrorKind::Timeout,
-                        format!("SSE stream network error: {e}"),
-                    ))));
+                    // Distinguish transport-level failures (retryable) from
+                    // SSE framing/UTF-8 parser failures (non-retryable). See
+                    // `map_event_stream_error` for the policy.
+                    return Poll::Ready(Some(Err(map_event_stream_error(e))));
                 }
                 Poll::Ready(None) => {
                     // The upstream stream ended. If we never emitted the completion
@@ -1424,6 +1418,36 @@ mod tests {
         assert!(
             err.is_retryable(),
             "transient transport errors must be retryable, got {err:?}",
+        );
+    }
+
+    /// Test: Invalid UTF-8 in the byte stream is a real protocol/decoding bug,
+    /// not a transient transport blip, and MUST stay non-retryable so the
+    /// engine surfaces it as a fatal turn failure instead of silently retrying.
+    #[tokio::test]
+    async fn test_utf8_error_is_not_retryable() {
+        use futures_util::StreamExt;
+
+        let byte_stream = stream::iter(vec![Ok::<bytes::Bytes, std::io::Error>(
+            bytes::Bytes::from_static(&[0xF0, 0x9F]),
+        )]);
+        let mut parser =
+            GeminiSseParser::new(byte_stream, "gemini-3-flash-preview".to_string(), "test");
+
+        let first = parser
+            .next()
+            .await
+            .expect("stream should yield the utf8 error");
+        let err = first.expect_err("invalid utf-8 must surface as Err");
+
+        assert_eq!(
+            err.kind,
+            ProviderErrorKind::Parse,
+            "utf-8 framing error must stay classified as Parse",
+        );
+        assert!(
+            !err.is_retryable(),
+            "utf-8 framing errors must not be retryable, got {err:?}",
         );
     }
 
