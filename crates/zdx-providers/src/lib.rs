@@ -26,8 +26,8 @@ pub use debug_trace::{DebugTrace, TraceStream, wrap_stream};
 pub use shared::{
     ChatContentBlock, ChatMessage, ContentBlockType, IdOrigin, MessageContent, ProviderError,
     ProviderErrorKind, ProviderResult, ProviderStream, ReasoningBlock, ReplayToken,
-    SignatureProvider, StreamEvent, Usage, UsageDelta, error_message_from_payload, resolve_api_key,
-    resolve_base_url,
+    SignatureProvider, StreamEvent, Usage, UsageDelta, error_message_from_payload,
+    map_event_stream_error, resolve_api_key, resolve_base_url,
 };
 
 /// Provider selection based on model naming.

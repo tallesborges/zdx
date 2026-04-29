@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::{
     ContentBlockType, ProviderError, ProviderErrorKind, ProviderResult, StreamEvent, Usage,
-    error_message_from_payload,
+    error_message_from_payload, map_event_stream_error,
 };
 
 /// Extension trait for extracting strings from JSON values.
@@ -505,10 +505,7 @@ where
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
-                    return Poll::Ready(Some(Err(ProviderError::new(
-                        ProviderErrorKind::Parse,
-                        format!("SSE stream error: {e}"),
-                    ))));
+                    return Poll::Ready(Some(Err(map_event_stream_error(e))));
                 }
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Pending => return Poll::Pending,
@@ -776,5 +773,67 @@ mod tests {
             }
         ));
         assert!(parser.pending.is_empty());
+    }
+
+    /// Transport-level errors mid-stream (socket reset, connection dropped,
+    /// etc.) must surface as a retryable `ProviderError`. Mapping them to
+    /// `ProviderErrorKind::Parse` would short-circuit `is_retryable()` to
+    /// false and incorrectly treat transient socket failures as fatal.
+    #[tokio::test]
+    async fn transport_error_is_retryable() {
+        use futures_util::StreamExt;
+
+        let byte_stream = stream::iter(vec![Err::<bytes::Bytes, std::io::Error>(
+            std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "socket closed mid-stream",
+            ),
+        )]);
+        let mut parser = ResponsesSseParser::new(byte_stream, "gpt-5.3-codex-spark".to_string());
+
+        let first = parser
+            .next()
+            .await
+            .expect("stream should yield the transport error");
+        let err = first.expect_err("transport failure must surface as Err");
+
+        assert_ne!(
+            err.kind,
+            ProviderErrorKind::Parse,
+            "transport error must not be classified as Parse (non-retryable)",
+        );
+        assert!(
+            err.is_retryable(),
+            "transient transport errors must be retryable, got {err:?}",
+        );
+    }
+
+    /// Invalid UTF-8 in the byte stream is a real protocol/decoding bug, not a
+    /// transient transport blip, and MUST stay non-retryable so the engine
+    /// surfaces it as a fatal turn failure instead of silently retrying.
+    #[tokio::test]
+    async fn utf8_error_is_not_retryable() {
+        use futures_util::StreamExt;
+
+        let byte_stream = stream::iter(vec![Ok::<bytes::Bytes, std::io::Error>(
+            bytes::Bytes::from_static(&[0xF0, 0x9F]),
+        )]);
+        let mut parser = ResponsesSseParser::new(byte_stream, "gpt-5.3-codex-spark".to_string());
+
+        let first = parser
+            .next()
+            .await
+            .expect("stream should yield the utf8 error");
+        let err = first.expect_err("invalid utf-8 must surface as Err");
+
+        assert_eq!(
+            err.kind,
+            ProviderErrorKind::Parse,
+            "utf-8 framing error must stay classified as Parse",
+        );
+        assert!(
+            !err.is_retryable(),
+            "utf-8 framing errors must not be retryable, got {err:?}",
+        );
     }
 }

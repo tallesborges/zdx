@@ -15,7 +15,7 @@ use crate::debug_metrics::maybe_wrap_with_metrics;
 use crate::{
     ChatContentBlock, ChatMessage, ContentBlockType, DebugTrace, MessageContent, ProviderError,
     ProviderErrorKind, ProviderResult, ProviderStream, StreamEvent, Usage,
-    error_message_from_payload, wrap_stream,
+    error_message_from_payload, map_event_stream_error, wrap_stream,
 };
 
 const CHAT_COMPLETIONS_PATH: &str = "/chat/completions";
@@ -935,10 +935,7 @@ where
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
-                    return Poll::Ready(Some(Err(ProviderError::new(
-                        ProviderErrorKind::Parse,
-                        format!("SSE stream error: {e}"),
-                    ))));
+                    return Poll::Ready(Some(Err(map_event_stream_error(e))));
                 }
                 Poll::Ready(None) => {
                     // Stream ended - force emit completion if we haven't yet
@@ -1364,5 +1361,73 @@ data: [DONE]
             .collect();
 
         assert_eq!(json, r#"{"command":"echo hi"}"#);
+    }
+
+    /// Transport-level errors mid-stream (socket reset, connection dropped,
+    /// etc.) must surface as a retryable `ProviderError`. Mapping them to
+    /// `ProviderErrorKind::Parse` would short-circuit `is_retryable()` to
+    /// false and incorrectly treat transient socket failures as fatal.
+    #[tokio::test]
+    async fn test_transport_error_is_retryable() {
+        use futures_util::StreamExt;
+
+        use super::ChatCompletionsSseParser;
+        use crate::ProviderErrorKind;
+
+        let byte_stream = futures_util::stream::iter(vec![Err::<bytes::Bytes, std::io::Error>(
+            std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "socket closed mid-stream",
+            ),
+        )]);
+        let mut parser = ChatCompletionsSseParser::new(byte_stream, "test-model".to_string());
+
+        let first = parser
+            .next()
+            .await
+            .expect("stream should yield the transport error");
+        let err = first.expect_err("transport failure must surface as Err");
+
+        assert_ne!(
+            err.kind,
+            ProviderErrorKind::Parse,
+            "transport error must not be classified as Parse (non-retryable)",
+        );
+        assert!(
+            err.is_retryable(),
+            "transient transport errors must be retryable, got {err:?}",
+        );
+    }
+
+    /// Invalid UTF-8 in the byte stream is a real protocol/decoding bug, not a
+    /// transient transport blip, and MUST stay non-retryable so the engine
+    /// surfaces it as a fatal turn failure instead of silently retrying.
+    #[tokio::test]
+    async fn test_utf8_error_is_not_retryable() {
+        use futures_util::StreamExt;
+
+        use super::ChatCompletionsSseParser;
+        use crate::ProviderErrorKind;
+
+        let byte_stream = futures_util::stream::iter(vec![Ok::<bytes::Bytes, std::io::Error>(
+            bytes::Bytes::from_static(&[0xF0, 0x9F]),
+        )]);
+        let mut parser = ChatCompletionsSseParser::new(byte_stream, "test-model".to_string());
+
+        let first = parser
+            .next()
+            .await
+            .expect("stream should yield the utf8 error");
+        let err = first.expect_err("invalid utf-8 must surface as Err");
+
+        assert_eq!(
+            err.kind,
+            ProviderErrorKind::Parse,
+            "utf-8 framing error must stay classified as Parse",
+        );
+        assert!(
+            !err.is_retryable(),
+            "utf-8 framing errors must not be retryable, got {err:?}",
+        );
     }
 }
