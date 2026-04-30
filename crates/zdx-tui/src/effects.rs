@@ -124,6 +124,10 @@ pub enum UiEffect {
     /// Open config file in default system editor/app.
     OpenConfig,
 
+    /// Reload custom slash commands from disk (`<ZDX_HOME>/commands` and
+    /// `<cwd>/.zdx/commands`) and refresh the in-memory list.
+    ReloadCustomCommands,
+
     /// Open models config file in default system editor/app.
     OpenModelsConfig,
 
