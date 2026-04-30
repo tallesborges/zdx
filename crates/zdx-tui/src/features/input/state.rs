@@ -763,6 +763,11 @@ impl InputState {
         self.textarea.cut();
         self.textarea.insert_str(text);
         self.clear_pending_pastes();
+        // Drop any image entries whose placeholder no longer appears in the
+        // new text (mirrors `InputMutation::InsertText`). Without this, an
+        // image attached to the previous draft would be silently submitted
+        // alongside the new content.
+        self.sync_pending_images();
     }
 
     /// Applies a cross-slice input mutation.
@@ -920,5 +925,48 @@ impl InputState {
             self.history_index = None;
             self.set_text(&draft);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_text_drops_pending_images_whose_placeholder_is_gone() {
+        let mut input = InputState::new();
+        input.attach_image("image/png".to_string(), "AAAA".to_string(), None);
+        assert!(input.has_images());
+        let placeholder = input
+            .pending_images
+            .first()
+            .map(|img| img.placeholder.clone())
+            .expect("attach should push an image");
+        assert!(input.get_text().contains(&placeholder));
+
+        // Replacing the textarea with new text that does NOT mention the
+        // placeholder must clean up the stale image entry, otherwise it
+        // would be silently submitted alongside the new prompt.
+        input.set_text("brand new prompt");
+        assert!(!input.has_images());
+        assert_eq!(input.get_text(), "brand new prompt");
+    }
+
+    #[test]
+    fn set_text_keeps_pending_images_whose_placeholder_is_preserved() {
+        let mut input = InputState::new();
+        input.attach_image("image/png".to_string(), "AAAA".to_string(), None);
+        let placeholder = input
+            .pending_images
+            .first()
+            .map(|img| img.placeholder.clone())
+            .expect("attach should push an image");
+
+        // Replacement text still references the placeholder, so the image
+        // entry must be retained.
+        let new_text = format!("Use this image: {placeholder}");
+        input.set_text(&new_text);
+        assert!(input.has_images());
+        assert_eq!(input.pending_images.len(), 1);
     }
 }
