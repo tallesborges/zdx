@@ -79,3 +79,26 @@ include!(concat!(env!("OUT_DIR"), "/bundled_skills_manifest.rs"));
 pub fn bundled_skill_assets() -> &'static [BundledSkillAsset] {
     BUNDLED_SKILL_ASSETS
 }
+
+// ---------------------------------------------------------------------------
+// Bundled custom slash commands (loaded in-memory at runtime)
+// ---------------------------------------------------------------------------
+
+/// A single embedded bundled-command asset.
+///
+/// Each entry corresponds to a Markdown file under
+/// `crates/zdx-assets/bundled_commands/`. The file stem becomes the slash
+/// command name; the bytes are the raw Markdown body (with optional
+/// `description` frontmatter).
+pub struct BundledCommandAsset {
+    pub relative_path: &'static str,
+    pub bytes: &'static [u8],
+}
+
+include!(concat!(env!("OUT_DIR"), "/bundled_commands_manifest.rs"));
+
+/// Returns the full list of embedded bundled-command assets.
+#[must_use]
+pub fn bundled_command_assets() -> &'static [BundledCommandAsset] {
+    BUNDLED_COMMAND_ASSETS
+}

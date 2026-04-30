@@ -1,29 +1,34 @@
 //! Custom slash command discovery and parsing.
 //!
 //! Custom commands are user-defined slash commands that augment the built-in
-//! command palette. They live in two locations:
+//! command palette. They live in three locations:
 //!
 //! - `<ZDX_HOME>/commands/*.md` (user-global)
 //! - `<cwd>/.zdx/commands/*.md` (per-project)
+//! - bundled commands embedded in the binary (always available)
 //!
 //! Each Markdown file becomes a command whose name is the file stem. An
 //! optional YAML frontmatter block may set `description` (shown in the
 //! palette). The remaining body is the prompt content.
 //!
 //! Built-in commands always win: any custom command whose name matches a
-//! built-in name is skipped with a warning.
+//! built-in name is skipped with a warning. User and project commands shadow
+//! bundled commands silently so users can override the shipped defaults.
 
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use zdx_assets::BundledCommandAsset;
 
 use crate::config::paths;
 
 /// Source location for a custom command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CustomCommandSource {
+    /// Bundled with the binary (`crates/zdx-assets/bundled_commands/*.md`).
+    BuiltIn,
     /// `<ZDX_HOME>/commands/*.md`
     User,
     /// `<cwd>/.zdx/commands/*.md`
@@ -34,6 +39,7 @@ impl CustomCommandSource {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::BuiltIn => "builtin",
             Self::User => "user",
             Self::Project => "project",
         }
@@ -78,7 +84,8 @@ struct CommandFrontmatter {
     description: Option<String>,
 }
 
-/// Loads custom commands from the standard user and project directories.
+/// Loads custom commands from the standard user and project directories,
+/// then merges in the bundled commands embedded in the binary.
 ///
 /// `builtin_names` are command names that custom commands may not shadow
 /// (built-ins always win). The TUI supplies this from its static `COMMANDS`
@@ -87,12 +94,28 @@ struct CommandFrontmatter {
 pub fn load_custom_commands(cwd: &Path, builtin_names: &[&str]) -> LoadCustomCommandsResult {
     let user_dir = paths::zdx_home().join("commands");
     let project_dir = cwd.join(".zdx").join("commands");
-    load_custom_commands_from_dirs(&user_dir, &project_dir, builtin_names)
+
+    let mut state = LoadState {
+        commands: Vec::new(),
+        warnings: Vec::new(),
+        seen_names: HashSet::new(),
+        builtin_names,
+    };
+
+    scan_dir(&user_dir, CustomCommandSource::User, &mut state);
+    scan_dir(&project_dir, CustomCommandSource::Project, &mut state);
+    load_bundled_commands(zdx_assets::bundled_command_assets(), &mut state);
+
+    LoadCustomCommandsResult {
+        commands: state.commands,
+        warnings: state.warnings,
+    }
 }
 
 /// Loads custom commands from explicit user and project directories.
 ///
-/// Useful for tests that want to avoid env-var mutation.
+/// Filesystem-only — does not include bundled commands. The production entry
+/// point [`load_custom_commands`] composes this with bundled commands.
 #[must_use]
 pub fn load_custom_commands_from_dirs(
     user_dir: &Path,
@@ -174,6 +197,66 @@ fn scan_dir(dir: &Path, source: CustomCommandSource, state: &mut LoadState) {
     for path in paths {
         load_command_file(&path, source, state);
     }
+}
+
+/// Ingests bundled commands embedded in the binary.
+///
+/// User and project commands with the same name shadow bundled commands
+/// silently (no warning) — bundled is the fallback layer. A bundled command
+/// that collides with a built-in name is also skipped silently because that
+/// would be a build-time mistake in this crate, not a user-facing condition.
+fn load_bundled_commands(assets: &[BundledCommandAsset], state: &mut LoadState) {
+    for asset in assets {
+        load_bundled_command(asset, state);
+    }
+}
+
+fn load_bundled_command(asset: &BundledCommandAsset, state: &mut LoadState) {
+    let synthetic_path = PathBuf::from(format!("<bundled>/{}", asset.relative_path));
+    let Some(name) = command_name_from_path(&synthetic_path) else {
+        return;
+    };
+
+    if name.starts_with('.') {
+        return;
+    }
+
+    if state
+        .builtin_names
+        .iter()
+        .any(|builtin| builtin.eq_ignore_ascii_case(&name))
+    {
+        return;
+    }
+
+    let key = name.to_ascii_lowercase();
+    if state.seen_names.contains(&key) {
+        // User or project already provided a command with this name; their
+        // version wins silently.
+        return;
+    }
+    state.seen_names.insert(key);
+
+    let raw = if let Ok(s) = std::str::from_utf8(asset.bytes) {
+        s.to_string()
+    } else {
+        state.warn(
+            &synthetic_path,
+            "Bundled command file is not valid UTF-8; skipping",
+        );
+        return;
+    };
+
+    let (description, content) = parse_command_content(&raw, &synthetic_path, state);
+
+    state.commands.push(CustomCommand {
+        name,
+        description,
+        source: CustomCommandSource::BuiltIn,
+        path: synthetic_path,
+        content,
+        is_executable: false,
+    });
 }
 
 fn load_command_file(path: &Path, source: CustomCommandSource, state: &mut LoadState) {
@@ -649,5 +732,117 @@ mod tests {
                 .iter()
                 .any(|w| w.message.contains("Failed to read command file"))
         );
+    }
+
+    #[test]
+    fn test_load_bundled_commands_appends_to_state() {
+        let assets: &[BundledCommandAsset] = &[
+            BundledCommandAsset {
+                relative_path: "ship.md",
+                bytes: b"---\ndescription: Ship it\n---\nDo the thing.\n",
+            },
+            BundledCommandAsset {
+                relative_path: "raw.md",
+                bytes: b"raw body without frontmatter",
+            },
+        ];
+
+        let mut state = LoadState {
+            commands: Vec::new(),
+            warnings: Vec::new(),
+            seen_names: HashSet::new(),
+            builtin_names: BUILTINS,
+        };
+
+        load_bundled_commands(assets, &mut state);
+
+        let by_name: std::collections::HashMap<&str, &CustomCommand> = state
+            .commands
+            .iter()
+            .map(|c| (c.name.as_str(), c))
+            .collect();
+
+        let ship = by_name.get("ship").expect("ship loaded");
+        assert_eq!(ship.source, CustomCommandSource::BuiltIn);
+        assert_eq!(ship.description.as_deref(), Some("Ship it"));
+        assert_eq!(ship.content, "Do the thing.");
+
+        let raw = by_name.get("raw").expect("raw loaded");
+        assert_eq!(raw.source, CustomCommandSource::BuiltIn);
+        assert_eq!(raw.description, None);
+        assert_eq!(raw.content, "raw body without frontmatter");
+
+        assert!(state.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_load_bundled_commands_user_shadows_silently() {
+        let assets: &[BundledCommandAsset] = &[BundledCommandAsset {
+            relative_path: "plan.md",
+            bytes: b"bundled body",
+        }];
+
+        let user = tempdir().unwrap();
+        write_md(user.path(), "plan", "user body");
+
+        let mut state = LoadState {
+            commands: Vec::new(),
+            warnings: Vec::new(),
+            seen_names: HashSet::new(),
+            builtin_names: BUILTINS,
+        };
+        scan_dir(user.path(), CustomCommandSource::User, &mut state);
+        load_bundled_commands(assets, &mut state);
+
+        assert_eq!(state.commands.len(), 1);
+        assert_eq!(state.commands[0].source, CustomCommandSource::User);
+        assert_eq!(state.commands[0].content, "user body");
+        assert!(state.warnings.is_empty(), "shadowing bundled must not warn");
+    }
+
+    #[test]
+    fn test_load_bundled_commands_skips_builtin_collision_silently() {
+        let assets: &[BundledCommandAsset] = &[BundledCommandAsset {
+            relative_path: "quit.md",
+            bytes: b"bundled body",
+        }];
+
+        let mut state = LoadState {
+            commands: Vec::new(),
+            warnings: Vec::new(),
+            seen_names: HashSet::new(),
+            builtin_names: BUILTINS,
+        };
+        load_bundled_commands(assets, &mut state);
+
+        assert!(state.commands.is_empty());
+        assert!(state.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_real_bundled_commands_are_present() {
+        // Smoke test: confirm the workspace's bundled markdown files actually
+        // round-trip into discoverable commands when no user/project commands
+        // exist. We exercise the full `load_bundled_commands` path with the
+        // crate's real embedded assets.
+        let mut state = LoadState {
+            commands: Vec::new(),
+            warnings: Vec::new(),
+            seen_names: HashSet::new(),
+            builtin_names: BUILTINS,
+        };
+        load_bundled_commands(zdx_assets::bundled_command_assets(), &mut state);
+
+        let names: HashSet<String> = state.commands.iter().map(|c| c.name.clone()).collect();
+        for expected in ["plan", "investigate", "execute-plan", "review-loop"] {
+            assert!(
+                names.contains(expected),
+                "expected bundled command '{expected}' to be present, got {names:?}",
+            );
+        }
+        for cmd in &state.commands {
+            assert_eq!(cmd.source, CustomCommandSource::BuiltIn);
+            assert!(!cmd.content.is_empty());
+        }
     }
 }

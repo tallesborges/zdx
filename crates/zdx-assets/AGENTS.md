@@ -1,11 +1,11 @@
 # zdx-assets development guide
 
-Scope: embedded asset content (prompts, instruction layers, default TOMLs, bundled skills, built-in subagents). No runtime logic.
+Scope: embedded asset content (prompts, instruction layers, default TOMLs, bundled skills, bundled commands, built-in subagents). No runtime logic.
 
 ## Where things are
 
-- `src/lib.rs`: `&'static str` / `&'static [u8]` constants + `bundled_skill_assets()` accessor
-- `build.rs`: generates the bundled-skill asset manifest from `bundled_skills/`
+- `src/lib.rs`: `&'static str` / `&'static [u8]` constants + `bundled_skill_assets()` / `bundled_command_assets()` accessors
+- `build.rs`: generates the bundled-skill and bundled-command asset manifests from `bundled_skills/` and `bundled_commands/`
 - `prompts/`: shared prompt templates (identity, system, handoff, thread title, read_thread)
 - `instruction_layers/automation_harness.md`: built-in automation harness instruction layer
 - `instruction_layers/exec_instruction_layer.md`: exec/terminal-specific output rules
@@ -14,6 +14,7 @@ Scope: embedded asset content (prompts, instruction layers, default TOMLs, bundl
 - `default_config.toml`: default configuration template (generated output; do not edit by hand)
 - `default_models.toml`: default model registry fallback
 - `bundled_skills/*/`: built-in bundled skill fallbacks; `build.rs` embeds every file under this tree
+- `bundled_commands/*.md`: built-in bundled custom slash commands; `build.rs` embeds every file under this tree
 - `subagents/*.md`: built-in standalone subagent prompts (`explorer`, `thread-searcher`, `oracle`)
 
 ## Conventions
