@@ -219,6 +219,7 @@ fn execute_command(
             }
         }
         "close-tab" => (None, vec![UiEffect::CloseCurrentTab], vec![]),
+        "commands-refresh" => (None, vec![UiEffect::ReloadCustomCommands], vec![]),
         "config" => (None, vec![UiEffect::OpenConfig], vec![]),
         "debug" => (None, vec![], vec![StateMutation::ToggleDebugStatus]),
         "fast" => match build_fast_mode_toggle_actions(&tui.config, &tui.config.model) {

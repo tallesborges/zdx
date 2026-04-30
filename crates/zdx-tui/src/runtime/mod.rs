@@ -697,6 +697,34 @@ impl TuiRuntime {
                     // Could add an event for error reporting if needed
                 }
             }
+            UiEffect::ReloadCustomCommands => {
+                let root = self.state.tui.agent_opts.root.clone();
+                let builtin_identifiers = crate::common::commands::builtin_command_identifiers();
+                let result = load_custom_commands(&root, &builtin_identifiers);
+
+                for warning in &result.warnings {
+                    tracing::warn!(
+                        path = %warning.path.display(),
+                        message = %warning.message,
+                        "custom command reload warning"
+                    );
+                }
+
+                let count = result.commands.len();
+                let warning_count = result.warnings.len();
+                self.state.custom_commands = result.commands;
+
+                let summary = if warning_count == 0 {
+                    format!("Reloaded {count} custom command(s).")
+                } else {
+                    format!(
+                        "Reloaded {count} custom command(s) ({warning_count} warning(s); see logs)."
+                    )
+                };
+                self.state.tui.transcript.apply(
+                    crate::mutations::TranscriptMutation::AppendSystemMessage(summary),
+                );
+            }
             UiEffect::OpenModelsConfig => {
                 let models_path = self.state.tui.config.models_path();
                 if !models_path.exists() {

@@ -57,6 +57,13 @@ pub const COMMANDS: &[Command] = &[
         shortcut: Some("Ctrl+W"),
     },
     Command {
+        name: "commands-refresh",
+        aliases: &["cmd-refresh", "reload-commands"],
+        description: "Reload custom slash commands from disk",
+        category: "config",
+        shortcut: None,
+    },
+    Command {
         name: "config",
         aliases: &["settings"],
         description: "Open config file in default editor",
@@ -288,6 +295,10 @@ mod tests {
         assert_eq!(find_command("btw").display_name(), "btw (side)");
         assert_eq!(find_command("config").display_name(), "config (settings)");
         assert_eq!(find_command("copy-id").display_name(), "copy-id (copyid)");
+        assert_eq!(
+            find_command("commands-refresh").display_name(),
+            "commands-refresh (cmd-refresh, reload-commands)"
+        );
         assert_eq!(find_command("debug").display_name(), "debug (perf, status)");
         assert_eq!(find_command("handoff").display_name(), "handoff");
         assert_eq!(find_command("login").display_name(), "login");
