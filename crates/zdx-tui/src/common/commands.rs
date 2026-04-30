@@ -233,6 +233,21 @@ pub fn command_available(command: &Command, model_id: &str) -> bool {
     true
 }
 
+/// Returns every reserved built-in identifier (primary names and aliases).
+///
+/// Used by custom-command discovery to ensure user files cannot shadow any
+/// built-in command, regardless of whether the conflict is on the primary
+/// name or an alias.
+#[must_use]
+pub fn builtin_command_identifiers() -> Vec<&'static str> {
+    let mut names = Vec::with_capacity(COMMANDS.len() * 2);
+    for cmd in COMMANDS {
+        names.push(cmd.name);
+        names.extend(cmd.aliases.iter().copied());
+    }
+    names
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,5 +313,21 @@ mod tests {
         assert_eq!(find_command("fast").display_name(), "fast");
         assert_eq!(find_command("thinking").display_name(), "thinking");
         assert_eq!(find_command("timeline").display_name(), "timeline");
+    }
+
+    #[test]
+    fn test_builtin_command_identifiers_includes_names_and_aliases() {
+        let identifiers = builtin_command_identifiers();
+        assert!(identifiers.contains(&"quit"));
+        assert!(identifiers.contains(&"q")); // alias of quit
+        assert!(identifiers.contains(&"exit")); // alias of quit
+        assert!(identifiers.contains(&"new"));
+        assert!(identifiers.contains(&"clear")); // alias of new
+        assert!(identifiers.contains(&"worktree"));
+        assert!(identifiers.contains(&"wt")); // alias of worktree
+
+        // Every command's name + every alias.
+        let expected: usize = COMMANDS.iter().map(|c| 1 + c.aliases.len()).sum();
+        assert_eq!(identifiers.len(), expected);
     }
 }

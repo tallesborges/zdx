@@ -768,7 +768,10 @@ fn apply_overlay_update(app: &mut AppState, update: overlays::OverlayUpdate) -> 
 fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) -> Vec<UiEffect> {
     match request {
         overlays::OverlayRequest::CommandPalette => {
-            let state = overlays::CommandPaletteState::open(app.tui.config.model.clone());
+            let state = overlays::CommandPaletteState::open(
+                app.tui.config.model.clone(),
+                app.custom_commands.clone(),
+            );
             app.overlay = Some(overlays::Overlay::CommandPalette(state));
             vec![]
         }
