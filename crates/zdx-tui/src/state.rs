@@ -51,6 +51,7 @@ use zdx_engine::config::Config;
 use zdx_engine::core::agent::{AgentOptions, ToolConfig};
 use zdx_engine::core::events::AgentEvent;
 use zdx_engine::core::thread_persistence::Thread;
+use zdx_engine::custom_commands::CustomCommand;
 use zdx_engine::providers::{ChatContentBlock, ChatMessage, ProviderKind, resolve_provider};
 
 use crate::auth::AuthState;
@@ -122,6 +123,11 @@ pub struct AppState {
     pub background_tabs: Vec<TuiState>,
     /// Counter for generating unique tab IDs.
     next_tab_id: u64,
+    /// Custom slash commands discovered at startup
+    /// (`<ZDX_HOME>/commands/*.md` and `<cwd>/.zdx/commands/*.md`). Shared
+    /// across tabs because reload-on-root-change is intentionally deferred
+    /// (see `docs/plans/active/custom-commands.md` Slice 2).
+    pub custom_commands: Vec<CustomCommand>,
 }
 
 impl AppState {
@@ -159,7 +165,16 @@ impl AppState {
             overlay: None,
             background_tabs: Vec::new(),
             next_tab_id: 1, // 0 is used for the initial tab
+            custom_commands: Vec::new(),
         }
+    }
+
+    /// Replaces the discovered custom commands. Intended for one-shot setup
+    /// from the runtime after construction.
+    #[must_use]
+    pub fn with_custom_commands(mut self, custom_commands: Vec<CustomCommand>) -> Self {
+        self.custom_commands = custom_commands;
+        self
     }
 
     // ========================================================================

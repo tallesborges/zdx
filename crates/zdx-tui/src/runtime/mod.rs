@@ -45,6 +45,7 @@ use zdx_engine::config::Config;
 use zdx_engine::core::events::{AgentEvent, ErrorKind, TurnStatus};
 use zdx_engine::core::interrupt;
 use zdx_engine::core::thread_persistence::Thread;
+use zdx_engine::custom_commands::load_custom_commands;
 use zdx_engine::providers::ChatMessage;
 
 use crate::common::{TaskCompleted, TaskKind, TaskMeta, TaskStarted};
@@ -201,8 +202,22 @@ impl TuiRuntime {
         // Enter alternate screen and raw mode
         let terminal = terminal::setup_terminal().context("Failed to setup terminal")?;
 
+        // Discover custom slash commands once at startup. Failures here are
+        // never fatal: missing dirs/parse warnings are surfaced via tracing
+        // and the app continues with whatever loaded successfully.
+        let builtin_identifiers = crate::common::commands::builtin_command_identifiers();
+        let custom_load = load_custom_commands(&root, &builtin_identifiers);
+        for warning in &custom_load.warnings {
+            tracing::warn!(
+                path = %warning.path.display(),
+                message = %warning.message,
+                "custom command load warning"
+            );
+        }
+
         // Create state
-        let state = AppState::with_history(config, root, system_prompt, thread_handle, history);
+        let state = AppState::with_history(config, root, system_prompt, thread_handle, history)
+            .with_custom_commands(custom_load.commands);
 
         // Create inbox channel for async event collection
         let (inbox_tx, inbox_rx) = mpsc::unbounded_channel();

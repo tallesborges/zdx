@@ -232,7 +232,7 @@ mod tests {
         let none: Option<Overlay> = None;
         assert!(none.is_none());
 
-        let palette = CommandPaletteState::open("claude-haiku-4-5".to_string());
+        let palette = CommandPaletteState::open("claude-haiku-4-5".to_string(), Vec::new());
         let overlay: Option<Overlay> = Some(Overlay::CommandPalette(palette));
         assert!(overlay.is_some());
 
