@@ -709,7 +709,9 @@ mod tests {
         );
         assert_eq!(prepared.config.model, "openai-codex:gpt-5.4");
         assert!(prompt.contains("Automation project note"));
-        assert!(prompt.contains("multi_tool_use.parallel"));
+        // `apply_patch` only appears in the prompt when the resolved provider is OpenAI Codex
+        // (via the `is_openai_codex` block and the `edit_tool_label` substitution).
+        assert!(prompt.contains("apply_patch"));
     }
 
     #[test]
