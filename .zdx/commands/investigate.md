@@ -39,6 +39,3 @@ At the end, give me:
 - what was fixed
 - what was verified
 - any remaining risks or uncertainty
-
-Bug / context:
-[paste issue, symptoms, logs, error, or ticket here]

@@ -43,6 +43,3 @@ At the end, provide:
 - the key assumptions
 - what Oracle changed or improved
 - any remaining open questions or risks
-
-Request:
-[paste request here]

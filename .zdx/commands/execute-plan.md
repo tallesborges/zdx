@@ -42,6 +42,3 @@ At the end, give me:
 - what Oracle found for each slice
 - what issues were fixed
 - any remaining risks or blockers
-
-Here is the approved plan:
-[paste plan here]
