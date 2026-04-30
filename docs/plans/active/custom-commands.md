@@ -77,80 +77,151 @@
 
 # MVP slices (ship-shaped, demoable)
 
-## Slice 1: Load Markdown commands from filesystem
+## Slice 1: Load Markdown commands from filesystem ✅ DONE
 
 - **Goal:** Discover and parse `.md` files from command directories into a data structure
 - **Scope checklist:**
-  - [ ] Define `CustomCommand` struct: `name`, `description`, `source` (path), `content`, `is_executable`
-  - [ ] Implement `load_custom_commands()` → `Vec<CustomCommand>`
-  - [ ] Scan `~/.config/zdx/commands/*.md` and `.zdx/commands/*.md`
-  - [ ] Parse optional YAML frontmatter for `description`
-  - [ ] Filename (without `.md`) becomes command name
-  - [ ] Skip files whose names conflict with built-in commands
-  - [ ] Add `src/core/commands.rs` with loading logic
-- **✅ Demo:** 
-  1. Create `~/.config/zdx/commands/test.md` with content "Hello from custom command"
-  2. Add temp `main()` code or test that calls `load_custom_commands()` and prints results
-  3. Verify: name="test", content="Hello from custom command"
-- **Risks / failure modes:**
-  - Frontmatter parsing fails on malformed YAML → use permissive parser, treat as no frontmatter
-  - Directory doesn't exist → return empty vec, don't error
-  - File read fails → skip file, log warning
+  - [x] Define `CustomCommand` struct: `name`, `description`, `source` (path), `content`, `is_executable`
+  - [x] Implement `load_custom_commands()` → `LoadCustomCommandsResult { commands, warnings }`
+  - [x] Scan `$ZDX_HOME/commands/*.md` and `<cwd>/.zdx/commands/*.md`
+  - [x] Parse optional YAML frontmatter for `description`
+  - [x] Filename (without `.md`) becomes command name
+  - [x] Skip files whose names conflict with built-in commands
+  - [x] Add `crates/zdx-engine/src/custom_commands.rs` with loading logic
+- **Implementation notes / deviations:**
+  - Path is `$ZDX_HOME/commands/` (not `~/.config/zdx/commands/`) — matches the actual `paths::zdx_home()` (default `~/.zdx`).
+  - Module lives in `crates/zdx-engine/src/custom_commands.rs` (engine, UI-agnostic per `crates/zdx-engine/AGENTS.md`); the workspace has no `src/core/commands.rs`.
+  - Loader takes `builtin_names: &[&str]` explicitly so the engine doesn't depend on the TUI's static `COMMANDS` array.
+  - Result is `LoadCustomCommandsResult { commands, warnings }` (mirrors the `skills` and `automations` loader patterns) so the caller can surface non-fatal warnings later without panicking.
+  - On duplicate name across user/project dirs, **user wins** (loaded first) and a warning is recorded; built-ins always win over both.
+  - Malformed/unterminated YAML frontmatter falls back to using the entire file as content (with a warning), per the plan's "permissive parser" guidance.
+- **Tests added (in `crates/zdx-engine/src/custom_commands.rs`):**
+  - `test_load_custom_commands_empty_dir`
+  - `test_load_custom_commands_skips_builtin_names`
+  - `test_load_custom_commands_parses_frontmatter`
+  - `test_load_custom_commands_no_frontmatter`
+  - `test_load_custom_commands_user_and_project_merged`
+  - `test_load_custom_commands_user_wins_on_duplicate`
+  - `test_load_custom_commands_malformed_frontmatter_falls_back_to_body`
+  - `test_load_custom_commands_unterminated_frontmatter_uses_full_body`
+  - `test_load_custom_commands_ignores_non_md_files`
+  - `test_load_custom_commands_handles_utf8_bom`
+- **✅ Demo:** Verified via `cargo test -p zdx-engine custom_commands` — all 15 tests pass; the `parses_frontmatter` and `no_frontmatter` tests cover the plan's smoke demo (file → struct fields).
+- **Oracle review applied:**
+  - **Bug fix:** `seen_names` is now reserved only after `read_to_string` succeeds, so a failed read on a user file no longer blocks the same-named project file. Covered by `test_load_custom_commands_failed_read_does_not_block_project_file`.
+  - Built-in shadowing and duplicate-name detection are now ASCII-case-insensitive (covered by two new tests). The TUI in slice 2 should pass both built-in primary names and aliases to keep the contract tight.
+  - Hidden Markdown files (stem starting with `.`) are now skipped with no warning (covered by `test_load_custom_commands_skips_hidden_files`).
+  - Body trimming changed from `trim()` to a `trim_blank_envelope` helper that strips leading/trailing blank lines but preserves first-line indentation, so indented prompts (e.g. code blocks) survive intact (covered by `test_load_custom_commands_preserves_first_line_indentation`).
+  - Doc comments and the "Absolute path" wording fixed.
+- **Forward-looking notes for slice 2 / 4:**
+  - Slice 2: when wiring the TUI, pass a `&[&'static str]` containing both `cmd.name` and each `cmd.aliases` so custom commands cannot shadow either.
+  - Slice 4: consider replacing `is_executable: bool` with an enum `CustomCommandKind { Markdown { content }, Executable { path } }` to remove the invalid state of `is_executable=true && content=...`.
 
-## Slice 2: Show custom commands in palette
+## Slice 2: Show custom commands in palette ✅ DONE
 
 - **Goal:** Custom commands appear in command palette, visually distinguished from built-ins
 - **Scope checklist:**
-  - [ ] Add `custom_commands: Vec<CustomCommand>` to `TuiState`
-  - [ ] Load custom commands at TUI startup (in `TuiRuntime::new()`)
-  - [ ] Modify `CommandPaletteState::filtered_commands()` to return merged list
-  - [ ] Define enum or wrapper to distinguish built-in vs custom in filtered results
-  - [ ] Render custom commands with "(custom)" suffix or different color
+  - [x] Add `custom_commands: Vec<CustomCommand>` to `AppState` (not `TuiState`) with a builder-style `with_custom_commands(...)` setter
+  - [x] Load custom commands at TUI startup in `TuiRuntime::with_history` using `crate::common::commands::builtin_command_identifiers()` (names + aliases)
+  - [x] Surface load warnings via `tracing::warn!` (non-fatal)
+  - [x] Replace `CommandPaletteState::filtered_commands() -> Vec<&'static Command>` with `filtered_entries() -> Vec<PaletteEntry<'_>>` (enum: `Builtin(&'static Command)` or `Custom(&CustomCommand)`)
+  - [x] Render custom commands with category `"custom"` and `(custom)` placeholder description when frontmatter is missing
+  - [x] Custom commands match by name + the literal category string `custom`
+  - [x] Built-ins always render first; custom entries follow
+  - [x] Pass `app.custom_commands.clone()` into `CommandPaletteState::open` from `update.rs`
+- **Implementation notes / deviations:**
+  - Stored on **`AppState`** (global) rather than per-`TuiState`. Tabs share the list because reload-on-root-change is deferred (see "Polish phase 2"). Keeps `TuiState::with_history` and the 7 `AppState::new` test sites unchanged.
+  - Added `pub fn builtin_command_identifiers() -> Vec<&'static str>` in `crates/zdx-tui/src/common/commands.rs` that flattens primary names **and aliases**, so a custom file named `q.md`, `clear.md`, or `wt.md` is correctly skipped (covered by Oracle's slice-1 finding).
+  - Selection of a custom entry is a **no-op close** in slice 2; slice 3 will dispatch `InsertCustomCommand`.
+  - Custom-entry filtering looks at the name and the literal `custom` category. We intentionally do **not** match against the description text in MVP to avoid surprising behavior; can revisit if users ask.
+- **Tests added (in `crates/zdx-tui/src/overlays/command_palette.rs`):**
+  - `test_palette_includes_custom_commands_after_builtins`
+  - `test_palette_filter_matches_custom_command_name`
+  - `test_palette_filter_matches_custom_category`
+  - `test_palette_filter_no_match_includes_no_custom`
+  - Existing 6 palette tests updated to the new `filtered_entries`/`open(model, customs)` API
+  - In `crates/zdx-tui/src/common/commands.rs`: `test_builtin_command_identifiers_includes_names_and_aliases`
 - **✅ Demo:**
-  1. Create `.zdx/commands/review.md` with frontmatter `description: Review code`
-  2. Run `zdx` in that directory
-  3. Press `/`, type "rev"
-  4. See `/review` with "Review code" description (or "(custom)" if no frontmatter)
-- **Risks / failure modes:**
-  - Performance on large command dirs → cap at reasonable limit (e.g., 100 commands)
-  - Stale commands if files change → acceptable for MVP, reload on `/new` later
+  1. `.zdx/commands/review.md` already created in repo root with `description: Review code for bugs and clarity` and a body.
+  2. `cargo test -p zdx-tui --lib` (258 tests, all green) verifies the palette renders/filters custom entries.
+  3. Live demo: `just run`, press `/`, type `rev` → `/review` appears with the description; selecting it closes the palette without effect (slice 3 will insert content).
+- **Verification:**
+  - `cargo build --workspace` clean.
+  - `cargo test -p zdx-engine custom_commands` → 15/15.
+  - `cargo test -p zdx-tui --lib` → 258/258.
+  - `cargo clippy -p zdx-tui --tests` clean.
+- **Oracle review applied:**
+  - Added `test_palette_custom_selection_closes_with_no_effects` to pin the slice-2 contract (Enter on a custom entry returns `OverlayTransition::Close` with empty effects/mutations).
+  - Confirmed (via git history) that the **claim of an alias-rendering regression was not real**: the original palette also rendered only `cmd.name`, never `cmd.display_name()`. Aliases were always filter-only. No fix needed.
+  - Confirmed `tracing::warn!` from the runtime reaches the rolling log file at `$ZDX_HOME/logs/...` even though stderr is taken over by the alternate-screen TUI.
+  - Storage on `AppState` (vs per-`TuiState`) is consistent with the plan's "reload at startup only for MVP" decision; tabs sharing the list is intentional.
+  - Slice 3 plumbing will be straightforward: the Enter branch on `PaletteEntry::Custom(cmd)` already has direct access to `cmd.content`.
 
-## Slice 3: Execute custom Markdown commands (insert content)
+## Slice 3: Execute custom Markdown commands (insert content) ✅ DONE
 
 - **Goal:** Selecting a custom Markdown command inserts its content into the input field
 - **Scope checklist:**
-  - [ ] Add `UiEffect::InsertCustomCommand { content: String }` effect
-  - [ ] Modify palette's `handle_palette_key()` to return this effect for custom commands
-  - [ ] Handle effect in runtime: insert content into `state.input.textarea`
-  - [ ] Content replaces any existing input (or appends — decide based on UX)
+  - [x] Decide between new `UiEffect` vs reusing existing `InputMutation::SetText` → reusing existing infrastructure (no new effect needed for Markdown)
+  - [x] Modify palette's Enter branch to emit `StateMutation::Input(InputMutation::SetText(content))` for custom entries
+  - [x] Confirmed mutation is applied through the standard overlay dispatch path (`update.rs:1202` → `apply_mutations`)
+  - [x] Content **replaces** existing input (per Key Decision in plan); cursor lands at end of inserted text (`InputState::set_text` clears + inserts)
+- **Implementation notes / deviations:**
+  - **No new `UiEffect` variant.** The plan called for `UiEffect::InsertCustomCommand { content: String }`, but the codebase already has `InputMutation::SetText(String)` (`crates/zdx-tui/src/mutations.rs:57`) which the overlay dispatch loop already forwards into `tui.input.apply(mutation)`. Adding a new effect would be pure indirection. Slice 4 still introduces a real `UiEffect::RunCustomCommand` because executables need async I/O.
+  - The custom-entry Enter branch now reads:
+    ```rust
+    PaletteEntry::Custom(cmd) => {
+        let content = cmd.content.clone();
+        OverlayUpdate::close().with_mutations(vec![StateMutation::Input(
+            InputMutation::SetText(content),
+        )])
+    }
+    ```
+  - Slice 2's `test_palette_custom_selection_closes_with_no_effects` was renamed to `test_palette_custom_markdown_selection_inserts_content` and now asserts the `SetText` mutation contents.
+- **Tests:**
+  - `test_palette_custom_markdown_selection_inserts_content` — Enter on filtered custom entry returns `Close` + a single `InputMutation::SetText("…body…")` mutation; effects empty.
+  - All previous tests still pass.
 - **✅ Demo:**
-  1. Create `.zdx/commands/explain.md` with "Explain this code step by step:"
-  2. Run `zdx`, press `/`, select `/explain`
-  3. Input field now contains "Explain this code step by step:"
-  4. User can add more text and send
-- **Risks / failure modes:**
-  - Large content overflows input → textarea handles this, but warn if > 10k chars
-  - Content has special chars → should work, textarea handles unicode
+  1. The repo already has `.zdx/commands/review.md` from slice 2.
+  2. `just run` → press `/` → type `rev` → select `/review` → input field is replaced with the review prompt and the cursor is at the end (verified by inspecting `InputState::set_text` + `TextBuffer::insert_str` cursor placement).
+  3. Verified via `cargo test -p zdx-tui --lib` (262/262) and `cargo clippy -p zdx-tui --tests` (clean).
+- **Oracle review applied:**
+  - **Bug fix #1 (handoff active):** Selecting a custom command while `tui.input.handoff.is_active()` would have silently re-routed Enter through handoff submission. Now the palette closes and surfaces a system message ("Cancel the handoff before inserting a custom command.") without touching input. Covered by `test_palette_custom_selection_blocked_during_handoff`.
+  - **Bug fix #2 (stale image attachments):** `InputState::set_text` now also calls `self.sync_pending_images()` (mirrors `InputMutation::InsertText`). Without this, images attached to the previous draft would silently survive into the new prompt and be submitted. This was a latent pre-existing bug that history navigation also tripped, but it was made user-visible by slice 3. Two new regression tests in `crates/zdx-tui/src/features/input/state.rs` (`set_text_drops_pending_images_whose_placeholder_is_gone`, `set_text_keeps_pending_images_whose_placeholder_is_preserved`).
+  - Confirmed Oracle's recommendation to **not** add `UiEffect::InsertCustomCommand` for Markdown — the existing `StateMutation::Input(InputMutation::SetText(...))` is the correct primitive (file picker uses the same pattern).
+  - Forward-looking concern noted: `set_text` still does not call `reset_navigation`, so opening the palette mid-history-navigation can leave history index stale. Acceptable for MVP per Oracle.
 
-## Slice 4: Execute custom executable commands
+## Slice 4: Execute custom executable commands — ⏸ DEFERRED
 
-- **Goal:** Executable files run and their stdout is inserted into input
-- **Scope checklist:**
-  - [ ] Detect executables: has shebang on first line OR execute bit set
-  - [ ] Include executables (no extension required) in `load_custom_commands()`
-  - [ ] Add `UiEffect::RunCustomCommand { path: PathBuf }` effect
-  - [ ] Handle effect: spawn process, capture stdout+stderr, cap at 50k chars
-  - [ ] Insert output into input field (same as Markdown content)
-  - [ ] Show error in transcript if execution fails
-- **✅ Demo:**
-  1. Create `.zdx/commands/staged` with `#!/bin/bash\ngit diff --staged`
-  2. `chmod +x .zdx/commands/staged`
-  3. Run `zdx`, press `/`, select `/staged`
-  4. Input field contains the git diff output
-- **Risks / failure modes:**
-  - Executable hangs → add timeout (5s default)
-  - Executable not found/permission denied → show error in transcript
-  - Large output → truncate at 50k with "[truncated]" suffix
+**Status:** Deferred at user request after slices 1–3 shipped. The user is not
+yet sure executables are needed; revisit only when there's a concrete use case.
+
+**Original goal:** Executable files run and their stdout is inserted into input.
+
+**Why deferred:**
+- Markdown commands (slices 1–3) already cover the common case ("paste a
+  saved prompt") with zero process-spawn risk.
+- Executables introduce real complexity: spawn semantics, kill-on-cancel /
+  timeout cleanup, output truncation, shebang vs execute-bit detection, and
+  a new `UiEffect`/`UiEvent`/`TaskKind` lifecycle. None of that pays off
+  unless the user actually wants script-driven prompts.
+
+**State of the codebase:**
+- `CustomCommand.is_executable: bool` field is **kept** (always `false` today)
+  so re-introducing executable discovery doesn't break the struct API.
+- The palette Enter branch has a comment pointing at this deferred slice.
+- No `UiEffect::RunCustomCommand`, no `TaskKind::CustomCommand`, no runtime
+  handler — all reverted cleanly.
+
+**When to revisit:**
+- User explicitly asks for executable commands, OR
+- A concrete use case appears (e.g. wanting `/staged` to run `git diff
+  --staged`) that's not well served by an interactive bash shortcut.
+
+**If revisited, the existing slice-4 sketch in this file's git history shows
+the planned API shape (UiEffect + UiEvent + handler in
+`runtime/handlers/custom_command.rs`) and the Oracle review notes that
+flagged the must-fix issues (shebang-without-exec-bit detection mismatch,
+process kill on cancel/timeout). Use that as the starting point.**
 
 ---
 
