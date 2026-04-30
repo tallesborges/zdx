@@ -19,7 +19,7 @@ use crate::mutations::{
     ConfigMutation, InputMutation, StateMutation, ThreadMutation, TranscriptMutation,
 };
 use crate::overlays::{LoginState, Overlay, OverlayRequest};
-use crate::state::{AgentState, fast_mode_enabled_for_model, fast_mode_provider_for_model};
+use crate::state::{AgentState, TabId, fast_mode_enabled_for_model, fast_mode_provider_for_model};
 use crate::transcript::HistoryCell;
 
 /// Result type for key handlers.
@@ -942,21 +942,68 @@ fn handle_handoff_submission(
     None
 }
 
+/// Tab targeting for `build_send_effects`.
+///
+/// The active tab uses the standard `StartAgentTurn` / `SaveThread`
+/// effects which mutate `app.tui` directly. Background tabs need their
+/// own variants so the runtime spawns the agent and persists messages
+/// against the correct `TuiState` (the queued prompt would otherwise be
+/// routed to whichever tab happens to be visible).
+#[derive(Debug, Clone, Copy)]
+pub enum TabContext {
+    /// Effects target the active tab (`app.tui`).
+    Active,
+    /// Effects target a specific background tab.
+    Background(TabId),
+}
+
 pub fn build_send_effects(
     text: &str,
     thread_id: Option<String>,
     should_suggest_title: bool,
     images: Vec<PendingImage>,
 ) -> (Vec<UiEffect>, Vec<StateMutation>) {
-    let mut effects = if thread_id.is_some() {
-        vec![
-            UiEffect::SaveThread {
-                event: ThreadEvent::user_message(text),
-            },
-            UiEffect::StartAgentTurn,
-        ]
-    } else {
-        vec![UiEffect::StartAgentTurn]
+    build_send_effects_for_tab(
+        text,
+        thread_id,
+        should_suggest_title,
+        images,
+        TabContext::Active,
+    )
+}
+
+pub fn build_send_effects_for_tab(
+    text: &str,
+    thread_id: Option<String>,
+    should_suggest_title: bool,
+    images: Vec<PendingImage>,
+    tab: TabContext,
+) -> (Vec<UiEffect>, Vec<StateMutation>) {
+    let user_event = ThreadEvent::user_message(text);
+    let mut effects: Vec<UiEffect> = match tab {
+        TabContext::Active => {
+            if thread_id.is_some() {
+                vec![
+                    UiEffect::SaveThread { event: user_event },
+                    UiEffect::StartAgentTurn,
+                ]
+            } else {
+                vec![UiEffect::StartAgentTurn]
+            }
+        }
+        TabContext::Background(tab_id) => {
+            if thread_id.is_some() {
+                vec![
+                    UiEffect::SaveThreadInBackgroundTab {
+                        tab_id,
+                        event: user_event,
+                    },
+                    UiEffect::StartAgentTurnInBackgroundTab { tab_id },
+                ]
+            } else {
+                vec![UiEffect::StartAgentTurnInBackgroundTab { tab_id }]
+            }
+        }
     };
 
     let image_pairs: Vec<(String, String, Option<String>)> = images
@@ -983,7 +1030,15 @@ pub fn build_send_effects(
         StateMutation::Thread(ThreadMutation::AppendMessage(message)),
     ];
 
-    if should_suggest_title && let Some(thread_id) = thread_id {
+    // Title suggestion is intentionally only emitted for the active tab.
+    // Background tabs are queue-drain only: their first turn (which is
+    // when titles are normally suggested) always happened on the active
+    // tab, so by the time a background drain fires the title task either
+    // already completed or is still in flight on the original active tab.
+    if matches!(tab, TabContext::Active)
+        && should_suggest_title
+        && let Some(thread_id) = thread_id
+    {
         effects.push(UiEffect::SuggestThreadTitle {
             thread_id,
             message: text.to_string(),

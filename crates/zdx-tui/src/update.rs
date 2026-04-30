@@ -73,29 +73,52 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         }
         UiEvent::BackgroundTabAgent { tab_id, event } => {
             if let Some(tab) = app.background_tab_mut(tab_id) {
-                let finished = matches!(
-                    event,
-                    zdx_engine::core::events::AgentEvent::TurnFinished { .. }
-                );
-                let thread_id = tab.thread.thread_handle.as_ref().map(|t| t.id.clone());
                 let has_thread = tab.thread.thread_handle.is_some();
-                let (_effects, mutations) = transcript::handle_agent_event(
+                let (_inner_effects, mutations) = transcript::handle_agent_event(
                     &mut tab.transcript,
                     &mut tab.agent_state,
                     has_thread,
                     &event,
                 );
-                // Apply mutations directly to the background tab
-                for mutation in mutations {
-                    match mutation {
-                        StateMutation::Transcript(m) => tab.transcript.apply(m),
-                        StateMutation::Thread(m) => tab.thread.apply(m),
-                        _ => {}
-                    }
+                apply_tab_mutations(tab, mutations);
+
+                let mut effects = Vec::new();
+                finalize_agent_event_for_tab(
+                    tab,
+                    &event,
+                    input::TabContext::Background(tab_id),
+                    &mut effects,
+                );
+                effects
+            } else {
+                vec![]
+            }
+        }
+        UiEvent::BackgroundTabAgentSpawned {
+            tab_id,
+            rx,
+            cancel,
+            thread_handle,
+            messages,
+        } => {
+            if let Some(tab) = app.background_tab_mut(tab_id) {
+                if let Some(handle) = thread_handle {
+                    tab.mark_thread_running(handle.id.clone());
+                    tab.thread.thread_handle = Some(handle);
+                } else if let Some(thread_id) = tab
+                    .thread
+                    .thread_handle
+                    .as_ref()
+                    .map(|thread| thread.id.clone())
+                {
+                    tab.mark_thread_running(thread_id);
                 }
-                if finished && let Some(thread_id) = thread_id {
-                    tab.mark_thread_finished(&thread_id);
+                if let Some(msgs) = messages {
+                    tab.thread.messages = msgs;
                 }
+                tab.agent_state = AgentState::Waiting { rx, cancel };
+                tab.transcript.activate_pending_user_cell();
+                tab.status_line.start_turn();
             }
             vec![]
         }
@@ -247,74 +270,120 @@ fn handle_agent_event(
     );
     apply_mutations(&mut app.tui, mutations);
 
+    finalize_agent_event_for_tab(
+        &mut app.tui,
+        agent_event,
+        input::TabContext::Active,
+        &mut effects,
+    );
+
+    effects
+}
+
+/// Shared end-of-turn handling for both the active tab (`UiEvent::Agent`)
+/// and background tabs (`UiEvent::BackgroundTabAgent`).
+///
+/// Marks tool usage on `ToolRequested`, marks the thread as finished on
+/// `TurnFinished`, optionally pushes a timing cell, and drains the next
+/// queued prompt for that tab when appropriate. Without this helper the
+/// background-tab path silently dropped both the timing cell and any
+/// queued prompts.
+fn finalize_agent_event_for_tab(
+    tui: &mut crate::state::TuiState,
+    agent_event: &zdx_engine::core::events::AgentEvent,
+    tab: input::TabContext,
+    effects: &mut Vec<UiEffect>,
+) {
     if matches!(
         agent_event,
         zdx_engine::core::events::AgentEvent::ToolRequested { .. }
     ) {
-        app.tui.status_line.mark_tool_used();
+        tui.status_line.mark_tool_used();
     }
 
     let should_dequeue = matches!(
         agent_event,
         zdx_engine::core::events::AgentEvent::TurnFinished { .. }
     );
+
     if should_dequeue
-        && let Some(thread_id) = app
-            .tui
+        && let Some(thread_id) = tui
             .thread
             .thread_handle
             .as_ref()
             .map(|thread| thread.id.clone())
     {
-        app.tui.mark_thread_finished(&thread_id);
+        tui.mark_thread_finished(&thread_id);
     }
-    maybe_push_timing_cell(app, should_dequeue);
-    maybe_send_next_queued_prompt(app, should_dequeue, &mut effects);
 
-    effects
+    maybe_push_timing_cell_for_tab(tui, should_dequeue);
+    maybe_send_next_queued_prompt_for_tab(tui, should_dequeue, tab, effects);
 }
 
-fn maybe_push_timing_cell(app: &mut AppState, should_dequeue: bool) {
+fn maybe_push_timing_cell_for_tab(tui: &mut crate::state::TuiState, should_dequeue: bool) {
     if should_dequeue
-        && let Some((duration, tool_count)) = app.tui.status_line.end_turn()
+        && let Some((duration, tool_count)) = tui.status_line.end_turn()
         && duration.as_secs_f64() >= 1.0
     {
-        app.tui
-            .transcript
+        tui.transcript
             .push_cell(HistoryCell::timing(duration, tool_count));
     }
 }
 
-fn maybe_send_next_queued_prompt(
-    app: &mut AppState,
+fn maybe_send_next_queued_prompt_for_tab(
+    tui: &mut crate::state::TuiState,
     should_dequeue: bool,
+    tab: input::TabContext,
     effects: &mut Vec<UiEffect>,
 ) {
     if !should_dequeue
-        || app.tui.agent_state.is_running()
-        || app.tui.tasks.state(TaskKind::Bash).is_running()
-        || app.tui.transcript.has_pending_user_cell()
+        || tui.agent_state.is_running()
+        || tui.tasks.state(TaskKind::Bash).is_running()
+        || tui.transcript.has_pending_user_cell()
     {
         return;
     }
 
-    let Some(text) = app.tui.input.pop_queued_prompt() else {
+    let Some(text) = tui.input.pop_queued_prompt() else {
         return;
     };
 
-    let thread_id = app
-        .tui
-        .thread
-        .thread_handle
-        .as_ref()
-        .map(|log| log.id.clone());
-    let should_suggest_title = thread_id.is_some()
-        && app.tui.thread.title.is_none()
-        && !app.tui.tasks.state(TaskKind::ThreadTitle).is_running();
+    let thread_id = tui.thread.thread_handle.as_ref().map(|log| log.id.clone());
+    // Title suggestion only fires for the active tab — see
+    // `build_send_effects_for_tab` for the rationale.
+    let should_suggest_title = matches!(tab, input::TabContext::Active)
+        && thread_id.is_some()
+        && tui.thread.title.is_none()
+        && !tui.tasks.state(TaskKind::ThreadTitle).is_running();
     let (queue_effects, queue_mutations) =
-        input::build_send_effects(&text, thread_id, should_suggest_title, vec![]);
-    apply_mutations(&mut app.tui, queue_mutations);
+        input::build_send_effects_for_tab(&text, thread_id, should_suggest_title, vec![], tab);
+    apply_tab_mutations(tui, queue_mutations);
     effects.extend(queue_effects);
+}
+
+/// Applies cross-slice state mutations to a single `TuiState` (active or
+/// background tab). Mirrors `apply_mutations` for `AppState`, but works on
+/// any tab so background-tab queue draining can apply transcript/thread/
+/// input changes to the right tab.
+fn apply_tab_mutations(tui: &mut crate::state::TuiState, mutations: Vec<StateMutation>) {
+    for mutation in mutations {
+        match mutation {
+            StateMutation::Transcript(m) => tui.transcript.apply(m),
+            StateMutation::Thread(m) => tui.thread.apply(m),
+            StateMutation::Input(m) => tui.input.apply(m),
+            StateMutation::Auth(_)
+            | StateMutation::Config(_)
+            | StateMutation::SetRootDisplay { .. }
+            | StateMutation::SetActiveThreadOverrides { .. }
+            | StateMutation::SetSystemPrompt(_)
+            | StateMutation::SetLastSkillRepo(_)
+            | StateMutation::ToggleDebugStatus => {
+                // App-level mutations never originate from a queued-prompt
+                // drain or transcript event; ignored here so the helper
+                // can stay focused on per-tab slices.
+            }
+        }
+    }
 }
 
 fn handle_login_result_event(app: &mut AppState, result: Result<(), String>) -> Vec<UiEffect> {
@@ -1351,6 +1420,91 @@ mod tests {
             last_cell,
             HistoryCell::User { content, .. } if content == "queued prompt"
         ));
+    }
+
+    /// Regression: a `TurnFinished` for a background tab must drain that
+    /// tab's queue and emit `StartAgentTurnInBackgroundTab` for it,
+    /// instead of leaving the queued prompt stranded. See the bug
+    /// where switching tabs while an agent was running left the queued
+    /// prompt visible in the `Queued` panel forever once the
+    /// background turn ended.
+    #[test]
+    fn background_tab_turn_finished_drains_queue() {
+        let config = zdx_engine::config::Config::default();
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
+
+        // Push a fresh tab to background. After this, `app.tui` is a new
+        // empty active tab and the original tab lives in `background_tabs`
+        // with its own `input.queued`.
+        let new_tab_id = app.next_tab_id();
+        let new_tab = create_main_tab(new_tab_id, &app.tui);
+        app.push_tab(new_tab);
+        let background_tab_id = app
+            .background_tabs
+            .first()
+            .map(|t| t.tab_id)
+            .expect("expected one background tab");
+
+        // Enqueue a prompt on the background tab (mirrors what
+        // `handle_submit_while_agent_running` would have produced before
+        // the user switched tabs).
+        app.background_tab_mut(background_tab_id)
+            .expect("background tab")
+            .input
+            .enqueue_prompt("queued background prompt".to_string());
+
+        let effects = update(
+            &mut app,
+            UiEvent::BackgroundTabAgent {
+                tab_id: background_tab_id,
+                event: AgentEvent::TurnFinished {
+                    status: zdx_engine::core::events::TurnStatus::Completed,
+                    final_text: String::new(),
+                    messages: Vec::new(),
+                    prior_message_count: 0,
+                },
+            },
+        );
+
+        // Background-targeted start effect, not the active-tab variant.
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                UiEffect::StartAgentTurnInBackgroundTab { tab_id } if *tab_id == background_tab_id
+            )),
+            "expected StartAgentTurnInBackgroundTab effect, got {effects:?}"
+        );
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, UiEffect::StartAgentTurn)),
+            "must not emit active-tab StartAgentTurn for a background tab drain"
+        );
+
+        // The queued prompt must be popped from the background tab's queue,
+        // not the active tab's.
+        let bg_tab = app
+            .background_tabs
+            .iter()
+            .find(|t| t.tab_id == background_tab_id)
+            .expect("background tab");
+        assert!(!bg_tab.input.has_queued());
+        assert!(app.tui.input.queued.is_empty());
+
+        // The queued user cell lands on the background tab's transcript.
+        let last_cell = bg_tab.transcript.cells().last().expect("cell");
+        assert!(matches!(
+            last_cell,
+            HistoryCell::User { content, .. } if content == "queued background prompt"
+        ));
+        assert!(
+            !app.tui
+                .transcript
+                .cells()
+                .iter()
+                .any(|c| matches!(c, HistoryCell::User { content, .. } if content == "queued background prompt")),
+            "queued prompt must not leak into the active tab's transcript"
+        );
     }
 
     #[test]
