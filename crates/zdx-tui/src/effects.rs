@@ -27,6 +27,7 @@ use zdx_engine::providers::ProviderKind;
 
 use crate::common::TaskKind;
 use crate::events::RecordedAudio;
+use crate::state::TabId;
 
 /// Effects returned by the reducer for the runtime to execute.
 ///
@@ -45,6 +46,16 @@ pub enum UiEffect {
 
     /// Start an agent turn with the current input.
     StartAgentTurn,
+
+    /// Start an agent turn for a background (non-active) tab.
+    ///
+    /// Used by the background-tab queue-drain path when a `TurnFinished`
+    /// arrives for a tab that is not currently visible. The runtime spawns
+    /// the agent task against the background tab's `TuiState` and emits
+    /// `UiEvent::BackgroundTabAgentSpawned` so the reducer can apply the
+    /// resulting `rx`/`cancel` to that tab without disturbing the active
+    /// tab's `agent_state`.
+    StartAgentTurnInBackgroundTab { tab_id: TabId },
 
     /// Interrupt the running agent task.
     InterruptAgent,
@@ -72,6 +83,13 @@ pub enum UiEffect {
 
     /// Append an event to the thread log.
     SaveThread { event: ThreadEvent },
+
+    /// Append an event to a background tab's thread log.
+    ///
+    /// Used by the background-tab queue-drain path so the queued user
+    /// message is persisted to the correct tab's thread file instead of
+    /// the active tab's.
+    SaveThreadInBackgroundTab { tab_id: TabId, event: ThreadEvent },
 
     /// Rename the current thread.
     RenameThread {

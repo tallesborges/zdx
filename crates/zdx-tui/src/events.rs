@@ -250,6 +250,21 @@ pub enum UiEvent {
         messages: Option<Vec<ChatMessage>>,
     },
 
+    /// Agent turn spawned for a background (non-active) tab.
+    ///
+    /// Mirrors `AgentSpawned` but targets a specific background tab's
+    /// `TuiState` instead of `app.tui`. Emitted by the runtime's
+    /// `StartAgentTurnInBackgroundTab` handler so a queued prompt that
+    /// drains while its tab is in the background actually starts a new
+    /// turn on the right tab.
+    BackgroundTabAgentSpawned {
+        tab_id: TabId,
+        rx: mpsc::UnboundedReceiver<Arc<AgentEvent>>,
+        cancel: CancellationToken,
+        thread_handle: Option<Thread>,
+        messages: Option<Vec<ChatMessage>>,
+    },
+
     /// Agent event for a background (non-active) tab.
     BackgroundTabAgent { tab_id: TabId, event: AgentEvent },
 

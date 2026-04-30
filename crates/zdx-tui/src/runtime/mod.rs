@@ -535,6 +535,39 @@ impl TuiRuntime {
                 let event = handlers::spawn_agent_turn(&self.state.tui);
                 self.dispatch_event(event);
             }
+            UiEffect::StartAgentTurnInBackgroundTab { tab_id } => {
+                // Spawn the agent task against the background tab's
+                // `TuiState` and re-route the resulting `AgentSpawned`
+                // event so it lands on the same background tab. Without
+                // re-routing, `AgentSpawned` would mutate `app.tui` (the
+                // active tab), which is the original cause of the
+                // queue-stuck-in-background-tab bug.
+                let Some(tab) = self
+                    .state
+                    .background_tabs
+                    .iter()
+                    .find(|t| t.tab_id == tab_id)
+                else {
+                    return;
+                };
+                let event = handlers::spawn_agent_turn(tab);
+                let routed = match event {
+                    UiEvent::AgentSpawned {
+                        rx,
+                        cancel,
+                        thread_handle,
+                        messages,
+                    } => UiEvent::BackgroundTabAgentSpawned {
+                        tab_id,
+                        rx,
+                        cancel,
+                        thread_handle,
+                        messages,
+                    },
+                    other => other,
+                };
+                self.dispatch_event(routed);
+            }
             UiEffect::InterruptAgent => {
                 handlers::interrupt_agent(&self.state.tui);
             }
@@ -712,6 +745,14 @@ impl TuiRuntime {
                 if let Some(ref mut s) = self.state.tui.thread.thread_handle {
                     let _ = s.append(&event);
                     // Errors are silently ignored for thread persistence
+                }
+            }
+            UiEffect::SaveThreadInBackgroundTab { tab_id, event } => {
+                if let Some(tab) = self.state.background_tab_mut(tab_id)
+                    && let Some(ref mut s) = tab.thread.thread_handle
+                {
+                    let _ = s.append(&event);
+                    // Errors silently ignored, mirroring the active-tab path.
                 }
             }
             UiEffect::RenameThread { thread_id, title } => {
