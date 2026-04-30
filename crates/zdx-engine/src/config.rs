@@ -2672,6 +2672,10 @@ available_models = ["codex:gpt-5.3-codex"]
                     enabled: Some(false),
                     ..default_openrouter_provider()
                 },
+                deepseek: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_deepseek_provider()
+                },
                 moonshot: ProviderConfig {
                     enabled: Some(false),
                     ..default_moonshot_provider()
