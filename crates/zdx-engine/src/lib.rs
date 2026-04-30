@@ -5,6 +5,7 @@ pub mod audio;
 pub mod automations;
 pub mod config;
 pub mod core;
+pub mod custom_commands;
 pub mod images;
 pub mod mcp;
 pub mod models;
