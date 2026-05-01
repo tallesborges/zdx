@@ -101,16 +101,6 @@ impl VoiceState {
         self.discard_next_capture = false;
         self.last_error = Some(error);
     }
-
-    pub fn badge(&self) -> Option<&'static str> {
-        if self.is_recording() {
-            Some("voice: recording")
-        } else if self.is_transcribing() {
-            Some("voice: transcribing")
-        } else {
-            None
-        }
-    }
 }
 
 impl HandoffState {
