@@ -18,7 +18,9 @@ use crate::mutations::{
 use crate::state::TuiState;
 
 /// Display category shown in the palette for custom user commands.
-const CUSTOM_CATEGORY: &str = "custom";
+const COMMANDS_CATEGORY: &str = "commands";
+/// Aliases used when filtering by category text (e.g. "cmd" → "commands").
+const COMMANDS_CATEGORY_ALIASES: &[&str] = &["commands", "cmd"];
 /// Default description shown when a custom command has no frontmatter.
 const CUSTOM_DEFAULT_DESCRIPTION: &str = "(custom)";
 
@@ -41,7 +43,7 @@ impl PaletteEntry<'_> {
     fn category(&self) -> &str {
         match self {
             PaletteEntry::Builtin(cmd) => cmd.category,
-            PaletteEntry::Custom(_) => CUSTOM_CATEGORY,
+            PaletteEntry::Custom(_) => COMMANDS_CATEGORY,
         }
     }
 
@@ -68,7 +70,9 @@ impl PaletteEntry<'_> {
             PaletteEntry::Custom(cmd) => {
                 let filter_lower = filter.to_lowercase();
                 cmd.name.to_lowercase().contains(&filter_lower)
-                    || CUSTOM_CATEGORY.contains(&filter_lower)
+                    || COMMANDS_CATEGORY_ALIASES
+                        .iter()
+                        .any(|alias| alias.contains(&filter_lower))
             }
         }
     }
@@ -800,7 +804,7 @@ mod tests {
             .find(|e| e.name() == "review")
             .expect("review entry");
         assert!(matches!(review, PaletteEntry::Custom(_)));
-        assert_eq!(review.category(), CUSTOM_CATEGORY);
+        assert_eq!(review.category(), COMMANDS_CATEGORY);
         assert_eq!(review.description(), "Review code for bugs");
 
         let explain = entries
@@ -822,19 +826,29 @@ mod tests {
     }
 
     #[test]
-    fn test_palette_filter_matches_custom_category() {
+    fn test_palette_filter_matches_commands_category() {
         let customs = vec![
             sample_custom("review", None),
             sample_custom("explain", None),
         ];
         let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string(), customs);
-        state.filter = CUSTOM_CATEGORY.to_string();
 
-        let entries = state.filtered_entries();
-        // Filtering by "custom" should surface every custom command but no
-        // built-in (which lives in a different category).
-        assert!(entries.iter().all(|e| matches!(e, PaletteEntry::Custom(_))));
-        assert_eq!(entries.len(), 2);
+        // Filtering by any commands-category alias must surface every custom
+        // command. (Built-ins whose name happens to contain the alias — e.g.
+        // `commands-refresh` — may also appear; that's fine.)
+        for filter in ["commands", "command", "cmd", "co"] {
+            state.filter = filter.to_string();
+            let entries = state.filtered_entries();
+            let names: Vec<&str> = entries
+                .iter()
+                .filter(|e| matches!(e, PaletteEntry::Custom(_)))
+                .map(PaletteEntry::name)
+                .collect();
+            assert!(
+                names.contains(&"review") && names.contains(&"explain"),
+                "filter {filter:?} did not surface all custom commands; got {names:?}"
+            );
+        }
     }
 
     #[test]
