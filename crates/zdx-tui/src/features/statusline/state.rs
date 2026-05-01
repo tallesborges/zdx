@@ -58,13 +58,15 @@ impl StatusLineAccumulator {
 
     /// Clear turn timing and return elapsed duration with tool count.
     ///
-    /// Returns (duration, `tool_count`) if tools were used, None otherwise.
+    /// Returns `(duration, tool_count)` whenever a turn was started (even
+    /// when the assistant answered without invoking any tools), so the
+    /// caller can decide whether to show a footer. Returns `None` only
+    /// when `end_turn` is called without a matching `start_turn`.
     pub fn end_turn(&mut self) -> Option<(Duration, usize)> {
         let tool_count = self.turn_tool_count;
         self.turn_tool_count = 0;
         self.turn_started_at
             .take()
-            .filter(|_| tool_count > 0)
             .map(|start| (start.elapsed(), tool_count))
     }
 
@@ -104,9 +106,12 @@ mod tests {
         let snapshot = acc.snapshot();
         assert!(snapshot.turn_elapsed.is_some());
 
-        // End turn without tools - should return None
+        // End turn without tools - still returns Some so the caller can
+        // render a `0 tools · Ns` footer (the timing cell push is gated
+        // separately on duration in the update layer).
         let result = acc.end_turn();
-        assert!(result.is_none());
+        let (_, tool_count) = result.expect("end_turn returns Some when a turn was started");
+        assert_eq!(tool_count, 0);
         let snapshot = acc.snapshot();
         assert!(snapshot.turn_elapsed.is_none());
 
@@ -122,7 +127,7 @@ mod tests {
         assert!(duration.as_nanos() > 0);
         assert_eq!(tool_count, 3);
 
-        // End again - should return None
+        // End again - should return None (no matching start_turn)
         let result = acc.end_turn();
         assert!(result.is_none());
     }
