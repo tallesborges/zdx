@@ -3224,13 +3224,13 @@ mod tests {
     #[tokio::test]
     async fn test_execute_tools_carries_todo_state_within_turn() {
         let ctx = ToolContext::new(std::path::PathBuf::from("."), None);
-        let enabled_tools: HashSet<String> = vec!["todo_write".to_string()].into_iter().collect();
+        let enabled_tools: HashSet<String> = vec!["Todo_Write".to_string()].into_iter().collect();
         let tool_uses = vec![
             ToolUse {
                 id: "tool1".to_string(),
-                name: "todo_write".to_string(),
+                name: "Todo_Write".to_string(),
                 input: serde_json::json!({
-                    "ops": [
+                    "todos": [
                         {"op": "add", "content": "Inspect codebase", "status": "in_progress"}
                     ]
                 }),
@@ -3239,10 +3239,10 @@ mod tests {
             },
             ToolUse {
                 id: "tool2".to_string(),
-                name: "todo_write".to_string(),
+                name: "Todo_Write".to_string(),
                 input: serde_json::json!({
-                    "ops": [
-                        {"op": "update", "id": "task-1", "status": "completed"},
+                    "todos": [
+                        {"op": "update", "id": "todo-1", "status": "completed"},
                         {"op": "add", "content": "Ship fix"}
                     ]
                 }),
@@ -3273,29 +3273,29 @@ mod tests {
             .content
             .as_text()
             .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
-            .expect("todo_write result should be valid JSON text");
+            .expect("Todo_Write result should be valid JSON text");
 
-        let tasks = second
+        let todos = second
             .get("data")
-            .and_then(|data| data.get("tasks"))
-            .and_then(|tasks| tasks.as_array())
-            .expect("todo_write should return tasks array");
+            .and_then(|data| data.get("todos"))
+            .and_then(|todos| todos.as_array())
+            .expect("Todo_Write should return todos array");
 
-        assert_eq!(tasks.len(), 2);
+        assert_eq!(todos.len(), 2);
         assert_eq!(
-            tasks[0].get("id").and_then(|id| id.as_str()),
-            Some("task-1")
+            todos[0].get("id").and_then(|id| id.as_str()),
+            Some("todo-1")
         );
         assert_eq!(
-            tasks[0].get("status").and_then(|status| status.as_str()),
+            todos[0].get("status").and_then(|status| status.as_str()),
             Some("completed")
         );
         assert_eq!(
-            tasks[1].get("id").and_then(|id| id.as_str()),
-            Some("task-2")
+            todos[1].get("id").and_then(|id| id.as_str()),
+            Some("todo-2")
         );
         assert_eq!(
-            tasks[1].get("status").and_then(|status| status.as_str()),
+            todos[1].get("status").and_then(|status| status.as_str()),
             Some("in_progress")
         );
     }
