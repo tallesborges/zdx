@@ -310,7 +310,32 @@ fn render_status_line(state: &TuiState, frame: &mut Frame, area: Rect) {
     let elapsed_span = elapsed.map(|d| format!(" ({})", format_elapsed(d)));
 
     // Check for bash execution first (takes priority over idle state)
-    let spans: Vec<Span> = if state.tasks.state(TaskKind::Bash).is_running() {
+    let spans: Vec<Span> = if state.input.voice.is_recording() {
+        // Blink the recording dot ~ once per second so the user can tell
+        // recording is alive (and not frozen).
+        let dot_color = if (state.spinner_frame / 30) % 2 == 0 {
+            Color::Red
+        } else {
+            Color::DarkGray
+        };
+        vec![
+            Span::styled("●", Style::default().fg(dot_color)),
+            Span::raw(" "),
+            Span::styled("Recording voice...", Style::default().fg(Color::Red)),
+            Span::raw("  "),
+            Span::styled("Esc", Style::default().fg(Color::DarkGray)),
+            Span::raw(" to cancel"),
+        ]
+    } else if state.input.voice.is_transcribing() {
+        vec![
+            Span::styled(spinner, Style::default().fg(Color::Cyan)),
+            Span::raw(" "),
+            Span::styled("Transcribing voice...", Style::default().fg(Color::Cyan)),
+            Span::raw("  "),
+            Span::styled("Esc", Style::default().fg(Color::DarkGray)),
+            Span::raw(" to cancel"),
+        ]
+    } else if state.tasks.state(TaskKind::Bash).is_running() {
         let mut spans = vec![
             Span::styled(spinner, Style::default().fg(Color::Green)),
             Span::raw(" "),
