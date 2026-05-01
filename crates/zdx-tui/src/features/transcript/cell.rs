@@ -127,7 +127,7 @@ fn tool_key_arg(name: &str, input: &Value) -> Option<String> {
             }
         }
         "todo_write" => {
-            // Show first task content if available
+            // Show first todo content if available
             None
         }
         "invoke_subagent" => value_as_trimmed_str(input, "subagent")

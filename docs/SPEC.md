@@ -230,7 +230,7 @@ Error:
 - Tool results are deterministic and correspond to the correct `tool_use_id`.
 - Relative paths resolve against `--root` (default `.`).
 - `--root` is a working directory context, not a security boundary (YOLO).
-- Built-in `todo_write` tracks a flat per-thread task list for multi-step work and keeps at most one active `in_progress` task while unfinished work remains.
+- Built-in `Todo_Write` tracks a flat per-thread todo list for multi-step work and keeps at most one active `in_progress` todo while unfinished work remains.
 
 ---
 
