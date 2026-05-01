@@ -313,7 +313,7 @@ fn render_status_line(state: &TuiState, frame: &mut Frame, area: Rect) {
     let spans: Vec<Span> = if state.input.voice.is_recording() {
         // Blink the recording dot ~ once per second so the user can tell
         // recording is alive (and not frozen).
-        let dot_color = if (state.spinner_frame / 30) % 2 == 0 {
+        let dot_color = if (state.spinner_frame / 30).is_multiple_of(2) {
             Color::Red
         } else {
             Color::DarkGray
