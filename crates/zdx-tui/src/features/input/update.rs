@@ -78,6 +78,11 @@ fn is_image_path(text: &str) -> bool {
     if trimmed.contains('\n') {
         return false;
     }
+    // URLs (http://, https://, file://, ...) are not local paths; let them
+    // paste as plain text instead of routing to the file-based attach flow.
+    if trimmed.contains("://") {
+        return false;
+    }
     // Unescape shell-escaped characters for extension detection
     let unescaped = trimmed.replace("\\ ", " ");
     let ext = std::path::Path::new(&unescaped)
@@ -1280,5 +1285,29 @@ mod tests {
             StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(message))
                 if message == "Creating new thread. Wait for it to finish before sending."
         )));
+    }
+
+    #[test]
+    fn is_image_path_accepts_local_image_paths() {
+        assert!(is_image_path("/tmp/photo.png"));
+        assert!(is_image_path("./screenshot.JPG"));
+        assert!(is_image_path("~/Downloads/animation.gif"));
+        assert!(is_image_path("/tmp/with\\ space.webp"));
+    }
+
+    #[test]
+    fn is_image_path_rejects_urls() {
+        // Pasted URLs should fall through to plain-text insertion rather than
+        // being routed to the local-file attach flow.
+        assert!(!is_image_path("https://example.com/photo.png"));
+        assert!(!is_image_path("http://example.com/a.jpg"));
+        assert!(!is_image_path("file:///tmp/photo.png"));
+        assert!(!is_image_path("  https://example.com/photo.png  "));
+    }
+
+    #[test]
+    fn is_image_path_rejects_non_image_extensions_and_multiline() {
+        assert!(!is_image_path("/tmp/notes.txt"));
+        assert!(!is_image_path("/tmp/photo.png\nmore"));
     }
 }
