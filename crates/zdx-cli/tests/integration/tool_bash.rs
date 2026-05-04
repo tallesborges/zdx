@@ -2,18 +2,18 @@
 //!
 //! Verifies that the bash tool executes commands and captures output correctly.
 
-mod fixtures;
-
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use assert_cmd::cargo::cargo_bin_cmd;
-use fixtures::{sse_response, tool_use_sse};
 use tempfile::TempDir;
 use tokio::time::{Duration, timeout};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request};
+
+use crate::fixtures;
+use crate::fixtures::{sse_response, tool_use_sse};
 
 /// Creates a temp `ZDX_HOME` directory for test isolation.
 fn temp_zdx_home() -> TempDir {

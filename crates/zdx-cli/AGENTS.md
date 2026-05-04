@@ -15,12 +15,12 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 - `src/cli/commands/worktree.rs`: worktree command handler
 - `src/modes/exec.rs`: non-interactive streaming mode
 - `src/modes/mod.rs`: mode exports (exec + feature-gated TUI)
-- `tests/`: CLI integration tests (`assert_cmd`, fixtures)
+- `tests/integration/`: CLI integration tests (`assert_cmd`, fixtures), aggregated into a single test binary via `tests/integration/main.rs`. Add new test files as `tests/integration/<name>.rs` and register them with `mod <name>;` in `main.rs`.
 
 ## Conventions
 
 - Keep CLI glue thin; shared behavior belongs in `zdx-engine`.
-- Prefer integration tests in `crates/zdx-cli/tests/` for CLI behavior.
+- Prefer integration tests in `crates/zdx-cli/tests/integration/` for CLI behavior. Do not add top-level `tests/*.rs` files — they would compile as separate test binaries and slow down `just ci`.
 
 ## Checks
 
