@@ -3,8 +3,6 @@ description: Capture this session's repeatable workflow as a reusable skill
 ---
 Turn what we just did in this thread into a reusable skill.
 
-Optional argument: a short description of the process the user wants to capture. If not provided, infer it from the thread.
-
 Rules:
 - The conversation history above is your source material. Do not template-inject anything — just look back at the actual messages.
 - Pay extra attention to where the user corrected, redirected, or refined what you were doing. Those moments are the real preferences worth encoding.
