@@ -367,6 +367,38 @@ pub fn load_skills_from_dir(dir: &Path, source: SkillSource) -> LoadSkillsResult
     }
 }
 
+/// Returns the project-level `.zdx/skills/` directories to scan, walking from
+/// `cwd` up through its ancestors.
+///
+/// Mirrors `AGENTS.md` discovery: when `cwd` is under the user's home
+/// directory, every ancestor between `cwd` (inclusive) and home (exclusive) is
+/// included so a project root's `.zdx/skills/` is found from any subdirectory.
+/// When `cwd` is outside home, only `cwd/.zdx/skills/` is included.
+///
+/// `cwd` is returned first so name collisions resolve in favour of the
+/// directory closest to the user's working directory.
+fn collect_zdx_project_skill_dirs(cwd: &Path, home_dir: Option<&Path>) -> Vec<PathBuf> {
+    let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let canonical_home = home_dir.and_then(|h| h.canonicalize().ok());
+
+    let mut dirs = vec![canonical_cwd.join(".zdx").join("skills")];
+
+    if let Some(home) = canonical_home.as_deref()
+        && canonical_cwd.strip_prefix(home).is_ok()
+    {
+        let mut current = canonical_cwd.as_path();
+        while let Some(parent) = current.parent() {
+            if parent == home {
+                break;
+            }
+            dirs.push(parent.join(".zdx").join("skills"));
+            current = parent;
+        }
+    }
+
+    dirs
+}
+
 fn build_skill_sources(
     options: &LoadSkillsOptions,
     zdx_home: &Path,
@@ -388,10 +420,9 @@ fn build_skill_sources(
     }
 
     if options.sources.zdx_project {
-        sources.push(SkillSourceSpec::recursive(
-            SkillSource::ZdxProject,
-            options.cwd.join(".zdx").join("skills"),
-        ));
+        for dir in collect_zdx_project_skill_dirs(&options.cwd, home_dir) {
+            sources.push(SkillSourceSpec::recursive(SkillSource::ZdxProject, dir));
+        }
     }
 
     if options.sources.codex_user
@@ -1292,5 +1323,146 @@ mod tests {
         let result = load_skills_from_sources_with_filters(sources, filters, Vec::new());
 
         assert!(result.skills.is_empty());
+    }
+
+    #[test]
+    fn test_zdx_project_walks_ancestors_under_home() {
+        let home = tempdir().unwrap();
+        let zdx_home = tempdir().unwrap();
+
+        let proj = home.path().join("proj");
+        let sub = proj.join("sub");
+        let cwd = sub.join("dir");
+        fs::create_dir_all(&cwd).unwrap();
+
+        write_skill(&proj.join(".zdx").join("skills"), "proj-skill", "Proj root");
+        write_skill(&sub.join(".zdx").join("skills"), "sub-skill", "Mid level");
+        write_skill(&cwd.join(".zdx").join("skills"), "cwd-skill", "Deepest");
+
+        // Sibling outside the cwd's ancestor chain — must not be picked up.
+        let sibling = home.path().join("other");
+        write_skill(
+            &sibling.join(".zdx").join("skills"),
+            "sibling-skill",
+            "Sibling",
+        );
+
+        let options = LoadSkillsOptions {
+            cwd: cwd.clone(),
+            sources: SkillSourceToggles {
+                zdx_user: false,
+                zdx_project: true,
+                codex_user: false,
+                claude_user: false,
+                claude_project: false,
+                agents_user: false,
+                agents_project: false,
+            },
+            ignored_skills: Vec::new(),
+            include_skills: Vec::new(),
+        };
+
+        let sources = build_skill_sources(&options, zdx_home.path(), Some(home.path()));
+        let result = load_skills_from_sources(sources);
+
+        let names: Vec<&str> = result.skills.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"cwd-skill"), "got: {names:?}");
+        assert!(names.contains(&"sub-skill"), "got: {names:?}");
+        assert!(names.contains(&"proj-skill"), "got: {names:?}");
+        assert!(!names.contains(&"sibling-skill"), "got: {names:?}");
+    }
+
+    #[test]
+    fn test_zdx_project_ancestor_precedence_is_deepest_first() {
+        let home = tempdir().unwrap();
+        let zdx_home = tempdir().unwrap();
+
+        let proj = home.path().join("proj");
+        let cwd = proj.join("sub");
+        fs::create_dir_all(&cwd).unwrap();
+
+        // Same skill name at two ancestor levels — the cwd one should win.
+        let proj_skills = proj.join(".zdx").join("skills");
+        let cwd_skills = cwd.join(".zdx").join("skills");
+        fs::create_dir_all(proj_skills.join("shared")).unwrap();
+        fs::create_dir_all(cwd_skills.join("shared")).unwrap();
+        fs::write(
+            proj_skills.join("shared").join("SKILL.md"),
+            "---\nname: shared\ndescription: From project root\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            cwd_skills.join("shared").join("SKILL.md"),
+            "---\nname: shared\ndescription: From cwd\n---\n",
+        )
+        .unwrap();
+
+        let options = LoadSkillsOptions {
+            cwd: cwd.clone(),
+            sources: SkillSourceToggles {
+                zdx_user: false,
+                zdx_project: true,
+                codex_user: false,
+                claude_user: false,
+                claude_project: false,
+                agents_user: false,
+                agents_project: false,
+            },
+            ignored_skills: Vec::new(),
+            include_skills: Vec::new(),
+        };
+
+        let sources = build_skill_sources(&options, zdx_home.path(), Some(home.path()));
+        let result = load_skills_from_sources(sources);
+
+        let shared = result
+            .skills
+            .iter()
+            .find(|s| s.name == "shared")
+            .expect("shared skill should be loaded");
+        assert_eq!(shared.description, "From cwd");
+    }
+
+    #[test]
+    fn test_zdx_project_outside_home_does_not_walk_ancestors() {
+        // Two unrelated tempdirs: cwd is not under `home`, so ancestor walking
+        // must not kick in (mirrors AGENTS.md, which only walks ancestors when
+        // the project root is under home).
+        let home = tempdir().unwrap();
+        let zdx_home = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+
+        let parent = outside.path().join("parent");
+        let cwd = parent.join("child");
+        fs::create_dir_all(&cwd).unwrap();
+
+        write_skill(
+            &parent.join(".zdx").join("skills"),
+            "parent-skill",
+            "Parent",
+        );
+        write_skill(&cwd.join(".zdx").join("skills"), "child-skill", "Child");
+
+        let options = LoadSkillsOptions {
+            cwd: cwd.clone(),
+            sources: SkillSourceToggles {
+                zdx_user: false,
+                zdx_project: true,
+                codex_user: false,
+                claude_user: false,
+                claude_project: false,
+                agents_user: false,
+                agents_project: false,
+            },
+            ignored_skills: Vec::new(),
+            include_skills: Vec::new(),
+        };
+
+        let sources = build_skill_sources(&options, zdx_home.path(), Some(home.path()));
+        let result = load_skills_from_sources(sources);
+
+        let names: Vec<&str> = result.skills.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"child-skill"), "got: {names:?}");
+        assert!(!names.contains(&"parent-skill"), "got: {names:?}");
     }
 }
