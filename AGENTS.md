@@ -49,7 +49,7 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `just lint` (format + clippy)
 - `just fmt` (nightly rustfmt)
 - `just clippy` (lint only)
-- `just test` (fast path; skips doc tests)
+- `just test` (fast path via `cargo nextest`; skips doc tests — requires `cargo-nextest`)
 - `just update-defaults` (maintainer: refresh both default_models.toml + default_config.toml)
 - `just update-models` (maintainer: refresh default_models.toml)
 - `just update-config` (maintainer: refresh default_config.toml)
@@ -61,7 +61,7 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 ## Verification
 
 - After code changes, prefer `just ci` from the repo root as the default final verification.
-- Use narrower checks (for example `cargo test -p zdx-cli`) for intermediate iteration, when `just ci` would be unnecessarily expensive, or when the user explicitly asks for a targeted check.
+- Use narrower checks (for example `cargo nextest run -p zdx-cli`) for intermediate iteration, when `just ci` would be unnecessarily expensive, or when the user explicitly asks for a targeted check.
 - Use `just lint` or `just test` only when intentionally running one half of CI.
 - If `just ci` is not run after a code change, briefly state why.
 

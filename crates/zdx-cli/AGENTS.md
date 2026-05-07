@@ -25,7 +25,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 ## Checks
 
 - Default final verification after code changes: `just ci` from repo root
-- Intermediate iteration for this crate: `cargo test -p zdx-cli`
+- Intermediate iteration for this crate: `cargo nextest run -p zdx-cli`
 - Use `just lint` or `just test` only when intentionally running one half of CI
 
 ## Maintenance

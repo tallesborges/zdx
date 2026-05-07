@@ -46,7 +46,7 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 ## Checks
 
 - Default final verification after code changes: `just ci` from repo root
-- Intermediate iteration for this crate: `cargo test -p zdx-tui`
+- Intermediate iteration for this crate: `cargo nextest run -p zdx-tui`
 - Use `just lint` or `just test` only when intentionally running one half of CI
 
 ## Maintenance

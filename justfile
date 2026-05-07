@@ -54,9 +54,9 @@ fmt:
 clippy:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-# Run tests (fast path, no doctests)
+# Run tests with nextest (fast path, no doctests)
 test:
-    cargo test --workspace --lib --tests --bins
+    cargo nextest run --workspace
 
 # ─── Xtask ────────────────────────────────────────
 

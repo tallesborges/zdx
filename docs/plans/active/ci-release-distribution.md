@@ -42,8 +42,8 @@ Ship-first plan for adding CI, automated releases, and distribution (Homebrew + 
 - Gaps: none
 
 ### Tests
-- What exists: `cargo test --workspace --lib --tests --bins`
-- ✅ Demo: `cargo test --workspace`
+- What exists: `cargo nextest run --workspace`
+- ✅ Demo: `cargo nextest run --workspace`
 - Gaps: none
 
 ---
@@ -56,7 +56,7 @@ Ship-first plan for adding CI, automated releases, and distribution (Homebrew + 
   - [x] Create `.github/workflows/ci.yml`
   - [x] Job: `cargo +nightly fmt --check` (matches AGENTS.md)
   - [x] Job: `cargo clippy --workspace --all-targets --locked -- -D warnings`
-  - [x] Job: `cargo test --workspace --lib --tests --bins --locked`
+  - [x] Job: `cargo nextest run --workspace --locked`
   - [x] Run on `push` (main/master), `pull_request`, `workflow_dispatch`
   - [x] Add `concurrency` to cancel stale runs
   - [x] Add `timeout-minutes` for safety
@@ -209,7 +209,7 @@ execFileSync(binary, process.argv.slice(2), { stdio: 'inherit' });
 - CI must run on every PR to `main`/`master`
 - `cargo +nightly fmt --check` must pass
 - `cargo clippy --workspace --all-targets --locked -- -D warnings` must pass
-- `cargo test --workspace --lib --tests --bins --locked` must pass
+- `cargo nextest run --workspace --locked` must pass
 - Release only triggers on `v*.*.*` tags
 - All 3 platform binaries must be included in release
 
