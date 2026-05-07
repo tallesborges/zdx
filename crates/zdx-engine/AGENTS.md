@@ -52,7 +52,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 ## Checks
 
 - Default final verification after code changes: `just ci` from repo root
-- Intermediate iteration for this crate: `cargo test -p zdx-engine`
+- Intermediate iteration for this crate: `cargo nextest run -p zdx-engine`
 - Use `just lint` or `just test` only when intentionally running one half of CI
 
 ## Adding or updating models

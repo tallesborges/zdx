@@ -9,5 +9,5 @@ Compact TUI dashboard for inspecting ZDX services, threads, automations, and con
 
 ## Checks
 - Default final verification after code changes: `just ci` from repo root
-- Intermediate iteration for this crate: `cargo test -p zdx-monitor`
+- Intermediate iteration for this crate: `cargo nextest run -p zdx-monitor`
 - Use `just lint` or `just test` only when intentionally running one half of CI
