@@ -85,18 +85,23 @@ What to do. Specific commands when relevant.
 
 Drafting rules:
 - `description` is the auto-invocation hook. Lead with "Use when the user...". Include 2–3 concrete trigger phrases. This is the single most important field.
+- Wrap `description` in double quotes whenever its value contains a colon, `#`, `>`, or other YAML-special characters. Unquoted `description: Use when X. Trigger phrases: foo, bar` breaks YAML parsing because the second colon is read as a nested mapping.
 - Concurrent steps use sub-numbers: `3a`, `3b`.
 - Steps the user must do get `[human]` in the title.
 - Keep simple skills simple — a 2-step workflow doesn't need annotations on every step.
 - Reference zdx subagents in prose as proper nouns: Explorer, Oracle, Thread Searcher, Task. Use the lowercase id (`oracle`, `explorer`, `thread-searcher`, `task`) only when naming the literal value passed to `invoke_subagent`.
 - Artifacts emitted by the skill at runtime should default to `$ZDX_ARTIFACT_DIR` when relevant.
 
-Phase 4 — Review and save:
+Phase 4 — Review, save, validate:
 - Output the full SKILL.md as a fenced markdown block in chat first.
 - Ask the user to confirm with one short question. No long preamble.
 - On confirmation, create the directory and write the file at the chosen path.
+- Validate the saved skill before declaring done:
+  - Run `python3 $ZDX_HOME/bundled-skills/skill-creator/scripts/quick_validate.py <skill-dir>` against the directory you just wrote.
+  - If it fails, fix the SKILL.md and re-run until it prints `Skill is valid!`. Most common failure is an unquoted `description` containing a colon — wrap the value in double quotes. Other common fixes: kebab-case `name`, no `<`/`>` in `description`, no extra frontmatter keys beyond `name`/`description`.
 - Tell the user:
   - The file path
+  - That validation passed
   - That the skill auto-invokes on description match (no slash needed)
   - That they can edit the SKILL.md directly to refine triggers or steps
 
