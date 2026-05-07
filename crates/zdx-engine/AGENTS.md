@@ -14,7 +14,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - `src/custom_commands.rs`: custom slash command discovery + frontmatter parsing (`<ZDX_HOME>/commands` + `<cwd>/.zdx/commands`, plus bundled commands from `zdx_assets::bundled_command_assets()`)
 - `src/models.rs`: model registry for model picker (embeds `zdx_assets::DEFAULT_MODELS_TOML`)
 - `src/mcp.rs`: MCP config loading, server discovery, helper workspace/runtime, and MCP tool-call execution helpers
-- `src/prompts.rs`: prompt template helpers (re-exports of `zdx_assets` prompt constants)
+- `src/prompts.rs`: prompt template helpers/re-exports of `zdx_assets` prompt constants.
 - `src/skills.rs`: skills discovery + parsing (materializes bundled skills from `zdx_assets::bundled_skill_assets()`)
 - `src/subagents.rs`: named subagent discovery + parsing (built-in subagents come from `zdx_assets::{EXPLORER_SUBAGENT,THREAD_SEARCHER_SUBAGENT,ORACLE_SUBAGENT}`)
 - `src/images/mod.rs`: shared image utilities module exports

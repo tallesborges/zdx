@@ -580,6 +580,7 @@ mod tests {
             InputMutation::ClearHistory => input.clear_history(),
             InputMutation::ClearQueue => input.queued.clear(),
             InputMutation::SetHandoffState(state) => input.handoff = state,
+            InputMutation::SetPromptBuilderState(state) => input.prompt_builder = state,
             InputMutation::AttachImage {
                 mime_type,
                 data,

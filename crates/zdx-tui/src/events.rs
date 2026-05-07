@@ -280,6 +280,12 @@ pub enum UiEvent {
         result: Result<String, String>,
     },
 
+    /// Async prompt-builder generation completed (Ok = generated prompt, Err = error message).
+    PromptBuilderResult {
+        intent: String,
+        result: Result<String, String>,
+    },
+
     /// File discovery completed.
     FilesDiscovered(Vec<PathBuf>),
 

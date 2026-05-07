@@ -92,6 +92,13 @@ pub const COMMANDS: &[Command] = &[
         shortcut: None,
     },
     Command {
+        name: "prompt-builder",
+        aliases: &["builder", "prompt"],
+        description: "Build a polished prompt from a short intent",
+        category: "prompt",
+        shortcut: None,
+    },
+    Command {
         name: "login",
         aliases: &[],
         description: "Authenticate with the active provider",

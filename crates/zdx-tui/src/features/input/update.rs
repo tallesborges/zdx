@@ -12,6 +12,7 @@ use zdx_engine::providers::ChatMessage;
 use super::CursorMove;
 use super::state::{
     HandoffState, InputState, LARGE_PASTE_CHAR_THRESHOLD, PendingImage, PendingPaste,
+    PromptBuilderState,
 };
 use crate::common::{TaskKind, Tasks, sanitize_for_display};
 use crate::effects::UiEffect;
@@ -146,6 +147,22 @@ pub fn handle_paste(
 /// Returns an error if the operation fails.
 pub fn handle_main_key(input: &mut InputState, ctx: &InputContext<'_>, key: KeyEvent) -> KeyResult {
     let mods = Modifiers::from(&key);
+
+    // While a sub-feature's async generation phase owns the composer
+    // (handoff, prompt-builder), restrict input to control keys
+    // (Esc/Ctrl+C/voice hotkey) and Enter (which shows the existing "press
+    // Esc to cancel" advisory). Drop everything else silently so the user
+    // cannot accidentally type into a composer that will be overwritten
+    // when the result event arrives or Esc restores the captured base.
+    if input.is_modal_generation_active() {
+        if let Some(result) = handle_control_keys(input, ctx, key.code, &mods) {
+            return result;
+        }
+        if let Some(result) = handle_submission(input, ctx, key.code, &mods) {
+            return result;
+        }
+        return (vec![], vec![], None);
+    }
 
     // Try each handler category in order; first match wins
     handle_line_editing(input, key.code, &mods)
@@ -427,35 +444,13 @@ fn handle_control_keys(
         }
         // Escape: cancel current operation or clear input
         KeyCode::Esc => {
-            if input.voice.is_recording() {
-                input.voice.discard_next_capture = true;
-                Some((vec![UiEffect::StopVoiceRecording], vec![], None))
-            } else if input.voice.is_transcribing() {
-                input.voice.mark_idle();
-                Some((
-                    vec![UiEffect::CancelTask {
-                        kind: TaskKind::VoiceTranscribe,
-                        token: None,
-                    }],
-                    vec![],
-                    None,
-                ))
-            } else if input.handoff.is_generating() {
-                input.handoff = HandoffState::Idle;
-                input.clear();
-                Some((
-                    vec![UiEffect::CancelTask {
-                        kind: TaskKind::Handoff,
-                        token: None,
-                    }],
-                    vec![],
-                    None,
-                ))
-            } else if input.handoff.is_active() {
-                input.handoff = HandoffState::Idle;
-                input.clear();
-                Some((vec![], vec![], None))
-            } else if ctx.agent_state.is_running() {
+            if let Some(result) = handle_esc_voice(input) {
+                return Some(result);
+            }
+            if let Some(result) = handle_esc_modals(input) {
+                return Some(result);
+            }
+            if ctx.agent_state.is_running() {
                 Some((vec![UiEffect::InterruptAgent], vec![], None))
             } else if ctx.tasks.state(TaskKind::Bash).is_running() {
                 Some((
@@ -473,6 +468,68 @@ fn handle_control_keys(
         }
         _ => None,
     }
+}
+
+/// Handles Esc while voice capture/transcription is active. Returns `Some`
+/// when voice owns the input.
+fn handle_esc_voice(input: &mut InputState) -> Option<KeyResult> {
+    if input.voice.is_recording() {
+        input.voice.discard_next_capture = true;
+        return Some((vec![UiEffect::StopVoiceRecording], vec![], None));
+    }
+    if input.voice.is_transcribing() {
+        input.voice.mark_idle();
+        return Some((
+            vec![UiEffect::CancelTask {
+                kind: TaskKind::VoiceTranscribe,
+                token: None,
+            }],
+            vec![],
+            None,
+        ));
+    }
+    None
+}
+
+/// Handles Esc for any modal flow that owns the composer. Generating-state
+/// modals cancel the underlying task; non-generating modals just reset to
+/// Idle. Returns `Some` when one of the modals matched.
+fn handle_esc_modals(input: &mut InputState) -> Option<KeyResult> {
+    if input.handoff.is_generating() {
+        input.handoff = HandoffState::Idle;
+        input.clear();
+        return Some((
+            vec![UiEffect::CancelTask {
+                kind: TaskKind::Handoff,
+                token: None,
+            }],
+            vec![],
+            None,
+        ));
+    }
+    if input.handoff.is_active() {
+        input.handoff = HandoffState::Idle;
+        input.clear();
+        return Some((vec![], vec![], None));
+    }
+    if input.prompt_builder.is_generating() {
+        input.prompt_builder = PromptBuilderState::Idle;
+        input.clear();
+        return Some((
+            vec![UiEffect::CancelTask {
+                kind: TaskKind::PromptBuilder,
+                token: None,
+            }],
+            vec![],
+            None,
+        ));
+    }
+    if input.prompt_builder.is_active() {
+        input.prompt_builder = PromptBuilderState::Idle;
+        input.clear();
+        return Some((vec![], vec![], None));
+    }
+    None
 }
 
 fn handle_voice_hotkey(input: &mut InputState) -> KeyResult {
@@ -676,17 +733,10 @@ fn submit_input(
     config: &Config,
     model_id: &str,
 ) -> KeyResult {
-    // Block input during handoff generation (prevent state interleaving)
-    if input.handoff.is_generating() {
-        return (
-            vec![],
-            vec![StateMutation::Transcript(
-                TranscriptMutation::AppendSystemMessage(
-                    "Handoff generation in progress. Press Esc to cancel.".to_string(),
-                ),
-            )],
-            None,
-        );
+    // Block input during any modal generation. Each branch shows a hint
+    // pointing at Esc as the cancel path and shares the early-return shape.
+    if let Some(result) = block_submit_during_generation(input) {
+        return result;
     }
 
     let text = input.get_text_with_pending();
@@ -732,6 +782,18 @@ fn submit_input(
         );
     }
 
+    // Modal flows that own the composer (handoff, prompt-builder) must
+    // claim the submission before slash/bash parsing. Otherwise an intent
+    // that happens to start with `/fast` or `$cmd` would short-circuit the
+    // modal flow and execute as a normal slash/bash command.
+    if let Some(result) = handle_handoff_submission(input, trimmed, &text, thread_id.as_deref()) {
+        return result;
+    }
+
+    if let Some(result) = handle_prompt_builder_submission(input, trimmed, &text) {
+        return result;
+    }
+
     // Try slash commands (/fast, etc.)
     if let Some(result) = handle_slash_commands(input, trimmed, config, model_id) {
         return result;
@@ -748,11 +810,6 @@ fn submit_input(
         return (effects, mutations, overlay);
     }
 
-    // Try handoff submissions
-    if let Some(result) = handle_handoff_submission(input, trimmed, &text, thread_id.as_deref()) {
-        return result;
-    }
-
     // Normal message submission
     if trimmed.is_empty() {
         return (vec![], vec![], None);
@@ -765,6 +822,34 @@ fn submit_input(
     let (effects, mutations) = build_send_effects(&text, thread_id, should_suggest_title, images);
 
     (effects, mutations, None)
+}
+
+/// Returns `Some(advisory)` if a modal flow's generation phase currently
+/// owns the composer, blocking the user from submitting via Enter.
+///
+/// Centralizes the per-modal "press Esc to cancel" advisories so
+/// `submit_input` stays small.
+fn block_submit_during_generation(input: &InputState) -> Option<KeyResult> {
+    let advisory = |message: &str| -> KeyResult {
+        (
+            vec![],
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(message.to_string()),
+            )],
+            None,
+        )
+    };
+    if input.handoff.is_generating() {
+        return Some(advisory(
+            "Handoff generation in progress. Press Esc to cancel.",
+        ));
+    }
+    if input.prompt_builder.is_generating() {
+        return Some(advisory(
+            "Prompt-builder generation in progress. Press Esc to cancel.",
+        ));
+    }
+    None
 }
 
 fn handle_submit_while_agent_running(
@@ -781,6 +866,17 @@ fn handle_submit_while_agent_running(
             vec![StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(
                     "Finish or cancel handoff before queueing.".to_string(),
+                ),
+            )],
+            None,
+        );
+    }
+    if input.prompt_builder.is_active() {
+        return (
+            vec![],
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(
+                    "Finish or cancel prompt-builder before queueing.".to_string(),
                 ),
             )],
             None,
@@ -947,6 +1043,42 @@ fn handle_handoff_submission(
     None
 }
 
+/// Handles `Enter` while the prompt-builder is in `Pending` state.
+///
+/// Captures the typed intent, clears the input, and emits the
+/// `StartPromptBuilder` effect. Returns `None` when prompt-builder is not in
+/// pending state so the caller falls through to normal submission handling.
+fn handle_prompt_builder_submission(
+    input: &mut InputState,
+    trimmed: &str,
+    text: &str,
+) -> Option<KeyResult> {
+    if !input.prompt_builder.is_pending() {
+        return None;
+    }
+
+    if trimmed.is_empty() {
+        return Some((
+            vec![],
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(
+                    "Prompt-builder intent cannot be empty.".to_string(),
+                ),
+            )],
+            None,
+        ));
+    }
+
+    input.clear();
+    Some((
+        vec![UiEffect::StartPromptBuilder {
+            intent: text.to_string(),
+        }],
+        vec![],
+        None,
+    ))
+}
+
 /// Tab targeting for `build_send_effects`.
 ///
 /// The active tab uses the standard `StartAgentTurn` / `SaveThread`
@@ -1092,6 +1224,49 @@ pub fn handle_handoff_result(
                 ));
             } else {
                 input.handoff = HandoffState::Idle;
+            }
+
+            mutations
+        }
+    }
+}
+
+/// Handles the prompt-builder generation result.
+///
+/// On success the generated prompt is dropped into the composer and the
+/// builder state returns to `Idle` so the user can edit and send it as a
+/// normal message. On failure the user's intent is restored to the composer
+/// and the builder returns to `Pending` so they can retry without retyping.
+pub fn handle_prompt_builder_result(
+    input: &mut InputState,
+    intent: &str,
+    result: Result<String, String>,
+) -> Vec<StateMutation> {
+    let was_generating = input.prompt_builder.is_generating();
+
+    match result {
+        Ok(generated_prompt) => {
+            input.set_text(&generated_prompt);
+            input.prompt_builder = PromptBuilderState::Idle;
+            vec![]
+        }
+        Err(error) => {
+            let mut mutations = vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(format!(
+                    "Prompt-builder generation failed: {error}"
+                )),
+            )];
+
+            if was_generating {
+                input.set_text(intent);
+                input.prompt_builder = PromptBuilderState::Pending;
+                mutations.push(StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(
+                        "Press Enter to retry, or Esc to cancel.".to_string(),
+                    ),
+                ));
+            } else {
+                input.prompt_builder = PromptBuilderState::Idle;
             }
 
             mutations
@@ -1284,6 +1459,200 @@ mod tests {
             mutation,
             StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(message))
                 if message == "Creating new thread. Wait for it to finish before sending."
+        )));
+    }
+
+    fn make_idle_ctx<'a>(
+        tasks: &'a Tasks,
+        active_thread_ids: &'a std::collections::HashSet<String>,
+        config: &'a Config,
+    ) -> InputContext<'a> {
+        InputContext {
+            agent_state: &AgentState::Idle,
+            tasks,
+            thread_id: None,
+            thread_title: None,
+            config,
+            model_id: &config.model,
+            active_thread_ids,
+        }
+    }
+
+    #[test]
+    fn prompt_builder_pending_submission_emits_start_effect() {
+        let mut input = InputState::default();
+        input.prompt_builder = PromptBuilderState::Pending;
+        input.set_text("make me a bug investigation loop with Oracle");
+        let tasks = Tasks::default();
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config::default();
+        let ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
+
+        let (effects, mutations, overlay) = handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        assert!(overlay.is_none());
+        assert!(mutations.is_empty());
+        assert_eq!(effects.len(), 1);
+        match &effects[0] {
+            UiEffect::StartPromptBuilder { intent } => {
+                assert_eq!(intent, "make me a bug investigation loop with Oracle");
+            }
+            other => panic!("expected StartPromptBuilder, got {other:?}"),
+        }
+        // Composer is cleared until the result arrives.
+        assert!(input.get_text().is_empty());
+    }
+
+    #[test]
+    fn prompt_builder_pending_intent_starting_with_slash_is_not_treated_as_slash_command() {
+        // Modal flows must claim Enter even when the typed intent happens to
+        // collide with normal slash/bash syntax — otherwise `/fast` typed as
+        // an intent would silently toggle fast mode.
+        let mut input = InputState::default();
+        input.prompt_builder = PromptBuilderState::Pending;
+        input.set_text("/fast");
+        let tasks = Tasks::default();
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config::default();
+        let ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
+
+        let (effects, _mutations, overlay) = handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        assert!(overlay.is_none());
+        assert_eq!(effects.len(), 1);
+        assert!(
+            matches!(&effects[0], UiEffect::StartPromptBuilder { intent } if intent == "/fast"),
+            "modal submission must take precedence over slash command parsing"
+        );
+    }
+
+    #[test]
+    fn prompt_builder_empty_pending_submission_keeps_state() {
+        let mut input = InputState::default();
+        input.prompt_builder = PromptBuilderState::Pending;
+        let tasks = Tasks::default();
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config::default();
+        let ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
+
+        let (effects, mutations, overlay) = handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        assert!(overlay.is_none());
+        assert!(effects.is_empty());
+        assert!(input.prompt_builder.is_pending());
+        assert!(mutations.iter().any(|mutation| matches!(
+            mutation,
+            StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(message))
+                if message.to_lowercase().contains("intent")
+        )));
+    }
+
+    #[test]
+    fn prompt_builder_result_inserts_prompt_into_composer_and_returns_to_idle() {
+        let mut input = InputState::default();
+        input.prompt_builder = PromptBuilderState::Generating;
+
+        let mutations = handle_prompt_builder_result(
+            &mut input,
+            "the original intent",
+            Ok("the polished prompt".to_string()),
+        );
+
+        assert!(mutations.is_empty());
+        assert_eq!(input.get_text(), "the polished prompt");
+        assert!(matches!(input.prompt_builder, PromptBuilderState::Idle));
+    }
+
+    #[test]
+    fn prompt_builder_failure_restores_intent_and_returns_to_pending() {
+        let mut input = InputState::default();
+        input.prompt_builder = PromptBuilderState::Generating;
+
+        let mutations = handle_prompt_builder_result(
+            &mut input,
+            "the original intent",
+            Err("subagent timed out".to_string()),
+        );
+
+        assert_eq!(input.get_text(), "the original intent");
+        assert!(matches!(input.prompt_builder, PromptBuilderState::Pending));
+        assert!(mutations.iter().any(|m| matches!(
+            m,
+            StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(text))
+                if text.to_lowercase().contains("prompt-builder")
+        )));
+    }
+
+    #[test]
+    fn typing_is_dropped_silently_during_modal_generation() {
+        // Regression: while a modal generation phase owns the composer the
+        // user must not be able to type into it. Otherwise the result event
+        // (or Esc) overwrites the typed text with the captured intent.
+        let mut input = InputState::default();
+        input.prompt_builder = PromptBuilderState::Generating;
+        let tasks = Tasks::default();
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config::default();
+        let ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
+
+        // Typing a printable character must not mutate the composer.
+        let (effects, mutations, overlay) = handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        );
+        assert!(effects.is_empty());
+        assert!(mutations.is_empty());
+        assert!(overlay.is_none());
+        assert!(input.get_text().is_empty());
+
+        // Backspace likewise.
+        handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        );
+        assert!(input.get_text().is_empty());
+    }
+
+    #[test]
+    fn esc_during_modal_generation_still_cancels_after_typing_guard() {
+        // Sanity-check that the typing guard does not break Esc — the guard
+        // explicitly delegates Esc to `handle_control_keys` so the cancel
+        // path remains reachable.
+        let mut input = InputState::default();
+        input.prompt_builder = PromptBuilderState::Generating;
+        let tasks = Tasks::default();
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config::default();
+        let ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
+
+        let (effects, _mutations, _overlay) = handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+
+        assert!(matches!(input.prompt_builder, PromptBuilderState::Idle));
+        // Cancellation effect is emitted.
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            UiEffect::CancelTask {
+                kind: TaskKind::PromptBuilder,
+                ..
+            }
         )));
     }
 

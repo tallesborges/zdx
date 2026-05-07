@@ -288,9 +288,10 @@ pub fn render_input_with_cursor(
     area: Rect,
     show_cursor: bool,
 ) {
-    // Check if in handoff mode (any active handoff state)
-    if state.input.handoff.is_active() {
-        render_handoff_input(state, frame, area, show_cursor);
+    // Modal sub-features (handoff, prompt-builder) own the
+    // composer while active. Dispatch their dedicated renderer instead of
+    // drawing the normal title chrome.
+    if try_render_modal_input(state, frame, area, show_cursor) {
         return;
     }
 
@@ -423,6 +424,26 @@ pub fn render_input_with_cursor(
     }
 }
 
+/// Dispatches to the matching modal renderer when a sub-feature owns the
+/// composer. Returns `true` if a modal renderer was invoked so the caller
+/// can skip its own (normal-mode) drawing.
+fn try_render_modal_input(
+    state: &TuiState,
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    show_cursor: bool,
+) -> bool {
+    if state.input.handoff.is_active() {
+        render_handoff_input(state, frame, area, show_cursor);
+        return true;
+    }
+    if state.input.prompt_builder.is_active() {
+        render_prompt_builder_input(state, frame, area, show_cursor);
+        return true;
+    }
+    false
+}
+
 /// Renders the input area in handoff mode with special styling.
 fn render_handoff_input(
     state: &TuiState,
@@ -446,6 +467,42 @@ fn render_handoff_input(
             Color::Yellow,
         )
     };
+    render_status_input(state, frame, area, show_cursor, title, border_color);
+}
+
+/// Renders the input area in prompt-builder mode with special styling.
+fn render_prompt_builder_input(
+    state: &TuiState,
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    show_cursor: bool,
+) {
+    let (title, border_color) = if state.input.prompt_builder.is_generating() {
+        (" prompt-builder (generating prompt...) ", Color::Cyan)
+    } else {
+        // Pending: waiting for the user's intent.
+        (
+            " prompt-builder (describe your intent, Esc to cancel) ",
+            Color::Yellow,
+        )
+    };
+    render_status_input(state, frame, area, show_cursor, title, border_color);
+}
+
+/// Shared single-state composer renderer used by handoff and prompt-builder
+/// modes. Draws the textarea inside a single-color border with the given
+/// title, scrolling so the cursor stays visible. Inner text is rendered
+/// uniformly white — paste/image placeholder styling is intentionally not
+/// preserved here because these modes are short-lived modal flows where the
+/// border/title carry the visual signal.
+fn render_status_input(
+    state: &TuiState,
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    show_cursor: bool,
+    title: &str,
+    border_color: Color,
+) {
     let title_style = Style::default().fg(border_color);
 
     let block = Block::default()
@@ -462,8 +519,14 @@ fn render_handoff_input(
 
     frame.render_widget(block, area);
 
-    // Extract placeholder strings for visual highlighting (unlikely in handoff but consistent)
-    let placeholders: Vec<String> = state.input.all_placeholder_strings();
+    // Pastes/images are rare in modal flows — skip the per-render Vec
+    // allocation in the common case where neither is attached.
+    let placeholders: Vec<String> =
+        if state.input.pending_pastes.is_empty() && state.input.pending_images.is_empty() {
+            Vec::new()
+        } else {
+            state.input.all_placeholder_strings()
+        };
 
     // Use common wrapping helper for Unicode-aware width calculation
     let available_width = inner_area.width as usize;

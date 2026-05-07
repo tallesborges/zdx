@@ -21,6 +21,7 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 - `runtime/handlers/voice.rs`: microphone capture + voice transcription task handlers
 - `runtime/handlers/`: side-effect handlers (thread ops, agent spawn, auth, skills)
 - `runtime/handoff.rs`: handoff generation handlers
+- `runtime/prompt_builder.rs`: prompt-builder generation handlers
 - `runtime/thread_title.rs`: auto-title handlers
 
 ### Feature slices (`src/features/`)

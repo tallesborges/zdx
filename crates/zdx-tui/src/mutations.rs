@@ -9,7 +9,7 @@ use zdx_engine::config::ThinkingLevel;
 use zdx_engine::core::thread_persistence::{Thread, Usage};
 use zdx_engine::providers::{ChatMessage, ProviderKind};
 
-use crate::input::HandoffState;
+use crate::input::{HandoffState, PromptBuilderState};
 use crate::transcript::{HistoryCell, ScrollMode};
 
 /// Mutations for cross-slice state changes.
@@ -68,6 +68,7 @@ pub enum InputMutation {
     ClearHistory,
     ClearQueue,
     SetHandoffState(HandoffState),
+    SetPromptBuilderState(PromptBuilderState),
     /// Attach an image (`mime_type`, `base64_data`, `source_path`).
     AttachImage {
         mime_type: String,

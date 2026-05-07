@@ -14,6 +14,10 @@ pub const IDENTITY_PROMPT_TEMPLATE: &str = include_str!("../prompts/identity_pro
 /// Prompt template for handoff generation (shared with TUI).
 pub const HANDOFF_PROMPT_TEMPLATE: &str = include_str!("../prompts/handoff_prompt.md");
 
+/// Prompt template for the `/prompt-builder` slash command (shared with TUI).
+pub const PROMPT_BUILDER_PROMPT_TEMPLATE: &str =
+    include_str!("../prompts/prompt_builder_prompt.md");
+
 /// Prompt template for auto thread-title generation (shared with TUI).
 pub const THREAD_TITLE_PROMPT_TEMPLATE: &str = include_str!("../prompts/thread_title_prompt.md");
 
