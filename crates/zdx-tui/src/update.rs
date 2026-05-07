@@ -11,7 +11,7 @@ use crossterm::event::Event;
 use crate::common::{TaskKind, TaskMeta};
 use crate::effects::UiEffect;
 use crate::events::{SkillUiEvent, ThreadUiEvent, UiEvent};
-use crate::input::HandoffState;
+use crate::input::{HandoffState, PromptBuilderState};
 use crate::mutations::{ConfigMutation, InputMutation, StateMutation, TranscriptMutation};
 use crate::overlays::{self, FilePickerState, Overlay};
 use crate::state::{AgentState, AppState, TabId, TabKind, TuiState};
@@ -138,6 +138,12 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         }
         UiEvent::HandoffResult { goal, result } => {
             let mutations = input::handle_handoff_result(&mut app.tui.input, &goal, result);
+            apply_mutations(&mut app.tui, mutations);
+            vec![]
+        }
+        UiEvent::PromptBuilderResult { intent, result } => {
+            let mutations =
+                input::handle_prompt_builder_result(&mut app.tui.input, &intent, result);
             apply_mutations(&mut app.tui, mutations);
             vec![]
         }
@@ -473,6 +479,11 @@ fn handle_task_started_event(
         TaskKind::Handoff => {
             if matches!(&started.meta, TaskMeta::Handoff { .. }) {
                 app.tui.input.handoff = HandoffState::Generating;
+            }
+        }
+        TaskKind::PromptBuilder => {
+            if matches!(&started.meta, TaskMeta::PromptBuilder { .. }) {
+                app.tui.input.prompt_builder = PromptBuilderState::Generating;
             }
         }
         TaskKind::Bash => {

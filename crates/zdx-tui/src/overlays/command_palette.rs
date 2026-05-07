@@ -11,7 +11,7 @@ use crate::common::TaskKind;
 use crate::common::clipboard::Clipboard;
 use crate::common::commands::{COMMANDS, Command, command_available};
 use crate::effects::UiEffect;
-use crate::input::{HandoffState, build_fast_mode_toggle_actions};
+use crate::input::{HandoffState, PromptBuilderState, build_fast_mode_toggle_actions};
 use crate::mutations::{
     AuthMutation, InputMutation, StateMutation, ThreadMutation, TranscriptMutation,
 };
@@ -142,6 +142,18 @@ impl CommandPaletteState {
                             return OverlayUpdate::close().with_mutations(vec![
                                 StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(
                                     "Cancel the handoff before inserting a custom command."
+                                        .to_string(),
+                                )),
+                            ]);
+                        }
+                        // Same logic for prompt-builder: the input is being
+                        // used to capture the builder intent, replacing it
+                        // would silently re-route the next Enter through the
+                        // builder submission path.
+                        if tui.input.prompt_builder.is_active() {
+                            return OverlayUpdate::close().with_mutations(vec![
+                                StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(
+                                    "Cancel prompt-builder before inserting a custom command."
                                         .to_string(),
                                 )),
                             ]);
@@ -343,6 +355,10 @@ fn execute_command(
             let (effects, mutations) = execute_handoff(tui);
             (None, effects, mutations)
         }
+        "prompt-builder" => {
+            let (effects, mutations) = execute_prompt_builder(tui);
+            (None, effects, mutations)
+        }
         "new" => {
             let (effects, mutations) = execute_new(tui);
             (None, effects, mutations)
@@ -433,6 +449,20 @@ fn execute_copy_id(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
 }
 
 fn execute_handoff(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
+    // Prompt-builder owns the input field while active; starting handoff on
+    // top would leave both modal flows live at once and silently drop the
+    // pending builder generation. Bail out cleanly instead.
+    if tui.input.prompt_builder.is_active() {
+        return (
+            vec![],
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(
+                    "Cancel prompt-builder before starting handoff.".to_string(),
+                ),
+            )],
+        );
+    }
+
     if tui.thread.thread_handle.is_none() {
         return (
             vec![],
@@ -448,6 +478,46 @@ fn execute_handoff(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
         vec![],
         vec![
             StateMutation::Input(InputMutation::SetHandoffState(HandoffState::Pending)),
+            StateMutation::Input(InputMutation::Clear),
+        ],
+    )
+}
+
+fn execute_prompt_builder(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
+    // Handoff owns the input field while active; entering prompt-builder
+    // would silently re-route Enter through prompt-builder submission and
+    // strand the in-progress handoff. Bail out cleanly instead.
+    if tui.input.handoff.is_active() {
+        return (
+            vec![],
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(
+                    "Cancel the handoff before starting prompt-builder.".to_string(),
+                ),
+            )],
+        );
+    }
+
+    // Self-guard: re-entering prompt-builder while a session is already
+    // pending or generating would clobber the in-flight intent (Pending) or
+    // silently drop the pending generation result (Generating).
+    if tui.input.prompt_builder.is_active() {
+        return (
+            vec![],
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(
+                    "Prompt-builder is already active. Press Esc to cancel.".to_string(),
+                ),
+            )],
+        );
+    }
+
+    (
+        vec![],
+        vec![
+            StateMutation::Input(InputMutation::SetPromptBuilderState(
+                PromptBuilderState::Pending,
+            )),
             StateMutation::Input(InputMutation::Clear),
         ],
     )
@@ -927,6 +997,114 @@ mod tests {
         assert!(!update.mutations.iter().any(|m| matches!(
             m,
             StateMutation::Input(crate::mutations::InputMutation::SetText(_))
+        )));
+    }
+
+    #[test]
+    fn test_palette_prompt_builder_command_arms_pending_state() {
+        use crate::mutations::InputMutation;
+        use crate::state::AppState;
+
+        let config = zdx_engine::config::Config::default();
+        let app = AppState::new(config, PathBuf::new(), None, None);
+
+        let (overlay, effects, mutations) = execute_command(&app.tui, "prompt-builder");
+
+        // Selecting `/prompt-builder` does not auto-open another overlay or
+        // emit side-effects; it just arms the pending state and clears the
+        // composer so the user can type the intent.
+        assert!(overlay.is_none());
+        assert!(effects.is_empty());
+
+        let armed_pending = mutations.iter().any(|m| {
+            matches!(
+                m,
+                StateMutation::Input(InputMutation::SetPromptBuilderState(
+                    PromptBuilderState::Pending
+                ))
+            )
+        });
+        assert!(armed_pending, "prompt-builder must transition to Pending");
+
+        let cleared_input = mutations
+            .iter()
+            .any(|m| matches!(m, StateMutation::Input(InputMutation::Clear)));
+        assert!(cleared_input, "prompt-builder must clear the composer");
+    }
+
+    #[test]
+    fn test_palette_prompt_builder_blocked_during_handoff() {
+        use crate::input::HandoffState;
+        use crate::state::AppState;
+
+        let config = zdx_engine::config::Config::default();
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
+        app.tui.input.handoff = HandoffState::Pending;
+
+        let (overlay, effects, mutations) = execute_command(&app.tui, "prompt-builder");
+
+        assert!(overlay.is_none());
+        assert!(effects.is_empty());
+        // No input mutation, only an advisory.
+        assert!(!mutations.iter().any(|m| matches!(
+            m,
+            StateMutation::Input(crate::mutations::InputMutation::SetPromptBuilderState(_))
+        )));
+        assert!(mutations.iter().any(|m| matches!(
+            m,
+            StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(text))
+                if text.to_lowercase().contains("handoff")
+        )));
+    }
+
+    #[test]
+    fn test_palette_handoff_blocked_during_prompt_builder() {
+        use crate::state::AppState;
+
+        let config = zdx_engine::config::Config::default();
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
+        app.tui.input.prompt_builder = PromptBuilderState::Pending;
+        // Note: no active thread is required to exercise the guard — the
+        // prompt-builder check runs before the active-thread check, so an
+        // attempt to start handoff while prompt-builder owns the composer
+        // is rejected with a builder-specific advisory regardless.
+
+        let (overlay, effects, mutations) = execute_command(&app.tui, "handoff");
+
+        assert!(overlay.is_none());
+        assert!(effects.is_empty());
+        assert!(!mutations.iter().any(|m| matches!(
+            m,
+            StateMutation::Input(crate::mutations::InputMutation::SetHandoffState(_))
+        )));
+        assert!(mutations.iter().any(|m| matches!(
+            m,
+            StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(text))
+                if text.to_lowercase().contains("prompt-builder")
+        )));
+    }
+
+    #[test]
+    fn test_palette_prompt_builder_blocked_when_already_active() {
+        use crate::state::AppState;
+
+        let config = zdx_engine::config::Config::default();
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
+        app.tui.input.prompt_builder = PromptBuilderState::Generating;
+
+        let (overlay, effects, mutations) = execute_command(&app.tui, "prompt-builder");
+
+        assert!(overlay.is_none());
+        assert!(effects.is_empty());
+        // Self-guard: must not re-arm pending while a session is in flight.
+        assert!(!mutations.iter().any(|m| matches!(
+            m,
+            StateMutation::Input(crate::mutations::InputMutation::SetPromptBuilderState(_))
+        )));
+        assert!(mutations.iter().any(|m| matches!(
+            m,
+            StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(text))
+                if text.to_lowercase().contains("prompt-builder")
         )));
     }
 }

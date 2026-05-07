@@ -134,6 +134,13 @@ pub enum UiEffect {
     /// Start handoff generation with a goal.
     StartHandoff { goal: String },
 
+    /// Start prompt-builder generation with a user intent.
+    ///
+    /// Spawns an isolated subagent that turns the intent into a polished
+    /// prompt. The result arrives as `UiEvent::PromptBuilderResult` and is
+    /// inserted into the composer (never auto-sent).
+    StartPromptBuilder { intent: String },
+
     /// Submit handoff prompt: create new thread and prefill the first message draft.
     HandoffSubmit {
         prompt: String,

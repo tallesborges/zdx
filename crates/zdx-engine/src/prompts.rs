@@ -10,6 +10,8 @@ pub use zdx_assets::EXEC_INSTRUCTION_LAYER;
 pub use zdx_assets::HANDOFF_PROMPT_TEMPLATE;
 /// Shared identity prompt for ZDX-coded agent surfaces.
 pub use zdx_assets::IDENTITY_PROMPT_TEMPLATE;
+/// Prompt template for the `/prompt-builder` slash command (shared with TUI).
+pub use zdx_assets::PROMPT_BUILDER_PROMPT_TEMPLATE;
 /// Prompt template for read thread tool (shared with tool execution).
 pub use zdx_assets::READ_THREAD_PROMPT_TEMPLATE;
 /// Prompt template for system prompt assembly (`MiniJinja`).

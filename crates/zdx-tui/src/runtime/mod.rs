@@ -28,6 +28,7 @@ mod handlers;
 mod handoff;
 mod image_ops;
 mod inbox;
+mod prompt_builder;
 mod thread_title;
 
 use std::future::Future;
@@ -999,6 +1000,18 @@ impl TuiRuntime {
 
                 self.spawn_task(TaskKind::ThreadCreate, TaskMeta::None, false, move |_| {
                     handlers::thread_create(config, root, handoff_from, Some(prompt))
+                });
+            }
+
+            // Prompt-builder effect
+            UiEffect::StartPromptBuilder { intent } => {
+                let root = self.state.tui.agent_opts.root.clone();
+                let model = Some(self.state.tui.config.model.clone());
+                let meta = TaskMeta::PromptBuilder {
+                    intent: intent.clone(),
+                };
+                self.spawn_task(TaskKind::PromptBuilder, meta, true, move |cancel| {
+                    prompt_builder::prompt_builder_generation(intent, model, root, cancel)
                 });
             }
 

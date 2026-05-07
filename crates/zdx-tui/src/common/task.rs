@@ -32,6 +32,7 @@ pub enum TaskKind {
     SkillInstall,
     Bash,
     Handoff,
+    PromptBuilder,
     LoginExchange,
     LoginCallback,
     ImageDecode,
@@ -49,6 +50,9 @@ pub enum TaskMeta {
     },
     Handoff {
         goal: String,
+    },
+    PromptBuilder {
+        intent: String,
     },
 }
 

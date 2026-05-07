@@ -133,6 +133,50 @@ impl HandoffState {
     }
 }
 
+/// Prompt-builder feature state machine.
+///
+/// Models the lifecycle of the `/prompt-builder` slash command:
+/// - `Idle`: No prompt-builder session active.
+/// - `Pending`: User is typing the intent in the textarea.
+/// - `Generating`: Async subagent is generating the polished prompt.
+///
+/// Unlike handoff there is no `Ready` state — once generation completes the
+/// generated prompt is dropped into the composer and the state returns to
+/// `Idle` so the user can edit and send it as a normal message.
+#[derive(Default, Debug)]
+pub enum PromptBuilderState {
+    #[default]
+    Idle,
+
+    /// User is typing the prompt-builder intent in the textarea.
+    Pending,
+
+    /// Prompt-builder generation is in progress.
+    Generating,
+}
+
+impl PromptBuilderState {
+    /// Returns true if prompt-builder is in any active state (not Idle).
+    pub fn is_active(&self) -> bool {
+        !matches!(self, PromptBuilderState::Idle)
+    }
+
+    /// Returns true if currently generating.
+    pub fn is_generating(&self) -> bool {
+        matches!(self, PromptBuilderState::Generating)
+    }
+
+    /// Returns true if in pending state (awaiting intent input).
+    pub fn is_pending(&self) -> bool {
+        matches!(self, PromptBuilderState::Pending)
+    }
+
+    /// Cancels any in-progress generation and resets to Idle.
+    pub fn cancel(&mut self) {
+        *self = PromptBuilderState::Idle;
+    }
+}
+
 /// User input state.
 ///
 /// Encapsulates the text area, command history, and navigation state.
@@ -151,6 +195,9 @@ pub struct InputState {
 
     /// Handoff feature state.
     pub handoff: HandoffState,
+
+    /// Prompt-builder feature state.
+    pub prompt_builder: PromptBuilderState,
 
     /// Queued prompts to send after the current turn completes.
     pub queued: std::collections::VecDeque<String>,
@@ -188,6 +235,7 @@ impl InputState {
             history_index: None,
             draft: None,
             handoff: HandoffState::Idle,
+            prompt_builder: PromptBuilderState::Idle,
             queued: std::collections::VecDeque::new(),
             pending_pastes: Vec::new(),
             paste_counter: 0,
@@ -747,6 +795,17 @@ impl InputState {
         self.clear_pending_pastes();
     }
 
+    /// Returns true if any sub-feature's async generation phase currently
+    /// owns the composer.
+    ///
+    /// Used by `handle_main_key` to suppress text-editing keys while a
+    /// generation modal is in flight, so the user cannot accidentally type
+    /// into a composer that will be overwritten when the result event
+    /// arrives or Esc restores the captured base/intent.
+    pub fn is_modal_generation_active(&self) -> bool {
+        self.handoff.is_generating() || self.prompt_builder.is_generating()
+    }
+
     /// Sets the input textarea to the given text.
     pub fn set_text(&mut self, text: &str) {
         self.textarea.select_all();
@@ -798,6 +857,10 @@ impl InputState {
             InputMutation::SetHandoffState(state) => {
                 self.handoff.cancel();
                 self.handoff = state;
+            }
+            InputMutation::SetPromptBuilderState(state) => {
+                self.prompt_builder.cancel();
+                self.prompt_builder = state;
             }
             InputMutation::AttachImage {
                 mime_type,
