@@ -81,3 +81,16 @@ codebase *CRATES:
 # Build release binary
 build-release:
     cargo build -p zdx --release
+
+# Install current workspace as the released `zdx` binary at ~/.local/bin/zdx
+install: build-release
+    @mkdir -p ~/.local/bin
+    install -m 0755 ../.zdx/cargo-target/release/zdx ~/.local/bin/zdx
+    @echo "Installed $(~/.local/bin/zdx --version 2>/dev/null || echo zdx) to ~/.local/bin/zdx"
+
+# (Re)create ~/.local/bin/zdxd as a symlink to the debug build
+install-debug:
+    cargo build -p zdx
+    @mkdir -p ~/.local/bin
+    ln -sfn "$(cd ../.zdx/cargo-target/debug && pwd)/zdx" ~/.local/bin/zdxd
+    @echo "Linked ~/.local/bin/zdxd -> $(cd ../.zdx/cargo-target/debug && pwd)/zdx"
