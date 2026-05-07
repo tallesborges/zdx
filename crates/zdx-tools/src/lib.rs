@@ -238,14 +238,37 @@ pub fn expand_env_vars(input: &str) -> String {
     result
 }
 
-/// Resolve a path against the tool root after expanding environment variables.
+/// Expand a leading `~` or `~/` in `path` to `$HOME` when available.
+///
+/// Returns the unmodified path if it does not start with `~`, if `HOME` is
+/// not set, or if the leading `~` is followed by characters other than `/`
+/// (for example `~user/foo`, which is not supported here).
+#[must_use]
+pub fn expand_tilde(path: &Path) -> PathBuf {
+    let Some(s) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    if s != "~" && !s.starts_with("~/") {
+        return path.to_path_buf();
+    }
+    let Ok(home) = std::env::var("HOME") else {
+        return path.to_path_buf();
+    };
+    if s == "~" {
+        return PathBuf::from(home);
+    }
+    PathBuf::from(home).join(&s[2..])
+}
+
+/// Resolve a path against the tool root after expanding environment variables
+/// and a leading `~`/`~/` to `$HOME`.
 #[must_use]
 pub fn resolve_path_against_root(path: &Path, root: &Path) -> PathBuf {
     let expanded = expand_env_vars(path.to_string_lossy().as_ref());
-    let requested = Path::new(&expanded);
+    let requested = expand_tilde(Path::new(&expanded));
 
     if requested.is_absolute() {
-        requested.to_path_buf()
+        requested
     } else {
         root.join(requested)
     }
@@ -253,7 +276,8 @@ pub fn resolve_path_against_root(path: &Path, root: &Path) -> PathBuf {
 
 /// Resolve a non-empty user path string against the tool root.
 ///
-/// Expands environment variables and joins relative paths with `root`.
+/// Expands environment variables, expands a leading `~`/`~/` to `$HOME`,
+/// and joins relative paths with `root`.
 ///
 /// # Errors
 /// Returns an error if the path is empty.
@@ -336,23 +360,15 @@ pub fn resolve_existing_path(path: &str, root: &Path) -> Result<ResolvedPath, To
 /// Normalizes user-provided file paths.
 ///
 /// Handles common drag-and-drop shell escaping (`\ `, `\(`, `\)`) and
-/// expands `~/` to the HOME directory when available.
+/// expands a leading `~`/`~/` to `$HOME` via [`expand_tilde`].
 #[must_use]
 pub fn normalize_input_path(path: &str) -> PathBuf {
-    // Unescape shell-escaped characters (e.g., "\ " → " ").
     let unescaped = path
         .replace("\\ ", " ")
         .replace("\\(", "(")
         .replace("\\)", ")");
 
-    let path = Path::new(&unescaped);
-    if let Some(rest) = path.to_str().and_then(|s| s.strip_prefix("~/"))
-        && let Ok(home) = std::env::var("HOME")
-    {
-        return PathBuf::from(home).join(rest);
-    }
-
-    path.to_path_buf()
+    expand_tilde(Path::new(&unescaped))
 }
 
 /// Returns MIME type inferred from file extension for supported image formats.

@@ -617,6 +617,28 @@ mod tests {
         assert_eq!(resolved, temp.path().join("nested.txt"));
     }
 
+    #[test]
+    fn test_resolve_input_path_expands_leading_tilde() {
+        let home = std::env::var("HOME").expect("HOME must be set for tests");
+        let temp = TempDir::new_in(&home).unwrap();
+        let root = TempDir::new().unwrap();
+
+        let relative_to_home = temp.path().strip_prefix(&home).unwrap();
+        let requested = format!("~/{}/nested.txt", relative_to_home.display());
+
+        let resolved = resolve_input_path(&requested, root.path()).unwrap();
+        assert_eq!(resolved, temp.path().join("nested.txt"));
+    }
+
+    #[test]
+    fn test_resolve_input_path_expands_bare_tilde() {
+        let home = std::env::var("HOME").expect("HOME must be set for tests");
+        let root = TempDir::new().unwrap();
+
+        let resolved = resolve_input_path("~", root.path()).unwrap();
+        assert_eq!(resolved, std::path::PathBuf::from(home));
+    }
+
     #[tokio::test]
     async fn test_execute_tool_times_out() {
         let temp = TempDir::new().unwrap();
