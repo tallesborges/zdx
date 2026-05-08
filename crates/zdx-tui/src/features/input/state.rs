@@ -151,8 +151,15 @@ pub enum PromptBuilderState {
     /// User is typing the prompt-builder intent in the textarea.
     Pending,
 
-    /// Prompt-builder generation is in progress.
-    Generating,
+    /// Prompt-builder generation is in progress. The intent is stashed here
+    /// so Esc can restore it to the composer when the user cancels.
+    Generating { intent: String },
+
+    /// Generated prompt is in the composer awaiting review. The original
+    /// intent is stashed so Esc can revert ("reject"); any other keystroke
+    /// implicitly accepts and drops back to `Idle` so the user can edit or
+    /// send the polished prompt normally.
+    Ready { intent: String },
 }
 
 impl PromptBuilderState {
@@ -163,12 +170,17 @@ impl PromptBuilderState {
 
     /// Returns true if currently generating.
     pub fn is_generating(&self) -> bool {
-        matches!(self, PromptBuilderState::Generating)
+        matches!(self, PromptBuilderState::Generating { .. })
     }
 
     /// Returns true if in pending state (awaiting intent input).
     pub fn is_pending(&self) -> bool {
         matches!(self, PromptBuilderState::Pending)
+    }
+
+    /// Returns true if the generated prompt is awaiting review.
+    pub fn is_ready(&self) -> bool {
+        matches!(self, PromptBuilderState::Ready { .. })
     }
 
     /// Cancels any in-progress generation and resets to Idle.
