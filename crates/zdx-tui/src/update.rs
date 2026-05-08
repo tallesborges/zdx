@@ -482,8 +482,10 @@ fn handle_task_started_event(
             }
         }
         TaskKind::PromptBuilder => {
-            if matches!(&started.meta, TaskMeta::PromptBuilder { .. }) {
-                app.tui.input.prompt_builder = PromptBuilderState::Generating;
+            if let TaskMeta::PromptBuilder { intent } = &started.meta {
+                app.tui.input.prompt_builder = PromptBuilderState::Generating {
+                    intent: intent.clone(),
+                };
             }
         }
         TaskKind::Bash => {
@@ -1309,6 +1311,21 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
     let (effects, mutations, overlay_request) =
         input::handle_main_key(&mut app.tui.input, &ctx, key);
     apply_mutations(&mut app.tui, mutations);
+
+    // Handoff submission opens the new thread in a fresh background tab so
+    // the source thread stays intact in its current tab. Push the new tab
+    // here, before the runtime processes the `HandoffSubmit` effect — that
+    // handler spawns `thread_create`, and `ThreadUiEvent::Created` populates
+    // whichever tab is active when it arrives (which will be the new tab).
+    if effects
+        .iter()
+        .any(|effect| matches!(effect, UiEffect::HandoffSubmit { .. }))
+    {
+        let tab_id = app.next_tab_id();
+        let tab = create_main_tab(tab_id, &app.tui);
+        app.push_tab(tab);
+    }
+
     if let Some(request) = overlay_request
         && app.overlay.is_none()
     {
@@ -1598,5 +1615,100 @@ mod tests {
             &cells[1],
             HistoryCell::System { content, .. } if content == "Thread cleared."
         ));
+    }
+
+    /// Regression: submitting a handoff in `Ready` state must open the new
+    /// thread in a fresh background tab and leave the source tab untouched.
+    /// See `crates/zdx-tui/src/features/input/update.rs::handle_handoff_submission`.
+    #[test]
+    fn handoff_submit_opens_new_tab_and_preserves_source_tab() {
+        use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
+
+        use crate::input::HandoffState;
+        use crate::transcript::TranscriptState;
+
+        let config = zdx_engine::config::Config::default();
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
+
+        let zdx_home = std::env::temp_dir().join(unique_thread_id("zdx-tui-handoff-tab-tests"));
+        std::fs::create_dir_all(&zdx_home).unwrap();
+        unsafe {
+            std::env::set_var("ZDX_HOME", &zdx_home);
+        }
+
+        // Seed the active (source) tab: thread handle, transcript, history,
+        // and a generated handoff prompt sitting in the textarea in `Ready`
+        // state — i.e. the user has just finished generation and is about to
+        // press Enter.
+        let source_thread_id = unique_thread_id("handoff-source");
+        let source_thread_handle = Thread::with_id(source_thread_id.clone()).unwrap();
+        app.tui.thread.thread_handle = Some(source_thread_handle);
+        app.tui.transcript = TranscriptState::with_cells(vec![HistoryCell::user(
+            "original message in source thread",
+        )]);
+        app.tui.input.history = vec!["earlier prompt".to_string()];
+        app.tui.input.handoff = HandoffState::Ready;
+        app.tui.input.set_text("Generated handoff prompt body.");
+        let source_tab_id = app.tui.tab_id;
+
+        let effects = update(
+            &mut app,
+            UiEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            ))),
+        );
+
+        // The submission emits a HandoffSubmit effect with the prompt and source thread ID.
+        let submit = effects
+            .iter()
+            .find_map(|effect| match effect {
+                UiEffect::HandoffSubmit {
+                    prompt,
+                    handoff_from,
+                } => Some((prompt.clone(), handoff_from.clone())),
+                _ => None,
+            })
+            .expect("expected HandoffSubmit effect");
+        assert_eq!(submit.0, "Generated handoff prompt body.");
+        assert_eq!(submit.1.as_deref(), Some(source_thread_id.as_str()));
+
+        // The source tab moved to background; a fresh tab is now active.
+        assert_eq!(app.background_tabs.len(), 1);
+        assert_ne!(app.tui.tab_id, source_tab_id);
+
+        // Source tab still has its original thread, transcript, and history.
+        let source = app
+            .background_tabs
+            .iter()
+            .find(|t| t.tab_id == source_tab_id)
+            .expect("source tab should be in background");
+        assert_eq!(
+            source
+                .thread
+                .thread_handle
+                .as_ref()
+                .map(|t| t.id.clone())
+                .as_deref(),
+            Some(source_thread_id.as_str()),
+            "source tab must retain its thread handle"
+        );
+        assert_eq!(
+            source.transcript.cells().len(),
+            1,
+            "source tab must retain its transcript"
+        );
+        assert_eq!(
+            source.input.history,
+            vec!["earlier prompt".to_string()],
+            "source tab must retain its input history"
+        );
+
+        // The new active tab is fresh: no thread handle, empty transcript,
+        // empty input, handoff state idle.
+        assert!(app.tui.thread.thread_handle.is_none());
+        assert!(app.tui.transcript.cells().is_empty());
+        assert!(app.tui.input.get_text().is_empty());
+        assert!(matches!(app.tui.input.handoff, HandoffState::Idle));
     }
 }
