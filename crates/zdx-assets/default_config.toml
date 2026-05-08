@@ -23,6 +23,7 @@ thinking_level = "off"
 handoff_model = "gemini:gemini-3-flash-preview"
 title_model = "gemini:gemini-2.5-flash"
 read_thread_model = "gemini:gemini-2.5-flash-lite"
+tldr_model = "gemini:gemini-3.1-flash-lite-preview"
 
 # System prompt (inline)
 # system_prompt = "You are a helpful coding assistant."

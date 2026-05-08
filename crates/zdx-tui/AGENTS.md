@@ -23,6 +23,7 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 - `runtime/handoff.rs`: handoff generation handlers
 - `runtime/prompt_builder.rs`: prompt-builder generation handlers
 - `runtime/thread_title.rs`: auto-title handlers
+- `runtime/thread_tldr.rs`: thread TLDR/recap handlers
 
 ### Feature slices (`src/features/`)
 
@@ -36,6 +37,7 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 
 - `src/common/`: shared leaf types
 - `src/overlays/`: command palette, skill picker, rename overlays
+- `src/overlays/tldr.rs`: thread TLDR/recap overlay (Ctrl+R)
 - `src/overlays/tool_detail.rs`: tool detail popup overlay (full args/output/status on click)
 
 ## Conventions

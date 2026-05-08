@@ -30,6 +30,7 @@ mod image_ops;
 mod inbox;
 mod prompt_builder;
 mod thread_title;
+mod thread_tldr;
 
 use std::future::Future;
 use std::io::Stdout;
@@ -804,6 +805,13 @@ impl TuiRuntime {
                 let title_model = self.state.tui.config.title_model.clone();
                 self.spawn_task(TaskKind::ThreadTitle, TaskMeta::None, false, move |_| {
                     thread_title::suggest_thread_title(thread_id, message, title_model, root)
+                });
+            }
+            UiEffect::GenerateTldr { thread_id } => {
+                let root = self.state.tui.agent_opts.root.clone();
+                let tldr_model = self.state.tui.config.tldr_model.clone();
+                self.spawn_task(TaskKind::ThreadTldr, TaskMeta::None, true, move |_| {
+                    thread_tldr::generate_tldr(thread_id, tldr_model, root)
                 });
             }
             UiEffect::CreateNewThread => {

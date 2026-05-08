@@ -115,7 +115,8 @@ pub fn render(app: &AppState, frame: &mut Frame) {
     }
 
     // Render overlay (last, so it appears on top)
-    // ToolDetail needs special handling: it looks up the live cell from transcript
+    // ToolDetail and Tldr need special handling: they look up live state and
+    // animate spinners, so we route them around the generic Overlay::render.
     if let Some(ref overlay) = app.overlay {
         match overlay {
             crate::overlays::Overlay::ToolDetail(state) => {
@@ -127,6 +128,9 @@ pub fn render(app: &AppState, frame: &mut Frame) {
                     )
                 });
                 state.render(frame, area, cell, app.tui.spinner_frame);
+            }
+            crate::overlays::Overlay::Tldr(state) => {
+                state.render(frame, area, chunks[input_idx].y, app.tui.spinner_frame);
             }
             _ => {
                 overlay.render(frame, area, chunks[input_idx].y, &app.tui.tasks);

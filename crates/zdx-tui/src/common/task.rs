@@ -23,6 +23,7 @@ pub enum TaskKind {
     ThreadLoad,
     ThreadRename,
     ThreadTitle,
+    ThreadTldr,
     ThreadPreview,
     ThreadCreate,
     ThreadFork,

@@ -20,6 +20,8 @@ pub use zdx_assets::SYSTEM_PROMPT_TEMPLATE;
 pub use zdx_assets::TELEGRAM_INSTRUCTION_LAYER;
 /// Prompt template for auto thread-title generation (shared with TUI).
 pub use zdx_assets::THREAD_TITLE_PROMPT_TEMPLATE;
+/// Prompt template for thread TLDR/recap generation (shared with TUI).
+pub use zdx_assets::THREAD_TLDR_PROMPT_TEMPLATE;
 
 /// Returns the canonical identity prompt without leading/trailing whitespace.
 #[must_use]

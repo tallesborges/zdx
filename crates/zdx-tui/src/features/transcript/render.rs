@@ -229,7 +229,11 @@ pub fn calculate_cell_line_counts(
 // ============================================================================
 
 /// Converts a transcript `StyledLine` to a ratatui Line.
-fn convert_styled_line(styled_line: StyledLine) -> Line<'static> {
+///
+/// Exposed within the crate so overlays (e.g. the TLDR overlay) can
+/// render styled markdown via `markdown::render_markdown` without
+/// duplicating the style-conversion logic.
+pub(crate) fn convert_styled_line(styled_line: StyledLine) -> Line<'static> {
     let spans: Vec<Span<'static>> = styled_line
         .spans
         .into_iter()

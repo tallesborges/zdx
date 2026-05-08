@@ -28,6 +28,9 @@ pub use cell::{CellId, HistoryCell, ToolState};
 // in `crate::state` can share the same display logic as build.rs and
 // update.rs.
 pub(crate) use reasoning::reasoning_display_text;
+// Crate-internal re-export so overlays can convert styled markdown lines
+// to ratatui lines without duplicating style mapping.
+pub(crate) use render::convert_styled_line;
 // Re-export render functions
 pub use render::{SPINNER_SPEED_DIVISOR, calculate_cell_line_counts, render_transcript};
 // Re-export selection types (only those used externally)
