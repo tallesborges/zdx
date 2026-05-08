@@ -222,6 +222,8 @@ pub struct ActiveAgentInfo {
     pub thread_id: String,
     pub model: String,
     pub uptime: String,
+    pub kind: Option<String>,
+    pub subagent_name: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -973,6 +975,8 @@ fn load_active_agents() -> Vec<ActiveAgentInfo> {
                 thread_id: short_thread,
                 model: r.model.unwrap_or_else(|| "-".to_string()),
                 uptime: agent_activity::uptime_since(&r.started_at),
+                kind: r.kind,
+                subagent_name: r.subagent_name,
             }
         })
         .collect()

@@ -41,6 +41,7 @@ pub async fn generate_tldr(thread_id: &str, tldr_model: &str, root: &Path) -> Re
         tools_override: None,
         event_filter: Some(vec!["turn_finished".to_string()]),
         timeout: Some(Duration::from_mins(1)),
+        ..Default::default()
     };
 
     let raw = run_exec_subagent(root, &prompt, &options).await?;

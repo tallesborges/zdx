@@ -270,6 +270,9 @@ fn build_exec_options(
     model: String,
     system_prompt: String,
 ) -> ExecSubagentOptions {
+    let subagent_name = definition
+        .map(|definition| definition.name.clone())
+        .unwrap_or_else(|| subagents::TASK_BUILTIN_ALIAS_NAME.to_string());
     ExecSubagentOptions {
         model: Some(model),
         system_prompt: Some(system_prompt),
@@ -281,6 +284,10 @@ fn build_exec_options(
         tools_override: definition.and_then(|definition| definition.tools.clone()),
         event_filter: Some(vec!["turn_finished".to_string()]),
         timeout: ctx.timeout,
+        track_activity: true,
+        activity_kind: Some("subagent".to_string()),
+        activity_parent_thread_id: ctx.current_thread_id.clone(),
+        activity_subagent_name: Some(subagent_name),
     }
 }
 

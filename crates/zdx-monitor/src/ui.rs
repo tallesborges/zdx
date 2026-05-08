@@ -119,7 +119,17 @@ fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, a)| {
-            let prefix = format!(" ● PID {} {} model:", a.pid, truncate_chars(&a.surface, 10));
+            let role = a.kind.as_deref().unwrap_or(&a.surface);
+            let role_label = if let Some(name) = a.subagent_name.as_deref() {
+                format!("{role}:{name}")
+            } else {
+                role.to_string()
+            };
+            let prefix = format!(
+                " ● PID {} {} model:",
+                a.pid,
+                truncate_chars(&role_label, 18)
+            );
             let suffix = format!(" thread:{} up {}", a.thread_id, a.uptime);
             let model_width = inner_width.saturating_sub(prefix.len() + suffix.len());
             let model = truncate_chars(&a.model, model_width);

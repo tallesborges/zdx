@@ -42,6 +42,7 @@ async fn run_subagent(
         tools_override: None,
         event_filter: Some(vec!["turn_finished".to_string()]),
         timeout: Some(Duration::from_secs(PROMPT_BUILDER_TIMEOUT_SECS)),
+        ..Default::default()
     };
 
     run_exec_subagent_with_cancel(&root, &generation_prompt, &options, Some(cancel))

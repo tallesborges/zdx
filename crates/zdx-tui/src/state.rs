@@ -370,6 +370,10 @@ impl TuiState {
             surface: Some("chat".to_string()),
             text_verbosity: None,
             service_tier: None,
+            track_activity: true,
+            activity_kind: Some("chat".to_string()),
+            activity_parent_thread_id: None,
+            activity_subagent_name: None,
         };
 
         // Cache display values at startup (avoids I/O during render)
