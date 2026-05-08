@@ -528,6 +528,11 @@ fn default_read_thread_model() -> String {
     Config::DEFAULT_READ_THREAD_MODEL.to_string()
 }
 
+/// Default value for serde when `tldr_model` is missing.
+fn default_tldr_model() -> String {
+    Config::DEFAULT_TLDR_MODEL.to_string()
+}
+
 /// Transcription configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -636,6 +641,10 @@ pub struct Config {
     #[serde(default = "default_read_thread_model")]
     pub read_thread_model: String,
 
+    /// Model to use for thread TLDR generation subagent.
+    #[serde(default = "default_tldr_model")]
+    pub tldr_model: String,
+
     /// Thinking level for extended thinking feature
     #[serde(default)]
     pub thinking_level: ThinkingLevel,
@@ -673,6 +682,7 @@ impl Config {
     const DEFAULT_HANDOFF_MODEL: &str = "gemini:gemini-3-flash-preview";
     const DEFAULT_TITLE_MODEL: &str = "gemini:gemini-2.5-flash";
     const DEFAULT_READ_THREAD_MODEL: &str = "gemini:gemini-2.5-flash-lite";
+    const DEFAULT_TLDR_MODEL: &str = "gemini:gemini-3.1-flash-lite-preview";
 
     /// Loads configuration from the default config path.
     ///
@@ -1150,6 +1160,7 @@ impl Default for Config {
             handoff_model: Self::DEFAULT_HANDOFF_MODEL.to_string(),
             title_model: Self::DEFAULT_TITLE_MODEL.to_string(),
             read_thread_model: Self::DEFAULT_READ_THREAD_MODEL.to_string(),
+            tldr_model: Self::DEFAULT_TLDR_MODEL.to_string(),
             thinking_level: ThinkingLevel::default(),
             skills: SkillsConfig::default(),
             subagents: SubagentsConfig::default(),

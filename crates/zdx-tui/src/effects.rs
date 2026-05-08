@@ -100,6 +100,12 @@ pub enum UiEffect {
     /// Suggest a thread title from the first user message.
     SuggestThreadTitle { thread_id: String, message: String },
 
+    /// Generate a TLDR/recap for the given thread (cheap subagent call).
+    ///
+    /// Result arrives as `UiEvent::TldrResult` and updates the open
+    /// `Overlay::Tldr` if it is still showing the same `thread_id`.
+    GenerateTldr { thread_id: String },
+
     /// Persist the model preference to config.
     PersistModel { model: String },
 

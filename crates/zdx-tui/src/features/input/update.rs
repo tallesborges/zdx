@@ -620,6 +620,10 @@ fn handle_overlays(
                 Some((vec![], vec![], None))
             }
         }
+        // Ctrl+R: open thread TLDR/recap overlay
+        KeyCode::Char('r') if mods.only_ctrl() => {
+            Some((vec![], vec![], Some(OverlayRequest::Tldr)))
+        }
         _ => None,
     }
 }

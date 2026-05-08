@@ -21,6 +21,9 @@ pub const PROMPT_BUILDER_PROMPT_TEMPLATE: &str =
 /// Prompt template for auto thread-title generation (shared with TUI).
 pub const THREAD_TITLE_PROMPT_TEMPLATE: &str = include_str!("../prompts/thread_title_prompt.md");
 
+/// Prompt template for thread TLDR/recap generation (shared with TUI).
+pub const THREAD_TLDR_PROMPT_TEMPLATE: &str = include_str!("../prompts/thread_tldr_prompt.md");
+
 /// Prompt template for system prompt assembly (`MiniJinja`).
 pub const SYSTEM_PROMPT_TEMPLATE: &str = include_str!("../prompts/system_prompt_template.md");
 

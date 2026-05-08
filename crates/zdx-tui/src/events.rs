@@ -343,4 +343,10 @@ pub enum UiEvent {
     VoiceTranscribed {
         result: Result<Option<String>, String>,
     },
+
+    /// Thread TLDR/recap generation completed (Ok = markdown summary, Err = error).
+    TldrResult {
+        thread_id: String,
+        result: Result<String, String>,
+    },
 }

@@ -32,6 +32,7 @@ pub mod skill_picker;
 pub mod thinking_picker;
 pub mod thread_picker;
 pub mod timeline;
+pub mod tldr;
 pub mod tool_detail;
 mod update;
 
@@ -48,6 +49,7 @@ pub use skill_picker::SkillPickerState;
 pub use thinking_picker::ThinkingPickerState;
 pub use thread_picker::{ThreadPickerMode, ThreadPickerState, ThreadScope};
 pub use timeline::TimelineState;
+pub use tldr::{TldrPhase, TldrState};
 pub use tool_detail::ToolDetailState;
 // Re-export update functions
 pub use update::{handle_files_discovered, handle_overlay_key};
@@ -76,6 +78,7 @@ pub enum OverlayRequest {
     },
     Timeline,
     Rename,
+    Tldr,
     ImagePreview {
         image_path: String,
         image_index: usize,
@@ -150,6 +153,7 @@ pub enum Overlay {
     FilePicker(FilePickerState),
     Timeline(TimelineState),
     Rename(RenameState),
+    Tldr(TldrState),
     ImagePreview(ImagePreviewState),
     ToolDetail(ToolDetailState),
 }
@@ -172,7 +176,10 @@ impl Overlay {
                 input_y,
                 tasks.state(TaskKind::ImageDecode).is_running(),
             ),
-            Overlay::ToolDetail(_) => {} // Rendered separately in render.rs with live cell lookup
+            // Rendered separately in render.rs:
+            //   - Tldr needs spinner_frame for the loading indicator
+            //   - ToolDetail looks up its live cell from the transcript
+            Overlay::Tldr(_) | Overlay::ToolDetail(_) => {}
         }
     }
 
@@ -188,6 +195,7 @@ impl Overlay {
             Overlay::Timeline(t) => t.handle_key(tui, key),
             Overlay::Rename(r) => r.handle_key(tui, key),
             Overlay::ImagePreview(p) => p.handle_key(tui, key),
+            Overlay::Tldr(t) => t.handle_key(key),
             Overlay::ToolDetail(t) => t.handle_key(key),
         }
     }

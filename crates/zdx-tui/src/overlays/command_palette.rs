@@ -351,6 +351,7 @@ fn execute_command(
         }
         "thinking" => (Some(OverlayRequest::ThinkingPicker), vec![], vec![]),
         "timeline" => (Some(OverlayRequest::Timeline), vec![], vec![]),
+        "tldr" => (Some(OverlayRequest::Tldr), vec![], vec![]),
         "handoff" => {
             let (effects, mutations) = execute_handoff(tui);
             (None, effects, mutations)

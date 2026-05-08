@@ -231,6 +231,13 @@ pub const COMMANDS: &[Command] = &[
         category: "thread",
         shortcut: None,
     },
+    Command {
+        name: "tldr",
+        aliases: &["recap", "summary"],
+        description: "Show a TLDR of recent activity in this thread",
+        category: "thread",
+        shortcut: Some("Ctrl+R"),
+    },
 ];
 
 pub fn command_available(command: &Command, model_id: &str) -> bool {

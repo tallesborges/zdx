@@ -198,6 +198,18 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         }
         UiEvent::VoiceRecorded { result } => handle_voice_recorded(app, result),
         UiEvent::VoiceTranscribed { result } => handle_voice_transcribed(app, result),
+        UiEvent::TldrResult { thread_id, result } => {
+            if let Some(overlays::Overlay::Tldr(state)) = &mut app.overlay
+                && state.thread_id == thread_id
+            {
+                match result {
+                    Ok(text) => state.set_ready(text),
+                    Err(message) => state.set_error(message),
+                }
+            }
+            // If the overlay was closed or switched threads, drop the result silently.
+            vec![]
+        }
     }
 }
 
@@ -505,6 +517,7 @@ fn handle_task_started_event(
         | TaskKind::ThreadLoad
         | TaskKind::ThreadRename
         | TaskKind::ThreadTitle
+        | TaskKind::ThreadTldr
         | TaskKind::ThreadPreview
         | TaskKind::ThreadCreate
         | TaskKind::ThreadFork
@@ -934,6 +947,34 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
             } else {
                 vec![]
             }
+        }
+        overlays::OverlayRequest::Tldr => {
+            // Requires an active thread persisted on disk so the engine can
+            // load events. Without a handle, surface a system message instead
+            // of opening an empty overlay.
+            let Some(thread_handle) = &app.tui.thread.thread_handle else {
+                app.tui
+                    .transcript
+                    .push_cell(crate::transcript::HistoryCell::system(
+                        "TLDR requires an active thread.".to_string(),
+                    ));
+                return vec![];
+            };
+            let thread_id = thread_handle.id.clone();
+            // If a previous TLDR task is still in flight (e.g. user closed
+            // overlay while it ran), drop it so this new request takes over.
+            let mut effects = Vec::new();
+            if app.tui.tasks.state(TaskKind::ThreadTldr).is_running() {
+                effects.push(UiEffect::CancelTask {
+                    kind: TaskKind::ThreadTldr,
+                    token: app.tui.tasks.state(TaskKind::ThreadTldr).cancel.clone(),
+                });
+            }
+            app.overlay = Some(overlays::Overlay::Tldr(overlays::TldrState::open(
+                thread_id.clone(),
+            )));
+            effects.push(UiEffect::GenerateTldr { thread_id });
+            effects
         }
         overlays::OverlayRequest::ImagePreview {
             image_path,
