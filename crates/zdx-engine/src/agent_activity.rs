@@ -9,6 +9,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::config::paths;
 
@@ -54,7 +55,7 @@ pub fn start(
         model: model.map(String::from),
     };
 
-    let filename = format!("{pid}.json");
+    let filename = format!("{pid}-{}.json", Uuid::new_v4());
     let path = dir.join(filename);
     let json = serde_json::to_string(&record).ok()?;
     fs::write(&path, json).ok()?;
