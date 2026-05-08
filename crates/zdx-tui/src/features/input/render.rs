@@ -457,13 +457,13 @@ fn render_handoff_input(
     } else if state.input.handoff.is_ready() {
         // Generated prompt is ready for review
         (
-            " handoff (review and Enter to start new thread, Esc to cancel) ",
+            " handoff (review and Enter to open in new tab, Esc to cancel) ",
             Color::Green,
         )
     } else {
         // Waiting for goal input (Pending)
         (
-            " handoff (enter goal for new thread, Esc to cancel) ",
+            " handoff (enter goal for new tab, Esc to cancel) ",
             Color::Yellow,
         )
     };
@@ -479,6 +479,12 @@ fn render_prompt_builder_input(
 ) {
     let (title, border_color) = if state.input.prompt_builder.is_generating() {
         (" prompt-builder (generating prompt...) ", Color::Cyan)
+    } else if state.input.prompt_builder.is_ready() {
+        // Generated prompt is awaiting review.
+        (
+            " prompt-builder (review — Enter to send, type to edit, Esc to undo) ",
+            Color::Green,
+        )
     } else {
         // Pending: waiting for the user's intent.
         (

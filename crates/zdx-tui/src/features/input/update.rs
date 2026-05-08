@@ -16,9 +16,7 @@ use super::state::{
 };
 use crate::common::{TaskKind, Tasks, sanitize_for_display};
 use crate::effects::UiEffect;
-use crate::mutations::{
-    ConfigMutation, InputMutation, StateMutation, ThreadMutation, TranscriptMutation,
-};
+use crate::mutations::{ConfigMutation, StateMutation, ThreadMutation, TranscriptMutation};
 use crate::overlays::{LoginState, Overlay, OverlayRequest};
 use crate::state::{AgentState, TabId, fast_mode_enabled_for_model, fast_mode_provider_for_model};
 use crate::transcript::HistoryCell;
@@ -106,6 +104,11 @@ pub fn handle_paste(
     overlay: &mut Option<Overlay>,
     text: &str,
 ) -> Vec<UiEffect> {
+    // Pasting into the prompt-builder review state implicitly accepts the
+    // polished prompt — the paste then modifies the composer normally.
+    if input.prompt_builder.is_ready() {
+        input.prompt_builder = PromptBuilderState::Idle;
+    }
     let sanitized = sanitize_for_display(text);
     if is_image_path(&sanitized) {
         let path = sanitized.trim();
@@ -162,6 +165,15 @@ pub fn handle_main_key(input: &mut InputState, ctx: &InputContext<'_>, key: KeyE
             return result;
         }
         return (vec![], vec![], None);
+    }
+
+    // Prompt-builder review state (`Ready`): any non-Esc keystroke implicitly
+    // accepts the polished prompt by dropping to `Idle` so normal dispatch
+    // takes over (Enter sends the prompt, edits modify it). Esc is preserved
+    // so `handle_esc_modals` can route it to the reject path that restores
+    // the original intent.
+    if input.prompt_builder.is_ready() && key.code != KeyCode::Esc {
+        input.prompt_builder = PromptBuilderState::Idle;
     }
 
     // Try each handler category in order; first match wins
@@ -513,8 +525,16 @@ fn handle_esc_modals(input: &mut InputState) -> Option<KeyResult> {
         return Some((vec![], vec![], None));
     }
     if input.prompt_builder.is_generating() {
+        let restored = match &input.prompt_builder {
+            PromptBuilderState::Generating { intent } => Some(intent.clone()),
+            _ => None,
+        };
         input.prompt_builder = PromptBuilderState::Idle;
-        input.clear();
+        if let Some(intent) = restored {
+            input.set_text(&intent);
+        } else {
+            input.clear();
+        }
         return Some((
             vec![UiEffect::CancelTask {
                 kind: TaskKind::PromptBuilder,
@@ -524,9 +544,26 @@ fn handle_esc_modals(input: &mut InputState) -> Option<KeyResult> {
             None,
         ));
     }
-    if input.prompt_builder.is_active() {
+    if input.prompt_builder.is_ready() {
+        // Reject the generated prompt: restore the original intent so the
+        // user does not lose what they had typed. The generation task has
+        // already completed, so there is nothing to cancel.
+        let restored = match &input.prompt_builder {
+            PromptBuilderState::Ready { intent } => Some(intent.clone()),
+            _ => None,
+        };
         input.prompt_builder = PromptBuilderState::Idle;
-        input.clear();
+        if let Some(intent) = restored {
+            input.set_text(&intent);
+        } else {
+            input.clear();
+        }
+        return Some((vec![], vec![], None));
+    }
+    if input.prompt_builder.is_active() {
+        // Pending: composer already holds the typed intent. Preserve it so
+        // the user keeps whatever they were drafting after Esc.
+        input.prompt_builder = PromptBuilderState::Idle;
         return Some((vec![], vec![], None));
     }
     None
@@ -1004,7 +1041,13 @@ fn handle_handoff_submission(
         ));
     }
 
-    // Submitting generated handoff prompt (to create new thread)
+    // Submitting generated handoff prompt (to create new thread in a new tab)
+    //
+    // The new thread is opened in a fresh background tab, so the source thread
+    // stays intact in its current tab. The reducer only resets modal state and
+    // clears the textarea on the source tab; `update.rs` intercepts
+    // `HandoffSubmit` and pushes the new tab before the runtime spawns
+    // `thread_create`, so `ThreadUiEvent::Created` populates the new tab.
     if input.handoff.is_ready() {
         if trimmed.is_empty() {
             return Some((
@@ -1018,24 +1061,13 @@ fn handle_handoff_submission(
             ));
         }
         input.handoff = HandoffState::Idle;
-        input.clear_history();
+        input.clear();
         return Some((
             vec![UiEffect::HandoffSubmit {
                 prompt: text.to_string(),
                 handoff_from: thread_id.map(std::string::ToString::to_string),
             }],
-            vec![
-                StateMutation::Transcript(TranscriptMutation::Clear),
-                StateMutation::Thread(ThreadMutation::ClearMessages),
-                StateMutation::Thread(ThreadMutation::SetThread(None)),
-                StateMutation::Thread(ThreadMutation::ResetUsage),
-                StateMutation::Input(InputMutation::ClearQueue),
-                StateMutation::Input(InputMutation::ResetImageCounter),
-                StateMutation::SetActiveThreadOverrides {
-                    model_override: None,
-                    thinking_override: None,
-                },
-            ],
+            vec![],
             None,
         ));
     }
@@ -1069,6 +1101,11 @@ fn handle_prompt_builder_submission(
         ));
     }
 
+    // Stash the intent inside the Generating state so Esc can restore it,
+    // then clear the composer for the "generating prompt..." view.
+    input.prompt_builder = PromptBuilderState::Generating {
+        intent: text.to_string(),
+    };
     input.clear();
     Some((
         vec![UiEffect::StartPromptBuilder {
@@ -1247,7 +1284,12 @@ pub fn handle_prompt_builder_result(
     match result {
         Ok(generated_prompt) => {
             input.set_text(&generated_prompt);
-            input.prompt_builder = PromptBuilderState::Idle;
+            // Stay in `Ready` so the user can review the polished prompt.
+            // Esc reverts to the original intent; any other key implicitly
+            // accepts and drops to `Idle` (handled in `handle_main_key`).
+            input.prompt_builder = PromptBuilderState::Ready {
+                intent: intent.to_string(),
+            };
             vec![]
         }
         Err(error) => {
@@ -1560,9 +1602,11 @@ mod tests {
     }
 
     #[test]
-    fn prompt_builder_result_inserts_prompt_into_composer_and_returns_to_idle() {
+    fn prompt_builder_result_inserts_prompt_into_composer_and_enters_review() {
         let mut input = InputState::default();
-        input.prompt_builder = PromptBuilderState::Generating;
+        input.prompt_builder = PromptBuilderState::Generating {
+            intent: "the original intent".to_string(),
+        };
 
         let mutations = handle_prompt_builder_result(
             &mut input,
@@ -1572,13 +1616,22 @@ mod tests {
 
         assert!(mutations.is_empty());
         assert_eq!(input.get_text(), "the polished prompt");
-        assert!(matches!(input.prompt_builder, PromptBuilderState::Idle));
+        // Success now lands in `Ready` so the user can review the polished
+        // prompt before it implicitly becomes a normal composer message.
+        match &input.prompt_builder {
+            PromptBuilderState::Ready { intent } => {
+                assert_eq!(intent, "the original intent");
+            }
+            other => panic!("expected Ready, got {other:?}"),
+        }
     }
 
     #[test]
     fn prompt_builder_failure_restores_intent_and_returns_to_pending() {
         let mut input = InputState::default();
-        input.prompt_builder = PromptBuilderState::Generating;
+        input.prompt_builder = PromptBuilderState::Generating {
+            intent: "the original intent".to_string(),
+        };
 
         let mutations = handle_prompt_builder_result(
             &mut input,
@@ -1601,7 +1654,9 @@ mod tests {
         // user must not be able to type into it. Otherwise the result event
         // (or Esc) overwrites the typed text with the captured intent.
         let mut input = InputState::default();
-        input.prompt_builder = PromptBuilderState::Generating;
+        input.prompt_builder = PromptBuilderState::Generating {
+            intent: "captured intent".to_string(),
+        };
         let tasks = Tasks::default();
         let active_thread_ids = std::collections::HashSet::new();
         let config = Config::default();
@@ -1633,7 +1688,9 @@ mod tests {
         // explicitly delegates Esc to `handle_control_keys` so the cancel
         // path remains reachable.
         let mut input = InputState::default();
-        input.prompt_builder = PromptBuilderState::Generating;
+        input.prompt_builder = PromptBuilderState::Generating {
+            intent: "captured intent".to_string(),
+        };
         let tasks = Tasks::default();
         let active_thread_ids = std::collections::HashSet::new();
         let config = Config::default();
@@ -1654,6 +1711,152 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn esc_during_prompt_builder_pending_keeps_typed_intent() {
+        // Esc while typing the intent must not wipe the composer — the user
+        // should be able to recover whatever they had drafted.
+        let mut input = InputState::default();
+        input.prompt_builder = PromptBuilderState::Pending;
+        input.set_text("half-written intent");
+        let tasks = Tasks::default();
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config::default();
+        let ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
+
+        let (effects, mutations, _overlay) = handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+
+        assert!(matches!(input.prompt_builder, PromptBuilderState::Idle));
+        assert_eq!(input.get_text(), "half-written intent");
+        assert!(effects.is_empty());
+        assert!(mutations.is_empty());
+    }
+
+    #[test]
+    fn esc_during_prompt_builder_generating_restores_intent() {
+        // Esc while generation is in flight must restore the captured intent
+        // back into the composer so the user does not lose their prompt.
+        let mut input = InputState::default();
+        input.prompt_builder = PromptBuilderState::Generating {
+            intent: "the captured intent".to_string(),
+        };
+        let tasks = Tasks::default();
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config::default();
+        let ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
+
+        let (effects, _mutations, _overlay) = handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+
+        assert!(matches!(input.prompt_builder, PromptBuilderState::Idle));
+        assert_eq!(input.get_text(), "the captured intent");
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            UiEffect::CancelTask {
+                kind: TaskKind::PromptBuilder,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn esc_during_prompt_builder_ready_restores_intent_and_emits_no_effect() {
+        // Reject the polished prompt: the original intent should come back
+        // into the composer and no cancellation effect should fire (the
+        // generation task already completed).
+        let mut input = InputState::default();
+        input.prompt_builder = PromptBuilderState::Ready {
+            intent: "the original intent".to_string(),
+        };
+        input.set_text("the polished prompt");
+        let tasks = Tasks::default();
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config::default();
+        let ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
+
+        let (effects, mutations, _overlay) = handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+
+        assert!(matches!(input.prompt_builder, PromptBuilderState::Idle));
+        assert_eq!(input.get_text(), "the original intent");
+        assert!(effects.is_empty());
+        assert!(mutations.is_empty());
+    }
+
+    #[test]
+    fn typing_in_prompt_builder_ready_implicitly_accepts_and_edits_composer() {
+        // Any non-Esc keystroke must drop `Ready` to `Idle` and then flow
+        // through normal dispatch so the user can edit the polished prompt
+        // without a separate confirmation step.
+        let mut input = InputState::default();
+        input.prompt_builder = PromptBuilderState::Ready {
+            intent: "the original intent".to_string(),
+        };
+        input.set_text("polished");
+        let tasks = Tasks::default();
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config::default();
+        let ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
+
+        let (_effects, _mutations, _overlay) = handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE),
+        );
+
+        assert!(matches!(input.prompt_builder, PromptBuilderState::Idle));
+        // The keystroke was processed against the polished text — exact
+        // cursor placement is implementation-dependent, but the new char
+        // must be present and the polished text must still be there.
+        let text = input.get_text();
+        assert!(
+            text.contains('!'),
+            "expected '!' to be inserted, got {text:?}"
+        );
+        assert!(text.contains("polished"));
+    }
+
+    #[test]
+    fn enter_in_prompt_builder_ready_accepts_and_falls_through_to_send() {
+        // Enter on the polished prompt should accept (drop to Idle) and then
+        // be handled like a normal submission — emitting `StartAgentTurn`.
+        let mut input = InputState::default();
+        input.prompt_builder = PromptBuilderState::Ready {
+            intent: "the original intent".to_string(),
+        };
+        input.set_text("the polished prompt");
+        let tasks = Tasks::default();
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config::default();
+        let ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
+
+        let (effects, _mutations, _overlay) = handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        assert!(matches!(input.prompt_builder, PromptBuilderState::Idle));
+        // Submission path emits a `StartAgentTurn` effect with the polished
+        // prompt as the user message.
+        let started_turn = effects
+            .iter()
+            .any(|e| matches!(e, UiEffect::StartAgentTurn { .. }));
+        assert!(
+            started_turn,
+            "expected StartAgentTurn after accepting Ready; got {effects:?}"
+        );
     }
 
     #[test]
