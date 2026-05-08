@@ -448,10 +448,12 @@ impl ToolDetailState {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color))
             .title_bottom(Line::from(vec![
-                Span::styled(" [q]", Style::default().fg(Color::Yellow)),
+                Span::styled(" [Esc/q]", Style::default().fg(Color::Yellow)),
                 Span::styled(" close  ", Style::default().fg(Color::DarkGray)),
                 Span::styled("[j/k]", Style::default().fg(Color::Yellow)),
-                Span::styled(" scroll ", Style::default().fg(Color::DarkGray)),
+                Span::styled(" scroll  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("[g/G]", Style::default().fg(Color::Yellow)),
+                Span::styled(" top/bottom ", Style::default().fg(Color::DarkGray)),
                 Span::styled(scroll_indicator, Style::default().fg(Color::Cyan)),
             ]));
 
