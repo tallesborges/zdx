@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -183,6 +184,12 @@ pub struct MonitorApp {
     pub automations: Vec<AutomationInfo>,
     pub services: Vec<ServiceInfo>,
     pub active_agents: Vec<ActiveAgentInfo>,
+    pub log_file_name: Option<String>,
+    pub log_lines: Vec<String>,
+    pub log_selected: usize,
+    pub log_offset: usize,
+    pub log_follow: bool,
+    pub log_overlay_open: bool,
     pub active_section: Section,
     pub selected_index: usize,
     pub status_section: Section,
@@ -224,15 +231,17 @@ pub enum Section {
     Config,
     Threads,
     Automations,
+    Logs,
 }
 
 impl Section {
-    pub const ALL: [Section; 5] = [
+    pub const ALL: [Section; 6] = [
         Section::Services,
         Section::ActiveAgents,
         Section::Config,
         Section::Threads,
         Section::Automations,
+        Section::Logs,
     ];
 
     pub fn label(self) -> &'static str {
@@ -242,6 +251,7 @@ impl Section {
             Section::Config => "Config",
             Section::Threads => "Threads",
             Section::Automations => "Automations",
+            Section::Logs => "Logs",
         }
     }
 
@@ -251,7 +261,8 @@ impl Section {
             Section::ActiveAgents => Section::Config,
             Section::Config => Section::Threads,
             Section::Threads => Section::Automations,
-            Section::Automations => Section::Services,
+            Section::Automations => Section::Logs,
+            Section::Logs => Section::Services,
         }
     }
 }
@@ -260,7 +271,7 @@ impl MonitorApp {
     fn item_count(&self) -> usize {
         match self.active_section {
             Section::Services => self.services.len(),
-            Section::Config => 0,
+            Section::Config | Section::Logs => 0,
             Section::ActiveAgents => self.active_agents.len(),
             Section::Threads => self.threads.len(),
             Section::Automations => self.automations.len(),
@@ -304,11 +315,82 @@ fn config_max_scroll(app: &MonitorApp) -> usize {
     app.config_line_count.saturating_sub(config_page_size(app))
 }
 
+/// Number of log lines tailed from the newest log file.
+const LOG_TAIL_LINES: usize = 500;
+
+/// Visible content rows in the Logs panel (same chrome as Config).
+fn log_page_size(app: &MonitorApp) -> usize {
+    (app.terminal_height.saturating_sub(8) as usize).max(1)
+}
+
+/// Adjust `log_offset` so `log_selected` is in the visible window.
+fn ensure_log_selected_visible(app: &mut MonitorApp) {
+    let page = log_page_size(app);
+    if app.log_selected < app.log_offset {
+        app.log_offset = app.log_selected;
+    } else if app.log_selected >= app.log_offset + page {
+        app.log_offset = app.log_selected + 1 - page;
+    }
+}
+
+/// Read up to `max_lines` final lines from a log file by tailing the last 256 KiB.
+fn tail_lines(path: &Path, max_lines: usize) -> io::Result<Vec<String>> {
+    let mut file = fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    let file_size = metadata.len();
+    let read_size: u64 = file_size.min(256 * 1024);
+    let start = file_size.saturating_sub(read_size);
+    file.seek(io::SeekFrom::Start(start))?;
+    let mut buf = Vec::with_capacity(read_size as usize);
+    file.read_to_end(&mut buf)?;
+    let text = String::from_utf8_lossy(&buf);
+    let mut lines: Vec<String> = text.lines().map(String::from).collect();
+    // If we started mid-file, the first line is likely a partial — drop it.
+    if start > 0 && !lines.is_empty() {
+        lines.remove(0);
+    }
+    let len = lines.len();
+    if len > max_lines {
+        lines.drain(0..len - max_lines);
+    }
+    Ok(lines)
+}
+
+/// Find the newest file in `~/.zdx/logs/` (by mtime) and tail its last lines.
+fn load_logs(max_lines: usize) -> (Option<String>, Vec<String>) {
+    let dir = paths::zdx_home().join("logs");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return (None, Vec::new());
+    };
+    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+    for entry in entries.flatten() {
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let mtime = metadata.modified().unwrap_or(std::time::UNIX_EPOCH);
+        let path = entry.path();
+        match &newest {
+            Some((t, _)) if *t >= mtime => {}
+            _ => newest = Some((mtime, path)),
+        }
+    }
+    let Some((_, path)) = newest else {
+        return (None, Vec::new());
+    };
+    let file_name = path.file_name().map(|s| s.to_string_lossy().into_owned());
+    let lines = tail_lines(&path, max_lines).unwrap_or_default();
+    (file_name, lines)
+}
+
 fn build_app(root: &Path) -> Result<MonitorApp> {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let config = config::Config::load().context("load config")?;
     let config_lines = build_config_lines(&config);
     let config_line_count = rendered_line_count(&config_lines);
+    let (log_file_name, log_lines) = load_logs(LOG_TAIL_LINES);
 
     Ok(MonitorApp {
         config_lines,
@@ -320,6 +402,12 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
         automations: load_automations(&root),
         services: load_services(),
         active_agents: load_active_agents(),
+        log_file_name,
+        log_lines,
+        log_selected: 0,
+        log_offset: 0,
+        log_follow: true,
+        log_overlay_open: false,
         active_section: Section::Services,
         selected_index: 0,
         status_section: Section::Services,
@@ -348,12 +436,28 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
 }
 
 fn handle_key_event(app: &mut MonitorApp, key: KeyCode) {
+    if app.log_overlay_open {
+        handle_log_overlay_key(app, key);
+        return;
+    }
+    if app.active_section == Section::Logs && handle_logs_key(app, key) {
+        return;
+    }
     match key {
         KeyCode::Char('q') => app.should_quit = true,
         KeyCode::Tab => {
             app.active_section = app.active_section.next();
             app.selected_index = 0;
             app.config_scroll = 0;
+            if app.active_section == Section::Logs {
+                app.log_follow = true;
+                let total = app.log_lines.len();
+                if total > 0 {
+                    app.log_selected = total - 1;
+                    let page = log_page_size(app);
+                    app.log_offset = total.saturating_sub(page);
+                }
+            }
         }
         KeyCode::Char('j') | KeyCode::Down => {
             if app.active_section == Section::Config {
@@ -373,18 +477,14 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyCode) {
                 app.selected_index -= 1;
             }
         }
-        KeyCode::PageDown => {
-            if app.active_section == Section::Config {
-                let page = config_page_size(app);
-                let max = config_max_scroll(app);
-                app.config_scroll = app.config_scroll.saturating_add(page).min(max);
-            }
+        KeyCode::PageDown if app.active_section == Section::Config => {
+            let page = config_page_size(app);
+            let max = config_max_scroll(app);
+            app.config_scroll = app.config_scroll.saturating_add(page).min(max);
         }
-        KeyCode::PageUp => {
-            if app.active_section == Section::Config {
-                let page = config_page_size(app);
-                app.config_scroll = app.config_scroll.saturating_sub(page);
-            }
+        KeyCode::PageUp if app.active_section == Section::Config => {
+            let page = config_page_size(app);
+            app.config_scroll = app.config_scroll.saturating_sub(page);
         }
         KeyCode::Char('y') => copy_selected_thread_id(app),
         KeyCode::Enter => toggle_selected_service(app),
@@ -393,12 +493,110 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyCode) {
     }
 }
 
+/// Handle a key while the Logs section is active. Returns `true` if the key
+/// was consumed (so the generic dispatcher should not also act on it).
+fn handle_logs_key(app: &mut MonitorApp, key: KeyCode) -> bool {
+    let total = app.log_lines.len();
+    match key {
+        KeyCode::Char('j') | KeyCode::Down => {
+            if total > 0 && app.log_selected + 1 < total {
+                app.log_selected += 1;
+                if app.log_selected + 1 == total {
+                    app.log_follow = true;
+                }
+                ensure_log_selected_visible(app);
+            }
+            true
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if app.log_selected > 0 {
+                app.log_selected -= 1;
+                app.log_follow = false;
+                ensure_log_selected_visible(app);
+            }
+            true
+        }
+        KeyCode::PageDown => {
+            if total > 0 {
+                let page = log_page_size(app);
+                app.log_selected = (app.log_selected + page).min(total - 1);
+                if app.log_selected + 1 == total {
+                    app.log_follow = true;
+                }
+                ensure_log_selected_visible(app);
+            }
+            true
+        }
+        KeyCode::PageUp => {
+            let page = log_page_size(app);
+            app.log_selected = app.log_selected.saturating_sub(page);
+            app.log_follow = false;
+            ensure_log_selected_visible(app);
+            true
+        }
+        KeyCode::Char('G') | KeyCode::End => {
+            if total > 0 {
+                app.log_selected = total - 1;
+                app.log_follow = true;
+                let page = log_page_size(app);
+                app.log_offset = total.saturating_sub(page);
+            }
+            true
+        }
+        KeyCode::Enter => {
+            if total > 0 {
+                app.log_overlay_open = true;
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn handle_log_overlay_key(app: &mut MonitorApp, key: KeyCode) {
+    match key {
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
+            app.log_overlay_open = false;
+        }
+        KeyCode::Char('y') => copy_selected_log_entry(app),
+        _ => {}
+    }
+}
+
+fn copy_selected_log_entry(app: &mut MonitorApp) {
+    if let Some(line) = app.log_lines.get(app.log_selected).cloned() {
+        let _ = std::process::Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                if let Some(ref mut stdin) = child.stdin {
+                    stdin.write_all(line.as_bytes())?;
+                }
+                child.wait()
+            });
+        app.set_status("Copied log entry");
+    }
+}
+
 fn handle_mouse_event(app: &mut MonitorApp, kind: MouseEventKind) {
+    if app.log_overlay_open {
+        return;
+    }
     match kind {
         MouseEventKind::ScrollDown => {
             if app.active_section == Section::Config {
                 let max = config_max_scroll(app);
                 app.config_scroll = app.config_scroll.saturating_add(1).min(max);
+            } else if app.active_section == Section::Logs {
+                let total = app.log_lines.len();
+                if total > 0 && app.log_selected + 1 < total {
+                    app.log_selected += 1;
+                    if app.log_selected + 1 == total {
+                        app.log_follow = true;
+                    }
+                    ensure_log_selected_visible(app);
+                }
             } else {
                 let count = app.item_count();
                 if count > 0 {
@@ -409,6 +607,12 @@ fn handle_mouse_event(app: &mut MonitorApp, kind: MouseEventKind) {
         MouseEventKind::ScrollUp => {
             if app.active_section == Section::Config {
                 app.config_scroll = app.config_scroll.saturating_sub(1);
+            } else if app.active_section == Section::Logs {
+                if app.log_selected > 0 {
+                    app.log_selected -= 1;
+                    app.log_follow = false;
+                    ensure_log_selected_visible(app);
+                }
             } else {
                 app.selected_index = app.selected_index.saturating_sub(1);
             }
@@ -464,6 +668,22 @@ fn restart_selected_service(app: &mut MonitorApp) {
 fn refresh_app(app: &mut MonitorApp) {
     app.services = load_services();
     app.active_agents = load_active_agents();
+    let (log_file_name, log_lines) = load_logs(LOG_TAIL_LINES);
+    app.log_file_name = log_file_name;
+    app.log_lines = log_lines;
+    let total = app.log_lines.len();
+    if total == 0 {
+        app.log_selected = 0;
+        app.log_offset = 0;
+        app.log_overlay_open = false;
+    } else if app.log_follow {
+        app.log_selected = total - 1;
+        let page = log_page_size(app);
+        app.log_offset = total.saturating_sub(page);
+    } else {
+        app.log_selected = app.log_selected.min(total - 1);
+        ensure_log_selected_visible(app);
+    }
     app.clamp_selection();
 }
 
