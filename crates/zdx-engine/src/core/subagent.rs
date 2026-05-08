@@ -35,6 +35,19 @@ pub struct ExecSubagentOptions {
     pub event_filter: Option<Vec<String>>,
     /// Optional timeout for the child process.
     pub timeout: Option<Duration>,
+    /// Whether the child run should register itself in the active-agents
+    /// registry. Defaults to `false` so internal helper subagents (title
+    /// generation, TLDR, handoff, prompt builder, read_thread) are not
+    /// counted as "active agents". Set to `true` for user-visible subagents
+    /// invoked via `invoke_subagent`.
+    pub track_activity: bool,
+    /// Logical role for the child run when `track_activity` is true
+    /// (e.g. `"subagent"`).
+    pub activity_kind: Option<String>,
+    /// Parent thread id when `track_activity` is true.
+    pub activity_parent_thread_id: Option<String>,
+    /// Named subagent (e.g. `"explorer"`) when `track_activity` is true.
+    pub activity_subagent_name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -190,6 +203,23 @@ fn build_exec_args(
         args.push(OsString::from(level.display_name()));
     }
 
+    if options.track_activity {
+        if let Some(kind) = normalize_optional(options.activity_kind.as_deref()) {
+            args.push(OsString::from("--activity-kind"));
+            args.push(OsString::from(kind));
+        }
+        if let Some(parent) = normalize_optional(options.activity_parent_thread_id.as_deref()) {
+            args.push(OsString::from("--activity-parent-thread-id"));
+            args.push(OsString::from(parent));
+        }
+        if let Some(name) = normalize_optional(options.activity_subagent_name.as_deref()) {
+            args.push(OsString::from("--activity-subagent-name"));
+            args.push(OsString::from(name));
+        }
+    } else {
+        args.push(OsString::from("--no-activity"));
+    }
+
     args
 }
 
@@ -318,7 +348,8 @@ mod tests {
                 "--no-thread",
                 "exec",
                 "--prompt-file",
-                "/tmp/subagent-prompt.md"
+                "/tmp/subagent-prompt.md",
+                "--no-activity"
             ]
         );
     }
@@ -339,6 +370,10 @@ mod tests {
                 tools_override: Some(vec!["read".to_string(), "glob".to_string()]),
                 event_filter: Some(vec!["turn_finished".to_string()]),
                 timeout: None,
+                track_activity: false,
+                activity_kind: None,
+                activity_parent_thread_id: None,
+                activity_subagent_name: None,
             },
             Some(system_prompt_file),
         );
@@ -366,7 +401,46 @@ mod tests {
                 "--effective-system-prompt-file",
                 "/tmp/effective-system-prompt.md",
                 "-t",
-                "low"
+                "low",
+                "--no-activity"
+            ]
+        );
+    }
+
+    #[test]
+    fn build_exec_args_propagates_activity_metadata_when_tracking() {
+        let args = build_exec_args(
+            Path::new("/tmp/project"),
+            Path::new("/tmp/subagent-prompt.md"),
+            &ExecSubagentOptions {
+                track_activity: true,
+                activity_kind: Some("subagent".to_string()),
+                activity_parent_thread_id: Some("thread-parent".to_string()),
+                activity_subagent_name: Some("explorer".to_string()),
+                ..Default::default()
+            },
+            None,
+        );
+        let args: Vec<String> = args
+            .iter()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+
+        assert_eq!(
+            args,
+            vec![
+                "--root",
+                "/tmp/project",
+                "--no-thread",
+                "exec",
+                "--prompt-file",
+                "/tmp/subagent-prompt.md",
+                "--activity-kind",
+                "subagent",
+                "--activity-parent-thread-id",
+                "thread-parent",
+                "--activity-subagent-name",
+                "explorer"
             ]
         );
     }

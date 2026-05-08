@@ -6,9 +6,11 @@
 //! filtered out when listing active runs.
 
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use tempfile::NamedTempFile;
 use uuid::Uuid;
 
 use crate::config::paths;
@@ -21,6 +23,29 @@ pub struct RunRecord {
     pub thread_id: Option<String>,
     pub surface: Option<String>,
     pub model: Option<String>,
+    /// Logical role of this run, e.g. `"chat"`, `"exec"`, `"telegram"`,
+    /// `"subagent"`. `None` is allowed for older markers and ad-hoc runs.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// When this run was spawned by another agent run, the originating
+    /// thread id (useful for grouping subagents under their parent).
+    #[serde(default)]
+    pub parent_thread_id: Option<String>,
+    /// For `invoke_subagent`: the named subagent invoked
+    /// (e.g. `"explorer"`, `"oracle"`, `"task"`).
+    #[serde(default)]
+    pub subagent_name: Option<String>,
+}
+
+/// Parameters for [`start`].
+#[derive(Debug, Default, Clone)]
+pub struct StartParams<'a> {
+    pub thread_id: Option<&'a str>,
+    pub surface: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub kind: Option<&'a str>,
+    pub parent_thread_id: Option<&'a str>,
+    pub subagent_name: Option<&'a str>,
 }
 
 /// Guard that creates a marker file on construction and removes it on drop.
@@ -37,11 +62,11 @@ impl Drop for RunGuard {
 /// Creates a `RunGuard` that writes a marker file for the current agent turn.
 ///
 /// Best-effort: returns `None` if the marker cannot be written (e.g. permissions).
-pub fn start(
-    thread_id: Option<&str>,
-    surface: Option<&str>,
-    model: Option<&str>,
-) -> Option<RunGuard> {
+///
+/// Marker writes are atomic — the JSON is staged in a same-directory temp
+/// file and renamed into place — so concurrent readers in
+/// [`list_active`] never observe partial JSON.
+pub fn start(params: StartParams<'_>) -> Option<RunGuard> {
     let dir = agents_run_dir();
     fs::create_dir_all(&dir).ok()?;
 
@@ -50,15 +75,22 @@ pub fn start(
     let record = RunRecord {
         pid,
         started_at,
-        thread_id: thread_id.map(String::from),
-        surface: surface.map(String::from),
-        model: model.map(String::from),
+        thread_id: params.thread_id.map(String::from),
+        surface: params.surface.map(String::from),
+        model: params.model.map(String::from),
+        kind: params.kind.map(String::from),
+        parent_thread_id: params.parent_thread_id.map(String::from),
+        subagent_name: params.subagent_name.map(String::from),
     };
 
     let filename = format!("{pid}-{}.json", Uuid::new_v4());
     let path = dir.join(filename);
     let json = serde_json::to_string(&record).ok()?;
-    fs::write(&path, json).ok()?;
+
+    let mut tmp = NamedTempFile::new_in(&dir).ok()?;
+    tmp.write_all(json.as_bytes()).ok()?;
+    tmp.flush().ok()?;
+    tmp.persist(&path).ok()?;
 
     Some(RunGuard { path })
 }
@@ -80,7 +112,8 @@ pub fn list_active() -> Vec<RunRecord> {
             continue;
         };
         let Ok(record) = serde_json::from_str::<RunRecord>(&content) else {
-            // Corrupt marker — remove it
+            // Corrupt marker — remove it. Atomic writes via tempfile+rename
+            // mean we should never see a partial JSON here under normal use.
             let _ = fs::remove_file(&path);
             continue;
         };

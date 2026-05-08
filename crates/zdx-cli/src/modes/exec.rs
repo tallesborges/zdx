@@ -39,6 +39,16 @@ pub struct ExecOptions {
     pub effective_system_prompt: Option<String>,
     /// Disable all system prompt/context composition.
     pub no_system_prompt: bool,
+    /// Whether this run should be registered in the active-agents registry.
+    /// Helper subagents (title generation, TLDR, handoff, prompt builder,
+    /// read_thread) pass `false`.
+    pub track_activity: bool,
+    /// Logical role for this run in the active-agents registry.
+    pub activity_kind: Option<String>,
+    /// Parent thread id when this run was spawned by another agent.
+    pub activity_parent_thread_id: Option<String>,
+    /// Named subagent invoked when this is a `invoke_subagent` child.
+    pub activity_subagent_name: Option<String>,
 }
 
 impl From<&ExecOptions> for AgentOptions {
@@ -49,6 +59,10 @@ impl From<&ExecOptions> for AgentOptions {
             surface: Some("exec".to_string()),
             text_verbosity: None,
             service_tier: None,
+            track_activity: opts.track_activity,
+            activity_kind: opts.activity_kind.clone(),
+            activity_parent_thread_id: opts.activity_parent_thread_id.clone(),
+            activity_subagent_name: opts.activity_subagent_name.clone(),
         }
     }
 }

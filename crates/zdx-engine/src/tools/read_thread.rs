@@ -112,6 +112,7 @@ async fn run_subagent(prompt: String, ctx: &ToolContext) -> Result<String, Strin
         tools_override: None,
         event_filter: Some(vec!["turn_finished".to_string()]),
         timeout: ctx.timeout,
+        ..Default::default()
     };
 
     run_exec_subagent(&ctx.root, &prompt, &options)

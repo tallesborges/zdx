@@ -29,6 +29,7 @@ pub async fn generate_title(message: &str, title_model: &str, root: &Path) -> Re
         tools_override: None,
         event_filter: Some(vec!["turn_finished".to_string()]),
         timeout: Some(Duration::from_secs(60)),
+        ..Default::default()
     };
 
     let raw_output = run_exec_subagent(root, &prompt, &options).await?;
