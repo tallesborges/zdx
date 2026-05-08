@@ -10,7 +10,7 @@
 use std::fmt::Write as _;
 use std::io::Write;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::{QueueableCommand, cursor};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -73,8 +73,10 @@ impl ImagePreviewState {
     }
 
     pub fn handle_key(&mut self, _tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => OverlayUpdate::close(),
+            KeyCode::Char('c') if ctrl => OverlayUpdate::close(),
             _ => OverlayUpdate::stay(),
         }
     }

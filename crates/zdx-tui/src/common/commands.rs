@@ -54,7 +54,7 @@ pub const COMMANDS: &[Command] = &[
         aliases: &["close"],
         description: "Close the current tab",
         category: "tab",
-        shortcut: Some("Ctrl+W"),
+        shortcut: None,
     },
     Command {
         name: "commands-refresh",

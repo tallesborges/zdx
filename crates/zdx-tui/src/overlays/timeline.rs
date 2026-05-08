@@ -444,6 +444,7 @@ fn render_timeline(frame: &mut Frame, state: &TimelineState, area: Rect, input_y
             InputHint::new("↑↓", "navigate"),
             InputHint::new("Enter", "jump"),
             InputHint::new("f", "fork"),
+            InputHint::new("t", "fork as tab"),
             InputHint::new("Esc", "close"),
         ],
         Color::Green,
