@@ -885,7 +885,13 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
             let tab = create_main_tab(tab_id, &app.tui);
             app.overlay = None;
             app.push_tab(tab);
-            vec![]
+            // Persist new tab from the start: create a thread immediately so
+            // messages sent in this tab are saved to disk. Without this, a
+            // `Main` tab keeps its conversation in memory only and loses it on
+            // close (see `spawn_agent_turn`'s no-handle branch and
+            // `build_send_effects_for_tab`, which only emit `SaveThread` when
+            // a handle exists).
+            vec![UiEffect::CreateNewThread]
         }
         overlays::OverlayRequest::Btw => {
             let base_messages = build_btw_base_messages(&app.tui);
