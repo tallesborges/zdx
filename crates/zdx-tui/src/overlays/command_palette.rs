@@ -512,14 +512,14 @@ fn execute_prompt_builder(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>)
         );
     }
 
+    // Preserve any text already typed in the composer so it becomes the seed
+    // intent for prompt-builder. Pressing Enter then forwards it to
+    // generation; the user can also edit or clear it first.
     (
         vec![],
-        vec![
-            StateMutation::Input(InputMutation::SetPromptBuilderState(
-                PromptBuilderState::Pending,
-            )),
-            StateMutation::Input(InputMutation::Clear),
-        ],
+        vec![StateMutation::Input(InputMutation::SetPromptBuilderState(
+            PromptBuilderState::Pending,
+        ))],
     )
 }
 
@@ -1011,8 +1011,8 @@ mod tests {
         let (overlay, effects, mutations) = execute_command(&app.tui, "prompt-builder");
 
         // Selecting `/prompt-builder` does not auto-open another overlay or
-        // emit side-effects; it just arms the pending state and clears the
-        // composer so the user can type the intent.
+        // emit side-effects; it just arms the pending state. Any existing
+        // composer text is preserved so it becomes the seed intent.
         assert!(overlay.is_none());
         assert!(effects.is_empty());
 
@@ -1029,7 +1029,10 @@ mod tests {
         let cleared_input = mutations
             .iter()
             .any(|m| matches!(m, StateMutation::Input(InputMutation::Clear)));
-        assert!(cleared_input, "prompt-builder must clear the composer");
+        assert!(
+            !cleared_input,
+            "prompt-builder must preserve existing composer text as seed intent"
+        );
     }
 
     #[test]
@@ -1090,7 +1093,9 @@ mod tests {
 
         let config = zdx_engine::config::Config::default();
         let mut app = AppState::new(config, PathBuf::new(), None, None);
-        app.tui.input.prompt_builder = PromptBuilderState::Generating;
+        app.tui.input.prompt_builder = PromptBuilderState::Generating {
+            intent: "in-flight".to_string(),
+        };
 
         let (overlay, effects, mutations) = execute_command(&app.tui, "prompt-builder");
 
