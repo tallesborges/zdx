@@ -8,7 +8,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 use zdx_engine::core::events::ToolOutput;
@@ -915,6 +915,7 @@ impl HistoryCell {
                 lines
             }
             HistoryCell::Timing {
+                created_at,
                 duration,
                 tool_count,
                 ..
@@ -936,9 +937,15 @@ impl HistoryCell {
                     format!("{tool_count} tools")
                 };
 
-                let message = format!("{tool_str} · {duration_str}");
+                // Wall-clock time when the turn finalized (local time, ms precision).
+                let finalized_str = created_at
+                    .with_timezone(&Local)
+                    .format("%H:%M:%S%.3f")
+                    .to_string();
 
-                // Build centered separator line: ─── 3 tools · 3.5s ───
+                let message = format!("{tool_str} · {duration_str} · {finalized_str}");
+
+                // Build centered separator line: ─── 3 tools · 3.5s · 13:21:11.123 ───
                 let text_with_padding = format!(" {message} ");
                 let text_width = text_with_padding.chars().count();
                 let remaining = width.saturating_sub(text_width);
