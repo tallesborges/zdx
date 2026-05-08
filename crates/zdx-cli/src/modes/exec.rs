@@ -128,12 +128,6 @@ pub async fn run_exec(
         }
     }
 
-    // Emit config path info (only if config exists on disk).
-    let config_path = zdx_engine::config::paths::config_path();
-    if config_path.exists() {
-        info!(path = %config_path.display(), "exec config file");
-    }
-
     // Emit context info (project context files, skills)
     if let Some(effective) = &effective {
         log_effective_context(effective);
