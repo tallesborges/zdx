@@ -624,6 +624,34 @@ fn handle_overlays(
         KeyCode::Char('r') if mods.only_ctrl() => {
             Some((vec![], vec![], Some(OverlayRequest::Tldr)))
         }
+        // Ctrl+B: open prompt builder (mirrors `/prompt-builder`).
+        // Mirrors guards in `execute_prompt_builder` in the command palette.
+        KeyCode::Char('b') if mods.only_ctrl() => {
+            if input.handoff.is_active() {
+                Some((
+                    vec![],
+                    vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(
+                            "Cancel the handoff before starting prompt-builder.".to_string(),
+                        ),
+                    )],
+                    None,
+                ))
+            } else if input.prompt_builder.is_active() {
+                Some((
+                    vec![],
+                    vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(
+                            "Prompt-builder is already active. Press Esc to cancel.".to_string(),
+                        ),
+                    )],
+                    None,
+                ))
+            } else {
+                input.prompt_builder = PromptBuilderState::Pending;
+                Some((vec![], vec![], None))
+            }
+        }
         _ => None,
     }
 }
