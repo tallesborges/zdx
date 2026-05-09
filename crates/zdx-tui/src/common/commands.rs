@@ -96,7 +96,7 @@ pub const COMMANDS: &[Command] = &[
         aliases: &["builder", "prompt"],
         description: "Build a polished prompt from a short intent",
         category: "prompt",
-        shortcut: None,
+        shortcut: Some("Ctrl+B"),
     },
     Command {
         name: "login",
