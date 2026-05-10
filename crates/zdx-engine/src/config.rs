@@ -497,6 +497,16 @@ pub mod paths {
         zdx_home().join("threads")
     }
 
+    /// Returns the path to the exports directory.
+    pub fn exports_dir() -> PathBuf {
+        zdx_home().join("exports")
+    }
+
+    /// Returns the path to exported thread transcripts.
+    pub fn thread_exports_dir() -> PathBuf {
+        exports_dir().join("threads")
+    }
+
     /// Returns the artifact root directory (`$ZDX_HOME/artifacts`).
     pub fn artifact_root() -> PathBuf {
         zdx_home().join("artifacts")
