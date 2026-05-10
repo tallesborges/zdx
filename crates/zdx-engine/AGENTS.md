@@ -31,6 +31,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - `core/interrupt.rs`: signal handling
 - `core/agent.rs`: agent loop + event channels
 - `core/subagent.rs`: child `zdx exec` subagent runner
+- `core/thread_export.rs`: clean Markdown transcript exports derived from saved thread JSONL
 - `core/title_generation.rs`: LLM-based title generation (shared by TUI + bot)
 - `core/tldr_generation.rs`: LLM-based thread TLDR/recap generation (shared by TUI)
 - `core/thread_persistence.rs`: thread persistence
