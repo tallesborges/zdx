@@ -135,17 +135,6 @@ impl CommandPaletteState {
                         update.with_ui_effects(effects).with_mutations(mutations)
                     }
                     PaletteEntry::Custom(cmd) => {
-                        // Handoff owns the input field while active; replacing
-                        // it would silently re-route Enter through handoff
-                        // submission. Bail out cleanly instead.
-                        if tui.input.handoff.is_active() {
-                            return OverlayUpdate::close().with_mutations(vec![
-                                StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(
-                                    "Cancel the handoff before inserting a custom command."
-                                        .to_string(),
-                                )),
-                            ]);
-                        }
                         // Same logic for prompt-builder: the input is being
                         // used to capture the builder intent, replacing it
                         // would silently re-route the next Enter through the
@@ -158,15 +147,29 @@ impl CommandPaletteState {
                                 )),
                             ]);
                         }
-                        // Markdown custom commands replace the input contents
-                        // synchronously and close the palette. Executable
-                        // custom commands are intentionally not supported in
-                        // this iteration (see the deferred slice in
+                        // Markdown custom commands synchronously update the
+                        // input and close the palette. Executable custom
+                        // commands are intentionally not supported in this
+                        // iteration (see the deferred slice in
                         // `docs/plans/active/custom-commands.md`).
                         let content = cmd.content.clone();
-                        OverlayUpdate::close().with_mutations(vec![StateMutation::Input(
-                            InputMutation::SetText(content),
-                        )])
+                        let mutation = match tui.input.handoff {
+                            HandoffState::Generating => {
+                                return OverlayUpdate::close().with_mutations(vec![
+                                    StateMutation::Transcript(
+                                        TranscriptMutation::AppendSystemMessage(
+                                            "Wait for handoff generation to finish before inserting a custom command."
+                                                .to_string(),
+                                        ),
+                                    ),
+                                ]);
+                            }
+                            HandoffState::Pending | HandoffState::Ready => {
+                                InputMutation::InsertText(content)
+                            }
+                            HandoffState::Idle => InputMutation::SetText(content),
+                        };
+                        OverlayUpdate::close().with_mutations(vec![StateMutation::Input(mutation)])
                     }
                 }
             }
@@ -967,14 +970,16 @@ mod tests {
     }
 
     #[test]
-    fn test_palette_custom_selection_blocked_during_handoff() {
+    fn test_palette_custom_selection_inserts_during_handoff() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
         use crate::input::HandoffState;
+        use crate::mutations::InputMutation;
         use crate::overlays::OverlayTransition;
         use crate::state::AppState;
 
-        let custom = sample_custom("review", Some("Review code"));
+        let mut custom = sample_custom("review", Some("Review code"));
+        custom.content = "Review the handoff goal.".to_string();
         let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string(), vec![custom]);
         state.filter = "review".to_string();
         state.clamp_selection();
@@ -985,19 +990,81 @@ mod tests {
 
         let update = state.handle_key(&app.tui, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        // Palette still closes, but no input mutation is emitted; instead the
-        // user gets a system-message advisory and handoff state is left
-        // intact so they can finish or cancel it deliberately.
+        // Handoff owns the composer while pending, so custom commands insert
+        // into the current handoff goal instead of replacing it or blocking.
+        assert!(matches!(update.transition, OverlayTransition::Close));
+        assert!(update.effects.is_empty());
+        assert_eq!(update.mutations.len(), 1);
+        match &update.mutations[0] {
+            StateMutation::Input(InputMutation::InsertText(text)) => {
+                assert_eq!(text, "Review the handoff goal.");
+            }
+            other => panic!("expected InsertText mutation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_palette_custom_selection_inserts_during_handoff_ready() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        use crate::input::HandoffState;
+        use crate::mutations::InputMutation;
+        use crate::overlays::OverlayTransition;
+        use crate::state::AppState;
+
+        let mut custom = sample_custom("review", Some("Review code"));
+        custom.content = "Review the ready handoff prompt.".to_string();
+        let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string(), vec![custom]);
+        state.filter = "review".to_string();
+        state.clamp_selection();
+
+        let config = zdx_engine::config::Config::default();
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
+        app.tui.input.handoff = HandoffState::Ready;
+
+        let update = state.handle_key(&app.tui, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(update.transition, OverlayTransition::Close));
+        assert!(update.effects.is_empty());
+        assert_eq!(update.mutations.len(), 1);
+        match &update.mutations[0] {
+            StateMutation::Input(InputMutation::InsertText(text)) => {
+                assert_eq!(text, "Review the ready handoff prompt.");
+            }
+            other => panic!("expected InsertText mutation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_palette_custom_selection_blocked_during_handoff_generation() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        use crate::input::HandoffState;
+        use crate::mutations::InputMutation;
+        use crate::overlays::OverlayTransition;
+        use crate::state::AppState;
+
+        let custom = sample_custom("review", Some("Review code"));
+        let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string(), vec![custom]);
+        state.filter = "review".to_string();
+        state.clamp_selection();
+
+        let config = zdx_engine::config::Config::default();
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
+        app.tui.input.handoff = HandoffState::Generating;
+
+        let update = state.handle_key(&app.tui, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
         assert!(matches!(update.transition, OverlayTransition::Close));
         assert!(update.effects.is_empty());
         assert!(update.mutations.iter().any(|m| matches!(
             m,
             StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(text))
-                if text.contains("handoff")
+                if text == "Wait for handoff generation to finish before inserting a custom command."
         )));
         assert!(!update.mutations.iter().any(|m| matches!(
             m,
-            StateMutation::Input(crate::mutations::InputMutation::SetText(_))
+            StateMutation::Input(InputMutation::SetText(_) | InputMutation::InsertText(_))
         )));
     }
 
