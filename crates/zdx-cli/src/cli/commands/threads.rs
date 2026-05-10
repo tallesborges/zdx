@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use zdx_engine::config;
+use zdx_engine::core::thread_export::{self, ThreadExportOptions};
 use zdx_engine::core::thread_persistence;
 
 use crate::modes;
@@ -83,6 +84,18 @@ pub fn rename(id: &str, title: &str) -> Result<()> {
         .with_context(|| format!("rename thread '{id}'"))?;
     let display_title = normalized.unwrap_or_else(|| thread_persistence::short_thread_id(id));
     println!("Renamed thread {id} → {display_title}");
+    Ok(())
+}
+
+pub fn export(force: bool, dry_run: bool) -> Result<()> {
+    let summary = thread_export::export_threads_incremental(ThreadExportOptions { force, dry_run })
+        .context("export threads")?;
+
+    println!(
+        "Thread exports: exported={}, skipped={}, removed={}, failed={}",
+        summary.exported, summary.skipped, summary.removed, summary.failed
+    );
+
     Ok(())
 }
 

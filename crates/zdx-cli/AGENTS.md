@@ -15,7 +15,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 - `src/cli/commands/worktree.rs`: worktree command handler
 - `src/modes/exec.rs`: non-interactive streaming mode
 - `src/modes/mod.rs`: mode exports (exec + feature-gated TUI)
-- `tests/integration/`: CLI integration tests (`assert_cmd`, fixtures), aggregated into a single test binary via `tests/integration/main.rs`. Add new test files as `tests/integration/<name>.rs` and register them with `mod <name>;` in `main.rs`.
+- `tests/integration/`: CLI integration tests (`assert_cmd`, fixtures), aggregated into a single test binary via `tests/integration/main.rs`. Add new test files as `tests/integration/<name>.rs` and register them with `mod <name>;` in `main.rs` (for example `threads_export.rs` covers `zdx threads export`).
 
 ## Conventions
 

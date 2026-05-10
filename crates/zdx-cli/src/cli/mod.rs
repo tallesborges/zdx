@@ -286,6 +286,16 @@ enum ThreadCommands {
         #[arg(long)]
         text: String,
     },
+    /// Export saved threads to Markdown transcripts
+    Export {
+        /// Regenerate exports even when they are up to date
+        #[arg(long)]
+        force: bool,
+
+        /// Show what would change without writing files
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
     /// Search threads by date and/or query text
     Search {
         /// Optional query text to match in titles and thread content
@@ -960,6 +970,7 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
         ThreadCommands::Resume { id } => commands::threads::resume(id, context.config).await,
         ThreadCommands::Rename { id, title } => commands::threads::rename(&id, &title),
         ThreadCommands::Append { id, role, text } => commands::threads::append(&id, &role, &text),
+        ThreadCommands::Export { force, dry_run } => commands::threads::export(force, dry_run),
         ThreadCommands::Search {
             query,
             date,
