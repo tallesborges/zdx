@@ -1,10 +1,10 @@
 //! Custom slash command discovery and parsing.
 //!
 //! Custom commands are user-defined slash commands that augment the built-in
-//! command palette. They live in three locations:
+//! command palette. They live in three kinds of locations:
 //!
 //! - `<ZDX_HOME>/commands/*.md` (user-global)
-//! - `<cwd>/.zdx/commands/*.md` (per-project)
+//! - each ancestor `.zdx/commands/*.md`, through `<cwd>/.zdx/commands/*.md`
 //! - bundled commands embedded in the binary (always available)
 //!
 //! Each Markdown file becomes a command whose name is the file stem. An
@@ -12,10 +12,11 @@
 //! palette). The remaining body is the prompt content.
 //!
 //! Built-in commands always win: any custom command whose name matches a
-//! built-in name is skipped with a warning. User and project commands shadow
+//! built-in name is skipped with a warning. Commands from nearer directories
+//! override broader user/ancestor commands, and user/project commands shadow
 //! bundled commands silently so users can override the shipped defaults.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -84,8 +85,8 @@ struct CommandFrontmatter {
     description: Option<String>,
 }
 
-/// Loads custom commands from the standard user and project directories,
-/// then merges in the bundled commands embedded in the binary.
+/// Loads custom commands from the standard user directory and ancestor project
+/// directories, then merges in the bundled commands embedded in the binary.
 ///
 /// `builtin_names` are command names that custom commands may not shadow
 /// (built-ins always win). The TUI supplies this from its static `COMMANDS`
@@ -93,17 +94,18 @@ struct CommandFrontmatter {
 #[must_use]
 pub fn load_custom_commands(cwd: &Path, builtin_names: &[&str]) -> LoadCustomCommandsResult {
     let user_dir = paths::zdx_home().join("commands");
-    let project_dir = cwd.join(".zdx").join("commands");
 
     let mut state = LoadState {
         commands: Vec::new(),
         warnings: Vec::new(),
-        seen_names: HashSet::new(),
+        command_indices: HashMap::new(),
         builtin_names,
     };
 
     scan_dir(&user_dir, CustomCommandSource::User, &mut state);
-    scan_dir(&project_dir, CustomCommandSource::Project, &mut state);
+    for project_dir in command_dirs_for_cwd(cwd) {
+        scan_dir(&project_dir, CustomCommandSource::Project, &mut state);
+    }
     load_bundled_commands(zdx_assets::bundled_command_assets(), &mut state);
 
     LoadCustomCommandsResult {
@@ -125,12 +127,12 @@ pub fn load_custom_commands_from_dirs(
     let mut state = LoadState {
         commands: Vec::new(),
         warnings: Vec::new(),
-        seen_names: HashSet::new(),
+        command_indices: HashMap::new(),
         builtin_names,
     };
 
-    // User dir is loaded first so project commands with the same name are
-    // skipped as duplicates (with a warning) rather than overriding.
+    // User dir is loaded first so project commands with the same name can
+    // override broader global commands.
     scan_dir(user_dir, CustomCommandSource::User, &mut state);
     scan_dir(project_dir, CustomCommandSource::Project, &mut state);
 
@@ -143,7 +145,7 @@ pub fn load_custom_commands_from_dirs(
 struct LoadState<'a> {
     commands: Vec<CustomCommand>,
     warnings: Vec<CustomCommandWarning>,
-    seen_names: HashSet<String>,
+    command_indices: HashMap<String, usize>,
     builtin_names: &'a [&'a str],
 }
 
@@ -154,6 +156,15 @@ impl LoadState<'_> {
             message: message.into(),
         });
     }
+}
+
+fn command_dirs_for_cwd(cwd: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = cwd
+        .ancestors()
+        .map(|ancestor| ancestor.join(".zdx").join("commands"))
+        .collect();
+    dirs.reverse();
+    dirs
 }
 
 fn scan_dir(dir: &Path, source: CustomCommandSource, state: &mut LoadState) {
@@ -230,12 +241,12 @@ fn load_bundled_command(asset: &BundledCommandAsset, state: &mut LoadState) {
     }
 
     let key = name.to_ascii_lowercase();
-    if state.seen_names.contains(&key) {
+    if state.command_indices.contains_key(&key) {
         // User or project already provided a command with this name; their
         // version wins silently.
         return;
     }
-    state.seen_names.insert(key);
+    state.command_indices.insert(key, state.commands.len());
 
     let raw = if let Ok(s) = std::str::from_utf8(asset.bytes) {
         s.to_string()
@@ -285,13 +296,7 @@ fn load_command_file(path: &Path, source: CustomCommandSource, state: &mut LoadS
         return;
     }
 
-    if state.seen_names.contains(&key) {
-        state.warn(
-            path,
-            format!("Duplicate custom command name '{name}'; skipping"),
-        );
-        return;
-    }
+    let duplicate_index = state.command_indices.get(&key).copied();
 
     let raw = match fs::read_to_string(path) {
         Ok(content) => content,
@@ -303,18 +308,30 @@ fn load_command_file(path: &Path, source: CustomCommandSource, state: &mut LoadS
 
     // Reserve the name only after the file is successfully read, so a
     // failed read does not block a same-named command from another dir.
-    state.seen_names.insert(key);
-
     let (description, content) = parse_command_content(&raw, path, state);
 
-    state.commands.push(CustomCommand {
+    if duplicate_index.is_some() {
+        state.warn(
+            path,
+            format!("Duplicate custom command name '{name}'; overriding broader command"),
+        );
+    }
+
+    let command = CustomCommand {
         name,
         description,
         source,
         path: path.to_path_buf(),
         content,
         is_executable: false,
-    });
+    };
+
+    if let Some(index) = duplicate_index {
+        state.commands[index] = command;
+    } else {
+        state.command_indices.insert(key, state.commands.len());
+        state.commands.push(command);
+    }
 }
 
 fn command_name_from_path(path: &Path) -> Option<String> {
@@ -406,6 +423,7 @@ fn normalize_description(value: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::fs;
 
     use tempfile::tempdir;
@@ -518,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_custom_commands_user_wins_on_duplicate() {
+    fn test_load_custom_commands_project_wins_on_duplicate() {
         let user = tempdir().unwrap();
         let project = tempdir().unwrap();
         write_md(user.path(), "shared", "user version");
@@ -527,8 +545,8 @@ mod tests {
         let result = load_custom_commands_from_dirs(user.path(), project.path(), BUILTINS);
 
         assert_eq!(result.commands.len(), 1);
-        assert_eq!(result.commands[0].source, CustomCommandSource::User);
-        assert_eq!(result.commands[0].content, "user version");
+        assert_eq!(result.commands[0].source, CustomCommandSource::Project);
+        assert_eq!(result.commands[0].content, "project version");
         assert!(
             result
                 .warnings
@@ -651,9 +669,57 @@ mod tests {
         let result = load_custom_commands_from_dirs(user.path(), project.path(), BUILTINS);
 
         assert_eq!(result.commands.len(), 1);
-        assert_eq!(result.commands[0].source, CustomCommandSource::User);
+        assert_eq!(result.commands[0].source, CustomCommandSource::Project);
+        assert_eq!(result.commands[0].content, "project");
         assert!(
             result
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("Duplicate custom command name"))
+        );
+    }
+
+    #[test]
+    fn test_command_dirs_for_cwd_walks_ancestors_from_broad_to_near() {
+        let root = tempdir().unwrap();
+        let nested = root.path().join("one").join("two");
+        fs::create_dir_all(&nested).unwrap();
+
+        let dirs = command_dirs_for_cwd(&nested);
+
+        let root_commands = root.path().join(".zdx").join("commands");
+        let one_commands = root.path().join("one").join(".zdx").join("commands");
+        let nested_commands = nested.join(".zdx").join("commands");
+        let root_index = dirs.iter().position(|dir| dir == &root_commands).unwrap();
+        let one_index = dirs.iter().position(|dir| dir == &one_commands).unwrap();
+        let nested_index = dirs.iter().position(|dir| dir == &nested_commands).unwrap();
+
+        assert!(root_index < one_index);
+        assert!(one_index < nested_index);
+    }
+
+    #[test]
+    fn test_nearer_project_command_overrides_shared_ancestor() {
+        let root = tempdir().unwrap();
+        let shared = root.path().join(".zdx").join("commands");
+        let nested = root.path().join("child").join(".zdx").join("commands");
+        write_md(&shared, "review", "shared version");
+        write_md(&nested, "review", "nested version");
+
+        let mut state = LoadState {
+            commands: Vec::new(),
+            warnings: Vec::new(),
+            command_indices: HashMap::new(),
+            builtin_names: BUILTINS,
+        };
+        scan_dir(&shared, CustomCommandSource::Project, &mut state);
+        scan_dir(&nested, CustomCommandSource::Project, &mut state);
+
+        assert_eq!(state.commands.len(), 1);
+        assert_eq!(state.commands[0].content, "nested version");
+        assert_eq!(state.commands[0].path, nested.join("review.md"));
+        assert!(
+            state
                 .warnings
                 .iter()
                 .any(|w| w.message.contains("Duplicate custom command name"))
@@ -750,7 +816,7 @@ mod tests {
         let mut state = LoadState {
             commands: Vec::new(),
             warnings: Vec::new(),
-            seen_names: HashSet::new(),
+            command_indices: HashMap::new(),
             builtin_names: BUILTINS,
         };
 
@@ -788,7 +854,7 @@ mod tests {
         let mut state = LoadState {
             commands: Vec::new(),
             warnings: Vec::new(),
-            seen_names: HashSet::new(),
+            command_indices: HashMap::new(),
             builtin_names: BUILTINS,
         };
         scan_dir(user.path(), CustomCommandSource::User, &mut state);
@@ -810,7 +876,7 @@ mod tests {
         let mut state = LoadState {
             commands: Vec::new(),
             warnings: Vec::new(),
-            seen_names: HashSet::new(),
+            command_indices: HashMap::new(),
             builtin_names: BUILTINS,
         };
         load_bundled_commands(assets, &mut state);
@@ -828,7 +894,7 @@ mod tests {
         let mut state = LoadState {
             commands: Vec::new(),
             warnings: Vec::new(),
-            seen_names: HashSet::new(),
+            command_indices: HashMap::new(),
             builtin_names: BUILTINS,
         };
         load_bundled_commands(zdx_assets::bundled_command_assets(), &mut state);
