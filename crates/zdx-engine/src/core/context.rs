@@ -1,10 +1,14 @@
 //! Context module for loading project-specific guidelines.
 //!
-//! Project context files are loaded hierarchically:
-//! 1. `ZDX_HOME/AGENTS.md` (or `CLAUDE.md` if `AGENTS.md` is missing)
-//! 2. `~/AGENTS.md` (or `CLAUDE.md` if `AGENTS.md` is missing)
-//! 3. Ancestor directories from home to project root
-//! 4. Project root (`--root` or cwd)
+//! Loaded hierarchically (`CLAUDE.md` is a per-scope fallback for `AGENTS.md`):
+//! 1. `ZDX_HOME/AGENTS.md`
+//! 2. `~/AGENTS.md` then `~/.zdx/AGENTS.md`
+//! 3. For each ancestor between home and project root: `<dir>/AGENTS.md` then `<dir>/.zdx/AGENTS.md`
+//! 4. `<root>/AGENTS.md` then `<root>/.zdx/AGENTS.md`
+//!
+//! At each scope, `.zdx/AGENTS.md` loads after the regular `AGENTS.md` so
+//! personal `.zdx/` rules override the committed file ("deeper wins"). It
+//! lives alongside other `.zdx/` per-project assets and is typically gitignored.
 //!
 //! This module is UI-agnostic: it returns structured warnings instead of
 //! printing directly. The caller (renderer) decides how to display them.
@@ -581,63 +585,59 @@ pub fn render_standalone_prompt_template(
 
 /// Collects all AGENTS.md paths to check, in order.
 ///
-/// Order:
-/// 1. `ZDX_HOME/AGENTS.md` (always included - global user config)
-/// 2. ~/AGENTS.md (only if root is under home)
-/// 3. Ancestors from home to root (only if root is under home)
-/// 4. root/AGENTS.md
-///
-/// Paths are deduplicated (later occurrences removed).
+/// At each scope (ZDX_HOME, home, every ancestor between home and root, and
+/// the project root), pushes `<dir>/AGENTS.md` followed by
+/// `<dir>/.zdx/AGENTS.md`. Same-scope `.zdx/` files load last so they
+/// override the committed file ("deeper wins"). `CLAUDE.md` is selected at
+/// load time as a per-directory fallback. Paths are deduplicated.
 pub fn collect_agents_paths(root: &Path) -> Vec<PathBuf> {
     collect_agents_paths_with_zdx_home(root, &paths::zdx_home())
 }
 
 /// Collects all AGENTS.md paths with an explicit ZDX home directory.
 ///
-/// This is the core implementation that allows dependency injection of the
-/// ZDX home path, primarily for testing without environment variable mutation.
-///
-/// See [`collect_agents_paths`] for the order of paths collected.
+/// Core implementation that allows injecting `zdx_home` for testing without
+/// env-var mutation. See [`collect_agents_paths`] for ordering.
 pub fn collect_agents_paths_with_zdx_home(root: &Path, zdx_home: &Path) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = Vec::new();
 
-    // 1. ZDX_HOME/AGENTS.md (always - this is explicit user config)
+    // At each scope, push regular AGENTS.md first, then .zdx/AGENTS.md so the
+    // personal override wins. CLAUDE.md fallback is handled at load time.
+    let push_scope = |paths: &mut Vec<PathBuf>, dir: &Path| {
+        paths.push(dir.join("AGENTS.md"));
+        paths.push(dir.join(".zdx").join("AGENTS.md"));
+    };
+
+    // ZDX_HOME itself is the user's `.zdx/`, so we don't add a nested .zdx/.
     paths.push(zdx_home.join("AGENTS.md"));
 
-    // Canonicalize root for comparison
     let canonical_root = root.canonicalize().ok();
 
-    // 2-3. User home and ancestors (only if root is under home)
+    // Home + ancestors, only if root is under home.
     if let Some(home) = paths::home_dir()
         && let Some(ref cr) = canonical_root
         && let Ok(canonical_home) = home.canonicalize()
+        && let Ok(relative) = cr.strip_prefix(&canonical_home)
     {
-        // Check if root is under home
-        if let Ok(relative) = cr.strip_prefix(&canonical_home) {
-            // Include ~/AGENTS.md
-            paths.push(home.join("AGENTS.md"));
+        push_scope(&mut paths, &home);
 
-            // Add each ancestor directory between home and root
-            let mut current = canonical_home.clone();
-            for component in relative.components() {
-                current = current.join(component);
-                // Don't add the root itself yet (added at end)
-                if current != *cr {
-                    paths.push(current.join("AGENTS.md"));
-                }
+        let mut current = canonical_home.clone();
+        for component in relative.components() {
+            current = current.join(component);
+            // Root is added last by the block below.
+            if current != *cr {
+                push_scope(&mut paths, &current);
             }
         }
     }
 
-    // 4. Root/AGENTS.md (project root)
+    // Project root (canonicalized when possible).
     if let Some(cr) = canonical_root {
-        paths.push(cr.join("AGENTS.md"));
+        push_scope(&mut paths, &cr);
     } else {
-        // Fallback if canonicalization fails
-        paths.push(root.join("AGENTS.md"));
+        push_scope(&mut paths, root);
     }
 
-    // Deduplicate while preserving order
     deduplicate_paths(paths)
 }
 
@@ -1202,14 +1202,9 @@ fn render_system_prompt_with_fallback(
 /// Builds the effective system prompt by combining config, inline project context,
 /// an optional memory index, and template-driven sections.
 ///
-/// Project context files are loaded hierarchically from:
-/// 1. `ZDX_HOME/AGENTS.md` (or `CLAUDE.md` if absent)
-/// 2. `~/AGENTS.md` (or `CLAUDE.md` if absent)
-/// 3. Ancestor directories from home to project root
-/// 4. Project root
-///
+/// See [`collect_agents_paths`] for the project-context discovery order.
 /// Returns the combined prompt, the list of loaded project context file paths, and any warnings.
-/// This function is UI-agnostic; callers should surface warnings via the renderer.
+/// UI-agnostic; callers should surface warnings via the renderer.
 ///
 /// # Errors
 /// Returns an error if the operation fails.
@@ -1252,7 +1247,7 @@ pub fn build_effective_system_prompt_with_paths_and_instruction_layers(
 mod tests {
     use std::fs;
 
-    use tempfile::tempdir;
+    use tempfile::{tempdir, tempdir_in};
 
     use super::*;
     use crate::config::SkillSourceToggles;
@@ -1305,6 +1300,150 @@ mod tests {
             })
             .count();
         assert!(count <= 1, "Should deduplicate paths, got count: {count}");
+    }
+
+    #[test]
+    fn test_collect_agents_paths_includes_project_zdx_dir() {
+        let zdx_home = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        let canonical_root = root.path().canonicalize().unwrap();
+
+        let paths = collect_agents_paths_with_zdx_home(root.path(), zdx_home.path());
+
+        let project_zdx_agents = canonical_root.join(".zdx").join("AGENTS.md");
+        let project_root_agents = canonical_root.join("AGENTS.md");
+
+        assert!(
+            paths.contains(&project_zdx_agents),
+            "Should include <root>/.zdx/AGENTS.md, got: {paths:?}"
+        );
+
+        // <root>/AGENTS.md must come before <root>/.zdx/AGENTS.md (deeper wins).
+        let root_idx = paths.iter().position(|p| p == &project_root_agents);
+        let zdx_idx = paths.iter().position(|p| p == &project_zdx_agents);
+        assert!(
+            matches!((root_idx, zdx_idx), (Some(r), Some(z)) if r < z),
+            "<root>/AGENTS.md should come before <root>/.zdx/AGENTS.md, got: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn test_collect_agents_paths_includes_zdx_at_each_ancestor_under_home() {
+        // Build a real `home/parent/middle/project` chain under $HOME and
+        // assert each scope contributes both AGENTS.md and .zdx/AGENTS.md, in
+        // that order.
+        let Some(home) = paths::home_dir() else {
+            return;
+        };
+        let Ok(canonical_home) = home.canonicalize() else {
+            return;
+        };
+
+        let zdx_home = tempdir().unwrap();
+        let parent = tempdir_in(&canonical_home).unwrap();
+        let middle = parent.path().join("middle");
+        let project = middle.join("project");
+        fs::create_dir_all(&project).unwrap();
+        let canonical_project = project.canonicalize().unwrap();
+        let canonical_middle = middle.canonicalize().unwrap();
+        let canonical_parent = parent.path().canonicalize().unwrap();
+
+        let paths = collect_agents_paths_with_zdx_home(&project, zdx_home.path());
+
+        for scope in [
+            canonical_home.as_path(),
+            canonical_parent.as_path(),
+            canonical_middle.as_path(),
+            canonical_project.as_path(),
+        ] {
+            let agents = scope.join("AGENTS.md");
+            let zdx_agents = scope.join(".zdx").join("AGENTS.md");
+            let agents_idx = paths.iter().position(|p| p == &agents);
+            let zdx_idx = paths.iter().position(|p| p == &zdx_agents);
+            assert!(
+                matches!((agents_idx, zdx_idx), (Some(a), Some(z)) if a < z),
+                "Expected {scope:?} to contribute AGENTS.md then .zdx/AGENTS.md, got: {paths:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_load_all_agents_files_picks_up_project_zdx_dir() {
+        let dir = tempdir().unwrap();
+        let zdx_dir = dir.path().join(".zdx");
+        fs::create_dir_all(&zdx_dir).unwrap();
+        let zdx_agents = zdx_dir.join("AGENTS.md");
+        fs::write(&zdx_agents, "Project-local personal rules").unwrap();
+        let canonical_zdx_agents = zdx_agents.canonicalize().unwrap();
+
+        let loaded = load_all_agents_files(dir.path()).expect("expected loaded context");
+
+        assert!(
+            loaded.content.contains("Project-local personal rules"),
+            "loaded content should include .zdx/AGENTS.md body: {}",
+            loaded.content
+        );
+        assert!(
+            loaded
+                .loaded_paths
+                .iter()
+                .any(|path| path == &canonical_zdx_agents),
+            "loaded_paths should include the canonical .zdx/AGENTS.md, got: {:?}",
+            loaded.loaded_paths
+        );
+    }
+
+    #[test]
+    fn test_load_all_agents_files_zdx_dir_falls_back_to_claude() {
+        let dir = tempdir().unwrap();
+        let zdx_dir = dir.path().join(".zdx");
+        fs::create_dir_all(&zdx_dir).unwrap();
+        let claude_md = zdx_dir.join("CLAUDE.md");
+        fs::write(&claude_md, "Project-local Claude fallback").unwrap();
+        let canonical_claude_md = claude_md.canonicalize().unwrap();
+
+        let loaded = load_all_agents_files(dir.path()).expect("expected loaded context");
+
+        assert!(loaded.content.contains("Project-local Claude fallback"));
+        assert!(
+            loaded
+                .loaded_paths
+                .iter()
+                .any(|path| path == &canonical_claude_md)
+        );
+    }
+
+    #[test]
+    fn test_load_all_agents_files_zdx_dir_overrides_root() {
+        let dir = tempdir().unwrap();
+        let root_agents = dir.path().join("AGENTS.md");
+        fs::write(&root_agents, "Root project rules").unwrap();
+        let canonical_root_agents = root_agents.canonicalize().unwrap();
+
+        let zdx_dir = dir.path().join(".zdx");
+        fs::create_dir_all(&zdx_dir).unwrap();
+        let zdx_agents = zdx_dir.join("AGENTS.md");
+        fs::write(&zdx_agents, "Personal override rules").unwrap();
+        let canonical_zdx_agents = zdx_agents.canonicalize().unwrap();
+
+        let loaded = load_all_agents_files(dir.path()).expect("expected loaded context");
+
+        // Both files should appear, with the .zdx/ override after the root one.
+        let root_idx = loaded
+            .loaded_paths
+            .iter()
+            .position(|path| path == &canonical_root_agents)
+            .expect("expected root AGENTS.md to be loaded");
+        let zdx_idx = loaded
+            .loaded_paths
+            .iter()
+            .position(|path| path == &canonical_zdx_agents)
+            .expect("expected .zdx/AGENTS.md to be loaded");
+        assert!(
+            root_idx < zdx_idx,
+            "Project-local .zdx/AGENTS.md should appear after the project root AGENTS.md so it overrides; got order: {:?}",
+            loaded.loaded_paths
+        );
     }
 
     #[test]
