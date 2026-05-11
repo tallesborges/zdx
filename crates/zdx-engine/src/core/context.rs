@@ -507,13 +507,29 @@ fn prompt_template_capability(
 }
 
 fn prompt_template_memory_collections() -> Vec<PromptTemplateMemoryCollection> {
-    vec![PromptTemplateMemoryCollection {
-        name: qmd::THREAD_COLLECTION_NAME.to_string(),
-        source: "saved ZDX threads".to_string(),
-        contains: "exported user/assistant chat transcripts from saved ZDX conversation threads; each search result includes a qmd `docid`".to_string(),
-        search_tool: "Memory_Search".to_string(),
-        read_after: "After `Memory_Search`, use `Memory_Get` with a returned `docid` before relying on a result. If a thread_id is already known and you need a focused answer to a specific goal, skip search and use `Read_Thread` directly.".to_string(),
-    }]
+    vec![
+        PromptTemplateMemoryCollection {
+            name: qmd::THREAD_COLLECTION_NAME.to_string(),
+            source: "saved ZDX threads".to_string(),
+            contains: "exported user/assistant chat transcripts from saved ZDX conversation threads; each search result includes a qmd `docid`".to_string(),
+            search_tool: "Memory_Search".to_string(),
+            read_after: "After `Memory_Search`, use `Memory_Get` with a returned `docid` before relying on a result. If a thread_id is already known and you need a focused answer to a specific goal, skip search and use `Read_Thread` directly.".to_string(),
+        },
+        PromptTemplateMemoryCollection {
+            name: qmd::NOTES_COLLECTION_NAME.to_string(),
+            source: "Second Brain notes".to_string(),
+            contains: "canonical Markdown notes under `$ZDX_MEMORY_ROOT/Notes`; each search result includes a qmd `docid`".to_string(),
+            search_tool: "Memory_Search".to_string(),
+            read_after: "After `Memory_Search`, use `Memory_Get` with a returned `docid` before relying on a result. If editing a known note path, edit the canonical file instead.".to_string(),
+        },
+        PromptTemplateMemoryCollection {
+            name: qmd::CALENDAR_COLLECTION_NAME.to_string(),
+            source: "calendar notes".to_string(),
+            contains: "canonical Markdown calendar and daily notes under `$ZDX_MEMORY_ROOT/Calendar`; each search result includes a qmd `docid`".to_string(),
+            search_tool: "Memory_Search".to_string(),
+            read_after: "After `Memory_Search`, use `Memory_Get` with a returned `docid` before relying on a result. If editing a known calendar note path, edit the canonical file instead.".to_string(),
+        },
+    ]
 }
 
 fn render_prompt_template(
@@ -2136,8 +2152,13 @@ mod tests {
 
         assert!(rendered.contains("## Searchable Memory Collections"));
         assert!(rendered.contains("`zdx-threads`"));
+        assert!(rendered.contains("`zdx-notes`"));
+        assert!(rendered.contains("`zdx-calendar`"));
         assert!(rendered.contains("exported user/assistant chat transcripts"));
-        assert!(rendered.contains("Call `Memory_Search`"));
+        assert!(rendered.contains("canonical Markdown notes"));
+        assert!(rendered.contains("calendar and daily notes"));
+        assert!(rendered.contains("Use `Memory_Search` explicitly for memory discovery"));
+        assert!(rendered.contains("saved threads, notes, and calendar files"));
         assert!(rendered.contains("`Memory_Get`"));
         assert!(rendered.contains("`Read_Thread`"));
         assert!(rendered.contains("skip search"));

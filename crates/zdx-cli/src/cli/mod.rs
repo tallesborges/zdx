@@ -1036,7 +1036,7 @@ fn dispatch_memory(command: MemoryCommands, context: &DispatchContext<'_>) -> Re
     match command {
         MemoryCommands::Index => commands::memory::index(context.config),
         MemoryCommands::Search { query, limit, json } => commands::memory::search(
-            commands::memory::SearchCommandOptions { query, limit, json },
+            &commands::memory::SearchCommandOptions { query, limit, json },
             context.config,
         ),
     }

@@ -68,7 +68,7 @@ fn write_fake_qmd(temp_dir: &TempDir) -> std::path::PathBuf {
            exit 1\n\
          fi\n\
          if [ \"${{1:-}}\" = search ]; then\n\
-           printf '%s\\n' '[{{\"file\":\"qmd://zdx-threads/thread-qmd.md\",\"title\":\"Thread thread-qmd\",\"snippet\":\"User: qmd memory\",\"score\":0.9}}]'\n\
+           printf '%s\\n' '[{{\"docid\":\"#threadqmd\",\"file\":\"qmd://zdx-threads/thread-qmd.md\",\"title\":\"Thread thread-qmd\",\"snippet\":\"User: qmd memory\",\"score\":0.9}}]'\n\
            exit 0\n\
          fi\n\
          exit 0\n",
@@ -265,7 +265,7 @@ fn test_memory_index_exports_and_invokes_qmd() {
 }
 
 #[test]
-fn test_memory_search_maps_results_to_memory_refs() {
+fn test_memory_search_returns_qmd_docids() {
     let temp_dir = TempDir::new().unwrap();
     create_thread(&temp_dir, "thread-qmd");
     let qmd_path = write_fake_qmd(&temp_dir);
@@ -277,9 +277,10 @@ fn test_memory_search_maps_results_to_memory_refs() {
         .args(["memory", "search", "qmd memory", "--json"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""ref": "thread:thread-qmd""#))
-        .stdout(predicate::str::contains(r#""source": "thread""#))
-        .stdout(predicate::str::contains(r#""thread_id": "thread-qmd""#))
+        .stdout(predicate::str::contains(r##""docid": "#threadqmd""##))
+        .stdout(predicate::str::contains(
+            r#""file": "qmd://zdx-threads/thread-qmd.md""#,
+        ))
         .stdout(predicate::str::contains("run `zdx memory index`"));
 
     let log = fs::read_to_string(temp_dir.path().join("qmd.log")).unwrap();

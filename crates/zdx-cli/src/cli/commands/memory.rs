@@ -55,7 +55,7 @@ pub fn index(config: &config::Config) -> Result<()> {
     Ok(())
 }
 
-pub fn search(options: SearchCommandOptions, config: &config::Config) -> Result<()> {
+pub fn search(options: &SearchCommandOptions, config: &config::Config) -> Result<()> {
     let query = options.query.trim().to_string();
     if query.is_empty() {
         anyhow::bail!("query is required");
