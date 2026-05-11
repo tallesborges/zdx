@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use zdx_engine::config;
 use zdx_engine::core::thread_export::{self, ThreadExportOptions};
-use zdx_engine::core::thread_persistence;
+use zdx_engine::core::{qmd, thread_persistence};
 
 use crate::modes;
 
@@ -94,6 +94,49 @@ pub fn export(force: bool, dry_run: bool) -> Result<()> {
     println!(
         "Thread exports: exported={}, skipped={}, removed={}, failed={}",
         summary.exported, summary.skipped, summary.removed, summary.failed
+    );
+
+    Ok(())
+}
+
+pub fn index(config: &config::Config) -> Result<()> {
+    let export_summary = thread_export::export_threads_incremental(ThreadExportOptions::default())
+        .context("export threads before qmd indexing")?;
+
+    println!(
+        "Thread exports: exported={}, skipped={}, removed={}, failed={}",
+        export_summary.exported,
+        export_summary.skipped,
+        export_summary.removed,
+        export_summary.failed
+    );
+
+    let index_summary = qmd::index_thread_exports(&config.qmd).context("index threads with qmd")?;
+    let installed = if index_summary.installed {
+        " (installed)"
+    } else {
+        ""
+    };
+    let collection_action = if index_summary.collection_added {
+        "created"
+    } else {
+        "updated"
+    };
+
+    println!(
+        "qmd binary: {}{}",
+        index_summary.binary_path.display(),
+        installed
+    );
+    println!(
+        "qmd collection: {} {} at {}",
+        collection_action,
+        qmd::THREAD_COLLECTION_NAME,
+        index_summary.export_dir.display()
+    );
+    println!(
+        "qmd index: updated and embedded {}",
+        qmd::THREAD_COLLECTION_NAME
     );
 
     Ok(())

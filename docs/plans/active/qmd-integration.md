@@ -93,12 +93,12 @@
 ## Slice 3: qmd setup and index command
 - **Goal**: Let ZDX initialize/update qmd over the generic exports directory.
 - **Scope checklist**:
-  - [ ] Add minimal config for qmd command path, defaulting to `qmd` on `PATH`.
-  - [ ] Keep qmd’s own state under a qmd-specific ZDX runtime directory, but keep exports under `$ZDX_HOME/exports/threads/`.
-  - [ ] Add a manual command such as `zdx threads index` that runs export first, then qmd collection/update commands.
-  - [ ] Register one qmd collection over `$ZDX_HOME/exports/threads/` with pattern `**/*.md`.
-  - [ ] Do not start a persistent qmd server/MCP process in the MVP.
-  - [ ] Surface clear errors when qmd is missing or the qmd command fails.
+  - [x] Add minimal config for qmd command path, defaulting to `qmd` on `PATH`.
+  - [x] Use qmd’s default state locations, while keeping exports under `$ZDX_HOME/exports/threads/`.
+  - [x] Add a manual command such as `zdx threads index` that runs export first, then qmd collection/update commands.
+  - [x] Register one qmd collection over `$ZDX_HOME/exports/threads/` with pattern `**/*.md`.
+  - [x] Do not start a persistent qmd server/MCP process in the MVP.
+  - [x] Surface clear errors when qmd is missing or the qmd command fails.
 - **✅ Demo**: Run the command on a fresh ZDX home and confirm qmd sees a `zdx-threads` collection with indexed Markdown files.
 - **Risks / failure modes**:
   - qmd CLI flags may vary by version; keep command usage minimal and inspect help/errors during implementation.
@@ -188,6 +188,7 @@
 
 ## Phase 2: Search quality tuning
 - Compare qmd `search`, `vsearch`, and `query` modes using real ZDX threads.
+- Add qmd collection context for `zdx-threads` so qmd knows the collection contains exported ZDX chat thread transcripts and that filenames map to thread IDs.
 - Keep mode selection explicit and simple.
 - ✅ Check-in demo: the same `memory_search` query can be run in different qmd modes to compare results.
 

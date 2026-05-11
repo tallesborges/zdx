@@ -225,3 +225,6 @@ enabled = true
 # base_url = "https://api.mistral.ai/v1"
 models = ["voxtral-mini-latest"]
 fast_mode = false
+
+[qmd]
+command = "qmd"

@@ -296,6 +296,8 @@ enum ThreadCommands {
         #[arg(long = "dry-run")]
         dry_run: bool,
     },
+    /// Export saved threads and index them with qmd
+    Index,
     /// Search threads by date and/or query text
     Search {
         /// Optional query text to match in titles and thread content
@@ -971,6 +973,7 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
         ThreadCommands::Rename { id, title } => commands::threads::rename(&id, &title),
         ThreadCommands::Append { id, role, text } => commands::threads::append(&id, &role, &text),
         ThreadCommands::Export { force, dry_run } => commands::threads::export(force, dry_run),
+        ThreadCommands::Index => commands::threads::index(context.config),
         ThreadCommands::Search {
             query,
             date,
