@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 
@@ -29,6 +30,18 @@ pub struct ThreadExportSummary {
     pub skipped: usize,
     pub removed: usize,
     pub failed: usize,
+}
+
+/// Diagnostic state for exported thread transcripts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ThreadExportStatus {
+    pub source_threads: usize,
+    pub exported_threads: usize,
+    pub missing_exports: usize,
+    pub stale_exports: usize,
+    pub orphaned_exports: usize,
+    pub latest_source_modified: Option<SystemTime>,
+    pub latest_export_modified: Option<SystemTime>,
 }
 
 /// Exports every saved thread to `$ZDX_HOME/exports/threads/<thread_id>.md`.
@@ -92,6 +105,60 @@ pub fn export_threads_incremental(options: ThreadExportOptions) -> Result<Thread
     }
 
     Ok(summary)
+}
+
+/// Reports freshness of exported thread transcripts without writing files.
+///
+/// # Errors
+/// Returns an error if thread/export directory discovery fails.
+pub fn thread_export_status() -> Result<ThreadExportStatus> {
+    let threads = thread_persistence::list_threads().context("list threads for export status")?;
+    let export_dir = thread_exports_dir();
+    let mut status = ThreadExportStatus {
+        source_threads: threads.len(),
+        ..ThreadExportStatus::default()
+    };
+    let mut thread_ids = HashSet::with_capacity(threads.len());
+
+    for thread in threads {
+        thread_ids.insert(thread.id.clone());
+        status.latest_source_modified = max_time(status.latest_source_modified, thread.modified);
+
+        let export_path = export_dir.join(format!("{}.md", thread.id));
+        let Ok(metadata) = fs::metadata(&export_path) else {
+            status.missing_exports += 1;
+            continue;
+        };
+        status.exported_threads += 1;
+        let export_modified = metadata.modified().ok();
+        status.latest_export_modified = max_time(status.latest_export_modified, export_modified);
+        if let (Some(source_modified), Some(export_modified)) = (thread.modified, export_modified)
+            && export_modified < source_modified
+        {
+            status.stale_exports += 1;
+        }
+    }
+
+    if export_dir.exists() {
+        for entry in fs::read_dir(&export_dir).context("read thread exports directory")? {
+            let entry = entry.context("read thread export entry")?;
+            let path = entry.path();
+            if path.extension().is_none_or(|ext| ext != "md") {
+                continue;
+            }
+            let Some(thread_id) = path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().to_string())
+            else {
+                continue;
+            };
+            if !thread_ids.contains(&thread_id) {
+                status.orphaned_exports += 1;
+            }
+        }
+    }
+
+    Ok(status)
 }
 
 /// Exports one saved thread to `$ZDX_HOME/exports/threads/<thread_id>.md`.
@@ -181,6 +248,15 @@ fn export_one_incremental(
 
 fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn max_time(left: Option<SystemTime>, right: Option<SystemTime>) -> Option<SystemTime> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
 }
 
 #[cfg(test)]

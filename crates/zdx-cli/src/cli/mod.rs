@@ -363,6 +363,8 @@ enum ThreadCommands {
 enum MemoryCommands {
     /// Export saved threads and index ZDX memory collections with qmd
     Index,
+    /// Show qmd binary, collection, export, and last index state
+    Status,
     /// Search ZDX memory collections with qmd
     Search {
         /// Query text to match in indexed memory content
@@ -1035,6 +1037,7 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
 fn dispatch_memory(command: MemoryCommands, context: &DispatchContext<'_>) -> Result<()> {
     match command {
         MemoryCommands::Index => commands::memory::index(context.config),
+        MemoryCommands::Status => commands::memory::status(context.config),
         MemoryCommands::Search { query, limit, json } => commands::memory::search(
             &commands::memory::SearchCommandOptions { query, limit, json },
             context.config,
