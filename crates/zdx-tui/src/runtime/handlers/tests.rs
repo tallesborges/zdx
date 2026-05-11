@@ -12,7 +12,7 @@ async fn test_cancellation_token_stops_handler() {
     let handle = tokio::spawn(async move {
         tokio::select! {
             () = token_clone.cancelled() => "cancelled",
-            () = tokio::time::sleep(Duration::from_secs(60)) => "timeout",
+            () = tokio::time::sleep(Duration::from_mins(1)) => "timeout",
         }
     });
 

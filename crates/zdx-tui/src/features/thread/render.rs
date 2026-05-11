@@ -289,7 +289,7 @@ fn build_thread_list_item(
     let display_name = if thread.title.is_some() {
         thread.display_title()
     } else {
-        short_thread_id(&thread.id).to_string()
+        short_thread_id(&thread.id).clone()
     };
 
     let capped_depth = item.depth.min(4);

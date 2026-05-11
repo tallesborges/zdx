@@ -313,7 +313,7 @@ fn wait_for_gemini_cli_code(state: &str) -> Option<String> {
                     break;
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    if start.elapsed() > Duration::from_secs(120) {
+                    if start.elapsed() > Duration::from_mins(2) {
                         let _ = tx.send(None);
                         break;
                     }
@@ -327,7 +327,7 @@ fn wait_for_gemini_cli_code(state: &str) -> Option<String> {
         }
     });
 
-    rx.recv_timeout(Duration::from_secs(120)).ok().flatten()
+    rx.recv_timeout(Duration::from_mins(2)).ok().flatten()
 }
 
 fn extract_gemini_cli_code_from_request(request: &str, expected_state: &str) -> Option<String> {
@@ -381,7 +381,7 @@ fn wait_for_claude_cli_code(state: &str, port: u16) -> Option<String> {
                     break;
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    if start.elapsed() > Duration::from_secs(120) {
+                    if start.elapsed() > Duration::from_mins(2) {
                         let _ = tx.send(None);
                         break;
                     }
@@ -395,7 +395,7 @@ fn wait_for_claude_cli_code(state: &str, port: u16) -> Option<String> {
         }
     });
 
-    rx.recv_timeout(Duration::from_secs(120)).ok().flatten()
+    rx.recv_timeout(Duration::from_mins(2)).ok().flatten()
 }
 
 fn extract_claude_cli_code_from_request(request: &str, expected_state: &str) -> Option<String> {
@@ -449,7 +449,7 @@ fn wait_for_local_code(state: &str) -> Option<String> {
                     break;
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    if start.elapsed() > Duration::from_secs(60) {
+                    if start.elapsed() > Duration::from_mins(1) {
                         let _ = tx.send(None);
                         break;
                     }
@@ -463,7 +463,7 @@ fn wait_for_local_code(state: &str) -> Option<String> {
         }
     });
 
-    rx.recv_timeout(Duration::from_secs(60)).ok().flatten()
+    rx.recv_timeout(Duration::from_mins(1)).ok().flatten()
 }
 
 fn extract_code_from_request(request: &str, expected_state: &str) -> Option<String> {

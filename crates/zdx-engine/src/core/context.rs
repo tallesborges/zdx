@@ -585,7 +585,7 @@ pub fn render_standalone_prompt_template(
 
 /// Collects all AGENTS.md paths to check, in order.
 ///
-/// At each scope (ZDX_HOME, home, every ancestor between home and root, and
+/// At each scope (`ZDX_HOME`, home, every ancestor between home and root, and
 /// the project root), pushes `<dir>/AGENTS.md` followed by
 /// `<dir>/.zdx/AGENTS.md`. Same-scope `.zdx/` files load last so they
 /// override the committed file ("deeper wins"). `CLAUDE.md` is selected at

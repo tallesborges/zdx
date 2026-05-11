@@ -645,9 +645,7 @@ fn scan_claude_one_level(dir: &Path, source: SkillSource, state: &mut LoadState)
         let is_dir = if file_type.is_dir() {
             true
         } else if file_type.is_symlink() {
-            fs::metadata(&path)
-                .map(|metadata| metadata.is_dir())
-                .unwrap_or(false)
+            fs::metadata(&path).is_ok_and(|metadata| metadata.is_dir())
         } else {
             false
         };

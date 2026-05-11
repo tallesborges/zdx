@@ -60,7 +60,7 @@ pub struct AgentOptions {
     pub service_tier: Option<String>,
     /// Whether to register this run in the active-agents registry.
     /// Set `false` for utility/helper runs (title generation, TLDR, handoff,
-    /// prompt builder, read_thread) so they do not count as "active agents".
+    /// prompt builder, `read_thread`) so they do not count as "active agents".
     pub track_activity: bool,
     /// Logical role for this run, e.g. `"chat"`, `"exec"`, `"telegram"`,
     /// `"subagent"`. Surfaced in the active-agents registry alongside `surface`.

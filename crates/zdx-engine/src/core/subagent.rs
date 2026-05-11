@@ -37,7 +37,7 @@ pub struct ExecSubagentOptions {
     pub timeout: Option<Duration>,
     /// Whether the child run should register itself in the active-agents
     /// registry. Defaults to `false` so internal helper subagents (title
-    /// generation, TLDR, handoff, prompt builder, read_thread) are not
+    /// generation, TLDR, handoff, prompt builder, `read_thread`) are not
     /// counted as "active agents". Set to `true` for user-visible subagents
     /// invoked via `invoke_subagent`.
     pub track_activity: bool,

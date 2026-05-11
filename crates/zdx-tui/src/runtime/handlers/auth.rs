@@ -133,7 +133,7 @@ fn wait_for_local_code(
                     break;
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    if start.elapsed() > Duration::from_secs(120) {
+                    if start.elapsed() > Duration::from_mins(2) {
                         let _ = tx.send(None);
                         break;
                     }
@@ -147,7 +147,7 @@ fn wait_for_local_code(
         }
     });
 
-    rx.recv_timeout(Duration::from_secs(120)).ok().flatten()
+    rx.recv_timeout(Duration::from_mins(2)).ok().flatten()
 }
 
 fn extract_code_from_request(

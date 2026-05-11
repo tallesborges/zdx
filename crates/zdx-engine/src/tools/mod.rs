@@ -7,6 +7,7 @@
 pub use zdx_tools::{apply_patch, bash, edit, fetch_webpage, glob, grep, read, web_search, write};
 
 // Engine-backed tools (need full ToolContext with config, threads, etc.)
+pub mod memory_search;
 pub mod read_thread;
 pub mod subagent;
 pub mod thread_search;
@@ -149,6 +150,7 @@ impl ToolSet {
                 "glob",
                 "grep",
                 "invoke_subagent",
+                "memory_search",
                 "read",
                 "read_thread",
                 "todo_write",
@@ -163,6 +165,7 @@ impl ToolSet {
                 "glob",
                 "grep",
                 "invoke_subagent",
+                "memory_search",
                 "read",
                 "read_thread",
                 "todo_write",
@@ -322,6 +325,7 @@ impl ToolRegistry {
         self.register_builtin_tool(apply_patch::definition(), apply_patch_handler);
         self.register_builtin_tool(edit::definition(), edit_handler);
         self.register_builtin_tool(read::definition(), read_handler);
+        self.register_builtin_tool(memory_search::definition(), memory_search_handler);
         self.register_builtin_tool(read_thread::definition(), read_thread_handler);
         self.register_builtin_tool(todo_write::definition(), todo_write_handler);
         self.register_builtin_tool(thread_search::definition(), thread_search_handler);
@@ -404,6 +408,10 @@ fn glob_handler(input: Value, ctx: ToolContext) -> ToolFuture {
 
 fn read_thread_handler(input: Value, ctx: ToolContext) -> ToolFuture {
     Box::pin(async move { read_thread::execute(&input, &ctx).await })
+}
+
+fn memory_search_handler(input: Value, ctx: ToolContext) -> ToolFuture {
+    Box::pin(async move { execute_memory_search(&input, &ctx).await })
 }
 
 fn todo_write_handler(input: Value, ctx: ToolContext) -> ToolFuture {
@@ -523,6 +531,15 @@ async fn execute_thread_search(input: &Value, ctx: &ToolContext) -> ToolOutput {
         let input = input.clone();
         let ctx = ctx.clone();
         move || thread_search::execute(&input, &ctx)
+    })
+    .await
+}
+
+async fn execute_memory_search(input: &Value, ctx: &ToolContext) -> ToolOutput {
+    execute_blocking(ctx.timeout, {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        move || memory_search::execute(&input, &ctx)
     })
     .await
 }

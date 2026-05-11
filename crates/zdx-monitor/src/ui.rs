@@ -223,11 +223,9 @@ fn render_config(f: &mut Frame, app: &MonitorApp, area: Rect) {
     let scroll_info = if total_lines > visible_lines {
         let max_scroll = total_lines - visible_lines;
         let current_scroll = app.config_scroll.min(max_scroll);
-        let percent = if max_scroll > 0 {
-            (current_scroll * 100) / max_scroll
-        } else {
-            100
-        };
+        let percent = (current_scroll * 100)
+            .checked_div(max_scroll)
+            .unwrap_or(100);
         format!(" [{percent}%]")
     } else {
         String::new()

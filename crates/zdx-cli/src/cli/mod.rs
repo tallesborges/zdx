@@ -129,7 +129,7 @@ enum Commands {
 
         /// Internal: skip registering this run in the active-agents registry.
         /// Used by helper subagents (title generation, TLDR, handoff, prompt
-        /// builder, read_thread) so they don't count as "active agents".
+        /// builder, `read_thread`) so they don't count as "active agents".
         #[arg(long = "no-activity", hide = true)]
         no_activity: bool,
 
@@ -323,6 +323,10 @@ enum ThreadCommands {
         /// Output as JSON for automation/script usage
         #[arg(long)]
         json: bool,
+
+        /// Use qmd-backed memory search over indexed thread exports
+        #[arg(long)]
+        qmd: bool,
     },
     /// Inspect tool calls captured inside saved threads
     Tools {
@@ -981,14 +985,19 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
             date_end,
             limit,
             json,
-        } => commands::threads::search(commands::threads::SearchCommandOptions {
-            query,
-            date,
-            date_start,
-            date_end,
-            limit,
-            json,
-        }),
+            qmd,
+        } => commands::threads::search(
+            commands::threads::SearchCommandOptions {
+                query,
+                date,
+                date_start,
+                date_end,
+                limit,
+                json,
+                qmd,
+            },
+            context.config,
+        ),
         ThreadCommands::Tools {
             tool,
             failed,

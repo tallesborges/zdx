@@ -496,8 +496,8 @@ async fn handle_model_callback(
             match Config::save_telegram_model(model_id) {
                 Ok(()) => {
                     context.update_config(|cfg| {
-                        cfg.telegram.model = model_id.to_string();
-                        cfg.model = model_id.to_string();
+                        cfg.telegram.model.clone_from(model_id);
+                        cfg.model.clone_from(model_id);
                     });
                     format!("✅ Default model set to <code>{model_id}</code>.")
                 }

@@ -63,6 +63,10 @@ fn write_fake_qmd(temp_dir: &TempDir) -> std::path::PathBuf {
            echo 'Collection not found: zdx-threads' >&2\n\
            exit 1\n\
          fi\n\
+         if [ \"${{1:-}}\" = search ]; then\n\
+           printf '%s\\n' '[{{\"file\":\"qmd://zdx-threads/thread-qmd.md\",\"title\":\"Thread thread-qmd\",\"snippet\":\"User: qmd memory\",\"score\":0.9}}]'\n\
+           exit 0\n\
+         fi\n\
          exit 0\n",
         log = log_path.display().to_string()
     );
@@ -241,4 +245,25 @@ fn test_threads_index_exports_and_invokes_qmd() {
     assert!(log.contains("XDG_CACHE_HOME:\n"));
     assert!(log.contains("XDG_CONFIG_HOME:\n"));
     assert!(log.contains("XDG_DATA_HOME:\n"));
+}
+
+#[test]
+fn test_threads_search_qmd_maps_results_to_memory_refs() {
+    let temp_dir = TempDir::new().unwrap();
+    create_thread(&temp_dir, "thread-qmd");
+    let qmd_path = write_fake_qmd(&temp_dir);
+    write_qmd_config(&temp_dir, &qmd_path);
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["threads", "search", "qmd memory", "--qmd", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r#""ref": "thread:thread-qmd""#))
+        .stdout(predicate::str::contains(r#""source": "thread""#))
+        .stdout(predicate::str::contains(r#""thread_id": "thread-qmd""#))
+        .stdout(predicate::str::contains("run `zdx threads index`"));
+
+    let log = fs::read_to_string(temp_dir.path().join("qmd.log")).unwrap();
+    assert!(log.contains("ARGS:search qmd memory --json -n 20 -c zdx-threads"));
 }

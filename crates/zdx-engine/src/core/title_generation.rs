@@ -28,7 +28,7 @@ pub async fn generate_title(message: &str, title_model: &str, root: &Path) -> Re
         no_system_prompt: true,
         tools_override: None,
         event_filter: Some(vec!["turn_finished".to_string()]),
-        timeout: Some(Duration::from_secs(60)),
+        timeout: Some(Duration::from_mins(1)),
         ..Default::default()
     };
 

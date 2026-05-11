@@ -49,7 +49,7 @@ pub fn definition() -> ToolDefinition {
     }
 }
 
-fn deserialize_optional_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+pub(super) fn deserialize_optional_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

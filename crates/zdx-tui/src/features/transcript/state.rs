@@ -800,14 +800,11 @@ impl TranscriptState {
     /// Records a click and returns true if it qualifies as a double-click.
     pub fn register_click(&mut self, line: usize, column: usize) -> bool {
         let now = Instant::now();
-        let is_double_click = self
-            .last_click
-            .filter(|last| {
-                now.duration_since(last.at) <= DOUBLE_CLICK_MAX_DELAY
-                    && last.line == line
-                    && last.column.abs_diff(column) <= DOUBLE_CLICK_MAX_COLUMN_DELTA
-            })
-            .is_some();
+        let is_double_click = self.last_click.as_ref().is_some_and(|last| {
+            now.duration_since(last.at) <= DOUBLE_CLICK_MAX_DELAY
+                && last.line == line
+                && last.column.abs_diff(column) <= DOUBLE_CLICK_MAX_COLUMN_DELTA
+        });
 
         if is_double_click {
             self.last_click = None;
