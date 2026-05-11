@@ -1,8 +1,11 @@
 //! Memory command handlers.
 
+use std::time::SystemTime;
+
 use anyhow::{Context, Result};
+use chrono::{DateTime, SecondsFormat, Utc};
 use zdx_engine::config;
-use zdx_engine::core::qmd;
+use zdx_engine::core::qmd::{self, QmdMemoryCollectionState};
 use zdx_engine::core::thread_export::{self, ThreadExportOptions};
 
 /// Input options for `zdx memory search`.
@@ -51,6 +54,78 @@ pub fn index(config: &config::Config) -> Result<()> {
         );
     }
     println!("qmd index: updated and embedded ZDX memory collections");
+    let last_successful_index_at =
+        qmd::record_memory_index_success().context("record successful memory index run")?;
+    println!("Last successful index: {last_successful_index_at}");
+
+    Ok(())
+}
+
+pub fn status(config: &config::Config) -> Result<()> {
+    let qmd_status =
+        qmd::memory_status(&config.qmd, &config.memory).context("inspect qmd memory status")?;
+    let export_status =
+        thread_export::thread_export_status().context("inspect thread export status")?;
+
+    println!(
+        "Memory search readiness: {}",
+        readiness(&qmd_status, &export_status)
+    );
+
+    println!("\nqmd binary:");
+    if let Some(binary) = &qmd_status.binary {
+        println!("  Found: yes");
+        println!("  Command: {}", binary.command);
+        println!("  Path: {}", binary.path.display());
+        match (&binary.version, &binary.version_error) {
+            (Some(version), _) => println!("  Version: {version}"),
+            (None, Some(error)) => println!("  Version: unavailable ({error})"),
+            (None, None) => println!("  Version: unavailable"),
+        }
+    } else {
+        println!("  Found: no");
+        println!("  Command: {}", config.qmd.command);
+        println!("  Install: run `zdx memory index` or install qmd on PATH");
+    }
+
+    println!("\nThread exports:");
+    println!("  Source threads: {}", export_status.source_threads);
+    println!("  Exported transcripts: {}", export_status.exported_threads);
+    println!("  Missing exports: {}", export_status.missing_exports);
+    println!("  Stale exports: {}", export_status.stale_exports);
+    println!("  Orphaned exports: {}", export_status.orphaned_exports);
+    println!(
+        "  Latest source update: {}",
+        format_system_time(export_status.latest_source_modified)
+    );
+    println!(
+        "  Latest export update: {}",
+        format_system_time(export_status.latest_export_modified)
+    );
+
+    println!("\nqmd collections:");
+    for collection in &qmd_status.collections {
+        println!(
+            "  {} ({}) — {}",
+            collection.name,
+            collection.source,
+            collection_state_label(collection.state)
+        );
+        println!("    Path: {}", collection.expected_root_dir.display());
+        println!("    Pattern: {}", collection.expected_pattern);
+        if let Some(detail) = &collection.detail {
+            println!("    Detail: {detail}");
+        }
+    }
+
+    println!("\nLast successful index:");
+    match &qmd_status.last_successful_index_at {
+        Some(timestamp) => println!("  {timestamp}"),
+        None => println!(
+            "  Not recorded yet (run `zdx memory index`; status file: {})",
+            qmd_status.status_path.display()
+        ),
+    }
 
     Ok(())
 }
@@ -118,4 +193,50 @@ pub fn search(options: &SearchCommandOptions, config: &config::Config) -> Result
     }
 
     Ok(())
+}
+
+fn readiness(
+    qmd_status: &qmd::QmdMemoryStatus,
+    export_status: &thread_export::ThreadExportStatus,
+) -> &'static str {
+    if qmd_status.binary.is_none() {
+        return "unavailable (qmd binary not found)";
+    }
+    if qmd_status.last_successful_index_at.is_none() {
+        return "needs `zdx memory index` (no successful index recorded)";
+    }
+    if qmd_status
+        .collections
+        .iter()
+        .any(|collection| collection.state != QmdMemoryCollectionState::Ready)
+    {
+        return "needs `zdx memory index` (collection issue)";
+    }
+    if export_status.missing_exports > 0
+        || export_status.stale_exports > 0
+        || export_status.orphaned_exports > 0
+    {
+        return "needs `zdx memory index` (thread exports changed)";
+    }
+    "ready"
+}
+
+fn collection_state_label(state: QmdMemoryCollectionState) -> &'static str {
+    match state {
+        QmdMemoryCollectionState::Ready => "ready",
+        QmdMemoryCollectionState::Missing => "missing",
+        QmdMemoryCollectionState::Mismatch => "mismatch",
+        QmdMemoryCollectionState::Unavailable => "unavailable",
+        QmdMemoryCollectionState::Error => "error",
+    }
+}
+
+fn format_system_time(time: Option<SystemTime>) -> String {
+    match time {
+        Some(time) => {
+            let datetime: DateTime<Utc> = time.into();
+            datetime.to_rfc3339_opts(SecondsFormat::Secs, true)
+        }
+        None => "unknown".to_string(),
+    }
 }

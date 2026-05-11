@@ -65,6 +65,46 @@ pub struct QmdMemoryCollectionIndexSummary {
     pub collection_added: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QmdMemoryStatus {
+    pub binary: Option<QmdMemoryBinaryStatus>,
+    pub collections: Vec<QmdMemoryCollectionStatus>,
+    pub last_successful_index_at: Option<String>,
+    pub status_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QmdMemoryBinaryStatus {
+    pub command: String,
+    pub path: PathBuf,
+    pub version: Option<String>,
+    pub version_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QmdMemoryCollectionStatus {
+    pub name: String,
+    pub source: String,
+    pub expected_root_dir: PathBuf,
+    pub expected_pattern: String,
+    pub state: QmdMemoryCollectionState,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QmdMemoryCollectionState {
+    Ready,
+    Missing,
+    Mismatch,
+    Unavailable,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct QmdMemoryIndexStatusFile {
+    last_successful_index_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct QmdMemorySearchOptions {
     pub query: String,
@@ -153,6 +193,69 @@ pub fn index_memory_collections(
     index_memory_collections_with_binary(binary, memory_config)
 }
 
+/// Reports qmd binary, collection, and last successful indexing state without mutating qmd.
+///
+/// # Errors
+/// Returns an error when the stored ZDX memory index status file exists but cannot be read
+/// or parsed.
+pub fn memory_status(
+    qmd_config: &QmdConfig,
+    memory_config: &MemoryConfig,
+) -> Result<QmdMemoryStatus> {
+    let found_binary = find_qmd_binary(qmd_config).map(|path| QmdBinary {
+        path,
+        installed: false,
+    });
+    let binary_status = found_binary.as_ref().map(|binary| {
+        let (version, version_error) = qmd_version(binary);
+        QmdMemoryBinaryStatus {
+            command: qmd_config.command.clone(),
+            path: binary.path.clone(),
+            version,
+            version_error,
+        }
+    });
+
+    let collections = memory_collection_defs(memory_config)
+        .iter()
+        .map(|collection| match &found_binary {
+            Some(binary) => qmd_memory_collection_status(binary, collection),
+            None => qmd_memory_collection_unavailable(collection),
+        })
+        .collect();
+
+    Ok(QmdMemoryStatus {
+        binary: binary_status,
+        collections,
+        last_successful_index_at: read_memory_index_success_at()?,
+        status_path: qmd_memory_status_path(),
+    })
+}
+
+/// Records a successful `zdx memory index` run.
+///
+/// # Errors
+/// Returns an error if the status file cannot be written.
+pub fn record_memory_index_success() -> Result<String> {
+    let last_successful_index_at =
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let status = QmdMemoryIndexStatusFile {
+        last_successful_index_at,
+    };
+    let path = qmd_memory_status_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!("create memory index status directory {}", parent.display())
+        })?;
+    }
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&status).context("serialize memory index status")?,
+    )
+    .with_context(|| format!("write memory index status {}", path.display()))?;
+    Ok(status.last_successful_index_at)
+}
+
 /// Searches the qmd index for ZDX memory and maps hits to stable memory refs.
 ///
 /// # Errors
@@ -192,6 +295,96 @@ fn get_memory_doc_with_binary(binary: &QmdBinary, docid: &str) -> Result<QmdMemo
         docid: docid.to_string(),
         content: String::from_utf8_lossy(&output.stdout).to_string(),
     })
+}
+
+fn qmd_version(binary: &QmdBinary) -> (Option<String>, Option<String>) {
+    let output = run_qmd_command_allow_failure(binary, [OsString::from("--version")]);
+    let output = match output {
+        Ok(output) => output,
+        Err(err) => return (None, Some(err.to_string())),
+    };
+
+    let detail = qmd_output_detail(&output);
+    if !output.status.success() {
+        return (None, Some(detail));
+    }
+    if detail.is_empty() {
+        return (None, Some("qmd --version produced no output".to_string()));
+    }
+    (Some(detail), None)
+}
+
+fn qmd_memory_collection_status(
+    binary: &QmdBinary,
+    collection: &QmdMemoryCollectionDef,
+) -> QmdMemoryCollectionStatus {
+    let expected_root_dir =
+        fs::canonicalize(&collection.root_dir).unwrap_or_else(|_| collection.root_dir.clone());
+    let mut status = QmdMemoryCollectionStatus {
+        name: collection.name.to_string(),
+        source: collection.source.to_string(),
+        expected_root_dir: expected_root_dir.clone(),
+        expected_pattern: collection.pattern.to_string(),
+        state: QmdMemoryCollectionState::Ready,
+        detail: None,
+    };
+
+    let info = match qmd_collection_info(binary, collection.name) {
+        Ok(Some(info)) => info,
+        Ok(None) => {
+            status.state = QmdMemoryCollectionState::Missing;
+            status.detail = Some("not registered; run `zdx memory index`".to_string());
+            return status;
+        }
+        Err(err) => {
+            status.state = QmdMemoryCollectionState::Error;
+            status.detail = Some(err.to_string());
+            return status;
+        }
+    };
+
+    if info.path != expected_root_dir || info.pattern != collection.pattern {
+        status.state = QmdMemoryCollectionState::Mismatch;
+        status.detail = Some(format!(
+            "registered path '{}' pattern '{}', expected path '{}' pattern '{}'",
+            info.path.display(),
+            info.pattern,
+            expected_root_dir.display(),
+            collection.pattern
+        ));
+    }
+
+    status
+}
+
+fn qmd_memory_collection_unavailable(
+    collection: &QmdMemoryCollectionDef,
+) -> QmdMemoryCollectionStatus {
+    QmdMemoryCollectionStatus {
+        name: collection.name.to_string(),
+        source: collection.source.to_string(),
+        expected_root_dir: fs::canonicalize(&collection.root_dir)
+            .unwrap_or_else(|_| collection.root_dir.clone()),
+        expected_pattern: collection.pattern.to_string(),
+        state: QmdMemoryCollectionState::Unavailable,
+        detail: Some("qmd binary not found on PATH".to_string()),
+    }
+}
+
+fn read_memory_index_success_at() -> Result<Option<String>> {
+    let path = qmd_memory_status_path();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("read memory index status {}", path.display()))?;
+    let status: QmdMemoryIndexStatusFile = serde_json::from_str(&content)
+        .with_context(|| format!("parse memory index status {}", path.display()))?;
+    Ok(Some(status.last_successful_index_at))
+}
+
+fn qmd_memory_status_path() -> PathBuf {
+    config::paths::exports_dir().join("memory-index-status.json")
 }
 
 fn search_memory_collections_with_binary(
@@ -709,17 +902,27 @@ where
         .join(" ");
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let detail = if stderr.trim().is_empty() {
-        stdout.trim()
-    } else {
-        stderr.trim()
-    };
+    let detail = output_detail(stdout.trim(), stderr.trim());
     bail!(
         "qmd command failed: {} {}: {}",
         binary.path.display(),
         args,
         detail
     )
+}
+
+fn qmd_output_detail(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    output_detail(stdout.trim(), stderr.trim())
+}
+
+fn output_detail(stdout: &str, stderr: &str) -> String {
+    if stderr.is_empty() {
+        stdout.to_string()
+    } else {
+        stderr.to_string()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
