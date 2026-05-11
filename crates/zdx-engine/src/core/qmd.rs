@@ -31,9 +31,9 @@ pub const MEMORY_MARKDOWN_COLLECTION_PATTERN: &str = "**/*.md";
 const MEMORY_COLLECTION_IGNORE_PATTERNS: &[&str] =
     &["@Archive/**", "**/@Archive/**", "@Trash/**", "**/@Trash/**"];
 
-const THREAD_COLLECTION_CONTEXT: &str = "ZDX saved conversation thread transcripts exported from canonical JSONL. Each Markdown file is one thread; the filename stem is the thread ID. Search hits should be treated as thread:<id> references and deep-read from canonical ZDX thread JSONL before answering.";
-const NOTES_COLLECTION_CONTEXT: &str = "Canonical ZDX personal notes from the user's NotePlan Notes directory. Search hits should be treated as note:<relative_path> references and deep-read from the canonical Markdown file before answering.";
-const CALENDAR_COLLECTION_CONTEXT: &str = "Canonical ZDX calendar and daily notes from the user's NotePlan Calendar directory. Search hits should be treated as calendar:<relative_path> references and deep-read from the canonical Markdown file before answering.";
+const THREAD_COLLECTION_CONTEXT: &str = "ZDX saved conversation thread transcripts exported from canonical JSONL. Each Markdown file is one thread. Search hits should be deep-read by qmd docid before answering; use Read_Thread only when a thread ID is already known.";
+const NOTES_COLLECTION_CONTEXT: &str = "Canonical ZDX personal notes from the user's NotePlan Notes directory. Search hits should be deep-read by qmd docid before answering.";
+const CALENDAR_COLLECTION_CONTEXT: &str = "Canonical ZDX calendar and daily notes from the user's NotePlan Calendar directory. Search hits should be deep-read by qmd docid before answering.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QmdBinary {
@@ -80,13 +80,8 @@ pub struct QmdMemorySearchOutput {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct QmdMemorySearchResult {
-    #[serde(rename = "ref")]
-    pub reference: String,
-    pub source: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thread_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub relative_path: Option<String>,
+    pub docid: String,
+    pub file: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub snippet: String,
@@ -96,6 +91,7 @@ pub struct QmdMemorySearchResult {
 
 #[derive(Debug, Deserialize)]
 struct QmdSearchJsonResult {
+    docid: String,
     file: String,
     #[serde(default)]
     title: Option<String>,
@@ -103,6 +99,12 @@ struct QmdSearchJsonResult {
     snippet: Option<String>,
     #[serde(default)]
     score: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct QmdMemoryGetOutput {
+    pub docid: String,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,6 +164,34 @@ pub fn search_memory_collections(
 ) -> Result<QmdMemorySearchOutput> {
     let binary = require_qmd_binary(qmd_config)?;
     search_memory_collections_with_binary(&binary, memory_config, options)
+}
+
+/// Reads an indexed qmd memory document by docid.
+///
+/// # Errors
+/// Returns an error when qmd is unavailable or qmd cannot retrieve the docid.
+pub fn get_memory_doc(qmd_config: &QmdConfig, docid: &str) -> Result<QmdMemoryGetOutput> {
+    let docid = docid.trim();
+    if docid.is_empty() {
+        bail!("qmd memory docid cannot be empty");
+    }
+
+    let binary = require_qmd_binary(qmd_config)?;
+    get_memory_doc_with_binary(&binary, docid)
+}
+
+fn get_memory_doc_with_binary(binary: &QmdBinary, docid: &str) -> Result<QmdMemoryGetOutput> {
+    let output =
+        run_qmd_command_allow_failure(binary, [OsString::from("get"), OsString::from(docid)])?;
+
+    if !output.status.success() {
+        return bail_qmd_failure(binary, ["get", docid], &output);
+    }
+
+    Ok(QmdMemoryGetOutput {
+        docid: docid.to_string(),
+        content: String::from_utf8_lossy(&output.stdout).to_string(),
+    })
 }
 
 fn search_memory_collections_with_binary(
@@ -247,7 +277,7 @@ fn parse_qmd_memory_search_output(
     let mut warnings = Vec::new();
 
     for raw in raw_results {
-        let Some(mapped) = memory_ref_from_qmd_file(&raw.file, collections) else {
+        let Some(mapped) = memory_result_from_qmd_file(&raw.file, collections) else {
             warnings.push(format!(
                 "ignored qmd result outside ZDX memory collections: {}",
                 raw.file
@@ -266,10 +296,8 @@ fn parse_qmd_memory_search_output(
         }
 
         results.push(QmdMemorySearchResult {
-            reference: mapped.reference,
-            source: mapped.source,
-            thread_id: mapped.thread_id,
-            relative_path: mapped.relative_path,
+            docid: raw.docid,
+            file: raw.file,
             title: raw.title,
             snippet: raw.snippet.unwrap_or_default(),
             score: raw.score,
@@ -280,52 +308,40 @@ fn parse_qmd_memory_search_output(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct MappedMemoryRef {
-    reference: String,
-    source: String,
+struct MappedMemoryResult {
     thread_id: Option<String>,
-    relative_path: Option<String>,
     is_excluded_path: bool,
 }
 
-fn memory_ref_from_qmd_file(
+fn memory_result_from_qmd_file(
     file: &str,
     collections: &[QmdMemoryCollectionDef],
-) -> Option<MappedMemoryRef> {
+) -> Option<MappedMemoryResult> {
     for collection in collections {
-        let relative_path =
-            if let Some(path) = file.strip_prefix(&format!("qmd://{}/", collection.name)) {
-                normalize_qmd_relative_path(path)
-                    .map(|path| resolve_qmd_relative_path(collection, path))
-            } else {
-                relative_path_under_root(file, &collection.root_dir)
-            };
-        let Some(relative_path) = relative_path else {
+        let Some(relative_path) = file
+            .strip_prefix(&format!("qmd://{}/", collection.name))
+            .and_then(valid_qmd_uri_path)
+        else {
             continue;
         };
 
         let is_excluded_path =
             collection.source != "thread" && is_archive_or_trash_path(&relative_path);
         if collection.source == "thread" {
-            let thread_id = Path::new(&relative_path)
-                .file_stem()
-                .and_then(|stem| stem.to_str())
+            let thread_id = relative_path
+                .rsplit('/')
+                .next()
+                .map(|filename| filename.strip_suffix(".md").unwrap_or(filename))
                 .filter(|stem| !stem.is_empty())
                 .map(str::to_string)?;
-            return Some(MappedMemoryRef {
-                reference: format!("thread:{thread_id}"),
-                source: "thread".to_string(),
+            return Some(MappedMemoryResult {
                 thread_id: Some(thread_id),
-                relative_path: None,
                 is_excluded_path,
             });
         }
 
-        return Some(MappedMemoryRef {
-            reference: format!("{}:{relative_path}", collection.source),
-            source: collection.source.to_string(),
+        return Some(MappedMemoryResult {
             thread_id: None,
-            relative_path: Some(relative_path),
             is_excluded_path,
         });
     }
@@ -333,114 +349,21 @@ fn memory_ref_from_qmd_file(
     None
 }
 
-fn resolve_qmd_relative_path(collection: &QmdMemoryCollectionDef, relative_path: String) -> String {
-    if collection.source == "thread" || collection.root_dir.join(&relative_path).is_file() {
-        return relative_path;
-    }
-
-    resolve_slugged_relative_path(&collection.root_dir, &relative_path).unwrap_or(relative_path)
-}
-
-fn resolve_slugged_relative_path(root: &Path, relative_path: &str) -> Option<String> {
-    let components = relative_path.split('/').collect::<Vec<_>>();
-    if components.is_empty() || components.iter().any(|component| component.is_empty()) {
-        return None;
-    }
-
-    let mut current = fs::canonicalize(root).ok()?;
-    let mut resolved = PathBuf::new();
-    for requested in components {
-        let mut matches = fs::read_dir(&current)
-            .ok()?
-            .filter_map(|entry| entry.ok())
-            .filter_map(|entry| {
-                let file_name = entry.file_name().to_str()?.to_string();
-                let file_type = entry.file_type().ok()?;
-                let slug = qmd_slug_component(&file_name, file_type.is_file());
-                (file_name == requested || slug == requested).then_some((file_name, entry.path()))
-            })
-            .collect::<Vec<_>>();
-
-        matches.sort_by(|a, b| a.0.cmp(&b.0));
-        let (file_name, path) = matches.into_iter().next()?;
-        resolved.push(file_name);
-        current = path;
-    }
-
-    resolved.to_str().map(|path| path.replace('\\', "/"))
-}
-
-fn qmd_slug_component(name: &str, is_file: bool) -> String {
-    if is_file {
-        let path = Path::new(name);
-        if let (Some(stem), Some(extension)) = (path.file_stem(), path.extension())
-            && let (Some(stem), Some(extension)) = (stem.to_str(), extension.to_str())
-        {
-            return format!("{}.{}", qmd_slug_text(stem), extension.to_lowercase());
-        }
-    }
-
-    qmd_slug_text(name)
-}
-
-fn qmd_slug_text(input: &str) -> String {
-    let mut slug = String::new();
-    let mut pending_separator = false;
-
-    for ch in input.chars().flat_map(char::to_lowercase) {
-        if ch.is_alphanumeric() || ch == '_' {
-            if pending_separator && !slug.is_empty() {
-                slug.push('-');
-            }
-            slug.push(ch);
-            pending_separator = false;
-        } else if ch == '-' {
-            if !slug.ends_with('-') && !slug.is_empty() {
-                slug.push('-');
-            }
-            pending_separator = false;
-        } else {
-            pending_separator = true;
-        }
-    }
-
-    slug.trim_matches('-').to_string()
-}
-
-fn normalize_qmd_relative_path(path: &str) -> Option<String> {
+fn valid_qmd_uri_path(path: &str) -> Option<&str> {
     let path = path.trim_start_matches('/');
-    if path.is_empty() {
-        return None;
-    }
-    let parsed = Path::new(path);
-    if parsed.is_absolute()
-        || parsed
-            .components()
-            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    if path.is_empty()
+        || path
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
     {
         return None;
     }
-    Some(path.replace('\\', "/"))
-}
-
-fn relative_path_under_root(file: &str, root_dir: &Path) -> Option<String> {
-    let path = Path::new(file);
-    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let root = fs::canonicalize(root_dir).unwrap_or_else(|_| root_dir.to_path_buf());
-    if !canonical.starts_with(&root) {
-        return None;
-    }
-    canonical
-        .strip_prefix(root)
-        .ok()
-        .and_then(|path| path.to_str())
-        .and_then(normalize_qmd_relative_path)
+    Some(path)
 }
 
 fn is_archive_or_trash_path(path: &str) -> bool {
-    Path::new(path).components().any(|component| {
-        matches!(component, std::path::Component::Normal(name) if name == "@Archive" || name == "@Trash")
-    })
+    path.split('/')
+        .any(|component| component == "@Archive" || component == "@Trash")
 }
 
 fn index_memory_collections_with_binary(
@@ -955,14 +878,15 @@ mod tests {
     #[test]
     fn parses_qmd_uri_thread_results() {
         let dir = tempdir().unwrap();
-        let output = r#"[
+        let output = r##"[
             {
+                "docid": "#thread123",
                 "file": "qmd://zdx-threads/thread-123.md",
                 "title": "Thread thread-123",
                 "snippet": "User: hello",
                 "score": 0.93
             }
-        ]"#;
+        ]"##;
 
         let parsed = parse_qmd_memory_search_output(
             output,
@@ -977,19 +901,18 @@ mod tests {
 
         assert!(parsed.warnings.is_empty());
         assert_eq!(parsed.results.len(), 1);
-        assert_eq!(parsed.results[0].reference, "thread:thread-123");
-        assert_eq!(parsed.results[0].source, "thread");
-        assert_eq!(parsed.results[0].thread_id.as_deref(), Some("thread-123"));
+        assert_eq!(parsed.results[0].docid, "#thread123");
+        assert_eq!(parsed.results[0].file, "qmd://zdx-threads/thread-123.md");
         assert_eq!(parsed.results[0].score, Some(0.93));
     }
 
     #[test]
     fn parses_qmd_uri_note_and_calendar_results() {
         let dir = tempdir().unwrap();
-        let output = r#"[
-            {"file": "qmd://zdx-notes/Projects/ZDX.md", "snippet": "note match"},
-            {"file": "qmd://zdx-calendar/2026-05-11.md", "snippet": "calendar match"}
-        ]"#;
+        let output = r##"[
+            {"docid": "#note123", "file": "qmd://zdx-notes/Projects/ZDX.md", "snippet": "note match"},
+            {"docid": "#calendar123", "file": "qmd://zdx-calendar/2026-05-11.md", "snippet": "calendar match"}
+        ]"##;
 
         let parsed = parse_qmd_memory_search_output(
             output,
@@ -1004,61 +927,42 @@ mod tests {
 
         assert!(parsed.warnings.is_empty());
         assert_eq!(parsed.results.len(), 2);
-        assert_eq!(parsed.results[0].reference, "note:Projects/ZDX.md");
-        assert_eq!(parsed.results[0].source, "note");
-        assert_eq!(
-            parsed.results[0].relative_path.as_deref(),
-            Some("Projects/ZDX.md")
-        );
-        assert_eq!(parsed.results[1].reference, "calendar:2026-05-11.md");
-        assert_eq!(parsed.results[1].source, "calendar");
-        assert_eq!(
-            parsed.results[1].relative_path.as_deref(),
-            Some("2026-05-11.md")
-        );
+        assert_eq!(parsed.results[0].docid, "#note123");
+        assert_eq!(parsed.results[0].file, "qmd://zdx-notes/Projects/ZDX.md");
+        assert_eq!(parsed.results[1].docid, "#calendar123");
+        assert_eq!(parsed.results[1].file, "qmd://zdx-calendar/2026-05-11.md");
     }
 
     #[test]
-    fn resolves_slugified_qmd_uri_note_results_to_real_paths() {
+    fn gets_indexed_qmd_doc_by_docid() {
         let dir = tempdir().unwrap();
-        let notes_dir = dir.path().join("Notes");
-        let note_path = notes_dir
-            .join("30-39 Area")
-            .join("33.01 Topic & details")
-            .join("Example Note.md");
-        fs::create_dir_all(note_path.parent().unwrap()).unwrap();
-        fs::write(&note_path, "# Example Note\n").unwrap();
-        let output = r#"[
-            {"file": "qmd://zdx-notes/30-39-area/33-01-topic-details/example-note.md", "snippet": "example match"}
-        ]"#;
+        let qmd_path = dir.path().join("qmd");
+        write_executable(
+            &qmd_path,
+            "#!/bin/sh\nif [ \"$1\" = get ] && [ \"$2\" = '#doc123' ]; then\n  printf '# Indexed Doc\\n\\nContent from qmd\\n'\n  exit 0\nfi\necho unexpected qmd args >&2\nexit 1\n",
+        );
 
-        let parsed = parse_qmd_memory_search_output(
-            output,
-            &test_collections(dir.path(), &notes_dir, &dir.path().join("Calendar")),
-            None,
+        let output = get_memory_doc_with_binary(
+            &QmdBinary {
+                path: qmd_path,
+                installed: false,
+            },
+            "#doc123",
         )
         .unwrap();
 
-        assert!(parsed.warnings.is_empty());
-        assert_eq!(parsed.results.len(), 1);
-        assert_eq!(
-            parsed.results[0].reference,
-            "note:30-39 Area/33.01 Topic & details/Example Note.md"
-        );
-        assert_eq!(
-            parsed.results[0].relative_path.as_deref(),
-            Some("30-39 Area/33.01 Topic & details/Example Note.md")
-        );
+        assert_eq!(output.docid, "#doc123");
+        assert!(output.content.contains("Content from qmd"));
     }
 
     #[test]
     fn skips_archive_and_trash_qmd_uri_results() {
         let dir = tempdir().unwrap();
-        let output = r#"[
-            {"file": "qmd://zdx-notes/@Archive/Old.md", "snippet": "archived"},
-            {"file": "qmd://zdx-calendar/2026/@Trash/Deleted.md", "snippet": "trash"},
-            {"file": "qmd://zdx-notes/Active.md", "snippet": "active"}
-        ]"#;
+        let output = r##"[
+            {"docid": "#archived", "file": "qmd://zdx-notes/@Archive/Old.md", "snippet": "archived"},
+            {"docid": "#trash", "file": "qmd://zdx-calendar/2026/@Trash/Deleted.md", "snippet": "trash"},
+            {"docid": "#active", "file": "qmd://zdx-notes/Active.md", "snippet": "active"}
+        ]"##;
 
         let parsed = parse_qmd_memory_search_output(
             output,
@@ -1072,33 +976,23 @@ mod tests {
         .unwrap();
 
         assert_eq!(parsed.results.len(), 1);
-        assert_eq!(parsed.results[0].reference, "note:Active.md");
+        assert_eq!(parsed.results[0].docid, "#active");
         assert_eq!(parsed.warnings.len(), 2);
         assert!(parsed.warnings[0].contains("excluded memory path"));
     }
 
     #[test]
-    fn parses_absolute_thread_export_results_and_skips_outside_paths() {
+    fn skips_results_outside_configured_qmd_collections() {
         let dir = tempdir().unwrap();
-        let export_dir = dir.path().join("exports").join("threads");
-        fs::create_dir_all(&export_dir).unwrap();
-        let thread_path = export_dir.join("thread-abs.md");
-        fs::write(&thread_path, "# Thread thread-abs\n").unwrap();
-        let outside_path = dir.path().join("outside.md");
-        fs::write(&outside_path, "# Outside\n").unwrap();
-        let output = format!(
-            r#"[
-                {{"file":"{}","snippet":"match"}},
-                {{"file":"{}","snippet":"outside"}}
-            ]"#,
-            thread_path.display(),
-            outside_path.display()
-        );
+        let output = r##"[
+            {"docid":"#inside","file":"qmd://zdx-threads/thread-abs.md","snippet":"match"},
+            {"docid":"#outside","file":"qmd://other-collection/outside.md","snippet":"outside"}
+        ]"##;
 
         let parsed = parse_qmd_memory_search_output(
-            &output,
+            output,
             &test_collections(
-                &export_dir,
+                &dir.path().join("exports").join("threads"),
                 &dir.path().join("Notes"),
                 &dir.path().join("Calendar"),
             ),
@@ -1107,7 +1001,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(parsed.results.len(), 1);
-        assert_eq!(parsed.results[0].thread_id.as_deref(), Some("thread-abs"));
+        assert_eq!(parsed.results[0].docid, "#inside");
         assert_eq!(parsed.warnings.len(), 1);
         assert!(parsed.warnings[0].contains("outside ZDX memory collections"));
     }
@@ -1115,10 +1009,10 @@ mod tests {
     #[test]
     fn excludes_current_thread_from_qmd_results() {
         let dir = tempdir().unwrap();
-        let output = r#"[
-            {"file": "qmd://zdx-threads/current.md", "snippet": "current"},
-            {"file": "qmd://zdx-threads/other.md", "snippet": "other"}
-        ]"#;
+        let output = r##"[
+            {"docid": "#current", "file": "qmd://zdx-threads/current.md", "snippet": "current"},
+            {"docid": "#other", "file": "qmd://zdx-threads/other.md", "snippet": "other"}
+        ]"##;
 
         let parsed = parse_qmd_memory_search_output(
             output,
@@ -1132,7 +1026,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(parsed.results.len(), 1);
-        assert_eq!(parsed.results[0].thread_id.as_deref(), Some("other"));
+        assert_eq!(parsed.results[0].docid, "#other");
     }
 
     fn test_collections(
