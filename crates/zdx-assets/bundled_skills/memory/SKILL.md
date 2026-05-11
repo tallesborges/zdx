@@ -1,13 +1,15 @@
 ---
 name: memory
-description: "Use for memory-related tasks: when the user mentions notes, memory, saved information, or asks factual questions that may already be documented in their notes."
+description: "Use for memory-related tasks: saved notes, factual questions that may already be documented, and saving durable information. Prefer Memory_Search and Memory_Get for discovery; use this skill for routing, note-saving, and filing conventions."
 ---
 
 # Memory
 
-Use the user's markdown notes under `$ZDX_MEMORY_ROOT`.
+Use ZDX's qmd-backed memory tools and the user's markdown notes under `$ZDX_MEMORY_ROOT`.
 
-This skill is about routing and tool usage, not about defining a full filing philosophy. Follow the existing note structure you find in memory.
+This skill is about routing, note-saving, and filing conventions. It is not the search implementation and does not replace `Memory_Search` / `Memory_Get`.
+
+Follow the existing note structure you find in memory.
 
 ## Paths
 
@@ -16,52 +18,105 @@ This skill is about routing and tool usage, not about defining a full filing phi
 - Calendar: `$ZDX_MEMORY_ROOT/Calendar`
 - Memory index: `$ZDX_MEMORY_ROOT/Notes/MEMORY.md`
 
-There is no dedicated memory tool. Use the normal file tools with these paths.
+Memory discovery is qmd-backed. Prefer memory tools before raw file searches.
 
 - Use `$ZDX_MEMORY_ROOT` directly in tool arguments.
 - Treat `$ZDX_MEMORY_ROOT` as a container directory, not a note location.
 - Do not create `.md` files directly under `$ZDX_MEMORY_ROOT`; use `Notes/` for regular notes and `Calendar/` for period notes.
-- Search `Notes/` and `Calendar/` unless the user clearly scopes the request.
 - Ignore `@Archive/` and `@Trash/` unless the user asks.
 - Do not guess alternate memory locations; derive from `$ZDX_MEMORY_ROOT`.
 
 ## Default workflow
 
 1. Check the embedded `<memory_index>` block to find likely notes.
-2. Search the relevant memory paths with `grep` or `glob`.
-3. Read only the matching files you need.
-4. Answer directly, or edit the note with `apply_patch`.
+2. Use `Memory_Search` for discovery across exported threads, notes, and calendar files.
+3. Use `Memory_Get` on returned `thread:`, `note:`, or `calendar:` refs when you need canonical evidence.
+4. Answer directly, or edit the relevant note with `apply_patch`.
 5. When saving memory, write full detail to a note first, then decide whether `MEMORY.md` needs a concise pointer.
 
 ## Tool patterns
 
+### Search memory
+
+Use `Memory_Search` for open-ended memory discovery. It searches qmd-backed collections for:
+
+- exported conversation threads
+- canonical notes under `$ZDX_MEMORY_ROOT/Notes`
+- canonical calendar files under `$ZDX_MEMORY_ROOT/Calendar`
+
+Search by meaning, names, project terms, decisions, URLs, or distinctive phrases. Do not manually slug note paths or guess filesystem names; qmd may return normalized paths, and ZDX maps them back to canonical refs.
+
+Start with a focused natural-language query and a small limit. If results are weak, run a second search with synonyms, aliases, acronyms, or the likely project/person name.
+
+Good search patterns:
+
+```text
+Memory_Search query:"architecture decision cache invalidation" limit:10
+Memory_Search query:"renewal deadline reference" limit:10
+Memory_Search query:"CLI search migration notes" limit:10
+```
+
+Avoid weak searches:
+
+- very broad terms like `work`, `notes`, or `project`
+- raw regex syntax; `Memory_Search` is semantic/qmd-backed, not grep
+- path-only guesses unless the user gave the path or folder name
+- searching first when the user already provided an exact `thread:` / `note:` / `calendar:` ref
+
+`Memory_Search` returns stable memory refs such as:
+
+- `thread:<thread_id>`
+- `note:<relative_path>`
+- `calendar:<relative_path>`
+
+Treat `ref` as the canonical handle for follow-up reads. Treat `relative_path`, title, score, and snippets as display/debug metadata.
+
+Treat search snippets as leads, not source-of-truth evidence. Before answering factual questions, call `Memory_Get` for the most relevant refs and answer from canonical content.
+
+```text
+Memory_Search query:"service integration credentials reference" limit:10
+```
+
+If `Memory_Search` warns that exported threads changed or results may be stale, continue with the best returned refs when they work. If `Memory_Get` fails for a returned ref or results clearly miss recent notes, run `zdx memory index` when command execution is allowed, then retry the search.
+
+### Read memory refs
+
+Use `Memory_Get` after `Memory_Search` when you need canonical content.
+
+Always pass the full `ref` returned by `Memory_Search`; do not reconstruct refs from snippets or use `relative_path` alone.
+
+```text
+Memory_Get ref:"note:20-29 Projects/21.02 References/Example Project.md"
+Memory_Get ref:"calendar:2026-05.md"
+Memory_Get ref:"thread:00000000-0000-0000-0000-000000000000"
+```
+
+Read multiple refs when the question depends on comparing sources or when the first result is only a weak match. Keep the number of deep reads small and targeted.
+
+If the user already provides a thread ID and wants an answer from that thread, use `Read_Thread` directly instead of searching.
+
 ### Read the memory index
+
+Use the embedded `<memory_index>` first. Read the full index only when you need the live file or are about to update it.
 
 ```text
 read file_path:"$ZDX_MEMORY_ROOT/Notes/MEMORY.md"
 ```
 
-### Search memory
+### Raw file access
 
-Run note and calendar searches in parallel unless the user clearly scoped one path.
+Use raw `grep`, `glob`, and `read` only when:
 
-```text
-grep file_path:"$ZDX_MEMORY_ROOT/Notes" glob:"**/*.md" pattern:"alice|cpf" case_insensitive:true
-grep file_path:"$ZDX_MEMORY_ROOT/Calendar" glob:"*.md" pattern:"alice|cpf" case_insensitive:true
-```
+- the memory tools are unavailable in the current runtime
+- you need to inspect nearby files before choosing where to save a note
+- you are editing a known note path and need exact surrounding context
+- the user explicitly asks for filesystem-level note work
 
-Tips:
-
-- Use targeted regexes instead of broad scans.
-- For terms on the same line, use `term1.*term2|term2.*term1`.
-- Use `read` after `grep` to confirm context.
-- If a path fails, search under the configured roots instead of inventing a different absolute path.
-
-### List candidate notes
+When raw search is necessary, search `Notes/` and `Calendar/` unless the user clearly scopes the request.
 
 ```text
-glob path:"$ZDX_MEMORY_ROOT/Notes" pattern:"**/*.md"
-glob path:"$ZDX_MEMORY_ROOT/Calendar" pattern:"*.md"
+grep file_path:"$ZDX_MEMORY_ROOT/Notes" glob:"**/*.md" pattern:"deadline|reference" case_insensitive:true
+grep file_path:"$ZDX_MEMORY_ROOT/Calendar" glob:"*.md" pattern:"deadline|reference" case_insensitive:true
 ```
 
 Narrow by folder or pattern whenever possible.
@@ -88,7 +143,7 @@ bash command:"mkdir -p \"$ZDX_MEMORY_ROOT/Notes/Some Folder\""
 Consult memory for factual questions about the user or things they own, manage, or have already documented, such as:
 
 - personal facts and preferences
-- family details and relationships
+- people, relationships, and household context
 - work and project context
 - saved links, plans, and reference notes
 - past decisions, discussions, and history
@@ -145,9 +200,8 @@ When saving technical or project memory that may need later review, include the 
 
 Usually skip thread references for simple facts like names or stable preferences.
 
-## Search and filing rules
+## Filing rules
 
-- Search both `Notes/` and `Calendar/` unless the user clearly scopes the request.
 - Follow the folder and naming conventions that already exist in the relevant area.
 - Do not invent new Johnny Decimal codes or reorganize large areas without explicit approval.
 - Prefer appending to or updating an existing note over creating a new one.
