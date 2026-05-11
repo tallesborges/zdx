@@ -296,6 +296,7 @@ fn memory_ref_from_qmd_file(
         let relative_path =
             if let Some(path) = file.strip_prefix(&format!("qmd://{}/", collection.name)) {
                 normalize_qmd_relative_path(path)
+                    .map(|path| resolve_qmd_relative_path(collection, path))
             } else {
                 relative_path_under_root(file, &collection.root_dir)
             };
@@ -330,6 +331,80 @@ fn memory_ref_from_qmd_file(
     }
 
     None
+}
+
+fn resolve_qmd_relative_path(collection: &QmdMemoryCollectionDef, relative_path: String) -> String {
+    if collection.source == "thread" || collection.root_dir.join(&relative_path).is_file() {
+        return relative_path;
+    }
+
+    resolve_slugged_relative_path(&collection.root_dir, &relative_path).unwrap_or(relative_path)
+}
+
+fn resolve_slugged_relative_path(root: &Path, relative_path: &str) -> Option<String> {
+    let components = relative_path.split('/').collect::<Vec<_>>();
+    if components.is_empty() || components.iter().any(|component| component.is_empty()) {
+        return None;
+    }
+
+    let mut current = fs::canonicalize(root).ok()?;
+    let mut resolved = PathBuf::new();
+    for requested in components {
+        let mut matches = fs::read_dir(&current)
+            .ok()?
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| {
+                let file_name = entry.file_name().to_str()?.to_string();
+                let file_type = entry.file_type().ok()?;
+                let slug = qmd_slug_component(&file_name, file_type.is_file());
+                (file_name == requested || slug == requested).then_some((file_name, entry.path()))
+            })
+            .collect::<Vec<_>>();
+
+        matches.sort_by(|a, b| a.0.cmp(&b.0));
+        let (file_name, path) = matches.into_iter().next()?;
+        resolved.push(file_name);
+        current = path;
+    }
+
+    resolved.to_str().map(|path| path.replace('\\', "/"))
+}
+
+fn qmd_slug_component(name: &str, is_file: bool) -> String {
+    if is_file {
+        let path = Path::new(name);
+        if let (Some(stem), Some(extension)) = (path.file_stem(), path.extension())
+            && let (Some(stem), Some(extension)) = (stem.to_str(), extension.to_str())
+        {
+            return format!("{}.{}", qmd_slug_text(stem), extension.to_lowercase());
+        }
+    }
+
+    qmd_slug_text(name)
+}
+
+fn qmd_slug_text(input: &str) -> String {
+    let mut slug = String::new();
+    let mut pending_separator = false;
+
+    for ch in input.chars().flat_map(char::to_lowercase) {
+        if ch.is_alphanumeric() || ch == '_' {
+            if pending_separator && !slug.is_empty() {
+                slug.push('-');
+            }
+            slug.push(ch);
+            pending_separator = false;
+        } else if ch == '-' {
+            if !slug.ends_with('-') && !slug.is_empty() {
+                slug.push('-');
+            }
+            pending_separator = false;
+        } else {
+            pending_separator = true;
+        }
+    }
+
+    slug.trim_matches('-').to_string()
 }
 
 fn normalize_qmd_relative_path(path: &str) -> Option<String> {
@@ -940,6 +1015,39 @@ mod tests {
         assert_eq!(
             parsed.results[1].relative_path.as_deref(),
             Some("2026-05-11.md")
+        );
+    }
+
+    #[test]
+    fn resolves_slugified_qmd_uri_note_results_to_real_paths() {
+        let dir = tempdir().unwrap();
+        let notes_dir = dir.path().join("Notes");
+        let note_path = notes_dir
+            .join("30-39 Area")
+            .join("33.01 Topic & details")
+            .join("Example Note.md");
+        fs::create_dir_all(note_path.parent().unwrap()).unwrap();
+        fs::write(&note_path, "# Example Note\n").unwrap();
+        let output = r#"[
+            {"file": "qmd://zdx-notes/30-39-area/33-01-topic-details/example-note.md", "snippet": "example match"}
+        ]"#;
+
+        let parsed = parse_qmd_memory_search_output(
+            output,
+            &test_collections(dir.path(), &notes_dir, &dir.path().join("Calendar")),
+            None,
+        )
+        .unwrap();
+
+        assert!(parsed.warnings.is_empty());
+        assert_eq!(parsed.results.len(), 1);
+        assert_eq!(
+            parsed.results[0].reference,
+            "note:30-39 Area/33.01 Topic & details/Example Note.md"
+        );
+        assert_eq!(
+            parsed.results[0].relative_path.as_deref(),
+            Some("30-39 Area/33.01 Topic & details/Example Note.md")
         );
     }
 
