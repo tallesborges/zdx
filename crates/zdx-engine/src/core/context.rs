@@ -512,7 +512,7 @@ fn prompt_template_memory_collections() -> Vec<PromptTemplateMemoryCollection> {
         source: "saved ZDX threads".to_string(),
         contains: "exported user/assistant chat transcripts from saved ZDX conversation threads; each document maps to `thread:<thread_id>` by filename stem".to_string(),
         search_tool: "Memory_Search".to_string(),
-        read_after: "Use `Read_Thread` with the returned thread_id for canonical deep reads before relying on a result.".to_string(),
+        read_after: "After `Memory_Search`, use `Memory_Get` with a returned ref when you need canonical evidence before relying on a result. If a thread_id is already known and you need a focused answer to a specific goal, skip search and use `Read_Thread` directly.".to_string(),
     }]
 }
 
@@ -2138,7 +2138,9 @@ mod tests {
         assert!(rendered.contains("`zdx-threads`"));
         assert!(rendered.contains("exported user/assistant chat transcripts"));
         assert!(rendered.contains("Call `Memory_Search`"));
-        assert!(rendered.contains("Use `Read_Thread`"));
+        assert!(rendered.contains("`Memory_Get`"));
+        assert!(rendered.contains("`Read_Thread`"));
+        assert!(rendered.contains("skip search"));
     }
 
     #[test]
