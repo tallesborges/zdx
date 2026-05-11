@@ -326,7 +326,7 @@ fn memory_result_from_qmd_file(
         };
 
         let is_excluded_path =
-            collection.source != "thread" && is_archive_or_trash_path(&relative_path);
+            collection.source != "thread" && is_archive_or_trash_path(relative_path);
         if collection.source == "thread" {
             let thread_id = relative_path
                 .rsplit('/')

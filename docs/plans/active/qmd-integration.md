@@ -166,11 +166,11 @@
 ## Slice 7: Auto memory prompt integration
 - **Goal**: Make the main assistant use memory tools automatically only after the manual/tool path is stable.
 - **Scope checklist**:
-  - [ ] Update shared prompt/context guidance around `crates/zdx-engine/src/core/context.rs` as needed.
-  - [ ] Prefer explicit `memory_search` tool calls over hidden pre-answer magic for the first integration.
-  - [ ] Trigger memory search for likely historical/thread-memory questions.
-  - [ ] Preserve explicit `thread_search` / `read_thread` guidance.
-  - [ ] Keep qmd/export warnings visible in the tool result.
+  - [x] Update shared prompt/context guidance around `crates/zdx-engine/src/core/context.rs` as needed.
+  - [x] Prefer explicit `memory_search` tool calls over hidden pre-answer magic for the first integration.
+  - [x] Trigger memory search for likely historical/thread-memory questions.
+  - [x] Preserve explicit `thread_search` / `read_thread` guidance.
+  - [x] Keep qmd/export warnings visible in the tool result.
 - **✅ Demo**: Ask “what did we decide about qmd?” and the assistant calls `memory_search`, finds the prior thread, then deep-reads it.
 - **Risks / failure modes**:
   - Auto memory search may add latency or unnecessary tool calls.
