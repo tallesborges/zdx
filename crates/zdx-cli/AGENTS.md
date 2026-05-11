@@ -10,6 +10,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 - `src/cli/commands/bot.rs`: Telegram bot setup/init command handler (`zdx bot init`)
 - `src/cli/commands/daemon.rs`: scheduled automations daemon loop
 - `src/cli/commands/imagine.rs`: image generation command handler (`zdx imagine`)
+- `src/cli/commands/memory.rs`: memory indexing/search commands (`zdx memory index`, `zdx memory search`)
 - `src/cli/commands/mcp.rs`: MCP helper commands (`servers`, `tools`, `schema`, `call`)
 - `src/cli/commands/telegram.rs`: Telegram utility commands
 - `src/cli/commands/worktree.rs`: worktree command handler

@@ -60,6 +60,10 @@ fn write_fake_qmd(temp_dir: &TempDir) -> std::path::PathBuf {
          printf 'XDG_CONFIG_HOME:%s\\n' \"${{XDG_CONFIG_HOME:-}}\" >> {log:?}\n\
          printf 'XDG_DATA_HOME:%s\\n' \"${{XDG_DATA_HOME:-}}\" >> {log:?}\n\
          if [ \"${{1:-}}\" = collection ] && [ \"${{2:-}}\" = show ]; then\n\
+           if [ \"${{3:-}}\" = zdx-threads ] && [ \"${{QMD_FAKE_SHOW_THREADS:-}}\" = 1 ]; then\n\
+             printf 'Collection: zdx-threads\\n  Path:     %s/exports/threads\\n  Pattern:  **/*.md\\n' \"$ZDX_HOME\"\n\
+             exit 0\n\
+           fi\n\
            echo 'Collection not found: zdx-threads' >&2\n\
            exit 1\n\
          fi\n\
@@ -203,7 +207,7 @@ fn test_threads_export_removes_stale_exports() {
 }
 
 #[test]
-fn test_threads_index_exports_and_invokes_qmd() {
+fn test_memory_index_exports_and_invokes_qmd() {
     let temp_dir = TempDir::new().unwrap();
     create_thread(&temp_dir, "thread-index");
     let qmd_path = write_fake_qmd(&temp_dir);
@@ -211,10 +215,11 @@ fn test_threads_index_exports_and_invokes_qmd() {
 
     cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
+        .env("QMD_CONFIG_DIR", temp_dir.path().join("qmd-config"))
         .env_remove("XDG_CACHE_HOME")
         .env_remove("XDG_CONFIG_HOME")
         .env_remove("XDG_DATA_HOME")
-        .args(["threads", "index"])
+        .args(["memory", "index"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -224,7 +229,13 @@ fn test_threads_index_exports_and_invokes_qmd() {
             "qmd collection: created zdx-threads",
         ))
         .stdout(predicate::str::contains(
-            "qmd index: updated and embedded zdx-threads",
+            "qmd collection: created zdx-notes",
+        ))
+        .stdout(predicate::str::contains(
+            "qmd collection: created zdx-calendar",
+        ))
+        .stdout(predicate::str::contains(
+            "qmd index: updated and embedded ZDX memory collections",
         ));
 
     assert!(
@@ -238,17 +249,23 @@ fn test_threads_index_exports_and_invokes_qmd() {
 
     let log = fs::read_to_string(temp_dir.path().join("qmd.log")).unwrap();
     assert!(log.contains("ARGS:collection show zdx-threads"));
+    assert!(log.contains("ARGS:collection show zdx-notes"));
+    assert!(log.contains("ARGS:collection show zdx-calendar"));
     assert!(log.contains("ARGS:collection add"));
     assert!(log.contains("--name zdx-threads --mask **/*.md"));
+    assert!(log.contains("--name zdx-notes --mask **/*.md"));
+    assert!(log.contains("--name zdx-calendar --mask **/*.md"));
     assert!(log.contains("ARGS:update"));
     assert!(log.contains("ARGS:embed -c zdx-threads"));
+    assert!(log.contains("ARGS:embed -c zdx-notes"));
+    assert!(log.contains("ARGS:embed -c zdx-calendar"));
     assert!(log.contains("XDG_CACHE_HOME:\n"));
     assert!(log.contains("XDG_CONFIG_HOME:\n"));
     assert!(log.contains("XDG_DATA_HOME:\n"));
 }
 
 #[test]
-fn test_threads_search_qmd_maps_results_to_memory_refs() {
+fn test_memory_search_maps_results_to_memory_refs() {
     let temp_dir = TempDir::new().unwrap();
     create_thread(&temp_dir, "thread-qmd");
     let qmd_path = write_fake_qmd(&temp_dir);
@@ -256,13 +273,14 @@ fn test_threads_search_qmd_maps_results_to_memory_refs() {
 
     cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
-        .args(["threads", "search", "qmd memory", "--qmd", "--json"])
+        .env("QMD_FAKE_SHOW_THREADS", "1")
+        .args(["memory", "search", "qmd memory", "--json"])
         .assert()
         .success()
         .stdout(predicate::str::contains(r#""ref": "thread:thread-qmd""#))
         .stdout(predicate::str::contains(r#""source": "thread""#))
         .stdout(predicate::str::contains(r#""thread_id": "thread-qmd""#))
-        .stdout(predicate::str::contains("run `zdx threads index`"));
+        .stdout(predicate::str::contains("run `zdx memory index`"));
 
     let log = fs::read_to_string(temp_dir.path().join("qmd.log")).unwrap();
     assert!(log.contains("ARGS:search qmd memory --json -n 20 -c zdx-threads"));

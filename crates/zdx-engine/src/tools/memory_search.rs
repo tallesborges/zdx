@@ -1,13 +1,13 @@
 //! Memory search tool.
 //!
-//! Exposes qmd-backed thread discovery through backend-neutral memory refs.
+//! Exposes qmd-backed memory discovery through backend-neutral memory refs.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{ToolContext, ToolDefinition};
 use crate::core::events::ToolOutput;
-use crate::core::qmd::{self, QmdThreadSearchOptions};
+use crate::core::qmd::{self, QmdMemorySearchOptions};
 use crate::core::thread_export::{self, ThreadExportOptions};
 
 const DEFAULT_LIMIT: usize = 20;
@@ -16,14 +16,14 @@ const DEFAULT_LIMIT: usize = 20;
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Memory_Search".to_string(),
-        description: "Search saved ZDX memory in the qmd-backed `zdx-threads` collection, which contains exported user/assistant transcripts from saved ZDX conversation threads. Returns backend-neutral memory refs such as `thread:<thread_id>` plus snippets and scores. Use `memory_get` with a returned ref for canonical evidence from `$ZDX_HOME/threads/<thread_id>.jsonl`; do not treat snippets as the source of truth. If the thread_id is already known and you need a focused answer, skip search and call Read_Thread directly."
+        description: "Search saved ZDX memory in qmd-backed collections for exported conversation threads, canonical Notes, and canonical Calendar files. Returns backend-neutral memory refs such as `thread:<thread_id>`, `note:<relative_path>`, or `calendar:<relative_path>` plus snippets and scores. Use `memory_get` with a returned ref for canonical evidence from `$ZDX_HOME/threads/<thread_id>.jsonl`, `$ZDX_MEMORY_ROOT/Notes`, or `$ZDX_MEMORY_ROOT/Calendar`; do not treat snippets as the source of truth. If the thread_id is already known and you need a focused answer, skip search and call Read_Thread directly."
             .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Search query for historical thread memory"
+                    "description": "Search query for saved memory"
                 },
                 "limit": {
                     "type": "integer",
@@ -48,7 +48,7 @@ struct MemorySearchInput {
     limit: Option<usize>,
 }
 
-/// Executes the memory search tool and returns qmd-backed thread memory results.
+/// Executes the memory search tool and returns qmd-backed memory results.
 pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     let input: MemorySearchInput = match serde_json::from_value(input.clone()) {
         Ok(i) => i,
@@ -71,7 +71,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Ok(summary) => {
             if summary.exported > 0 || summary.removed > 0 || summary.failed > 0 {
                 warnings.push(format!(
-                    "thread exports changed before search (exported={}, removed={}, failed={}); run `zdx threads index` to refresh qmd if results look stale",
+                    "thread exports changed before search (exported={}, removed={}, failed={}); run `zdx memory index` to refresh qmd if results look stale",
                     summary.exported, summary.removed, summary.failed
                 ));
             }
@@ -84,13 +84,13 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     }
 
     let config = ctx.config.clone().unwrap_or_default();
-    let options = QmdThreadSearchOptions {
+    let options = QmdMemorySearchOptions {
         query,
         limit: input.limit.unwrap_or(DEFAULT_LIMIT).max(1),
         exclude_thread_id: ctx.current_thread_id.clone(),
     };
 
-    match qmd::search_thread_exports(&config.qmd, &options) {
+    match qmd::search_memory_collections(&config.qmd, &config.memory, &options) {
         Ok(mut output) => {
             warnings.append(&mut output.warnings);
             output.warnings = warnings;
@@ -114,8 +114,10 @@ mod tests {
     fn test_definition_schema() {
         let def = definition();
         assert_eq!(def.name, "Memory_Search");
-        assert!(def.description.contains("zdx-threads"));
+        assert!(def.description.contains("qmd-backed collections"));
         assert!(def.description.contains("thread:<thread_id>"));
+        assert!(def.description.contains("note:<relative_path>"));
+        assert!(def.description.contains("calendar:<relative_path>"));
         assert!(def.description.contains("memory_get"));
         assert!(def.description.contains("Read_Thread directly"));
     }
