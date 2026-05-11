@@ -79,6 +79,7 @@ fn test_threads_help_shows_subcommands() {
         .stdout(predicate::str::contains("list"))
         .stdout(predicate::str::contains("show"))
         .stdout(predicate::str::contains("resume"))
+        .stdout(predicate::str::contains("index"))
         .stdout(predicate::str::contains("search"))
         .stdout(predicate::str::contains("tools"));
 }

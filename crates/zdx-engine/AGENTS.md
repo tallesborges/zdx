@@ -30,6 +30,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - `core/context.rs`: project context loading (`AGENTS.md`/`CLAUDE.md`, memory)
 - `core/interrupt.rs`: signal handling
 - `core/agent.rs`: agent loop + event channels
+- `core/qmd.rs`: qmd binary discovery and setup helpers
 - `core/subagent.rs`: child `zdx exec` subagent runner
 - `core/thread_export.rs`: clean Markdown transcript exports derived from saved thread JSONL
 - `core/title_generation.rs`: LLM-based title generation (shared by TUI + bot)

@@ -225,6 +225,18 @@ where
     Ok(value)
 }
 
+fn default_qmd_command() -> String {
+    "qmd".to_string()
+}
+
+fn deserialize_qmd_command<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    normalize_non_empty(&value).ok_or_else(|| serde::de::Error::custom("value must not be blank"))
+}
+
 impl NamedBotConfig {
     /// Applies this named bot configuration onto the loaded global config.
     pub fn apply_to(&self, config: &mut Config) {
@@ -555,6 +567,28 @@ pub struct TranscriptionConfig {
     pub language: Option<String>,
 }
 
+/// qmd search backend configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct QmdConfig {
+    /// qmd command path or binary name.
+    ///
+    /// Defaults to `qmd` on `PATH`.
+    #[serde(
+        default = "default_qmd_command",
+        deserialize_with = "deserialize_qmd_command"
+    )]
+    pub command: String,
+}
+
+impl Default for QmdConfig {
+    fn default() -> Self {
+        Self {
+            command: default_qmd_command(),
+        }
+    }
+}
+
 /// Memory system configuration.
 ///
 /// Configures the root directory for memory storage.
@@ -678,6 +712,10 @@ pub struct Config {
     /// Shared audio transcription configuration for TUI/CLI and as the default for integrations.
     #[serde(default)]
     pub transcription: TranscriptionConfig,
+
+    /// qmd search backend configuration.
+    #[serde(default)]
+    pub qmd: QmdConfig,
 
     /// Telegram bot configuration
     #[serde(default)]
@@ -1177,6 +1215,7 @@ impl Default for Config {
             prompt_template: PromptTemplateConfig::default(),
             memory: MemoryConfig::default(),
             transcription: TranscriptionConfig::default(),
+            qmd: QmdConfig::default(),
             telegram: TelegramConfig::default(),
         }
     }
@@ -1651,6 +1690,7 @@ mod tests {
         assert!(config.transcription.provider.is_none());
         assert!(config.transcription.model.is_none());
         assert!(config.transcription.language.is_none());
+        assert_eq!(config.qmd.command, "qmd");
     }
 
     #[test]
@@ -1672,6 +1712,35 @@ language = "pt"
         assert_eq!(config.transcription.provider.as_deref(), Some("openai"));
         assert_eq!(config.transcription.model.as_deref(), Some("whisper-1"));
         assert_eq!(config.transcription.language.as_deref(), Some("pt"));
+    }
+
+    #[test]
+    fn test_qmd_command_loads_from_file() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        fs::write(&config_path, "[qmd]\ncommand = \"/opt/bin/qmd\"\n").unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(config.qmd.command, "/opt/bin/qmd");
+    }
+
+    #[test]
+    fn test_blank_qmd_command_is_rejected() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        fs::write(&config_path, "[qmd]\ncommand = \"   \"\n").unwrap();
+
+        let error = Config::load_from(&config_path).unwrap_err();
+        let chain = error.chain().map(ToString::to_string).collect::<Vec<_>>();
+
+        assert!(
+            chain
+                .iter()
+                .any(|message| message.contains("must not be blank")),
+            "expected blank-value error in chain, got: {chain:?}"
+        );
     }
 
     #[test]
