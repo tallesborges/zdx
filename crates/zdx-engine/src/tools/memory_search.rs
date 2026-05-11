@@ -1,6 +1,6 @@
 //! Memory search tool.
 //!
-//! Exposes qmd-backed memory discovery through backend-neutral memory refs.
+//! Exposes qmd-backed memory discovery through qmd docids.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -16,7 +16,7 @@ const DEFAULT_LIMIT: usize = 20;
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Memory_Search".to_string(),
-        description: "Search saved ZDX memory in qmd-backed collections for exported conversation threads, canonical Notes, and canonical Calendar files. Returns backend-neutral memory refs such as `thread:<thread_id>`, `note:<relative_path>`, or `calendar:<relative_path>` plus snippets and scores. Use `memory_get` with a returned ref for canonical evidence from `$ZDX_HOME/threads/<thread_id>.jsonl`, `$ZDX_MEMORY_ROOT/Notes`, or `$ZDX_MEMORY_ROOT/Calendar`; do not treat snippets as the source of truth. If the thread_id is already known and you need a focused answer, skip search and call Read_Thread directly."
+        description: "Search saved ZDX memory in qmd-backed collections for exported conversation threads, canonical Notes, and canonical Calendar files. Returns qmd `docid` handles such as `#962e2b`, qmd file identifiers, snippets, and scores. Use Memory_Get with a returned docid to read the indexed qmd document; do not treat snippets as the source of truth. If the thread_id is already known and you need a focused answer from canonical thread JSONL, skip search and call Read_Thread directly."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -115,10 +115,8 @@ mod tests {
         let def = definition();
         assert_eq!(def.name, "Memory_Search");
         assert!(def.description.contains("qmd-backed collections"));
-        assert!(def.description.contains("thread:<thread_id>"));
-        assert!(def.description.contains("note:<relative_path>"));
-        assert!(def.description.contains("calendar:<relative_path>"));
-        assert!(def.description.contains("memory_get"));
+        assert!(def.description.contains("docid"));
+        assert!(def.description.contains("Memory_Get"));
         assert!(def.description.contains("Read_Thread directly"));
     }
 

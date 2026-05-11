@@ -103,15 +103,13 @@ pub fn search(options: SearchCommandOptions, config: &config::Config) -> Result<
     }
 
     for result in output.results {
-        let title = result
-            .title
-            .as_deref()
-            .or(result.thread_id.as_deref())
-            .or(result.relative_path.as_deref())
-            .unwrap_or(&result.reference);
+        let title = result.title.as_deref().unwrap_or(&result.file);
         match result.score {
-            Some(score) => println!("[{}] {}  score={score:.3}", result.reference, title),
-            None => println!("[{}] {}", result.reference, title),
+            Some(score) => println!("[{}] {}  score={score:.3}", result.docid, title),
+            None => println!("[{}] {}", result.docid, title),
+        }
+        if result.title.is_some() {
+            println!("  File: {}", result.file);
         }
         if !result.snippet.is_empty() {
             println!("  Snippet: {}", result.snippet);

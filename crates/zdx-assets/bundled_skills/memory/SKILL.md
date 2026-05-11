@@ -30,7 +30,7 @@ Memory discovery is qmd-backed. Prefer memory tools before raw file searches.
 
 1. Check the embedded `<memory_index>` block to find likely notes.
 2. Use `Memory_Search` for discovery across exported threads, notes, and calendar files.
-3. Use `Memory_Get` on returned `thread:`, `note:`, or `calendar:` refs when you need canonical evidence.
+3. Use `Memory_Get` on returned qmd `docid` values when you need full indexed content.
 4. Answer directly, or edit the relevant note with `apply_patch`.
 5. When saving memory, write full detail to a note first, then decide whether `MEMORY.md` needs a concise pointer.
 
@@ -44,7 +44,7 @@ Use `Memory_Search` for open-ended memory discovery. It searches qmd-backed coll
 - canonical notes under `$ZDX_MEMORY_ROOT/Notes`
 - canonical calendar files under `$ZDX_MEMORY_ROOT/Calendar`
 
-Search by meaning, names, project terms, decisions, URLs, or distinctive phrases. Do not manually slug note paths or guess filesystem names; qmd may return normalized paths, and ZDX maps them back to canonical refs.
+Search by meaning, names, project terms, decisions, URLs, or distinctive phrases. Do not manually slug note paths or guess filesystem names; qmd owns indexed paths and doc IDs.
 
 Start with a focused natural-language query and a small limit. If results are weak, run a second search with synonyms, aliases, acronyms, or the likely project/person name.
 
@@ -61,39 +61,37 @@ Avoid weak searches:
 - very broad terms like `work`, `notes`, or `project`
 - raw regex syntax; `Memory_Search` is semantic/qmd-backed, not grep
 - path-only guesses unless the user gave the path or folder name
-- searching first when the user already provided an exact `thread:` / `note:` / `calendar:` ref
+- searching first when the user already provided an exact qmd `docid`
 
-`Memory_Search` returns stable memory refs such as:
+`Memory_Search` returns qmd-native results such as:
 
-- `thread:<thread_id>`
-- `note:<relative_path>`
-- `calendar:<relative_path>`
+- `docid`: the canonical qmd handle for `Memory_Get`, such as `#962e2b`
+- `file`: the qmd file identifier/path for display and debugging
+- `snippet`, `title`, and `score`: ranking context
 
-Treat `ref` as the canonical handle for follow-up reads. Treat `relative_path`, title, score, and snippets as display/debug metadata.
+Treat `docid` as the only handle for follow-up memory reads. Treat `file`, title, score, and snippets as display/debug metadata. Do not pass `qmd://...` values to `read`.
 
-Treat search snippets as leads, not source-of-truth evidence. Before answering factual questions, call `Memory_Get` for the most relevant refs and answer from canonical content.
+Treat search snippets as leads, not source-of-truth evidence. Before answering factual questions, call `Memory_Get` for the most relevant doc IDs and answer from indexed qmd content.
 
 ```text
 Memory_Search query:"service integration credentials reference" limit:10
 ```
 
-If `Memory_Search` warns that exported threads changed or results may be stale, continue with the best returned refs when they work. If `Memory_Get` fails for a returned ref or results clearly miss recent notes, run `zdx memory index` when command execution is allowed, then retry the search.
+If `Memory_Search` warns that exported threads changed or results may be stale, continue with the best returned doc IDs when they work. If `Memory_Get` fails for a returned doc ID or results clearly miss recent notes, run `zdx memory index` when command execution is allowed, then retry the search.
 
-### Read memory refs
+### Read memory doc IDs
 
-Use `Memory_Get` after `Memory_Search` when you need canonical content.
+Use `Memory_Get` after `Memory_Search` when you need full indexed qmd content.
 
-Always pass the full `ref` returned by `Memory_Search`; do not reconstruct refs from snippets or use `relative_path` alone.
+Always pass the exact `docid` returned by `Memory_Search`; do not reconstruct doc IDs from snippets or paths.
 
 ```text
-Memory_Get ref:"note:20-29 Projects/21.02 References/Example Project.md"
-Memory_Get ref:"calendar:2026-05.md"
-Memory_Get ref:"thread:00000000-0000-0000-0000-000000000000"
+Memory_Get docid:"#962e2b"
 ```
 
-Read multiple refs when the question depends on comparing sources or when the first result is only a weak match. Keep the number of deep reads small and targeted.
+Read multiple doc IDs when the question depends on comparing sources or when the first result is only a weak match. Keep the number of deep reads small and targeted.
 
-If the user already provides a thread ID and wants an answer from that thread, use `Read_Thread` directly instead of searching.
+If the user already provides a thread ID and wants an answer from that thread, use `Read_Thread` directly instead of searching. If you need to edit a known local note, use `read` / `apply_patch` on the exact canonical file path rather than `Memory_Get`.
 
 ### Read the memory index
 

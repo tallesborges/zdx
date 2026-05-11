@@ -510,9 +510,9 @@ fn prompt_template_memory_collections() -> Vec<PromptTemplateMemoryCollection> {
     vec![PromptTemplateMemoryCollection {
         name: qmd::THREAD_COLLECTION_NAME.to_string(),
         source: "saved ZDX threads".to_string(),
-        contains: "exported user/assistant chat transcripts from saved ZDX conversation threads; each document maps to `thread:<thread_id>` by filename stem".to_string(),
+        contains: "exported user/assistant chat transcripts from saved ZDX conversation threads; each search result includes a qmd `docid`".to_string(),
         search_tool: "Memory_Search".to_string(),
-        read_after: "After `Memory_Search`, use `Memory_Get` with a returned ref when you need canonical evidence before relying on a result. If a thread_id is already known and you need a focused answer to a specific goal, skip search and use `Read_Thread` directly.".to_string(),
+        read_after: "After `Memory_Search`, use `Memory_Get` with a returned `docid` before relying on a result. If a thread_id is already known and you need a focused answer to a specific goal, skip search and use `Read_Thread` directly.".to_string(),
     }]
 }
 
