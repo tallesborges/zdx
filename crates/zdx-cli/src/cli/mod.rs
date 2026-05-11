@@ -174,10 +174,15 @@ enum Commands {
         source: Vec<String>,
     },
 
-    /// Manage saved threads
+    /// Manage saved conversation threads
     Threads {
         #[command(subcommand)]
         command: ThreadCommands,
+    },
+    /// Search and index ZDX memory collections
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommands,
     },
     /// Manage automations
     Automations {
@@ -296,8 +301,6 @@ enum ThreadCommands {
         #[arg(long = "dry-run")]
         dry_run: bool,
     },
-    /// Export saved threads and index them with qmd
-    Index,
     /// Search threads by date and/or query text
     Search {
         /// Optional query text to match in titles and thread content
@@ -323,10 +326,6 @@ enum ThreadCommands {
         /// Output as JSON for automation/script usage
         #[arg(long)]
         json: bool,
-
-        /// Use qmd-backed memory search over indexed thread exports
-        #[arg(long)]
-        qmd: bool,
     },
     /// Inspect tool calls captured inside saved threads
     Tools {
@@ -349,6 +348,26 @@ enum ThreadCommands {
         /// Filter tool calls on/before this date (YYYY-MM-DD)
         #[arg(long = "date-end", value_name = "YYYY-MM-DD")]
         date_end: Option<String>,
+
+        /// Maximum number of results to return
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+
+        /// Output as JSON for automation/script usage
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum MemoryCommands {
+    /// Export saved threads and index ZDX memory collections with qmd
+    Index,
+    /// Search ZDX memory collections with qmd
+    Search {
+        /// Query text to match in indexed memory content
+        #[arg(value_name = "QUERY")]
+        query: String,
 
         /// Maximum number of results to return
         #[arg(long, default_value_t = 20)]
@@ -882,6 +901,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             )
             .await
         }
+        Commands::Memory { command } => dispatch_memory(command, context),
         Commands::Automations { command } => dispatch_automations(command, context).await,
         Commands::Mcp { command } => dispatch_mcp(command, context).await,
         Commands::Config { command } => dispatch_config(&command),
@@ -977,7 +997,6 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
         ThreadCommands::Rename { id, title } => commands::threads::rename(&id, &title),
         ThreadCommands::Append { id, role, text } => commands::threads::append(&id, &role, &text),
         ThreadCommands::Export { force, dry_run } => commands::threads::export(force, dry_run),
-        ThreadCommands::Index => commands::threads::index(context.config),
         ThreadCommands::Search {
             query,
             date,
@@ -985,19 +1004,14 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
             date_end,
             limit,
             json,
-            qmd,
-        } => commands::threads::search(
-            commands::threads::SearchCommandOptions {
-                query,
-                date,
-                date_start,
-                date_end,
-                limit,
-                json,
-                qmd,
-            },
-            context.config,
-        ),
+        } => commands::threads::search(commands::threads::SearchCommandOptions {
+            query,
+            date,
+            date_start,
+            date_end,
+            limit,
+            json,
+        }),
         ThreadCommands::Tools {
             tool,
             failed,
@@ -1015,6 +1029,16 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
             limit,
             json,
         }),
+    }
+}
+
+fn dispatch_memory(command: MemoryCommands, context: &DispatchContext<'_>) -> Result<()> {
+    match command {
+        MemoryCommands::Index => commands::memory::index(context.config),
+        MemoryCommands::Search { query, limit, json } => commands::memory::search(
+            commands::memory::SearchCommandOptions { query, limit, json },
+            context.config,
+        ),
     }
 }
 

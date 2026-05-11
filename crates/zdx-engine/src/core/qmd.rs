@@ -8,7 +8,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{self, QmdConfig};
+use crate::config::{self, MemoryConfig, QmdConfig};
 
 /// qmd package installed by the supported Node/Bun installers.
 pub const QMD_PACKAGE: &str = "@tobilu/qmd";
@@ -19,6 +19,22 @@ pub const THREAD_COLLECTION_NAME: &str = "zdx-threads";
 /// File pattern qmd should index inside the thread transcript export directory.
 pub const THREAD_COLLECTION_PATTERN: &str = "**/*.md";
 
+/// qmd collection used for canonical Second Brain notes.
+pub const NOTES_COLLECTION_NAME: &str = "zdx-notes";
+
+/// qmd collection used for canonical calendar notes.
+pub const CALENDAR_COLLECTION_NAME: &str = "zdx-calendar";
+
+/// File pattern qmd should index inside memory Markdown directories.
+pub const MEMORY_MARKDOWN_COLLECTION_PATTERN: &str = "**/*.md";
+
+const MEMORY_COLLECTION_IGNORE_PATTERNS: &[&str] =
+    &["@Archive/**", "**/@Archive/**", "@Trash/**", "**/@Trash/**"];
+
+const THREAD_COLLECTION_CONTEXT: &str = "ZDX saved conversation thread transcripts exported from canonical JSONL. Each Markdown file is one thread; the filename stem is the thread ID. Search hits should be treated as thread:<id> references and deep-read from canonical ZDX thread JSONL before answering.";
+const NOTES_COLLECTION_CONTEXT: &str = "Canonical ZDX personal notes from the user's NotePlan Notes directory. Search hits should be treated as note:<relative_path> references and deep-read from the canonical Markdown file before answering.";
+const CALENDAR_COLLECTION_CONTEXT: &str = "Canonical ZDX calendar and daily notes from the user's NotePlan Calendar directory. Search hits should be treated as calendar:<relative_path> references and deep-read from the canonical Markdown file before answering.";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QmdBinary {
     /// Resolved executable path.
@@ -28,7 +44,7 @@ pub struct QmdBinary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QmdThreadIndexSummary {
+pub struct QmdMemoryIndexSummary {
     /// Resolved executable path.
     pub binary_path: PathBuf,
     /// Whether this call installed qmd before resolving it.
@@ -37,27 +53,40 @@ pub struct QmdThreadIndexSummary {
     pub export_dir: PathBuf,
     /// Whether the qmd collection was created during this call.
     pub collection_added: bool,
+    /// All ZDX memory collections registered/updated during this call.
+    pub collections: Vec<QmdMemoryCollectionIndexSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QmdMemoryCollectionIndexSummary {
+    pub name: String,
+    pub source: String,
+    pub root_dir: PathBuf,
+    pub collection_added: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct QmdThreadSearchOptions {
+pub struct QmdMemorySearchOptions {
     pub query: String,
     pub limit: usize,
     pub exclude_thread_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct QmdThreadSearchOutput {
-    pub results: Vec<QmdThreadSearchResult>,
+pub struct QmdMemorySearchOutput {
+    pub results: Vec<QmdMemorySearchResult>,
     pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct QmdThreadSearchResult {
+pub struct QmdMemorySearchResult {
     #[serde(rename = "ref")]
     pub reference: String,
     pub source: String,
-    pub thread_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relative_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub snippet: String,
@@ -82,6 +111,16 @@ struct QmdCollectionInfo {
     pattern: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QmdMemoryCollectionDef {
+    name: &'static str,
+    source: &'static str,
+    root_dir: PathBuf,
+    pattern: &'static str,
+    context: &'static str,
+    ignore_patterns: &'static [&'static str],
+}
+
 /// Finds qmd using the configured command path/name.
 #[must_use]
 pub fn find_qmd_binary(config: &QmdConfig) -> Option<PathBuf> {
@@ -99,66 +138,87 @@ pub fn ensure_qmd_binary(config: &QmdConfig) -> Result<QmdBinary> {
     ensure_qmd_binary_with_path(config, path_env.as_deref())
 }
 
-/// Registers/updates qmd's `zdx-threads` collection over exported thread transcripts.
+/// Registers/updates qmd collections for ZDX memory.
 ///
 /// # Errors
 /// Returns an error when qmd is unavailable, the collection points at a different path
 /// or pattern, or qmd indexing/embedding fails.
-pub fn index_thread_exports(config: &QmdConfig) -> Result<QmdThreadIndexSummary> {
-    let binary = ensure_qmd_binary(config)?;
-    index_thread_exports_with_binary(binary)
+pub fn index_memory_collections(
+    qmd_config: &QmdConfig,
+    memory_config: &MemoryConfig,
+) -> Result<QmdMemoryIndexSummary> {
+    let binary = ensure_qmd_binary(qmd_config)?;
+    index_memory_collections_with_binary(binary, memory_config)
 }
 
-/// Searches the qmd index for exported thread transcripts and maps hits to stable memory refs.
+/// Searches the qmd index for ZDX memory and maps hits to stable memory refs.
 ///
 /// # Errors
 /// Returns an error when qmd is unavailable, qmd search fails, or JSON output cannot be parsed.
-pub fn search_thread_exports(
-    config: &QmdConfig,
-    options: &QmdThreadSearchOptions,
-) -> Result<QmdThreadSearchOutput> {
-    let binary = require_qmd_binary(config)?;
-    search_thread_exports_with_binary(&binary, options)
+pub fn search_memory_collections(
+    qmd_config: &QmdConfig,
+    memory_config: &MemoryConfig,
+    options: &QmdMemorySearchOptions,
+) -> Result<QmdMemorySearchOutput> {
+    let binary = require_qmd_binary(qmd_config)?;
+    search_memory_collections_with_binary(&binary, memory_config, options)
 }
 
-fn search_thread_exports_with_binary(
+fn search_memory_collections_with_binary(
     binary: &QmdBinary,
-    options: &QmdThreadSearchOptions,
-) -> Result<QmdThreadSearchOutput> {
+    memory_config: &MemoryConfig,
+    options: &QmdMemorySearchOptions,
+) -> Result<QmdMemorySearchOutput> {
     let query = options.query.trim();
     if query.is_empty() {
-        bail!("qmd thread search query cannot be empty");
+        bail!("qmd memory search query cannot be empty");
     }
 
-    let export_dir = config::paths::thread_exports_dir();
-    let export_dir = fs::canonicalize(&export_dir).unwrap_or(export_dir);
+    let collections = memory_collection_defs(memory_config);
+    let mut active_collections = Vec::new();
+    let mut warnings = Vec::new();
+    for collection in &collections {
+        match qmd_collection_info(binary, collection.name)? {
+            Some(_) => active_collections.push(collection.name),
+            None if collection.name == THREAD_COLLECTION_NAME => {
+                bail!(
+                    "qmd collection '{THREAD_COLLECTION_NAME}' was not found; run `zdx memory index` to set up qmd first"
+                );
+            }
+            None => warnings.push(format!(
+                "qmd collection '{}' is not indexed yet; run `zdx memory index` to include {} memory",
+                collection.name, collection.source
+            )),
+        }
+    }
+
     let limit = options.limit.max(1).to_string();
-    let output = run_qmd_command_allow_failure(
-        binary,
-        [
-            OsString::from("search"),
-            OsString::from(query),
-            OsString::from("--json"),
-            OsString::from("-n"),
-            OsString::from(limit),
-            OsString::from("-c"),
-            OsString::from(THREAD_COLLECTION_NAME),
-        ],
-    )?;
+    let mut args = vec![
+        OsString::from("search"),
+        OsString::from(query),
+        OsString::from("--json"),
+        OsString::from("-n"),
+        OsString::from(limit),
+    ];
+    for collection_name in active_collections {
+        args.push(OsString::from("-c"));
+        args.push(OsString::from(collection_name));
+    }
+
+    let output = run_qmd_command_allow_failure(binary, args)?;
 
     if !output.status.success() {
-        return bail_qmd_failure(
-            binary,
-            ["search", query, "--json", "-c", THREAD_COLLECTION_NAME],
-            &output,
-        );
+        return bail_qmd_failure(binary, ["search", query, "--json"], &output);
     }
 
-    parse_qmd_thread_search_output(
+    let mut parsed = parse_qmd_memory_search_output(
         &String::from_utf8_lossy(&output.stdout),
-        &export_dir,
+        &collections,
         options.exclude_thread_id.as_deref(),
-    )
+    )?;
+    warnings.append(&mut parsed.warnings);
+    parsed.warnings = warnings;
+    Ok(parsed)
 }
 
 fn require_qmd_binary(config: &QmdConfig) -> Result<QmdBinary> {
@@ -171,120 +231,337 @@ fn require_qmd_binary(config: &QmdConfig) -> Result<QmdBinary> {
     }
 
     bail!(
-        "qmd command '{}' was not found or is not executable; run `zdx threads index` to set up qmd first",
+        "qmd command '{}' was not found or is not executable; run `zdx memory index` to set up qmd first",
         config.command
     )
 }
 
-fn parse_qmd_thread_search_output(
+fn parse_qmd_memory_search_output(
     output: &str,
-    export_dir: &Path,
+    collections: &[QmdMemoryCollectionDef],
     exclude_thread_id: Option<&str>,
-) -> Result<QmdThreadSearchOutput> {
-    let export_dir = fs::canonicalize(export_dir).unwrap_or_else(|_| export_dir.to_path_buf());
+) -> Result<QmdMemorySearchOutput> {
     let raw_results: Vec<QmdSearchJsonResult> = serde_json::from_str(output)
         .with_context(|| "parse qmd search JSON output; expected an array of results")?;
     let mut results = Vec::with_capacity(raw_results.len());
     let mut warnings = Vec::new();
 
     for raw in raw_results {
-        let Some(thread_id) = thread_id_from_qmd_file(&raw.file, &export_dir) else {
+        let Some(mapped) = memory_ref_from_qmd_file(&raw.file, collections) else {
             warnings.push(format!(
-                "ignored qmd result outside thread exports: {}",
+                "ignored qmd result outside ZDX memory collections: {}",
                 raw.file
             ));
             continue;
         };
-        if exclude_thread_id.is_some_and(|excluded| excluded == thread_id) {
+        if mapped.is_excluded_path {
+            warnings.push(format!(
+                "ignored qmd result under excluded memory path: {}",
+                raw.file
+            ));
+            continue;
+        }
+        if exclude_thread_id.is_some_and(|excluded| mapped.thread_id.as_deref() == Some(excluded)) {
             continue;
         }
 
-        results.push(QmdThreadSearchResult {
-            reference: format!("thread:{thread_id}"),
-            source: "thread".to_string(),
-            thread_id,
+        results.push(QmdMemorySearchResult {
+            reference: mapped.reference,
+            source: mapped.source,
+            thread_id: mapped.thread_id,
+            relative_path: mapped.relative_path,
             title: raw.title,
             snippet: raw.snippet.unwrap_or_default(),
             score: raw.score,
         });
     }
 
-    Ok(QmdThreadSearchOutput { results, warnings })
+    Ok(QmdMemorySearchOutput { results, warnings })
 }
 
-fn thread_id_from_qmd_file(file: &str, export_dir: &Path) -> Option<String> {
-    if let Some(path) = file.strip_prefix(&format!("qmd://{THREAD_COLLECTION_NAME}/")) {
-        return Path::new(path)
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .filter(|stem| !stem.is_empty())
-            .map(str::to_string);
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MappedMemoryRef {
+    reference: String,
+    source: String,
+    thread_id: Option<String>,
+    relative_path: Option<String>,
+    is_excluded_path: bool,
+}
+
+fn memory_ref_from_qmd_file(
+    file: &str,
+    collections: &[QmdMemoryCollectionDef],
+) -> Option<MappedMemoryRef> {
+    for collection in collections {
+        let relative_path =
+            if let Some(path) = file.strip_prefix(&format!("qmd://{}/", collection.name)) {
+                normalize_qmd_relative_path(path)
+            } else {
+                relative_path_under_root(file, &collection.root_dir)
+            };
+        let Some(relative_path) = relative_path else {
+            continue;
+        };
+
+        let is_excluded_path =
+            collection.source != "thread" && is_archive_or_trash_path(&relative_path);
+        if collection.source == "thread" {
+            let thread_id = Path::new(&relative_path)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .filter(|stem| !stem.is_empty())
+                .map(str::to_string)?;
+            return Some(MappedMemoryRef {
+                reference: format!("thread:{thread_id}"),
+                source: "thread".to_string(),
+                thread_id: Some(thread_id),
+                relative_path: None,
+                is_excluded_path,
+            });
+        }
+
+        return Some(MappedMemoryRef {
+            reference: format!("{}:{relative_path}", collection.source),
+            source: collection.source.to_string(),
+            thread_id: None,
+            relative_path: Some(relative_path),
+            is_excluded_path,
+        });
     }
 
+    None
+}
+
+fn normalize_qmd_relative_path(path: &str) -> Option<String> {
+    let path = path.trim_start_matches('/');
+    if path.is_empty() {
+        return None;
+    }
+    let parsed = Path::new(path);
+    if parsed.is_absolute()
+        || parsed
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    Some(path.replace('\\', "/"))
+}
+
+fn relative_path_under_root(file: &str, root_dir: &Path) -> Option<String> {
     let path = Path::new(file);
     let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    if !canonical.starts_with(export_dir) {
+    let root = fs::canonicalize(root_dir).unwrap_or_else(|_| root_dir.to_path_buf());
+    if !canonical.starts_with(&root) {
         return None;
     }
     canonical
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .filter(|stem| !stem.is_empty())
-        .map(str::to_string)
+        .strip_prefix(root)
+        .ok()
+        .and_then(|path| path.to_str())
+        .and_then(normalize_qmd_relative_path)
 }
 
-fn index_thread_exports_with_binary(binary: QmdBinary) -> Result<QmdThreadIndexSummary> {
-    let export_dir = config::paths::thread_exports_dir();
-    fs::create_dir_all(&export_dir).context("create thread exports directory")?;
-    let export_dir = fs::canonicalize(&export_dir).context("resolve thread exports directory")?;
+fn is_archive_or_trash_path(path: &str) -> bool {
+    Path::new(path).components().any(|component| {
+        matches!(component, std::path::Component::Normal(name) if name == "@Archive" || name == "@Trash")
+    })
+}
 
-    let collection = qmd_collection_info(&binary, THREAD_COLLECTION_NAME)?;
-    let collection_added = if let Some(info) = collection {
-        if info.path != export_dir || info.pattern != THREAD_COLLECTION_PATTERN {
-            bail!(
-                "qmd collection '{name}' already exists for path '{}' with pattern '{}'; expected path '{}' with pattern '{}'. Remove or rename the existing collection with `qmd collection remove {name}` and try again.",
-                info.path.display(),
-                info.pattern,
-                export_dir.display(),
-                THREAD_COLLECTION_PATTERN,
-                name = THREAD_COLLECTION_NAME
-            );
-        }
-        false
-    } else {
+fn index_memory_collections_with_binary(
+    binary: QmdBinary,
+    memory_config: &MemoryConfig,
+) -> Result<QmdMemoryIndexSummary> {
+    let mut indexed_collections = Vec::new();
+    for collection in memory_collection_defs(memory_config) {
+        fs::create_dir_all(&collection.root_dir)
+            .with_context(|| format!("create {} memory directory", collection.source))?;
+        let root_dir = fs::canonicalize(&collection.root_dir)
+            .with_context(|| format!("resolve {} memory directory", collection.source))?;
+
+        let existing = qmd_collection_info(&binary, collection.name)?;
+        let collection_added = if let Some(info) = existing {
+            if info.path != root_dir || info.pattern != collection.pattern {
+                bail!(
+                    "qmd collection '{name}' already exists for path '{}' with pattern '{}'; expected path '{}' with pattern '{}'. Remove or rename the existing collection with `qmd collection remove {name}` and try again.",
+                    info.path.display(),
+                    info.pattern,
+                    root_dir.display(),
+                    collection.pattern,
+                    name = collection.name
+                );
+            }
+            false
+        } else {
+            run_qmd_command(
+                &binary,
+                [
+                    OsString::from("collection"),
+                    OsString::from("add"),
+                    root_dir.as_os_str().to_os_string(),
+                    OsString::from("--name"),
+                    OsString::from(collection.name),
+                    OsString::from("--mask"),
+                    OsString::from(collection.pattern),
+                ],
+            )
+            .with_context(|| format!("create qmd {} collection", collection.source))?;
+            true
+        };
+
+        ensure_qmd_collection_ignores(collection.name, collection.ignore_patterns).with_context(
+            || format!("configure qmd ignores for collection '{}'", collection.name),
+        )?;
+        ensure_qmd_collection_context(&binary, collection.name, collection.context).with_context(
+            || format!("configure qmd context for collection '{}'", collection.name),
+        )?;
+
+        indexed_collections.push(QmdMemoryCollectionIndexSummary {
+            name: collection.name.to_string(),
+            source: collection.source.to_string(),
+            root_dir,
+            collection_added,
+        });
+    }
+
+    run_qmd_command(&binary, [OsString::from("update")]).context("update qmd index")?;
+    for collection in &indexed_collections {
         run_qmd_command(
             &binary,
             [
-                OsString::from("collection"),
-                OsString::from("add"),
-                export_dir.as_os_str().to_os_string(),
-                OsString::from("--name"),
-                OsString::from(THREAD_COLLECTION_NAME),
-                OsString::from("--mask"),
-                OsString::from(THREAD_COLLECTION_PATTERN),
+                OsString::from("embed"),
+                OsString::from("-c"),
+                OsString::from(&collection.name),
             ],
         )
-        .context("create qmd thread collection")?;
-        true
-    };
+        .with_context(|| format!("embed qmd {} collection", collection.name))?;
+    }
 
-    run_qmd_command(&binary, [OsString::from("update")]).context("update qmd index")?;
-    run_qmd_command(
-        &binary,
-        [
-            OsString::from("embed"),
-            OsString::from("-c"),
-            OsString::from(THREAD_COLLECTION_NAME),
-        ],
-    )
-    .context("embed qmd thread collection")?;
+    let thread_collection = indexed_collections
+        .iter()
+        .find(|collection| collection.name == THREAD_COLLECTION_NAME)
+        .context("missing thread collection summary")?;
 
-    Ok(QmdThreadIndexSummary {
+    Ok(QmdMemoryIndexSummary {
         binary_path: binary.path,
         installed: binary.installed,
-        export_dir,
-        collection_added,
+        export_dir: thread_collection.root_dir.clone(),
+        collection_added: thread_collection.collection_added,
+        collections: indexed_collections,
     })
+}
+
+fn memory_collection_defs(memory_config: &MemoryConfig) -> Vec<QmdMemoryCollectionDef> {
+    vec![
+        QmdMemoryCollectionDef {
+            name: THREAD_COLLECTION_NAME,
+            source: "thread",
+            root_dir: config::paths::thread_exports_dir(),
+            pattern: THREAD_COLLECTION_PATTERN,
+            context: THREAD_COLLECTION_CONTEXT,
+            ignore_patterns: &[],
+        },
+        QmdMemoryCollectionDef {
+            name: NOTES_COLLECTION_NAME,
+            source: "note",
+            root_dir: memory_config.effective_notes_path(),
+            pattern: MEMORY_MARKDOWN_COLLECTION_PATTERN,
+            context: NOTES_COLLECTION_CONTEXT,
+            ignore_patterns: MEMORY_COLLECTION_IGNORE_PATTERNS,
+        },
+        QmdMemoryCollectionDef {
+            name: CALENDAR_COLLECTION_NAME,
+            source: "calendar",
+            root_dir: memory_config.effective_daily_path(),
+            pattern: MEMORY_MARKDOWN_COLLECTION_PATTERN,
+            context: CALENDAR_COLLECTION_CONTEXT,
+            ignore_patterns: MEMORY_COLLECTION_IGNORE_PATTERNS,
+        },
+    ]
+}
+
+fn ensure_qmd_collection_context(binary: &QmdBinary, name: &str, context: &str) -> Result<()> {
+    run_qmd_command(
+        binary,
+        [
+            OsString::from("context"),
+            OsString::from("add"),
+            OsString::from(format!("qmd://{name}/")),
+            OsString::from(context),
+        ],
+    )
+}
+
+fn ensure_qmd_collection_ignores(name: &str, ignore_patterns: &[&str]) -> Result<()> {
+    if ignore_patterns.is_empty() {
+        return Ok(());
+    }
+
+    let config_path = qmd_config_file_path()?;
+    let content = fs::read_to_string(&config_path).unwrap_or_default();
+    let mut yaml: serde_yaml::Value = if content.trim().is_empty() {
+        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+    } else {
+        serde_yaml::from_str(&content)
+            .with_context(|| format!("parse qmd config {}", config_path.display()))?
+    };
+
+    let root = yaml
+        .as_mapping_mut()
+        .context("qmd config root is not a mapping")?;
+    let collections_field = serde_yaml::Value::String("collections".to_string());
+    if !root.contains_key(&collections_field) {
+        root.insert(
+            collections_field.clone(),
+            serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+        );
+    }
+    let collections = root
+        .get_mut(&collections_field)
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .context("qmd config collections is not a mapping")?;
+    let collection_name_field = serde_yaml::Value::String(name.to_string());
+    if !collections.contains_key(&collection_name_field) {
+        collections.insert(
+            collection_name_field.clone(),
+            serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+        );
+    }
+    let collection = collections
+        .get_mut(&collection_name_field)
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .context("qmd collection config is not a mapping")?;
+    collection.insert(
+        serde_yaml::Value::String("ignore".to_string()),
+        serde_yaml::Value::Sequence(
+            ignore_patterns
+                .iter()
+                .map(|pattern| serde_yaml::Value::String((*pattern).to_string()))
+                .collect(),
+        ),
+    );
+
+    fs::write(
+        &config_path,
+        serde_yaml::to_string(&yaml).context("serialize qmd config")?,
+    )
+    .with_context(|| format!("write qmd config {}", config_path.display()))
+}
+
+fn qmd_config_file_path() -> Result<PathBuf> {
+    let config_dir = if let Some(dir) = std::env::var_os("QMD_CONFIG_DIR") {
+        PathBuf::from(dir)
+    } else if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
+        PathBuf::from(dir).join("qmd")
+    } else {
+        config::paths::home_dir()
+            .context("determine home directory for qmd config")?
+            .join(".config")
+            .join("qmd")
+    };
+    fs::create_dir_all(&config_dir)
+        .with_context(|| format!("create qmd config directory {}", config_dir.display()))?;
+    Ok(config_dir.join("index.yml"))
 }
 
 fn ensure_qmd_binary_with_path(config: &QmdConfig, path_env: Option<&OsStr>) -> Result<QmdBinary> {
@@ -612,14 +889,84 @@ mod tests {
             }
         ]"#;
 
-        let parsed = parse_qmd_thread_search_output(output, dir.path(), None).unwrap();
+        let parsed = parse_qmd_memory_search_output(
+            output,
+            &test_collections(
+                dir.path(),
+                &dir.path().join("Notes"),
+                &dir.path().join("Calendar"),
+            ),
+            None,
+        )
+        .unwrap();
 
         assert!(parsed.warnings.is_empty());
         assert_eq!(parsed.results.len(), 1);
         assert_eq!(parsed.results[0].reference, "thread:thread-123");
         assert_eq!(parsed.results[0].source, "thread");
-        assert_eq!(parsed.results[0].thread_id, "thread-123");
+        assert_eq!(parsed.results[0].thread_id.as_deref(), Some("thread-123"));
         assert_eq!(parsed.results[0].score, Some(0.93));
+    }
+
+    #[test]
+    fn parses_qmd_uri_note_and_calendar_results() {
+        let dir = tempdir().unwrap();
+        let output = r#"[
+            {"file": "qmd://zdx-notes/Projects/ZDX.md", "snippet": "note match"},
+            {"file": "qmd://zdx-calendar/2026-05-11.md", "snippet": "calendar match"}
+        ]"#;
+
+        let parsed = parse_qmd_memory_search_output(
+            output,
+            &test_collections(
+                dir.path(),
+                &dir.path().join("Notes"),
+                &dir.path().join("Calendar"),
+            ),
+            None,
+        )
+        .unwrap();
+
+        assert!(parsed.warnings.is_empty());
+        assert_eq!(parsed.results.len(), 2);
+        assert_eq!(parsed.results[0].reference, "note:Projects/ZDX.md");
+        assert_eq!(parsed.results[0].source, "note");
+        assert_eq!(
+            parsed.results[0].relative_path.as_deref(),
+            Some("Projects/ZDX.md")
+        );
+        assert_eq!(parsed.results[1].reference, "calendar:2026-05-11.md");
+        assert_eq!(parsed.results[1].source, "calendar");
+        assert_eq!(
+            parsed.results[1].relative_path.as_deref(),
+            Some("2026-05-11.md")
+        );
+    }
+
+    #[test]
+    fn skips_archive_and_trash_qmd_uri_results() {
+        let dir = tempdir().unwrap();
+        let output = r#"[
+            {"file": "qmd://zdx-notes/@Archive/Old.md", "snippet": "archived"},
+            {"file": "qmd://zdx-calendar/2026/@Trash/Deleted.md", "snippet": "trash"},
+            {"file": "qmd://zdx-notes/Active.md", "snippet": "active"}
+        ]"#;
+
+        let parsed = parse_qmd_memory_search_output(
+            output,
+            &test_collections(
+                dir.path(),
+                &dir.path().join("Notes"),
+                &dir.path().join("Calendar"),
+            ),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.results.len(), 1);
+        assert_eq!(parsed.results[0].reference, "note:Active.md");
+        assert_eq!(parsed.warnings.len(), 2);
+        assert!(parsed.warnings[0].contains("excluded memory path"));
     }
 
     #[test]
@@ -640,12 +987,21 @@ mod tests {
             outside_path.display()
         );
 
-        let parsed = parse_qmd_thread_search_output(&output, &export_dir, None).unwrap();
+        let parsed = parse_qmd_memory_search_output(
+            &output,
+            &test_collections(
+                &export_dir,
+                &dir.path().join("Notes"),
+                &dir.path().join("Calendar"),
+            ),
+            None,
+        )
+        .unwrap();
 
         assert_eq!(parsed.results.len(), 1);
-        assert_eq!(parsed.results[0].thread_id, "thread-abs");
+        assert_eq!(parsed.results[0].thread_id.as_deref(), Some("thread-abs"));
         assert_eq!(parsed.warnings.len(), 1);
-        assert!(parsed.warnings[0].contains("outside thread exports"));
+        assert!(parsed.warnings[0].contains("outside ZDX memory collections"));
     }
 
     #[test]
@@ -656,10 +1012,52 @@ mod tests {
             {"file": "qmd://zdx-threads/other.md", "snippet": "other"}
         ]"#;
 
-        let parsed = parse_qmd_thread_search_output(output, dir.path(), Some("current")).unwrap();
+        let parsed = parse_qmd_memory_search_output(
+            output,
+            &test_collections(
+                dir.path(),
+                &dir.path().join("Notes"),
+                &dir.path().join("Calendar"),
+            ),
+            Some("current"),
+        )
+        .unwrap();
 
         assert_eq!(parsed.results.len(), 1);
-        assert_eq!(parsed.results[0].thread_id, "other");
+        assert_eq!(parsed.results[0].thread_id.as_deref(), Some("other"));
+    }
+
+    fn test_collections(
+        export_dir: &Path,
+        notes_dir: &Path,
+        calendar_dir: &Path,
+    ) -> Vec<QmdMemoryCollectionDef> {
+        vec![
+            QmdMemoryCollectionDef {
+                name: THREAD_COLLECTION_NAME,
+                source: "thread",
+                root_dir: export_dir.to_path_buf(),
+                pattern: THREAD_COLLECTION_PATTERN,
+                context: THREAD_COLLECTION_CONTEXT,
+                ignore_patterns: &[],
+            },
+            QmdMemoryCollectionDef {
+                name: NOTES_COLLECTION_NAME,
+                source: "note",
+                root_dir: notes_dir.to_path_buf(),
+                pattern: MEMORY_MARKDOWN_COLLECTION_PATTERN,
+                context: NOTES_COLLECTION_CONTEXT,
+                ignore_patterns: MEMORY_COLLECTION_IGNORE_PATTERNS,
+            },
+            QmdMemoryCollectionDef {
+                name: CALENDAR_COLLECTION_NAME,
+                source: "calendar",
+                root_dir: calendar_dir.to_path_buf(),
+                pattern: MEMORY_MARKDOWN_COLLECTION_PATTERN,
+                context: CALENDAR_COLLECTION_CONTEXT,
+                ignore_patterns: MEMORY_COLLECTION_IGNORE_PATTERNS,
+            },
+        ]
     }
 
     fn write_executable(path: &Path, content: &str) {

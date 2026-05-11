@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use zdx_engine::config;
 use zdx_engine::core::thread_export::{self, ThreadExportOptions};
-use zdx_engine::core::{qmd, thread_persistence};
+use zdx_engine::core::thread_persistence;
 
 use crate::modes;
 
@@ -37,7 +37,6 @@ pub struct SearchCommandOptions {
     pub date_end: Option<String>,
     pub limit: usize,
     pub json: bool,
-    pub qmd: bool,
 }
 
 /// Input options for `zdx threads tools`.
@@ -100,49 +99,6 @@ pub fn export(force: bool, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn index(config: &config::Config) -> Result<()> {
-    let export_summary = thread_export::export_threads_incremental(ThreadExportOptions::default())
-        .context("export threads before qmd indexing")?;
-
-    println!(
-        "Thread exports: exported={}, skipped={}, removed={}, failed={}",
-        export_summary.exported,
-        export_summary.skipped,
-        export_summary.removed,
-        export_summary.failed
-    );
-
-    let index_summary = qmd::index_thread_exports(&config.qmd).context("index threads with qmd")?;
-    let installed = if index_summary.installed {
-        " (installed)"
-    } else {
-        ""
-    };
-    let collection_action = if index_summary.collection_added {
-        "created"
-    } else {
-        "updated"
-    };
-
-    println!(
-        "qmd binary: {}{}",
-        index_summary.binary_path.display(),
-        installed
-    );
-    println!(
-        "qmd collection: {} {} at {}",
-        collection_action,
-        qmd::THREAD_COLLECTION_NAME,
-        index_summary.export_dir.display()
-    );
-    println!(
-        "qmd index: updated and embedded {}",
-        qmd::THREAD_COLLECTION_NAME
-    );
-
-    Ok(())
-}
-
 pub async fn resume(id: Option<String>, config: &config::Config) -> Result<()> {
     let thread_id = match id {
         Some(id) => id,
@@ -165,11 +121,7 @@ pub async fn resume(id: Option<String>, config: &config::Config) -> Result<()> {
     Ok(())
 }
 
-pub fn search(options: SearchCommandOptions, config: &config::Config) -> Result<()> {
-    if options.qmd {
-        return search_qmd(&options, config);
-    }
-
+pub fn search(options: SearchCommandOptions) -> Result<()> {
     let date = parse_date_filter(options.date.as_deref(), "date")?;
     let date_start = parse_date_filter(options.date_start.as_deref(), "date-start")?;
     let date_end = parse_date_filter(options.date_end.as_deref(), "date-end")?;
@@ -211,74 +163,6 @@ pub fn search(options: SearchCommandOptions, config: &config::Config) -> Result<
         }
         if !result.preview.is_empty() {
             println!("  Preview: {}", result.preview);
-        }
-        println!();
-    }
-
-    Ok(())
-}
-
-fn search_qmd(options: &SearchCommandOptions, config: &config::Config) -> Result<()> {
-    if options.date.is_some() || options.date_start.is_some() || options.date_end.is_some() {
-        anyhow::bail!("date filters are not supported with --qmd yet");
-    }
-
-    let query = options
-        .query
-        .as_deref()
-        .map(str::trim)
-        .filter(|query| !query.is_empty())
-        .context("query is required with --qmd")?
-        .to_string();
-
-    let export_summary = thread_export::export_threads_incremental(ThreadExportOptions::default())
-        .context("export threads before qmd search")?;
-
-    let mut output = qmd::search_thread_exports(
-        &config.qmd,
-        &qmd::QmdThreadSearchOptions {
-            query,
-            limit: options.limit.max(1),
-            exclude_thread_id: None,
-        },
-    )
-    .context("search threads with qmd")?;
-
-    if export_summary.exported > 0 || export_summary.removed > 0 || export_summary.failed > 0 {
-        output.warnings.insert(
-            0,
-            format!(
-                "thread exports changed before search (exported={}, removed={}, failed={}); run `zdx threads index` to refresh qmd if results look stale",
-                export_summary.exported, export_summary.removed, export_summary.failed
-            ),
-        );
-    }
-
-    if options.json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&output).context("serialize qmd thread search results")?
-        );
-        return Ok(());
-    }
-
-    for warning in &output.warnings {
-        println!("Warning: {warning}");
-    }
-
-    if output.results.is_empty() {
-        println!("No memory results found matching the query.");
-        return Ok(());
-    }
-
-    for result in output.results {
-        let title = result.title.as_deref().unwrap_or(&result.thread_id);
-        match result.score {
-            Some(score) => println!("[{}] {}  score={score:.3}", result.reference, title),
-            None => println!("[{}] {}", result.reference, title),
-        }
-        if !result.snippet.is_empty() {
-            println!("  Snippet: {}", result.snippet);
         }
         println!();
     }

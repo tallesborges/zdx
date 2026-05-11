@@ -26,8 +26,8 @@
 - Let qmd handle indexing, embedding generation/storage, BM25/vector search, chunking, query expansion, and reranking.
 
 # User journey
-1. The user runs `zdx threads export` to create/update clean Markdown exports.
-2. The user runs a qmd setup/index command for `$ZDX_HOME/exports/threads/`.
+1. The user runs `zdx threads export` only when they want to inspect or refresh clean Markdown thread exports directly.
+2. The user runs `zdx memory index`, which refreshes thread exports and indexes threads, notes, and calendar collections with qmd.
 3. The user or agent searches through `memory_search`, not a qmd-specific tool.
 4. ZDX returns memory refs such as `thread:<thread_id>`, `note:<relative_path>`, or `calendar:<relative_path>` plus snippets from qmd.
 5. The user or agent calls `memory_get(ref)` or `read_thread(thread_id)` to read from the canonical source.
@@ -48,7 +48,7 @@
 ## Existing CLI thread surface
 - What exists: `crates/zdx-cli/src/cli/commands/threads.rs` exposes thread commands such as search/list/show-style flows.
 - ✅ Demo: run existing `zdx threads ...` commands, including `zdx threads export`.
-- Gaps: there is no qmd setup/index or qmd-backed search command yet.
+- Gaps: qmd-backed memory setup/search now belongs to `zdx memory ...`, not the thread-specific command surface.
 
 ## Existing recall planning
 - What exists: `docs/plans/active/recall-tool-canonical-notes-threads.md` already describes a broader recall direction.
@@ -58,7 +58,7 @@
 ## Existing memory root contract
 - What exists: the memory skill defines `$ZDX_MEMORY_ROOT/Notes`, `$ZDX_MEMORY_ROOT/Calendar`, and `$ZDX_MEMORY_ROOT/Notes/MEMORY.md` as canonical memory locations.
 - ✅ Demo: current memory workflows can read/search these Markdown files directly.
-- Gaps: qmd-backed `memory_search` only covers exported threads until notes/calendar collections are added.
+- Gaps: auto recall guidance still needs to lean on the new qmd-backed `memory_search` path consistently.
 
 # MVP slices (ship-shaped, demoable)
 
@@ -97,30 +97,32 @@
 - **Risks / failure modes**:
   - Mtime-based freshness can miss exporter logic changes; `--force` covers that for MVP.
 
-## Slice 3: qmd setup and index command
-- **Goal**: Let ZDX initialize/update qmd over the generic exports directory.
+## Slice 3: qmd setup and memory index command
+- **Goal**: Let ZDX initialize/update qmd over all ZDX memory collections.
 - **Scope checklist**:
   - [x] Add minimal config for qmd command path, defaulting to `qmd` on `PATH`.
   - [x] Use qmd’s default state locations, while keeping exports under `$ZDX_HOME/exports/threads/`.
-  - [x] Add a manual command such as `zdx threads index` that runs export first, then qmd collection/update commands.
-  - [x] Register one qmd collection over `$ZDX_HOME/exports/threads/` with pattern `**/*.md`.
+  - [x] Add `zdx memory index` that runs thread export first, then qmd collection/update commands.
+  - [x] Keep `zdx threads` focused on conversation management and transcript export.
+  - [x] Register qmd collections for `zdx-threads`, `zdx-notes`, and `zdx-calendar` with pattern `**/*.md`.
+  - [x] Add qmd root collection context with `qmd context add qmd://<collection>/ <description>` for all ZDX memory collections.
   - [x] Run `qmd embed` after qmd updates so vector search modes have document embeddings.
   - [x] Do not start a persistent qmd server/MCP process in the MVP.
   - [x] Surface clear errors when qmd is missing or the qmd command fails.
-- **✅ Demo**: Run the command on a fresh ZDX home and confirm qmd sees a `zdx-threads` collection with indexed Markdown files.
+- **✅ Demo**: Run `zdx memory index` on a fresh ZDX home and confirm qmd sees `zdx-threads`, `zdx-notes`, and `zdx-calendar` collections with root contexts.
 - **Risks / failure modes**:
   - qmd CLI flags may vary by version; keep command usage minimal and inspect help/errors during implementation.
   - First qmd semantic setup may be slow if qmd downloads local models.
 
 ## Slice 4: Memory search backed by qmd
-- **Goal**: Expose qmd-backed thread discovery through a backend-neutral `memory_search` tool/command.
+- **Goal**: Expose qmd-backed memory discovery through a backend-neutral `memory_search` tool and `zdx memory search` command.
 - **Scope checklist**:
-  - [x] Add a read-only `memory_search` tool, plus a manual CLI path if useful for dogfooding.
+  - [x] Add a read-only `memory_search` tool and `zdx memory search` for dogfooding.
   - [x] Run `zdx threads export` first or warn when exports are stale.
   - [x] Invoke qmd search with JSON output when available.
-  - [x] Parse qmd result paths under `$ZDX_HOME/exports/threads/`.
+  - [x] Parse qmd result paths under thread exports, Notes, and Calendar collections.
   - [x] Derive `thread_id` from `<thread_id>.md` filename.
-  - [x] Return backend-neutral refs such as `thread:<thread_id>`.
+  - [x] Return backend-neutral refs such as `thread:<thread_id>`, `note:<relative_path>`, and `calendar:<relative_path>`.
   - [x] Return enough result data for follow-up: `ref`, `source`, `thread_id`, snippet, score if available, and warnings.
   - [x] Keep qmd/export paths out of normal tool output; include them only in optional debug metadata.
   - [x] Keep existing `thread_search` behavior unchanged.
@@ -146,15 +148,16 @@
 ## Slice 6: Notes/calendar qmd collections
 - **Goal**: Add Second Brain notes and calendar notes to qmd-backed `memory_search` without creating exports.
 - **Scope checklist**:
-  - [ ] Add qmd collection setup for `$ZDX_MEMORY_ROOT/Notes` with pattern `**/*.md`.
-  - [ ] Add qmd collection setup for `$ZDX_MEMORY_ROOT/Calendar` with pattern `**/*.md`.
-  - [ ] Exclude `@Archive/` and `@Trash/` by default.
-  - [ ] Keep notes/calendar files canonical; do not copy them into `$ZDX_HOME/exports/`.
-  - [ ] Map qmd results under Notes to refs like `note:<relative_path>`.
-  - [ ] Map qmd results under Calendar to refs like `calendar:<relative_path>`.
-  - [ ] Teach `memory_get` to read `note:<relative_path>` from `$ZDX_MEMORY_ROOT/Notes`.
-  - [ ] Teach `memory_get` to read `calendar:<relative_path>` from `$ZDX_MEMORY_ROOT/Calendar`.
-  - [ ] Preserve `thread:<thread_id>` behavior unchanged.
+  - [x] Add qmd collection setup for `$ZDX_MEMORY_ROOT/Notes` with pattern `**/*.md`.
+  - [x] Add qmd collection setup for `$ZDX_MEMORY_ROOT/Calendar` with pattern `**/*.md`.
+  - [x] Exclude `@Archive/` and `@Trash/` by default.
+  - [x] Keep notes/calendar files canonical; do not copy them into `$ZDX_HOME/exports/`.
+  - [x] Add qmd root collection context for notes and calendar via `qmd context add`.
+  - [x] Map qmd results under Notes to refs like `note:<relative_path>`.
+  - [x] Map qmd results under Calendar to refs like `calendar:<relative_path>`.
+  - [x] Teach `memory_get` to read `note:<relative_path>` from `$ZDX_MEMORY_ROOT/Notes`.
+  - [x] Teach `memory_get` to read `calendar:<relative_path>` from `$ZDX_MEMORY_ROOT/Calendar`.
+  - [x] Preserve `thread:<thread_id>` behavior unchanged.
 - **✅ Demo**: `memory_search` for a known Second Brain fact returns a `note:<relative_path>` ref, and `memory_get` reads the canonical note.
 - **Risks / failure modes**:
   - Broad notes/calendar indexing may surface too much; start with default excludes and tune only after dogfooding.
@@ -182,6 +185,8 @@
 - No qmd-specific path or filename in the export layer.
 - qmd is the search backend, not the primary database.
 - Agent-facing search/read APIs use memory refs, not qmd paths.
+- `zdx memory index` is the manual refresh/setup command for all qmd-backed memory collections.
+- `zdx memory search` is the manual qmd-backed search command; `zdx threads search` remains thread-persistence search.
 - `memory_get(thread:<thread_id>)` reads canonical ZDX thread data, not exported Markdown, unless debug/export inspection is explicitly requested.
 - `memory_get(note:<relative_path>)` reads under `$ZDX_MEMORY_ROOT/Notes` only.
 - `memory_get(calendar:<relative_path>)` reads under `$ZDX_MEMORY_ROOT/Calendar` only.
@@ -195,8 +200,10 @@
 - Use mtime-based incremental export first; avoid a state DB until needed.
 - Shell out to qmd in the MVP; defer MCP/server lifecycle.
 - Add `memory_search` as the qmd-backed public discovery tool instead of `qmd_search`.
-- Add `memory_get` only when the memory-ref read path is needed; `read_thread` can remain the first deep-read path.
+- Add `memory_get` as the unified canonical read path for `thread:`, `note:`, and `calendar:` refs; keep `read_thread` available for thread-specific focused reads.
+- Use `zdx memory index` / `zdx memory search` for qmd-backed memory operations; keep `zdx threads` thread-specific.
 - Add notes/calendar by indexing canonical Markdown directly; only threads need Markdown exports.
+- Use `qmd context add qmd://<collection>/ <description>` for qmd collection descriptions; keep direct qmd YAML editing limited to ignore patterns that qmd does not expose as a CLI command.
 - Start with manual export/index/search before auto memory integration.
 - Treat `qmd vsearch` and `qmd query` as high-level retrieval modes over qmd-managed embeddings, not as a raw embedding API; ZDX should not persist or expose embeddings itself.
 - Run `qmd embed` as part of the manual qmd index path because `vsearch`, `vec`, and `hyde` search only work well after embeddings exist.
@@ -218,16 +225,16 @@
 ## Phase 1: qmd lifecycle polish
 - Add better status output for qmd binary, collection state, export freshness, and last successful update.
 - Add configurable qmd command path only if `PATH` lookup is insufficient.
-- ✅ Check-in demo: `zdx threads index/status` tells whether qmd search is ready.
+- ✅ Check-in demo: `zdx memory index/status` tells whether qmd search is ready.
 
 ## Phase 2: Search quality tuning
 - Compare qmd `search`, `vsearch`, and `query` modes using real ZDX threads.
-- Add qmd collection context for `zdx-threads` so qmd knows the collection contains exported ZDX chat thread transcripts and that filenames map to thread IDs.
+- Dogfood existing qmd root collection contexts for `zdx-threads`, `zdx-notes`, and `zdx-calendar`; add path-specific contexts only if real queries need them.
 - Keep mode selection explicit and simple.
 - ✅ Check-in demo: the same `memory_search` query can be run in different qmd modes to compare results.
 
 ## Phase 3: Notes/calendar tuning
-- Tune collection names, excludes, and qmd collection context for Notes and Calendar after dogfooding real queries.
+- Tune collection names, excludes, and any path-specific qmd collection context for Notes and Calendar after dogfooding real queries.
 - Keep canonical notes separate from historical thread evidence in results.
 - ✅ Check-in demo: one recall query returns clearly labeled note, calendar, and thread results.
 
