@@ -176,6 +176,16 @@ The following runtime environment variables are especially relevant:
 These env vars are usable directly as `$VAR`/`${VAR}` in any tool argument — every tool expands env vars natively. Pass them directly; never shell out to resolve them first.
 </environment>
 
+{% if memory_collections %}
+## Searchable Memory Collections
+
+These collections are available through the `Memory_Search` tool. Use them for historical context discovery; search snippets are hints, not the source of truth.
+
+{% for collection in memory_collections %}
+- `{{ collection.name }}` ({{ collection.source }}): {{ collection.contains }}. Call `{{ collection.search_tool }}` when prior conversation context, past decisions, old outputs, or continuing work from an earlier thread may matter. {{ collection.read_after }}
+{% endfor %}
+{% endif %}
+
 ## Delegation
 
 - SHOULD use `invoke_subagent` for large, splittable, or isolated tasks to keep context focused.
