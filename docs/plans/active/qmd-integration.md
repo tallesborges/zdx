@@ -107,15 +107,15 @@
 ## Slice 4: Memory search backed by qmd
 - **Goal**: Expose qmd-backed thread discovery through a backend-neutral `memory_search` tool/command.
 - **Scope checklist**:
-  - [ ] Add a read-only `memory_search` tool, plus a manual CLI path if useful for dogfooding.
-  - [ ] Run `zdx threads export` first or warn when exports are stale.
-  - [ ] Invoke qmd search with JSON output when available.
-  - [ ] Parse qmd result paths under `$ZDX_HOME/exports/threads/`.
-  - [ ] Derive `thread_id` from `<thread_id>.md` filename.
-  - [ ] Return backend-neutral refs such as `thread:<thread_id>`.
-  - [ ] Return enough result data for follow-up: `ref`, `source`, `thread_id`, snippet, score if available, and warnings.
-  - [ ] Keep qmd/export paths out of normal tool output; include them only in optional debug metadata.
-  - [ ] Keep existing `thread_search` behavior unchanged.
+  - [x] Add a read-only `memory_search` tool, plus a manual CLI path if useful for dogfooding.
+  - [x] Run `zdx threads export` first or warn when exports are stale.
+  - [x] Invoke qmd search with JSON output when available.
+  - [x] Parse qmd result paths under `$ZDX_HOME/exports/threads/`.
+  - [x] Derive `thread_id` from `<thread_id>.md` filename.
+  - [x] Return backend-neutral refs such as `thread:<thread_id>`.
+  - [x] Return enough result data for follow-up: `ref`, `source`, `thread_id`, snippet, score if available, and warnings.
+  - [x] Keep qmd/export paths out of normal tool output; include them only in optional debug metadata.
+  - [x] Keep existing `thread_search` behavior unchanged.
 - **✅ Demo**: Call `memory_search` for a known prior discussion, get `thread:<thread_id>`, then use `read_thread` on that ID.
 - **Risks / failure modes**:
   - qmd result JSON shape may vary by version; keep parser narrow and fail visibly.

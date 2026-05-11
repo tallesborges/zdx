@@ -38,7 +38,7 @@ pub struct RunRecord {
 }
 
 /// Parameters for [`start`].
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct StartParams<'a> {
     pub thread_id: Option<&'a str>,
     pub surface: Option<&'a str>,

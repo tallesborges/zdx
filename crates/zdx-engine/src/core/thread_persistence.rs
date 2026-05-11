@@ -1688,7 +1688,7 @@ pub fn list_threads() -> Result<Vec<ThreadSummary>> {
     }
 
     // Sort by modification time (newest first)
-    threads.sort_by(|a, b| b.modified.cmp(&a.modified));
+    threads.sort_by_key(|thread| std::cmp::Reverse(thread.modified));
 
     Ok(threads)
 }

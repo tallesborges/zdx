@@ -92,7 +92,7 @@ fn prompt_i64_required(label: &str) -> Result<i64> {
         let value = prompt_required(label)?;
         match value.parse::<i64>() {
             Ok(parsed) => return Ok(parsed),
-            Err(_) => eprintln!("Enter a valid integer for {label}.",),
+            Err(_) => eprintln!("Enter a valid integer for {label}."),
         }
     }
 }
@@ -109,7 +109,7 @@ fn prompt_i64_with_default(label: &str, default: Option<i64>) -> Result<i64> {
         }
         match trimmed.parse::<i64>() {
             Ok(parsed) => return Ok(parsed),
-            Err(_) => eprintln!("Enter a valid integer for {label}.",),
+            Err(_) => eprintln!("Enter a valid integer for {label}."),
         }
     }
 }

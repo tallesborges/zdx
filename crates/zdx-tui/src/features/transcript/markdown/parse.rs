@@ -586,10 +586,8 @@ impl MarkdownRenderer {
                 self.table_buffer.finish_row(true);
                 self.in_table_head = false;
             }
-            TagEnd::TableRow => {
-                if !self.in_table_head {
-                    self.table_buffer.finish_row(false);
-                }
+            TagEnd::TableRow if !self.in_table_head => {
+                self.table_buffer.finish_row(false);
             }
             TagEnd::TableCell => {
                 self.table_buffer.finish_cell();

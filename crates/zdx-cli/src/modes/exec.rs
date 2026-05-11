@@ -41,7 +41,7 @@ pub struct ExecOptions {
     pub no_system_prompt: bool,
     /// Whether this run should be registered in the active-agents registry.
     /// Helper subagents (title generation, TLDR, handoff, prompt builder,
-    /// read_thread) pass `false`.
+    /// `read_thread`) pass `false`.
     pub track_activity: bool,
     /// Logical role for this run in the active-agents registry.
     pub activity_kind: Option<String>,

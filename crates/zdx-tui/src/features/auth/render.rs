@@ -195,8 +195,8 @@ fn render_cli_provider_entries(width: u16, selected: usize) -> Vec<Line<'static>
             let logged_in = load_fn()
                 .ok()
                 .flatten()
-                .filter(|creds| !creds.is_expired())
-                .is_some();
+                .as_ref()
+                .is_some_and(|creds| !creds.is_expired());
             let status = if logged_in { "✓ logged in" } else { "" };
             let status_style = if logged_in { status_on } else { label_style };
             let pointer = if idx == selected { ">" } else { " " };

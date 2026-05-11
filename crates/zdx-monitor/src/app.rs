@@ -703,7 +703,7 @@ pub fn run(root: &Path) -> Result<()> {
 
     loop {
         terminal.draw(|f| ui::render(f, &app))?;
-        app.terminal_height = terminal.size().map(|r| r.height).unwrap_or(24);
+        app.terminal_height = terminal.size().map_or(24, |r| r.height);
 
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
         if event::poll(timeout).context("poll events")? {

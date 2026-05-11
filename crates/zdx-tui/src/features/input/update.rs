@@ -873,7 +873,7 @@ fn submit_input(
         if should_suggest_title && let Some(thread_id) = thread_id.as_ref() {
             effects.push(UiEffect::SuggestThreadTitle {
                 thread_id: thread_id.clone(),
-                message: text.to_string(),
+                message: text.clone(),
             });
         }
         return (effects, mutations, overlay);
@@ -1884,7 +1884,7 @@ mod tests {
         // prompt as the user message.
         let started_turn = effects
             .iter()
-            .any(|e| matches!(e, UiEffect::StartAgentTurn { .. }));
+            .any(|e| matches!(e, UiEffect::StartAgentTurn));
         assert!(
             started_turn,
             "expected StartAgentTurn after accepting Ready; got {effects:?}"

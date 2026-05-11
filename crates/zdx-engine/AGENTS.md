@@ -41,6 +41,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 ### Tools (`src/tools/`)
 
 - `tools/mod.rs`: ToolContext, ToolRegistry, ToolSet, handlers
+- `tools/memory_search.rs`: qmd-backed memory search returning stable memory refs
 - `tools/read_thread.rs`: read saved thread transcript tool
 - `tools/subagent.rs`: invoke_subagent tool
 - `tools/todo_write.rs`: structured todo/task tracking tool

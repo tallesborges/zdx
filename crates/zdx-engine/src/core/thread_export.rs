@@ -69,7 +69,7 @@ pub fn export_threads_incremental(options: ThreadExportOptions) -> Result<Thread
         for entry in fs::read_dir(&export_dir).context("read thread exports directory")? {
             let entry = entry.context("read thread export entry")?;
             let path = entry.path();
-            if !path.extension().is_some_and(|ext| ext == "md") {
+            if path.extension().is_none_or(|ext| ext != "md") {
                 continue;
             }
 

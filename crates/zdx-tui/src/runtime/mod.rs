@@ -80,21 +80,11 @@ impl KittyImageManager {
     }
 
     fn current_cell_size() -> (u16, u16) {
-        crossterm::terminal::window_size()
-            .map(|ws| {
-                let cw = if ws.columns > 0 {
-                    (ws.width / ws.columns).max(1)
-                } else {
-                    8
-                };
-                let ch = if ws.rows > 0 {
-                    (ws.height / ws.rows).max(1)
-                } else {
-                    16
-                };
-                (cw, ch)
-            })
-            .unwrap_or((8, 16))
+        crossterm::terminal::window_size().map_or((8, 16), |ws| {
+            let cw = ws.width.checked_div(ws.columns).map_or(8, |cw| cw.max(1));
+            let ch = ws.height.checked_div(ws.rows).map_or(16, |ch| ch.max(1));
+            (cw, ch)
+        })
     }
 
     fn flush(

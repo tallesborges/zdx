@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
 
 use crate::config::{self, QmdConfig};
 
@@ -36,6 +37,43 @@ pub struct QmdThreadIndexSummary {
     pub export_dir: PathBuf,
     /// Whether the qmd collection was created during this call.
     pub collection_added: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct QmdThreadSearchOptions {
+    pub query: String,
+    pub limit: usize,
+    pub exclude_thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct QmdThreadSearchOutput {
+    pub results: Vec<QmdThreadSearchResult>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct QmdThreadSearchResult {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub source: String,
+    pub thread_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub snippet: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QmdSearchJsonResult {
+    file: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    snippet: Option<String>,
+    #[serde(default)]
+    score: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,42 +109,163 @@ pub fn index_thread_exports(config: &QmdConfig) -> Result<QmdThreadIndexSummary>
     index_thread_exports_with_binary(binary)
 }
 
+/// Searches the qmd index for exported thread transcripts and maps hits to stable memory refs.
+///
+/// # Errors
+/// Returns an error when qmd is unavailable, qmd search fails, or JSON output cannot be parsed.
+pub fn search_thread_exports(
+    config: &QmdConfig,
+    options: &QmdThreadSearchOptions,
+) -> Result<QmdThreadSearchOutput> {
+    let binary = require_qmd_binary(config)?;
+    search_thread_exports_with_binary(&binary, options)
+}
+
+fn search_thread_exports_with_binary(
+    binary: &QmdBinary,
+    options: &QmdThreadSearchOptions,
+) -> Result<QmdThreadSearchOutput> {
+    let query = options.query.trim();
+    if query.is_empty() {
+        bail!("qmd thread search query cannot be empty");
+    }
+
+    let export_dir = config::paths::thread_exports_dir();
+    let export_dir = fs::canonicalize(&export_dir).unwrap_or(export_dir);
+    let limit = options.limit.max(1).to_string();
+    let output = run_qmd_command_allow_failure(
+        binary,
+        [
+            OsString::from("search"),
+            OsString::from(query),
+            OsString::from("--json"),
+            OsString::from("-n"),
+            OsString::from(limit),
+            OsString::from("-c"),
+            OsString::from(THREAD_COLLECTION_NAME),
+        ],
+    )?;
+
+    if !output.status.success() {
+        return bail_qmd_failure(
+            binary,
+            ["search", query, "--json", "-c", THREAD_COLLECTION_NAME],
+            &output,
+        );
+    }
+
+    parse_qmd_thread_search_output(
+        &String::from_utf8_lossy(&output.stdout),
+        &export_dir,
+        options.exclude_thread_id.as_deref(),
+    )
+}
+
+fn require_qmd_binary(config: &QmdConfig) -> Result<QmdBinary> {
+    let path_env = std::env::var_os("PATH");
+    if let Some(path) = find_command(&config.command, path_env.as_deref()) {
+        return Ok(QmdBinary {
+            path,
+            installed: false,
+        });
+    }
+
+    bail!(
+        "qmd command '{}' was not found or is not executable; run `zdx threads index` to set up qmd first",
+        config.command
+    )
+}
+
+fn parse_qmd_thread_search_output(
+    output: &str,
+    export_dir: &Path,
+    exclude_thread_id: Option<&str>,
+) -> Result<QmdThreadSearchOutput> {
+    let export_dir = fs::canonicalize(export_dir).unwrap_or_else(|_| export_dir.to_path_buf());
+    let raw_results: Vec<QmdSearchJsonResult> = serde_json::from_str(output)
+        .with_context(|| "parse qmd search JSON output; expected an array of results")?;
+    let mut results = Vec::with_capacity(raw_results.len());
+    let mut warnings = Vec::new();
+
+    for raw in raw_results {
+        let Some(thread_id) = thread_id_from_qmd_file(&raw.file, &export_dir) else {
+            warnings.push(format!(
+                "ignored qmd result outside thread exports: {}",
+                raw.file
+            ));
+            continue;
+        };
+        if exclude_thread_id.is_some_and(|excluded| excluded == thread_id) {
+            continue;
+        }
+
+        results.push(QmdThreadSearchResult {
+            reference: format!("thread:{thread_id}"),
+            source: "thread".to_string(),
+            thread_id,
+            title: raw.title,
+            snippet: raw.snippet.unwrap_or_default(),
+            score: raw.score,
+        });
+    }
+
+    Ok(QmdThreadSearchOutput { results, warnings })
+}
+
+fn thread_id_from_qmd_file(file: &str, export_dir: &Path) -> Option<String> {
+    if let Some(path) = file.strip_prefix(&format!("qmd://{THREAD_COLLECTION_NAME}/")) {
+        return Path::new(path)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty())
+            .map(str::to_string);
+    }
+
+    let path = Path::new(file);
+    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if !canonical.starts_with(export_dir) {
+        return None;
+    }
+    canonical
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .map(str::to_string)
+}
+
 fn index_thread_exports_with_binary(binary: QmdBinary) -> Result<QmdThreadIndexSummary> {
     let export_dir = config::paths::thread_exports_dir();
     fs::create_dir_all(&export_dir).context("create thread exports directory")?;
     let export_dir = fs::canonicalize(&export_dir).context("resolve thread exports directory")?;
 
     let collection = qmd_collection_info(&binary, THREAD_COLLECTION_NAME)?;
-    let collection_added = match collection {
-        Some(info) => {
-            if info.path != export_dir || info.pattern != THREAD_COLLECTION_PATTERN {
-                bail!(
-                    "qmd collection '{name}' already exists for path '{}' with pattern '{}'; expected path '{}' with pattern '{}'. Remove or rename the existing collection with `qmd collection remove {name}` and try again.",
-                    info.path.display(),
-                    info.pattern,
-                    export_dir.display(),
-                    THREAD_COLLECTION_PATTERN,
-                    name = THREAD_COLLECTION_NAME
-                );
-            }
-            false
+    let collection_added = if let Some(info) = collection {
+        if info.path != export_dir || info.pattern != THREAD_COLLECTION_PATTERN {
+            bail!(
+                "qmd collection '{name}' already exists for path '{}' with pattern '{}'; expected path '{}' with pattern '{}'. Remove or rename the existing collection with `qmd collection remove {name}` and try again.",
+                info.path.display(),
+                info.pattern,
+                export_dir.display(),
+                THREAD_COLLECTION_PATTERN,
+                name = THREAD_COLLECTION_NAME
+            );
         }
-        None => {
-            run_qmd_command(
-                &binary,
-                [
-                    OsString::from("collection"),
-                    OsString::from("add"),
-                    export_dir.as_os_str().to_os_string(),
-                    OsString::from("--name"),
-                    OsString::from(THREAD_COLLECTION_NAME),
-                    OsString::from("--mask"),
-                    OsString::from(THREAD_COLLECTION_PATTERN),
-                ],
-            )
-            .context("create qmd thread collection")?;
-            true
-        }
+        false
+    } else {
+        run_qmd_command(
+            &binary,
+            [
+                OsString::from("collection"),
+                OsString::from("add"),
+                export_dir.as_os_str().to_os_string(),
+                OsString::from("--name"),
+                OsString::from(THREAD_COLLECTION_NAME),
+                OsString::from("--mask"),
+                OsString::from(THREAD_COLLECTION_PATTERN),
+            ],
+        )
+        .context("create qmd thread collection")?;
+        true
     };
 
     run_qmd_command(&binary, [OsString::from("update")]).context("update qmd index")?;
@@ -275,10 +434,10 @@ where
         .join(" ");
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let detail = if !stderr.trim().is_empty() {
-        stderr.trim()
-    } else {
+    let detail = if stderr.trim().is_empty() {
         stdout.trim()
+    } else {
+        stderr.trim()
     };
     bail!(
         "qmd command failed: {} {}: {}",
@@ -439,6 +598,68 @@ mod tests {
                 .to_string();
 
         assert!(error.contains("neither npm nor bun"));
+    }
+
+    #[test]
+    fn parses_qmd_uri_thread_results() {
+        let dir = tempdir().unwrap();
+        let output = r#"[
+            {
+                "file": "qmd://zdx-threads/thread-123.md",
+                "title": "Thread thread-123",
+                "snippet": "User: hello",
+                "score": 0.93
+            }
+        ]"#;
+
+        let parsed = parse_qmd_thread_search_output(output, dir.path(), None).unwrap();
+
+        assert!(parsed.warnings.is_empty());
+        assert_eq!(parsed.results.len(), 1);
+        assert_eq!(parsed.results[0].reference, "thread:thread-123");
+        assert_eq!(parsed.results[0].source, "thread");
+        assert_eq!(parsed.results[0].thread_id, "thread-123");
+        assert_eq!(parsed.results[0].score, Some(0.93));
+    }
+
+    #[test]
+    fn parses_absolute_thread_export_results_and_skips_outside_paths() {
+        let dir = tempdir().unwrap();
+        let export_dir = dir.path().join("exports").join("threads");
+        fs::create_dir_all(&export_dir).unwrap();
+        let thread_path = export_dir.join("thread-abs.md");
+        fs::write(&thread_path, "# Thread thread-abs\n").unwrap();
+        let outside_path = dir.path().join("outside.md");
+        fs::write(&outside_path, "# Outside\n").unwrap();
+        let output = format!(
+            r#"[
+                {{"file":"{}","snippet":"match"}},
+                {{"file":"{}","snippet":"outside"}}
+            ]"#,
+            thread_path.display(),
+            outside_path.display()
+        );
+
+        let parsed = parse_qmd_thread_search_output(&output, &export_dir, None).unwrap();
+
+        assert_eq!(parsed.results.len(), 1);
+        assert_eq!(parsed.results[0].thread_id, "thread-abs");
+        assert_eq!(parsed.warnings.len(), 1);
+        assert!(parsed.warnings[0].contains("outside thread exports"));
+    }
+
+    #[test]
+    fn excludes_current_thread_from_qmd_results() {
+        let dir = tempdir().unwrap();
+        let output = r#"[
+            {"file": "qmd://zdx-threads/current.md", "snippet": "current"},
+            {"file": "qmd://zdx-threads/other.md", "snippet": "other"}
+        ]"#;
+
+        let parsed = parse_qmd_thread_search_output(output, dir.path(), Some("current")).unwrap();
+
+        assert_eq!(parsed.results.len(), 1);
+        assert_eq!(parsed.results[0].thread_id, "other");
     }
 
     fn write_executable(path: &Path, content: &str) {

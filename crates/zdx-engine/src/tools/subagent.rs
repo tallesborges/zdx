@@ -270,9 +270,10 @@ fn build_exec_options(
     model: String,
     system_prompt: String,
 ) -> ExecSubagentOptions {
-    let subagent_name = definition
-        .map(|definition| definition.name.clone())
-        .unwrap_or_else(|| subagents::TASK_BUILTIN_ALIAS_NAME.to_string());
+    let subagent_name = definition.map_or_else(
+        || subagents::TASK_BUILTIN_ALIAS_NAME.to_string(),
+        |definition| definition.name.clone(),
+    );
     ExecSubagentOptions {
         model: Some(model),
         system_prompt: Some(system_prompt),

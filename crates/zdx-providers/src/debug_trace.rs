@@ -47,8 +47,7 @@ impl DebugTrace {
 
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_millis());
         let counter = TRACE_COUNTER.fetch_add(1, Ordering::Relaxed);
         let id = format!("{safe}_{ts}_{counter}");
 
