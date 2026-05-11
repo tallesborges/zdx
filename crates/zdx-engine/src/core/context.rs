@@ -24,6 +24,7 @@ use minijinja::{Environment, UndefinedBehavior};
 use serde::Serialize;
 
 use crate::config::{Config, paths};
+use crate::core::qmd;
 use crate::providers::{ProviderKind, resolve_provider};
 use crate::skills::{LoadSkillsOptions, LoadSkillsResult, Skill, load_skills, skill_access_path};
 use crate::{prompts, subagents};
@@ -213,6 +214,15 @@ struct PromptTemplateScopedContext {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct PromptTemplateMemoryCollection {
+    name: String,
+    source: String,
+    contains: String,
+    search_tool: String,
+    read_after: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct PromptTemplateVars {
     identity_prompt: String,
     provider: String,
@@ -233,6 +243,7 @@ struct PromptTemplateVars {
     auto_loaded_skill_contents: Vec<LoadedSkillContent>,
     scoped_context: Vec<PromptTemplateScopedContext>,
     specialized_capabilities: Vec<PromptTemplateCapability>,
+    memory_collections: Vec<PromptTemplateMemoryCollection>,
     cwd: String,
     date: String,
 }
@@ -442,6 +453,7 @@ fn build_prompt_template_vars(
         auto_loaded_skill_contents: Vec::new(),
         scoped_context,
         specialized_capabilities: sections.specialized_capabilities.to_vec(),
+        memory_collections: prompt_template_memory_collections(),
         cwd: root.display().to_string(),
         date: Utc::now().format("%Y-%m-%d").to_string(),
     }
@@ -492,6 +504,16 @@ fn prompt_template_capability(
         kind_label,
         backing,
     }
+}
+
+fn prompt_template_memory_collections() -> Vec<PromptTemplateMemoryCollection> {
+    vec![PromptTemplateMemoryCollection {
+        name: qmd::THREAD_COLLECTION_NAME.to_string(),
+        source: "saved ZDX threads".to_string(),
+        contains: "exported user/assistant chat transcripts from saved ZDX conversation threads; each document maps to `thread:<thread_id>` by filename stem".to_string(),
+        search_tool: "Memory_Search".to_string(),
+        read_after: "Use `Read_Thread` with the returned thread_id for canonical deep reads before relying on a result.".to_string(),
+    }]
 }
 
 fn render_prompt_template(
@@ -2089,6 +2111,34 @@ mod tests {
         assert!(when_to_consult_pos < saving_memory_pos);
         assert!(saving_memory_pos < memory_index_pos);
         assert!(memory_skill_pos < memory_index_pos);
+    }
+
+    #[test]
+    fn test_default_template_includes_searchable_memory_collection_context() {
+        let vars = build_prompt_template_vars(
+            Path::new("/tmp"),
+            "anthropic:claude-opus-4-6",
+            PromptTemplateSections {
+                base_prompt: None,
+                project_context: None,
+                memory_index: None,
+                memory_suggestions: false,
+                skills_list: &[],
+                scoped_context: &[],
+                specialized_capabilities: &[],
+            },
+        );
+
+        let rendered =
+            render_prompt_template(crate::prompts::default_system_prompt_template(), &vars)
+                .unwrap()
+                .unwrap();
+
+        assert!(rendered.contains("## Searchable Memory Collections"));
+        assert!(rendered.contains("`zdx-threads`"));
+        assert!(rendered.contains("exported user/assistant chat transcripts"));
+        assert!(rendered.contains("Call `Memory_Search`"));
+        assert!(rendered.contains("Use `Read_Thread`"));
     }
 
     #[test]

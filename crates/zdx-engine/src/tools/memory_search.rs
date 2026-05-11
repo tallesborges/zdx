@@ -16,7 +16,7 @@ const DEFAULT_LIMIT: usize = 20;
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Memory_Search".to_string(),
-        description: "Search saved ZDX memory across indexed thread transcripts using the qmd backend. Returns backend-neutral memory refs such as `thread:<thread_id>` plus snippets and scores. Use `read_thread` with the returned thread_id for canonical deep reads; do not treat snippets as the source of truth."
+        description: "Search saved ZDX memory in the qmd-backed `zdx-threads` collection, which contains exported user/assistant transcripts from saved ZDX conversation threads. Returns backend-neutral memory refs such as `thread:<thread_id>` plus snippets and scores. Use `read_thread` with the returned thread_id for canonical deep reads; do not treat snippets as the source of truth."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -114,6 +114,7 @@ mod tests {
     fn test_definition_schema() {
         let def = definition();
         assert_eq!(def.name, "Memory_Search");
+        assert!(def.description.contains("zdx-threads"));
         assert!(def.description.contains("thread:<thread_id>"));
     }
 
