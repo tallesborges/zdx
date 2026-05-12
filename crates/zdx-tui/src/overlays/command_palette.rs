@@ -1,4 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
+use nucleo_matcher::{Config, Matcher, Utf32Str};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -19,10 +21,14 @@ use crate::state::TuiState;
 
 /// Display category shown in the palette for custom user commands.
 const COMMANDS_CATEGORY: &str = "commands";
-/// Aliases used when filtering by category text (e.g. "cmd" → "commands").
-const COMMANDS_CATEGORY_ALIASES: &[&str] = &["commands", "cmd"];
 /// Default description shown when a custom command has no frontmatter.
 const CUSTOM_DEFAULT_DESCRIPTION: &str = "(custom)";
+/// Divisor applied to the description fuzzy-match score so descriptions act
+/// as a fallback haystack rather than competing with name/category/alias
+/// matches for the top rank. Half weight is enough to keep e.g. typing
+/// `clipboard` to find `copy-id`/`pwd` working without flooding the
+/// short-filter ranking with weak description hits.
+const DESCRIPTION_SCORE_DIVISOR: u32 = 2;
 
 /// One row in the command palette: either a built-in or a user-defined custom
 /// command. The custom variant borrows from `CommandPaletteState::custom_commands`.
@@ -64,16 +70,55 @@ impl PaletteEntry<'_> {
         }
     }
 
-    fn matches_filter(&self, filter: &str) -> bool {
+    /// Extra haystacks (beyond name + category) the fuzzy matcher should score
+    /// against. For built-ins this surfaces declared aliases (e.g. `q`/`exit`
+    /// → `quit`, `clear` → `new`, `wt` → `worktree`). Custom commands have
+    /// none today.
+    fn aliases(&self) -> &[&str] {
         match self {
-            PaletteEntry::Builtin(cmd) => cmd.matches(filter),
-            PaletteEntry::Custom(cmd) => {
-                let filter_lower = filter.to_lowercase();
-                cmd.name.to_lowercase().contains(&filter_lower)
-                    || COMMANDS_CATEGORY_ALIASES
-                        .iter()
-                        .any(|alias| alias.contains(&filter_lower))
-            }
+            PaletteEntry::Builtin(cmd) => cmd.aliases,
+            PaletteEntry::Custom(_) => &[],
+        }
+    }
+
+    /// Returns a fuzzy match score against `filter`, or `None` if no haystack
+    /// fuzzy-matches.
+    ///
+    /// Haystacks (highest signal first):
+    /// - name, category, and every alias score at full weight
+    /// - description scores at half weight, so it acts as a fallback for
+    ///   discovery (e.g. typing `clipboard` to find `copy-id`) without
+    ///   competing for top rank against direct name/alias matches
+    ///
+    /// Uses nucleo fuzzy matching (same engine as the file picker and thread
+    /// picker). An empty filter returns `Some(0)` so callers can treat
+    /// "no filter" as "everything matches with the default ordering".
+    fn fuzzy_score(&self, filter: &str) -> Option<u32> {
+        if filter.is_empty() {
+            return Some(0);
+        }
+
+        let pattern = Pattern::parse(filter, CaseMatching::Ignore, Normalization::Smart);
+        let mut matcher = Matcher::new(Config::DEFAULT);
+
+        let mut score_of = |haystack: &str| -> Option<u32> {
+            let mut buf = Vec::new();
+            let utf32 = Utf32Str::new(haystack, &mut buf);
+            pattern.score(utf32, &mut matcher)
+        };
+
+        let primary = [self.name(), self.category()]
+            .into_iter()
+            .chain(self.aliases().iter().copied())
+            .filter_map(&mut score_of)
+            .max();
+
+        let description = score_of(self.description()).map(|s| s / DESCRIPTION_SCORE_DIVISOR);
+
+        match (primary, description) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(s), None) | (None, Some(s)) => Some(s),
+            (None, None) => None,
         }
     }
 }
@@ -190,6 +235,10 @@ impl CommandPaletteState {
     /// Returns the merged, filtered list of palette entries (built-ins first,
     /// then custom commands). Built-in availability is gated on the active
     /// model (e.g. `thinking` only for reasoning models).
+    ///
+    /// When `filter` is non-empty, entries are ranked by descending nucleo
+    /// fuzzy-match score across name and category. The sort is stable, so
+    /// ties preserve the underlying built-ins-before-customs ordering.
     pub fn filtered_entries(&self) -> Vec<PaletteEntry<'_>> {
         let builtins = COMMANDS
             .iter()
@@ -201,8 +250,11 @@ impl CommandPaletteState {
         if self.filter.is_empty() {
             all.collect()
         } else {
-            all.filter(|entry| entry.matches_filter(&self.filter))
-                .collect()
+            let mut ranked: Vec<_> = all
+                .filter_map(|entry| entry.fuzzy_score(&self.filter).map(|score| (entry, score)))
+                .collect();
+            ranked.sort_by(|(_, a), (_, b)| b.cmp(a));
+            ranked.into_iter().map(|(entry, _)| entry).collect()
         }
     }
 
@@ -355,6 +407,7 @@ fn execute_command(
         "thinking" => (Some(OverlayRequest::ThinkingPicker), vec![], vec![]),
         "timeline" => (Some(OverlayRequest::Timeline), vec![], vec![]),
         "tldr" => (Some(OverlayRequest::Tldr), vec![], vec![]),
+        "context" => (Some(OverlayRequest::Context), vec![], vec![]),
         "handoff" => {
             let (effects, mutations) = execute_handoff(tui);
             (None, effects, mutations)
@@ -794,8 +847,10 @@ mod tests {
         let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string(), Vec::new());
         state.filter = "ne".to_string();
         let filtered = state.filtered_entries();
-        assert_eq!(filtered.len(), 4);
         let names: Vec<&str> = filtered.iter().map(PaletteEntry::name).collect();
+        // Contiguous "ne" matches must surface; fuzzy scoring may also bring
+        // in scattered-subsequence matches (e.g. `rename`, `open`), which is
+        // fine — we only pin the strong matches here.
         assert!(names.contains(&"new"));
         assert!(names.contains(&"new-tab"));
         assert!(names.contains(&"root-new"));
@@ -815,9 +870,97 @@ mod tests {
     #[test]
     fn test_palette_state_filtered_commands_no_match() {
         let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string(), Vec::new());
-        state.filter = "xyz".to_string();
+        // Repeated rare letter ensures no subsequence exists anywhere in any
+        // name, alias, or category.
+        state.filter = "zzzz".to_string();
         let filtered = state.filtered_entries();
         assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_palette_filter_matches_fuzzy_subsequence() {
+        // Non-contiguous subsequence ("pmt") must surface `prompt-builder`.
+        // This is the core fuzzy-matching contract the user asked for.
+        let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string(), Vec::new());
+        state.filter = "pmt".to_string();
+        let entries = state.filtered_entries();
+        let names: Vec<&str> = entries.iter().map(PaletteEntry::name).collect();
+        assert!(
+            names.contains(&"prompt-builder"),
+            "fuzzy filter 'pmt' should match 'prompt-builder'; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn test_palette_filter_ranks_better_matches_first() {
+        // Contiguous matches must outrank scattered subsequence matches.
+        // `new` contains "ne" verbatim and should rank above `rename`.
+        let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string(), Vec::new());
+        state.filter = "ne".to_string();
+        let entries = state.filtered_entries();
+        let names: Vec<&str> = entries.iter().map(PaletteEntry::name).collect();
+        let pos = |n: &str| names.iter().position(|x| *x == n);
+        let new_pos = pos("new").expect("'new' present");
+        if let Some(rename_pos) = pos("rename") {
+            assert!(
+                new_pos < rename_pos,
+                "'new' must rank above 'rename' for filter 'ne'; got {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_palette_filter_matches_aliases() {
+        // Aliases must remain fuzzy-matchable (`exit` and `q` → `quit`,
+        // `clear` → `new`, `wt` → `worktree`). This is a regression guard:
+        // moving to fuzzy scoring must not drop alias matching.
+        let cases = [("exit", "quit"), ("clear", "new"), ("wt", "worktree")];
+        for (filter, expected) in cases {
+            let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string(), Vec::new());
+            state.filter = filter.to_string();
+            let entries = state.filtered_entries();
+            let names: Vec<&str> = entries.iter().map(PaletteEntry::name).collect();
+            assert!(
+                names.contains(&expected),
+                "alias filter {filter:?} should surface {expected:?}; got {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_palette_filter_matches_description_as_fallback() {
+        // Words that only appear in descriptions must still surface their
+        // commands (e.g. `clipboard` → `copy-id` / `pwd`). Description hits
+        // are weighted lower than name/category/alias hits, but they still
+        // count as a match.
+        let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string(), Vec::new());
+        state.filter = "clipboard".to_string();
+        let entries = state.filtered_entries();
+        let names: Vec<&str> = entries.iter().map(PaletteEntry::name).collect();
+        assert!(
+            names.contains(&"copy-id"),
+            "description filter 'clipboard' should surface 'copy-id'; got {names:?}"
+        );
+        assert!(
+            names.contains(&"pwd"),
+            "description filter 'clipboard' should surface 'pwd'; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn test_palette_description_does_not_outrank_name_match() {
+        // Description weight must stay below name weight: filtering `new`
+        // should put the literal `new` command above any command whose
+        // description merely mentions "new" (e.g. `btw`, `new-tab`, `tabs`).
+        let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string(), Vec::new());
+        state.filter = "new".to_string();
+        let entries = state.filtered_entries();
+        let names: Vec<&str> = entries.iter().map(PaletteEntry::name).collect();
+        assert_eq!(
+            names.first().copied(),
+            Some("new"),
+            "literal name match must outrank description matches; got {names:?}"
+        );
     }
 
     #[test]
@@ -832,7 +975,7 @@ mod tests {
     #[test]
     fn test_palette_state_clamp_selection_empty_filter() {
         let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string(), Vec::new());
-        state.filter = "xyz".to_string();
+        state.filter = "zzzz".to_string();
         state.selected = 5;
         state.clamp_selection();
         assert_eq!(state.selected, 0);
