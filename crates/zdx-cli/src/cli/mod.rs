@@ -379,6 +379,10 @@ enum MemoryCommands {
         #[arg(long, default_value = "hybrid", value_parser = ["keyword", "vector", "hybrid"])]
         strategy: String,
 
+        /// Search only one memory source: thread, note, or calendar
+        #[arg(long, value_parser = ["thread", "note", "calendar"])]
+        source: Option<String>,
+
         /// Brief disambiguating context for vector/hybrid search
         #[arg(long)]
         intent: Option<String>,
@@ -1054,6 +1058,7 @@ fn dispatch_memory(command: MemoryCommands, context: &DispatchContext<'_>) -> Re
             query,
             limit,
             strategy,
+            source,
             intent,
             candidate_limit,
             json,
@@ -1062,6 +1067,7 @@ fn dispatch_memory(command: MemoryCommands, context: &DispatchContext<'_>) -> Re
                 query,
                 limit,
                 strategy,
+                source,
                 intent,
                 candidate_limit,
                 json,
