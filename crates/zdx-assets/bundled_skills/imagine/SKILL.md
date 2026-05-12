@@ -5,7 +5,7 @@ description: "Generate and edit images. Outputs PNG files. Use when the user wan
 
 # Imagine – Image Generation & Editing via `zdx imagine`
 
-Generate images from text prompts or edit existing images using Gemini image models. Supports text-to-image generation, image editing (inpainting, outpainting, style transfer), and multi-image composition.
+Generate images from text prompts or edit existing images using Gemini or OpenAI image models. Supports text-to-image generation, image editing (inpainting, outpainting, style transfer), and multi-image composition.
 
 ## CLI reference
 
@@ -16,8 +16,8 @@ Options:
   -p, --prompt <PROMPT>   Text prompt (required)
   -s, --source <IMAGE>    Source image for editing (repeatable for multi-image)
   -o, --out <PATH>        Output path (default: $ZDX_HOME/artifacts/image-<timestamp>.png)
-      --model <MODEL>     Gemini model (default: gemini-3.1-flash-image-preview)
-      --aspect <RATIO>    Aspect ratio (see table below)
+      --model <MODEL>     Model override (default: gemini:gemini-3.1-flash-image-preview)
+      --aspect <RATIO>    Aspect ratio (Gemini only; see table below)
       --size <SIZE>       512px | 1K (default) | 2K | 4K
 ```
 
@@ -30,6 +30,37 @@ zdx imagine -p "..." --out "$ZDX_ARTIFACT_DIR/descriptive-name.png"
 ```
 
 If no `--out` is given, images default to `$ZDX_HOME/artifacts/`.
+
+## Provider guidance
+
+- **Default:** If you do not pass `--model`, `zdx imagine` uses `gemini:gemini-3.1-flash-image-preview`.
+- **OpenAI support:** `zdx imagine` also supports both `openai:gpt-image-2` and `openai-codex:gpt-image-2`.
+- **Preferred OpenAI path:** When using OpenAI, prefer `openai-codex:gpt-image-2` unless the user explicitly asks for plain `openai:gpt-image-2`.
+- **Gemini vs OpenAI:** `--aspect` currently works with Gemini, but OpenAI/OpenAI Codex require `--size` instead.
+- **OpenAI size support:** OpenAI/OpenAI Codex support `1K`, `2K`, and `4K`. `512px` is Gemini-only.
+
+### Recommended model selection
+
+- Use **Gemini** by default unless the user asks for OpenAI or there is a specific reason to use it.
+- Use **`openai-codex:gpt-image-2`** as the preferred OpenAI model path.
+- Use **`openai:gpt-image-2`** only when the user explicitly asks for the non-Codex OpenAI provider.
+
+### OpenAI examples
+
+**Preferred OpenAI Codex usage:**
+```bash
+zdx imagine -p "A cinematic photo of a red fox in falling snow" --model openai-codex:gpt-image-2 --size 1K
+```
+
+**Plain OpenAI usage:**
+```bash
+zdx imagine -p "A cinematic photo of a red fox in falling snow" --model openai:gpt-image-2 --size 1K
+```
+
+**OpenAI editing:**
+```bash
+zdx imagine -p "Add a neon sign above the doorway, keep the rest unchanged" -s street.png --model openai-codex:gpt-image-2 --size 2K
+```
 
 ### Modes
 
