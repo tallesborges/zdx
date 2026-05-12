@@ -13,6 +13,9 @@ use zdx_engine::core::thread_export::{self, ThreadExportOptions};
 pub struct SearchCommandOptions {
     pub query: String,
     pub limit: usize,
+    pub strategy: String,
+    pub intent: Option<String>,
+    pub candidate_limit: Option<usize>,
     pub json: bool,
 }
 
@@ -145,6 +148,13 @@ pub fn search(options: &SearchCommandOptions, config: &config::Config) -> Result
         &qmd::QmdMemorySearchOptions {
             query,
             limit: options.limit.max(1),
+            strategy: parse_search_strategy(&options.strategy)?,
+            intent: options
+                .intent
+                .as_ref()
+                .map(|intent| intent.trim().to_string())
+                .filter(|intent| !intent.is_empty()),
+            candidate_limit: options.candidate_limit.map(|limit| limit.max(1)),
             exclude_thread_id: None,
         },
     )
@@ -193,6 +203,15 @@ pub fn search(options: &SearchCommandOptions, config: &config::Config) -> Result
     }
 
     Ok(())
+}
+
+fn parse_search_strategy(value: &str) -> Result<qmd::QmdMemorySearchStrategy> {
+    match value {
+        "keyword" => Ok(qmd::QmdMemorySearchStrategy::Keyword),
+        "vector" => Ok(qmd::QmdMemorySearchStrategy::Vector),
+        "hybrid" => Ok(qmd::QmdMemorySearchStrategy::Hybrid),
+        _ => anyhow::bail!("invalid memory search strategy '{value}'"),
+    }
 }
 
 fn readiness(

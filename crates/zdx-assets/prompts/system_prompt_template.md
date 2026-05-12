@@ -181,6 +181,8 @@ These env vars are usable directly as `$VAR`/`${VAR}` in any tool argument — e
 
 These collections are available through the `Memory_Search` tool. Use `Memory_Search` explicitly for memory discovery across saved threads, notes, and calendar files. This includes prior discussions, past decisions, saved notes, documented facts, personal/project context, or continuing work from an earlier thread. Search snippets are hints, not the source of truth.
 
+Use `Memory_Search` with `strategy: "hybrid"` for normal recall questions such as what was decided, discussed, or learned. Use `strategy: "keyword"` for exact names, URLs, error strings, commands, file names, or quoted phrases. Use `strategy: "vector"` only when semantic wording mismatch matters and lower latency is more important than reranking precision. Use a brief `intent` only with `vector` or `hybrid` when the query is ambiguous and the conversation provides disambiguating context; `intent` is not a filter. Prefer `limit: 5-10`, then read the best 1-3 returned docids with `Memory_Get` before answering.
+
 {% for collection in memory_collections %}
 - `{{ collection.name }}` ({{ collection.source }}): {{ collection.contains }}. {{ collection.read_after }}
 {% endfor %}

@@ -109,7 +109,30 @@ struct QmdMemoryIndexStatusFile {
 pub struct QmdMemorySearchOptions {
     pub query: String,
     pub limit: usize,
+    pub strategy: QmdMemorySearchStrategy,
+    pub intent: Option<String>,
+    pub candidate_limit: Option<usize>,
     pub exclude_thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum QmdMemorySearchStrategy {
+    Keyword,
+    Vector,
+    #[default]
+    Hybrid,
+}
+
+impl QmdMemorySearchStrategy {
+    #[must_use]
+    pub const fn qmd_command(self) -> &'static str {
+        match self {
+            Self::Keyword => "search",
+            Self::Vector => "vsearch",
+            Self::Hybrid => "query",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -121,6 +144,7 @@ pub struct QmdMemorySearchOutput {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct QmdMemorySearchResult {
     pub docid: String,
+    pub source: String,
     pub file: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -414,15 +438,42 @@ fn search_memory_collections_with_binary(
             )),
         }
     }
+    if active_collections.is_empty() {
+        bail!(
+            "none of the qmd memory collections are indexed; run `zdx memory index` to set up qmd first"
+        );
+    }
 
     let limit = options.limit.max(1).to_string();
+    let command = options.strategy.qmd_command();
     let mut args = vec![
-        OsString::from("search"),
+        OsString::from(command),
         OsString::from(query),
         OsString::from("--json"),
         OsString::from("-n"),
         OsString::from(limit),
     ];
+    let intent = options
+        .intent
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if let Some(intent) = intent {
+        if options.strategy == QmdMemorySearchStrategy::Keyword {
+            warnings.push("intent is ignored for keyword memory search; use vector or hybrid strategy to disambiguate meaning".to_string());
+        } else {
+            args.push(OsString::from("--intent"));
+            args.push(OsString::from(intent));
+        }
+    }
+    if let Some(candidate_limit) = options.candidate_limit {
+        if options.strategy == QmdMemorySearchStrategy::Hybrid {
+            args.push(OsString::from("--candidate-limit"));
+            args.push(OsString::from(candidate_limit.max(1).to_string()));
+        } else {
+            warnings.push("candidate_limit is ignored unless strategy is hybrid".to_string());
+        }
+    }
     for collection_name in active_collections {
         args.push(OsString::from("-c"));
         args.push(OsString::from(collection_name));
@@ -431,7 +482,7 @@ fn search_memory_collections_with_binary(
     let output = run_qmd_command_allow_failure(binary, args)?;
 
     if !output.status.success() {
-        return bail_qmd_failure(binary, ["search", query, "--json"], &output);
+        return bail_qmd_failure(binary, [command, query, "--json"], &output);
     }
 
     let mut parsed = parse_qmd_memory_search_output(
@@ -490,6 +541,7 @@ fn parse_qmd_memory_search_output(
 
         results.push(QmdMemorySearchResult {
             docid: raw.docid,
+            source: mapped.source.to_string(),
             file: raw.file,
             title: raw.title,
             snippet: raw.snippet.unwrap_or_default(),
@@ -502,6 +554,7 @@ fn parse_qmd_memory_search_output(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MappedMemoryResult {
+    source: &'static str,
     thread_id: Option<String>,
     is_excluded_path: bool,
 }
@@ -528,12 +581,14 @@ fn memory_result_from_qmd_file(
                 .filter(|stem| !stem.is_empty())
                 .map(str::to_string)?;
             return Some(MappedMemoryResult {
+                source: collection.source,
                 thread_id: Some(thread_id),
                 is_excluded_path,
             });
         }
 
         return Some(MappedMemoryResult {
+            source: collection.source,
             thread_id: None,
             is_excluded_path,
         });
@@ -1105,6 +1160,7 @@ mod tests {
         assert!(parsed.warnings.is_empty());
         assert_eq!(parsed.results.len(), 1);
         assert_eq!(parsed.results[0].docid, "#thread123");
+        assert_eq!(parsed.results[0].source, "thread");
         assert_eq!(parsed.results[0].file, "qmd://zdx-threads/thread-123.md");
         assert_eq!(parsed.results[0].score, Some(0.93));
     }
@@ -1131,9 +1187,51 @@ mod tests {
         assert!(parsed.warnings.is_empty());
         assert_eq!(parsed.results.len(), 2);
         assert_eq!(parsed.results[0].docid, "#note123");
+        assert_eq!(parsed.results[0].source, "note");
         assert_eq!(parsed.results[0].file, "qmd://zdx-notes/Projects/ZDX.md");
         assert_eq!(parsed.results[1].docid, "#calendar123");
+        assert_eq!(parsed.results[1].source, "calendar");
         assert_eq!(parsed.results[1].file, "qmd://zdx-calendar/2026-05-11.md");
+    }
+
+    #[test]
+    fn hybrid_search_passes_strategy_intent_and_candidate_limit() {
+        let dir = tempdir().unwrap();
+        let qmd_path = dir.path().join("qmd");
+        let log_path = dir.path().join("qmd.log");
+        write_executable(
+            &qmd_path,
+            &format!(
+                "#!/bin/sh\nprintf 'ARGS:%s\\n' \"$*\" >> {log:?}\nif [ \"$1\" = collection ] && [ \"$2\" = show ]; then\n  case \"$3\" in zdx-threads|zdx-notes|zdx-calendar) printf 'Collection: %s\\n  Path:     {dir}\\n  Pattern:  **/*.md\\n' \"$3\"; exit 0;; esac\n  echo 'Collection not found' >&2\n  exit 1\nfi\nif [ \"$1\" = query ]; then\n  printf '%s\\n' '[{{\"docid\":\"#note\",\"file\":\"qmd://zdx-notes/Active.md\",\"snippet\":\"match\"}}]'\n  exit 0\nfi\nexit 1\n",
+                log = log_path.display().to_string(),
+                dir = dir.path().display()
+            ),
+        );
+
+        let output = search_memory_collections_with_binary(
+            &QmdBinary {
+                path: qmd_path,
+                installed: false,
+            },
+            &MemoryConfig::default(),
+            &QmdMemorySearchOptions {
+                query: "qmd memory".to_string(),
+                limit: 7,
+                strategy: QmdMemorySearchStrategy::Hybrid,
+                intent: Some("ZDX memory recall".to_string()),
+                candidate_limit: Some(12),
+                exclude_thread_id: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output.results.len(), 1);
+        assert_eq!(output.results[0].source, "note");
+        let log = fs::read_to_string(log_path).unwrap();
+        assert!(log.contains("ARGS:collection show zdx-notes"));
+        assert!(log.contains("ARGS:collection show zdx-threads"));
+        assert!(log.contains("ARGS:collection show zdx-calendar"));
+        assert!(log.contains("ARGS:query qmd memory --json -n 7 --intent ZDX memory recall --candidate-limit 12 -c zdx-threads -c zdx-notes -c zdx-calendar"));
     }
 
     #[test]
