@@ -229,9 +229,10 @@
 
 ## Phase 2: Search quality tuning
 - Compare qmd `search`, `vsearch`, and `query` modes using real ZDX threads.
+- Add source-aware search routing so notes/calendar queries can target `zdx-notes` or `zdx-calendar` instead of being shadowed by thread transcripts.
 - Dogfood existing qmd root collection contexts for `zdx-threads`, `zdx-notes`, and `zdx-calendar`; add path-specific contexts only if real queries need them.
 - Keep mode selection explicit and simple.
-- ✅ Check-in demo: the same `memory_search` query can be run in different qmd modes to compare results.
+- ✅ Check-in demo: the same `memory_search` query can be run in different qmd modes and source scopes to compare results.
 
 ## Phase 3: Notes/calendar tuning
 - Tune collection names, excludes, and any path-specific qmd collection context for Notes and Calendar after dogfooding real queries.

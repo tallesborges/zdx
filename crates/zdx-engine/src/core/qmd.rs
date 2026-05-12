@@ -110,9 +110,29 @@ pub struct QmdMemorySearchOptions {
     pub query: String,
     pub limit: usize,
     pub strategy: QmdMemorySearchStrategy,
+    pub source: Option<QmdMemorySearchSource>,
     pub intent: Option<String>,
     pub candidate_limit: Option<usize>,
     pub exclude_thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QmdMemorySearchSource {
+    Thread,
+    Note,
+    Calendar,
+}
+
+impl QmdMemorySearchSource {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Thread => "thread",
+            Self::Note => "note",
+            Self::Calendar => "calendar",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -424,9 +444,21 @@ fn search_memory_collections_with_binary(
     let collections = memory_collection_defs(memory_config);
     let mut active_collections = Vec::new();
     let mut warnings = Vec::new();
-    for collection in &collections {
+    for collection in collections.iter().filter(|collection| {
+        options
+            .source
+            .is_none_or(|source| collection.source == source.label())
+    }) {
         match qmd_collection_info(binary, collection.name)? {
             Some(_) => active_collections.push(collection.name),
+            None if options.source.is_some() => {
+                bail!(
+                    "qmd {} collection '{}' is not indexed yet; run `zdx memory index` to include {} memory",
+                    collection.source,
+                    collection.name,
+                    collection.source
+                );
+            }
             None if collection.name == THREAD_COLLECTION_NAME => {
                 bail!(
                     "qmd collection '{THREAD_COLLECTION_NAME}' was not found; run `zdx memory index` to set up qmd first"
@@ -1218,6 +1250,7 @@ mod tests {
                 query: "qmd memory".to_string(),
                 limit: 7,
                 strategy: QmdMemorySearchStrategy::Hybrid,
+                source: None,
                 intent: Some("ZDX memory recall".to_string()),
                 candidate_limit: Some(12),
                 exclude_thread_id: None,
@@ -1232,6 +1265,78 @@ mod tests {
         assert!(log.contains("ARGS:collection show zdx-threads"));
         assert!(log.contains("ARGS:collection show zdx-calendar"));
         assert!(log.contains("ARGS:query qmd memory --json -n 7 --intent ZDX memory recall --candidate-limit 12 -c zdx-threads -c zdx-notes -c zdx-calendar"));
+    }
+
+    #[test]
+    fn source_filtered_search_passes_only_requested_collection() {
+        let dir = tempdir().unwrap();
+        let qmd_path = dir.path().join("qmd");
+        let log_path = dir.path().join("qmd.log");
+        write_executable(
+            &qmd_path,
+            &format!(
+                "#!/bin/sh\nprintf 'ARGS:%s\\n' \"$*\" >> {log:?}\nif [ \"$1\" = collection ] && [ \"$2\" = show ]; then\n  if [ \"$3\" = zdx-notes ]; then printf 'Collection: %s\\n  Path:     {dir}\\n  Pattern:  **/*.md\\n' \"$3\"; exit 0; fi\n  echo 'Collection not found' >&2\n  exit 1\nfi\nif [ \"$1\" = query ]; then\n  printf '%s\\n' '[{{\"docid\":\"#note\",\"file\":\"qmd://zdx-notes/Active.md\",\"snippet\":\"match\"}}]'\n  exit 0\nfi\nexit 1\n",
+                log = log_path.display().to_string(),
+                dir = dir.path().display()
+            ),
+        );
+
+        let output = search_memory_collections_with_binary(
+            &QmdBinary {
+                path: qmd_path,
+                installed: false,
+            },
+            &MemoryConfig::default(),
+            &QmdMemorySearchOptions {
+                query: "project notes".to_string(),
+                limit: 5,
+                strategy: QmdMemorySearchStrategy::Hybrid,
+                source: Some(QmdMemorySearchSource::Note),
+                intent: None,
+                candidate_limit: None,
+                exclude_thread_id: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output.results.len(), 1);
+        assert_eq!(output.results[0].source, "note");
+        let log = fs::read_to_string(log_path).unwrap();
+        assert!(log.contains("ARGS:collection show zdx-notes"));
+        assert!(!log.contains("ARGS:collection show zdx-threads"));
+        assert!(!log.contains("ARGS:collection show zdx-calendar"));
+        assert!(log.contains("ARGS:query project notes --json -n 5 -c zdx-notes"));
+    }
+
+    #[test]
+    fn source_filtered_search_errors_when_requested_collection_is_missing() {
+        let dir = tempdir().unwrap();
+        let qmd_path = dir.path().join("qmd");
+        write_executable(
+            &qmd_path,
+            "#!/bin/sh\nif [ \"$1\" = collection ] && [ \"$2\" = show ]; then\n  echo 'Collection not found' >&2\n  exit 1\nfi\nexit 1\n",
+        );
+
+        let error = search_memory_collections_with_binary(
+            &QmdBinary {
+                path: qmd_path,
+                installed: false,
+            },
+            &MemoryConfig::default(),
+            &QmdMemorySearchOptions {
+                query: "project notes".to_string(),
+                limit: 5,
+                strategy: QmdMemorySearchStrategy::Hybrid,
+                source: Some(QmdMemorySearchSource::Note),
+                intent: None,
+                candidate_limit: None,
+                exclude_thread_id: None,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("qmd note collection 'zdx-notes' is not indexed yet"));
     }
 
     #[test]

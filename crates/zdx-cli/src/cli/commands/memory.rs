@@ -14,6 +14,7 @@ pub struct SearchCommandOptions {
     pub query: String,
     pub limit: usize,
     pub strategy: String,
+    pub source: Option<String>,
     pub intent: Option<String>,
     pub candidate_limit: Option<usize>,
     pub json: bool,
@@ -149,6 +150,11 @@ pub fn search(options: &SearchCommandOptions, config: &config::Config) -> Result
             query,
             limit: options.limit.max(1),
             strategy: parse_search_strategy(&options.strategy)?,
+            source: options
+                .source
+                .as_deref()
+                .map(parse_search_source)
+                .transpose()?,
             intent: options
                 .intent
                 .as_ref()
@@ -211,6 +217,15 @@ fn parse_search_strategy(value: &str) -> Result<qmd::QmdMemorySearchStrategy> {
         "vector" => Ok(qmd::QmdMemorySearchStrategy::Vector),
         "hybrid" => Ok(qmd::QmdMemorySearchStrategy::Hybrid),
         _ => anyhow::bail!("invalid memory search strategy '{value}'"),
+    }
+}
+
+fn parse_search_source(value: &str) -> Result<qmd::QmdMemorySearchSource> {
+    match value {
+        "thread" => Ok(qmd::QmdMemorySearchSource::Thread),
+        "note" => Ok(qmd::QmdMemorySearchSource::Note),
+        "calendar" => Ok(qmd::QmdMemorySearchSource::Calendar),
+        _ => anyhow::bail!("invalid memory search source '{value}'"),
     }
 }
 
