@@ -67,7 +67,7 @@ fn write_fake_qmd(temp_dir: &TempDir) -> std::path::PathBuf {
            echo 'Collection not found: zdx-threads' >&2\n\
            exit 1\n\
          fi\n\
-         if [ \"${{1:-}}\" = search ]; then\n\
+         if [ \"${{1:-}}\" = search ] || [ \"${{1:-}}\" = query ] || [ \"${{1:-}}\" = vsearch ]; then\n\
            printf '%s\\n' '[{{\"docid\":\"#threadqmd\",\"file\":\"qmd://zdx-threads/thread-qmd.md\",\"title\":\"Thread thread-qmd\",\"snippet\":\"User: qmd memory\",\"score\":0.9}}]'\n\
            exit 0\n\
          fi\n\
@@ -278,11 +278,12 @@ fn test_memory_search_returns_qmd_docids() {
         .assert()
         .success()
         .stdout(predicate::str::contains(r##""docid": "#threadqmd""##))
+        .stdout(predicate::str::contains(r#""source": "thread""#))
         .stdout(predicate::str::contains(
             r#""file": "qmd://zdx-threads/thread-qmd.md""#,
         ))
         .stdout(predicate::str::contains("run `zdx memory index`"));
 
     let log = fs::read_to_string(temp_dir.path().join("qmd.log")).unwrap();
-    assert!(log.contains("ARGS:search qmd memory --json -n 20 -c zdx-threads"));
+    assert!(log.contains("ARGS:query qmd memory --json -n 10 -c zdx-threads"));
 }

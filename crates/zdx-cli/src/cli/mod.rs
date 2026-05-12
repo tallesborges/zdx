@@ -372,8 +372,20 @@ enum MemoryCommands {
         query: String,
 
         /// Maximum number of results to return
-        #[arg(long, default_value_t = 20)]
+        #[arg(long, default_value_t = 10)]
         limit: usize,
+
+        /// qmd retrieval strategy: keyword, vector, or hybrid
+        #[arg(long, default_value = "hybrid", value_parser = ["keyword", "vector", "hybrid"])]
+        strategy: String,
+
+        /// Brief disambiguating context for vector/hybrid search
+        #[arg(long)]
+        intent: Option<String>,
+
+        /// Maximum hybrid candidates qmd reranks (lower is faster)
+        #[arg(long = "candidate-limit")]
+        candidate_limit: Option<usize>,
 
         /// Output as JSON for automation/script usage
         #[arg(long)]
@@ -1038,8 +1050,22 @@ fn dispatch_memory(command: MemoryCommands, context: &DispatchContext<'_>) -> Re
     match command {
         MemoryCommands::Index => commands::memory::index(context.config),
         MemoryCommands::Status => commands::memory::status(context.config),
-        MemoryCommands::Search { query, limit, json } => commands::memory::search(
-            &commands::memory::SearchCommandOptions { query, limit, json },
+        MemoryCommands::Search {
+            query,
+            limit,
+            strategy,
+            intent,
+            candidate_limit,
+            json,
+        } => commands::memory::search(
+            &commands::memory::SearchCommandOptions {
+                query,
+                limit,
+                strategy,
+                intent,
+                candidate_limit,
+                json,
+            },
             context.config,
         ),
     }

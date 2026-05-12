@@ -46,14 +46,23 @@ Use `Memory_Search` for open-ended memory discovery. It searches qmd-backed coll
 
 Search by meaning, names, project terms, decisions, URLs, or distinctive phrases. Do not manually slug note paths or guess filesystem names; qmd owns indexed paths and doc IDs.
 
-Start with a focused natural-language query and a small limit. If results are weak, run a second search with synonyms, aliases, acronyms, or the likely project/person name.
+Start with a focused natural-language query and a small limit. Prefer `limit:5-10`, then read the best 1-3 docids with `Memory_Get`. If results are weak, run a second search with synonyms, aliases, acronyms, or the likely project/person name.
+
+Use `strategy` deliberately:
+
+- `hybrid` (default): strongest qmd query recall with BM25 probe, query expansion, keyword + vector retrieval, fusion, chunk selection, and reranking. Use for normal memory recall, broad questions, and “what did we decide/discuss/learn?”
+- `keyword`: fastest BM25/full-text search. Use for exact names, URLs, error messages, commands, file names, quoted phrases, or known distinctive terms.
+- `vector`: semantic vector search without reranking. Use when wording may differ and latency matters more than reranking precision.
+
+Use `intent` only with `hybrid` or `vector` when the query is short or ambiguous and the conversation gives context. Keep it brief, around 3-12 words. It disambiguates meaning for qmd expansion/reranking/chunk selection; it is not a filter.
 
 Good search patterns:
 
 ```text
-Memory_Search query:"architecture decision cache invalidation" limit:10
-Memory_Search query:"renewal deadline reference" limit:10
-Memory_Search query:"CLI search migration notes" limit:10
+Memory_Search query:"architecture decision cache invalidation" strategy:"hybrid" limit:8
+Memory_Search query:"renewal deadline reference" strategy:"hybrid" limit:8
+Memory_Search query:"TypeError Cannot read properties" strategy:"keyword" limit:5
+Memory_Search query:"performance" strategy:"hybrid" intent:"web app Core Web Vitals" limit:8
 ```
 
 Avoid weak searches:
@@ -62,10 +71,12 @@ Avoid weak searches:
 - raw regex syntax; `Memory_Search` is semantic/qmd-backed, not grep
 - path-only guesses unless the user gave the path or folder name
 - searching first when the user already provided an exact qmd `docid`
+- using `intent` as a source/date filter instead of writing a focused query
 
 `Memory_Search` returns qmd-native results such as:
 
 - `docid`: the canonical qmd handle for `Memory_Get`, such as `#962e2b`
+- `source`: the memory source label (`thread`, `note`, or `calendar`)
 - `file`: the qmd file identifier/path for display and debugging
 - `snippet`, `title`, and `score`: ranking context
 

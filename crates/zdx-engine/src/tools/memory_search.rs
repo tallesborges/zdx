@@ -7,16 +7,16 @@ use serde_json::{Value, json};
 
 use super::{ToolContext, ToolDefinition};
 use crate::core::events::ToolOutput;
-use crate::core::qmd::{self, QmdMemorySearchOptions};
+use crate::core::qmd::{self, QmdMemorySearchOptions, QmdMemorySearchStrategy};
 use crate::core::thread_export::{self, ThreadExportOptions};
 
-const DEFAULT_LIMIT: usize = 20;
+const DEFAULT_LIMIT: usize = 10;
 
 /// Returns the tool definition for the `memory_search` tool.
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Memory_Search".to_string(),
-        description: "Search saved ZDX memory in qmd-backed collections for exported conversation threads, canonical Notes, and canonical Calendar files. Returns qmd `docid` handles such as `#962e2b`, qmd file identifiers, snippets, and scores. Use Memory_Get with a returned docid to read the indexed qmd document; do not treat snippets as the source of truth. If the thread_id is already known and you need a focused answer from canonical thread JSONL, skip search and call Read_Thread directly."
+        description: "Search saved ZDX memory in qmd-backed collections for exported conversation threads, canonical Notes, and canonical Calendar files. Returns qmd `docid` handles such as `#962e2b`, source labels, qmd file identifiers, snippets, and scores. Use Memory_Get with returned docids to read indexed qmd documents; do not treat snippets as the source of truth. `strategy` controls qmd retrieval: `keyword` is fastest BM25/full-text search for exact names, URLs, errors, commands, files, or quoted phrases; `vector` is semantic vector search without reranking for wording-mismatch searches when latency matters; `hybrid` is the strongest qmd query path using BM25 probe, query expansion, keyword+vector retrieval, fusion, chunk selection, and reranking, best for memory recall such as what was decided, discussed, or learned. Default to `hybrid` for memory recall unless the user asks for an exact string/URL/error lookup. Use `intent` only with `vector` or `hybrid` when the query is ambiguous and conversation context can disambiguate it; it is not a filter. Prefer limit 5-10 and read only the best 1-3 docids with Memory_Get. If the thread_id is already known and you need a focused answer from canonical thread JSONL, skip search and call Read_Thread directly."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -27,8 +27,23 @@ pub fn definition() -> ToolDefinition {
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum number of results to return (default: 20)",
-                    "default": 20,
+                    "description": "Maximum number of results to return (default: 10). Prefer 5-10 for initial searches.",
+                    "default": 10,
+                    "minimum": 1
+                },
+                "strategy": {
+                    "type": "string",
+                    "description": "Retrieval strategy: `keyword` for fastest BM25 exact-term search, `vector` for semantic vector search without reranking, or `hybrid` for strongest qmd query recall with expansion, fusion, chunk selection, and reranking (default).",
+                    "enum": ["keyword", "vector", "hybrid"],
+                    "default": "hybrid"
+                },
+                "intent": {
+                    "type": "string",
+                    "description": "Optional brief disambiguating context for `vector`/`hybrid` searches, such as `ZDX qmd memory integration`. Not a filter."
+                },
+                "candidate_limit": {
+                    "type": "integer",
+                    "description": "For `hybrid`, maximum candidates qmd reranks (lower is faster; qmd default is 40). Ignored by other strategies.",
                     "minimum": 1
                 }
             },
@@ -46,6 +61,15 @@ struct MemorySearchInput {
         deserialize_with = "super::thread_search::deserialize_optional_usize"
     )]
     limit: Option<usize>,
+    #[serde(default)]
+    strategy: QmdMemorySearchStrategy,
+    #[serde(default)]
+    intent: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "super::thread_search::deserialize_optional_usize"
+    )]
+    candidate_limit: Option<usize>,
 }
 
 /// Executes the memory search tool and returns qmd-backed memory results.
@@ -84,9 +108,16 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     }
 
     let config = ctx.config.clone().unwrap_or_default();
+    let intent = input
+        .intent
+        .map(|intent| intent.trim().to_string())
+        .filter(|intent| !intent.is_empty());
     let options = QmdMemorySearchOptions {
         query,
         limit: input.limit.unwrap_or(DEFAULT_LIMIT).max(1),
+        strategy: input.strategy,
+        intent,
+        candidate_limit: input.candidate_limit.map(|limit| limit.max(1)),
         exclude_thread_id: ctx.current_thread_id.clone(),
     };
 
@@ -116,6 +147,9 @@ mod tests {
         assert_eq!(def.name, "Memory_Search");
         assert!(def.description.contains("qmd-backed collections"));
         assert!(def.description.contains("docid"));
+        assert!(def.description.contains("strategy"));
+        assert!(def.description.contains("hybrid"));
+        assert!(def.description.contains("intent"));
         assert!(def.description.contains("Memory_Get"));
         assert!(def.description.contains("Read_Thread directly"));
     }
