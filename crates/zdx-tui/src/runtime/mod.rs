@@ -24,6 +24,7 @@
 //! - `thread_title.rs`: Auto-title generation handlers (subagent spawning)
 //! - `image_ops.rs`: shared image loading/transform helpers (preview + attachments)
 
+mod context_analyze;
 mod handlers;
 mod handoff;
 mod image_ops;
@@ -37,6 +38,7 @@ use std::io::Stdout;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+pub use context_analyze::{AnalysisMode, ContextReport, DisplayMode, refine_supported};
 use crossterm::event;
 use inbox::{UiEventReceiver, UiEventSender};
 use ratatui::Terminal;
@@ -802,6 +804,15 @@ impl TuiRuntime {
                 let tldr_model = self.state.tui.config.tldr_model.clone();
                 self.spawn_task(TaskKind::ThreadTldr, TaskMeta::None, true, move |_| {
                     thread_tldr::generate_tldr(thread_id, tldr_model, root)
+                });
+            }
+            UiEffect::AnalyzeContext { mode } => {
+                let model_id = self.state.tui.config.model.clone();
+                let config = self.state.tui.config.clone();
+                let agent_opts = self.state.tui.agent_opts.clone();
+                let messages = self.state.tui.thread.messages.clone();
+                self.spawn_task(TaskKind::ContextAnalyze, TaskMeta::None, true, move |_| {
+                    context_analyze::analyze_context(model_id, config, agent_opts, messages, mode)
                 });
             }
             UiEffect::CreateNewThread => {

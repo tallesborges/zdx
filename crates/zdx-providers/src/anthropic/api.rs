@@ -1,6 +1,6 @@
 //! Anthropic API key provider (Messages API).
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use zdx_types::ToolDefinition;
 
 use super::shared::{
@@ -8,7 +8,9 @@ use super::shared::{
     build_thinking_and_output_config, build_tool_defs, send_streaming_request,
     should_enable_interleaved_thinking_beta,
 };
-use super::types::{EffortLevel, StreamingMessagesRequest};
+use super::types::{
+    CountTokensRequest, CountTokensResponse, EffortLevel, StreamingMessagesRequest,
+};
 use crate::ProviderKind;
 use crate::shared::{ChatMessage, ProviderStream};
 
@@ -150,6 +152,60 @@ impl AnthropicClient {
             }
         })
         .await
+    }
+
+    /// Counts the input tokens an outgoing request would consume.
+    ///
+    /// Calls `POST /v1/messages/count_tokens` with the same shape as
+    /// `send_messages_stream` (system + tools + messages) and returns the
+    /// `input_tokens` field. Used by the TUI context-analyzer overlay to
+    /// size each section of the current LLM context.
+    ///
+    /// The endpoint requires `messages` to be non-empty; callers should
+    /// pass a single placeholder user message (e.g. `["."]`) when measuring
+    /// baseline / system-only / tools-only variants.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails or the response is not
+    /// 2xx.
+    pub async fn count_tokens(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+        system: Option<&str>,
+    ) -> Result<u64> {
+        let api_messages = build_api_messages_with_cache_control(messages);
+        let tool_defs = build_tool_defs(tools);
+        let system_blocks = build_system_blocks(system, None);
+
+        let request = CountTokensRequest {
+            model: &self.config.model,
+            messages: api_messages,
+            tools: tool_defs,
+            system: system_blocks,
+        };
+
+        let url = format!("{}/v1/messages/count_tokens", self.config.base_url);
+
+        let response = self
+            .http
+            .post(&url)
+            .header("anthropic-version", API_VERSION)
+            .header("x-api-key", &self.config.api_key)
+            .header("content-type", "application/json")
+            .header("accept", "application/json")
+            .json(&request)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            bail!("count_tokens failed ({status}): {body}");
+        }
+
+        let parsed: CountTokensResponse = response.json().await?;
+        Ok(parsed.input_tokens)
     }
 
     fn build_streaming_request<'a>(

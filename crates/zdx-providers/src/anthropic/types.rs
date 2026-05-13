@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use zdx_types::{ToolDefinition, ToolResultBlock, ToolResultContent};
 
@@ -67,6 +67,28 @@ impl OutputConfig {
     pub(crate) fn new(effort: EffortLevel) -> Self {
         Self { effort }
     }
+}
+
+/// Request body for `POST /v1/messages/count_tokens`.
+///
+/// Mirrors the structure of `StreamingMessagesRequest` but omits the fields
+/// that the `count_tokens` endpoint does not accept (`max_tokens`, `stream`,
+/// `thinking`, `output_config`). Used by the TUI context-analyzer overlay
+/// to size each section of an outgoing request.
+#[derive(Debug, Serialize)]
+pub(crate) struct CountTokensRequest<'a> {
+    pub(crate) model: &'a str,
+    pub(crate) messages: Vec<ApiMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tools: Option<Vec<ApiToolDef<'a>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) system: Option<Vec<SystemBlock>>,
+}
+
+/// Response body for `POST /v1/messages/count_tokens`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct CountTokensResponse {
+    pub(crate) input_tokens: u64,
 }
 
 #[derive(Debug, Serialize)]

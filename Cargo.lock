@@ -4546,6 +4546,7 @@ dependencies = [
  "crossterm",
  "enum-map",
  "fast_image_resize",
+ "futures-util",
  "hound",
  "ignore",
  "image",
@@ -4564,6 +4565,7 @@ dependencies = [
  "url",
  "uuid",
  "zdx-engine",
+ "zdx-types",
 ]
 
 [[package]]

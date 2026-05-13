@@ -24,6 +24,7 @@ pub enum TaskKind {
     ThreadRename,
     ThreadTitle,
     ThreadTldr,
+    ContextAnalyze,
     ThreadPreview,
     ThreadCreate,
     ThreadFork,
