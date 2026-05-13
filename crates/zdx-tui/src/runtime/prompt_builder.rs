@@ -113,4 +113,16 @@ mod tests {
         assert!(prompt.contains("Oracle"));
         assert!(prompt.contains("Explorer"));
     }
+
+    #[test]
+    fn template_teaches_todo_write_progress_tracking() {
+        let prompt = build_prompt_builder_prompt("anything");
+        // The template must teach the future assistant to plan and track
+        // progress with `Todo_Write` for multi-step or multi-phase prompts.
+        // If these markers disappear the generated prompts will stop
+        // directing the receiving agent to track work, which defeats the
+        // ZDX house style for iterative workflows.
+        assert!(prompt.contains("Todo_Write"));
+        assert!(prompt.contains("in_progress"));
+    }
 }

@@ -22,18 +22,25 @@ When the iterative shape fits, assemble these blocks in this order. Drop any blo
    - Do not jump ahead before [agreement / context / draft] is solid.
    - Minimize assumptions; inspect the codebase or evidence instead of guessing.
    - Prefer concrete verification when possible.
+   - Track progress with `Todo_Write` — open a plan before starting, keep exactly one item `in_progress`, and update statuses as work lands.
    - End the Rules block with an explicit "Repeat until:" sub-list of 2–3 numbered exit conditions (convergence reached, decision needed from the user, real blocker hit). This is the termination contract — every iterative prompt needs one.
 
-3. **Phases or passes** (multi-pass workflows only) — a numbered list naming each pass with one or two descriptive lines.
+3. **Phases or passes** (multi-pass workflows only) — a numbered list naming each pass with one or two descriptive lines. When phases exist, instruct the future assistant to mirror them as `Todo_Write` items so the plan and the workflow stay in lockstep.
 
-4. **Loop arrow** — a single line using literal `→` arrows that compresses the iteration shape into one scannable line. Examples:
+4. **`Todo_Write` plan** — for any workflow with 3+ phases/passes, multiple roles, or a dependent sequence of steps, add a short block telling the future assistant to:
+   - Initialize a `Todo_Write` plan up front (one item per phase or major step).
+   - Mark the active item `in_progress` before working it and `completed` as soon as it lands.
+   - Add/adjust todos when scope changes mid-loop instead of keeping a long implicit plan in prose.
+   Skip this block for tight one-shot loops where a single arrow already captures the work.
+
+5. **Loop arrow** — a single line using literal `→` arrows that compresses the iteration shape into one scannable line. Examples:
    - `inspect → draft → Oracle review → revise → repeat until agreement`
    - `review pass → judge findings → fix valid issues → next review pass`
    - `inspect → ask Oracle for hypotheses → evaluate → gather more evidence → repeat → agree → fix → review`
 
-5. **Role separation** (multi-agent workflows only) — short labeled blocks like "Oracle's role:" / "Your role:" / "Explorer's role:" with 2–4 bullets each describing what each agent owns.
+6. **Role separation** (multi-agent workflows only) — short labeled blocks like "Oracle's role:" / "Your role:" / "Explorer's role:" with 2–4 bullets each describing what each agent owns.
 
-6. **`At the end, give me:` bullet block** — the deliverables contract. Concrete artifacts only (root cause, what was fixed, what was verified, remaining risks, open questions). Do not pad with generic closers.
+7. **`At the end, give me:` bullet block** — the deliverables contract. Concrete artifacts only (root cause, what was fixed, what was verified, remaining risks, open questions). Do not pad with generic closers.
 
 ## ZDX subagent vocabulary
 
@@ -44,11 +51,14 @@ Reference subagents as proper nouns when the intent supports it. Do not invent c
 - **Thread Searcher** — saved-conversation retrieval
 - **Task** — scoped implementation when no specialist fits
 
+The future assistant also has the `Todo_Write` tool for structured task tracking. Reference it by name whenever the generated prompt has a multi-step plan, phased workflow, or any work where visible progress matters.
+
 ## Universal quality rules
 
 - Capture the user's real goal, not just the literal words.
 - State concrete inputs, expected outputs, and success criteria when they can be inferred.
 - Include relevant constraints, non-goals, or guardrails when the intent implies them.
+- When the generated prompt covers 3+ meaningful steps, multiple phases, or a dependent sequence, instruct the future assistant to plan and track with `Todo_Write` (open a plan, keep one item `in_progress`, update statuses as work completes). Skip this for tight one-shot transformations.
 - Prefer plain text and short, scannable structure (bullets, numbered steps, the loop arrow) over heavy markdown decoration. No fenced code blocks unless the intent itself calls for code.
 - Be as long as needed to be useful, but do not pad. A tight checklist usually beats prose.
 - Do not invent details that aren't supported by the intent. If a critical detail is missing, leave it out and write the prompt around what is actually there — do not insert bracketed placeholders like `[describe X]` or `[TODO]`.
