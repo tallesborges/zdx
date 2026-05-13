@@ -210,6 +210,16 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             // If the overlay was closed or switched threads, drop the result silently.
             vec![]
         }
+        UiEvent::ContextResult { result } => {
+            if let Some(overlays::Overlay::Context(state)) = &mut app.overlay {
+                match result {
+                    Ok(report) => state.set_ready(report),
+                    Err(message) => state.set_error(message),
+                }
+            }
+            // If the overlay was closed in the meantime, drop the result silently.
+            vec![]
+        }
     }
 }
 
@@ -518,6 +528,7 @@ fn handle_task_started_event(
         | TaskKind::ThreadRename
         | TaskKind::ThreadTitle
         | TaskKind::ThreadTldr
+        | TaskKind::ContextAnalyze
         | TaskKind::ThreadPreview
         | TaskKind::ThreadCreate
         | TaskKind::ThreadFork
@@ -974,6 +985,29 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
                 thread_id.clone(),
             )));
             effects.push(UiEffect::GenerateTldr { thread_id });
+            effects
+        }
+        overlays::OverlayRequest::Context => {
+            // Cancel any in-flight context-analyze task so this new request
+            // takes over (e.g. user closed overlay mid-analysis and reopened).
+            let mut effects = Vec::new();
+            if app.tui.tasks.state(TaskKind::ContextAnalyze).is_running() {
+                effects.push(UiEffect::CancelTask {
+                    kind: TaskKind::ContextAnalyze,
+                    token: app.tui.tasks.state(TaskKind::ContextAnalyze).cancel.clone(),
+                });
+            }
+            // Default to the instant heuristic; user presses `r` in the
+            // overlay to refine to the exact Anthropic count_tokens path.
+            // `refine_supported` controls whether the `[r]` hint is shown.
+            let refine_supported =
+                crate::runtime::refine_supported(&app.tui.config.model, &app.tui.config);
+            app.overlay = Some(overlays::Overlay::Context(overlays::ContextState::open(
+                refine_supported,
+            )));
+            effects.push(UiEffect::AnalyzeContext {
+                mode: crate::runtime::AnalysisMode::Heuristic,
+            });
             effects
         }
         overlays::OverlayRequest::ImagePreview {

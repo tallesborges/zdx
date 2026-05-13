@@ -106,6 +106,15 @@ pub enum UiEffect {
     /// `Overlay::Tldr` if it is still showing the same `thread_id`.
     GenerateTldr { thread_id: String },
 
+    /// Analyze the current LLM context and emit `UiEvent::ContextResult`.
+    ///
+    /// Builds a per-section token breakdown (system prompt + tools + per-file
+    /// AGENTS.md + messages) for the next outgoing turn. The `mode` selects
+    /// between an instant `chars / 4` heuristic and an exact count via
+    /// Anthropic's `/v1/messages/count_tokens` (Claude-family + API key
+    /// required).
+    AnalyzeContext { mode: crate::runtime::AnalysisMode },
+
     /// Persist the model preference to config.
     PersistModel { model: String },
 

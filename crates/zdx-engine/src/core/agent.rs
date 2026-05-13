@@ -1639,6 +1639,23 @@ fn build_apiyi_client(
     )))
 }
 
+/// Resolves the tool list that would be sent to the LLM for the given
+/// config / agent options / provider.
+///
+/// Mirrors the resolution the engine performs inside a real turn (including
+/// `Invoke_Subagent` enrichment based on discovered subagents under
+/// `options.root`). Exposed for external callers (e.g. the TUI
+/// context-analyzer overlay) that need to size the tool block of an
+/// outgoing request without actually starting a turn.
+#[must_use]
+pub fn resolve_active_tools(
+    config: &Config,
+    options: &AgentOptions,
+    provider: ProviderKind,
+) -> Vec<ToolDefinition> {
+    resolve_tools(config, options, provider, &options.tool_config.registry)
+}
+
 fn resolve_tools(
     config: &Config,
     options: &AgentOptions,

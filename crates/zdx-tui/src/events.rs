@@ -349,4 +349,16 @@ pub enum UiEvent {
         thread_id: String,
         result: Result<String, String>,
     },
+
+    /// Context analysis completed (Ok = structured report, Err = error).
+    ///
+    /// Updates the open `Overlay::Context` with the per-section breakdown
+    /// of the current LLM context (system prompt + tools + per-file
+    /// AGENTS.md + messages). The report always carries char counts; it
+    /// also carries exact token counts once the user refines via
+    /// Anthropic's `count_tokens`. The overlay toggles between Chars and
+    /// Tokens views locally without re-running the handler.
+    ContextResult {
+        result: Result<crate::runtime::ContextReport, String>,
+    },
 }

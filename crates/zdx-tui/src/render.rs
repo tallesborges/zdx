@@ -115,8 +115,9 @@ pub fn render(app: &AppState, frame: &mut Frame) {
     }
 
     // Render overlay (last, so it appears on top)
-    // ToolDetail and Tldr need special handling: they look up live state and
-    // animate spinners, so we route them around the generic Overlay::render.
+    // ToolDetail, Tldr, and Context need special handling: they look up
+    // live state and animate spinners, so we route them around the
+    // generic Overlay::render.
     if let Some(ref overlay) = app.overlay {
         match overlay {
             crate::overlays::Overlay::ToolDetail(state) => {
@@ -130,6 +131,9 @@ pub fn render(app: &AppState, frame: &mut Frame) {
                 state.render(frame, area, cell, app.tui.spinner_frame);
             }
             crate::overlays::Overlay::Tldr(state) => {
+                state.render(frame, area, chunks[input_idx].y, app.tui.spinner_frame);
+            }
+            crate::overlays::Overlay::Context(state) => {
                 state.render(frame, area, chunks[input_idx].y, app.tui.spinner_frame);
             }
             _ => {

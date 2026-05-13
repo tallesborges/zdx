@@ -71,6 +71,13 @@ pub const COMMANDS: &[Command] = &[
         shortcut: None,
     },
     Command {
+        name: "context",
+        aliases: &["ctx", "context-analyze"],
+        description: "Show per-section token breakdown of the current LLM context",
+        category: "debug",
+        shortcut: None,
+    },
+    Command {
         name: "copy-id",
         aliases: &["copyid"],
         description: "Copy current thread ID to clipboard",

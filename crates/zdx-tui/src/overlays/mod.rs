@@ -22,6 +22,7 @@
 //! the common patterns used in the reducer.
 
 pub mod command_palette;
+pub mod context;
 pub mod file_picker;
 pub mod image_preview;
 pub mod login;
@@ -37,6 +38,7 @@ pub mod tool_detail;
 mod update;
 
 pub use command_palette::CommandPaletteState;
+pub use context::{ContextPhase, ContextState};
 use crossterm::event::KeyEvent;
 pub use file_picker::{FilePickerState, discover_files};
 pub use image_preview::ImagePreviewState;
@@ -79,6 +81,7 @@ pub enum OverlayRequest {
     Timeline,
     Rename,
     Tldr,
+    Context,
     ImagePreview {
         image_path: String,
         image_index: usize,
@@ -154,6 +157,7 @@ pub enum Overlay {
     Timeline(TimelineState),
     Rename(RenameState),
     Tldr(TldrState),
+    Context(ContextState),
     ImagePreview(ImagePreviewState),
     ToolDetail(ToolDetailState),
 }
@@ -178,8 +182,9 @@ impl Overlay {
             ),
             // Rendered separately in render.rs:
             //   - Tldr needs spinner_frame for the loading indicator
+            //   - Context needs spinner_frame for the loading indicator
             //   - ToolDetail looks up its live cell from the transcript
-            Overlay::Tldr(_) | Overlay::ToolDetail(_) => {}
+            Overlay::Tldr(_) | Overlay::Context(_) | Overlay::ToolDetail(_) => {}
         }
     }
 
@@ -196,6 +201,7 @@ impl Overlay {
             Overlay::Rename(r) => r.handle_key(tui, key),
             Overlay::ImagePreview(p) => p.handle_key(tui, key),
             Overlay::Tldr(t) => t.handle_key(key),
+            Overlay::Context(c) => c.handle_key(key),
             Overlay::ToolDetail(t) => t.handle_key(key),
         }
     }
