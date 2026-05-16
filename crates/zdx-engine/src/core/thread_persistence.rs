@@ -2441,6 +2441,83 @@ mod tests {
         assert_eq!(messages[3].role, "assistant");
     }
 
+    /// Replay-side contract: adjacent assistant `Message` events with
+    /// per-event `replay` tokens round-trip as separate
+    /// `ChatContentBlock::Text` blocks. TUI restore coalesces these for
+    /// display, but the replay path must preserve each block's signature
+    /// so implicit-cache fingerprints line up on the next request.
+    #[test]
+    fn test_thread_events_to_messages_preserves_replay_tokens_across_fragments() {
+        let events = vec![
+            ThreadEvent::user_message("hi"),
+            ThreadEvent::Message {
+                role: "assistant".to_string(),
+                text: "Hello **wor".to_string(),
+                phase: None,
+                replay: Some(crate::providers::ReplayToken::Gemini {
+                    signature: "sig-first".to_string(),
+                    model: "gemini-3-pro-preview".to_string(),
+                }),
+                ts: "2026-05-15T00:00:00Z".to_string(),
+            },
+            ThreadEvent::Message {
+                role: "assistant".to_string(),
+                text: "ld**".to_string(),
+                phase: None,
+                replay: Some(crate::providers::ReplayToken::Gemini {
+                    signature: "sig-second".to_string(),
+                    model: "gemini-3-pro-preview".to_string(),
+                }),
+                ts: "2026-05-15T00:00:01Z".to_string(),
+            },
+        ];
+
+        let messages = thread_events_to_messages(events);
+        assert_eq!(messages.len(), 2, "expected user + assistant messages");
+        assert_eq!(messages[1].role, "assistant");
+
+        let blocks = match &messages[1].content {
+            crate::providers::MessageContent::Blocks(b) => b,
+            other @ crate::providers::MessageContent::Text(_) => {
+                panic!("expected assistant message in Blocks form, got {other:?}")
+            }
+        };
+
+        let text_blocks: Vec<(&str, Option<&crate::providers::ReplayToken>)> = blocks
+            .iter()
+            .filter_map(|b| match b {
+                crate::providers::ChatContentBlock::Text { text, replay } => {
+                    Some((text.as_str(), replay.as_ref()))
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            text_blocks.len(),
+            2,
+            "replay must keep adjacent assistant text fragments as separate blocks; got {text_blocks:#?}"
+        );
+        assert_eq!(text_blocks[0].0, "Hello **wor");
+        assert_eq!(text_blocks[1].0, "ld**");
+        assert!(
+            matches!(
+                text_blocks[0].1,
+                Some(crate::providers::ReplayToken::Gemini { signature, .. }) if signature == "sig-first"
+            ),
+            "first block must keep sig-first; got {:?}",
+            text_blocks[0].1
+        );
+        assert!(
+            matches!(
+                text_blocks[1].1,
+                Some(crate::providers::ReplayToken::Gemini { signature, .. }) if signature == "sig-second"
+            ),
+            "second block must keep sig-second; got {:?}",
+            text_blocks[1].1
+        );
+    }
+
     #[test]
     fn notice_agent_event_persists_as_thread_notice_not_message() {
         use crate::core::events::{AgentEvent, NoticeKind};

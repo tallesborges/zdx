@@ -18,30 +18,55 @@ use super::reasoning::reasoning_display_text;
 /// - unmatched `ToolUse` → cancelled `Tool` cell (the historical turn ended without a result)
 /// - `Thinking`/`Reasoning` → `Thinking` cells
 /// - Skips `Meta` and `Interrupted` events
+///
+/// Consecutive assistant `Message` events with the same `phase` coalesce
+/// into a single cell. Persistence emits one event per `ChatContentBlock::Text`,
+/// so a streamed turn that produced multiple text blocks (e.g. Gemini
+/// incremental deltas before the SSE fix) lands on disk as several adjacent
+/// events. Live rendering already collapses all deltas into one cell;
+/// restore must mirror that, otherwise markdown spans whose pair straddles
+/// a fragment boundary (`**bold` … `text**`) render as literal `**`.
+/// Boundaries: any non-Message event, role change, or phase change.
 pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> {
     let mut cells = Vec::new();
     // Track tool cells by ID for pairing with results
     let mut tool_cells: HashMap<String, usize> = HashMap::new();
+    // (phase, accumulated_text) for the in-progress assistant coalesce.
+    let mut pending_assistant: Option<(Option<String>, String)> = None;
 
     for event in events {
         match event {
+            ThreadEvent::Message {
+                role, text, phase, ..
+            } if role == "assistant" => match pending_assistant.as_mut() {
+                Some((p, accumulated)) if *p == *phase => {
+                    accumulated.push_str(text);
+                }
+                _ => {
+                    flush_pending_assistant(&mut pending_assistant, &mut cells);
+                    pending_assistant = Some((phase.clone(), text.clone()));
+                }
+            },
             ThreadEvent::Meta { .. }
             | ThreadEvent::Usage { .. }
             | ThreadEvent::Interrupted { .. } => {
-                // Skip non-display events when building transcript
+                // Non-display events still flush the pending assistant run.
+                flush_pending_assistant(&mut pending_assistant, &mut cells);
             }
             ThreadEvent::Notice { message, .. } => {
+                flush_pending_assistant(&mut pending_assistant, &mut cells);
                 cells.push(HistoryCell::system(format!("⚠ {message}")));
             }
             ThreadEvent::Message { role, text, .. } => {
+                flush_pending_assistant(&mut pending_assistant, &mut cells);
                 let cell = match role.as_str() {
                     "user" => HistoryCell::user(text),
-                    "assistant" => HistoryCell::assistant(text),
                     _ => continue,
                 };
                 cells.push(cell);
             }
             ThreadEvent::Reasoning { text, replay, .. } => {
+                flush_pending_assistant(&mut pending_assistant, &mut cells);
                 if let Some(display) = reasoning_display_text(text.as_deref(), replay.as_ref()) {
                     let mut cell = HistoryCell::thinking_streaming(display);
                     cell.finalize_thinking(replay.clone());
@@ -51,6 +76,7 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
             ThreadEvent::ToolUse {
                 id, name, input, ..
             } => {
+                flush_pending_assistant(&mut pending_assistant, &mut cells);
                 // Create a running tool cell (will be updated by result)
                 let cell = HistoryCell::tool_running(id, name, input.clone());
                 let idx = cells.len();
@@ -62,6 +88,7 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
                 output,
                 ..
             } => {
+                flush_pending_assistant(&mut pending_assistant, &mut cells);
                 // Find and update the corresponding tool cell
                 if let Some(idx) = tool_cells.remove(tool_use_id)
                     && let Some(cell) = cells.get_mut(idx)
@@ -83,6 +110,8 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
         }
     }
 
+    flush_pending_assistant(&mut pending_assistant, &mut cells);
+
     for idx in tool_cells.into_values() {
         if let Some(cell) = cells.get_mut(idx) {
             cell.set_tool_result(ToolOutput::canceled(
@@ -92,6 +121,16 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
     }
 
     cells
+}
+
+/// Pushes any pending coalesced assistant text as one `Assistant` cell.
+fn flush_pending_assistant(
+    pending: &mut Option<(Option<String>, String)>,
+    cells: &mut Vec<HistoryCell>,
+) {
+    if let Some((_phase, text)) = pending.take() {
+        cells.push(HistoryCell::assistant(text));
+    }
 }
 
 #[cfg(test)]
@@ -427,5 +466,246 @@ mod tests {
 
         let cells = build_transcript_from_events(&events);
         assert!(cells.is_empty());
+    }
+
+    /// Adjacent assistant `Message` events with the same `phase` coalesce
+    /// into one cell so bold pairs that straddle a fragment boundary
+    /// (`**bold` … `text**`) render as bold, not literal `**`.
+    #[test]
+    fn test_build_transcript_coalesces_consecutive_assistant_messages() {
+        let events = vec![
+            ThreadEvent::Message {
+                role: "assistant".to_string(),
+                text: "Hello **wor".to_string(),
+                phase: None,
+                replay: None,
+                ts: "2026-05-15T00:00:00Z".to_string(),
+            },
+            ThreadEvent::Message {
+                role: "assistant".to_string(),
+                text: "ld** how are you?".to_string(),
+                phase: None,
+                replay: None,
+                ts: "2026-05-15T00:00:00Z".to_string(),
+            },
+        ];
+
+        let cells = build_transcript_from_events(&events);
+        assert_eq!(cells.len(), 1);
+        match &cells[0] {
+            HistoryCell::Assistant { content, .. } => {
+                assert_eq!(content, "Hello **world** how are you?");
+            }
+            _ => panic!("Expected single coalesced Assistant cell"),
+        }
+    }
+
+    /// N adjacent assistant fragments (the real on-disk shape after
+    /// `TurnFinished` flushes a chunked turn) coalesce into one cell.
+    #[test]
+    fn test_build_transcript_coalesces_across_many_assistant_fragments() {
+        let fragments = ["This", " is ", "**one** ", "response."];
+        let events: Vec<ThreadEvent> = fragments
+            .iter()
+            .map(|t| ThreadEvent::Message {
+                role: "assistant".to_string(),
+                text: (*t).to_string(),
+                phase: None,
+                replay: None,
+                ts: "2026-05-15T00:00:00Z".to_string(),
+            })
+            .collect();
+
+        let cells = build_transcript_from_events(&events);
+        assert_eq!(cells.len(), 1);
+        match &cells[0] {
+            HistoryCell::Assistant { content, .. } => {
+                assert_eq!(content, "This is **one** response.");
+            }
+            _ => panic!("Expected single coalesced Assistant cell"),
+        }
+    }
+
+    /// `Reasoning` between assistant messages is a flush boundary, so the
+    /// surrounding text stays in distinct cells.
+    #[test]
+    fn test_build_transcript_reasoning_between_assistant_messages_breaks_merge() {
+        let events = vec![
+            ThreadEvent::Message {
+                role: "assistant".to_string(),
+                text: "Before reasoning".to_string(),
+                phase: None,
+                replay: None,
+                ts: "2026-05-15T00:00:00Z".to_string(),
+            },
+            ThreadEvent::Reasoning {
+                text: Some("…thinking…".to_string()),
+                replay: None,
+                ts: "2026-05-15T00:00:01Z".to_string(),
+            },
+            ThreadEvent::Message {
+                role: "assistant".to_string(),
+                text: "After reasoning".to_string(),
+                phase: None,
+                replay: None,
+                ts: "2026-05-15T00:00:02Z".to_string(),
+            },
+        ];
+
+        let cells = build_transcript_from_events(&events);
+        assert_eq!(cells.len(), 3);
+        assert!(
+            matches!(&cells[0], HistoryCell::Assistant { content, .. } if content == "Before reasoning")
+        );
+        assert!(matches!(&cells[1], HistoryCell::Thinking { .. }));
+        assert!(
+            matches!(&cells[2], HistoryCell::Assistant { content, .. } if content == "After reasoning")
+        );
+    }
+
+    /// `ToolUse`/`ToolResult` between assistant messages is a flush
+    /// boundary, so the surrounding text stays in distinct cells.
+    #[test]
+    fn test_build_transcript_tool_use_between_assistant_messages_breaks_merge() {
+        let events = vec![
+            ThreadEvent::Message {
+                role: "assistant".to_string(),
+                text: "Let me read the file.".to_string(),
+                phase: None,
+                replay: None,
+                ts: "2026-05-15T00:00:00Z".to_string(),
+            },
+            ThreadEvent::ToolUse {
+                id: "t1".to_string(),
+                name: "read".to_string(),
+                input: json!({"file_path": "x"}),
+                id_origin: zdx_engine::providers::IdOrigin::Synthesized,
+                replay: None,
+                ts: "2026-05-15T00:00:01Z".to_string(),
+            },
+            ThreadEvent::ToolResult {
+                tool_use_id: "t1".to_string(),
+                output: json!({"ok": true, "data": {"content": "x"}}),
+                ok: true,
+                ts: "2026-05-15T00:00:02Z".to_string(),
+            },
+            ThreadEvent::Message {
+                role: "assistant".to_string(),
+                text: "Done.".to_string(),
+                phase: None,
+                replay: None,
+                ts: "2026-05-15T00:00:03Z".to_string(),
+            },
+        ];
+
+        let cells = build_transcript_from_events(&events);
+        assert_eq!(cells.len(), 3);
+        assert!(
+            matches!(&cells[0], HistoryCell::Assistant { content, .. } if content == "Let me read the file.")
+        );
+        assert!(matches!(&cells[1], HistoryCell::Tool { .. }));
+        assert!(matches!(&cells[2], HistoryCell::Assistant { content, .. } if content == "Done."));
+    }
+
+    /// Different `phase` (commentary vs. final) is a flush boundary.
+    #[test]
+    fn test_build_transcript_different_assistant_phase_breaks_merge() {
+        let events = vec![
+            ThreadEvent::Message {
+                role: "assistant".to_string(),
+                text: "Commentary text.".to_string(),
+                phase: Some("commentary".to_string()),
+                replay: None,
+                ts: "2026-05-15T00:00:00Z".to_string(),
+            },
+            ThreadEvent::Message {
+                role: "assistant".to_string(),
+                text: "Final text.".to_string(),
+                phase: None,
+                replay: None,
+                ts: "2026-05-15T00:00:01Z".to_string(),
+            },
+        ];
+
+        let cells = build_transcript_from_events(&events);
+        assert_eq!(cells.len(), 2);
+        assert!(
+            matches!(&cells[0], HistoryCell::Assistant { content, .. } if content == "Commentary text.")
+        );
+        assert!(
+            matches!(&cells[1], HistoryCell::Assistant { content, .. } if content == "Final text.")
+        );
+    }
+
+    /// User messages are 1:1; coalescing only applies to assistant text.
+    #[test]
+    fn test_build_transcript_consecutive_user_messages_are_not_merged() {
+        let events = vec![
+            ThreadEvent::Message {
+                role: "user".to_string(),
+                text: "first question".to_string(),
+                phase: None,
+                replay: None,
+                ts: "2026-05-15T00:00:00Z".to_string(),
+            },
+            ThreadEvent::Message {
+                role: "user".to_string(),
+                text: "second question".to_string(),
+                phase: None,
+                replay: None,
+                ts: "2026-05-15T00:00:01Z".to_string(),
+            },
+        ];
+
+        let cells = build_transcript_from_events(&events);
+        assert_eq!(cells.len(), 2);
+        assert!(
+            matches!(&cells[0], HistoryCell::User { content, .. } if content == "first question")
+        );
+        assert!(
+            matches!(&cells[1], HistoryCell::User { content, .. } if content == "second question")
+        );
+    }
+
+    /// Per-event `replay` tokens don't block display coalescing — the cell
+    /// doesn't surface them. Replay-side `thread_events_to_messages` keeps
+    /// the blocks separate (covered in `zdx-engine`).
+    #[test]
+    fn test_build_transcript_coalesces_assistant_messages_with_replay_tokens() {
+        let events = vec![
+            ThreadEvent::Message {
+                role: "assistant".to_string(),
+                text: "Hello **wor".to_string(),
+                phase: None,
+                replay: Some(zdx_engine::providers::ReplayToken::Gemini {
+                    signature: "sig-first".to_string(),
+                    model: "gemini-3-pro-preview".to_string(),
+                }),
+                ts: "2026-05-15T00:00:00Z".to_string(),
+            },
+            ThreadEvent::Message {
+                role: "assistant".to_string(),
+                text: "ld**".to_string(),
+                phase: None,
+                replay: Some(zdx_engine::providers::ReplayToken::Gemini {
+                    signature: "sig-second".to_string(),
+                    model: "gemini-3-pro-preview".to_string(),
+                }),
+                ts: "2026-05-15T00:00:01Z".to_string(),
+            },
+        ];
+
+        let cells = build_transcript_from_events(&events);
+        assert_eq!(
+            cells.len(),
+            1,
+            "replay-metadata differences must not break visual coalescing"
+        );
+        match &cells[0] {
+            HistoryCell::Assistant { content, .. } => {
+                assert_eq!(content, "Hello **world**");
+            }
+            _ => panic!("expected single coalesced Assistant cell"),
+        }
     }
 }
