@@ -262,9 +262,14 @@ impl<S> GeminiSseParser<S> {
     /// case the second chunk is treated as a continuation of the open
     /// part and only the new tail is emitted as a delta.
     fn process_parts(&mut self, parts: &[Value]) {
+        // Same-chunk kind tracking: adjacent same-kind parts in one SSE
+        // event must stay distinct blocks so each keeps its own signature.
+        // Cross-chunk continuation lives in `handle_text_or_reasoning_part`.
+        let mut prev_text_reasoning_kind: Option<OpenPartKind> = None;
+
         for part in parts {
-            // Per-part signature. Gemini may attach `thoughtSignature` at
-            // the part top level or under `functionCall`; both are valid.
+            // `thoughtSignature` can sit at the part top level or under
+            // `functionCall`.
             let signature = part
                 .get("thoughtSignature")
                 .and_then(Value::as_str)
@@ -277,6 +282,8 @@ impl<S> GeminiSseParser<S> {
 
             if let Some(call) = part.get("functionCall") {
                 self.handle_function_call_part(call, signature);
+                // Function call closes any open text/reasoning.
+                prev_text_reasoning_kind = None;
                 continue;
             }
 
@@ -286,10 +293,8 @@ impl<S> GeminiSseParser<S> {
                 .unwrap_or(false);
             let text = part.get("text").and_then(Value::as_str).unwrap_or("");
 
-            // A non-thought part with no text and no signature is metadata
-            // we don't render — skip. Empty thought parts with a signature
-            // are real (signature-only parts) and must open a block so the
-            // signature survives end-to-end.
+            // Skip pure metadata. Empty thought parts with a signature are
+            // real (signature-only) and must open a block.
             if !is_thought && text.is_empty() && signature.is_none() {
                 continue;
             }
@@ -299,7 +304,21 @@ impl<S> GeminiSseParser<S> {
             } else {
                 OpenPartKind::Text
             };
+
+            // Split before a non-empty same-kind sibling so each part keeps
+            // its own signature. Empty signature-only parts attach to the
+            // open block instead.
+            if prev_text_reasoning_kind == Some(kind) && !text.is_empty() {
+                self.close_open_part();
+            }
+
             self.handle_text_or_reasoning_part(kind, text, signature);
+            // Only non-empty parts arm the split heuristic; otherwise
+            // `[empty+sig, "real"]` would split into an empty signed block
+            // plus an unsigned text block.
+            if !text.is_empty() {
+                prev_text_reasoning_kind = Some(kind);
+            }
         }
     }
 
@@ -309,22 +328,37 @@ impl<S> GeminiSseParser<S> {
         text: &str,
         signature: Option<String>,
     ) {
-        // Continuation = same kind as the currently-open part AND the new
-        // text is a prefix-extension of the accumulated text. Covers the
-        // rolling-cumulative streaming variant where Gemini re-emits the
-        // same part with growing text plus an eventual signature.
-        let is_continuation = match self.open_part.as_ref() {
-            Some(open) => open.kind == kind && text.starts_with(&open.accumulated_text),
-            None => false,
-        };
+        // Same-kind across chunks continues the open block. Gemini streams
+        // text two ways: cumulative (each chunk = full accumulated text)
+        // and incremental (each chunk = only the new tail). Both must
+        // accumulate into one block — opening a fresh block per incremental
+        // chunk fragments one logical response across N persisted events
+        // and splits markdown spans (`**bold` … `text**`) across cells.
+        let is_same_kind_open = matches!(
+            self.open_part.as_ref(),
+            Some(open) if open.kind == kind
+        );
 
-        if is_continuation {
+        if is_same_kind_open {
             let open = self
                 .open_part
                 .as_mut()
-                .expect("open_part is Some by continuation guard");
-            let delta = text[open.accumulated_text.len()..].to_string();
-            open.accumulated_text = text.to_string();
+                .expect("open_part is Some by same-kind guard");
+            let delta = if text.starts_with(&open.accumulated_text)
+                && text.len() > open.accumulated_text.len()
+            {
+                // Cumulative: emit the new suffix, replace snapshot.
+                let suffix = text[open.accumulated_text.len()..].to_string();
+                open.accumulated_text = text.to_string();
+                suffix
+            } else if text == open.accumulated_text || text.is_empty() {
+                // Pure resend or signature-only chunk; nothing to emit.
+                String::new()
+            } else {
+                // Incremental: append verbatim.
+                open.accumulated_text.push_str(text);
+                text.to_string()
+            };
             if signature.is_some() {
                 open.signature = signature;
             }
@@ -344,8 +378,7 @@ impl<S> GeminiSseParser<S> {
             return;
         }
 
-        // Non-continuation: close any open part first (so its signature is
-        // attached to its own ContentBlockCompleted), then open a new one.
+        // Different kind or no open part: close existing, open new.
         self.close_open_part();
 
         let block_index = self.next_index;
@@ -997,6 +1030,389 @@ mod tests {
                 reasoning,
             } if reasoning == ", second"
         ));
+    }
+
+    /// Incremental-delta text (each chunk = only the new tail) accumulates
+    /// into one block at one index, so markdown spans whose pair straddles
+    /// a chunk boundary (`**bold` then `text**`) stay intact.
+    #[test]
+    fn test_incremental_text_deltas_accumulate_into_one_block() {
+        let mut parser = create_test_parser();
+
+        let fragments = ["###", " Release", " Notes **fast", " mode** enabled."];
+        for frag in &fragments {
+            let chunk = json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{ "text": *frag }]
+                    }
+                }]
+            });
+            parser.handle_chunk(chunk).unwrap();
+        }
+
+        let events: Vec<_> = parser.pending.drain(..).collect();
+
+        // Exactly one ContentBlockStart for text...
+        let starts: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    StreamEvent::ContentBlockStart {
+                        block_type: ContentBlockType::Text,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(
+            starts.len(),
+            1,
+            "incremental deltas must reuse one text block; got starts={starts:#?}"
+        );
+
+        // ...and every TextDelta carries the same index.
+        let text_deltas: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::TextDelta { index, text } => {
+                    assert_eq!(*index, 0, "all incremental deltas share block 0");
+                    Some(text.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text_deltas, fragments);
+    }
+
+    /// Mixed cumulative + incremental chunks in one stream stay in one
+    /// block: the cumulative branch emits only the new suffix even when
+    /// `accumulated_text` was last extended by an incremental chunk.
+    #[test]
+    fn test_mixed_cumulative_and_incremental_text_stay_in_one_block() {
+        let mut parser = create_test_parser();
+
+        // 1st chunk: incremental seed.
+        parser
+            .handle_chunk(json!({
+                "candidates": [{ "content": { "parts": [{ "text": "Hello" }] } }]
+            }))
+            .unwrap();
+        // 2nd chunk: incremental (does not start with accumulated).
+        parser
+            .handle_chunk(json!({
+                "candidates": [{ "content": { "parts": [{ "text": " world" }] } }]
+            }))
+            .unwrap();
+        // 3rd chunk: cumulative resend of the full accumulated text + new tail.
+        parser
+            .handle_chunk(json!({
+                "candidates": [{ "content": { "parts": [{ "text": "Hello world!" }] } }]
+            }))
+            .unwrap();
+
+        let events: Vec<_> = parser.pending.drain(..).collect();
+
+        let starts = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    StreamEvent::ContentBlockStart {
+                        block_type: ContentBlockType::Text,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(starts, 1, "mixed-mode chunks must stay in one block");
+
+        let text_deltas: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::TextDelta { index: 0, text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            text_deltas,
+            vec!["Hello", " world", "!"],
+            "incremental chunks emit verbatim; cumulative chunk emits only its new suffix"
+        );
+    }
+
+    /// Signature-only same-kind chunk (empty text + `thoughtSignature`)
+    /// updates the open part's signature without emitting an empty delta
+    /// or opening a new block.
+    #[test]
+    fn test_signature_only_same_kind_chunk_does_not_open_new_block() {
+        let mut parser = create_test_parser();
+
+        parser
+            .handle_chunk(json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{ "thought": true, "text": "Thinking..." }]
+                    }
+                }]
+            }))
+            .unwrap();
+        parser.pending.clear();
+
+        // Second chunk: same kind, empty text, with a signature.
+        parser
+            .handle_chunk(json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "thought": true,
+                            "text": "",
+                            "thoughtSignature": "sig-xyz"
+                        }]
+                    }
+                }]
+            }))
+            .unwrap();
+
+        let events: Vec<_> = parser.pending.drain(..).collect();
+        // No new ContentBlockStart, no spurious empty ReasoningDelta.
+        for event in &events {
+            match event {
+                StreamEvent::ContentBlockStart { .. } => {
+                    panic!("signature-only chunk must not open a new block; got: {event:?}")
+                }
+                StreamEvent::ReasoningDelta { reasoning, .. } if reasoning.is_empty() => {
+                    panic!("signature-only chunk must not emit empty delta; got: {event:?}")
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Adjacent same-kind text parts in one SSE chunk stay as distinct
+    /// blocks so each keeps its own signature. Cross-chunk same-kind
+    /// continuation is unaffected.
+    #[test]
+    fn test_adjacent_same_kind_parts_in_one_chunk_stay_distinct() {
+        let mut parser = create_test_parser();
+
+        parser
+            .handle_chunk(json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [
+                            { "text": "first block", "thoughtSignature": "sig-A" },
+                            { "text": "second block", "thoughtSignature": "sig-B" }
+                        ]
+                    }
+                }]
+            }))
+            .unwrap();
+
+        let events: Vec<_> = parser.pending.drain(..).collect();
+
+        // Two ContentBlockStart::Text, at consecutive indices.
+        let starts: Vec<usize> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ContentBlockStart {
+                    block_type: ContentBlockType::Text,
+                    index,
+                    ..
+                } => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            starts,
+            vec![0, 1],
+            "adjacent same-kind text parts in one chunk must open distinct blocks; events={events:#?}"
+        );
+
+        // First block closes with sig-A; second block stays open.
+        let completed: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ContentBlockCompleted { index, signature } => {
+                    Some((*index, signature.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            completed.len(),
+            1,
+            "only the first block is closed mid-chunk"
+        );
+        let (closed_index, sig) = &completed[0];
+        assert_eq!(*closed_index, 0);
+        assert!(
+            matches!(sig, Some((SignatureProvider::Gemini, s)) if s == "sig-A"),
+            "first block must close with its own sig-A; got {sig:?}"
+        );
+
+        // Flush via terminal finishReason and confirm block 1 closes with
+        // sig-B (signatures don't bleed across the same-chunk split).
+        parser
+            .handle_chunk(json!({
+                "candidates": [{
+                    "content": { "parts": [] },
+                    "finishReason": "STOP"
+                }]
+            }))
+            .unwrap();
+        let terminal_events: Vec<_> = parser.pending.drain(..).collect();
+        let block_one_close = terminal_events.iter().find_map(|e| match e {
+            StreamEvent::ContentBlockCompleted {
+                index: 1,
+                signature,
+            } => Some(signature.clone()),
+            _ => None,
+        });
+        assert!(
+            matches!(
+                block_one_close,
+                Some(Some((SignatureProvider::Gemini, ref s))) if s == "sig-B"
+            ),
+            "second block must close with sig-B at terminal flush; got {block_one_close:?}"
+        );
+    }
+
+    /// `[empty+sig, non-empty]` same-chunk same-kind parts produce one
+    /// signed block, not an empty signed block plus an unsigned text
+    /// block. Regression guard for the empty-skip rule in `process_parts`.
+    #[test]
+    fn test_empty_signature_only_part_does_not_split_following_text() {
+        let mut parser = create_test_parser();
+
+        parser
+            .handle_chunk(json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [
+                            { "text": "", "thoughtSignature": "sig-attached" },
+                            { "text": "real text after signature" }
+                        ]
+                    }
+                }]
+            }))
+            .unwrap();
+        // Flush via finishReason so we can inspect the closing event.
+        parser
+            .handle_chunk(json!({
+                "candidates": [{
+                    "content": { "parts": [] },
+                    "finishReason": "STOP"
+                }]
+            }))
+            .unwrap();
+
+        let events: Vec<_> = parser.pending.drain(..).collect();
+
+        let starts: Vec<usize> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ContentBlockStart {
+                    block_type: ContentBlockType::Text,
+                    index,
+                    ..
+                } => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            starts,
+            vec![0],
+            "signature-only + non-empty same-kind parts must share one block; events={events:#?}"
+        );
+
+        let deltas: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::TextDelta { index: 0, text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            deltas,
+            vec!["real text after signature"],
+            "delta must come from the non-empty part; empty part emits no delta"
+        );
+
+        let close = events.iter().find_map(|e| match e {
+            StreamEvent::ContentBlockCompleted {
+                index: 0,
+                signature,
+            } => Some(signature.clone()),
+            _ => None,
+        });
+        assert!(
+            matches!(
+                close,
+                Some(Some((SignatureProvider::Gemini, ref s))) if s == "sig-attached"
+            ),
+            "the single block must close with the attached signature; got {close:?}"
+        );
+    }
+
+    /// Signatures are sticky: a later same-kind chunk with `signature:
+    /// None` must not erase a signature already attached to the open part.
+    #[test]
+    fn test_signature_is_sticky_across_chunks_without_signature() {
+        let mut parser = create_test_parser();
+
+        // Open with signature.
+        parser
+            .handle_chunk(json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "thought": true,
+                            "text": "Let me think",
+                            "thoughtSignature": "sig-keep-me"
+                        }]
+                    }
+                }]
+            }))
+            .unwrap();
+        parser.pending.clear();
+
+        // Cumulative resend without signature — must not erase it.
+        parser
+            .handle_chunk(json!({
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "thought": true,
+                            "text": "Let me think further"
+                        }]
+                    }
+                }]
+            }))
+            .unwrap();
+        parser.pending.clear();
+
+        // Flush and inspect the emitted signature.
+        parser
+            .handle_chunk(json!({
+                "candidates": [{
+                    "finishReason": "STOP",
+                    "content": { "parts": [] }
+                }]
+            }))
+            .unwrap();
+
+        let events: Vec<_> = parser.pending.drain(..).collect();
+        let sig_delta = events.iter().find_map(|e| match e {
+            StreamEvent::ReasoningSignatureDelta { signature, .. } => Some(signature.clone()),
+            _ => None,
+        });
+        assert_eq!(
+            sig_delta.as_deref(),
+            Some("sig-keep-me"),
+            "signature must persist across chunks that omit it; events={events:#?}"
+        );
     }
 
     /// Test: A real Gemini 3 `functionCall.id` is preserved end-to-end instead of

@@ -411,3 +411,127 @@ async fn test_function_response_id_symmetry() {
         "functionResponse for a synthesized-id call must omit `id` (cache symmetry)"
     );
 }
+
+/// End-to-end: raw Gemini incremental-delta SSE bytes → parser →
+/// `AssistantTurnBuilder.finalize()` → `messages_to_events` must produce
+/// one assistant text block and one persisted `ThreadEvent::Message`
+/// regardless of how many SSE chunks the provider streamed. Regressing
+/// any layer back to per-chunk fragmentation will fail this test.
+#[tokio::test]
+async fn test_gemini_incremental_stream_pipeline_persists_one_message() {
+    use zdx_engine::core::thread_persistence::ThreadEvent;
+    use zdx_providers::MessageContent;
+
+    // Mirrors the real `gemini-2.0-flash:streamGenerateContent?alt=sse`
+    // shape: each chunk = only the new tail, bold pair straddles chunks 3
+    // and 4 so a regression would surface as literal `**`.
+    let fragments = [
+        "### ",
+        "Release Notes ",
+        "shipped with **fast",
+        " mode** enabled.",
+    ];
+    let mut sse_bytes = Vec::new();
+    for frag in &fragments {
+        let event = serde_json::json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{ "text": frag }]
+                },
+                "index": 0,
+            }]
+        });
+        sse_bytes.extend_from_slice(b"data: ");
+        sse_bytes.extend_from_slice(serde_json::to_string(&event).unwrap().as_bytes());
+        sse_bytes.extend_from_slice(b"\n\n");
+    }
+    // Terminal chunk with finishReason flushes the open part.
+    let terminal = serde_json::json!({
+        "candidates": [{
+            "content": { "parts": [] },
+            "finishReason": "STOP",
+            "index": 0,
+        }]
+    });
+    sse_bytes.extend_from_slice(b"data: ");
+    sse_bytes.extend_from_slice(serde_json::to_string(&terminal).unwrap().as_bytes());
+    sse_bytes.extend_from_slice(b"\n\n");
+
+    // Drive the full pipeline: SSE → builder → finalize → ChatMessage → persist.
+    let events = collect_stream_events(sse_bytes, "gemini-2.0-flash").await;
+
+    // Sanity: the SSE side really did emit the multiple deltas we expect.
+    let text_delta_count = events
+        .iter()
+        .filter(|e| matches!(e, StreamEvent::TextDelta { .. }))
+        .count();
+    assert!(
+        text_delta_count >= fragments.len(),
+        "synthetic stream must yield at least {} text deltas, got {}",
+        fragments.len(),
+        text_delta_count
+    );
+
+    let mut turn = AssistantTurnBuilder::new("gemini-2.0-flash".to_string());
+    for event in events {
+        apply_stream_event(&mut turn, event);
+    }
+    let finalized = turn.finalize();
+
+    // Engine finalize: exactly one text block carries the joined content.
+    let joined = {
+        let text_blocks: Vec<&str> = finalized
+            .blocks
+            .iter()
+            .filter_map(|b| match b {
+                ChatContentBlock::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            text_blocks.len(),
+            1,
+            "incremental Gemini stream must finalize to one text block; got blocks={:#?}",
+            finalized.blocks
+        );
+        assert!(
+            text_blocks[0].contains("**fast mode**"),
+            "bold pair split across chunks must reunite in the finalized block; got: {}",
+            text_blocks[0]
+        );
+        text_blocks[0].to_string()
+    };
+
+    // Persistence side: exactly one ThreadEvent::Message for the assistant.
+    let assistant = ChatMessage::assistant_blocks(finalized.blocks);
+    let thread_events = messages_to_events(&[assistant]);
+    let assistant_msg_count = thread_events
+        .iter()
+        .filter(|e| matches!(e, ThreadEvent::Message { role, .. } if role == "assistant"))
+        .count();
+    assert_eq!(
+        assistant_msg_count, 1,
+        "one assistant ChatMessage must persist as exactly one Message event; got {assistant_msg_count}"
+    );
+
+    // Replay round-trip: rebuilt assistant message still has one text block.
+    let rehydrated = thread_events_to_messages(thread_events);
+    let rebuilt_text: Vec<String> = rehydrated
+        .iter()
+        .filter(|m| m.role == "assistant")
+        .flat_map(|m| match &m.content {
+            MessageContent::Blocks(blocks) => blocks.clone(),
+            MessageContent::Text(_) => panic!("expected Blocks variant"),
+        })
+        .filter_map(|b| match b {
+            ChatContentBlock::Text { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        rebuilt_text.len(),
+        1,
+        "round-trip must preserve the single-block shape; got {rebuilt_text:#?}"
+    );
+    assert_eq!(rebuilt_text[0], joined);
+}
