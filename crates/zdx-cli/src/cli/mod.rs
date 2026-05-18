@@ -711,7 +711,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
         config: &config,
     };
 
-    dispatch_command(command, &context).await
+    Box::pin(dispatch_command(command, &context)).await
 }
 
 fn apply_system_prompt_override(config: &mut config::Config, system_prompt: Option<&str>) {

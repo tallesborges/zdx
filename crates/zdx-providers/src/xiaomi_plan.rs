@@ -1,6 +1,8 @@
-//! `Xiaomi` provider (Xiaomi `MiMo` OpenAI-compatible Chat Completions).
+//! `XiaomiPlan` provider (Xiaomi `MiMo` Token Plan, OpenAI-compatible Chat Completions).
 //!
-//! For the Token Plan subscription, see the sibling `xiaomi_plan` module.
+//! Same wire protocol as `xiaomi` but pointed at the Token Plan subscription endpoint
+//! and authenticated with a `tp-` key. After subscribing, users may also paste their
+//! exclusive Base URL into `base_url` or `XIAOMI_PLAN_BASE_URL`.
 
 use anyhow::Result;
 use reqwest::header::HeaderMap;
@@ -10,9 +12,9 @@ use crate::openai::chat_completions::{OpenAIChatCompletionsClient, OpenAIChatCom
 use crate::shared::merge_system_prompt;
 use crate::{ProviderKind, ProviderStream};
 
-/// `Xiaomi` API configuration.
+/// `XiaomiPlan` API configuration.
 #[derive(Debug, Clone)]
-pub struct XiaomiConfig {
+pub struct XiaomiPlanConfig {
     pub api_key: String,
     pub base_url: String,
     pub model: String,
@@ -21,16 +23,16 @@ pub struct XiaomiConfig {
     pub thinking_enabled: bool,
 }
 
-impl XiaomiConfig {
+impl XiaomiPlanConfig {
     /// Creates a new config from environment.
     ///
     /// Authentication resolution order:
     /// 1. `config_api_key` parameter (from config file)
-    /// 2. `XIAOMI_API_KEY` environment variable
+    /// 2. `XIAOMI_PLAN_API_KEY` environment variable
     ///
     /// Environment variables:
-    /// - `XIAOMI_API_KEY` (fallback if not in config)
-    /// - `XIAOMI_BASE_URL` (optional)
+    /// - `XIAOMI_PLAN_API_KEY` (fallback if not in config)
+    /// - `XIAOMI_PLAN_BASE_URL` (optional; overrides the default Token Plan endpoint)
     ///
     /// # Errors
     /// Returns an error if the operation fails.
@@ -42,8 +44,8 @@ impl XiaomiConfig {
         prompt_cache_key: Option<String>,
         thinking_enabled: bool,
     ) -> Result<Self> {
-        let api_key = ProviderKind::Xiaomi.resolve_api_key(config_api_key)?;
-        let base_url = ProviderKind::Xiaomi.resolve_base_url(config_base_url)?;
+        let api_key = ProviderKind::XiaomiPlan.resolve_api_key(config_api_key)?;
+        let base_url = ProviderKind::XiaomiPlan.resolve_base_url(config_base_url)?;
 
         Ok(Self {
             api_key,
@@ -56,13 +58,13 @@ impl XiaomiConfig {
     }
 }
 
-/// `Xiaomi` client.
-pub struct XiaomiClient {
+/// `XiaomiPlan` client.
+pub struct XiaomiPlanClient {
     inner: OpenAIChatCompletionsClient,
 }
 
-impl XiaomiClient {
-    pub fn new(config: XiaomiConfig) -> Self {
+impl XiaomiPlanClient {
+    pub fn new(config: XiaomiPlanConfig) -> Self {
         Self {
             inner: OpenAIChatCompletionsClient::new(OpenAIChatCompletionsConfig {
                 api_key: config.api_key,
