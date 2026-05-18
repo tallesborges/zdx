@@ -1,6 +1,16 @@
 //! Automation discovery and parsing.
 //!
 //! Automations are markdown files with YAML frontmatter and prompt body.
+//!
+//! There are two sources:
+//! - [`AutomationSource::Bundled`] — embedded via `zdx_assets::bundled_automation_assets()`.
+//!   Bundled automations are **manual-only by contract**: their frontmatter MUST NOT include
+//!   a `schedule` field. Parsing rejects scheduled bundled assets so the daemon never silently
+//!   runs them.
+//! - [`AutomationSource::User`] — markdown files under `<ZDX_HOME>/automations/`.
+//!
+//! When both sources define an automation with the same file stem, the user definition
+//! shadows the bundled one. Duplicate names within the same source are an error.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -9,12 +19,15 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Datelike, Local, Timelike};
 use serde::Deserialize;
+use zdx_assets::{BundledAutomationAsset, bundled_automation_assets};
 
 use crate::config::paths;
 
 /// Source location for an automation definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutomationSource {
+    /// Embedded in the `zdx-assets` crate (manual-only).
+    Bundled,
     /// `<ZDX_HOME>/automations/*.md`
     User,
 }
@@ -24,6 +37,7 @@ impl AutomationSource {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Bundled => "bundled",
             Self::User => "user",
         }
     }
@@ -62,13 +76,16 @@ struct AutomationFrontmatter {
     max_retries: Option<u32>,
 }
 
-/// Discovers and parses automations from user-global directory.
+/// Discovers and parses automations from bundled assets and the user-global directory.
 ///
 /// Scans:
+/// - Embedded bundled automations in `zdx-assets` (manual-only).
 /// - `<ZDX_HOME>/automations/*.md`
 ///
+/// User definitions shadow bundled ones with the same file stem.
+///
 /// # Errors
-/// Returns an error if parsing fails, duplicate names are found, or I/O fails.
+/// Returns an error if parsing fails, duplicate names exist within a single source, or I/O fails.
 pub fn discover(root: &Path) -> Result<Vec<AutomationDefinition>> {
     let user_dir = paths::zdx_home().join("automations");
     discover_with_user_dir(root, &user_dir)
@@ -79,18 +96,65 @@ pub fn discover(root: &Path) -> Result<Vec<AutomationDefinition>> {
 /// Intended for testing without env-var mutation.
 ///
 /// # Errors
-/// Returns an error if parsing fails, duplicate names are found, or I/O fails.
+/// Returns an error if parsing fails, duplicate names exist within a single source, or I/O fails.
 pub fn discover_with_user_dir(root: &Path, user_dir: &Path) -> Result<Vec<AutomationDefinition>> {
-    let _ = root;
-    let mut entries: Vec<(PathBuf, AutomationSource)> = Vec::new();
-    collect_markdown_files(user_dir, AutomationSource::User, &mut entries)?;
+    discover_with_sources(bundled_automation_assets(), root, user_dir)
+}
 
+/// Discovers and parses automations from explicit bundled assets and user directory.
+///
+/// Intended for tests that need to inject a custom bundled-asset slice.
+///
+/// # Errors
+/// Returns an error if parsing fails, duplicate names exist within a single source, or I/O fails.
+pub fn discover_with_sources(
+    bundled: &[BundledAutomationAsset],
+    root: &Path,
+    user_dir: &Path,
+) -> Result<Vec<AutomationDefinition>> {
+    let _ = root;
     let mut by_name: BTreeMap<String, AutomationDefinition> = BTreeMap::new();
-    for (path, source) in entries {
-        let definition = parse_automation_file(&path, source)
+
+    // Bundled first — same-source collisions still bail.
+    for asset in bundled {
+        // Defensive: `build.rs` embeds every file under `bundled_automations/`. Skip non-`.md`
+        // files so future sidecars (README, references, scripts) cannot accidentally surface
+        // as malformed automations.
+        if !asset
+            .relative_path
+            .rsplit_once('.')
+            .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("md"))
+        {
+            continue;
+        }
+
+        let definition = parse_bundled_automation(asset.relative_path, asset.bytes)
+            .with_context(|| format!("parse bundled automation {}", asset.relative_path))?;
+
+        if let Some(existing) = by_name.get(&definition.name)
+            && existing.source == AutomationSource::Bundled
+        {
+            bail!(
+                "Duplicate bundled automation name '{}': '{}' and '{}'",
+                definition.name,
+                existing.path.display(),
+                definition.path.display()
+            );
+        }
+        by_name.insert(definition.name.clone(), definition);
+    }
+
+    // User next — overwrites bundled with same name; duplicate user files bail.
+    let mut user_entries: Vec<PathBuf> = Vec::new();
+    collect_markdown_files(user_dir, &mut user_entries)?;
+
+    for path in user_entries {
+        let definition = parse_automation_file(&path, AutomationSource::User)
             .with_context(|| format!("parse automation {}", path.display()))?;
 
-        if let Some(existing) = by_name.get(&definition.name) {
+        if let Some(existing) = by_name.get(&definition.name)
+            && existing.source == AutomationSource::User
+        {
             bail!(
                 "Duplicate automation name '{}': '{}' and '{}'",
                 definition.name,
@@ -172,11 +236,7 @@ pub fn schedule_matches_local_time(schedule: &str, now: DateTime<Local>) -> Resu
         && field_matches(fields[4], weekday, 0, 6, true)?)
 }
 
-fn collect_markdown_files(
-    dir: &Path,
-    source: AutomationSource,
-    out: &mut Vec<(PathBuf, AutomationSource)>,
-) -> Result<()> {
+fn collect_markdown_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     if !dir.exists() {
         return Ok(());
     }
@@ -196,7 +256,7 @@ fn collect_markdown_files(
 
     files.sort();
     for path in files {
-        out.push((path, source));
+        out.push(path);
     }
     Ok(())
 }
@@ -204,7 +264,40 @@ fn collect_markdown_files(
 fn parse_automation_file(path: &Path, source: AutomationSource) -> Result<AutomationDefinition> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("read automation file {}", path.display()))?;
-    let (yaml, body) = split_frontmatter(&content)?;
+    let name = file_stem(path)?;
+    parse_automation_content(&name, path.to_path_buf(), &content, source)
+}
+
+fn parse_bundled_automation(relative_path: &str, bytes: &[u8]) -> Result<AutomationDefinition> {
+    let content = std::str::from_utf8(bytes)
+        .with_context(|| format!("bundled automation {relative_path} is not valid UTF-8"))?;
+
+    // Synthesize a display path so error messages and listings have a stable identity.
+    let display_path = PathBuf::from(format!("<bundled>/{relative_path}"));
+    let name = file_stem(Path::new(relative_path))?;
+
+    let definition =
+        parse_automation_content(&name, display_path, content, AutomationSource::Bundled)?;
+
+    if definition.schedule.is_some() {
+        bail!(
+            "Bundled automation '{}' must not declare a schedule. Bundled automations are \
+             manual-only by contract; copy it to $ZDX_HOME/automations/{}.md to add a schedule.",
+            definition.name,
+            definition.name
+        );
+    }
+
+    Ok(definition)
+}
+
+fn parse_automation_content(
+    name: &str,
+    path: PathBuf,
+    content: &str,
+    source: AutomationSource,
+) -> Result<AutomationDefinition> {
+    let (yaml, body) = split_frontmatter(content)?;
 
     let frontmatter: AutomationFrontmatter = if yaml.trim().is_empty() {
         AutomationFrontmatter::default()
@@ -213,7 +306,6 @@ fn parse_automation_file(path: &Path, source: AutomationSource) -> Result<Automa
             .with_context(|| format!("parse YAML frontmatter in {}", path.display()))?
     };
 
-    let name = file_stem(path)?;
     let schedule = normalize_optional_string(frontmatter.schedule, "schedule")?;
     let model = normalize_optional_string(frontmatter.model, "model")?;
     let subagent = normalize_optional_string(frontmatter.subagent, "subagent")?;
@@ -228,8 +320,8 @@ fn parse_automation_file(path: &Path, source: AutomationSource) -> Result<Automa
     }
 
     Ok(AutomationDefinition {
-        name,
-        path: path.to_path_buf(),
+        name: name.to_string(),
+        path,
         source,
         schedule,
         model,
@@ -408,7 +500,7 @@ mod tests {
         fs::create_dir_all(&user_dir).unwrap();
         fs::write(user_dir.join("user-report.md"), "---\n---\nuser prompt").unwrap();
 
-        let all = discover_with_user_dir(root.path(), &user_dir).unwrap();
+        let all = discover_with_sources(&[], root.path(), &user_dir).unwrap();
         assert_eq!(all.len(), 1);
         assert!(all.iter().any(|a| a.name == "user-report"));
     }
@@ -430,7 +522,7 @@ mod tests {
         .unwrap();
         fs::write(user_dir.join("user-only.md"), "---\n---\nuser prompt").unwrap();
 
-        let all = discover_with_user_dir(root.path(), &user_dir).unwrap();
+        let all = discover_with_sources(&[], root.path(), &user_dir).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].name, "user-only");
     }
@@ -460,5 +552,159 @@ mod tests {
         let dt = Local::now();
         let err = schedule_matches_local_time("0 8 * *", dt).unwrap_err();
         assert!(err.to_string().contains("expected 5 cron fields"));
+    }
+
+    // ---- Bundled automations ----
+
+    fn bundled_asset(relative_path: &'static str, bytes: &'static [u8]) -> BundledAutomationAsset {
+        BundledAutomationAsset {
+            relative_path,
+            bytes,
+        }
+    }
+
+    #[test]
+    fn bundled_automation_is_discovered_without_user_dir() {
+        let root = tempdir().unwrap();
+        let user = tempdir().unwrap();
+        let user_dir = user.path().join("automations");
+
+        let assets = [bundled_asset(
+            "memory-curator.md",
+            b"---\n---\nReview recent threads and propose memory items.",
+        )];
+
+        let all = discover_with_sources(&assets, root.path(), &user_dir).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].name, "memory-curator");
+        assert_eq!(all[0].source, AutomationSource::Bundled);
+        assert!(all[0].schedule.is_none());
+        assert_eq!(all[0].path, PathBuf::from("<bundled>/memory-curator.md"));
+    }
+
+    #[test]
+    fn user_definition_shadows_bundled_with_same_stem() {
+        let root = tempdir().unwrap();
+        let user = tempdir().unwrap();
+        let user_dir = user.path().join("automations");
+        fs::create_dir_all(&user_dir).unwrap();
+        fs::write(
+            user_dir.join("memory-curator.md"),
+            "---\nschedule: \"0 8 * * *\"\n---\nMy custom curator prompt body.",
+        )
+        .unwrap();
+
+        let assets = [bundled_asset(
+            "memory-curator.md",
+            b"---\n---\nBundled curator body.",
+        )];
+
+        let all = discover_with_sources(&assets, root.path(), &user_dir).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].name, "memory-curator");
+        assert_eq!(all[0].source, AutomationSource::User);
+        assert_eq!(all[0].schedule.as_deref(), Some("0 8 * * *"));
+        assert!(all[0].prompt.contains("My custom curator prompt"));
+    }
+
+    #[test]
+    fn bundled_with_schedule_is_rejected() {
+        let root = tempdir().unwrap();
+        let user = tempdir().unwrap();
+        let user_dir = user.path().join("automations");
+
+        let assets = [bundled_asset(
+            "scheduled.md",
+            b"---\nschedule: \"0 8 * * *\"\n---\nNope.",
+        )];
+
+        let err = discover_with_sources(&assets, root.path(), &user_dir).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("manual-only"),
+            "expected manual-only error, got: {msg}"
+        );
+        assert!(msg.contains("scheduled"), "expected name in error: {msg}");
+    }
+
+    #[test]
+    fn bundled_invalid_utf8_bails_with_path_context() {
+        let root = tempdir().unwrap();
+        let user = tempdir().unwrap();
+        let user_dir = user.path().join("automations");
+
+        let assets = [bundled_asset("broken.md", b"\xff\xfe not utf8")];
+
+        let err = discover_with_sources(&assets, root.path(), &user_dir).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("broken.md"),
+            "expected relative path in error: {msg}"
+        );
+    }
+
+    #[test]
+    fn duplicate_bundled_names_bail() {
+        let root = tempdir().unwrap();
+        let user = tempdir().unwrap();
+        let user_dir = user.path().join("automations");
+
+        let assets = [
+            bundled_asset("memory-curator.md", b"---\n---\nFirst."),
+            bundled_asset("memory-curator.md", b"---\n---\nSecond."),
+        ];
+
+        let err = discover_with_sources(&assets, root.path(), &user_dir).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Duplicate bundled automation"),
+            "expected duplicate-bundled error: {msg}"
+        );
+    }
+
+    #[test]
+    fn bundled_non_markdown_assets_are_skipped() {
+        let root = tempdir().unwrap();
+        let user = tempdir().unwrap();
+        let user_dir = user.path().join("automations");
+
+        // Simulate a future sidecar file shipped under bundled_automations/ — a README,
+        // a script, or anything that is not a `.md` automation. Discovery must skip it
+        // rather than fail trying to parse it as automation YAML+body.
+        let assets = [
+            bundled_asset("README.txt", b"This is not an automation."),
+            bundled_asset("helpers/util.py", b"print('helper')"),
+            bundled_asset("memory-curator.md", b"---\n---\nReal automation prompt."),
+        ];
+
+        let all = discover_with_sources(&assets, root.path(), &user_dir).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].name, "memory-curator");
+        assert_eq!(all[0].source, AutomationSource::Bundled);
+    }
+
+    #[test]
+    fn shipped_memory_curator_bundled_parses() {
+        let root = tempdir().unwrap();
+        let user = tempdir().unwrap();
+        let user_dir = user.path().join("automations");
+
+        let all = discover_with_sources(
+            zdx_assets::bundled_automation_assets(),
+            root.path(),
+            &user_dir,
+        )
+        .unwrap();
+
+        let curator = all
+            .iter()
+            .find(|a| a.name == "memory-curator")
+            .expect("shipped memory-curator bundled automation should be present");
+
+        assert_eq!(curator.source, AutomationSource::Bundled);
+        assert!(curator.schedule.is_none(), "must be manual-only");
+        assert!(!curator.prompt.is_empty());
+        assert!(curator.prompt.contains("Thread_Search"));
+        assert!(curator.prompt.contains("memory_suggestions"));
     }
 }

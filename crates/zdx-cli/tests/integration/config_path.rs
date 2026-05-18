@@ -155,7 +155,8 @@ fn test_telegram_command_requires_bot_name() {
 }
 
 #[test]
-fn test_automations_list_empty() {
+fn test_automations_list_includes_bundled_memory_curator() {
+    // With no user automations the bundled `memory-curator` is the only entry.
     let dir = tempdir().unwrap();
 
     cargo_bin_cmd!("zdx")
@@ -163,11 +164,14 @@ fn test_automations_list_empty() {
         .args(["automations", "list"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("No automations found."));
+        .stdout(predicate::str::contains(
+            "memory-curator (bundled) - manual",
+        ));
 }
 
 #[test]
-fn test_automations_validate_single_file() {
+fn test_automations_validate_includes_bundled() {
+    // One user automation + the bundled `memory-curator` should validate together.
     let user_home = tempdir().unwrap();
     let automations_dir = user_home.path().join("automations");
     fs::create_dir_all(&automations_dir).unwrap();
@@ -182,8 +186,9 @@ fn test_automations_validate_single_file() {
         .args(["automations", "validate"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Validated 1 automation(s)."))
-        .stdout(predicate::str::contains("morning-report"));
+        .stdout(predicate::str::contains("Validated 2 automation(s)."))
+        .stdout(predicate::str::contains("morning-report"))
+        .stdout(predicate::str::contains("memory-curator"));
 }
 
 #[test]

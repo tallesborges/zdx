@@ -109,3 +109,29 @@ include!(concat!(env!("OUT_DIR"), "/bundled_commands_manifest.rs"));
 pub fn bundled_command_assets() -> &'static [BundledCommandAsset] {
     BUNDLED_COMMAND_ASSETS
 }
+
+// ---------------------------------------------------------------------------
+// Bundled automations (markdown + frontmatter, manual-only)
+// ---------------------------------------------------------------------------
+
+/// A single embedded bundled-automation asset.
+///
+/// Each entry corresponds to a Markdown file under
+/// `crates/zdx-assets/bundled_automations/`. The file stem becomes the
+/// automation name; the bytes are the raw Markdown body (with YAML
+/// frontmatter). Bundled automations are manual-only by contract: they MUST
+/// NOT carry a `schedule` field — the engine rejects bundled automations
+/// with a schedule. Users opt into scheduling by copying the file into
+/// `$ZDX_HOME/automations/<name>.md` with their own `schedule:` value.
+pub struct BundledAutomationAsset {
+    pub relative_path: &'static str,
+    pub bytes: &'static [u8],
+}
+
+include!(concat!(env!("OUT_DIR"), "/bundled_automations_manifest.rs"));
+
+/// Returns the full list of embedded bundled-automation assets.
+#[must_use]
+pub fn bundled_automation_assets() -> &'static [BundledAutomationAsset] {
+    BUNDLED_AUTOMATION_ASSETS
+}

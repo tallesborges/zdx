@@ -45,6 +45,13 @@ pub async fn run(
         match automations::discover(root) {
             Ok(defs) => {
                 for automation in defs {
+                    // Defense in depth: bundled automations are manual-only by parser contract,
+                    // but skip explicitly here so a future parser relaxation does not silently
+                    // start running bundled definitions on the user's daemon.
+                    if automation.source == automations::AutomationSource::Bundled {
+                        continue;
+                    }
+
                     let Some(schedule) = automation.schedule.as_deref() else {
                         continue;
                     };

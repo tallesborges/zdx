@@ -11,14 +11,26 @@ Create and maintain ZDX automation files.
 
 An automation is a headless agent that runs unattended — no human in the loop. It always produces a visible effect (a report, a message, a file, a PR). It must handle errors on its own: retry, degrade gracefully, or report what failed. Every automation is a single markdown file with YAML frontmatter and a prompt body.
 
+## Sources & precedence
+
+Automations come from two sources, discovered together:
+
+- **Bundled** — embedded with ZDX (see `crates/zdx-assets/bundled_automations/`). Bundled automations are **manual-only by contract** — they do not declare a `schedule` field, so the daemon will never run them automatically. Discovery rejects bundled assets with a schedule.
+- **User** — markdown files under `$ZDX_HOME/automations/<name>.md`.
+
+If a user automation has the same file stem as a bundled one, the **user definition shadows the bundled one**. Users opt a bundled automation into the scheduler by copying it into `$ZDX_HOME/automations/<name>.md` and adding a `schedule:` value.
+
+Currently bundled: `memory-curator` (reads recent threads and proposes durable memory items to save — see `bundled_automations/memory-curator.md`).
+
 ## Contract (must follow)
 
-- Keep automations global-only in `$ZDX_HOME/automations/` (usually `$HOME/.zdx/automations/`).
+- Keep user automations in `$ZDX_HOME/automations/` (usually `$HOME/.zdx/automations/`).
 - Treat one file as one automation.
 - Derive automation identity from file stem (no `id` field).
   - Example: `~/.zdx/automations/morning-report.md` → `morning-report`.
 - Require markdown with YAML frontmatter delimited by `---`.
 - Keep prompt body as non-empty markdown after frontmatter.
+- Do not add a `schedule` to a bundled automation; if a user needs scheduling, copy the file into `$ZDX_HOME/automations/` first.
 
 ### Allowed frontmatter keys
 

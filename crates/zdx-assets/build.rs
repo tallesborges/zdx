@@ -24,6 +24,15 @@ fn main() -> io::Result<()> {
         "bundled_commands_manifest.rs",
     )?;
 
+    generate_manifest(
+        &manifest_dir,
+        &out_dir,
+        "bundled_automations",
+        "BUNDLED_AUTOMATION_ASSETS",
+        "BundledAutomationAsset",
+        "bundled_automations_manifest.rs",
+    )?;
+
     Ok(())
 }
 
