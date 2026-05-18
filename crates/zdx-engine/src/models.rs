@@ -120,6 +120,137 @@ pub fn model_supports_reasoning(id: &str) -> bool {
     ModelOption::find_by_id(id).is_none_or(|model| model.capabilities.reasoning)
 }
 
+/// Returns the bare model id (with any leading `provider:` prefix stripped).
+///
+/// `provider` should match the `ModelOption::provider` field. If the id does
+/// not actually start with `<provider>:`, the id is returned unchanged.
+pub fn bare_model_id<'a>(provider: &str, id: &'a str) -> &'a str {
+    let prefix = format!("{provider}:");
+    id.strip_prefix(prefix.as_str()).unwrap_or(id)
+}
+
+/// Returns true if a model's bare id matches any pattern in the provider's
+/// `[providers.X].models` list. An empty pattern list means "no filter"
+/// (matches anything) so existing configs without an explicit allow-list
+/// keep showing every registered model.
+///
+/// Patterns may use `*` as a wildcard. Matching is case-insensitive.
+pub fn model_id_matches_patterns(bare_id: &str, patterns: &[String]) -> bool {
+    if patterns.is_empty() {
+        return true;
+    }
+    patterns.iter().any(|pattern| {
+        let pattern = pattern.trim();
+        !pattern.is_empty() && wildcard_match(pattern, bare_id)
+    })
+}
+
+/// Glob match with `*` wildcards (any-run). Case-insensitive ASCII compare.
+pub fn wildcard_match(pattern: &str, text: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+
+    let p = pattern.to_ascii_lowercase();
+    let t = text.to_ascii_lowercase();
+    let p = p.as_bytes();
+    let t = t.as_bytes();
+    let mut p_idx = 0;
+    let mut t_idx = 0;
+    let mut star_idx: Option<usize> = None;
+    let mut match_idx = 0;
+
+    while t_idx < t.len() {
+        if p_idx < p.len() && p[p_idx] == t[t_idx] {
+            p_idx += 1;
+            t_idx += 1;
+            continue;
+        }
+
+        if p_idx < p.len() && p[p_idx] == b'*' {
+            star_idx = Some(p_idx);
+            p_idx += 1;
+            match_idx = t_idx;
+            continue;
+        }
+
+        if let Some(star) = star_idx {
+            p_idx = star + 1;
+            match_idx += 1;
+            t_idx = match_idx;
+            continue;
+        }
+
+        return false;
+    }
+
+    while p_idx < p.len() && p[p_idx] == b'*' {
+        p_idx += 1;
+    }
+
+    p_idx == p.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bare_model_id, model_id_matches_patterns, wildcard_match};
+
+    #[test]
+    fn wildcard_match_exact_and_star() {
+        assert!(wildcard_match("mimo-v2.5", "mimo-v2.5"));
+        assert!(wildcard_match("*", "anything"));
+        assert!(wildcard_match("gpt-5*", "gpt-5.5"));
+        assert!(wildcard_match("*:exacto", "claude-sonnet-4-5:exacto"));
+        assert!(!wildcard_match("mimo-v2.5", "mimo-v2.5-pro"));
+        assert!(!wildcard_match("gpt-5*", "claude-sonnet"));
+    }
+
+    #[test]
+    fn wildcard_match_is_case_insensitive() {
+        assert!(wildcard_match("MiMo-V2.5", "mimo-v2.5"));
+    }
+
+    #[test]
+    fn bare_model_id_strips_provider_prefix() {
+        assert_eq!(
+            bare_model_id("xiaomi-plan", "xiaomi-plan:mimo-v2.5"),
+            "mimo-v2.5"
+        );
+        assert_eq!(
+            bare_model_id("openrouter", "openrouter:xiaomi/mimo-v2-flash:free"),
+            "xiaomi/mimo-v2-flash:free"
+        );
+        // Non-matching prefix returns the original id unchanged.
+        assert_eq!(bare_model_id("xiaomi", "openai:gpt-5"), "openai:gpt-5");
+    }
+
+    #[test]
+    fn model_id_matches_patterns_empty_list_matches_everything() {
+        assert!(model_id_matches_patterns("mimo-v2.5-pro", &[]));
+    }
+
+    #[test]
+    fn model_id_matches_patterns_literal_and_wildcard() {
+        let patterns = vec!["mimo-v2.5-pro".to_string(), "mimo-v2.5".to_string()];
+        assert!(model_id_matches_patterns("mimo-v2.5-pro", &patterns));
+        assert!(model_id_matches_patterns("mimo-v2.5", &patterns));
+        assert!(!model_id_matches_patterns("mimo-v2-flash", &patterns));
+
+        let wildcard = vec!["*:exacto".to_string()];
+        assert!(model_id_matches_patterns("anything:exacto", &wildcard));
+        assert!(!model_id_matches_patterns("anything:free", &wildcard));
+    }
+
+    #[test]
+    fn model_id_matches_patterns_ignores_blank_entries() {
+        let patterns = vec![String::new(), "   ".to_string()];
+        // Treated as "no usable patterns": only blank entries should not silently match
+        // because the empty-list rule already covers the "no filter" case. Blank-only
+        // lists are treated like an empty list.
+        assert!(!model_id_matches_patterns("mimo-v2.5", &patterns));
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct ModelsFile {
     #[serde(rename = "model")]
