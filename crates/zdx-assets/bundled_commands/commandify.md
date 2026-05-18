@@ -7,7 +7,6 @@ Rules:
 - The conversation history above is your source material. Pay extra attention to outputs from `/prompt-builder` and to messages where the user refined or corrected the prompt — those are usually the thing worth saving.
 - If the body to save is ambiguous (multiple candidate prompts in the thread), ask once which one before drafting.
 - Commands are user-fired at a chosen moment. If the workflow is fundamentally pattern-recognized and should auto-invoke, suggest a skill via `/skillify` instead and stop.
-- Built-ins always win. Reject any name that collides with a built-in command or alias and tell the user why.
 - Never overwrite an existing command file silently.
 - Do not invent a description that isn't supported by the prompt body.
 - Prefer the narrowest scope that matches the intended reuse.
@@ -63,7 +62,7 @@ Drafting rules:
 - Do not strip frontmatter the user already wrote into the body. If the body already starts with `---`, use it as-is and only adjust the description if needed.
 
 Phase 4 — Validate, save, confirm:
-- Validate the name: must match `^[a-z0-9][a-z0-9-]*$` and must not collide with any built-in slash command or alias defined in `crates/zdx-tui/src/common/commands.rs` (read that file to check). If invalid, stop and explain.
+- Validate the name shape: must match `^[a-z0-9][a-z0-9-]*$`. If invalid, stop and explain.
 - Resolve the selected target path before saving:
   - Current directory/project: `./.zdx/commands/<name>.md`
   - Shared ancestor: `<selected-ancestor>/.zdx/commands/<name>.md`
