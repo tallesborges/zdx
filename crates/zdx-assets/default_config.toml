@@ -182,7 +182,17 @@ fast_mode = false
 enabled = true
 # api_key = "sk-..."  # Overrides XIAOMI_API_KEY env var
 # base_url = "https://api.xiaomimimo.com/v1"
-models = ["mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-flash", "mimo-v2-pro", "mimo-v2-omni"]
+models = ["mimo-v2.5-pro", "mimo-v2.5"]
+fast_mode = false
+
+[providers.xiaomi_plan]
+# Xiaomi MiMo Token Plan (fixed-fee subscription, `tp-` API keys).
+# After subscribing, paste your exclusive Base URL + API Key from
+# https://platform.xiaomimimo.com/#/console/plan-manage or use the defaults below.
+enabled = false
+# api_key = "tp-..."  # Overrides XIAOMI_PLAN_API_KEY env var
+# base_url = "https://token-plan-cn.xiaomimimo.com/v1"
+models = ["mimo-v2.5-pro", "mimo-v2.5"]
 fast_mode = false
 
 [providers.gemini]

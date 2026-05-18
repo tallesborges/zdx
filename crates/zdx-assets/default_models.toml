@@ -716,6 +716,91 @@ input_images = true
 output_limit = 128000
 
 [[model]]
+id = "xiaomi-plan:mimo-v2.5-pro"
+provider = "xiaomi-plan"
+display_name = "MiMo-V2.5-Pro (Plan)"
+context_limit = 1048576
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = false
+output_limit = 128000
+
+[[model]]
+id = "xiaomi-plan:mimo-v2.5"
+provider = "xiaomi-plan"
+display_name = "MiMo-V2.5 (Plan)"
+context_limit = 262144
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
+[[model]]
+id = "xiaomi-plan:mimo-v2-flash"
+provider = "xiaomi-plan"
+display_name = "MiMo-V2-Flash (Plan)"
+context_limit = 256000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = false
+output_limit = 64000
+
+[[model]]
+id = "xiaomi-plan:mimo-v2-pro"
+provider = "xiaomi-plan"
+display_name = "MiMo-V2-Pro (Plan)"
+context_limit = 1000000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = false
+output_limit = 128000
+
+[[model]]
+id = "xiaomi-plan:mimo-v2-omni"
+provider = "xiaomi-plan"
+display_name = "MiMo-V2-Omni (Plan)"
+context_limit = 256000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
+[[model]]
 id = "gemini:gemini-3.1-pro-preview-customtools"
 provider = "gemini"
 display_name = "Gemini 3.1 Pro Preview Custom Tools"

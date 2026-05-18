@@ -35,7 +35,8 @@ use crate::providers::openai::{OpenAIClient, OpenAICodexClient, OpenAICodexConfi
 use crate::providers::openrouter::{OpenRouterClient, OpenRouterConfig};
 use crate::providers::stepfun::{StepfunClient, StepfunConfig};
 use crate::providers::xai::{XaiClient, XaiConfig};
-use crate::providers::xiaomi::{XiomiClient, XiomiConfig};
+use crate::providers::xiaomi::{XiaomiClient, XiaomiConfig};
+use crate::providers::xiaomi_plan::{XiaomiPlanClient, XiaomiPlanConfig};
 use crate::providers::zai::{ZaiClient, ZaiConfig};
 use crate::providers::zen::{ZenClient, ZenConfig};
 use crate::providers::{
@@ -163,7 +164,8 @@ enum ProviderClient {
     OpenAI(OpenAIClient),
     OpenRouter(OpenRouterClient),
     DeepSeek(DeepSeekClient),
-    Xiomi(XiomiClient),
+    Xiaomi(XiaomiClient),
+    XiaomiPlan(XiaomiPlanClient),
     Mistral(MistralClient),
     Moonshot(MoonshotClient),
     Stepfun(StepfunClient),
@@ -202,7 +204,10 @@ impl ProviderClient {
             ProviderClient::DeepSeek(client) => {
                 client.send_messages_stream(messages, tools, system).await
             }
-            ProviderClient::Xiomi(client) => {
+            ProviderClient::Xiaomi(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::XiaomiPlan(client) => {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::Mistral(client) => {
@@ -1293,7 +1298,10 @@ fn build_provider_client(
             cache_key,
             thinking_enabled,
         ),
-        ProviderKind::Xiomi => build_xiaomi_client(config, options.model, thinking_enabled),
+        ProviderKind::Xiaomi => build_xiaomi_client(config, options.model, thinking_enabled),
+        ProviderKind::XiaomiPlan => {
+            build_xiaomi_plan_client(config, options.model, thinking_enabled)
+        }
         ProviderKind::Mistral => {
             build_mistral_client(config, options.model, cache_key, thinking_enabled)
         }
@@ -1442,12 +1450,29 @@ fn build_xiaomi_client(
     model: &str,
     thinking_enabled: bool,
 ) -> Result<ProviderClient> {
-    Ok(ProviderClient::Xiomi(XiomiClient::new(
-        XiomiConfig::from_env(
+    Ok(ProviderClient::Xiaomi(XiaomiClient::new(
+        XiaomiConfig::from_env(
             model.to_string(),
             config.max_tokens,
             config.providers.xiaomi.effective_base_url(),
             config.providers.xiaomi.effective_api_key(),
+            None,
+            thinking_enabled,
+        )?,
+    )))
+}
+
+fn build_xiaomi_plan_client(
+    config: &Config,
+    model: &str,
+    thinking_enabled: bool,
+) -> Result<ProviderClient> {
+    Ok(ProviderClient::XiaomiPlan(XiaomiPlanClient::new(
+        XiaomiPlanConfig::from_env(
+            model.to_string(),
+            config.max_tokens,
+            config.providers.xiaomi_plan.effective_base_url(),
+            config.providers.xiaomi_plan.effective_api_key(),
             None,
             thinking_enabled,
         )?,

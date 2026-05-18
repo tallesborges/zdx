@@ -1243,6 +1243,8 @@ pub struct ProvidersConfig {
     pub stepfun: ProviderConfig,
     #[serde(default = "default_xiaomi_provider")]
     pub xiaomi: ProviderConfig,
+    #[serde(default = "default_xiaomi_plan_provider")]
+    pub xiaomi_plan: ProviderConfig,
     #[serde(default = "default_gemini_provider")]
     pub gemini: ProviderConfig,
     #[serde(default = "default_gemini_cli_provider")]
@@ -1278,7 +1280,8 @@ impl ProvidersConfig {
             id if id == ProviderKind::DeepSeek.id() => &self.deepseek,
             id if id == ProviderKind::Moonshot.id() => &self.moonshot,
             id if id == ProviderKind::Stepfun.id() => &self.stepfun,
-            id if id == ProviderKind::Xiomi.id() => &self.xiaomi,
+            id if id == ProviderKind::Xiaomi.id() => &self.xiaomi,
+            id if id == ProviderKind::XiaomiPlan.id() => &self.xiaomi_plan,
             id if id == ProviderKind::Gemini.id() => &self.gemini,
             id if id == ProviderKind::GeminiCli.id() => &self.gemini_cli,
             id if id == ProviderKind::Zen.id() => &self.zen,
@@ -1305,7 +1308,8 @@ impl ProvidersConfig {
             ProviderKind::Mistral => &self.mistral,
             ProviderKind::Moonshot => &self.moonshot,
             ProviderKind::Stepfun => &self.stepfun,
-            ProviderKind::Xiomi => &self.xiaomi,
+            ProviderKind::Xiaomi => &self.xiaomi,
+            ProviderKind::XiaomiPlan => &self.xiaomi_plan,
             ProviderKind::Gemini => &self.gemini,
             ProviderKind::GeminiCli => &self.gemini_cli,
             ProviderKind::Zen => &self.zen,
@@ -1330,7 +1334,8 @@ impl ProvidersConfig {
             ProviderKind::Mistral => &mut self.mistral,
             ProviderKind::Moonshot => &mut self.moonshot,
             ProviderKind::Stepfun => &mut self.stepfun,
-            ProviderKind::Xiomi => &mut self.xiaomi,
+            ProviderKind::Xiaomi => &mut self.xiaomi,
+            ProviderKind::XiaomiPlan => &mut self.xiaomi_plan,
             ProviderKind::Gemini => &mut self.gemini,
             ProviderKind::GeminiCli => &mut self.gemini_cli,
             ProviderKind::Zen => &mut self.zen,
@@ -1364,6 +1369,7 @@ impl Default for ProvidersConfig {
             moonshot: default_moonshot_provider(),
             stepfun: default_stepfun_provider(),
             xiaomi: default_xiaomi_provider(),
+            xiaomi_plan: default_xiaomi_plan_provider(),
             mistral: default_mistral_provider(),
             zen: default_zen_provider(),
             apiyi: default_apiyi_provider(),
@@ -1475,13 +1481,15 @@ fn default_stepfun_provider() -> ProviderConfig {
 fn default_xiaomi_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec![
-            "mimo-v2.5-pro".to_string(),
-            "mimo-v2.5".to_string(),
-            "mimo-v2-flash".to_string(),
-            "mimo-v2-pro".to_string(),
-            "mimo-v2-omni".to_string(),
-        ],
+        models: vec!["mimo-v2.5-pro".to_string(), "mimo-v2.5".to_string()],
+        ..Default::default()
+    }
+}
+
+fn default_xiaomi_plan_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(false),
+        models: vec!["mimo-v2.5-pro".to_string(), "mimo-v2.5".to_string()],
         ..Default::default()
     }
 }

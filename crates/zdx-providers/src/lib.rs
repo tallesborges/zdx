@@ -19,6 +19,7 @@ pub mod shared;
 pub mod stepfun;
 pub mod xai;
 pub mod xiaomi;
+pub mod xiaomi_plan;
 pub mod zai;
 pub mod zen;
 
@@ -39,7 +40,8 @@ pub enum ProviderKind {
     OpenAI,
     OpenRouter,
     DeepSeek,
-    Xiomi,
+    Xiaomi,
+    XiaomiPlan,
     Mistral,
     Moonshot,
     Stepfun,
@@ -75,7 +77,8 @@ impl ProviderKind {
             ProviderKind::OpenAI,
             ProviderKind::OpenRouter,
             ProviderKind::DeepSeek,
-            ProviderKind::Xiomi,
+            ProviderKind::Xiaomi,
+            ProviderKind::XiaomiPlan,
             ProviderKind::Mistral,
             ProviderKind::Moonshot,
             ProviderKind::Stepfun,
@@ -98,7 +101,8 @@ impl ProviderKind {
             ProviderKind::OpenAI => "openai",
             ProviderKind::OpenRouter => "openrouter",
             ProviderKind::DeepSeek => "deepseek",
-            ProviderKind::Xiomi => "xiaomi",
+            ProviderKind::Xiaomi => "xiaomi",
+            ProviderKind::XiaomiPlan => "xiaomi-plan",
             ProviderKind::Mistral => "mistral",
             ProviderKind::Moonshot => "moonshot",
             ProviderKind::Stepfun => "stepfun",
@@ -121,7 +125,8 @@ impl ProviderKind {
             "openai" => Some(ProviderKind::OpenAI),
             "openrouter" => Some(ProviderKind::OpenRouter),
             "deepseek" => Some(ProviderKind::DeepSeek),
-            "xiaomi" => Some(ProviderKind::Xiomi),
+            "xiaomi" => Some(ProviderKind::Xiaomi),
+            "xiaomi-plan" | "mimo-plan" => Some(ProviderKind::XiaomiPlan),
             "mistral" => Some(ProviderKind::Mistral),
             "moonshot" => Some(ProviderKind::Moonshot),
             "stepfun" => Some(ProviderKind::Stepfun),
@@ -145,7 +150,8 @@ impl ProviderKind {
             ProviderKind::OpenAI => "OpenAI",
             ProviderKind::OpenRouter => "OpenRouter",
             ProviderKind::DeepSeek => "DeepSeek",
-            ProviderKind::Xiomi => "Xiomi",
+            ProviderKind::Xiaomi => "Xiaomi MiMo",
+            ProviderKind::XiaomiPlan => "Xiaomi MiMo Plan",
             ProviderKind::Mistral => "Mistral",
             ProviderKind::Moonshot => "Moonshot",
             ProviderKind::Stepfun => "StepFun",
@@ -178,7 +184,8 @@ impl ProviderKind {
             ProviderKind::OpenAI => Some("OPENAI_API_KEY"),
             ProviderKind::OpenRouter => Some("OPENROUTER_API_KEY"),
             ProviderKind::DeepSeek => Some("DEEPSEEK_API_KEY"),
-            ProviderKind::Xiomi => Some("XIAOMI_API_KEY"),
+            ProviderKind::Xiaomi => Some("XIAOMI_API_KEY"),
+            ProviderKind::XiaomiPlan => Some("XIAOMI_PLAN_API_KEY"),
             ProviderKind::Mistral => Some("MISTRAL_API_KEY"),
             ProviderKind::Moonshot => Some("MOONSHOT_API_KEY"),
             ProviderKind::Stepfun => Some("STEPFUN_API_KEY"),
@@ -204,7 +211,8 @@ impl ProviderKind {
             Self::Moonshot => "https://api.moonshot.ai/v1",
             Self::Stepfun => "https://api.stepfun.ai/v1",
             Self::Gemini | Self::GeminiCli => "https://generativelanguage.googleapis.com/v1beta",
-            Self::Xiomi => "https://api.xiaomimimo.com/v1",
+            Self::Xiaomi => "https://api.xiaomimimo.com/v1",
+            Self::XiaomiPlan => "https://token-plan-cn.xiaomimimo.com/v1",
             Self::Zen => "https://opencode.ai/zen",
             Self::Apiyi => "https://api.apiyi.com",
             Self::Minimax => "https://api.minimax.io/v1",
@@ -225,7 +233,8 @@ impl ProviderKind {
             Self::Moonshot => Some("MOONSHOT_BASE_URL"),
             Self::Stepfun => Some("STEPFUN_BASE_URL"),
             Self::Gemini | Self::GeminiCli => Some("GEMINI_BASE_URL"),
-            Self::Xiomi => Some("XIAOMI_BASE_URL"),
+            Self::Xiaomi => Some("XIAOMI_BASE_URL"),
+            Self::XiaomiPlan => Some("XIAOMI_PLAN_BASE_URL"),
             Self::Zen => Some("ZEN_BASE_URL"),
             Self::Apiyi => Some("APIYI_BASE_URL"),
             Self::Minimax => Some("MINIMAX_BASE_URL"),
@@ -268,7 +277,8 @@ impl ProviderKind {
             | ProviderKind::OpenAI
             | ProviderKind::OpenRouter
             | ProviderKind::DeepSeek
-            | ProviderKind::Xiomi
+            | ProviderKind::Xiaomi
+            | ProviderKind::XiaomiPlan
             | ProviderKind::Mistral
             | ProviderKind::Moonshot
             | ProviderKind::Stepfun
@@ -328,7 +338,8 @@ fn parse_provider_prefix(model: &str) -> Option<(ProviderKind, &str)> {
                 "openai" | "openai-api" => ProviderKind::OpenAI,
                 "openrouter" => ProviderKind::OpenRouter,
                 "deepseek" => ProviderKind::DeepSeek,
-                "xiaomi" => ProviderKind::Xiomi,
+                "xiaomi" => ProviderKind::Xiaomi,
+                "xiaomi-plan" | "mimo-plan" => ProviderKind::XiaomiPlan,
                 "mistral" => ProviderKind::Mistral,
                 "moonshot" | "kimi" => ProviderKind::Moonshot,
                 "stepfun" => ProviderKind::Stepfun,

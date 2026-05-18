@@ -801,7 +801,7 @@ fn lookup_openrouter_model(
 ) -> Option<ModelCandidate> {
     // Map our provider IDs to OpenRouter vendor prefixes
     let vendor = match provider_id {
-        "xiaomi" => "xiaomi",
+        "xiaomi" | "xiaomi-plan" => "xiaomi",
         "minimax" => "minimax",
         "xai" => "x-ai",
         "anthropic" | "claude-cli" => "anthropic",
