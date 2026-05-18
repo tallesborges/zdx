@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use zdx_engine::config;
+use zdx_engine::models::wildcard_match;
 
 const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
@@ -959,51 +960,6 @@ fn matches_pattern(pattern: &str, candidate: &ModelCandidate) -> bool {
         .match_targets
         .iter()
         .any(|target| wildcard_match(pattern, target))
-}
-
-fn wildcard_match(pattern: &str, text: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-
-    let p = pattern.to_ascii_lowercase();
-    let t = text.to_ascii_lowercase();
-    let p = p.as_bytes();
-    let t = t.as_bytes();
-    let mut p_idx = 0;
-    let mut t_idx = 0;
-    let mut star_idx = None;
-    let mut match_idx = 0;
-
-    while t_idx < t.len() {
-        if p_idx < p.len() && p[p_idx] == t[t_idx] {
-            p_idx += 1;
-            t_idx += 1;
-            continue;
-        }
-
-        if p_idx < p.len() && p[p_idx] == b'*' {
-            star_idx = Some(p_idx);
-            p_idx += 1;
-            match_idx = t_idx;
-            continue;
-        }
-
-        if let Some(star) = star_idx {
-            p_idx = star + 1;
-            match_idx += 1;
-            t_idx = match_idx;
-            continue;
-        }
-
-        return false;
-    }
-
-    while p_idx < p.len() && p[p_idx] == b'*' {
-        p_idx += 1;
-    }
-
-    p_idx == p.len()
 }
 
 fn format_display_name(provider_id: &str, name: &str) -> String {
