@@ -245,6 +245,7 @@ struct PromptTemplateVars {
     specialized_capabilities: Vec<PromptTemplateCapability>,
     memory_collections: Vec<PromptTemplateMemoryCollection>,
     cwd: String,
+    cwd_tree: String,
     date: String,
 }
 
@@ -383,6 +384,105 @@ fn detect_git_repo(cwd: &Path) -> (String, String) {
     (toplevel, branch)
 }
 
+/// Maximum depth (including root) for the cwd directory snapshot injected into
+/// the system prompt's `<environment>` block. Depth 2 yields immediate children
+/// plus their direct contents, matching Kimi's `KIMI_WORK_DIR_LS`.
+const CWD_TREE_MAX_DEPTH: usize = 2;
+/// Per-directory cap for entries listed in the cwd snapshot. Excess entries
+/// collapse into a single `... and N more` line.
+const CWD_TREE_MAX_ENTRIES_PER_DIR: usize = 30;
+/// Hard byte cap for the rendered tree. Keeps the prompt bounded on large
+/// workspaces.
+const CWD_TREE_MAX_TOTAL_BYTES: usize = 4096;
+
+/// Builds a compact, gitignore-aware directory snapshot of the workspace root
+/// for inclusion in the system prompt's `<environment>` block.
+///
+/// Depth-limited to [`CWD_TREE_MAX_DEPTH`], per-directory entries capped by
+/// [`CWD_TREE_MAX_ENTRIES_PER_DIR`], and total output capped by
+/// [`CWD_TREE_MAX_TOTAL_BYTES`]. Returns an empty string on walk failure so
+/// the template can render the block conditionally.
+fn build_cwd_tree(root: &Path) -> String {
+    use std::collections::BTreeMap;
+
+    use ignore::WalkBuilder;
+
+    let walker = WalkBuilder::new(root)
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(false)
+        .require_git(false)
+        .max_depth(Some(CWD_TREE_MAX_DEPTH))
+        .build();
+
+    let mut by_parent: BTreeMap<PathBuf, Vec<(String, bool)>> = BTreeMap::new();
+    for entry in walker.flatten() {
+        let path = entry.path();
+        if path == root {
+            continue;
+        }
+        let Some(parent) = path.parent() else {
+            continue;
+        };
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let is_dir = entry
+            .file_type()
+            .map_or_else(|| path.is_dir(), |ft| ft.is_dir());
+        by_parent
+            .entry(parent.to_path_buf())
+            .or_default()
+            .push((name.to_string(), is_dir));
+    }
+
+    let mut out = String::new();
+    render_cwd_tree(root, 0, &by_parent, &mut out);
+    out.trim_end().to_string()
+}
+
+fn render_cwd_tree(
+    dir: &Path,
+    indent: usize,
+    by_parent: &std::collections::BTreeMap<PathBuf, Vec<(String, bool)>>,
+    out: &mut String,
+) {
+    use std::fmt::Write as _;
+    let Some(children) = by_parent.get(dir) else {
+        return;
+    };
+    let mut children = children.clone();
+    // Directories first, then files; each group sorted by name.
+    children.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    let total = children.len();
+    let shown = total.min(CWD_TREE_MAX_ENTRIES_PER_DIR);
+    let pad = "  ".repeat(indent);
+
+    for (name, is_dir) in &children[..shown] {
+        if out.len() >= CWD_TREE_MAX_TOTAL_BYTES {
+            out.push_str(&pad);
+            out.push_str("... (truncated)\n");
+            return;
+        }
+        out.push_str(&pad);
+        out.push_str(name);
+        if *is_dir {
+            out.push('/');
+            out.push('\n');
+            render_cwd_tree(&dir.join(name), indent + 1, by_parent, out);
+        } else {
+            out.push('\n');
+        }
+    }
+
+    if total > shown {
+        out.push_str(&pad);
+        let _ = writeln!(out, "... and {} more", total - shown);
+    }
+}
+
 fn build_prompt_template_vars(
     root: &Path,
     model: &str,
@@ -455,6 +555,7 @@ fn build_prompt_template_vars(
         specialized_capabilities: sections.specialized_capabilities.to_vec(),
         memory_collections: prompt_template_memory_collections(),
         cwd: root.display().to_string(),
+        cwd_tree: build_cwd_tree(&canonical_root),
         date: Utc::now().format("%Y-%m-%d").to_string(),
     }
 }
@@ -1292,6 +1393,78 @@ mod tests {
     use crate::skills::SkillSource;
 
     #[test]
+    fn test_build_cwd_tree_lists_two_levels_sorted_dirs_first() {
+        let root = tempdir().unwrap();
+        let base = root.path();
+        fs::create_dir(base.join("src")).unwrap();
+        fs::create_dir(base.join("docs")).unwrap();
+        fs::write(base.join("README.md"), b"# r").unwrap();
+        fs::write(base.join("src").join("lib.rs"), b"fn main(){}").unwrap();
+        fs::write(base.join("docs").join("guide.md"), b"# g").unwrap();
+
+        let canonical = base.canonicalize().unwrap();
+        let tree = build_cwd_tree(&canonical);
+
+        // Dirs listed first (alphabetically), then files.
+        let docs_idx = tree.find("docs/").expect("docs/ missing");
+        let src_idx = tree.find("src/").expect("src/ missing");
+        let readme_idx = tree.find("README.md").expect("README.md missing");
+        assert!(docs_idx < src_idx, "docs/ should sort before src/: {tree}");
+        assert!(
+            src_idx < readme_idx,
+            "directories should appear before files: {tree}"
+        );
+        // Depth-2 children are listed with indentation.
+        assert!(
+            tree.contains("  lib.rs"),
+            "depth-2 child lib.rs should be indented: {tree}"
+        );
+        assert!(
+            tree.contains("  guide.md"),
+            "depth-2 child guide.md should be indented: {tree}"
+        );
+    }
+
+    #[test]
+    fn test_build_cwd_tree_respects_gitignore() {
+        let root = tempdir().unwrap();
+        let base = root.path();
+        fs::write(base.join(".gitignore"), b"ignored/\n").unwrap();
+        fs::create_dir(base.join("ignored")).unwrap();
+        fs::write(base.join("ignored").join("secret.txt"), b"x").unwrap();
+        fs::create_dir(base.join("kept")).unwrap();
+        fs::write(base.join("kept").join("ok.txt"), b"y").unwrap();
+
+        let canonical = base.canonicalize().unwrap();
+        let tree = build_cwd_tree(&canonical);
+
+        assert!(tree.contains("kept/"), "kept/ should be present: {tree}");
+        assert!(
+            !tree.contains("ignored/"),
+            "ignored/ should be filtered: {tree}"
+        );
+        assert!(
+            !tree.contains("secret.txt"),
+            "ignored contents should not leak: {tree}"
+        );
+    }
+
+    #[test]
+    fn test_build_cwd_tree_collapses_excess_entries() {
+        let root = tempdir().unwrap();
+        let base = root.path();
+        for i in 0..(CWD_TREE_MAX_ENTRIES_PER_DIR + 5) {
+            fs::write(base.join(format!("f{i:03}.txt")), b"x").unwrap();
+        }
+        let canonical = base.canonicalize().unwrap();
+        let tree = build_cwd_tree(&canonical);
+        assert!(
+            tree.contains("... and 5 more"),
+            "should collapse 5 extra entries: {tree}"
+        );
+    }
+
+    #[test]
     fn test_collect_agents_paths_includes_zdx_home() {
         let zdx_home = tempdir().unwrap();
         let root = tempdir().unwrap();
@@ -2080,8 +2253,8 @@ mod tests {
                 .unwrap()
                 .unwrap();
 
-        assert!(!rendered.contains("### How to use memory"));
-        assert!(rendered.contains("### When to consult memory"));
+        assert!(!rendered.contains("## How to use memory"));
+        assert!(rendered.contains("## When to consult memory"));
         assert!(rendered.contains(
             "For any memory-related task, the first step is to read the `memory` skill `SKILL.md`."
         ));
@@ -2091,12 +2264,12 @@ mod tests {
         assert!(rendered.contains(
             "If the answer is more likely to live in a connected live system, SHOULD use the corresponding skill instead of memory"
         ));
-        assert!(rendered.contains("### Saving memory"));
+        assert!(rendered.contains("## Saving memory"));
         assert!(
             rendered
                 .contains("If the user explicitly says \"remember X\", MUST save it immediately.")
         );
-        assert!(!rendered.contains("### Memory index rules"));
+        assert!(!rendered.contains("## Memory index rules"));
         assert!(!rendered.contains(
             "Use the normal file tools (for example `read`, `grep`, and `glob`) to inspect memory files."
         ));
@@ -2113,15 +2286,15 @@ mod tests {
             "Skills are instruction files: read the `SKILL.md`, then follow it with normal"
         ));
 
-        let skills_pos = rendered.find("## Skills").unwrap();
-        let memory_pos = rendered.find("## Memory").unwrap();
+        let skills_pos = rendered.find("# Skills").unwrap();
+        let memory_pos = rendered.find("# Memory").unwrap();
         assert!(skills_pos < memory_pos);
 
         let memory_skill_pos = rendered
             .find("For any memory-related task, the first step is to read the `memory` skill `SKILL.md`.")
             .unwrap();
-        let when_to_consult_pos = rendered.find("### When to consult memory").unwrap();
-        let saving_memory_pos = rendered.find("### Saving memory").unwrap();
+        let when_to_consult_pos = rendered.find("## When to consult memory").unwrap();
+        let saving_memory_pos = rendered.find("## Saving memory").unwrap();
         let memory_index_pos = rendered.find("<memory_index>").unwrap();
         assert!(memory_skill_pos < when_to_consult_pos);
         assert!(when_to_consult_pos < saving_memory_pos);
@@ -2150,7 +2323,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
 
-        assert!(rendered.contains("## Searchable Memory Collections"));
+        assert!(rendered.contains("# Searchable Memory Collections"));
         assert!(rendered.contains("`zdx-threads`"));
         assert!(rendered.contains("`zdx-notes`"));
         assert!(rendered.contains("`zdx-calendar`"));
@@ -2351,8 +2524,8 @@ mod tests {
         assert!(prompt.contains("Current date:"));
         assert!(prompt.contains(&format!("Operating system: {}", std::env::consts::OS)));
         assert!(prompt.contains(&format!(" on {}", std::env::consts::ARCH)));
-        assert!(prompt.contains("### Path Resolution"));
-        assert!(prompt.contains("### Parallel Tool Use"));
+        assert!(prompt.contains("## Path Resolution"));
+        assert!(prompt.contains("## Parallel Tool Use"));
         assert!(
             prompt.contains("The following runtime environment variables are especially relevant:")
         );
@@ -2377,7 +2550,7 @@ mod tests {
             "Relative paths passed to tools still resolve from the current working directory; convert any source-relative path before calling a tool."
         ));
         assert!(prompt.contains("Base prompt"));
-        assert!(prompt.contains("## Project Instructions"));
+        assert!(prompt.contains("# Project Instructions"));
         assert!(prompt.contains(
             "Project-instruction blocks are source-labeled by their `## /path/to/AGENTS.md` or `## /path/to/CLAUDE.md` heading; apply the Path Resolution rules unless that file defines a different base for its own relative references."
         ));
@@ -2462,7 +2635,7 @@ mod tests {
         .unwrap_or_default();
 
         assert!(!rendered.contains("<memory_index>"));
-        assert!(!rendered.contains("## Memory"));
+        assert!(!rendered.contains("# Memory"));
     }
 
     #[test]
@@ -2495,7 +2668,7 @@ mod tests {
         let prompt = effective.prompt.unwrap_or_default();
 
         assert!(prompt.contains("Telegram output rules"));
-        assert!(prompt.contains("## Runtime Layers"));
+        assert!(prompt.contains("# Runtime Layers"));
     }
 
     #[test]
