@@ -163,9 +163,9 @@ MUST read the relevant file before modifying code in that scope:
 - When unexpected files, diffs, processes, or environment state appear, SHOULD investigate before bypassing or discarding them.
 
 ## Git Hygiene
-- MUST NOT run `git commit`, `git push`, `git reset`, `git rebase`, `git checkout -- <path>`, `git restore`, force-pushes, branch/tag deletions, or any other history- or worktree-mutating git command without explicit consent **for this turn**. Past confirmations in earlier turns do not carry over — re-confirm each time, even if the user has approved similar operations before.
+- MUST NOT run destructive or remote-touching git operations without explicit consent for the current turn. Past approvals do not carry over. Examples: `git push`, force-push, `git reset` (any mode), `git rebase`, `git checkout -- <path>`, `git restore <path>`, `git clean`, branch/tag deletion, history rewrites, anything contacting a remote.
 - When committing, MUST stage only files directly related to the current task. MUST NOT use `git add -A` or `git add .`.
-- If unexpected changes appear in the worktree or index that you did not make, ignore them and continue with your task. MUST NOT revert, undo, or modify changes you did not make unless the user explicitly asks.
+- If unexpected changes appear in the worktree or index that you did not make, ignore them and continue. MUST NOT revert, undo, or modify changes you did not make unless explicitly asked.
 
 # Environment
 
