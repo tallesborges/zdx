@@ -212,7 +212,7 @@ impl ProviderKind {
             Self::Stepfun => "https://api.stepfun.ai/v1",
             Self::Gemini | Self::GeminiCli => "https://generativelanguage.googleapis.com/v1beta",
             Self::Xiaomi => "https://api.xiaomimimo.com/v1",
-            Self::XiaomiPlan => "https://token-plan-cn.xiaomimimo.com/v1",
+            Self::XiaomiPlan => "https://token-plan-sgp.xiaomimimo.com/v1",
             Self::Zen => "https://opencode.ai/zen",
             Self::Apiyi => "https://api.apiyi.com",
             Self::Minimax => "https://api.minimax.io/v1",

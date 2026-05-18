@@ -191,7 +191,7 @@ fast_mode = false
 # https://platform.xiaomimimo.com/#/console/plan-manage or use the defaults below.
 enabled = false
 # api_key = "tp-..."  # Overrides XIAOMI_PLAN_API_KEY env var
-# base_url = "https://token-plan-cn.xiaomimimo.com/v1"
+# base_url = "https://token-plan-sgp.xiaomimimo.com/v1"
 models = ["mimo-v2.5-pro", "mimo-v2.5"]
 fast_mode = false
 
