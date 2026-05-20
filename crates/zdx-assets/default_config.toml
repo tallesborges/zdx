@@ -21,8 +21,8 @@ tool_timeout_secs = 0
 # Note: when max_tokens is set, it is auto-adjusted to ensure room for both thinking and response.
 thinking_level = "off"
 handoff_model = "gemini:gemini-3-flash-preview"
-title_model = "gemini:gemini-2.5-flash"
-read_thread_model = "gemini:gemini-2.5-flash-lite"
+title_model = "gemini:gemini-3.1-flash-lite-preview"
+read_thread_model = "gemini:gemini-3.1-flash-lite-preview"
 tldr_model = "gemini:gemini-3.1-flash-lite-preview"
 
 # System prompt (inline)
@@ -64,12 +64,12 @@ tldr_model = "gemini:gemini-3.1-flash-lite-preview"
 enabled = true
 
 # Model used for handoff generation subagent.
-# Examples: "gemini-cli:gemini-2.5-flash", "openai:gpt-5.2"
-# handoff_model = "gemini-cli:gemini-2.5-flash"
+# Examples: "gemini-cli:gemini-3-flash-preview", "openai:gpt-5.2"
+# handoff_model = "gemini-cli:gemini-3-flash-preview"
 
 # Model used for auto-title generation subagent.
-# Examples: "gemini-cli:gemini-2.5-flash", "openai:gpt-5.2"
-# title_model = "gemini-cli:gemini-2.5-flash"
+# Examples: "gemini-cli:gemini-3.1-flash-lite-preview", "openai:gpt-5.2"
+# title_model = "gemini-cli:gemini-3.1-flash-lite-preview"
 
 # Skill discovery configuration
 # Enable/disable skill sources (all enabled by default)
@@ -199,13 +199,13 @@ fast_mode = false
 enabled = true
 # api_key = "..."  # Overrides GEMINI_API_KEY env var
 # base_url = "https://generativelanguage.googleapis.com/v1beta"
-models = ["gemini-3.1-pro-preview-customtools", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview", "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+models = ["gemini-3.5-flash", "gemini-3.1-pro-preview-customtools", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview", "gemini-3-flash-preview"]
 fast_mode = false
 
 [providers.gemini_cli]
 enabled = true
 # base_url = "https://cloudcode-pa.googleapis.com"
-models = ["gemini-3.1-pro-preview-customtools", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview", "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+models = ["gemini-3.5-flash", "gemini-3.1-pro-preview-customtools", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview", "gemini-3-flash-preview"]
 fast_mode = false
 
 [providers.minimax]

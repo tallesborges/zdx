@@ -167,7 +167,7 @@ Don't hardcode API calls when a skill exists.
 ### Model selection guidance
 
 - Default: omit `model` (uses system default).
-- Long-context or complex reasoning: `model: "gemini-cli:gemini-2.5-flash"` or similar.
+- Long-context or complex reasoning: `model: "gemini-cli:gemini-3.1-pro-preview"` or similar.
 - Fast/cheap for simple tasks: `model: "stepfun:step-3.5-flash"` or `model: "mimo:mimo-v2-flash"`.
 - Only set `model` when the default won't work well for the task.
 

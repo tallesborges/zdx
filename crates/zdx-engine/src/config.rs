@@ -728,8 +728,8 @@ impl Config {
     /// Default is disabled
     const DEFAULT_TOOL_TIMEOUT_SECS: u32 = 0;
     const DEFAULT_HANDOFF_MODEL: &str = "gemini:gemini-3-flash-preview";
-    const DEFAULT_TITLE_MODEL: &str = "gemini:gemini-2.5-flash";
-    const DEFAULT_READ_THREAD_MODEL: &str = "gemini:gemini-2.5-flash-lite";
+    const DEFAULT_TITLE_MODEL: &str = "gemini:gemini-3.1-flash-lite-preview";
+    const DEFAULT_READ_THREAD_MODEL: &str = "gemini:gemini-3.1-flash-lite-preview";
     const DEFAULT_TLDR_MODEL: &str = "gemini:gemini-3.1-flash-lite-preview";
 
     /// Loads configuration from the default config path.
@@ -1498,12 +1498,11 @@ fn default_gemini_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gemini-3.5-flash".to_string(),
             "gemini-3.1-pro-preview-customtools".to_string(),
             "gemini-3.1-pro-preview".to_string(),
             "gemini-3.1-flash-lite-preview".to_string(),
             "gemini-3-flash-preview".to_string(),
-            "gemini-2.5-flash".to_string(),
-            "gemini-2.5-flash-lite".to_string(),
         ],
         ..Default::default()
     }
@@ -1513,12 +1512,11 @@ fn default_gemini_cli_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gemini-3.5-flash".to_string(),
             "gemini-3.1-pro-preview-customtools".to_string(),
             "gemini-3.1-pro-preview".to_string(),
             "gemini-3.1-flash-lite-preview".to_string(),
             "gemini-3-flash-preview".to_string(),
-            "gemini-2.5-flash".to_string(),
-            "gemini-2.5-flash-lite".to_string(),
         ],
         ..Default::default()
     }

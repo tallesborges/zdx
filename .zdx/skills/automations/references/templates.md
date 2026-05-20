@@ -5,7 +5,7 @@
 ```md
 ---
 schedule: "0 8 * * *"
-# model: "gemini-cli:gemini-2.5-flash"
+# model: "gemini-cli:gemini-3-flash-preview"
 # timeout_secs: 900
 # max_retries: 1
 ---
@@ -36,7 +36,7 @@ If <nothing to report condition>: `<short message>.`
 
 ```md
 ---
-# model: "gemini-cli:gemini-2.5-flash"
+# model: "gemini-cli:gemini-3-flash-preview"
 # timeout_secs: 900
 ---
 

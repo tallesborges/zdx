@@ -771,7 +771,7 @@ fn lookup_default_model(full_id: &str) -> Option<ModelRecord> {
             }
 
             // Meta-providers (zen/apiyi) can reuse defaults from underlying providers
-            // when model IDs match (e.g., apiyi:gemini-2.5-flash -> gemini:gemini-2.5-flash).
+            // when model IDs match (e.g., apiyi:gemini-3-flash-preview -> gemini:gemini-3-flash-preview).
             if is_meta_target {
                 let resolved_record = resolve_provider(&record.id);
                 let resolved_match =
@@ -1089,7 +1089,7 @@ mod tests {
 
     #[test]
     fn test_lookup_default_model_meta_provider_uses_underlying_defaults() {
-        let result = lookup_default_model("apiyi:gemini-2.5-flash");
+        let result = lookup_default_model("apiyi:gemini-3-flash-preview");
         assert!(result.is_some(), "Should find gemini model for apiyi");
     }
 

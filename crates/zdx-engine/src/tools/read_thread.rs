@@ -103,7 +103,7 @@ async fn run_subagent(prompt: String, ctx: &ToolContext) -> Result<String, Strin
         model: Some(
             ctx.read_thread_model
                 .clone()
-                .unwrap_or_else(|| "gemini:gemini-2.5-flash-lite".to_string()),
+                .unwrap_or_else(|| "gemini:gemini-3.1-flash-lite-preview".to_string()),
         ),
         system_prompt: None,
         thinking_level: ctx.thinking_level,
