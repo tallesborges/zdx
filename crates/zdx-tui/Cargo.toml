@@ -43,4 +43,5 @@ uuid.workspace = true
 arboard = { workspace = true }
 
 [dev-dependencies]
+tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process", "test-util"] }
