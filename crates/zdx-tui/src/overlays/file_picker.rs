@@ -314,19 +314,45 @@ impl FilePickerState {
 }
 
 /// Discovers project files, respecting .gitignore.
+///
+/// Hidden dotfiles/dotdirs are skipped by default (via `standard_filters`),
+/// but `.zdx/` is walked explicitly because it holds user-authored skills,
+/// automations, and other content worth referencing via `@`.
 pub fn discover_files(root: &std::path::Path, cancel: &CancellationToken) -> Vec<PathBuf> {
     use ignore::WalkBuilder;
 
     let mut files = Vec::new();
 
-    let walker = WalkBuilder::new(root)
+    let main_walker = WalkBuilder::new(root)
         .standard_filters(true)
         .max_depth(Some(MAX_DEPTH))
         .build();
+    collect_walker_files(main_walker, root, cancel, &mut files);
 
+    let zdx_dir = root.join(".zdx");
+    if zdx_dir.is_dir() {
+        let zdx_walker = WalkBuilder::new(&zdx_dir)
+            .standard_filters(true)
+            .hidden(false)
+            .max_depth(Some(MAX_DEPTH))
+            .build();
+        collect_walker_files(zdx_walker, root, cancel, &mut files);
+    }
+
+    files.sort();
+    files.dedup();
+    files
+}
+
+fn collect_walker_files(
+    walker: ignore::Walk,
+    root: &std::path::Path,
+    cancel: &CancellationToken,
+    files: &mut Vec<PathBuf>,
+) {
     for entry in walker.flatten() {
         if cancel.is_cancelled() {
-            return files;
+            return;
         }
 
         if !entry.file_type().is_some_and(|ft| ft.is_file()) {
@@ -341,9 +367,6 @@ pub fn discover_files(root: &std::path::Path, cancel: &CancellationToken) -> Vec
             files.push(rel_path.to_path_buf());
         }
     }
-
-    files.sort();
-    files
 }
 
 /// Converts character indices to byte indices.
@@ -843,5 +866,32 @@ mod tests {
         // Third span should be cyan (non-matched)
         assert_eq!(line.spans[2].content, ".rs");
         assert_eq!(line.spans[2].style.fg, Some(Color::Cyan));
+    }
+
+    #[test]
+    fn test_discover_files_includes_dotzdx_but_skips_other_dotdirs() {
+        use std::fs;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "").unwrap();
+
+        fs::create_dir_all(root.join(".zdx/skills/example")).unwrap();
+        fs::write(root.join(".zdx/skills/example/SKILL.md"), "").unwrap();
+
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join(".git/config"), "").unwrap();
+
+        let cancel = CancellationToken::new();
+        let files = discover_files(root, &cancel);
+
+        assert!(files.contains(&PathBuf::from("src/main.rs")));
+        assert!(files.contains(&PathBuf::from(".zdx/skills/example/SKILL.md")));
+        assert!(
+            !files.iter().any(|p| p.starts_with(".git")),
+            "expected .git/ to remain hidden, got: {files:?}"
+        );
     }
 }
