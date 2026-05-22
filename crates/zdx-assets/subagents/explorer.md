@@ -1,7 +1,7 @@
 ---
 name: explorer
 description: "Use for read-only local codebase and thread exploration: open-ended multi-step discovery across the current workspace, other machine-local paths, and saved thread history. Prefer it when the task likely needs several search/read rounds or broad orientation before implementation. It uses native read/search tools and does not have `bash`."
-model: gemini:gemini-3-flash-preview
+model: openai-codex:gpt-5.5
 thinking_level: low
 tools:
   - read

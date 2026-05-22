@@ -1,7 +1,7 @@
 ---
 name: thread-searcher
 description: "Use for saved conversation retrieval, historical audits, and multi-thread synthesis when the answer is likely in past ZDX threads rather than the current filesystem. Best for recovering prior decisions, finding old code/snippets, locating earlier discussions of an error, or auditing thread/tool usage with `thread_search`, `read_thread`, and `zdx threads tools`."
-model: gemini:gemini-3-flash-preview
+model: openai-codex:gpt-5.5
 thinking_level: low
 tools:
   - bash
