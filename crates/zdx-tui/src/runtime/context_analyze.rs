@@ -165,6 +165,8 @@ async fn run(
         display_model,
         context_limit,
         messages_count: messages.len(),
+        system_prompt,
+        tools,
         chars,
         tokens,
     })
@@ -392,6 +394,8 @@ pub struct ContextReport {
     pub display_model: String,
     pub context_limit: u64,
     pub messages_count: usize,
+    pub system_prompt: String,
+    pub tools: Vec<ToolDefinition>,
     pub chars: CharCounts,
     /// Present once the user has refined via Anthropic `count_tokens`.
     pub tokens: Option<TokenCounts>,
@@ -489,7 +493,6 @@ impl ContextReport {
             out,
             "_Raw character counts. Press `r` to refine to exact tokens._"
         );
-
         out
     }
 
@@ -589,7 +592,24 @@ impl ContextReport {
             "_Counts via Anthropic `/v1/messages/count_tokens`. \
              Per-file numbers measure raw content; tiny framing overhead is absorbed into the parent row._"
         );
+        out
+    }
 
+    pub fn render_system_prompt_markdown(&self) -> String {
+        if self.system_prompt.trim().is_empty() {
+            "_(empty)_".to_string()
+        } else {
+            self.system_prompt.trim_end().to_string()
+        }
+    }
+
+    pub fn render_tools_markdown(&self) -> String {
+        let mut out = String::new();
+        let _ = writeln!(out, "```json");
+        if let Ok(tools) = serde_json::to_string_pretty(&self.tools) {
+            let _ = writeln!(out, "{tools}");
+        }
+        let _ = writeln!(out, "```");
         out
     }
 }

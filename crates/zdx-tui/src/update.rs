@@ -1248,6 +1248,19 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
     match event {
         Event::Key(key) => handle_key(app, key),
         Event::Mouse(mouse) => {
+            if let Some(overlays::Overlay::Context(state)) = &mut app.overlay {
+                match mouse.kind {
+                    crossterm::event::MouseEventKind::ScrollUp => {
+                        state.scroll_up(3);
+                    }
+                    crossterm::event::MouseEventKind::ScrollDown => {
+                        state.scroll_down(3);
+                    }
+                    _ => {}
+                }
+                return vec![];
+            }
+
             if let Some(overlays::Overlay::ToolDetail(state)) = &mut app.overlay {
                 // ToolDetail overlay consumes all mouse events while open
                 match mouse.kind {
