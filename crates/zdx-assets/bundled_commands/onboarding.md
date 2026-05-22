@@ -1,7 +1,7 @@
 ---
-description: Learn a project or library through source-grounded explanation
+description: Onboard to a project or library through source-grounded explanation
 ---
-Learn this project or library using a DeepWiki-style workflow, then explain it in a way that helps me understand and work with it.
+Onboard me to this project or library using a DeepWiki-style workflow, then explain it in a way that helps me understand and work with it.
 
 Rules:
 - Optimize for human learning, not for creating durable agent instructions.
