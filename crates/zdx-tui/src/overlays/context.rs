@@ -47,6 +47,31 @@ pub enum ContextPhase {
     Error(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextTab {
+    Usage,
+    SystemPrompt,
+    Tools,
+}
+
+impl ContextTab {
+    fn next(self) -> Self {
+        match self {
+            Self::Usage => Self::SystemPrompt,
+            Self::SystemPrompt => Self::Tools,
+            Self::Tools => Self::Usage,
+        }
+    }
+
+    fn previous(self) -> Self {
+        match self {
+            Self::Usage => Self::Tools,
+            Self::SystemPrompt => Self::Usage,
+            Self::Tools => Self::SystemPrompt,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ContextState {
     pub phase: ContextPhase,
@@ -61,6 +86,7 @@ pub struct ContextState {
     /// any) stays visible underneath so the user keeps the chars view
     /// instead of seeing an empty spinner.
     pub refining: bool,
+    pub tab: ContextTab,
     scroll_offset: Cell<usize>,
 }
 
@@ -71,6 +97,7 @@ impl ContextState {
             refine_available,
             display_mode: DisplayMode::Chars,
             refining: false,
+            tab: ContextTab::Usage,
             scroll_offset: Cell::new(0),
         }
     }
@@ -96,6 +123,16 @@ impl ContextState {
     pub fn handle_key(&mut self, key: KeyEvent) -> OverlayUpdate {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => OverlayUpdate::close(),
+            KeyCode::Tab => {
+                self.tab = self.tab.next();
+                self.scroll_offset.set(0);
+                OverlayUpdate::stay()
+            }
+            KeyCode::BackTab => {
+                self.tab = self.tab.previous();
+                self.scroll_offset.set(0);
+                OverlayUpdate::stay()
+            }
             // `r` — refine to exact tokens, or switch to the cached
             // Tokens view if we already fetched them.
             KeyCode::Char('r') if self.refine_available => self.trigger_refine_or_toggle(),
@@ -150,6 +187,16 @@ impl ContextState {
         }
     }
 
+    pub fn scroll_up(&mut self, lines: usize) {
+        self.scroll_offset
+            .set(self.scroll_offset.get().saturating_sub(lines));
+    }
+
+    pub fn scroll_down(&mut self, lines: usize) {
+        self.scroll_offset
+            .set(self.scroll_offset.get().saturating_add(lines));
+    }
+
     fn has_cached_tokens(&self) -> bool {
         matches!(&self.phase, ContextPhase::Ready(r) if r.has_tokens())
     }
@@ -187,9 +234,13 @@ impl ContextState {
                 (SPINNER_FRAMES[idx], Color::Cyan, "Refining…")
             }
             ContextPhase::Ready(_) => {
-                let label = match self.display_mode {
-                    DisplayMode::Chars => "Context Usage · Chars",
-                    DisplayMode::Tokens => "Context Usage · Tokens",
+                let label = match self.tab {
+                    ContextTab::Usage => match self.display_mode {
+                        DisplayMode::Chars => "Usage · Chars",
+                        DisplayMode::Tokens => "Usage · Tokens",
+                    },
+                    ContextTab::SystemPrompt => "Sent · System Prompt",
+                    ContextTab::Tools => "Sent · Tool Definitions",
                 };
                 ("✓", Color::Green, label)
             }
@@ -265,7 +316,11 @@ impl ContextState {
                 )));
             }
             ContextPhase::Ready(report) => {
-                let markdown = report.render_markdown(self.display_mode);
+                let markdown = match self.tab {
+                    ContextTab::Usage => report.render_markdown(self.display_mode),
+                    ContextTab::SystemPrompt => report.render_system_prompt_markdown(),
+                    ContextTab::Tools => report.render_tools_markdown(),
+                };
                 let styled = render_markdown(&markdown, body_width);
                 lines.extend(styled.into_iter().map(convert_styled_line));
                 if lines.is_empty() {
@@ -300,6 +355,8 @@ impl ContextState {
         let mut spans: Vec<Span<'static>> = vec![
             Span::styled(" [Esc/q]", Style::default().fg(Color::Yellow)),
             Span::styled(" close  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[Tab]", Style::default().fg(Color::Yellow)),
+            Span::styled(" view  ", Style::default().fg(Color::DarkGray)),
             Span::styled("[j/k]", Style::default().fg(Color::Yellow)),
             Span::styled(" scroll  ", Style::default().fg(Color::DarkGray)),
             Span::styled("[g/G]", Style::default().fg(Color::Yellow)),
@@ -308,7 +365,10 @@ impl ContextState {
 
         // Toggle hints only make sense once a report is visible and we're
         // not in the middle of a refine round-trip.
-        if !self.refining && matches!(self.phase, ContextPhase::Ready(_)) {
+        if self.tab == ContextTab::Usage
+            && !self.refining
+            && matches!(self.phase, ContextPhase::Ready(_))
+        {
             match self.display_mode {
                 DisplayMode::Chars => {
                     if self.has_cached_tokens() {
