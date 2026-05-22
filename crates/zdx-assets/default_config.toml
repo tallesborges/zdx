@@ -226,7 +226,7 @@ fast_mode = false
 enabled = true
 # api_key = "..."  # Overrides XAI_API_KEY env var
 # base_url = "https://api.x.ai/v1"
-models = ["grok-4.20-experimental-beta-0304-reasoning", "grok-4.20-experimental-beta-0304-non-reasoning", "grok-4-1-fast", "grok-4-1-fast-non-reasoning"]
+models = ["grok-4.3", "grok-build-0.1"]
 fast_mode = false
 
 [providers.mistral]

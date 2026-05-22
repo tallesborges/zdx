@@ -1251,69 +1251,35 @@ input_images = false
 output_limit = 131072
 
 [[model]]
-id = "xai:grok-4-1-fast"
+id = "xai:grok-4.3"
 provider = "xai"
-display_name = "Grok 4.1 Fast"
-context_limit = 2000000
+display_name = "Grok 4.3"
+context_limit = 1000000
 
 [model.pricing]
-input = 0.2
-output = 0.5
-cache_read = 0.05
+input = 1.25
+output = 2.5
+cache_read = 0.2
 cache_write = 0.0
 
 [model.capabilities]
 reasoning = true
 input_images = true
-output_limit = 30000
-
-[[model]]
-id = "xai:grok-4-1-fast-non-reasoning"
-provider = "xai"
-display_name = "Grok 4.1 Fast (Non-Reasoning)"
-context_limit = 2000000
-
-[model.pricing]
-input = 0.2
-output = 0.5
-cache_read = 0.05
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = false
-input_images = true
-output_limit = 30000
-
-[[model]]
-id = "xai:grok-4.20-experimental-beta-0304-reasoning"
-provider = "xai"
-display_name = "grok-4.20-experimental-beta-0304-reasoning (custom)"
-context_limit = 136000
-
-[model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = false
-input_images = false
 output_limit = 0
 
 [[model]]
-id = "xai:grok-4.20-experimental-beta-0304-non-reasoning"
+id = "xai:grok-build-0.1"
 provider = "xai"
-display_name = "grok-4.20-experimental-beta-0304-non-reasoning (custom)"
-context_limit = 136000
+display_name = "Grok Build 0.1"
+context_limit = 256000
 
 [model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
+input = 1.0
+output = 2.0
+cache_read = 0.2
 cache_write = 0.0
 
 [model.capabilities]
-reasoning = false
-input_images = false
+reasoning = true
+input_images = true
 output_limit = 0
