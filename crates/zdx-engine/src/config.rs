@@ -1584,12 +1584,7 @@ fn default_zai_provider() -> ProviderConfig {
 fn default_xai_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec![
-            "grok-4.20-experimental-beta-0304-reasoning".to_string(),
-            "grok-4.20-experimental-beta-0304-non-reasoning".to_string(),
-            "grok-4-1-fast".to_string(),
-            "grok-4-1-fast-non-reasoning".to_string(),
-        ],
+        models: vec!["grok-4.3".to_string(), "grok-build-0.1".to_string()],
         ..Default::default()
     }
 }

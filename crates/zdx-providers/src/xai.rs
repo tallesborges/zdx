@@ -144,11 +144,7 @@ mod tests {
 
     #[test]
     fn xai_provider_uses_responses_api_for_current_models() {
-        for model in [
-            "grok-4.20-experimental-beta-0304-reasoning",
-            "grok-4-1-fast-reasoning",
-            "grok-4-1-fast-non-reasoning",
-        ] {
+        for model in ["grok-4.3", "grok-build-0.1"] {
             let client = XaiClient::new(test_config(model));
             assert_eq!(client.config.path, RESPONSES_PATH);
             assert_eq!(client.config.model, model);
