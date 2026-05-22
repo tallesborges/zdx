@@ -40,8 +40,12 @@ bot-loop:
 
 # ─── Quality ──────────────────────────────────────
 
-# Full local CI (lint + test)
+# Full local CI (lint + test) — use before pushing
 ci: lint test
+
+# Fast inner-loop check — single cargo mode (clippy), default features, lib+bins only
+ci-fast: fmt
+    cargo clippy --workspace -- -D warnings
 
 # Format + clippy
 lint: fmt clippy

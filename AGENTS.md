@@ -45,7 +45,8 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `just bot` (Telegram bot; requires config telegram.\* keys)
 - `just bot-loop` (Telegram bot with auto-restart on exit code 42)
 - `just automations` (automation subcommands; e.g. `just automations list`)
-- `just ci` (full local CI: lint + test)
+- `just ci` (full local CI: lint + test; matches what GHA runs on push/PR — optional pre-push gate)
+- `just ci-fast` (fast inner-loop check: fmt + clippy on default features, lib+bins only — single cargo mode, avoids mode-switching tax)
 - `just lint` (format + clippy)
 - `just fmt` (nightly rustfmt)
 - `just clippy` (lint only)
@@ -60,10 +61,10 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 
 ## Verification
 
-- After code changes, prefer `just ci` from the repo root as the default final verification.
-- Use narrower checks (for example `cargo nextest run -p zdx-cli`) for intermediate iteration, when `just ci` would be unnecessarily expensive, or when the user explicitly asks for a targeted check.
+- During iteration, prefer `just ci-fast` for quick feedback (clippy on default features, lib+bins only).
+- When behavior changes, also run `just test` (or a narrower `cargo nextest run -p <crate>`).
+- `just ci` matches what GHA runs on push/PR; treat it as an optional pre-push gate rather than the default after every change. GHA will catch what local `ci-fast` misses (all-features, all-targets, tests).
 - Use `just lint` or `just test` only when intentionally running one half of CI.
-- If `just ci` is not run after a code change, briefly state why.
 
 ## Conventions
 
