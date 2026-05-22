@@ -223,7 +223,8 @@ impl UpdateState {
     }
 }
 
-fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 16] {
+#[allow(clippy::too_many_lines)]
+fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 17] {
     [
         ProviderSpec {
             provider_id: "anthropic",
@@ -278,6 +279,12 @@ fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 16] {
             api_id: "xiaomi",
             prefix: Some("xiaomi"),
             provider_cfg: &config.providers.xiaomi,
+        },
+        ProviderSpec {
+            provider_id: "xiaomi-plan",
+            api_id: "xiaomi",
+            prefix: Some("xiaomi-plan"),
+            provider_cfg: &config.providers.xiaomi_plan,
         },
         ProviderSpec {
             provider_id: "gemini",
@@ -1113,6 +1120,27 @@ mod tests {
         assert!(specs.iter().any(|s| {
             s.provider_id == "apiyi" && s.api_id == "apiyi" && s.prefix == Some("apiyi")
         }));
+    }
+
+    #[test]
+    fn test_provider_specs_includes_both_xiaomi_variants() {
+        let config = config::Config::default();
+        let specs = provider_specs(&config);
+
+        assert!(
+            specs.iter().any(|s| {
+                s.provider_id == "xiaomi" && s.api_id == "xiaomi" && s.prefix == Some("xiaomi")
+            }),
+            "provider_specs must include xiaomi"
+        );
+        assert!(
+            specs.iter().any(|s| {
+                s.provider_id == "xiaomi-plan"
+                    && s.api_id == "xiaomi"
+                    && s.prefix == Some("xiaomi-plan")
+            }),
+            "provider_specs must include xiaomi-plan so `zdx models update` keeps Plan models"
+        );
     }
 
     #[test]
