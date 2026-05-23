@@ -463,6 +463,7 @@ fn process_login_callback(
             zdx_engine::providers::ProviderKind::ClaudeCli
                 | zdx_engine::providers::ProviderKind::OpenAICodex
                 | zdx_engine::providers::ProviderKind::GeminiCli
+                | zdx_engine::providers::ProviderKind::GoogleAntigravity
         )
     {
         match code {

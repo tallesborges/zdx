@@ -35,6 +35,9 @@ pub fn handle_login_result(
                 zdx_engine::providers::ProviderKind::GeminiCli => {
                     "Logged in with Gemini CLI OAuth."
                 }
+                zdx_engine::providers::ProviderKind::GoogleAntigravity => {
+                    "Logged in with Google Antigravity OAuth."
+                }
                 _ => "Login complete.",
             };
             (

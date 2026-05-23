@@ -26,7 +26,8 @@ use crate::providers::anthropic::{
 use crate::providers::apiyi::{ApiyiClient, ApiyiConfig};
 use crate::providers::deepseek::{DeepSeekClient, DeepSeekConfig};
 use crate::providers::gemini::{
-    GeminiCliClient, GeminiCliConfig, GeminiClient, GeminiConfig, GeminiThinkingConfig,
+    AntigravityClient, AntigravityConfig, GeminiCliClient, GeminiCliConfig, GeminiClient,
+    GeminiConfig, GeminiThinkingConfig,
 };
 use crate::providers::minimax::{MinimaxClient, MinimaxConfig};
 use crate::providers::mistral::{MistralClient, MistralConfig};
@@ -171,6 +172,7 @@ enum ProviderClient {
     Stepfun(StepfunClient),
     Gemini(GeminiClient),
     GeminiCli(GeminiCliClient),
+    GoogleAntigravity(AntigravityClient),
     Zen(ZenClient),
     Apiyi(ApiyiClient),
     Minimax(MinimaxClient),
@@ -223,6 +225,9 @@ impl ProviderClient {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::GeminiCli(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::GoogleAntigravity(client) => {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::Zen(client) => {
@@ -1326,6 +1331,17 @@ fn build_provider_client(
                 GeminiThinkingConfig::from_thinking_level(options.thinking_level, options.model),
             ),
         ))),
+        ProviderKind::GoogleAntigravity => Ok(ProviderClient::GoogleAntigravity(
+            AntigravityClient::new(AntigravityConfig::new(
+                options.model.to_string(),
+                config.max_tokens,
+                antigravity_thinking_config(
+                    options.thinking_level,
+                    options.model,
+                    config.max_tokens,
+                ),
+            )),
+        )),
         ProviderKind::Zen => build_zen_client(
             config,
             options.model,
@@ -1351,6 +1367,31 @@ fn build_provider_client(
             cache_key,
         ),
     }
+}
+
+fn antigravity_thinking_config(
+    level: ThinkingLevel,
+    model: &str,
+    max_tokens: Option<u32>,
+) -> GeminiThinkingConfig {
+    let budget = if model.starts_with("claude-") {
+        match level {
+            ThinkingLevel::Off => 0,
+            _ => 1024,
+        }
+    } else if model.starts_with("gpt-oss-") {
+        match level {
+            ThinkingLevel::Off => 0,
+            _ => 4096,
+        }
+    } else {
+        return GeminiThinkingConfig::from_thinking_level(level, model);
+    };
+
+    let capped_budget = max_tokens
+        .and_then(|tokens| i32::try_from(tokens.saturating_sub(1)).ok())
+        .map_or(budget, |limit| budget.min(limit));
+    GeminiThinkingConfig::Budget(capped_budget.max(0))
 }
 
 fn build_anthropic_client(
