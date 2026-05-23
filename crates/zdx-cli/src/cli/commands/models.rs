@@ -224,7 +224,7 @@ impl UpdateState {
 }
 
 #[allow(clippy::too_many_lines)]
-fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 17] {
+fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 18] {
     [
         ProviderSpec {
             provider_id: "anthropic",
@@ -297,6 +297,12 @@ fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 17] {
             api_id: "google",
             prefix: Some("gemini-cli"),
             provider_cfg: &config.providers.gemini_cli,
+        },
+        ProviderSpec {
+            provider_id: "google-antigravity",
+            api_id: "google-antigravity",
+            prefix: Some("google-antigravity"),
+            provider_cfg: &config.providers.google_antigravity,
         },
         ProviderSpec {
             provider_id: "zen",
@@ -814,7 +820,7 @@ fn lookup_openrouter_model(
         "xai" => "x-ai",
         "anthropic" | "claude-cli" => "anthropic",
         "openai" | "openai-codex" => "openai",
-        "gemini" | "gemini-cli" => "google",
+        "gemini" | "gemini-cli" | "google-antigravity" => "google",
         "stepfun" => "stepfun",
         "moonshot" => "moonshotai",
         "zai" => "z-ai",

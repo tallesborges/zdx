@@ -13,7 +13,7 @@ pub async fn token_exchange(
     verifier: String,
     redirect_uri: Option<String>,
 ) -> UiEvent {
-    use zdx_engine::providers::oauth::{claude_cli, gemini_cli, openai_codex};
+    use zdx_engine::providers::oauth::{claude_cli, gemini_cli, google_antigravity, openai_codex};
 
     let result = match provider {
         zdx_engine::providers::ProviderKind::ClaudeCli => {
@@ -64,6 +64,23 @@ pub async fn token_exchange(
                 Err(e) => Err(e.to_string()),
             }
         }
+        zdx_engine::providers::ProviderKind::GoogleAntigravity => {
+            let pkce = google_antigravity::Pkce {
+                verifier,
+                challenge: String::new(),
+            };
+            match google_antigravity::exchange_code(&code, &pkce).await {
+                Ok(mut creds) => match google_antigravity::discover_project(&creds.access).await {
+                    Ok(project_id) => {
+                        creds.account_id = Some(project_id);
+                        google_antigravity::save_credentials(&creds)
+                            .map_err(|e| format!("Failed to save: {e}"))
+                    }
+                    Err(e) => Err(format!("Failed to discover project: {e}")),
+                },
+                Err(e) => Err(e.to_string()),
+            }
+        }
         _ => Err("OAuth is not supported for this provider.".to_string()),
     };
     UiEvent::LoginResult { result }
@@ -90,6 +107,9 @@ pub async fn local_auth_callback(
         }
         zdx_engine::providers::ProviderKind::GeminiCli => {
             wait_for_local_code(8085, "/oauth2callback", state.as_deref())
+        }
+        zdx_engine::providers::ProviderKind::GoogleAntigravity => {
+            wait_for_local_code(51121, "/oauth-callback", state.as_deref())
         }
         _ => None,
     };

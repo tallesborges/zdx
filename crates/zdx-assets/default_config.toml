@@ -150,6 +150,11 @@ enabled = true
 models = ["*:exacto"]
 fast_mode = false
 
+[providers.google_antigravity]
+enabled = true
+models = ["gemini-3.5-flash-low", "gemini-3-flash-agent", "gemini-3.1-pro-low", "gemini-3.1-pro-high", "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"]
+fast_mode = false
+
 [providers.moonshot]
 enabled = true
 # api_key = "sk-..."  # Overrides MOONSHOT_API_KEY env var

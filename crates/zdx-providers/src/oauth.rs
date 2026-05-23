@@ -1029,6 +1029,264 @@ pub mod gemini_cli {
     }
 }
 
+/// Google Antigravity (Cloud Code Assist sandbox OAuth) helpers.
+pub mod google_antigravity {
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use sha2::{Digest, Sha256};
+
+    use super::{Context, Deserialize, OAuthCache, OAuthCredentials, Result};
+
+    pub const PROVIDER_KEY: &str = "google-antigravity";
+
+    const CLIENT_ID: &str =
+        "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
+    const CLIENT_SECRET: &str = "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";
+    const AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
+    const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+    const REDIRECT_URI: &str = "http://localhost:51121/oauth-callback";
+    const SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs";
+    const DEFAULT_PROJECT_ID: &str = "rising-fact-p41fc";
+
+    pub struct Pkce {
+        pub verifier: String,
+        pub challenge: String,
+    }
+
+    #[derive(Debug, Clone)]
+    #[allow(dead_code)]
+    pub struct AntigravityCredentials {
+        pub access: String,
+        pub refresh: String,
+        pub expires: u64,
+        pub project_id: String,
+    }
+
+    pub fn generate_pkce() -> Pkce {
+        let uuid1 = uuid::Uuid::new_v4();
+        let uuid2 = uuid::Uuid::new_v4();
+        let mut verifier_bytes = [0u8; 32];
+        verifier_bytes[..16].copy_from_slice(uuid1.as_bytes());
+        verifier_bytes[16..].copy_from_slice(uuid2.as_bytes());
+        let verifier = URL_SAFE_NO_PAD.encode(verifier_bytes);
+
+        let mut hasher = Sha256::new();
+        hasher.update(verifier.as_bytes());
+        let challenge = URL_SAFE_NO_PAD.encode(hasher.finalize());
+
+        Pkce {
+            verifier,
+            challenge,
+        }
+    }
+
+    pub fn build_auth_url(pkce: &Pkce, state: &str) -> String {
+        let params = [
+            ("response_type", "code"),
+            ("client_id", CLIENT_ID),
+            ("redirect_uri", REDIRECT_URI),
+            ("scope", SCOPES),
+            ("code_challenge", &pkce.challenge),
+            ("code_challenge_method", "S256"),
+            ("state", state),
+            ("access_type", "offline"),
+            ("prompt", "consent"),
+        ];
+
+        let query: String = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(params)
+            .finish();
+
+        format!("{AUTHORIZE_URL}?{query}")
+    }
+
+    pub fn parse_authorization_input(input: &str) -> (Option<String>, Option<String>) {
+        super::gemini_cli::parse_authorization_input(input)
+    }
+
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub async fn exchange_code(auth_code: &str, pkce: &Pkce) -> Result<OAuthCredentials> {
+        let client = reqwest::Client::new();
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("grant_type", "authorization_code")
+            .append_pair("client_id", CLIENT_ID)
+            .append_pair("client_secret", CLIENT_SECRET)
+            .append_pair("code", auth_code)
+            .append_pair("code_verifier", &pkce.verifier)
+            .append_pair("redirect_uri", REDIRECT_URI)
+            .finish();
+
+        let response = client
+            .post(TOKEN_URL)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .context("Failed to send Antigravity token exchange request")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Antigravity token exchange failed (HTTP {status}): {body}");
+        }
+
+        let token_data: TokenResponse = response
+            .json()
+            .await
+            .context("Failed to parse Antigravity token response")?;
+        let expires_at = compute_expires_at(token_data.expires_in);
+
+        Ok(OAuthCredentials {
+            cred_type: "oauth".to_string(),
+            refresh: token_data.refresh_token.unwrap_or_default(),
+            access: token_data.access_token,
+            expires: expires_at,
+            account_id: None,
+        })
+    }
+
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub async fn refresh_token(refresh_token: &str, project_id: &str) -> Result<OAuthCredentials> {
+        let client = reqwest::Client::new();
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("grant_type", "refresh_token")
+            .append_pair("client_id", CLIENT_ID)
+            .append_pair("client_secret", CLIENT_SECRET)
+            .append_pair("refresh_token", refresh_token)
+            .finish();
+
+        let response = client
+            .post(TOKEN_URL)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .context("Failed to send Antigravity token refresh request")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Antigravity token refresh failed (HTTP {status}): {body}");
+        }
+
+        let token_data: TokenResponse = response
+            .json()
+            .await
+            .context("Failed to parse Antigravity token response")?;
+        let expires_at = compute_expires_at(token_data.expires_in);
+
+        Ok(OAuthCredentials {
+            cred_type: "oauth".to_string(),
+            refresh: token_data
+                .refresh_token
+                .unwrap_or_else(|| refresh_token.to_string()),
+            access: token_data.access_token,
+            expires: expires_at,
+            account_id: Some(project_id.to_string()),
+        })
+    }
+
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub async fn discover_project(access_token: &str) -> Result<String> {
+        let client = reqwest::Client::new();
+        let metadata = serde_json::json!({
+            "ideType": "IDE_UNSPECIFIED",
+            "platform": "PLATFORM_UNSPECIFIED",
+            "pluginType": "GEMINI",
+        });
+        let endpoints = [
+            "https://cloudcode-pa.googleapis.com",
+            "https://daily-cloudcode-pa.googleapis.com",
+        ];
+
+        for endpoint in endpoints {
+            let load_url = format!("{endpoint}/v1internal:loadCodeAssist");
+            let response = client
+                .post(&load_url)
+                .header("Authorization", format!("Bearer {access_token}"))
+                .header("Content-Type", "application/json")
+                .header("User-Agent", "google-api-nodejs-client/9.15.1")
+                .header(
+                    "X-Goog-Api-Client",
+                    "google-cloud-sdk vscode_cloudshelleditor/0.1",
+                )
+                .header("Client-Metadata", metadata.to_string())
+                .json(&serde_json::json!({ "metadata": metadata.clone() }))
+                .send()
+                .await;
+
+            let Ok(response) = response else {
+                continue;
+            };
+            if !response.status().is_success() {
+                continue;
+            }
+            let data: serde_json::Value = response.json().await.unwrap_or_default();
+            if let Some(project) = data
+                .get("cloudaicompanionProject")
+                .and_then(serde_json::Value::as_str)
+            {
+                return Ok(project.to_string());
+            }
+            if let Some(project) = data
+                .get("cloudaicompanionProject")
+                .and_then(|value| value.get("id"))
+                .and_then(serde_json::Value::as_str)
+            {
+                return Ok(project.to_string());
+            }
+        }
+
+        Ok(DEFAULT_PROJECT_ID.to_string())
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct TokenResponse {
+        access_token: String,
+        refresh_token: Option<String>,
+        expires_in: u64,
+    }
+
+    fn compute_expires_at(expires_in_secs: u64) -> u64 {
+        let now = super::now_millis_u64();
+        now + (expires_in_secs * 1000).saturating_sub(5 * 60 * 1000)
+    }
+
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn load_credentials() -> Result<Option<OAuthCredentials>> {
+        let cache = OAuthCache::load()?;
+        Ok(cache.get(PROVIDER_KEY).cloned())
+    }
+
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn save_credentials(creds: &OAuthCredentials) -> Result<()> {
+        let mut cache = OAuthCache::load()?;
+        cache.set(PROVIDER_KEY, creds.clone());
+        cache.save()?;
+        Ok(())
+    }
+
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn clear_credentials() -> Result<bool> {
+        let mut cache = OAuthCache::load()?;
+        let had_creds = cache.remove(PROVIDER_KEY).is_some();
+        cache.save()?;
+        Ok(had_creds)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1249,6 +1249,8 @@ pub struct ProvidersConfig {
     pub gemini: ProviderConfig,
     #[serde(default = "default_gemini_cli_provider")]
     pub gemini_cli: ProviderConfig,
+    #[serde(default = "default_google_antigravity_provider")]
+    pub google_antigravity: ProviderConfig,
     #[serde(default = "default_mistral_provider")]
     pub mistral: ProviderConfig,
     #[serde(default = "default_zen_provider")]
@@ -1284,6 +1286,7 @@ impl ProvidersConfig {
             id if id == ProviderKind::XiaomiPlan.id() => &self.xiaomi_plan,
             id if id == ProviderKind::Gemini.id() => &self.gemini,
             id if id == ProviderKind::GeminiCli.id() => &self.gemini_cli,
+            id if id == ProviderKind::GoogleAntigravity.id() => &self.google_antigravity,
             id if id == ProviderKind::Zen.id() => &self.zen,
             id if id == ProviderKind::Apiyi.id() => &self.apiyi,
             id if id == ProviderKind::Minimax.id() => &self.minimax,
@@ -1312,6 +1315,7 @@ impl ProvidersConfig {
             ProviderKind::XiaomiPlan => &self.xiaomi_plan,
             ProviderKind::Gemini => &self.gemini,
             ProviderKind::GeminiCli => &self.gemini_cli,
+            ProviderKind::GoogleAntigravity => &self.google_antigravity,
             ProviderKind::Zen => &self.zen,
             ProviderKind::Apiyi => &self.apiyi,
             ProviderKind::Minimax => &self.minimax,
@@ -1338,6 +1342,7 @@ impl ProvidersConfig {
             ProviderKind::XiaomiPlan => &mut self.xiaomi_plan,
             ProviderKind::Gemini => &mut self.gemini,
             ProviderKind::GeminiCli => &mut self.gemini_cli,
+            ProviderKind::GoogleAntigravity => &mut self.google_antigravity,
             ProviderKind::Zen => &mut self.zen,
             ProviderKind::Apiyi => &mut self.apiyi,
             ProviderKind::Minimax => &mut self.minimax,
@@ -1364,6 +1369,7 @@ impl Default for ProvidersConfig {
             openai: default_openai_provider(),
             gemini: default_gemini_provider(),
             gemini_cli: default_gemini_cli_provider(),
+            google_antigravity: default_google_antigravity_provider(),
             openrouter: default_openrouter_provider(),
             deepseek: default_deepseek_provider(),
             moonshot: default_moonshot_provider(),
@@ -1517,6 +1523,22 @@ fn default_gemini_cli_provider() -> ProviderConfig {
             "gemini-3.1-pro-preview".to_string(),
             "gemini-3.1-flash-lite-preview".to_string(),
             "gemini-3-flash-preview".to_string(),
+        ],
+        ..Default::default()
+    }
+}
+
+fn default_google_antigravity_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec![
+            "gemini-3.5-flash-low".to_string(),
+            "gemini-3-flash-agent".to_string(),
+            "gemini-3.1-pro-low".to_string(),
+            "gemini-3.1-pro-high".to_string(),
+            "claude-sonnet-4-6".to_string(),
+            "claude-opus-4-6-thinking".to_string(),
+            "gpt-oss-120b-medium".to_string(),
         ],
         ..Default::default()
     }

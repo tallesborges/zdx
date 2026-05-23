@@ -47,6 +47,7 @@ pub enum ProviderKind {
     Stepfun,
     Gemini,
     GeminiCli,
+    GoogleAntigravity,
     Zen,
     Apiyi,
     Minimax,
@@ -84,6 +85,7 @@ impl ProviderKind {
             ProviderKind::Stepfun,
             ProviderKind::Gemini,
             ProviderKind::GeminiCli,
+            ProviderKind::GoogleAntigravity,
             ProviderKind::Zen,
             ProviderKind::Apiyi,
             ProviderKind::Minimax,
@@ -108,6 +110,7 @@ impl ProviderKind {
             ProviderKind::Stepfun => "stepfun",
             ProviderKind::Gemini => "gemini",
             ProviderKind::GeminiCli => "gemini-cli",
+            ProviderKind::GoogleAntigravity => "google-antigravity",
             ProviderKind::Zen => "zen",
             ProviderKind::Apiyi => "apiyi",
             ProviderKind::Minimax => "minimax",
@@ -132,6 +135,7 @@ impl ProviderKind {
             "stepfun" => Some(ProviderKind::Stepfun),
             "gemini" => Some(ProviderKind::Gemini),
             "gemini-cli" => Some(ProviderKind::GeminiCli),
+            "google-antigravity" | "antigravity" => Some(ProviderKind::GoogleAntigravity),
             "zen" => Some(ProviderKind::Zen),
             "apiyi" => Some(ProviderKind::Apiyi),
             "minimax" => Some(ProviderKind::Minimax),
@@ -157,6 +161,7 @@ impl ProviderKind {
             ProviderKind::Stepfun => "StepFun",
             ProviderKind::Gemini => "Gemini",
             ProviderKind::GeminiCli => "Gemini CLI",
+            ProviderKind::GoogleAntigravity => "Google Antigravity",
             ProviderKind::Zen => "Zen",
             ProviderKind::Apiyi => "APIYI",
             ProviderKind::Minimax => "MiniMax",
@@ -168,7 +173,10 @@ impl ProviderKind {
     pub fn supports_oauth(&self) -> bool {
         matches!(
             self,
-            ProviderKind::ClaudeCli | ProviderKind::OpenAICodex | ProviderKind::GeminiCli
+            ProviderKind::ClaudeCli
+                | ProviderKind::OpenAICodex
+                | ProviderKind::GeminiCli
+                | ProviderKind::GoogleAntigravity
         )
     }
 
@@ -195,7 +203,10 @@ impl ProviderKind {
             ProviderKind::Minimax => Some("MINIMAX_API_KEY"),
             ProviderKind::Zai => Some("ZAI_API_KEY"),
             ProviderKind::Xai => Some("XAI_API_KEY"),
-            ProviderKind::ClaudeCli | ProviderKind::OpenAICodex | ProviderKind::GeminiCli => None,
+            ProviderKind::ClaudeCli
+            | ProviderKind::OpenAICodex
+            | ProviderKind::GeminiCli
+            | ProviderKind::GoogleAntigravity => None,
         }
     }
 
@@ -211,6 +222,7 @@ impl ProviderKind {
             Self::Moonshot => "https://api.moonshot.ai/v1",
             Self::Stepfun => "https://api.stepfun.ai/v1",
             Self::Gemini | Self::GeminiCli => "https://generativelanguage.googleapis.com/v1beta",
+            Self::GoogleAntigravity => "https://daily-cloudcode-pa.googleapis.com",
             Self::Xiaomi => "https://api.xiaomimimo.com/v1",
             Self::XiaomiPlan => "https://token-plan-sgp.xiaomimimo.com/v1",
             Self::Zen => "https://opencode.ai/zen",
@@ -233,6 +245,7 @@ impl ProviderKind {
             Self::Moonshot => Some("MOONSHOT_BASE_URL"),
             Self::Stepfun => Some("STEPFUN_BASE_URL"),
             Self::Gemini | Self::GeminiCli => Some("GEMINI_BASE_URL"),
+            Self::GoogleAntigravity => None,
             Self::Xiaomi => Some("XIAOMI_BASE_URL"),
             Self::XiaomiPlan => Some("XIAOMI_PLAN_BASE_URL"),
             Self::Zen => Some("ZEN_BASE_URL"),
@@ -270,9 +283,10 @@ impl ProviderKind {
 
     pub fn auth_mode(&self) -> ProviderAuthMode {
         match self {
-            ProviderKind::ClaudeCli | ProviderKind::OpenAICodex | ProviderKind::GeminiCli => {
-                ProviderAuthMode::OAuth
-            }
+            ProviderKind::ClaudeCli
+            | ProviderKind::OpenAICodex
+            | ProviderKind::GeminiCli
+            | ProviderKind::GoogleAntigravity => ProviderAuthMode::OAuth,
             ProviderKind::Anthropic
             | ProviderKind::OpenAI
             | ProviderKind::OpenRouter
@@ -345,6 +359,7 @@ fn parse_provider_prefix(model: &str) -> Option<(ProviderKind, &str)> {
                 "stepfun" => ProviderKind::Stepfun,
                 "gemini" | "google" => ProviderKind::Gemini,
                 "gemini-cli" | "google-gemini-cli" => ProviderKind::GeminiCli,
+                "antigravity" | "google-antigravity" => ProviderKind::GoogleAntigravity,
                 "codex" | "openai-codex" => ProviderKind::OpenAICodex,
                 "zen" | "opencode" => ProviderKind::Zen,
                 "apiyi" => ProviderKind::Apiyi,

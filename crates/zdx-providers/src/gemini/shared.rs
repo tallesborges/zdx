@@ -600,6 +600,10 @@ pub struct CloudCodeRequestParams<'a> {
     pub session_id: &'a str,
     pub prompt_seq: u32,
     pub thinking_config: Option<&'a GeminiThinkingConfig>,
+    pub include_thoughts: bool,
+    pub request_type: Option<&'a str>,
+    pub user_agent: Option<&'a str>,
+    pub request_id: Option<String>,
 }
 
 /// Builds a Cloud Code Assist request body (for OAuth auth).
@@ -641,7 +645,11 @@ pub fn build_cloud_code_assist_request(
     // Note: Cloud Code Assist API does NOT support includeThoughts
     // (unlike the standard Gemini API at generativelanguage.googleapis.com).
     if let Some(thinking) = params.thinking_config {
-        generation_config["thinkingConfig"] = thinking.to_json();
+        let mut thinking_config = thinking.to_json();
+        if params.include_thoughts {
+            thinking_config["includeThoughts"] = json!(true);
+        }
+        generation_config["thinkingConfig"] = thinking_config;
     }
 
     if generation_config.as_object().is_some_and(|o| !o.is_empty()) {
@@ -651,12 +659,24 @@ pub fn build_cloud_code_assist_request(
     // Format matches official Gemini CLI: <session_id>########<seq>
     let user_prompt_id = format!("{}########{}", params.session_id, params.prompt_seq);
 
-    json!({
+    let mut outer_request = json!({
         "project": params.project_id,
         "model": params.model,
         "user_prompt_id": user_prompt_id,
         "request": inner_request,
-    })
+    });
+
+    if let Some(request_type) = params.request_type {
+        outer_request["requestType"] = json!(request_type);
+    }
+    if let Some(user_agent) = params.user_agent {
+        outer_request["userAgent"] = json!(user_agent);
+    }
+    if let Some(request_id) = &params.request_id {
+        outer_request["requestId"] = json!(request_id);
+    }
+
+    outer_request
 }
 
 /// Extracts text and optional image from tool result content.
@@ -1727,6 +1747,10 @@ mod integration_tests {
                 session_id: "test-session",
                 prompt_seq: 0,
                 thinking_config: Some(&thinking_config),
+                include_thoughts: false,
+                request_type: None,
+                user_agent: None,
+                request_id: None,
             },
         );
 
@@ -1772,6 +1796,10 @@ mod integration_tests {
                 session_id: "test-session",
                 prompt_seq: 0,
                 thinking_config: Some(&thinking_config),
+                include_thoughts: false,
+                request_type: None,
+                user_agent: None,
+                request_id: None,
             },
         );
 

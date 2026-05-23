@@ -1,6 +1,7 @@
-//! Gemini CLI (Cloud Code Assist OAuth) provider.
+//! Google Antigravity (Cloud Code Assist sandbox OAuth) provider.
 
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -12,32 +13,26 @@ use super::shared::{
 };
 use super::sse::GeminiSseParser;
 use crate::debug_metrics::maybe_wrap_with_metrics;
-use crate::oauth::gemini_cli as oauth_gemini_cli;
+use crate::oauth::google_antigravity as oauth_antigravity;
 use crate::shared::merge_system_prompt;
 use crate::{ChatMessage, ProviderError, ProviderStream};
 
-/// Cloud Code Assist API endpoint
-const API_ENDPOINT: &str = "https://cloudcode-pa.googleapis.com";
-
-/// Stream generate content path
+const API_ENDPOINT: &str = "https://daily-cloudcode-pa.googleapis.com";
 const STREAM_PATH: &str = "/v1internal:streamGenerateContent";
 
-/// Runtime config for Gemini CLI requests.
 #[derive(Debug, Clone)]
-pub struct GeminiCliConfig {
+pub struct AntigravityConfig {
     pub model: String,
     pub max_tokens: Option<u32>,
-    /// Session ID for rate limit grouping (persists across requests in a session).
     pub session_id: String,
-    /// Thinking configuration (level for Gemini 3, budget for Gemini 2.5).
-    pub thinking_config: GeminiThinkingConfig,
+    pub thinking_config: Option<GeminiThinkingConfig>,
 }
 
-impl GeminiCliConfig {
+impl AntigravityConfig {
     pub fn new(
         model: String,
         max_tokens: Option<u32>,
-        thinking_config: GeminiThinkingConfig,
+        thinking_config: Option<GeminiThinkingConfig>,
     ) -> Self {
         Self {
             model,
@@ -48,14 +43,10 @@ impl GeminiCliConfig {
     }
 }
 
-/// Resolves OAuth credentials, refreshing if expired.
-///
-/// # Errors
-/// Returns an error if the operation fails.
-pub async fn resolve_credentials() -> Result<oauth_gemini_cli::GeminiCliCredentials> {
-    let mut creds = oauth_gemini_cli::load_credentials()?.ok_or_else(|| {
+pub async fn resolve_credentials() -> Result<oauth_antigravity::AntigravityCredentials> {
+    let mut creds = oauth_antigravity::load_credentials()?.ok_or_else(|| {
         anyhow::anyhow!(
-            "No Gemini CLI OAuth credentials found. Run 'zdx login gemini-cli' to authenticate."
+            "No Google Antigravity OAuth credentials found. Run 'zdx login --antigravity' to authenticate."
         )
     })?;
 
@@ -65,14 +56,14 @@ pub async fn resolve_credentials() -> Result<oauth_gemini_cli::GeminiCliCredenti
         .ok_or_else(|| anyhow::anyhow!("Missing project ID in credentials"))?;
 
     if creds.is_expired() {
-        let refreshed = oauth_gemini_cli::refresh_token(&creds.refresh, &project_id)
+        let refreshed = oauth_antigravity::refresh_token(&creds.refresh, &project_id)
             .await
-            .context("Failed to refresh Gemini CLI OAuth token")?;
-        oauth_gemini_cli::save_credentials(&refreshed)?;
+            .context("Failed to refresh Google Antigravity OAuth token")?;
+        oauth_antigravity::save_credentials(&refreshed)?;
         creds = refreshed;
     }
 
-    Ok(oauth_gemini_cli::GeminiCliCredentials {
+    Ok(oauth_antigravity::AntigravityCredentials {
         access: creds.access,
         refresh: creds.refresh,
         expires: creds.expires,
@@ -80,16 +71,14 @@ pub async fn resolve_credentials() -> Result<oauth_gemini_cli::GeminiCliCredenti
     })
 }
 
-/// Gemini CLI client.
-pub struct GeminiCliClient {
-    config: GeminiCliConfig,
+pub struct AntigravityClient {
+    config: AntigravityConfig,
     http: reqwest::Client,
-    /// Prompt sequence counter for `user_prompt_id` generation.
     prompt_seq: AtomicU32,
 }
 
-impl GeminiCliClient {
-    pub fn new(config: GeminiCliConfig) -> Self {
+impl AntigravityClient {
+    pub fn new(config: AntigravityConfig) -> Self {
         Self {
             config,
             http: reqwest::Client::new(),
@@ -109,6 +98,11 @@ impl GeminiCliClient {
         let creds = resolve_credentials().await?;
         let seq = self.prompt_seq.fetch_add(1, Ordering::Relaxed);
         let system_prompt = merge_system_prompt(system);
+        let now_millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default();
+        let request_id = format!("agent-{now_millis}-{seq}");
 
         let request = build_cloud_code_assist_request(
             messages,
@@ -120,11 +114,11 @@ impl GeminiCliClient {
                 max_output_tokens: self.config.max_tokens,
                 session_id: &self.config.session_id,
                 prompt_seq: seq,
-                thinking_config: Some(&self.config.thinking_config),
-                include_thoughts: false,
-                request_type: None,
-                user_agent: None,
-                request_id: None,
+                thinking_config: self.config.thinking_config.as_ref(),
+                include_thoughts: true,
+                request_type: Some("agent"),
+                user_agent: Some("antigravity"),
+                request_id: Some(request_id),
             },
         );
 
@@ -148,7 +142,7 @@ impl GeminiCliClient {
 
         let byte_stream = response.bytes_stream();
         let event_stream =
-            GeminiSseParser::new(byte_stream, self.config.model.clone(), "gemini-cli");
+            GeminiSseParser::new(byte_stream, self.config.model.clone(), "google-antigravity");
         Ok(maybe_wrap_with_metrics(event_stream))
     }
 }
@@ -160,14 +154,19 @@ fn build_headers(access_token: &str) -> HeaderMap {
         HeaderValue::from_str(&format!("Bearer {access_token}"))
             .unwrap_or_else(|_| HeaderValue::from_static("")),
     );
-    // Mimic official Gemini CLI User-Agent for better rate limits
     headers.insert(
         "User-Agent",
-        HeaderValue::from_static("GeminiCLI/0.23.0 (darwin; arm64)"),
+        HeaderValue::from_static("antigravity/2.0.6 darwin/arm64"),
     );
     headers.insert(
-        "x-goog-api-client",
-        HeaderValue::from_static("gl-node/22.16.0"),
+        "X-Goog-Api-Client",
+        HeaderValue::from_static("google-cloud-sdk vscode_cloudshelleditor/0.1"),
+    );
+    headers.insert(
+        "Client-Metadata",
+        HeaderValue::from_static(
+            r#"{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}"#,
+        ),
     );
     headers.insert("Accept", HeaderValue::from_static("*/*"));
     headers.insert("Content-Type", HeaderValue::from_static("application/json"));
