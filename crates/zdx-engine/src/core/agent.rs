@@ -1335,11 +1335,11 @@ fn build_provider_client(
             AntigravityClient::new(AntigravityConfig::new(
                 options.model.to_string(),
                 config.max_tokens,
-                antigravity_thinking_config(
+                Some(antigravity_thinking_config(
                     options.thinking_level,
                     options.model,
                     config.max_tokens,
-                ),
+                )),
             )),
         )),
         ProviderKind::Zen => build_zen_client(
