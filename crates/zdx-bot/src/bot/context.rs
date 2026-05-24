@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
-use zdx_engine::config::Config;
+use zdx_engine::config::{Config, TelegramProfileConfig};
 use zdx_engine::core::agent::ToolConfig;
 
 use crate::telegram::TelegramClient;
@@ -42,6 +42,12 @@ pub(crate) struct BotContext {
     rebuild_signal: Notify,
     cancel_map: CancelMap,
     queue_cancel_map: QueueCancelMap,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedProfileRoot {
+    pub(crate) profile_name: Option<String>,
+    pub(crate) root: PathBuf,
 }
 
 pub(crate) struct BotContextDeps {
@@ -108,6 +114,21 @@ impl BotContext {
         self.root.as_path()
     }
 
+    pub(crate) fn root_for_chat(&self, chat_id: i64) -> ResolvedProfileRoot {
+        let config = self.config.read().expect("bot config lock poisoned");
+        if let Some((name, profile)) = config.telegram_profile_for_chat(chat_id) {
+            return ResolvedProfileRoot {
+                profile_name: Some(name.to_string()),
+                root: profile_root_path(profile),
+            };
+        }
+
+        ResolvedProfileRoot {
+            profile_name: None,
+            root: self.root.clone(),
+        }
+    }
+
     pub(crate) fn bot_instruction_layer(&self) -> Option<&str> {
         self.bot_instruction_layer.as_deref()
     }
@@ -133,4 +154,9 @@ impl BotContext {
     pub(crate) fn queue_cancel_map(&self) -> &QueueCancelMap {
         &self.queue_cancel_map
     }
+}
+
+fn profile_root_path(profile: &TelegramProfileConfig) -> PathBuf {
+    let root = profile.cwd_path();
+    root.canonicalize().unwrap_or(root)
 }

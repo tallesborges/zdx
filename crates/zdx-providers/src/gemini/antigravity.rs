@@ -43,6 +43,9 @@ impl AntigravityConfig {
     }
 }
 
+/// # Errors
+///
+/// Returns an error if credentials cannot be loaded or refreshed.
 pub async fn resolve_credentials() -> Result<oauth_antigravity::AntigravityCredentials> {
     let mut creds = oauth_antigravity::load_credentials()?.ok_or_else(|| {
         anyhow::anyhow!(
