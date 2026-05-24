@@ -120,7 +120,7 @@ fn tool_key_arg(name: &str, input: &Value) -> Option<String> {
         "glob" => value_as_trimmed_str(input, "pattern").map(str::to_string),
         "grep" => {
             let pattern = value_as_trimmed_str(input, "pattern")?;
-            if let Some(path) = value_as_trimmed_str(input, "file_path") {
+            if let Some(path) = value_as_trimmed_str(input, "path") {
                 Some(format!("{pattern} {path}"))
             } else {
                 Some(pattern.to_string())

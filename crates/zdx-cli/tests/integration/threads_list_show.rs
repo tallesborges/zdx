@@ -486,7 +486,7 @@ fn test_threads_tools_filters_by_name() {
                 "type": "tool_use",
                 "id": "toolu_grep",
                 "name": "grep",
-                "input": {"pattern": "thread_search", "file_path": "."},
+                "input": {"pattern": "thread_search", "path": "."},
                 "ts": "2026-02-12T12:00:00Z"
             }),
             json!({
