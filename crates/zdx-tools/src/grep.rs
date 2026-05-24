@@ -42,7 +42,7 @@ const MAX_CONTEXT_LINES: usize = 5;
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Grep".to_string(),
-        description: "Search file contents for text matching a regex pattern. ALWAYS use this tool instead of running grep or rg through Bash — it returns structured JSON with file paths, line numbers, and context, respects .gitignore, supports pagination, and never floods the context window. NEVER invoke grep or rg as a Bash command. Use `glob`, `type`, or `file_path` to narrow the search, and use `extract_unique` for discovery queries such as listing tags or symbol names. Returns structured JSON results with file paths, line numbers, matched text, and optional context. Large files are skipped above 4MB, long match/context lines are truncated to safe snippets, and oversized result sets include a warning so the model can narrow the search or paginate with offset/max_count. Respects .gitignore by default: gitignored files are skipped during directory searches; pass an exact file path in `file_path` to search a known ignored file."
+        description: "Search file contents for text matching a regex pattern. ALWAYS use this tool instead of running grep or rg through Bash — it returns structured JSON with file paths, line numbers, and context, respects .gitignore, supports pagination, and never floods the context window. NEVER invoke grep or rg as a Bash command. Use `glob`, `type`, or `path` to narrow the search, and use `extract_unique` for discovery queries such as listing tags or symbol names. Returns structured JSON results with file paths, line numbers, matched text, and optional context. Large files are skipped above 4MB, long match/context lines are truncated to safe snippets, and oversized result sets include a warning so the model can narrow the search or paginate with offset/max_count. Respects .gitignore by default: gitignored files are skipped during directory searches; pass an exact file path in `path` to search a known ignored file."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -51,7 +51,7 @@ pub fn definition() -> ToolDefinition {
                     "type": "string",
                     "description": "Regex pattern to search for"
                 },
-                "file_path": {
+                "path": {
                     "type": "string",
                     "description": "Directory or file to search in. Relative paths resolve from the current working directory. Defaults to the current working directory. Supports $VAR/${VAR} env vars."
                 },
@@ -99,7 +99,7 @@ pub fn definition() -> ToolDefinition {
 #[serde(deny_unknown_fields)]
 struct GrepInput {
     pattern: String,
-    file_path: Option<String>,
+    path: Option<String>,
     glob: Option<String>,
     #[serde(default, deserialize_with = "crate::bool_or_string::deserialize")]
     case_insensitive: bool,
@@ -323,7 +323,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         }
     };
 
-    let search_path = match resolve_search_path(input.file_path.as_deref(), &ctx.root) {
+    let search_path = match resolve_search_path(input.path.as_deref(), &ctx.root) {
         Ok(p) => p,
         Err(output) => return output,
     };
@@ -925,7 +925,7 @@ mod tests {
         fs::write(temp.path().join("sub/nested.txt"), "match here too\n").unwrap();
 
         let ctx = make_ctx(&temp);
-        let input = json!({"pattern": "match", "file_path": "sub"});
+        let input = json!({"pattern": "match", "path": "sub"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -941,7 +941,7 @@ mod tests {
         fs::write(temp.path().join("b.txt"), "target line\n").unwrap();
 
         let ctx = make_ctx(&temp);
-        let input = json!({"pattern": "target", "file_path": "a.txt"});
+        let input = json!({"pattern": "target", "path": "a.txt"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -979,7 +979,7 @@ mod tests {
     fn test_nonexistent_path() {
         let temp = TempDir::new().unwrap();
         let ctx = make_ctx(&temp);
-        let input = json!({"pattern": "test", "file_path": "nonexistent"});
+        let input = json!({"pattern": "test", "path": "nonexistent"});
 
         let result = execute(&input, &ctx);
         assert!(!result.is_ok());
@@ -1859,7 +1859,7 @@ mod type_filter_tests {
     }
 
     #[test]
-    fn test_type_filter_bypassed_for_explicit_file_path() {
+    fn test_type_filter_bypassed_for_explicit_path() {
         // When path points directly to a file, that file is always searched
         // regardless of the type filter — explicit paths act as an override.
         let temp = TempDir::new().unwrap();
@@ -1869,7 +1869,7 @@ mod type_filter_tests {
         let file = temp.path().join("script.py");
         let input = json!({
             "pattern": "fn",
-            "file_path": file.to_str().unwrap(),
+            "path": file.to_str().unwrap(),
             "type": "rust"
         });
 
@@ -1895,12 +1895,13 @@ mod type_filter_tests {
     }
 
     #[test]
-    fn test_legacy_path_key_is_rejected() {
-        // Regression: old callers sending "path" must fail with a clear error,
+    fn test_legacy_file_path_key_is_rejected() {
+        // Regression: old callers sending "file_path" must fail with a clear error,
         // not silently fall back to the cwd and search an unintended broad scope.
+        // The canonical key is `path`, matching `glob`.
         let temp = TempDir::new().unwrap();
         let ctx = make_ctx(&temp);
-        let input = json!({"pattern": "x", "path": "."});
+        let input = json!({"pattern": "x", "file_path": "."});
 
         let result = execute(&input, &ctx);
         assert!(!result.is_ok());

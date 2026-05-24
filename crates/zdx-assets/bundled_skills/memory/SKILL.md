@@ -124,8 +124,8 @@ Use raw `grep`, `glob`, and `read` only when:
 When raw search is necessary, search `Notes/` and `Calendar/` unless the user clearly scopes the request.
 
 ```text
-grep file_path:"$ZDX_MEMORY_ROOT/Notes" glob:"**/*.md" pattern:"deadline|reference" case_insensitive:true
-grep file_path:"$ZDX_MEMORY_ROOT/Calendar" glob:"*.md" pattern:"deadline|reference" case_insensitive:true
+grep path:"$ZDX_MEMORY_ROOT/Notes" glob:"**/*.md" pattern:"deadline|reference" case_insensitive:true
+grep path:"$ZDX_MEMORY_ROOT/Calendar" glob:"*.md" pattern:"deadline|reference" case_insensitive:true
 ```
 
 Narrow by folder or pattern whenever possible.
