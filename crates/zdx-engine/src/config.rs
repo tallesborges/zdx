@@ -129,6 +129,18 @@ pub struct TelegramConfig {
     pub model: String,
     /// Thinking level for the Telegram bot.
     pub thinking_level: ThinkingLevel,
+    /// Per-chat project profiles keyed by profile name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub profiles: BTreeMap<String, TelegramProfileConfig>,
+}
+
+/// Per-chat Telegram project profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelegramProfileConfig {
+    /// Telegram chat ID routed to this profile.
+    pub chat_id: i64,
+    /// Working directory for agent turns in this chat.
+    pub cwd: String,
 }
 
 impl Default for TelegramConfig {
@@ -139,7 +151,15 @@ impl Default for TelegramConfig {
             allowlist_chat_ids: Vec::new(),
             model: "claude-cli:claude-opus-4-6".to_string(),
             thinking_level: ThinkingLevel::Minimal,
+            profiles: BTreeMap::new(),
         }
+    }
+}
+
+impl TelegramProfileConfig {
+    #[must_use]
+    pub fn cwd_path(&self) -> PathBuf {
+        expand_tilde(self.cwd.trim())
     }
 }
 
@@ -802,11 +822,91 @@ impl Config {
             bail!("telegram.allowlist_user_ids must contain at least one user ID");
         }
 
+        self.validate_telegram_profiles()?;
+
+        let mut allowlist_chat_ids = self.telegram.allowlist_chat_ids.clone();
+        for profile in self.telegram.profiles.values() {
+            if !allowlist_chat_ids.contains(&profile.chat_id) {
+                allowlist_chat_ids.push(profile.chat_id);
+            }
+        }
+
         Ok(ResolvedTelegramRuntime {
             bot_token,
             allowlist_user_ids: self.telegram.allowlist_user_ids.clone(),
-            allowlist_chat_ids: self.telegram.allowlist_chat_ids.clone(),
+            allowlist_chat_ids,
         })
+    }
+
+    /// Returns a Telegram profile by chat ID.
+    #[must_use]
+    pub fn telegram_profile_for_chat(
+        &self,
+        chat_id: i64,
+    ) -> Option<(&str, &TelegramProfileConfig)> {
+        self.telegram.profiles.iter().find_map(|(name, profile)| {
+            (profile.chat_id == chat_id).then_some((name.as_str(), profile))
+        })
+    }
+
+    /// Validates the Telegram profile map.
+    ///
+    /// # Errors
+    /// Returns an error if profile names/cwds are blank or chat IDs are duplicated.
+    pub fn validate_telegram_profiles(&self) -> Result<()> {
+        let mut seen_chat_ids: BTreeMap<i64, &str> = BTreeMap::new();
+        for (name, profile) in &self.telegram.profiles {
+            if name.trim().is_empty() {
+                bail!("telegram profile names must not be blank");
+            }
+            if profile.cwd.trim().is_empty() {
+                bail!("telegram profile '{name}' cwd must not be blank");
+            }
+            if let Some(existing_name) = seen_chat_ids.insert(profile.chat_id, name) {
+                bail!(
+                    "telegram profiles '{existing_name}' and '{name}' use duplicate chat ID {}",
+                    profile.chat_id
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Saves one Telegram profile to a config file.
+    ///
+    /// # Errors
+    /// Returns an error if the config cannot be read, parsed, validated, or written.
+    pub fn save_telegram_profile(name: &str, profile: &TelegramProfileConfig) -> Result<()> {
+        Self::save_telegram_profile_to(&paths::config_path(), name, profile)
+    }
+
+    /// Saves one Telegram profile to a specific config file path.
+    ///
+    /// # Errors
+    /// Returns an error if the config cannot be read, parsed, validated, or written.
+    pub fn save_telegram_profile_to(
+        path: &Path,
+        name: &str,
+        profile: &TelegramProfileConfig,
+    ) -> Result<()> {
+        use toml_edit::{DocumentMut, value};
+
+        let contents = if path.exists() {
+            let user_config = fs::read_to_string(path)
+                .with_context(|| format!("Failed to read config from {}", path.display()))?;
+            merge_with_template(&user_config)?
+        } else {
+            default_config_template().to_string()
+        };
+
+        let mut doc: DocumentMut = contents
+            .parse()
+            .with_context(|| format!("Failed to parse config from {}", path.display()))?;
+
+        doc["telegram"]["profiles"][name]["chat_id"] = value(profile.chat_id);
+        doc["telegram"]["profiles"][name]["cwd"] = value(profile.cwd.trim());
+
+        Self::write_config(path, &doc.to_string())
     }
 
     /// Loads configuration from a specific path.
@@ -2556,6 +2656,90 @@ max_tokens = 4096
         let config = TelegramConfig::default();
         assert_eq!(config.model, "claude-cli:claude-opus-4-6");
         assert_eq!(config.thinking_level, ThinkingLevel::Minimal);
+        assert!(config.profiles.is_empty());
+    }
+
+    #[test]
+    fn test_telegram_profiles_load_from_config() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        fs::write(
+            &config_path,
+            r#"[telegram]
+allowlist_user_ids = [42]
+bot_token = "token"
+
+[telegram.profiles.zdx]
+chat_id = -100123
+cwd = "/tmp/zdx"
+
+[telegram.profiles.work]
+chat_id = -100456
+cwd = "~/work"
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(config.telegram.profiles.len(), 2);
+        let (name, profile) = config.telegram_profile_for_chat(-100_123).unwrap();
+        assert_eq!(name, "zdx");
+        assert_eq!(profile.cwd, "/tmp/zdx");
+        assert!(config.telegram_profile_for_chat(-999).is_none());
+    }
+
+    #[test]
+    fn test_telegram_profile_chat_ids_are_allowlisted_at_runtime() {
+        let config = Config {
+            telegram: TelegramConfig {
+                bot_token: Some("token".to_string()),
+                allowlist_user_ids: vec![42],
+                allowlist_chat_ids: vec![-100_123],
+                profiles: BTreeMap::from([(
+                    "work".to_string(),
+                    TelegramProfileConfig {
+                        chat_id: -100_456,
+                        cwd: "/tmp/work".to_string(),
+                    },
+                )]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let runtime = config.resolve_telegram_runtime().unwrap();
+        assert_eq!(runtime.allowlist_chat_ids, vec![-100_123, -100_456]);
+    }
+
+    #[test]
+    fn test_duplicate_telegram_profile_chat_ids_are_rejected() {
+        let config = Config {
+            telegram: TelegramConfig {
+                bot_token: Some("token".to_string()),
+                allowlist_user_ids: vec![42],
+                profiles: BTreeMap::from([
+                    (
+                        "one".to_string(),
+                        TelegramProfileConfig {
+                            chat_id: -100_123,
+                            cwd: "/tmp/one".to_string(),
+                        },
+                    ),
+                    (
+                        "two".to_string(),
+                        TelegramProfileConfig {
+                            chat_id: -100_123,
+                            cwd: "/tmp/two".to_string(),
+                        },
+                    ),
+                ]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error = config.resolve_telegram_runtime().unwrap_err().to_string();
+        assert!(error.contains("duplicate chat ID"));
     }
 
     #[test]
@@ -2801,6 +2985,10 @@ available_models = ["codex:gpt-5.3-codex"]
                     enabled: Some(false),
                     ..default_xiaomi_provider()
                 },
+                xiaomi_plan: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_xiaomi_plan_provider()
+                },
                 gemini: ProviderConfig {
                     enabled: Some(false),
                     ..default_gemini_provider()
@@ -2808,6 +2996,10 @@ available_models = ["codex:gpt-5.3-codex"]
                 gemini_cli: ProviderConfig {
                     enabled: Some(false),
                     ..default_gemini_cli_provider()
+                },
+                google_antigravity: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_google_antigravity_provider()
                 },
                 mistral: ProviderConfig {
                     enabled: Some(false),

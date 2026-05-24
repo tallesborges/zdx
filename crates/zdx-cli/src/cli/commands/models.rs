@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use zdx_engine::config;
 use zdx_engine::models::wildcard_match;
+use zdx_engine::providers::provider_kind_from_id;
 
 const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
@@ -208,12 +209,17 @@ struct UpdateState {
 
 impl UpdateState {
     fn push_candidate(&mut self, provider_id: &str, candidate: ModelCandidate) {
+        let mut pricing = candidate.pricing;
+        let is_sub = provider_kind_from_id(provider_id).is_some_and(|k| k.is_subscription());
+        if is_sub {
+            pricing = ModelPricingRecord::default();
+        }
         let record = ModelRecord {
             id: candidate.full_id,
             provider: provider_id.to_string(),
             display_name: candidate.display_name,
             context_limit: candidate.context_limit,
-            pricing: candidate.pricing,
+            pricing,
             capabilities: candidate.capabilities,
         };
         let key = record_key(&record);

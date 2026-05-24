@@ -50,6 +50,7 @@ impl LoginState {
         state
     }
 
+    #[allow(clippy::too_many_lines)]
     fn open_with_provider(provider: ProviderKind, error: Option<String>) -> (Self, Vec<UiEffect>) {
         match provider {
             ProviderKind::ClaudeCli => {

@@ -182,8 +182,14 @@ impl ProviderKind {
 
     /// Returns true if this provider is subscription-based (usage included in subscription).
     pub fn is_subscription(&self) -> bool {
-        // OAuth providers are typically subscription-based (no per-token charges)
-        self.supports_oauth()
+        matches!(
+            self,
+            ProviderKind::ClaudeCli
+                | ProviderKind::OpenAICodex
+                | ProviderKind::GeminiCli
+                | ProviderKind::GoogleAntigravity
+                | ProviderKind::XiaomiPlan
+        )
     }
 
     pub fn api_key_env_var(&self) -> Option<&'static str> {
@@ -238,14 +244,13 @@ impl ProviderKind {
         match self {
             Self::Anthropic | Self::ClaudeCli => Some("ANTHROPIC_BASE_URL"),
             Self::OpenAI => Some("OPENAI_BASE_URL"),
-            Self::OpenAICodex => None,
+            Self::OpenAICodex | Self::GoogleAntigravity => None,
             Self::OpenRouter => Some("OPENROUTER_BASE_URL"),
             Self::DeepSeek => Some("DEEPSEEK_BASE_URL"),
             Self::Mistral => Some("MISTRAL_BASE_URL"),
             Self::Moonshot => Some("MOONSHOT_BASE_URL"),
             Self::Stepfun => Some("STEPFUN_BASE_URL"),
             Self::Gemini | Self::GeminiCli => Some("GEMINI_BASE_URL"),
-            Self::GoogleAntigravity => None,
             Self::Xiaomi => Some("XIAOMI_BASE_URL"),
             Self::XiaomiPlan => Some("XIAOMI_PLAN_BASE_URL"),
             Self::Zen => Some("ZEN_BASE_URL"),
