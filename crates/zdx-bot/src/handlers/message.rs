@@ -248,6 +248,7 @@ struct StatusSnapshot<'a> {
     model_override: Option<&'a str>,
     thinking: ThinkingLevel,
     thinking_override: Option<ThinkingLevel>,
+    profile_name: Option<&'a str>,
     thread_id: &'a str,
     root_path: &'a Path,
     branch: Option<&'a str>,
@@ -616,8 +617,9 @@ async fn handle_status_command(
     }
 
     let config = context.config();
+    let resolved_root = context.root_for_chat(incoming.chat_id);
     let root_path = thread_persistence::read_thread_root_path(thread_id)?
-        .map_or_else(|| context.root().to_path_buf(), PathBuf::from);
+        .map_or_else(|| resolved_root.root.clone(), PathBuf::from);
     let model_override = thread_persistence::read_thread_model_override(thread_id)?;
     let thinking_override = thread_persistence::read_thread_thinking_override(thread_id)?;
     let effective_model = model_override.as_deref().unwrap_or(&config.model);
@@ -631,6 +633,7 @@ async fn handle_status_command(
         model_override: model_override.as_deref(),
         thinking: effective_thinking,
         thinking_override,
+        profile_name: resolved_root.profile_name.as_deref(),
         thread_id,
         root_path: &root_path,
         branch: branch.as_deref(),
@@ -840,7 +843,8 @@ async fn handle_thread_commands(
         BotCommand::WorktreeCreate => {}
     }
 
-    let worktree_root = match worktree::ensure_worktree(context.root(), thread_id) {
+    let resolved_root = context.root_for_chat(incoming.chat_id);
+    let worktree_root = match worktree::ensure_worktree(&resolved_root.root, thread_id) {
         Ok(path) => path,
         Err(err) => {
             let msg = format!(
@@ -889,8 +893,9 @@ async fn run_agent_turn(
     synthetic_topic_routed_from_general: bool,
     provisional_status: Option<TurnStatus>,
 ) -> Result<()> {
+    let resolved_root = context.root_for_chat(incoming.chat_id);
     let worktree_root = thread_persistence::read_thread_root_path(thread_id)?
-        .map_or_else(|| context.root().to_path_buf(), std::path::PathBuf::from);
+        .map_or_else(|| resolved_root.root.clone(), std::path::PathBuf::from);
     let model_override = thread_persistence::read_thread_model_override(thread_id)?;
     let thinking_override = thread_persistence::read_thread_thinking_override(thread_id)?;
     let config = if model_override.is_some() || thinking_override.is_some() {
@@ -1674,6 +1679,10 @@ fn format_status_message(snapshot: &StatusSnapshot<'_>) -> String {
     lines.push(format!(
         "Thread: <code>{}</code>",
         escape_html(snapshot.thread_id)
+    ));
+    lines.push(format!(
+        "Profile: <code>{}</code>",
+        escape_html(snapshot.profile_name.unwrap_or("fallback"))
     ));
     lines.push(format!(
         "Root: <code>{}</code>",

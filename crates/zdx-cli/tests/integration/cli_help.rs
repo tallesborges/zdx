@@ -123,7 +123,7 @@ fn test_bot_help_shows_init_subcommand() {
         .assert()
         .success()
         .stdout(predicate::str::contains("init"))
-        .stdout(predicate::str::contains("--bot"));
+        .stdout(predicate::str::contains("profile"));
 }
 
 #[test]

@@ -75,12 +75,8 @@ impl From<&ThreadArgs> for ThreadPersistenceOptions {
 
 #[derive(clap::Subcommand)]
 enum Commands {
-    /// Run a named Telegram bot or manage the global bot registry
+    /// Run or configure the global Telegram bot
     Bot {
-        /// Named bot profile from `$ZDX_HOME/bots.toml`
-        #[arg(long, value_name = "NAME")]
-        bot: Option<String>,
-
         #[command(subcommand)]
         command: Option<BotCommands>,
     },
@@ -506,12 +502,8 @@ enum ConfigCommands {
 
 #[derive(clap::Subcommand)]
 enum BotCommands {
-    /// Initialize or update a named bot in `$ZDX_HOME/bots.toml`
+    /// Initialize or update the global Telegram bot settings in config.toml
     Init {
-        /// Name for this bot profile
-        #[arg(long, value_name = "NAME")]
-        name: Option<String>,
-
         /// Telegram bot token
         #[arg(long, value_name = "TOKEN")]
         bot_token: Option<String>,
@@ -520,21 +512,36 @@ enum BotCommands {
         #[arg(long, value_name = "USER_ID")]
         user_id: Option<i64>,
 
-        /// Allowlisted Telegram group/supergroup chat ID
-        #[arg(long, value_name = "CHAT_ID", allow_hyphen_values = true)]
-        chat_id: Option<i64>,
-
-        /// Model for this project's bot
+        /// Model for the Telegram bot
         #[arg(long, value_name = "MODEL")]
         model: Option<String>,
 
         /// Thinking level for this project's bot (off, minimal, low, medium, high, xhigh)
         #[arg(long, value_name = "LEVEL")]
         thinking: Option<String>,
+    },
+    /// Manage per-chat project profiles for the Telegram bot
+    Profile {
+        #[command(subcommand)]
+        command: BotProfileCommands,
+    },
+}
 
-        /// Overwrite an existing project bot config
-        #[arg(long)]
-        force: bool,
+#[derive(clap::Subcommand)]
+enum BotProfileCommands {
+    /// Add a chat-to-cwd project profile to `telegram.profiles`
+    Add {
+        /// Profile name
+        #[arg(value_name = "NAME")]
+        name: String,
+
+        /// Telegram group/supergroup chat ID
+        #[arg(value_name = "CHAT_ID", allow_hyphen_values = true)]
+        chat_id: i64,
+
+        /// Working directory for this chat
+        #[arg(value_name = "CWD")]
+        cwd: PathBuf,
     },
 }
 
@@ -548,10 +555,6 @@ enum ModelsCommands {
 enum TelegramCommands {
     /// Create a forum topic in a supergroup with topics enabled
     CreateTopic {
-        /// Named bot profile from `$ZDX_HOME/bots.toml`
-        #[arg(long, value_name = "NAME")]
-        bot: String,
-
         /// Telegram chat ID (supergroup)
         #[arg(long, value_name = "CHAT_ID", allow_hyphen_values = true)]
         chat_id: i64,
@@ -567,10 +570,6 @@ enum TelegramCommands {
 
     /// Send a message to a chat (optionally to a forum topic)
     SendMessage {
-        /// Named bot profile from `$ZDX_HOME/bots.toml`
-        #[arg(long, value_name = "NAME")]
-        bot: String,
-
         /// Telegram chat ID
         #[arg(long, value_name = "CHAT_ID", allow_hyphen_values = true)]
         chat_id: i64,
@@ -598,10 +597,6 @@ enum TelegramCommands {
     },
     /// Send a document (file) to a chat (optionally to a forum topic)
     SendDocument {
-        /// Named bot profile from `$ZDX_HOME/bots.toml`
-        #[arg(long, value_name = "NAME")]
-        bot: String,
-
         /// Telegram chat ID
         #[arg(long, value_name = "CHAT_ID", allow_hyphen_values = true)]
         chat_id: i64,
@@ -867,7 +862,7 @@ async fn run_imagine_command(
 
 async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> Result<()> {
     match command {
-        Commands::Bot { command, bot } => dispatch_bot(bot, command, context).await,
+        Commands::Bot { command } => Box::pin(dispatch_bot(command, context)).await,
         Commands::Exec {
             prompt,
             prompt_file,
@@ -976,42 +971,31 @@ fn parse_image_size(value: &str) -> std::result::Result<String, String> {
     }
 }
 
-async fn dispatch_bot(
-    bot_name: Option<String>,
-    command: Option<BotCommands>,
-    context: &DispatchContext<'_>,
-) -> Result<()> {
+async fn dispatch_bot(command: Option<BotCommands>, context: &DispatchContext<'_>) -> Result<()> {
     match command {
         None => {
-            let bot_name = bot_name.ok_or_else(|| anyhow::anyhow!("bot name is required (use `zdx bot --bot <NAME>` or `zdx bot init --name <NAME>`)"))?;
-            let (config, root_path) = config::Config::load_for_named_bot(&bot_name)?;
-            let service_name = config::named_bot_service_name(&bot_name);
-            zdx_bot::run_named_with_config_and_root(&service_name, config, root_path).await
+            let root_path = resolve_root(context.root, context.worktree_id)?;
+            zdx_bot::run_named_with_config_and_root("bot", context.config.clone(), root_path).await
         }
         Some(BotCommands::Init {
-            name,
             bot_token,
             user_id,
-            chat_id,
             model,
             thinking,
-            force,
-        }) => {
-            let root_path = resolve_root(context.root, context.worktree_id)?;
-            commands::bot::init(
-                &root_path,
-                context.config,
-                commands::bot::BotInitOptions {
-                    name: name.or(bot_name),
-                    bot_token,
-                    user_id,
-                    chat_id,
-                    model,
-                    thinking,
-                    force,
-                },
-            )
-        }
+        }) => commands::bot::init(
+            context.config,
+            commands::bot::BotInitOptions {
+                bot_token,
+                user_id,
+                model,
+                thinking,
+            },
+        ),
+        Some(BotCommands::Profile { command }) => match command {
+            BotProfileCommands::Add { name, chat_id, cwd } => {
+                commands::bot::add_profile(context.config, &name, chat_id, &cwd)
+            }
+        },
     }
 }
 
@@ -1163,35 +1147,22 @@ async fn dispatch_models(command: ModelsCommands, context: &DispatchContext<'_>)
     }
 }
 
-async fn dispatch_telegram(
-    command: TelegramCommands,
-    _context: &DispatchContext<'_>,
-) -> Result<()> {
-    fn load_named_bot_runtime(bot: &str) -> Result<config::Config> {
-        config::Config::load_for_named_bot(bot).map(|(config, _root)| config)
-    }
-
+async fn dispatch_telegram(command: TelegramCommands, context: &DispatchContext<'_>) -> Result<()> {
     match command {
         TelegramCommands::CreateTopic {
-            bot,
             chat_id,
             name,
             bot_token,
-        } => {
-            let config = load_named_bot_runtime(&bot)?;
-            commands::telegram::create_topic(&config, bot_token, chat_id, &name).await
-        }
+        } => commands::telegram::create_topic(context.config, bot_token, chat_id, &name).await,
         TelegramCommands::SendMessage {
-            bot,
             chat_id,
             text,
             message_thread_id,
             parse_mode,
             bot_token,
         } => {
-            let config = load_named_bot_runtime(&bot)?;
             commands::telegram::send_message(
-                &config,
+                context.config,
                 bot_token,
                 chat_id,
                 message_thread_id,
@@ -1201,16 +1172,14 @@ async fn dispatch_telegram(
             .await
         }
         TelegramCommands::SendDocument {
-            bot,
             chat_id,
             path,
             caption,
             message_thread_id,
             bot_token,
         } => {
-            let config = load_named_bot_runtime(&bot)?;
             commands::telegram::send_document(
-                &config,
+                context.config,
                 bot_token,
                 chat_id,
                 message_thread_id,

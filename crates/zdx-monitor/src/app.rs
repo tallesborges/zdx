@@ -822,12 +822,8 @@ fn load_automations(root: &Path) -> Vec<AutomationInfo> {
 }
 
 fn load_services() -> Vec<ServiceInfo> {
-    let mut service_names: BTreeSet<String> = BTreeSet::from(["daemon".to_string()]);
-    if let Ok(bots) = config::BotsConfig::load() {
-        for name in bots.bots.keys() {
-            service_names.insert(config::named_bot_service_name(name));
-        }
-    }
+    let mut service_names: BTreeSet<String> =
+        BTreeSet::from(["daemon".to_string(), "bot".to_string()]);
     let run_dir = paths::zdx_home().join("run");
     if let Ok(entries) = fs::read_dir(&run_dir) {
         for entry in entries.filter_map(Result::ok) {
@@ -838,9 +834,7 @@ fn load_services() -> Vec<ServiceInfo> {
             let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
                 continue;
             };
-            if stem == config::LEGACY_BOT_SERVICE_NAME
-                || config::parse_named_bot_service_name(stem).is_some()
-            {
+            if stem == "bot" {
                 service_names.insert(stem.to_string());
             }
         }
@@ -849,13 +843,7 @@ fn load_services() -> Vec<ServiceInfo> {
     service_names
         .into_iter()
         .filter_map(|service_name| {
-            let display_name = if service_name == config::LEGACY_BOT_SERVICE_NAME {
-                config::LEGACY_BOT_SERVICE_NAME.to_string()
-            } else if let Some(name) = config::parse_named_bot_service_name(&service_name) {
-                config::named_bot_service_display_name(name)
-            } else {
-                service_name.clone()
-            };
+            let display_name = service_name.clone();
 
             match pidfile::status(&service_name) {
                 pidfile::ServiceStatus::Running { pid, started } => {
@@ -876,16 +864,12 @@ fn load_services() -> Vec<ServiceInfo> {
                     status: "stopped".to_string(),
                     details: String::new(),
                 }),
-                pidfile::ServiceStatus::Stopped
-                    if config::parse_named_bot_service_name(&service_name).is_some() =>
-                {
-                    Some(ServiceInfo {
-                        key: service_name.clone(),
-                        name: display_name,
-                        status: "stopped".to_string(),
-                        details: String::new(),
-                    })
-                }
+                pidfile::ServiceStatus::Stopped if service_name == "bot" => Some(ServiceInfo {
+                    key: service_name.clone(),
+                    name: display_name,
+                    status: "stopped".to_string(),
+                    details: String::new(),
+                }),
                 pidfile::ServiceStatus::Stopped => None,
             }
         })
@@ -912,9 +896,8 @@ fn start_service(service: &ServiceInfo, root: &Path) -> Result<String> {
                 .arg("automations")
                 .arg("daemon");
         }
-        key if config::parse_named_bot_service_name(key).is_some() => {
-            let name = config::parse_named_bot_service_name(key).unwrap_or_default();
-            command.arg("bot").arg("--bot").arg(name);
+        "bot" => {
+            command.arg("--root").arg(root).arg("bot");
         }
         _ => anyhow::bail!("unsupported service '{}'", service.name),
     }

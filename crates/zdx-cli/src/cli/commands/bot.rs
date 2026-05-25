@@ -4,30 +4,16 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use zdx_engine::config::{BotsConfig, Config, NamedBotConfig, ThinkingLevel};
+use zdx_engine::config::{Config, TelegramProfileConfig, ThinkingLevel};
 
 pub struct BotInitOptions {
-    pub name: Option<String>,
     pub bot_token: Option<String>,
     pub user_id: Option<i64>,
-    pub chat_id: Option<i64>,
     pub model: Option<String>,
     pub thinking: Option<String>,
-    pub force: bool,
 }
 
-pub fn init(root: &Path, config: &Config, options: BotInitOptions) -> Result<()> {
-    let name = match options.name {
-        Some(name) => require_non_empty("bot name", &name)?,
-        None => prompt_required("Bot name")?,
-    };
-    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-
-    let mut bots = BotsConfig::load().context("load bot registry")?;
-    if bots.get(&name).is_some() && !options.force {
-        bail!("bot '{name}' already exists in the bot registry (use --force to overwrite)");
-    }
-
+pub fn init(config: &Config, options: BotInitOptions) -> Result<()> {
     let bot_token = match options.bot_token {
         Some(token) => require_non_empty("bot token", &token)?,
         None => prompt_required("Bot token")?,
@@ -37,11 +23,6 @@ pub fn init(root: &Path, config: &Config, options: BotInitOptions) -> Result<()>
     let user_id = match options.user_id {
         Some(id) => id,
         None => prompt_i64_with_default("Allowlisted user ID", default_user_id)?,
-    };
-
-    let chat_id = match options.chat_id {
-        Some(id) => id,
-        None => prompt_i64_required("Allowlisted group chat ID")?,
     };
 
     let default_model = config.telegram.model.trim();
@@ -56,24 +37,41 @@ pub fn init(root: &Path, config: &Config, options: BotInitOptions) -> Result<()>
         None => parse_thinking_level(&prompt_with_default("Thinking level", default_thinking)?)?,
     };
 
-    let named_bot = NamedBotConfig {
-        root: root.display().to_string(),
-        bot_token,
-        allowlist_user_ids: vec![user_id],
-        allowlist_chat_ids: vec![chat_id],
-        model,
-        thinking_level,
-    };
-
-    bots.bots.insert(name.clone(), named_bot);
-    bots.save().context("save bot registry")?;
+    Config::save_telegram_bot_settings(&bot_token, &[user_id], &model, thinking_level)
+        .context("save telegram bot settings")?;
 
     println!(
-        "Saved bot '{}' to {}",
-        name,
-        zdx_engine::config::paths::bots_config_path().display()
+        "Saved Telegram bot settings to {}",
+        zdx_engine::config::paths::config_path().display()
     );
-    println!("Run `zdx bot --bot {name}` to start it.");
+    println!("Run `zdx bot` to start it.");
+    Ok(())
+}
+
+pub fn add_profile(config: &Config, name: &str, chat_id: i64, cwd: &Path) -> Result<()> {
+    let name = require_non_empty("profile name", name)?;
+    if config.telegram.profiles.contains_key(&name) {
+        bail!("telegram profile '{name}' already exists");
+    }
+    if let Some((existing_name, _)) = config.telegram_profile_for_chat(chat_id) {
+        bail!("telegram chat ID {chat_id} is already used by profile '{existing_name}'");
+    }
+    let cwd = cwd
+        .canonicalize()
+        .with_context(|| format!("cwd does not exist: {}", cwd.display()))?;
+    if !cwd.is_dir() {
+        bail!("cwd is not a directory: {}", cwd.display());
+    }
+
+    let profile = TelegramProfileConfig {
+        chat_id,
+        cwd: cwd.display().to_string(),
+    };
+    Config::save_telegram_profile(&name, &profile).context("save telegram profile")?;
+
+    println!("Saved Telegram profile '{name}' to telegram.profiles.{name}");
+    println!("Chat ID: {chat_id}");
+    println!("CWD: {}", cwd.display());
     Ok(())
 }
 
@@ -84,16 +82,6 @@ fn prompt_required(label: &str) -> Result<String> {
             return Ok(value.trim().to_string());
         }
         eprintln!("{label} is required.");
-    }
-}
-
-fn prompt_i64_required(label: &str) -> Result<i64> {
-    loop {
-        let value = prompt_required(label)?;
-        match value.parse::<i64>() {
-            Ok(parsed) => return Ok(parsed),
-            Err(_) => eprintln!("Enter a valid integer for {label}."),
-        }
     }
 }
 
