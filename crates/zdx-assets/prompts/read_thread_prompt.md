@@ -6,6 +6,8 @@ Non-negotiable rules:
 - If the answer is not in the transcript, respond with: "I don't know based on the thread."
   - If the goal specifies a strict output format, put that exact message into the required format.
 
+The <zdx_context> block is provided for terminology and name resolution ONLY (recognize real project/people names and project-specific vocabulary when they appear in the transcript). Do NOT use <zdx_context> to answer the goal. Facts that appear only in <zdx_context> and not in the transcript count as "not in the transcript" and must trigger the fallback above.
+
 Extraction/summary guidance:
 - Preserve full fidelity of relevant details (quotes, code, file paths, names, numbers).
 - Keep logical/chronological order when multiple parts are relevant.
@@ -20,6 +22,10 @@ Output constraints:
 <goal>
 {{GOAL}}
 </goal>
+
+<zdx_context>
+{{ZDX_CONTEXT}}
+</zdx_context>
 
 <mentionedThread>
 {{THREAD_CONTENT}}

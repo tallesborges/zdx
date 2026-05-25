@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 use zdx_engine::core::subagent::{ExecSubagentOptions, run_exec_subagent_with_cancel};
 use zdx_engine::core::thread_persistence;
 use zdx_engine::prompts::HANDOFF_PROMPT_TEMPLATE;
+use zdx_engine::zdx_context::build_zdx_context;
 
 use crate::events::UiEvent;
 
@@ -35,8 +36,9 @@ fn build_handoff_prefix(thread_id: &str, next_message: &str) -> String {
 }
 
 /// Builds the prompt for handoff generation.
-fn build_handoff_prompt(thread_content: &str, next_message: &str) -> String {
+fn build_handoff_prompt(thread_content: &str, next_message: &str, zdx_context: &str) -> String {
     HANDOFF_PROMPT_TEMPLATE
+        .replace("{{ZDX_CONTEXT}}", zdx_context)
         .replace("{{THREAD_CONTENT}}", thread_content)
         .replace("{{NEXT_MESSAGE}}", next_message)
 }
@@ -105,7 +107,8 @@ pub async fn handoff_generation(
         }
     };
 
-    let generation_prompt = build_handoff_prompt(&content, &next_message);
+    let generation_prompt =
+        build_handoff_prompt(&content, &next_message, &build_zdx_context(&root));
     let handoff_prefix = build_handoff_prefix(&thread_id, &next_message);
     let result = run_subagent(cancel, handoff_model, generation_prompt, root)
         .await

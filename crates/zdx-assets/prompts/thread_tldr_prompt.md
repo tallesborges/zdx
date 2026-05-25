@@ -4,6 +4,12 @@ Speak directly to the user in second person ("you"). Never refer to them in the 
 
 The transcript below contains the user's most recent activity in a single thread. Generate a scannable TLDR that reflects what is actually in the transcript — nothing more.
 
+The <zdx_context> block lists the user's installed tooling, memory index (project/people names), and project instructions. Use it ONLY for name resolution and terminology: prefer real names already present in the transcript over generic phrases. Do NOT introduce any name, project, person, or fact from <zdx_context> that the transcript itself does not already use. The anti-fabrication rule in the transcript takes precedence over the context block.
+
+<zdx_context>
+{{ZDX_CONTEXT}}
+</zdx_context>
+
 <transcript>
 {{TRANSCRIPT}}
 </transcript>
