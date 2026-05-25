@@ -825,27 +825,13 @@ impl HistoryCell {
                 // Error details
                 if *state == ToolState::Error {
                     if let Some(res) = result {
-                        if let Some((code, message, details)) = res.error_info() {
+                        if let Some((code, message, _details)) = res.error_info() {
                             lines.push(StyledLine {
                                 spans: vec![StyledSpan {
                                     text: format!("Error [{code}]: {message}"),
                                     style: Style::ToolError,
                                 }],
                             });
-
-                            if let Some(detail_text) = details {
-                                for detail_line in detail_text.lines() {
-                                    let wrapped = wrap_text(detail_line, width.saturating_sub(2));
-                                    for line in wrapped {
-                                        lines.push(StyledLine {
-                                            spans: vec![StyledSpan {
-                                                text: format!("  {line}"),
-                                                style: Style::ToolOutput,
-                                            }],
-                                        });
-                                    }
-                                }
-                            }
                         }
                     } else {
                         lines.push(StyledLine {
