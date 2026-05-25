@@ -461,9 +461,9 @@ fn render_handoff_input(
             Color::Green,
         )
     } else {
-        // Waiting for goal input (Pending)
+        // Waiting for next-message input (Pending)
         (
-            " handoff (enter goal for new tab, Esc to cancel) ",
+            " handoff (type your first message for the new chat, Esc to cancel) ",
             Color::Yellow,
         )
     };

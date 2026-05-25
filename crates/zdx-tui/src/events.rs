@@ -276,7 +276,7 @@ pub enum UiEvent {
 
     /// Async handoff generation completed (Ok = generated prompt, Err = error message).
     HandoffResult {
-        goal: String,
+        next_message: String,
         result: Result<String, String>,
     },
 

@@ -982,18 +982,26 @@ impl TuiRuntime {
             }
 
             // Handoff effects
-            UiEffect::StartHandoff { goal } => {
+            UiEffect::StartHandoff { next_message } => {
                 if let Some(ref thread_handle) = self.state.tui.thread.thread_handle {
                     let thread_id = thread_handle.id.clone();
                     let root = self.state.tui.agent_opts.root.clone();
                     let handoff_model = self.state.tui.config.handoff_model.clone();
-                    let meta = TaskMeta::Handoff { goal: goal.clone() };
+                    let meta = TaskMeta::Handoff {
+                        next_message: next_message.clone(),
+                    };
                     self.spawn_task(TaskKind::Handoff, meta, true, move |cancel| {
-                        handoff::handoff_generation(thread_id, goal, handoff_model, root, cancel)
+                        handoff::handoff_generation(
+                            thread_id,
+                            next_message,
+                            handoff_model,
+                            root,
+                            cancel,
+                        )
                     });
                 } else {
                     self.dispatch_event(UiEvent::HandoffResult {
-                        goal,
+                        next_message,
                         result: Err("Handoff requires an active thread.".to_string()),
                     });
                 }

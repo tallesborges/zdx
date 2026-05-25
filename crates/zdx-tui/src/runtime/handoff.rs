@@ -1,6 +1,6 @@
 //! Handoff generation handlers.
 //!
-//! Handles spawning a subagent to generate handoff prompts from thread context.
+//! Handles spawning a subagent to generate handoff context from thread history.
 //!
 //! Uses `CancellationToken` for unified cancellation model.
 
@@ -19,26 +19,26 @@ const HANDOFF_TIMEOUT_SECS: u64 = 120;
 
 /// Prefix shown at the beginning of generated handoff output.
 ///
-/// Surfaces the user's literal goal verbatim so the new chat sees it
-/// directly rather than relying on the LLM to preserve it through summarization.
-fn build_handoff_prefix(thread_id: &str, goal: &str) -> String {
-    let trimmed = goal.trim();
+/// The user's literal next-chat message leads (so the new assistant sees the
+/// user's own words first, exactly as typed), followed by a short parenthetical
+/// pointing at the source thread. The LLM-generated context block is appended
+/// after this prefix.
+fn build_handoff_prefix(thread_id: &str, next_message: &str) -> String {
+    let trimmed = next_message.trim();
     if trimmed.is_empty() {
-        format!(
-            "Continuing work from thread {thread_id}. If you need specific information, use read_thread to get it.\n\nContext from the previous thread:"
-        )
+        format!("(Continuing from thread {thread_id} — call read_thread for full context.)")
     } else {
         format!(
-            "Continuing work from thread {thread_id}.\n\nMy goal: {trimmed}\n\nContext from the previous thread (use read_thread if you need more):"
+            "{trimmed}\n\n(Continuing from thread {thread_id} — call read_thread for anything below that's missing.)"
         )
     }
 }
 
 /// Builds the prompt for handoff generation.
-fn build_handoff_prompt(thread_content: &str, goal: &str) -> String {
+fn build_handoff_prompt(thread_content: &str, next_message: &str) -> String {
     HANDOFF_PROMPT_TEMPLATE
         .replace("{{THREAD_CONTENT}}", thread_content)
-        .replace("{{GOAL}}", goal)
+        .replace("{{NEXT_MESSAGE}}", next_message)
 }
 
 /// Loads and validates thread content for handoff.
@@ -85,7 +85,7 @@ async fn run_subagent(
 /// Returns `HandoffResult`; cancellation is cooperative via token.
 pub async fn handoff_generation(
     thread_id: String,
-    goal: String,
+    next_message: String,
     handoff_model: String,
     root: PathBuf,
     cancel: Option<CancellationToken>,
@@ -99,18 +99,21 @@ pub async fn handoff_generation(
         Ok(content) => content,
         Err(e) => {
             return UiEvent::HandoffResult {
-                goal,
+                next_message,
                 result: Err(e),
             };
         }
     };
 
-    let generation_prompt = build_handoff_prompt(&content, &goal);
-    let handoff_prefix = build_handoff_prefix(&thread_id, &goal);
+    let generation_prompt = build_handoff_prompt(&content, &next_message);
+    let handoff_prefix = build_handoff_prefix(&thread_id, &next_message);
     let result = run_subagent(cancel, handoff_model, generation_prompt, root)
         .await
         .map(|generated_prompt| format!("{handoff_prefix}\n\n{generated_prompt}"));
-    UiEvent::HandoffResult { goal, result }
+    UiEvent::HandoffResult {
+        next_message,
+        result,
+    }
 }
 
 #[cfg(test)]
@@ -125,18 +128,22 @@ mod tests {
     }
 
     #[test]
-    fn handoff_prefix_includes_goal_verbatim() {
-        let goal = "refactor the handoff prompt to drop length guidance";
-        let prefix = build_handoff_prefix("thread-xyz", goal);
-        assert!(prefix.contains(goal));
-        assert!(prefix.contains("My goal:"));
+    fn handoff_prefix_leads_with_next_message_verbatim() {
+        let msg = "now lets streamline the comments";
+        let prefix = build_handoff_prefix("thread-xyz", msg);
+        assert!(prefix.starts_with(msg), "user message must lead the prefix");
+        assert!(
+            !prefix.contains("My goal:"),
+            "prefix must not relabel the user's message as a goal"
+        );
     }
 
     #[test]
-    fn handoff_prefix_handles_empty_goal() {
+    fn handoff_prefix_handles_empty_next_message() {
         let prefix = build_handoff_prefix("thread-abc", "   ");
         assert!(prefix.contains("thread-abc"));
         assert!(prefix.contains("read_thread"));
-        assert!(!prefix.contains("My goal:"));
+        // Empty case has no leading user-text section, just the parenthetical.
+        assert!(prefix.starts_with('('));
     }
 }

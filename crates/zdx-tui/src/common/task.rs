@@ -51,7 +51,7 @@ pub enum TaskMeta {
         command: String,
     },
     Handoff {
-        goal: String,
+        next_message: String,
     },
     PromptBuilder {
         intent: String,
