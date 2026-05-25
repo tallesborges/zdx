@@ -146,8 +146,11 @@ pub enum UiEffect {
     /// Open models config file in default system editor/app.
     OpenModelsConfig,
 
-    /// Start handoff generation with a goal.
-    StartHandoff { goal: String },
+    /// Start handoff generation. `next_message` is the literal first message
+    /// the user is about to send in the new chat; it is used as the relevance
+    /// filter for the generated context block and is shown verbatim to the
+    /// new assistant.
+    StartHandoff { next_message: String },
 
     /// Start prompt-builder generation with a user intent.
     ///

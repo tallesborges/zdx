@@ -38,15 +38,15 @@ pub struct PendingImage {
 ///
 /// Models the lifecycle of a handoff operation:
 /// - `Idle`: No handoff in progress
-/// - `Pending`: User is typing the goal in textarea
-/// - `Generating`: Async subagent is generating the handoff prompt
+/// - `Pending`: User is typing the first message for the new chat in the textarea
+/// - `Generating`: Async subagent is generating the handoff context block
 /// - `Ready`: Generated prompt is in textarea, awaiting confirmation
 #[derive(Default, Debug)]
 pub enum HandoffState {
     #[default]
     Idle,
 
-    /// User is typing the handoff goal in the textarea.
+    /// User is typing the first message for the new chat in the textarea.
     Pending,
 
     /// Handoff generation is in progress.

@@ -1122,7 +1122,7 @@ mod tests {
         use crate::state::AppState;
 
         let mut custom = sample_custom("review", Some("Review code"));
-        custom.content = "Review the handoff goal.".to_string();
+        custom.content = "Review the handoff message.".to_string();
         let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string(), vec![custom]);
         state.filter = "review".to_string();
         state.clamp_selection();
@@ -1134,13 +1134,14 @@ mod tests {
         let update = state.handle_key(&app.tui, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         // Handoff owns the composer while pending, so custom commands insert
-        // into the current handoff goal instead of replacing it or blocking.
+        // into the current handoff next-message draft instead of replacing it
+        // or blocking.
         assert!(matches!(update.transition, OverlayTransition::Close));
         assert!(update.effects.is_empty());
         assert_eq!(update.mutations.len(), 1);
         match &update.mutations[0] {
             StateMutation::Input(InputMutation::InsertText(text)) => {
-                assert_eq!(text, "Review the handoff goal.");
+                assert_eq!(text, "Review the handoff message.");
             }
             other => panic!("expected InsertText mutation, got {other:?}"),
         }

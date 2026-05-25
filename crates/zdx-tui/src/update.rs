@@ -136,8 +136,11 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 vec![]
             }
         }
-        UiEvent::HandoffResult { goal, result } => {
-            let mutations = input::handle_handoff_result(&mut app.tui.input, &goal, result);
+        UiEvent::HandoffResult {
+            next_message,
+            result,
+        } => {
+            let mutations = input::handle_handoff_result(&mut app.tui.input, &next_message, result);
             apply_mutations(&mut app.tui, mutations);
             vec![]
         }

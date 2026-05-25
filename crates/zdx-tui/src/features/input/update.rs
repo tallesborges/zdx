@@ -1050,14 +1050,14 @@ fn handle_handoff_submission(
     text: &str,
     thread_id: Option<&str>,
 ) -> Option<KeyResult> {
-    // Submitting handoff goal (to trigger generation)
+    // Submitting handoff next-message (to trigger generation)
     if input.handoff.is_pending() {
         if trimmed.is_empty() {
             return Some((
                 vec![],
                 vec![StateMutation::Transcript(
                     TranscriptMutation::AppendSystemMessage(
-                        "Handoff goal cannot be empty.".to_string(),
+                        "Handoff message cannot be empty.".to_string(),
                     ),
                 )],
                 None,
@@ -1066,7 +1066,7 @@ fn handle_handoff_submission(
         input.clear();
         return Some((
             vec![UiEffect::StartHandoff {
-                goal: text.to_string(),
+                next_message: text.to_string(),
             }],
             vec![],
             None,
@@ -1260,7 +1260,7 @@ pub fn build_send_effects_for_tab(
 /// Returns an error if the operation fails.
 pub fn handle_handoff_result(
     input: &mut InputState,
-    goal: &str,
+    next_message: &str,
     result: Result<String, String>,
 ) -> Vec<StateMutation> {
     let was_generating = input.handoff.is_generating();
@@ -1282,9 +1282,9 @@ pub fn handle_handoff_result(
                 )),
             )];
 
-            // Restore goal for retry (spec requirement)
+            // Restore the user's next-message draft for retry (spec requirement)
             if was_generating {
-                input.set_text(goal);
+                input.set_text(next_message);
                 input.handoff = HandoffState::Pending;
                 mutations.push(StateMutation::Transcript(
                     TranscriptMutation::AppendSystemMessage(
