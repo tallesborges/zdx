@@ -18,7 +18,7 @@ pub(crate) fn spawn_topic_title_update(
 ) {
     let client = context.client().clone();
     let title_model = context.config().title_model;
-    let root = context.root().to_path_buf();
+    let root = context.root_for_chat(chat_id).root;
 
     tokio::spawn(async move {
         match title_generation::generate_title(&message_text, &title_model, &root).await {

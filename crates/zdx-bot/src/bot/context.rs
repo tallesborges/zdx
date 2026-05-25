@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use tokio::sync::{Mutex, Notify};
@@ -110,10 +110,6 @@ impl BotContext {
         &self.allowlist_chat_ids
     }
 
-    pub(crate) fn root(&self) -> &Path {
-        self.root.as_path()
-    }
-
     pub(crate) fn root_for_chat(&self, chat_id: i64) -> ResolvedProfileRoot {
         let config = self.config.read().expect("bot config lock poisoned");
         if let Some((name, profile)) = config.telegram_profile_for_chat(chat_id) {
@@ -159,4 +155,70 @@ impl BotContext {
 fn profile_root_path(profile: &TelegramProfileConfig) -> PathBuf {
     let root = profile.cwd_path();
     root.canonicalize().unwrap_or(root)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, HashSet};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use zdx_engine::config::TelegramConfig;
+
+    use super::*;
+
+    #[test]
+    fn test_root_for_chat_uses_matching_profile_cwd() {
+        let temp_root = unique_temp_dir("fallback");
+        let profile_root = unique_temp_dir("profile");
+        fs::create_dir_all(&temp_root).unwrap();
+        fs::create_dir_all(&profile_root).unwrap();
+
+        let config = Config {
+            telegram: TelegramConfig {
+                profiles: BTreeMap::from([(
+                    "zdx".to_string(),
+                    TelegramProfileConfig {
+                        chat_id: -100_123,
+                        cwd: profile_root.display().to_string(),
+                    },
+                )]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let context = test_context(config, temp_root.clone());
+
+        let resolved = context.root_for_chat(-100_123);
+        assert_eq!(resolved.profile_name.as_deref(), Some("zdx"));
+        assert_eq!(resolved.root, profile_root.canonicalize().unwrap());
+
+        let fallback = context.root_for_chat(-100_999);
+        assert_eq!(fallback.profile_name, None);
+        assert_eq!(fallback.root, temp_root.canonicalize().unwrap());
+    }
+
+    fn test_context(config: Config, root: PathBuf) -> BotContext {
+        BotContext::new(
+            TelegramClient::new("token".to_string()),
+            config,
+            BotContextDeps {
+                allowlist_user_ids: HashSet::new(),
+                allowlist_chat_ids: HashSet::new(),
+                root,
+                bot_instruction_layer: None,
+                tool_config: ToolConfig::default(),
+                cancel_map: new_cancel_map(),
+                queue_cancel_map: new_queue_cancel_map(),
+            },
+        )
+    }
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("zdx-bot-profile-{label}-{nanos}"))
+    }
 }
