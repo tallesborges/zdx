@@ -57,7 +57,6 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `just codebase` (generate codebase.txt for entire workspace)
 - `just codebase crates/zdx-tui` (generate codebase.txt for specific crate)
 - `just build-release` (build release binary)
-- Release automation: `.github/workflows/release-please.yml` (config in `release-please-config.json`)
 
 ## Verification
 

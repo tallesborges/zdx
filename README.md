@@ -18,16 +18,6 @@ Zdx is a coding agent built in Rust. I made it to have customization freedom and
 
 ### Install
 
-**Shell (macOS/Linux):**
-```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/tallesborges/zdx/releases/latest/download/zdx-installer.sh | sh
-```
-
-**Homebrew:**
-```bash
-brew install tallesborges/zdx/zdx
-```
-
 **From source:**
 ```bash
 git clone https://github.com/tallesborges/zdx.git
