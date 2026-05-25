@@ -32,7 +32,18 @@ Operate in read-only mode throughout. Do not write or update files.
    - Project/feature: (1–3 sentences from user)
    - Existing state: (what already exists)
    - Constraints: (platforms, requirements, no-go's)
-   - Success looks like: (what "usable" means)
+   - Success looks like: (what "usable" means — must be measurable or binary; see Goal-quality gate below)
+
+   **Goal-quality gate (blocking):** before moving on, "Success looks like" must answer:
+   - What concrete user-visible thing will be true when this is done?
+   - What demo or command proves it (pass/fail or threshold)?
+   - What is explicitly out of scope?
+
+   If the success criterion is a pure activity description ("make X better", "improve Y", "work on Z") or has no observable validator, stop and either:
+   - Sharpen it inline with one focused clarification question, or
+   - Suggest running the `define-goal` skill first when the goal needs a deeper shaping pass.
+
+   Do not proceed to slicing until the goal passes this gate. Slices inherit their `✅ Demo` rigor from this criterion — a vague goal produces vague demos.
 
 2. **Deep context gathering with Explorer**
    - Delegate to `explorer` to gather codebase facts relevant to the feature: directory structure, existing patterns, related modules, test conventions, and likely touchpoints.
