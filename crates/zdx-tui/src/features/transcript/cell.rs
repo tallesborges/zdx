@@ -15,7 +15,7 @@ use zdx_engine::core::events::ToolOutput;
 use zdx_engine::providers::ReplayToken;
 
 use super::style::{Style, StyledLine, StyledSpan};
-use super::wrap::{WrapCache, render_prefixed_content, wrap_text};
+use super::wrap::{WrapCache, render_prefixed_content};
 use crate::common::truncate_with_ellipsis;
 
 fn value_as_trimmed_str<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
