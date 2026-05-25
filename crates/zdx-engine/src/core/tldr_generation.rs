@@ -13,6 +13,7 @@ use crate::config::ThinkingLevel;
 use crate::core::subagent::{ExecSubagentOptions, run_exec_subagent};
 use crate::core::thread_persistence as tp;
 use crate::prompts::THREAD_TLDR_PROMPT_TEMPLATE;
+use crate::zdx_context::build_zdx_context;
 
 /// Generate a TLDR/recap of the given thread using the configured TLDR model.
 ///
@@ -30,7 +31,9 @@ pub async fn generate_tldr(thread_id: &str, tldr_model: &str, root: &Path) -> Re
     let trimmed = transcript.trim();
     ensure!(!trimmed.is_empty(), "Thread transcript is empty");
 
-    let prompt = THREAD_TLDR_PROMPT_TEMPLATE.replace("{{TRANSCRIPT}}", trimmed);
+    let prompt = THREAD_TLDR_PROMPT_TEMPLATE
+        .replace("{{ZDX_CONTEXT}}", &build_zdx_context(root))
+        .replace("{{TRANSCRIPT}}", trimmed);
 
     let options = ExecSubagentOptions {
         model: Some(tldr_model.to_string()),

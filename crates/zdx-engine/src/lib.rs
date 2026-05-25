@@ -16,3 +16,4 @@ pub mod skills;
 pub mod subagents;
 pub mod tools;
 pub mod tracing_init;
+pub mod zdx_context;

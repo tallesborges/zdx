@@ -10,6 +10,7 @@ use crate::core::events::ToolOutput;
 use crate::core::subagent::{ExecSubagentOptions, run_exec_subagent};
 use crate::core::thread_persistence as tp;
 use crate::prompts::READ_THREAD_PROMPT_TEMPLATE;
+use crate::zdx_context::build_zdx_context;
 
 /// Returns the tool definition for the read thread tool.
 pub fn definition() -> ToolDefinition {
@@ -84,7 +85,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     }
 
     let thread_content = tp::format_transcript(&events);
-    let prompt = build_read_thread_prompt(&thread_content, &goal);
+    let prompt = build_read_thread_prompt(&thread_content, &goal, &build_zdx_context(&ctx.root));
 
     match run_subagent(prompt, ctx).await {
         Ok(response) => ToolOutput::success(Value::String(response)),
@@ -92,8 +93,9 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     }
 }
 
-fn build_read_thread_prompt(thread_content: &str, goal: &str) -> String {
+fn build_read_thread_prompt(thread_content: &str, goal: &str, zdx_context: &str) -> String {
     READ_THREAD_PROMPT_TEMPLATE
+        .replace("{{ZDX_CONTEXT}}", zdx_context)
         .replace("{{THREAD_CONTENT}}", thread_content)
         .replace("{{GOAL}}", goal)
 }
