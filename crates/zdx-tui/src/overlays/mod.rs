@@ -255,7 +255,8 @@ mod tests {
         let overlay: Option<Overlay> = Some(Overlay::ModelPicker(picker));
         assert!(overlay.is_some());
 
-        let (skill_picker, _) = SkillPickerState::open(vec!["test/repo".to_string()], None);
+        let (skill_picker, _) =
+            SkillPickerState::open(Vec::new(), vec!["test/repo".to_string()], None);
         let overlay: Option<Overlay> = Some(Overlay::SkillPicker(skill_picker));
         assert!(overlay.is_some());
 

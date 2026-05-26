@@ -326,6 +326,8 @@ pub struct TuiState {
     pub base_thinking_level: zdx_engine::config::ThinkingLevel,
     /// Last selected skill repository in this session.
     pub last_skill_repo: Option<String>,
+    /// Skills currently loaded into the active thread/context.
+    pub loaded_skills: Vec<zdx_engine::skills::Skill>,
     /// Agent options (root path, etc).
     pub agent_opts: AgentOptions,
     /// System prompt for the agent.
@@ -422,6 +424,7 @@ impl TuiState {
             base_thinking_level: config.thinking_level,
             config,
             last_skill_repo: None,
+            loaded_skills: Vec::new(),
             agent_opts,
             system_prompt,
             agent_state: AgentState::Idle,

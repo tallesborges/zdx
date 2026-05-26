@@ -142,6 +142,7 @@ pub async fn run_interactive_chat_with_history(
             .transcript
             .push_cell(HistoryCell::system(message));
     }
+    runtime.state.tui.loaded_skills = loaded_skills;
 
     runtime.run()?;
 

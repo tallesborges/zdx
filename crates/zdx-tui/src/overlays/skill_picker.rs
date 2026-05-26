@@ -25,18 +25,25 @@ pub struct SkillItem {
     pub name: String,
     pub path: String,
     pub description: Option<String>,
+    /// Source label for locally-loaded skills (e.g. "zdx-user"). `None` for
+    /// remote/installable skills fetched from a repository.
+    pub source: Option<String>,
 }
 
 /// Which view the skill picker is showing.
 #[derive(Debug)]
 enum SkillView {
-    /// List of skills (default).
+    /// Currently-loaded skills in the active thread (default).
+    Loaded,
+    /// Install picker: remote skills listed per repo.
     List,
     /// Detail view for a selected skill.
     Detail {
         skill: SkillItem,
         instructions: DetailContent,
         scroll: u16,
+        /// True if reached from the install `List` view; false from `Loaded`.
+        from_install: bool,
     },
 }
 
@@ -55,6 +62,7 @@ pub struct SkillPickerState {
     filter: String,
     selected: usize,
     skills_by_repo: HashMap<String, Vec<SkillItem>>,
+    loaded_skills: Vec<SkillItem>,
     loading_repo: Option<String>,
     installing_skill: Option<String>,
     error: Option<String>,
@@ -63,7 +71,11 @@ pub struct SkillPickerState {
 }
 
 impl SkillPickerState {
-    pub fn open(repos: Vec<String>, last_repo: Option<&str>) -> (Self, Vec<UiEffect>) {
+    pub fn open(
+        loaded_skills: Vec<zdx_engine::skills::Skill>,
+        repos: Vec<String>,
+        last_repo: Option<&str>,
+    ) -> (Self, Vec<UiEffect>) {
         let installed = load_installed_skills();
         let repos: Vec<String> = repos
             .into_iter()
@@ -73,27 +85,32 @@ impl SkillPickerState {
             .and_then(|repo| repos.iter().position(|r| r == repo))
             .unwrap_or(0);
 
-        let mut state = Self {
+        let loaded_items: Vec<SkillItem> = loaded_skills
+            .into_iter()
+            .map(|s| SkillItem {
+                name: s.name,
+                path: s.file_path.display().to_string(),
+                description: Some(s.description).filter(|d| !d.is_empty()),
+                source: Some(s.source.as_str().to_string()),
+            })
+            .collect();
+
+        let state = Self {
             repos,
             selected_repo,
             filter: String::new(),
             selected: 0,
             skills_by_repo: HashMap::new(),
+            loaded_skills: loaded_items,
             loading_repo: None,
             installing_skill: None,
             error: None,
             installed,
-            view: SkillView::List,
+            view: SkillView::Loaded,
         };
 
-        let effects = if let Some(repo) = state.current_repo().map(ToString::to_string) {
-            state.loading_repo = Some(repo.clone());
-            vec![UiEffect::FetchSkillsList { repo }]
-        } else {
-            vec![]
-        };
-
-        (state, effects)
+        // Defer fetching remote skills until the user enters the install view.
+        (state, vec![])
     }
 
     pub fn current_repo(&self) -> Option<&str> {
@@ -102,20 +119,121 @@ impl SkillPickerState {
 
     pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
         match &self.view {
+            SkillView::Loaded => render_skill_loaded(frame, self, area, input_y),
             SkillView::List => render_skill_list(frame, self, area, input_y),
             SkillView::Detail {
                 skill,
                 instructions,
                 scroll,
-            } => render_skill_detail(frame, self, skill, instructions, *scroll, area, input_y),
+                from_install,
+            } => render_skill_detail(
+                frame,
+                self,
+                skill,
+                instructions,
+                *scroll,
+                *from_install,
+                area,
+                input_y,
+            ),
         }
     }
 
     pub fn handle_key(&mut self, _tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
         match &self.view {
+            SkillView::Loaded => self.handle_loaded_key(key),
             SkillView::List => self.handle_list_key(key),
             SkillView::Detail { .. } => self.handle_detail_key(key),
         }
+    }
+
+    fn handle_loaded_key(&mut self, key: KeyEvent) -> OverlayUpdate {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
+                OverlayUpdate::close()
+            }
+            KeyCode::Up => {
+                if self.selected > 0 {
+                    self.selected -= 1;
+                }
+                OverlayUpdate::stay()
+            }
+            KeyCode::Down => {
+                let count = self.filtered_loaded().len();
+                if count > 0 && self.selected < count.saturating_sub(1) {
+                    self.selected += 1;
+                }
+                OverlayUpdate::stay()
+            }
+            KeyCode::Enter => self.open_loaded_detail(),
+            KeyCode::Char('i') if !ctrl && !alt => self.enter_install_view(),
+            KeyCode::Char('u') if ctrl => {
+                self.filter.clear();
+                self.error = None;
+                self.clamp_selection();
+                OverlayUpdate::stay()
+            }
+            KeyCode::Backspace => {
+                if alt {
+                    clear_word_left(&mut self.filter);
+                } else {
+                    self.filter.pop();
+                }
+                self.error = None;
+                self.clamp_selection();
+                OverlayUpdate::stay()
+            }
+            KeyCode::Char(c) if !ctrl => {
+                self.filter.push(c);
+                self.error = None;
+                self.clamp_selection();
+                OverlayUpdate::stay()
+            }
+            _ => OverlayUpdate::stay(),
+        }
+    }
+
+    fn enter_install_view(&mut self) -> OverlayUpdate {
+        self.view = SkillView::List;
+        self.filter.clear();
+        self.selected = 0;
+        self.error = None;
+        self.clamp_selection();
+
+        let mut effects = Vec::new();
+        if let Some(repo) = self.current_repo().map(ToString::to_string) {
+            if !self.skills_by_repo.contains_key(&repo) {
+                self.loading_repo = Some(repo.clone());
+                effects.push(UiEffect::FetchSkillsList { repo });
+            }
+        } else {
+            self.error = Some("No skill repositories configured.".to_string());
+        }
+
+        OverlayUpdate::stay().with_ui_effects(effects)
+    }
+
+    fn open_loaded_detail(&mut self) -> OverlayUpdate {
+        let filtered = self.filtered_loaded();
+        let Some(skill) = filtered.get(self.selected).map(|s| (*s).clone()) else {
+            return OverlayUpdate::stay();
+        };
+
+        let instructions = match std::fs::read_to_string(&skill.path) {
+            Ok(content) => DetailContent::Loaded(content),
+            Err(err) => DetailContent::Failed(format!("Failed to read SKILL.md: {err}")),
+        };
+
+        self.view = SkillView::Detail {
+            skill,
+            instructions,
+            scroll: 0,
+            from_install: false,
+        };
+        OverlayUpdate::stay()
     }
 
     fn handle_list_key(&mut self, key: KeyEvent) -> OverlayUpdate {
@@ -192,7 +310,18 @@ impl SkillPickerState {
 
         match key.code {
             KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
-                self.view = SkillView::List;
+                let from_install = matches!(
+                    &self.view,
+                    SkillView::Detail {
+                        from_install: true,
+                        ..
+                    }
+                );
+                self.view = if from_install {
+                    SkillView::List
+                } else {
+                    SkillView::Loaded
+                };
                 self.error = None;
                 OverlayUpdate::stay()
             }
@@ -283,6 +412,7 @@ impl SkillPickerState {
             skill,
             instructions: DetailContent::Loading,
             scroll: 0,
+            from_install: true,
         };
 
         OverlayUpdate::stay()
@@ -294,10 +424,18 @@ impl SkillPickerState {
             return OverlayUpdate::close();
         };
 
-        let skill = match &self.view {
-            SkillView::Detail { skill, .. } => skill.clone(),
+        let (skill, from_install) = match &self.view {
+            SkillView::Detail {
+                skill,
+                from_install,
+                ..
+            } => (skill.clone(), *from_install),
             _ => return OverlayUpdate::stay(),
         };
+
+        if !from_install {
+            return OverlayUpdate::stay();
+        }
 
         if self.is_installed(&skill) {
             self.error = Some("Skill already installed.".to_string());
@@ -372,12 +510,36 @@ impl SkillPickerState {
     }
 
     fn clamp_selection(&mut self) {
-        let count = self.filtered_skills().len();
+        let count = match self.view {
+            SkillView::Loaded => self.filtered_loaded().len(),
+            _ => self.filtered_skills().len(),
+        };
         if count == 0 {
             self.selected = 0;
         } else if self.selected >= count {
             self.selected = count - 1;
         }
+    }
+
+    fn filtered_loaded(&self) -> Vec<&SkillItem> {
+        if self.filter.is_empty() {
+            return self.loaded_skills.iter().collect();
+        }
+        let filter = self.filter.to_lowercase();
+        self.loaded_skills
+            .iter()
+            .filter(|skill| {
+                skill.name.to_lowercase().contains(&filter)
+                    || skill
+                        .description
+                        .as_ref()
+                        .is_some_and(|desc| desc.to_lowercase().contains(&filter))
+                    || skill
+                        .source
+                        .as_ref()
+                        .is_some_and(|src| src.to_lowercase().contains(&filter))
+            })
+            .collect()
     }
 
     fn is_installed(&self, skill: &SkillItem) -> bool {
@@ -516,15 +678,184 @@ fn render_skill_list(frame: &mut Frame, picker: &SkillPickerState, area: Rect, i
 }
 
 // =============================================================================
+// Loaded view rendering
+// =============================================================================
+
+fn render_skill_loaded(frame: &mut Frame, picker: &SkillPickerState, area: Rect, input_top_y: u16) {
+    use super::render_utils::{
+        InputHint, InputLine, OverlayConfig, render_input_line, render_overlay, render_separator,
+    };
+
+    let filtered = picker.filtered_loaded();
+
+    let max_width = area.width.saturating_sub(4);
+    let picker_width = max_width.clamp(40, 90);
+    let picker_height = (filtered.len() as u16 + 9).max(9);
+
+    let mut hints = vec![
+        InputHint::new("↑↓", "navigate"),
+        InputHint::new("Enter", "details"),
+    ];
+    if !picker.repos.is_empty() {
+        hints.push(InputHint::new("i", "install"));
+    }
+    hints.push(InputHint::new("Esc", "close"));
+
+    let layout = render_overlay(
+        frame,
+        area,
+        input_top_y,
+        &OverlayConfig {
+            title: "Loaded Skills",
+            border_color: Color::Magenta,
+            width: picker_width,
+            height: picker_height,
+            hints: &hints,
+        },
+    );
+
+    let filter_area = Rect::new(layout.body.x, layout.body.y, layout.body.width, 1);
+    render_input_line(
+        frame,
+        filter_area,
+        &InputLine {
+            value: &picker.filter,
+            placeholder: Some("Filter loaded skills"),
+            prompt: "> ",
+            prompt_color: Color::DarkGray,
+            text_color: Color::Magenta,
+            placeholder_color: Color::DarkGray,
+            cursor_color: Color::Magenta,
+        },
+    );
+
+    render_separator(frame, layout.body, 1);
+
+    let summary = format!(
+        "{} skill{} loaded into this thread",
+        picker.loaded_skills.len(),
+        if picker.loaded_skills.len() == 1 {
+            ""
+        } else {
+            "s"
+        }
+    );
+    let summary_area = Rect::new(layout.body.x, layout.body.y + 2, layout.body.width, 1);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            summary,
+            Style::default().fg(Color::DarkGray),
+        )))
+        .alignment(Alignment::Center),
+        summary_area,
+    );
+
+    render_separator(frame, layout.body, 3);
+
+    let list_height = layout.body.height.saturating_sub(6);
+    let list_area = Rect::new(
+        layout.body.x,
+        layout.body.y + 4,
+        layout.body.width,
+        list_height,
+    );
+
+    let items: Vec<ListItem> = if filtered.is_empty() {
+        let label = if picker.loaded_skills.is_empty() {
+            "  No skills loaded"
+        } else {
+            "  No matches"
+        };
+        vec![ListItem::new(Line::from(Span::styled(
+            label,
+            Style::default().fg(Color::DarkGray),
+        )))]
+    } else {
+        let line_width = list_area.width.saturating_sub(2);
+        filtered
+            .iter()
+            .map(|skill| ListItem::new(loaded_skill_line(skill, line_width)))
+            .collect()
+    };
+
+    let list = List::new(items)
+        .highlight_style(
+            Style::default()
+                .bg(Color::Magenta)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▶ ");
+
+    let mut list_state = ListState::default();
+    if !filtered.is_empty() {
+        list_state.select(Some(picker.selected));
+    }
+    frame.render_stateful_widget(list, list_area, &mut list_state);
+
+    render_separator(frame, layout.body, 4 + list_height);
+
+    let status_area = Rect::new(
+        layout.body.x,
+        layout.body.y + 5 + list_height,
+        layout.body.width,
+        1,
+    );
+    if let Some(error) = &picker.error {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                error.clone(),
+                Style::default().fg(Color::Red),
+            )))
+            .alignment(Alignment::Center),
+            status_area,
+        );
+    } else if let Some(skill) = filtered.get(picker.selected)
+        && let Some(desc) = &skill.description
+    {
+        let text = crate::common::truncate_start_with_ellipsis(desc, layout.body.width as usize);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                text,
+                Style::default().fg(Color::DarkGray),
+            )))
+            .alignment(Alignment::Center),
+            status_area,
+        );
+    }
+}
+
+fn loaded_skill_line(skill: &SkillItem, width: u16) -> Line<'static> {
+    let source = skill.source.clone().unwrap_or_default();
+    let base = skill.name.clone();
+    let left_width = base.len() as u16;
+    let right_width = source.len() as u16;
+    let spacing = if right_width == 0 || width <= left_width + right_width {
+        1
+    } else {
+        width - left_width - right_width
+    } as usize;
+
+    let mut spans = vec![Span::styled(base, Style::default().fg(Color::Cyan))];
+    spans.push(Span::raw(" ".repeat(spacing)));
+    if !source.is_empty() {
+        spans.push(Span::styled(source, Style::default().fg(Color::DarkGray)));
+    }
+    Line::from(spans)
+}
+
+// =============================================================================
 // Detail view rendering
 // =============================================================================
 
+#[allow(clippy::too_many_arguments)]
 fn render_skill_detail(
     frame: &mut Frame,
     picker: &SkillPickerState,
     skill: &SkillItem,
     instructions: &DetailContent,
     scroll: u16,
+    from_install: bool,
     area: Rect,
     input_top_y: u16,
 ) {
@@ -540,7 +871,7 @@ fn render_skill_detail(
         InputHint::new("↑↓", "scroll"),
         InputHint::new("Esc", "back"),
     ];
-    if !installed && picker.installing_skill.is_none() {
+    if from_install && !installed && picker.installing_skill.is_none() {
         hints.insert(1, InputHint::new("Enter", "install"));
     }
 
@@ -571,6 +902,12 @@ fn render_skill_detail(
             Style::default().fg(Color::Green),
         ));
     }
+    if !from_install && let Some(source) = &skill.source {
+        header_spans.push(Span::styled(
+            format!("  [{source}]"),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
     frame.render_widget(Paragraph::new(Line::from(header_spans)), header_area);
 
     render_separator(frame, layout.body, 1);
@@ -599,7 +936,9 @@ fn render_skill_detail(
                 Line::from(Span::styled(error.clone(), Style::default().fg(Color::Red))),
                 Line::from(""),
                 Line::from(Span::styled(
-                    if installed {
+                    if !from_install {
+                        "Press Esc to go back."
+                    } else if installed {
                         "Skill is already installed."
                     } else {
                         "Press Enter to install anyway."
@@ -627,7 +966,7 @@ fn render_skill_detail(
         layout.body.width,
         1,
     );
-    let status_line = detail_status_text(picker, skill);
+    let status_line = detail_status_text(picker, skill, from_install);
     if let Some(line) = status_line {
         frame.render_widget(
             Paragraph::new(line).alignment(Alignment::Center),
@@ -689,7 +1028,11 @@ fn list_status_text(picker: &SkillPickerState) -> Option<Line<'static>> {
     )))
 }
 
-fn detail_status_text(picker: &SkillPickerState, skill: &SkillItem) -> Option<Line<'static>> {
+fn detail_status_text(
+    picker: &SkillPickerState,
+    skill: &SkillItem,
+    from_install: bool,
+) -> Option<Line<'static>> {
     if let Some(error) = &picker.error {
         return Some(Line::from(Span::styled(
             error.clone(),
@@ -701,6 +1044,13 @@ fn detail_status_text(picker: &SkillPickerState, skill: &SkillItem) -> Option<Li
         return Some(Line::from(Span::styled(
             format!("Installing {installing}..."),
             Style::default().fg(Color::Yellow),
+        )));
+    }
+
+    if !from_install {
+        return Some(Line::from(Span::styled(
+            crate::common::truncate_start_with_ellipsis(&skill.path, 80),
+            Style::default().fg(Color::DarkGray),
         )));
     }
 

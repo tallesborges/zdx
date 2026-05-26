@@ -316,6 +316,7 @@ fn handle_thread_created(
 ) {
     let startup_messages =
         crate::thread_startup_messages(Some(thread_handle.path()), &context_paths, &skills);
+    mutations.push(StateMutation::SetLoadedSkills(skills));
     mutations.push(StateMutation::Thread(ThreadMutation::SetThread(Some(
         thread_handle,
     ))));
