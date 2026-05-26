@@ -1,6 +1,6 @@
 ---
 name: brainstorm
-description: Explore options and pick a direction before committing to a goal or plan. Use when the user wants to think through approaches, weigh trade-offs, or decide between alternatives — not yet ready to define success criteria or slice work. Hard rule: no code, files, or implementation until the user explicitly approves a direction.
+description: "Explore options and pick a direction before committing to a goal or plan. Use when the user wants to think through approaches, weigh trade-offs, or decide between alternatives — not yet ready to define success criteria or slice work. Hard rule: no code, files, or implementation until the user explicitly approves a direction."
 metadata:
   short-description: Explore options and pick a direction
 ---
