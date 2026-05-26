@@ -596,7 +596,7 @@ fn build_usage_display(
         .add_modifier(Modifier::DIM);
 
     let show_pricing = provider.auth_mode() == ProviderAuthMode::ApiKey;
-    let show_subscription = provider.auth_mode() == ProviderAuthMode::OAuth;
+    let show_subscription = provider.is_subscription();
 
     // Try to find the model to get pricing and context limit
     let model = ModelOption::find_by_id(model_id);
