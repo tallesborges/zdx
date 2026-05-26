@@ -595,7 +595,7 @@ fn build_usage_display(
         .fg(Color::Green)
         .add_modifier(Modifier::DIM);
 
-    let show_pricing = provider.auth_mode() == ProviderAuthMode::ApiKey;
+    let show_pricing = provider.auth_mode() == ProviderAuthMode::ApiKey && !provider.is_subscription();
     let show_subscription = provider.is_subscription();
 
     // Try to find the model to get pricing and context limit
