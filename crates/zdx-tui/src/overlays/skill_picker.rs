@@ -169,7 +169,8 @@ impl SkillPickerState {
                 OverlayUpdate::stay()
             }
             KeyCode::Enter => self.open_loaded_detail(),
-            KeyCode::Char('i') if !ctrl && !alt => self.enter_install_view(),
+            KeyCode::Tab => self.cycle_view(true),
+            KeyCode::BackTab => self.cycle_view(false),
             KeyCode::Char('u') if ctrl => {
                 self.filter.clear();
                 self.error = None;
@@ -196,24 +197,54 @@ impl SkillPickerState {
         }
     }
 
-    fn enter_install_view(&mut self) -> OverlayUpdate {
-        self.view = SkillView::List;
+    /// Cycle through views: Loaded → Install(repo 0) → Install(repo 1) → … → Loaded.
+    fn cycle_view(&mut self, forward: bool) -> OverlayUpdate {
+        // Total positions: 1 (Loaded) + repos.len(). If no repos, Tab is a no-op.
+        let repo_count = self.repos.len();
+        if repo_count == 0 {
+            return OverlayUpdate::stay();
+        }
+
+        let positions = 1 + repo_count;
+        let current = match self.view {
+            SkillView::List => 1 + self.selected_repo,
+            // Detail shouldn't reach here; treat as Loaded.
+            SkillView::Loaded | SkillView::Detail { .. } => 0,
+        };
+
+        let next = if forward {
+            (current + 1) % positions
+        } else {
+            (current + positions - 1) % positions
+        };
+
         self.filter.clear();
         self.selected = 0;
         self.error = None;
+        self.loading_repo = None;
         self.clamp_selection();
 
-        let mut effects = Vec::new();
-        if let Some(repo) = self.current_repo().map(ToString::to_string) {
-            if !self.skills_by_repo.contains_key(&repo) {
-                self.loading_repo = Some(repo.clone());
-                effects.push(UiEffect::FetchSkillsList { repo });
-            }
-        } else {
-            self.error = Some("No skill repositories configured.".to_string());
+        if next == 0 {
+            self.view = SkillView::Loaded;
+            return OverlayUpdate::stay();
         }
 
-        OverlayUpdate::stay().with_ui_effects(effects)
+        self.selected_repo = next - 1;
+        self.view = SkillView::List;
+
+        let Some(repo) = self.current_repo().map(ToString::to_string) else {
+            return OverlayUpdate::stay();
+        };
+
+        let mut effects = Vec::new();
+        if !self.skills_by_repo.contains_key(&repo) {
+            self.loading_repo = Some(repo.clone());
+            effects.push(UiEffect::FetchSkillsList { repo: repo.clone() });
+        }
+
+        OverlayUpdate::stay()
+            .with_ui_effects(effects)
+            .with_mutations(vec![StateMutation::SetLastSkillRepo(repo)])
     }
 
     fn open_loaded_detail(&mut self) -> OverlayUpdate {
@@ -267,8 +298,8 @@ impl SkillPickerState {
                 }
                 OverlayUpdate::stay()
             }
-            KeyCode::Tab => self.switch_repo(true),
-            KeyCode::BackTab => self.switch_repo(false),
+            KeyCode::Tab => self.cycle_view(true),
+            KeyCode::BackTab => self.cycle_view(false),
             KeyCode::Enter => self.open_detail(),
             KeyCode::Char('u') if ctrl && !shift && !alt => {
                 self.filter.clear();
@@ -451,40 +482,6 @@ impl SkillPickerState {
         }])
     }
 
-    fn switch_repo(&mut self, forward: bool) -> OverlayUpdate {
-        if self.repos.len() <= 1 {
-            return OverlayUpdate::stay();
-        }
-
-        let repo_count = self.repos.len();
-        if forward {
-            self.selected_repo = (self.selected_repo + 1) % repo_count;
-        } else {
-            self.selected_repo = (self.selected_repo + repo_count - 1) % repo_count;
-        }
-
-        self.filter.clear();
-        self.selected = 0;
-        self.error = None;
-        self.loading_repo = None;
-        self.view = SkillView::List;
-        self.clamp_selection();
-
-        let Some(repo) = self.current_repo().map(ToString::to_string) else {
-            return OverlayUpdate::stay();
-        };
-
-        let mut effects = Vec::new();
-        if !self.skills_by_repo.contains_key(&repo) {
-            self.loading_repo = Some(repo.clone());
-            effects.push(UiEffect::FetchSkillsList { repo: repo.clone() });
-        }
-
-        OverlayUpdate::stay()
-            .with_ui_effects(effects)
-            .with_mutations(vec![StateMutation::SetLastSkillRepo(repo)])
-    }
-
     fn filtered_skills(&self) -> Vec<&SkillItem> {
         let Some(repo) = self.current_repo() else {
             return Vec::new();
@@ -567,9 +564,12 @@ fn render_skill_list(frame: &mut Frame, picker: &SkillPickerState, area: Rect, i
         InputHint::new("Enter", "details"),
         InputHint::new("Esc", "cancel"),
     ];
-    if picker.repos.len() > 1 {
-        hints.insert(2, InputHint::new("Tab", "repo"));
-    }
+    let tab_label = if picker.repos.len() > 1 {
+        "next repo / loaded"
+    } else {
+        "loaded"
+    };
+    hints.insert(2, InputHint::new("Tab", tab_label));
 
     let layout = render_overlay(
         frame,
@@ -697,7 +697,7 @@ fn render_skill_loaded(frame: &mut Frame, picker: &SkillPickerState, area: Rect,
         InputHint::new("Enter", "details"),
     ];
     if !picker.repos.is_empty() {
-        hints.push(InputHint::new("i", "install"));
+        hints.push(InputHint::new("Tab", "install"));
     }
     hints.push(InputHint::new("Esc", "close"));
 
