@@ -408,6 +408,7 @@ fn apply_tab_mutations(tui: &mut crate::state::TuiState, mutations: Vec<StateMut
             | StateMutation::SetActiveThreadOverrides { .. }
             | StateMutation::SetSystemPrompt(_)
             | StateMutation::SetLastSkillRepo(_)
+            | StateMutation::SetLoadedSkills(_)
             | StateMutation::ToggleDebugStatus => {
                 // App-level mutations never originate from a queued-prompt
                 // drain or transcript event; ignored here so the helper
@@ -554,6 +555,7 @@ fn handle_skill_event(app: &mut AppState, skill_event: SkillUiEvent) -> Vec<UiEf
                         name: skill.name,
                         path: skill.path,
                         description: skill.description,
+                        source: None,
                     })
                     .collect();
                 picker.set_skills(&repo, items);
@@ -785,6 +787,9 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
             StateMutation::SetLastSkillRepo(repo) => {
                 tui.last_skill_repo = Some(repo);
             }
+            StateMutation::SetLoadedSkills(skills) => {
+                tui.loaded_skills = skills;
+            }
             StateMutation::ToggleDebugStatus => {
                 tui.show_debug_status = !tui.show_debug_status;
             }
@@ -894,7 +899,8 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
         overlays::OverlayRequest::SkillPicker => {
             let repos = app.tui.config.skills.skill_repositories.clone();
             let last_repo = app.tui.last_skill_repo.as_deref();
-            let (state, effects) = overlays::SkillPickerState::open(repos, last_repo);
+            let loaded = app.tui.loaded_skills.clone();
+            let (state, effects) = overlays::SkillPickerState::open(loaded, repos, last_repo);
             if let Some(repo) = state.current_repo() {
                 app.tui.last_skill_repo = Some(repo.to_string());
             }
@@ -1099,6 +1105,7 @@ fn create_btw_tab(
         base_model: parent.base_model.clone(),
         base_thinking_level: parent.base_thinking_level,
         last_skill_repo: parent.last_skill_repo.clone(),
+        loaded_skills: parent.loaded_skills.clone(),
         agent_opts: parent.agent_opts.clone(),
         system_prompt: parent.system_prompt.clone(),
         agent_state: AgentState::Idle,
@@ -1196,6 +1203,7 @@ fn create_thread_tab(
         base_model: parent.base_model.clone(),
         base_thinking_level: parent.base_thinking_level,
         last_skill_repo: parent.last_skill_repo.clone(),
+        loaded_skills: parent.loaded_skills.clone(),
         agent_opts: parent.agent_opts.clone(),
         system_prompt: parent.system_prompt.clone(),
         agent_state: AgentState::Idle,

@@ -31,6 +31,7 @@ pub enum StateMutation {
     },
     SetSystemPrompt(Option<String>),
     SetLastSkillRepo(String),
+    SetLoadedSkills(Vec<zdx_engine::skills::Skill>),
     /// Toggle the debug status line visibility.
     ToggleDebugStatus,
 }
