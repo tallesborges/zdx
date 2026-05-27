@@ -1,8 +1,9 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BotCommand {
     New,
-    Rebuild,
+    Exit,
     Status,
+    WhereAmI,
     WorktreeCreate,
 }
 
@@ -31,12 +32,12 @@ const COMMAND_DEFS: &[CommandDef] = &[
         },
     },
     CommandDef {
-        command: BotCommand::Rebuild,
-        patterns: &["/rebuild"],
+        command: BotCommand::Exit,
+        patterns: &["/exit"],
         blocks_topic_autocreate: true,
         telegram_spec: TelegramCommandSpec {
-            command: "rebuild",
-            description: "Rebuild and restart the bot",
+            command: "exit",
+            description: "Exit the bot (supervisor will restart it)",
         },
     },
     CommandDef {
@@ -46,6 +47,15 @@ const COMMAND_DEFS: &[CommandDef] = &[
         telegram_spec: TelegramCommandSpec {
             command: "status",
             description: "Show thread, model, usage, and pricing",
+        },
+    },
+    CommandDef {
+        command: BotCommand::WhereAmI,
+        patterns: &["/whereami"],
+        blocks_topic_autocreate: true,
+        telegram_spec: TelegramCommandSpec {
+            command: "whereami",
+            description: "Show chat ID, topic ID, and profile/cwd binding",
         },
     },
     CommandDef {
@@ -98,7 +108,10 @@ pub(crate) fn is_topic_blocking_command(text: &str) -> bool {
 }
 
 pub(crate) fn bypasses_queue(text: &str) -> bool {
-    matches!(parse_command(text), Some(BotCommand::Status))
+    matches!(
+        parse_command(text),
+        Some(BotCommand::Status | BotCommand::WhereAmI)
+    )
 }
 
 fn command_matches(trimmed_text: &str, command: &str) -> bool {
@@ -196,13 +209,18 @@ mod tests {
     fn parse_basic_commands() {
         assert_eq!(parse_command("/new"), Some(BotCommand::New));
         assert_eq!(parse_command(" /new@zdx_bot "), Some(BotCommand::New));
-        assert_eq!(parse_command("/rebuild"), Some(BotCommand::Rebuild));
+        assert_eq!(parse_command("/exit"), Some(BotCommand::Exit));
         assert_eq!(
-            parse_command("/rebuild@zdx_bot please"),
-            Some(BotCommand::Rebuild)
+            parse_command("/exit@zdx_bot please"),
+            Some(BotCommand::Exit)
         );
         assert_eq!(parse_command("/status"), Some(BotCommand::Status));
         assert_eq!(parse_command(" /status@zdx_bot "), Some(BotCommand::Status));
+        assert_eq!(parse_command("/whereami"), Some(BotCommand::WhereAmI));
+        assert_eq!(
+            parse_command(" /whereami@zdx_bot "),
+            Some(BotCommand::WhereAmI)
+        );
     }
 
     #[test]
@@ -234,15 +252,17 @@ mod tests {
     fn rejects_non_commands() {
         assert_eq!(parse_command("hello"), None);
         assert_eq!(parse_command("/new please"), None);
-        assert_eq!(parse_command("/rebuild please"), None);
+        assert_eq!(parse_command("/exit please"), None);
         assert_eq!(parse_command("/worktree please"), None);
     }
 
     #[test]
     fn blocking_topic_creation_uses_same_parser() {
         assert!(is_topic_blocking_command("/new"));
-        assert!(is_topic_blocking_command("/rebuild@zdx_bot"));
+        assert!(is_topic_blocking_command("/exit@zdx_bot"));
         assert!(is_topic_blocking_command("/status"));
+        assert!(is_topic_blocking_command("/whereami"));
+        assert!(is_topic_blocking_command("/whereami@zdx_bot"));
         assert!(is_topic_blocking_command("/worktree"));
         assert!(is_topic_blocking_command("/model"));
         assert!(is_topic_blocking_command("/model list"));
@@ -255,6 +275,8 @@ mod tests {
     fn queue_bypass_is_limited_to_status() {
         assert!(bypasses_queue("/status"));
         assert!(bypasses_queue("/status@zdx_bot"));
+        assert!(bypasses_queue("/whereami"));
+        assert!(bypasses_queue("/whereami@zdx_bot"));
         assert!(!bypasses_queue("/new"));
         assert!(!bypasses_queue("/model"));
     }

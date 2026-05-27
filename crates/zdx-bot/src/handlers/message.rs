@@ -157,7 +157,7 @@ async fn handle_pre_agent_commands(
 ) -> Result<bool> {
     Ok(
         handle_general_forum_commands(context, incoming, reply_ctx.reply_to_message_id).await?
-            || handle_rebuild_command(context, incoming, reply_ctx.reply_to_message_id).await?,
+            || handle_exit_command(context, incoming, reply_ctx.reply_to_message_id).await?,
     )
 }
 
@@ -187,6 +187,13 @@ async fn handle_thread_setup_commands(
             context,
             incoming,
             thread_id,
+            reply_ctx.reply_to_message_id,
+            reply_ctx.topic_id,
+        )
+        .await?
+        || handle_whereami_command(
+            context,
+            incoming,
             reply_ctx.reply_to_message_id,
             reply_ctx.topic_id,
         )
@@ -346,8 +353,9 @@ async fn handle_general_forum_commands(
             return Ok(true);
         }
         BotCommand::WorktreeCreate => "/worktree must be used inside a topic, not General.",
-        BotCommand::Rebuild => unreachable!("rebuild is handled by handle_rebuild_command"),
+        BotCommand::Exit => unreachable!("exit is handled by handle_exit_command"),
         BotCommand::Status => unreachable!("status is handled by handle_status_command"),
+        BotCommand::WhereAmI => unreachable!("whereami is handled by handle_whereami_command"),
     };
     context
         .client()
@@ -356,7 +364,7 @@ async fn handle_general_forum_commands(
     Ok(true)
 }
 
-async fn handle_rebuild_command(
+async fn handle_exit_command(
     context: &BotContext,
     incoming: &crate::types::IncomingMessage,
     reply_to_message_id: Option<i64>,
@@ -367,21 +375,34 @@ async fn handle_rebuild_command(
     if !incoming
         .text
         .as_deref()
-        .is_some_and(|text| matches!(parse_command(text), Some(BotCommand::Rebuild)))
+        .is_some_and(|text| matches!(parse_command(text), Some(BotCommand::Exit)))
     {
         return Ok(false);
+    }
+
+    if !zdx_engine::pidfile::is_supervised("bot") {
+        context
+            .client()
+            .send_message(
+                incoming.chat_id,
+                "⚠️ No active supervisor — refusing to exit. Enable supervision in `zdx monitor` (Ctrl+R on `bot`) first.",
+                reply_to_message_id,
+                incoming.message_thread_id,
+            )
+            .await?;
+        return Ok(true);
     }
 
     context
         .client()
         .send_message(
             incoming.chat_id,
-            "♻️ Rebuilding bot… coming back shortly.",
+            "👋 Exiting… supervisor will restart shortly.",
             reply_to_message_id,
             incoming.message_thread_id,
         )
         .await?;
-    context.request_rebuild();
+    context.request_exit();
     Ok(true)
 }
 
@@ -649,6 +670,87 @@ async fn handle_status_command(
     Ok(true)
 }
 
+async fn handle_whereami_command(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    reply_to_message_id: Option<i64>,
+    topic_id: Option<i64>,
+) -> Result<bool> {
+    if !incoming.images.is_empty() || !incoming.audios.is_empty() {
+        return Ok(false);
+    }
+    if !incoming
+        .text
+        .as_deref()
+        .is_some_and(|text| matches!(parse_command(text), Some(BotCommand::WhereAmI)))
+    {
+        return Ok(false);
+    }
+
+    let resolved_root = context.root_for_chat(incoming.chat_id);
+    // Private DMs to the bot use chat_id == user_id and are trusted; group
+    // chats need to be on the allowlist for full info (CWD).
+    let is_private = incoming.chat_id == incoming.user_id;
+    let chat_allowlisted = context.allowlist_chat_ids().contains(&incoming.chat_id);
+    let discovery_mode = !is_private && !chat_allowlisted;
+
+    let message = format_whereami_message(
+        incoming.chat_id,
+        topic_id,
+        resolved_root.profile_name.as_deref(),
+        &resolved_root.root,
+        discovery_mode,
+    );
+
+    context
+        .client()
+        .send_message(incoming.chat_id, &message, reply_to_message_id, topic_id)
+        .await?;
+
+    Ok(true)
+}
+
+fn format_whereami_message(
+    chat_id: i64,
+    topic_id: Option<i64>,
+    profile_name: Option<&str>,
+    root_path: &Path,
+    discovery_mode: bool,
+) -> String {
+    let mut lines = vec!["<b>Where am I</b>".to_string()];
+    lines.push(format!("Chat ID: <code>{chat_id}</code>"));
+    if let Some(topic_id) = topic_id {
+        lines.push(format!("Topic ID: <code>{topic_id}</code>"));
+    }
+
+    if discovery_mode {
+        // Chat is not on the bot allowlist. Keep the reply minimal: do not
+        // disclose the bot's filesystem (cwd) or profile state to a chat the
+        // operator has not yet opted in.
+        lines.push("Status: <code>chat not on bot allowlist</code>".to_string());
+        lines.push(format!(
+            "Allow this chat by adding <code>{chat_id}</code> to <code>telegram.allowlist_chat_ids</code> in <code>config.toml</code>, then restart the bot."
+        ));
+        lines.push(format!(
+            "Bind workspace: <code>zdx bot profile add &lt;name&gt; {chat_id} &lt;cwd&gt;</code>"
+        ));
+        return lines.join("\n");
+    }
+
+    let root_display = root_path.display().to_string();
+    if let Some(name) = profile_name {
+        lines.push(format!("Profile: <code>{}</code>", escape_html(name)));
+        lines.push(format!("CWD: <code>{}</code>", escape_html(&root_display)));
+    } else {
+        lines.push("Profile: <code>none</code> (fallback root)".to_string());
+        lines.push(format!("CWD: <code>{}</code>", escape_html(&root_display)));
+        lines.push(format!(
+            "Bind this chat with: <code>zdx bot profile add &lt;name&gt; {chat_id} &lt;cwd&gt;</code>"
+        ));
+    }
+    lines.join("\n")
+}
+
 /// Build an inline keyboard showing provider names as buttons.
 /// Callback data format: `model_provider:{provider}:{scope}` where scope is `general` or `topic`.
 pub(crate) fn build_provider_keyboard(
@@ -839,7 +941,7 @@ async fn handle_thread_commands(
                 .await?;
             return Ok(true);
         }
-        BotCommand::Rebuild | BotCommand::Status => return Ok(false),
+        BotCommand::Exit | BotCommand::Status | BotCommand::WhereAmI => return Ok(false),
         BotCommand::WorktreeCreate => {}
     }
 
@@ -1847,7 +1949,7 @@ fn thread_id_for_chat(chat_id: i64, message_thread_id: Option<i64>) -> String {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{is_image_path, parse_final_response};
+    use super::{format_whereami_message, is_image_path, parse_final_response};
 
     #[test]
     fn parse_final_response_extracts_media_wrapper_format() {
@@ -1897,5 +1999,54 @@ mod tests {
     fn image_extension_routing_is_detected() {
         assert!(is_image_path(Path::new("/tmp/screenshot.webp")));
         assert!(!is_image_path(Path::new("/tmp/report.pdf")));
+    }
+
+    #[test]
+    fn whereami_discovery_mode_hides_cwd_and_profile() {
+        let msg = format_whereami_message(
+            -1_001_234_567_890,
+            Some(42),
+            None,
+            Path::new("/Users/secret/projects/private-thing"),
+            true,
+        );
+        assert!(msg.contains("Chat ID: <code>-1001234567890</code>"));
+        assert!(msg.contains("Topic ID: <code>42</code>"));
+        assert!(msg.contains("chat not on bot allowlist"));
+        assert!(msg.contains("allowlist_chat_ids"));
+        assert!(msg.contains("zdx bot profile add"));
+        // Discovery mode MUST NOT leak filesystem paths or profile info.
+        assert!(!msg.contains("/Users/secret"));
+        assert!(!msg.contains("CWD"));
+        assert!(!msg.contains("Profile"));
+    }
+
+    #[test]
+    fn whereami_allowlisted_unbound_shows_cwd_and_bind_hint() {
+        let msg = format_whereami_message(
+            -1_001_234_567_890,
+            None,
+            None,
+            Path::new("/work/fallback-root"),
+            false,
+        );
+        assert!(msg.contains("Profile: <code>none</code> (fallback root)"));
+        assert!(msg.contains("CWD: <code>/work/fallback-root</code>"));
+        assert!(msg.contains("Bind this chat with"));
+        assert!(!msg.contains("Topic ID"));
+    }
+
+    #[test]
+    fn whereami_allowlisted_bound_shows_profile_and_cwd() {
+        let msg = format_whereami_message(
+            -1_001_234_567_890,
+            None,
+            Some("zdx"),
+            Path::new("/work/zdx"),
+            false,
+        );
+        assert!(msg.contains("Profile: <code>zdx</code>"));
+        assert!(msg.contains("CWD: <code>/work/zdx</code>"));
+        assert!(!msg.contains("Bind this chat"));
     }
 }

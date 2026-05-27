@@ -43,7 +43,6 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `just run` (interactive TUI; pass extra args: `just run --help`)
 - `just monitor` (service dashboard for config, threads, automations)
 - `just bot` (Telegram bot; runs the global `[telegram]` config)
-- `just bot-loop` (global Telegram bot with auto-restart on exit code 42)
 - `just automations` (automation subcommands; e.g. `just automations list`)
 - `just ci` (full local CI: lint + test; matches what GHA runs on push/PR — optional pre-push gate)
 - `just ci-fast` (fast inner-loop check: fmt + clippy on default features, lib+bins only — single cargo mode, avoids mode-switching tax)

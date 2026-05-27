@@ -55,10 +55,23 @@ fn render_services(f: &mut Frame, app: &MonitorApp, area: Rect) {
             } else {
                 ("○", Style::default().fg(Color::DarkGray))
             };
-            let line = if s.details.is_empty() {
-                format!(" {:<10} {icon} {}", s.name, s.status)
-            } else {
-                format!(" {:<10} {icon} {:<10} {}", s.name, s.status, s.details)
+            let line = {
+                let mut display_details = s.details.clone();
+                if app.supervised_services.contains(&s.key) {
+                    if display_details.is_empty() {
+                        display_details = "supervised".to_string();
+                    } else {
+                        display_details = format!("{display_details} · supervised");
+                    }
+                }
+                if display_details.is_empty() {
+                    format!(" {:<10} {icon} {}", s.name, s.status)
+                } else {
+                    format!(
+                        " {:<10} {icon} {:<10} {}",
+                        s.name, s.status, display_details
+                    )
+                }
             };
             let style = if i == app.selected_index && app.active_section == Section::Services {
                 style.add_modifier(Modifier::REVERSED)
@@ -71,7 +84,7 @@ fn render_services(f: &mut Frame, app: &MonitorApp, area: Rect) {
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title("Services (Enter=toggle, r=restart)"),
+            .title("Services (Enter=toggle, r=restart, ^R=supervise)"),
     );
     f.render_widget(list, area);
 }
@@ -90,7 +103,9 @@ fn render_footer(f: &mut Frame, app: &MonitorApp, area: Rect) {
 
 fn footer_hint(section: Section) -> &'static str {
     match section {
-        Section::Services => "↑↓ navigate • Enter toggle • r restart • Tab switch • q quit",
+        Section::Services => {
+            "↑↓ navigate • Enter toggle • r restart • ^R supervise • Tab switch • q quit"
+        }
         Section::ActiveAgents | Section::Automations => "↑↓ navigate • Tab switch • q quit",
         Section::Config => "↑↓ scroll • PgUp/PgDn page • Tab switch • q quit",
         Section::Threads => "↑↓ navigate • y copy thread ID • Tab switch • q quit",
