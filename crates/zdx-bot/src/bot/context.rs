@@ -39,7 +39,7 @@ pub(crate) struct BotContext {
     root: PathBuf,
     bot_instruction_layer: Option<String>,
     tool_config: ToolConfig,
-    rebuild_signal: Notify,
+    exit_signal: Notify,
     cancel_map: CancelMap,
     queue_cancel_map: QueueCancelMap,
 }
@@ -80,7 +80,7 @@ impl BotContext {
             root,
             bot_instruction_layer,
             tool_config,
-            rebuild_signal: Notify::new(),
+            exit_signal: Notify::new(),
             cancel_map,
             queue_cancel_map,
         }
@@ -133,14 +133,14 @@ impl BotContext {
         &self.tool_config
     }
 
-    /// Signal the bot to rebuild (exit with code 42).
-    pub(crate) fn request_rebuild(&self) {
-        self.rebuild_signal.notify_one();
+    /// Signal the bot to exit (with code 42) so a supervisor can restart it.
+    pub(crate) fn request_exit(&self) {
+        self.exit_signal.notify_one();
     }
 
-    /// Wait for a rebuild signal.
-    pub(crate) async fn rebuild_notified(&self) {
-        self.rebuild_signal.notified().await;
+    /// Wait for an exit signal.
+    pub(crate) async fn exit_notified(&self) {
+        self.exit_signal.notified().await;
     }
 
     pub(crate) fn cancel_map(&self) -> &CancelMap {

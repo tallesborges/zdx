@@ -22,22 +22,6 @@ bot:
 automations *ARGS:
     cargo run -p zdx -- automations {{ARGS}}
 
-# Run the bot with auto-rebuild (exit 42 = rebuild)
-bot-loop:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    while true; do
-        echo "🚀 Starting bot..."
-        cargo run -p zdx -- bot || EXIT_CODE=$?
-        EXIT_CODE=${EXIT_CODE:-0}
-        if [ "$EXIT_CODE" -eq 42 ]; then
-            echo "♻️  Restart requested, rebuilding..."
-            continue
-        fi
-        echo "Bot exited with code $EXIT_CODE"
-        break
-    done
-
 # ─── Quality ──────────────────────────────────────
 
 # Full local CI (lint + test) — use before pushing

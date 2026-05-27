@@ -82,6 +82,14 @@ pub fn terminate(name: &str) -> Result<Option<u32>> {
     }
 }
 
+/// Remove a service's PID file. Silent no-op if the file is absent.
+///
+/// Use this before `std::process::exit()` to release the PID slot without
+/// relying on [`PidGuard`]'s `Drop` (which `process::exit` skips).
+pub fn remove(name: &str) {
+    let _ = fs::remove_file(pid_path(name));
+}
+
 /// Status of a service.
 pub enum ServiceStatus {
     Running {
@@ -104,6 +112,59 @@ impl Drop for PidGuard {
 
 fn pid_path(name: &str) -> PathBuf {
     paths::zdx_home().join("run").join(format!("{name}.pid"))
+}
+
+fn supervised_path(name: &str) -> PathBuf {
+    paths::zdx_home()
+        .join("run")
+        .join(format!("{name}.supervised"))
+}
+
+/// Mark `name` as actively supervised by the current process.
+///
+/// Writes the current PID to `~/.zdx/run/{name}.supervised`. The supervised
+/// service can later call [`is_supervised`] to check whether its supervisor is
+/// alive before performing exit-and-be-restarted flows.
+///
+/// # Errors
+///
+/// Returns an error if the run directory cannot be created or the marker file
+/// cannot be written.
+pub fn mark_supervised(name: &str) -> Result<()> {
+    let path = supervised_path(name);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create run dir {}", parent.display()))?;
+    }
+    let pid = std::process::id();
+    fs::write(&path, pid.to_string())
+        .with_context(|| format!("write supervised marker {}", path.display()))?;
+    Ok(())
+}
+
+/// Remove the supervision marker for `name`. Silent no-op if the file is absent.
+pub fn unmark_supervised(name: &str) {
+    let _ = fs::remove_file(supervised_path(name));
+}
+
+/// Returns true when `name` has a supervision marker whose owning process is alive.
+///
+/// A stale marker (process gone) is treated as unsupervised and is cleaned up.
+pub fn is_supervised(name: &str) -> bool {
+    let path = supervised_path(name);
+    let Ok(content) = fs::read_to_string(&path) else {
+        return false;
+    };
+    let Ok(pid) = content.trim().parse::<u32>() else {
+        let _ = fs::remove_file(&path);
+        return false;
+    };
+    if is_alive(pid) {
+        true
+    } else {
+        let _ = fs::remove_file(&path);
+        false
+    }
 }
 
 #[cfg(unix)]

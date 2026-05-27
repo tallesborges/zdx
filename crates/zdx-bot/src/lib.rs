@@ -31,8 +31,8 @@ type MediaGroupKey = (i64, Option<i64>, i64, String);
 type PendingMediaGroups =
     Arc<Mutex<std::collections::HashMap<MediaGroupKey, crate::telegram::Message>>>;
 
-/// Exit code used to signal the wrapper script to rebuild.
-pub const EXIT_REBUILD: i32 = 42;
+/// Exit code used to signal an active supervisor to restart the bot.
+pub const EXIT_REQUESTED: i32 = 42;
 
 ///
 /// # Errors
@@ -138,9 +138,10 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
                 tracing::info!("Shutting down Telegram bot");
                 break;
             }
-            () = context.rebuild_notified() => {
-                tracing::info!("Rebuild requested via /rebuild command");
-                std::process::exit(EXIT_REBUILD);
+            () = context.exit_notified() => {
+                tracing::info!("Exit requested via /exit command");
+                zdx_engine::pidfile::remove("bot");
+                std::process::exit(EXIT_REQUESTED);
             }
             updates = client.get_updates(current_offset, poll_timeout) => {
                 let updates = match updates {

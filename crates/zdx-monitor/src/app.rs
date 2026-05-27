@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -7,7 +7,8 @@ use std::{fs, io};
 
 use anyhow::{Context, Result};
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    MouseEventKind,
 };
 use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
@@ -174,6 +175,7 @@ pub fn build_config_lines(config: &config::Config) -> Vec<ConfigLine> {
     lines
 }
 
+#[allow(clippy::struct_excessive_bools)]
 pub struct MonitorApp {
     pub config_lines: Vec<ConfigLine>,
     pub config_line_count: usize,
@@ -195,6 +197,10 @@ pub struct MonitorApp {
     pub status_section: Section,
     pub status_message: String,
     pub should_quit: bool,
+    /// Services that should be kept running by the supervisor (toggled with Ctrl+R).
+    pub supervised_services: BTreeSet<String>,
+    /// Per-service cooldown for automatic restart attempts.
+    pub last_auto_restart: BTreeMap<String, Instant>,
 }
 
 pub struct ThreadInfo {
@@ -209,6 +215,7 @@ pub struct AutomationInfo {
     pub schedule: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct ServiceInfo {
     pub key: String,
     pub name: String,
@@ -393,6 +400,7 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
     let config_lines = build_config_lines(&config);
     let config_line_count = rendered_line_count(&config_lines);
     let (log_file_name, log_lines) = load_logs(LOG_TAIL_LINES);
+    let services = load_services();
 
     Ok(MonitorApp {
         config_lines,
@@ -402,7 +410,7 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
         root: root.clone(),
         threads: load_threads(),
         automations: load_automations(&root),
-        services: load_services(),
+        services,
         active_agents: load_active_agents(),
         log_file_name,
         log_lines,
@@ -415,6 +423,8 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
         status_section: Section::Services,
         status_message: String::new(),
         should_quit: false,
+        supervised_services: BTreeSet::new(),
+        last_auto_restart: BTreeMap::new(),
     })
 }
 
@@ -437,15 +447,23 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
     terminal.show_cursor().context("show cursor")
 }
 
-fn handle_key_event(app: &mut MonitorApp, key: KeyCode) {
+fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
     if app.log_overlay_open {
-        handle_log_overlay_key(app, key);
+        handle_log_overlay_key(app, key.code);
         return;
     }
-    if app.active_section == Section::Logs && handle_logs_key(app, key) {
+    if app.active_section == Section::Logs && handle_logs_key(app, key.code) {
         return;
     }
-    match key {
+    if key.code == KeyCode::Char('r')
+        && key
+            .modifiers
+            .contains(crossterm::event::KeyModifiers::CONTROL)
+    {
+        toggle_supervision(app);
+        return;
+    }
+    match key.code {
         KeyCode::Char('q') => app.should_quit = true,
         KeyCode::Tab => {
             app.active_section = app.active_section.next();
@@ -489,8 +507,8 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyCode) {
             app.config_scroll = app.config_scroll.saturating_sub(page);
         }
         KeyCode::Char('y') => copy_selected_thread_id(app),
-        KeyCode::Enter => toggle_selected_service(app),
         KeyCode::Char('r') => restart_selected_service(app),
+        KeyCode::Enter => toggle_selected_service(app),
         _ => {}
     }
 }
@@ -667,6 +685,72 @@ fn restart_selected_service(app: &mut MonitorApp) {
     }
 }
 
+fn toggle_supervision(app: &mut MonitorApp) {
+    if app.active_section != Section::Services {
+        return;
+    }
+    let Some(service) = app.services.get(app.selected_index) else {
+        return;
+    };
+    let key = service.key.clone();
+    let name = service.name.clone();
+    if app.supervised_services.remove(&key) {
+        pidfile::unmark_supervised(&key);
+        app.last_auto_restart.remove(&key);
+        app.set_status(format!("{name}: supervision off"));
+    } else {
+        match pidfile::mark_supervised(&key) {
+            Ok(()) => {
+                app.supervised_services.insert(key);
+                app.set_status(format!("{name}: supervision on"));
+            }
+            Err(err) => {
+                app.set_status(format!("{name}: supervision failed: {err}"));
+            }
+        }
+    }
+}
+
+/// Minimum interval between automatic service restart attempts.
+const SERVICE_RESTART_COOLDOWN: Duration = Duration::from_secs(5);
+
+/// After service refresh, auto-restart any supervised service that should be running but isn't.
+fn supervise_services(app: &mut MonitorApp) {
+    if app.supervised_services.is_empty() {
+        return;
+    }
+
+    let now = Instant::now();
+
+    let stalled: Vec<usize> = app
+        .services
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| app.supervised_services.contains(&s.key) && s.status != "running")
+        .map(|(i, _)| i)
+        .collect();
+
+    for idx in stalled {
+        let key = app.services[idx].key.clone();
+
+        let last = app
+            .last_auto_restart
+            .get(&key)
+            .copied()
+            .unwrap_or_else(|| now.checked_sub(SERVICE_RESTART_COOLDOWN).unwrap_or(now));
+        if now.duration_since(last) < SERVICE_RESTART_COOLDOWN {
+            continue;
+        }
+
+        let service = app.services[idx].clone();
+        app.last_auto_restart.insert(key, now);
+        match start_service(&service, &app.root) {
+            Ok(msg) => app.set_status(format!("Auto-restart: {msg}")),
+            Err(err) => app.set_status(format!("Auto-restart failed: {err}")),
+        }
+    }
+}
+
 fn refresh_app(app: &mut MonitorApp) {
     app.services = load_services();
     app.active_agents = load_active_agents();
@@ -687,6 +771,7 @@ fn refresh_app(app: &mut MonitorApp) {
         ensure_log_selected_visible(app);
     }
     app.clamp_selection();
+    supervise_services(app);
 }
 
 /// Run the monitor dashboard.
@@ -709,7 +794,7 @@ pub fn run(root: &Path) -> Result<()> {
         if event::poll(timeout).context("poll events")? {
             match event::read().context("read event")? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    handle_key_event(&mut app, key.code);
+                    handle_key_event(&mut app, key);
                     refresh_app(&mut app);
                 }
                 Event::Mouse(mouse) => {
@@ -727,6 +812,10 @@ pub fn run(root: &Path) -> Result<()> {
         if app.should_quit {
             break;
         }
+    }
+
+    for key in &app.supervised_services {
+        pidfile::unmark_supervised(key);
     }
 
     restore_terminal(&mut terminal)
