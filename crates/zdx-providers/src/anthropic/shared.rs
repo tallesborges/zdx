@@ -116,7 +116,8 @@ fn normalize_model_id(model: &str) -> &str {
 }
 
 fn supports_max_effort(model: &str) -> bool {
-    model.starts_with("claude-opus-4-7")
+    model.starts_with("claude-opus-4-8")
+        || model.starts_with("claude-opus-4-7")
         || model.starts_with("claude-opus-4-6")
         || model.starts_with("claude-sonnet-4-6")
 }
@@ -124,17 +125,19 @@ fn supports_max_effort(model: &str) -> bool {
 /// `xhigh` effort was introduced in Claude Opus 4.7 (sits between `high`
 /// and `max`). No earlier model supports it.
 fn supports_xhigh_effort(model: &str) -> bool {
-    model.starts_with("claude-opus-4-7")
+    model.starts_with("claude-opus-4-8") || model.starts_with("claude-opus-4-7")
 }
 
 fn supports_adaptive_thinking(model: &str) -> bool {
-    model.starts_with("claude-opus-4-7")
+    model.starts_with("claude-opus-4-8")
+        || model.starts_with("claude-opus-4-7")
         || model.starts_with("claude-opus-4-6")
         || model.starts_with("claude-sonnet-4-6")
 }
 
 fn supports_effort_control(model: &str) -> bool {
-    model.starts_with("claude-opus-4-7")
+    model.starts_with("claude-opus-4-8")
+        || model.starts_with("claude-opus-4-7")
         || model.starts_with("claude-opus-4-6")
         || model.starts_with("claude-opus-4-5")
         || model.starts_with("claude-sonnet-4-6")
@@ -422,6 +425,26 @@ mod tests {
     fn thinking_and_effort_opus_47_uses_adaptive_and_xhigh_effort() {
         let (thinking, output_config) = build_thinking_and_output_config(
             "claude-opus-4-7",
+            true,
+            4096,
+            Some(EffortLevel::XHigh),
+        )
+        .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(thinking.unwrap()).unwrap(),
+            json!({"type": "adaptive", "display": "summarized"})
+        );
+        assert_eq!(
+            serde_json::to_value(output_config.unwrap()).unwrap(),
+            json!({"effort": "xhigh"})
+        );
+    }
+
+    #[test]
+    fn thinking_and_effort_opus_48_uses_adaptive_and_xhigh_effort() {
+        let (thinking, output_config) = build_thinking_and_output_config(
+            "claude-opus-4-8",
             true,
             4096,
             Some(EffortLevel::XHigh),

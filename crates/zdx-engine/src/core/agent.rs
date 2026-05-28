@@ -2534,10 +2534,10 @@ fn map_thinking_to_anthropic_effort(
     // Strip provider-prefixed model ids like "claude-cli:claude-opus-4-7".
     let normalized = model.rsplit(':').next().unwrap_or(model);
 
-    // Opus 4.7 introduced an `xhigh` effort level between `high` and `max`,
-    // giving it 5 effort levels (low/medium/high/xhigh/max) — perfect 1:1
-    // alignment with our 5 active ThinkingLevels.
-    if normalized.starts_with("claude-opus-4-7") {
+    // Opus 4.7+ exposes `xhigh` between `high` and `max`, giving it 5 effort
+    // levels (low/medium/high/xhigh/max) — perfect 1:1 alignment with our 5
+    // active ThinkingLevels.
+    if normalized.starts_with("claude-opus-4-8") || normalized.starts_with("claude-opus-4-7") {
         return Some(match level {
             ThinkingLevel::Off => unreachable!(),
             ThinkingLevel::Minimal => AnthropicEffortLevel::Low,
@@ -2816,6 +2816,19 @@ mod tests {
             map_thinking_to_anthropic_effort(ThinkingLevel::Medium, m),
             Some(AnthropicEffortLevel::High)
         );
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::High, m),
+            Some(AnthropicEffortLevel::XHigh)
+        );
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::XHigh, m),
+            Some(AnthropicEffortLevel::Max)
+        );
+    }
+
+    #[test]
+    fn anthropic_effort_opus_48_uses_one_to_one_shift_with_xhigh() {
+        let m = "claude-opus-4-8";
         assert_eq!(
             map_thinking_to_anthropic_effort(ThinkingLevel::High, m),
             Some(AnthropicEffortLevel::XHigh)

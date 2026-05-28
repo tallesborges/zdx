@@ -2,6 +2,23 @@
 # Edit this file to customize the model picker.
 
 [[model]]
+id = "claude-opus-4-8"
+provider = "anthropic"
+display_name = "Claude Opus 4.8"
+context_limit = 1000000
+
+[model.pricing]
+input = 5.0
+output = 25.0
+cache_read = 0.5
+cache_write = 6.25
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
+[[model]]
 id = "claude-opus-4-6"
 provider = "anthropic"
 display_name = "Claude Opus 4.6"
@@ -90,6 +107,23 @@ output_limit = 64000
 id = "claude-opus-4-7"
 provider = "anthropic"
 display_name = "Claude Opus 4.7"
+context_limit = 1000000
+
+[model.pricing]
+input = 5.0
+output = 25.0
+cache_read = 0.5
+cache_write = 6.25
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
+[[model]]
+id = "claude-cli:claude-opus-4-8"
+provider = "claude-cli"
+display_name = "Claude Opus 4.8"
 context_limit = 1000000
 
 [model.pricing]
