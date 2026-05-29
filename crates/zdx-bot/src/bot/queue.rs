@@ -5,7 +5,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::bot::context::{BotContext, QueueCancelKey};
-use crate::commands::{bypasses_queue, is_topic_blocking_command};
+use crate::commands::{BotCommand, bypasses_queue, is_topic_blocking_command, parse_command};
 use crate::handlers::message::handle_message;
 use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message};
 
@@ -118,15 +118,6 @@ pub(crate) async fn dispatch_message(
 /// Quick check if message should be processed (allowlist + bot filter).
 /// Returns false for messages that should be silently ignored.
 fn should_process_message(context: &BotContext, message: &Message) -> bool {
-    // Check chat allowlist for groups
-    if message.chat.is_group() && !context.allowlist_chat_ids().contains(&message.chat.id) {
-        tracing::debug!(
-            chat_id = message.chat.id,
-            "Ignoring non-allowlisted group chat"
-        );
-        return false;
-    }
-
     // Check sender exists and is not a bot
     let Some(user) = message.from.as_ref() else {
         tracing::debug!(chat_id = message.chat.id, "Ignoring message without sender");
@@ -137,10 +128,33 @@ fn should_process_message(context: &BotContext, message: &Message) -> bool {
         return false;
     }
 
-    // Check user allowlist
+    // Check user allowlist — primary security boundary
     if !context.allowlist_user_ids().contains(&user.id) {
         tracing::warn!(user_id = user.id, chat_id = message.chat.id, "Denied user");
         return false;
+    }
+
+    // Check chat allowlist for groups, with a single exception: /whereami is
+    // allowed in any group when the sender is allowlisted, so the operator
+    // can discover a new group's chat ID before binding it.
+    if message.chat.is_group() && !context.allowlist_chat_ids().contains(&message.chat.id) {
+        let is_whereami = message
+            .text
+            .as_deref()
+            .and_then(parse_command)
+            .is_some_and(|cmd| matches!(cmd, BotCommand::WhereAmI));
+        if !is_whereami {
+            tracing::debug!(
+                chat_id = message.chat.id,
+                "Ignoring non-allowlisted group chat"
+            );
+            return false;
+        }
+        tracing::info!(
+            chat_id = message.chat.id,
+            user_id = user.id,
+            "Allowing /whereami in non-allowlisted group"
+        );
     }
 
     true
