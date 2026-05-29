@@ -679,7 +679,7 @@ impl Config {
         name: &str,
         profile: &TelegramProfileConfig,
     ) -> Result<()> {
-        use toml_edit::{DocumentMut, value};
+        use toml_edit::{DocumentMut, Item, Table, value};
 
         let contents = if path.exists() {
             let user_config = fs::read_to_string(path)
@@ -693,8 +693,32 @@ impl Config {
             .parse()
             .with_context(|| format!("Failed to parse config from {}", path.display()))?;
 
-        doc["telegram"]["profiles"][name]["chat_id"] = value(profile.chat_id);
-        doc["telegram"]["profiles"][name]["cwd"] = value(profile.cwd.trim());
+        // Ensure `[telegram]` is a regular table.
+        if !doc.get("telegram").is_some_and(Item::is_table) {
+            doc["telegram"] = Item::Table(Table::new());
+        }
+        let Some(telegram) = doc["telegram"].as_table_mut() else {
+            bail!("failed to prepare telegram config table");
+        };
+
+        // Ensure `[telegram.profiles]` is a regular table. When created fresh,
+        // mark it implicit so we don't emit a bare `[telegram.profiles]`
+        // header alongside the per-profile sub-tables.
+        if !telegram.get("profiles").is_some_and(Item::is_table) {
+            let mut profiles = Table::new();
+            profiles.set_implicit(true);
+            telegram["profiles"] = Item::Table(profiles);
+        }
+        let Some(profiles) = telegram["profiles"].as_table_mut() else {
+            bail!("failed to prepare telegram profiles config table");
+        };
+
+        // Insert this profile as its own sub-table so it serializes as
+        // `[telegram.profiles.<name>]` instead of an inline-table sibling.
+        let mut entry = Table::new();
+        entry["chat_id"] = value(profile.chat_id);
+        entry["cwd"] = value(profile.cwd.trim());
+        profiles[name] = Item::Table(entry);
 
         Self::write_config(path, &doc.to_string())
     }
@@ -2588,6 +2612,82 @@ cwd = "~/work"
 
         let error = config.resolve_telegram_runtime().unwrap_err().to_string();
         assert!(error.contains("duplicate chat ID"));
+    }
+
+    #[test]
+    fn save_telegram_profile_emits_section_header_form() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        fs::write(
+            &config_path,
+            r#"[telegram]
+bot_token = "token"
+allowlist_user_ids = [42]
+"#,
+        )
+        .unwrap();
+
+        Config::save_telegram_profile_to(
+            &config_path,
+            "zdx",
+            &TelegramProfileConfig {
+                chat_id: -100_123,
+                cwd: "/tmp/zdx".to_string(),
+            },
+        )
+        .unwrap();
+
+        let after = fs::read_to_string(&config_path).unwrap();
+        assert!(
+            after.contains("[telegram.profiles.zdx]"),
+            "missing section header form in:\n{after}"
+        );
+        assert!(after.contains("chat_id = -100123"));
+        assert!(after.contains("cwd = \"/tmp/zdx\""));
+        // Must not regress back to the inline-sibling style.
+        assert!(
+            !after.contains("zdx = { "),
+            "saver regressed to inline form:\n{after}"
+        );
+        // Loading the saved config must roundtrip.
+        let reloaded = Config::load_from(&config_path).unwrap();
+        let (name, profile) = reloaded.telegram_profile_for_chat(-100_123).unwrap();
+        assert_eq!(name, "zdx");
+        assert_eq!(profile.cwd, "/tmp/zdx");
+    }
+
+    #[test]
+    fn save_telegram_profile_appends_section_alongside_existing_inline_entries() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        fs::write(
+            &config_path,
+            r#"[telegram]
+bot_token = "token"
+allowlist_user_ids = [42]
+
+[telegram.profiles]
+bravo = { chat_id = -100200, cwd = "/tmp/bravo" }
+"#,
+        )
+        .unwrap();
+
+        Config::save_telegram_profile_to(
+            &config_path,
+            "zdx",
+            &TelegramProfileConfig {
+                chat_id: -100_123,
+                cwd: "/tmp/zdx".to_string(),
+            },
+        )
+        .unwrap();
+
+        let after = fs::read_to_string(&config_path).unwrap();
+        assert!(after.contains("[telegram.profiles.zdx]"));
+        // Existing inline entry stays as-is (we don't rewrite siblings).
+        assert!(after.contains("bravo = { chat_id = -100200"));
+        let reloaded = Config::load_from(&config_path).unwrap();
+        assert_eq!(reloaded.telegram.profiles.len(), 2);
     }
 
     /// `SubagentsConfig`: defaults are enabled with dynamic model list resolution.

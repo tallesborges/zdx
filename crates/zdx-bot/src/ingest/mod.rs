@@ -98,16 +98,6 @@ async fn validate_access(
     message: &Message,
     target: &MessageTarget,
 ) -> Result<Option<i64>> {
-    if message.chat.is_group() {
-        if !allowlist.chat_ids.contains(&target.chat) {
-            tracing::debug!(chat_id = target.chat, "Ignoring non-allowlisted group chat");
-            return Ok(None);
-        }
-    } else if !message.chat.is_private() {
-        tracing::debug!(chat_id = target.chat, "Ignoring unsupported chat type");
-        return Ok(None);
-    }
-
     let Some(user) = message.from.as_ref() else {
         tracing::debug!(chat_id = target.chat, "Ignoring message without sender");
         return Ok(None);
@@ -117,7 +107,30 @@ async fn validate_access(
         return Ok(None);
     }
 
-    if allowlist.user_ids.contains(&user.id) {
+    let user_allowed = allowlist.user_ids.contains(&user.id);
+
+    if message.chat.is_group() {
+        if !allowlist.chat_ids.contains(&target.chat) {
+            // Mirror the queue-level gate: allow /whereami in non-allowlisted
+            // groups only when the sender is allowlisted, so the operator can
+            // discover the chat ID before binding it.
+            let is_whereami = message
+                .text
+                .as_deref()
+                .and_then(crate::commands::parse_command)
+                .is_some_and(|cmd| matches!(cmd, crate::commands::BotCommand::WhereAmI));
+            if user_allowed && is_whereami {
+                return Ok(Some(user.id));
+            }
+            tracing::debug!(chat_id = target.chat, "Ignoring non-allowlisted group chat");
+            return Ok(None);
+        }
+    } else if !message.chat.is_private() {
+        tracing::debug!(chat_id = target.chat, "Ignoring unsupported chat type");
+        return Ok(None);
+    }
+
+    if user_allowed {
         return Ok(Some(user.id));
     }
 
