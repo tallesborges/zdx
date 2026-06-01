@@ -2090,13 +2090,13 @@ fn cancelled_tool_result(tool_use_id: String) -> crate::tools::ToolResult {
     }
 }
 
-/// Extracts usage from thread events for thread restore.
+/// Extracts `(cumulative, latest)` usage from thread events for thread restore.
 ///
-/// With per-request delta storage (event sourcing), we:
-/// - Sum all Usage events → cumulative totals (for cost display)
-/// - Take last Usage event → latest request (for context % display)
-///
-/// Returns (cumulative, latest) as Usage structs.
+/// Cumulative sums all `Usage` events (for cost). `latest` is the most recent
+/// *request* for context-% display, which must be reconstructed: a single
+/// request persists as one context-bearing event followed by output-only tail
+/// fragments `(0, output, 0, 0)`, so the literal last event has zero
+/// `context_input()`. Mirrors the live `ThreadUsage::add` logic.
 pub fn extract_usage_from_thread_events(events: &[ThreadEvent]) -> (Usage, Usage) {
     let mut cumulative = Usage::default();
     let mut latest = Usage::default();
@@ -2117,11 +2117,14 @@ pub fn extract_usage_from_thread_events(events: &[ThreadEvent]) -> (Usage, Usage
                 *cache_write_tokens,
             );
 
-            // Sum for cumulative
             cumulative += usage;
 
-            // Track latest (will be overwritten each time, ending with last)
-            latest = usage;
+            // Context-bearing event starts a new request; output-only tails fold in.
+            if usage.input > 0 || usage.cache_read > 0 || usage.cache_write > 0 {
+                latest = usage;
+            } else {
+                latest.output += usage.output;
+            }
         }
     }
 
@@ -3139,22 +3142,34 @@ mod tests {
 
     #[test]
     fn test_extract_usage_from_events() {
-        // Usage events are per-request deltas (event sourcing)
-        // Cumulative = sum of all events, Latest = last event
         let events = vec![
             ThreadEvent::user_message("hello"),
             ThreadEvent::assistant_message("hi"),
-            ThreadEvent::usage(Usage::new(100, 50, 200, 25)), // Request 1
+            ThreadEvent::usage(Usage::new(100, 50, 200, 25)),
             ThreadEvent::user_message("bye"),
             ThreadEvent::assistant_message("goodbye"),
-            ThreadEvent::usage(Usage::new(150, 75, 300, 30)), // Request 2
+            ThreadEvent::usage(Usage::new(150, 75, 300, 30)),
         ];
 
         let (cumulative, latest) = extract_usage_from_thread_events(&events);
-        // Cumulative = sum of all usage events
         assert_eq!(cumulative, Usage::new(250, 125, 500, 55));
-        // Latest = last usage event (for context %)
         assert_eq!(latest, Usage::new(150, 75, 300, 30));
+    }
+
+    #[test]
+    fn test_extract_usage_latest_folds_output_only_tail_fragments() {
+        // Latest must keep context tokens and fold the output-only tail rather
+        // than collapsing to the final zero-context fragment.
+        let events = vec![
+            ThreadEvent::usage(Usage::new(2, 3, 250_000, 880)),
+            ThreadEvent::usage(Usage::new(0, 1522, 0, 0)),
+            ThreadEvent::usage(Usage::new(0, 480, 0, 0)),
+        ];
+
+        let (cumulative, latest) = extract_usage_from_thread_events(&events);
+        assert_eq!(cumulative, Usage::new(2, 2005, 250_000, 880));
+        assert_eq!(latest, Usage::new(2, 2005, 250_000, 880));
+        assert_eq!(latest.context_input(), 250_882);
     }
 
     #[test]
