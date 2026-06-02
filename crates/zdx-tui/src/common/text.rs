@@ -5,130 +5,72 @@
 use std::borrow::Cow;
 
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
-/// Calculates the terminal display width of a string, operating on grapheme
-/// clusters for correct handling of multi-codepoint emoji sequences (ZWJ
-/// sequences like 👩‍🚀, skin-tone modifiers, flag sequences, VS16).
-///
-/// `UnicodeWidthStr::width()` handles most sequences correctly, but terminals
-/// render characters followed by U+FE0F (VS16) as 2-cell-wide emoji even when
-/// `unicode-width` reports them as 1. This function corrects for that.
-pub fn terminal_display_width(s: &str) -> usize {
-    s.graphemes(true).map(grapheme_width).sum()
-}
+const VS16: char = '\u{FE0F}';
 
-/// Returns the terminal display width of a single grapheme cluster.
-///
-/// For graphemes containing VS16 (U+FE0F) whose `UnicodeWidthStr` width is < 2,
-/// we return 2 because terminals render VS16-qualified emoji at full emoji width.
-fn grapheme_width(g: &str) -> usize {
-    let w = g.width();
-    // If the grapheme contains VS16 and unicode-width under-reports it, correct to 2.
-    if w < 2 && g.contains('\u{FE0F}') {
-        2
+pub fn ratatui_text(s: &str) -> Cow<'_, str> {
+    if s.contains(VS16) {
+        Cow::Owned(s.replace(VS16, ""))
     } else {
-        w
+        Cow::Borrowed(s)
     }
 }
 
-/// Truncates a string to fit within `max_width` terminal columns, operating on
-/// grapheme clusters. Appends `…` when truncated.
-pub fn terminal_truncate(s: &str, max_width: usize) -> String {
-    if terminal_display_width(s) <= max_width {
-        return s.to_string();
-    }
-    if max_width <= 1 {
-        return "…".to_string();
-    }
-
-    let target = max_width - 1; // reserve 1 column for ellipsis
-    let mut result = String::new();
-    let mut width = 0;
-
-    for g in s.graphemes(true) {
-        let gw = grapheme_width(g);
-        if width + gw > target {
-            break;
-        }
-        result.push_str(g);
-        width += gw;
-    }
-
-    result.push('…');
-    result
+pub fn ratatui_width(s: &str) -> usize {
+    ratatui_text(s).width()
 }
 
-/// Truncates a string with ellipsis if it exceeds `max_width` (unicode-aware).
-///
-/// Uses unicode width for accurate terminal column calculation, handling
-/// wide characters (CJK, emoji) correctly.
-///
-/// # Arguments
-/// * `text` - The string to truncate
-/// * `max_width` - Maximum display width in terminal columns
-///
-/// # Returns
-/// The original string if it fits, or a truncated version ending with `…`
+/// Truncates text for Ratatui rendering, preserving source graphemes.
 pub fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
-    if text.width() <= max_width {
+    if ratatui_width(text) <= max_width {
         return text.to_string();
     }
     if max_width <= 1 {
         return "…".to_string();
     }
+
+    let target = max_width - ratatui_width("…");
     let mut truncated = String::new();
-    for ch in text.chars() {
-        let next_width = truncated.width() + ch.width().unwrap_or(0);
-        if next_width + 1 > max_width {
+    let mut width = 0;
+    for grapheme in text.graphemes(true) {
+        let grapheme_width = ratatui_width(grapheme);
+        if width + grapheme_width > target {
             break;
         }
-        truncated.push(ch);
+        truncated.push_str(grapheme);
+        width += grapheme_width;
     }
     truncated.push('…');
     truncated
 }
 
-/// Truncates a string from the start with ellipsis if it exceeds `max_width` (unicode-aware).
-///
-/// Shows the end of the string with `…` prefix when truncated.
-/// Uses unicode width for accurate terminal column calculation.
-///
-/// # Arguments
-/// * `text` - The string to truncate
-/// * `max_width` - Maximum display width in terminal columns
-///
-/// # Returns
-/// The original string if it fits, or a truncated version starting with `…`
+/// Truncates text from the start for Ratatui rendering, preserving source graphemes.
 pub fn truncate_start_with_ellipsis(text: &str, max_width: usize) -> String {
-    if text.width() <= max_width {
+    if ratatui_width(text) <= max_width {
         return text.to_string();
     }
     if max_width <= 1 {
         return "…".to_string();
     }
 
-    // Collect chars with their widths from the end
-    let chars: Vec<char> = text.chars().collect();
-    let mut result_chars: Vec<char> = Vec::new();
-    let mut current_width = 0;
-    let available_width = max_width - 1; // Reserve 1 for ellipsis
+    let target = max_width - ratatui_width("…");
+    let graphemes: Vec<&str> = text.graphemes(true).collect();
+    let mut kept: Vec<&str> = Vec::new();
+    let mut width = 0;
 
-    // Iterate from the end
-    for &ch in chars.iter().rev() {
-        let ch_width = ch.width().unwrap_or(0);
-        if current_width + ch_width > available_width {
+    for grapheme in graphemes.iter().rev() {
+        let grapheme_width = ratatui_width(grapheme);
+        if width + grapheme_width > target {
             break;
         }
-        result_chars.push(ch);
-        current_width += ch_width;
+        kept.push(*grapheme);
+        width += grapheme_width;
     }
 
-    // Reverse to get correct order and prepend ellipsis
-    result_chars.reverse();
     let mut result = String::from("…");
-    for ch in result_chars {
-        result.push(ch);
+    for grapheme in kept.iter().rev() {
+        result.push_str(grapheme);
     }
     result
 }
@@ -270,58 +212,28 @@ mod tests {
     }
 
     #[test]
-    fn test_terminal_display_width_plain() {
-        assert_eq!(terminal_display_width("hello"), 5);
-        assert_eq!(terminal_display_width(""), 0);
+    fn test_ratatui_text_strips_vs16_only_for_rendering() {
+        assert_eq!(ratatui_text("⚠️ Warn"), "⚠ Warn");
+        assert_eq!(ratatui_text("👩‍🚀"), "👩‍🚀");
     }
 
     #[test]
-    fn test_terminal_display_width_wide_emoji() {
-        // ✅ (U+2705) is East Asian Width=W → 2 cells, no VS16 needed
-        assert_eq!(terminal_display_width("✅"), 2);
+    fn test_ratatui_width_matches_render_text() {
+        assert_eq!(ratatui_width("⚠️⚠️"), ratatui_width("⚠⚠"));
+        assert_eq!(ratatui_width("hello"), 5);
+        assert_eq!(ratatui_width("✅"), 2);
     }
 
     #[test]
-    fn test_terminal_display_width_vs16_emoji() {
-        // ⚠️ = U+26A0 + U+FE0F: base char is narrow (1) but VS16 forces emoji (2)
-        assert_eq!(terminal_display_width("⚠️"), 2);
-        // Without VS16: just the base character
-        assert_eq!(terminal_display_width("⚠"), 1);
-    }
+    fn test_truncate_with_ellipsis_preserves_graphemes() {
+        for text in ["⚠️⚠️ab", "👩‍🚀👩‍🚀ab", "👍🏽👍🏽ab", "ééab"] {
+            let truncated = truncate_with_ellipsis(text, 3);
+            assert!(truncated.ends_with('…'));
+            assert!(text.starts_with(truncated.trim_end_matches('…')));
+        }
 
-    #[test]
-    fn test_terminal_display_width_mixed() {
-        // "✅ Ship" = 2 + 1 + 4 = 7
-        assert_eq!(terminal_display_width("✅ Ship"), 7);
-        // "⚠️ Warn" = 2 + 1 + 4 = 7
-        assert_eq!(terminal_display_width("⚠️ Warn"), 7);
-    }
-
-    #[test]
-    fn test_terminal_display_width_zwj_emoji() {
-        // ZWJ sequences should be treated as single grapheme clusters.
-        // 👩‍🚀 = U+1F469 U+200D U+1F680 (woman astronaut)
-        let astronaut = "👩\u{200D}🚀";
-        let w = terminal_display_width(astronaut);
-        // Most terminals render ZWJ emoji as 2 cells
-        assert_eq!(w, 2);
-    }
-
-    #[test]
-    fn test_terminal_truncate_grapheme_safe() {
-        // Truncation must not split a grapheme cluster.
-        // "⚠️ab" = 2 + 1 + 1 = 4 display width
-        let s = "⚠️ab";
-        assert_eq!(terminal_display_width(s), 4);
-        // Truncate to 4 → fits entirely
-        assert_eq!(terminal_truncate(s, 4), "⚠️ab");
-        // Truncate to 3 → "⚠️" (2) + "…" (1) = 3
-        assert_eq!(terminal_truncate(s, 3), "⚠️…");
-        // Truncate to 2 → only "…" fits if the emoji (2) + ellipsis (1) > 2
-        // target = 1, emoji width 2 > 1 → skip emoji, result = "…"
-        // Actually "a" (1) fits target=1, but emoji comes first...
-        // "⚠️" is the first grapheme (width 2), target=1, doesn't fit → "…"
-        assert_eq!(terminal_truncate(s, 2), "…");
+        assert_eq!(truncate_with_ellipsis("⚠️ab", 3), "⚠️ab");
+        assert_eq!(truncate_with_ellipsis("⚠️ab", 2), "⚠️…");
     }
 
     #[test]

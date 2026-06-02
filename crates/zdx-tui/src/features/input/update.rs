@@ -1362,7 +1362,7 @@ pub fn handle_mouse(
     area: ratatui::layout::Rect,
 ) -> Option<crate::overlays::OverlayRequest> {
     use crossterm::event::{MouseButton, MouseEventKind};
-    use unicode_width::UnicodeWidthStr;
+    use crate::common::ratatui_width;
 
     if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
         return None;
@@ -1428,7 +1428,7 @@ pub fn handle_mouse(
         let mut active: Option<(usize, usize, usize)> = None; // (display_start, byte_end, img_idx)
 
         for (byte_off, ch) in logical_line.char_indices() {
-            let ch_w = ch.to_string().width();
+            let ch_w = ratatui_width(&ch.to_string());
 
             // Line wrap
             if display_w + ch_w > inner_w && display_w > 0 {

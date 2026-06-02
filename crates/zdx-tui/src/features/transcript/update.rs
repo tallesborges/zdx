@@ -601,8 +601,8 @@ pub fn screen_to_transcript_pos(
     screen_y: u16,
     transcript_area: Rect,
 ) -> Option<(usize, usize)> {
+    use crate::common::ratatui_width;
     use unicode_segmentation::UnicodeSegmentation;
-    use unicode_width::UnicodeWidthStr;
 
     if !contains_point(transcript_area, screen_x, screen_y) {
         return None; // Click is in input or status area, not transcript
@@ -661,7 +661,7 @@ pub fn screen_to_transcript_pos(
     let mut grapheme_idx = 0usize;
 
     for grapheme in mapping.text.graphemes(true) {
-        let grapheme_width = grapheme.width();
+        let grapheme_width = ratatui_width(grapheme);
         if accumulated_width + grapheme_width > content_x {
             break;
         }

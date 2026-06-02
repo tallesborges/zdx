@@ -1,5 +1,6 @@
-use unicode_width::UnicodeWidthStr;
+use unicode_segmentation::UnicodeSegmentation;
 
+use crate::common::ratatui_width;
 use crate::transcript::{Style, StyledLine, StyledSpan};
 
 /// Options for wrapping styled spans with hanging indents.
@@ -26,7 +27,7 @@ impl WrapOptions {
 
 /// Calculates the display width of a slice of styled spans.
 fn spans_display_width(spans: &[StyledSpan]) -> usize {
-    spans.iter().map(|s| s.text.width()).sum()
+    spans.iter().map(|s| ratatui_width(&s.text)).sum()
 }
 
 /// Context for wrapping operations, reducing argument count for helper functions.
@@ -84,27 +85,23 @@ impl<'a> WrapContext<'a> {
     }
 }
 
-/// Breaks a styled span into character-by-width fragments.
+/// Breaks a styled span into grapheme-by-width fragments.
 ///
 /// Used for inline code or when word boundaries aren't available.
 fn break_span_by_width(span: &StyledSpan, max_width: usize) -> Vec<StyledSpan> {
-    use unicode_width::UnicodeWidthChar;
-
     let mut parts = Vec::new();
     let mut current = String::new();
     let mut current_width: usize = 0;
 
-    for ch in span.text.chars() {
-        let ch_width = ch.width().unwrap_or(0);
+    for grapheme in span.text.graphemes(true) {
+        let grapheme_width = ratatui_width(grapheme);
 
-        // Zero-width characters always stay with current fragment
-        if ch_width == 0 {
-            current.push(ch);
+        if grapheme_width == 0 {
+            current.push_str(grapheme);
             continue;
         }
 
-        // Check if adding this character would exceed width
-        if current_width + ch_width > max_width && !current.is_empty() {
+        if current_width + grapheme_width > max_width && !current.is_empty() {
             parts.push(StyledSpan {
                 text: std::mem::take(&mut current),
                 style: span.style,
@@ -112,8 +109,8 @@ fn break_span_by_width(span: &StyledSpan, max_width: usize) -> Vec<StyledSpan> {
             current_width = 0;
         }
 
-        current.push(ch);
-        current_width += ch_width;
+        current.push_str(grapheme);
+        current_width += grapheme_width;
     }
 
     if !current.is_empty() {
@@ -210,7 +207,7 @@ fn process_span_impl(span: &StyledSpan, ctx: &mut WrapContext, first_line_width:
 
 /// Process code span (preserve whitespace, break by character).
 fn process_code_span_impl(span: &StyledSpan, ctx: &mut WrapContext, first_line_width: usize) {
-    let span_width = span.text.width();
+    let span_width = ratatui_width(&span.text);
     let available_width = ctx.current_avail(first_line_width);
 
     if ctx.current_line_width + span_width <= available_width {
@@ -229,7 +226,7 @@ fn process_code_span_impl(span: &StyledSpan, ctx: &mut WrapContext, first_line_w
         let fragments = break_span_by_width(span, remaining_width.max(1));
 
         for (i, frag) in fragments.into_iter().enumerate() {
-            let frag_width = frag.text.width();
+            let frag_width = ratatui_width(&frag.text);
             let current_avail = ctx.current_avail(first_line_width);
 
             if i > 0 && ctx.current_line_width + frag_width > current_avail {
@@ -283,7 +280,7 @@ fn process_text_span_impl(span: &StyledSpan, ctx: &mut WrapContext, first_line_w
     }
 
     for (i, word) in words.iter().enumerate() {
-        let word_width = word.width();
+        let word_width = ratatui_width(word);
         let current_avail = ctx.current_avail(first_line_width);
 
         // Add space before word (except first word - leading space handled above)
@@ -335,7 +332,7 @@ fn process_text_span_impl(span: &StyledSpan, ctx: &mut WrapContext, first_line_w
             let fragments = break_span_by_width(&word_span, break_width);
 
             for frag in fragments {
-                let frag_width = frag.text.width();
+                let frag_width = ratatui_width(&frag.text);
                 let current_avail = ctx.current_avail(first_line_width);
                 if ctx.current_line_width + frag_width > current_avail && ctx.current_line_width > 0
                 {
@@ -471,6 +468,42 @@ mod tests {
         // Continuation lines should have indent
         if lines.len() > 1 {
             assert_eq!(lines[1].spans[0].text, "  ");
+        }
+    }
+
+    #[test]
+    fn test_break_span_by_width_preserves_emoji_graphemes() {
+        for text in ["⚠️⚠️", "👩‍🚀👩‍🚀", "👍🏽👍🏽", "éé"] {
+            for width in [1, 2, 3] {
+                let span = StyledSpan {
+                    text: text.to_string(),
+                    style: Style::CodeInline,
+                };
+                let fragments = break_span_by_width(&span, width);
+                assert_wrapped_span_invariants(text, &fragments, width);
+            }
+        }
+    }
+
+    fn assert_wrapped_span_invariants(original: &str, fragments: &[StyledSpan], width: usize) {
+        let joined: String = fragments
+            .iter()
+            .map(|fragment| fragment.text.as_str())
+            .collect();
+        assert_eq!(joined, original);
+
+        for fragment in fragments {
+            let fragment_width = ratatui_width(&fragment.text);
+            let grapheme_count = fragment.text.graphemes(true).count();
+            let is_single_wide_grapheme = grapheme_count == 1 && fragment_width > width;
+
+            assert!(
+                fragment_width <= width || is_single_wide_grapheme,
+                "{:?} width {} exceeds {}",
+                fragment.text,
+                fragment_width,
+                width
+            );
         }
     }
 }

@@ -16,6 +16,6 @@ pub use clipboard::Clipboard;
 pub use scrollbar::Scrollbar;
 pub use task::{TaskCompleted, TaskId, TaskKind, TaskMeta, TaskSeq, TaskStarted, Tasks};
 pub use text::{
-    sanitize_for_display, terminal_display_width, terminal_truncate, truncate_start_with_ellipsis,
+    ratatui_text, ratatui_width, sanitize_for_display, truncate_start_with_ellipsis,
     truncate_with_ellipsis,
 };

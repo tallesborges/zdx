@@ -10,6 +10,7 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::common::ratatui_text;
 use crate::state::TuiState;
 use crate::transcript::{
     CellId, LineInteraction, LineMapping, SelectionState, Style as TranscriptStyle, StyledLine,
@@ -239,7 +240,7 @@ pub(crate) fn convert_styled_line(styled_line: StyledLine) -> Line<'static> {
         .into_iter()
         .map(|s| {
             let style = convert_style(s.style);
-            Span::styled(s.text, style)
+            Span::styled(ratatui_text(&s.text).into_owned(), style)
         })
         .collect();
     Line::from(spans)
@@ -336,7 +337,10 @@ fn convert_styled_line_with_selection(
 
         if overlap_start >= overlap_end {
             // No overlap with selection
-            result_spans.push(Span::styled(span.text, base_style));
+            result_spans.push(Span::styled(
+                ratatui_text(&span.text).into_owned(),
+                base_style,
+            ));
         } else {
             // Partial or full overlap - split the span
             let rel_start = overlap_start - current_grapheme;
@@ -345,17 +349,20 @@ fn convert_styled_line_with_selection(
             // Before selection
             if rel_start > 0 {
                 let before: String = span_graphemes[..rel_start].join("");
-                result_spans.push(Span::styled(before, base_style));
+                result_spans.push(Span::styled(ratatui_text(&before).into_owned(), base_style));
             }
 
             // Selected portion
             let selected: String = span_graphemes[rel_start..rel_end].join("");
-            result_spans.push(Span::styled(selected, selected_style));
+            result_spans.push(Span::styled(
+                ratatui_text(&selected).into_owned(),
+                selected_style,
+            ));
 
             // After selection
             if rel_end < span_len {
                 let after: String = span_graphemes[rel_end..].join("");
-                result_spans.push(Span::styled(after, base_style));
+                result_spans.push(Span::styled(ratatui_text(&after).into_owned(), base_style));
             }
         }
 
