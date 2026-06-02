@@ -10,13 +10,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Local, Utc};
 use serde_json::Value;
-use unicode_width::UnicodeWidthStr;
 use zdx_engine::core::events::ToolOutput;
 use zdx_engine::providers::ReplayToken;
 
 use super::style::{Style, StyledLine, StyledSpan};
 use super::wrap::{WrapCache, render_prefixed_content};
-use crate::common::truncate_with_ellipsis;
+use crate::common::{ratatui_width, truncate_with_ellipsis};
 
 fn value_as_trimmed_str<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
     let value = input.get(key)?.as_str()?.trim();
@@ -800,7 +799,11 @@ impl HistoryCell {
 
                 if let Some(key_arg) = tool_key_arg(name, input) {
                     // icon(1-2) + space(1) + name + double-space(2)
-                    let used_width = header_spans.iter().map(|s| s.text.width()).sum::<usize>() + 2;
+                    let used_width = header_spans
+                        .iter()
+                        .map(|s| ratatui_width(&s.text))
+                        .sum::<usize>()
+                        + 2;
                     let remaining = width.saturating_sub(used_width).max(4);
                     let truncated_arg = truncate_with_ellipsis(&key_arg, remaining);
                     header_spans.push(StyledSpan {
@@ -933,7 +936,7 @@ impl HistoryCell {
 
                 // Build centered separator line: ─── 3 tools · 3.5s · 13:21:11.123 ───
                 let text_with_padding = format!(" {message} ");
-                let text_width = text_with_padding.chars().count();
+                let text_width = ratatui_width(&text_with_padding);
                 let remaining = width.saturating_sub(text_width);
                 let left_dashes = remaining / 2;
                 let right_dashes = remaining - left_dashes;
@@ -1692,7 +1695,7 @@ mod tests {
         // Verify that no line exceeds the display width
         for (i, line) in lines.iter().enumerate() {
             let line_text: String = line.spans.iter().map(|s| s.text.as_str()).collect();
-            let line_width = line_text.width();
+            let line_width = ratatui_width(&line_text);
 
             assert!(
                 line_width <= width,

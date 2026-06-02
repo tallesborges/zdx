@@ -1,10 +1,11 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use unicode_width::UnicodeWidthStr;
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::cell::CellId;
 use super::style::{Style, StyledLine, StyledSpan};
+use crate::common::ratatui_width;
 
 /// Cache for wrapped lines to avoid re-computing on every frame.
 ///
@@ -83,7 +84,7 @@ pub(crate) fn render_prefixed_content(
 ) -> Vec<StyledLine> {
     let mut lines = Vec::new();
     // Use display width for prefix
-    let prefix_display_width = prefix.width();
+    let prefix_display_width = ratatui_width(prefix);
 
     // Minimum usable width
     let min_width = prefix_display_width + 10;
@@ -182,7 +183,7 @@ pub(crate) fn wrap_text(text: &str, width: usize) -> Vec<String> {
     let mut current_width: usize = 0;
 
     for word in text.split_whitespace() {
-        let word_width = word.width();
+        let word_width = ratatui_width(word);
 
         if current_line.is_empty() {
             // First word on line
@@ -193,7 +194,7 @@ pub(crate) fn wrap_text(text: &str, width: usize) -> Vec<String> {
                     // All but last go to completed lines
                     lines.extend(broken);
                     // Last part becomes current line
-                    current_width = last.width();
+                    current_width = ratatui_width(&last);
                     current_line = last;
                 }
             } else {
@@ -213,7 +214,7 @@ pub(crate) fn wrap_text(text: &str, width: usize) -> Vec<String> {
                 let mut broken = wrap_chars(word, width);
                 if let Some(last) = broken.pop() {
                     lines.extend(broken);
-                    current_width = last.width();
+                    current_width = ratatui_width(&last);
                     current_line = last;
                 }
             } else {
@@ -241,37 +242,33 @@ pub(crate) fn wrap_text(text: &str, width: usize) -> Vec<String> {
 /// where whitespace preservation and exact width are more important than
 /// word boundaries.
 ///
-/// Breaks at character boundaries, respecting display width.
+/// Breaks at grapheme-cluster boundaries, respecting display width.
 ///
 /// Note: Callers should expand tabs to spaces before calling this function.
 /// Tab characters have variable terminal width (to next tab stop), but
 /// `unicode_width` returns `None` (0) for them. Pre-expanding ensures
 /// consistent width calculation.
 pub(crate) fn wrap_chars(text: &str, width: usize) -> Vec<String> {
-    use unicode_width::UnicodeWidthChar;
-
     let mut parts = Vec::new();
     let mut current = String::new();
     let mut current_width: usize = 0;
 
-    for ch in text.chars() {
-        let ch_width = ch.width().unwrap_or(0);
+    for grapheme in text.graphemes(true) {
+        let grapheme_width = ratatui_width(grapheme);
 
-        // Handle zero-width characters (always add to current)
-        if ch_width == 0 {
-            current.push(ch);
+        if grapheme_width == 0 {
+            current.push_str(grapheme);
             continue;
         }
 
-        // Check if adding this character would exceed width
-        if current_width + ch_width > width && !current.is_empty() {
+        if current_width + grapheme_width > width && !current.is_empty() {
             parts.push(current);
             current = String::new();
             current_width = 0;
         }
 
-        current.push(ch);
-        current_width += ch_width;
+        current.push_str(grapheme);
+        current_width += grapheme_width;
     }
 
     if !current.is_empty() {
@@ -373,5 +370,31 @@ mod tests {
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0], "🎉🎊");
         assert_eq!(parts[1], "🎁🎄");
+    }
+
+    #[test]
+    fn test_wrap_chars_preserves_emoji_graphemes() {
+        for text in ["⚠️⚠️", "👩‍🚀👩‍🚀", "👍🏽👍🏽", "éé"] {
+            for width in [1, 2, 3] {
+                let parts = wrap_chars(text, width);
+                assert_wrapped_grapheme_invariants(text, &parts, width);
+            }
+        }
+    }
+
+    fn assert_wrapped_grapheme_invariants(original: &str, parts: &[String], width: usize) {
+        let joined: String = parts.iter().map(String::as_str).collect();
+        assert_eq!(joined, original);
+
+        for part in parts {
+            let part_width = ratatui_width(part);
+            let grapheme_count = part.graphemes(true).count();
+            let is_single_wide_grapheme = grapheme_count == 1 && part_width > width;
+
+            assert!(
+                part_width <= width || is_single_wide_grapheme,
+                "{part:?} width {part_width} exceeds {width}"
+            );
+        }
     }
 }

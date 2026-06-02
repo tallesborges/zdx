@@ -7,11 +7,12 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_segmentation::UnicodeSegmentation;
 use zdx_engine::config::ThinkingLevel;
 use zdx_engine::models::{ModelOption, model_supports_reasoning};
 use zdx_engine::providers::{ProviderAuthMode, ProviderKind, provider_for_model};
 
+use crate::common::{ratatui_text, ratatui_width};
 use crate::input::TextBuffer;
 use crate::state::{TuiState, fast_mode_enabled_for_model};
 use crate::thread::ThreadUsage;
@@ -106,6 +107,10 @@ fn split_into_segments<'a>(line: &'a str, placeholders: &[String]) -> Vec<TextSe
 /// Handles multi-width characters (CJK, emoji) correctly by using
 /// display width instead of character count for line breaking.
 /// Placeholders are treated as atomic units that won't be broken mid-text.
+#[expect(
+    clippy::too_many_lines,
+    reason = "keeps placeholder wrapping and cursor mapping in one linear pass"
+)]
 fn wrap_textarea(
     textarea: &TextBuffer,
     available_width: usize,
@@ -134,19 +139,12 @@ fn wrap_textarea(
             continue;
         }
 
-        // Split line into segments (normal text vs placeholders)
         let segments = split_into_segments(logical_line, placeholders);
-
-        // Track current visual line being built
         let mut current_spans: Vec<Span<'static>> = Vec::new();
         let mut current_width = 0usize;
-
-        // Track byte position for cursor calculation
         let mut byte_pos = 0usize;
-        // Map from byte position to (visual_row_offset, visual_col)
         let mut cursor_byte_pos = 0usize;
         if is_cursor_line {
-            // Convert cursor_col (char index) to byte position
             cursor_byte_pos = logical_line
                 .char_indices()
                 .nth(cursor_col)
@@ -156,7 +154,7 @@ fn wrap_textarea(
         for segment in segments {
             match segment {
                 TextSegment::Placeholder(text) => {
-                    let placeholder_width = UnicodeWidthStr::width(text);
+                    let placeholder_width = ratatui_width(text);
 
                     // If placeholder doesn't fit on current line (and line has content), wrap first
                     if current_width > 0 && current_width + placeholder_width > available_width {
@@ -176,8 +174,10 @@ fn wrap_textarea(
                         cursor_visual_col = current_width;
                     }
 
-                    // Add placeholder as atomic unit (with styling)
-                    current_spans.push(Span::styled(text.to_string(), placeholder_style()));
+                    current_spans.push(Span::styled(
+                        ratatui_text(text).into_owned(),
+                        placeholder_style(),
+                    ));
                     current_width += placeholder_width;
                     byte_pos += text.len();
 
@@ -188,38 +188,48 @@ fn wrap_textarea(
                     }
                 }
                 TextSegment::Normal(text) => {
-                    // Wrap normal text character by character
                     let mut segment_start = 0;
 
-                    for (char_offset, ch) in text.char_indices() {
-                        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+                    for (grapheme_offset, grapheme) in text.grapheme_indices(true) {
+                        let grapheme_width = ratatui_width(grapheme);
+                        let grapheme_end = grapheme_offset + grapheme.len();
 
-                        // Check if we need to wrap before this character
-                        if current_width + ch_width > available_width && current_width > 0 {
+                        if current_width + grapheme_width > available_width && current_width > 0 {
                             // Emit accumulated normal text first
-                            if segment_start < char_offset {
-                                current_spans
-                                    .push(Span::raw(text[segment_start..char_offset].to_string()));
+                            if segment_start < grapheme_offset {
+                                current_spans.push(Span::raw(
+                                    ratatui_text(&text[segment_start..grapheme_offset])
+                                        .into_owned(),
+                                ));
                             }
                             // Emit current line
                             wrapped_lines.push(Line::from(std::mem::take(&mut current_spans)));
                             visual_row += 1;
                             current_width = 0;
-                            segment_start = char_offset;
+                            segment_start = grapheme_offset;
                         }
 
                         // Track cursor position
-                        if is_cursor_line && byte_pos + char_offset == cursor_byte_pos {
+                        if is_cursor_line
+                            && byte_pos + grapheme_offset <= cursor_byte_pos
+                            && cursor_byte_pos < byte_pos + grapheme_end
+                        {
                             cursor_visual_row = visual_row;
                             cursor_visual_col = current_width;
                         }
 
-                        current_width += ch_width;
+                        current_width += grapheme_width;
+
+                        if is_cursor_line && byte_pos + grapheme_end == cursor_byte_pos {
+                            cursor_visual_row = visual_row;
+                            cursor_visual_col = current_width;
+                        }
                     }
 
                     // Add remaining text from this segment
                     if segment_start < text.len() {
-                        current_spans.push(Span::raw(text[segment_start..].to_string()));
+                        current_spans
+                            .push(Span::raw(ratatui_text(&text[segment_start..]).into_owned()));
                     }
 
                     // Check cursor at end of segment
@@ -679,4 +689,76 @@ fn build_token_breakdown(usage: &ThreadUsage) -> Vec<Span<'static>> {
             label_style,
         ),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::CursorMove;
+
+    #[test]
+    fn wrap_textarea_preserves_emoji_graphemes() {
+        for text in ["⚠️⚠️", "👩‍🚀👩‍🚀", "👍🏽👍🏽", "éé"] {
+            for width in [1, 2, 3] {
+                let wrapped = wrap_textarea_with_text(text, width);
+                let lines = wrapped_line_text(&wrapped);
+                assert_wrapped_line_invariants(text, &lines, width);
+            }
+        }
+    }
+
+    #[test]
+    fn wrap_textarea_maps_cursor_around_emoji_graphemes() {
+        let mut textarea = TextBuffer::default();
+        textarea.insert_str("a👩‍🚀b");
+        textarea.move_cursor(CursorMove::Head);
+        textarea.move_cursor(CursorMove::Forward);
+
+        let before_emoji = wrap_textarea(&textarea, 20, &[]);
+        assert_eq!((before_emoji.cursor_row, before_emoji.cursor_col), (0, 1));
+
+        textarea.move_cursor(CursorMove::Forward);
+        let inside_emoji = wrap_textarea(&textarea, 20, &[]);
+        assert_eq!((inside_emoji.cursor_row, inside_emoji.cursor_col), (0, 1));
+
+        textarea.move_cursor(CursorMove::Forward);
+        textarea.move_cursor(CursorMove::Forward);
+        let after_emoji = wrap_textarea(&textarea, 20, &[]);
+        assert_eq!((after_emoji.cursor_row, after_emoji.cursor_col), (0, 3));
+    }
+
+    fn wrap_textarea_with_text(text: &str, width: usize) -> WrappedTextarea {
+        let mut textarea = TextBuffer::default();
+        textarea.insert_str(text);
+        wrap_textarea(&textarea, width, &[])
+    }
+
+    fn wrapped_line_text(wrapped: &WrappedTextarea) -> Vec<String> {
+        wrapped
+            .lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn assert_wrapped_line_invariants(original: &str, lines: &[String], width: usize) {
+        let joined: String = lines.iter().map(String::as_str).collect();
+        assert_eq!(joined, ratatui_text(original));
+
+        for line in lines {
+            let line_width = ratatui_width(line);
+            let grapheme_count = line.graphemes(true).count();
+            let is_single_wide_grapheme = grapheme_count == 1 && line_width > width;
+
+            assert!(
+                line_width <= width || is_single_wide_grapheme,
+                "{line:?} width {line_width} exceeds {width}"
+            );
+        }
+    }
 }

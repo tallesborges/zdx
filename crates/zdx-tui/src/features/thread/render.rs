@@ -7,10 +7,9 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
-use unicode_width::UnicodeWidthStr;
 use zdx_engine::core::thread_persistence::{self, short_thread_id};
 
-use crate::common::truncate_with_ellipsis;
+use crate::common::{ratatui_width, truncate_with_ellipsis};
 use crate::overlays::{ThreadPickerState, ThreadScope};
 
 /// Maximum number of threads visible in the picker list.
@@ -317,23 +316,23 @@ fn build_thread_list_item(
 
     let highlight_width = 3;
     let available_width = (inner_width as usize).saturating_sub(highlight_width);
-    let date_width = timestamp.width();
+    let date_width = ratatui_width(&timestamp);
     let name_max_width = available_width.saturating_sub(
-        tree_prefix.width()
-            + handoff_label.width()
-            + running_label.width()
-            + current_label.width()
+        ratatui_width(&tree_prefix)
+            + ratatui_width(handoff_label)
+            + ratatui_width(running_label)
+            + ratatui_width(current_label)
             + date_width
             + 2,
     );
     let display_name = truncate_with_ellipsis(&display_name, name_max_width);
     let gap = available_width
         .saturating_sub(
-            tree_prefix.width()
-                + handoff_label.width()
-                + running_label.width()
-                + display_name.width()
-                + current_label.width()
+            ratatui_width(&tree_prefix)
+                + ratatui_width(handoff_label)
+                + ratatui_width(running_label)
+                + ratatui_width(&display_name)
+                + ratatui_width(current_label)
                 + date_width,
         )
         .max(1);

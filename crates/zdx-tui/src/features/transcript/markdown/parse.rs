@@ -6,10 +6,9 @@
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 use super::wrap::{WrapOptions, wrap_styled_spans};
-use crate::common::{sanitize_for_display, terminal_display_width};
+use crate::common::{ratatui_width, sanitize_for_display};
 use crate::transcript::{Style, StyledLine, StyledSpan};
 
 /// Renders markdown text into styled lines.
@@ -85,8 +84,7 @@ impl TableBuffer {
 
     /// Render the table and return plain text lines.
     ///
-    /// Uses `terminal_display_width` for column sizing to correctly handle
-    /// emoji with variation selectors (e.g. ⚠️) that `unicode-width` under-counts.
+    /// Uses ratatui-safe display width for column sizing.
     /// Long cell content is word-wrapped across multiple lines within the row.
     fn render(&self, max_width: usize) -> Vec<String> {
         let all_rows: Vec<&Vec<String>> = if self.header.is_empty() {
@@ -110,7 +108,7 @@ impl TableBuffer {
         let mut col_widths: Vec<usize> = vec![0; num_cols];
         for row in &all_rows {
             for (i, cell) in row.iter().enumerate() {
-                col_widths[i] = col_widths[i].max(terminal_display_width(cell));
+                col_widths[i] = col_widths[i].max(ratatui_width(cell));
             }
         }
 
@@ -180,7 +178,7 @@ impl TableBuffer {
                 let mut line = String::from("│");
                 for (col_idx, col_w) in col_widths.iter().enumerate() {
                     let cell_text = wrapped_cells[col_idx].get(sub).map_or("", String::as_str);
-                    let cell_width = terminal_display_width(cell_text);
+                    let cell_width = ratatui_width(cell_text);
                     let padding = col_w.saturating_sub(cell_width);
                     line.push(' ');
                     line.push_str(cell_text);
@@ -237,7 +235,7 @@ fn wrap_cell_text(text: &str, max_width: usize) -> Vec<String> {
         return vec![String::new()];
     }
 
-    if terminal_display_width(text) <= max_width {
+    if ratatui_width(text) <= max_width {
         return vec![text.to_string()];
     }
 
@@ -247,7 +245,7 @@ fn wrap_cell_text(text: &str, max_width: usize) -> Vec<String> {
     let mut current_width: usize = 0;
 
     for word in words {
-        let word_width = terminal_display_width(word);
+        let word_width = ratatui_width(word);
 
         if word_width > max_width {
             // Word itself is too long — flush current line, then split the word.
@@ -288,9 +286,9 @@ fn wrap_cell_text(text: &str, max_width: usize) -> Vec<String> {
 }
 
 /// Splits a word that is wider than `max_width` into multiple lines at
-/// grapheme cluster boundaries, using `terminal_display_width` for accurate
-/// sizing. Handles ZWJ sequences, skin-tone modifiers, and VS16 correctly
-/// by never splitting a grapheme cluster.
+/// grapheme cluster boundaries, using terminal display width for sizing.
+/// Handles ZWJ sequences, skin-tone modifiers, and VS16 by never splitting a
+/// grapheme cluster.
 fn split_long_word(word: &str, max_width: usize, lines: &mut Vec<String>) {
     let mut current = String::new();
     let mut current_width: usize = 0;
@@ -323,15 +321,8 @@ fn split_long_word(word: &str, max_width: usize, lines: &mut Vec<String>) {
     }
 }
 
-/// Returns the terminal display width of a single grapheme cluster.
-/// Re-exported here for use in table rendering without importing from common.
 fn grapheme_width(g: &str) -> usize {
-    let w = g.width();
-    if w < 2 && g.contains('\u{FE0F}') {
-        2
-    } else {
-        w
-    }
+    ratatui_width(g)
 }
 
 /// Internal state for markdown rendering.
@@ -751,7 +742,7 @@ impl MarkdownRenderer {
 
         let indent_level = self.list_stack.len().saturating_sub(1);
         let base_indent = "  ".repeat(indent_level);
-        let marker_width = marker.width();
+        let marker_width = ratatui_width(&marker);
 
         let opts = WrapOptions {
             width: self.width,
@@ -1017,7 +1008,6 @@ mod tests {
 
     #[test]
     fn test_table_with_emoji_alignment() {
-        // Regression test: emojis with VS16 (like ⚠️) must not break table alignment.
         let md = "| Fix | Verdict |\n|---|---|\n| #1 | ✅ Ship |\n| #2 | ⚠️ Needs change |";
         let lines = render_markdown(md, 80);
 
@@ -1029,10 +1019,7 @@ mod tests {
             .collect();
 
         // All border/content lines should have the same display width
-        let widths: Vec<usize> = table_lines
-            .iter()
-            .map(|l| terminal_display_width(l))
-            .collect();
+        let widths: Vec<usize> = table_lines.iter().map(|l| ratatui_width(l)).collect();
 
         assert!(
             !widths.is_empty(),
@@ -1049,6 +1036,33 @@ mod tests {
     }
 
     #[test]
+    fn test_table_preserves_source_vs16_and_matches_ratatui_safe_width_model() {
+        let md = "| Status | Notes |\n|---|---|\n| ⚠️ | needs deploy |\n| ✅ | done |";
+        let lines = render_markdown(md, 80);
+
+        let table_lines: Vec<String> = lines
+            .iter()
+            .map(|line| line.spans.iter().map(|span| span.text.as_str()).collect())
+            .filter(|line: &String| line.contains('│'))
+            .collect();
+
+        assert!(!table_lines.is_empty());
+        assert!(
+            table_lines.iter().any(|line| line.contains('\u{FE0F}')),
+            "table should preserve VS16 for ratatui-compatible rendering"
+        );
+
+        let first_width = ratatui_width(&table_lines[0]);
+        for line in table_lines {
+            assert_eq!(
+                ratatui_width(&line),
+                first_width,
+                "table line has inconsistent ratatui-safe width: {line:?}"
+            );
+        }
+    }
+
+    #[test]
     fn test_table_long_content_fits_max_width() {
         // Table with very long cell content must not exceed the given width.
         let md = "| Col | Description |\n|---|---|\n| A | This is a very long description that should be wrapped to fit within the table width |";
@@ -1057,7 +1071,7 @@ mod tests {
 
         for styled_line in &lines {
             for span in &styled_line.spans {
-                let w = terminal_display_width(&span.text);
+                let w = ratatui_width(&span.text);
                 assert!(
                     w <= max_width,
                     "Line exceeds max_width ({w} > {max_width}): {:?}",
@@ -1089,7 +1103,7 @@ mod tests {
 
         for styled_line in &lines {
             for span in &styled_line.spans {
-                let w = terminal_display_width(&span.text);
+                let w = ratatui_width(&span.text);
                 assert!(
                     w <= max_width,
                     "Line exceeds max_width ({w} > {max_width}): {:?}",
@@ -1111,10 +1125,7 @@ mod tests {
             .filter(|s| s.contains('│'))
             .collect();
 
-        let widths: Vec<usize> = table_lines
-            .iter()
-            .map(|l| terminal_display_width(l))
-            .collect();
+        let widths: Vec<usize> = table_lines.iter().map(|l| ratatui_width(l)).collect();
 
         assert!(!widths.is_empty());
         let first = widths[0];
