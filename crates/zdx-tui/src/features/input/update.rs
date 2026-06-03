@@ -5,7 +5,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers as CrosstermKeyModifiers};
 use zdx_engine::agent_activity;
-use zdx_engine::config::Config;
+use zdx_engine::config::{Config, ModelFavorite, ThinkingLevel};
 use zdx_engine::core::thread_persistence::ThreadEvent;
 use zdx_engine::providers::ChatMessage;
 
@@ -36,6 +36,7 @@ pub struct InputContext<'a> {
     pub config: &'a Config,
     pub model_id: &'a str,
     pub active_thread_ids: &'a std::collections::HashSet<String>,
+    pub root: &'a std::path::Path,
 }
 
 const FAST_MODE_UNAVAILABLE_MSG: &str =
@@ -183,6 +184,7 @@ pub fn handle_main_key(input: &mut InputState, ctx: &InputContext<'_>, key: KeyE
         .or_else(|| handle_control_keys(input, ctx, key.code, &mods))
         .or_else(|| handle_overlays(input, ctx.model_id, key.code, &mods))
         .or_else(|| handle_submission(input, ctx, key.code, &mods))
+        .or_else(|| handle_favorites(input, ctx, key.code, &mods))
         .unwrap_or_else(|| handle_default_input(input, key))
 }
 
@@ -678,6 +680,85 @@ fn handle_submission(
             ctx.model_id,
         )),
         _ => None,
+    }
+}
+
+// =============================================================================
+// Favorites: Tab / Shift+Tab cycling
+// =============================================================================
+
+/// Tab / Shift+Tab cycles favorite presets when the composer is empty and
+/// `[[favorites]]` is configured; otherwise returns `None` so Tab falls through
+/// to inserting spaces. Switches model + thinking together, persisting both and
+/// refreshing the system prompt (which depends on the model).
+fn handle_favorites(
+    input: &InputState,
+    ctx: &InputContext<'_>,
+    code: KeyCode,
+    mods: &Modifiers,
+) -> Option<KeyResult> {
+    if !matches!(code, KeyCode::Tab | KeyCode::BackTab)
+        || mods.ctrl()
+        || mods.alt()
+        || mods.super_key()
+        || ctx.config.favorites.is_empty()
+        || !input.get_text().is_empty()
+    {
+        return None;
+    }
+
+    let forward = code == KeyCode::Tab && !mods.shift();
+    let idx = next_favorite_index(
+        &ctx.config.favorites,
+        &ctx.config.model,
+        ctx.config.thinking_level,
+        forward,
+    );
+    let favorite = ctx.config.favorites.get(idx)?;
+
+    let model = favorite.model.clone();
+    let level = favorite.thinking;
+    let message = format!("Switched to {}", favorite.alias);
+
+    Some((
+        vec![
+            UiEffect::PersistModel {
+                model: model.clone(),
+            },
+            UiEffect::PersistThinking { level },
+            UiEffect::RefreshSystemPrompt {
+                path: ctx.root.to_path_buf(),
+            },
+        ],
+        vec![
+            StateMutation::Config(ConfigMutation::SetModel(model)),
+            StateMutation::Config(ConfigMutation::SetThinkingLevel(level)),
+            StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(message)),
+        ],
+        None,
+    ))
+}
+
+/// Index of the favorite to switch to: the next/previous entry from the one
+/// matching the current model + thinking, or the first/last when none match.
+fn next_favorite_index(
+    favorites: &[ModelFavorite],
+    current_model: &str,
+    current_thinking: ThinkingLevel,
+    forward: bool,
+) -> usize {
+    let len = favorites.len();
+    if len == 0 {
+        return 0;
+    }
+    let current = favorites
+        .iter()
+        .position(|fav| fav.matches(current_model, current_thinking));
+    match current {
+        Some(i) if forward => (i + 1) % len,
+        Some(i) => (i + len - 1) % len,
+        None if forward => 0,
+        None => len - 1,
     }
 }
 
@@ -1362,6 +1443,7 @@ pub fn handle_mouse(
     area: ratatui::layout::Rect,
 ) -> Option<crate::overlays::OverlayRequest> {
     use crossterm::event::{MouseButton, MouseEventKind};
+
     use crate::common::ratatui_width;
 
     if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
@@ -1518,6 +1600,7 @@ mod tests {
             config: &config,
             model_id: &config.model,
             active_thread_ids: &active_thread_ids,
+            root: std::path::Path::new("."),
         };
 
         let (effects, mutations, overlay) = handle_main_key(
@@ -1549,7 +1632,160 @@ mod tests {
             config,
             model_id: &config.model,
             active_thread_ids,
+            root: std::path::Path::new("."),
         }
+    }
+
+    fn fav(alias: &str, model: &str, thinking: ThinkingLevel) -> ModelFavorite {
+        ModelFavorite {
+            alias: alias.to_string(),
+            model: model.to_string(),
+            thinking,
+        }
+    }
+
+    #[test]
+    fn favorite_cycle_index_wraps_and_matches_current() {
+        let favorites = vec![
+            fav("a", "anthropic:claude-sonnet-4-6", ThinkingLevel::Off),
+            fav("b", "anthropic:claude-opus-4-6", ThinkingLevel::High),
+            fav("c", "openai:gpt-5.5", ThinkingLevel::Medium),
+        ];
+
+        // No favorite matches → forward starts at first, backward at last.
+        let none = "anthropic:claude-haiku-4-5";
+        assert_eq!(
+            next_favorite_index(&favorites, none, ThinkingLevel::Off, true),
+            0
+        );
+        assert_eq!(
+            next_favorite_index(&favorites, none, ThinkingLevel::Off, false),
+            2
+        );
+
+        // Match found → forward advances/wraps, backward retreats/wraps.
+        assert_eq!(
+            next_favorite_index(
+                &favorites,
+                "anthropic:claude-opus-4-6",
+                ThinkingLevel::High,
+                true
+            ),
+            2
+        );
+        assert_eq!(
+            next_favorite_index(&favorites, "openai:gpt-5.5", ThinkingLevel::Medium, true),
+            0
+        );
+        assert_eq!(
+            next_favorite_index(
+                &favorites,
+                "anthropic:claude-sonnet-4-6",
+                ThinkingLevel::Off,
+                false
+            ),
+            2
+        );
+
+        // Same model, different thinking is not a match → starts fresh.
+        assert_eq!(
+            next_favorite_index(
+                &favorites,
+                "anthropic:claude-opus-4-6",
+                ThinkingLevel::Off,
+                true
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn tab_cycles_favorites_when_composer_empty() {
+        let mut input = InputState::default();
+        let tasks = Tasks::default();
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config {
+            model: "anthropic:claude-haiku-4-5".to_string(),
+            thinking_level: ThinkingLevel::Off,
+            favorites: vec![fav(
+                "sonnet-hi",
+                "anthropic:claude-sonnet-4-6",
+                ThinkingLevel::High,
+            )],
+            ..Config::default()
+        };
+        let ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
+
+        let (effects, mutations, overlay) = handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+        );
+
+        assert!(overlay.is_none());
+        assert!(input.get_text().is_empty(), "Tab must not insert spaces");
+        assert!(mutations.iter().any(|m| matches!(
+            m,
+            StateMutation::Config(ConfigMutation::SetModel(model))
+                if model == "anthropic:claude-sonnet-4-6"
+        )));
+        assert!(mutations.iter().any(|m| matches!(
+            m,
+            StateMutation::Config(ConfigMutation::SetThinkingLevel(ThinkingLevel::High))
+        )));
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, UiEffect::PersistModel { .. }))
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, UiEffect::RefreshSystemPrompt { .. }))
+        );
+    }
+
+    #[test]
+    fn tab_does_not_cycle_when_composer_has_text() {
+        let mut input = InputState::default();
+        input.set_text("hello");
+        let tasks = Tasks::default();
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config {
+            favorites: vec![fav("s", "anthropic:claude-sonnet-4-6", ThinkingLevel::High)],
+            ..Config::default()
+        };
+        let ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
+
+        let (_effects, mutations, _overlay) = handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+        );
+
+        assert!(input.get_text().starts_with("hello"));
+        assert!(
+            !mutations
+                .iter()
+                .any(|m| matches!(m, StateMutation::Config(ConfigMutation::SetModel(_))))
+        );
+    }
+
+    #[test]
+    fn tab_inserts_spaces_when_no_favorites() {
+        let mut input = InputState::default();
+        let tasks = Tasks::default();
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config::default();
+        let ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
+
+        handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+        );
+
+        assert_eq!(input.get_text(), "    ");
     }
 
     #[test]
