@@ -312,14 +312,21 @@ pub fn render_input_with_cursor(
         .fg(Color::DarkGray)
         .add_modifier(Modifier::DIM);
 
-    let mut title_spans = vec![Span::styled(format!(" {}", state.config.model), base_style)];
+    // Show the favorite alias instead of the model id when one matches.
+    let favorite_alias = state.config.active_favorite_alias();
+    let label = match favorite_alias {
+        Some(alias) => format!(" {alias}"),
+        None => format!(" {}", state.config.model),
+    };
+    let mut title_spans = vec![Span::styled(label, base_style)];
 
     if fast_mode_enabled_for_model(&state.config, &state.config.model) {
         title_spans.push(Span::styled(" [F]", fast_style));
     }
 
-    // Add thinking indicator with dim style (only when enabled + supported)
-    if state.config.thinking_level != ThinkingLevel::Off
+    // Thinking badge, unless a favorite alias already implies it.
+    if favorite_alias.is_none()
+        && state.config.thinking_level != ThinkingLevel::Off
         && model_supports_reasoning(&state.config.model)
     {
         title_spans.push(Span::styled(

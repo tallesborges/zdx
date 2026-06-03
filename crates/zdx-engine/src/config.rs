@@ -494,6 +494,36 @@ fn expand_tilde(path: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(path)
 }
 
+/// A favorite model preset cycled with Tab in the TUI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelFavorite {
+    pub alias: String,
+    /// Model id, with or without a `provider:` prefix.
+    pub model: String,
+    #[serde(default)]
+    pub thinking: ThinkingLevel,
+}
+
+impl ModelFavorite {
+    /// True if this favorite matches the given model + thinking. Prefixed
+    /// (`provider:id`) and bare model ids are treated as equivalent.
+    #[must_use]
+    pub fn matches(&self, model: &str, thinking: ThinkingLevel) -> bool {
+        self.thinking == thinking && models_equivalent(&self.model, model)
+    }
+}
+
+/// Bare and `provider:`-prefixed ids are equivalent when they resolve to the
+/// same provider + model.
+fn models_equivalent(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let ra = crate::providers::resolve_provider(a);
+    let rb = crate::providers::resolve_provider(b);
+    ra.kind == rb.kind && ra.model == rb.model
+}
+
 /// Main configuration structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -536,6 +566,10 @@ pub struct Config {
     /// Thinking level for extended thinking feature
     #[serde(default)]
     pub thinking_level: ThinkingLevel,
+
+    /// Favorite model presets cycled with Tab in the TUI.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub favorites: Vec<ModelFavorite>,
 
     /// Skill discovery configuration
     #[serde(default)]
@@ -582,6 +616,15 @@ impl Config {
     /// Returns an error if the operation fails.
     pub fn load() -> Result<Self> {
         Self::load_from(&paths::config_path())
+    }
+
+    /// Alias of the favorite matching the active model + thinking, if any.
+    #[must_use]
+    pub fn active_favorite_alias(&self) -> Option<&str> {
+        self.favorites
+            .iter()
+            .find(|fav| fav.matches(&self.model, self.thinking_level))
+            .map(|fav| fav.alias.as_str())
     }
 
     /// Resolves Telegram runtime credentials/settings from config + environment.
@@ -1180,6 +1223,7 @@ impl Default for Config {
             read_thread_model: Self::DEFAULT_READ_THREAD_MODEL.to_string(),
             tldr_model: Self::DEFAULT_TLDR_MODEL.to_string(),
             thinking_level: ThinkingLevel::default(),
+            favorites: Vec::new(),
             skills: SkillsConfig::default(),
             subagents: SubagentsConfig::default(),
             prompt_template: PromptTemplateConfig::default(),
@@ -2234,6 +2278,76 @@ max_tokens = 2048
 
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.thinking_level, ThinkingLevel::Off);
+    }
+
+    /// Favorites: load from `[[favorites]]` and survive an unrelated save.
+    #[test]
+    fn test_favorites_load_and_survive_save() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        fs::write(
+            &config_path,
+            r#"model = "claude-sonnet-4"
+
+[[favorites]]
+alias = "sonnet-hi"
+model = "anthropic:claude-sonnet-4-6"
+thinking = "high"
+
+[[favorites]]
+alias = "opus"
+model = "anthropic:claude-opus-4-6"
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(config.favorites.len(), 2);
+        assert_eq!(config.favorites[0].alias, "sonnet-hi");
+        assert_eq!(config.favorites[0].model, "anthropic:claude-sonnet-4-6");
+        assert_eq!(config.favorites[0].thinking, ThinkingLevel::High);
+        // thinking defaults to Off when omitted
+        assert_eq!(config.favorites[1].thinking, ThinkingLevel::Off);
+
+        // Saving an unrelated field (via template merge) must not drop favorites.
+        Config::save_thinking_level_to(&config_path, ThinkingLevel::Medium).unwrap();
+        let reloaded = Config::load_from(&config_path).unwrap();
+        assert_eq!(reloaded.thinking_level, ThinkingLevel::Medium);
+        assert_eq!(reloaded.favorites.len(), 2);
+        assert_eq!(reloaded.favorites[1].alias, "opus");
+        assert_eq!(reloaded.favorites[0].thinking, ThinkingLevel::High);
+    }
+
+    /// Favorites: `active_favorite_alias` matches the active model + thinking,
+    /// treating bare and prefixed model ids as equivalent.
+    #[test]
+    fn test_active_favorite_alias() {
+        let config = Config {
+            model: "anthropic:claude-sonnet-4-6".to_string(),
+            thinking_level: ThinkingLevel::High,
+            favorites: vec![
+                ModelFavorite {
+                    alias: "sonnet-hi".to_string(),
+                    // bare id should still match the prefixed active model
+                    model: "claude-sonnet-4-6".to_string(),
+                    thinking: ThinkingLevel::High,
+                },
+                ModelFavorite {
+                    alias: "opus".to_string(),
+                    model: "anthropic:claude-opus-4-6".to_string(),
+                    thinking: ThinkingLevel::Off,
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(config.active_favorite_alias(), Some("sonnet-hi"));
+
+        // Same model but a different thinking level matches no favorite.
+        let config = Config {
+            thinking_level: ThinkingLevel::Off,
+            ..config
+        };
+        assert_eq!(config.active_favorite_alias(), None);
     }
 
     #[test]
