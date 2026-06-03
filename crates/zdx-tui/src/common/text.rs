@@ -226,7 +226,8 @@ mod tests {
 
     #[test]
     fn test_truncate_with_ellipsis_preserves_graphemes() {
-        for text in ["⚠️⚠️ab", "👩‍🚀👩‍🚀ab", "👍🏽👍🏽ab", "ééab"] {
+        for text in ["⚠️⚠️ab", "👩‍🚀👩‍🚀ab", "👍🏽👍🏽ab", "ééab"]
+        {
             let truncated = truncate_with_ellipsis(text, 3);
             assert!(truncated.ends_with('…'));
             assert!(text.starts_with(truncated.trim_end_matches('…')));
