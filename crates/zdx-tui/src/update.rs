@@ -7,6 +7,7 @@
 //! This is the single source of truth for how events modify state.
 
 use crossterm::event::Event;
+use zdx_engine::config::{ModelFavorite, ThinkingLevel};
 
 use crate::common::{TaskKind, TaskMeta};
 use crate::effects::UiEffect;
@@ -1352,6 +1353,21 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         return vec![UiEffect::CloseCurrentTab];
     }
 
+    // Tab / Shift+Tab cycles favorites when the composer is empty; otherwise
+    // Tab falls through to inserting spaces.
+    if app.overlay.is_none()
+        && matches!(key.code, KeyCode::Tab | KeyCode::BackTab)
+        && !key.modifiers.contains(KeyModifiers::CONTROL)
+        && !key.modifiers.contains(KeyModifiers::ALT)
+        && !key.modifiers.contains(KeyModifiers::SUPER)
+        && !app.tui.config.favorites.is_empty()
+        && app.tui.input.get_text().is_empty()
+        && !app.tui.input.is_modal_generation_active()
+    {
+        let forward = key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::SHIFT);
+        return cycle_favorite_model(app, forward);
+    }
+
     if let Some(Overlay::FilePicker(picker)) = app.overlay.as_mut()
         && FilePickerState::should_route_input_key(key)
     {
@@ -1437,6 +1453,64 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
     effects
 }
 
+/// Switches to the next/previous favorite, persisting model + thinking and
+/// refreshing the system prompt (which depends on the model).
+fn cycle_favorite_model(app: &mut AppState, forward: bool) -> Vec<UiEffect> {
+    let idx = next_favorite_index(
+        &app.tui.config.favorites,
+        &app.tui.config.model,
+        app.tui.config.thinking_level,
+        forward,
+    );
+    let Some(favorite) = app.tui.config.favorites.get(idx).cloned() else {
+        return vec![];
+    };
+
+    let root = app.tui.agent_opts.root.clone();
+    let model = favorite.model.clone();
+    let level = favorite.thinking;
+
+    let message = format!("Switched to {}", favorite.alias);
+
+    apply_mutations(
+        &mut app.tui,
+        vec![
+            StateMutation::Config(ConfigMutation::SetModel(model.clone())),
+            StateMutation::Config(ConfigMutation::SetThinkingLevel(level)),
+            StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(message)),
+        ],
+    );
+
+    vec![
+        UiEffect::PersistModel { model },
+        UiEffect::PersistThinking { level },
+        UiEffect::RefreshSystemPrompt { path: root },
+    ]
+}
+
+/// Index of the favorite to switch to: the next/previous entry from the one
+/// matching the current model + thinking, or the first/last when none match.
+fn next_favorite_index(
+    favorites: &[ModelFavorite],
+    current_model: &str,
+    current_thinking: ThinkingLevel,
+    forward: bool,
+) -> usize {
+    let len = favorites.len();
+    if len == 0 {
+        return 0;
+    }
+    let current = favorites
+        .iter()
+        .position(|fav| fav.matches(current_model, current_thinking));
+    match current {
+        Some(i) if forward => (i + 1) % len,
+        Some(i) => (i + len - 1) % len,
+        None if forward => 0,
+        None => len - 1,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -1448,6 +1522,82 @@ mod tests {
 
     use super::*;
     use crate::transcript::{HistoryCell, ScrollMode};
+
+    fn fav(alias: &str, model: &str, thinking: ThinkingLevel) -> ModelFavorite {
+        ModelFavorite {
+            alias: alias.to_string(),
+            model: model.to_string(),
+            thinking,
+        }
+    }
+
+    #[test]
+    fn favorite_cycle_wraps_and_matches_current() {
+        let favorites = vec![
+            fav("a", "anthropic:claude-sonnet-4-6", ThinkingLevel::Off),
+            fav("b", "anthropic:claude-opus-4-6", ThinkingLevel::High),
+            fav("c", "openai:gpt-5.5", ThinkingLevel::Medium),
+        ];
+
+        // No favorite matches the current selection → forward starts at the
+        // first entry, backward at the last.
+        let none = "anthropic:claude-haiku-4-5";
+        assert_eq!(
+            next_favorite_index(&favorites, none, ThinkingLevel::Off, true),
+            0
+        );
+        assert_eq!(
+            next_favorite_index(&favorites, none, ThinkingLevel::Off, false),
+            2
+        );
+
+        // Match found → forward advances and wraps; backward retreats and wraps.
+        assert_eq!(
+            next_favorite_index(
+                &favorites,
+                "anthropic:claude-opus-4-6",
+                ThinkingLevel::High,
+                true
+            ),
+            2
+        );
+        assert_eq!(
+            next_favorite_index(&favorites, "openai:gpt-5.5", ThinkingLevel::Medium, true),
+            0
+        );
+        assert_eq!(
+            next_favorite_index(
+                &favorites,
+                "anthropic:claude-sonnet-4-6",
+                ThinkingLevel::Off,
+                false
+            ),
+            2
+        );
+
+        // Same model, different thinking level is not a match → starts fresh.
+        assert_eq!(
+            next_favorite_index(
+                &favorites,
+                "anthropic:claude-opus-4-6",
+                ThinkingLevel::Off,
+                true
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn favorite_matches_bare_and_prefixed_model_ids() {
+        let bare = fav("s", "claude-sonnet-4-6", ThinkingLevel::Off);
+
+        // A bare id in config matches the prefixed effective model.
+        assert!(bare.matches("anthropic:claude-sonnet-4-6", ThinkingLevel::Off));
+        // A different model id does not match.
+        assert!(!bare.matches("anthropic:claude-opus-4-6", ThinkingLevel::Off));
+        // Same model, different thinking level is not a match.
+        assert!(!bare.matches("anthropic:claude-sonnet-4-6", ThinkingLevel::High));
+    }
 
     fn unique_thread_id(prefix: &str) -> String {
         let nanos = SystemTime::now()
