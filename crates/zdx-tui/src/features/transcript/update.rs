@@ -601,8 +601,9 @@ pub fn screen_to_transcript_pos(
     screen_y: u16,
     transcript_area: Rect,
 ) -> Option<(usize, usize)> {
-    use crate::common::ratatui_width;
     use unicode_segmentation::UnicodeSegmentation;
+
+    use crate::common::ratatui_width;
 
     if !contains_point(transcript_area, screen_x, screen_y) {
         return None; // Click is in input or status area, not transcript
