@@ -325,17 +325,40 @@ fn finalize_agent_event_for_tab(
     tab: input::TabContext,
     effects: &mut Vec<UiEffect>,
 ) {
-    if matches!(
-        agent_event,
-        zdx_engine::core::events::AgentEvent::ToolRequested { .. }
-    ) {
+    use zdx_engine::core::events::AgentEvent;
+
+    if matches!(agent_event, AgentEvent::ToolRequested { .. }) {
         tui.status_line.mark_tool_used();
     }
 
-    let should_dequeue = matches!(
-        agent_event,
-        zdx_engine::core::events::AgentEvent::TurnFinished { .. }
-    );
+    // cmux pill/bar reflects only the active tab (one per pane), when enabled.
+    let cmux = tui.config.notifications.cmux_status && matches!(tab, input::TabContext::Active);
+    if cmux {
+        let title = tui.thread.title.as_deref();
+        match agent_event {
+            AgentEvent::TurnStarted => {
+                effects.push(UiEffect::CmuxStatus {
+                    value: cmux_status_value(title, None),
+                });
+            }
+            AgentEvent::ToolStarted { name, .. } => {
+                effects.push(UiEffect::CmuxStatus {
+                    value: cmux_status_value(title, Some(&name.to_lowercase())),
+                });
+            }
+            AgentEvent::ToolCompleted { result, .. } => {
+                effects.push(UiEffect::CmuxStatus {
+                    value: cmux_status_value(title, None),
+                });
+                if let Some((value, label)) = todo_progress_from_output(result) {
+                    effects.push(UiEffect::CmuxProgress { value, label });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let should_dequeue = matches!(agent_event, AgentEvent::TurnFinished { .. });
 
     if should_dequeue
         && let Some(thread_id) = tui
@@ -348,7 +371,80 @@ fn finalize_agent_event_for_tab(
     }
 
     maybe_push_timing_cell_for_tab(tui, should_dequeue);
-    maybe_send_next_queued_prompt_for_tab(tui, should_dequeue, tab, effects);
+    let continues = maybe_send_next_queued_prompt_for_tab(tui, should_dequeue, tab, effects);
+
+    if let AgentEvent::TurnFinished { status, .. } = agent_event
+        && !continues
+    {
+        if cmux {
+            effects.push(UiEffect::CmuxStatusClear);
+            effects.push(UiEffect::CmuxProgressClear);
+        }
+        if let Some(ok) = turn_notification_outcome(status) {
+            effects.push(UiEffect::NotifyTurnEnd { ok });
+        }
+    }
+}
+
+/// Builds the cmux status-pill value: thread title (to identify the
+/// conversation) or `running` as a fallback, plus the active tool when present.
+fn cmux_status_value(title: Option<&str>, tool: Option<&str>) -> String {
+    let label = title.map(str::trim).filter(|t| !t.is_empty()).map_or_else(
+        || "running".to_string(),
+        |t| crate::common::truncate_with_ellipsis(t, 32),
+    );
+    match tool {
+        Some(tool) => format!("{label}: {tool}"),
+        None => label,
+    }
+}
+
+/// Extracts `(progress, label)` from a `todo_write` tool result for the cmux
+/// progress bar. Returns `None` for any other tool. `progress` is
+/// completed/total; `label` is the active todo's content or a `done/total`
+/// fallback.
+fn todo_progress_from_output(
+    result: &zdx_engine::core::events::ToolOutput,
+) -> Option<(f64, String)> {
+    let data = result.data()?;
+    let reminder = data.get("reminder").and_then(|r| r.as_str())?;
+    if !reminder.contains("Todo_Write") {
+        return None;
+    }
+    let counts = data.get("counts")?;
+    let total = counts.get("total").and_then(serde_json::Value::as_u64)?;
+    if total == 0 {
+        return None;
+    }
+    let completed = counts
+        .get("completed")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let active_content = data
+        .get("todos")
+        .and_then(|t| t.as_array())
+        .and_then(|todos| {
+            todos
+                .iter()
+                .find(|todo| todo.get("status").and_then(|s| s.as_str()) == Some("in_progress"))
+        })
+        .and_then(|todo| todo.get("content").and_then(|c| c.as_str()));
+    let label = active_content.map_or_else(
+        || format!("{completed}/{total} done"),
+        |content| crate::common::truncate_with_ellipsis(content, 40),
+    );
+    Some((completed as f64 / total as f64, label))
+}
+
+/// `Some(true)` completed, `Some(false)` failed, `None` interrupted (no
+/// notification — the user is already present).
+fn turn_notification_outcome(status: &zdx_engine::core::events::TurnStatus) -> Option<bool> {
+    use zdx_engine::core::events::TurnStatus;
+    match status {
+        TurnStatus::Completed => Some(true),
+        TurnStatus::Failed { .. } => Some(false),
+        TurnStatus::Interrupted => None,
+    }
 }
 
 fn maybe_push_timing_cell_for_tab(tui: &mut crate::state::TuiState, should_dequeue: bool) {
@@ -361,22 +457,29 @@ fn maybe_push_timing_cell_for_tab(tui: &mut crate::state::TuiState, should_deque
     }
 }
 
+/// Drains the next queued prompt for `tab` when the turn just ended and the
+/// tab is idle. Returns `true` when the turn effectively continues (a queued
+/// prompt was dispatched or the tab is still busy), so the caller suppresses
+/// the turn-end notification.
 fn maybe_send_next_queued_prompt_for_tab(
     tui: &mut crate::state::TuiState,
     should_dequeue: bool,
     tab: input::TabContext,
     effects: &mut Vec<UiEffect>,
-) {
-    if !should_dequeue
-        || tui.agent_state.is_running()
+) -> bool {
+    if !should_dequeue {
+        return false;
+    }
+
+    if tui.agent_state.is_running()
         || tui.tasks.state(TaskKind::Bash).is_running()
         || tui.transcript.has_pending_user_cell()
     {
-        return;
+        return true;
     }
 
     let Some(text) = tui.input.pop_queued_prompt() else {
-        return;
+        return false;
     };
 
     let thread_id = tui.thread.thread_handle.as_ref().map(|log| log.id.clone());
@@ -390,6 +493,7 @@ fn maybe_send_next_queued_prompt_for_tab(
         input::build_send_effects_for_tab(&text, thread_id, should_suggest_title, vec![], tab);
     apply_tab_mutations(tui, queue_mutations);
     effects.extend(queue_effects);
+    true
 }
 
 /// Applies cross-slice state mutations to a single `TuiState` (active or
@@ -1456,6 +1560,50 @@ mod tests {
             .unwrap()
             .as_nanos();
         format!("{prefix}-{nanos}")
+    }
+
+    #[test]
+    fn todo_progress_extracts_ratio_and_active_label() {
+        let output = zdx_engine::core::events::ToolOutput::success(serde_json::json!({
+            "todos": [
+                { "id": "todo-1", "content": "Inspect bug", "status": "completed" },
+                { "id": "todo-2", "content": "Implement fix", "status": "in_progress" },
+                { "id": "todo-3", "content": "Add tests", "status": "pending" },
+            ],
+            "counts": { "total": 3, "pending": 1, "in_progress": 1, "completed": 1, "abandoned": 0 },
+            "summary": "Active: todo-2 (Implement fix). Remaining todos: 2.",
+            "reminder": "Todo list updated. Continue using Todo_Write to mark items in_progress before starting and completed as soon as you finish — keep exactly one todo in_progress while work remains.",
+        }));
+
+        let (value, label) = todo_progress_from_output(&output).expect("todo progress");
+        assert!((value - 1.0 / 3.0).abs() < f64::EPSILON);
+        assert_eq!(label, "Implement fix");
+    }
+
+    #[test]
+    fn todo_progress_ignores_non_todo_output() {
+        let output = zdx_engine::core::events::ToolOutput::success(serde_json::json!({
+            "file_path": "src/lib.rs",
+        }));
+        assert!(todo_progress_from_output(&output).is_none());
+    }
+
+    #[test]
+    fn cmux_status_value_leads_with_title_and_tool() {
+        assert_eq!(
+            cmux_status_value(Some("fix auth bug"), Some("bash")),
+            "fix auth bug: bash"
+        );
+        assert_eq!(
+            cmux_status_value(Some("fix auth bug"), None),
+            "fix auth bug"
+        );
+        assert_eq!(cmux_status_value(None, Some("bash")), "running: bash");
+        assert_eq!(cmux_status_value(None, None), "running");
+        assert_eq!(
+            cmux_status_value(Some("   "), Some("edit")),
+            "running: edit"
+        );
     }
 
     #[test]

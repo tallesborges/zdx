@@ -243,3 +243,7 @@ fast_mode = false
 
 [qmd]
 command = "qmd"
+
+[notifications]
+osc = true
+cmux_status = false

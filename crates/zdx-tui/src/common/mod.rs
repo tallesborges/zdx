@@ -8,6 +8,7 @@
 
 pub mod clipboard;
 pub mod commands;
+pub mod notify;
 pub mod scrollbar;
 pub mod task;
 pub mod text;

@@ -411,6 +411,29 @@ pub struct TranscriptionConfig {
     pub language: Option<String>,
 }
 
+/// Turn-completion notification configuration for the interactive TUI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NotificationsConfig {
+    /// Emit an OSC 9 desktop notification when a turn finishes (cmux, Ghostty,
+    /// kitty, and `WezTerm` surface it; other terminals ignore it).
+    pub osc: bool,
+    /// Also drive cmux sidebar integration via the `cmux` CLI: a per-instance
+    /// status pill showing the current tool while a turn runs (cleared when
+    /// idle) plus a `todo_write` progress bar. No-op when `cmux` is not on
+    /// `PATH`.
+    pub cmux_status: bool,
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            osc: true,
+            cmux_status: false,
+        }
+    }
+}
+
 /// qmd search backend configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -594,6 +617,10 @@ pub struct Config {
     /// qmd search backend configuration.
     #[serde(default)]
     pub qmd: QmdConfig,
+
+    /// Turn-completion notification configuration for the interactive TUI.
+    #[serde(default)]
+    pub notifications: NotificationsConfig,
 
     /// Telegram bot configuration
     #[serde(default)]
@@ -1230,6 +1257,7 @@ impl Default for Config {
             memory: MemoryConfig::default(),
             transcription: TranscriptionConfig::default(),
             qmd: QmdConfig::default(),
+            notifications: NotificationsConfig::default(),
             telegram: TelegramConfig::default(),
         }
     }
