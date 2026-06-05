@@ -81,6 +81,23 @@ pub enum UiEffect {
     /// Open a URL in the system browser.
     OpenBrowser { url: String },
 
+    /// A turn finished with no queued prompt continuing. The runtime emits an
+    /// OSC 9 desktop notification per `[notifications]`. `ok` is false when the
+    /// turn failed.
+    NotifyTurnEnd { ok: bool },
+
+    /// Set this instance's cmux sidebar status pill (e.g. `running: bash`).
+    CmuxStatus { value: String },
+
+    /// Clear this instance's cmux sidebar status pill (turn went idle).
+    CmuxStatusClear,
+
+    /// Set the cmux sidebar progress bar from `todo_write` completion.
+    CmuxProgress { value: f64, label: String },
+
+    /// Clear the cmux sidebar progress bar.
+    CmuxProgressClear,
+
     /// Append an event to the thread log.
     SaveThread { event: ThreadEvent },
 

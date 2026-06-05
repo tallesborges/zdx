@@ -523,6 +523,27 @@ impl TuiRuntime {
             UiEffect::OpenBrowser { url } => {
                 let _ = open::that(&url);
             }
+            UiEffect::NotifyTurnEnd { ok } => {
+                if self.state.tui.config.notifications.osc {
+                    crate::common::notify::emit_osc9(if ok {
+                        "zdx · turn complete"
+                    } else {
+                        "zdx · turn failed"
+                    });
+                }
+            }
+            UiEffect::CmuxStatus { value } => {
+                crate::common::notify::cmux_set_status(value);
+            }
+            UiEffect::CmuxStatusClear => {
+                crate::common::notify::cmux_clear_status();
+            }
+            UiEffect::CmuxProgress { value, label } => {
+                crate::common::notify::cmux_set_progress(value, label);
+            }
+            UiEffect::CmuxProgressClear => {
+                crate::common::notify::cmux_clear_progress();
+            }
 
             // Agent effects (still returns event for now - streaming is special)
             UiEffect::StartAgentTurn => {
