@@ -86,10 +86,17 @@ pub enum UiEffect {
     /// turn failed.
     NotifyTurnEnd { ok: bool },
 
-    /// Set this instance's cmux sidebar status pill (e.g. `running: bash`).
+    /// Set the terminal window/tab title via OSC to the thread title, with an
+    /// animated spinner prefix while a turn runs (e.g. `◐ Fix auth bug`).
+    SetTermTitle { value: String },
+
+    /// Set this instance's cmux sidebar status pill (e.g. `◐ · fix auth bug`
+    /// while running, `fix auth bug` when complete, `✗ · fix auth bug` on
+    /// failure).
     CmuxStatus { value: String },
 
-    /// Clear this instance's cmux sidebar status pill (turn went idle).
+    /// Clear this instance's cmux sidebar status pill (active tab idle with
+    /// nothing to show, e.g. a fresh tab with no title yet).
     CmuxStatusClear,
 
     /// Set the cmux sidebar progress bar from `todo_write` completion.
