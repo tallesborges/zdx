@@ -415,13 +415,15 @@ pub struct TranscriptionConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct NotificationsConfig {
-    /// Emit an OSC 9 desktop notification when a turn finishes (cmux, Ghostty,
-    /// kitty, and `WezTerm` surface it; other terminals ignore it).
+    /// Emit OSC escape sequences for turn state: an OSC 9 desktop notification
+    /// when a turn finishes, plus a window/tab title showing the thread title
+    /// with an animated spinner while a turn runs. cmux, Ghostty, kitty, and
+    /// `WezTerm` surface these; other terminals ignore them.
     pub osc: bool,
     /// Also drive cmux sidebar integration via the `cmux` CLI: a per-instance
-    /// status pill showing the current tool while a turn runs (cleared when
-    /// idle) plus a `todo_write` progress bar. No-op when `cmux` is not on
-    /// `PATH`.
+    /// status pill showing an animated spinner with the thread title while a
+    /// turn runs (settling to the bare title when complete, or `✗` on failure)
+    /// plus a `todo_write` progress bar. No-op when `cmux` is not on `PATH`.
     pub cmux_status: bool,
 }
 
@@ -1624,11 +1626,7 @@ fn default_apiyi_provider() -> ProviderConfig {
 fn default_minimax_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec![
-            "MiniMax-M2.7".to_string(),
-            "MiniMax-M2.5".to_string(),
-            "MiniMax-M2.1".to_string(),
-        ],
+        models: vec!["MiniMax-M3".to_string(), "MiniMax-M2.7".to_string()],
         ..Default::default()
     }
 }
