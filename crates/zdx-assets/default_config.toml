@@ -217,7 +217,7 @@ fast_mode = false
 enabled = true
 # api_key = "..."  # Overrides MINIMAX_API_KEY env var
 # base_url = "https://api.minimax.io/v1"
-models = ["MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.1"]
+models = ["MiniMax-M3", "MiniMax-M2.7"]
 fast_mode = false
 
 [providers.zai]
