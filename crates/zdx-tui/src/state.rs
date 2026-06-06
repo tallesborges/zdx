@@ -128,6 +128,12 @@ pub struct AppState {
     /// across tabs because reload-on-root-change is intentionally deferred
     /// (see `docs/plans/active/custom-commands.md` Slice 2).
     pub custom_commands: Vec<CustomCommand>,
+    /// Last terminal window/tab title written via OSC, used to dedupe the
+    /// per-tick title refresh so it only emits when the value changes.
+    pub last_term_title: Option<String>,
+    /// Last cmux status-pill value written, used to dedupe the per-tick spinner
+    /// animation so it only spawns a `cmux` process when the frame changes.
+    pub last_cmux_status: Option<String>,
 }
 
 impl AppState {
@@ -166,6 +172,8 @@ impl AppState {
             background_tabs: Vec::new(),
             next_tab_id: 1, // 0 is used for the initial tab
             custom_commands: Vec::new(),
+            last_term_title: None,
+            last_cmux_status: None,
         }
     }
 
@@ -277,7 +285,6 @@ impl AgentState {
     pub fn is_running(&self) -> bool {
         !matches!(self, AgentState::Idle)
     }
-
     pub fn cancel_token(&self) -> Option<CancellationToken> {
         match self {
             AgentState::Idle => None,
@@ -286,6 +293,16 @@ impl AgentState {
             }
         }
     }
+}
+
+/// Outcome of the most recent finished turn, used to render the idle cmux
+/// status pill. `None` before the first turn finishes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnOutcome {
+    /// Completed or interrupted — the pill settles to the bare thread title.
+    Succeeded,
+    /// Failed — the pill shows the `✗` error glyph.
+    Failed,
 }
 
 // ============================================================================
@@ -334,6 +351,8 @@ pub struct TuiState {
     pub system_prompt: Option<String>,
     /// Current agent state.
     pub agent_state: AgentState,
+    /// Outcome of the most recent finished turn, for the idle cmux status pill.
+    pub last_turn_outcome: Option<TurnOutcome>,
     /// Spinner animation frame counter (for running tools).
     pub spinner_frame: usize,
     /// Git branch name (cached at startup).
@@ -428,6 +447,7 @@ impl TuiState {
             agent_opts,
             system_prompt,
             agent_state: AgentState::Idle,
+            last_turn_outcome: None,
             spinner_frame: 0,
             git_branch,
             display_path,

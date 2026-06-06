@@ -35,7 +35,46 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             for tab in &mut app.background_tabs {
                 transcript::apply_pending_delta(&mut tab.transcript, &mut tab.agent_state);
             }
-            vec![]
+            // Refresh the terminal title for the active pane, deduped so it only
+            // writes when the value actually changes (spinner frame, title, or
+            // run state). This single path covers streaming animation, idle,
+            // async title arrival, and tab switches.
+            let mut effects = Vec::new();
+            if let Some(value) = term_title_value(
+                app.tui.config.notifications.osc,
+                app.tui.agent_state.is_running(),
+                app.tui.thread.title.as_deref(),
+                app.tui.spinner_frame,
+            ) && app.last_term_title.as_deref() != Some(value.as_str())
+            {
+                app.last_term_title = Some(value.clone());
+                effects.push(UiEffect::SetTermTitle { value });
+            }
+            // Animate / refresh the cmux status pill for the active pane. Driven
+            // from the tick loop (deduped against `last_cmux_status`) so it stays
+            // correct across streaming, idle, async title arrival, and tab
+            // switches. Each write spawns a `cmux` process, hence the slower
+            // spinner cadence; a `None` result clears the pill.
+            match cmux_pill_value(
+                app.tui.config.notifications.cmux_status,
+                app.tui.agent_state.is_running(),
+                app.tui.last_turn_outcome,
+                app.tui.thread.title.as_deref(),
+                app.tui.spinner_frame,
+            ) {
+                Some(value) if app.last_cmux_status.as_deref() != Some(value.as_str()) => {
+                    app.last_cmux_status = Some(value.clone());
+                    effects.push(UiEffect::CmuxStatus { value });
+                }
+                None if app.last_cmux_status.is_some()
+                    && app.tui.config.notifications.cmux_status =>
+                {
+                    app.last_cmux_status = None;
+                    effects.push(UiEffect::CmuxStatusClear);
+                }
+                _ => {}
+            }
+            effects
         }
         UiEvent::Frame { width, height } => {
             let tab_bar_height = u16::from(app.tab_count() > 1);
@@ -331,31 +370,15 @@ fn finalize_agent_event_for_tab(
         tui.status_line.mark_tool_used();
     }
 
-    // cmux pill/bar reflects only the active tab (one per pane), when enabled.
+    // cmux progress bar reflects only the active tab (one per pane). The status
+    // pill is entirely tick-driven; here `TurnFinished` only records
+    // `last_turn_outcome` so the next tick can render the idle pill.
     let cmux = tui.config.notifications.cmux_status && matches!(tab, input::TabContext::Active);
-    if cmux {
-        let title = tui.thread.title.as_deref();
-        match agent_event {
-            AgentEvent::TurnStarted => {
-                effects.push(UiEffect::CmuxStatus {
-                    value: cmux_status_value(title, None),
-                });
-            }
-            AgentEvent::ToolStarted { name, .. } => {
-                effects.push(UiEffect::CmuxStatus {
-                    value: cmux_status_value(title, Some(&name.to_lowercase())),
-                });
-            }
-            AgentEvent::ToolCompleted { result, .. } => {
-                effects.push(UiEffect::CmuxStatus {
-                    value: cmux_status_value(title, None),
-                });
-                if let Some((value, label)) = todo_progress_from_output(result) {
-                    effects.push(UiEffect::CmuxProgress { value, label });
-                }
-            }
-            _ => {}
-        }
+    if cmux
+        && let AgentEvent::ToolCompleted { result, .. } = agent_event
+        && let Some((value, label)) = todo_progress_from_output(result)
+    {
+        effects.push(UiEffect::CmuxProgress { value, label });
     }
 
     let should_dequeue = matches!(agent_event, AgentEvent::TurnFinished { .. });
@@ -373,29 +396,127 @@ fn finalize_agent_event_for_tab(
     maybe_push_timing_cell_for_tab(tui, should_dequeue);
     let continues = maybe_send_next_queued_prompt_for_tab(tui, should_dequeue, tab, effects);
 
-    if let AgentEvent::TurnFinished { status, .. } = agent_event
-        && !continues
-    {
-        if cmux {
-            effects.push(UiEffect::CmuxStatusClear);
-            effects.push(UiEffect::CmuxProgressClear);
-        }
-        if let Some(ok) = turn_notification_outcome(status) {
-            effects.push(UiEffect::NotifyTurnEnd { ok });
+    if let AgentEvent::TurnFinished { status, .. } = agent_event {
+        use zdx_engine::core::events::TurnStatus;
+
+        use crate::state::TurnOutcome;
+
+        // Remember the outcome so the idle cmux pill (driven from the tick loop)
+        // can render it for this tab, including after a later tab switch.
+        tui.last_turn_outcome = Some(match status {
+            TurnStatus::Failed { .. } => TurnOutcome::Failed,
+            TurnStatus::Completed | TurnStatus::Interrupted => TurnOutcome::Succeeded,
+        });
+
+        if !continues {
+            if cmux {
+                effects.push(UiEffect::CmuxProgressClear);
+            }
+            if let Some(ok) = turn_notification_outcome(status) {
+                effects.push(UiEffect::NotifyTurnEnd { ok });
+            }
         }
     }
 }
 
-/// Builds the cmux status-pill value: thread title (to identify the
-/// conversation) or `running` as a fallback, plus the active tool when present.
-fn cmux_status_value(title: Option<&str>, tool: Option<&str>) -> String {
-    let label = title.map(str::trim).filter(|t| !t.is_empty()).map_or_else(
-        || "running".to_string(),
-        |t| crate::common::truncate_with_ellipsis(t, 32),
+/// Spinner glyphs for the animated terminal title and cmux status pill (circle
+/// glyphs, matching the in-app spinner — braille renders unevenly across
+/// terminal tab fonts).
+const SPINNER_GLYPHS: &[&str] = &["◐", "◓", "◑", "◒"];
+
+/// Render-frame divisor for the cmux status-pill spinner. Coarser than the
+/// in-app spinner (`SPINNER_SPEED_DIVISOR`) because each cmux update spawns a
+/// `cmux` subprocess, so we trade smoothness for far fewer spawns (~4/s vs
+/// ~10/s).
+const CMUX_SPINNER_SPEED_DIVISOR: usize = 16;
+
+/// Current spinner glyph for a frame counter, advancing one glyph every
+/// `divisor` ticks.
+fn spinner_glyph(spinner_frame: usize, divisor: usize) -> &'static str {
+    SPINNER_GLYPHS[(spinner_frame / divisor) % SPINNER_GLYPHS.len()]
+}
+
+/// Trims a title and returns `None` when it is empty, so callers can apply a
+/// fallback or skip the segment.
+fn non_empty_trimmed(text: Option<&str>) -> Option<&str> {
+    text.map(str::trim).filter(|t| !t.is_empty())
+}
+
+/// Computes the terminal window/tab title for the active pane: the thread
+/// `title` (or `zdx` before one exists), prefixed with an animated spinner
+/// frame while a turn is `running`. Returns `None` when OSC integration is off,
+/// leaving the terminal title untouched.
+fn term_title_value(
+    osc: bool,
+    running: bool,
+    title: Option<&str>,
+    spinner_frame: usize,
+) -> Option<String> {
+    if !osc {
+        return None;
+    }
+    let base = non_empty_trimmed(title).map_or_else(
+        || "zdx".to_string(),
+        |t| crate::common::truncate_with_ellipsis(t, 40),
     );
-    match tool {
-        Some(tool) => format!("{label}: {tool}"),
-        None => label,
+    if running {
+        Some(format!(
+            "{} {base}",
+            spinner_glyph(spinner_frame, crate::transcript::SPINNER_SPEED_DIVISOR)
+        ))
+    } else {
+        Some(base)
+    }
+}
+
+/// Computes the cmux status-pill value for the active pane. While a turn runs it
+/// animates a spinner glyph alongside the thread title (falling back to `zdx`
+/// before a title exists); when idle it reflects the last turn's `outcome`
+/// (bare title on success, `✗` on failure). Returns `None` when the cmux
+/// integration is disabled or there is nothing to show (no turn yet, or a
+/// completed turn with no title) — the caller clears the pill in that case.
+/// This single path keeps the pill correct across streaming, idle, async title
+/// arrival, and tab switches.
+fn cmux_pill_value(
+    cmux_enabled: bool,
+    running: bool,
+    outcome: Option<crate::state::TurnOutcome>,
+    title: Option<&str>,
+    spinner_frame: usize,
+) -> Option<String> {
+    use crate::state::TurnOutcome;
+
+    if !cmux_enabled {
+        return None;
+    }
+    if running {
+        // While running, always show an identifiable pill — fall back to `zdx`
+        // until the thread title is generated.
+        let base = non_empty_trimmed(title).unwrap_or("zdx");
+        return Some(cmux_status_value(
+            spinner_glyph(spinner_frame, CMUX_SPINNER_SPEED_DIVISOR),
+            Some(base),
+        ));
+    }
+    let status = match outcome? {
+        TurnOutcome::Succeeded => "",
+        TurnOutcome::Failed => "✗",
+    };
+    let value = cmux_status_value(status, title);
+    (!value.is_empty()).then_some(value)
+}
+
+/// Builds the cmux status-pill value: an optional status prefix (a spinner glyph
+/// while running, `✗` on failure, or empty when complete) joined to the thread
+/// title with ` · `. No `zdx` prefix — the pill is already per-instance in the
+/// cmux sidebar.
+fn cmux_status_value(status: &str, title: Option<&str>) -> String {
+    let title = non_empty_trimmed(title).map(|t| crate::common::truncate_with_ellipsis(t, 32));
+    match (status.is_empty(), title) {
+        (true, Some(t)) => t,
+        (true, None) => String::new(),
+        (false, Some(t)) => format!("{status} · {t}"),
+        (false, None) => status.to_string(),
     }
 }
 
@@ -1213,6 +1334,7 @@ fn create_btw_tab(
         agent_opts: parent.agent_opts.clone(),
         system_prompt: parent.system_prompt.clone(),
         agent_state: AgentState::Idle,
+        last_turn_outcome: None,
         spinner_frame: 0,
         git_branch: parent.git_branch.clone(),
         display_path: parent.display_path.clone(),
@@ -1311,6 +1433,7 @@ fn create_thread_tab(
         agent_opts: parent.agent_opts.clone(),
         system_prompt: parent.system_prompt.clone(),
         agent_state: AgentState::Idle,
+        last_turn_outcome: None,
         spinner_frame: 0,
         git_branch: parent.git_branch.clone(),
         display_path: parent.display_path.clone(),
@@ -1589,21 +1712,104 @@ mod tests {
     }
 
     #[test]
-    fn cmux_status_value_leads_with_title_and_tool() {
+    fn cmux_status_value_uses_dot_separator() {
+        // Glyph status + title.
         assert_eq!(
-            cmux_status_value(Some("fix auth bug"), Some("bash")),
-            "fix auth bug: bash"
+            cmux_status_value("✗", Some("fix auth bug")),
+            "✗ · fix auth bug"
+        );
+        // Empty status (completed) → bare title.
+        assert_eq!(cmux_status_value("", Some("fix auth bug")), "fix auth bug");
+        // Empty status + no title → empty pill.
+        assert_eq!(cmux_status_value("", None), "");
+        // Glyph + no title → glyph only.
+        assert_eq!(cmux_status_value("✗", None), "✗");
+        // Whitespace-only title is treated as absent.
+        assert_eq!(cmux_status_value("✗", Some("   ")), "✗");
+    }
+
+    #[test]
+    fn term_title_value_animates_while_running() {
+        use crate::transcript::SPINNER_SPEED_DIVISOR;
+
+        // OSC disabled → leave the terminal title untouched.
+        assert_eq!(term_title_value(false, true, Some("Fix bug"), 0), None);
+        // Idle → bare thread title.
+        assert_eq!(
+            term_title_value(true, false, Some("Fix bug"), 0),
+            Some("Fix bug".to_string())
+        );
+        // Running → spinner-prefixed title; frame 0 is the first glyph.
+        assert_eq!(
+            term_title_value(true, true, Some("Fix bug"), 0),
+            Some("◐ Fix bug".to_string())
+        );
+        // Spinner advances once per `SPINNER_SPEED_DIVISOR` ticks.
+        assert_eq!(
+            term_title_value(true, true, Some("Fix bug"), SPINNER_SPEED_DIVISOR),
+            Some("◓ Fix bug".to_string())
+        );
+        // No title yet (or whitespace) → falls back to `zdx`.
+        assert_eq!(
+            term_title_value(true, false, None, 0),
+            Some("zdx".to_string())
         );
         assert_eq!(
-            cmux_status_value(Some("fix auth bug"), None),
-            "fix auth bug"
+            term_title_value(true, true, Some("   "), 0),
+            Some("◐ zdx".to_string())
         );
-        assert_eq!(cmux_status_value(None, Some("bash")), "running: bash");
-        assert_eq!(cmux_status_value(None, None), "running");
+    }
+
+    #[test]
+    fn cmux_pill_value_covers_running_and_idle() {
+        use crate::state::TurnOutcome;
+
+        // Disabled → no pill.
+        assert_eq!(cmux_pill_value(false, true, None, Some("Fix bug"), 0), None);
+        // Running → spinner-prefixed pill.
         assert_eq!(
-            cmux_status_value(Some("   "), Some("edit")),
-            "running: edit"
+            cmux_pill_value(true, true, None, Some("Fix bug"), 0),
+            Some("◐ · Fix bug".to_string())
         );
+        // Spinner advances once per `CMUX_SPINNER_SPEED_DIVISOR` ticks.
+        assert_eq!(
+            cmux_pill_value(
+                true,
+                true,
+                None,
+                Some("Fix bug"),
+                CMUX_SPINNER_SPEED_DIVISOR
+            ),
+            Some("◓ · Fix bug".to_string())
+        );
+        // Running with no title → spinner + `zdx` fallback.
+        assert_eq!(
+            cmux_pill_value(true, true, None, None, 0),
+            Some("◐ · zdx".to_string())
+        );
+        // Idle + succeeded → bare title.
+        assert_eq!(
+            cmux_pill_value(
+                true,
+                false,
+                Some(TurnOutcome::Succeeded),
+                Some("Fix bug"),
+                0
+            ),
+            Some("Fix bug".to_string())
+        );
+        // Idle + failed → error glyph + title.
+        assert_eq!(
+            cmux_pill_value(true, false, Some(TurnOutcome::Failed), Some("Fix bug"), 0),
+            Some("✗ · Fix bug".to_string())
+        );
+        // Idle + succeeded but no title yet → clear (None).
+        assert_eq!(
+            cmux_pill_value(true, false, Some(TurnOutcome::Succeeded), None, 0),
+            None
+        );
+        // Idle + no finished turn → clear (None).
+        assert_eq!(cmux_pill_value(true, false, None, Some("Fix bug"), 0), None);
     }
 
     #[test]

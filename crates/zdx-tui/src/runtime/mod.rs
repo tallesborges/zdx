@@ -532,6 +532,9 @@ impl TuiRuntime {
                     });
                 }
             }
+            UiEffect::SetTermTitle { value } => {
+                crate::common::notify::set_term_title(&value);
+            }
             UiEffect::CmuxStatus { value } => {
                 crate::common::notify::cmux_set_status(value);
             }

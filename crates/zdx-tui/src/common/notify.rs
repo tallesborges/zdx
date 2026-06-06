@@ -27,17 +27,27 @@ fn derive_status_key(surface_id: Option<&str>, pid: u32) -> String {
     format!("zdx-{id}")
 }
 
-/// Writes an OSC 9 desktop notification (`ESC ] 9 ; <message> BEL`) to stdout,
-/// which the terminal interprets rather than renders. Unsupported terminals
-/// ignore it.
-pub fn emit_osc9(message: &str) {
+/// Writes an OSC sequence (`ESC ] <code> ; <payload> BEL`) to stdout, which the
+/// terminal interprets rather than renders. Unsupported terminals ignore it.
+fn write_osc(code: u8, payload: &str) {
     let mut stdout = std::io::stdout();
-    let _ = write!(stdout, "\x1b]9;{message}\x07");
+    let _ = write!(stdout, "\x1b]{code};{payload}\x07");
     let _ = stdout.flush();
 }
 
-/// Sets this instance's cmux sidebar status pill (e.g. `running`, `running:
-/// bash`). Fire-and-forget, so a missing `cmux` binary is a silent no-op.
+/// Emits an OSC 9 desktop notification.
+pub fn emit_osc9(message: &str) {
+    write_osc(9, message);
+}
+
+/// Sets the terminal window/tab title via OSC 0, which sets both the icon name
+/// and window title so most terminals show it in the tab.
+pub fn set_term_title(title: &str) {
+    write_osc(0, title);
+}
+
+/// Sets this instance's cmux sidebar status pill (e.g. `◐ · fix auth bug`).
+/// Fire-and-forget, so a missing `cmux` binary is a silent no-op.
 pub fn cmux_set_status(value: impl Into<String>) {
     let value = value.into();
     cmux_spawn(vec!["set-status".into(), cmux_status_key().into(), value]);
