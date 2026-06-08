@@ -1538,13 +1538,20 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
             }
         }
         Event::Paste(text) => input::handle_paste(&mut app.tui.input, &mut app.overlay, &text),
+        Event::FocusGained => {
+            app.is_focused = true;
+            vec![]
+        }
+        Event::FocusLost => {
+            app.is_focused = false;
+            vec![]
+        }
         Event::Resize(_, _) => {
             // Clear wrap cache on resize since line wrapping depends on width
             app.tui.transcript.wrap_cache.clear();
             app.tui.transcript.invalidate_line_info();
             vec![]
         }
-        _ => vec![],
     }
 }
 
