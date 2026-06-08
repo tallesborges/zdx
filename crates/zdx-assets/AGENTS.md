@@ -13,6 +13,7 @@ Scope: embedded asset content (prompts, instruction layers, default TOMLs, bundl
 - `instruction_layers/telegram_instruction_layer.md`: Telegram bot output rules
 - `default_config.toml`: default configuration template (generated output; do not edit by hand)
 - `default_models.toml`: default model registry fallback
+- `model_overrides.toml`: pinned post-fetch overrides applied by `zdx models update` (corrects stale/promo upstream pricing and limits)
 - `bundled_skills/*/`: built-in bundled skill fallbacks; `build.rs` embeds every file under this tree
 - `bundled_commands/*.md`: built-in bundled custom slash commands; `build.rs` embeds every file under this tree
 - `subagents/*.md`: built-in standalone subagent prompts (`explorer`, `thread-searcher`, `oracle`)
