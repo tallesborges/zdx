@@ -26,3 +26,20 @@ output = 1.2
 cache_read = 0.06
 cache_write = 0.0
 context_limit = 1000000
+
+# Zen proxies mirror the underlying model's pricing; models.dev reports the wrong
+# cache-read for these two. Underlying MiniMax-M2.5 cache hit is $0.03; Kimi K2.5 is $0.10.
+# https://platform.minimax.io/docs/guides/pricing-paygo , https://platform.kimi.com/docs/pricing/chat-k25 — verified 2026-06-08
+[[override]]
+id = "zen:minimax-m2.5"
+cache_read = 0.03
+
+[[override]]
+id = "zen:kimi-k2.5"
+cache_read = 0.1
+
+# OpenRouter is authoritative for openrouter:* ids; models.dev serves a stale $1.75 output.
+# https://openrouter.ai/z-ai/glm-4.7 — verified 2026-06-08
+[[override]]
+id = "openrouter:z-ai/glm-4.7"
+output = 1.5
