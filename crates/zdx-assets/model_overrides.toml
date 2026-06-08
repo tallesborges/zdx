@@ -1,0 +1,28 @@
+# Post-fetch overrides for `zdx models update`. Applied after models.dev/OpenRouter
+# and win over fetched values. Matched by exact `id`; only the fields set here are
+# overridden. Keep small and add a source + date — a pin can hide a real price change.
+
+# MiMo V2.5 permanent price cut (2026-05-27); models.dev still serves old tiered pricing.
+# https://platform.xiaomimimo.com/docs/en-US/news/v2.5-price-update — verified 2026-06-08
+[[override]]
+id = "xiaomi:mimo-v2.5-pro"
+input = 0.435
+output = 0.87
+cache_read = 0.0036
+
+[[override]]
+id = "xiaomi:mimo-v2.5"
+input = 0.14
+output = 0.28
+cache_read = 0.0028
+
+# MiniMax-M3 standard tier (≤512K input) with the permanent 50% discount in effect.
+# >512K long-context is double; ZDX uses a single rate, so we pin the ≤512K tier.
+# https://platform.minimax.io/docs/guides/pricing-paygo — verified 2026-06-08
+[[override]]
+id = "minimax:MiniMax-M3"
+input = 0.3
+output = 1.2
+cache_read = 0.06
+cache_write = 0.0
+context_limit = 1000000

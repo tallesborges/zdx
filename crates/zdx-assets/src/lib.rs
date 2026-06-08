@@ -56,6 +56,9 @@ pub const DEFAULT_CONFIG_TOML: &str = include_str!("../default_config.toml");
 /// Embedded `default_models.toml`.
 pub const DEFAULT_MODELS_TOML: &str = include_str!("../default_models.toml");
 
+/// Embedded `model_overrides.toml`: post-fetch overrides for `zdx models update`.
+pub const MODEL_OVERRIDES_TOML: &str = include_str!("../model_overrides.toml");
+
 // ---------------------------------------------------------------------------
 // Built-in subagent definitions
 // ---------------------------------------------------------------------------

@@ -16,6 +16,11 @@ pub fn default_models_toml() -> &'static str {
     DEFAULT_MODELS_TOML
 }
 
+/// Embedded `model_overrides.toml`.
+pub fn default_model_overrides_toml() -> &'static str {
+    zdx_assets::MODEL_OVERRIDES_TOML
+}
+
 /// Pricing information for a model (prices per million tokens).
 #[derive(Debug, Clone, Copy)]
 pub struct ModelPricing {

@@ -187,6 +187,8 @@ pub async fn update(config: &config::Config) -> Result<()> {
         bail!("No models matched configured providers/models.");
     }
 
+    apply_overrides(&mut state.records);
+
     let out_path = config.models_path();
     write_models_file(&out_path, &state.records)?;
     println!("Updated models at {}", out_path.display());
@@ -998,6 +1000,83 @@ fn format_model_id(prefix: Option<&str>, raw_id: &str) -> String {
 
 fn record_key(record: &ModelRecord) -> String {
     format!("{}::{}", record.provider, record.id)
+}
+
+#[derive(Debug, Deserialize)]
+struct OverridesFile {
+    #[serde(rename = "override", default)]
+    overrides: Vec<ModelOverride>,
+}
+
+/// One `model_overrides.toml` entry. Set fields override fetched values; the rest pass through.
+#[derive(Debug, Deserialize)]
+struct ModelOverride {
+    id: String,
+    #[serde(default)]
+    input: Option<f64>,
+    #[serde(default)]
+    output: Option<f64>,
+    #[serde(default)]
+    cache_read: Option<f64>,
+    #[serde(default)]
+    cache_write: Option<f64>,
+    #[serde(default)]
+    context_limit: Option<u64>,
+    #[serde(default)]
+    output_limit: Option<u64>,
+    #[serde(default)]
+    reasoning: Option<bool>,
+    #[serde(default)]
+    input_images: Option<bool>,
+}
+
+/// Pins known-correct values over stale/promotional upstream data, keyed by exact `id`.
+fn apply_overrides(records: &mut [ModelRecord]) {
+    let overrides_toml = zdx_engine::models::default_model_overrides_toml();
+    let parsed = match toml::from_str::<OverridesFile>(overrides_toml) {
+        Ok(file) => file,
+        Err(e) => {
+            eprintln!("Warning: failed to parse model_overrides.toml: {e}");
+            return;
+        }
+    };
+
+    for ov in &parsed.overrides {
+        let Some(record) = records.iter_mut().find(|r| r.id == ov.id) else {
+            println!(
+                "Warning: override for '{}' did not match any fetched model",
+                ov.id
+            );
+            continue;
+        };
+
+        if let Some(v) = ov.input {
+            record.pricing.input = v;
+        }
+        if let Some(v) = ov.output {
+            record.pricing.output = v;
+        }
+        if let Some(v) = ov.cache_read {
+            record.pricing.cache_read = v;
+        }
+        if let Some(v) = ov.cache_write {
+            record.pricing.cache_write = v;
+        }
+        if let Some(v) = ov.context_limit {
+            record.context_limit = v;
+        }
+        if let Some(v) = ov.output_limit {
+            record.capabilities.output_limit = v;
+        }
+        if let Some(v) = ov.reasoning {
+            record.capabilities.reasoning = v;
+        }
+        if let Some(v) = ov.input_images {
+            record.capabilities.input_images = v;
+        }
+
+        println!("Info: applied override for '{}'", ov.id);
+    }
 }
 
 fn write_models_file(path: &Path, models: &[ModelRecord]) -> Result<()> {

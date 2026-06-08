@@ -132,8 +132,30 @@ just ci-fast
 When a provider changes pricing but no new models are added:
 
 1. If the change is systematic: just re-run `just update-models` — it fetches fresh data from models.dev/OpenRouter.
-2. If the fetched data is wrong (promotional pricing, wrong context): edit `crates/zdx-assets/default_models.toml` directly, then `just ci-fast`.
+2. If the fetched data is **wrong** (promotional/launch pricing, stale rates, or a pricing-tier threshold reported as the context window): add a **pinned override** in `crates/zdx-assets/model_overrides.toml`, then re-run `just update-models`. This is the durable fix — manual edits to `default_models.toml`/`models.toml` get overwritten on the next update, overrides do not.
 3. Don't forget cache pricing (`cache_read`, `cache_write`) — set to `0.0` if not supported.
+
+### Pinned overrides (`model_overrides.toml`)
+
+`zdx models update` applies `crates/zdx-assets/model_overrides.toml` **after** fetching from models.dev/OpenRouter, so pinned fields always win. Use it for providers where upstream is known-wrong (e.g. Xiaomi MiMo served old tiered pricing; MiniMax-M3 served the launch promo + 512K tier threshold as context).
+
+- Match is by exact model `id` (the same `id` written to `models.toml`).
+- Only the fields you set override the fetched value; omit a field to let upstream pass through.
+- Overridable fields: `input`, `output`, `cache_read`, `cache_write`, `context_limit`, `output_limit`, `reasoning`, `input_images`.
+- Always include a source URL + verification date comment. Keep the list small — each pin can hide a real upstream price change.
+- On update, `zdx models update` prints `Info: applied override for '<id>'` per pin, and `Warning: override for '<id>' did not match any fetched model` if an `id` is stale.
+
+```toml
+[[override]]
+id = "minimax:MiniMax-M3"
+# Source: https://platform.minimax.io/docs/guides/pricing-paygo (standard, non-promo). Verified: 2026-06-08
+input = 0.6
+output = 2.4
+cache_read = 0.12
+context_limit = 1000000
+```
+
+The override layer lives in `update()` (`crates/zdx-cli/src/cli/commands/models.rs`, `apply_overrides()`), so it covers both the runtime `$ZDX_HOME/models.toml` and the regenerated repo `default_models.toml`.
 
 ## TUI / UI impact
 
@@ -158,7 +180,7 @@ When a provider changes pricing but no new models are added:
 - **Subscription providers**: pricing is zeroed automatically — don't add pricing to their model entries. Check `ProviderKind::is_subscription()` for the current list.
 - **Meta providers** (zen, apiyi): proxy models need separate entries with `capabilities.api` set (usually `"openai-completions"`).
 - **`model_supports_reasoning` defaults to `true`** when the field is unknown (`crates/zdx-engine/src/models.rs:120-122`). Explicitly set `reasoning = false` for non-reasoning models.
-- **`default_models.toml` is generated** — manual edits get overwritten by `just update-models`. For corrections that the updater can't handle, document them as post-generation patches or fix the updater logic.
+- **`default_models.toml` is generated** — manual edits get overwritten by `just update-models`. For corrections the updater fetches wrong, add a pin in `model_overrides.toml` instead (it survives regeneration); only fix the updater logic for structural problems an override can't express.
 - **`default_config.toml` is generated** from Rust defaults — edit `config.rs`, not the TOML file directly.
 
 ## Key files
@@ -171,6 +193,7 @@ When a provider changes pricing but no new models are added:
 | `crates/zdx-engine/src/core/agent.rs` | `ProviderClient` dispatch, client builders |
 | `crates/zdx-engine/src/models.rs` | Model registry load/parse |
 | `crates/zdx-assets/default_models.toml` | Generated model registry (don't edit directly for new models) |
+| `crates/zdx-assets/model_overrides.toml` | Pinned post-fetch overrides applied by `zdx models update` (durable price/metadata corrections) |
 | `crates/zdx-assets/default_config.toml` | Generated config defaults (don't edit directly) |
 | `crates/zdx-cli/src/cli/commands/models.rs` | `zdx models update` implementation, `ProviderSpec` |
 | `crates/zdx-tui/src/features/auth/render.rs` | TUI auth labels per provider, CLI provider list |
