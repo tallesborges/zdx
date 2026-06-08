@@ -1043,10 +1043,6 @@ fn apply_overrides(records: &mut [ModelRecord]) {
 
     for ov in &parsed.overrides {
         let Some(record) = records.iter_mut().find(|r| r.id == ov.id) else {
-            println!(
-                "Warning: override for '{}' did not match any fetched model",
-                ov.id
-            );
             continue;
         };
 

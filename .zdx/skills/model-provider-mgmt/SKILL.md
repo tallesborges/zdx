@@ -143,7 +143,7 @@ When a provider changes pricing but no new models are added:
 - Only the fields you set override the fetched value; omit a field to let upstream pass through.
 - Overridable fields: `input`, `output`, `cache_read`, `cache_write`, `context_limit`, `output_limit`, `reasoning`, `input_images`.
 - Always include a source URL + verification date comment. Keep the list small — each pin can hide a real upstream price change.
-- On update, `zdx models update` prints `Info: applied override for '<id>'` per pin, and `Warning: override for '<id>' did not match any fetched model` if an `id` is stale.
+- Pins are "apply if present": `zdx models update` prints `Info: applied override for '<id>'` per matched pin and silently skips ids not in the fetched set (so a pin can target a non-default/user-only model without noise).
 
 ```toml
 [[override]]

@@ -998,7 +998,7 @@ context_limit = 204800
 [model.pricing]
 input = 0.3
 output = 1.2
-cache_read = 0.06
+cache_read = 0.03
 cache_write = 0.0
 
 [model.capabilities]
@@ -1034,7 +1034,7 @@ context_limit = 262144
 [model.pricing]
 input = 0.6
 output = 3.0
-cache_read = 0.08
+cache_read = 0.1
 cache_write = 0.0
 
 [model.capabilities]
