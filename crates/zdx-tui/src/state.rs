@@ -134,6 +134,9 @@ pub struct AppState {
     /// Last cmux status-pill value written, used to dedupe the per-tick spinner
     /// animation so it only spawns a `cmux` process when the frame changes.
     pub last_cmux_status: Option<String>,
+    /// Whether the terminal window is currently focused.
+    /// Used to throttle rendering when backgrounded.
+    pub is_focused: bool,
 }
 
 impl AppState {
@@ -174,6 +177,7 @@ impl AppState {
             custom_commands: Vec::new(),
             last_term_title: None,
             last_cmux_status: None,
+            is_focused: true,
         }
     }
 

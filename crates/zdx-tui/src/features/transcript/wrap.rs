@@ -9,15 +9,16 @@ use crate::common::ratatui_width;
 
 /// Cache for wrapped lines to avoid re-computing on every frame.
 ///
-/// Keyed by `(CellId, width, content_len)` where `content_len` helps
-/// invalidate entries when streaming content changes.
+/// Keyed by `(CellId, width)`. The value is `(discriminator, cached_styled_lines)`,
+/// where the `discriminator` helps invalidate entries when streaming content changes
+/// without leaking old variations.
 ///
 /// Uses interior mutability (`RefCell`) to allow caching during immutable
 /// render passes.
 #[derive(Debug, Default)]
 pub struct WrapCache {
-    /// Maps (`cell_id`, width, `content_len`) -> cached styled lines
-    cache: RefCell<HashMap<(CellId, usize, usize), Vec<StyledLine>>>,
+    /// Maps (`cell_id`, width) -> (discriminator, cached styled lines)
+    cache: RefCell<HashMap<(CellId, usize), (usize, Vec<StyledLine>)>>,
 }
 
 impl WrapCache {
@@ -35,17 +36,18 @@ impl WrapCache {
         self.cache.borrow_mut().clear();
     }
 
-    /// Gets cached lines for a cell, cloning if present.
+    /// Gets cached lines for a cell, cloning if present and discriminator matches.
     pub(crate) fn get(
         &self,
         cell_id: CellId,
         width: usize,
-        content_len: usize,
+        discriminator: usize,
     ) -> Option<Vec<StyledLine>> {
         self.cache
             .borrow()
-            .get(&(cell_id, width, content_len))
-            .cloned()
+            .get(&(cell_id, width))
+            .filter(|(cached_disc, _)| *cached_disc == discriminator)
+            .map(|(_, lines)| lines.clone())
     }
 
     /// Stores wrapped lines in the cache.
@@ -53,12 +55,12 @@ impl WrapCache {
         &self,
         cell_id: CellId,
         width: usize,
-        content_len: usize,
+        discriminator: usize,
         lines: Vec<StyledLine>,
     ) {
         self.cache
             .borrow_mut()
-            .insert((cell_id, width, content_len), lines);
+            .insert((cell_id, width), (discriminator, lines));
     }
 
     /// Returns true if the cache is empty (test-only).

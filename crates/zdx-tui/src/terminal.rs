@@ -11,7 +11,8 @@ use std::panic;
 
 use anyhow::{Context, Result};
 use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -51,8 +52,13 @@ pub fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
 /// # Errors
 /// Returns an error if the operation fails.
 pub fn enable_input_features() -> Result<()> {
-    execute!(io::stdout(), EnableBracketedPaste, EnableMouseCapture)
-        .context("Failed to enable input features")?;
+    execute!(
+        io::stdout(),
+        EnableBracketedPaste,
+        EnableMouseCapture,
+        EnableFocusChange
+    )
+    .context("Failed to enable input features")?;
     Ok(())
 }
 
@@ -63,8 +69,13 @@ pub fn enable_input_features() -> Result<()> {
 /// # Errors
 /// Returns an error if the operation fails.
 pub fn disable_input_features() -> Result<()> {
-    execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste)
-        .context("Failed to disable input features")?;
+    execute!(
+        io::stdout(),
+        DisableMouseCapture,
+        DisableBracketedPaste,
+        DisableFocusChange
+    )
+    .context("Failed to disable input features")?;
     Ok(())
 }
 
@@ -80,9 +91,14 @@ pub fn disable_input_features() -> Result<()> {
 /// # Errors
 /// Returns an error if the operation fails.
 pub fn restore_terminal() -> Result<()> {
-    // Disable mouse and bracketed paste first (safe even if not enabled)
+    // Disable mouse, bracketed paste, and focus events first (safe even if not enabled)
     // These must be disabled before leaving raw mode
-    let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
+    let _ = execute!(
+        io::stdout(),
+        DisableMouseCapture,
+        DisableBracketedPaste,
+        DisableFocusChange
+    );
 
     // Leave alternate screen (while still in raw mode)
     execute!(io::stdout(), LeaveAlternateScreen).context("Failed to leave alternate screen")?;

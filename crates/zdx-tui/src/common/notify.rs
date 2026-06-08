@@ -58,6 +58,20 @@ pub fn cmux_clear_status() {
     cmux_spawn(vec!["clear-status".into(), cmux_status_key().into()]);
 }
 
+/// Clears this instance's cmux status pill on shutdown using a detached
+/// `std::process` spawn, so cleanup still runs as the tokio runtime tears down
+/// (a fire-and-forget `tokio::spawn` would be dropped unpolled at exit). Returns
+/// once the child is launched without waiting, so a missing `cmux` binary or an
+/// unresponsive socket is a silent, non-blocking no-op.
+pub fn cmux_clear_status_on_exit() {
+    let _ = std::process::Command::new("cmux")
+        .args(["clear-status", cmux_status_key()])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
 /// Sets the cmux sidebar progress bar (`value` clamped to `0.0..=1.0`).
 pub fn cmux_set_progress(value: f64, label: String) {
     let value = value.clamp(0.0, 1.0);

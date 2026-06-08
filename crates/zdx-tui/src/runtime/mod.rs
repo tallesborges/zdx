@@ -65,6 +65,16 @@ pub const FRAME_DURATION: std::time::Duration = std::time::Duration::from_millis
 /// Longer timeout reduces CPU usage when nothing is happening.
 pub const IDLE_POLL_DURATION: std::time::Duration = std::time::Duration::from_millis(100);
 
+// Helper for target FPS
+#[inline]
+fn effective_frame_duration(is_focused: bool) -> std::time::Duration {
+    if is_focused {
+        FRAME_DURATION
+    } else {
+        IDLE_POLL_DURATION
+    }
+}
+
 /// Manages Kitty graphics protocol image lifecycle (send/delete/resize detection).
 struct KittyImageManager {
     sent: bool,
@@ -242,6 +252,13 @@ impl TuiRuntime {
         // Disable mouse capture and bracketed paste
         let _ = terminal::disable_input_features();
 
+        // Clear this instance's cmux status pill so it doesn't linger in the
+        // sidebar after exit. Detached + synchronous so it survives runtime
+        // teardown; gated on config to avoid spawning `cmux` when unused.
+        if self.state.tui.config.notifications.cmux_status {
+            crate::common::notify::cmux_clear_status_on_exit();
+        }
+
         result
     }
 
@@ -265,7 +282,7 @@ impl TuiRuntime {
             }
 
             // Collect events from various sources
-            let mut events = self.collect_events()?;
+            let mut events = self.collect_events(dirty)?;
 
             // Prepend Frame event with current terminal size
             // This ensures layout/delta updates happen before other events
@@ -288,7 +305,20 @@ impl TuiRuntime {
                 // Render on any non-frame event. This keeps interaction
                 // responsive (key/mouse/task transitions) while still allowing
                 // `Frame` housekeeping without forcing a redraw.
-                let marks_dirty = !matches!(&event, UiEvent::Frame { .. });
+                let marks_dirty = match &event {
+                    UiEvent::Frame { .. } => false,
+                    UiEvent::Terminal(crossterm::event::Event::Mouse(m)) => {
+                        matches!(
+                            m.kind,
+                            crossterm::event::MouseEventKind::Down(_)
+                                | crossterm::event::MouseEventKind::Up(_)
+                                | crossterm::event::MouseEventKind::Drag(_)
+                                | crossterm::event::MouseEventKind::ScrollUp
+                                | crossterm::event::MouseEventKind::ScrollDown
+                        )
+                    }
+                    _ => true,
+                };
 
                 let effects = update::update(&mut self.state, event);
                 if marks_dirty {
@@ -297,8 +327,9 @@ impl TuiRuntime {
                 self.execute_effects(effects);
             }
 
-            // Only render if something changed
-            if dirty {
+            // Only render if something changed and enough time has passed (cap at 60 FPS, or 10 FPS if unfocused)
+            let effective_frame_duration = effective_frame_duration(self.state.is_focused);
+            if dirty && self.last_render.elapsed() >= effective_frame_duration {
                 // Measure time since last render (actual frame interval for FPS)
                 let frame_ms = self.last_render.elapsed().as_millis() as u16;
                 self.last_render = std::time::Instant::now();
@@ -349,7 +380,7 @@ impl TuiRuntime {
     ///
     /// With the inbox pattern, most async results arrive via `inbox_rx`.
     /// Agent events still use their dedicated channel for streaming.
-    fn collect_events(&mut self) -> Result<Vec<UiEvent>> {
+    fn collect_events(&mut self, dirty: bool) -> Result<Vec<UiEvent>> {
         let mut events = Vec::new();
 
         // Determine tick interval based on activity level.
@@ -359,20 +390,24 @@ impl TuiRuntime {
         // - Selection clear is pending (visual feedback timer)
         // - Any async operations are in progress
         // - Recent terminal activity (scrolling, typing)
+        // - We have a pending redraw (`dirty == true`)
         // Otherwise use slow polling to save CPU.
+        // Additionally, if the terminal is not focused, force slow polling.
         let recent_terminal_activity = self.last_terminal_event.elapsed() < IDLE_POLL_DURATION;
         let background_tab_running = self
             .state
             .background_tabs
             .iter()
             .any(|tab| tab.agent_state.is_running());
-        let needs_fast_poll = self.state.tui.agent_state.is_running()
-            || background_tab_running
-            || self.state.tui.tasks.state(TaskKind::Bash).is_running()
-            || self.state.tui.transcript.selection.has_pending_clear()
-            || self.state.tui.input.handoff.is_generating()
-            || self.state.tui.tasks.is_any_running()
-            || recent_terminal_activity;
+        let needs_fast_poll = self.state.is_focused
+            && (self.state.tui.agent_state.is_running()
+                || background_tab_running
+                || self.state.tui.tasks.state(TaskKind::Bash).is_running()
+                || self.state.tui.transcript.selection.has_pending_clear()
+                || self.state.tui.input.handoff.is_generating()
+                || self.state.tui.tasks.is_any_running()
+                || recent_terminal_activity
+                || dirty);
 
         let tick_interval = if needs_fast_poll {
             FRAME_DURATION
@@ -400,7 +435,17 @@ impl TuiRuntime {
             std::time::Duration::ZERO
         };
 
-        if event::poll(poll_duration)? {
+        // If we have a pending redraw, cap the poll duration so we don't wait longer
+        // than necessary to hit our target frame rate. Unfocused terminal limits
+        // the target frame rate to IDLE_POLL_DURATION (10 FPS).
+        let mut target_duration = poll_duration;
+        if dirty && events.is_empty() {
+            let time_until_render =
+                effective_frame_duration(self.state.is_focused).saturating_sub(self.last_render.elapsed());
+            target_duration = poll_duration.min(time_until_render);
+        }
+
+        if event::poll(target_duration)? {
             events.push(UiEvent::Terminal(event::read()?));
             // Drain any remaining buffered events (non-blocking)
             while event::poll(std::time::Duration::ZERO)? {

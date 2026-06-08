@@ -264,6 +264,11 @@ const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 ///
 /// Every cell has a unique `id` for addressing and an optional `created_at`
 /// timestamp for ordering/display.
+#[inline]
+fn streaming_discriminator(content_len: usize, is_streaming: bool, is_interrupted: bool) -> usize {
+    (content_len << 2) | ((is_streaming as usize) << 1) | (is_interrupted as usize)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum HistoryCell {
     /// User input message.
@@ -965,10 +970,10 @@ impl HistoryCell {
     pub fn is_cacheable(&self) -> bool {
         match self {
             HistoryCell::User { .. } => true,
-            HistoryCell::Assistant { is_streaming, .. } => !*is_streaming,
+            HistoryCell::Assistant { .. } => true,
             HistoryCell::Tool { state, .. } => *state != ToolState::Running,
             HistoryCell::System { .. } => true,
-            HistoryCell::Thinking { is_streaming, .. } => !*is_streaming,
+            HistoryCell::Thinking { .. } => true,
             HistoryCell::Timing { .. } => true,
         }
     }
@@ -977,7 +982,7 @@ impl HistoryCell {
     ///
     /// This is used to invalidate cache entries when content or state changes.
     /// The value must change when the rendered output would change.
-    pub fn content_len(&self) -> usize {
+    pub fn cache_discriminator(&self) -> usize {
         match self {
             HistoryCell::User {
                 content,
@@ -986,25 +991,27 @@ impl HistoryCell {
                 ..
             } => {
                 // Include is_interrupted and image_paths len in discriminator to invalidate cache when marked
-                content.len() + usize::from(*is_interrupted) + image_paths.len()
+                (content.len() << 8) | (image_paths.len() << 1) | usize::from(*is_interrupted)
             }
             HistoryCell::Assistant {
                 content,
+                is_streaming,
                 is_interrupted,
                 ..
             } => {
-                // Include is_interrupted in discriminator
-                content.len() + usize::from(*is_interrupted)
+                // Include is_interrupted and is_streaming in discriminator
+                streaming_discriminator(content.len(), *is_streaming, *is_interrupted)
             }
             HistoryCell::Tool { result, .. } => usize::from(result.is_some()),
             HistoryCell::System { content, .. } => content.len(),
             HistoryCell::Thinking {
                 content,
+                is_streaming,
                 is_interrupted,
                 ..
             } => {
-                // Include is_interrupted in discriminator
-                content.len() + usize::from(*is_interrupted)
+                // Include is_interrupted and is_streaming in discriminator
+                streaming_discriminator(content.len(), *is_streaming, *is_interrupted)
             }
             HistoryCell::Timing { duration, .. } => {
                 // Duration doesn't change, use millis as discriminator
@@ -1029,16 +1036,16 @@ impl HistoryCell {
         }
 
         let cell_id = self.id();
-        let content_len = self.content_len();
+        let discriminator = self.cache_discriminator();
 
         // Check cache
-        if let Some(cached) = cache.get(cell_id, width, content_len) {
+        if let Some(cached) = cache.get(cell_id, width, discriminator) {
             return cached;
         }
 
         // Compute and cache
         let lines = self.display_lines(width, spinner_frame);
-        cache.insert(cell_id, width, content_len, lines.clone());
+        cache.insert(cell_id, width, discriminator, lines.clone());
         lines
     }
 }
@@ -1518,14 +1525,14 @@ mod tests {
     }
 
     #[test]
-    fn test_wrap_cache_streaming_not_cached() {
+    fn test_wrap_cache_streaming_cached() {
         let cache = WrapCache::new();
         let cell = HistoryCell::assistant_streaming("Still typing...");
 
-        // Streaming cells should not be cached (is_cacheable returns false)
-        assert!(!cell.is_cacheable());
+        // Streaming cells should be cached
+        assert!(cell.is_cacheable());
 
-        // Should still work, just not cached
+        // Should still work
         let lines = cell.display_lines_cached(80, 0, &cache);
         assert!(!lines.is_empty());
     }
@@ -1567,8 +1574,8 @@ mod tests {
         // System cells are always cacheable
         assert!(HistoryCell::system("test").is_cacheable());
 
-        // Streaming assistant is not cacheable
-        assert!(!HistoryCell::assistant_streaming("test").is_cacheable());
+        // Streaming assistant is cacheable
+        assert!(HistoryCell::assistant_streaming("test").is_cacheable());
 
         // Finalized assistant is cacheable
         let mut assistant = HistoryCell::assistant_streaming("test");
@@ -1583,8 +1590,8 @@ mod tests {
         tool.set_tool_result(ToolOutput::success(serde_json::json!({})));
         assert!(tool.is_cacheable());
 
-        // Streaming thinking is not cacheable
-        assert!(!HistoryCell::thinking_streaming("test").is_cacheable());
+        // Streaming thinking is cacheable
+        assert!(HistoryCell::thinking_streaming("test").is_cacheable());
 
         // Finalized thinking is cacheable
         let mut thinking = HistoryCell::thinking_streaming("test");
