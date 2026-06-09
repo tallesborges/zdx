@@ -2,6 +2,23 @@
 # Edit this file to customize the model picker.
 
 [[model]]
+id = "claude-fable-5"
+provider = "anthropic"
+display_name = "Claude Fable 5"
+context_limit = 1000000
+
+[model.pricing]
+input = 10.0
+output = 50.0
+cache_read = 1.0
+cache_write = 12.5
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
+[[model]]
 id = "claude-opus-4-8"
 provider = "anthropic"
 display_name = "Claude Opus 4.8"
