@@ -440,8 +440,8 @@ impl TuiRuntime {
         // the target frame rate to IDLE_POLL_DURATION (10 FPS).
         let mut target_duration = poll_duration;
         if dirty && events.is_empty() {
-            let time_until_render =
-                effective_frame_duration(self.state.is_focused).saturating_sub(self.last_render.elapsed());
+            let time_until_render = effective_frame_duration(self.state.is_focused)
+                .saturating_sub(self.last_render.elapsed());
             target_duration = poll_duration.min(time_until_render);
         }
 
