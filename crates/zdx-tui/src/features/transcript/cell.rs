@@ -266,7 +266,7 @@ const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 /// timestamp for ordering/display.
 #[inline]
 fn streaming_discriminator(content_len: usize, is_streaming: bool, is_interrupted: bool) -> usize {
-    (content_len << 2) | ((is_streaming as usize) << 1) | (is_interrupted as usize)
+    (content_len << 2) | (usize::from(is_streaming) << 1) | usize::from(is_interrupted)
 }
 
 #[derive(Debug, Clone, PartialEq)]

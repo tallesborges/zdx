@@ -15,10 +15,13 @@ use crate::common::ratatui_width;
 ///
 /// Uses interior mutability (`RefCell`) to allow caching during immutable
 /// render passes.
+/// Cached value: (discriminator, cached styled lines).
+type CacheEntry = (usize, Vec<StyledLine>);
+
 #[derive(Debug, Default)]
 pub struct WrapCache {
     /// Maps (`cell_id`, width) -> (discriminator, cached styled lines)
-    cache: RefCell<HashMap<(CellId, usize), (usize, Vec<StyledLine>)>>,
+    cache: RefCell<HashMap<(CellId, usize), CacheEntry>>,
 }
 
 impl WrapCache {
