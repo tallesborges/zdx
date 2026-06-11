@@ -263,7 +263,7 @@ struct StatusSnapshot<'a> {
     latest_usage: thread_persistence::Usage,
 }
 
-fn escape_html(text: &str) -> String {
+pub(crate) fn escape_html(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
