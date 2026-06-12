@@ -1285,6 +1285,8 @@ pub struct ProvidersConfig {
     pub moonshot: ProviderConfig,
     #[serde(default = "default_stepfun_provider")]
     pub stepfun: ProviderConfig,
+    #[serde(default = "default_lmstudio_provider")]
+    pub lmstudio: ProviderConfig,
     #[serde(default = "default_xiaomi_provider")]
     pub xiaomi: ProviderConfig,
     #[serde(default = "default_xiaomi_plan_provider")]
@@ -1324,6 +1326,7 @@ impl ProvidersConfig {
             id if id == ProviderKind::DeepSeek.id() => &self.deepseek,
             id if id == ProviderKind::Moonshot.id() => &self.moonshot,
             id if id == ProviderKind::Stepfun.id() => &self.stepfun,
+            id if id == ProviderKind::LMStudio.id() => &self.lmstudio,
             id if id == ProviderKind::Xiaomi.id() => &self.xiaomi,
             id if id == ProviderKind::XiaomiPlan.id() => &self.xiaomi_plan,
             id if id == ProviderKind::Gemini.id() => &self.gemini,
@@ -1352,6 +1355,7 @@ impl ProvidersConfig {
             ProviderKind::Mistral => &self.mistral,
             ProviderKind::Moonshot => &self.moonshot,
             ProviderKind::Stepfun => &self.stepfun,
+            ProviderKind::LMStudio => &self.lmstudio,
             ProviderKind::Xiaomi => &self.xiaomi,
             ProviderKind::XiaomiPlan => &self.xiaomi_plan,
             ProviderKind::Gemini => &self.gemini,
@@ -1378,6 +1382,7 @@ impl ProvidersConfig {
             ProviderKind::Mistral => &mut self.mistral,
             ProviderKind::Moonshot => &mut self.moonshot,
             ProviderKind::Stepfun => &mut self.stepfun,
+            ProviderKind::LMStudio => &mut self.lmstudio,
             ProviderKind::Xiaomi => &mut self.xiaomi,
             ProviderKind::XiaomiPlan => &mut self.xiaomi_plan,
             ProviderKind::Gemini => &mut self.gemini,
@@ -1413,6 +1418,7 @@ impl Default for ProvidersConfig {
             deepseek: default_deepseek_provider(),
             moonshot: default_moonshot_provider(),
             stepfun: default_stepfun_provider(),
+            lmstudio: default_lmstudio_provider(),
             xiaomi: default_xiaomi_provider(),
             xiaomi_plan: default_xiaomi_plan_provider(),
             mistral: default_mistral_provider(),
@@ -1521,6 +1527,14 @@ fn default_stepfun_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec!["step-3.5-flash".to_string()],
+        ..Default::default()
+    }
+}
+
+fn default_lmstudio_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec!["google/gemma-4-e4b".to_string()],
         ..Default::default()
     }
 }
@@ -2897,6 +2911,10 @@ available_models = ["codex:gpt-5.3-codex"]
                 stepfun: ProviderConfig {
                     enabled: Some(false),
                     ..default_stepfun_provider()
+                },
+                lmstudio: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_lmstudio_provider()
                 },
                 xiaomi: ProviderConfig {
                     enabled: Some(false),

@@ -8,6 +8,7 @@ pub mod thinking_parser;
 pub mod anthropic;
 pub mod deepseek;
 pub mod gemini;
+pub mod lmstudio;
 pub mod minimax;
 pub mod mistral;
 pub mod moonshot;
@@ -44,6 +45,7 @@ pub enum ProviderKind {
     Mistral,
     Moonshot,
     Stepfun,
+    LMStudio,
     Gemini,
     GeminiCli,
     GoogleAntigravity,
@@ -81,6 +83,7 @@ impl ProviderKind {
             ProviderKind::Mistral,
             ProviderKind::Moonshot,
             ProviderKind::Stepfun,
+            ProviderKind::LMStudio,
             ProviderKind::Gemini,
             ProviderKind::GeminiCli,
             ProviderKind::GoogleAntigravity,
@@ -105,6 +108,7 @@ impl ProviderKind {
             ProviderKind::Mistral => "mistral",
             ProviderKind::Moonshot => "moonshot",
             ProviderKind::Stepfun => "stepfun",
+            ProviderKind::LMStudio => "lmstudio",
             ProviderKind::Gemini => "gemini",
             ProviderKind::GeminiCli => "gemini-cli",
             ProviderKind::GoogleAntigravity => "google-antigravity",
@@ -129,6 +133,7 @@ impl ProviderKind {
             "mistral" => Some(ProviderKind::Mistral),
             "moonshot" => Some(ProviderKind::Moonshot),
             "stepfun" => Some(ProviderKind::Stepfun),
+            "lmstudio" => Some(ProviderKind::LMStudio),
             "gemini" => Some(ProviderKind::Gemini),
             "gemini-cli" => Some(ProviderKind::GeminiCli),
             "google-antigravity" | "antigravity" => Some(ProviderKind::GoogleAntigravity),
@@ -154,6 +159,7 @@ impl ProviderKind {
             ProviderKind::Mistral => "Mistral",
             ProviderKind::Moonshot => "Moonshot",
             ProviderKind::Stepfun => "StepFun",
+            ProviderKind::LMStudio => "LMStudio",
             ProviderKind::Gemini => "Gemini",
             ProviderKind::GeminiCli => "Gemini CLI",
             ProviderKind::GoogleAntigravity => "Google Antigravity",
@@ -203,7 +209,8 @@ impl ProviderKind {
             ProviderKind::Minimax => Some("MINIMAX_API_KEY"),
             ProviderKind::Zai => Some("ZAI_API_KEY"),
             ProviderKind::Xai => Some("XAI_API_KEY"),
-            ProviderKind::ClaudeCli
+            ProviderKind::LMStudio
+            | ProviderKind::ClaudeCli
             | ProviderKind::OpenAICodex
             | ProviderKind::GeminiCli
             | ProviderKind::GoogleAntigravity => None,
@@ -221,6 +228,7 @@ impl ProviderKind {
             Self::Mistral => "https://api.mistral.ai/v1",
             Self::Moonshot => "https://api.moonshot.ai/v1",
             Self::Stepfun => "https://api.stepfun.ai/v1",
+            Self::LMStudio => "http://127.0.0.1:1234/v1",
             Self::Gemini | Self::GeminiCli => "https://generativelanguage.googleapis.com/v1beta",
             Self::GoogleAntigravity => "https://daily-cloudcode-pa.googleapis.com",
             Self::Xiaomi => "https://api.xiaomimimo.com/v1",
@@ -243,6 +251,7 @@ impl ProviderKind {
             Self::Mistral => Some("MISTRAL_BASE_URL"),
             Self::Moonshot => Some("MOONSHOT_BASE_URL"),
             Self::Stepfun => Some("STEPFUN_BASE_URL"),
+            Self::LMStudio => Some("LMSTUDIO_BASE_URL"),
             Self::Gemini | Self::GeminiCli => Some("GEMINI_BASE_URL"),
             Self::Xiaomi => Some("XIAOMI_BASE_URL"),
             Self::XiaomiPlan => Some("XIAOMI_PLAN_BASE_URL"),
@@ -293,6 +302,7 @@ impl ProviderKind {
             | ProviderKind::Mistral
             | ProviderKind::Moonshot
             | ProviderKind::Stepfun
+            | ProviderKind::LMStudio
             | ProviderKind::Gemini
             | ProviderKind::OpencodeGo
             | ProviderKind::Minimax
@@ -353,6 +363,7 @@ fn parse_provider_prefix(model: &str) -> Option<(ProviderKind, &str)> {
                 "mistral" => ProviderKind::Mistral,
                 "moonshot" | "kimi" => ProviderKind::Moonshot,
                 "stepfun" => ProviderKind::Stepfun,
+                "lmstudio" => ProviderKind::LMStudio,
                 "gemini" | "google" => ProviderKind::Gemini,
                 "gemini-cli" | "google-gemini-cli" => ProviderKind::GeminiCli,
                 "antigravity" | "google-antigravity" => ProviderKind::GoogleAntigravity,
