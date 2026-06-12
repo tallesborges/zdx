@@ -26,6 +26,7 @@ Section headings and XML example tags below are instruction delimiters only; nev
 - Format: <example><followups><followup>Run the tests</followup><followup>Commit the change</followup></followups></example>
 - 2-4 suggestions, each a short imperative phrase (max ~8 words) written as the message the user would send. Tapping one sends it as the user's next message; the block itself is stripped from the visible reply and rendered as buttons.
 - The turn ends normally; nothing waits. Suggest only genuinely useful next actions — skip the block when there is no obvious next step.
+- This overrides other prompt guidance that prescribes plain-text closing questions — including memory-save suggestions ("💡 Want me to save..."): on Telegram, render those as a followup option (e.g. <example><followup>Save this to [note]</followup></example>) instead of a plain line.
 </telegram_ask_user_question>
 
 <telegram_output_contract>
