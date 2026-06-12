@@ -5,7 +5,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use tokio::sync::Mutex;
 use zdx_engine::config::Config;
-use zdx_engine::core::agent::ToolConfig;
+use zdx_engine::core::agent::{ToolConfig, ToolSelection};
+use zdx_engine::tools::{ToolRegistry, ToolSet};
 
 use crate::bot::queue::ChatQueueMap;
 use crate::bot::{
@@ -15,8 +16,10 @@ use crate::bot::{
 use crate::telegram::{CallbackQuery, TelegramClient, TelegramSettings};
 
 mod agent;
+mod ask_user;
 mod bot;
 mod commands;
+mod followups;
 mod handlers;
 mod ingest;
 pub mod telegram;
@@ -54,7 +57,7 @@ pub async fn run_with_root(root: PathBuf) -> Result<()> {
 /// # Errors
 /// Returns an error if the operation fails.
 pub async fn run_with_config_and_root(config: Config, root: PathBuf) -> Result<()> {
-    run_named_with_config_and_root("bot", config, root).await
+    Box::pin(run_named_with_config_and_root("bot", config, root)).await
 }
 
 ///
@@ -94,7 +97,18 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
         Ok(()) => tracing::info!(count = command_specs.len(), "Telegram command menu updated"),
         Err(err) => tracing::error!(%err, "Failed to update Telegram command menu"),
     }
-    let tool_config = ToolConfig::default();
+    let ask_user_map = ask_user::new_pending_map();
+    let tool_registry = ToolRegistry::builtins().with_tool(
+        ask_user::definition(),
+        ask_user::handler(Arc::clone(&ask_user_map)),
+    );
+    let tool_config = ToolConfig::new(
+        tool_registry,
+        ToolSelection::Auto {
+            base: ToolSet::Default,
+            include: vec![ask_user::TOOL_NAME.to_string()],
+        },
+    );
 
     let cancel_map = new_cancel_map();
     let queue_cancel_map = new_queue_cancel_map();
@@ -114,6 +128,8 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
             tool_config,
             cancel_map,
             queue_cancel_map,
+            ask_user_map,
+            followup_map: followups::new_followup_map(),
         },
     ));
     let chat_queues = new_chat_queues();
@@ -168,7 +184,7 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
                         .await;
                     }
                     if let Some(callback) = update.callback_query {
-                        handle_callback_query(&context, &client, callback).await;
+                        handle_callback_query(&context, &client, &chat_queues, callback).await;
                     }
                 }
             }
@@ -227,8 +243,9 @@ fn media_group_key(message: &crate::telegram::Message) -> Option<MediaGroupKey> 
 /// - `cancel:{chat_id}:{user_message_id}` — cancel an active agent turn
 /// - `cancel_q:{chat_id}:{message_id}` — cancel a queued (not-yet-processing) item
 async fn handle_callback_query(
-    context: &BotContext,
+    context: &Arc<BotContext>,
     client: &TelegramClient,
+    chat_queues: &ChatQueueMap,
     callback: CallbackQuery,
 ) {
     // Enforce allowlist: only authorized users can trigger cancel actions
@@ -292,17 +309,21 @@ async fn handle_callback_query(
                 tracing::warn!(%err, "Failed to answer callback");
             }
         }
+    } else if let Some(rest) = data.strip_prefix("askq:") {
+        ask_user::handle_callback(context.ask_user_map(), client, &callback, rest).await;
+    } else if let Some(rest) = data.strip_prefix("fu:") {
+        followups::handle_callback(context, chat_queues, client, &callback, rest).await;
     } else if data.starts_with("model_provider:")
         || data.starts_with("model_pick:")
         || data.starts_with("model_back:")
         || data.starts_with("model_cancel:")
     {
-        handle_model_callback(context, client, &callback, data).await;
+        handle_model_callback(context.as_ref(), client, &callback, data).await;
     } else if data.starts_with("thinking_set:")
         || data.starts_with("thinking_reset:")
         || data.starts_with("thinking_cancel:")
     {
-        handle_thinking_callback(context, client, &callback, data).await;
+        handle_thinking_callback(context.as_ref(), client, &callback, data).await;
     } else {
         if let Err(err) = client.answer_callback_query(&callback.id, None).await {
             tracing::warn!(%err, "Failed to answer unknown callback");

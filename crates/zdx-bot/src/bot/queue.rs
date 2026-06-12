@@ -65,6 +65,19 @@ pub(crate) async fn dispatch_message(
         return;
     }
 
+    // A typed reply while a question is pending answers the question instead
+    // of starting a new queued turn.
+    if let Some(text) = message.text.as_deref()
+        && crate::ask_user::try_answer_with_text(
+            context.ask_user_map(),
+            message.chat.id,
+            message.effective_thread_id(),
+            text,
+        )
+    {
+        return;
+    }
+
     if is_forum_general {
         // Check for commands that shouldn't create a topic
         if let Some(text) = message.text.as_deref()
