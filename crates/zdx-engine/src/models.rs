@@ -43,7 +43,7 @@ pub struct ModelCapabilities {
     pub input_images: bool,
     /// Maximum output tokens supported by the model.
     pub output_limit: u64,
-    /// Optional API routing hint for meta-providers (e.g., zen/apiyi).
+    /// Optional API routing hint for meta-providers (e.g., opencode-go).
     ///
     /// Expected values:
     /// - "anthropic-messages"

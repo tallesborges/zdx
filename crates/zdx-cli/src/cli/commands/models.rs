@@ -232,7 +232,7 @@ impl UpdateState {
 }
 
 #[allow(clippy::too_many_lines)]
-fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 18] {
+fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 17] {
     [
         ProviderSpec {
             provider_id: "anthropic",
@@ -313,16 +313,10 @@ fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 18] {
             provider_cfg: &config.providers.google_antigravity,
         },
         ProviderSpec {
-            provider_id: "zen",
-            api_id: "opencode",
-            prefix: Some("zen"),
-            provider_cfg: &config.providers.zen,
-        },
-        ProviderSpec {
-            provider_id: "apiyi",
-            api_id: "apiyi",
-            prefix: Some("apiyi"),
-            provider_cfg: &config.providers.apiyi,
+            provider_id: "opencode-go",
+            api_id: "opencode-go",
+            prefix: Some("opencode-go"),
+            provider_cfg: &config.providers.opencode_go,
         },
         ProviderSpec {
             provider_id: "minimax",
@@ -749,7 +743,7 @@ fn is_pure_wildcard(pattern: &str) -> bool {
 }
 
 fn is_meta_provider(provider_id: &str) -> bool {
-    matches!(provider_id, "zen" | "apiyi")
+    provider_id == "opencode-go"
 }
 
 /// Looks up a model in the embedded `default_models.toml` by ID.
@@ -771,7 +765,7 @@ fn lookup_default_model(full_id: &str) -> Option<ModelRecord> {
 
     let target = resolve_provider(full_id);
     let target_model_normalized = normalize_model_lookup_id(&target.model);
-    let is_meta_target = matches!(target.kind, ProviderKind::Zen | ProviderKind::Apiyi);
+    let is_meta_target = target.kind == ProviderKind::OpencodeGo;
 
     defaults
         .models
@@ -791,8 +785,8 @@ fn lookup_default_model(full_id: &str) -> Option<ModelRecord> {
                 return true;
             }
 
-            // Meta-providers (zen/apiyi) can reuse defaults from underlying providers
-            // when model IDs match (e.g., apiyi:gemini-3-flash-preview -> gemini:gemini-3-flash-preview).
+            // Meta-providers (opencode-go) can reuse defaults from underlying providers
+            // when model IDs match (e.g., opencode-go:glm-5.1 -> zai:glm-5.1).
             if is_meta_target {
                 let resolved_record = resolve_provider(&record.id);
                 let resolved_match =
@@ -1183,13 +1177,13 @@ mod tests {
 
     #[test]
     fn test_lookup_default_model_meta_provider_uses_underlying_defaults() {
-        let result = lookup_default_model("apiyi:gemini-3-flash-preview");
-        assert!(result.is_some(), "Should find gemini model for apiyi");
+        let result = lookup_default_model("opencode-go:glm-5.1");
+        assert!(result.is_some(), "Should find glm model for opencode-go");
     }
 
     #[test]
     fn test_lookup_default_model_meta_provider_normalizes_thinking_suffix() {
-        let result = lookup_default_model("apiyi:gemini-3.1-pro-preview-thinking");
+        let result = lookup_default_model("opencode-go:glm-5.1-thinking");
         assert!(
             result.is_some(),
             "Should map -thinking variant to base model default"
@@ -1197,15 +1191,14 @@ mod tests {
     }
 
     #[test]
-    fn test_provider_specs_includes_zen_and_apiyi() {
+    fn test_provider_specs_includes_opencode_go() {
         let config = config::Config::default();
         let specs = provider_specs(&config);
 
         assert!(specs.iter().any(|s| {
-            s.provider_id == "zen" && s.api_id == "opencode" && s.prefix == Some("zen")
-        }));
-        assert!(specs.iter().any(|s| {
-            s.provider_id == "apiyi" && s.api_id == "apiyi" && s.prefix == Some("apiyi")
+            s.provider_id == "opencode-go"
+                && s.api_id == "opencode-go"
+                && s.prefix == Some("opencode-go")
         }));
     }
 
@@ -1231,7 +1224,7 @@ mod tests {
     }
 
     #[test]
-    fn test_official_source_provider_ids_for_apiyi_models() {
+    fn test_official_source_provider_ids_for_meta_models() {
         assert_eq!(official_source_provider_ids("glm-5"), &["zhipuai", "zai"]);
         assert_eq!(
             official_source_provider_ids("gemini-2.5-flash"),
@@ -1280,7 +1273,7 @@ mod tests {
 
         // npm @ai-sdk/openai → openai-responses (trusted)
         assert_eq!(
-            model_api_hint("zen", Some("opencode"), &model).as_deref(),
+            model_api_hint("opencode-go", Some("opencode-go"), &model).as_deref(),
             Some("openai-responses")
         );
 
@@ -1299,7 +1292,7 @@ mod tests {
         };
 
         assert_eq!(
-            model_api_hint("zen", Some("opencode"), &minimax_model).as_deref(),
+            model_api_hint("opencode-go", Some("opencode-go"), &minimax_model).as_deref(),
             Some("openai-completions")
         );
 
@@ -1318,7 +1311,7 @@ mod tests {
         };
 
         assert_eq!(
-            model_api_hint("zen", Some("opencode"), &claude_model).as_deref(),
+            model_api_hint("opencode-go", Some("opencode-go"), &claude_model).as_deref(),
             Some("anthropic-messages")
         );
     }
@@ -1337,11 +1330,11 @@ mod tests {
         };
 
         assert_eq!(
-            model_api_hint("apiyi", Some("google"), &model).as_deref(),
+            model_api_hint("opencode-go", Some("google"), &model).as_deref(),
             Some("google-generative-ai")
         );
         assert_eq!(
-            model_api_hint("apiyi", Some("moonshotai"), &model).as_deref(),
+            model_api_hint("opencode-go", Some("moonshotai"), &model).as_deref(),
             Some("openai-completions")
         );
     }
