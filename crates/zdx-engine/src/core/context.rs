@@ -2508,12 +2508,14 @@ mod tests {
             "These are user-defined base instructions. Treat them as baseline instructions for this run unless higher-priority guidance in this prompt overrides them."
         ));
         assert!(prompt.contains(
-            "MUST use a short plan when the task spans 3+ files or involves a dependent sequence of changes. Keep it concise and only as detailed as needed. Otherwise, no plan."
+            "For tasks spanning 3+ files or involving dependent steps, create a short plan and execute it without waiting unless approval is required."
         ));
-        assert!(prompt.contains("for example `cargo` or git)."));
+        assert!(prompt.contains(
+            "Use `bash` only for commands that dedicated tools cannot perform, such as builds, tests, git, or CLIs."
+        ));
         assert!(!prompt.contains("for example `rg`, `cargo`, or git)."));
         assert!(prompt.contains(
-            "When creating or editing files, MUST use `edit`/`write` instead of shell redirection, heredocs, `echo > file`, or `sed -i`-style commands."
+            "Use `edit`/`write` for file edits; never use shell redirection, heredocs, `echo > file`, or `sed -i`-style commands for edits."
         ));
         assert!(!prompt.contains("apply_patch"));
         assert!(prompt.contains("<environment>"));
@@ -2525,7 +2527,11 @@ mod tests {
         assert!(prompt.contains(&format!("Operating system: {}", std::env::consts::OS)));
         assert!(prompt.contains(&format!(" on {}", std::env::consts::ARCH)));
         assert!(prompt.contains("## Path Resolution"));
-        assert!(prompt.contains("## Parallel Tool Use"));
+        assert!(
+            prompt.contains(
+                "Think first, then batch independent reads/searches/tool calls in parallel"
+            )
+        );
         assert!(
             prompt.contains("The following runtime environment variables are especially relevant:")
         );
@@ -2569,10 +2575,10 @@ mod tests {
         ));
         assert!(prompt.contains("Available specialized capabilities"));
         assert!(prompt.contains(
-            "Use `oracle` when the task is mainly deep diagnosis, debugging dead ends, architecture, or tradeoff analysis."
+            "Use `oracle` for difficult diagnosis, debugging dead ends, architecture tradeoffs, or advisory review."
         ));
         assert!(prompt.contains(
-            "Use `task` for scoped implementation when no named specialist fits better."
+            "Use `task` for scoped, self-contained implementation work when no named specialist fits better."
         ));
         assert!(prompt.contains("Task (`task`)"));
         assert!(prompt.contains("Oracle (`oracle`)"));
