@@ -91,18 +91,24 @@ pub(crate) async fn send_followups(
         return;
     }
 
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = items
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            vec![InlineKeyboardButton {
+                text: truncate_chars(item, MAX_BUTTON_CHARS),
+                callback_data: Some(format!("fu:{idx}")),
+                url: None,
+            }]
+        })
+        .collect();
+    rows.push(vec![InlineKeyboardButton {
+        text: "✕ Dismiss".to_string(),
+        callback_data: Some("fu:x".to_string()),
+        url: None,
+    }]);
     let markup = InlineKeyboardMarkup {
-        inline_keyboard: items
-            .iter()
-            .enumerate()
-            .map(|(idx, item)| {
-                vec![InlineKeyboardButton {
-                    text: truncate_chars(item, MAX_BUTTON_CHARS),
-                    callback_data: Some(format!("fu:{idx}")),
-                    url: None,
-                }]
-            })
-            .collect(),
+        inline_keyboard: rows,
     };
 
     match context
@@ -145,6 +151,20 @@ pub(crate) async fn handle_callback(
         return;
     };
     let chat_id = message.chat.id;
+
+    // Dismiss: delete the suggestions message without starting a turn.
+    if data == "x" {
+        {
+            let mut map = context
+                .followup_map()
+                .lock()
+                .expect("followup lock poisoned");
+            map.remove(&(chat_id, message.id));
+        }
+        let _ = client.delete_message(chat_id, message.id).await;
+        let _ = client.answer_callback_query(&callback.id, None).await;
+        return;
+    }
 
     let Some(idx) = data.parse::<usize>().ok() else {
         let _ = client.answer_callback_query(&callback.id, None).await;
