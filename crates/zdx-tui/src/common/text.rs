@@ -225,6 +225,9 @@ mod tests {
     }
 
     #[test]
+    // Decomposed "éé" (e + combining accent) is intentional: it exercises
+    // combining-mark grapheme handling.
+    #[allow(clippy::unicode_not_nfc)]
     fn test_truncate_with_ellipsis_preserves_graphemes() {
         for text in ["⚠️⚠️ab", "👩‍🚀👩‍🚀ab", "👍🏽👍🏽ab", "ééab"]
         {
