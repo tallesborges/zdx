@@ -5,6 +5,8 @@ Scope: Telegram bot runtime, ingest/handler flow, queueing, and Telegram API int
 ## Where things are
 
 - `src/lib.rs`: bot crate entrypoint
+- `src/ask_user.rs`: `ask_user_question` tool (mid-run question + inline keyboard answer flow)
+- `src/followups.rs`: end-of-turn follow-up suggestion buttons (`<followups>` tag → tap dispatches new turn)
 - `src/commands.rs`: centralized slash-command parsing and matching
 - `src/bot/mod.rs`: bot module exports
 - `src/bot/context.rs`: shared bot context
