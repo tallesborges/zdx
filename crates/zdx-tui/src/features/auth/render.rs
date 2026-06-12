@@ -52,6 +52,7 @@ fn login_overlay_title(login_state: &LoginState) -> &'static str {
             zdx_engine::providers::ProviderKind::Mistral => "Mistral API Key",
             zdx_engine::providers::ProviderKind::Moonshot => "Moonshot API Key",
             zdx_engine::providers::ProviderKind::Stepfun => "StepFun API Key",
+            zdx_engine::providers::ProviderKind::LMStudio => "LMStudio (Local)",
             zdx_engine::providers::ProviderKind::Gemini => "Gemini Login",
             zdx_engine::providers::ProviderKind::GeminiCli => "Gemini CLI Login",
             zdx_engine::providers::ProviderKind::GoogleAntigravity => "Google Antigravity Login",

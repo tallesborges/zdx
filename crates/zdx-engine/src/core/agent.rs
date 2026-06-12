@@ -28,6 +28,7 @@ use crate::providers::gemini::{
     AntigravityClient, AntigravityConfig, GeminiCliClient, GeminiCliConfig, GeminiClient,
     GeminiConfig, GeminiThinkingConfig,
 };
+use crate::providers::lmstudio::{LMStudioClient, LMStudioConfig};
 use crate::providers::minimax::{MinimaxClient, MinimaxConfig};
 use crate::providers::mistral::{MistralClient, MistralConfig};
 use crate::providers::moonshot::{MoonshotClient, MoonshotConfig};
@@ -169,6 +170,7 @@ enum ProviderClient {
     Mistral(MistralClient),
     Moonshot(MoonshotClient),
     Stepfun(StepfunClient),
+    LMStudio(LMStudioClient),
     Gemini(GeminiClient),
     GeminiCli(GeminiCliClient),
     GoogleAntigravity(AntigravityClient),
@@ -217,6 +219,9 @@ impl ProviderClient {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::Stepfun(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::LMStudio(client) => {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::Gemini(client) => {
@@ -1311,6 +1316,9 @@ fn build_provider_client(
         ProviderKind::Stepfun => {
             build_stepfun_client(config, options.model, cache_key, thinking_enabled)
         }
+        ProviderKind::LMStudio => {
+            build_lmstudio_client(config, options.model, cache_key, thinking_enabled)
+        }
         ProviderKind::Minimax => {
             build_minimax_client(config, options.model, cache_key, thinking_enabled)
         }
@@ -1551,6 +1559,24 @@ fn build_stepfun_client(
             config.max_tokens,
             config.providers.stepfun.effective_base_url(),
             config.providers.stepfun.effective_api_key(),
+            cache_key,
+            thinking_enabled,
+        )?,
+    )))
+}
+
+fn build_lmstudio_client(
+    config: &Config,
+    model: &str,
+    cache_key: Option<String>,
+    thinking_enabled: bool,
+) -> Result<ProviderClient> {
+    Ok(ProviderClient::LMStudio(LMStudioClient::new(
+        LMStudioConfig::from_env(
+            model.to_string(),
+            config.max_tokens,
+            config.providers.lmstudio.effective_base_url(),
+            config.providers.lmstudio.effective_api_key(),
             cache_key,
             thinking_enabled,
         )?,

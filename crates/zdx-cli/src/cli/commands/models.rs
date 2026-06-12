@@ -232,7 +232,7 @@ impl UpdateState {
 }
 
 #[allow(clippy::too_many_lines)]
-fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 17] {
+fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 18] {
     [
         ProviderSpec {
             provider_id: "anthropic",
@@ -281,6 +281,12 @@ fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 17] {
             api_id: "stepfun",
             prefix: Some("stepfun"),
             provider_cfg: &config.providers.stepfun,
+        },
+        ProviderSpec {
+            provider_id: "lmstudio",
+            api_id: "lmstudio",
+            prefix: Some("lmstudio"),
+            provider_cfg: &config.providers.lmstudio,
         },
         ProviderSpec {
             provider_id: "xiaomi",
