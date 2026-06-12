@@ -12,7 +12,8 @@ use std::panic;
 use anyhow::{Context, Result};
 use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture,
+    EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -56,7 +57,8 @@ pub fn enable_input_features() -> Result<()> {
         io::stdout(),
         EnableBracketedPaste,
         EnableMouseCapture,
-        EnableFocusChange
+        EnableFocusChange,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
     )
     .context("Failed to enable input features")?;
     Ok(())
@@ -71,6 +73,7 @@ pub fn enable_input_features() -> Result<()> {
 pub fn disable_input_features() -> Result<()> {
     execute!(
         io::stdout(),
+        PopKeyboardEnhancementFlags,
         DisableMouseCapture,
         DisableBracketedPaste,
         DisableFocusChange
@@ -95,6 +98,7 @@ pub fn restore_terminal() -> Result<()> {
     // These must be disabled before leaving raw mode
     let _ = execute!(
         io::stdout(),
+        PopKeyboardEnhancementFlags,
         DisableMouseCapture,
         DisableBracketedPaste,
         DisableFocusChange
