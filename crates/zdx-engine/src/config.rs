@@ -1297,10 +1297,8 @@ pub struct ProvidersConfig {
     pub google_antigravity: ProviderConfig,
     #[serde(default = "default_mistral_provider")]
     pub mistral: ProviderConfig,
-    #[serde(default = "default_zen_provider")]
-    pub zen: ProviderConfig,
-    #[serde(default = "default_apiyi_provider")]
-    pub apiyi: ProviderConfig,
+    #[serde(default = "default_opencode_go_provider")]
+    pub opencode_go: ProviderConfig,
     #[serde(default = "default_minimax_provider")]
     pub minimax: ProviderConfig,
     #[serde(default = "default_zai_provider")]
@@ -1331,8 +1329,7 @@ impl ProvidersConfig {
             id if id == ProviderKind::Gemini.id() => &self.gemini,
             id if id == ProviderKind::GeminiCli.id() => &self.gemini_cli,
             id if id == ProviderKind::GoogleAntigravity.id() => &self.google_antigravity,
-            id if id == ProviderKind::Zen.id() => &self.zen,
-            id if id == ProviderKind::Apiyi.id() => &self.apiyi,
+            id if id == ProviderKind::OpencodeGo.id() => &self.opencode_go,
             id if id == ProviderKind::Minimax.id() => &self.minimax,
             id if id == ProviderKind::Zai.id() => &self.zai,
             id if id == ProviderKind::Xai.id() => &self.xai,
@@ -1360,8 +1357,7 @@ impl ProvidersConfig {
             ProviderKind::Gemini => &self.gemini,
             ProviderKind::GeminiCli => &self.gemini_cli,
             ProviderKind::GoogleAntigravity => &self.google_antigravity,
-            ProviderKind::Zen => &self.zen,
-            ProviderKind::Apiyi => &self.apiyi,
+            ProviderKind::OpencodeGo => &self.opencode_go,
             ProviderKind::Minimax => &self.minimax,
             ProviderKind::Zai => &self.zai,
             ProviderKind::Xai => &self.xai,
@@ -1387,8 +1383,7 @@ impl ProvidersConfig {
             ProviderKind::Gemini => &mut self.gemini,
             ProviderKind::GeminiCli => &mut self.gemini_cli,
             ProviderKind::GoogleAntigravity => &mut self.google_antigravity,
-            ProviderKind::Zen => &mut self.zen,
-            ProviderKind::Apiyi => &mut self.apiyi,
+            ProviderKind::OpencodeGo => &mut self.opencode_go,
             ProviderKind::Minimax => &mut self.minimax,
             ProviderKind::Zai => &mut self.zai,
             ProviderKind::Xai => &mut self.xai,
@@ -1421,8 +1416,7 @@ impl Default for ProvidersConfig {
             xiaomi: default_xiaomi_provider(),
             xiaomi_plan: default_xiaomi_plan_provider(),
             mistral: default_mistral_provider(),
-            zen: default_zen_provider(),
-            apiyi: default_apiyi_provider(),
+            opencode_go: default_opencode_go_provider(),
             minimax: default_minimax_provider(),
             zai: default_zai_provider(),
             xai: default_xai_provider(),
@@ -1599,27 +1593,25 @@ fn default_mistral_provider() -> ProviderConfig {
     }
 }
 
-fn default_zen_provider() -> ProviderConfig {
+fn default_opencode_go_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
-            "big-pickle".to_string(),
-            "gemini-3-flash".to_string(),
-            "minimax-m2.5".to_string(),
-            "minimax-m2.5-free".to_string(),
-            "kimi-k2.5".to_string(),
-            "kimi-k2.5-free".to_string(),
+            "glm-5.1".to_string(),
             "glm-5".to_string(),
-            "glm-5-free".to_string(),
+            "kimi-k2.6".to_string(),
+            "kimi-k2.5".to_string(),
+            "mimo-v2.5-pro".to_string(),
+            "mimo-v2.5".to_string(),
+            "minimax-m3".to_string(),
+            "minimax-m2.7".to_string(),
+            "minimax-m2.5".to_string(),
+            "qwen3.7-max".to_string(),
+            "qwen3.7-plus".to_string(),
+            "qwen3.6-plus".to_string(),
+            "deepseek-v4-pro".to_string(),
+            "deepseek-v4-flash".to_string(),
         ],
-        ..Default::default()
-    }
-}
-
-fn default_apiyi_provider() -> ProviderConfig {
-    ProviderConfig {
-        enabled: Some(false),
-        models: vec![],
         ..Default::default()
     }
 }
@@ -2263,22 +2255,6 @@ max_tokens = 2048
             .unwrap_or(Config::DEFAULT_MAX_TOKENS);
 
         assert_eq!(config.effective_max_tokens_for(model_id), expected);
-    }
-
-    #[test]
-    fn test_effective_max_tokens_uses_default_when_output_limit_matches_context_limit() {
-        let config = Config {
-            max_tokens: None,
-            thinking_level: ThinkingLevel::Off,
-            ..Default::default()
-        };
-
-        // zen:kimi-k2.5-free currently reports output_limit == context_limit in models.dev.
-        // In that case, using output_limit-1 as max_tokens can exceed context once input is added.
-        assert_eq!(
-            config.effective_max_tokens_for("zen:kimi-k2.5-free"),
-            Config::DEFAULT_MAX_TOKENS
-        );
     }
 
     /// Thinking: config loads from file with `thinking_level`.
@@ -2946,13 +2922,9 @@ available_models = ["codex:gpt-5.3-codex"]
                     enabled: Some(false),
                     ..default_mistral_provider()
                 },
-                zen: ProviderConfig {
+                opencode_go: ProviderConfig {
                     enabled: Some(false),
-                    ..default_zen_provider()
-                },
-                apiyi: ProviderConfig {
-                    enabled: Some(false),
-                    ..default_apiyi_provider()
+                    ..default_opencode_go_provider()
                 },
                 minimax: ProviderConfig {
                     enabled: Some(false),

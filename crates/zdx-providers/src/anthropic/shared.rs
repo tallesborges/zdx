@@ -115,32 +115,37 @@ fn normalize_model_id(model: &str) -> &str {
     model.rsplit(':').next().unwrap_or(model)
 }
 
-fn supports_max_effort(model: &str) -> bool {
-    model.starts_with("claude-opus-4-8")
-        || model.starts_with("claude-opus-4-7")
-        || model.starts_with("claude-opus-4-6")
-        || model.starts_with("claude-sonnet-4-6")
+/// Legacy Claude models that still use manual extended thinking
+/// (`thinking: {type: "enabled", budget_tokens}`). Anything newer —
+/// including future Anthropic models — defaults to adaptive thinking
+/// with `output_config.effort`.
+fn uses_legacy_budget_thinking(model: &str) -> bool {
+    model.starts_with("claude-opus-4-5")
+        || model.starts_with("claude-sonnet-4-5")
+        || model.starts_with("claude-haiku-4-5")
+        || model.starts_with("claude-3")
 }
 
-/// `xhigh` effort was introduced in Claude Opus 4.7 (sits between `high`
-/// and `max`). No earlier model supports it.
+fn supports_max_effort(model: &str) -> bool {
+    !uses_legacy_budget_thinking(model)
+}
+
+/// `xhigh` sits between `high` and `max`. Opus/Sonnet 4.6 expose only
+/// 4 effort levels (low/medium/high/max); everything newer has all 5.
 fn supports_xhigh_effort(model: &str) -> bool {
-    model.starts_with("claude-opus-4-8") || model.starts_with("claude-opus-4-7")
+    !uses_legacy_budget_thinking(model)
+        && !model.starts_with("claude-opus-4-6")
+        && !model.starts_with("claude-sonnet-4-6")
 }
 
 fn supports_adaptive_thinking(model: &str) -> bool {
-    model.starts_with("claude-opus-4-8")
-        || model.starts_with("claude-opus-4-7")
-        || model.starts_with("claude-opus-4-6")
-        || model.starts_with("claude-sonnet-4-6")
+    !uses_legacy_budget_thinking(model)
 }
 
 fn supports_effort_control(model: &str) -> bool {
-    model.starts_with("claude-opus-4-8")
-        || model.starts_with("claude-opus-4-7")
-        || model.starts_with("claude-opus-4-6")
-        || model.starts_with("claude-opus-4-5")
-        || model.starts_with("claude-sonnet-4-6")
+    // Opus 4.5 is the one legacy budget-thinking model that also accepts
+    // `output_config.effort` (low/medium/high only).
+    model.starts_with("claude-opus-4-5") || !uses_legacy_budget_thinking(model)
 }
 
 pub(crate) fn build_system_blocks(
@@ -458,6 +463,60 @@ mod tests {
         assert_eq!(
             serde_json::to_value(output_config.unwrap()).unwrap(),
             json!({"effort": "xhigh"})
+        );
+    }
+
+    #[test]
+    fn thinking_and_effort_fable_5_uses_adaptive_and_full_effort() {
+        let (thinking, output_config) = build_thinking_and_output_config(
+            "claude-fable-5",
+            true,
+            4096,
+            Some(EffortLevel::XHigh),
+        )
+        .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(thinking.unwrap()).unwrap(),
+            json!({"type": "adaptive", "display": "summarized"})
+        );
+        assert_eq!(
+            serde_json::to_value(output_config.unwrap()).unwrap(),
+            json!({"effort": "xhigh"})
+        );
+
+        let (_, output_config) =
+            build_thinking_and_output_config("claude-fable-5", true, 4096, Some(EffortLevel::Max))
+                .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(output_config.unwrap()).unwrap(),
+            json!({"effort": "max"})
+        );
+    }
+
+    #[test]
+    fn unknown_future_model_defaults_to_adaptive_and_full_effort() {
+        let (thinking, output_config) =
+            build_thinking_and_output_config("claude-opus-5", true, 4096, Some(EffortLevel::XHigh))
+                .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(thinking.unwrap()).unwrap(),
+            json!({"type": "adaptive", "display": "summarized"})
+        );
+        assert_eq!(
+            serde_json::to_value(output_config.unwrap()).unwrap(),
+            json!({"effort": "xhigh"})
+        );
+
+        let (_, output_config) =
+            build_thinking_and_output_config("claude-opus-5", true, 4096, Some(EffortLevel::Max))
+                .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(output_config.unwrap()).unwrap(),
+            json!({"effort": "max"})
         );
     }
 

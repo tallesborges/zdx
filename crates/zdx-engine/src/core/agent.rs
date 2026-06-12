@@ -23,7 +23,6 @@ use crate::providers::anthropic::{
     AnthropicClient, AnthropicConfig, ClaudeCliClient, ClaudeCliConfig,
     EffortLevel as AnthropicEffortLevel,
 };
-use crate::providers::apiyi::{ApiyiClient, ApiyiConfig};
 use crate::providers::deepseek::{DeepSeekClient, DeepSeekConfig};
 use crate::providers::gemini::{
     AntigravityClient, AntigravityConfig, GeminiCliClient, GeminiCliConfig, GeminiClient,
@@ -33,13 +32,13 @@ use crate::providers::minimax::{MinimaxClient, MinimaxConfig};
 use crate::providers::mistral::{MistralClient, MistralConfig};
 use crate::providers::moonshot::{MoonshotClient, MoonshotConfig};
 use crate::providers::openai::{OpenAIClient, OpenAICodexClient, OpenAICodexConfig, OpenAIConfig};
+use crate::providers::opencode_go::{OpencodeGoClient, OpencodeGoConfig};
 use crate::providers::openrouter::{OpenRouterClient, OpenRouterConfig};
 use crate::providers::stepfun::{StepfunClient, StepfunConfig};
 use crate::providers::xai::{XaiClient, XaiConfig};
 use crate::providers::xiaomi::{XiaomiClient, XiaomiConfig};
 use crate::providers::xiaomi_plan::{XiaomiPlanClient, XiaomiPlanConfig};
 use crate::providers::zai::{ZaiClient, ZaiConfig};
-use crate::providers::zen::{ZenClient, ZenConfig};
 use crate::providers::{
     ChatContentBlock, ChatMessage, ContentBlockType, ProviderError, ProviderKind, ProviderStream,
     ReasoningBlock, ReplayToken, StreamEvent, resolve_provider,
@@ -173,8 +172,7 @@ enum ProviderClient {
     Gemini(GeminiClient),
     GeminiCli(GeminiCliClient),
     GoogleAntigravity(AntigravityClient),
-    Zen(ZenClient),
-    Apiyi(ApiyiClient),
+    OpencodeGo(OpencodeGoClient),
     Minimax(MinimaxClient),
     Zai(ZaiClient),
     Xai(XaiClient),
@@ -230,10 +228,7 @@ impl ProviderClient {
             ProviderClient::GoogleAntigravity(client) => {
                 client.send_messages_stream(messages, tools, system).await
             }
-            ProviderClient::Zen(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::Apiyi(client) => {
+            ProviderClient::OpencodeGo(client) => {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::Minimax(client) => {
@@ -1342,19 +1337,7 @@ fn build_provider_client(
                 )),
             )),
         )),
-        ProviderKind::Zen => build_zen_client(
-            config,
-            options.model,
-            config.max_tokens,
-            options.max_tokens,
-            thinking_enabled,
-            thinking_budget_tokens,
-            thinking_effort,
-            gemini_thinking.clone(),
-            reasoning_effort,
-            cache_key,
-        ),
-        ProviderKind::Apiyi => build_apiyi_client(
+        ProviderKind::OpencodeGo => build_opencode_go_client(
             config,
             options.model,
             config.max_tokens,
@@ -1642,7 +1625,7 @@ fn build_gemini_client(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_zen_client(
+fn build_opencode_go_client(
     config: &Config,
     model: &str,
     max_tokens: Option<u32>,
@@ -1654,51 +1637,20 @@ fn build_zen_client(
     reasoning_effort: Option<String>,
     cache_key: Option<String>,
 ) -> Result<ProviderClient> {
-    Ok(ProviderClient::Zen(ZenClient::new(ZenConfig::from_env(
-        model.to_string(),
-        max_tokens,
-        fallback_max_tokens,
-        config.providers.zen.effective_base_url(),
-        config.providers.zen.effective_api_key(),
-        thinking_enabled,
-        thinking_budget_tokens,
-        thinking_effort,
-        gemini_thinking,
-        reasoning_effort,
-        cache_key,
-        crate::models::ModelOption::find_by_provider_and_id("zen", model)
-            .and_then(|m| m.capabilities.api)
-            .map(ToString::to_string),
-    )?)))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_apiyi_client(
-    config: &Config,
-    model: &str,
-    max_tokens: Option<u32>,
-    fallback_max_tokens: u32,
-    thinking_enabled: bool,
-    thinking_budget_tokens: u32,
-    thinking_effort: Option<AnthropicEffortLevel>,
-    gemini_thinking: Option<GeminiThinkingConfig>,
-    reasoning_effort: Option<String>,
-    cache_key: Option<String>,
-) -> Result<ProviderClient> {
-    Ok(ProviderClient::Apiyi(ApiyiClient::new(
-        ApiyiConfig::from_env(
+    Ok(ProviderClient::OpencodeGo(OpencodeGoClient::new(
+        OpencodeGoConfig::from_env(
             model.to_string(),
             max_tokens,
             fallback_max_tokens,
-            config.providers.apiyi.effective_base_url(),
-            config.providers.apiyi.effective_api_key(),
+            config.providers.opencode_go.effective_base_url(),
+            config.providers.opencode_go.effective_api_key(),
             thinking_enabled,
             thinking_budget_tokens,
             thinking_effort,
             gemini_thinking,
             reasoning_effort,
             cache_key,
-            crate::models::ModelOption::find_by_provider_and_id("apiyi", model)
+            crate::models::ModelOption::find_by_provider_and_id("opencode-go", model)
                 .and_then(|m| m.capabilities.api)
                 .map(ToString::to_string),
         )?,
@@ -2534,27 +2486,31 @@ fn map_thinking_to_anthropic_effort(
     // Strip provider-prefixed model ids like "claude-cli:claude-opus-4-7".
     let normalized = model.rsplit(':').next().unwrap_or(model);
 
-    // Opus 4.7+ exposes `xhigh` between `high` and `max`, giving it 5 effort
-    // levels (low/medium/high/xhigh/max) — perfect 1:1 alignment with our 5
-    // active ThinkingLevels.
-    if normalized.starts_with("claude-opus-4-8") || normalized.starts_with("claude-opus-4-7") {
+    // Opus/Sonnet 4.6 and Opus 4.5 expose at most 4 effort levels
+    // (low/medium/high/max). Collapse Minimal+Low into `low` and keep
+    // High at `high`.
+    if normalized.starts_with("claude-opus-4-6")
+        || normalized.starts_with("claude-sonnet-4-6")
+        || normalized.starts_with("claude-opus-4-5")
+    {
         return Some(match level {
             ThinkingLevel::Off => unreachable!(),
-            ThinkingLevel::Minimal => AnthropicEffortLevel::Low,
-            ThinkingLevel::Low => AnthropicEffortLevel::Medium,
-            ThinkingLevel::Medium => AnthropicEffortLevel::High,
-            ThinkingLevel::High => AnthropicEffortLevel::XHigh,
+            ThinkingLevel::Minimal | ThinkingLevel::Low => AnthropicEffortLevel::Low,
+            ThinkingLevel::Medium => AnthropicEffortLevel::Medium,
+            ThinkingLevel::High => AnthropicEffortLevel::High,
             ThinkingLevel::XHigh => AnthropicEffortLevel::Max,
         });
     }
 
-    // Opus/Sonnet 4.6 and earlier expose at most 4 effort levels
-    // (low/medium/high/max). Collapse Minimal+Low into `low`.
+    // Default for newer Anthropic models (Fable 5, Opus 4.7+, and future
+    // releases): 5 effort levels (low/medium/high/xhigh/max) aligned 1:1
+    // with our 5 active ThinkingLevels.
     Some(match level {
         ThinkingLevel::Off => unreachable!(),
-        ThinkingLevel::Minimal | ThinkingLevel::Low => AnthropicEffortLevel::Low,
-        ThinkingLevel::Medium => AnthropicEffortLevel::Medium,
-        ThinkingLevel::High => AnthropicEffortLevel::High,
+        ThinkingLevel::Minimal => AnthropicEffortLevel::Low,
+        ThinkingLevel::Low => AnthropicEffortLevel::Medium,
+        ThinkingLevel::Medium => AnthropicEffortLevel::High,
+        ThinkingLevel::High => AnthropicEffortLevel::XHigh,
         ThinkingLevel::XHigh => AnthropicEffortLevel::Max,
     })
 }
@@ -2829,6 +2785,48 @@ mod tests {
     #[test]
     fn anthropic_effort_opus_48_uses_one_to_one_shift_with_xhigh() {
         let m = "claude-opus-4-8";
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::High, m),
+            Some(AnthropicEffortLevel::XHigh)
+        );
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::XHigh, m),
+            Some(AnthropicEffortLevel::Max)
+        );
+    }
+
+    #[test]
+    fn anthropic_effort_fable_5_uses_opus_48_mapping() {
+        let m = "claude-fable-5";
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::Minimal, m),
+            Some(AnthropicEffortLevel::Low)
+        );
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::Low, m),
+            Some(AnthropicEffortLevel::Medium)
+        );
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::Medium, m),
+            Some(AnthropicEffortLevel::High)
+        );
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::High, m),
+            Some(AnthropicEffortLevel::XHigh)
+        );
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::XHigh, m),
+            Some(AnthropicEffortLevel::Max)
+        );
+    }
+
+    #[test]
+    fn anthropic_effort_unknown_future_model_defaults_to_five_levels() {
+        let m = "claude-opus-5";
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::Minimal, m),
+            Some(AnthropicEffortLevel::Low)
+        );
         assert_eq!(
             map_thinking_to_anthropic_effort(ThinkingLevel::High, m),
             Some(AnthropicEffortLevel::XHigh)

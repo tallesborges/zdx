@@ -6,7 +6,6 @@ pub mod text_tool_parser;
 pub mod thinking_parser;
 
 pub mod anthropic;
-pub mod apiyi;
 pub mod deepseek;
 pub mod gemini;
 pub mod minimax;
@@ -14,6 +13,7 @@ pub mod mistral;
 pub mod moonshot;
 pub mod oauth;
 pub mod openai;
+pub mod opencode_go;
 pub mod openrouter;
 pub mod shared;
 pub mod stepfun;
@@ -21,7 +21,6 @@ pub mod xai;
 pub mod xiaomi;
 pub mod xiaomi_plan;
 pub mod zai;
-pub mod zen;
 
 pub use debug_trace::{DebugTrace, TraceStream, wrap_stream};
 pub use shared::{
@@ -48,8 +47,7 @@ pub enum ProviderKind {
     Gemini,
     GeminiCli,
     GoogleAntigravity,
-    Zen,
-    Apiyi,
+    OpencodeGo,
     Minimax,
     Zai,
     Xai,
@@ -86,8 +84,7 @@ impl ProviderKind {
             ProviderKind::Gemini,
             ProviderKind::GeminiCli,
             ProviderKind::GoogleAntigravity,
-            ProviderKind::Zen,
-            ProviderKind::Apiyi,
+            ProviderKind::OpencodeGo,
             ProviderKind::Minimax,
             ProviderKind::Zai,
             ProviderKind::Xai,
@@ -111,8 +108,7 @@ impl ProviderKind {
             ProviderKind::Gemini => "gemini",
             ProviderKind::GeminiCli => "gemini-cli",
             ProviderKind::GoogleAntigravity => "google-antigravity",
-            ProviderKind::Zen => "zen",
-            ProviderKind::Apiyi => "apiyi",
+            ProviderKind::OpencodeGo => "opencode-go",
             ProviderKind::Minimax => "minimax",
             ProviderKind::Zai => "zai",
             ProviderKind::Xai => "xai",
@@ -136,8 +132,7 @@ impl ProviderKind {
             "gemini" => Some(ProviderKind::Gemini),
             "gemini-cli" => Some(ProviderKind::GeminiCli),
             "google-antigravity" | "antigravity" => Some(ProviderKind::GoogleAntigravity),
-            "zen" => Some(ProviderKind::Zen),
-            "apiyi" => Some(ProviderKind::Apiyi),
+            "opencode-go" | "opencode" | "go" => Some(ProviderKind::OpencodeGo),
             "minimax" => Some(ProviderKind::Minimax),
             "zai" | "zhipu" | "glm" => Some(ProviderKind::Zai),
             "xai" | "grok" | "x" => Some(ProviderKind::Xai),
@@ -162,8 +157,7 @@ impl ProviderKind {
             ProviderKind::Gemini => "Gemini",
             ProviderKind::GeminiCli => "Gemini CLI",
             ProviderKind::GoogleAntigravity => "Google Antigravity",
-            ProviderKind::Zen => "Zen",
-            ProviderKind::Apiyi => "APIYI",
+            ProviderKind::OpencodeGo => "OpenCode Go",
             ProviderKind::Minimax => "MiniMax",
             ProviderKind::Zai => "Z.AI",
             ProviderKind::Xai => "xAI",
@@ -189,6 +183,7 @@ impl ProviderKind {
                 | ProviderKind::GeminiCli
                 | ProviderKind::GoogleAntigravity
                 | ProviderKind::XiaomiPlan
+                | ProviderKind::OpencodeGo
         )
     }
 
@@ -204,8 +199,7 @@ impl ProviderKind {
             ProviderKind::Moonshot => Some("MOONSHOT_API_KEY"),
             ProviderKind::Stepfun => Some("STEPFUN_API_KEY"),
             ProviderKind::Gemini => Some("GEMINI_API_KEY"),
-            ProviderKind::Zen => Some("ZEN_API_KEY"),
-            ProviderKind::Apiyi => Some("APIYI_API_KEY"),
+            ProviderKind::OpencodeGo => Some("OPENCODE_API_KEY"),
             ProviderKind::Minimax => Some("MINIMAX_API_KEY"),
             ProviderKind::Zai => Some("ZAI_API_KEY"),
             ProviderKind::Xai => Some("XAI_API_KEY"),
@@ -231,8 +225,7 @@ impl ProviderKind {
             Self::GoogleAntigravity => "https://daily-cloudcode-pa.googleapis.com",
             Self::Xiaomi => "https://api.xiaomimimo.com/v1",
             Self::XiaomiPlan => "https://token-plan-sgp.xiaomimimo.com/v1",
-            Self::Zen => "https://opencode.ai/zen",
-            Self::Apiyi => "https://api.apiyi.com",
+            Self::OpencodeGo => "https://opencode.ai/zen/go",
             Self::Minimax => "https://api.minimax.io/v1",
             Self::Zai => "https://api.z.ai/api/paas/v4",
             Self::Xai => "https://api.x.ai/v1",
@@ -253,8 +246,7 @@ impl ProviderKind {
             Self::Gemini | Self::GeminiCli => Some("GEMINI_BASE_URL"),
             Self::Xiaomi => Some("XIAOMI_BASE_URL"),
             Self::XiaomiPlan => Some("XIAOMI_PLAN_BASE_URL"),
-            Self::Zen => Some("ZEN_BASE_URL"),
-            Self::Apiyi => Some("APIYI_BASE_URL"),
+            Self::OpencodeGo => Some("OPENCODE_GO_BASE_URL"),
             Self::Minimax => Some("MINIMAX_BASE_URL"),
             Self::Zai => Some("ZAI_BASE_URL"),
             Self::Xai => Some("XAI_BASE_URL"),
@@ -302,8 +294,7 @@ impl ProviderKind {
             | ProviderKind::Moonshot
             | ProviderKind::Stepfun
             | ProviderKind::Gemini
-            | ProviderKind::Zen
-            | ProviderKind::Apiyi
+            | ProviderKind::OpencodeGo
             | ProviderKind::Minimax
             | ProviderKind::Zai
             | ProviderKind::Xai => ProviderAuthMode::ApiKey,
@@ -366,8 +357,7 @@ fn parse_provider_prefix(model: &str) -> Option<(ProviderKind, &str)> {
                 "gemini-cli" | "google-gemini-cli" => ProviderKind::GeminiCli,
                 "antigravity" | "google-antigravity" => ProviderKind::GoogleAntigravity,
                 "codex" | "openai-codex" => ProviderKind::OpenAICodex,
-                "zen" | "opencode" => ProviderKind::Zen,
-                "apiyi" => ProviderKind::Apiyi,
+                "opencode-go" | "opencode" | "go" => ProviderKind::OpencodeGo,
                 "minimax" => ProviderKind::Minimax,
                 "zai" | "zhipu" | "glm" => ProviderKind::Zai,
                 "xai" | "grok" | "x" => ProviderKind::Xai,
