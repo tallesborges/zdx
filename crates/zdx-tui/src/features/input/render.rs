@@ -704,6 +704,9 @@ mod tests {
     use crate::input::CursorMove;
 
     #[test]
+    // Decomposed "éé" (e + combining accent) is intentional: it exercises
+    // combining-mark grapheme handling.
+    #[allow(clippy::unicode_not_nfc)]
     fn wrap_textarea_preserves_emoji_graphemes() {
         for text in ["⚠️⚠️", "👩‍🚀👩‍🚀", "👍🏽👍🏽", "éé"] {
             for width in [1, 2, 3] {
