@@ -70,12 +70,10 @@ pub(crate) async fn dispatch_message(
     if let Some(text) = message.text.as_deref()
         && crate::ask_user::try_answer_with_text(
             context.ask_user_map(),
-            context.client(),
             message.chat.id,
             message.effective_thread_id(),
             text,
         )
-        .await
     {
         return;
     }

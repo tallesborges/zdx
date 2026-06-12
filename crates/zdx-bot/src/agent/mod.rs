@@ -15,7 +15,6 @@ pub(crate) const STATUS_WAITING: &str = "⏳ Waiting for model...";
 pub(crate) const STATUS_THINKING: &str = "🧠 Thinking...";
 pub(crate) const STATUS_WRITING: &str = "✍️ Writing reply...";
 pub(crate) const STATUS_TRANSCRIBING: &str = "🎤 Transcribing audio...";
-pub(crate) const STATUS_AWAITING_ANSWER: &str = "❓ Waiting for your answer...";
 
 ///
 /// # Errors
@@ -207,16 +206,8 @@ pub(crate) fn event_to_status(event: &AgentEvent) -> Option<String> {
         AgentEvent::AssistantDelta { .. } | AgentEvent::AssistantCompleted { .. } => {
             Some(STATUS_WRITING.to_string())
         }
-        AgentEvent::ToolRequested { name, .. } => {
-            if name == crate::ask_user::TOOL_NAME {
-                return Some(STATUS_AWAITING_ANSWER.to_string());
-            }
-            Some(format!("⚙️ Preparing `{name}`..."))
-        }
+        AgentEvent::ToolRequested { name, .. } => Some(format!("⚙️ Preparing `{name}`...")),
         AgentEvent::ToolStarted { name, .. } => {
-            if name == crate::ask_user::TOOL_NAME {
-                return Some(STATUS_AWAITING_ANSWER.to_string());
-            }
             let emoji = match name.as_str() {
                 "bash" => "🔧",
                 "read" => "📖",

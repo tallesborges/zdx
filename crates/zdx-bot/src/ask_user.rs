@@ -1,11 +1,14 @@
 //! `ask_user_question` tool: lets the agent ask the user a question with
 //! tappable inline-keyboard options mid-run and wait for the answer.
 //!
-//! The tool handler blocks (async) on a oneshot channel until either an
-//! inline button is tapped or the user types a reply in the same chat/topic.
+//! The tool handler only registers a pending question and waits (async) on a
+//! oneshot channel. The bot's event loop renders the question into the turn's
+//! status message (options + cancel in one message) on `ToolInputCompleted`,
+//! and freezes it as a Q&A record on `ToolCompleted`. Answers arrive either
+//! via an `askq:` inline-keyboard callback or a typed reply in the same
+//! chat/topic.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
@@ -14,7 +17,7 @@ use tokio::sync::oneshot;
 use zdx_engine::core::events::ToolOutput;
 use zdx_engine::tools::{ToolContext, ToolDefinition, ToolHandler};
 
-use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, TelegramClient};
+use crate::telegram::{InlineKeyboardButton, TelegramClient};
 
 pub(crate) const TOOL_NAME: &str = "ask_user_question";
 
@@ -23,11 +26,9 @@ pub(crate) const TOOL_NAME: &str = "ask_user_question";
 type PendingKey = (i64, i64);
 
 pub(crate) struct PendingQuestion {
-    /// Unique id used in callback data to reject stale button taps.
-    qid: u64,
+    /// Tool-use id of the call, used in callback data to reject stale taps.
+    tool_use_id: String,
     sender: oneshot::Sender<String>,
-    /// `message_id` of the question message (deleted once answered).
-    message_id: Option<i64>,
     option_labels: Vec<String>,
 }
 
@@ -40,8 +41,6 @@ pub(crate) type PendingQuestionMap = Arc<Mutex<HashMap<PendingKey, PendingQuesti
 pub(crate) fn new_pending_map() -> PendingQuestionMap {
     Arc::new(Mutex::new(HashMap::new()))
 }
-
-static NEXT_QID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Deserialize)]
 struct QuestionInput {
@@ -103,23 +102,30 @@ pub(crate) fn definition() -> ToolDefinition {
     }
 }
 
-/// Builds the tool handler closure capturing the pending map and the
-/// Telegram client.
-pub(crate) fn handler(pending: PendingQuestionMap, client: TelegramClient) -> ToolHandler {
+/// Builds the tool handler closure capturing the pending map.
+pub(crate) fn handler(pending: PendingQuestionMap) -> ToolHandler {
     Arc::new(move |input: &Value, ctx: &ToolContext| {
         let input = input.clone();
         let pending = Arc::clone(&pending);
-        let client = client.clone();
         let thread_id = ctx.current_thread_id.clone();
-        Box::pin(async move { execute(&input, thread_id.as_deref(), &pending, &client).await })
+        let tool_use_id = ctx.tool_use_id.clone();
+        Box::pin(async move {
+            execute(
+                &input,
+                thread_id.as_deref(),
+                tool_use_id.as_deref(),
+                &pending,
+            )
+            .await
+        })
     })
 }
 
 async fn execute(
     input: &Value,
     thread_id: Option<&str>,
+    tool_use_id: Option<&str>,
     pending: &PendingQuestionMap,
-    client: &TelegramClient,
 ) -> ToolOutput {
     let parsed: QuestionInput = match serde_json::from_value(input.clone()) {
         Ok(parsed) => parsed,
@@ -146,11 +152,16 @@ async fn execute(
             None,
         );
     };
+    let Some(tool_use_id) = tool_use_id else {
+        return ToolOutput::failure(
+            "internal",
+            "Missing tool_use_id for ask_user_question",
+            None,
+        );
+    };
 
     let key: PendingKey = (chat_id, topic_id.unwrap_or(0));
-    let qid = NEXT_QID.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = oneshot::channel::<String>();
-    let text = build_question_text(&parsed);
 
     {
         let mut map = pending.lock().expect("pending question lock poisoned");
@@ -165,45 +176,20 @@ async fn execute(
         map.insert(
             key,
             PendingQuestion {
-                qid,
+                tool_use_id: tool_use_id.to_string(),
                 sender: tx,
-                message_id: None,
                 option_labels: parsed.options.iter().map(|o| o.label.clone()).collect(),
             },
         );
     }
 
-    // Removes the pending entry (qid-checked) even if this future is aborted
+    // Removes the pending entry (id-checked) even if this future is aborted
     // by engine-side cancellation while awaiting the answer.
     let _guard = PendingGuard {
         pending: Arc::clone(pending),
         key,
-        qid,
+        tool_use_id: tool_use_id.to_string(),
     };
-
-    let markup = build_keyboard(qid, &parsed.options);
-    let message_id = match client
-        .send_message_with_markup(chat_id, &text, None, topic_id, &markup)
-        .await
-    {
-        Ok(message) => message.id,
-        Err(err) => {
-            return ToolOutput::failure(
-                "send_failed",
-                format!("Failed to send question to Telegram: {err}"),
-                None,
-            );
-        }
-    };
-
-    {
-        let mut map = pending.lock().expect("pending question lock poisoned");
-        if let Some(entry) = map.get_mut(&key)
-            && entry.qid == qid
-        {
-            entry.message_id = Some(message_id);
-        }
-    }
 
     // Wait indefinitely: no LLM connection is open while waiting, the user
     // can cancel the turn, and a bot restart clears the run anyway.
@@ -223,7 +209,7 @@ async fn execute(
 struct PendingGuard {
     pending: PendingQuestionMap,
     key: PendingKey,
-    qid: u64,
+    tool_use_id: String,
 }
 
 impl Drop for PendingGuard {
@@ -231,35 +217,30 @@ impl Drop for PendingGuard {
         if let Ok(mut map) = self.pending.lock()
             && map
                 .get(&self.key)
-                .is_some_and(|entry| entry.qid == self.qid)
+                .is_some_and(|entry| entry.tool_use_id == self.tool_use_id)
         {
             map.remove(&self.key);
         }
     }
 }
 
-fn build_keyboard(qid: u64, options: &[OptionInput]) -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup {
-        inline_keyboard: options
-            .iter()
-            .enumerate()
-            .map(|(idx, option)| {
-                vec![InlineKeyboardButton {
-                    text: option.label.clone(),
-                    callback_data: Some(format!("askq:{qid}:{idx}")),
-                    url: None,
-                }]
-            })
-            .collect(),
+/// Renders the question HTML base text (no answer hint) and option-button
+/// rows for the bot's status message. Returns `None` when the tool input is
+/// invalid.
+pub(crate) fn render_question(
+    input: &Value,
+    tool_use_id: &str,
+) -> Option<(String, Vec<Vec<InlineKeyboardButton>>)> {
+    let parsed: QuestionInput = serde_json::from_value(input.clone()).ok()?;
+    if parsed.options.len() < 2 || parsed.options.len() > 5 {
+        return None;
     }
-}
 
-fn build_question_text(input: &QuestionInput) -> String {
     let mut lines = vec![format!(
         "❓ <b>{}</b>",
-        crate::handlers::message::escape_html(&input.question)
+        crate::handlers::message::escape_html(&parsed.question)
     )];
-    let described: Vec<&OptionInput> = input
+    let described: Vec<&OptionInput> = parsed
         .options
         .iter()
         .filter(|o| !o.description.trim().is_empty())
@@ -274,9 +255,32 @@ fn build_question_text(input: &QuestionInput) -> String {
             ));
         }
     }
-    lines.push(String::new());
-    lines.push("<i>Tap an option or reply with your answer.</i>".to_string());
-    lines.join("\n")
+
+    let rows = parsed
+        .options
+        .iter()
+        .enumerate()
+        .map(|(idx, option)| {
+            vec![InlineKeyboardButton {
+                text: option.label.clone(),
+                callback_data: Some(format!("askq:{tool_use_id}:{idx}")),
+                url: None,
+            }]
+        })
+        .collect();
+
+    Some((lines.join("\n"), rows))
+}
+
+/// Extracts the user's answer from a completed `ask_user_question` output.
+pub(crate) fn answer_from_output(output: &ToolOutput) -> Option<String> {
+    match output {
+        ToolOutput::Success { data, .. } => data
+            .get("answer")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        _ => None,
+    }
 }
 
 /// Parses a bot thread id (`telegram-{chat_id}` or
@@ -290,16 +294,16 @@ fn parse_telegram_thread_id(thread_id: &str) -> Option<(i64, Option<i64>)> {
     }
 }
 
-/// Removes and returns the pending question for `key` when `qid` matches
-/// (or when no `qid` check is requested).
+/// Removes and returns the pending question for `key` when `tool_use_id`
+/// matches (or when no id check is requested).
 fn take_pending(
     pending: &PendingQuestionMap,
     key: PendingKey,
-    qid: Option<u64>,
+    tool_use_id: Option<&str>,
 ) -> Option<PendingQuestion> {
     let mut map = pending.lock().expect("pending question lock poisoned");
     match map.get(&key) {
-        Some(entry) if qid.is_none_or(|qid| qid == entry.qid) => map.remove(&key),
+        Some(entry) if tool_use_id.is_none_or(|id| id == entry.tool_use_id) => map.remove(&key),
         _ => None,
     }
 }
@@ -308,9 +312,8 @@ fn take_pending(
 ///
 /// Returns `true` when the message was consumed as an answer (the caller
 /// must not enqueue it as a new turn).
-pub(crate) async fn try_answer_with_text(
+pub(crate) fn try_answer_with_text(
     pending: &PendingQuestionMap,
-    client: &TelegramClient,
     chat_id: i64,
     topic_id: Option<i64>,
     text: &str,
@@ -323,15 +326,11 @@ pub(crate) async fn try_answer_with_text(
     let Some(entry) = take_pending(pending, key, None) else {
         return false;
     };
-    let message_id = entry.message_id;
     let _ = entry.sender.send(trimmed.to_string());
-    if let Some(message_id) = message_id {
-        let _ = client.delete_message(chat_id, message_id).await;
-    }
     true
 }
 
-/// Handles an `askq:{qid}:{option_idx}` inline-keyboard callback.
+/// Handles an `askq:{tool_use_id}:{option_idx}` inline-keyboard callback.
 pub(crate) async fn handle_callback(
     pending: &PendingQuestionMap,
     client: &TelegramClient,
@@ -344,32 +343,28 @@ pub(crate) async fn handle_callback(
             .await;
         return;
     };
-    let chat_id = message.chat.id;
-    let key: PendingKey = (chat_id, message.effective_thread_id().unwrap_or(0));
+    let key: PendingKey = (message.chat.id, message.effective_thread_id().unwrap_or(0));
 
-    let parsed = parse_askq_callback(data);
-    let Some((qid, option_idx)) = parsed else {
+    let Some((tool_use_id, option_idx)) = parse_askq_callback(data) else {
         let _ = client.answer_callback_query(&callback.id, None).await;
         return;
     };
 
-    let label = {
+    let answer = {
         let map = pending.lock().expect("pending question lock poisoned");
         map.get(&key)
-            .filter(|entry| entry.qid == qid)
+            .filter(|entry| entry.tool_use_id == tool_use_id)
             .and_then(|entry| entry.option_labels.get(option_idx).cloned())
     };
-    let Some(label) = label else {
+    let Some(answer) = answer else {
         let _ = client
             .answer_callback_query(&callback.id, Some("This question is no longer active"))
             .await;
         return;
     };
 
-    if let Some(entry) = take_pending(pending, key, Some(qid)) {
-        let target_message_id = entry.message_id.unwrap_or(message.id);
-        let _ = entry.sender.send(label);
-        let _ = client.delete_message(chat_id, target_message_id).await;
+    if let Some(entry) = take_pending(pending, key, Some(tool_use_id)) {
+        let _ = entry.sender.send(answer);
         let _ = client.answer_callback_query(&callback.id, None).await;
     } else {
         let _ = client
@@ -378,14 +373,30 @@ pub(crate) async fn handle_callback(
     }
 }
 
-fn parse_askq_callback(data: &str) -> Option<(u64, usize)> {
-    let (qid_str, idx_str) = data.split_once(':')?;
-    Some((qid_str.parse().ok()?, idx_str.parse().ok()?))
+fn parse_askq_callback(data: &str) -> Option<(&str, usize)> {
+    let (tool_use_id, idx_str) = data.rsplit_once(':')?;
+    if tool_use_id.is_empty() {
+        return None;
+    }
+    Some((tool_use_id, idx_str.parse().ok()?))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn insert_pending(pending: &PendingQuestionMap, key: PendingKey) -> oneshot::Receiver<String> {
+        let (tx, rx) = oneshot::channel();
+        pending.lock().unwrap().insert(
+            key,
+            PendingQuestion {
+                tool_use_id: "toolu_1".to_string(),
+                sender: tx,
+                option_labels: vec!["A".to_string(), "B".to_string()],
+            },
+        );
+        rx
+    }
 
     #[test]
     fn parses_dm_thread_id() {
@@ -411,60 +422,83 @@ mod tests {
 
     #[test]
     fn parses_askq_callback_data() {
-        assert_eq!(parse_askq_callback("7:2"), Some((7, 2)));
+        assert_eq!(parse_askq_callback("toolu_1:2"), Some(("toolu_1", 2)));
         assert_eq!(parse_askq_callback("bad"), None);
+        assert_eq!(parse_askq_callback(":2"), None);
     }
 
     #[test]
-    fn take_pending_rejects_stale_qid() {
+    fn take_pending_rejects_stale_tool_use_id() {
         let pending = new_pending_map();
-        let (tx, mut rx) = oneshot::channel();
-        pending.lock().unwrap().insert(
-            (1, 0),
-            PendingQuestion {
-                qid: 5,
-                sender: tx,
-                message_id: Some(99),
-                option_labels: vec!["A".to_string()],
-            },
-        );
+        let mut rx = insert_pending(&pending, (1, 0));
 
-        assert!(take_pending(&pending, (1, 0), Some(4)).is_none());
+        assert!(take_pending(&pending, (1, 0), Some("toolu_2")).is_none());
         assert!(pending.lock().unwrap().contains_key(&(1, 0)));
 
-        let entry = take_pending(&pending, (1, 0), Some(5)).expect("entry should resolve");
-        assert_eq!(entry.message_id, Some(99));
+        let entry = take_pending(&pending, (1, 0), Some("toolu_1")).expect("entry should resolve");
         assert!(pending.lock().unwrap().is_empty());
         let _ = entry.sender.send("A".to_string());
         assert_eq!(rx.try_recv().unwrap(), "A");
     }
 
     #[test]
-    fn guard_removes_only_matching_qid() {
+    fn typed_text_answers_pending_question() {
         let pending = new_pending_map();
-        let (tx, _rx) = oneshot::channel();
-        pending.lock().unwrap().insert(
-            (1, 0),
-            PendingQuestion {
-                qid: 5,
-                sender: tx,
-                message_id: None,
-                option_labels: vec![],
-            },
-        );
+        let mut rx = insert_pending(&pending, (1, 7));
+
+        assert!(!try_answer_with_text(&pending, 1, Some(7), "/command"));
+        assert!(!try_answer_with_text(&pending, 1, None, "hello"));
+        assert!(try_answer_with_text(
+            &pending,
+            1,
+            Some(7),
+            "  custom answer "
+        ));
+        assert_eq!(rx.try_recv().unwrap(), "custom answer");
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn guard_removes_only_matching_id() {
+        let pending = new_pending_map();
+        let _rx = insert_pending(&pending, (1, 0));
 
         drop(PendingGuard {
             pending: Arc::clone(&pending),
             key: (1, 0),
-            qid: 4,
+            tool_use_id: "other".to_string(),
         });
         assert!(pending.lock().unwrap().contains_key(&(1, 0)));
 
         drop(PendingGuard {
             pending: Arc::clone(&pending),
             key: (1, 0),
-            qid: 5,
+            tool_use_id: "toolu_1".to_string(),
         });
         assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn renders_question_text_and_rows() {
+        let input = json!({
+            "question": "Pick one?",
+            "options": [
+                {"label": "A", "description": "first"},
+                {"label": "B"}
+            ]
+        });
+        let (text, rows) = render_question(&input, "toolu_9").expect("should render");
+        assert!(text.contains("Pick one?"));
+        assert!(text.contains("first"));
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][0].callback_data.as_deref(), Some("askq:toolu_9:0"));
+    }
+
+    #[test]
+    fn extracts_answer_from_output() {
+        let output = ToolOutput::success(json!({"question": "Q", "answer": "A"}));
+        assert_eq!(answer_from_output(&output).as_deref(), Some("A"));
+        let dismissed = ToolOutput::success(json!({"question": "Q", "answer": null}));
+        assert_eq!(answer_from_output(&dismissed), None);
     }
 }

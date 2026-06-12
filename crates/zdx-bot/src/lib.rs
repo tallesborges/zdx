@@ -100,7 +100,7 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
     let ask_user_map = ask_user::new_pending_map();
     let tool_registry = ToolRegistry::builtins().with_tool(
         ask_user::definition(),
-        ask_user::handler(Arc::clone(&ask_user_map), client.clone()),
+        ask_user::handler(Arc::clone(&ask_user_map)),
     );
     let tool_config = ToolConfig::new(
         tool_registry,
