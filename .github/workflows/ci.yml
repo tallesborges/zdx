@@ -20,7 +20,7 @@ jobs:
       code_changed: ${{ steps.filter.outputs.code }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Filter paths
         id: filter
@@ -41,7 +41,7 @@ jobs:
       CARGO_TARGET_DIR: ${{ github.workspace }}/../.zdx/cargo-target
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
