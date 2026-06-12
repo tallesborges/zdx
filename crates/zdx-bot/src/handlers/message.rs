@@ -1275,6 +1275,10 @@ async fn stream_turn_events(
     // Question currently rendered in the status message:
     // (tool_use_id, base question HTML).
     let mut active_question: Option<(String, String)> = None;
+    // ask_user_question inputs seen via ToolInputCompleted, awaiting the
+    // handler's "registered" marker before rendering.
+    let mut ask_inputs: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
 
     loop {
         tokio::select! {
@@ -1307,7 +1311,17 @@ async fn stream_turn_events(
                     AgentEvent::ToolInputCompleted { id, name, input }
                         if name == crate::ask_user::TOOL_NAME =>
                     {
-                        if let Some((text, rows)) = crate::ask_user::render_question(input, id) {
+                        ask_inputs.insert(id.clone(), input.clone());
+                    }
+                    AgentEvent::ToolOutputDelta { id, chunk }
+                        if chunk == crate::ask_user::REGISTERED_MARKER
+                            && ask_inputs.contains_key(id)
+                            && active_question.is_none() =>
+                    {
+                        if let Some(input) = ask_inputs.remove(id)
+                            && let Some((text, rows)) =
+                                crate::ask_user::render_question(&input, id)
+                        {
                             show_question_status(context, incoming, status, &text, rows).await;
                             active_question = Some((id.clone(), text));
                         }
@@ -1315,6 +1329,7 @@ async fn stream_turn_events(
                     AgentEvent::ToolCompleted { id, result }
                         if active_question.as_ref().is_some_and(|(qid, _)| qid == id) =>
                     {
+                        ask_inputs.remove(id);
                         let (_, question_text) =
                             active_question.take().expect("active question checked above");
                         let frozen = match crate::ask_user::answer_from_output(result) {
@@ -1336,6 +1351,9 @@ async fn stream_turn_events(
                         tracing::info!(?kind, message, "Agent notice event");
                     }
                     other => {
+                        if let AgentEvent::ToolCompleted { id, .. } = other {
+                            ask_inputs.remove(id);
+                        }
                         if active_question.is_none() {
                             update_status(context, incoming.chat_id, status, other, &mut current_status, &mut last_edit).await;
                         }

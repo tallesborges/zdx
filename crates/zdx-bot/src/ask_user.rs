@@ -14,12 +14,19 @@ use std::sync::{Arc, Mutex};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
-use zdx_engine::core::events::ToolOutput;
+use zdx_engine::core::agent::EventSender;
+use zdx_engine::core::events::{AgentEvent, ToolOutput};
 use zdx_engine::tools::{ToolContext, ToolDefinition, ToolHandler};
 
 use crate::telegram::{InlineKeyboardButton, TelegramClient};
 
 pub(crate) const TOOL_NAME: &str = "ask_user_question";
+
+/// `ToolOutputDelta` chunk emitted once the pending question is registered
+/// and answerable. The bot's event loop renders the question only after
+/// receiving this marker, so buttons can never appear before an answer can
+/// be accepted.
+pub(crate) const REGISTERED_MARKER: &str = "question_registered";
 
 /// Key: (`chat_id`, `topic_id`); DMs use topic 0. One pending question per
 /// chat/topic at a time.
@@ -109,12 +116,14 @@ pub(crate) fn handler(pending: PendingQuestionMap) -> ToolHandler {
         let pending = Arc::clone(&pending);
         let thread_id = ctx.current_thread_id.clone();
         let tool_use_id = ctx.tool_use_id.clone();
+        let event_sender = ctx.event_sender.clone();
         Box::pin(async move {
             execute(
                 &input,
                 thread_id.as_deref(),
                 tool_use_id.as_deref(),
                 &pending,
+                event_sender.as_ref(),
             )
             .await
         })
@@ -126,6 +135,7 @@ async fn execute(
     thread_id: Option<&str>,
     tool_use_id: Option<&str>,
     pending: &PendingQuestionMap,
+    event_sender: Option<&EventSender>,
 ) -> ToolOutput {
     let parsed: QuestionInput = match serde_json::from_value(input.clone()) {
         Ok(parsed) => parsed,
@@ -190,6 +200,16 @@ async fn execute(
         key,
         tool_use_id: tool_use_id.to_string(),
     };
+
+    // Tell the bot's event loop the question is registered and answerable.
+    // Rendering waits for this marker, so buttons can never appear during
+    // the window between input streaming and handler startup.
+    if let Some(sender) = event_sender {
+        sender.send(AgentEvent::ToolOutputDelta {
+            id: tool_use_id.to_string(),
+            chunk: REGISTERED_MARKER.to_string(),
+        });
+    }
 
     // Wait indefinitely: no LLM connection is open while waiting, the user
     // can cancel the turn, and a bot restart clears the run anyway.
@@ -456,6 +476,47 @@ mod tests {
         ));
         assert_eq!(rx.try_recv().unwrap(), "custom answer");
         assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn execute_emits_registered_marker_then_returns_answer() {
+        let pending = new_pending_map();
+        let (tx, mut event_rx) = zdx_engine::core::agent::create_event_channel();
+        let input = json!({
+            "question": "Q?",
+            "options": [{"label": "A"}, {"label": "B"}]
+        });
+
+        let pending_clone = Arc::clone(&pending);
+        let task = tokio::spawn(async move {
+            let sender = EventSender::new(tx);
+            execute(
+                &input,
+                Some("telegram-1-topic-2"),
+                Some("toolu_42"),
+                &pending_clone,
+                Some(&sender),
+            )
+            .await
+        });
+
+        let event = event_rx.recv().await.expect("marker event");
+        match &*event {
+            AgentEvent::ToolOutputDelta { id, chunk } => {
+                assert_eq!(id, "toolu_42");
+                assert_eq!(chunk, REGISTERED_MARKER);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        // The pending entry must already be answerable when the marker arrives.
+        assert!(try_answer_with_text(&pending, 1, Some(2), "Beta"));
+
+        let output = task.await.expect("task join");
+        match output {
+            ToolOutput::Success { data, .. } => assert_eq!(data["answer"], "Beta"),
+            other => panic!("unexpected output: {other:?}"),
+        }
     }
 
     #[test]
