@@ -1167,7 +1167,7 @@ mod tests {
     #[test]
     fn test_lookup_default_model_xiaomi() {
         // Also test xiaomi which has similar structure
-        let result = lookup_default_model("xiaomi:mimo-v2-flash");
+        let result = lookup_default_model("xiaomi:mimo-v2.5");
         assert!(result.is_some(), "Should find xiaomi model in defaults");
 
         let model = result.unwrap();
