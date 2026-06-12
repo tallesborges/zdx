@@ -1316,6 +1316,10 @@ fn create_btw_tab(
     let cells = TuiState::build_transcript_from_history(&base_messages);
     let transcript = TranscriptState::with_cells(cells);
 
+    let (ask_user_map, tool_config) = crate::state::build_ask_user_tooling();
+    let mut agent_opts = parent.agent_opts.clone();
+    agent_opts.tool_config = tool_config;
+
     TuiState {
         tab_id,
         tab_kind: TabKind::Btw { base_messages },
@@ -1331,7 +1335,7 @@ fn create_btw_tab(
         base_thinking_level: parent.base_thinking_level,
         last_skill_repo: parent.last_skill_repo.clone(),
         loaded_skills: parent.loaded_skills.clone(),
-        agent_opts: parent.agent_opts.clone(),
+        agent_opts,
         system_prompt: parent.system_prompt.clone(),
         agent_state: AgentState::Idle,
         last_turn_outcome: None,
@@ -1343,6 +1347,7 @@ fn create_btw_tab(
         input_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
         transcript_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
         optimistic_active_threads: std::collections::HashMap::new(),
+        ask_user_map,
     }
 }
 
@@ -1408,6 +1413,10 @@ fn create_thread_tab(
         input.set_text(text);
     }
 
+    let (ask_user_map, tool_config) = crate::state::build_ask_user_tooling();
+    let mut agent_opts = parent.agent_opts.clone();
+    agent_opts.tool_config = tool_config;
+
     TuiState {
         tab_id,
         tab_kind: TabKind::Thread {
@@ -1430,7 +1439,7 @@ fn create_thread_tab(
         base_thinking_level: parent.base_thinking_level,
         last_skill_repo: parent.last_skill_repo.clone(),
         loaded_skills: parent.loaded_skills.clone(),
-        agent_opts: parent.agent_opts.clone(),
+        agent_opts,
         system_prompt: parent.system_prompt.clone(),
         agent_state: AgentState::Idle,
         last_turn_outcome: None,
@@ -1442,6 +1451,7 @@ fn create_thread_tab(
         input_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
         transcript_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
         optimistic_active_threads: std::collections::HashMap::new(),
+        ask_user_map,
     }
 }
 
@@ -1633,6 +1643,9 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         .as_ref()
         .map(|thread_handle| thread_handle.id.clone());
     let active_thread_ids = app.tui.snapshot_active_thread_ids();
+    let pending_question = thread_id
+        .as_deref()
+        .is_some_and(|id| crate::ask_user::has_pending(&app.tui.ask_user_map, id));
     let ctx = input::InputContext {
         agent_state: &app.tui.agent_state,
         tasks: &app.tui.tasks,
@@ -1642,6 +1655,7 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         model_id: &app.tui.config.model,
         active_thread_ids: &active_thread_ids,
         root: app.tui.agent_opts.root.as_path(),
+        pending_question,
     };
     let (effects, mutations, overlay_request) =
         input::handle_main_key(&mut app.tui.input, &ctx, key);

@@ -60,6 +60,9 @@ pub enum UiEffect {
     /// Interrupt the running agent task.
     InterruptAgent,
 
+    /// Resolve a pending `ask_user_question` with the user's typed answer.
+    AnswerPendingQuestion { thread_id: String, text: String },
+
     /// Interrupt the running direct bash command.
     InterruptBash,
 

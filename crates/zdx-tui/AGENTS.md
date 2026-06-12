@@ -5,6 +5,7 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 ## Where things are
 
 - `src/lib.rs`: TUI exports (`run_interactive_chat`, `TuiRuntime`)
+- `src/ask_user.rs`: TUI-side `ask_user_question` tool (pending map keyed by thread id; typed-answer resolution)
 - `src/terminal.rs`: terminal setup/restore + panic hooks
 - `src/state.rs`: `AppState` + TUI state structs
 - `src/events.rs`: UI event types

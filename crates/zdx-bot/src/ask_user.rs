@@ -11,22 +11,15 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use zdx_engine::core::agent::EventSender;
 use zdx_engine::core::events::{AgentEvent, ToolOutput};
-use zdx_engine::tools::{ToolContext, ToolDefinition, ToolHandler};
+use zdx_engine::tools::ask_user_question::{OptionInput, parse_input};
+pub(crate) use zdx_engine::tools::ask_user_question::{REGISTERED_MARKER, TOOL_NAME, definition};
+use zdx_engine::tools::{ToolContext, ToolHandler};
 
 use crate::telegram::{InlineKeyboardButton, TelegramClient};
-
-pub(crate) const TOOL_NAME: &str = "ask_user_question";
-
-/// `ToolOutputDelta` chunk emitted once the pending question is registered
-/// and answerable. The bot's event loop renders the question only after
-/// receiving this marker, so buttons can never appear before an answer can
-/// be accepted.
-pub(crate) const REGISTERED_MARKER: &str = "question_registered";
 
 /// Key: (`chat_id`, `topic_id`); DMs use topic 0. One pending question per
 /// chat/topic at a time.
@@ -47,66 +40,6 @@ pub(crate) type PendingQuestionMap = Arc<Mutex<HashMap<PendingKey, PendingQuesti
 
 pub(crate) fn new_pending_map() -> PendingQuestionMap {
     Arc::new(Mutex::new(HashMap::new()))
-}
-
-#[derive(Deserialize)]
-struct QuestionInput {
-    question: String,
-    options: Vec<OptionInput>,
-}
-
-#[derive(Deserialize)]
-struct OptionInput {
-    label: String,
-    #[serde(default)]
-    description: String,
-}
-
-pub(crate) fn definition() -> ToolDefinition {
-    ToolDefinition {
-        name: TOOL_NAME.to_string(),
-        description: "Ask the user one question with tappable answer options, then wait for \
-                      their reply. Use this when you are blocked on a decision that is genuinely \
-                      the user's to make — clarifying ambiguous instructions, choosing between \
-                      approaches, or offering concrete follow-up directions. Do NOT use it for \
-                      decisions you can resolve from context or sensible defaults; overusing it \
-                      interrupts the user. The user can always type a free-form reply instead of \
-                      tapping an option — treat whatever answer comes back as authoritative. If \
-                      you recommend an option, put it first and append ' (Recommended)' to its \
-                      label. Do not add an 'Other' or 'Something else' option. Ask one question \
-                      per call; call again for follow-up questions."
-            .to_string(),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "question": {
-                    "type": "string",
-                    "description": "A clear, specific question ending with a question mark."
-                },
-                "options": {
-                    "type": "array",
-                    "minItems": 2,
-                    "maxItems": 5,
-                    "description": "2-5 distinct, meaningful choices.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "label": {
-                                "type": "string",
-                                "description": "Concise button text (1-5 words)."
-                            },
-                            "description": {
-                                "type": "string",
-                                "description": "Optional one-line explanation of trade-offs or implications."
-                            }
-                        },
-                        "required": ["label"]
-                    }
-                }
-            },
-            "required": ["question", "options"]
-        }),
-    }
 }
 
 /// Builds the tool handler closure capturing the pending map.
@@ -137,23 +70,10 @@ async fn execute(
     pending: &PendingQuestionMap,
     event_sender: Option<&EventSender>,
 ) -> ToolOutput {
-    let parsed: QuestionInput = match serde_json::from_value(input.clone()) {
+    let parsed = match parse_input(input) {
         Ok(parsed) => parsed,
-        Err(err) => {
-            return ToolOutput::failure(
-                "invalid_input",
-                format!("Invalid ask_user_question input: {err}"),
-                None,
-            );
-        }
+        Err(output) => return output,
     };
-    if parsed.options.len() < 2 || parsed.options.len() > 5 {
-        return ToolOutput::failure(
-            "invalid_input",
-            "ask_user_question requires 2-5 options",
-            None,
-        );
-    }
 
     let Some((chat_id, topic_id)) = thread_id.and_then(parse_telegram_thread_id) else {
         return ToolOutput::failure(
@@ -251,10 +171,7 @@ pub(crate) fn render_question(
     input: &Value,
     tool_use_id: &str,
 ) -> Option<(String, Vec<Vec<InlineKeyboardButton>>)> {
-    let parsed: QuestionInput = serde_json::from_value(input.clone()).ok()?;
-    if parsed.options.len() < 2 || parsed.options.len() > 5 {
-        return None;
-    }
+    let parsed = parse_input(input).ok()?;
 
     let mut lines = vec![format!(
         "❓ <b>{}</b>",
