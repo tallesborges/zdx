@@ -41,6 +41,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 ### Tools (`src/tools/`)
 
 - `tools/mod.rs`: ToolContext, ToolRegistry, ToolSet, handlers
+- `tools/ask_user_question.rs`: shared schema/constants for the surface-registered ask-user tool (not a builtin; surfaces own handlers)
 - `tools/memory_get.rs`: stable memory-ref reads from canonical ZDX storage
 - `tools/memory_search.rs`: qmd-backed memory search returning stable memory refs
 - `tools/read_thread.rs`: read saved thread transcript tool

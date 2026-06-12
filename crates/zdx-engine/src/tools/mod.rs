@@ -7,6 +7,7 @@
 pub use zdx_tools::{apply_patch, bash, edit, fetch_webpage, glob, grep, read, web_search, write};
 
 // Engine-backed tools (need full ToolContext with config, threads, etc.)
+pub mod ask_user_question;
 pub mod memory_get;
 pub mod memory_search;
 pub mod read_thread;

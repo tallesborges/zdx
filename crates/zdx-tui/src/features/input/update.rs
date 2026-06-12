@@ -37,6 +37,9 @@ pub struct InputContext<'a> {
     pub model_id: &'a str,
     pub active_thread_ids: &'a std::collections::HashSet<String>,
     pub root: &'a std::path::Path,
+    /// Whether an `ask_user_question` is waiting for an answer on the active
+    /// thread (typed submissions answer it instead of queueing).
+    pub pending_question: bool,
 }
 
 const FAST_MODE_UNAVAILABLE_MSG: &str =
@@ -678,6 +681,7 @@ fn handle_submission(
             ctx.active_thread_ids,
             ctx.config,
             ctx.model_id,
+            ctx.pending_question,
         )),
         _ => None,
     }
@@ -882,6 +886,7 @@ fn submit_input(
     active_thread_ids: &std::collections::HashSet<String>,
     config: &Config,
     model_id: &str,
+    pending_question: bool,
 ) -> KeyResult {
     // Block input during any modal generation. Each branch shows a hint
     // pointing at Esc as the cancel path and shares the early-return shape.
@@ -894,6 +899,26 @@ fn submit_input(
 
     let agent_running = agent_state.is_running();
     if agent_running {
+        if pending_question
+            && !trimmed.is_empty()
+            && !trimmed.starts_with('/')
+            && !trimmed.starts_with('$')
+            && let Some(thread_id) = thread_id
+        {
+            input.history.push(text.clone());
+            input.reset_navigation();
+            input.clear();
+            return (
+                vec![UiEffect::AnswerPendingQuestion {
+                    thread_id,
+                    text: trimmed.to_string(),
+                }],
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(format!("↩️ Answered: {trimmed}")),
+                )],
+                None,
+            );
+        }
         return handle_submit_while_agent_running(input, trimmed, &text);
     }
 
@@ -1601,6 +1626,7 @@ mod tests {
             model_id: &config.model,
             active_thread_ids: &active_thread_ids,
             root: std::path::Path::new("."),
+            pending_question: false,
         };
 
         let (effects, mutations, overlay) = handle_main_key(
@@ -1633,6 +1659,7 @@ mod tests {
             model_id: &config.model,
             active_thread_ids,
             root: std::path::Path::new("."),
+            pending_question: false,
         }
     }
 

@@ -12,6 +12,8 @@ pub mod state;
 pub mod terminal;
 pub mod update;
 
+pub(crate) mod ask_user;
+
 use std::io::{IsTerminal, Write, stderr};
 use std::path::PathBuf;
 
