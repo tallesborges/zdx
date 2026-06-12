@@ -2,13 +2,11 @@
 //! tappable inline-keyboard options mid-run and wait for the answer.
 //!
 //! The tool handler blocks (async) on a oneshot channel until either an
-//! inline button is tapped, the user types a reply in the same chat/topic,
-//! or the wait times out.
+//! inline button is tapped or the user types a reply in the same chat/topic.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -19,8 +17,6 @@ use zdx_engine::tools::{ToolContext, ToolDefinition, ToolHandler};
 use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, TelegramClient};
 
 pub(crate) const TOOL_NAME: &str = "ask_user_question";
-
-const ANSWER_TIMEOUT: Duration = Duration::from_mins(10);
 
 /// Key: (`chat_id`, `topic_id`); DMs use topic 0. One pending question per
 /// chat/topic at a time.
@@ -74,9 +70,7 @@ pub(crate) fn definition() -> ToolDefinition {
                       tapping an option — treat whatever answer comes back as authoritative. If \
                       you recommend an option, put it first and append ' (Recommended)' to its \
                       label. Do not add an 'Other' or 'Something else' option. Ask one question \
-                      per call; call again for follow-up questions. If no answer arrives in time \
-                      the result says so — proceed with your best judgment instead of asking \
-                      again."
+                      per call; call again for follow-up questions."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -214,45 +208,18 @@ async fn execute(
         }
     }
 
-    wait_for_answer(rx, client, chat_id, message_id, &text, &parsed.question).await
-}
-
-async fn wait_for_answer(
-    rx: oneshot::Receiver<String>,
-    client: &TelegramClient,
-    chat_id: i64,
-    message_id: i64,
-    rendered_text: &str,
-    question: &str,
-) -> ToolOutput {
-    match tokio::time::timeout(ANSWER_TIMEOUT, rx).await {
-        Ok(Ok(answer)) => ToolOutput::success(json!({
-            "question": question,
+    // Wait indefinitely: no LLM connection is open while waiting, the user
+    // can cancel the turn, and a bot restart clears the run anyway.
+    match rx.await {
+        Ok(answer) => ToolOutput::success(json!({
+            "question": parsed.question,
             "answer": answer,
         })),
-        Ok(Err(_)) => ToolOutput::success(json!({
-            "question": question,
+        Err(_) => ToolOutput::success(json!({
+            "question": parsed.question,
             "answer": Value::Null,
             "note": "The question was dismissed without an answer. Proceed with your best judgment.",
         })),
-        Err(_) => {
-            let _ = client
-                .edit_message_text(
-                    chat_id,
-                    message_id,
-                    &format!("{rendered_text}\n\n⌛ <i>No answer — continuing.</i>"),
-                    None,
-                )
-                .await;
-            ToolOutput::success(json!({
-                "question": question,
-                "answer": Value::Null,
-                "note": format!(
-                    "No answer was received within {} minutes. Proceed with your best judgment.",
-                    ANSWER_TIMEOUT.as_secs() / 60
-                ),
-            }))
-        }
     }
 }
 
