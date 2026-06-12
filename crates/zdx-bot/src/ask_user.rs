@@ -26,11 +26,9 @@ pub(crate) struct PendingQuestion {
     /// Unique id used in callback data to reject stale button taps.
     qid: u64,
     sender: oneshot::Sender<String>,
-    /// `message_id` of the question message (to strip the keyboard on answer).
+    /// `message_id` of the question message (deleted once answered).
     message_id: Option<i64>,
     option_labels: Vec<String>,
-    /// Rendered HTML of the question message, for answered-state edits.
-    rendered_text: String,
 }
 
 /// Shared map of questions currently waiting for a user answer.
@@ -171,7 +169,6 @@ async fn execute(
                 sender: tx,
                 message_id: None,
                 option_labels: parsed.options.iter().map(|o| o.label.clone()).collect(),
-                rendered_text: text.clone(),
             },
         );
     }
@@ -293,26 +290,18 @@ fn parse_telegram_thread_id(thread_id: &str) -> Option<(i64, Option<i64>)> {
     }
 }
 
-/// Resolves a pending question with the user's answer.
-///
-/// Returns `(message_id, rendered_text)` of the answered question (for
-/// keyboard cleanup) when a pending question existed for the key.
-fn resolve_pending(
+/// Removes and returns the pending question for `key` when `qid` matches
+/// (or when no `qid` check is requested).
+fn take_pending(
     pending: &PendingQuestionMap,
     key: PendingKey,
     qid: Option<u64>,
-    answer: &str,
-) -> Option<(Option<i64>, String)> {
-    let entry = {
-        let mut map = pending.lock().expect("pending question lock poisoned");
-        match map.get(&key) {
-            Some(entry) if qid.is_none_or(|qid| qid == entry.qid) => map.remove(&key),
-            _ => None,
-        }
-    }?;
-    let resolved = (entry.message_id, entry.rendered_text);
-    let _ = entry.sender.send(answer.to_string());
-    Some(resolved)
+) -> Option<PendingQuestion> {
+    let mut map = pending.lock().expect("pending question lock poisoned");
+    match map.get(&key) {
+        Some(entry) if qid.is_none_or(|qid| qid == entry.qid) => map.remove(&key),
+        _ => None,
+    }
 }
 
 /// Intercepts a typed message as the answer to a pending question.
@@ -331,14 +320,13 @@ pub(crate) async fn try_answer_with_text(
         return false;
     }
     let key: PendingKey = (chat_id, topic_id.unwrap_or(0));
-    let Some((message_id, rendered_text)) = resolve_pending(pending, key, None, trimmed) else {
+    let Some(entry) = take_pending(pending, key, None) else {
         return false;
     };
+    let message_id = entry.message_id;
+    let _ = entry.sender.send(trimmed.to_string());
     if let Some(message_id) = message_id {
-        let updated = format!("{rendered_text}\n\n✅ <i>Answered by reply.</i>");
-        let _ = client
-            .edit_message_text(chat_id, message_id, &updated, None)
-            .await;
+        let _ = client.delete_message(chat_id, message_id).await;
     }
     true
 }
@@ -378,15 +366,10 @@ pub(crate) async fn handle_callback(
         return;
     };
 
-    if let Some((message_id, rendered_text)) = resolve_pending(pending, key, Some(qid), &label) {
-        let updated = format!(
-            "{rendered_text}\n\n✅ <b>{}</b>",
-            crate::handlers::message::escape_html(&label)
-        );
-        let target_message_id = message_id.unwrap_or(message.id);
-        let _ = client
-            .edit_message_text(chat_id, target_message_id, &updated, None)
-            .await;
+    if let Some(entry) = take_pending(pending, key, Some(qid)) {
+        let target_message_id = entry.message_id.unwrap_or(message.id);
+        let _ = entry.sender.send(label);
+        let _ = client.delete_message(chat_id, target_message_id).await;
         let _ = client.answer_callback_query(&callback.id, None).await;
     } else {
         let _ = client
@@ -433,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_pending_rejects_stale_qid() {
+    fn take_pending_rejects_stale_qid() {
         let pending = new_pending_map();
         let (tx, mut rx) = oneshot::channel();
         pending.lock().unwrap().insert(
@@ -443,18 +426,16 @@ mod tests {
                 sender: tx,
                 message_id: Some(99),
                 option_labels: vec!["A".to_string()],
-                rendered_text: "q".to_string(),
             },
         );
 
-        assert!(resolve_pending(&pending, (1, 0), Some(4), "A").is_none());
+        assert!(take_pending(&pending, (1, 0), Some(4)).is_none());
         assert!(pending.lock().unwrap().contains_key(&(1, 0)));
 
-        assert_eq!(
-            resolve_pending(&pending, (1, 0), Some(5), "A"),
-            Some((Some(99), "q".to_string()))
-        );
+        let entry = take_pending(&pending, (1, 0), Some(5)).expect("entry should resolve");
+        assert_eq!(entry.message_id, Some(99));
         assert!(pending.lock().unwrap().is_empty());
+        let _ = entry.sender.send("A".to_string());
         assert_eq!(rx.try_recv().unwrap(), "A");
     }
 
@@ -469,7 +450,6 @@ mod tests {
                 sender: tx,
                 message_id: None,
                 option_labels: vec![],
-                rendered_text: String::new(),
             },
         );
 
