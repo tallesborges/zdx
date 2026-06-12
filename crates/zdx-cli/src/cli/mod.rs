@@ -975,7 +975,12 @@ async fn dispatch_bot(command: Option<BotCommands>, context: &DispatchContext<'_
     match command {
         None => {
             let root_path = resolve_root(context.root, context.worktree_id)?;
-            zdx_bot::run_named_with_config_and_root("bot", context.config.clone(), root_path).await
+            Box::pin(zdx_bot::run_named_with_config_and_root(
+                "bot",
+                context.config.clone(),
+                root_path,
+            ))
+            .await
         }
         Some(BotCommands::Init {
             bot_token,

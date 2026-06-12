@@ -8,6 +8,7 @@ use zdx_engine::config::{Config, TelegramProfileConfig};
 use zdx_engine::core::agent::ToolConfig;
 
 use crate::ask_user::PendingQuestionMap;
+use crate::followups::FollowupMap;
 use crate::telegram::TelegramClient;
 
 /// Key for the per-turn cancellation map: (`chat_id`, `user_message_id`).
@@ -44,6 +45,7 @@ pub(crate) struct BotContext {
     cancel_map: CancelMap,
     queue_cancel_map: QueueCancelMap,
     ask_user_map: PendingQuestionMap,
+    followup_map: FollowupMap,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +63,7 @@ pub(crate) struct BotContextDeps {
     pub cancel_map: CancelMap,
     pub queue_cancel_map: QueueCancelMap,
     pub ask_user_map: PendingQuestionMap,
+    pub followup_map: FollowupMap,
 }
 
 impl BotContext {
@@ -74,6 +77,7 @@ impl BotContext {
             cancel_map,
             queue_cancel_map,
             ask_user_map,
+            followup_map,
         } = deps;
         let root = root.canonicalize().unwrap_or(root);
         Self {
@@ -88,6 +92,7 @@ impl BotContext {
             cancel_map,
             queue_cancel_map,
             ask_user_map,
+            followup_map,
         }
     }
 
@@ -159,6 +164,10 @@ impl BotContext {
     pub(crate) fn ask_user_map(&self) -> &PendingQuestionMap {
         &self.ask_user_map
     }
+
+    pub(crate) fn followup_map(&self) -> &FollowupMap {
+        &self.followup_map
+    }
 }
 
 fn profile_root_path(profile: &TelegramProfileConfig) -> PathBuf {
@@ -220,6 +229,7 @@ mod tests {
                 cancel_map: new_cancel_map(),
                 queue_cancel_map: new_queue_cancel_map(),
                 ask_user_map: crate::ask_user::new_pending_map(),
+                followup_map: crate::followups::new_followup_map(),
             },
         )
     }

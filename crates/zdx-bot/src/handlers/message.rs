@@ -1410,7 +1410,7 @@ async fn send_final_response(
     let parsed = parse_final_response(final_text);
     let has_text = !parsed.text.trim().is_empty();
 
-    if !has_text && parsed.media_paths.is_empty() {
+    if !has_text && parsed.media_paths.is_empty() && parsed.followups.is_empty() {
         if let Some(msg_id) = status_message_id
             && let Err(err) = context
                 .client()
@@ -1440,7 +1440,16 @@ async fn send_final_response(
         tracing::warn!(msg_id, %err, "Failed to delete empty status message");
     }
 
-    send_media_responses(context, incoming, reply_ctx, &parsed.media_paths, has_text).await
+    send_media_responses(context, incoming, reply_ctx, &parsed.media_paths, has_text).await?;
+
+    crate::followups::send_followups(
+        context,
+        incoming.chat_id,
+        reply_ctx.topic_id,
+        parsed.followups,
+    )
+    .await;
+    Ok(())
 }
 
 async fn send_text_response(
@@ -1620,10 +1629,12 @@ async fn send_media_responses(
 struct ParsedFinalResponse {
     text: String,
     media_paths: Vec<PathBuf>,
+    followups: Vec<String>,
 }
 
 fn parse_final_response(final_text: &str) -> ParsedFinalResponse {
-    let text_without_wrappers = strip_media_wrappers(final_text);
+    let (text_without_followups, followups) = crate::followups::extract_followups(final_text);
+    let text_without_wrappers = strip_media_wrappers(&text_without_followups);
     let (text_without_media_tags, raw_media_values) = extract_media_tags(&text_without_wrappers);
     let mut media_paths = Vec::new();
     let mut seen = HashSet::new();
@@ -1639,6 +1650,7 @@ fn parse_final_response(final_text: &str) -> ParsedFinalResponse {
     ParsedFinalResponse {
         text: normalize_reply_text(&text_without_media_tags),
         media_paths,
+        followups,
     }
 }
 
