@@ -52,22 +52,28 @@ impl FollowupPickerState {
                 }
                 OverlayUpdate::stay()
             }
-            KeyCode::Enter => {
-                let Some(text) = self.items.get(self.selected).cloned() else {
-                    return OverlayUpdate::close();
-                };
-                // Reuse the normal submission path so the selected suggestion
-                // becomes a real user message + agent turn.
-                let (effects, mutations) =
-                    crate::input::build_send_effects(&text, self.thread_id.clone(), false, vec![]);
-                let mut all_mutations = vec![StateMutation::SetLastFollowups(Vec::new())];
-                all_mutations.extend(mutations);
-                OverlayUpdate::close()
-                    .with_ui_effects(effects)
-                    .with_mutations(all_mutations)
+            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
+                self.confirm((c as usize) - ('1' as usize))
             }
+            KeyCode::Enter => self.confirm(self.selected),
             _ => OverlayUpdate::stay(),
         }
+    }
+
+    /// Sends the suggestion at `idx` as the next user message.
+    fn confirm(&self, idx: usize) -> OverlayUpdate {
+        let Some(text) = self.items.get(idx).cloned() else {
+            return OverlayUpdate::stay();
+        };
+        // Reuse the normal submission path so the selected suggestion
+        // becomes a real user message + agent turn.
+        let (effects, mutations) =
+            crate::input::build_send_effects(&text, self.thread_id.clone(), false, vec![]);
+        let mut all_mutations = vec![StateMutation::SetLastFollowups(Vec::new())];
+        all_mutations.extend(mutations);
+        OverlayUpdate::close()
+            .with_ui_effects(effects)
+            .with_mutations(all_mutations)
     }
 }
 
@@ -81,8 +87,8 @@ fn render_followup_picker(
 
     let picker_height = (picker.items.len() as u16 + 5).max(7);
     let hints = [
+        InputHint::new("1-9", "send"),
         InputHint::new("↑↓", "navigate"),
-        InputHint::new("Enter", "send"),
         InputHint::new("Esc", "dismiss"),
     ];
     let layout = render_overlay(
@@ -104,7 +110,8 @@ fn render_followup_picker(
     let items: Vec<ListItem> = picker
         .items
         .iter()
-        .map(|item| ListItem::new(Line::from(item.clone())))
+        .enumerate()
+        .map(|(idx, item)| ListItem::new(Line::from(format!("{}. {item}", idx + 1))))
         .collect();
 
     let list = List::new(items)

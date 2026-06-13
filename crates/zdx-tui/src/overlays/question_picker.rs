@@ -75,21 +75,28 @@ impl QuestionPickerState {
                 }
                 OverlayUpdate::stay()
             }
-            KeyCode::Enter => {
-                let Some((label, _)) = self.options.get(self.selected) else {
-                    return OverlayUpdate::close();
-                };
-                OverlayUpdate::close()
-                    .with_ui_effects(vec![UiEffect::AnswerPendingQuestion {
-                        thread_id: self.thread_id.clone(),
-                        text: label.clone(),
-                    }])
-                    .with_mutations(vec![StateMutation::Transcript(
-                        TranscriptMutation::AppendSystemMessage(format!("↩️ Answered: {label}")),
-                    )])
+            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
+                let idx = (c as usize) - ('1' as usize);
+                self.confirm(idx)
             }
+            KeyCode::Enter => self.confirm(self.selected),
             _ => OverlayUpdate::stay(),
         }
+    }
+
+    /// Resolves the pending question with the option at `idx`.
+    fn confirm(&self, idx: usize) -> OverlayUpdate {
+        let Some((label, _)) = self.options.get(idx) else {
+            return OverlayUpdate::stay();
+        };
+        OverlayUpdate::close()
+            .with_ui_effects(vec![UiEffect::AnswerPendingQuestion {
+                thread_id: self.thread_id.clone(),
+                text: label.clone(),
+            }])
+            .with_mutations(vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(format!("↩️ Answered: {label}")),
+            )])
     }
 }
 
@@ -105,8 +112,8 @@ fn render_question_picker(
     let picker_height = (picker.options.len() as u16 + 5).max(7);
 
     let hints = [
+        InputHint::new("1-9", "pick"),
         InputHint::new("↑↓", "navigate"),
-        InputHint::new("Enter", "select"),
         InputHint::new("Esc", "type instead"),
     ];
     let layout = render_overlay(
@@ -128,9 +135,10 @@ fn render_question_picker(
     let items: Vec<ListItem> = picker
         .options
         .iter()
-        .map(|(label, desc)| {
+        .enumerate()
+        .map(|(idx, (label, desc))| {
             let mut spans = vec![Span::styled(
-                label.clone(),
+                format!("{}. {label}", idx + 1),
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
