@@ -22,9 +22,22 @@ pub(crate) struct PendingQuestion {
     /// Tool-use id of the call, used to reject stale resolutions.
     tool_use_id: String,
     sender: oneshot::Sender<String>,
-    /// Option labels, used by the picker overlay (later slice).
-    #[allow(dead_code)]
-    option_labels: Vec<String>,
+    question: String,
+    options: Vec<QuestionOption>,
+}
+
+#[derive(Clone)]
+pub(crate) struct QuestionOption {
+    pub label: String,
+    pub description: String,
+}
+
+/// Snapshot of a pending question for the picker overlay.
+#[derive(Clone)]
+pub(crate) struct QuestionView {
+    pub tool_use_id: String,
+    pub question: String,
+    pub options: Vec<QuestionOption>,
 }
 
 /// Questions currently waiting for a user answer, keyed by thread id.
@@ -100,7 +113,15 @@ async fn execute(
             PendingQuestion {
                 tool_use_id: tool_use_id.to_string(),
                 sender: tx,
-                option_labels: parsed.options.iter().map(|o| o.label.clone()).collect(),
+                question: parsed.question.clone(),
+                options: parsed
+                    .options
+                    .iter()
+                    .map(|o| QuestionOption {
+                        label: o.label.clone(),
+                        description: o.description.clone(),
+                    })
+                    .collect(),
             },
         );
     }
@@ -160,6 +181,17 @@ pub(crate) fn has_pending(pending: &PendingQuestionMap, thread_id: &str) -> bool
         .lock()
         .expect("pending question lock poisoned")
         .contains_key(thread_id)
+}
+
+/// Snapshots the pending question for `thread_id` (for the picker overlay).
+pub(crate) fn pending_view(pending: &PendingQuestionMap, thread_id: &str) -> Option<QuestionView> {
+    let map = pending.lock().expect("pending question lock poisoned");
+    let entry = map.get(thread_id)?;
+    Some(QuestionView {
+        tool_use_id: entry.tool_use_id.clone(),
+        question: entry.question.clone(),
+        options: entry.options.clone(),
+    })
 }
 
 /// Resolves the pending question for `thread_id` with the user's typed
@@ -242,7 +274,8 @@ mod tests {
             PendingQuestion {
                 tool_use_id: "toolu_1".to_string(),
                 sender: tx,
-                option_labels: vec![],
+                question: "Q?".to_string(),
+                options: vec![],
             },
         );
 

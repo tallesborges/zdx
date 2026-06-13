@@ -376,6 +376,8 @@ pub struct TuiState {
     pub optimistic_active_threads: HashMap<String, Instant>,
     /// Questions from `ask_user_question` waiting for a user answer.
     pub(crate) ask_user_map: crate::ask_user::PendingQuestionMap,
+    /// Follow-up suggestions from the most recent reply (Ctrl+F to pick).
+    pub last_followups: Vec<String>,
 }
 
 impl TuiState {
@@ -464,6 +466,7 @@ impl TuiState {
             transcript_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
             optimistic_active_threads: HashMap::new(),
             ask_user_map,
+            last_followups: Vec::new(),
         }
     }
 

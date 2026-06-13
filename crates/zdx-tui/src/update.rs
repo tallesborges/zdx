@@ -111,6 +111,13 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
         UiEvent::BackgroundTabAgent { tab_id, event } => {
+            // Suppress the ask_user_question marker on background tabs: it must
+            // not pollute the tool-output cell, and the picker only opens for
+            // the active tab (the pending question still answers via typing
+            // once the user switches to that tab).
+            if is_ask_user_marker(&event) {
+                return vec![];
+            }
             if let Some(tab) = app.background_tab_mut(tab_id) {
                 let has_thread = tab.thread.thread_handle.is_some();
                 let (_inner_effects, mutations) = transcript::handle_agent_event(
@@ -327,10 +334,76 @@ fn handle_voice_transcribed(
     vec![]
 }
 
+/// Handles `ask_user_question` lifecycle events for the active tab.
+///
+/// Returns `true` when the event was fully consumed (the `REGISTERED_MARKER`
+/// delta) and must not reach the transcript. Close-on-complete and
+/// close-on-turn-end run as side effects but let normal handling proceed.
+fn intercept_ask_user_event(
+    app: &mut AppState,
+    agent_event: &zdx_engine::core::events::AgentEvent,
+) -> bool {
+    use zdx_engine::core::events::AgentEvent;
+
+    match agent_event {
+        AgentEvent::ToolOutputDelta { id, chunk }
+            if chunk == zdx_engine::tools::ask_user_question::REGISTERED_MARKER =>
+        {
+            let thread_id = app.tui.thread.thread_handle.as_ref().map(|t| t.id.clone());
+            if let Some(thread_id) = thread_id
+                && let Some(view) = crate::ask_user::pending_view(&app.tui.ask_user_map, &thread_id)
+                && view.tool_use_id == *id
+            {
+                let state = overlays::QuestionPickerState::open(thread_id, view);
+                app.overlay = Some(overlays::Overlay::QuestionPicker(state));
+            }
+            true
+        }
+        AgentEvent::ToolCompleted { id, .. } => {
+            close_question_picker_if(app, |p| p.tool_use_id() == id);
+            false
+        }
+        AgentEvent::TurnFinished { .. } => {
+            close_question_picker_if(app, |_| true);
+            false
+        }
+        _ => false,
+    }
+}
+
+/// Closes the question picker overlay when one is open and `pred` matches.
+fn close_question_picker_if(
+    app: &mut AppState,
+    pred: impl FnOnce(&overlays::QuestionPickerState) -> bool,
+) {
+    if let Some(overlays::Overlay::QuestionPicker(p)) = app.overlay.as_ref()
+        && pred(p)
+    {
+        app.overlay = None;
+    }
+}
+
+/// Whether an event is the `ask_user_question` registration marker.
+fn is_ask_user_marker(event: &zdx_engine::core::events::AgentEvent) -> bool {
+    matches!(
+        event,
+        zdx_engine::core::events::AgentEvent::ToolOutputDelta { chunk, .. }
+            if chunk == zdx_engine::tools::ask_user_question::REGISTERED_MARKER
+    )
+}
+
 fn handle_agent_event(
     app: &mut AppState,
     agent_event: &zdx_engine::core::events::AgentEvent,
 ) -> Vec<UiEffect> {
+    // ask_user_question lifecycle: open the picker once the question is
+    // registered (REGISTERED_MARKER), and close it when the question
+    // completes or the turn ends. The marker delta is suppressed so it never
+    // pollutes the tool-output cell.
+    if intercept_ask_user_event(app, agent_event) {
+        return vec![];
+    }
+
     let has_thread = app.tui.thread.thread_handle.is_some();
     let (mut effects, mutations) = transcript::handle_agent_event(
         &mut app.tui.transcript,
@@ -627,6 +700,8 @@ fn apply_tab_mutations(tui: &mut crate::state::TuiState, mutations: Vec<StateMut
             StateMutation::Transcript(m) => tui.transcript.apply(m),
             StateMutation::Thread(m) => tui.thread.apply(m),
             StateMutation::Input(m) => tui.input.apply(m),
+            // Per-tab state: must apply to the owning tab, not just the active one.
+            StateMutation::SetLastFollowups(items) => tui.last_followups = items,
             StateMutation::Auth(_)
             | StateMutation::Config(_)
             | StateMutation::SetRootDisplay { .. }
@@ -1015,6 +1090,9 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
             StateMutation::SetLoadedSkills(skills) => {
                 tui.loaded_skills = skills;
             }
+            StateMutation::SetLastFollowups(items) => {
+                tui.last_followups = items;
+            }
             StateMutation::ToggleDebugStatus => {
                 tui.show_debug_status = !tui.show_debug_status;
             }
@@ -1348,6 +1426,7 @@ fn create_btw_tab(
         transcript_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
         optimistic_active_threads: std::collections::HashMap::new(),
         ask_user_map,
+        last_followups: Vec::new(),
     }
 }
 
@@ -1452,6 +1531,7 @@ fn create_thread_tab(
         transcript_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
         optimistic_active_threads: std::collections::HashMap::new(),
         ask_user_map,
+        last_followups: Vec::new(),
     }
 }
 
@@ -1594,6 +1674,23 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         && app.tui.input.get_text().is_empty()
     {
         return vec![UiEffect::CloseCurrentTab];
+    }
+
+    // Ctrl+F: open the follow-up suggestion picker when idle, the composer is
+    // empty, and the last reply offered suggestions.
+    if app.overlay.is_none()
+        && key.code == KeyCode::Char('f')
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && !app.tui.agent_state.is_running()
+        && app.tui.input.get_text().is_empty()
+        && !app.tui.last_followups.is_empty()
+    {
+        let thread_id = app.tui.thread.thread_handle.as_ref().map(|t| t.id.clone());
+        let items = app.tui.last_followups.clone();
+        app.overlay = Some(Overlay::FollowupPicker(
+            overlays::FollowupPickerState::open(thread_id, items),
+        ));
+        return vec![];
     }
 
     if let Some(Overlay::FilePicker(picker)) = app.overlay.as_mut()

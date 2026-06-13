@@ -542,6 +542,21 @@ impl TranscriptState {
         }
     }
 
+    /// Finalizes an assistant cell, stripping any `<followups>` block from its
+    /// visible text and returning the extracted suggestions.
+    pub fn finalize_assistant_cell_extracting_followups(
+        &mut self,
+        cell_id: super::CellId,
+    ) -> Vec<String> {
+        let mut items = Vec::new();
+        if let Some(cell) = self.cells.iter_mut().find(|c| c.id() == cell_id) {
+            items = cell.strip_followups();
+            cell.finalize_assistant();
+            self.invalidate_line_info();
+        }
+        items
+    }
+
     /// Appends delta to a streaming assistant cell by `cell_id`.
     pub fn append_to_streaming_cell(&mut self, cell_id: super::CellId, delta: &str) {
         if let Some(cell) = self.cells.iter_mut().find(|c| c.id() == cell_id) {
