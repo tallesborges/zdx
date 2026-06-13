@@ -64,9 +64,9 @@
 ## Slice 3: Follow-up suggestions — render + strip
 - **Goal**: TUI replies can end with follow-up suggestions, displayed instead of leaking raw tags.
 - **Scope checklist**:
-  - [ ] Add followups guidance to `chat_instruction_layer.md` (TUI-appropriate wording: suggestions are optional next messages; no no-op suggestions).
-  - [ ] Move `extract_followups` (pure string parsing) from `crates/zdx-bot/src/followups.rs` into `zdx-engine` (e.g. `zdx_engine::followups`); bot and TUI both call it.
-  - [ ] Strip the block from the visible assistant cell at `AssistantCompleted`/`TurnFinished` (`features/transcript/update.rs:39-57,112-151`) and render suggestions as a compact transcript cell (e.g. `💡 1. … 2. …`).
+  - [x] Add followups guidance to `chat_instruction_layer.md` (TUI-appropriate wording: suggestions are optional next messages; no no-op suggestions).
+  - [x] Move `extract_followups` (pure string parsing) from `crates/zdx-bot/src/followups.rs` into `zdx-engine` (e.g. `zdx_engine::followups`); bot and TUI both call it.
+  - [x] Strip the block from the visible assistant cell at `AssistantCompleted`/`TurnFinished` (`features/transcript/update.rs:39-57,112-151`) and render suggestions as a compact transcript cell (e.g. `💡 1. … 2. …`).
 - **✅ Demo**: ask "give me 2 follow-up suggestions after your answer" → reply renders clean, suggestions cell lists them, no raw `<followups>` tags in the transcript.
 - **Risks / failure modes**:
   - Tags arrive via streaming deltas, not just final text — strip at finalize, accept transient raw text during streaming (ugly-but-functional), or hold back trailing partial tags.
