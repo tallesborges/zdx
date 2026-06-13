@@ -327,10 +327,67 @@ fn handle_voice_transcribed(
     vec![]
 }
 
+/// Handles `ask_user_question` lifecycle events for the active tab.
+///
+/// Returns `true` when the event was fully consumed (the `REGISTERED_MARKER`
+/// delta) and must not reach the transcript. Close-on-complete and
+/// close-on-turn-end run as side effects but let normal handling proceed.
+fn intercept_ask_user_event(
+    app: &mut AppState,
+    agent_event: &zdx_engine::core::events::AgentEvent,
+) -> bool {
+    use zdx_engine::core::events::AgentEvent;
+
+    match agent_event {
+        AgentEvent::ToolOutputDelta { id, chunk }
+            if chunk == zdx_engine::tools::ask_user_question::REGISTERED_MARKER =>
+        {
+            let thread_id = app.tui.thread.thread_handle.as_ref().map(|t| t.id.clone());
+            if let Some(thread_id) = thread_id
+                && let Some(view) = crate::ask_user::pending_view(&app.tui.ask_user_map, &thread_id)
+                && view.tool_use_id == *id
+            {
+                let state = overlays::QuestionPickerState::open(thread_id, view);
+                app.overlay = Some(overlays::Overlay::QuestionPicker(state));
+            }
+            true
+        }
+        AgentEvent::ToolCompleted { id, .. } => {
+            close_question_picker_if(app, |p| p.tool_use_id() == id);
+            false
+        }
+        AgentEvent::TurnFinished { .. } => {
+            close_question_picker_if(app, |_| true);
+            false
+        }
+        _ => false,
+    }
+}
+
+/// Closes the question picker overlay when one is open and `pred` matches.
+fn close_question_picker_if(
+    app: &mut AppState,
+    pred: impl FnOnce(&overlays::QuestionPickerState) -> bool,
+) {
+    if let Some(overlays::Overlay::QuestionPicker(p)) = app.overlay.as_ref()
+        && pred(p)
+    {
+        app.overlay = None;
+    }
+}
+
 fn handle_agent_event(
     app: &mut AppState,
     agent_event: &zdx_engine::core::events::AgentEvent,
 ) -> Vec<UiEffect> {
+    // ask_user_question lifecycle: open the picker once the question is
+    // registered (REGISTERED_MARKER), and close it when the question
+    // completes or the turn ends. The marker delta is suppressed so it never
+    // pollutes the tool-output cell.
+    if intercept_ask_user_event(app, agent_event) {
+        return vec![];
+    }
+
     let has_thread = app.tui.thread.thread_handle.is_some();
     let (mut effects, mutations) = transcript::handle_agent_event(
         &mut app.tui.transcript,

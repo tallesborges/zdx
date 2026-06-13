@@ -53,9 +53,9 @@
 ## Slice 2: Question picker overlay
 - **Goal**: options are selectable with arrows + Enter, like the bot's buttons.
 - **Scope checklist**:
-  - [ ] New `crates/zdx-tui/src/overlays/question_picker.rs` modeled on `thinking_picker.rs`: shows question, option labels + descriptions; Enter resolves the pending entry with the selected label; Esc closes the overlay only (question stays pending, typed answers still work — the "Other" path).
-  - [ ] `update.rs::handle_agent_event`: stash `ToolInputCompleted` input for `ask_user_question`; on the matching `ToolOutputDelta == REGISTERED_MARKER`, open the overlay (active tab only) and suppress the marker from reaching `transcript.append_tool_output_delta_for`.
-  - [ ] Close the overlay automatically when the question resolves (typed answer or `ToolCompleted`) or the turn ends.
+  - [x] New `crates/zdx-tui/src/overlays/question_picker.rs` modeled on `thinking_picker.rs`: shows question, option labels + descriptions; Enter resolves the pending entry with the selected label; Esc closes the overlay only (question stays pending, typed answers still work — the "Other" path).
+  - [x] `update.rs::handle_agent_event`: stash `ToolInputCompleted` input for `ask_user_question`; on the matching `ToolOutputDelta == REGISTERED_MARKER`, open the overlay (active tab only) and suppress the marker from reaching `transcript.append_tool_output_delta_for`.
+  - [x] Close the overlay automatically when the question resolves (typed answer or `ToolCompleted`) or the turn ends.
 - **✅ Demo**: same prompt as Slice 1 → picker opens automatically → arrow + Enter → answer lands in the tool result and the run continues. Esc → type a custom answer → same outcome. Marker no longer visible in tool output.
 - **Risks / failure modes**:
   - Background-tab events must not steal the overlay; key by tab/thread and only open for the active tab.

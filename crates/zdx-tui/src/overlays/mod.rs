@@ -27,6 +27,7 @@ pub mod file_picker;
 pub mod image_preview;
 pub mod login;
 pub mod model_picker;
+pub mod question_picker;
 pub mod rename;
 pub mod render_utils;
 pub mod skill_picker;
@@ -44,6 +45,7 @@ pub use file_picker::{FilePickerState, discover_files};
 pub use image_preview::ImagePreviewState;
 pub use login::LoginState;
 pub use model_picker::ModelPickerState;
+pub use question_picker::QuestionPickerState;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 pub use rename::RenameState;
@@ -160,6 +162,7 @@ pub enum Overlay {
     Context(ContextState),
     ImagePreview(ImagePreviewState),
     ToolDetail(ToolDetailState),
+    QuestionPicker(QuestionPickerState),
 }
 
 impl Overlay {
@@ -174,6 +177,7 @@ impl Overlay {
             Overlay::Login(l) => l.render(frame, area, input_y),
             Overlay::Timeline(t) => t.render(frame, area, input_y),
             Overlay::Rename(r) => r.render(frame, area, input_y),
+            Overlay::QuestionPicker(p) => p.render(frame, area, input_y),
             Overlay::ImagePreview(p) => p.render(
                 frame,
                 area,
@@ -199,6 +203,7 @@ impl Overlay {
             Overlay::Login(l) => l.handle_key(tui, key),
             Overlay::Timeline(t) => t.handle_key(tui, key),
             Overlay::Rename(r) => r.handle_key(tui, key),
+            Overlay::QuestionPicker(p) => p.handle_key(tui, key),
             Overlay::ImagePreview(p) => p.handle_key(tui, key),
             Overlay::Tldr(t) => t.handle_key(key),
             Overlay::Context(c) => c.handle_key(key),
