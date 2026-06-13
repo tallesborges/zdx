@@ -111,6 +111,13 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
         UiEvent::BackgroundTabAgent { tab_id, event } => {
+            // Suppress the ask_user_question marker on background tabs: it must
+            // not pollute the tool-output cell, and the picker only opens for
+            // the active tab (the pending question still answers via typing
+            // once the user switches to that tab).
+            if is_ask_user_marker(&event) {
+                return vec![];
+            }
             if let Some(tab) = app.background_tab_mut(tab_id) {
                 let has_thread = tab.thread.thread_handle.is_some();
                 let (_inner_effects, mutations) = transcript::handle_agent_event(
@@ -374,6 +381,15 @@ fn close_question_picker_if(
     {
         app.overlay = None;
     }
+}
+
+/// Whether an event is the `ask_user_question` registration marker.
+fn is_ask_user_marker(event: &zdx_engine::core::events::AgentEvent) -> bool {
+    matches!(
+        event,
+        zdx_engine::core::events::AgentEvent::ToolOutputDelta { chunk, .. }
+            if chunk == zdx_engine::tools::ask_user_question::REGISTERED_MARKER
+    )
 }
 
 fn handle_agent_event(
@@ -684,6 +700,8 @@ fn apply_tab_mutations(tui: &mut crate::state::TuiState, mutations: Vec<StateMut
             StateMutation::Transcript(m) => tui.transcript.apply(m),
             StateMutation::Thread(m) => tui.thread.apply(m),
             StateMutation::Input(m) => tui.input.apply(m),
+            // Per-tab state: must apply to the owning tab, not just the active one.
+            StateMutation::SetLastFollowups(items) => tui.last_followups = items,
             StateMutation::Auth(_)
             | StateMutation::Config(_)
             | StateMutation::SetRootDisplay { .. }
@@ -691,7 +709,6 @@ fn apply_tab_mutations(tui: &mut crate::state::TuiState, mutations: Vec<StateMut
             | StateMutation::SetSystemPrompt(_)
             | StateMutation::SetLastSkillRepo(_)
             | StateMutation::SetLoadedSkills(_)
-            | StateMutation::SetLastFollowups(_)
             | StateMutation::ToggleDebugStatus => {
                 // App-level mutations never originate from a queued-prompt
                 // drain or transcript event; ignored here so the helper
