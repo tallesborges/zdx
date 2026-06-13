@@ -75,8 +75,8 @@
 ## Slice 4 (optional polish): Follow-up selection
 - **Goal**: pick a suggestion and send it as the next user message. Typing is cheap in a terminal — implement only if selecting proves genuinely useful after dogfooding Slice 3.
 - **Scope checklist**:
-  - [ ] Keybinding on the suggestions cell or a small picker overlay (reuse `question_picker` rendering) listing the last reply's suggestions.
-  - [ ] Selection invokes the normal submission path (`input::build_send_effects`) when idle; replace/clear stale suggestions when a new turn starts.
+  - [x] Keybinding on the suggestions cell or a small picker overlay (reuse `question_picker` rendering) listing the last reply's suggestions.
+  - [x] Selection invokes the normal submission path (`input::build_send_effects`) when idle; replace/clear stale suggestions when a new turn starts.
 - **✅ Demo**: after a reply with suggestions, trigger the picker, select one → it appears as the user message and a new turn starts.
 - **Risks / failure modes**:
   - Don't fork a second "send" code path — selection must produce the same effects as typing + Enter.

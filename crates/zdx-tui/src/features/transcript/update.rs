@@ -51,6 +51,7 @@ pub fn handle_agent_event(
                 let followups = transcript.finalize_assistant_cell_extracting_followups(cell_id);
                 if !followups.is_empty() {
                     transcript.push_cell(HistoryCell::system(format_followups(&followups)));
+                    mutations.push(StateMutation::SetLastFollowups(followups));
                 }
             }
             vec![]
@@ -189,7 +190,8 @@ pub fn handle_agent_event(
             vec![]
         }
         AgentEvent::TurnStarted => {
-            // Turn start - no UI updates needed yet
+            // A new turn supersedes the previous reply's suggestions.
+            mutations.push(StateMutation::SetLastFollowups(Vec::new()));
             vec![]
         }
         AgentEvent::ToolOutputDelta { id, chunk } => {
@@ -698,7 +700,7 @@ pub fn apply_pending_delta(transcript: &mut TranscriptState, agent_state: &mut A
 /// Formats follow-up suggestions into a system cell body.
 fn format_followups(items: &[String]) -> String {
     use std::fmt::Write;
-    let mut out = String::from("💡 Suggested next steps:");
+    let mut out = String::from("💡 Suggested next steps (Ctrl+F to pick):");
     for (idx, item) in items.iter().enumerate() {
         let _ = write!(out, "\n  {}. {item}", idx + 1);
     }

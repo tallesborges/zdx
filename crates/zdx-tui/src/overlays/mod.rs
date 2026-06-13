@@ -24,6 +24,7 @@
 pub mod command_palette;
 pub mod context;
 pub mod file_picker;
+pub mod followup_picker;
 pub mod image_preview;
 pub mod login;
 pub mod model_picker;
@@ -42,6 +43,7 @@ pub use command_palette::CommandPaletteState;
 pub use context::{ContextPhase, ContextState};
 use crossterm::event::KeyEvent;
 pub use file_picker::{FilePickerState, discover_files};
+pub use followup_picker::FollowupPickerState;
 pub use image_preview::ImagePreviewState;
 pub use login::LoginState;
 pub use model_picker::ModelPickerState;
@@ -163,6 +165,7 @@ pub enum Overlay {
     ImagePreview(ImagePreviewState),
     ToolDetail(ToolDetailState),
     QuestionPicker(QuestionPickerState),
+    FollowupPicker(FollowupPickerState),
 }
 
 impl Overlay {
@@ -178,6 +181,7 @@ impl Overlay {
             Overlay::Timeline(t) => t.render(frame, area, input_y),
             Overlay::Rename(r) => r.render(frame, area, input_y),
             Overlay::QuestionPicker(p) => p.render(frame, area, input_y),
+            Overlay::FollowupPicker(p) => p.render(frame, area, input_y),
             Overlay::ImagePreview(p) => p.render(
                 frame,
                 area,
@@ -204,6 +208,7 @@ impl Overlay {
             Overlay::Timeline(t) => t.handle_key(tui, key),
             Overlay::Rename(r) => r.handle_key(tui, key),
             Overlay::QuestionPicker(p) => p.handle_key(tui, key),
+            Overlay::FollowupPicker(p) => p.handle_key(tui, key),
             Overlay::ImagePreview(p) => p.handle_key(tui, key),
             Overlay::Tldr(t) => t.handle_key(key),
             Overlay::Context(c) => c.handle_key(key),

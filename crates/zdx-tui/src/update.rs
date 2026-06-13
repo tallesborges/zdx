@@ -691,6 +691,7 @@ fn apply_tab_mutations(tui: &mut crate::state::TuiState, mutations: Vec<StateMut
             | StateMutation::SetSystemPrompt(_)
             | StateMutation::SetLastSkillRepo(_)
             | StateMutation::SetLoadedSkills(_)
+            | StateMutation::SetLastFollowups(_)
             | StateMutation::ToggleDebugStatus => {
                 // App-level mutations never originate from a queued-prompt
                 // drain or transcript event; ignored here so the helper
@@ -1072,6 +1073,9 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
             StateMutation::SetLoadedSkills(skills) => {
                 tui.loaded_skills = skills;
             }
+            StateMutation::SetLastFollowups(items) => {
+                tui.last_followups = items;
+            }
             StateMutation::ToggleDebugStatus => {
                 tui.show_debug_status = !tui.show_debug_status;
             }
@@ -1405,6 +1409,7 @@ fn create_btw_tab(
         transcript_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
         optimistic_active_threads: std::collections::HashMap::new(),
         ask_user_map,
+        last_followups: Vec::new(),
     }
 }
 
@@ -1509,6 +1514,7 @@ fn create_thread_tab(
         transcript_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
         optimistic_active_threads: std::collections::HashMap::new(),
         ask_user_map,
+        last_followups: Vec::new(),
     }
 }
 
@@ -1651,6 +1657,23 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         && app.tui.input.get_text().is_empty()
     {
         return vec![UiEffect::CloseCurrentTab];
+    }
+
+    // Ctrl+F: open the follow-up suggestion picker when idle, the composer is
+    // empty, and the last reply offered suggestions.
+    if app.overlay.is_none()
+        && key.code == KeyCode::Char('f')
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && !app.tui.agent_state.is_running()
+        && app.tui.input.get_text().is_empty()
+        && !app.tui.last_followups.is_empty()
+    {
+        let thread_id = app.tui.thread.thread_handle.as_ref().map(|t| t.id.clone());
+        let items = app.tui.last_followups.clone();
+        app.overlay = Some(Overlay::FollowupPicker(
+            overlays::FollowupPickerState::open(thread_id, items),
+        ));
+        return vec![];
     }
 
     if let Some(Overlay::FilePicker(picker)) = app.overlay.as_mut()
