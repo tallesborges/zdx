@@ -53,9 +53,9 @@
 ## Slice 2: Question picker overlay
 - **Goal**: options are selectable with arrows + Enter, like the bot's buttons.
 - **Scope checklist**:
-  - [ ] New `crates/zdx-tui/src/overlays/question_picker.rs` modeled on `thinking_picker.rs`: shows question, option labels + descriptions; Enter resolves the pending entry with the selected label; Esc closes the overlay only (question stays pending, typed answers still work — the "Other" path).
-  - [ ] `update.rs::handle_agent_event`: stash `ToolInputCompleted` input for `ask_user_question`; on the matching `ToolOutputDelta == REGISTERED_MARKER`, open the overlay (active tab only) and suppress the marker from reaching `transcript.append_tool_output_delta_for`.
-  - [ ] Close the overlay automatically when the question resolves (typed answer or `ToolCompleted`) or the turn ends.
+  - [x] New `crates/zdx-tui/src/overlays/question_picker.rs` modeled on `thinking_picker.rs`: shows question, option labels + descriptions; Enter resolves the pending entry with the selected label; Esc closes the overlay only (question stays pending, typed answers still work — the "Other" path).
+  - [x] `update.rs::handle_agent_event`: stash `ToolInputCompleted` input for `ask_user_question`; on the matching `ToolOutputDelta == REGISTERED_MARKER`, open the overlay (active tab only) and suppress the marker from reaching `transcript.append_tool_output_delta_for`.
+  - [x] Close the overlay automatically when the question resolves (typed answer or `ToolCompleted`) or the turn ends.
 - **✅ Demo**: same prompt as Slice 1 → picker opens automatically → arrow + Enter → answer lands in the tool result and the run continues. Esc → type a custom answer → same outcome. Marker no longer visible in tool output.
 - **Risks / failure modes**:
   - Background-tab events must not steal the overlay; key by tab/thread and only open for the active tab.
@@ -64,9 +64,9 @@
 ## Slice 3: Follow-up suggestions — render + strip
 - **Goal**: TUI replies can end with follow-up suggestions, displayed instead of leaking raw tags.
 - **Scope checklist**:
-  - [ ] Add followups guidance to `chat_instruction_layer.md` (TUI-appropriate wording: suggestions are optional next messages; no no-op suggestions).
-  - [ ] Move `extract_followups` (pure string parsing) from `crates/zdx-bot/src/followups.rs` into `zdx-engine` (e.g. `zdx_engine::followups`); bot and TUI both call it.
-  - [ ] Strip the block from the visible assistant cell at `AssistantCompleted`/`TurnFinished` (`features/transcript/update.rs:39-57,112-151`) and render suggestions as a compact transcript cell (e.g. `💡 1. … 2. …`).
+  - [x] Add followups guidance to `chat_instruction_layer.md` (TUI-appropriate wording: suggestions are optional next messages; no no-op suggestions).
+  - [x] Move `extract_followups` (pure string parsing) from `crates/zdx-bot/src/followups.rs` into `zdx-engine` (e.g. `zdx_engine::followups`); bot and TUI both call it.
+  - [x] Strip the block from the visible assistant cell at `AssistantCompleted`/`TurnFinished` (`features/transcript/update.rs:39-57,112-151`) and render suggestions as a compact transcript cell (e.g. `💡 1. … 2. …`).
 - **✅ Demo**: ask "give me 2 follow-up suggestions after your answer" → reply renders clean, suggestions cell lists them, no raw `<followups>` tags in the transcript.
 - **Risks / failure modes**:
   - Tags arrive via streaming deltas, not just final text — strip at finalize, accept transient raw text during streaming (ugly-but-functional), or hold back trailing partial tags.
@@ -75,8 +75,8 @@
 ## Slice 4 (optional polish): Follow-up selection
 - **Goal**: pick a suggestion and send it as the next user message. Typing is cheap in a terminal — implement only if selecting proves genuinely useful after dogfooding Slice 3.
 - **Scope checklist**:
-  - [ ] Keybinding on the suggestions cell or a small picker overlay (reuse `question_picker` rendering) listing the last reply's suggestions.
-  - [ ] Selection invokes the normal submission path (`input::build_send_effects`) when idle; replace/clear stale suggestions when a new turn starts.
+  - [x] Keybinding on the suggestions cell or a small picker overlay (reuse `question_picker` rendering) listing the last reply's suggestions.
+  - [x] Selection invokes the normal submission path (`input::build_send_effects`) when idle; replace/clear stale suggestions when a new turn starts.
 - **✅ Demo**: after a reply with suggestions, trigger the picker, select one → it appears as the user message and a new turn starts.
 - **Risks / failure modes**:
   - Don't fork a second "send" code path — selection must produce the same effects as typing + Enter.

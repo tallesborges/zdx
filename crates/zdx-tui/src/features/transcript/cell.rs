@@ -482,6 +482,21 @@ impl HistoryCell {
         }
     }
 
+    /// Strips a trailing `<followups>` block from an assistant cell's content,
+    /// returning the extracted suggestions. No-op for non-assistant cells.
+    pub fn strip_followups(&mut self) -> Vec<String> {
+        match self {
+            HistoryCell::Assistant { content, .. } => {
+                let (cleaned, items) = zdx_engine::followups::extract_followups(content);
+                if !items.is_empty() {
+                    *content = cleaned.trim_end().to_string();
+                }
+                items
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// Appends text to a thinking cell's content.
     ///
     /// # Panics

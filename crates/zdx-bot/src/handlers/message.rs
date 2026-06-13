@@ -1754,7 +1754,7 @@ struct ParsedFinalResponse {
 }
 
 fn parse_final_response(final_text: &str) -> ParsedFinalResponse {
-    let (text_without_followups, followups) = crate::followups::extract_followups(final_text);
+    let (text_without_followups, followups) = zdx_engine::followups::extract_followups(final_text);
     let text_without_wrappers = strip_media_wrappers(&text_without_followups);
     let (text_without_media_tags, raw_media_values) = extract_media_tags(&text_without_wrappers);
     let mut media_paths = Vec::new();
