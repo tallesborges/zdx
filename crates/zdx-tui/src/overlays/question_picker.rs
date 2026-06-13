@@ -108,8 +108,37 @@ fn render_question_picker(
 ) {
     use super::render_utils::{InputHint, OverlayConfig, render_overlay, render_separator};
 
-    let title = truncate(&picker.question, 56);
-    let picker_height = (picker.options.len() as u16 + 5).max(7);
+    // Width: use most of the screen so option descriptions aren't clipped.
+    let width = area.width.saturating_sub(6).clamp(40, 96);
+    // Inner text width available to wrapped description lines (border + symbol).
+    let wrap_width = width.saturating_sub(6) as usize;
+
+    // Pre-build each option's lines (label + wrapped description) so we can
+    // size the overlay to fit and avoid mid-word clipping.
+    let option_lines: Vec<Vec<Line>> = picker
+        .options
+        .iter()
+        .enumerate()
+        .map(|(idx, (label, desc))| {
+            let mut lines = vec![Line::from(Span::styled(
+                format!("{}. {label}", idx + 1),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ))];
+            for chunk in wrap_text(desc.trim(), wrap_width) {
+                lines.push(Line::from(Span::styled(
+                    format!("   {chunk}"),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            lines
+        })
+        .collect();
+
+    let total_lines: usize = option_lines.iter().map(Vec::len).sum();
+    let title = truncate(&picker.question, width.saturating_sub(4) as usize);
+    let picker_height = (total_lines as u16 + 4).max(7);
 
     let hints = [
         InputHint::new("1-9", "pick"),
@@ -123,7 +152,7 @@ fn render_question_picker(
         &OverlayConfig {
             title: &title,
             border_color: Color::Cyan,
-            width: 60,
+            width,
             height: picker_height,
             hints: &hints,
         },
@@ -132,26 +161,7 @@ fn render_question_picker(
     let list_height = layout.body.height.saturating_sub(1);
     let list_area = Rect::new(layout.body.x, layout.body.y, layout.body.width, list_height);
 
-    let items: Vec<ListItem> = picker
-        .options
-        .iter()
-        .enumerate()
-        .map(|(idx, (label, desc))| {
-            let mut spans = vec![Span::styled(
-                format!("{}. {label}", idx + 1),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )];
-            if !desc.trim().is_empty() {
-                spans.push(Span::styled(
-                    format!("  {}", desc.trim()),
-                    Style::default().fg(Color::DarkGray),
-                ));
-            }
-            ListItem::new(Line::from(spans))
-        })
-        .collect();
+    let items: Vec<ListItem> = option_lines.into_iter().map(ListItem::new).collect();
 
     let list = List::new(items)
         .highlight_style(
@@ -169,10 +179,53 @@ fn render_question_picker(
     render_separator(frame, layout.body, list_height);
 }
 
+/// Word-wraps `text` to `width` columns, returning the wrapped lines (empty
+/// when `text` is empty).
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    if text.is_empty() || width == 0 {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if current.is_empty() {
+            current.push_str(word);
+        } else if current.chars().count() + 1 + word.chars().count() <= width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current.push_str(word);
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
 fn truncate(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_string();
     }
     let kept: String = text.chars().take(max_chars.saturating_sub(1)).collect();
     format!("{kept}…")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrap_text;
+
+    #[test]
+    fn wraps_words_within_width() {
+        let wrapped = wrap_text("the quick brown fox jumps", 10);
+        assert!(wrapped.iter().all(|l| l.chars().count() <= 10));
+        assert_eq!(wrapped.join(" "), "the quick brown fox jumps");
+    }
+
+    #[test]
+    fn empty_or_zero_width_yields_no_lines() {
+        assert!(wrap_text("", 10).is_empty());
+        assert!(wrap_text("hello", 0).is_empty());
+    }
 }
