@@ -349,13 +349,19 @@ fn intercept_ask_user_event(
         AgentEvent::ToolOutputDelta { id, chunk }
             if chunk == zdx_engine::tools::ask_user_question::REGISTERED_MARKER =>
         {
+            // Don't steal the keyboard: instead of auto-opening the picker,
+            // show the question inline so the user can type or dictate an
+            // answer. Ctrl+F opens the picker on demand.
             let thread_id = app.tui.thread.thread_handle.as_ref().map(|t| t.id.clone());
             if let Some(thread_id) = thread_id
                 && let Some(view) = crate::ask_user::pending_view(&app.tui.ask_user_map, &thread_id)
                 && view.tool_use_id == *id
             {
-                let state = overlays::QuestionPickerState::open(thread_id, view);
-                app.overlay = Some(overlays::Overlay::QuestionPicker(state));
+                app.tui
+                    .transcript
+                    .push_cell(crate::transcript::HistoryCell::system(format_question(
+                        &view,
+                    )));
             }
             true
         }
@@ -381,6 +387,27 @@ fn close_question_picker_if(
     {
         app.overlay = None;
     }
+}
+
+/// Formats a pending question + options into an inline system cell body.
+fn format_question(view: &crate::ask_user::QuestionView) -> String {
+    use std::fmt::Write;
+    let mut out = format!("❓ {}", view.question);
+    for (idx, opt) in view.options.iter().enumerate() {
+        if opt.description.trim().is_empty() {
+            let _ = write!(out, "\n  {}. {}", idx + 1, opt.label);
+        } else {
+            let _ = write!(
+                out,
+                "\n  {}. {} — {}",
+                idx + 1,
+                opt.label,
+                opt.description.trim()
+            );
+        }
+    }
+    out.push_str("\n(type or dictate your answer, or press Ctrl+F to pick)");
+    out
 }
 
 /// Whether an event is the `ask_user_question` registration marker.
@@ -1676,21 +1703,30 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         return vec![UiEffect::CloseCurrentTab];
     }
 
-    // Ctrl+F: open the follow-up suggestion picker when idle, the composer is
-    // empty, and the last reply offered suggestions.
+    // Ctrl+F: open a picker on demand — the pending question picker when a
+    // question is waiting, otherwise the follow-up suggestion picker. Keeps
+    // the keyboard free for typing/dictation by default.
     if app.overlay.is_none()
         && key.code == KeyCode::Char('f')
         && key.modifiers.contains(KeyModifiers::CONTROL)
-        && !app.tui.agent_state.is_running()
         && app.tui.input.get_text().is_empty()
-        && !app.tui.last_followups.is_empty()
     {
         let thread_id = app.tui.thread.thread_handle.as_ref().map(|t| t.id.clone());
-        let items = app.tui.last_followups.clone();
-        app.overlay = Some(Overlay::FollowupPicker(
-            overlays::FollowupPickerState::open(thread_id, items),
-        ));
-        return vec![];
+        if let Some(tid) = thread_id.clone()
+            && let Some(view) = crate::ask_user::pending_view(&app.tui.ask_user_map, &tid)
+        {
+            app.overlay = Some(Overlay::QuestionPicker(
+                overlays::QuestionPickerState::open(tid, view),
+            ));
+            return vec![];
+        }
+        if !app.tui.agent_state.is_running() && !app.tui.last_followups.is_empty() {
+            let items = app.tui.last_followups.clone();
+            app.overlay = Some(Overlay::FollowupPicker(
+                overlays::FollowupPickerState::open(thread_id, items),
+            ));
+            return vec![];
+        }
     }
 
     if let Some(Overlay::FilePicker(picker)) = app.overlay.as_mut()
