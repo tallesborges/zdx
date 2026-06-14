@@ -304,9 +304,12 @@ impl TuiRuntime {
 
                 // Render on any non-frame event. This keeps interaction
                 // responsive (key/mouse/task transitions) while still allowing
-                // `Frame` housekeeping without forcing a redraw.
+                // `Frame` housekeeping without forcing a redraw. `Tick` only
+                // dirties when something is actually animating, so an idle TUI
+                // stays visually static instead of redrawing every tick.
                 let marks_dirty = match &event {
                     UiEvent::Frame { .. } => false,
+                    UiEvent::Tick => self.state.needs_animation_tick(),
                     UiEvent::Terminal(crossterm::event::Event::Mouse(m)) => {
                         matches!(
                             m.kind,
