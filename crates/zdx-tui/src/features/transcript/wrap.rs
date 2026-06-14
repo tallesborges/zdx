@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -9,14 +10,13 @@ use crate::common::ratatui_width;
 
 /// Cache for wrapped lines to avoid re-computing on every frame.
 ///
-/// Keyed by `(CellId, width)`. The value is `(discriminator, cached_styled_lines)`,
-/// where the `discriminator` helps invalidate entries when streaming content changes
-/// without leaking old variations.
+/// Keyed by `(CellId, width)`. The `discriminator` invalidates entries when a
+/// cell's content changes. Lines are stored behind an `Rc` so cache hits are
+/// cheap pointer clones rather than deep `Vec<StyledLine>` copies.
 ///
 /// Uses interior mutability (`RefCell`) to allow caching during immutable
 /// render passes.
-/// Cached value: (discriminator, cached styled lines).
-type CacheEntry = (usize, Vec<StyledLine>);
+type CacheEntry = (usize, Rc<[StyledLine]>);
 
 #[derive(Debug, Default)]
 pub struct WrapCache {
@@ -39,18 +39,19 @@ impl WrapCache {
         self.cache.borrow_mut().clear();
     }
 
-    /// Gets cached lines for a cell, cloning if present and discriminator matches.
+    /// Gets cached lines for a cell, returning a cheap `Rc` clone if present
+    /// and the discriminator matches.
     pub(crate) fn get(
         &self,
         cell_id: CellId,
         width: usize,
         discriminator: usize,
-    ) -> Option<Vec<StyledLine>> {
+    ) -> Option<Rc<[StyledLine]>> {
         self.cache
             .borrow()
             .get(&(cell_id, width))
             .filter(|(cached_disc, _)| *cached_disc == discriminator)
-            .map(|(_, lines)| lines.clone())
+            .map(|(_, lines)| Rc::clone(lines))
     }
 
     /// Stores wrapped lines in the cache.
@@ -59,7 +60,7 @@ impl WrapCache {
         cell_id: CellId,
         width: usize,
         discriminator: usize,
-        lines: Vec<StyledLine>,
+        lines: Rc<[StyledLine]>,
     ) {
         self.cache
             .borrow_mut()

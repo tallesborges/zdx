@@ -1586,13 +1586,17 @@ fn handle_frame(tui: &mut TuiState, width: u16, height: u16, tab_bar_height: u16
     // Apply accumulated scroll delta from mouse events (coalescing)
     transcript::apply_scroll_delta(&mut tui.transcript);
 
-    // Update cell line info for lazy rendering and scroll calculations
+    // Update cell line info for lazy rendering and scroll calculations.
+    // Width changes invalidate every wrapped line; otherwise patch only the
+    // cells marked dirty since the last frame (usually just the streaming cell).
     let width_changed = previous_width != width;
-    if width_changed || tui.transcript.scroll.cell_line_info.is_empty() {
-        let cell_line_counts = render::calculate_cell_line_counts(tui, width as usize);
+    let dirty = tui.transcript.take_line_info_dirty();
+    let rebuild_from = if width_changed { Some(0) } else { dirty };
+    if let Some(from) = rebuild_from {
+        let cell_line_counts = render::calculate_cell_line_counts(tui, width as usize, from);
         tui.transcript
             .scroll
-            .update_cell_line_info(cell_line_counts);
+            .patch_cell_line_info(from, cell_line_counts);
     }
 }
 

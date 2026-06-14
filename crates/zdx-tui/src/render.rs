@@ -476,7 +476,14 @@ pub fn calculate_transcript_height_with_state(
 ///
 /// This is a thin wrapper around `transcript::calculate_cell_line_counts`
 /// that passes the combined horizontal overhead (margins + scrollbar).
-pub fn calculate_cell_line_counts(state: &TuiState, terminal_width: usize) -> Vec<(CellId, usize)> {
+///
+/// `from_index` selects incremental recompute: only cells at or after that
+/// index are measured. Pass `0` for a full rebuild.
+pub fn calculate_cell_line_counts(
+    state: &TuiState,
+    terminal_width: usize,
+    from_index: usize,
+) -> Vec<(CellId, usize)> {
     let horizontal_overhead = (TRANSCRIPT_MARGIN * 2 + SCROLLBAR_WIDTH) as usize;
-    transcript::calculate_cell_line_counts(state, terminal_width, horizontal_overhead)
+    transcript::calculate_cell_line_counts(state, terminal_width, horizontal_overhead, from_index)
 }
