@@ -1015,8 +1015,19 @@ impl HistoryCell {
                 is_interrupted,
                 ..
             } => {
-                // Include is_interrupted and is_streaming in discriminator
-                streaming_discriminator(content.len(), *is_streaming, *is_interrupted)
+                if *is_streaming {
+                    // Streaming only renders the committed markdown prefix, which
+                    // is byte-stable between commit points. Key on the committed
+                    // length (not total length) so deltas that don't advance a
+                    // commit point reuse the cached render instead of re-parsing
+                    // markdown every frame. The has-content bit distinguishes an
+                    // empty cell from one that is typing but not yet committed.
+                    let committed = crate::markdown::committed_len(content);
+                    let has_content = usize::from(!content.is_empty());
+                    usize::from(*is_interrupted) | (1 << 1) | (has_content << 2) | (committed << 3)
+                } else {
+                    streaming_discriminator(content.len(), false, *is_interrupted)
+                }
             }
             HistoryCell::Tool { result, .. } => usize::from(result.is_some()),
             HistoryCell::System { content, .. } => content.len(),
@@ -1579,6 +1590,39 @@ mod tests {
 
         // Cache should be empty (we can't directly check, but behavior should be correct)
         // This mainly tests that clear() doesn't panic
+    }
+
+    #[test]
+    fn streaming_assistant_cache_key_stable_until_commit() {
+        // Deltas that don't complete a line must not change the cache key, so
+        // the streaming markdown isn't re-parsed every frame.
+        let mut cell = HistoryCell::assistant_streaming("Hello");
+        let d1 = cell.cache_discriminator();
+
+        cell.append_assistant_delta(" world"); // still no newline -> no new commit
+        assert_eq!(
+            cell.cache_discriminator(),
+            d1,
+            "no commit point advanced -> cache key must stay stable"
+        );
+
+        cell.append_assistant_delta("\n"); // newline commits the line
+        assert_ne!(
+            cell.cache_discriminator(),
+            d1,
+            "commit point advanced -> cache key must change"
+        );
+    }
+
+    #[test]
+    fn streaming_assistant_cache_key_distinguishes_empty_from_typing() {
+        let empty = HistoryCell::assistant_streaming("");
+        let typing = HistoryCell::assistant_streaming("hi"); // uncommitted, shows cursor
+        assert_ne!(
+            empty.cache_discriminator(),
+            typing.cache_discriminator(),
+            "empty vs typing-but-uncommitted render differently"
+        );
     }
 
     #[test]
