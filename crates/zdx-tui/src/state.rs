@@ -374,6 +374,11 @@ pub struct TuiState {
     /// Optimistic thread-running markers used to bridge spawn-time races before
     /// activity markers are visible on disk.
     pub optimistic_active_threads: HashMap<String, Instant>,
+    /// Throttle cache for the on-disk active-run scan. The scan is only used to
+    /// gate submit-time behavior, so `snapshot_active_thread_ids` reuses this
+    /// for up to 1s instead of hitting the filesystem on the per-keystroke path.
+    pub(crate) active_threads_scan: HashSet<String>,
+    pub(crate) active_threads_scanned_at: Option<Instant>,
     /// Questions from `ask_user_question` waiting for a user answer.
     pub(crate) ask_user_map: crate::ask_user::PendingQuestionMap,
     /// Follow-up suggestions from the most recent reply (Ctrl+F to pick).
@@ -465,6 +470,8 @@ impl TuiState {
             input_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
             transcript_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
             optimistic_active_threads: HashMap::new(),
+            active_threads_scan: HashSet::new(),
+            active_threads_scanned_at: None,
             ask_user_map,
             last_followups: Vec::new(),
         }
@@ -477,13 +484,29 @@ impl TuiState {
 
     pub fn mark_thread_finished(&mut self, thread_id: &str) {
         self.optimistic_active_threads.remove(thread_id);
+        // Drop it from the throttled scan cache too, so a just-finished thread
+        // doesn't linger as "active" until the next on-disk refresh.
+        self.active_threads_scan.remove(thread_id);
     }
 
     pub fn snapshot_active_thread_ids(&mut self) -> HashSet<String> {
-        let registry: HashSet<String> = zdx_engine::agent_activity::list_active()
-            .into_iter()
-            .filter_map(|run| run.thread_id)
-            .collect();
+        // The on-disk scan gates submit-time behavior plus the load/preview
+        // guards, so brief staleness is harmless. Throttle it so plain typing
+        // never pays for a filesystem walk + per-marker JSON parse + PID check
+        // on every key.
+        const SCAN_INTERVAL: Duration = Duration::from_secs(1);
+        let stale = self
+            .active_threads_scanned_at
+            .is_none_or(|at| at.elapsed() >= SCAN_INTERVAL);
+        if stale {
+            self.active_threads_scan = zdx_engine::agent_activity::list_active()
+                .into_iter()
+                .filter_map(|run| run.thread_id)
+                .collect();
+            self.active_threads_scanned_at = Some(Instant::now());
+        }
+
+        let registry = self.active_threads_scan.clone();
         let grace = Duration::from_secs(2);
         self.optimistic_active_threads
             .retain(|thread_id, started| registry.contains(thread_id) || started.elapsed() < grace);
