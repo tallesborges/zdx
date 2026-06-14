@@ -24,11 +24,13 @@ const MAX_BUFFER_BEFORE_FORCE_COMMIT: usize = 500;
 /// // When finalized - use render_markdown() directly on the full content
 /// ```
 #[derive(Debug, Clone, Default)]
+#[cfg(test)]
 pub struct MarkdownStreamCollector {
     /// The accumulated raw markdown buffer.
     buffer: String,
 }
 
+#[cfg(test)]
 impl MarkdownStreamCollector {
     /// Creates a new empty stream collector.
     pub fn new() -> Self {
@@ -42,150 +44,149 @@ impl MarkdownStreamCollector {
 
     /// Renders committed content (up to the last safe commit point).
     ///
-    /// A safe commit point is:
-    /// - The last newline, if we're not inside an unclosed code fence
-    /// - Content before an unclosed code fence (if there's prior content)
-    /// - Or a forced commit after `MAX_BUFFER_BEFORE_FORCE_COMMIT` bytes without newline
-    ///
     /// Returns the rendered styled lines for the committed portion.
     pub fn render_committed(&self, width: usize) -> Vec<StyledLine> {
-        let commit_pos = self.find_commit_point();
+        let commit_pos = commit_point(&self.buffer);
         if commit_pos == 0 {
             return vec![];
         }
-
-        let to_render = &self.buffer[..commit_pos];
-        render_markdown(to_render, width)
-    }
-
-    /// Finds the safe commit point in the buffer.
-    ///
-    /// Returns the byte position up to which we can safely render markdown.
-    /// Returns 0 if no safe commit point exists yet.
-    fn find_commit_point(&self) -> usize {
-        if self.buffer.is_empty() {
-            return 0;
-        }
-
-        // Find all fence positions and determine safe commit point
-        let fence_positions = self.find_fence_positions();
-
-        if fence_positions.is_empty() {
-            // No fences - commit up to last newline
-            return self.find_last_newline_commit();
-        }
-
-        // Check if we're inside an unclosed code block (odd fence count)
-        if fence_positions.len() % 2 == 1 {
-            // We have an unclosed fence. Find safe commit point BEFORE it.
-            let unclosed_fence_start = fence_positions[fence_positions.len() - 1];
-
-            // If there are complete blocks before this, commit up to after the last complete block
-            if fence_positions.len() >= 3 {
-                // We have at least one complete block (pair) before the unclosed one
-                let last_complete_close = fence_positions[fence_positions.len() - 2];
-                if let Some(newline_pos) = self.buffer[last_complete_close..].find('\n') {
-                    let commit_pos = last_complete_close + newline_pos + 1;
-                    // Only commit if this is before the unclosed fence
-                    if commit_pos <= unclosed_fence_start {
-                        return commit_pos;
-                    }
-                }
-            }
-
-            // Find last newline before the unclosed fence
-            if unclosed_fence_start > 0 {
-                // Look for the start of the line containing the fence
-                if let Some(line_start) = self.buffer[..unclosed_fence_start].rfind('\n') {
-                    return line_start + 1;
-                }
-            }
-
-            // Unclosed fence at start of buffer - can't commit anything
-            return 0;
-        }
-
-        // Even fence count - all blocks are closed
-        // Commit up to after the last closing fence (if terminated) or last newline
-        if fence_positions.len() >= 2 {
-            let last_close = fence_positions[fence_positions.len() - 1];
-            if let Some(newline_pos) = self.buffer[last_close..].find('\n') {
-                return last_close + newline_pos + 1;
-            }
-            // Closing fence not terminated yet - commit up to before it
-            if let Some(line_start) = self.buffer[..last_close].rfind('\n') {
-                return line_start + 1;
-            }
-        }
-
-        // Fallback: commit up to last newline
-        self.find_last_newline_commit()
-    }
-
-    /// Find commit point based on last newline (for non-code-block content).
-    fn find_last_newline_commit(&self) -> usize {
-        if let Some(pos) = self.buffer.rfind('\n') {
-            return pos + 1;
-        }
-
-        // No newline found - check if we should force commit due to buffer size
-        if self.buffer.len() > MAX_BUFFER_BEFORE_FORCE_COMMIT {
-            if let Some(pos) = self.buffer[..MAX_BUFFER_BEFORE_FORCE_COMMIT].rfind(' ') {
-                return pos + 1;
-            }
-            return MAX_BUFFER_BEFORE_FORCE_COMMIT;
-        }
-
-        0
-    }
-
-    /// Finds all fence positions in the buffer.
-    ///
-    /// A fence starts with three backticks or `~~~` at the start of a line
-    /// (with up to 3 leading spaces).
-    fn find_fence_positions(&self) -> Vec<usize> {
-        let mut positions = Vec::new();
-        let mut line_start = 0;
-
-        for (i, ch) in self.buffer.char_indices() {
-            if ch == '\n' {
-                line_start = i + 1;
-                continue;
-            }
-
-            // Check if we're at a potential fence start
-            if i == line_start || (i > line_start && i - line_start <= 3) {
-                // Allow up to 3 leading spaces
-                let before_fence = &self.buffer[line_start..i];
-                if before_fence.chars().all(|c| c == ' ') {
-                    // Check for ``` or ~~~
-                    let remaining = &self.buffer[i..];
-                    if remaining.starts_with("```") || remaining.starts_with("~~~") {
-                        positions.push(i);
-                    }
-                }
-            }
-        }
-
-        positions
+        render_markdown(&self.buffer[..commit_pos], width)
     }
 
     /// Checks if we're currently inside an unclosed code block.
     #[cfg(test)]
     pub fn is_in_code_block(&self) -> bool {
-        self.find_fence_positions().len() % 2 == 1
+        fence_positions(&self.buffer).len() % 2 == 1
     }
+}
+
+/// Length of the committed (stable) markdown prefix of `content`.
+///
+/// The streaming renderer only renders `content[..committed_len]`, and that
+/// prefix is byte-stable until a new commit point appears. Callers use this to
+/// key cached output so deltas that don't advance a commit point skip
+/// re-parsing markdown every frame.
+pub(crate) fn committed_len(content: &str) -> usize {
+    commit_point(content)
+}
+
+/// Finds the safe commit point in `buffer`: the byte position up to which
+/// markdown can be rendered. Returns 0 if nothing can be committed yet.
+///
+/// A safe commit point is the last newline (when not inside an unclosed code
+/// fence), the content before an unclosed fence, or a forced commit after
+/// `MAX_BUFFER_BEFORE_FORCE_COMMIT` bytes without a newline.
+fn commit_point(buffer: &str) -> usize {
+    if buffer.is_empty() {
+        return 0;
+    }
+
+    let fences = fence_positions(buffer);
+
+    if fences.is_empty() {
+        // No fences - commit up to last newline
+        return last_newline_commit(buffer);
+    }
+
+    // Check if we're inside an unclosed code block (odd fence count)
+    if fences.len() % 2 == 1 {
+        // We have an unclosed fence. Find safe commit point BEFORE it.
+        let unclosed_fence_start = fences[fences.len() - 1];
+
+        // If there are complete blocks before this, commit up to after the last complete block
+        if fences.len() >= 3 {
+            let last_complete_close = fences[fences.len() - 2];
+            if let Some(newline_pos) = buffer[last_complete_close..].find('\n') {
+                let commit_pos = last_complete_close + newline_pos + 1;
+                if commit_pos <= unclosed_fence_start {
+                    return commit_pos;
+                }
+            }
+        }
+
+        // Find last newline before the unclosed fence
+        if unclosed_fence_start > 0
+            && let Some(line_start) = buffer[..unclosed_fence_start].rfind('\n')
+        {
+            return line_start + 1;
+        }
+
+        // Unclosed fence at start of buffer - can't commit anything
+        return 0;
+    }
+
+    // Even fence count - all blocks are closed.
+    if fences.len() >= 2 {
+        let last_close = fences[fences.len() - 1];
+        if let Some(newline_pos) = buffer[last_close..].find('\n') {
+            return last_close + newline_pos + 1;
+        }
+        // Closing fence not terminated yet - commit up to before it
+        if let Some(line_start) = buffer[..last_close].rfind('\n') {
+            return line_start + 1;
+        }
+    }
+
+    // Fallback: commit up to last newline
+    last_newline_commit(buffer)
+}
+
+/// Commit point based on the last newline (for non-code-block content).
+fn last_newline_commit(buffer: &str) -> usize {
+    if let Some(pos) = buffer.rfind('\n') {
+        return pos + 1;
+    }
+
+    // No newline found - force commit if the buffer is getting long.
+    if buffer.len() > MAX_BUFFER_BEFORE_FORCE_COMMIT {
+        if let Some(pos) = buffer[..MAX_BUFFER_BEFORE_FORCE_COMMIT].rfind(' ') {
+            return pos + 1;
+        }
+        return MAX_BUFFER_BEFORE_FORCE_COMMIT;
+    }
+
+    0
+}
+
+/// Finds all fence positions in `buffer`.
+///
+/// A fence starts with three backticks or `~~~` at the start of a line
+/// (with up to 3 leading spaces).
+fn fence_positions(buffer: &str) -> Vec<usize> {
+    let mut positions = Vec::new();
+    let mut line_start = 0;
+
+    for (i, ch) in buffer.char_indices() {
+        if ch == '\n' {
+            line_start = i + 1;
+            continue;
+        }
+
+        // Check if we're at a potential fence start (allow up to 3 leading spaces)
+        if i == line_start || (i > line_start && i - line_start <= 3) {
+            let before_fence = &buffer[line_start..i];
+            if before_fence.chars().all(|c| c == ' ') {
+                let remaining = &buffer[i..];
+                if remaining.starts_with("```") || remaining.starts_with("~~~") {
+                    positions.push(i);
+                }
+            }
+        }
+    }
+
+    positions
 }
 
 /// Renders markdown content for streaming, returning only the committed portion.
 ///
-/// This is a convenience function that creates a collector, pushes the content,
-/// and returns the committed lines. For actual streaming, use `MarkdownStreamCollector`
-/// directly to avoid re-parsing on each delta.
+/// Renders `content[..commit_point]` — complete lines/blocks only — so partial
+/// trailing content isn't shown mid-parse.
 pub fn render_markdown_streaming(content: &str, width: usize) -> Vec<StyledLine> {
-    let mut collector = MarkdownStreamCollector::new();
-    collector.push_delta(content);
-    collector.render_committed(width)
+    let commit_pos = commit_point(content);
+    if commit_pos == 0 {
+        return vec![];
+    }
+    render_markdown(&content[..commit_pos], width)
 }
 
 #[cfg(test)]
