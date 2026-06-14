@@ -140,6 +140,21 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Whether anything time-driven is currently visible and therefore needs a
+    /// redraw on each tick (spinners, streaming, selection auto-clear, the
+    /// thread-picker "Copied!" feedback). When false, idle ticks skip rendering.
+    pub fn needs_animation_tick(&self) -> bool {
+        let tui = &self.tui;
+        tui.agent_state.is_running()
+            || tui.tasks.is_any_running()
+            || tui.transcript.selection.has_pending_clear()
+            || tui.input.handoff.is_generating()
+            || matches!(
+                &self.overlay,
+                Some(Overlay::ThreadPicker(picker)) if picker.should_show_copied()
+            )
+    }
+
     /// Creates a new `AppState`.
     #[cfg(test)]
     pub fn new(
