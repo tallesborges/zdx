@@ -132,7 +132,12 @@ fn render_transcript_lazy(
     // This is the line index in the full transcript
     let mut global_line_idx = visible.lines_before;
 
-    for (cell_idx, cell) in state.transcript.cells()[visible.cell_range.clone()]
+    // Stop once we've produced enough lines to fill the viewport. Without this
+    // cap, a single huge visible cell would materialize every one of its lines
+    // (including those below the viewport) instead of just the visible slice.
+    let max_lines = state.transcript.viewport_height;
+
+    'cells: for (cell_idx, cell) in state.transcript.cells()[visible.cell_range.clone()]
         .iter()
         .enumerate()
     {
@@ -142,20 +147,16 @@ fn render_transcript_lazy(
             &state.transcript.wrap_cache,
         );
 
-        // For first cell, skip lines that are above viewport
+        // For the first cell, skip lines above the viewport by slicing rather
+        // than iterating and discarding them. `global_line_idx` already starts
+        // at `visible.lines_before`, which accounts for the skipped lines.
         let skip_count = if cell_idx == 0 {
-            visible.first_cell_line_offset
+            visible.first_cell_line_offset.min(styled_lines.len())
         } else {
             0
         };
 
-        for (line_in_cell, styled_line) in styled_lines.iter().enumerate() {
-            if line_in_cell < skip_count {
-                // Don't increment global_line_idx here - it's already set correctly
-                // to visible.lines_before which accounts for all skipped lines
-                continue;
-            }
-
+        for styled_line in &styled_lines[skip_count..] {
             let interaction = detect_line_interaction(styled_line);
             let non_selectable_prefix_graphemes =
                 non_selectable_prefix_graphemes_for_line(styled_line);
@@ -179,6 +180,10 @@ fn render_transcript_lazy(
             );
             lines.push(converted);
             global_line_idx += 1;
+
+            if lines.len() >= max_lines {
+                break 'cells;
+            }
         }
 
         // Add blank line after each cell (matching full render behavior)
@@ -189,6 +194,10 @@ fn render_transcript_lazy(
             .push(LineMapping::new(String::new(), None));
         lines.push(Line::default());
         global_line_idx += 1;
+
+        if lines.len() >= max_lines {
+            break 'cells;
+        }
     }
 
     lines
