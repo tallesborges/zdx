@@ -41,5 +41,5 @@ pub use state::{ScrollMode, ScrollState};
 pub use state::{TranscriptState, VisibleRange};
 pub use style::{Style, StyledLine, StyledSpan};
 // Re-export update functions
-pub use update::{apply_pending_delta, apply_scroll_delta, handle_agent_event, handle_mouse};
+pub use update::{apply_pending_delta, handle_agent_event, handle_mouse};
 pub use wrap::WrapCache;
