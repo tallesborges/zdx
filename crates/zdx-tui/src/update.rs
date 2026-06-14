@@ -1452,6 +1452,8 @@ fn create_btw_tab(
         input_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
         transcript_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
         optimistic_active_threads: std::collections::HashMap::new(),
+        active_threads_scan: std::collections::HashSet::new(),
+        active_threads_scanned_at: None,
         ask_user_map,
         last_followups: Vec::new(),
     }
@@ -1557,6 +1559,8 @@ fn create_thread_tab(
         input_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
         transcript_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
         optimistic_active_threads: std::collections::HashMap::new(),
+        active_threads_scan: std::collections::HashSet::new(),
+        active_threads_scanned_at: None,
         ask_user_map,
         last_followups: Vec::new(),
     }
