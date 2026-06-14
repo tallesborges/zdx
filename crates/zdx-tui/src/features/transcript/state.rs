@@ -268,78 +268,6 @@ impl ScrollState {
     }
 }
 
-/// Accumulator for mouse scroll deltas with acceleration.
-///
-/// Coalesces rapid scroll events (especially from trackpads) into a single
-/// scroll operation per frame, improving smoothness and reducing jitter.
-///
-/// Features scroll acceleration: starts slow (1 line) for precision,
-/// then speeds up if the user keeps scrolling in the same direction.
-///
-/// Convention: positive delta = scroll down, negative delta = scroll up.
-#[derive(Debug, Clone, Default)]
-pub struct ScrollAccumulator {
-    /// Accumulated scroll delta (positive = down, negative = up).
-    pending_delta: i32,
-    /// Consecutive frames scrolling in the same direction.
-    consecutive_frames: u8,
-    /// Direction of last scroll (-1 = up, 0 = none, 1 = down).
-    last_direction: i8,
-}
-
-impl ScrollAccumulator {
-    /// Accumulates a scroll delta.
-    ///
-    /// Positive values scroll down, negative values scroll up.
-    pub fn accumulate(&mut self, delta: i32) {
-        self.pending_delta += delta;
-    }
-
-    /// Takes the accumulated delta and returns the lines to scroll.
-    ///
-    /// Implements linear acceleration: starts at 1 line, increases by 1
-    /// per consecutive frame scrolling in the same direction, resets on
-    /// direction change.
-    pub fn take_delta(&mut self) -> i32 {
-        let raw_delta = std::mem::take(&mut self.pending_delta);
-        if raw_delta == 0 {
-            // No scroll this frame - reset acceleration
-            self.consecutive_frames = 0;
-            self.last_direction = 0;
-            return 0;
-        }
-
-        let current_direction = raw_delta.signum() as i8;
-
-        // Check if direction changed
-        if current_direction == self.last_direction {
-            self.consecutive_frames = self.consecutive_frames.saturating_add(1);
-        } else {
-            self.consecutive_frames = 1;
-            self.last_direction = current_direction;
-        }
-
-        // Linear acceleration: 1, 2, 3, ... per consecutive frame.
-        let multiplier = u32::from(self.consecutive_frames);
-
-        // Apply multiplier but cap at the raw delta magnitude
-        let max_lines = raw_delta.unsigned_abs().max(1);
-        let lines = multiplier.min(max_lines);
-
-        // Return with correct sign
-        if raw_delta < 0 {
-            -(lines as i32)
-        } else {
-            lines as i32
-        }
-    }
-
-    /// Returns the current pending delta without consuming it.
-    pub fn peek_delta(&self) -> i32 {
-        self.pending_delta
-    }
-}
-
 /// Transcript display state.
 ///
 /// Encapsulates all state related to displaying the transcript: cells, scroll,
@@ -351,9 +279,6 @@ pub struct TranscriptState {
 
     /// Scroll state (mode, offset, cached line count).
     pub scroll: ScrollState,
-
-    /// Accumulator for mouse scroll deltas (coalesces events within a frame).
-    pub scroll_accumulator: ScrollAccumulator,
 
     /// Cache for wrapped line rendering.
     pub wrap_cache: super::WrapCache,
@@ -394,7 +319,6 @@ impl Default for TranscriptState {
         Self {
             cells: Vec::new(),
             scroll: ScrollState::default(),
-            scroll_accumulator: ScrollAccumulator::default(),
             wrap_cache: super::WrapCache::new(),
             viewport_height: 20,
             terminal_size: (80, 24),
@@ -924,32 +848,6 @@ fn is_word_grapheme(grapheme: &str) -> bool {
 mod tests {
     use super::*;
     use crate::transcript::LineMapping;
-
-    #[test]
-    fn test_scroll_accumulator_acceleration() {
-        let mut acc = ScrollAccumulator::default();
-
-        // First frame: starts at 1 line
-        acc.accumulate(5);
-        assert_eq!(acc.take_delta(), 1);
-
-        // Second frame same direction: accelerates to 2
-        acc.accumulate(5);
-        assert_eq!(acc.take_delta(), 2);
-
-        // Third frame same direction: accelerates to 3
-        acc.accumulate(5);
-        assert_eq!(acc.take_delta(), 3);
-
-        // Direction change resets acceleration
-        acc.accumulate(-5);
-        assert_eq!(acc.take_delta(), -1);
-
-        // No scroll resets acceleration
-        assert_eq!(acc.take_delta(), 0);
-        acc.accumulate(5);
-        assert_eq!(acc.take_delta(), 1); // Back to 1
-    }
 
     // ========================================================================
     // Lazy Rendering Tests

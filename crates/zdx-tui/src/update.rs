@@ -1587,9 +1587,6 @@ fn handle_frame(tui: &mut TuiState, width: u16, height: u16, tab_bar_height: u16
     // Apply any pending streaming text deltas (coalescing)
     transcript::apply_pending_delta(&mut tui.transcript, &mut tui.agent_state);
 
-    // Apply accumulated scroll delta from mouse events (coalescing)
-    transcript::apply_scroll_delta(&mut tui.transcript);
-
     // Update cell line info for lazy rendering and scroll calculations.
     // Width changes invalidate every wrapped line; otherwise patch only the
     // cells marked dirty since the last frame (usually just the streaming cell).
@@ -2019,28 +2016,6 @@ mod tests {
         assert!(matches!(
             app.tui.transcript.scroll.mode,
             ScrollMode::FollowLatest
-        ));
-    }
-
-    #[test]
-    fn test_apply_scroll_delta_with_acceleration() {
-        let config = zdx_engine::config::Config::default();
-        let mut app = AppState::new(config, PathBuf::new(), None, None);
-        app.tui.transcript.scroll.update_line_count(100);
-        app.tui.transcript.viewport_height = 20;
-
-        // First frame: multiple events accumulated, but acceleration starts at 1
-        app.tui.transcript.scroll_accumulator.accumulate(-1);
-        app.tui.transcript.scroll_accumulator.accumulate(-1);
-        app.tui.transcript.scroll_accumulator.accumulate(-1);
-
-        // Apply scrolls 1 line (acceleration starting point)
-        transcript::apply_scroll_delta(&mut app.tui.transcript);
-
-        // Should be anchored at offset 79 (80 - 1)
-        assert!(matches!(
-            app.tui.transcript.scroll.mode,
-            ScrollMode::Anchored { offset: 79 }
         ));
     }
 

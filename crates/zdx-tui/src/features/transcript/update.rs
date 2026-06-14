@@ -17,7 +17,7 @@ use crate::state::AgentState;
 use crate::transcript::{HistoryCell, LineInteraction, TranscriptState};
 
 /// Lines to scroll per mouse wheel tick.
-const MOUSE_SCROLL_LINES: usize = 1;
+const MOUSE_SCROLL_LINES: usize = 3;
 
 // ============================================================================
 // Agent Event Handler
@@ -393,20 +393,14 @@ pub fn handle_mouse(
             if !contains_point(transcript_area, mouse.column, mouse.row) {
                 return None;
             }
-            // Accumulate negative delta (up = negative)
-            transcript
-                .scroll_accumulator
-                .accumulate(-(MOUSE_SCROLL_LINES as i32));
+            transcript.scroll_up(MOUSE_SCROLL_LINES);
             None
         }
         MouseEventKind::ScrollDown => {
             if !contains_point(transcript_area, mouse.column, mouse.row) {
                 return None;
             }
-            // Accumulate positive delta (down = positive)
-            transcript
-                .scroll_accumulator
-                .accumulate(MOUSE_SCROLL_LINES as i32);
+            transcript.scroll_down(MOUSE_SCROLL_LINES);
             None
         }
         MouseEventKind::Down(MouseButton::Left) => {
@@ -705,25 +699,6 @@ fn format_followups(items: &[String]) -> String {
         let _ = write!(out, "\n  {}. {item}", idx + 1);
     }
     out
-}
-
-/// Applies any accumulated scroll delta from mouse events.
-///
-/// Called once per frame after all events are processed to coalesce
-/// rapid scroll events (especially from trackpads) into a single scroll.
-/// Uses scroll acceleration: slow for precision, faster for long scrolls.
-pub fn apply_scroll_delta(transcript: &mut TranscriptState) {
-    let delta = transcript.scroll_accumulator.take_delta();
-    if delta == 0 {
-        return;
-    }
-
-    let lines = delta.unsigned_abs() as usize;
-    if delta < 0 {
-        transcript.scroll_up(lines);
-    } else {
-        transcript.scroll_down(lines);
-    }
 }
 
 #[cfg(test)]
