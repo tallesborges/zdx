@@ -1037,8 +1037,22 @@ impl HistoryCell {
                 is_interrupted,
                 ..
             } => {
-                // Include is_interrupted and is_streaming in discriminator
-                streaming_discriminator(content.len(), *is_streaming, *is_interrupted)
+                if *is_streaming {
+                    // Reasoning is plain word-wrap (no markdown commit points), and
+                    // we keep showing the live tail. Re-wrap at a coarse byte
+                    // granularity instead of every delta so fast streams reuse the
+                    // cache; the first byte still renders immediately and the tail
+                    // updates in ~32-byte steps.
+                    const THINKING_STREAM_BUCKET_BYTES: usize = 32;
+                    let len_bucket = if content.is_empty() {
+                        0
+                    } else {
+                        1 + (content.len() - 1) / THINKING_STREAM_BUCKET_BYTES
+                    };
+                    streaming_discriminator(len_bucket, true, *is_interrupted)
+                } else {
+                    streaming_discriminator(content.len(), false, *is_interrupted)
+                }
             }
             HistoryCell::Timing { duration, .. } => {
                 // Duration doesn't change, use millis as discriminator
@@ -1623,6 +1637,24 @@ mod tests {
             typing.cache_discriminator(),
             "empty vs typing-but-uncommitted render differently"
         );
+    }
+
+    #[test]
+    fn streaming_thinking_cache_key_throttles_but_shows_first_byte() {
+        // First byte must change the key (live content renders immediately).
+        let empty = HistoryCell::thinking_streaming("");
+        let one = HistoryCell::thinking_streaming("a");
+        assert_ne!(empty.cache_discriminator(), one.cache_discriminator());
+
+        // Within a 32-byte bucket the key is stable (no re-wrap per delta).
+        let mut cell = HistoryCell::thinking_streaming("a");
+        let d1 = cell.cache_discriminator();
+        cell.append_thinking_delta(&"x".repeat(20)); // 21 bytes -> same bucket
+        assert_eq!(cell.cache_discriminator(), d1);
+
+        // Crossing the 32-byte boundary changes the key.
+        cell.append_thinking_delta(&"y".repeat(20)); // 41 bytes -> next bucket
+        assert_ne!(cell.cache_discriminator(), d1);
     }
 
     #[test]
