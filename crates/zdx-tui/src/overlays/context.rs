@@ -322,7 +322,7 @@ impl ContextState {
                     ContextTab::Tools => report.render_tools_markdown(),
                 };
                 let styled = render_markdown(&markdown, body_width);
-                lines.extend(styled.into_iter().map(convert_styled_line));
+                lines.extend(styled.iter().map(convert_styled_line));
                 if lines.is_empty() {
                     lines.push(Line::from(Span::styled(
                         "(empty report)",

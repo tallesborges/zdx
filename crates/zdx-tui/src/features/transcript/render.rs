@@ -66,10 +66,10 @@ fn render_transcript_full(state: &TuiState, width: usize) -> Vec<Line<'static>> 
             &state.transcript.wrap_cache,
         );
 
-        for styled_line in styled_lines {
-            let interaction = detect_line_interaction(&styled_line);
+        for styled_line in styled_lines.iter() {
+            let interaction = detect_line_interaction(styled_line);
             let non_selectable_prefix_graphemes =
-                non_selectable_prefix_graphemes_for_line(&styled_line);
+                non_selectable_prefix_graphemes_for_line(styled_line);
             // Build the line text for position mapping
             let line_text: String = styled_line.spans.iter().map(|s| s.text.as_str()).collect();
             let grapheme_count = line_text.graphemes(true).count();
@@ -149,16 +149,16 @@ fn render_transcript_lazy(
             0
         };
 
-        for (line_in_cell, styled_line) in styled_lines.into_iter().enumerate() {
+        for (line_in_cell, styled_line) in styled_lines.iter().enumerate() {
             if line_in_cell < skip_count {
                 // Don't increment global_line_idx here - it's already set correctly
                 // to visible.lines_before which accounts for all skipped lines
                 continue;
             }
 
-            let interaction = detect_line_interaction(&styled_line);
+            let interaction = detect_line_interaction(styled_line);
             let non_selectable_prefix_graphemes =
-                non_selectable_prefix_graphemes_for_line(&styled_line);
+                non_selectable_prefix_graphemes_for_line(styled_line);
             // Build the line text for position mapping
             let line_text: String = styled_line.spans.iter().map(|s| s.text.as_str()).collect();
             let grapheme_count = line_text.graphemes(true).count();
@@ -200,18 +200,21 @@ fn render_transcript_lazy(
 
 /// Calculates cell line info and returns it for external application.
 ///
-/// Returns a Vec of (`CellId`, `line_count`) tuples that can be used to
-/// update `ScrollState::cell_line_info`.
+/// Returns a Vec of (`CellId`, `line_count`) tuples for the cells starting at
+/// `from_index`, which can be used to patch `ScrollState::cell_line_info`
+/// incrementally. Pass `from_index == 0` for a full rebuild.
 pub fn calculate_cell_line_counts(
     state: &TuiState,
     terminal_width: usize,
     horizontal_overhead: usize,
+    from_index: usize,
 ) -> Vec<(CellId, usize)> {
     let effective_width = terminal_width.saturating_sub(horizontal_overhead);
 
-    state
-        .transcript
-        .cells()
+    let cells = state.transcript.cells();
+    let from_index = from_index.min(cells.len());
+
+    cells[from_index..]
         .iter()
         .map(|cell| {
             let lines = cell.display_lines_cached(
@@ -234,10 +237,10 @@ pub fn calculate_cell_line_counts(
 /// Exposed within the crate so overlays (e.g. the TLDR overlay) can
 /// render styled markdown via `markdown::render_markdown` without
 /// duplicating the style-conversion logic.
-pub(crate) fn convert_styled_line(styled_line: StyledLine) -> Line<'static> {
+pub(crate) fn convert_styled_line(styled_line: &StyledLine) -> Line<'static> {
     let spans: Vec<Span<'static>> = styled_line
         .spans
-        .into_iter()
+        .iter()
         .map(|s| {
             let style = convert_style(s.style);
             Span::styled(ratatui_text(&s.text).into_owned(), style)
@@ -298,7 +301,7 @@ fn non_selectable_prefix_graphemes_for_line(styled_line: &StyledLine) -> usize {
 /// If the line (at `line_idx`) is within the selection range, the selected
 /// portion is rendered with a reversed background.
 fn convert_styled_line_with_selection(
-    styled_line: StyledLine,
+    styled_line: &StyledLine,
     selection: &SelectionState,
     line_idx: usize,
     grapheme_count: usize,
@@ -323,7 +326,7 @@ fn convert_styled_line_with_selection(
     let mut result_spans: Vec<Span<'static>> = Vec::new();
     let mut current_grapheme = 0usize;
 
-    for span in styled_line.spans {
+    for span in &styled_line.spans {
         let span_graphemes: Vec<&str> = span.text.graphemes(true).collect();
         let span_len = span_graphemes.len();
         let span_end = current_grapheme + span_len;

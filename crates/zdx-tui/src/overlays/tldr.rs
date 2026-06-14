@@ -132,7 +132,7 @@ impl TldrState {
             }
             TldrPhase::Ready(text) => {
                 let styled = render_markdown(text, body_width);
-                lines.extend(styled.into_iter().map(convert_styled_line));
+                lines.extend(styled.iter().map(convert_styled_line));
                 if lines.is_empty() {
                     lines.push(Line::from(Span::styled(
                         "(empty TLDR)",

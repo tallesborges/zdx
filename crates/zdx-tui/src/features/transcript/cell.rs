@@ -6,6 +6,7 @@
     clippy::cast_sign_loss
 )]
 
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Local, Utc};
@@ -1039,28 +1040,27 @@ impl HistoryCell {
     ///
     /// This is the preferred method for rendering in the TUI loop.
     /// It caches the output for static cells to avoid recomputation.
+    /// Cached lines are shared via `Rc`, so repeated reads (e.g. every
+    /// streaming frame) are cheap pointer clones rather than deep copies.
     pub fn display_lines_cached(
         &self,
         width: usize,
         spinner_frame: usize,
         cache: &WrapCache,
-    ) -> Vec<StyledLine> {
-        // Skip cache for dynamic cells
+    ) -> Rc<[StyledLine]> {
         if !self.is_cacheable() {
-            return self.display_lines(width, spinner_frame);
+            return Rc::from(self.display_lines(width, spinner_frame));
         }
 
         let cell_id = self.id();
         let discriminator = self.cache_discriminator();
 
-        // Check cache
         if let Some(cached) = cache.get(cell_id, width, discriminator) {
             return cached;
         }
 
-        // Compute and cache
-        let lines = self.display_lines(width, spinner_frame);
-        cache.insert(cell_id, width, discriminator, lines.clone());
+        let lines: Rc<[StyledLine]> = Rc::from(self.display_lines(width, spinner_frame));
+        cache.insert(cell_id, width, discriminator, Rc::clone(&lines));
         lines
     }
 }

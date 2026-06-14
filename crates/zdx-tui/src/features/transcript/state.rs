@@ -165,7 +165,7 @@ impl ScrollState {
     /// Updates the cached line count.
     ///
     /// Call this after rendering to keep scroll calculations accurate.
-    /// Note: For production use, prefer `update_cell_line_info()` which
+    /// Note: For production use, prefer `patch_cell_line_info()` which
     /// updates both cell info and `cached_line_count`.
     #[cfg(test)]
     pub fn update_line_count(&mut self, line_count: usize) {
@@ -220,17 +220,22 @@ impl ScrollState {
         })
     }
 
-    /// Updates cell line info from rendered cells.
+    /// Incrementally patches cell line info from `from_index` onward.
     ///
-    /// Call this after rendering to update visibility calculations.
-    /// The `line_counts` iterator should yield (`cell_id`, `line_count`) pairs
-    /// in cell order. Also updates `cached_line_count`.
-    pub fn update_cell_line_info<I>(&mut self, line_counts: I)
-    where
-        I: IntoIterator<Item = (CellId, usize)>,
-    {
-        self.cell_line_info.clear();
-        let mut cumulative_offset = 0;
+    /// Entries before `from_index` are kept as-is; entries at and after it are
+    /// replaced by `line_counts` (which must cover exactly `cells[from_index..]`
+    /// in order). Start lines are recomputed cumulatively from the last kept
+    /// entry, and `cached_line_count` is updated.
+    ///
+    /// `from_index == 0` is equivalent to a full rebuild.
+    pub fn patch_cell_line_info(&mut self, from_index: usize, line_counts: Vec<(CellId, usize)>) {
+        let from_index = from_index.min(self.cell_line_info.len());
+        self.cell_line_info.truncate(from_index);
+
+        let mut cumulative_offset = self
+            .cell_line_info
+            .last()
+            .map_or(0, |info| info.start_line + info.line_count);
 
         for (cell_id, line_count) in line_counts {
             self.cell_line_info.push(CellLineInfo {
@@ -243,8 +248,6 @@ impl ScrollState {
 
         self.cached_line_count = cumulative_offset;
     }
-
-    /// Returns the start line for a given cell index, if available.
     pub fn cell_start_line(&self, cell_index: usize) -> Option<usize> {
         self.cell_line_info
             .get(cell_index)
@@ -376,6 +379,14 @@ pub struct TranscriptState {
 
     /// User cell ID for the currently running agent turn.
     active_user_cell_id: Option<super::CellId>,
+
+    /// Smallest cell index whose line info needs recomputing before the next
+    /// render. `None` means `cell_line_info` is up to date.
+    ///
+    /// Streaming appends only touch the changed cell, so this lets
+    /// `handle_frame` patch line info incrementally instead of clearing and
+    /// rebuilding the whole transcript every frame.
+    line_info_dirty: Option<usize>,
 }
 
 impl Default for TranscriptState {
@@ -392,6 +403,8 @@ impl Default for TranscriptState {
             last_click: None,
             pending_user_cell_id: None,
             active_user_cell_id: None,
+            // Force an initial full build on the first frame.
+            line_info_dirty: Some(0),
         }
     }
 }
@@ -439,6 +452,7 @@ impl TranscriptState {
         self.wrap_cache.clear();
         self.pending_user_cell_id = None;
         self.active_user_cell_id = None;
+        self.invalidate_line_info();
     }
 
     /// Removes a cell by its ID.
@@ -447,23 +461,23 @@ impl TranscriptState {
     /// needs to be removed to maintain correct cell ordering. Returns true
     /// if a cell was removed.
     pub fn remove_cell_by_id(&mut self, id: super::CellId) -> bool {
-        let len_before = self.cells.len();
-        self.cells.retain(|c| c.id() != id);
-        if self.cells.len() < len_before {
-            self.scroll.cell_line_info.clear();
+        if let Some(index) = self.cells.iter().position(|c| c.id() == id) {
+            self.cells.remove(index);
+            // Everything from the removed slot shifts up.
+            self.mark_line_info_dirty_from(index);
             true
         } else {
             false
         }
     }
 
-    /// Pushes a cell and invalidates line info.
+    /// Pushes a cell and marks line info dirty from the new cell.
     pub fn push_cell(&mut self, cell: super::HistoryCell) {
         if let super::HistoryCell::User { id, .. } = &cell {
             self.pending_user_cell_id = Some(*id);
         }
         self.cells.push(cell);
-        self.scroll.cell_line_info.clear();
+        self.mark_line_info_dirty_from(self.cells.len() - 1);
     }
 
     /// Activates the pending user cell for the current turn.
@@ -478,9 +492,29 @@ impl TranscriptState {
         self.pending_user_cell_id.is_some()
     }
 
-    /// Invalidates cell line info to force full rendering.
+    /// Invalidates all cell line info, forcing a full rebuild next frame.
+    ///
+    /// Prefer `mark_line_info_dirty_from` when the changed cell index is known,
+    /// so streaming stays incremental.
     pub fn invalidate_line_info(&mut self) {
-        self.scroll.cell_line_info.clear();
+        self.mark_line_info_dirty_from(0);
+    }
+
+    /// Marks line info dirty starting at `index`, keeping the earliest pending
+    /// dirty index so multiple mutations within a frame coalesce correctly.
+    fn mark_line_info_dirty_from(&mut self, index: usize) {
+        self.line_info_dirty = Some(match self.line_info_dirty {
+            Some(existing) => existing.min(index),
+            None => index,
+        });
+    }
+
+    /// Takes the pending line-info dirty range, clearing it.
+    ///
+    /// Returns `Some(from_index)` when line info needs recomputing from that
+    /// cell index, or `None` when it is already up to date.
+    pub fn take_line_info_dirty(&mut self) -> Option<usize> {
+        self.line_info_dirty.take()
     }
 
     // ========================================================================
@@ -493,31 +527,31 @@ impl TranscriptState {
         tool_id: &str,
         result: zdx_engine::core::events::ToolOutput,
     ) {
-        if let Some(cell) = self.cells.iter_mut().find(
+        if let Some(index) = self.cells.iter().position(
             |c| matches!(c, super::HistoryCell::Tool { tool_use_id, .. } if tool_use_id == tool_id),
         ) {
-            cell.set_tool_result(result);
-            self.invalidate_line_info();
+            self.cells[index].set_tool_result(result);
+            self.mark_line_info_dirty_from(index);
         }
     }
 
     /// Sets tool input for a cell by `tool_use_id`.
     pub fn set_tool_input_for(&mut self, tool_id: &str, input: serde_json::Value) {
-        if let Some(cell) = self.cells.iter_mut().find(
+        if let Some(index) = self.cells.iter().position(
             |c| matches!(c, super::HistoryCell::Tool { tool_use_id, .. } if tool_use_id == tool_id),
         ) {
-            cell.set_tool_input(input);
-            self.invalidate_line_info();
+            self.cells[index].set_tool_input(input);
+            self.mark_line_info_dirty_from(index);
         }
     }
 
     /// Sets tool input preview for a cell by `tool_use_id`.
     pub fn set_tool_input_delta_for(&mut self, tool_id: &str, delta: String) {
-        if let Some(cell) = self.cells.iter_mut().find(
+        if let Some(index) = self.cells.iter().position(
             |c| matches!(c, super::HistoryCell::Tool { tool_use_id, .. } if tool_use_id == tool_id),
         ) {
-            cell.set_tool_input_delta(delta);
-            self.invalidate_line_info();
+            self.cells[index].set_tool_input_delta(delta);
+            self.mark_line_info_dirty_from(index);
         }
     }
 
@@ -526,19 +560,19 @@ impl TranscriptState {
     /// Only appends if the cell is in `ToolState::Running` — silently ignores
     /// deltas for tools that have already completed, errored, or been cancelled.
     pub fn append_tool_output_delta_for(&mut self, tool_id: &str, chunk: &str) {
-        if let Some(cell) = self.cells.iter_mut().find(
+        if let Some(index) = self.cells.iter().position(
             |c| matches!(c, super::HistoryCell::Tool { tool_use_id, state, .. } if tool_use_id == tool_id && *state == super::ToolState::Running),
         ) {
-            cell.append_tool_output_delta(chunk);
-            self.invalidate_line_info();
+            self.cells[index].append_tool_output_delta(chunk);
+            self.mark_line_info_dirty_from(index);
         }
     }
 
     /// Finalizes an assistant cell by `cell_id` (streaming → complete).
     pub fn finalize_assistant_cell(&mut self, cell_id: super::CellId) {
-        if let Some(cell) = self.cells.iter_mut().find(|c| c.id() == cell_id) {
-            cell.finalize_assistant();
-            self.invalidate_line_info();
+        if let Some(index) = self.cells.iter().position(|c| c.id() == cell_id) {
+            self.cells[index].finalize_assistant();
+            self.mark_line_info_dirty_from(index);
         }
     }
 
@@ -549,27 +583,27 @@ impl TranscriptState {
         cell_id: super::CellId,
     ) -> Vec<String> {
         let mut items = Vec::new();
-        if let Some(cell) = self.cells.iter_mut().find(|c| c.id() == cell_id) {
-            items = cell.strip_followups();
-            cell.finalize_assistant();
-            self.invalidate_line_info();
+        if let Some(index) = self.cells.iter().position(|c| c.id() == cell_id) {
+            items = self.cells[index].strip_followups();
+            self.cells[index].finalize_assistant();
+            self.mark_line_info_dirty_from(index);
         }
         items
     }
 
     /// Appends delta to a streaming assistant cell by `cell_id`.
     pub fn append_to_streaming_cell(&mut self, cell_id: super::CellId, delta: &str) {
-        if let Some(cell) = self.cells.iter_mut().find(|c| c.id() == cell_id) {
-            cell.append_assistant_delta(delta);
-            self.invalidate_line_info();
+        if let Some(index) = self.cells.iter().position(|c| c.id() == cell_id) {
+            self.cells[index].append_assistant_delta(delta);
+            self.mark_line_info_dirty_from(index);
         }
     }
 
     /// Appends delta to the last thinking cell.
     pub fn append_thinking_delta_to_last(&mut self, delta: &str) {
-        if let Some(cell) = self.cells.last_mut() {
+        if let Some((index, cell)) = self.cells.iter_mut().enumerate().next_back() {
             cell.append_thinking_delta(delta);
-            self.invalidate_line_info();
+            self.mark_line_info_dirty_from(index);
         }
     }
 
@@ -578,7 +612,7 @@ impl TranscriptState {
         &mut self,
         replay: Option<zdx_engine::providers::ReplayToken>,
     ) -> bool {
-        if let Some(cell) = self.cells.iter_mut().rev().find(|c| {
+        if let Some(index) = self.cells.iter().rposition(|c| {
             matches!(
                 c,
                 super::HistoryCell::Thinking {
@@ -587,8 +621,8 @@ impl TranscriptState {
                 }
             )
         }) {
-            cell.finalize_thinking(replay);
-            self.invalidate_line_info();
+            self.cells[index].finalize_thinking(replay);
+            self.mark_line_info_dirty_from(index);
             true
         } else {
             false
@@ -693,8 +727,8 @@ impl TranscriptState {
             TranscriptMutation::Clear => self.reset(),
             TranscriptMutation::ReplaceCells(cells) => {
                 self.cells = cells;
-                // Invalidate cell line info so visible_range() falls back to full render
-                self.scroll.cell_line_info.clear();
+                // Full rebuild: cell identities changed entirely.
+                self.invalidate_line_info();
                 self.pending_user_cell_id = None;
                 self.active_user_cell_id = None;
             }
@@ -935,7 +969,7 @@ mod tests {
     fn test_visible_range_single_cell_fits() {
         let mut scroll = ScrollState::new();
         // Single cell with 10 lines
-        scroll.update_cell_line_info(vec![(make_test_cell_id(1), 10)]);
+        scroll.patch_cell_line_info(0, vec![(make_test_cell_id(1), 10)]);
 
         let visible = scroll.visible_range(20).expect("should have range");
         assert_eq!(visible.cell_range, 0..1);
@@ -947,11 +981,14 @@ mod tests {
     fn test_visible_range_multiple_cells_all_visible() {
         let mut scroll = ScrollState::new();
         // 3 cells with 5 lines each = 15 total, viewport 20
-        scroll.update_cell_line_info(vec![
-            (make_test_cell_id(1), 5),
-            (make_test_cell_id(2), 5),
-            (make_test_cell_id(3), 5),
-        ]);
+        scroll.patch_cell_line_info(
+            0,
+            vec![
+                (make_test_cell_id(1), 5),
+                (make_test_cell_id(2), 5),
+                (make_test_cell_id(3), 5),
+            ],
+        );
 
         let visible = scroll.visible_range(20).expect("should have range");
         assert_eq!(visible.cell_range, 0..3);
@@ -962,13 +999,16 @@ mod tests {
     fn test_visible_range_scrolled_to_middle() {
         let mut scroll = ScrollState::new();
         // 5 cells with 10 lines each = 50 total
-        scroll.update_cell_line_info(vec![
-            (make_test_cell_id(1), 10), // lines 0-9
-            (make_test_cell_id(2), 10), // lines 10-19
-            (make_test_cell_id(3), 10), // lines 20-29
-            (make_test_cell_id(4), 10), // lines 30-39
-            (make_test_cell_id(5), 10), // lines 40-49
-        ]);
+        scroll.patch_cell_line_info(
+            0,
+            vec![
+                (make_test_cell_id(1), 10), // lines 0-9
+                (make_test_cell_id(2), 10), // lines 10-19
+                (make_test_cell_id(3), 10), // lines 20-29
+                (make_test_cell_id(4), 10), // lines 30-39
+                (make_test_cell_id(5), 10), // lines 40-49
+            ],
+        );
 
         // Scroll to offset 15 with viewport 20
         scroll.mode = ScrollMode::Anchored { offset: 15 };
@@ -984,13 +1024,16 @@ mod tests {
     fn test_visible_range_follow_mode() {
         let mut scroll = ScrollState::new();
         // 5 cells with 10 lines each = 50 total, viewport 20
-        scroll.update_cell_line_info(vec![
-            (make_test_cell_id(1), 10),
-            (make_test_cell_id(2), 10),
-            (make_test_cell_id(3), 10),
-            (make_test_cell_id(4), 10),
-            (make_test_cell_id(5), 10),
-        ]);
+        scroll.patch_cell_line_info(
+            0,
+            vec![
+                (make_test_cell_id(1), 10),
+                (make_test_cell_id(2), 10),
+                (make_test_cell_id(3), 10),
+                (make_test_cell_id(4), 10),
+                (make_test_cell_id(5), 10),
+            ],
+        );
 
         // Follow mode should show bottom (offset = 50 - 20 = 30)
         let visible = scroll.visible_range(20).expect("should have range");
@@ -1004,11 +1047,14 @@ mod tests {
     fn test_visible_range_partial_first_cell() {
         let mut scroll = ScrollState::new();
         // 3 cells with 20 lines each = 60 total
-        scroll.update_cell_line_info(vec![
-            (make_test_cell_id(1), 20), // lines 0-19
-            (make_test_cell_id(2), 20), // lines 20-39
-            (make_test_cell_id(3), 20), // lines 40-59
-        ]);
+        scroll.patch_cell_line_info(
+            0,
+            vec![
+                (make_test_cell_id(1), 20), // lines 0-19
+                (make_test_cell_id(2), 20), // lines 20-39
+                (make_test_cell_id(3), 20), // lines 40-59
+            ],
+        );
 
         // Scroll to offset 5 with viewport 10
         scroll.mode = ScrollMode::Anchored { offset: 5 };
@@ -1020,13 +1066,16 @@ mod tests {
     }
 
     #[test]
-    fn test_update_cell_line_info_updates_cached_line_count() {
+    fn test_patch_cell_line_info_updates_cached_line_count() {
         let mut scroll = ScrollState::new();
-        scroll.update_cell_line_info(vec![
-            (make_test_cell_id(1), 10),
-            (make_test_cell_id(2), 15),
-            (make_test_cell_id(3), 5),
-        ]);
+        scroll.patch_cell_line_info(
+            0,
+            vec![
+                (make_test_cell_id(1), 10),
+                (make_test_cell_id(2), 15),
+                (make_test_cell_id(3), 5),
+            ],
+        );
 
         assert_eq!(scroll.cached_line_count, 30);
         assert_eq!(scroll.cell_line_info.len(), 3);
@@ -1036,13 +1085,61 @@ mod tests {
     }
 
     #[test]
+    fn test_patch_cell_line_info_incremental_keeps_prefix_and_reflows() {
+        let mut scroll = ScrollState::new();
+        scroll.patch_cell_line_info(
+            0,
+            vec![
+                (make_test_cell_id(1), 10),
+                (make_test_cell_id(2), 15),
+                (make_test_cell_id(3), 5),
+            ],
+        );
+
+        // Simulate the streaming last cell growing (15 -> 20) plus an appended
+        // cell, patched incrementally from index 2.
+        scroll.patch_cell_line_info(
+            2,
+            vec![(make_test_cell_id(3), 20), (make_test_cell_id(4), 4)],
+        );
+
+        assert_eq!(scroll.cell_line_info.len(), 4);
+        // Prefix entries are untouched.
+        assert_eq!(scroll.cell_line_info[0].start_line, 0);
+        assert_eq!(scroll.cell_line_info[1].start_line, 10);
+        // Patched entries reflow from the last kept offset (10 + 15 = 25).
+        assert_eq!(scroll.cell_line_info[2].start_line, 25);
+        assert_eq!(scroll.cell_line_info[2].line_count, 20);
+        assert_eq!(scroll.cell_line_info[3].start_line, 45);
+        assert_eq!(scroll.cached_line_count, 49);
+    }
+
+    #[test]
+    fn test_patch_cell_line_info_from_zero_is_full_rebuild() {
+        let mut scroll = ScrollState::new();
+        scroll.patch_cell_line_info(
+            0,
+            vec![(make_test_cell_id(1), 10), (make_test_cell_id(2), 10)],
+        );
+
+        scroll.patch_cell_line_info(0, vec![(make_test_cell_id(9), 7)]);
+
+        assert_eq!(scroll.cell_line_info.len(), 1);
+        assert_eq!(scroll.cell_line_info[0].start_line, 0);
+        assert_eq!(scroll.cached_line_count, 7);
+    }
+
+    #[test]
     fn test_cell_index_for_line() {
         let mut scroll = ScrollState::new();
-        scroll.update_cell_line_info(vec![
-            (make_test_cell_id(1), 3),
-            (make_test_cell_id(2), 2),
-            (make_test_cell_id(3), 4),
-        ]);
+        scroll.patch_cell_line_info(
+            0,
+            vec![
+                (make_test_cell_id(1), 3),
+                (make_test_cell_id(2), 2),
+                (make_test_cell_id(3), 4),
+            ],
+        );
 
         assert_eq!(scroll.cell_index_for_line(0), Some(0));
         assert_eq!(scroll.cell_index_for_line(2), Some(0));
@@ -1071,7 +1168,10 @@ mod tests {
     #[test]
     fn test_reset_clears_cell_line_info() {
         let mut scroll = ScrollState::new();
-        scroll.update_cell_line_info(vec![(make_test_cell_id(1), 10), (make_test_cell_id(2), 10)]);
+        scroll.patch_cell_line_info(
+            0,
+            vec![(make_test_cell_id(1), 10), (make_test_cell_id(2), 10)],
+        );
 
         scroll.reset();
 
