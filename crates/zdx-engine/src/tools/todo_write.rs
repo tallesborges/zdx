@@ -11,13 +11,13 @@ use crate::core::thread_persistence::{self as tp, ThreadEvent};
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Todo_Write".to_string(),
-        description: "Create and manage a structured todo list for the current thread. Use this for tasks with 3+ meaningful steps, multiple requested changes, or work that benefits from visible progress. Send a `todos` array of mutations such as `replace`, `add`, `update`, and `remove` — `todos` must be a real JSON array, not a quoted JSON string. Use `replace` to initialize or fully reset the list, then prefer incremental `update`/`add`/`remove` ops as work advances instead of keeping a long implicit plan in prose. While unfinished work remains, keep exactly one todo `in_progress`. Example: {\"todos\":[{\"op\":\"add\",\"content\":\"Inspect bug\",\"status\":\"in_progress\"}]}".to_string(),
+        description: "Create and manage a structured todo list for the current thread. Use this for tasks with 3+ meaningful steps, multiple requested changes, or work that benefits from visible progress. Send a `todos` array of mutations such as `replace`, `add`, `update`, and `remove` — `todos` must be a real JSON array, not a quoted JSON string. Each element must be a mutation object with `op`; do not pass raw todo items like `{content,status}` directly. Use `replace` to initialize or fully reset the list, then prefer incremental `update`/`add`/`remove` ops as work advances instead of keeping a long implicit plan in prose. While unfinished work remains, keep exactly one todo `in_progress`. Example: {\"todos\":[{\"op\":\"add\",\"content\":\"Inspect bug\",\"status\":\"in_progress\"}]}".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "todos": {
                     "type": "array",
-                    "description": "Ordered todo-list mutations to apply. Must be a JSON array, not a stringified JSON array.",
+                    "description": "Ordered todo-list mutations to apply. Must be a JSON array, not a stringified JSON array. Each element must include `op`; to initialize the list, use `{ \"op\": \"replace\", \"todos\": [...] }`.",
                     "minItems": 1,
                     "items": {
                         "type": "object",
@@ -231,6 +231,18 @@ fn describe_parse_error(input: &Value, error: &serde_json::Error) -> String {
             return format!(
                 "field 'todos' must be an array; received {}. Parse error: {error}",
                 json_type_name(todos)
+            );
+        }
+        if let Some(items) = todos.as_array()
+            && items.iter().any(|item| {
+                item.as_object().is_some_and(|item| {
+                    !item.contains_key("op")
+                        && (item.contains_key("content") || item.contains_key("status"))
+                })
+            })
+        {
+            return format!(
+                "todo items must be wrapped in mutation ops; use {{\"op\":\"replace\",\"todos\":[...]}} to initialize. Parse error: {error}"
             );
         }
     }
@@ -853,6 +865,26 @@ mod tests {
             detail
                 .unwrap_or_default()
                 .contains("unknown variant `bogus`")
+        );
+    }
+
+    #[test]
+    fn test_execute_reports_raw_todo_items_need_mutation_ops() {
+        let output = execute(
+            &json!({
+                "todos": [{"content": "Inspect codebase", "status": "in_progress"}]
+            }),
+            &ToolContext::new(std::path::PathBuf::from("."), None),
+        );
+
+        assert!(!output.is_ok());
+        let (code, message, detail) = output.error_info().unwrap();
+        assert_eq!(code, "invalid_input");
+        assert_eq!(message, "Invalid input for Todo_Write tool");
+        assert!(
+            detail
+                .unwrap_or_default()
+                .contains("todo items must be wrapped in mutation ops")
         );
     }
 
