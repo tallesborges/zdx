@@ -1359,6 +1359,23 @@ input_images = false
 output_limit = 131072
 
 [[model]]
+id = "zai:glm-5.2"
+provider = "zai"
+display_name = "Z.ai: GLM 5.2"
+context_limit = 1048576
+
+[model.pricing]
+input = 1.2
+output = 4.1
+cache_read = 0.19999999999999998
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = false
+output_limit = 131072
+
+[[model]]
 id = "xai:grok-4.3"
 provider = "xai"
 display_name = "Grok 4.3"
