@@ -222,7 +222,7 @@ fast_mode = false
 enabled = true
 # api_key = "..."  # Overrides ZAI_API_KEY env var
 # base_url = "https://api.z.ai/api/paas/v4"
-models = ["glm-5.1", "glm-5-turbo", "glm-5", "glm-4.7", "glm-4.7-flash"]
+models = ["glm-5.2", "glm-5.1", "glm-5-turbo", "glm-5", "glm-4.7", "glm-4.7-flash"]
 fast_mode = false
 
 [providers.xai]
