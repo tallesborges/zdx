@@ -89,6 +89,7 @@ MUST read the relevant file before modifying code in that scope:
 - Use {{ edit_tool_label }} for file edits; never use shell redirection, heredocs, `echo > file`, or `sed -i`-style commands for edits.
 - Use `bash` only for commands that dedicated tools cannot perform, such as builds, tests, git, or CLIs.
 - MUST NOT invent placeholder values or guess missing required parameters in tool calls.
+- Tool call arguments MUST be a valid JSON object matching the tool schema; never use XML-style parameter tags, CLI flag keys, or empty argument objects for tools with required fields.
 - MUST NOT use `bash` to communicate with the user. Communicate only in the assistant response channel.
 - When a `bash` result is truncated, MUST inspect the provided output file before relying on the result.
 - Think first, then batch independent reads/searches/tool calls in parallel; make sequential calls only when the next step depends on the previous result.

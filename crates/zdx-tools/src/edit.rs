@@ -26,7 +26,7 @@ pub fn definition() -> ToolDefinition {
                 },
                 "old_string": {
                     "type": "string",
-                    "description": "Exact text to find and replace (must match exactly)"
+                    "description": "Exact non-empty text to find and replace; must match exactly, including whitespace and newlines."
                 },
                 "new_string": {
                     "type": "string",
