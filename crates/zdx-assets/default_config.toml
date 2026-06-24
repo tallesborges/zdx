@@ -171,7 +171,7 @@ fast_mode = false
 enabled = true
 # api_key = "..."  # Overrides OPENCODE_API_KEY env var
 # base_url = "https://opencode.ai/zen/go"
-models = ["glm-5.1", "glm-5", "kimi-k2.6", "kimi-k2.5", "mimo-v2.5-pro", "mimo-v2.5", "minimax-m3", "minimax-m2.7", "minimax-m2.5", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "deepseek-v4-pro", "deepseek-v4-flash"]
+models = ["glm-5.1", "glm-5.2", "kimi-k2.6", "kimi-k2.7-code", "mimo-v2.5-pro", "mimo-v2.5", "minimax-m3", "minimax-m2.7", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "deepseek-v4-pro", "deepseek-v4-flash"]
 fast_mode = false
 
 [providers.stepfun]

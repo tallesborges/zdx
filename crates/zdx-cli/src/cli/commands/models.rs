@@ -669,15 +669,10 @@ fn model_api_hint(
         Some("@ai-sdk/openai") => "openai-responses",
         Some("@ai-sdk/google") => "google-generative-ai",
         Some("@ai-sdk/openai-compatible") => "openai-completions",
-        Some("@ai-sdk/anthropic") => {
-            // Only claude models actually use the Anthropic messages API.
-            // Others (minimax, big-pickle, etc.) are proxied as chat-completions.
-            if model.id.to_ascii_lowercase().starts_with("claude") {
-                "anthropic-messages"
-            } else {
-                "openai-completions"
-            }
-        }
+        // The proxy serves these models only via the Anthropic Messages API
+        // (`/v1/messages`); e.g. qwen3.7-max rejects the chat-completions
+        // ("oa-compat") format with a 401.
+        Some("@ai-sdk/anthropic") => "anthropic-messages",
         _ => source_provider_default_api(source_provider_id.unwrap_or(provider_id)),
     };
 
@@ -1283,7 +1278,8 @@ mod tests {
             Some("openai-responses")
         );
 
-        // npm @ai-sdk/anthropic for minimax → openai-completions (overridden)
+        // npm @ai-sdk/anthropic for minimax → anthropic-messages
+        // (the proxy serves these via /v1/messages, not oa-compat)
         let minimax_model = ModelEntry {
             id: "minimax-m2.5-free".to_string(),
             name: "MiniMax M2.5 Free".to_string(),
@@ -1299,7 +1295,7 @@ mod tests {
 
         assert_eq!(
             model_api_hint("opencode-go", Some("opencode-go"), &minimax_model).as_deref(),
-            Some("openai-completions")
+            Some("anthropic-messages")
         );
 
         // npm @ai-sdk/anthropic for claude → anthropic-messages (trusted)
