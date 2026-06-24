@@ -1006,10 +1006,10 @@ output_limit = 32768
 api = "openai-completions"
 
 [[model]]
-id = "opencode-go:glm-5"
+id = "opencode-go:glm-5.2"
 provider = "opencode-go"
-display_name = "GLM-5"
-context_limit = 202752
+display_name = "GLM-5.2"
+context_limit = 1000000
 
 [model.pricing]
 input = 0.0
@@ -1020,7 +1020,7 @@ cache_write = 0.0
 [model.capabilities]
 reasoning = true
 input_images = false
-output_limit = 32768
+output_limit = 131072
 api = "openai-completions"
 
 [[model]]
@@ -1042,9 +1042,9 @@ output_limit = 65536
 api = "openai-completions"
 
 [[model]]
-id = "opencode-go:kimi-k2.5"
+id = "opencode-go:kimi-k2.7-code"
 provider = "opencode-go"
-display_name = "Kimi K2.5"
+display_name = "Kimi K2.7 Code"
 context_limit = 262144
 
 [model.pricing]
@@ -1056,7 +1056,7 @@ cache_write = 0.0
 [model.capabilities]
 reasoning = true
 input_images = true
-output_limit = 65536
+output_limit = 262144
 api = "openai-completions"
 
 [[model]]
@@ -1111,7 +1111,7 @@ cache_write = 0.0
 reasoning = true
 input_images = true
 output_limit = 131072
-api = "openai-completions"
+api = "anthropic-messages"
 
 [[model]]
 id = "opencode-go:minimax-m2.7"
@@ -1129,25 +1129,7 @@ cache_write = 0.0
 reasoning = true
 input_images = false
 output_limit = 131072
-api = "openai-completions"
-
-[[model]]
-id = "opencode-go:minimax-m2.5"
-provider = "opencode-go"
-display_name = "MiniMax M2.5"
-context_limit = 204800
-
-[model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = false
-output_limit = 65536
-api = "openai-completions"
+api = "anthropic-messages"
 
 [[model]]
 id = "opencode-go:qwen3.7-max"
@@ -1165,7 +1147,7 @@ cache_write = 0.0
 reasoning = true
 input_images = false
 output_limit = 65536
-api = "openai-completions"
+api = "anthropic-messages"
 
 [[model]]
 id = "opencode-go:qwen3.7-plus"
@@ -1183,7 +1165,7 @@ cache_write = 0.0
 reasoning = true
 input_images = true
 output_limit = 65536
-api = "openai-completions"
+api = "anthropic-messages"
 
 [[model]]
 id = "opencode-go:qwen3.6-plus"
@@ -1201,7 +1183,7 @@ cache_write = 0.0
 reasoning = true
 input_images = true
 output_limit = 65536
-api = "openai-completions"
+api = "anthropic-messages"
 
 [[model]]
 id = "opencode-go:deepseek-v4-pro"
