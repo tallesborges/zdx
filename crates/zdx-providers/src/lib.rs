@@ -23,6 +23,9 @@ pub mod xiaomi;
 pub mod xiaomi_plan;
 pub mod zai;
 
+use std::future::Future;
+use std::pin::Pin;
+
 pub use debug_trace::{DebugTrace, TraceStream, wrap_stream};
 pub use shared::{
     ChatContentBlock, ChatMessage, ContentBlockType, IdOrigin, MessageContent, ProviderError,
@@ -30,6 +33,79 @@ pub use shared::{
     SignatureProvider, StreamEvent, Usage, UsageDelta, error_message_from_payload,
     map_event_stream_error, resolve_api_key, resolve_base_url,
 };
+use zdx_types::ToolDefinition;
+
+/// Object-safe trait for streaming LLM providers.
+///
+/// All provider clients implement this so the engine can hold a
+/// `Box<dyn StreamingProvider>` instead of an enum with a match arm per
+/// provider. The method mirrors the existing `send_messages_stream` on each
+/// concrete client; the trait just adds a boxed-future shim so the call works
+/// through dynamic dispatch.
+pub trait StreamingProvider: Send + Sync {
+    /// Streams a completion request, returning a boxed stream of events.
+    fn stream_messages<'a>(
+        &'a self,
+        messages: &'a [ChatMessage],
+        tools: &'a [ToolDefinition],
+        system: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderStream>> + Send + 'a>>;
+}
+
+macro_rules! impl_streaming_provider {
+    ($($t:ty),* $(,)?) => {
+        $(
+            impl StreamingProvider for $t {
+                fn stream_messages<'a>(
+                    &'a self,
+                    messages: &'a [ChatMessage],
+                    tools: &'a [ToolDefinition],
+                    system: Option<&'a str>,
+                ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderStream>> + Send + 'a>> {
+                    Box::pin(self.send_messages_stream(messages, tools, system))
+                }
+            }
+        )*
+    };
+}
+
+impl_streaming_provider!(
+    anthropic::api::AnthropicClient,
+    anthropic::cli::ClaudeCliClient,
+    openai::api::OpenAIClient,
+    openai::codex::OpenAICodexClient,
+    openai::chat_completions::OpenAIChatCompletionsClient,
+    openai::responses_ws::OpenAIResponsesWsClient,
+    openrouter::OpenRouterClient,
+    deepseek::DeepSeekClient,
+    gemini::api::GeminiClient,
+    gemini::cli::GeminiCliClient,
+    gemini::antigravity::AntigravityClient,
+    xiaomi::XiaomiClient,
+    xiaomi_plan::XiaomiPlanClient,
+    mistral::MistralClient,
+    moonshot::MoonshotClient,
+    stepfun::StepfunClient,
+    lmstudio::LMStudioClient,
+    minimax::MinimaxClient,
+    zai::ZaiClient,
+    xai::XaiClient,
+    opencode_go::OpencodeGoClient,
+);
+
+/// Blanket impl so `Box<dyn StreamingProvider>` is itself a `StreamingProvider`.
+/// This lets callers pass `&Box<dyn StreamingProvider>` where `&dyn StreamingProvider`
+/// is expected without explicit dereferencing.
+impl<T: StreamingProvider + ?Sized> StreamingProvider for Box<T> {
+    fn stream_messages<'a>(
+        &'a self,
+        messages: &'a [ChatMessage],
+        tools: &'a [ToolDefinition],
+        system: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderStream>> + Send + 'a>> {
+        (**self).stream_messages(messages, tools, system)
+    }
+}
 
 /// Provider selection based on model naming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +144,216 @@ pub struct ProviderSelection {
     pub model: String,
 }
 
+/// Static metadata for a single provider kind.
+struct ProviderMeta {
+    id: &'static str,
+    aliases: &'static [&'static str],
+    label: &'static str,
+    api_key_env: Option<&'static str>,
+    base_url: &'static str,
+    base_url_env: Option<&'static str>,
+    supports_oauth: bool,
+    is_subscription: bool,
+}
+
 impl ProviderKind {
+    /// Returns the static metadata for this provider.
+    #[allow(clippy::too_many_lines)]
+    const fn meta(self) -> ProviderMeta {
+        match self {
+            Self::Anthropic => ProviderMeta {
+                id: "anthropic",
+                aliases: &[],
+                label: "Anthropic",
+                api_key_env: Some("ANTHROPIC_API_KEY"),
+                base_url: "https://api.anthropic.com",
+                base_url_env: Some("ANTHROPIC_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: false,
+            },
+            Self::ClaudeCli => ProviderMeta {
+                id: "claude-cli",
+                aliases: &[],
+                label: "Claude CLI",
+                api_key_env: None,
+                base_url: "https://api.anthropic.com",
+                base_url_env: Some("ANTHROPIC_BASE_URL"),
+                supports_oauth: true,
+                is_subscription: true,
+            },
+            Self::OpenAICodex => ProviderMeta {
+                id: "openai-codex",
+                aliases: &["codex"],
+                label: "OpenAI Codex",
+                api_key_env: None,
+                base_url: "https://chatgpt.com/backend-api",
+                base_url_env: None,
+                supports_oauth: true,
+                is_subscription: true,
+            },
+            Self::OpenAI => ProviderMeta {
+                id: "openai",
+                aliases: &[],
+                label: "OpenAI",
+                api_key_env: Some("OPENAI_API_KEY"),
+                base_url: "https://api.openai.com/v1",
+                base_url_env: Some("OPENAI_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: false,
+            },
+            Self::OpenRouter => ProviderMeta {
+                id: "openrouter",
+                aliases: &[],
+                label: "OpenRouter",
+                api_key_env: Some("OPENROUTER_API_KEY"),
+                base_url: "https://openrouter.ai/api/v1",
+                base_url_env: Some("OPENROUTER_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: false,
+            },
+            Self::DeepSeek => ProviderMeta {
+                id: "deepseek",
+                aliases: &[],
+                label: "DeepSeek",
+                api_key_env: Some("DEEPSEEK_API_KEY"),
+                base_url: "https://api.deepseek.com",
+                base_url_env: Some("DEEPSEEK_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: false,
+            },
+            Self::Xiaomi => ProviderMeta {
+                id: "xiaomi",
+                aliases: &[],
+                label: "Xiaomi MiMo",
+                api_key_env: Some("XIAOMI_API_KEY"),
+                base_url: "https://api.xiaomimimo.com/v1",
+                base_url_env: Some("XIAOMI_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: false,
+            },
+            Self::XiaomiPlan => ProviderMeta {
+                id: "xiaomi-plan",
+                aliases: &["mimo-plan"],
+                label: "Xiaomi MiMo Plan",
+                api_key_env: Some("XIAOMI_PLAN_API_KEY"),
+                base_url: "https://token-plan-sgp.xiaomimimo.com/v1",
+                base_url_env: Some("XIAOMI_PLAN_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: true,
+            },
+            Self::Mistral => ProviderMeta {
+                id: "mistral",
+                aliases: &[],
+                label: "Mistral",
+                api_key_env: Some("MISTRAL_API_KEY"),
+                base_url: "https://api.mistral.ai/v1",
+                base_url_env: Some("MISTRAL_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: false,
+            },
+            Self::Moonshot => ProviderMeta {
+                id: "moonshot",
+                aliases: &[],
+                label: "Moonshot",
+                api_key_env: Some("MOONSHOT_API_KEY"),
+                base_url: "https://api.moonshot.ai/v1",
+                base_url_env: Some("MOONSHOT_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: false,
+            },
+            Self::Stepfun => ProviderMeta {
+                id: "stepfun",
+                aliases: &[],
+                label: "StepFun",
+                api_key_env: Some("STEPFUN_API_KEY"),
+                base_url: "https://api.stepfun.ai/v1",
+                base_url_env: Some("STEPFUN_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: false,
+            },
+            Self::LMStudio => ProviderMeta {
+                id: "lmstudio",
+                aliases: &[],
+                label: "LMStudio",
+                api_key_env: None,
+                base_url: "http://127.0.0.1:1234/v1",
+                base_url_env: Some("LMSTUDIO_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: false,
+            },
+            Self::Gemini => ProviderMeta {
+                id: "gemini",
+                aliases: &[],
+                label: "Gemini",
+                api_key_env: Some("GEMINI_API_KEY"),
+                base_url: "https://generativelanguage.googleapis.com/v1beta",
+                base_url_env: Some("GEMINI_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: false,
+            },
+            Self::GeminiCli => ProviderMeta {
+                id: "gemini-cli",
+                aliases: &[],
+                label: "Gemini CLI",
+                api_key_env: None,
+                base_url: "https://generativelanguage.googleapis.com/v1beta",
+                base_url_env: Some("GEMINI_BASE_URL"),
+                supports_oauth: true,
+                is_subscription: true,
+            },
+            Self::GoogleAntigravity => ProviderMeta {
+                id: "google-antigravity",
+                aliases: &["antigravity"],
+                label: "Google Antigravity",
+                api_key_env: None,
+                base_url: "https://daily-cloudcode-pa.googleapis.com",
+                base_url_env: None,
+                supports_oauth: true,
+                is_subscription: true,
+            },
+            Self::OpencodeGo => ProviderMeta {
+                id: "opencode-go",
+                aliases: &["opencode", "go"],
+                label: "OpenCode Go",
+                api_key_env: Some("OPENCODE_API_KEY"),
+                base_url: "https://opencode.ai/zen/go",
+                base_url_env: Some("OPENCODE_GO_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: true,
+            },
+            Self::Minimax => ProviderMeta {
+                id: "minimax",
+                aliases: &[],
+                label: "MiniMax",
+                api_key_env: Some("MINIMAX_API_KEY"),
+                base_url: "https://api.minimax.io/v1",
+                base_url_env: Some("MINIMAX_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: false,
+            },
+            Self::Zai => ProviderMeta {
+                id: "zai",
+                aliases: &["zhipu", "glm"],
+                label: "Z.AI",
+                api_key_env: Some("ZAI_API_KEY"),
+                base_url: "https://api.z.ai/api/paas/v4",
+                base_url_env: Some("ZAI_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: false,
+            },
+            Self::Xai => ProviderMeta {
+                id: "xai",
+                aliases: &["grok", "x"],
+                label: "xAI",
+                api_key_env: Some("XAI_API_KEY"),
+                base_url: "https://api.x.ai/v1",
+                base_url_env: Some("XAI_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: false,
+            },
+        }
+    }
+
     /// Returns all provider kinds.
     pub fn all() -> &'static [ProviderKind] {
         &[
@@ -95,178 +380,55 @@ impl ProviderKind {
     }
 
     /// Returns the string identifier used in config files and model registry.
-    pub fn id(&self) -> &'static str {
-        match self {
-            ProviderKind::Anthropic => "anthropic",
-            ProviderKind::ClaudeCli => "claude-cli",
-            ProviderKind::OpenAICodex => "openai-codex",
-            ProviderKind::OpenAI => "openai",
-            ProviderKind::OpenRouter => "openrouter",
-            ProviderKind::DeepSeek => "deepseek",
-            ProviderKind::Xiaomi => "xiaomi",
-            ProviderKind::XiaomiPlan => "xiaomi-plan",
-            ProviderKind::Mistral => "mistral",
-            ProviderKind::Moonshot => "moonshot",
-            ProviderKind::Stepfun => "stepfun",
-            ProviderKind::LMStudio => "lmstudio",
-            ProviderKind::Gemini => "gemini",
-            ProviderKind::GeminiCli => "gemini-cli",
-            ProviderKind::GoogleAntigravity => "google-antigravity",
-            ProviderKind::OpencodeGo => "opencode-go",
-            ProviderKind::Minimax => "minimax",
-            ProviderKind::Zai => "zai",
-            ProviderKind::Xai => "xai",
-        }
+    pub fn id(self) -> &'static str {
+        self.meta().id
     }
 
     /// Returns the `ProviderKind` for a given id string.
     pub fn from_id(id: &str) -> Option<ProviderKind> {
-        match id.to_lowercase().as_str() {
-            "anthropic" => Some(ProviderKind::Anthropic),
-            "claude-cli" => Some(ProviderKind::ClaudeCli),
-            "openai-codex" | "codex" => Some(ProviderKind::OpenAICodex),
-            "openai" => Some(ProviderKind::OpenAI),
-            "openrouter" => Some(ProviderKind::OpenRouter),
-            "deepseek" => Some(ProviderKind::DeepSeek),
-            "xiaomi" => Some(ProviderKind::Xiaomi),
-            "xiaomi-plan" | "mimo-plan" => Some(ProviderKind::XiaomiPlan),
-            "mistral" => Some(ProviderKind::Mistral),
-            "moonshot" => Some(ProviderKind::Moonshot),
-            "stepfun" => Some(ProviderKind::Stepfun),
-            "lmstudio" => Some(ProviderKind::LMStudio),
-            "gemini" => Some(ProviderKind::Gemini),
-            "gemini-cli" => Some(ProviderKind::GeminiCli),
-            "google-antigravity" | "antigravity" => Some(ProviderKind::GoogleAntigravity),
-            "opencode-go" | "opencode" | "go" => Some(ProviderKind::OpencodeGo),
-            "minimax" => Some(ProviderKind::Minimax),
-            "zai" | "zhipu" | "glm" => Some(ProviderKind::Zai),
-            "xai" | "grok" | "x" => Some(ProviderKind::Xai),
-            _ => None,
+        let lower = id.to_lowercase();
+        for kind in Self::all() {
+            let meta = kind.meta();
+            if meta.id == lower || meta.aliases.contains(&lower.as_str()) {
+                return Some(*kind);
+            }
         }
+        None
     }
 
     /// Returns the human-readable label for display.
-    pub fn label(&self) -> &'static str {
-        match self {
-            ProviderKind::Anthropic => "Anthropic",
-            ProviderKind::ClaudeCli => "Claude CLI",
-            ProviderKind::OpenAICodex => "OpenAI Codex",
-            ProviderKind::OpenAI => "OpenAI",
-            ProviderKind::OpenRouter => "OpenRouter",
-            ProviderKind::DeepSeek => "DeepSeek",
-            ProviderKind::Xiaomi => "Xiaomi MiMo",
-            ProviderKind::XiaomiPlan => "Xiaomi MiMo Plan",
-            ProviderKind::Mistral => "Mistral",
-            ProviderKind::Moonshot => "Moonshot",
-            ProviderKind::Stepfun => "StepFun",
-            ProviderKind::LMStudio => "LMStudio",
-            ProviderKind::Gemini => "Gemini",
-            ProviderKind::GeminiCli => "Gemini CLI",
-            ProviderKind::GoogleAntigravity => "Google Antigravity",
-            ProviderKind::OpencodeGo => "OpenCode Go",
-            ProviderKind::Minimax => "MiniMax",
-            ProviderKind::Zai => "Z.AI",
-            ProviderKind::Xai => "xAI",
-        }
+    pub fn label(self) -> &'static str {
+        self.meta().label
     }
 
-    pub fn supports_oauth(&self) -> bool {
-        matches!(
-            self,
-            ProviderKind::ClaudeCli
-                | ProviderKind::OpenAICodex
-                | ProviderKind::GeminiCli
-                | ProviderKind::GoogleAntigravity
-        )
+    pub fn supports_oauth(self) -> bool {
+        self.meta().supports_oauth
     }
 
     /// Returns true if this provider is subscription-based (usage included in subscription).
-    pub fn is_subscription(&self) -> bool {
-        matches!(
-            self,
-            ProviderKind::ClaudeCli
-                | ProviderKind::OpenAICodex
-                | ProviderKind::GeminiCli
-                | ProviderKind::GoogleAntigravity
-                | ProviderKind::XiaomiPlan
-                | ProviderKind::OpencodeGo
-        )
+    pub fn is_subscription(self) -> bool {
+        self.meta().is_subscription
     }
 
-    pub fn api_key_env_var(&self) -> Option<&'static str> {
-        match self {
-            ProviderKind::Anthropic => Some("ANTHROPIC_API_KEY"),
-            ProviderKind::OpenAI => Some("OPENAI_API_KEY"),
-            ProviderKind::OpenRouter => Some("OPENROUTER_API_KEY"),
-            ProviderKind::DeepSeek => Some("DEEPSEEK_API_KEY"),
-            ProviderKind::Xiaomi => Some("XIAOMI_API_KEY"),
-            ProviderKind::XiaomiPlan => Some("XIAOMI_PLAN_API_KEY"),
-            ProviderKind::Mistral => Some("MISTRAL_API_KEY"),
-            ProviderKind::Moonshot => Some("MOONSHOT_API_KEY"),
-            ProviderKind::Stepfun => Some("STEPFUN_API_KEY"),
-            ProviderKind::Gemini => Some("GEMINI_API_KEY"),
-            ProviderKind::OpencodeGo => Some("OPENCODE_API_KEY"),
-            ProviderKind::Minimax => Some("MINIMAX_API_KEY"),
-            ProviderKind::Zai => Some("ZAI_API_KEY"),
-            ProviderKind::Xai => Some("XAI_API_KEY"),
-            ProviderKind::LMStudio
-            | ProviderKind::ClaudeCli
-            | ProviderKind::OpenAICodex
-            | ProviderKind::GeminiCli
-            | ProviderKind::GoogleAntigravity => None,
-        }
+    pub fn api_key_env_var(self) -> Option<&'static str> {
+        self.meta().api_key_env
     }
 
     /// Returns the default base URL for this provider's API.
-    pub fn default_base_url(&self) -> &'static str {
-        match self {
-            Self::Anthropic | Self::ClaudeCli => "https://api.anthropic.com",
-            Self::OpenAI => "https://api.openai.com/v1",
-            Self::OpenAICodex => "https://chatgpt.com/backend-api",
-            Self::OpenRouter => "https://openrouter.ai/api/v1",
-            Self::DeepSeek => "https://api.deepseek.com",
-            Self::Mistral => "https://api.mistral.ai/v1",
-            Self::Moonshot => "https://api.moonshot.ai/v1",
-            Self::Stepfun => "https://api.stepfun.ai/v1",
-            Self::LMStudio => "http://127.0.0.1:1234/v1",
-            Self::Gemini | Self::GeminiCli => "https://generativelanguage.googleapis.com/v1beta",
-            Self::GoogleAntigravity => "https://daily-cloudcode-pa.googleapis.com",
-            Self::Xiaomi => "https://api.xiaomimimo.com/v1",
-            Self::XiaomiPlan => "https://token-plan-sgp.xiaomimimo.com/v1",
-            Self::OpencodeGo => "https://opencode.ai/zen/go",
-            Self::Minimax => "https://api.minimax.io/v1",
-            Self::Zai => "https://api.z.ai/api/paas/v4",
-            Self::Xai => "https://api.x.ai/v1",
-        }
+    pub fn default_base_url(self) -> &'static str {
+        self.meta().base_url
     }
 
     /// Returns the environment variable name for the base URL override.
-    pub fn base_url_env_var(&self) -> Option<&'static str> {
-        match self {
-            Self::Anthropic | Self::ClaudeCli => Some("ANTHROPIC_BASE_URL"),
-            Self::OpenAI => Some("OPENAI_BASE_URL"),
-            Self::OpenAICodex | Self::GoogleAntigravity => None,
-            Self::OpenRouter => Some("OPENROUTER_BASE_URL"),
-            Self::DeepSeek => Some("DEEPSEEK_BASE_URL"),
-            Self::Mistral => Some("MISTRAL_BASE_URL"),
-            Self::Moonshot => Some("MOONSHOT_BASE_URL"),
-            Self::Stepfun => Some("STEPFUN_BASE_URL"),
-            Self::LMStudio => Some("LMSTUDIO_BASE_URL"),
-            Self::Gemini | Self::GeminiCli => Some("GEMINI_BASE_URL"),
-            Self::Xiaomi => Some("XIAOMI_BASE_URL"),
-            Self::XiaomiPlan => Some("XIAOMI_PLAN_BASE_URL"),
-            Self::OpencodeGo => Some("OPENCODE_GO_BASE_URL"),
-            Self::Minimax => Some("MINIMAX_BASE_URL"),
-            Self::Zai => Some("ZAI_BASE_URL"),
-            Self::Xai => Some("XAI_BASE_URL"),
-        }
+    pub fn base_url_env_var(self) -> Option<&'static str> {
+        self.meta().base_url_env
     }
 
     /// Resolves the base URL: env var > config > default.
     ///
     /// # Errors
     /// Returns an error if the resolved URL is invalid.
-    pub fn resolve_base_url(&self, config_base_url: Option<&str>) -> anyhow::Result<String> {
+    pub fn resolve_base_url(self, config_base_url: Option<&str>) -> anyhow::Result<String> {
         shared::resolve_base_url(
             config_base_url,
             self.base_url_env_var().unwrap_or_default(),
@@ -279,7 +441,7 @@ impl ProviderKind {
     ///
     /// # Errors
     /// Returns an error if no API key is found.
-    pub fn resolve_api_key(&self, config_api_key: Option<&str>) -> anyhow::Result<String> {
+    pub fn resolve_api_key(self, config_api_key: Option<&str>) -> anyhow::Result<String> {
         shared::resolve_api_key(
             config_api_key,
             self.api_key_env_var().unwrap_or_default(),
@@ -287,27 +449,11 @@ impl ProviderKind {
         )
     }
 
-    pub fn auth_mode(&self) -> ProviderAuthMode {
-        match self {
-            ProviderKind::ClaudeCli
-            | ProviderKind::OpenAICodex
-            | ProviderKind::GeminiCli
-            | ProviderKind::GoogleAntigravity => ProviderAuthMode::OAuth,
-            ProviderKind::Anthropic
-            | ProviderKind::OpenAI
-            | ProviderKind::OpenRouter
-            | ProviderKind::DeepSeek
-            | ProviderKind::Xiaomi
-            | ProviderKind::XiaomiPlan
-            | ProviderKind::Mistral
-            | ProviderKind::Moonshot
-            | ProviderKind::Stepfun
-            | ProviderKind::LMStudio
-            | ProviderKind::Gemini
-            | ProviderKind::OpencodeGo
-            | ProviderKind::Minimax
-            | ProviderKind::Zai
-            | ProviderKind::Xai => ProviderAuthMode::ApiKey,
+    pub fn auth_mode(self) -> ProviderAuthMode {
+        if self.supports_oauth() {
+            ProviderAuthMode::OAuth
+        } else {
+            ProviderAuthMode::ApiKey
         }
     }
 }

@@ -212,7 +212,8 @@ struct UpdateState {
 impl UpdateState {
     fn push_candidate(&mut self, provider_id: &str, candidate: ModelCandidate) {
         let mut pricing = candidate.pricing;
-        let is_sub = provider_kind_from_id(provider_id).is_some_and(|k| k.is_subscription());
+        let is_sub = provider_kind_from_id(provider_id)
+            .is_some_and(zdx_engine::providers::ProviderKind::is_subscription);
         if is_sub {
             pricing = ModelPricingRecord::default();
         }

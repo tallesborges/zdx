@@ -42,7 +42,7 @@ use crate::providers::xiaomi_plan::{XiaomiPlanClient, XiaomiPlanConfig};
 use crate::providers::zai::{ZaiClient, ZaiConfig};
 use crate::providers::{
     ChatContentBlock, ChatMessage, ContentBlockType, ProviderError, ProviderKind, ProviderStream,
-    ReasoningBlock, ReplayToken, StreamEvent, resolve_provider,
+    ReasoningBlock, ReplayToken, StreamEvent, StreamingProvider, resolve_provider,
 };
 use crate::subagents;
 use crate::tools::{ToolContext, ToolDefinition, ToolRegistry, ToolResult, ToolSet, todo_write};
@@ -155,97 +155,6 @@ impl EventSender {
     /// Sends an event. Never blocks; ignored silently if the receiver has dropped.
     pub fn send(&self, ev: AgentEvent) {
         let _ = self.tx.send(Arc::new(ev));
-    }
-}
-
-enum ProviderClient {
-    Anthropic(AnthropicClient),
-    ClaudeCli(ClaudeCliClient),
-    OpenAICodex(OpenAICodexClient),
-    OpenAI(OpenAIClient),
-    OpenRouter(OpenRouterClient),
-    DeepSeek(DeepSeekClient),
-    Xiaomi(XiaomiClient),
-    XiaomiPlan(XiaomiPlanClient),
-    Mistral(MistralClient),
-    Moonshot(MoonshotClient),
-    Stepfun(StepfunClient),
-    LMStudio(LMStudioClient),
-    Gemini(GeminiClient),
-    GeminiCli(GeminiCliClient),
-    GoogleAntigravity(AntigravityClient),
-    OpencodeGo(OpencodeGoClient),
-    Minimax(MinimaxClient),
-    Zai(ZaiClient),
-    Xai(XaiClient),
-}
-
-impl ProviderClient {
-    async fn send_messages_stream(
-        &self,
-        messages: &[ChatMessage],
-        tools: &[crate::tools::ToolDefinition],
-        system: Option<&str>,
-    ) -> Result<ProviderStream> {
-        match self {
-            ProviderClient::Anthropic(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::ClaudeCli(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::OpenAICodex(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::OpenAI(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::OpenRouter(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::DeepSeek(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::Xiaomi(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::XiaomiPlan(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::Mistral(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::Moonshot(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::Stepfun(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::LMStudio(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::Gemini(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::GeminiCli(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::GoogleAntigravity(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::OpencodeGo(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::Minimax(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::Zai(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-            ProviderClient::Xai(client) => {
-                client.send_messages_stream(messages, tools, system).await
-            }
-        }
     }
 }
 
@@ -1153,7 +1062,7 @@ async fn run_turn_inner(
 
 struct RunTurnSetup {
     model: String,
-    client: ProviderClient,
+    client: Box<dyn StreamingProvider>,
     tools: Vec<ToolDefinition>,
     enabled_tools: HashSet<String>,
     tool_ctx: ToolContext,
@@ -1235,7 +1144,7 @@ struct ProviderBuildOptions<'a> {
 fn build_provider_client(
     config: &Config,
     options: ProviderBuildOptions<'_>,
-) -> Result<ProviderClient> {
+) -> Result<Box<dyn StreamingProvider>> {
     let cache_key = options.thread_id.map(std::string::ToString::to_string);
     let thinking_enabled = options.thinking_level.is_enabled();
     let reasoning_effort = map_thinking_to_reasoning(options.thinking_level);
@@ -1261,30 +1170,26 @@ fn build_provider_client(
             thinking_budget_tokens,
             thinking_effort,
         ),
-        ProviderKind::ClaudeCli => Ok(ProviderClient::ClaudeCli(ClaudeCliClient::new(
-            ClaudeCliConfig::new(
-                options.model.to_string(),
-                options.max_tokens,
-                config.providers.claude_cli.effective_base_url(),
-                thinking_enabled,
-                thinking_budget_tokens,
-                thinking_effort,
+        ProviderKind::ClaudeCli => Ok(Box::new(ClaudeCliClient::new(ClaudeCliConfig::new(
+            options.model.to_string(),
+            options.max_tokens,
+            config.providers.claude_cli.effective_base_url(),
+            thinking_enabled,
+            thinking_budget_tokens,
+            thinking_effort,
+        )))),
+        ProviderKind::OpenAICodex => Ok(Box::new(OpenAICodexClient::new(OpenAICodexConfig::new(
+            options.model.to_string(),
+            options.max_tokens,
+            reasoning_effort,
+            resolve_text_verbosity(
+                options.text_verbosity,
+                config.providers.openai_codex.effective_text_verbosity(),
             ),
-        ))),
-        ProviderKind::OpenAICodex => Ok(ProviderClient::OpenAICodex(OpenAICodexClient::new(
-            OpenAICodexConfig::new(
-                options.model.to_string(),
-                options.max_tokens,
-                reasoning_effort,
-                resolve_text_verbosity(
-                    options.text_verbosity,
-                    config.providers.openai_codex.effective_text_verbosity(),
-                ),
-                cache_key,
-                options.service_tier.map(std::string::ToString::to_string),
-                config.providers.openai_codex.websocket,
-            ),
-        ))),
+            cache_key,
+            options.service_tier.map(std::string::ToString::to_string),
+            config.providers.openai_codex.websocket,
+        )))),
         ProviderKind::OpenAI => build_openai_client(
             config,
             options.model,
@@ -1328,15 +1233,13 @@ fn build_provider_client(
         ProviderKind::Gemini => {
             build_gemini_client(config, options.model, config.max_tokens, gemini_thinking)
         }
-        ProviderKind::GeminiCli => Ok(ProviderClient::GeminiCli(GeminiCliClient::new(
-            GeminiCliConfig::new(
-                options.model.to_string(),
-                config.max_tokens,
-                GeminiThinkingConfig::from_thinking_level(options.thinking_level, options.model),
-            ),
-        ))),
-        ProviderKind::GoogleAntigravity => Ok(ProviderClient::GoogleAntigravity(
-            AntigravityClient::new(AntigravityConfig::new(
+        ProviderKind::GeminiCli => Ok(Box::new(GeminiCliClient::new(GeminiCliConfig::new(
+            options.model.to_string(),
+            config.max_tokens,
+            GeminiThinkingConfig::from_thinking_level(options.thinking_level, options.model),
+        )))),
+        ProviderKind::GoogleAntigravity => {
+            Ok(Box::new(AntigravityClient::new(AntigravityConfig::new(
                 options.model.to_string(),
                 config.max_tokens,
                 Some(antigravity_thinking_config(
@@ -1344,8 +1247,8 @@ fn build_provider_client(
                     options.model,
                     config.max_tokens,
                 )),
-            )),
-        )),
+            ))))
+        }
         ProviderKind::OpencodeGo => build_opencode_go_client(
             config,
             options.model,
@@ -1393,18 +1296,16 @@ fn build_anthropic_client(
     thinking_enabled: bool,
     thinking_budget_tokens: u32,
     thinking_effort: Option<AnthropicEffortLevel>,
-) -> Result<ProviderClient> {
-    Ok(ProviderClient::Anthropic(AnthropicClient::new(
-        AnthropicConfig::from_env(
-            model.to_string(),
-            max_tokens,
-            config.providers.anthropic.effective_base_url(),
-            config.providers.anthropic.effective_api_key(),
-            thinking_enabled,
-            thinking_budget_tokens,
-            thinking_effort,
-        )?,
-    )))
+) -> Result<Box<dyn StreamingProvider>> {
+    Ok(Box::new(AnthropicClient::new(AnthropicConfig::from_env(
+        model.to_string(),
+        max_tokens,
+        config.providers.anthropic.effective_base_url(),
+        config.providers.anthropic.effective_api_key(),
+        thinking_enabled,
+        thinking_budget_tokens,
+        thinking_effort,
+    )?)))
 }
 
 fn build_openai_client(
@@ -1415,23 +1316,21 @@ fn build_openai_client(
     text_verbosity: Option<TextVerbosity>,
     cache_key: Option<String>,
     service_tier: Option<String>,
-) -> Result<ProviderClient> {
-    Ok(ProviderClient::OpenAI(OpenAIClient::new(
-        OpenAIConfig::from_env(
-            model.to_string(),
-            max_tokens,
-            config.providers.openai.effective_base_url(),
-            config.providers.openai.effective_api_key(),
-            reasoning_effort,
-            resolve_text_verbosity(
-                text_verbosity,
-                config.providers.openai.effective_text_verbosity(),
-            ),
-            cache_key,
-            service_tier,
-            config.providers.openai.websocket,
-        )?,
-    )))
+) -> Result<Box<dyn StreamingProvider>> {
+    Ok(Box::new(OpenAIClient::new(OpenAIConfig::from_env(
+        model.to_string(),
+        max_tokens,
+        config.providers.openai.effective_base_url(),
+        config.providers.openai.effective_api_key(),
+        reasoning_effort,
+        resolve_text_verbosity(
+            text_verbosity,
+            config.providers.openai.effective_text_verbosity(),
+        ),
+        cache_key,
+        service_tier,
+        config.providers.openai.websocket,
+    )?)))
 }
 
 fn resolve_text_verbosity(
@@ -1446,17 +1345,15 @@ fn build_openrouter_client(
     model: &str,
     reasoning_effort: Option<String>,
     cache_key: Option<String>,
-) -> Result<ProviderClient> {
-    Ok(ProviderClient::OpenRouter(OpenRouterClient::new(
-        OpenRouterConfig::from_env(
-            model.to_string(),
-            config.max_tokens,
-            config.providers.openrouter.effective_base_url(),
-            config.providers.openrouter.effective_api_key(),
-            reasoning_effort,
-            cache_key,
-        )?,
-    )))
+) -> Result<Box<dyn StreamingProvider>> {
+    Ok(Box::new(OpenRouterClient::new(OpenRouterConfig::from_env(
+        model.to_string(),
+        config.max_tokens,
+        config.providers.openrouter.effective_base_url(),
+        config.providers.openrouter.effective_api_key(),
+        reasoning_effort,
+        cache_key,
+    )?)))
 }
 
 fn build_deepseek_client(
@@ -1465,52 +1362,46 @@ fn build_deepseek_client(
     reasoning_effort: Option<String>,
     cache_key: Option<String>,
     thinking_enabled: bool,
-) -> Result<ProviderClient> {
-    Ok(ProviderClient::DeepSeek(DeepSeekClient::new(
-        DeepSeekConfig::from_env(
-            model.to_string(),
-            config.max_tokens,
-            config.providers.deepseek.effective_base_url(),
-            config.providers.deepseek.effective_api_key(),
-            cache_key,
-            thinking_enabled,
-            reasoning_effort,
-        )?,
-    )))
+) -> Result<Box<dyn StreamingProvider>> {
+    Ok(Box::new(DeepSeekClient::new(DeepSeekConfig::from_env(
+        model.to_string(),
+        config.max_tokens,
+        config.providers.deepseek.effective_base_url(),
+        config.providers.deepseek.effective_api_key(),
+        cache_key,
+        thinking_enabled,
+        reasoning_effort,
+    )?)))
 }
 
 fn build_xiaomi_client(
     config: &Config,
     model: &str,
     thinking_enabled: bool,
-) -> Result<ProviderClient> {
-    Ok(ProviderClient::Xiaomi(XiaomiClient::new(
-        XiaomiConfig::from_env(
-            model.to_string(),
-            config.max_tokens,
-            config.providers.xiaomi.effective_base_url(),
-            config.providers.xiaomi.effective_api_key(),
-            None,
-            thinking_enabled,
-        )?,
-    )))
+) -> Result<Box<dyn StreamingProvider>> {
+    Ok(Box::new(XiaomiClient::new(XiaomiConfig::from_env(
+        model.to_string(),
+        config.max_tokens,
+        config.providers.xiaomi.effective_base_url(),
+        config.providers.xiaomi.effective_api_key(),
+        None,
+        thinking_enabled,
+    )?)))
 }
 
 fn build_xiaomi_plan_client(
     config: &Config,
     model: &str,
     thinking_enabled: bool,
-) -> Result<ProviderClient> {
-    Ok(ProviderClient::XiaomiPlan(XiaomiPlanClient::new(
-        XiaomiPlanConfig::from_env(
-            model.to_string(),
-            config.max_tokens,
-            config.providers.xiaomi_plan.effective_base_url(),
-            config.providers.xiaomi_plan.effective_api_key(),
-            None,
-            thinking_enabled,
-        )?,
-    )))
+) -> Result<Box<dyn StreamingProvider>> {
+    Ok(Box::new(XiaomiPlanClient::new(XiaomiPlanConfig::from_env(
+        model.to_string(),
+        config.max_tokens,
+        config.providers.xiaomi_plan.effective_base_url(),
+        config.providers.xiaomi_plan.effective_api_key(),
+        None,
+        thinking_enabled,
+    )?)))
 }
 
 fn build_mistral_client(
@@ -1518,17 +1409,15 @@ fn build_mistral_client(
     model: &str,
     cache_key: Option<String>,
     thinking_enabled: bool,
-) -> Result<ProviderClient> {
-    Ok(ProviderClient::Mistral(MistralClient::new(
-        MistralConfig::from_env(
-            model.to_string(),
-            config.max_tokens,
-            config.providers.mistral.effective_base_url(),
-            config.providers.mistral.effective_api_key(),
-            cache_key,
-            thinking_enabled,
-        )?,
-    )))
+) -> Result<Box<dyn StreamingProvider>> {
+    Ok(Box::new(MistralClient::new(MistralConfig::from_env(
+        model.to_string(),
+        config.max_tokens,
+        config.providers.mistral.effective_base_url(),
+        config.providers.mistral.effective_api_key(),
+        cache_key,
+        thinking_enabled,
+    )?)))
 }
 
 fn build_moonshot_client(
@@ -1536,17 +1425,15 @@ fn build_moonshot_client(
     model: &str,
     cache_key: Option<String>,
     thinking_enabled: bool,
-) -> Result<ProviderClient> {
-    Ok(ProviderClient::Moonshot(MoonshotClient::new(
-        MoonshotConfig::from_env(
-            model.to_string(),
-            config.max_tokens,
-            config.providers.moonshot.effective_base_url(),
-            config.providers.moonshot.effective_api_key(),
-            cache_key,
-            thinking_enabled,
-        )?,
-    )))
+) -> Result<Box<dyn StreamingProvider>> {
+    Ok(Box::new(MoonshotClient::new(MoonshotConfig::from_env(
+        model.to_string(),
+        config.max_tokens,
+        config.providers.moonshot.effective_base_url(),
+        config.providers.moonshot.effective_api_key(),
+        cache_key,
+        thinking_enabled,
+    )?)))
 }
 
 fn build_stepfun_client(
@@ -1554,17 +1441,15 @@ fn build_stepfun_client(
     model: &str,
     cache_key: Option<String>,
     thinking_enabled: bool,
-) -> Result<ProviderClient> {
-    Ok(ProviderClient::Stepfun(StepfunClient::new(
-        StepfunConfig::from_env(
-            model.to_string(),
-            config.max_tokens,
-            config.providers.stepfun.effective_base_url(),
-            config.providers.stepfun.effective_api_key(),
-            cache_key,
-            thinking_enabled,
-        )?,
-    )))
+) -> Result<Box<dyn StreamingProvider>> {
+    Ok(Box::new(StepfunClient::new(StepfunConfig::from_env(
+        model.to_string(),
+        config.max_tokens,
+        config.providers.stepfun.effective_base_url(),
+        config.providers.stepfun.effective_api_key(),
+        cache_key,
+        thinking_enabled,
+    )?)))
 }
 
 fn build_lmstudio_client(
@@ -1572,17 +1457,15 @@ fn build_lmstudio_client(
     model: &str,
     cache_key: Option<String>,
     thinking_enabled: bool,
-) -> Result<ProviderClient> {
-    Ok(ProviderClient::LMStudio(LMStudioClient::new(
-        LMStudioConfig::from_env(
-            model.to_string(),
-            config.max_tokens,
-            config.providers.lmstudio.effective_base_url(),
-            config.providers.lmstudio.effective_api_key(),
-            cache_key,
-            thinking_enabled,
-        )?,
-    )))
+) -> Result<Box<dyn StreamingProvider>> {
+    Ok(Box::new(LMStudioClient::new(LMStudioConfig::from_env(
+        model.to_string(),
+        config.max_tokens,
+        config.providers.lmstudio.effective_base_url(),
+        config.providers.lmstudio.effective_api_key(),
+        cache_key,
+        thinking_enabled,
+    )?)))
 }
 
 fn build_minimax_client(
@@ -1590,17 +1473,15 @@ fn build_minimax_client(
     model: &str,
     cache_key: Option<String>,
     thinking_enabled: bool,
-) -> Result<ProviderClient> {
-    Ok(ProviderClient::Minimax(MinimaxClient::new(
-        MinimaxConfig::from_env(
-            model.to_string(),
-            config.max_tokens,
-            config.providers.minimax.effective_base_url(),
-            config.providers.minimax.effective_api_key(),
-            cache_key,
-            thinking_enabled,
-        )?,
-    )))
+) -> Result<Box<dyn StreamingProvider>> {
+    Ok(Box::new(MinimaxClient::new(MinimaxConfig::from_env(
+        model.to_string(),
+        config.max_tokens,
+        config.providers.minimax.effective_base_url(),
+        config.providers.minimax.effective_api_key(),
+        cache_key,
+        thinking_enabled,
+    )?)))
 }
 
 fn build_zai_client(
@@ -1608,8 +1489,8 @@ fn build_zai_client(
     model: &str,
     cache_key: Option<String>,
     thinking_enabled: bool,
-) -> Result<ProviderClient> {
-    Ok(ProviderClient::Zai(ZaiClient::new(ZaiConfig::from_env(
+) -> Result<Box<dyn StreamingProvider>> {
+    Ok(Box::new(ZaiClient::new(ZaiConfig::from_env(
         model.to_string(),
         config.max_tokens,
         config.providers.zai.effective_base_url(),
@@ -1624,8 +1505,8 @@ fn build_xai_client(
     model: &str,
     cache_key: Option<String>,
     thinking_enabled: bool,
-) -> Result<ProviderClient> {
-    Ok(ProviderClient::Xai(XaiClient::new(XaiConfig::from_env(
+) -> Result<Box<dyn StreamingProvider>> {
+    Ok(Box::new(XaiClient::new(XaiConfig::from_env(
         model.to_string(),
         config.max_tokens,
         config.providers.xai.effective_base_url(),
@@ -1640,16 +1521,14 @@ fn build_gemini_client(
     model: &str,
     max_tokens: Option<u32>,
     gemini_thinking: Option<GeminiThinkingConfig>,
-) -> Result<ProviderClient> {
-    Ok(ProviderClient::Gemini(GeminiClient::new(
-        GeminiConfig::from_env(
-            model.to_string(),
-            max_tokens,
-            config.providers.gemini.effective_base_url(),
-            config.providers.gemini.effective_api_key(),
-            gemini_thinking,
-        )?,
-    )))
+) -> Result<Box<dyn StreamingProvider>> {
+    Ok(Box::new(GeminiClient::new(GeminiConfig::from_env(
+        model.to_string(),
+        max_tokens,
+        config.providers.gemini.effective_base_url(),
+        config.providers.gemini.effective_api_key(),
+        gemini_thinking,
+    )?)))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1664,25 +1543,23 @@ fn build_opencode_go_client(
     gemini_thinking: Option<GeminiThinkingConfig>,
     reasoning_effort: Option<String>,
     cache_key: Option<String>,
-) -> Result<ProviderClient> {
-    Ok(ProviderClient::OpencodeGo(OpencodeGoClient::new(
-        OpencodeGoConfig::from_env(
-            model.to_string(),
-            max_tokens,
-            fallback_max_tokens,
-            config.providers.opencode_go.effective_base_url(),
-            config.providers.opencode_go.effective_api_key(),
-            thinking_enabled,
-            thinking_budget_tokens,
-            thinking_effort,
-            gemini_thinking,
-            reasoning_effort,
-            cache_key,
-            crate::models::ModelOption::find_by_provider_and_id("opencode-go", model)
-                .and_then(|m| m.capabilities.api)
-                .map(ToString::to_string),
-        )?,
-    )))
+) -> Result<Box<dyn StreamingProvider>> {
+    Ok(Box::new(OpencodeGoClient::new(OpencodeGoConfig::from_env(
+        model.to_string(),
+        max_tokens,
+        fallback_max_tokens,
+        config.providers.opencode_go.effective_base_url(),
+        config.providers.opencode_go.effective_api_key(),
+        thinking_enabled,
+        thinking_budget_tokens,
+        thinking_effort,
+        gemini_thinking,
+        reasoning_effort,
+        cache_key,
+        crate::models::ModelOption::find_by_provider_and_id("opencode-go", model)
+            .and_then(|m| m.capabilities.api)
+            .map(ToString::to_string),
+    )?)))
 }
 
 /// Resolves the tool list that would be sent to the LLM for the given
@@ -1730,7 +1607,7 @@ fn resolve_tools(
         ToolSelection::Explicit(names) => {
             tool_registry.tools_from_names(names.iter().map(String::as_str))
         }
-        ToolSelection::All => tool_registry.definitions().to_vec(),
+        ToolSelection::All => tool_registry.definitions(),
     };
 
     if config.subagents.enabled {
@@ -1834,7 +1711,7 @@ fn ensure_not_interrupted(
 }
 
 async fn request_stream(
-    client: &ProviderClient,
+    client: &dyn StreamingProvider,
     messages: &[ChatMessage],
     tools: &[ToolDefinition],
     system_prompt: Option<&str>,
@@ -1848,7 +1725,7 @@ async fn request_stream(
         () = wait_for_cancel(cancel) => {
             return Err(TurnError::interrupted(None));
         }
-        result = client.send_messages_stream(messages, tools, system_prompt) => result,
+        result = client.stream_messages(messages, tools, system_prompt) => result,
     };
     match stream_result {
         Ok(stream) => Ok(stream),
@@ -5105,7 +4982,7 @@ mod tests {
 
         let setup = RunTurnSetup {
             model: "gemini-3-pro-preview".to_string(),
-            client: ProviderClient::Gemini(GeminiClient::new(GeminiConfig {
+            client: Box::new(GeminiClient::new(GeminiConfig {
                 api_key: "x".to_string(),
                 base_url: "https://example.invalid".to_string(),
                 model: "gemini-3-pro-preview".to_string(),

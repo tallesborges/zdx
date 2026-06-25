@@ -15,7 +15,6 @@ pub mod subagent;
 pub mod thread_search;
 pub mod todo_write;
 
-use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -190,30 +189,56 @@ pub fn toolset_tool_names(set: ToolSet) -> Vec<String> {
 /// Async tool handler function.
 pub type ToolFuture = Pin<Box<dyn Future<Output = ToolOutput> + Send>>;
 pub type ToolHandler = Arc<dyn Fn(&Value, &ToolContext) -> ToolFuture + Send + Sync>;
-type ToolExecutor = fn(Value, ToolContext) -> ToolFuture;
+
+/// Trait for agent tools.
+///
+/// Each tool provides its schema definition and an async execute method.
+/// The registry stores `Arc<dyn Tool>` for cheap cloning and heterogeneous
+/// dispatch. Surface-registered tools (e.g. `ask_user_question`) can use
+/// [`ClosureTool`] to wrap an existing `(ToolDefinition, ToolHandler)` pair
+/// without implementing the trait directly.
+pub trait Tool: Send + Sync {
+    /// Returns the schema definition for this tool.
+    fn definition(&self) -> ToolDefinition;
+
+    /// Executes the tool with the given JSON input and context.
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture;
+}
+
+/// Adapter that wraps a `(ToolDefinition, ToolHandler)` pair as a [`Tool`].
+/// Used for surface-registered tools that still provide a closure-based handler.
+pub struct ClosureTool {
+    def: ToolDefinition,
+    handler: ToolHandler,
+}
+
+impl Tool for ClosureTool {
+    fn definition(&self) -> ToolDefinition {
+        self.def.clone()
+    }
+
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        (self.handler)(input, ctx)
+    }
+}
 
 /// Tool registry (definitions + executors).
 #[derive(Clone, Default)]
 pub struct ToolRegistry {
-    definitions: Vec<ToolDefinition>,
-    handlers: HashMap<String, ToolHandler>,
+    tools: Vec<Arc<dyn Tool>>,
 }
 
 impl std::fmt::Debug for ToolRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ToolRegistry")
-            .field("definitions", &self.definitions)
-            .field("handlers_len", &self.handlers.len())
+            .field("tools_len", &self.tools.len())
             .finish()
     }
 }
 
 impl ToolRegistry {
     pub fn new() -> Self {
-        Self {
-            definitions: Vec::new(),
-            handlers: HashMap::new(),
-        }
+        Self { tools: Vec::new() }
     }
 
     pub fn builtins() -> Self {
@@ -222,40 +247,43 @@ impl ToolRegistry {
         registry
     }
 
+    /// Registers a concrete [`Tool`] implementation.
+    pub fn register_tool<T: Tool + 'static>(&mut self, tool: T) {
+        self.register_boxed(Arc::new(tool));
+    }
+
+    /// Registers a boxed trait object directly.
+    pub fn register_boxed(&mut self, tool: Arc<dyn Tool>) {
+        // Remove any existing tool with the same name (case-insensitive).
+        let name = tool.definition().name.to_ascii_lowercase();
+        self.tools
+            .retain(|t| t.definition().name.to_ascii_lowercase() != name);
+        self.tools.push(tool);
+    }
+
+    /// Registers a closure-based tool (backward compat for surface-registered tools).
+    pub fn register(&mut self, definition: ToolDefinition, handler: ToolHandler) {
+        self.register_boxed(Arc::new(ClosureTool {
+            def: definition,
+            handler,
+        }));
+    }
+
+    /// Builder-style registration of a closure-based tool.
     #[must_use]
     pub fn with_tool(mut self, definition: ToolDefinition, handler: ToolHandler) -> Self {
         self.register(definition, handler);
         self
     }
 
-    fn register_builtin_tool(&mut self, definition: ToolDefinition, executor: ToolExecutor) {
-        self.register(
-            definition,
-            Arc::new(move |input, ctx| executor(input.clone(), ctx.clone())),
-        );
-    }
-
-    pub fn register(&mut self, definition: ToolDefinition, handler: ToolHandler) {
-        let name_lower = definition.name.to_ascii_lowercase();
-        if let Some(pos) = self
-            .definitions
-            .iter()
-            .position(|t| t.name.eq_ignore_ascii_case(&definition.name))
-        {
-            self.definitions.remove(pos);
-        }
-        self.definitions.push(definition);
-        self.handlers.insert(name_lower, handler);
-    }
-
-    pub fn definitions(&self) -> &[ToolDefinition] {
-        &self.definitions
+    pub fn definitions(&self) -> Vec<ToolDefinition> {
+        self.tools.iter().map(|t| t.definition()).collect()
     }
 
     pub fn tool_names(&self) -> Vec<String> {
-        self.definitions
+        self.tools
             .iter()
-            .map(|t| t.name.to_lowercase())
+            .map(|t| t.definition().name.to_lowercase())
             .collect()
     }
 
@@ -269,10 +297,10 @@ impl ToolRegistry {
             .filter(|name| !name.is_empty())
             .collect();
 
-        self.definitions
+        self.tools
             .iter()
+            .map(|t| t.definition())
             .filter(|t| include_set.contains(&t.name.to_lowercase()))
-            .cloned()
             .collect()
     }
 
@@ -290,7 +318,6 @@ impl ToolRegistry {
         self.tools_from_names(enabled_names)
     }
 
-    ///
     /// # Errors
     /// Returns an error if the operation fails.
     pub async fn execute_tool<S>(
@@ -315,8 +342,12 @@ impl ToolRegistry {
             return (output, result);
         }
 
-        let output = match self.handlers.get(&name_lower) {
-            Some(handler) => handler(input, ctx).await,
+        let output = match self
+            .tools
+            .iter()
+            .find(|t| t.definition().name.eq_ignore_ascii_case(&name_lower))
+        {
+            Some(tool) => tool.execute(input, ctx).await,
             None => unknown_tool_output(name, enabled_tools),
         };
 
@@ -325,114 +356,229 @@ impl ToolRegistry {
     }
 
     fn register_builtin_tools(&mut self) {
-        self.register_builtin_tool(bash::definition(), bash_handler);
-        self.register_builtin_tool(apply_patch::definition(), apply_patch_handler);
-        self.register_builtin_tool(edit::definition(), edit_handler);
-        self.register_builtin_tool(read::definition(), read_handler);
-        self.register_builtin_tool(memory_get::definition(), memory_get_handler);
-        self.register_builtin_tool(memory_search::definition(), memory_search_handler);
-        self.register_builtin_tool(read_thread::definition(), read_thread_handler);
-        self.register_builtin_tool(todo_write::definition(), todo_write_handler);
-        self.register_builtin_tool(thread_search::definition(), thread_search_handler);
-        self.register_builtin_tool(subagent::definition(), subagent_handler);
-        self.register_builtin_tool(write::definition(), write_handler);
-        self.register_builtin_tool(web_search::definition(), web_search_handler);
-        self.register_builtin_tool(fetch_webpage::definition(), fetch_webpage_handler);
-        self.register_builtin_tool(grep::definition(), grep_handler);
-        self.register_builtin_tool(glob::definition(), glob_handler);
+        self.register_tool(Bash);
+        self.register_tool(ApplyPatch);
+        self.register_tool(Edit);
+        self.register_tool(Read);
+        self.register_tool(MemoryGet);
+        self.register_tool(MemorySearch);
+        self.register_tool(ReadThread);
+        self.register_tool(TodoWrite);
+        self.register_tool(ThreadSearch);
+        self.register_tool(Subagent);
+        self.register_tool(Write);
+        self.register_tool(WebSearch);
+        self.register_tool(FetchWebpage);
+        self.register_tool(Grep);
+        self.register_tool(Glob);
     }
 }
 
-// -- Leaf tool handlers (bridge via as_leaf()) --
+// -- Builtin tool implementations --
 
-fn bash_handler(input: Value, ctx: ToolContext) -> ToolFuture {
-    Box::pin(async move {
-        let event_sender = ctx.event_sender.clone();
-        let tool_use_id = ctx.tool_use_id.clone();
+struct Bash;
+impl Tool for Bash {
+    fn definition(&self) -> ToolDefinition {
+        bash::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move {
+            let event_sender = ctx.event_sender.clone();
+            let tool_use_id = ctx.tool_use_id.clone();
 
-        if let (Some(sender), Some(id)) = (event_sender, tool_use_id) {
-            let (output_tx, mut output_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+            if let (Some(sender), Some(id)) = (event_sender, tool_use_id) {
+                let (output_tx, mut output_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
-            let leaf = ctx.as_leaf();
-            let timeout = ctx.timeout;
+                let leaf = ctx.as_leaf();
+                let timeout = ctx.timeout;
 
-            // Run bash and chunk forwarding concurrently.
-            // bash owns output_tx and drops it when done, which closes the
-            // channel and lets the receiver loop exit.
-            tokio::join!(
-                bash::execute(&input, &leaf, timeout, Some(output_tx)),
-                async {
-                    while let Some(chunk) = output_rx.recv().await {
-                        sender.send(AgentEvent::ToolOutputDelta {
-                            id: id.clone(),
-                            chunk,
-                        });
+                tokio::join!(
+                    bash::execute(&input, &leaf, timeout, Some(output_tx)),
+                    async {
+                        while let Some(chunk) = output_rx.recv().await {
+                            sender.send(AgentEvent::ToolOutputDelta {
+                                id: id.clone(),
+                                chunk,
+                            });
+                        }
                     }
-                }
-            )
-            .0
-        } else {
-            bash::execute(&input, &ctx.as_leaf(), ctx.timeout, None).await
-        }
-    })
+                )
+                .0
+            } else {
+                bash::execute(&input, &ctx.as_leaf(), ctx.timeout, None).await
+            }
+        })
+    }
 }
 
-fn apply_patch_handler(input: Value, ctx: ToolContext) -> ToolFuture {
-    Box::pin(async move { execute_apply_patch(&input, &ctx.as_leaf()).await })
+struct ApplyPatch;
+impl Tool for ApplyPatch {
+    fn definition(&self) -> ToolDefinition {
+        apply_patch::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { execute_apply_patch(&input, &ctx.as_leaf()).await })
+    }
 }
 
-fn edit_handler(input: Value, ctx: ToolContext) -> ToolFuture {
-    Box::pin(async move { execute_edit(&input, &ctx.as_leaf()).await })
+struct Edit;
+impl Tool for Edit {
+    fn definition(&self) -> ToolDefinition {
+        edit::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { execute_edit(&input, &ctx.as_leaf()).await })
+    }
 }
 
-fn read_handler(input: Value, ctx: ToolContext) -> ToolFuture {
-    Box::pin(async move { execute_read(&input, &ctx.as_leaf()).await })
+struct Read;
+impl Tool for Read {
+    fn definition(&self) -> ToolDefinition {
+        read::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { execute_read(&input, &ctx.as_leaf()).await })
+    }
 }
 
-fn write_handler(input: Value, ctx: ToolContext) -> ToolFuture {
-    Box::pin(async move { execute_write(&input, &ctx.as_leaf()).await })
+struct Write;
+impl Tool for Write {
+    fn definition(&self) -> ToolDefinition {
+        write::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { execute_write(&input, &ctx.as_leaf()).await })
+    }
 }
 
-fn web_search_handler(input: Value, ctx: ToolContext) -> ToolFuture {
-    Box::pin(async move { web_search::execute(&input, &ctx.as_leaf()).await })
+struct WebSearch;
+impl Tool for WebSearch {
+    fn definition(&self) -> ToolDefinition {
+        web_search::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { web_search::execute(&input, &ctx.as_leaf()).await })
+    }
 }
 
-fn fetch_webpage_handler(input: Value, ctx: ToolContext) -> ToolFuture {
-    Box::pin(async move { fetch_webpage::execute(&input, &ctx.as_leaf()).await })
+struct FetchWebpage;
+impl Tool for FetchWebpage {
+    fn definition(&self) -> ToolDefinition {
+        fetch_webpage::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { fetch_webpage::execute(&input, &ctx.as_leaf()).await })
+    }
 }
 
-fn grep_handler(input: Value, ctx: ToolContext) -> ToolFuture {
-    Box::pin(async move { execute_grep(&input, &ctx.as_leaf()).await })
+struct Grep;
+impl Tool for Grep {
+    fn definition(&self) -> ToolDefinition {
+        grep::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { execute_grep(&input, &ctx.as_leaf()).await })
+    }
 }
 
-fn glob_handler(input: Value, ctx: ToolContext) -> ToolFuture {
-    Box::pin(async move { execute_glob(&input, &ctx.as_leaf()).await })
+struct Glob;
+impl Tool for Glob {
+    fn definition(&self) -> ToolDefinition {
+        glob::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { execute_glob(&input, &ctx.as_leaf()).await })
+    }
 }
 
-// -- Engine tool handlers (use full ToolContext) --
-
-fn read_thread_handler(input: Value, ctx: ToolContext) -> ToolFuture {
-    Box::pin(async move { read_thread::execute(&input, &ctx).await })
+struct ReadThread;
+impl Tool for ReadThread {
+    fn definition(&self) -> ToolDefinition {
+        read_thread::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { read_thread::execute(&input, &ctx).await })
+    }
 }
 
-fn memory_search_handler(input: Value, ctx: ToolContext) -> ToolFuture {
-    Box::pin(async move { execute_memory_search(&input, &ctx).await })
+struct MemorySearch;
+impl Tool for MemorySearch {
+    fn definition(&self) -> ToolDefinition {
+        memory_search::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { execute_memory_search(&input, &ctx).await })
+    }
 }
 
-fn memory_get_handler(input: Value, ctx: ToolContext) -> ToolFuture {
-    Box::pin(async move { execute_memory_get(&input, &ctx).await })
+struct MemoryGet;
+impl Tool for MemoryGet {
+    fn definition(&self) -> ToolDefinition {
+        memory_get::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { execute_memory_get(&input, &ctx).await })
+    }
 }
 
-fn todo_write_handler(input: Value, ctx: ToolContext) -> ToolFuture {
-    Box::pin(async move { execute_todo_write(&input, &ctx).await })
+struct TodoWrite;
+impl Tool for TodoWrite {
+    fn definition(&self) -> ToolDefinition {
+        todo_write::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { execute_todo_write(&input, &ctx).await })
+    }
 }
 
-fn thread_search_handler(input: Value, ctx: ToolContext) -> ToolFuture {
-    Box::pin(async move { execute_thread_search(&input, &ctx).await })
+struct ThreadSearch;
+impl Tool for ThreadSearch {
+    fn definition(&self) -> ToolDefinition {
+        thread_search::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { execute_thread_search(&input, &ctx).await })
+    }
 }
 
-fn subagent_handler(input: Value, ctx: ToolContext) -> ToolFuture {
-    Box::pin(async move { subagent::execute(&input, &ctx).await })
+struct Subagent;
+impl Tool for Subagent {
+    fn definition(&self) -> ToolDefinition {
+        subagent::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { subagent::execute(&input, &ctx).await })
+    }
 }
 
 fn unknown_tool_output<S>(
@@ -453,7 +599,7 @@ where
 
 /// Returns all available tool definitions.
 pub fn all_tools() -> Vec<ToolDefinition> {
-    ToolRegistry::builtins().definitions
+    ToolRegistry::builtins().definitions()
 }
 
 /// Returns all tool names (lowercase), derived from `all_tools()` to stay in sync.
