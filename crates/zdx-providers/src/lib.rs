@@ -6,6 +6,7 @@ pub mod text_tool_parser;
 pub mod thinking_parser;
 
 pub mod anthropic;
+pub mod build;
 pub mod deepseek;
 pub mod gemini;
 pub mod lmstudio;
@@ -26,6 +27,10 @@ pub mod zai;
 use std::future::Future;
 use std::pin::Pin;
 
+pub use build::{
+    ProviderBuildContext, build_provider_client, map_thinking_to_anthropic_effort,
+    resolve_text_verbosity,
+};
 pub use debug_trace::{DebugTrace, TraceStream, wrap_stream};
 pub use shared::{
     ChatContentBlock, ChatMessage, ContentBlockType, IdOrigin, MessageContent, ProviderError,
