@@ -163,7 +163,7 @@ impl ProviderKind {
         match self {
             Self::Anthropic => ProviderMeta {
                 id: "anthropic",
-                aliases: &[],
+                aliases: &["claude"],
                 label: "Anthropic",
                 api_key_env: Some("ANTHROPIC_API_KEY"),
                 base_url: "https://api.anthropic.com",
@@ -193,7 +193,7 @@ impl ProviderKind {
             },
             Self::OpenAI => ProviderMeta {
                 id: "openai",
-                aliases: &[],
+                aliases: &["openai-api"],
                 label: "OpenAI",
                 api_key_env: Some("OPENAI_API_KEY"),
                 base_url: "https://api.openai.com/v1",
@@ -253,7 +253,7 @@ impl ProviderKind {
             },
             Self::Moonshot => ProviderMeta {
                 id: "moonshot",
-                aliases: &[],
+                aliases: &["kimi"],
                 label: "Moonshot",
                 api_key_env: Some("MOONSHOT_API_KEY"),
                 base_url: "https://api.moonshot.ai/v1",
@@ -283,7 +283,7 @@ impl ProviderKind {
             },
             Self::Gemini => ProviderMeta {
                 id: "gemini",
-                aliases: &[],
+                aliases: &["google"],
                 label: "Gemini",
                 api_key_env: Some("GEMINI_API_KEY"),
                 base_url: "https://generativelanguage.googleapis.com/v1beta",
@@ -293,7 +293,7 @@ impl ProviderKind {
             },
             Self::GeminiCli => ProviderMeta {
                 id: "gemini-cli",
-                aliases: &[],
+                aliases: &["google-gemini-cli"],
                 label: "Gemini CLI",
                 api_key_env: None,
                 base_url: "https://generativelanguage.googleapis.com/v1beta",
@@ -493,34 +493,13 @@ pub fn provider_kind_from_id(id: &str) -> Option<ProviderKind> {
 }
 
 fn parse_provider_prefix(model: &str) -> Option<(ProviderKind, &str)> {
-    let separators = [':', '/'];
-    for sep in separators {
+    for sep in [':', '/'] {
         if let Some((prefix, rest)) = model.split_once(sep) {
-            let prefix = prefix.trim().to_lowercase();
+            let prefix = prefix.trim();
             let rest = rest.trim();
-            let kind = match prefix.as_str() {
-                "anthropic" | "claude" => ProviderKind::Anthropic,
-                "claude-cli" => ProviderKind::ClaudeCli,
-                "openai" | "openai-api" => ProviderKind::OpenAI,
-                "openrouter" => ProviderKind::OpenRouter,
-                "deepseek" => ProviderKind::DeepSeek,
-                "xiaomi" => ProviderKind::Xiaomi,
-                "xiaomi-plan" | "mimo-plan" => ProviderKind::XiaomiPlan,
-                "mistral" => ProviderKind::Mistral,
-                "moonshot" | "kimi" => ProviderKind::Moonshot,
-                "stepfun" => ProviderKind::Stepfun,
-                "lmstudio" => ProviderKind::LMStudio,
-                "gemini" | "google" => ProviderKind::Gemini,
-                "gemini-cli" | "google-gemini-cli" => ProviderKind::GeminiCli,
-                "antigravity" | "google-antigravity" => ProviderKind::GoogleAntigravity,
-                "codex" | "openai-codex" => ProviderKind::OpenAICodex,
-                "opencode-go" | "opencode" | "go" => ProviderKind::OpencodeGo,
-                "minimax" => ProviderKind::Minimax,
-                "zai" | "zhipu" | "glm" => ProviderKind::Zai,
-                "xai" | "grok" | "x" => ProviderKind::Xai,
-                _ => continue,
-            };
-            return Some((kind, rest));
+            if let Some(kind) = ProviderKind::from_id(prefix) {
+                return Some((kind, rest));
+            }
         }
     }
     None
