@@ -6,7 +6,6 @@ pub mod text_tool_parser;
 pub mod thinking_parser;
 
 pub mod anthropic;
-pub mod build;
 pub mod deepseek;
 pub mod gemini;
 pub mod lmstudio;
@@ -27,10 +26,8 @@ pub mod zai;
 use std::future::Future;
 use std::pin::Pin;
 
-pub use build::{
-    ProviderBuildContext, build_provider_client, map_thinking_to_anthropic_effort,
-    resolve_text_verbosity,
-};
+use crate::anthropic::types::EffortLevel as AnthropicEffortLevel;
+use crate::gemini::shared::GeminiThinkingConfig;
 pub use debug_trace::{DebugTrace, TraceStream, wrap_stream};
 pub use shared::{
     ChatContentBlock, ChatMessage, ContentBlockType, IdOrigin, MessageContent, ProviderError,
@@ -39,6 +36,7 @@ pub use shared::{
     map_event_stream_error, resolve_api_key, resolve_base_url,
 };
 use zdx_types::ToolDefinition;
+use zdx_types::config::{TextVerbosity, ThinkingLevel};
 
 /// Object-safe trait for streaming LLM providers.
 ///
@@ -110,6 +108,148 @@ impl<T: StreamingProvider + ?Sized> StreamingProvider for Box<T> {
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<ProviderStream>> + Send + 'a>> {
         (**self).stream_messages(messages, tools, system)
     }
+}
+
+/// Consolidated context for provider client construction.
+///
+/// Carries both raw inputs (model, provider kind) and derived values
+/// (thinking, reasoning, cache key) plus resolved per-provider config
+/// values (`base_url`, `api_key`, `websocket`, `text_verbosity`).
+///
+/// The engine constructs this by resolving its `Config` and then calls
+/// `ProviderKind::build_client(&ctx)`. This crate never needs to reference
+/// the engine's `Config` type.
+pub struct ProviderBuildContext<'a> {
+    pub model: &'a str,
+    pub provider: ProviderKind,
+    /// Effective max tokens (`u32`) — used by `Anthropic`, `ClaudeCli`, `OpenAICodex`, `Xiaomi`.
+    pub max_tokens: u32,
+    /// Global `config.max_tokens` (`Option<u32>`) — used by `OpenAI`, `OpenRouter`, `Gemini`, etc.
+    pub config_max_tokens: Option<u32>,
+    pub thinking_level: ThinkingLevel,
+    pub thinking_enabled: bool,
+    pub reasoning_effort: Option<String>,
+    pub anthropic_effort: Option<AnthropicEffortLevel>,
+    pub thinking_budget_tokens: u32,
+    pub gemini_thinking: Option<GeminiThinkingConfig>,
+    pub cache_key: Option<String>,
+    pub text_verbosity: Option<TextVerbosity>,
+    pub service_tier: Option<String>,
+    /// Resolved per-provider base URL override.
+    pub base_url: Option<&'a str>,
+    /// Resolved per-provider API key.
+    pub api_key: Option<&'a str>,
+    /// Per-provider text verbosity default.
+    pub provider_text_verbosity: Option<TextVerbosity>,
+    /// Per-provider websocket flag (`OpenAI`/`OpenAICodex`).
+    pub websocket: bool,
+    /// API routing hint for the `opencode-go` meta-provider.
+    pub api_hint: Option<String>,
+}
+
+impl<'a> ProviderBuildContext<'a> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        model: &'a str,
+        provider: ProviderKind,
+        max_tokens: u32,
+        config_max_tokens: Option<u32>,
+        thinking_level: ThinkingLevel,
+        text_verbosity: Option<TextVerbosity>,
+        model_output_limit: Option<u32>,
+        thread_id: Option<&'a str>,
+        service_tier: Option<&'a str>,
+        base_url: Option<&'a str>,
+        api_key: Option<&'a str>,
+        provider_text_verbosity: Option<TextVerbosity>,
+        websocket: bool,
+        api_hint: Option<String>,
+    ) -> Self {
+        let thinking_enabled = thinking_level.is_enabled();
+        let reasoning_effort = map_thinking_to_reasoning(thinking_level);
+        let anthropic_effort = map_thinking_to_anthropic_effort(thinking_level, model);
+        let thinking_budget_tokens = thinking_level
+            .compute_reasoning_budget(max_tokens, model_output_limit)
+            .unwrap_or(0);
+        // Always emit a Gemini thinking config — even when ThinkingLevel::Off — so that
+        // `Off` sends an explicit minimum-thinking config rather than omitting
+        // `thinkingConfig` (which lets Gemini fall back to its default high reasoning).
+        let gemini_thinking = Some(GeminiThinkingConfig::from_thinking_level(
+            thinking_level,
+            model,
+        ));
+
+        Self {
+            model,
+            provider,
+            max_tokens,
+            config_max_tokens,
+            thinking_level,
+            thinking_enabled,
+            reasoning_effort,
+            anthropic_effort,
+            thinking_budget_tokens,
+            gemini_thinking,
+            cache_key: thread_id.map(str::to_owned),
+            text_verbosity,
+            service_tier: service_tier.map(str::to_owned),
+            base_url,
+            api_key,
+            provider_text_verbosity,
+            websocket,
+            api_hint,
+        }
+    }
+}
+
+fn map_thinking_to_reasoning(level: ThinkingLevel) -> Option<String> {
+    match level {
+        ThinkingLevel::Off => None,
+        ThinkingLevel::Minimal | ThinkingLevel::Low => Some("low".to_string()),
+        ThinkingLevel::Medium => Some("medium".to_string()),
+        ThinkingLevel::High => Some("high".to_string()),
+        ThinkingLevel::XHigh => Some("xhigh".to_string()),
+    }
+}
+
+pub fn map_thinking_to_anthropic_effort(
+    level: ThinkingLevel,
+    model: &str,
+) -> Option<AnthropicEffortLevel> {
+    if matches!(level, ThinkingLevel::Off) {
+        return None;
+    }
+
+    let normalized = model.rsplit(':').next().unwrap_or(model);
+
+    if normalized.starts_with("claude-opus-4-6")
+        || normalized.starts_with("claude-sonnet-4-6")
+        || normalized.starts_with("claude-opus-4-5")
+    {
+        return Some(match level {
+            ThinkingLevel::Off => unreachable!(),
+            ThinkingLevel::Minimal | ThinkingLevel::Low => AnthropicEffortLevel::Low,
+            ThinkingLevel::Medium => AnthropicEffortLevel::Medium,
+            ThinkingLevel::High => AnthropicEffortLevel::High,
+            ThinkingLevel::XHigh => AnthropicEffortLevel::Max,
+        });
+    }
+
+    Some(match level {
+        ThinkingLevel::Off => unreachable!(),
+        ThinkingLevel::Minimal => AnthropicEffortLevel::Low,
+        ThinkingLevel::Low => AnthropicEffortLevel::Medium,
+        ThinkingLevel::Medium => AnthropicEffortLevel::High,
+        ThinkingLevel::High => AnthropicEffortLevel::XHigh,
+        ThinkingLevel::XHigh => AnthropicEffortLevel::Max,
+    })
+}
+
+pub fn resolve_text_verbosity(
+    runtime_override: Option<TextVerbosity>,
+    provider_default: Option<TextVerbosity>,
+) -> Option<TextVerbosity> {
+    runtime_override.or(provider_default)
 }
 
 /// Provider selection based on model naming.
@@ -459,6 +599,42 @@ impl ProviderKind {
             ProviderAuthMode::OAuth
         } else {
             ProviderAuthMode::ApiKey
+        }
+    }
+
+    /// Builds a provider client from the given context.
+    ///
+    /// Thin dispatcher that delegates to each provider module's `build()` function.
+    /// Adding a new provider: implement the client + `StreamingProvider` trait,
+    /// add a `build()` function in the module, add a `ProviderKind` variant +
+    /// `ProviderMeta` entry, then add one match arm here.
+    ///
+    /// # Errors
+    /// Returns an error if the selected provider's configuration cannot be resolved.
+    pub fn build_client(
+        &self,
+        ctx: &ProviderBuildContext<'_>,
+    ) -> anyhow::Result<Box<dyn StreamingProvider>> {
+        match self {
+            Self::Anthropic => anthropic::api::build(ctx),
+            Self::ClaudeCli => anthropic::cli::build(ctx),
+            Self::OpenAICodex => openai::codex::build(ctx),
+            Self::OpenAI => openai::api::build(ctx),
+            Self::OpenRouter => openrouter::build(ctx),
+            Self::DeepSeek => deepseek::build(ctx),
+            Self::Xiaomi => xiaomi::build(ctx),
+            Self::XiaomiPlan => xiaomi_plan::build(ctx),
+            Self::Mistral => mistral::build(ctx),
+            Self::Moonshot => moonshot::build(ctx),
+            Self::Stepfun => stepfun::build(ctx),
+            Self::LMStudio => lmstudio::build(ctx),
+            Self::Gemini => gemini::api::build(ctx),
+            Self::GeminiCli => gemini::cli::build(ctx),
+            Self::GoogleAntigravity => gemini::antigravity::build(ctx),
+            Self::OpencodeGo => opencode_go::build(ctx),
+            Self::Minimax => minimax::build(ctx),
+            Self::Zai => zai::build(ctx),
+            Self::Xai => xai::build(ctx),
         }
     }
 }

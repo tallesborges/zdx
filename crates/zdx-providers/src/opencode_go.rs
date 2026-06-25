@@ -189,6 +189,27 @@ impl OpencodeGoClient {
     }
 }
 
+/// Constructs the `OpenCode Go` meta-provider client from the given context.
+///
+/// # Errors
+/// Returns an error if the API key / base URL cannot be resolved from env or config.
+pub fn build(ctx: &crate::ProviderBuildContext<'_>) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
+    Ok(Box::new(OpencodeGoClient::new(OpencodeGoConfig::from_env(
+        ctx.model.to_string(),
+        ctx.config_max_tokens,
+        ctx.max_tokens,
+        ctx.base_url,
+        ctx.api_key,
+        ctx.thinking_enabled,
+        ctx.thinking_budget_tokens,
+        ctx.anthropic_effort,
+        ctx.gemini_thinking.clone(),
+        ctx.reasoning_effort.clone(),
+        ctx.cache_key.clone(),
+        ctx.api_hint.clone(),
+    )?)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

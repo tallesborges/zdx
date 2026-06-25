@@ -110,3 +110,18 @@ fn build_openrouter_headers(include_openrouter_headers: bool) -> HeaderMap {
 
     headers
 }
+
+/// Constructs the `OpenRouter` client from the given context.
+///
+/// # Errors
+/// Returns an error if the API key / base URL cannot be resolved from env or config.
+pub fn build(ctx: &crate::ProviderBuildContext<'_>) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
+    Ok(Box::new(OpenRouterClient::new(OpenRouterConfig::from_env(
+        ctx.model.to_string(),
+        ctx.config_max_tokens,
+        ctx.base_url,
+        ctx.api_key,
+        ctx.reasoning_effort.clone(),
+        ctx.cache_key.clone(),
+    )?)))
+}

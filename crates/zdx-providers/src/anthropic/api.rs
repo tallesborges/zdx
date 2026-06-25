@@ -245,6 +245,22 @@ impl AnthropicClient {
     }
 }
 
+/// Constructs the Anthropic client from the given context.
+///
+/// # Errors
+/// Returns an error if the API key / base URL cannot be resolved from env or config.
+pub fn build(ctx: &crate::ProviderBuildContext<'_>) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
+    Ok(Box::new(AnthropicClient::new(AnthropicConfig::from_env(
+        ctx.model.to_string(),
+        ctx.max_tokens,
+        ctx.base_url,
+        ctx.api_key,
+        ctx.thinking_enabled,
+        ctx.thinking_budget_tokens,
+        ctx.anthropic_effort,
+    )?)))
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

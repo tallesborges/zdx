@@ -163,6 +163,21 @@ impl ClaudeCliClient {
     }
 }
 
+/// Constructs the Claude CLI client from the given context.
+///
+/// # Errors
+/// Never returns an error; construction is infallible.
+pub fn build(ctx: &crate::ProviderBuildContext<'_>) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
+    Ok(Box::new(ClaudeCliClient::new(ClaudeCliConfig::new(
+        ctx.model.to_string(),
+        ctx.max_tokens,
+        ctx.base_url,
+        ctx.thinking_enabled,
+        ctx.thinking_budget_tokens,
+        ctx.anthropic_effort,
+    ))))
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

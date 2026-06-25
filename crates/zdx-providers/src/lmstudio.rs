@@ -96,3 +96,18 @@ impl LMStudioClient {
             .await
     }
 }
+
+/// Constructs the `LMStudio` client from the given context.
+///
+/// # Errors
+/// Returns an error if the base URL cannot be resolved from env or config.
+pub fn build(ctx: &crate::ProviderBuildContext<'_>) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
+    Ok(Box::new(LMStudioClient::new(LMStudioConfig::from_env(
+        ctx.model.to_string(),
+        ctx.config_max_tokens,
+        ctx.base_url,
+        ctx.api_key,
+        ctx.cache_key.clone(),
+        ctx.thinking_enabled,
+    )?)))
+}
