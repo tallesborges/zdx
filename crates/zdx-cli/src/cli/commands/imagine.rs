@@ -136,6 +136,7 @@ async fn generate_codex_images(
             .effective_text_verbosity(),
         None,
         service_tier,
+        false,
     );
     let response = OpenAICodexClient::new(codex_config)
         .generate_images(options.prompt, &image_options)
@@ -175,6 +176,7 @@ async fn generate_openai_images(
         options.config.providers.openai.effective_text_verbosity(),
         None,
         service_tier,
+        false,
     )?;
     let response = OpenAIClient::new(openai_config)
         .generate_images(options.prompt, &image_options)

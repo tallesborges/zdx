@@ -921,7 +921,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             .await
         }
         Commands::Memory { command } => dispatch_memory(command, context),
-        Commands::Automations { command } => dispatch_automations(command, context).await,
+        Commands::Automations { command } => Box::pin(dispatch_automations(command, context)).await,
         Commands::Mcp { command } => dispatch_mcp(command, context).await,
         Commands::Config { command } => dispatch_config(&command),
         Commands::Login {
@@ -1084,8 +1084,13 @@ async fn dispatch_automations(
         AutomationCommands::Validate => commands::automations::validate(&root_path, context.config),
         AutomationCommands::Daemon { poll_interval_secs } => {
             let thread_opts: ThreadPersistenceOptions = context.thread_args.into();
-            commands::daemon::run(&root_path, &thread_opts, context.config, poll_interval_secs)
-                .await
+            Box::pin(commands::daemon::run(
+                &root_path,
+                &thread_opts,
+                context.config,
+                poll_interval_secs,
+            ))
+            .await
         }
         AutomationCommands::Runs {
             name,

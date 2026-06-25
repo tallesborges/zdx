@@ -1,5 +1,7 @@
 //! `OpenAI` Codex (`ChatGPT` OAuth) provider.
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -13,6 +15,7 @@ use super::image_generation::{
 };
 use crate::oauth::openai_codex as oauth_codex;
 use crate::openai::responses::{ResponsesConfig, send_responses_stream};
+use crate::openai::responses_ws::{OpenAIResponsesWsClient, WsHeaderFactory};
 use crate::{ProviderKind, ProviderStream};
 
 const RESPONSES_PATH: &str = "/codex/responses";
@@ -21,9 +24,13 @@ const HEADER_ACCOUNT_ID: &str = "chatgpt-account-id";
 const HEADER_ORIGINATOR: &str = "originator";
 const HEADER_USER_AGENT: &str = "user-agent";
 const HEADER_SESSION_ID: &str = "session_id";
+const HEADER_OPENAI_BETA: &str = "OpenAI-Beta";
 
 const ORIGINATOR_VALUE: &str = "zdx";
 const USER_AGENT_VALUE: &str = concat!("zdx/", env!("CARGO_PKG_VERSION"));
+/// Opt-in beta flag the `ChatGPT` Codex backend requires for the Responses
+/// WebSocket transport.
+const WS_BETA_VALUE: &str = "responses_websockets=2026-02-06";
 
 fn supports_reasoning_summary(model: &str) -> bool {
     // Current Codex backend rejects `reasoning.summary` for Spark tier.
@@ -40,6 +47,8 @@ pub struct OpenAICodexConfig {
     pub text_verbosity: Option<TextVerbosity>,
     pub prompt_cache_key: Option<String>,
     pub service_tier: Option<String>,
+    /// Use the persistent WebSocket transport for the Codex Responses endpoint.
+    pub websocket: bool,
 }
 
 impl OpenAICodexConfig {
@@ -50,6 +59,7 @@ impl OpenAICodexConfig {
         text_verbosity: Option<TextVerbosity>,
         prompt_cache_key: Option<String>,
         service_tier: Option<String>,
+        websocket: bool,
     ) -> Self {
         Self {
             model,
@@ -58,6 +68,7 @@ impl OpenAICodexConfig {
             text_verbosity,
             prompt_cache_key,
             service_tier,
+            websocket,
         }
     }
 }
@@ -114,13 +125,22 @@ fn decode_account_id(token: &str) -> Option<String> {
 pub struct OpenAICodexClient {
     config: OpenAICodexConfig,
     http: reqwest::Client,
+    ws: Option<Box<OpenAIResponsesWsClient>>,
 }
 
 impl OpenAICodexClient {
     pub fn new(config: OpenAICodexConfig) -> Self {
+        let ws = config.websocket.then(|| {
+            Box::new(OpenAIResponsesWsClient::new(
+                codex_ws_header_factory(config.prompt_cache_key.clone()),
+                codex_responses_config(&config, effective_codex_instructions(None)),
+                true,
+            ))
+        });
         Self {
             config,
             http: reqwest::Client::new(),
+            ws,
         }
     }
 
@@ -133,40 +153,17 @@ impl OpenAICodexClient {
         tools: &[ToolDefinition],
         system: Option<&str>,
     ) -> Result<ProviderStream> {
+        if let Some(ws) = &self.ws {
+            return ws.send_messages_stream(messages, tools, system).await;
+        }
+
         let creds = resolve_credentials().await?;
-
-        let instructions = effective_codex_instructions(system);
-
         let headers = build_headers(
             &creds.account_id,
             &creds.access,
             self.config.prompt_cache_key.as_deref(),
         );
-        let config = ResponsesConfig {
-            base_url: ProviderKind::OpenAICodex.default_base_url().to_string(),
-            path: RESPONSES_PATH.to_string(),
-            model: self.config.model.clone(),
-            max_output_tokens: None,
-            reasoning_effort: self.config.reasoning_effort.clone(),
-            reasoning_summary: supports_reasoning_summary(&self.config.model)
-                .then(|| "auto".to_string()),
-            instructions,
-            text_verbosity: Some(
-                self.config
-                    .text_verbosity
-                    .unwrap_or_default()
-                    .as_str()
-                    .to_string(),
-            ),
-            store: Some(false),
-            include: Some(vec!["reasoning.encrypted_content".to_string()]),
-            stream_options: None,
-            prompt_cache_key: self.config.prompt_cache_key.clone(),
-            parallel_tool_calls: Some(true),
-            tool_choice: Some("auto".to_string()),
-            truncation: None, // Default: "disabled" - fail if context exceeded
-            service_tier: self.config.service_tier.clone(),
-        };
+        let config = codex_responses_config(&self.config, effective_codex_instructions(system));
 
         // For Codex, send the system prompt through top-level `instructions`.
         // Keep `system` input empty here to avoid duplication in `input`.
@@ -224,6 +221,62 @@ fn effective_codex_instructions(system: Option<&str>) -> Option<String> {
         .filter(|prompt| !prompt.is_empty())
         .map(ToOwned::to_owned)
         .or_else(|| Some(IDENTITY_PROMPT_TEMPLATE.trim().to_string()))
+}
+
+fn codex_responses_config(
+    config: &OpenAICodexConfig,
+    instructions: Option<String>,
+) -> ResponsesConfig {
+    ResponsesConfig {
+        base_url: ProviderKind::OpenAICodex.default_base_url().to_string(),
+        path: RESPONSES_PATH.to_string(),
+        model: config.model.clone(),
+        max_output_tokens: None,
+        reasoning_effort: config.reasoning_effort.clone(),
+        reasoning_summary: supports_reasoning_summary(&config.model).then(|| "auto".to_string()),
+        instructions,
+        text_verbosity: Some(
+            config
+                .text_verbosity
+                .unwrap_or_default()
+                .as_str()
+                .to_string(),
+        ),
+        store: Some(false),
+        include: Some(vec!["reasoning.encrypted_content".to_string()]),
+        stream_options: None,
+        prompt_cache_key: config.prompt_cache_key.clone(),
+        parallel_tool_calls: Some(true),
+        tool_choice: Some("auto".to_string()),
+        truncation: None, // Default: "disabled" - fail if context exceeded
+        service_tier: config.service_tier.clone(),
+    }
+}
+
+/// Builds the async header factory for the Codex WebSocket handshake: OAuth
+/// bearer + account/originator/user-agent headers + the `responses_websockets`
+/// beta flag, resolving (and refreshing) credentials at connect time.
+fn codex_ws_header_factory(session_id: Option<String>) -> WsHeaderFactory {
+    Arc::new(move || {
+        let session_id = session_id.clone();
+        Box::pin(async move {
+            let creds = resolve_credentials().await?;
+            let mut headers = vec![
+                (
+                    "Authorization".to_string(),
+                    format!("Bearer {}", creds.access),
+                ),
+                (HEADER_ACCOUNT_ID.to_string(), creds.account_id),
+                (HEADER_ORIGINATOR.to_string(), ORIGINATOR_VALUE.to_string()),
+                (HEADER_USER_AGENT.to_string(), USER_AGENT_VALUE.to_string()),
+                (HEADER_OPENAI_BETA.to_string(), WS_BETA_VALUE.to_string()),
+            ];
+            if let Some(session_id) = session_id {
+                headers.push((HEADER_SESSION_ID.to_string(), session_id));
+            }
+            Ok(headers)
+        })
+    })
 }
 
 fn build_headers(account_id: &str, access_token: &str, session_id: Option<&str>) -> HeaderMap {
@@ -294,8 +347,15 @@ mod tests {
 
     #[test]
     fn codex_config_defaults_text_verbosity_to_medium_when_unset() {
-        let config =
-            super::OpenAICodexConfig::new("gpt-5.4".to_string(), 4096, None, None, None, None);
+        let config = super::OpenAICodexConfig::new(
+            "gpt-5.4".to_string(),
+            4096,
+            None,
+            None,
+            None,
+            None,
+            false,
+        );
 
         assert_eq!(
             config.text_verbosity.unwrap_or_default().as_str(),

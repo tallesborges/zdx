@@ -1282,6 +1282,7 @@ fn build_provider_client(
                 ),
                 cache_key,
                 options.service_tier.map(std::string::ToString::to_string),
+                config.providers.openai_codex.websocket,
             ),
         ))),
         ProviderKind::OpenAI => build_openai_client(
@@ -1428,6 +1429,7 @@ fn build_openai_client(
             ),
             cache_key,
             service_tier,
+            config.providers.openai.websocket,
         )?,
     )))
 }

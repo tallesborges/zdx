@@ -1680,6 +1680,9 @@ pub struct ProviderConfig {
     /// Enable fast mode (`service_tier: "priority"`) for `OpenAI` Responses API (2× cost).
     #[serde(default)]
     pub fast_mode: bool,
+    /// Use the persistent WebSocket transport for the `OpenAI` Responses API.
+    #[serde(default)]
+    pub websocket: bool,
 }
 
 impl ProviderConfig {

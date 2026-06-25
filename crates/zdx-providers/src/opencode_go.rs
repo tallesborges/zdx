@@ -138,6 +138,7 @@ impl OpencodeGoClient {
                     text_verbosity: None,
                     prompt_cache_key: config.cache_key,
                     service_tier: None,
+                    websocket: false,
                 }))
             }
             GoRoute::GoogleGenerativeAI => {

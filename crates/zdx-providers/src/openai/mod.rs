@@ -7,6 +7,7 @@ pub mod image_generation;
 pub mod responses;
 mod responses_sse;
 mod responses_types;
+pub mod responses_ws;
 
 pub use api::{OpenAIClient, OpenAIConfig};
 pub use codex::{OpenAICodexClient, OpenAICodexConfig};
@@ -14,3 +15,4 @@ pub use image_generation::{
     OpenAIGenerateImageResponse, OpenAIGeneratedImage, OpenAIImageGenerationOptions,
     OpenAIImageInput,
 };
+pub use responses_ws::OpenAIResponsesWsClient;

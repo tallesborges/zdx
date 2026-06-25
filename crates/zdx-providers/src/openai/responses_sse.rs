@@ -91,28 +91,30 @@ fn extract_function_call_arguments(item: &Value) -> Option<String> {
     })
 }
 
-/// SSE parser for `OpenAI` Responses API.
-pub struct ResponsesSseParser<S> {
-    inner: EventStream<S>,
+/// Maps `OpenAI` Responses JSON events to `StreamEvent`s. The payloads are
+/// byte-identical over SSE and WebSocket, so both transports feed this mapper.
+pub struct ResponsesEventMapper {
     model: String,
     state: StreamState,
     pending: VecDeque<StreamEvent>,
+    last_response_id: Option<String>,
 }
 
-impl<S> ResponsesSseParser<S> {
-    pub fn new(stream: S, model: String) -> Self
-    where
-        S: Eventsource,
-    {
+impl ResponsesEventMapper {
+    pub fn new(model: String) -> Self {
         Self {
-            inner: stream.eventsource(),
             model,
             state: StreamState::new(),
             pending: VecDeque::new(),
+            last_response_id: None,
         }
     }
 
-    fn handle_event_data(&mut self, data: &str) -> ProviderResult<()> {
+    /// Parses one JSON event payload and queues the resulting `StreamEvent`(s).
+    ///
+    /// # Errors
+    /// Returns a parse error if the payload is not valid JSON.
+    pub fn push_json(&mut self, data: &str) -> ProviderResult<()> {
         let trimmed = data.trim();
         if trimmed.is_empty() || trimmed == "[DONE]" {
             return Ok(());
@@ -127,6 +129,15 @@ impl<S> ResponsesSseParser<S> {
         let event = self.map_event(value)?;
         self.pending.push_back(event);
         Ok(())
+    }
+
+    pub fn pop(&mut self) -> Option<StreamEvent> {
+        self.pending.pop_front()
+    }
+
+    /// Most recent server `response.id` (used for WebSocket continuation).
+    pub fn last_response_id(&self) -> Option<&str> {
+        self.last_response_id.as_deref()
     }
 
     #[allow(
@@ -414,6 +425,10 @@ impl<S> ResponsesSseParser<S> {
             }
             "response.completed" | "response.done" => {
                 let response = value.get("response").unwrap_or(&Value::Null);
+                let response_id = response.get_str("id");
+                if !response_id.is_empty() {
+                    self.last_response_id = Some(response_id.to_string());
+                }
                 let usage = response.get("usage").unwrap_or(&Value::Null);
                 let cached = usage
                     .get("input_tokens_details")
@@ -479,6 +494,26 @@ impl<S> ResponsesSseParser<S> {
     }
 }
 
+/// SSE parser for `OpenAI` Responses API streaming.
+///
+/// Owns SSE framing and delegates JSON event payloads to a `ResponsesEventMapper`.
+pub struct ResponsesSseParser<S> {
+    inner: EventStream<S>,
+    mapper: ResponsesEventMapper,
+}
+
+impl<S> ResponsesSseParser<S> {
+    pub fn new(stream: S, model: String) -> Self
+    where
+        S: Eventsource,
+    {
+        Self {
+            inner: stream.eventsource(),
+            mapper: ResponsesEventMapper::new(model),
+        }
+    }
+}
+
 impl<S, E> Stream for ResponsesSseParser<S>
 where
     S: Stream<Item = std::result::Result<bytes::Bytes, E>> + Unpin,
@@ -493,14 +528,14 @@ where
         use std::task::Poll;
 
         loop {
-            if let Some(event) = self.pending.pop_front() {
+            if let Some(event) = self.mapper.pop() {
                 return Poll::Ready(Some(Ok(event)));
             }
 
             let inner = Pin::new(&mut self.inner);
             match inner.poll_next(cx) {
                 Poll::Ready(Some(Ok(event))) => {
-                    if let Err(err) = self.handle_event_data(&event.data) {
+                    if let Err(err) = self.mapper.push_json(&event.data) {
                         return Poll::Ready(Some(Err(err)));
                     }
                 }
@@ -521,17 +556,15 @@ mod tests {
 
     use super::*;
 
-    fn parser()
-    -> ResponsesSseParser<impl Stream<Item = std::result::Result<bytes::Bytes, std::io::Error>>>
-    {
-        ResponsesSseParser::new(stream::empty(), "gpt-5.3-codex-spark".to_string())
+    fn mapper() -> ResponsesEventMapper {
+        ResponsesEventMapper::new("gpt-5.3-codex-spark".to_string())
     }
 
     #[test]
     fn function_call_done_with_arguments_emits_missing_input_delta() {
-        let mut parser = parser();
+        let mut mapper = mapper();
 
-        let start = parser
+        let start = mapper
             .map_event(json!({
                 "type": "response.output_item.added",
                 "item": {
@@ -544,7 +577,7 @@ mod tests {
             .unwrap();
         assert!(matches!(start, StreamEvent::ContentBlockStart { .. }));
 
-        let event = parser
+        let event = mapper
             .map_event(json!({
                 "type": "response.output_item.done",
                 "item": {
@@ -562,16 +595,16 @@ mod tests {
             }
         ));
         assert!(matches!(
-            parser.pending.pop_front(),
+            mapper.pending.pop_front(),
             Some(StreamEvent::InputJsonDelta { ref partial_json, .. }) if partial_json == "{\"command\":\"git status\"}"
         ));
     }
 
     #[test]
     fn function_call_done_only_emits_remaining_input_after_delta() {
-        let mut parser = parser();
+        let mut mapper = mapper();
 
-        let _ = parser
+        let _ = mapper
             .map_event(json!({
                 "type": "response.output_item.added",
                 "item": {
@@ -583,7 +616,7 @@ mod tests {
             }))
             .unwrap();
 
-        let first = parser
+        let first = mapper
             .map_event(json!({
                 "type": "response.function_call_arguments.delta",
                 "delta": "a"
@@ -594,7 +627,7 @@ mod tests {
             StreamEvent::InputJsonDelta { ref partial_json, .. } if partial_json == "a"
         ));
 
-        let second = parser
+        let second = mapper
             .map_event(json!({
                 "type": "response.output_item.done",
                 "item": {
@@ -612,16 +645,16 @@ mod tests {
             }
         ));
         assert!(matches!(
-            parser.pending.pop_front(),
+            mapper.pending.pop_front(),
             Some(StreamEvent::InputJsonDelta { ref partial_json, .. }) if partial_json == "bc"
         ));
     }
 
     #[test]
     fn function_call_arguments_done_emits_missing_input_and_completes() {
-        let mut parser = parser();
+        let mut mapper = mapper();
 
-        let _ = parser
+        let _ = mapper
             .map_event(json!({
                 "type": "response.output_item.added",
                 "item": {
@@ -633,7 +666,7 @@ mod tests {
             }))
             .unwrap();
 
-        let done = parser
+        let done = mapper
             .map_event(json!({
                 "type": "response.function_call_arguments.done",
                 "arguments": "{\"file_path\":\"Cargo.toml\"}"
@@ -648,16 +681,16 @@ mod tests {
             }
         ));
         assert!(matches!(
-            parser.pending.pop_front(),
+            mapper.pending.pop_front(),
             Some(StreamEvent::InputJsonDelta { ref partial_json, .. }) if partial_json == "{\"file_path\":\"Cargo.toml\"}"
         ));
     }
 
     #[test]
     fn function_call_output_item_done_after_arguments_done_is_ignored() {
-        let mut parser = parser();
+        let mut mapper = mapper();
 
-        let _ = parser
+        let _ = mapper
             .map_event(json!({
                 "type": "response.output_item.added",
                 "item": {
@@ -669,15 +702,15 @@ mod tests {
             }))
             .unwrap();
 
-        let _ = parser
+        let _ = mapper
             .map_event(json!({
                 "type": "response.function_call_arguments.done",
                 "arguments": "{\"file_path\":\"Cargo.toml\"}"
             }))
             .unwrap();
-        let _ = parser.pending.pop_front();
+        let _ = mapper.pending.pop_front();
 
-        let event = parser
+        let event = mapper
             .map_event(json!({
                 "type": "response.output_item.done",
                 "item": { "type": "function_call" }
@@ -689,9 +722,9 @@ mod tests {
 
     #[test]
     fn function_call_arguments_done_without_arguments_waits_for_output_item_done() {
-        let mut parser = parser();
+        let mut mapper = mapper();
 
-        let _ = parser
+        let _ = mapper
             .map_event(json!({
                 "type": "response.output_item.added",
                 "item": {
@@ -703,14 +736,14 @@ mod tests {
             }))
             .unwrap();
 
-        let early_done = parser
+        let early_done = mapper
             .map_event(json!({
                 "type": "response.function_call_arguments.done"
             }))
             .unwrap();
         assert!(matches!(early_done, StreamEvent::Ping));
 
-        let final_done = parser
+        let final_done = mapper
             .map_event(json!({
                 "type": "response.output_item.done",
                 "item": {
@@ -727,16 +760,16 @@ mod tests {
             }
         ));
         assert!(matches!(
-            parser.pending.pop_front(),
+            mapper.pending.pop_front(),
             Some(StreamEvent::InputJsonDelta { ref partial_json, .. }) if partial_json == "{\"command\":\"ls -la\"}"
         ));
     }
 
     #[test]
     fn function_call_done_does_not_reemit_when_done_payload_is_shorter() {
-        let mut parser = parser();
+        let mut mapper = mapper();
 
-        let _ = parser
+        let _ = mapper
             .map_event(json!({
                 "type": "response.output_item.added",
                 "item": {
@@ -748,14 +781,14 @@ mod tests {
             }))
             .unwrap();
 
-        let _ = parser
+        let _ = mapper
             .map_event(json!({
                 "type": "response.function_call_arguments.delta",
                 "delta": "abcd"
             }))
             .unwrap();
 
-        let done = parser
+        let done = mapper
             .map_event(json!({
                 "type": "response.output_item.done",
                 "item": {
@@ -772,7 +805,22 @@ mod tests {
                 signature: None
             }
         ));
-        assert!(parser.pending.is_empty());
+        assert!(mapper.pending.is_empty());
+    }
+
+    #[test]
+    fn response_completed_captures_response_id() {
+        let mut mapper = mapper();
+
+        let event = mapper
+            .map_event(json!({
+                "type": "response.completed",
+                "response": { "id": "resp_123", "status": "completed" }
+            }))
+            .unwrap();
+
+        assert!(matches!(event, StreamEvent::MessageStart { .. }));
+        assert_eq!(mapper.last_response_id(), Some("resp_123"));
     }
 
     /// Transport-level errors mid-stream (socket reset, connection dropped,
