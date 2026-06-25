@@ -22,7 +22,7 @@ use crate::core::interrupt::{self, InterruptedError};
 use crate::providers::{
     ChatContentBlock, ChatMessage, ContentBlockType, ProviderBuildContext, ProviderError,
     ProviderKind, ProviderStream, ReasoningBlock, ReplayToken, StreamEvent, StreamingProvider,
-    build_provider_client, resolve_provider,
+    resolve_provider,
 };
 use crate::subagents;
 use crate::tools::{ToolContext, ToolDefinition, ToolRegistry, ToolResult, ToolSet, todo_write};
@@ -1097,7 +1097,7 @@ fn build_run_turn_setup(
             None
         },
     );
-    let client = build_provider_client(&provider_ctx)?;
+    let client = provider.build_client(&provider_ctx)?;
     let tool_ctx = ToolContext::new(
         options
             .root

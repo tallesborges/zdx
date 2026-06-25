@@ -186,6 +186,24 @@ fn build_headers(api_key: &str) -> HeaderMap {
     headers
 }
 
+/// Constructs the `OpenAI` API client from the given context.
+///
+/// # Errors
+/// Returns an error if the API key / base URL cannot be resolved from env or config.
+pub fn build(ctx: &crate::ProviderBuildContext<'_>) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
+    Ok(Box::new(OpenAIClient::new(OpenAIConfig::from_env(
+        ctx.model.to_string(),
+        ctx.config_max_tokens,
+        ctx.base_url,
+        ctx.api_key,
+        ctx.reasoning_effort.clone(),
+        crate::resolve_text_verbosity(ctx.text_verbosity, ctx.provider_text_verbosity),
+        ctx.cache_key.clone(),
+        ctx.service_tier.clone(),
+        ctx.websocket,
+    )?)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

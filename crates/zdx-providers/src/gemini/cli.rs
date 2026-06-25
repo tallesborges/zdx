@@ -173,3 +173,15 @@ fn build_headers(access_token: &str) -> HeaderMap {
     headers.insert("Content-Type", HeaderValue::from_static("application/json"));
     headers
 }
+
+/// Constructs the Gemini CLI client from the given context.
+///
+/// # Errors
+/// Never returns an error; construction is infallible.
+pub fn build(ctx: &crate::ProviderBuildContext<'_>) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
+    Ok(Box::new(GeminiCliClient::new(GeminiCliConfig::new(
+        ctx.model.to_string(),
+        ctx.config_max_tokens,
+        GeminiThinkingConfig::from_thinking_level(ctx.thinking_level, ctx.model),
+    ))))
+}

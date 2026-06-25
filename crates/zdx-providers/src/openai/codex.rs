@@ -308,6 +308,22 @@ fn build_headers(account_id: &str, access_token: &str, session_id: Option<&str>)
     headers
 }
 
+/// Constructs the `OpenAI Codex` client from the given context.
+///
+/// # Errors
+/// Never returns an error; construction is infallible.
+pub fn build(ctx: &crate::ProviderBuildContext<'_>) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
+    Ok(Box::new(OpenAICodexClient::new(OpenAICodexConfig::new(
+        ctx.model.to_string(),
+        ctx.max_tokens,
+        ctx.reasoning_effort.clone(),
+        crate::resolve_text_verbosity(ctx.text_verbosity, ctx.provider_text_verbosity),
+        ctx.cache_key.clone(),
+        ctx.service_tier.clone(),
+        ctx.websocket,
+    ))))
+}
+
 #[cfg(test)]
 mod tests {
     use zdx_assets::IDENTITY_PROMPT_TEMPLATE;

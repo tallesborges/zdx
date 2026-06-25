@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
 use zdx_types::ToolDefinition;
+use zdx_types::config::ThinkingLevel;
 
 use super::shared::{
     CloudCodeRequestParams, GeminiThinkingConfig, build_cloud_code_assist_request,
@@ -174,4 +175,45 @@ fn build_headers(access_token: &str) -> HeaderMap {
     headers.insert("Accept", HeaderValue::from_static("*/*"));
     headers.insert("Content-Type", HeaderValue::from_static("application/json"));
     headers
+}
+
+fn antigravity_thinking_config(
+    level: ThinkingLevel,
+    model: &str,
+    max_tokens: Option<u32>,
+) -> GeminiThinkingConfig {
+    let budget = if model.starts_with("claude-") {
+        match level {
+            ThinkingLevel::Off => 0,
+            _ => 1024,
+        }
+    } else if model.starts_with("gpt-oss-") {
+        match level {
+            ThinkingLevel::Off => 0,
+            _ => 4096,
+        }
+    } else {
+        return GeminiThinkingConfig::from_thinking_level(level, model);
+    };
+
+    let capped_budget = max_tokens
+        .and_then(|tokens| i32::try_from(tokens.saturating_sub(1)).ok())
+        .map_or(budget, |limit| budget.min(limit));
+    GeminiThinkingConfig::Budget(capped_budget.max(0))
+}
+
+/// Constructs the Google Antigravity client from the given context.
+///
+/// # Errors
+/// Never returns an error; construction is infallible.
+pub fn build(ctx: &crate::ProviderBuildContext<'_>) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
+    Ok(Box::new(AntigravityClient::new(AntigravityConfig::new(
+        ctx.model.to_string(),
+        ctx.config_max_tokens,
+        Some(antigravity_thinking_config(
+            ctx.thinking_level,
+            ctx.model,
+            ctx.config_max_tokens,
+        )),
+    ))))
 }
