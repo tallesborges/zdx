@@ -11,6 +11,8 @@ pub struct RequestBody {
     pub stream_options: Option<StreamOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub store: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_response_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "max_output_tokens")]
     pub max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -162,6 +164,41 @@ mod tests {
         assert_eq!(
             value.get("parameters"),
             Some(&serde_json::json!({"type": "object"}))
+        );
+    }
+
+    #[test]
+    fn previous_response_id_is_omitted_when_none_and_present_when_set() {
+        let mut body = RequestBody {
+            model: "gpt-5".to_string(),
+            stream: true,
+            stream_options: None,
+            store: Some(false),
+            previous_response_id: None,
+            max_output_tokens: None,
+            instructions: None,
+            text: None,
+            reasoning: None,
+            include: None,
+            input: vec![],
+            tools: None,
+            tool_choice: None,
+            truncation: None,
+            prompt_cache_key: None,
+            parallel_tool_calls: None,
+            service_tier: None,
+        };
+
+        let omitted = serde_json::to_value(&body).unwrap();
+        assert!(omitted.get("previous_response_id").is_none());
+
+        body.previous_response_id = Some("resp_123".to_string());
+        let present = serde_json::to_value(&body).unwrap();
+        assert_eq!(
+            present
+                .get("previous_response_id")
+                .and_then(serde_json::Value::as_str),
+            Some("resp_123")
         );
     }
 }

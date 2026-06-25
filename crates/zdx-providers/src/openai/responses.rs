@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use reqwest::header::HeaderMap;
 use zdx_types::{ToolDefinition, ToolResultContent};
 
-pub use super::responses_sse::ResponsesSseParser;
+pub use super::responses_sse::{ResponsesEventMapper, ResponsesSseParser};
 pub use super::responses_types::{
     FunctionTool, InputContent, InputItem, ReasoningConfig, RequestBody, StreamOptions,
     SummaryItem, TextConfig,
@@ -52,43 +52,7 @@ pub async fn send_responses_stream(
     tools: &[ToolDefinition],
     system: Option<&str>,
 ) -> Result<ProviderStream> {
-    let input = build_input(messages, system);
-    if input.is_empty() {
-        bail!("No input messages provided for OpenAI request");
-    }
-
-    let tool_defs = if tools.is_empty() {
-        None
-    } else {
-        Some(tools.iter().map(FunctionTool::from).collect())
-    };
-
-    let request = RequestBody {
-        model: config.model.clone(),
-        stream: true,
-        stream_options: config.stream_options.clone(),
-        store: config.store,
-        max_output_tokens: config.max_output_tokens,
-        instructions: config.instructions.clone(),
-        text: config.text_verbosity.as_ref().map(|verbosity| TextConfig {
-            verbosity: verbosity.clone(),
-        }),
-        reasoning: config
-            .reasoning_effort
-            .as_ref()
-            .map(|effort| ReasoningConfig {
-                effort: effort.clone(),
-                summary: config.reasoning_summary.clone(),
-            }),
-        include: config.include.clone(),
-        input,
-        tools: tool_defs,
-        tool_choice: config.tool_choice.clone(),
-        truncation: config.truncation.clone(),
-        prompt_cache_key: config.prompt_cache_key.clone(),
-        parallel_tool_calls: config.parallel_tool_calls,
-        service_tier: config.service_tier.clone(),
-    };
+    let request = build_request_body(config, messages, tools, system, None)?;
 
     let url = format!("{}{}", config.base_url, config.path);
 
@@ -136,7 +100,74 @@ fn classify_reqwest_error(e: &reqwest::Error) -> ProviderError {
     }
 }
 
-fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Vec<InputItem> {
+/// Builds the full Responses request body for the HTTP/SSE path.
+///
+/// # Errors
+/// Returns an error when there are no input messages to send.
+pub(crate) fn build_request_body(
+    config: &ResponsesConfig,
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    system: Option<&str>,
+    previous_response_id: Option<String>,
+) -> Result<RequestBody> {
+    let input = build_input(messages, system);
+    if input.is_empty() {
+        bail!("No input messages provided for OpenAI request");
+    }
+
+    Ok(build_request_body_from_input(
+        config,
+        input,
+        tools,
+        previous_response_id,
+    ))
+}
+
+/// Builds a Responses request body from pre-built input items (WebSocket path,
+/// which may send only the new suffix).
+pub(crate) fn build_request_body_from_input(
+    config: &ResponsesConfig,
+    input: Vec<InputItem>,
+    tools: &[ToolDefinition],
+    previous_response_id: Option<String>,
+) -> RequestBody {
+    let tool_defs = if tools.is_empty() {
+        None
+    } else {
+        Some(tools.iter().map(FunctionTool::from).collect())
+    };
+
+    RequestBody {
+        model: config.model.clone(),
+        stream: true,
+        stream_options: config.stream_options.clone(),
+        store: config.store,
+        previous_response_id,
+        max_output_tokens: config.max_output_tokens,
+        instructions: config.instructions.clone(),
+        text: config.text_verbosity.as_ref().map(|verbosity| TextConfig {
+            verbosity: verbosity.clone(),
+        }),
+        reasoning: config
+            .reasoning_effort
+            .as_ref()
+            .map(|effort| ReasoningConfig {
+                effort: effort.clone(),
+                summary: config.reasoning_summary.clone(),
+            }),
+        include: config.include.clone(),
+        input,
+        tools: tool_defs,
+        tool_choice: config.tool_choice.clone(),
+        truncation: config.truncation.clone(),
+        prompt_cache_key: config.prompt_cache_key.clone(),
+        parallel_tool_calls: config.parallel_tool_calls,
+        service_tier: config.service_tier.clone(),
+    }
+}
+
+pub(crate) fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Vec<InputItem> {
     let mut input = Vec::new();
     if let Some(prompt) = system {
         input.push(message_item(

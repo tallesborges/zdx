@@ -8,6 +8,7 @@ use super::image_generation::{
     OpenAIGenerateImageResponse, OpenAIImageGenerationOptions, build_image_generation_request,
     parse_image_generation_sse_response,
 };
+use super::responses_ws::OpenAIResponsesWsClient;
 use crate::openai::responses::{ResponsesConfig, StreamOptions, send_responses_stream};
 use crate::{ProviderKind, ProviderStream};
 
@@ -24,6 +25,8 @@ pub struct OpenAIConfig {
     pub text_verbosity: Option<TextVerbosity>,
     pub prompt_cache_key: Option<String>,
     pub service_tier: Option<String>,
+    /// Use the persistent WebSocket transport instead of HTTP/SSE.
+    pub websocket: bool,
 }
 
 impl OpenAIConfig {
@@ -49,6 +52,7 @@ impl OpenAIConfig {
         text_verbosity: Option<TextVerbosity>,
         prompt_cache_key: Option<String>,
         service_tier: Option<String>,
+        websocket: bool,
     ) -> Result<Self> {
         let api_key = ProviderKind::OpenAI.resolve_api_key(config_api_key)?;
         let base_url = ProviderKind::OpenAI.resolve_base_url(config_base_url)?;
@@ -62,6 +66,7 @@ impl OpenAIConfig {
             text_verbosity,
             prompt_cache_key,
             service_tier,
+            websocket,
         })
     }
 }
@@ -70,13 +75,21 @@ impl OpenAIConfig {
 pub struct OpenAIClient {
     config: OpenAIConfig,
     http: reqwest::Client,
+    ws: Option<Box<OpenAIResponsesWsClient>>,
 }
 
 impl OpenAIClient {
     pub fn new(config: OpenAIConfig) -> Self {
+        let ws = config.websocket.then(|| {
+            Box::new(OpenAIResponsesWsClient::bearer(
+                config.api_key.clone(),
+                responses_config(&config),
+            ))
+        });
         Self {
             config,
             http: reqwest::Client::new(),
+            ws,
         }
     }
 
@@ -89,34 +102,11 @@ impl OpenAIClient {
         tools: &[ToolDefinition],
         system: Option<&str>,
     ) -> Result<ProviderStream> {
+        if let Some(ws) = &self.ws {
+            return ws.send_messages_stream(messages, tools, system).await;
+        }
         let headers = build_headers(&self.config.api_key);
-        let config = ResponsesConfig {
-            base_url: self.config.base_url.clone(),
-            path: RESPONSES_PATH.to_string(),
-            model: self.config.model.clone(),
-            max_output_tokens: self.config.max_output_tokens,
-            reasoning_effort: self.config.reasoning_effort.clone(),
-            reasoning_summary: None,
-            instructions: None,
-            text_verbosity: Some(
-                self.config
-                    .text_verbosity
-                    .unwrap_or_default()
-                    .as_str()
-                    .to_string(),
-            ),
-            store: Some(false),
-            include: Some(vec!["reasoning.encrypted_content".to_string()]),
-            stream_options: Some(StreamOptions {
-                include_obfuscation: Some(false),
-            }),
-            prompt_cache_key: self.config.prompt_cache_key.clone(),
-            parallel_tool_calls: Some(true),
-            tool_choice: Some("auto".to_string()),
-            truncation: None, // Default: "disabled" - fail if context exceeded
-            service_tier: self.config.service_tier.clone(),
-        };
-
+        let config = responses_config(&self.config);
         send_responses_stream(&self.http, &config, headers, messages, tools, system).await
     }
 
@@ -151,6 +141,35 @@ impl OpenAIClient {
     }
 }
 
+fn responses_config(config: &OpenAIConfig) -> ResponsesConfig {
+    ResponsesConfig {
+        base_url: config.base_url.clone(),
+        path: RESPONSES_PATH.to_string(),
+        model: config.model.clone(),
+        max_output_tokens: config.max_output_tokens,
+        reasoning_effort: config.reasoning_effort.clone(),
+        reasoning_summary: None,
+        instructions: None,
+        text_verbosity: Some(
+            config
+                .text_verbosity
+                .unwrap_or_default()
+                .as_str()
+                .to_string(),
+        ),
+        store: Some(false),
+        include: Some(vec!["reasoning.encrypted_content".to_string()]),
+        stream_options: Some(StreamOptions {
+            include_obfuscation: Some(false),
+        }),
+        prompt_cache_key: config.prompt_cache_key.clone(),
+        parallel_tool_calls: Some(true),
+        tool_choice: Some("auto".to_string()),
+        truncation: None, // Default: "disabled" - fail if context exceeded
+        service_tier: config.service_tier.clone(),
+    }
+}
+
 fn build_headers(api_key: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -182,6 +201,7 @@ mod tests {
             text_verbosity: None,
             prompt_cache_key: None,
             service_tier: None,
+            websocket: false,
         };
 
         assert_eq!(
