@@ -19,30 +19,10 @@ use tokio_util::sync::CancellationToken;
 use crate::config::{Config, TextVerbosity, ThinkingLevel};
 use crate::core::events::{AgentEvent, ErrorKind, NoticeKind, ToolOutput, TurnStatus};
 use crate::core::interrupt::{self, InterruptedError};
-use crate::providers::anthropic::{
-    AnthropicClient, AnthropicConfig, ClaudeCliClient, ClaudeCliConfig,
-    EffortLevel as AnthropicEffortLevel,
-};
-use crate::providers::deepseek::{DeepSeekClient, DeepSeekConfig};
-use crate::providers::gemini::{
-    AntigravityClient, AntigravityConfig, GeminiCliClient, GeminiCliConfig, GeminiClient,
-    GeminiConfig, GeminiThinkingConfig,
-};
-use crate::providers::lmstudio::{LMStudioClient, LMStudioConfig};
-use crate::providers::minimax::{MinimaxClient, MinimaxConfig};
-use crate::providers::mistral::{MistralClient, MistralConfig};
-use crate::providers::moonshot::{MoonshotClient, MoonshotConfig};
-use crate::providers::openai::{OpenAIClient, OpenAICodexClient, OpenAICodexConfig, OpenAIConfig};
-use crate::providers::opencode_go::{OpencodeGoClient, OpencodeGoConfig};
-use crate::providers::openrouter::{OpenRouterClient, OpenRouterConfig};
-use crate::providers::stepfun::{StepfunClient, StepfunConfig};
-use crate::providers::xai::{XaiClient, XaiConfig};
-use crate::providers::xiaomi::{XiaomiClient, XiaomiConfig};
-use crate::providers::xiaomi_plan::{XiaomiPlanClient, XiaomiPlanConfig};
-use crate::providers::zai::{ZaiClient, ZaiConfig};
 use crate::providers::{
-    ChatContentBlock, ChatMessage, ContentBlockType, ProviderError, ProviderKind, ProviderStream,
-    ReasoningBlock, ReplayToken, StreamEvent, StreamingProvider, resolve_provider,
+    ChatContentBlock, ChatMessage, ContentBlockType, ProviderBuildContext, ProviderError,
+    ProviderKind, ProviderStream, ReasoningBlock, ReplayToken, StreamEvent, StreamingProvider,
+    build_provider_client, resolve_provider,
 };
 use crate::subagents;
 use crate::tools::{ToolContext, ToolDefinition, ToolRegistry, ToolResult, ToolSet, todo_write};
@@ -1087,29 +1067,42 @@ fn build_run_turn_setup(
         .filter(|&limit| limit > 0)
         .and_then(|limit| u32::try_from(limit).ok());
 
-    let client = build_provider_client(
-        config,
-        ProviderBuildOptions {
-            text_verbosity: options.text_verbosity,
-            thread_id,
-            model: &selection.model,
-            provider,
-            max_tokens,
-            thinking_level,
-            model_output_limit,
-            service_tier: options.service_tier.as_deref().or({
-                match provider {
-                    ProviderKind::OpenAI if config.providers.openai.fast_mode => Some("priority"),
-                    ProviderKind::OpenAICodex if config.providers.openai_codex.fast_mode => {
-                        Some("priority")
-                    }
-                    _ => None,
-                }
+    let provider_config = config.providers.get(provider);
+    let provider_ctx = ProviderBuildContext::new(
+        &selection.model,
+        provider,
+        max_tokens,
+        config.max_tokens,
+        thinking_level,
+        options.text_verbosity,
+        model_output_limit,
+        thread_id,
+        options
+            .service_tier
+            .as_deref()
+            .or(if provider_config.fast_mode {
+                Some("priority")
+            } else {
+                None
             }),
+        provider_config.effective_base_url(),
+        provider_config.effective_api_key(),
+        provider_config.effective_text_verbosity(),
+        provider_config.websocket,
+        if provider == ProviderKind::OpencodeGo {
+            crate::models::ModelOption::find_by_provider_and_id("opencode-go", &selection.model)
+                .and_then(|m| m.capabilities.api)
+                .map(ToString::to_string)
+        } else {
+            None
         },
-    )?;
+    );
+    let client = build_provider_client(&provider_ctx)?;
     let tool_ctx = ToolContext::new(
-        options.root.canonicalize().unwrap_or(options.root.clone()),
+        options
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| options.root.clone()),
         config.tool_timeout(),
     )
     .with_current_thread_id(thread_id)
@@ -1126,440 +1119,6 @@ fn build_run_turn_setup(
         tool_ctx,
         tool_registry,
     })
-}
-
-#[derive(Clone, Copy)]
-struct ProviderBuildOptions<'a> {
-    text_verbosity: Option<TextVerbosity>,
-    thread_id: Option<&'a str>,
-    model: &'a str,
-    provider: ProviderKind,
-    max_tokens: u32,
-    thinking_level: ThinkingLevel,
-    model_output_limit: Option<u32>,
-    service_tier: Option<&'a str>,
-}
-
-#[allow(clippy::too_many_lines)]
-fn build_provider_client(
-    config: &Config,
-    options: ProviderBuildOptions<'_>,
-) -> Result<Box<dyn StreamingProvider>> {
-    let cache_key = options.thread_id.map(std::string::ToString::to_string);
-    let thinking_enabled = options.thinking_level.is_enabled();
-    let reasoning_effort = map_thinking_to_reasoning(options.thinking_level);
-    let thinking_budget_tokens = options
-        .thinking_level
-        .compute_reasoning_budget(options.max_tokens, options.model_output_limit)
-        .unwrap_or(0);
-    let thinking_effort = map_thinking_to_anthropic_effort(options.thinking_level, options.model);
-    // Always emit a Gemini thinking config — even when ThinkingLevel::Off — so that
-    // `Off` sends an explicit minimum-thinking config rather than omitting
-    // `thinkingConfig` (which lets Gemini fall back to its default high reasoning).
-    let gemini_thinking = Some(GeminiThinkingConfig::from_thinking_level(
-        options.thinking_level,
-        options.model,
-    ));
-
-    match options.provider {
-        ProviderKind::Anthropic => build_anthropic_client(
-            config,
-            options.model,
-            options.max_tokens,
-            thinking_enabled,
-            thinking_budget_tokens,
-            thinking_effort,
-        ),
-        ProviderKind::ClaudeCli => Ok(Box::new(ClaudeCliClient::new(ClaudeCliConfig::new(
-            options.model.to_string(),
-            options.max_tokens,
-            config.providers.claude_cli.effective_base_url(),
-            thinking_enabled,
-            thinking_budget_tokens,
-            thinking_effort,
-        )))),
-        ProviderKind::OpenAICodex => Ok(Box::new(OpenAICodexClient::new(OpenAICodexConfig::new(
-            options.model.to_string(),
-            options.max_tokens,
-            reasoning_effort,
-            resolve_text_verbosity(
-                options.text_verbosity,
-                config.providers.openai_codex.effective_text_verbosity(),
-            ),
-            cache_key,
-            options.service_tier.map(std::string::ToString::to_string),
-            config.providers.openai_codex.websocket,
-        )))),
-        ProviderKind::OpenAI => build_openai_client(
-            config,
-            options.model,
-            config.max_tokens,
-            reasoning_effort,
-            options.text_verbosity,
-            cache_key,
-            options.service_tier.map(std::string::ToString::to_string),
-        ),
-        ProviderKind::OpenRouter => {
-            build_openrouter_client(config, options.model, reasoning_effort, cache_key)
-        }
-        ProviderKind::DeepSeek => build_deepseek_client(
-            config,
-            options.model,
-            reasoning_effort,
-            cache_key,
-            thinking_enabled,
-        ),
-        ProviderKind::Xiaomi => build_xiaomi_client(config, options.model, thinking_enabled),
-        ProviderKind::XiaomiPlan => {
-            build_xiaomi_plan_client(config, options.model, thinking_enabled)
-        }
-        ProviderKind::Mistral => {
-            build_mistral_client(config, options.model, cache_key, thinking_enabled)
-        }
-        ProviderKind::Moonshot => {
-            build_moonshot_client(config, options.model, cache_key, thinking_enabled)
-        }
-        ProviderKind::Stepfun => {
-            build_stepfun_client(config, options.model, cache_key, thinking_enabled)
-        }
-        ProviderKind::LMStudio => {
-            build_lmstudio_client(config, options.model, cache_key, thinking_enabled)
-        }
-        ProviderKind::Minimax => {
-            build_minimax_client(config, options.model, cache_key, thinking_enabled)
-        }
-        ProviderKind::Zai => build_zai_client(config, options.model, cache_key, thinking_enabled),
-        ProviderKind::Xai => build_xai_client(config, options.model, cache_key, thinking_enabled),
-        ProviderKind::Gemini => {
-            build_gemini_client(config, options.model, config.max_tokens, gemini_thinking)
-        }
-        ProviderKind::GeminiCli => Ok(Box::new(GeminiCliClient::new(GeminiCliConfig::new(
-            options.model.to_string(),
-            config.max_tokens,
-            GeminiThinkingConfig::from_thinking_level(options.thinking_level, options.model),
-        )))),
-        ProviderKind::GoogleAntigravity => {
-            Ok(Box::new(AntigravityClient::new(AntigravityConfig::new(
-                options.model.to_string(),
-                config.max_tokens,
-                Some(antigravity_thinking_config(
-                    options.thinking_level,
-                    options.model,
-                    config.max_tokens,
-                )),
-            ))))
-        }
-        ProviderKind::OpencodeGo => build_opencode_go_client(
-            config,
-            options.model,
-            config.max_tokens,
-            options.max_tokens,
-            thinking_enabled,
-            thinking_budget_tokens,
-            thinking_effort,
-            gemini_thinking.clone(),
-            reasoning_effort,
-            cache_key,
-        ),
-    }
-}
-
-fn antigravity_thinking_config(
-    level: ThinkingLevel,
-    model: &str,
-    max_tokens: Option<u32>,
-) -> GeminiThinkingConfig {
-    let budget = if model.starts_with("claude-") {
-        match level {
-            ThinkingLevel::Off => 0,
-            _ => 1024,
-        }
-    } else if model.starts_with("gpt-oss-") {
-        match level {
-            ThinkingLevel::Off => 0,
-            _ => 4096,
-        }
-    } else {
-        return GeminiThinkingConfig::from_thinking_level(level, model);
-    };
-
-    let capped_budget = max_tokens
-        .and_then(|tokens| i32::try_from(tokens.saturating_sub(1)).ok())
-        .map_or(budget, |limit| budget.min(limit));
-    GeminiThinkingConfig::Budget(capped_budget.max(0))
-}
-
-fn build_anthropic_client(
-    config: &Config,
-    model: &str,
-    max_tokens: u32,
-    thinking_enabled: bool,
-    thinking_budget_tokens: u32,
-    thinking_effort: Option<AnthropicEffortLevel>,
-) -> Result<Box<dyn StreamingProvider>> {
-    Ok(Box::new(AnthropicClient::new(AnthropicConfig::from_env(
-        model.to_string(),
-        max_tokens,
-        config.providers.anthropic.effective_base_url(),
-        config.providers.anthropic.effective_api_key(),
-        thinking_enabled,
-        thinking_budget_tokens,
-        thinking_effort,
-    )?)))
-}
-
-fn build_openai_client(
-    config: &Config,
-    model: &str,
-    max_tokens: Option<u32>,
-    reasoning_effort: Option<String>,
-    text_verbosity: Option<TextVerbosity>,
-    cache_key: Option<String>,
-    service_tier: Option<String>,
-) -> Result<Box<dyn StreamingProvider>> {
-    Ok(Box::new(OpenAIClient::new(OpenAIConfig::from_env(
-        model.to_string(),
-        max_tokens,
-        config.providers.openai.effective_base_url(),
-        config.providers.openai.effective_api_key(),
-        reasoning_effort,
-        resolve_text_verbosity(
-            text_verbosity,
-            config.providers.openai.effective_text_verbosity(),
-        ),
-        cache_key,
-        service_tier,
-        config.providers.openai.websocket,
-    )?)))
-}
-
-fn resolve_text_verbosity(
-    runtime_override: Option<TextVerbosity>,
-    provider_default: Option<TextVerbosity>,
-) -> Option<TextVerbosity> {
-    runtime_override.or(provider_default)
-}
-
-fn build_openrouter_client(
-    config: &Config,
-    model: &str,
-    reasoning_effort: Option<String>,
-    cache_key: Option<String>,
-) -> Result<Box<dyn StreamingProvider>> {
-    Ok(Box::new(OpenRouterClient::new(OpenRouterConfig::from_env(
-        model.to_string(),
-        config.max_tokens,
-        config.providers.openrouter.effective_base_url(),
-        config.providers.openrouter.effective_api_key(),
-        reasoning_effort,
-        cache_key,
-    )?)))
-}
-
-fn build_deepseek_client(
-    config: &Config,
-    model: &str,
-    reasoning_effort: Option<String>,
-    cache_key: Option<String>,
-    thinking_enabled: bool,
-) -> Result<Box<dyn StreamingProvider>> {
-    Ok(Box::new(DeepSeekClient::new(DeepSeekConfig::from_env(
-        model.to_string(),
-        config.max_tokens,
-        config.providers.deepseek.effective_base_url(),
-        config.providers.deepseek.effective_api_key(),
-        cache_key,
-        thinking_enabled,
-        reasoning_effort,
-    )?)))
-}
-
-fn build_xiaomi_client(
-    config: &Config,
-    model: &str,
-    thinking_enabled: bool,
-) -> Result<Box<dyn StreamingProvider>> {
-    Ok(Box::new(XiaomiClient::new(XiaomiConfig::from_env(
-        model.to_string(),
-        config.max_tokens,
-        config.providers.xiaomi.effective_base_url(),
-        config.providers.xiaomi.effective_api_key(),
-        None,
-        thinking_enabled,
-    )?)))
-}
-
-fn build_xiaomi_plan_client(
-    config: &Config,
-    model: &str,
-    thinking_enabled: bool,
-) -> Result<Box<dyn StreamingProvider>> {
-    Ok(Box::new(XiaomiPlanClient::new(XiaomiPlanConfig::from_env(
-        model.to_string(),
-        config.max_tokens,
-        config.providers.xiaomi_plan.effective_base_url(),
-        config.providers.xiaomi_plan.effective_api_key(),
-        None,
-        thinking_enabled,
-    )?)))
-}
-
-fn build_mistral_client(
-    config: &Config,
-    model: &str,
-    cache_key: Option<String>,
-    thinking_enabled: bool,
-) -> Result<Box<dyn StreamingProvider>> {
-    Ok(Box::new(MistralClient::new(MistralConfig::from_env(
-        model.to_string(),
-        config.max_tokens,
-        config.providers.mistral.effective_base_url(),
-        config.providers.mistral.effective_api_key(),
-        cache_key,
-        thinking_enabled,
-    )?)))
-}
-
-fn build_moonshot_client(
-    config: &Config,
-    model: &str,
-    cache_key: Option<String>,
-    thinking_enabled: bool,
-) -> Result<Box<dyn StreamingProvider>> {
-    Ok(Box::new(MoonshotClient::new(MoonshotConfig::from_env(
-        model.to_string(),
-        config.max_tokens,
-        config.providers.moonshot.effective_base_url(),
-        config.providers.moonshot.effective_api_key(),
-        cache_key,
-        thinking_enabled,
-    )?)))
-}
-
-fn build_stepfun_client(
-    config: &Config,
-    model: &str,
-    cache_key: Option<String>,
-    thinking_enabled: bool,
-) -> Result<Box<dyn StreamingProvider>> {
-    Ok(Box::new(StepfunClient::new(StepfunConfig::from_env(
-        model.to_string(),
-        config.max_tokens,
-        config.providers.stepfun.effective_base_url(),
-        config.providers.stepfun.effective_api_key(),
-        cache_key,
-        thinking_enabled,
-    )?)))
-}
-
-fn build_lmstudio_client(
-    config: &Config,
-    model: &str,
-    cache_key: Option<String>,
-    thinking_enabled: bool,
-) -> Result<Box<dyn StreamingProvider>> {
-    Ok(Box::new(LMStudioClient::new(LMStudioConfig::from_env(
-        model.to_string(),
-        config.max_tokens,
-        config.providers.lmstudio.effective_base_url(),
-        config.providers.lmstudio.effective_api_key(),
-        cache_key,
-        thinking_enabled,
-    )?)))
-}
-
-fn build_minimax_client(
-    config: &Config,
-    model: &str,
-    cache_key: Option<String>,
-    thinking_enabled: bool,
-) -> Result<Box<dyn StreamingProvider>> {
-    Ok(Box::new(MinimaxClient::new(MinimaxConfig::from_env(
-        model.to_string(),
-        config.max_tokens,
-        config.providers.minimax.effective_base_url(),
-        config.providers.minimax.effective_api_key(),
-        cache_key,
-        thinking_enabled,
-    )?)))
-}
-
-fn build_zai_client(
-    config: &Config,
-    model: &str,
-    cache_key: Option<String>,
-    thinking_enabled: bool,
-) -> Result<Box<dyn StreamingProvider>> {
-    Ok(Box::new(ZaiClient::new(ZaiConfig::from_env(
-        model.to_string(),
-        config.max_tokens,
-        config.providers.zai.effective_base_url(),
-        config.providers.zai.effective_api_key(),
-        cache_key,
-        thinking_enabled,
-    )?)))
-}
-
-fn build_xai_client(
-    config: &Config,
-    model: &str,
-    cache_key: Option<String>,
-    thinking_enabled: bool,
-) -> Result<Box<dyn StreamingProvider>> {
-    Ok(Box::new(XaiClient::new(XaiConfig::from_env(
-        model.to_string(),
-        config.max_tokens,
-        config.providers.xai.effective_base_url(),
-        config.providers.xai.effective_api_key(),
-        cache_key,
-        thinking_enabled,
-    )?)))
-}
-
-fn build_gemini_client(
-    config: &Config,
-    model: &str,
-    max_tokens: Option<u32>,
-    gemini_thinking: Option<GeminiThinkingConfig>,
-) -> Result<Box<dyn StreamingProvider>> {
-    Ok(Box::new(GeminiClient::new(GeminiConfig::from_env(
-        model.to_string(),
-        max_tokens,
-        config.providers.gemini.effective_base_url(),
-        config.providers.gemini.effective_api_key(),
-        gemini_thinking,
-    )?)))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_opencode_go_client(
-    config: &Config,
-    model: &str,
-    max_tokens: Option<u32>,
-    fallback_max_tokens: u32,
-    thinking_enabled: bool,
-    thinking_budget_tokens: u32,
-    thinking_effort: Option<AnthropicEffortLevel>,
-    gemini_thinking: Option<GeminiThinkingConfig>,
-    reasoning_effort: Option<String>,
-    cache_key: Option<String>,
-) -> Result<Box<dyn StreamingProvider>> {
-    Ok(Box::new(OpencodeGoClient::new(OpencodeGoConfig::from_env(
-        model.to_string(),
-        max_tokens,
-        fallback_max_tokens,
-        config.providers.opencode_go.effective_base_url(),
-        config.providers.opencode_go.effective_api_key(),
-        thinking_enabled,
-        thinking_budget_tokens,
-        thinking_effort,
-        gemini_thinking,
-        reasoning_effort,
-        cache_key,
-        crate::models::ModelOption::find_by_provider_and_id("opencode-go", model)
-            .and_then(|m| m.capabilities.api)
-            .map(ToString::to_string),
-    )?)))
 }
 
 /// Resolves the tool list that would be sent to the LLM for the given
@@ -2368,58 +1927,6 @@ fn emit_malformed_tool_events(
     }
 }
 
-fn map_thinking_to_reasoning(level: ThinkingLevel) -> Option<String> {
-    match level {
-        ThinkingLevel::Off => None,
-        // OpenAI reasoning.effort doesn't support "minimal"; use the lowest
-        // supported effort instead.
-        ThinkingLevel::Minimal | ThinkingLevel::Low => Some("low".to_string()),
-        ThinkingLevel::Medium => Some("medium".to_string()),
-        ThinkingLevel::High => Some("high".to_string()),
-        ThinkingLevel::XHigh => Some("xhigh".to_string()),
-    }
-}
-
-fn map_thinking_to_anthropic_effort(
-    level: ThinkingLevel,
-    model: &str,
-) -> Option<AnthropicEffortLevel> {
-    if matches!(level, ThinkingLevel::Off) {
-        return None;
-    }
-
-    // Strip provider-prefixed model ids like "claude-cli:claude-opus-4-7".
-    let normalized = model.rsplit(':').next().unwrap_or(model);
-
-    // Opus/Sonnet 4.6 and Opus 4.5 expose at most 4 effort levels
-    // (low/medium/high/max). Collapse Minimal+Low into `low` and keep
-    // High at `high`.
-    if normalized.starts_with("claude-opus-4-6")
-        || normalized.starts_with("claude-sonnet-4-6")
-        || normalized.starts_with("claude-opus-4-5")
-    {
-        return Some(match level {
-            ThinkingLevel::Off => unreachable!(),
-            ThinkingLevel::Minimal | ThinkingLevel::Low => AnthropicEffortLevel::Low,
-            ThinkingLevel::Medium => AnthropicEffortLevel::Medium,
-            ThinkingLevel::High => AnthropicEffortLevel::High,
-            ThinkingLevel::XHigh => AnthropicEffortLevel::Max,
-        });
-    }
-
-    // Default for newer Anthropic models (Fable 5, Opus 4.7+, and future
-    // releases): 5 effort levels (low/medium/high/xhigh/max) aligned 1:1
-    // with our 5 active ThinkingLevels.
-    Some(match level {
-        ThinkingLevel::Off => unreachable!(),
-        ThinkingLevel::Minimal => AnthropicEffortLevel::Low,
-        ThinkingLevel::Low => AnthropicEffortLevel::Medium,
-        ThinkingLevel::Medium => AnthropicEffortLevel::High,
-        ThinkingLevel::High => AnthropicEffortLevel::XHigh,
-        ThinkingLevel::XHigh => AnthropicEffortLevel::Max,
-    })
-}
-
 /// Surface non-`tool_use`/`end_turn` stop reasons that warrant explicit
 /// user feedback (introduced in Claude 4.5+ and reaffirmed in the 4.6/4.7
 /// migration guide). The turn still completes — this is informational so
@@ -2649,6 +2156,9 @@ mod tests {
     use tokio::time::{Duration, timeout};
 
     use super::*;
+    use crate::providers::anthropic::EffortLevel as AnthropicEffortLevel;
+    use crate::providers::gemini::{GeminiClient, GeminiConfig};
+    use crate::providers::{map_thinking_to_anthropic_effort, resolve_text_verbosity};
 
     #[test]
     fn openai_runtime_text_verbosity_overrides_provider_config() {
