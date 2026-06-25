@@ -313,7 +313,7 @@ fn model_line(model: &ModelOption, width: u16) -> Line<'static> {
     let is_subscription = ProviderKind::all()
         .iter()
         .find(|kind| kind.id() == model.provider)
-        .is_some_and(zdx_engine::providers::ProviderKind::is_subscription);
+        .is_some_and(|kind| zdx_engine::providers::ProviderKind::is_subscription(*kind));
 
     // Build the right side with pricing and context
     let (pricing_text, pricing_suffix) = if is_subscription && !pricing.is_empty() {

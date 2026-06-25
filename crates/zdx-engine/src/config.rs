@@ -1107,7 +1107,7 @@ impl Config {
         let enabled_providers: HashSet<&str> = crate::providers::ProviderKind::all()
             .iter()
             .filter(|kind| self.providers.is_enabled(kind.id()))
-            .map(crate::providers::ProviderKind::id)
+            .map(|kind| crate::providers::ProviderKind::id(*kind))
             .collect();
 
         let mut seen = HashSet::new();
