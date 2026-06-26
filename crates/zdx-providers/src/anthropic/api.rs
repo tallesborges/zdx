@@ -263,7 +263,7 @@ pub fn build(
         ctx.api_key,
         ctx.thinking_level.is_enabled(),
         thinking_budget_tokens,
-        crate::map_thinking_to_anthropic_effort(ctx.thinking_level, ctx.model),
+        EffortLevel::from_thinking_level(ctx.thinking_level, ctx.model),
     )?)))
 }
 

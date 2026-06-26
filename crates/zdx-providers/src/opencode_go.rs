@@ -208,12 +208,12 @@ pub fn build(
         ctx.api_key,
         ctx.thinking_level.is_enabled(),
         thinking_budget_tokens,
-        crate::map_thinking_to_anthropic_effort(ctx.thinking_level, ctx.model),
+        AnthropicEffortLevel::from_thinking_level(ctx.thinking_level, ctx.model),
         Some(GeminiThinkingConfig::from_thinking_level(
             ctx.thinking_level,
             ctx.model,
         )),
-        crate::map_thinking_to_reasoning(ctx.thinking_level),
+        crate::openai::reasoning_effort_from_thinking_level(ctx.thinking_level).map(str::to_owned),
         ctx.cache_key.clone(),
         ctx.api_hint.clone(),
     )?)))

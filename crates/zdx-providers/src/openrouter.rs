@@ -123,7 +123,7 @@ pub fn build(
         ctx.config_max_tokens,
         ctx.base_url,
         ctx.api_key,
-        crate::map_thinking_to_reasoning(ctx.thinking_level),
+        crate::openai::reasoning_effort_from_thinking_level(ctx.thinking_level).map(str::to_owned),
         ctx.cache_key.clone(),
     )?)))
 }
