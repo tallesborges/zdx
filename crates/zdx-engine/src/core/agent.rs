@@ -1062,11 +1062,6 @@ fn build_run_turn_setup(
     } else {
         ThinkingLevel::Off
     };
-    let model_output_limit = crate::models::ModelOption::find_by_id(&config.model)
-        .map(|m| m.capabilities.output_limit)
-        .filter(|&limit| limit > 0)
-        .and_then(|limit| u32::try_from(limit).ok());
-
     let provider_config = config.providers.get(provider);
     let provider_ctx = ProviderBuildContext::new(
         &selection.model,
@@ -1075,7 +1070,6 @@ fn build_run_turn_setup(
         config.max_tokens,
         thinking_level,
         options.text_verbosity,
-        model_output_limit,
         thread_id,
         options
             .service_tier

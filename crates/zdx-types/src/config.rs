@@ -93,24 +93,16 @@ impl ThinkingLevel {
 
     /// Computes the reasoning budget in tokens based on effort percent and `max_tokens`.
     ///
-    /// Uses min 1024 tokens to ensure meaningful reasoning.
+    /// `max_tokens` is expected to already be clamped to the model output limit
+    /// by the caller. Uses min 1024 tokens to ensure meaningful reasoning.
     /// Returns None if thinking is Off.
-    pub fn compute_reasoning_budget(
-        &self,
-        max_tokens: u32,
-        model_output_limit: Option<u32>,
-    ) -> Option<u32> {
+    pub fn compute_reasoning_budget(&self, max_tokens: u32) -> Option<u32> {
         const MIN_BUDGET: u32 = 1024;
 
         let percent = self.effort_percent()?;
 
-        let base = match model_output_limit {
-            Some(limit) if limit > 0 => max_tokens.min(limit),
-            _ => max_tokens,
-        };
-
         let raw_budget =
-            u32::try_from(u64::from(base) * u64::from(percent) / 100).unwrap_or(u32::MAX);
+            u32::try_from(u64::from(max_tokens) * u64::from(percent) / 100).unwrap_or(u32::MAX);
 
         Some(raw_budget.max(MIN_BUDGET))
     }
