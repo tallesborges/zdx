@@ -36,8 +36,6 @@ pub use shared::{
 use zdx_types::ToolDefinition;
 use zdx_types::config::{TextVerbosity, ThinkingLevel};
 
-use crate::anthropic::types::EffortLevel as AnthropicEffortLevel;
-
 /// Object-safe trait for streaming LLM providers.
 ///
 /// All provider clients implement this so the engine can hold a
@@ -142,56 +140,6 @@ pub struct ProviderBuildContext<'a> {
     pub websocket: bool,
     /// API routing hint for the `opencode-go` meta-provider.
     pub api_hint: Option<String>,
-}
-
-fn map_thinking_to_reasoning(level: ThinkingLevel) -> Option<String> {
-    match level {
-        ThinkingLevel::Off => None,
-        ThinkingLevel::Minimal | ThinkingLevel::Low => Some("low".to_string()),
-        ThinkingLevel::Medium => Some("medium".to_string()),
-        ThinkingLevel::High => Some("high".to_string()),
-        ThinkingLevel::XHigh => Some("xhigh".to_string()),
-    }
-}
-
-pub fn map_thinking_to_anthropic_effort(
-    level: ThinkingLevel,
-    model: &str,
-) -> Option<AnthropicEffortLevel> {
-    if matches!(level, ThinkingLevel::Off) {
-        return None;
-    }
-
-    let normalized = model.rsplit(':').next().unwrap_or(model);
-
-    if normalized.starts_with("claude-opus-4-6")
-        || normalized.starts_with("claude-sonnet-4-6")
-        || normalized.starts_with("claude-opus-4-5")
-    {
-        return Some(match level {
-            ThinkingLevel::Off => unreachable!(),
-            ThinkingLevel::Minimal | ThinkingLevel::Low => AnthropicEffortLevel::Low,
-            ThinkingLevel::Medium => AnthropicEffortLevel::Medium,
-            ThinkingLevel::High => AnthropicEffortLevel::High,
-            ThinkingLevel::XHigh => AnthropicEffortLevel::Max,
-        });
-    }
-
-    Some(match level {
-        ThinkingLevel::Off => unreachable!(),
-        ThinkingLevel::Minimal => AnthropicEffortLevel::Low,
-        ThinkingLevel::Low => AnthropicEffortLevel::Medium,
-        ThinkingLevel::Medium => AnthropicEffortLevel::High,
-        ThinkingLevel::High => AnthropicEffortLevel::XHigh,
-        ThinkingLevel::XHigh => AnthropicEffortLevel::Max,
-    })
-}
-
-pub fn resolve_text_verbosity(
-    runtime_override: Option<TextVerbosity>,
-    provider_default: Option<TextVerbosity>,
-) -> Option<TextVerbosity> {
-    runtime_override.or(provider_default)
 }
 
 /// Provider selection based on model naming.

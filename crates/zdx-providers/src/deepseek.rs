@@ -140,6 +140,6 @@ pub fn build(
         ctx.api_key,
         ctx.cache_key.clone(),
         ctx.thinking_level.is_enabled(),
-        crate::map_thinking_to_reasoning(ctx.thinking_level),
+        crate::openai::reasoning_effort_from_thinking_level(ctx.thinking_level).map(str::to_owned),
     )?)))
 }

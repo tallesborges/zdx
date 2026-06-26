@@ -318,8 +318,8 @@ pub fn build(
     Ok(Box::new(OpenAICodexClient::new(OpenAICodexConfig::new(
         ctx.model.to_string(),
         ctx.max_tokens,
-        crate::map_thinking_to_reasoning(ctx.thinking_level),
-        crate::resolve_text_verbosity(ctx.text_verbosity, ctx.provider_text_verbosity),
+        super::reasoning_effort_from_thinking_level(ctx.thinking_level).map(str::to_owned),
+        ctx.text_verbosity.or(ctx.provider_text_verbosity),
         ctx.cache_key.clone(),
         ctx.service_tier.clone(),
         ctx.websocket,

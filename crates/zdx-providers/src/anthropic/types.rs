@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use zdx_types::config::ThinkingLevel;
 use zdx_types::{ToolDefinition, ToolResultBlock, ToolResultContent};
 
 use crate::shared::{ChatContentBlock, ChatMessage, MessageContent, ReasoningBlock, ReplayToken};
@@ -56,6 +57,44 @@ pub enum EffortLevel {
     High,
     XHigh,
     Max,
+}
+
+impl EffortLevel {
+    /// Maps a ZDX thinking level to Anthropic's `output_config.effort`.
+    ///
+    /// Model-dependent: 4.6 / Sonnet 4.6 / Opus 4.5 collapse `Minimal`+`Low`
+    /// and cap at `high`; newer models use a one-step shift up to `max`.
+    /// Returns `None` when thinking is off. Accepts provider-prefixed IDs
+    /// (e.g. `claude-cli:claude-opus-4-7`).
+    pub(crate) fn from_thinking_level(level: ThinkingLevel, model: &str) -> Option<Self> {
+        if matches!(level, ThinkingLevel::Off) {
+            return None;
+        }
+
+        let normalized = model.rsplit(':').next().unwrap_or(model);
+
+        if normalized.starts_with("claude-opus-4-6")
+            || normalized.starts_with("claude-sonnet-4-6")
+            || normalized.starts_with("claude-opus-4-5")
+        {
+            return Some(match level {
+                ThinkingLevel::Off => unreachable!(),
+                ThinkingLevel::Minimal | ThinkingLevel::Low => Self::Low,
+                ThinkingLevel::Medium => Self::Medium,
+                ThinkingLevel::High => Self::High,
+                ThinkingLevel::XHigh => Self::Max,
+            });
+        }
+
+        Some(match level {
+            ThinkingLevel::Off => unreachable!(),
+            ThinkingLevel::Minimal => Self::Low,
+            ThinkingLevel::Low => Self::Medium,
+            ThinkingLevel::Medium => Self::High,
+            ThinkingLevel::High => Self::XHigh,
+            ThinkingLevel::XHigh => Self::Max,
+        })
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -371,6 +410,130 @@ fn api_tool_result_block(block: &ToolResultBlock) -> ApiToolResultBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effort_opus_47_uses_one_to_one_shift_with_xhigh() {
+        let m = "claude-opus-4-7";
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::Off, m),
+            None
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::Minimal, m),
+            Some(EffortLevel::Low)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::Low, m),
+            Some(EffortLevel::Medium)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::Medium, m),
+            Some(EffortLevel::High)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::High, m),
+            Some(EffortLevel::XHigh)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::XHigh, m),
+            Some(EffortLevel::Max)
+        );
+    }
+
+    #[test]
+    fn effort_opus_48_uses_one_to_one_shift_with_xhigh() {
+        let m = "claude-opus-4-8";
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::High, m),
+            Some(EffortLevel::XHigh)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::XHigh, m),
+            Some(EffortLevel::Max)
+        );
+    }
+
+    #[test]
+    fn effort_fable_5_uses_opus_48_mapping() {
+        let m = "claude-fable-5";
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::Minimal, m),
+            Some(EffortLevel::Low)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::Low, m),
+            Some(EffortLevel::Medium)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::Medium, m),
+            Some(EffortLevel::High)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::High, m),
+            Some(EffortLevel::XHigh)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::XHigh, m),
+            Some(EffortLevel::Max)
+        );
+    }
+
+    #[test]
+    fn effort_unknown_future_model_defaults_to_five_levels() {
+        let m = "claude-opus-5";
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::Minimal, m),
+            Some(EffortLevel::Low)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::High, m),
+            Some(EffortLevel::XHigh)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::XHigh, m),
+            Some(EffortLevel::Max)
+        );
+    }
+
+    #[test]
+    fn effort_opus_46_collapses_minimal_low_and_skips_xhigh() {
+        let m = "claude-opus-4-6";
+        // 4.6 has no `xhigh`; High must stay at `high` (not be promoted).
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::Minimal, m),
+            Some(EffortLevel::Low)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::Low, m),
+            Some(EffortLevel::Low)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::Medium, m),
+            Some(EffortLevel::Medium)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::High, m),
+            Some(EffortLevel::High)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::XHigh, m),
+            Some(EffortLevel::Max)
+        );
+    }
+
+    #[test]
+    fn effort_normalizes_provider_prefixed_model_id() {
+        // claude-cli:claude-opus-4-7 should still hit the 4.7 branch.
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::High, "claude-cli:claude-opus-4-7"),
+            Some(EffortLevel::XHigh)
+        );
+        // And 4.6 should still collapse High → high under the cli prefix.
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::High, "claude-cli:claude-opus-4-6"),
+            Some(EffortLevel::High)
+        );
+    }
 
     #[test]
     fn missing_anthropic_signature_falls_back_to_plain_text() {
