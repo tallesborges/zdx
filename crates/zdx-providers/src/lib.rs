@@ -26,8 +26,6 @@ pub mod zai;
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::anthropic::types::EffortLevel as AnthropicEffortLevel;
-use crate::gemini::shared::GeminiThinkingConfig;
 pub use debug_trace::{DebugTrace, TraceStream, wrap_stream};
 pub use shared::{
     ChatContentBlock, ChatMessage, ContentBlockType, IdOrigin, MessageContent, ProviderError,
@@ -37,6 +35,9 @@ pub use shared::{
 };
 use zdx_types::ToolDefinition;
 use zdx_types::config::{TextVerbosity, ThinkingLevel};
+
+use crate::anthropic::types::EffortLevel as AnthropicEffortLevel;
+use crate::gemini::shared::GeminiThinkingConfig;
 
 /// Object-safe trait for streaming LLM providers.
 ///
@@ -156,7 +157,6 @@ impl<'a> ProviderBuildContext<'a> {
         config_max_tokens: Option<u32>,
         thinking_level: ThinkingLevel,
         text_verbosity: Option<TextVerbosity>,
-        model_output_limit: Option<u32>,
         thread_id: Option<&'a str>,
         service_tier: Option<&'a str>,
         base_url: Option<&'a str>,
@@ -169,7 +169,7 @@ impl<'a> ProviderBuildContext<'a> {
         let reasoning_effort = map_thinking_to_reasoning(thinking_level);
         let anthropic_effort = map_thinking_to_anthropic_effort(thinking_level, model);
         let thinking_budget_tokens = thinking_level
-            .compute_reasoning_budget(max_tokens, model_output_limit)
+            .compute_reasoning_budget(max_tokens)
             .unwrap_or(0);
         // Always emit a Gemini thinking config — even when ThinkingLevel::Off — so that
         // `Off` sends an explicit minimum-thinking config rather than omitting

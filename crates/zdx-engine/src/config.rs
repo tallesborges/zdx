@@ -2161,44 +2161,35 @@ max_tokens = 2048
     #[test]
     fn test_thinking_level_compute_reasoning_budget() {
         // Off returns None
-        assert_eq!(
-            ThinkingLevel::Off.compute_reasoning_budget(10000, None),
-            None
-        );
+        assert_eq!(ThinkingLevel::Off.compute_reasoning_budget(10000), None);
 
         // Medium (50%) of 10000 = 5000
         assert_eq!(
-            ThinkingLevel::Medium.compute_reasoning_budget(10000, None),
+            ThinkingLevel::Medium.compute_reasoning_budget(10000),
             Some(5000)
         );
 
         // High (80%) of 10000 = 8000
         assert_eq!(
-            ThinkingLevel::High.compute_reasoning_budget(10000, None),
+            ThinkingLevel::High.compute_reasoning_budget(10000),
             Some(8000)
         );
 
         // XHigh (95%) of 10000 = 9500
         assert_eq!(
-            ThinkingLevel::XHigh.compute_reasoning_budget(10000, None),
+            ThinkingLevel::XHigh.compute_reasoning_budget(10000),
             Some(9500)
         );
 
         // Minimal (5%) of 5000 = 250, but clamped to min 1024
         assert_eq!(
-            ThinkingLevel::Minimal.compute_reasoning_budget(5000, None),
+            ThinkingLevel::Minimal.compute_reasoning_budget(5000),
             Some(1024)
-        );
-
-        // Uses min of max_tokens and model_output_limit
-        assert_eq!(
-            ThinkingLevel::Medium.compute_reasoning_budget(20_000, Some(10_000)),
-            Some(5000) // 50% of min(20_000, 10_000) = 5000
         );
 
         // No max clamp - XHigh (95%) of 200000 = 190000
         assert_eq!(
-            ThinkingLevel::XHigh.compute_reasoning_budget(200_000, None),
+            ThinkingLevel::XHigh.compute_reasoning_budget(200_000),
             Some(190_000)
         );
     }
