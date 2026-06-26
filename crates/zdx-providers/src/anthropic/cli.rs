@@ -170,13 +170,17 @@ impl ClaudeCliClient {
 pub fn build(
     ctx: &crate::ProviderBuildContext<'_>,
 ) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
+    let thinking_budget_tokens = ctx
+        .thinking_level
+        .compute_reasoning_budget(ctx.max_tokens)
+        .unwrap_or(0);
     Ok(Box::new(ClaudeCliClient::new(ClaudeCliConfig::new(
         ctx.model.to_string(),
         ctx.max_tokens,
         ctx.base_url,
-        ctx.thinking_enabled,
-        ctx.thinking_budget_tokens,
-        ctx.anthropic_effort,
+        ctx.thinking_level.is_enabled(),
+        thinking_budget_tokens,
+        crate::map_thinking_to_anthropic_effort(ctx.thinking_level, ctx.model),
     ))))
 }
 

@@ -123,7 +123,7 @@ pub fn build(
         ctx.config_max_tokens,
         ctx.base_url,
         ctx.api_key,
-        ctx.reasoning_effort.clone(),
+        crate::map_thinking_to_reasoning(ctx.thinking_level),
         ctx.cache_key.clone(),
     )?)))
 }

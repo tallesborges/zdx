@@ -37,7 +37,6 @@ use zdx_types::ToolDefinition;
 use zdx_types::config::{TextVerbosity, ThinkingLevel};
 
 use crate::anthropic::types::EffortLevel as AnthropicEffortLevel;
-use crate::gemini::shared::GeminiThinkingConfig;
 
 /// Object-safe trait for streaming LLM providers.
 ///
@@ -111,11 +110,13 @@ impl<T: StreamingProvider + ?Sized> StreamingProvider for Box<T> {
     }
 }
 
-/// Consolidated context for provider client construction.
+/// Generic inputs for provider client construction.
 ///
-/// Carries both raw inputs (model, provider kind) and derived values
-/// (thinking, reasoning, cache key) plus resolved per-provider config
-/// values (`base_url`, `api_key`, `websocket`, `text_verbosity`).
+/// Carries only raw/resolved inputs: model, provider kind, thinking level,
+/// token limits, cache key, verbosity, and resolved per-provider config
+/// (`base_url`, `api_key`, `websocket`, `api_hint`). Each provider derives
+/// its own provider-specific config (reasoning effort, thinking budget,
+/// Gemini thinking config) from `thinking_level` inside its `build()`.
 ///
 /// The engine constructs this by resolving its `Config` and then calls
 /// `ProviderKind::build_client(&ctx)`. This crate never needs to reference
@@ -128,11 +129,6 @@ pub struct ProviderBuildContext<'a> {
     /// Global `config.max_tokens` (`Option<u32>`) — used by `OpenAI`, `OpenRouter`, `Gemini`, etc.
     pub config_max_tokens: Option<u32>,
     pub thinking_level: ThinkingLevel,
-    pub thinking_enabled: bool,
-    pub reasoning_effort: Option<String>,
-    pub anthropic_effort: Option<AnthropicEffortLevel>,
-    pub thinking_budget_tokens: u32,
-    pub gemini_thinking: Option<GeminiThinkingConfig>,
     pub cache_key: Option<String>,
     pub text_verbosity: Option<TextVerbosity>,
     pub service_tier: Option<String>,
@@ -146,60 +142,6 @@ pub struct ProviderBuildContext<'a> {
     pub websocket: bool,
     /// API routing hint for the `opencode-go` meta-provider.
     pub api_hint: Option<String>,
-}
-
-impl<'a> ProviderBuildContext<'a> {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        model: &'a str,
-        provider: ProviderKind,
-        max_tokens: u32,
-        config_max_tokens: Option<u32>,
-        thinking_level: ThinkingLevel,
-        text_verbosity: Option<TextVerbosity>,
-        thread_id: Option<&'a str>,
-        service_tier: Option<&'a str>,
-        base_url: Option<&'a str>,
-        api_key: Option<&'a str>,
-        provider_text_verbosity: Option<TextVerbosity>,
-        websocket: bool,
-        api_hint: Option<String>,
-    ) -> Self {
-        let thinking_enabled = thinking_level.is_enabled();
-        let reasoning_effort = map_thinking_to_reasoning(thinking_level);
-        let anthropic_effort = map_thinking_to_anthropic_effort(thinking_level, model);
-        let thinking_budget_tokens = thinking_level
-            .compute_reasoning_budget(max_tokens)
-            .unwrap_or(0);
-        // Always emit a Gemini thinking config — even when ThinkingLevel::Off — so that
-        // `Off` sends an explicit minimum-thinking config rather than omitting
-        // `thinkingConfig` (which lets Gemini fall back to its default high reasoning).
-        let gemini_thinking = Some(GeminiThinkingConfig::from_thinking_level(
-            thinking_level,
-            model,
-        ));
-
-        Self {
-            model,
-            provider,
-            max_tokens,
-            config_max_tokens,
-            thinking_level,
-            thinking_enabled,
-            reasoning_effort,
-            anthropic_effort,
-            thinking_budget_tokens,
-            gemini_thinking,
-            cache_key: thread_id.map(str::to_owned),
-            text_verbosity,
-            service_tier: service_tier.map(str::to_owned),
-            base_url,
-            api_key,
-            provider_text_verbosity,
-            websocket,
-            api_hint,
-        }
-    }
 }
 
 fn map_thinking_to_reasoning(level: ThinkingLevel) -> Option<String> {

@@ -198,7 +198,7 @@ pub fn build(
         ctx.config_max_tokens,
         ctx.base_url,
         ctx.api_key,
-        ctx.reasoning_effort.clone(),
+        crate::map_thinking_to_reasoning(ctx.thinking_level),
         crate::resolve_text_verbosity(ctx.text_verbosity, ctx.provider_text_verbosity),
         ctx.cache_key.clone(),
         ctx.service_tier.clone(),

@@ -110,6 +110,6 @@ pub fn build(
         ctx.base_url,
         ctx.api_key,
         ctx.cache_key.clone(),
-        ctx.thinking_enabled,
+        ctx.thinking_level.is_enabled(),
     )?)))
 }

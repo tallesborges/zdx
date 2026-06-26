@@ -318,7 +318,7 @@ pub fn build(
     Ok(Box::new(OpenAICodexClient::new(OpenAICodexConfig::new(
         ctx.model.to_string(),
         ctx.max_tokens,
-        ctx.reasoning_effort.clone(),
+        crate::map_thinking_to_reasoning(ctx.thinking_level),
         crate::resolve_text_verbosity(ctx.text_verbosity, ctx.provider_text_verbosity),
         ctx.cache_key.clone(),
         ctx.service_tier.clone(),
