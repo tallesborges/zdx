@@ -327,7 +327,13 @@ pub fn build(
         ctx.config_max_tokens,
         ctx.base_url,
         ctx.api_key,
-        ctx.gemini_thinking.clone(),
+        // Always emit a thinking config — even when ThinkingLevel::Off — so that
+        // `Off` sends an explicit minimum-thinking config rather than omitting
+        // `thinkingConfig` (which lets Gemini fall back to its default high reasoning).
+        Some(GeminiThinkingConfig::from_thinking_level(
+            ctx.thinking_level,
+            ctx.model,
+        )),
     )?)))
 }
 

@@ -1063,34 +1063,35 @@ fn build_run_turn_setup(
         ThinkingLevel::Off
     };
     let provider_config = config.providers.get(provider);
-    let provider_ctx = ProviderBuildContext::new(
-        &selection.model,
+    let provider_ctx = ProviderBuildContext {
+        model: &selection.model,
         provider,
         max_tokens,
-        config.max_tokens,
+        config_max_tokens: config.max_tokens,
         thinking_level,
-        options.text_verbosity,
-        thread_id,
-        options
+        cache_key: thread_id.map(str::to_owned),
+        text_verbosity: options.text_verbosity,
+        service_tier: options
             .service_tier
             .as_deref()
             .or(if provider_config.fast_mode {
                 Some("priority")
             } else {
                 None
-            }),
-        provider_config.effective_base_url(),
-        provider_config.effective_api_key(),
-        provider_config.effective_text_verbosity(),
-        provider_config.websocket,
-        if provider == ProviderKind::OpencodeGo {
+            })
+            .map(str::to_owned),
+        base_url: provider_config.effective_base_url(),
+        api_key: provider_config.effective_api_key(),
+        provider_text_verbosity: provider_config.effective_text_verbosity(),
+        websocket: provider_config.websocket,
+        api_hint: if provider == ProviderKind::OpencodeGo {
             crate::models::ModelOption::find_by_provider_and_id("opencode-go", &selection.model)
                 .and_then(|m| m.capabilities.api)
                 .map(ToString::to_string)
         } else {
             None
         },
-    );
+    };
     let client = provider.build_client(&provider_ctx)?;
     let tool_ctx = ToolContext::new(
         options
