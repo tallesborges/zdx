@@ -206,7 +206,9 @@ fn antigravity_thinking_config(
 ///
 /// # Errors
 /// Never returns an error; construction is infallible.
-pub fn build(ctx: &crate::ProviderBuildContext<'_>) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
+pub fn build(
+    ctx: &crate::ProviderBuildContext<'_>,
+) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
     Ok(Box::new(AntigravityClient::new(AntigravityConfig::new(
         ctx.model.to_string(),
         ctx.config_max_tokens,

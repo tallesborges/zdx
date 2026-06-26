@@ -178,7 +178,9 @@ fn build_headers(access_token: &str) -> HeaderMap {
 ///
 /// # Errors
 /// Never returns an error; construction is infallible.
-pub fn build(ctx: &crate::ProviderBuildContext<'_>) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
+pub fn build(
+    ctx: &crate::ProviderBuildContext<'_>,
+) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
     Ok(Box::new(GeminiCliClient::new(GeminiCliConfig::new(
         ctx.model.to_string(),
         ctx.config_max_tokens,

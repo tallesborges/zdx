@@ -167,7 +167,9 @@ impl ClaudeCliClient {
 ///
 /// # Errors
 /// Never returns an error; construction is infallible.
-pub fn build(ctx: &crate::ProviderBuildContext<'_>) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
+pub fn build(
+    ctx: &crate::ProviderBuildContext<'_>,
+) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
     Ok(Box::new(ClaudeCliClient::new(ClaudeCliConfig::new(
         ctx.model.to_string(),
         ctx.max_tokens,

@@ -102,7 +102,9 @@ impl XiaomiPlanClient {
 ///
 /// # Errors
 /// Returns an error if the API key / base URL cannot be resolved from env or config.
-pub fn build(ctx: &crate::ProviderBuildContext<'_>) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
+pub fn build(
+    ctx: &crate::ProviderBuildContext<'_>,
+) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
     Ok(Box::new(XiaomiPlanClient::new(XiaomiPlanConfig::from_env(
         ctx.model.to_string(),
         ctx.config_max_tokens,
