@@ -32,8 +32,6 @@ pub(crate) enum ThinkingConfig {
 #[serde(rename_all = "lowercase")]
 pub(crate) enum ThinkingDisplay {
     Summarized,
-    #[allow(dead_code)] // Reserved for a future "omitted" mode (faster TTFT).
-    Omitted,
 }
 
 impl ThinkingConfig {

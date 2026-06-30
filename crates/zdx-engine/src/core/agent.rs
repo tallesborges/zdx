@@ -67,12 +67,6 @@ impl ToolConfig {
             selection,
         }
     }
-
-    #[must_use]
-    pub fn with_selection(mut self, selection: ToolSelection) -> Self {
-        self.selection = selection;
-        self
-    }
 }
 
 impl Default for ToolConfig {
