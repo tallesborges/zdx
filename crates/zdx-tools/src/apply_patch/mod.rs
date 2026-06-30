@@ -41,15 +41,9 @@ struct ApplyPatchInput {
 
 /// Executes the `apply_patch` tool and returns a structured envelope.
 pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
-    let input: ApplyPatchInput = match serde_json::from_value(input.clone()) {
+    let input: ApplyPatchInput = match super::parse_tool_input(input, "apply_patch") {
         Ok(i) => i,
-        Err(e) => {
-            return ToolOutput::failure(
-                "invalid_input",
-                "Invalid input for apply_patch tool",
-                Some(format!("Parse error: {e}")),
-            );
-        }
+        Err(out) => return out,
     };
 
     match apply_patch(&input.patch, &ctx.root) {

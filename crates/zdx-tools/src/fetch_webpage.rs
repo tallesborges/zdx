@@ -135,15 +135,9 @@ struct ExtractResult {
 
 /// Executes the `fetch_webpage` tool asynchronously.
 pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
-    let input: FetchInput = match serde_json::from_value(input.clone()) {
+    let input: FetchInput = match super::parse_tool_input(input, "fetch_webpage") {
         Ok(i) => i,
-        Err(e) => {
-            return ToolOutput::failure(
-                "invalid_input",
-                "Invalid input for fetch_webpage tool",
-                Some(format!("Parse error: {e}")),
-            );
-        }
+        Err(out) => return out,
     };
 
     let FetchInput {

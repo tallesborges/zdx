@@ -42,56 +42,6 @@ fn write_temp_file(bytes: &[u8], stream_name: &str) -> Option<String> {
     Some(path.to_string_lossy().into_owned())
 }
 
-/// Truncates a byte slice at a valid UTF-8 character boundary.
-///
-/// Returns the truncated string and whether truncation occurred.
-fn truncate_at_utf8_boundary(bytes: &[u8], max_bytes: usize) -> (String, bool, usize) {
-    let total_bytes = bytes.len();
-
-    if total_bytes <= max_bytes {
-        // No truncation needed
-        return (
-            String::from_utf8_lossy(bytes).into_owned(),
-            false,
-            total_bytes,
-        );
-    }
-
-    // Find the last valid UTF-8 boundary at or before max_bytes
-    let truncated_bytes = &bytes[..max_bytes];
-
-    // Walk backwards to find a valid UTF-8 boundary
-    // UTF-8 continuation bytes start with 10xxxxxx (0x80-0xBF)
-    let mut end = max_bytes;
-    while end > 0 && (truncated_bytes[end - 1] & 0xC0) == 0x80 {
-        end -= 1;
-    }
-
-    // If we hit a multi-byte sequence start, back up one more
-    // to avoid cutting in the middle of a character
-    if end > 0 && truncated_bytes[end - 1] >= 0x80 {
-        // Check if this is a valid start of a multi-byte sequence
-        let byte = truncated_bytes[end - 1];
-        let char_len = if byte >= 0xF0 {
-            4
-        } else if byte >= 0xE0 {
-            3
-        } else if byte >= 0xC0 {
-            2
-        } else {
-            1
-        };
-
-        // If the sequence would extend beyond our truncation point, remove it
-        if end - 1 + char_len > max_bytes {
-            end -= 1;
-        }
-    }
-
-    let truncated = String::from_utf8_lossy(&bytes[..end]).into_owned();
-    (truncated, true, total_bytes)
-}
-
 /// Returns the tool definition for the bash tool.
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
@@ -436,9 +386,9 @@ async fn run_command(
 
     // Apply truncation to accumulated buffers.
     let (stdout, stdout_truncated, stdout_total_bytes) =
-        truncate_at_utf8_boundary(&stdout_buf, MAX_OUTPUT_BYTES);
+        super::truncate_bytes_to_byte_limit(&stdout_buf, MAX_OUTPUT_BYTES);
     let (stderr_text, stderr_truncated, stderr_total_bytes) =
-        truncate_at_utf8_boundary(&stderr_buf, MAX_OUTPUT_BYTES);
+        super::truncate_bytes_to_byte_limit(&stderr_buf, MAX_OUTPUT_BYTES);
 
     // Write full output to temp files when truncated
     let stdout_file = if stdout_truncated {
@@ -602,41 +552,6 @@ mod tests {
         let payload = serde_json::to_value(result).unwrap();
         assert_eq!(payload["error"]["code"], "invalid_input");
         assert_eq!(payload["error"]["message"], "command cannot be empty");
-    }
-
-    #[test]
-    fn test_truncate_at_utf8_boundary_no_truncation() {
-        let input = "Hello, world!".as_bytes();
-        let (result, truncated, total) = truncate_at_utf8_boundary(input, 100);
-        assert_eq!(result, "Hello, world!");
-        assert!(!truncated);
-        assert_eq!(total, 13);
-    }
-
-    #[test]
-    fn test_truncate_at_utf8_boundary_multibyte() {
-        // "こんにちは" - each character is 3 bytes in UTF-8
-        let input = "こんにちは".as_bytes();
-        assert_eq!(input.len(), 15); // 5 chars * 3 bytes
-
-        // Truncate at 10 bytes - should keep 3 full characters (9 bytes)
-        let (result, truncated, total) = truncate_at_utf8_boundary(input, 10);
-        assert_eq!(result, "こんに");
-        assert!(truncated);
-        assert_eq!(total, 15);
-    }
-
-    #[test]
-    fn test_truncate_at_utf8_boundary_emoji() {
-        // Emoji "😀" is 4 bytes in UTF-8
-        let input = "Hi😀there".as_bytes();
-        // "Hi" = 2 bytes, "😀" = 4 bytes, "there" = 5 bytes = 11 total
-
-        // Truncate at 5 bytes - should keep "Hi" (2 bytes), skip partial emoji
-        let (result, truncated, total) = truncate_at_utf8_boundary(input, 5);
-        assert_eq!(result, "Hi");
-        assert!(truncated);
-        assert_eq!(total, 11);
     }
 
     #[tokio::test]

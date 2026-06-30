@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use serde_json::{Value, json};
-use zdx_types::{ThinkingLevel, ToolDefinition, ToolResultBlock, ToolResultContent};
+use zdx_types::{ThinkingLevel, ToolDefinition};
 
 use crate::{
     ChatContentBlock, ChatMessage, IdOrigin, MessageContent, ProviderError, ProviderErrorKind,
@@ -379,7 +379,7 @@ impl GeminiContentsBuilder {
                 continue;
             };
 
-            let (text, image) = extract_tool_result_with_image(&result.content);
+            let (text, image) = crate::shared::extract_tool_result_with_image(&result.content);
 
             let mut function_response = serde_json::Map::new();
             // Symmetric id emission: only echo the id if the matching
@@ -677,34 +677,6 @@ pub fn build_cloud_code_assist_request(
     }
 
     outer_request
-}
-
-/// Extracts text and optional image from tool result content.
-/// Returns (text, Option<(`mime_type`, `base64_data`)>)
-fn extract_tool_result_with_image(
-    content: &ToolResultContent,
-) -> (String, Option<(String, String)>) {
-    match content {
-        ToolResultContent::Text(text) => (text.clone(), None),
-        ToolResultContent::Blocks(blocks) => {
-            let text = blocks
-                .iter()
-                .find_map(|block| match block {
-                    ToolResultBlock::Text { text } => Some(text.clone()),
-                    ToolResultBlock::Image { .. } => None,
-                })
-                .unwrap_or_default();
-
-            let image = blocks.iter().find_map(|block| match block {
-                ToolResultBlock::Image { mime_type, data } => {
-                    Some((mime_type.clone(), data.clone()))
-                }
-                ToolResultBlock::Text { .. } => None,
-            });
-
-            (text, image)
-        }
-    }
 }
 
 #[cfg(test)]

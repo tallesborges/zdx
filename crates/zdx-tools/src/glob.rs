@@ -3,7 +3,7 @@
 //! Uses `ignore::WalkBuilder` and `globset` for fast, `.gitignore`-respecting
 //! file discovery that returns structured JSON results.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use globset::Glob;
 use ignore::WalkBuilder;
@@ -58,29 +58,6 @@ fn make_recursive(pattern: &str) -> String {
     }
 }
 
-/// Resolve the search path from user input + context root.
-fn resolve_search_path(user_path: Option<&str>, root: &Path) -> Result<PathBuf, ToolOutput> {
-    match user_path {
-        Some(p) => {
-            let p = p.trim();
-            if p.is_empty() {
-                return Ok(root.to_path_buf());
-            }
-            let full = super::resolve_input_path(p, root)?;
-            if full.exists() {
-                Ok(full)
-            } else {
-                Err(ToolOutput::failure(
-                    "path_error",
-                    format!("Path does not exist: '{}'", full.display()),
-                    None,
-                ))
-            }
-        }
-        None => Ok(root.to_path_buf()),
-    }
-}
-
 /// Walk a directory tree and collect files matching the glob pattern.
 fn collect_files(
     search_path: &Path,
@@ -119,15 +96,9 @@ fn collect_files(
 
 /// Executes the glob tool and returns structured results.
 pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
-    let input: GlobInput = match serde_json::from_value(input.clone()) {
+    let input: GlobInput = match super::parse_tool_input(input, "glob") {
         Ok(i) => i,
-        Err(e) => {
-            return ToolOutput::failure(
-                "invalid_input",
-                "Invalid input for glob tool",
-                Some(format!("Parse error: {e}")),
-            );
-        }
+        Err(out) => return out,
     };
 
     if input.pattern.trim().is_empty() {
@@ -148,7 +119,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     };
     let glob_matcher = glob.compile_matcher();
 
-    let search_path = match resolve_search_path(input.path.as_deref(), &ctx.root) {
+    let search_path = match super::resolve_search_path(input.path.as_deref(), &ctx.root) {
         Ok(p) => p,
         Err(output) => return output,
     };
@@ -168,11 +139,8 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     let truncated = files.len() > MAX_FILES;
     files.truncate(MAX_FILES);
 
-    let total = files.len();
-
     ToolOutput::success(json!({
         "files": files,
-        "total": total,
         "truncated": truncated,
     }))
 }
@@ -202,7 +170,7 @@ mod tests {
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
         let data = result.data().unwrap();
-        assert_eq!(data["total"], 2);
+        assert_eq!(data["files"].as_array().unwrap().len(), 2);
         assert_eq!(data["truncated"], false);
         let files = data["files"].as_array().unwrap();
         assert!(files.iter().any(|f| f == "hello.txt"));
@@ -223,7 +191,7 @@ mod tests {
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
         let data = result.data().unwrap();
-        assert_eq!(data["total"], 3);
+        assert_eq!(data["files"].as_array().unwrap().len(), 3);
     }
 
     #[test]
@@ -239,7 +207,7 @@ mod tests {
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
         let data = result.data().unwrap();
-        assert_eq!(data["total"], 1);
+        assert_eq!(data["files"].as_array().unwrap().len(), 1);
         assert_eq!(data["files"][0], "sub/nested.txt");
     }
 
@@ -291,7 +259,6 @@ mod tests {
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
         let data = result.data().unwrap();
-        assert_eq!(data["total"], 0);
         assert_eq!(data["files"].as_array().unwrap().len(), 0);
     }
 
@@ -330,7 +297,7 @@ mod tests {
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
         let data = result.data().unwrap();
-        assert_eq!(data["total"], MAX_FILES);
+        assert_eq!(data["files"].as_array().unwrap().len(), MAX_FILES);
         assert_eq!(data["truncated"], true);
     }
 
@@ -387,7 +354,7 @@ mod tests {
         assert!(result.is_ok());
         let data = result.data().unwrap();
         // Should find the file via retry without gitignore
-        assert_eq!(data["total"], 1);
+        assert_eq!(data["files"].as_array().unwrap().len(), 1);
         assert_eq!(data["files"][0], "ignored/hidden.txt");
     }
 }

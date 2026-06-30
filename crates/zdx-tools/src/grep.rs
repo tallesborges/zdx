@@ -228,29 +228,6 @@ fn build_type_filter(file_type: Option<&str>) -> Result<Option<ignore::types::Ty
     }
 }
 
-/// Resolve the search path from user input + context root.
-fn resolve_search_path(user_path: Option<&str>, root: &Path) -> Result<PathBuf, ToolOutput> {
-    match user_path {
-        Some(p) => {
-            let p = p.trim();
-            if p.is_empty() {
-                return Ok(root.to_path_buf());
-            }
-            let full = super::resolve_input_path(p, root)?;
-            if full.exists() {
-                Ok(full)
-            } else {
-                Err(ToolOutput::failure(
-                    "path_error",
-                    format!("Path does not exist: '{}'", full.display()),
-                    None,
-                ))
-            }
-        }
-        None => Ok(root.to_path_buf()),
-    }
-}
-
 /// Build a `GlobMatcher` from a user-supplied glob string.
 fn build_glob_matcher(glob_pattern: &str) -> Result<GlobMatcher, ToolOutput> {
     Glob::new(glob_pattern)
@@ -292,15 +269,9 @@ fn round_robin_select(per_file: Vec<Vec<Match>>, max: usize) -> (Vec<Match>, boo
 
 /// Executes the grep tool and returns structured results.
 pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
-    let input: GrepInput = match serde_json::from_value(input.clone()) {
+    let input: GrepInput = match super::parse_tool_input(input, "grep") {
         Ok(i) => i,
-        Err(e) => {
-            return ToolOutput::failure(
-                "invalid_input",
-                "Invalid input for grep tool",
-                Some(format!("Parse error: {e}")),
-            );
-        }
+        Err(out) => return out,
     };
 
     if input.pattern.trim().is_empty() {
@@ -323,7 +294,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         }
     };
 
-    let search_path = match resolve_search_path(input.path.as_deref(), &ctx.root) {
+    let search_path = match super::resolve_search_path(input.path.as_deref(), &ctx.root) {
         Ok(p) => p,
         Err(output) => return output,
     };
@@ -546,32 +517,15 @@ fn walk_files(
     (files, skipped_large_files)
 }
 
-fn truncate_snippet(text: &str, max_bytes: usize) -> (String, bool) {
-    if text.len() <= max_bytes {
-        return (text.to_string(), false);
-    }
-
-    let mut end = 0;
-    for (idx, ch) in text.char_indices() {
-        let next = idx + ch.len_utf8();
-        if next > max_bytes {
-            break;
-        }
-        end = next;
-    }
-
-    (text[..end].to_string(), true)
-}
-
 fn truncate_match_for_output(m: Match) -> (Match, bool) {
-    let (text, text_truncated) = truncate_snippet(&m.text, MAX_SNIPPET_BYTES);
+    let (text, text_truncated) = super::truncate_str_to_byte_limit(&m.text, MAX_SNIPPET_BYTES);
     let mut any_truncated = text_truncated;
 
     let context_before = m
         .context_before
         .into_iter()
         .map(|line| {
-            let (line, truncated) = truncate_snippet(&line, MAX_SNIPPET_BYTES);
+            let (line, truncated) = super::truncate_str_to_byte_limit(&line, MAX_SNIPPET_BYTES);
             any_truncated |= truncated;
             line
         })
@@ -581,7 +535,7 @@ fn truncate_match_for_output(m: Match) -> (Match, bool) {
         .context_after
         .into_iter()
         .map(|line| {
-            let (line, truncated) = truncate_snippet(&line, MAX_SNIPPET_BYTES);
+            let (line, truncated) = super::truncate_str_to_byte_limit(&line, MAX_SNIPPET_BYTES);
             any_truncated |= truncated;
             line
         })
@@ -644,7 +598,7 @@ fn cap_unique_values_for_output(
     let mut used_bytes = 0;
 
     for value in unique_values {
-        let (value, truncated) = truncate_snippet(&value, MAX_SNIPPET_BYTES);
+        let (value, truncated) = super::truncate_str_to_byte_limit(&value, MAX_SNIPPET_BYTES);
         stats.text_truncated |= truncated;
         if used_bytes + value.len() > MAX_OUTPUT_TEXT_BYTES {
             stats.payload_truncated = true;

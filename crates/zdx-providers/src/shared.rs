@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use eventsource_stream::EventStreamError;
+use reqwest::header::HeaderValue;
 use serde_json::Value;
 pub use zdx_types::providers::UsageDelta;
 pub use zdx_types::{
@@ -15,6 +16,17 @@ pub use zdx_types::{
 /// Used by all API-key providers for identification. OAuth providers
 /// (Claude CLI, Gemini CLI) use mimicked User-Agents for compatibility.
 pub const USER_AGENT: &str = concat!("zdx/", env!("CARGO_PKG_VERSION"));
+
+/// Parses a string into an HTTP header value, returning a contextual error
+/// instead of silently substituting an empty value when the input contains
+/// bytes that are invalid in an HTTP header (e.g. a stray newline or control
+/// character in an API key or token). The error never includes the value.
+///
+/// # Errors
+/// Returns an error if `value` is not a valid HTTP header value.
+pub(crate) fn header_value(label: &str, value: &str) -> Result<HeaderValue> {
+    HeaderValue::from_str(value).with_context(|| format!("{label} is not a valid HTTP header value"))
+}
 
 // ============================================================================
 // Config resolution helpers
@@ -138,6 +150,36 @@ where
             ProviderErrorKind::Parse,
             format!("SSE stream parse error: {e}"),
         ),
+    }
+}
+
+/// Extracts text and an optional image from tool result content.
+///
+/// Returns the text output and `Some((mime_type, base64_data))` when the
+/// result carries an image block.
+pub(crate) fn extract_tool_result_with_image(
+    content: &zdx_types::ToolResultContent,
+) -> (String, Option<(String, String)>) {
+    match content {
+        zdx_types::ToolResultContent::Text(text) => (text.clone(), None),
+        zdx_types::ToolResultContent::Blocks(blocks) => {
+            let text = blocks
+                .iter()
+                .find_map(|block| match block {
+                    zdx_types::ToolResultBlock::Text { text } => Some(text.clone()),
+                    zdx_types::ToolResultBlock::Image { .. } => None,
+                })
+                .unwrap_or_default();
+
+            let image = blocks.iter().find_map(|block| match block {
+                zdx_types::ToolResultBlock::Image { mime_type, data } => {
+                    Some((mime_type.clone(), data.clone()))
+                }
+                zdx_types::ToolResultBlock::Text { .. } => None,
+            });
+
+            (text, image)
+        }
     }
 }
 
