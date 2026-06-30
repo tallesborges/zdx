@@ -155,7 +155,10 @@ fn build_headers(access_token: &str) -> anyhow::Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(
         "Authorization",
-        crate::shared::header_value("Antigravity access token", &format!("Bearer {access_token}"))?,
+        crate::shared::header_value(
+            "Antigravity access token",
+            &format!("Bearer {access_token}"),
+        )?,
     );
     headers.insert(
         "User-Agent",
