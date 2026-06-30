@@ -9,7 +9,7 @@ use futures_util::Stream;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Serialize;
 use serde_json::Value;
-use zdx_types::{ToolDefinition, ToolResult, ToolResultContent};
+use zdx_types::{ToolDefinition, ToolResult};
 
 use crate::debug_metrics::maybe_wrap_with_metrics;
 use crate::{
@@ -74,7 +74,7 @@ impl OpenAIChatCompletionsClient {
             DebugTrace::from_env(&self.config.model, self.config.prompt_cache_key.as_deref());
 
         let url = format!("{}{}", self.config.base_url, CHAT_COMPLETIONS_PATH);
-        let headers = build_headers(&self.config.api_key, &self.config.extra_headers);
+        let headers = build_headers(&self.config.api_key, &self.config.extra_headers)?;
 
         let response = if let Some(trace) = &trace {
             let body = serde_json::to_vec(&request)?;
@@ -108,12 +108,11 @@ impl OpenAIChatCompletionsClient {
     }
 }
 
-fn build_headers(api_key: &str, extra_headers: &HeaderMap) -> HeaderMap {
+fn build_headers(api_key: &str, extra_headers: &HeaderMap) -> anyhow::Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(
         "Authorization",
-        HeaderValue::from_str(&format!("Bearer {api_key}"))
-            .unwrap_or_else(|_| HeaderValue::from_static("")),
+        crate::shared::header_value("API key", &format!("Bearer {api_key}"))?,
     );
     headers.insert("accept", HeaderValue::from_static("text/event-stream"));
     headers.insert("content-type", HeaderValue::from_static("application/json"));
@@ -126,7 +125,7 @@ fn build_headers(api_key: &str, extra_headers: &HeaderMap) -> HeaderMap {
         headers.insert(name, value.clone());
     }
 
-    headers
+    Ok(headers)
 }
 
 fn classify_reqwest_error(e: &reqwest::Error) -> ProviderError {
@@ -457,7 +456,7 @@ fn user_blocks_messages(blocks: &[ChatContentBlock]) -> Vec<ChatCompletionMessag
     }
 
     for result in tool_results {
-        let (text, image) = extract_tool_result_with_image(&result.content);
+        let (text, image) = crate::shared::extract_tool_result_with_image(&result.content);
         messages.push(ChatCompletionMessage {
             role: "tool".to_string(),
             content: Some(ChatMessageContent::Text(text)),
@@ -506,34 +505,6 @@ fn collapse_user_content_parts(content_parts: Vec<ChatContentPart>) -> ChatMessa
         combined.push_str(text);
     }
     ChatMessageContent::Text(combined)
-}
-
-/// Extracts text and optional image from tool result content.
-/// Returns (text, Option<(`mime_type`, `base64_data`)>)
-fn extract_tool_result_with_image(
-    content: &ToolResultContent,
-) -> (String, Option<(String, String)>) {
-    match content {
-        ToolResultContent::Text(text) => (text.clone(), None),
-        ToolResultContent::Blocks(blocks) => {
-            let text = blocks
-                .iter()
-                .find_map(|block| match block {
-                    zdx_types::ToolResultBlock::Text { text } => Some(text.clone()),
-                    zdx_types::ToolResultBlock::Image { .. } => None,
-                })
-                .unwrap_or_default();
-
-            let image = blocks.iter().find_map(|block| match block {
-                zdx_types::ToolResultBlock::Image { mime_type, data } => {
-                    Some((mime_type.clone(), data.clone()))
-                }
-                zdx_types::ToolResultBlock::Text { .. } => None,
-            });
-
-            (text, image)
-        }
-    }
 }
 
 #[derive(Debug)]

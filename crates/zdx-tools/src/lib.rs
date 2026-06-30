@@ -16,6 +16,7 @@ pub mod write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 pub use zdx_types::{
     ImageContent, ToolDefinition, ToolOutput, ToolResult, ToolResultBlock, ToolResultContent,
@@ -181,6 +182,28 @@ pub mod i64_or_string {
             }),
         }
     }
+}
+
+// ============================================================================
+// Tool input parsing
+// ============================================================================
+
+/// Deserializes tool input JSON into `T`, returning a uniform `invalid_input`
+/// failure when parsing fails.
+///
+/// # Errors
+/// Returns a `ToolOutput` failure when `value` does not deserialize into `T`.
+pub(crate) fn parse_tool_input<T: DeserializeOwned>(
+    value: &Value,
+    tool_name: &str,
+) -> Result<T, ToolOutput> {
+    serde_json::from_value(value.clone()).map_err(|e| {
+        ToolOutput::failure(
+            "invalid_input",
+            format!("Invalid input for {tool_name} tool"),
+            Some(format!("Parse error: {e}")),
+        )
+    })
 }
 
 // ============================================================================
@@ -353,6 +376,35 @@ pub fn resolve_existing_path(path: &str, root: &Path) -> Result<ResolvedPath, To
         })
 }
 
+/// Resolve the search path from user input + context root.
+///
+/// Returns `root` when the user path is absent or blank; otherwise resolves
+/// the path against `root` and errors when it does not exist.
+pub(crate) fn resolve_search_path(
+    user_path: Option<&str>,
+    root: &Path,
+) -> Result<PathBuf, ToolOutput> {
+    match user_path {
+        Some(p) => {
+            let p = p.trim();
+            if p.is_empty() {
+                return Ok(root.to_path_buf());
+            }
+            let full = resolve_input_path(p, root)?;
+            if full.exists() {
+                Ok(full)
+            } else {
+                Err(ToolOutput::failure(
+                    "path_error",
+                    format!("Path does not exist: '{}'", full.display()),
+                    None,
+                ))
+            }
+        }
+        None => Ok(root.to_path_buf()),
+    }
+}
+
 // ============================================================================
 // Image path helpers (moved from zdx-core images::path_mime)
 // ============================================================================
@@ -382,5 +434,108 @@ pub fn mime_type_for_extension(path: &str) -> Option<&'static str> {
         "gif" => Some("image/gif"),
         "webp" => Some("image/webp"),
         _ => None,
+    }
+}
+
+// ============================================================================
+// Output truncation helpers
+// ============================================================================
+
+/// Truncates a byte slice at a valid UTF-8 character boundary at or before
+/// `max_bytes`, replacing any invalid UTF-8 via lossy conversion.
+///
+/// Returns the truncated string, whether truncation occurred, and the original
+/// total byte length.
+pub(crate) fn truncate_bytes_to_byte_limit(
+    bytes: &[u8],
+    max_bytes: usize,
+) -> (String, bool, usize) {
+    let total_bytes = bytes.len();
+
+    if total_bytes <= max_bytes {
+        return (
+            String::from_utf8_lossy(bytes).into_owned(),
+            false,
+            total_bytes,
+        );
+    }
+
+    let truncated_bytes = &bytes[..max_bytes];
+
+    // Walk backwards over UTF-8 continuation bytes (10xxxxxx, 0x80-0xBF).
+    let mut end = max_bytes;
+    while end > 0 && (truncated_bytes[end - 1] & 0xC0) == 0x80 {
+        end -= 1;
+    }
+
+    // If the last kept byte starts a multi-byte sequence that would extend
+    // past max_bytes, drop it so we never cut mid-character.
+    if end > 0 && truncated_bytes[end - 1] >= 0x80 {
+        let byte = truncated_bytes[end - 1];
+        let char_len = if byte >= 0xF0 {
+            4
+        } else if byte >= 0xE0 {
+            3
+        } else if byte >= 0xC0 {
+            2
+        } else {
+            1
+        };
+
+        if end - 1 + char_len > max_bytes {
+            end -= 1;
+        }
+    }
+
+    let truncated = String::from_utf8_lossy(&bytes[..end]).into_owned();
+    (truncated, true, total_bytes)
+}
+
+/// Truncates a string at a valid UTF-8 character boundary at or before
+/// `max_bytes`.
+///
+/// Returns the truncated string and whether truncation occurred.
+pub(crate) fn truncate_str_to_byte_limit(text: &str, max_bytes: usize) -> (String, bool) {
+    let (truncated, was_truncated, _) = truncate_bytes_to_byte_limit(text.as_bytes(), max_bytes);
+    (truncated, was_truncated)
+}
+
+#[cfg(test)]
+mod truncation_tests {
+    use super::truncate_bytes_to_byte_limit;
+
+    #[test]
+    fn truncate_bytes_no_truncation() {
+        let input = "Hello, world!".as_bytes();
+        let (result, truncated, total) = truncate_bytes_to_byte_limit(input, 100);
+        assert_eq!(result, "Hello, world!");
+        assert!(!truncated);
+        assert_eq!(total, 13);
+    }
+
+    #[test]
+    fn truncate_bytes_multibyte() {
+        // "こんにちは" - each character is 3 bytes in UTF-8
+        let input = "こんにちは".as_bytes();
+        assert_eq!(input.len(), 15); // 5 chars * 3 bytes
+
+        // Truncate at 10 bytes - should keep 3 full characters (9 bytes)
+        let (result, truncated, total) = truncate_bytes_to_byte_limit(input, 10);
+        assert_eq!(result, "こんに");
+        assert!(truncated);
+        assert_eq!(total, 15);
+    }
+
+    #[test]
+    fn truncate_bytes_emoji() {
+        // Emoji "😀" is 4 bytes in UTF-8
+        let input = "Hi😀there".as_bytes();
+        // "Hi" = 2 bytes, "😀" = 4 bytes, "there" = 5 bytes = 11 total
+
+        // Truncate at 5 bytes - should keep "Hi" (2 bytes), skip partial emoji
+        let (result, truncated, total) = truncate_bytes_to_byte_limit(input, 5);
+        assert_eq!(result, "Hi");
+        assert!(truncated);
+        assert_eq!(total, 11);
     }
 }

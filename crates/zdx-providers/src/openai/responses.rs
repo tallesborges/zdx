@@ -2,7 +2,7 @@
 
 use anyhow::{Result, bail};
 use reqwest::header::HeaderMap;
-use zdx_types::{ToolDefinition, ToolResultContent};
+use zdx_types::ToolDefinition;
 
 pub use super::responses_sse::{ResponsesEventMapper, ResponsesSseParser};
 pub use super::responses_types::{
@@ -272,7 +272,7 @@ fn flush_user_content_parts(input: &mut Vec<InputItem>, content_parts: &mut Vec<
 }
 
 fn append_tool_result(result: &zdx_types::ToolResult, input: &mut Vec<InputItem>) {
-    let (output, has_image) = extract_tool_result_with_image(&result.content);
+    let (output, has_image) = crate::shared::extract_tool_result_with_image(&result.content);
     let call_id = result
         .tool_use_id
         .split('|')
@@ -396,34 +396,6 @@ fn input_image_content(mime_type: &str, data: &str) -> InputContent {
 
 fn non_empty_owned(value: &str) -> Option<String> {
     (!value.is_empty()).then_some(value.to_string())
-}
-
-/// Extracts text and optional image from tool result content.
-/// Returns (`text_output`, Option<(`mime_type`, `base64_data`)>)
-fn extract_tool_result_with_image(
-    content: &ToolResultContent,
-) -> (String, Option<(String, String)>) {
-    match content {
-        ToolResultContent::Text(text) => (text.clone(), None),
-        ToolResultContent::Blocks(blocks) => {
-            let text = blocks
-                .iter()
-                .find_map(|block| match block {
-                    zdx_types::ToolResultBlock::Text { text } => Some(text.clone()),
-                    zdx_types::ToolResultBlock::Image { .. } => None,
-                })
-                .unwrap_or_default();
-
-            let image = blocks.iter().find_map(|block| match block {
-                zdx_types::ToolResultBlock::Image { mime_type, data } => {
-                    Some((mime_type.clone(), data.clone()))
-                }
-                zdx_types::ToolResultBlock::Text { .. } => None,
-            });
-
-            (text, image)
-        }
-    }
 }
 
 #[cfg(test)]

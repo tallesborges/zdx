@@ -108,13 +108,7 @@ fn parse_input(input: &Value) -> Result<WebSearchInput, ToolOutput> {
         ));
     }
 
-    serde_json::from_value(input.clone()).map_err(|e| {
-        ToolOutput::failure(
-            "invalid_input",
-            "Invalid input for web_search tool",
-            Some(format!("Parse error: {e}")),
-        )
-    })
+    super::parse_tool_input(input, "web_search")
 }
 
 fn validate_input(

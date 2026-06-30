@@ -112,15 +112,9 @@ struct ReadInput {
 
 /// Executes the read tool and returns a structured envelope.
 pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
-    let input: ReadInput = match serde_json::from_value(input.clone()) {
+    let input: ReadInput = match super::parse_tool_input(input, "read") {
         Ok(i) => i,
-        Err(e) => {
-            return ToolOutput::failure(
-                "invalid_input",
-                "Invalid input for read tool",
-                Some(format!("Parse error: {e}")),
-            );
-        }
+        Err(out) => return out,
     };
 
     let path = input.file_path.trim();
@@ -263,7 +257,7 @@ fn read_text_from_reader<R: BufRead>(
                 page_full = true;
                 byte_limited = true;
             } else {
-                let truncated_line = truncate_to_byte_limit(&line, remaining_bytes);
+                let truncated_line = super::truncate_str_to_byte_limit(&line, remaining_bytes).0;
                 let line_was_cut = truncated_line.len() < line.len();
 
                 if truncated_line.is_empty() {
@@ -309,23 +303,6 @@ fn read_text_from_reader<R: BufRead>(
     }
 
     ToolOutput::success(Value::Object(data))
-}
-
-fn truncate_to_byte_limit(text: &str, max_bytes: usize) -> String {
-    if text.len() <= max_bytes {
-        return text.to_string();
-    }
-
-    let mut end = 0;
-    for (idx, ch) in text.char_indices() {
-        let next = idx + ch.len_utf8();
-        if next > max_bytes {
-            break;
-        }
-        end = next;
-    }
-
-    text[..end].to_string()
 }
 
 fn build_read_warning(

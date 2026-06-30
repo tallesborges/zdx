@@ -63,15 +63,9 @@ fn default_expected_replacements() -> i64 {
 
 /// Executes the edit tool and returns a structured envelope.
 pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
-    let input: EditInput = match serde_json::from_value(input.clone()) {
+    let input: EditInput = match super::parse_tool_input(input, "edit") {
         Ok(i) => i,
-        Err(e) => {
-            return ToolOutput::failure(
-                "invalid_input",
-                "Invalid input for edit tool",
-                Some(format!("Parse error: {e}")),
-            );
-        }
+        Err(out) => return out,
     };
 
     if input.file_path.trim().is_empty() {

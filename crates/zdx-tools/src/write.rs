@@ -43,15 +43,9 @@ struct WriteInput {
 
 /// Executes the write tool and returns a structured envelope.
 pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
-    let input: WriteInput = match serde_json::from_value(input.clone()) {
+    let input: WriteInput = match super::parse_tool_input(input, "write") {
         Ok(i) => i,
-        Err(e) => {
-            return ToolOutput::failure(
-                "invalid_input",
-                "Invalid input for write tool",
-                Some(format!("Parse error: {e}")),
-            );
-        }
+        Err(out) => return out,
     };
 
     let display_path = input.file_path.trim();
