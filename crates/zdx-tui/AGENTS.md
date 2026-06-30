@@ -5,7 +5,6 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 ## Where things are
 
 - `src/lib.rs`: TUI exports (`run_interactive_chat`, `TuiRuntime`)
-- `src/ask_user.rs`: TUI-side `ask_user_question` tool (pending map keyed by thread id; typed-answer resolution)
 - `src/terminal.rs`: terminal setup/restore + panic hooks
 - `src/state.rs`: `AppState` + TUI state structs
 - `src/events.rs`: UI event types
@@ -40,7 +39,6 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 - `src/overlays/`: command palette, skill picker, rename overlays
 - `src/overlays/tldr.rs`: thread TLDR/recap overlay (Ctrl+R)
 - `src/overlays/tool_detail.rs`: tool detail popup overlay (full args/output/status on click)
-- `src/overlays/question_picker.rs`: `ask_user_question` option picker (opened mid-turn on the registered marker)
 - `src/overlays/followup_picker.rs`: end-of-turn follow-up suggestion picker (Ctrl+F; sends selection as next message)
 
 ## Conventions
@@ -58,4 +56,4 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 
 - Add/move/delete `.rs` files in this crate: update this file.
 - Add/move/delete prompt layer files in this crate: update this file.
-- Architecture changes: update `docs/ARCHITECTURE.md`.
+- Architecture changes: update `docs/ARCHITECTURE.md`..

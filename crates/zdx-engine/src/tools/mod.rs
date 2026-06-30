@@ -7,7 +7,6 @@
 pub use zdx_tools::{apply_patch, bash, edit, fetch_webpage, glob, grep, read, web_search, write};
 
 // Engine-backed tools (need full ToolContext with config, threads, etc.)
-pub mod ask_user_question;
 pub mod memory_get;
 pub mod memory_search;
 pub mod read_thread;
@@ -188,38 +187,18 @@ pub fn toolset_tool_names(set: ToolSet) -> Vec<String> {
 
 /// Async tool handler function.
 pub type ToolFuture = Pin<Box<dyn Future<Output = ToolOutput> + Send>>;
-pub type ToolHandler = Arc<dyn Fn(&Value, &ToolContext) -> ToolFuture + Send + Sync>;
 
 /// Trait for agent tools.
 ///
 /// Each tool provides its schema definition and an async execute method.
 /// The registry stores `Arc<dyn Tool>` for cheap cloning and heterogeneous
-/// dispatch. Surface-registered tools (e.g. `ask_user_question`) can use
-/// [`ClosureTool`] to wrap an existing `(ToolDefinition, ToolHandler)` pair
-/// without implementing the trait directly.
+/// dispatch.
 pub trait Tool: Send + Sync {
     /// Returns the schema definition for this tool.
     fn definition(&self) -> ToolDefinition;
 
     /// Executes the tool with the given JSON input and context.
     fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture;
-}
-
-/// Adapter that wraps a `(ToolDefinition, ToolHandler)` pair as a [`Tool`].
-/// Used for surface-registered tools that still provide a closure-based handler.
-pub struct ClosureTool {
-    def: ToolDefinition,
-    handler: ToolHandler,
-}
-
-impl Tool for ClosureTool {
-    fn definition(&self) -> ToolDefinition {
-        self.def.clone()
-    }
-
-    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
-        (self.handler)(input, ctx)
-    }
 }
 
 /// Tool registry (definitions + executors).
@@ -259,21 +238,6 @@ impl ToolRegistry {
         self.tools
             .retain(|t| t.definition().name.to_ascii_lowercase() != name);
         self.tools.push(tool);
-    }
-
-    /// Registers a closure-based tool (backward compat for surface-registered tools).
-    pub fn register(&mut self, definition: ToolDefinition, handler: ToolHandler) {
-        self.register_boxed(Arc::new(ClosureTool {
-            def: definition,
-            handler,
-        }));
-    }
-
-    /// Builder-style registration of a closure-based tool.
-    #[must_use]
-    pub fn with_tool(mut self, definition: ToolDefinition, handler: ToolHandler) -> Self {
-        self.register(definition, handler);
-        self
     }
 
     pub fn definitions(&self) -> Vec<ToolDefinition> {

@@ -65,19 +65,6 @@ pub(crate) async fn dispatch_message(
         return;
     }
 
-    // A typed reply while a question is pending answers the question instead
-    // of starting a new queued turn.
-    if let Some(text) = message.text.as_deref()
-        && crate::ask_user::try_answer_with_text(
-            context.ask_user_map(),
-            message.chat.id,
-            message.effective_thread_id(),
-            text,
-        )
-    {
-        return;
-    }
-
     if is_forum_general {
         // Check for commands that shouldn't create a topic
         if let Some(text) = message.text.as_deref()
@@ -371,8 +358,17 @@ fn spawn_queue_worker(
             }
 
             let mut queues = queues.lock().await;
-            if let Some(state) = queues.get_mut(&key) {
+            let drained = if let Some(state) = queues.get_mut(&key) {
                 state.pending = state.pending.saturating_sub(1);
+                state.pending == 0
+            } else {
+                false
+            };
+            if drained {
+                // No items left for this key: drop the entry so the channel
+                // closes and this worker exits instead of leaking a per-key
+                // queue + idle task forever.
+                queues.remove(&key);
             }
         }
     });

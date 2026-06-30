@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use tokio::process::Command;
 
 use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
@@ -645,7 +645,7 @@ async fn handle_status_command(
     let thinking_override = thread_persistence::read_thread_thinking_override(thread_id)?;
     let effective_model = model_override.as_deref().unwrap_or(&config.model);
     let effective_thinking = thinking_override.unwrap_or(config.thinking_level);
-    let branch = git_branch_name(&root_path);
+    let branch = git_branch_name(&root_path).await;
     let events = thread_persistence::load_thread_events(thread_id)?;
     let (cumulative_usage, latest_usage) =
         thread_persistence::extract_usage_from_thread_events(&events);
@@ -1272,13 +1272,6 @@ async fn stream_turn_events(
     let mut got_result = false;
     let mut had_error = false;
     let mut error_message = None;
-    // Question currently rendered in the status message:
-    // (tool_use_id, base question HTML).
-    let mut active_question: Option<(String, String)> = None;
-    // ask_user_question inputs seen via ToolInputCompleted, awaiting the
-    // handler's "registered" marker before rendering.
-    let mut ask_inputs: std::collections::HashMap<String, serde_json::Value> =
-        std::collections::HashMap::new();
 
     loop {
         tokio::select! {
@@ -1308,41 +1301,6 @@ async fn stream_turn_events(
                         }
                         break;
                     }
-                    AgentEvent::ToolInputCompleted { id, name, input }
-                        if name == crate::ask_user::TOOL_NAME =>
-                    {
-                        ask_inputs.insert(id.clone(), input.clone());
-                    }
-                    AgentEvent::ToolOutputDelta { id, chunk }
-                        if chunk == crate::ask_user::REGISTERED_MARKER
-                            && ask_inputs.contains_key(id)
-                            && active_question.is_none() =>
-                    {
-                        if let Some(input) = ask_inputs.remove(id)
-                            && let Some((text, rows)) =
-                                crate::ask_user::render_question(&input, id)
-                        {
-                            show_question_status(context, incoming, status, &text, rows).await;
-                            active_question = Some((id.clone(), text));
-                        }
-                    }
-                    AgentEvent::ToolCompleted { id, result }
-                        if active_question.as_ref().is_some_and(|(qid, _)| qid == id) =>
-                    {
-                        ask_inputs.remove(id);
-                        let (_, question_text) =
-                            active_question.take().expect("active question checked above");
-                        let frozen = match crate::ask_user::answer_from_output(result) {
-                            Some(answer) => format!(
-                                "{question_text}\n\n✅ <b>{}</b>",
-                                escape_html(&answer)
-                            ),
-                            None => format!("{question_text}\n\n💤 <i>No answer.</i>"),
-                        };
-                        freeze_question_status(context, incoming, status, &frozen).await;
-                        current_status = agent::STATUS_WAITING.to_string();
-                        last_edit = std::time::Instant::now();
-                    }
                     AgentEvent::Error { message, .. } => {
                         tracing::error!(message, "Agent error event");
                         // Diagnostic only; terminal outcome is carried by TurnFinished.
@@ -1351,12 +1309,7 @@ async fn stream_turn_events(
                         tracing::info!(?kind, message, "Agent notice event");
                     }
                     other => {
-                        if let AgentEvent::ToolCompleted { id, .. } = other {
-                            ask_inputs.remove(id);
-                        }
-                        if active_question.is_none() {
-                            update_status(context, incoming.chat_id, status, other, &mut current_status, &mut last_edit).await;
-                        }
+                        update_status(context, incoming.chat_id, status, other, &mut current_status, &mut last_edit).await;
                     }
                 }
             }
@@ -1369,77 +1322,6 @@ async fn stream_turn_events(
         had_error,
         error_message,
     }
-}
-
-/// Renders a pending question into the turn's status message: question text
-/// plus option buttons, with the existing cancel button row appended.
-async fn show_question_status(
-    context: &BotContext,
-    incoming: &crate::types::IncomingMessage,
-    status: &mut TurnStatus,
-    question_text: &str,
-    option_rows: Vec<Vec<InlineKeyboardButton>>,
-) {
-    let mut rows = option_rows;
-    rows.extend(status.markup.inline_keyboard.iter().cloned());
-    let markup = InlineKeyboardMarkup {
-        inline_keyboard: rows,
-    };
-    let text = format!("{question_text}\n\n<i>Tap an option or reply with your answer.</i>");
-
-    if let Some(msg_id) = status.message_id {
-        if let Err(err) = context
-            .client()
-            .edit_message_text(incoming.chat_id, msg_id, &text, Some(&markup))
-            .await
-        {
-            tracing::warn!(msg_id, %err, "Failed to render question into status message");
-        }
-    } else {
-        status.message_id = context
-            .client()
-            .send_message_with_markup(
-                incoming.chat_id,
-                &text,
-                None,
-                incoming.message_thread_id,
-                &markup,
-            )
-            .await
-            .ok()
-            .map(|m| m.id);
-    }
-}
-
-/// Freezes the answered question as a Q&A record and continues the turn in a
-/// fresh status message below it.
-async fn freeze_question_status(
-    context: &BotContext,
-    incoming: &crate::types::IncomingMessage,
-    status: &mut TurnStatus,
-    frozen_text: &str,
-) {
-    if let Some(msg_id) = status.message_id
-        && let Err(err) = context
-            .client()
-            .edit_message_text(incoming.chat_id, msg_id, frozen_text, None)
-            .await
-    {
-        tracing::warn!(msg_id, %err, "Failed to freeze answered question");
-    }
-
-    status.message_id = context
-        .client()
-        .send_message_with_markup(
-            incoming.chat_id,
-            agent::STATUS_WAITING,
-            None,
-            incoming.message_thread_id,
-            &status.markup,
-        )
-        .await
-        .ok()
-        .map(|m| m.id);
 }
 
 async fn update_status(
@@ -2055,13 +1937,14 @@ fn trim_price(value: f64) -> String {
     text
 }
 
-fn git_branch_name(root: &Path) -> Option<String> {
+async fn git_branch_name(root: &Path) -> Option<String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
         .arg("branch")
         .arg("--show-current")
         .output()
+        .await
         .ok()?;
     if !output.status.success() {
         return None;

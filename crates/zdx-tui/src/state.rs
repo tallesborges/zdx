@@ -48,7 +48,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use zdx_engine::config::Config;
-use zdx_engine::core::agent::{AgentOptions, ToolConfig, ToolSelection};
+use zdx_engine::core::agent::{AgentOptions, ToolConfig};
 use zdx_engine::core::events::AgentEvent;
 use zdx_engine::core::thread_persistence::Thread;
 use zdx_engine::custom_commands::CustomCommand;
@@ -394,8 +394,6 @@ pub struct TuiState {
     /// for up to 1s instead of hitting the filesystem on the per-keystroke path.
     pub(crate) active_threads_scan: HashSet<String>,
     pub(crate) active_threads_scanned_at: Option<Instant>,
-    /// Questions from `ask_user_question` waiting for a user answer.
-    pub(crate) ask_user_map: crate::ask_user::PendingQuestionMap,
     /// Follow-up suggestions from the most recent reply (Ctrl+F to pick).
     pub last_followups: Vec<String>,
 }
@@ -413,7 +411,7 @@ impl TuiState {
         thread_handle: Option<Thread>,
         history: Vec<ChatMessage>,
     ) -> Self {
-        let (ask_user_map, tool_config) = build_ask_user_tooling();
+        let tool_config = ToolConfig::default();
         let agent_opts = AgentOptions {
             root,
             tool_config,
@@ -487,7 +485,6 @@ impl TuiState {
             optimistic_active_threads: HashMap::new(),
             active_threads_scan: HashSet::new(),
             active_threads_scanned_at: None,
-            ask_user_map,
             last_followups: Vec::new(),
         }
     }
@@ -615,25 +612,6 @@ impl TuiState {
 
         transcript
     }
-}
-
-/// Builds a fresh pending-question map plus a `ToolConfig` whose
-/// `ask_user_question` handler is bound to that map. Every tab gets its own
-/// pair so answers always route to the tab's own runs.
-pub(crate) fn build_ask_user_tooling() -> (crate::ask_user::PendingQuestionMap, ToolConfig) {
-    let ask_user_map = crate::ask_user::new_pending_map();
-    let tool_registry = zdx_engine::tools::ToolRegistry::builtins().with_tool(
-        zdx_engine::tools::ask_user_question::definition(),
-        crate::ask_user::handler(std::sync::Arc::clone(&ask_user_map)),
-    );
-    let tool_config = ToolConfig::new(
-        tool_registry,
-        ToolSelection::Auto {
-            base: zdx_engine::tools::ToolSet::Default,
-            include: vec![crate::ask_user::TOOL_NAME.to_string()],
-        },
-    );
-    (ask_user_map, tool_config)
 }
 
 pub fn fast_mode_provider_for_model(model_id: &str) -> Option<ProviderKind> {

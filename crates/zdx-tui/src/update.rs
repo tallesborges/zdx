@@ -111,13 +111,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
         UiEvent::BackgroundTabAgent { tab_id, event } => {
-            // Suppress the ask_user_question marker on background tabs: it must
-            // not pollute the tool-output cell, and the picker only opens for
-            // the active tab (the pending question still answers via typing
-            // once the user switches to that tab).
-            if is_ask_user_marker(&event) {
-                return vec![];
-            }
             if let Some(tab) = app.background_tab_mut(tab_id) {
                 let has_thread = tab.thread.thread_handle.is_some();
                 let (_inner_effects, mutations) = transcript::handle_agent_event(
@@ -334,103 +327,10 @@ fn handle_voice_transcribed(
     vec![]
 }
 
-/// Handles `ask_user_question` lifecycle events for the active tab.
-///
-/// Returns `true` when the event was fully consumed (the `REGISTERED_MARKER`
-/// delta) and must not reach the transcript. Close-on-complete and
-/// close-on-turn-end run as side effects but let normal handling proceed.
-fn intercept_ask_user_event(
-    app: &mut AppState,
-    agent_event: &zdx_engine::core::events::AgentEvent,
-) -> bool {
-    use zdx_engine::core::events::AgentEvent;
-
-    match agent_event {
-        AgentEvent::ToolOutputDelta { id, chunk }
-            if chunk == zdx_engine::tools::ask_user_question::REGISTERED_MARKER =>
-        {
-            // Don't steal the keyboard: instead of auto-opening the picker,
-            // show the question inline so the user can type or dictate an
-            // answer. Ctrl+F opens the picker on demand.
-            let thread_id = app.tui.thread.thread_handle.as_ref().map(|t| t.id.clone());
-            if let Some(thread_id) = thread_id
-                && let Some(view) = crate::ask_user::pending_view(&app.tui.ask_user_map, &thread_id)
-                && view.tool_use_id == *id
-            {
-                app.tui
-                    .transcript
-                    .push_cell(crate::transcript::HistoryCell::system(format_question(
-                        &view,
-                    )));
-            }
-            true
-        }
-        AgentEvent::ToolCompleted { id, .. } => {
-            close_question_picker_if(app, |p| p.tool_use_id() == id);
-            false
-        }
-        AgentEvent::TurnFinished { .. } => {
-            close_question_picker_if(app, |_| true);
-            false
-        }
-        _ => false,
-    }
-}
-
-/// Closes the question picker overlay when one is open and `pred` matches.
-fn close_question_picker_if(
-    app: &mut AppState,
-    pred: impl FnOnce(&overlays::QuestionPickerState) -> bool,
-) {
-    if let Some(overlays::Overlay::QuestionPicker(p)) = app.overlay.as_ref()
-        && pred(p)
-    {
-        app.overlay = None;
-    }
-}
-
-/// Formats a pending question + options into an inline system cell body.
-fn format_question(view: &crate::ask_user::QuestionView) -> String {
-    use std::fmt::Write;
-    let mut out = format!("❓ {}", view.question);
-    for (idx, opt) in view.options.iter().enumerate() {
-        if opt.description.trim().is_empty() {
-            let _ = write!(out, "\n  {}. {}", idx + 1, opt.label);
-        } else {
-            let _ = write!(
-                out,
-                "\n  {}. {} — {}",
-                idx + 1,
-                opt.label,
-                opt.description.trim()
-            );
-        }
-    }
-    out.push_str("\n(type or dictate your answer, or press Ctrl+F to pick)");
-    out
-}
-
-/// Whether an event is the `ask_user_question` registration marker.
-fn is_ask_user_marker(event: &zdx_engine::core::events::AgentEvent) -> bool {
-    matches!(
-        event,
-        zdx_engine::core::events::AgentEvent::ToolOutputDelta { chunk, .. }
-            if chunk == zdx_engine::tools::ask_user_question::REGISTERED_MARKER
-    )
-}
-
 fn handle_agent_event(
     app: &mut AppState,
     agent_event: &zdx_engine::core::events::AgentEvent,
 ) -> Vec<UiEffect> {
-    // ask_user_question lifecycle: open the picker once the question is
-    // registered (REGISTERED_MARKER), and close it when the question
-    // completes or the turn ends. The marker delta is suppressed so it never
-    // pollutes the tool-output cell.
-    if intercept_ask_user_event(app, agent_event) {
-        return vec![];
-    }
-
     let has_thread = app.tui.thread.thread_handle.is_some();
     let (mut effects, mutations) = transcript::handle_agent_event(
         &mut app.tui.transcript,
@@ -1421,9 +1321,7 @@ fn create_btw_tab(
     let cells = TuiState::build_transcript_from_history(&base_messages);
     let transcript = TranscriptState::with_cells(cells);
 
-    let (ask_user_map, tool_config) = crate::state::build_ask_user_tooling();
-    let mut agent_opts = parent.agent_opts.clone();
-    agent_opts.tool_config = tool_config;
+    let agent_opts = parent.agent_opts.clone();
 
     TuiState {
         tab_id,
@@ -1454,7 +1352,6 @@ fn create_btw_tab(
         optimistic_active_threads: std::collections::HashMap::new(),
         active_threads_scan: std::collections::HashSet::new(),
         active_threads_scanned_at: None,
-        ask_user_map,
         last_followups: Vec::new(),
     }
 }
@@ -1521,9 +1418,7 @@ fn create_thread_tab(
         input.set_text(text);
     }
 
-    let (ask_user_map, tool_config) = crate::state::build_ask_user_tooling();
-    let mut agent_opts = parent.agent_opts.clone();
-    agent_opts.tool_config = tool_config;
+    let agent_opts = parent.agent_opts.clone();
 
     TuiState {
         tab_id,
@@ -1561,7 +1456,6 @@ fn create_thread_tab(
         optimistic_active_threads: std::collections::HashMap::new(),
         active_threads_scan: std::collections::HashSet::new(),
         active_threads_scanned_at: None,
-        ask_user_map,
         last_followups: Vec::new(),
     }
 }
@@ -1708,23 +1602,14 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         return vec![UiEffect::CloseCurrentTab];
     }
 
-    // Ctrl+F: open a picker on demand — the pending question picker when a
-    // question is waiting, otherwise the follow-up suggestion picker. Keeps
-    // the keyboard free for typing/dictation by default.
+    // Ctrl+F: open the follow-up suggestion picker on demand when idle and the
+    // input is empty. Keeps the keyboard free for typing/dictation by default.
     if app.overlay.is_none()
         && key.code == KeyCode::Char('f')
         && key.modifiers.contains(KeyModifiers::CONTROL)
         && app.tui.input.get_text().is_empty()
     {
         let thread_id = app.tui.thread.thread_handle.as_ref().map(|t| t.id.clone());
-        if let Some(tid) = thread_id.clone()
-            && let Some(view) = crate::ask_user::pending_view(&app.tui.ask_user_map, &tid)
-        {
-            app.overlay = Some(Overlay::QuestionPicker(
-                overlays::QuestionPickerState::open(tid, view),
-            ));
-            return vec![];
-        }
         if !app.tui.agent_state.is_running() && !app.tui.last_followups.is_empty() {
             let items = app.tui.last_followups.clone();
             app.overlay = Some(Overlay::FollowupPicker(
@@ -1781,9 +1666,6 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         .as_ref()
         .map(|thread_handle| thread_handle.id.clone());
     let active_thread_ids = app.tui.snapshot_active_thread_ids();
-    let pending_question = thread_id
-        .as_deref()
-        .is_some_and(|id| crate::ask_user::has_pending(&app.tui.ask_user_map, id));
     let ctx = input::InputContext {
         agent_state: &app.tui.agent_state,
         tasks: &app.tui.tasks,
@@ -1793,7 +1675,6 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         model_id: &app.tui.config.model,
         active_thread_ids: &active_thread_ids,
         root: app.tui.agent_opts.root.as_path(),
-        pending_question,
     };
     let (effects, mutations, overlay_request) =
         input::handle_main_key(&mut app.tui.input, &ctx, key);
