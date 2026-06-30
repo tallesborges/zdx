@@ -637,15 +637,6 @@ impl TuiRuntime {
             UiEffect::InterruptAgent => {
                 handlers::interrupt_agent(&self.state.tui);
             }
-            UiEffect::AnswerPendingQuestion { thread_id, text } => {
-                if !crate::ask_user::answer_with_text(
-                    &self.state.tui.ask_user_map,
-                    &thread_id,
-                    &text,
-                ) {
-                    tracing::warn!(thread_id, "No pending question to answer");
-                }
-            }
             UiEffect::InterruptBash => {
                 // Unified cancellation: call cancel() on the token
                 if let Some(cancel) = self.state.tui.tasks.state(TaskKind::Bash).cancel.clone() {

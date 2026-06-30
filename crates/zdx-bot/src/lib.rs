@@ -5,8 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use tokio::sync::Mutex;
 use zdx_engine::config::Config;
-use zdx_engine::core::agent::{ToolConfig, ToolSelection};
-use zdx_engine::tools::{ToolRegistry, ToolSet};
+use zdx_engine::core::agent::ToolConfig;
 
 use crate::bot::queue::ChatQueueMap;
 use crate::bot::{
@@ -16,7 +15,6 @@ use crate::bot::{
 use crate::telegram::{CallbackQuery, TelegramClient, TelegramSettings};
 
 mod agent;
-mod ask_user;
 mod bot;
 mod commands;
 mod followups;
@@ -97,18 +95,7 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
         Ok(()) => tracing::info!(count = command_specs.len(), "Telegram command menu updated"),
         Err(err) => tracing::error!(%err, "Failed to update Telegram command menu"),
     }
-    let ask_user_map = ask_user::new_pending_map();
-    let tool_registry = ToolRegistry::builtins().with_tool(
-        ask_user::definition(),
-        ask_user::handler(Arc::clone(&ask_user_map)),
-    );
-    let tool_config = ToolConfig::new(
-        tool_registry,
-        ToolSelection::Auto {
-            base: ToolSet::Default,
-            include: vec![ask_user::TOOL_NAME.to_string()],
-        },
-    );
+    let tool_config = ToolConfig::default();
 
     let cancel_map = new_cancel_map();
     let queue_cancel_map = new_queue_cancel_map();
@@ -128,7 +115,6 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
             tool_config,
             cancel_map,
             queue_cancel_map,
-            ask_user_map,
             followup_map: followups::new_followup_map(),
         },
     ));
@@ -309,8 +295,6 @@ async fn handle_callback_query(
                 tracing::warn!(%err, "Failed to answer callback");
             }
         }
-    } else if let Some(rest) = data.strip_prefix("askq:") {
-        ask_user::handle_callback(context.ask_user_map(), client, &callback, rest).await;
     } else if let Some(rest) = data.strip_prefix("fu:") {
         followups::handle_callback(context, chat_queues, client, &callback, rest).await;
     } else if data.starts_with("model_provider:")
