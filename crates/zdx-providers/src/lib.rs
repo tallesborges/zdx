@@ -2,7 +2,6 @@
 
 mod debug_metrics;
 mod debug_trace;
-pub mod text_tool_parser;
 pub mod thinking_parser;
 
 pub mod anthropic;
