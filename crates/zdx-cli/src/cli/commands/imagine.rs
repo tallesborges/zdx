@@ -127,7 +127,6 @@ async fn generate_codex_images(
         .then(|| "priority".to_string());
     let codex_config = OpenAICodexConfig::new(
         model.to_string(),
-        options.config.effective_max_tokens_for(model),
         None,
         options
             .config

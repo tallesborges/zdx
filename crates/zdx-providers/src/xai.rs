@@ -56,12 +56,11 @@ impl XaiConfig {
     }
 }
 
-fn build_headers(api_key: &str) -> HeaderMap {
+fn build_headers(api_key: &str) -> anyhow::Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(
         "Authorization",
-        HeaderValue::from_str(&format!("Bearer {api_key}"))
-            .unwrap_or_else(|_| HeaderValue::from_static("")),
+        crate::shared::header_value("xAI API key", &format!("Bearer {api_key}"))?,
     );
     headers.insert("accept", HeaderValue::from_static("text/event-stream"));
     headers.insert("content-type", HeaderValue::from_static("application/json"));
@@ -69,7 +68,7 @@ fn build_headers(api_key: &str) -> HeaderMap {
         "user-agent",
         HeaderValue::from_static(crate::shared::USER_AGENT),
     );
-    headers
+    Ok(headers)
 }
 
 /// `xAI` client using the Responses API.
@@ -118,7 +117,7 @@ impl XaiClient {
         send_responses_stream(
             &self.http,
             &self.config,
-            build_headers(&self.api_key),
+            build_headers(&self.api_key)?,
             messages,
             tools,
             system.as_deref(),

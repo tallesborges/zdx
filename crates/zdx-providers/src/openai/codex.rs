@@ -41,8 +41,6 @@ fn supports_reasoning_summary(model: &str) -> bool {
 #[derive(Debug, Clone)]
 pub struct OpenAICodexConfig {
     pub model: String,
-    #[allow(dead_code)]
-    pub max_tokens: u32,
     pub reasoning_effort: Option<String>,
     pub text_verbosity: Option<TextVerbosity>,
     pub prompt_cache_key: Option<String>,
@@ -54,7 +52,6 @@ pub struct OpenAICodexConfig {
 impl OpenAICodexConfig {
     pub fn new(
         model: String,
-        max_tokens: u32,
         reasoning_effort: Option<String>,
         text_verbosity: Option<TextVerbosity>,
         prompt_cache_key: Option<String>,
@@ -63,7 +60,6 @@ impl OpenAICodexConfig {
     ) -> Self {
         Self {
             model,
-            max_tokens,
             reasoning_effort,
             text_verbosity,
             prompt_cache_key,
@@ -162,7 +158,7 @@ impl OpenAICodexClient {
             &creds.account_id,
             &creds.access,
             self.config.prompt_cache_key.as_deref(),
-        );
+        )?;
         let config = codex_responses_config(&self.config, effective_codex_instructions(system));
 
         // For Codex, send the system prompt through top-level `instructions`.
@@ -188,7 +184,7 @@ impl OpenAICodexClient {
             &creds.account_id,
             &creds.access,
             self.config.prompt_cache_key.as_deref(),
-        );
+        )?;
 
         let request = build_image_generation_request(&self.config.model, prompt, options);
         let url = format!(
@@ -279,16 +275,19 @@ fn codex_ws_header_factory(session_id: Option<String>) -> WsHeaderFactory {
     })
 }
 
-fn build_headers(account_id: &str, access_token: &str, session_id: Option<&str>) -> HeaderMap {
+fn build_headers(
+    account_id: &str,
+    access_token: &str,
+    session_id: Option<&str>,
+) -> anyhow::Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(
         "Authorization",
-        HeaderValue::from_str(&format!("Bearer {access_token}"))
-            .unwrap_or_else(|_| HeaderValue::from_static("")),
+        crate::shared::header_value("Codex access token", &format!("Bearer {access_token}"))?,
     );
     headers.insert(
         HEADER_ACCOUNT_ID,
-        HeaderValue::from_str(account_id).unwrap_or_else(|_| HeaderValue::from_static("")),
+        crate::shared::header_value("Codex account id", account_id)?,
     );
     headers.insert(
         HEADER_ORIGINATOR,
@@ -305,7 +304,7 @@ fn build_headers(account_id: &str, access_token: &str, session_id: Option<&str>)
     {
         headers.insert(HEADER_SESSION_ID, header_value);
     }
-    headers
+    Ok(headers)
 }
 
 /// Constructs the `OpenAI Codex` client from the given context.
@@ -317,7 +316,6 @@ pub fn build(
 ) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
     Ok(Box::new(OpenAICodexClient::new(OpenAICodexConfig::new(
         ctx.model.to_string(),
-        ctx.max_tokens,
         super::reasoning_effort_from_thinking_level(ctx.thinking_level).map(str::to_owned),
         ctx.text_verbosity.or(ctx.provider_text_verbosity),
         ctx.cache_key.clone(),
@@ -365,15 +363,8 @@ mod tests {
 
     #[test]
     fn codex_config_defaults_text_verbosity_to_medium_when_unset() {
-        let config = super::OpenAICodexConfig::new(
-            "gpt-5.4".to_string(),
-            4096,
-            None,
-            None,
-            None,
-            None,
-            false,
-        );
+        let config =
+            super::OpenAICodexConfig::new("gpt-5.4".to_string(), None, None, None, None, false);
 
         assert_eq!(
             config.text_verbosity.unwrap_or_default().as_str(),

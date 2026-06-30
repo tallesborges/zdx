@@ -127,7 +127,7 @@ impl AntigravityClient {
         );
 
         let url = format!("{API_ENDPOINT}{STREAM_PATH}?alt=sse");
-        let headers = build_headers(&creds.access);
+        let headers = build_headers(&creds.access)?;
 
         let response = self
             .http
@@ -151,12 +151,11 @@ impl AntigravityClient {
     }
 }
 
-fn build_headers(access_token: &str) -> HeaderMap {
+fn build_headers(access_token: &str) -> anyhow::Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(
         "Authorization",
-        HeaderValue::from_str(&format!("Bearer {access_token}"))
-            .unwrap_or_else(|_| HeaderValue::from_static("")),
+        crate::shared::header_value("Antigravity access token", &format!("Bearer {access_token}"))?,
     );
     headers.insert(
         "User-Agent",
@@ -174,7 +173,7 @@ fn build_headers(access_token: &str) -> HeaderMap {
     );
     headers.insert("Accept", HeaderValue::from_static("*/*"));
     headers.insert("Content-Type", HeaderValue::from_static("application/json"));
-    headers
+    Ok(headers)
 }
 
 fn antigravity_thinking_config(

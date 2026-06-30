@@ -129,7 +129,7 @@ impl GeminiCliClient {
         );
 
         let url = format!("{API_ENDPOINT}{STREAM_PATH}?alt=sse");
-        let headers = build_headers(&creds.access);
+        let headers = build_headers(&creds.access)?;
 
         let response = self
             .http
@@ -153,12 +153,11 @@ impl GeminiCliClient {
     }
 }
 
-fn build_headers(access_token: &str) -> HeaderMap {
+fn build_headers(access_token: &str) -> anyhow::Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(
         "Authorization",
-        HeaderValue::from_str(&format!("Bearer {access_token}"))
-            .unwrap_or_else(|_| HeaderValue::from_static("")),
+        crate::shared::header_value("Gemini access token", &format!("Bearer {access_token}"))?,
     );
     // Mimic official Gemini CLI User-Agent for better rate limits
     headers.insert(
@@ -171,7 +170,7 @@ fn build_headers(access_token: &str) -> HeaderMap {
     );
     headers.insert("Accept", HeaderValue::from_static("*/*"));
     headers.insert("Content-Type", HeaderValue::from_static("application/json"));
-    headers
+    Ok(headers)
 }
 
 /// Constructs the Gemini CLI client from the given context.
