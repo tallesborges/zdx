@@ -13,7 +13,7 @@ use ratatui::text::{Line, Span};
 use crate::common::ratatui_text;
 use crate::state::TuiState;
 use crate::transcript::{
-    CellId, LineInteraction, LineMapping, SelectionState, Style as TranscriptStyle, StyledLine,
+    LineInteraction, LineMapping, SelectionState, Style as TranscriptStyle, StyledLine,
     VisibleRange,
 };
 
@@ -209,7 +209,7 @@ fn render_transcript_lazy(
 
 /// Calculates cell line info and returns it for external application.
 ///
-/// Returns a Vec of (`CellId`, `line_count`) tuples for the cells starting at
+/// Returns a Vec of `line_count` values for the cells starting at
 /// `from_index`, which can be used to patch `ScrollState::cell_line_info`
 /// incrementally. Pass `from_index == 0` for a full rebuild.
 pub fn calculate_cell_line_counts(
@@ -217,7 +217,7 @@ pub fn calculate_cell_line_counts(
     terminal_width: usize,
     horizontal_overhead: usize,
     from_index: usize,
-) -> Vec<(CellId, usize)> {
+) -> Vec<usize> {
     let effective_width = terminal_width.saturating_sub(horizontal_overhead);
 
     let cells = state.transcript.cells();
@@ -232,7 +232,7 @@ pub fn calculate_cell_line_counts(
                 &state.transcript.wrap_cache,
             );
             // +1 for blank line between cells
-            (cell.id(), lines.len() + 1)
+            lines.len() + 1
         })
         .collect()
 }

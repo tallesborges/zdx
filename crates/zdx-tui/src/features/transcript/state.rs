@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 
 use unicode_segmentation::UnicodeSegmentation;
 
-use super::CellId;
 use super::selection::{PositionMap, SelectionState, VisualPosition};
 use crate::mutations::TranscriptMutation;
 
@@ -36,9 +35,6 @@ pub enum ScrollMode {
 /// Used for O(log n) visibility calculations in lazy rendering.
 #[derive(Debug, Clone)]
 pub struct CellLineInfo {
-    /// Unique cell ID (stored for debugging and future extensibility).
-    #[allow(dead_code)]
-    pub cell_id: CellId,
     /// Starting line index (cumulative offset from top).
     pub start_line: usize,
     /// Number of lines this cell produces (including trailing blank).
@@ -228,7 +224,7 @@ impl ScrollState {
     /// entry, and `cached_line_count` is updated.
     ///
     /// `from_index == 0` is equivalent to a full rebuild.
-    pub fn patch_cell_line_info(&mut self, from_index: usize, line_counts: Vec<(CellId, usize)>) {
+    pub fn patch_cell_line_info(&mut self, from_index: usize, line_counts: Vec<usize>) {
         let from_index = from_index.min(self.cell_line_info.len());
         self.cell_line_info.truncate(from_index);
 
@@ -237,9 +233,8 @@ impl ScrollState {
             .last()
             .map_or(0, |info| info.start_line + info.line_count);
 
-        for (cell_id, line_count) in line_counts {
+        for line_count in line_counts {
             self.cell_line_info.push(CellLineInfo {
-                cell_id,
                 start_line: cumulative_offset,
                 line_count,
             });
@@ -334,12 +329,6 @@ impl Default for TranscriptState {
 }
 
 impl TranscriptState {
-    /// Creates a new `TranscriptState` with default values.
-    #[allow(dead_code)]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Creates a `TranscriptState` with pre-loaded cells.
     pub fn with_cells(cells: Vec<super::HistoryCell>) -> Self {
         Self {
@@ -853,10 +842,6 @@ mod tests {
     // Lazy Rendering Tests
     // ========================================================================
 
-    fn make_test_cell_id(n: u64) -> CellId {
-        CellId(n)
-    }
-
     #[test]
     fn test_visible_range_empty_cell_info() {
         let scroll = ScrollState::new();
@@ -867,7 +852,7 @@ mod tests {
     fn test_visible_range_single_cell_fits() {
         let mut scroll = ScrollState::new();
         // Single cell with 10 lines
-        scroll.patch_cell_line_info(0, vec![(make_test_cell_id(1), 10)]);
+        scroll.patch_cell_line_info(0, vec![10]);
 
         let visible = scroll.visible_range(20).expect("should have range");
         assert_eq!(visible.cell_range, 0..1);
@@ -879,14 +864,7 @@ mod tests {
     fn test_visible_range_multiple_cells_all_visible() {
         let mut scroll = ScrollState::new();
         // 3 cells with 5 lines each = 15 total, viewport 20
-        scroll.patch_cell_line_info(
-            0,
-            vec![
-                (make_test_cell_id(1), 5),
-                (make_test_cell_id(2), 5),
-                (make_test_cell_id(3), 5),
-            ],
-        );
+        scroll.patch_cell_line_info(0, vec![5, 5, 5]);
 
         let visible = scroll.visible_range(20).expect("should have range");
         assert_eq!(visible.cell_range, 0..3);
@@ -897,16 +875,7 @@ mod tests {
     fn test_visible_range_scrolled_to_middle() {
         let mut scroll = ScrollState::new();
         // 5 cells with 10 lines each = 50 total
-        scroll.patch_cell_line_info(
-            0,
-            vec![
-                (make_test_cell_id(1), 10), // lines 0-9
-                (make_test_cell_id(2), 10), // lines 10-19
-                (make_test_cell_id(3), 10), // lines 20-29
-                (make_test_cell_id(4), 10), // lines 30-39
-                (make_test_cell_id(5), 10), // lines 40-49
-            ],
-        );
+        scroll.patch_cell_line_info(0, vec![10, 10, 10, 10, 10]);
 
         // Scroll to offset 15 with viewport 20
         scroll.mode = ScrollMode::Anchored { offset: 15 };
@@ -922,16 +891,7 @@ mod tests {
     fn test_visible_range_follow_mode() {
         let mut scroll = ScrollState::new();
         // 5 cells with 10 lines each = 50 total, viewport 20
-        scroll.patch_cell_line_info(
-            0,
-            vec![
-                (make_test_cell_id(1), 10),
-                (make_test_cell_id(2), 10),
-                (make_test_cell_id(3), 10),
-                (make_test_cell_id(4), 10),
-                (make_test_cell_id(5), 10),
-            ],
-        );
+        scroll.patch_cell_line_info(0, vec![10, 10, 10, 10, 10]);
 
         // Follow mode should show bottom (offset = 50 - 20 = 30)
         let visible = scroll.visible_range(20).expect("should have range");
@@ -945,14 +905,7 @@ mod tests {
     fn test_visible_range_partial_first_cell() {
         let mut scroll = ScrollState::new();
         // 3 cells with 20 lines each = 60 total
-        scroll.patch_cell_line_info(
-            0,
-            vec![
-                (make_test_cell_id(1), 20), // lines 0-19
-                (make_test_cell_id(2), 20), // lines 20-39
-                (make_test_cell_id(3), 20), // lines 40-59
-            ],
-        );
+        scroll.patch_cell_line_info(0, vec![20, 20, 20]);
 
         // Scroll to offset 5 with viewport 10
         scroll.mode = ScrollMode::Anchored { offset: 5 };
@@ -966,14 +919,7 @@ mod tests {
     #[test]
     fn test_patch_cell_line_info_updates_cached_line_count() {
         let mut scroll = ScrollState::new();
-        scroll.patch_cell_line_info(
-            0,
-            vec![
-                (make_test_cell_id(1), 10),
-                (make_test_cell_id(2), 15),
-                (make_test_cell_id(3), 5),
-            ],
-        );
+        scroll.patch_cell_line_info(0, vec![10, 15, 5]);
 
         assert_eq!(scroll.cached_line_count, 30);
         assert_eq!(scroll.cell_line_info.len(), 3);
@@ -985,21 +931,11 @@ mod tests {
     #[test]
     fn test_patch_cell_line_info_incremental_keeps_prefix_and_reflows() {
         let mut scroll = ScrollState::new();
-        scroll.patch_cell_line_info(
-            0,
-            vec![
-                (make_test_cell_id(1), 10),
-                (make_test_cell_id(2), 15),
-                (make_test_cell_id(3), 5),
-            ],
-        );
+        scroll.patch_cell_line_info(0, vec![10, 15, 5]);
 
         // Simulate the streaming last cell growing (15 -> 20) plus an appended
         // cell, patched incrementally from index 2.
-        scroll.patch_cell_line_info(
-            2,
-            vec![(make_test_cell_id(3), 20), (make_test_cell_id(4), 4)],
-        );
+        scroll.patch_cell_line_info(2, vec![20, 4]);
 
         assert_eq!(scroll.cell_line_info.len(), 4);
         // Prefix entries are untouched.
@@ -1015,12 +951,9 @@ mod tests {
     #[test]
     fn test_patch_cell_line_info_from_zero_is_full_rebuild() {
         let mut scroll = ScrollState::new();
-        scroll.patch_cell_line_info(
-            0,
-            vec![(make_test_cell_id(1), 10), (make_test_cell_id(2), 10)],
-        );
+        scroll.patch_cell_line_info(0, vec![10, 10]);
 
-        scroll.patch_cell_line_info(0, vec![(make_test_cell_id(9), 7)]);
+        scroll.patch_cell_line_info(0, vec![7]);
 
         assert_eq!(scroll.cell_line_info.len(), 1);
         assert_eq!(scroll.cell_line_info[0].start_line, 0);
@@ -1030,14 +963,7 @@ mod tests {
     #[test]
     fn test_cell_index_for_line() {
         let mut scroll = ScrollState::new();
-        scroll.patch_cell_line_info(
-            0,
-            vec![
-                (make_test_cell_id(1), 3),
-                (make_test_cell_id(2), 2),
-                (make_test_cell_id(3), 4),
-            ],
-        );
+        scroll.patch_cell_line_info(0, vec![3, 2, 4]);
 
         assert_eq!(scroll.cell_index_for_line(0), Some(0));
         assert_eq!(scroll.cell_index_for_line(2), Some(0));
@@ -1066,10 +992,7 @@ mod tests {
     #[test]
     fn test_reset_clears_cell_line_info() {
         let mut scroll = ScrollState::new();
-        scroll.patch_cell_line_info(
-            0,
-            vec![(make_test_cell_id(1), 10), (make_test_cell_id(2), 10)],
-        );
+        scroll.patch_cell_line_info(0, vec![10, 10]);
 
         scroll.reset();
 
