@@ -16,10 +16,9 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::common::text::truncate_with_ellipsis;
 use crate::common::{Scrollbar, TaskKind};
-use crate::input;
 use crate::state::{AgentState, AppState, TuiState};
 use crate::statusline::render_debug_status_line;
-use crate::transcript::{self, CellId};
+use crate::{input, transcript};
 
 /// Height of status line below input.
 const STATUS_HEIGHT: u16 = 1;
@@ -483,7 +482,7 @@ pub fn calculate_cell_line_counts(
     state: &TuiState,
     terminal_width: usize,
     from_index: usize,
-) -> Vec<(CellId, usize)> {
+) -> Vec<usize> {
     let horizontal_overhead = (TRANSCRIPT_MARGIN * 2 + SCROLLBAR_WIDTH) as usize;
     transcript::calculate_cell_line_counts(state, terminal_width, horizontal_overhead, from_index)
 }

@@ -66,13 +66,6 @@ impl WrapCache {
             .borrow_mut()
             .insert((cell_id, width), (discriminator, lines));
     }
-
-    /// Returns true if the cache is empty (test-only).
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.cache.borrow().is_empty()
-    }
 }
 
 /// Renders content with a prefix, handling line wrapping.

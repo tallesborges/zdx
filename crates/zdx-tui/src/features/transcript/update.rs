@@ -711,7 +711,7 @@ mod tests {
     use crate::transcript::{LineMapping, ToolState};
 
     fn transcript_with_lines(lines: &[&str], viewport_height: usize) -> TranscriptState {
-        let mut transcript = TranscriptState::new();
+        let mut transcript = TranscriptState::default();
         transcript.update_layout((80, 24), viewport_height);
         transcript.scroll.cached_line_count = lines.len();
         transcript.position_map.clear();
@@ -802,7 +802,7 @@ mod tests {
 
     #[test]
     fn completed_turn_cancels_running_tool_without_result() {
-        let mut transcript = TranscriptState::new();
+        let mut transcript = TranscriptState::default();
         let mut agent_state = AgentState::Idle;
 
         handle_agent_event(
@@ -844,7 +844,7 @@ mod tests {
 
     #[test]
     fn completed_turn_preserves_completed_tool_result() {
-        let mut transcript = TranscriptState::new();
+        let mut transcript = TranscriptState::default();
         let mut agent_state = AgentState::Idle;
         let expected_result = ToolOutput::success(json!({"content": "ok"}));
 
@@ -890,7 +890,7 @@ mod tests {
 
     #[test]
     fn reasoning_completed_creates_finalized_thinking_cell_without_live_delta() {
-        let mut transcript = TranscriptState::new();
+        let mut transcript = TranscriptState::default();
         let replay = ReplayToken::Anthropic {
             signature: "sig-123".to_string(),
         };
@@ -921,7 +921,7 @@ mod tests {
         // A `redacted_thinking` block completes with no prior `ReasoningDelta`
         // (nothing was streamed) and must still appear as a visible cell
         // anchored to the redacted replay token.
-        let mut transcript = TranscriptState::new();
+        let mut transcript = TranscriptState::default();
         let replay = ReplayToken::AnthropicRedacted {
             data: "blob".to_string(),
         };
@@ -954,7 +954,7 @@ mod tests {
         // The cell must be finalized with the redacted replay but KEEP the
         // streamed text — we must not overwrite visible content with the
         // placeholder.
-        let mut transcript = TranscriptState::new();
+        let mut transcript = TranscriptState::default();
         transcript.push_cell(HistoryCell::thinking_streaming("already streamed"));
 
         let replay = ReplayToken::AnthropicRedacted {
@@ -985,7 +985,7 @@ mod tests {
     fn reasoning_completed_skips_when_no_text_and_no_redacted_replay() {
         // Preserves previous behavior: a completion with no visible text and
         // no redacted replay token produces no cell.
-        let mut transcript = TranscriptState::new();
+        let mut transcript = TranscriptState::default();
 
         handle_reasoning_completed(
             &mut transcript,
