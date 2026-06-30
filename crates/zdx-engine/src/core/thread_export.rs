@@ -44,21 +44,6 @@ pub struct ThreadExportStatus {
     pub latest_export_modified: Option<SystemTime>,
 }
 
-/// Exports every saved thread to `$ZDX_HOME/exports/threads/<thread_id>.md`.
-///
-/// # Errors
-/// Returns an error if thread discovery, transcript loading, or file writing fails.
-pub fn export_threads() -> Result<Vec<PathBuf>> {
-    let threads = thread_persistence::list_threads().context("list threads for export")?;
-    let mut exported = Vec::with_capacity(threads.len());
-
-    for thread in threads {
-        exported.push(export_thread(&thread.id)?);
-    }
-
-    Ok(exported)
-}
-
 /// Incrementally exports all saved threads and removes stale thread exports.
 ///
 /// # Errors

@@ -38,18 +38,6 @@ impl ThinkingLevel {
         }
     }
 
-    /// Returns the normalized effort label for this level.
-    pub fn effort_label(&self) -> Option<&'static str> {
-        match self {
-            ThinkingLevel::Off => None,
-            ThinkingLevel::Minimal => Some("minimal"),
-            ThinkingLevel::Low => Some("low"),
-            ThinkingLevel::Medium => Some("medium"),
-            ThinkingLevel::High => Some("high"),
-            ThinkingLevel::XHigh => Some("xhigh"),
-        }
-    }
-
     /// Returns whether thinking is enabled for this level.
     pub fn is_enabled(&self) -> bool {
         !matches!(self, ThinkingLevel::Off)

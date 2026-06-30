@@ -130,11 +130,6 @@ pub fn list_active() -> Vec<RunRecord> {
     runs
 }
 
-/// Returns the number of currently active agent runs.
-pub fn count_active() -> usize {
-    list_active().len()
-}
-
 /// Computes uptime string from an RFC 3339 timestamp.
 pub fn uptime_since(started_at: &str) -> String {
     let Ok(started) = chrono::DateTime::parse_from_rfc3339(started_at) else {

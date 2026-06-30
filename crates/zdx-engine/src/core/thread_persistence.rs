@@ -63,14 +63,7 @@ impl Usage {
         }
     }
 
-    /// Returns true if all fields are zero.
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.input == 0 && self.output == 0 && self.cache_read == 0 && self.cache_write == 0
-    }
-
     /// Total tokens for this request (for context window calculation).
-    #[allow(dead_code)]
     pub fn total(&self) -> u64 {
         self.input + self.output + self.cache_read + self.cache_write
     }
@@ -4075,10 +4068,6 @@ mod tests {
 
         // Test context_input
         assert_eq!(u1.context_input(), 325);
-
-        // Test is_empty
-        assert!(!u1.is_empty());
-        assert!(Usage::default().is_empty());
     }
 
     /// Regression test: orphaned `tool_use` (bot crashed mid-execution) followed by

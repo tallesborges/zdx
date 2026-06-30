@@ -50,29 +50,6 @@ where
     }
 }
 
-/// Parses a single SSE event block into a `StreamEvent`.
-#[allow(dead_code)]
-///
-/// # Errors
-/// Returns an error if the operation fails.
-pub fn parse_sse_event(event_text: &str) -> ProviderResult<StreamEvent> {
-    let mut event_type = None;
-    let mut data = None;
-
-    for line in event_text.lines() {
-        if let Some(value) = line.strip_prefix("event: ") {
-            event_type = Some(value.trim());
-        } else if let Some(value) = line.strip_prefix("data: ") {
-            data = Some(value);
-        }
-    }
-
-    let event_type = event_type.unwrap_or("message");
-    let data = data.unwrap_or("");
-
-    parse_sse_event_fields(event_type, data)
-}
-
 fn parse_sse_event_fields(event_type: &str, data: &str) -> ProviderResult<StreamEvent> {
     match event_type {
         "ping" => Ok(StreamEvent::Ping),
@@ -359,6 +336,21 @@ mod tests {
     use futures_util::StreamExt;
 
     use super::*;
+
+    /// Test helper: parses a raw SSE event block (`event:`/`data:` lines) into
+    /// a `StreamEvent` via the production field parser.
+    fn parse_sse_event(event_text: &str) -> ProviderResult<StreamEvent> {
+        let mut event_type = None;
+        let mut data = None;
+        for line in event_text.lines() {
+            if let Some(value) = line.strip_prefix("event: ") {
+                event_type = Some(value.trim());
+            } else if let Some(value) = line.strip_prefix("data: ") {
+                data = Some(value);
+            }
+        }
+        parse_sse_event_fields(event_type.unwrap_or("message"), data.unwrap_or(""))
+    }
 
     /// SSE fixture simulating a typical Anthropic streaming response
     const SSE_TEXT_RESPONSE: &str = r#"event: message_start
