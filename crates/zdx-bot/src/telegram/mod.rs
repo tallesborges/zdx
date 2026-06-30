@@ -16,8 +16,8 @@ mod types;
 
 #[allow(unused_imports)]
 pub use types::{
-    Audio, CallbackQuery, Chat, Document, InlineKeyboardButton, InlineKeyboardMarkup, Message,
-    PhotoSize, TelegramFile, Update, User, Voice,
+    Audio, CallbackQuery, Document, InlineKeyboardButton, InlineKeyboardMarkup, Message, PhotoSize,
+    TelegramFile, Update, Voice,
 };
 
 pub struct TelegramSettings {
@@ -520,7 +520,7 @@ impl TelegramClient {
                 message_thread_id,
                 parse_mode: Some(TELEGRAM_PARSE_MODE),
                 reply_markup,
-                reply_parameters,
+                reply_parameters: reply_parameters.clone(),
             })
             .await;
 
@@ -535,7 +535,7 @@ impl TelegramClient {
                         message_thread_id,
                         parse_mode: None,
                         reply_markup,
-                        reply_parameters: None,
+                        reply_parameters,
                     })
                     .await;
             }
