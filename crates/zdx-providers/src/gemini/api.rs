@@ -125,7 +125,7 @@ impl GeminiClient {
             "{}/models/{}:streamGenerateContent?alt=sse",
             self.config.base_url, self.config.model
         );
-        let headers = build_headers(&self.config.api_key);
+        let headers = build_headers(&self.config.api_key)?;
 
         let response = if let Some(trace) = &trace {
             let body = serde_json::to_vec(&request)?;
@@ -172,7 +172,7 @@ impl GeminiClient {
             "{}/models/{}:generateContent",
             self.config.base_url, self.config.model
         );
-        let headers = build_json_headers(&self.config.api_key);
+        let headers = build_json_headers(&self.config.api_key)?;
 
         let response = self
             .http
@@ -294,11 +294,11 @@ fn parse_image_generation_response(value: &Value) -> Result<GenerateImageRespons
     Ok(GenerateImageResponse { images, text_parts })
 }
 
-fn build_headers(api_key: &str) -> HeaderMap {
+fn build_headers(api_key: &str) -> anyhow::Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(
         "x-goog-api-key",
-        HeaderValue::from_str(api_key).unwrap_or_else(|_| HeaderValue::from_static("")),
+        crate::shared::header_value("Gemini API key", api_key)?,
     );
     headers.insert("accept", HeaderValue::from_static("text/event-stream"));
     headers.insert("content-type", HeaderValue::from_static("application/json"));
@@ -306,13 +306,13 @@ fn build_headers(api_key: &str) -> HeaderMap {
         "user-agent",
         HeaderValue::from_static(crate::shared::USER_AGENT),
     );
-    headers
+    Ok(headers)
 }
 
-fn build_json_headers(api_key: &str) -> HeaderMap {
-    let mut headers = build_headers(api_key);
+fn build_json_headers(api_key: &str) -> anyhow::Result<HeaderMap> {
+    let mut headers = build_headers(api_key)?;
     headers.insert("accept", HeaderValue::from_static("application/json"));
-    headers
+    Ok(headers)
 }
 
 /// Constructs the Gemini API client from the given context.

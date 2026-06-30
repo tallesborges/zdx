@@ -105,7 +105,7 @@ impl OpenAIClient {
         if let Some(ws) = &self.ws {
             return ws.send_messages_stream(messages, tools, system).await;
         }
-        let headers = build_headers(&self.config.api_key);
+        let headers = build_headers(&self.config.api_key)?;
         let config = responses_config(&self.config);
         send_responses_stream(&self.http, &config, headers, messages, tools, system).await
     }
@@ -119,7 +119,7 @@ impl OpenAIClient {
         prompt: &str,
         options: &OpenAIImageGenerationOptions,
     ) -> Result<OpenAIGenerateImageResponse> {
-        let headers = build_headers(&self.config.api_key);
+        let headers = build_headers(&self.config.api_key)?;
         let request = build_image_generation_request(&self.config.model, prompt, options);
         let url = format!("{}{}", self.config.base_url, RESPONSES_PATH);
         let response = self
@@ -170,12 +170,11 @@ fn responses_config(config: &OpenAIConfig) -> ResponsesConfig {
     }
 }
 
-fn build_headers(api_key: &str) -> HeaderMap {
+fn build_headers(api_key: &str) -> anyhow::Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(
         "Authorization",
-        HeaderValue::from_str(&format!("Bearer {api_key}"))
-            .unwrap_or_else(|_| HeaderValue::from_static("")),
+        crate::shared::header_value("OpenAI API key", &format!("Bearer {api_key}"))?,
     );
     headers.insert("accept", HeaderValue::from_static("text/event-stream"));
     headers.insert("content-type", HeaderValue::from_static("application/json"));
@@ -183,7 +182,7 @@ fn build_headers(api_key: &str) -> HeaderMap {
         "user-agent",
         HeaderValue::from_static(crate::shared::USER_AGENT),
     );
-    headers
+    Ok(headers)
 }
 
 /// Constructs the `OpenAI` API client from the given context.
