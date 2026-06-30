@@ -25,7 +25,8 @@ pub const USER_AGENT: &str = concat!("zdx/", env!("CARGO_PKG_VERSION"));
 /// # Errors
 /// Returns an error if `value` is not a valid HTTP header value.
 pub(crate) fn header_value(label: &str, value: &str) -> Result<HeaderValue> {
-    HeaderValue::from_str(value).with_context(|| format!("{label} is not a valid HTTP header value"))
+    HeaderValue::from_str(value)
+        .with_context(|| format!("{label} is not a valid HTTP header value"))
 }
 
 // ============================================================================
