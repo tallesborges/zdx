@@ -1297,6 +1297,10 @@ pub struct ProvidersConfig {
     pub zai: ProviderConfig,
     #[serde(default = "default_xai_provider")]
     pub xai: ProviderConfig,
+    /// User-defined OpenAI-compatible providers, keyed by name. Used by
+    /// prefixing the model with the name (e.g. `<name>:model-id`).
+    #[serde(default)]
+    pub custom: std::collections::HashMap<String, CustomProviderConfig>,
 }
 
 impl ProvidersConfig {
@@ -1384,6 +1388,27 @@ impl ProvidersConfig {
             ProviderKind::Xai => &mut self.xai,
         }
     }
+
+    /// Resolves a `name:model` / `name/model` prefix to a configured custom
+    /// provider (`[providers.custom.<name>]`), returning its config + bare model.
+    pub fn custom_provider_for_model<'a>(
+        &'a self,
+        model: &str,
+    ) -> Option<(&'a CustomProviderConfig, String)> {
+        let trimmed = model.trim();
+        for sep in [':', '/'] {
+            if let Some((prefix, rest)) = trimmed.split_once(sep) {
+                let prefix = prefix.trim();
+                let rest = rest.trim();
+                if !rest.is_empty()
+                    && let Some(cfg) = self.custom.get(prefix)
+                {
+                    return Some((cfg, rest.to_string()));
+                }
+            }
+        }
+        None
+    }
 }
 
 fn provider_fast_mode_key(provider: crate::providers::ProviderKind) -> &'static str {
@@ -1416,6 +1441,7 @@ impl Default for ProvidersConfig {
             minimax: default_minimax_provider(),
             zai: default_zai_provider(),
             xai: default_xai_provider(),
+            custom: std::collections::HashMap::new(),
         }
     }
 }
@@ -1722,6 +1748,65 @@ impl ProviderConfig {
     }
 }
 
+/// A user-defined OpenAI-compatible provider (`[providers.custom.<name>]`),
+/// e.g. a self-hosted `LiteLLM` proxy. The chat-completions path is appended
+/// to `base_url`, so point it at the OpenAI-compatible root
+/// (e.g. `https://llm.example.com/v1`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct CustomProviderConfig {
+    pub base_url: String,
+    /// Inline API key; takes precedence over `api_key_env`.
+    pub api_key: Option<String>,
+    /// Env var to read the API key from when `api_key` is unset.
+    pub api_key_env: Option<String>,
+    /// Model allow-list shown in the picker (supports `*`).
+    pub models: Vec<String>,
+}
+
+impl CustomProviderConfig {
+    /// Trimmed base URL without a trailing slash.
+    ///
+    /// # Errors
+    /// Returns an error if `base_url` is empty.
+    pub fn effective_base_url(&self) -> anyhow::Result<String> {
+        let url = self.base_url.trim().trim_end_matches('/');
+        if url.is_empty() {
+            anyhow::bail!("custom provider `base_url` must not be empty");
+        }
+        Ok(url.to_string())
+    }
+
+    /// Resolves the API key from `api_key`, then `api_key_env`.
+    ///
+    /// # Errors
+    /// Returns an error if neither source yields a non-empty key.
+    pub fn resolve_api_key(&self) -> anyhow::Result<String> {
+        if let Some(key) = self
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Ok(key.to_string());
+        }
+        if let Some(env) = self
+            .api_key_env
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let value = std::env::var(env).unwrap_or_default();
+            let value = value.trim();
+            if !value.is_empty() {
+                return Ok(value.to_string());
+            }
+            anyhow::bail!("custom provider API key env var `{env}` is not set");
+        }
+        anyhow::bail!("custom provider requires `api_key` or `api_key_env`");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -1729,6 +1814,89 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    /// Custom providers: a model prefixed with a configured custom-provider
+    /// name resolves to that provider config + bare model id.
+    #[test]
+    fn test_custom_provider_resolution() {
+        let mut providers = ProvidersConfig::default();
+        providers.custom.insert(
+            "myproxy".to_string(),
+            CustomProviderConfig {
+                base_url: "https://llm.example.com/v1".to_string(),
+                api_key: Some("sk-test".to_string()),
+                api_key_env: None,
+                models: vec!["model-a".to_string()],
+            },
+        );
+
+        // Both `:` and `/` separators resolve.
+        for model in ["myproxy:model-a", "myproxy/model-a"] {
+            let (cfg, bare) = providers
+                .custom_provider_for_model(model)
+                .expect("custom provider should resolve");
+            assert_eq!(bare, "model-a");
+            assert_eq!(cfg.base_url, "https://llm.example.com/v1");
+        }
+
+        // Unknown prefix and empty bare model do not resolve.
+        assert!(
+            providers
+                .custom_provider_for_model("openai:gpt-5")
+                .is_none()
+        );
+        assert!(providers.custom_provider_for_model("myproxy:").is_none());
+        assert!(providers.custom_provider_for_model("model-a").is_none());
+    }
+
+    /// Custom providers: base URL trims trailing slash; empty errors.
+    #[test]
+    fn test_custom_provider_base_url_and_api_key() {
+        let cfg = CustomProviderConfig {
+            base_url: "https://llm.example.com/v1/".to_string(),
+            api_key: Some("  sk-test  ".to_string()),
+            api_key_env: None,
+            models: vec![],
+        };
+        assert_eq!(
+            cfg.effective_base_url().unwrap(),
+            "https://llm.example.com/v1"
+        );
+        assert_eq!(cfg.resolve_api_key().unwrap(), "sk-test");
+
+        let empty = CustomProviderConfig::default();
+        assert!(empty.effective_base_url().is_err());
+        assert!(empty.resolve_api_key().is_err());
+    }
+
+    /// Custom providers parse from a real config file.
+    #[test]
+    fn test_custom_provider_loads_from_file() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        fs::write(
+            &config_path,
+            r#"model = "myproxy:model-a"
+
+[providers.custom.myproxy]
+base_url = "https://llm.example.com/v1"
+api_key = "sk-test"
+models = ["model-a", "model-b"]
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(config.model, "myproxy:model-a");
+        let (cfg, bare) = config
+            .providers
+            .custom_provider_for_model(&config.model)
+            .expect("custom provider should resolve from loaded config");
+        assert_eq!(bare, "model-a");
+        assert_eq!(cfg.models, vec!["model-a", "model-b"]);
+        // Built-in providers remain intact alongside custom ones.
+        assert!(config.providers.is_enabled("anthropic"));
+    }
 
     /// Config loading: missing file returns defaults (SPEC §9).
     #[test]

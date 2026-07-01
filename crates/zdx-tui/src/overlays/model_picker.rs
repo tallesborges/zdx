@@ -7,7 +7,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use zdx_engine::config::ProvidersConfig;
-use zdx_engine::models::{ModelOption, available_models, bare_model_id, model_id_matches_patterns};
+use zdx_engine::models::{
+    ModelOption, available_models, bare_model_id, custom_provider_models, model_id_matches_patterns,
+};
 use zdx_engine::providers::{ProviderKind, resolve_provider};
 
 use super::OverlayUpdate;
@@ -24,6 +26,9 @@ pub struct ModelPickerState {
     /// the provider's `[providers.X].models` list (may be empty, which means
     /// "no filter — show every registered model for this provider").
     enabled_providers: HashMap<String, Vec<String>>,
+    /// Candidate models captured at open time: the static registry plus
+    /// synthesized custom-provider entries.
+    models: Vec<&'static ModelOption>,
 }
 
 impl ModelPickerState {
@@ -31,9 +36,16 @@ impl ModelPickerState {
         // Collect enabled providers (with their configured model patterns)
         let enabled_providers = collect_enabled_providers(providers);
 
-        // Filter available models by enabled providers + their pattern lists
-        let enabled_models: Vec<_> = available_models()
+        // Registry models plus synthesized custom-provider models.
+        let models: Vec<&'static ModelOption> = available_models()
             .iter()
+            .chain(custom_provider_models(providers).iter())
+            .collect();
+
+        // Filter available models by enabled providers + their pattern lists
+        let enabled_models: Vec<_> = models
+            .iter()
+            .copied()
             .filter(|m| model_passes_provider_filter(m, &enabled_providers))
             .collect();
 
@@ -53,6 +65,7 @@ impl ModelPickerState {
                 selected,
                 filter: String::new(),
                 enabled_providers,
+                models,
             },
             vec![],
         )
@@ -165,8 +178,9 @@ impl ModelPickerState {
     }
 
     fn filtered_models(&self) -> Vec<&'static ModelOption> {
-        available_models()
+        self.models
             .iter()
+            .copied()
             .filter(|model| model_passes_provider_filter(model, &self.enabled_providers))
             .filter(|model| self.filter.is_empty() || model_matches_filter(model, &self.filter))
             .collect()
@@ -508,11 +522,15 @@ fn provider_label(provider_id: &str) -> String {
 /// each provider's `[providers.X].models` allow-list. An empty allow-list
 /// is preserved as-is and interpreted downstream as "no filter".
 fn collect_enabled_providers(providers: &ProvidersConfig) -> HashMap<String, Vec<String>> {
-    ProviderKind::all()
+    let mut enabled: HashMap<String, Vec<String>> = ProviderKind::all()
         .iter()
         .filter(|kind| providers.is_enabled(kind.id()))
         .map(|kind| (kind.id().to_string(), providers.get(*kind).models.clone()))
-        .collect()
+        .collect();
+    for (name, cfg) in &providers.custom {
+        enabled.insert(name.clone(), cfg.models.clone());
+    }
+    enabled
 }
 
 /// Returns true if a registry entry should be shown in the picker given the
