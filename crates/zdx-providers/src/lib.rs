@@ -13,6 +13,7 @@ pub mod mistral;
 pub mod moonshot;
 pub mod oauth;
 pub mod openai;
+pub mod openai_compatible;
 pub mod opencode_go;
 pub mod openrouter;
 pub mod shared;
@@ -91,6 +92,7 @@ impl_streaming_provider!(
     zai::ZaiClient,
     xai::XaiClient,
     opencode_go::OpencodeGoClient,
+    openai_compatible::OpenAICompatibleClient,
 );
 
 /// Blanket impl so `Box<dyn StreamingProvider>` is itself a `StreamingProvider`.

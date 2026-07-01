@@ -11,6 +11,7 @@ LLM provider implementations extracted from `zdx-core`.
 - `src/openai/` — OpenAI Responses/Chat Completions/image generation API + Codex OAuth provider
 - `src/gemini/` — Google Gemini API + Gemini CLI OAuth + Antigravity OAuth providers
 - `src/openrouter.rs`, `src/deepseek.rs`, `src/mistral.rs`, `src/moonshot.rs`, `src/stepfun.rs`, `src/xiaomi.rs`, `src/minimax.rs`, `src/zai.rs`, `src/xai.rs` — thin OpenAI-compatible providers
+- `src/openai_compatible.rs` — generic OpenAI-compatible chat-completions client for user-defined "custom" providers (`[providers.custom.<name>]`); carries no `ProviderKind`, built directly by the engine from a resolved base URL + API key
 - `src/opencode_go.rs` — meta-provider that routes to inner clients based on model registry hints
 - `src/debug_metrics.rs`, `src/debug_trace.rs` — debug/tracing wrappers for provider streams
 - `src/thinking_parser.rs` — SSE stream content parser

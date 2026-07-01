@@ -95,6 +95,52 @@ pub fn available_models() -> &'static [ModelOption] {
         .as_slice()
 }
 
+static CUSTOM_MODELS: OnceLock<Vec<ModelOption>> = OnceLock::new();
+
+/// Synthesizes picker entries for custom providers (`[providers.custom.<name>]`)
+/// so their configured models show up. Pricing/context are zeroed (not in the
+/// registry). Leaked and cached once per process; the first call's config wins.
+pub fn custom_provider_models(
+    providers: &crate::config::ProvidersConfig,
+) -> &'static [ModelOption] {
+    CUSTOM_MODELS
+        .get_or_init(|| {
+            let mut out = Vec::new();
+            for (name, cfg) in &providers.custom {
+                let provider = name.trim();
+                if provider.is_empty() {
+                    continue;
+                }
+                for model in &cfg.models {
+                    let id = model.trim();
+                    if id.is_empty() {
+                        continue;
+                    }
+                    out.push(ModelOption {
+                        id: leak_string(id.to_string()),
+                        provider: leak_string(provider.to_string()),
+                        display_name: leak_string(id.to_string()),
+                        pricing: ModelPricing {
+                            input: 0.0,
+                            output: 0.0,
+                            cache_read: 0.0,
+                            cache_write: 0.0,
+                        },
+                        context_limit: 0,
+                        capabilities: ModelCapabilities {
+                            reasoning: true,
+                            input_images: false,
+                            output_limit: 0,
+                            api: Some("openai-completions"),
+                        },
+                    });
+                }
+            }
+            out
+        })
+        .as_slice()
+}
+
 impl ModelOption {
     /// Finds a model by its ID.
     pub fn find_by_id(id: &str) -> Option<&'static ModelOption> {

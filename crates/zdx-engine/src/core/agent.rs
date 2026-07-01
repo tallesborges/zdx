@@ -1048,6 +1048,12 @@ fn build_run_turn_setup(
     options: &AgentOptions,
     thread_id: Option<&str>,
 ) -> Result<RunTurnSetup> {
+    if let Some((custom_cfg, bare_model)) =
+        config.providers.custom_provider_for_model(&config.model)
+    {
+        return build_custom_run_turn_setup(config, options, thread_id, custom_cfg, bare_model);
+    }
+
     let selection = resolve_provider(&config.model);
     let provider = selection.kind;
     let max_tokens = config.effective_max_tokens_for(&config.model);
@@ -1097,11 +1103,63 @@ fn build_run_turn_setup(
     .with_current_thread_id(thread_id)
     .with_config(config);
     let tool_registry = options.tool_config.registry.clone();
-    let tools = resolve_tools(config, options, provider, &tool_registry);
+    let tools = resolve_tools(
+        config,
+        options,
+        provider_config,
+        matches!(provider, ProviderKind::OpenAI | ProviderKind::OpenAICodex),
+        &tool_registry,
+    );
     let enabled_tools = tools.iter().map(|t| t.name.clone()).collect();
 
     Ok(RunTurnSetup {
         model: selection.model,
+        client,
+        tools,
+        enabled_tools,
+        tool_ctx,
+        tool_registry,
+    })
+}
+
+/// Builds the run-turn setup for a custom OpenAI-compatible provider
+/// (`[providers.custom.<name>]`): no `ProviderKind`, default tool set.
+fn build_custom_run_turn_setup(
+    config: &Config,
+    options: &AgentOptions,
+    thread_id: Option<&str>,
+    custom_cfg: &crate::config::CustomProviderConfig,
+    bare_model: String,
+) -> Result<RunTurnSetup> {
+    let thinking_enabled = crate::models::model_supports_reasoning(&config.model)
+        && config.thinking_level.is_enabled();
+    let base_url = custom_cfg.effective_base_url()?;
+    let api_key = custom_cfg.resolve_api_key()?;
+    let client = crate::providers::openai_compatible::build_custom(
+        base_url,
+        api_key,
+        bare_model.clone(),
+        config.max_tokens,
+        thread_id.map(str::to_owned),
+        thinking_enabled,
+    );
+
+    let tool_ctx = ToolContext::new(
+        options
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| options.root.clone()),
+        config.tool_timeout(),
+    )
+    .with_current_thread_id(thread_id)
+    .with_config(config);
+    let tool_registry = options.tool_config.registry.clone();
+    let provider_config = crate::config::ProviderConfig::default();
+    let tools = resolve_tools(config, options, &provider_config, false, &tool_registry);
+    let enabled_tools = tools.iter().map(|t| t.name.clone()).collect();
+
+    Ok(RunTurnSetup {
+        model: bare_model,
         client,
         tools,
         enabled_tools,
@@ -1124,27 +1182,34 @@ pub fn resolve_active_tools(
     options: &AgentOptions,
     provider: ProviderKind,
 ) -> Vec<ToolDefinition> {
-    resolve_tools(config, options, provider, &options.tool_config.registry)
+    let provider_config = config.providers.get(provider);
+    let use_codex_toolset = matches!(provider, ProviderKind::OpenAI | ProviderKind::OpenAICodex);
+    resolve_tools(
+        config,
+        options,
+        provider_config,
+        use_codex_toolset,
+        &options.tool_config.registry,
+    )
 }
 
 fn resolve_tools(
     config: &Config,
     options: &AgentOptions,
-    provider: ProviderKind,
+    provider_config: &crate::config::ProviderConfig,
+    use_codex_toolset: bool,
     tool_registry: &ToolRegistry,
 ) -> Vec<ToolDefinition> {
     let mut tools = match &options.tool_config.selection {
         ToolSelection::Auto { base, include } => {
-            let provider_config = config.providers.get(provider);
             let base_tools = if provider_config.tools.is_some() {
                 tool_registry.tools_for_provider(provider_config)
             } else {
-                let tool_set =
-                    if matches!(provider, ProviderKind::OpenAI | ProviderKind::OpenAICodex) {
-                        ToolSet::OpenAICodex
-                    } else {
-                        *base
-                    };
+                let tool_set = if use_codex_toolset {
+                    ToolSet::OpenAICodex
+                } else {
+                    *base
+                };
                 tool_registry.tools_for_set(tool_set)
             };
             merge_tool_defs(base_tools, include, tool_registry)
