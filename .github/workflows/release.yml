@@ -25,6 +25,11 @@ jobs:
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      # Override the repo's .cargo/config.toml target-dir and lld linker so
+      # the binary lands in ./target and links with the default toolchain.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      RUSTFLAGS: ""
     strategy:
       fail-fast: false
       matrix:
