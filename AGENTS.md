@@ -31,7 +31,6 @@ This monorepo now uses scoped `AGENTS.md` files per crate.
 - `docs/SPEC.md`: behavior contracts
 - `docs/ARCHITECTURE.md`: architecture and data flow
 - `docs/plans/`: commit-sized implementation plans
-- `tools/scripts/`: optional repo scripts
 - `.github/workflows/`: CI/release workflows
 - `.cargo/config.toml`: cargo aliases/shared target dir config
 - `justfile`: common development tasks

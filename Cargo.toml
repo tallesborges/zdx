@@ -95,8 +95,3 @@ uuid = { version = "1.19.0", features = ["v4"] }
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
 codegen-units = 256
-
-# The profile that 'dist' will build with
-[profile.dist]
-inherits = "release"
-lto = "thin"
