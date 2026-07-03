@@ -18,7 +18,7 @@
 - Latency / tokens-per-second / TTFT metrics (zdx does not record per-request timing today; deferred).
 - A web dashboard or charts (oh-my-pi style). Terminal-native only.
 - Retroactive correctness for *old* threads' mid-thread switches (only data recorded after Slice 2 is per-request attributable).
-- **Capturing subagent/helper cost in MVP.** Subagents and internal helpers (explorer, oracle, title-gen, TLDR, handoff, prompt builder) always run `zdx exec --no-thread` (`crates/zdx-engine/src/core/subagent.rs:156`), so their usage is **never persisted to thread JSONL**. Thread-scanning stats therefore *under-count* total spend. Capturing it needs a separate usage ledger (see Later / Deferred).
+- **Capturing subagent/helper cost in MVP.** Subagents and internal helpers (explorer, oracle, title-gen, TLDR, handoff, prompt builder) always run `zdx exec --no-thread` (`crates/zdx-engine/src/core/subagent.rs:159`), so their usage is **never persisted to thread JSONL**. Thread-scanning stats therefore *under-count* total spend in the MVP. **Follow-up (superseding the earlier "usage ledger" idea):** `docs/plans/active/persist-subagent-threads.md` now persists subagent runs as tagged thread JSONL, so this thread-scanning aggregator captures their spend automatically — no separate ledger. Once that plan's Slice 1 lands, subagent spend is included and this becomes a resolved gap.
 - **`zdx imagine` image-generation spend.** It calls image APIs and writes artifacts, not thread usage events (`crates/zdx-cli/src/cli/commands/imagine.rs`), and `ModelPricing` is per-token only — image spend is neither captured nor representable.
 - **Exact USD for subscription/OAuth providers.** Subscription providers (`ProviderKind::is_subscription`, e.g. `claude-cli`, `openai-codex`) are flat-rate; their token-priced figure is not real spend. Stats report them as `subscription`, not as billed USD (see Key decisions).
 
@@ -163,7 +163,7 @@ Capabilities that already exist and must be reused, not rebuilt.
   - [ ] **Monitor render**: extend `build_usage_lines` in `crates/zdx-monitor/src/ui.rs` to add the cache-savings figure to the totals block and a "By project:" table (reuse the existing `usage_table(...)` helper). Scroll math needs no change — `usage_line_count` is derived from the same lines.
   - [ ] Keep numbers identical across both surfaces (existing contract) and keep the per-provider/per-model tables unchanged.
 - **✅ Check-in demo**: `zdx stats` **and** `just monitor` → `Usage` tab both show a cache-savings figure and a per-project split, with matching numbers.
-- Note: a per-agent-type (main/subagent/advisor) breakdown is **not** included here — subagent/advisor transcripts aren't persisted; it depends on the deferred usage ledger.
+- Note: a per-agent-type (main/subagent/advisor) breakdown is **not** included here — it depends on subagent/advisor transcripts being persisted, which `docs/plans/active/persist-subagent-threads.md` now delivers (see that plan's Phase 2).
 
 ## Phase 3: Fast, non-blocking stats — ✅ DONE
 - **Goal**: Keep aggregation fast at thousands of threads and stop the monitor freezing. JSONL stays canonical; the cache is a **derived, disposable** artifact only (consistent with Non-goals — not a storage migration).
@@ -191,7 +191,7 @@ Capabilities that already exist and must be reused, not rebuilt.
 - **Note**: like Slice 2, only data recorded after this lands is measurable; old usage has no timing.
 
 # Later / Deferred
-- **Subagent/helper usage ledger** — capture cost from `--no-thread` child execs (subagents + internal helpers) via a separate append-only usage ledger or a parent-thread usage event. Unlocks the per-agent-type breakdown. Revisit when total-spend accuracy matters more than per-thread breakdown.
+- **Subagent/helper usage capture** — **now planned as thread persistence, not a ledger.** `docs/plans/active/persist-subagent-threads.md` drops `--no-thread` for subagent runs and persists them as tagged thread JSONL, so this aggregator counts their spend for free and unlocks the per-agent-type breakdown. The earlier "separate append-only usage ledger" approach is retired.
 - **Image-generation cost** — `zdx imagine` spend; needs a non-token pricing unit and a usage sink. Revisit if image spend matters.
 - **`meta.model` mirror for fast listing** — a thread-level model badge in `threads list`/picker without scanning events (former metadata plan's Phase 3). Defer unless list-level display is needed.
 - **Backfilling old multi-model threads** — only resolvable heuristically; revisit only if historical accuracy is requested.
