@@ -307,8 +307,13 @@ fn render_usage(f: &mut Frame, app: &MonitorApp, area: Rect) {
     } else {
         String::new()
     };
+    let refreshing = if app.usage_rx.is_some() {
+        " · refreshing"
+    } else {
+        ""
+    };
     let title = format!(
-        " Usage — {} thread(s) scanned{scroll_info} ",
+        " Usage — {} thread(s) scanned{scroll_info}{refreshing} ",
         cached.stats.threads_scanned
     );
 

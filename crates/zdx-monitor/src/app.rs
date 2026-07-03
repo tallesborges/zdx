@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use std::{fs, io};
 
@@ -210,6 +211,9 @@ pub struct MonitorApp {
     pub usage_line_count: usize,
     /// Default model used to attribute legacy usage (mirrors `config.model`).
     pub default_model: String,
+    /// Receiver for an in-flight background usage scan, if any. The scan runs
+    /// off the UI thread so the dashboard never freezes during aggregation.
+    pub usage_rx: Option<mpsc::Receiver<Result<UsageStats>>>,
 }
 
 /// A cached snapshot of the usage aggregation plus when it was computed.
@@ -356,36 +360,60 @@ fn usage_max_scroll(app: &MonitorApp) -> usize {
 /// How long a cached usage snapshot stays fresh before an on-tick refresh.
 const USAGE_STALE_AFTER: Duration = Duration::from_secs(30);
 
-/// Recompute usage stats from scratch, replacing the cache on success.
-/// On failure the previous cache is kept and the error is surfaced.
-fn recompute_usage(app: &mut MonitorApp) {
-    match usage_stats::aggregate_usage(&app.default_model) {
-        Ok(stats) => {
-            let cached = CachedUsageStats {
-                stats,
-                computed_at: Instant::now(),
-            };
-            app.usage_line_count = ui::usage_line_count(&cached);
-            app.usage_stats = Some(cached);
-            app.usage_scroll = app.usage_scroll.min(usage_max_scroll(app));
+/// Spawn a background usage scan unless one is already in flight. The scan
+/// runs off the UI thread; its result is collected by `poll_usage_result`.
+fn start_usage_scan(app: &mut MonitorApp) {
+    if app.usage_rx.is_some() {
+        return;
+    }
+    let model = app.default_model.clone();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(usage_stats::aggregate_usage(&model));
+    });
+    app.usage_rx = Some(rx);
+}
+
+/// Collect a finished background usage scan, if any, into the cache. Non-
+/// blocking: returns immediately when the scan is still running.
+fn poll_usage_result(app: &mut MonitorApp) {
+    let Some(rx) = &app.usage_rx else {
+        return;
+    };
+    match rx.try_recv() {
+        Ok(result) => {
+            app.usage_rx = None;
+            match result {
+                Ok(stats) => {
+                    let cached = CachedUsageStats {
+                        stats,
+                        computed_at: Instant::now(),
+                    };
+                    app.usage_line_count = ui::usage_line_count(&cached);
+                    app.usage_stats = Some(cached);
+                    app.usage_scroll = app.usage_scroll.min(usage_max_scroll(app));
+                }
+                Err(err) => app.set_status(format!("Usage stats failed: {err}")),
+            }
         }
-        Err(err) => app.set_status(format!("Usage stats failed: {err}")),
+        Err(mpsc::TryRecvError::Empty) => {}
+        Err(mpsc::TryRecvError::Disconnected) => app.usage_rx = None,
     }
 }
 
-/// Refresh the usage cache when needed. Only runs while the Usage tab is
-/// active (unless `force`d by the refresh key) and only recomputes when the
-/// cache is missing or stale — never on every tick.
-fn refresh_usage(app: &mut MonitorApp, force: bool) {
-    if !force && app.active_section != Section::Usage {
+/// Starts a background usage refresh when the Usage tab is active and the
+/// cache is missing or stale. Never runs on every tick, never blocks the UI.
+/// The refresh key (`R`) calls `start_usage_scan` directly to force a scan.
+fn refresh_usage(app: &mut MonitorApp) {
+    if app.active_section != Section::Usage {
         return;
     }
     let stale = app
         .usage_stats
         .as_ref()
         .is_none_or(|c| c.computed_at.elapsed() >= USAGE_STALE_AFTER);
-    if force || stale {
-        recompute_usage(app);
+    if stale {
+        start_usage_scan(app);
     }
 }
 
@@ -495,6 +523,7 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
         usage_scroll: 0,
         usage_line_count: 0,
         default_model,
+        usage_rx: None,
     })
 }
 
@@ -592,8 +621,8 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
             app.usage_scroll = app.usage_scroll.saturating_sub(page);
         }
         KeyCode::Char('R') if app.active_section == Section::Usage => {
-            recompute_usage(app);
-            app.set_status("Usage stats refreshed");
+            start_usage_scan(app);
+            app.set_status("Refreshing usage stats…");
         }
         KeyCode::Char('y') => copy_selected_thread_id(app),
         KeyCode::Char('r') => restart_selected_service(app),
@@ -866,7 +895,8 @@ fn refresh_app(app: &mut MonitorApp) {
     }
     app.clamp_selection();
     supervise_services(app);
-    refresh_usage(app, false);
+    poll_usage_result(app);
+    refresh_usage(app);
 }
 
 /// Run the monitor dashboard.
