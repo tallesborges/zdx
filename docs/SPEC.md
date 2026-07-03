@@ -140,6 +140,7 @@ Threads are append-only **JSONL** event logs (thread events are never modified o
 - Timestamps are RFC3339 UTC.
 - Event types: `meta`, `message`, `tool_use`, `tool_result`, `interrupted`, `reasoning`, `usage`, `notice`.
 - `tool_use` events carry `id_origin` (`real` when the provider emitted the id, `synthesized` when zdx generated one because the provider omitted it; default `synthesized` for old transcripts) and an optional `replay` token (e.g. Gemini per-part `thoughtSignature`). Replay metadata is preserved verbatim so multi-turn provider caches (e.g. Gemini's implicit prompt cache) can hit on subsequent turns.
+- `usage` events carry optional `model` and `provider` fields recording which model/provider produced that usage, so token/cost can be attributed per provider even when the model is switched mid-thread. Both default to absent on older transcripts (attribution then falls back to the thread's model). Adding these fields is additive and does not bump `schema_version`.
 - `message` and `reasoning` events also carry an optional `replay` token for the same reason.
 - `notice` events (e.g. model `refusal`, `model_context_window_exceeded`) are persisted for UI replay and MUST NOT be rehydrated as conversation messages sent back to providers.
 - Threads remain readable even if interrupted mid-stream.

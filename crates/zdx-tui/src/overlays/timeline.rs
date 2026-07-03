@@ -456,6 +456,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cells_to_events_never_emits_usage_or_meta() {
+        // Forks (and `/btw`) reconstruct a thread's context from display cells,
+        // not from the raw thread JSONL. Usage events are not display cells, so
+        // they are never reproduced — which is exactly why a forked thread does
+        // not inherit (and double-count) the parent's usage. Guard that
+        // invariant: cell -> event reconstruction must yield only conversation
+        // events, never `usage`/`meta`.
+        let cells = vec![
+            HistoryCell::user("question"),
+            HistoryCell::assistant("answer"),
+            HistoryCell::system("banner"),
+        ];
+        let events = cells_to_events(&cells);
+        assert!(
+            events
+                .iter()
+                .all(|e| !matches!(e, ThreadEvent::Usage { .. } | ThreadEvent::Meta { .. })),
+            "fork event reconstruction must not carry usage/meta events"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ThreadEvent::Message { .. })),
+            "conversation messages should survive reconstruction"
+        );
+    }
+
+    #[test]
     fn build_entries_filters_and_trims() {
         let cells = vec![
             HistoryCell::system("skip"),

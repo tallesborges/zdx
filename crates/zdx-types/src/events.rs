@@ -143,6 +143,13 @@ pub enum AgentEvent {
         cache_read_input_tokens: u64,
         /// Tokens written to cache
         cache_creation_input_tokens: u64,
+        /// Model id that produced this usage (bare registry id).
+        #[serde(default)]
+        model: String,
+        /// Provider id that served the request (e.g. `anthropic`, `claude-cli`,
+        /// or a custom provider name). Used to attribute usage/cost per provider.
+        #[serde(default)]
+        provider: String,
     },
 }
 

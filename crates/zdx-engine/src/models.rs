@@ -34,6 +34,27 @@ pub struct ModelPricing {
     pub cache_write: f64,
 }
 
+const TOKENS_PER_MILLION: f64 = 1_000_000.0;
+
+impl ModelPricing {
+    /// USD cost for the given token counts (prices are per million tokens).
+    ///
+    /// Shared cost path for the TUI, bot, CLI stats, and monitor so cost is
+    /// computed identically everywhere.
+    pub fn cost(&self, input: u64, output: u64, cache_read: u64, cache_write: u64) -> f64 {
+        (input as f64 / TOKENS_PER_MILLION) * self.input
+            + (output as f64 / TOKENS_PER_MILLION) * self.output
+            + (cache_read as f64 / TOKENS_PER_MILLION) * self.cache_read
+            + (cache_write as f64 / TOKENS_PER_MILLION) * self.cache_write
+    }
+
+    /// USD saved by serving `cache_read` tokens from cache instead of paying
+    /// the full input price.
+    pub fn cache_savings(&self, cache_read: u64) -> f64 {
+        (cache_read as f64 / TOKENS_PER_MILLION) * (self.input - self.cache_read)
+    }
+}
+
 /// Capability metadata for a model.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ModelCapabilities {

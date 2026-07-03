@@ -37,6 +37,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - `core/title_generation.rs`: LLM-based title generation (shared by TUI + bot)
 - `core/tldr_generation.rs`: LLM-based thread TLDR/recap generation (shared by TUI)
 - `core/thread_persistence.rs`: thread persistence
+- `core/usage_stats.rs`: usage/cost aggregation over saved threads (per provider/model)
 - `core/worktree.rs`: git worktree management helpers
 
 ### Tools (`src/tools/`)

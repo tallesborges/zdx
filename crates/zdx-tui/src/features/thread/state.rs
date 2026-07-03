@@ -228,27 +228,19 @@ impl ThreadUsage {
     ///
     /// Uses the pricing from the model (prices are per million tokens).
     pub fn calculate_cost(&self, pricing: &ModelPricing) -> f64 {
-        let million = 1_000_000.0;
-
-        let input_cost = (self.input_tokens as f64 / million) * pricing.input;
-        let output_cost = (self.output_tokens as f64 / million) * pricing.output;
-        let cache_read_cost = (self.cache_read_tokens as f64 / million) * pricing.cache_read;
-        let cache_write_cost = (self.cache_write_tokens as f64 / million) * pricing.cache_write;
-
-        input_cost + output_cost + cache_read_cost + cache_write_cost
+        pricing.cost(
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_read_tokens,
+            self.cache_write_tokens,
+        )
     }
 
     /// Calculates the cost savings from cache hits.
     ///
     /// Returns the amount saved by using `cache_read` instead of regular input pricing.
     pub fn cache_savings(&self, pricing: &ModelPricing) -> f64 {
-        let million = 1_000_000.0;
-
-        // Savings = what we would have paid at input price - what we actually paid at cache_read price
-        let would_have_paid = (self.cache_read_tokens as f64 / million) * pricing.input;
-        let actually_paid = (self.cache_read_tokens as f64 / million) * pricing.cache_read;
-
-        would_have_paid - actually_paid
+        pricing.cache_savings(self.cache_read_tokens)
     }
 
     /// Formats token count for display (e.g., "12.5k" or "1.2M").

@@ -1882,18 +1882,16 @@ fn format_pricing_line(
 }
 
 fn calculate_usage_cost(usage: thread_persistence::Usage, pricing: &ModelPricing) -> f64 {
-    let million = 1_000_000.0;
-    (usage.input as f64 / million) * pricing.input
-        + (usage.output as f64 / million) * pricing.output
-        + (usage.cache_read as f64 / million) * pricing.cache_read
-        + (usage.cache_write as f64 / million) * pricing.cache_write
+    pricing.cost(
+        usage.input,
+        usage.output,
+        usage.cache_read,
+        usage.cache_write,
+    )
 }
 
 fn calculate_cache_savings(usage: thread_persistence::Usage, pricing: &ModelPricing) -> f64 {
-    let million = 1_000_000.0;
-    let would_have_paid = (usage.cache_read as f64 / million) * pricing.input;
-    let actually_paid = (usage.cache_read as f64 / million) * pricing.cache_read;
-    would_have_paid - actually_paid
+    pricing.cache_savings(usage.cache_read)
 }
 
 fn format_token_count(count: u64) -> String {

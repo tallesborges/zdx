@@ -203,6 +203,14 @@ pub enum ThreadEvent {
         output_tokens: u64,
         cache_read_tokens: u64,
         cache_write_tokens: u64,
+        /// Model id that produced this usage. `None` on older transcripts and
+        /// on usage recorded before per-request attribution existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        /// Provider id that served the request (e.g. `anthropic`, `claude-cli`,
+        /// or a custom provider name). `None` on older transcripts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
         ts: String,
     },
 
@@ -318,13 +326,15 @@ impl ThreadEvent {
         }
     }
 
-    /// Creates a new usage event.
-    pub fn usage(usage: Usage) -> Self {
+    /// Creates a new usage event with optional model/provider attribution.
+    pub fn usage(usage: Usage, model: Option<String>, provider: Option<String>) -> Self {
         Self::Usage {
             input_tokens: usage.input,
             output_tokens: usage.output,
             cache_read_tokens: usage.cache_read,
             cache_write_tokens: usage.cache_write,
+            model,
+            provider,
             ts: chrono_timestamp(),
         }
     }
@@ -1002,6 +1012,12 @@ pub fn spawn_thread_persist_task(mut thread: Thread, mut rx: AgentEventRx) -> Jo
 #[derive(Debug, Default)]
 struct UsagePersistor {
     pending: Option<Usage>,
+    /// Model/provider from the most recent `UsageUpdate`, attached to every
+    /// emitted usage event (including the trailing `finish()` flush and
+    /// output-only usage) so attribution survives across flush boundaries.
+    /// `None` until the first attributed usage arrives.
+    current_model: Option<String>,
+    current_provider: Option<String>,
     /// Index into `messages` already flushed to disk for this run.
     /// Combined with the run-entry `prior_message_count` cursor (carried on
     /// every `TurnCheckpoint`/`TurnFinished`), this makes flushes idempotent
@@ -1025,7 +1041,12 @@ impl UsagePersistor {
                 output_tokens,
                 cache_read_input_tokens,
                 cache_creation_input_tokens,
+                model,
+                provider,
             } => {
+                self.current_model = (!model.is_empty()).then(|| model.clone());
+                self.current_provider = (!provider.is_empty()).then(|| provider.clone());
+
                 if *input_tokens > 0
                     || *cache_read_input_tokens > 0
                     || *cache_creation_input_tokens > 0
@@ -1042,9 +1063,9 @@ impl UsagePersistor {
                 if *output_tokens > 0 {
                     if let Some(mut usage) = self.pending.take() {
                         usage.output += *output_tokens;
-                        events.push(ThreadEvent::usage(usage));
+                        events.push(self.usage_event(usage));
                     } else {
-                        events.push(ThreadEvent::usage(Usage::new(0, *output_tokens, 0, 0)));
+                        events.push(self.usage_event(Usage::new(0, *output_tokens, 0, 0)));
                     }
                 }
             }
@@ -1104,8 +1125,17 @@ impl UsagePersistor {
         if let Some(usage) = self.pending.take()
             && usage.total() > 0
         {
-            events.push(ThreadEvent::usage(usage));
+            events.push(self.usage_event(usage));
         }
+    }
+
+    /// Builds a usage `ThreadEvent`, attaching the current model/provider.
+    fn usage_event(&self, usage: Usage) -> ThreadEvent {
+        ThreadEvent::usage(
+            usage,
+            self.current_model.clone(),
+            self.current_provider.clone(),
+        )
     }
 
     fn finish(&mut self) -> Vec<ThreadEvent> {
@@ -2171,6 +2201,7 @@ pub fn format_timestamp_relative(time: SystemTime) -> Option<String> {
 /// Formats a thread transcript in a human-readable format.
 pub fn format_transcript(events: &[ThreadEvent]) -> String {
     let mut output = String::new();
+    let mut models_used: Vec<String> = Vec::new();
 
     for event in events {
         match event {
@@ -2229,13 +2260,38 @@ pub fn format_transcript(events: &[ThreadEvent]) -> String {
             ThreadEvent::Notice { message, .. } => {
                 writeln!(output, "### Notice\n⚠ {message}\n").expect("write");
             }
-            ThreadEvent::Usage { .. } => {
-                // Skip usage events in transcript display
+            ThreadEvent::Usage {
+                model, provider, ..
+            } => {
+                if let Some(label) = usage_model_label(model.as_deref(), provider.as_deref())
+                    && !models_used.contains(&label)
+                {
+                    models_used.push(label);
+                }
             }
         }
     }
 
+    if !models_used.is_empty() {
+        writeln!(output, "### Models used\n{}\n", models_used.join(", ")).expect("write");
+    }
+
     output.trim_end().to_string()
+}
+
+/// Builds a display label for a usage event's model/provider attribution.
+/// Returns `provider:model`, or just the model or provider when only one is
+/// known, or `None` when neither is present.
+fn usage_model_label(model: Option<&str>, provider: Option<&str>) -> Option<String> {
+    match (
+        provider.filter(|p| !p.is_empty()),
+        model.filter(|m| !m.is_empty()),
+    ) {
+        (Some(provider), Some(model)) => Some(format!("{provider}:{model}")),
+        (None, Some(model)) => Some(model.to_string()),
+        (Some(provider), None) => Some(provider.to_string()),
+        (None, None) => None,
+    }
 }
 
 /// Thread options for CLI commands.
@@ -3103,7 +3159,7 @@ mod tests {
 
     #[test]
     fn test_usage_event_serialization() {
-        let usage = ThreadEvent::usage(Usage::new(1000, 500, 2000, 100));
+        let usage = ThreadEvent::usage(Usage::new(1000, 500, 2000, 100), None, None);
         let json = serde_json::to_string(&usage).unwrap();
         assert!(json.contains("\"type\":\"usage\""));
         assert!(json.contains("\"input_tokens\":1000"));
@@ -3138,10 +3194,10 @@ mod tests {
         let events = vec![
             ThreadEvent::user_message("hello"),
             ThreadEvent::assistant_message("hi"),
-            ThreadEvent::usage(Usage::new(100, 50, 200, 25)),
+            ThreadEvent::usage(Usage::new(100, 50, 200, 25), None, None),
             ThreadEvent::user_message("bye"),
             ThreadEvent::assistant_message("goodbye"),
-            ThreadEvent::usage(Usage::new(150, 75, 300, 30)),
+            ThreadEvent::usage(Usage::new(150, 75, 300, 30), None, None),
         ];
 
         let (cumulative, latest) = extract_usage_from_thread_events(&events);
@@ -3154,9 +3210,9 @@ mod tests {
         // Latest must keep context tokens and fold the output-only tail rather
         // than collapsing to the final zero-context fragment.
         let events = vec![
-            ThreadEvent::usage(Usage::new(2, 3, 250_000, 880)),
-            ThreadEvent::usage(Usage::new(0, 1522, 0, 0)),
-            ThreadEvent::usage(Usage::new(0, 480, 0, 0)),
+            ThreadEvent::usage(Usage::new(2, 3, 250_000, 880), None, None),
+            ThreadEvent::usage(Usage::new(0, 1522, 0, 0), None, None),
+            ThreadEvent::usage(Usage::new(0, 480, 0, 0), None, None),
         ];
 
         let (cumulative, latest) = extract_usage_from_thread_events(&events);
@@ -3187,7 +3243,11 @@ mod tests {
             .append(&ThreadEvent::assistant_message("hi"))
             .unwrap();
         thread
-            .append(&ThreadEvent::usage(Usage::new(1000, 500, 2000, 100)))
+            .append(&ThreadEvent::usage(
+                Usage::new(1000, 500, 2000, 100),
+                None,
+                None,
+            ))
             .unwrap();
 
         let events = thread.read_events().unwrap();
@@ -3213,6 +3273,8 @@ mod tests {
             output_tokens: 0,
             cache_read_input_tokens: 20,
             cache_creation_input_tokens: 5,
+            model: String::new(),
+            provider: String::new(),
         }))
         .unwrap();
         tx.send(Arc::new(AgentEvent::UsageUpdate {
@@ -3220,6 +3282,8 @@ mod tests {
             output_tokens: 50,
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            model: String::new(),
+            provider: String::new(),
         }))
         .unwrap();
         tx.send(Arc::new(AgentEvent::TurnFinished {
@@ -3247,6 +3311,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_persist_task_records_model_and_provider_on_usage() {
+        let _temp = setup_temp_zdx_home();
+
+        let thread = Thread::with_id(unique_thread_id("persist-usage-attribution")).unwrap();
+        let (tx, rx) = create_event_channel();
+        let persist_handle = spawn_thread_persist_task(thread.clone(), rx);
+
+        tx.send(Arc::new(AgentEvent::UsageUpdate {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_read_input_tokens: 20,
+            cache_creation_input_tokens: 5,
+            model: "claude-opus-4-6".to_string(),
+            provider: "claude-cli".to_string(),
+        }))
+        .unwrap();
+        drop(tx);
+
+        persist_handle.await.unwrap();
+
+        let events = thread.read_events().unwrap();
+        let usage = events
+            .iter()
+            .find_map(|e| match e {
+                ThreadEvent::Usage {
+                    model, provider, ..
+                } => Some((model.clone(), provider.clone())),
+                _ => None,
+            })
+            .expect("expected a usage event");
+        assert_eq!(usage.0.as_deref(), Some("claude-opus-4-6"));
+        assert_eq!(usage.1.as_deref(), Some("claude-cli"));
+    }
+
+    #[tokio::test]
     async fn test_persist_task_flushes_partial_usage_on_interrupted_turn() {
         let _temp = setup_temp_zdx_home();
 
@@ -3259,6 +3358,8 @@ mod tests {
             output_tokens: 0,
             cache_read_input_tokens: 100,
             cache_creation_input_tokens: 25,
+            model: String::new(),
+            provider: String::new(),
         }))
         .unwrap();
         tx.send(Arc::new(AgentEvent::TurnFinished {
@@ -3312,6 +3413,8 @@ mod tests {
             output_tokens: 0,
             cache_read_input_tokens: 45,
             cache_creation_input_tokens: 6,
+            model: String::new(),
+            provider: String::new(),
         }))
         .unwrap();
         drop(tx);

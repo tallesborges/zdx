@@ -130,5 +130,8 @@ Overlays (e.g., Command Palette, File Picker) are self-contained state machines 
 ### Agent State Machine
 The agent progresses through `Idle` -> `Waiting` (for first byte) -> `Streaming` (accumulating deltas) -> `Idle`.
 
+### Usage Accounting
+Token usage is event-sourced. The agent buffers usage deltas per attempt and emits one combined `AgentEvent::UsageUpdate` (carrying the active `model` + `provider`) at commit boundaries; transparently retried attempts drop their buffered usage to avoid double counting. `UsagePersistor` (in `thread_persistence`) turns those events into `usage` `ThreadEvent`s, attaching the model/provider so any saved thread can be attributed per provider. `core/usage_stats.rs` aggregates usage/cost across all saved threads (per provider/model) for `zdx stats` and the monitor, reusing `ModelPricing` for cost.
+
 ---
 *For file locations, see `AGENTS.md`.*
