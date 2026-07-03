@@ -150,6 +150,16 @@ pub enum AgentEvent {
         /// or a custom provider name). Used to attribute usage/cost per provider.
         #[serde(default)]
         provider: String,
+        /// Wall-clock duration of the request in milliseconds. `Some` only on
+        /// the terminal usage event of a successful request; `None` on interim
+        /// or failed flushes. Used for latency/throughput stats.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+        /// Time-to-first-token in milliseconds (request start → first content
+        /// token). `Some` only on the terminal usage event when content
+        /// arrived; `None` otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ttft_ms: Option<u64>,
     },
 }
 
