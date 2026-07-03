@@ -20,11 +20,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::config::paths;
+use crate::core::thread_persistence;
 use crate::models::ModelOption;
 use crate::providers::{self, ProviderKind};
 
@@ -172,7 +174,7 @@ fn aggregate_usage_at(
 /// Full (uncached) scan of every thread. Used as the fallback when the cache
 /// cannot be opened.
 fn aggregate_scan_all(threads_dir: &Path, default_model: &str) -> Result<UsageStats> {
-    let files = list_thread_files(threads_dir)?;
+    let files = thread_persistence::list_thread_files(threads_dir)?;
     let mut raw: BTreeMap<(String, String), RawBucket> = BTreeMap::new();
     let mut warnings = Vec::new();
     let mut threads_scanned = 0usize;
@@ -199,7 +201,7 @@ fn aggregate_cached(
     cache_path: &Path,
     default_model: &str,
 ) -> Result<UsageStats> {
-    let files = list_thread_files(threads_dir)?;
+    let files = thread_persistence::list_thread_files(threads_dir)?;
     let conn = open_cache(cache_path)?;
     ensure_cache_valid(&conn, default_model)?;
 
@@ -211,9 +213,11 @@ fn aggregate_cached(
     let tx = conn.unchecked_transaction()?;
     for file in &files {
         current_ids.insert(file.id.as_str());
+        let mtime_ns = mtime_nanos(file.modified);
+        let size = i64_from(file.size);
         let unchanged = cached_meta
             .get(&file.id)
-            .is_some_and(|(mtime, size)| *mtime == file.mtime_ns && *size == file.size);
+            .is_some_and(|(m, s)| *m == mtime_ns && *s == size);
         if unchanged {
             threads_scanned += 1;
             continue;
@@ -221,7 +225,7 @@ fn aggregate_cached(
         match scan_thread_file(&file.path) {
             Ok(scan) => {
                 let buckets = resolve_thread_buckets(&scan, default_model);
-                replace_thread_rows(&tx, &file.id, file.mtime_ns, file.size, &buckets)?;
+                replace_thread_rows(&tx, &file.id, mtime_ns, size, &buckets)?;
                 threads_scanned += 1;
             }
             Err(err) => {
@@ -279,49 +283,11 @@ fn resolve_thread_buckets(
     buckets
 }
 
-/// A thread `.jsonl` file on disk with the metadata used for cache invalidation.
-struct ThreadFile {
-    id: String,
-    path: PathBuf,
-    mtime_ns: i64,
-    size: i64,
-}
-
-/// Lists `*.jsonl` thread files under `threads_dir` with their mtime and size.
-/// A missing directory yields an empty list rather than an error.
-fn list_thread_files(threads_dir: &Path) -> Result<Vec<ThreadFile>> {
-    let entries = match std::fs::read_dir(threads_dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(err).context("read threads dir"),
-    };
-
-    let mut files = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "jsonl") {
-            continue;
-        }
-        let Some(id) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else {
-            continue;
-        };
-        let Ok(md) = entry.metadata() else {
-            continue;
-        };
-        let size = i64::try_from(md.len()).unwrap_or(i64::MAX);
-        let mtime_ns = md
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |d| i64::try_from(d.as_nanos()).unwrap_or(i64::MAX));
-        files.push(ThreadFile {
-            id,
-            path,
-            mtime_ns,
-            size,
-        });
-    }
-    Ok(files)
+/// Converts a file mtime to nanoseconds-since-epoch for the cache key.
+fn mtime_nanos(modified: Option<SystemTime>) -> i64 {
+    modified
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map_or(0, |d| i64::try_from(d.as_nanos()).unwrap_or(i64::MAX))
 }
 
 // ── Derived SQLite cache ────────────────────────────────────────────────────

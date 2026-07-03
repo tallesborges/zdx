@@ -1705,42 +1705,69 @@ fn truncate_preview(value: &str) -> String {
     }
 }
 
-/// Lists all saved threads.
-///
-/// Returns a vector of `ThreadSummary` sorted by modification time (newest first).
+/// One thread `.jsonl` file with its filesystem metadata. This is a cheap
+/// directory walk + per-file `stat` only — no file content is read (unlike
+/// `list_threads`, which additionally parses each thread's meta line).
+pub(crate) struct ThreadFileMeta {
+    pub(crate) id: String,
+    pub(crate) path: PathBuf,
+    pub(crate) modified: Option<SystemTime>,
+    pub(crate) size: u64,
+}
+
+/// Lists `*.jsonl` thread files under `dir` with their mtime + size. A missing
+/// directory yields an empty list; files whose metadata can't be read are still
+/// listed (with `modified: None`, `size: 0`).
 ///
 /// # Errors
-/// Returns an error if the operation fails.
-pub fn list_threads() -> Result<Vec<ThreadSummary>> {
-    let dir = threads_dir();
+/// Returns an error if the directory exists but cannot be read.
+pub(crate) fn list_thread_files(dir: &Path) -> Result<Vec<ThreadFileMeta>> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err).context("Failed to read threads directory"),
+    };
 
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut threads = Vec::new();
-
-    for entry in fs::read_dir(&dir).context("Failed to read threads directory")? {
+    let mut files = Vec::new();
+    for entry in entries {
         let entry = entry.context("Failed to read directory entry")?;
         let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "jsonl") {
+            continue;
+        }
+        let Some(stem) = path.file_stem() else {
+            continue;
+        };
+        let id = stem.to_string_lossy().to_string();
+        let md = entry.metadata().ok();
+        files.push(ThreadFileMeta {
+            id,
+            modified: md.as_ref().and_then(|m| m.modified().ok()),
+            size: md.as_ref().map_or(0, std::fs::Metadata::len),
+            path,
+        });
+    }
+    Ok(files)
+}
 
-        // Only process .jsonl files
-        if path.extension().is_some_and(|ext| ext == "jsonl")
-            && let Some(stem) = path.file_stem()
-        {
-            let id = stem.to_string_lossy().to_string();
-            let modified = entry.metadata().ok().and_then(|m| m.modified().ok());
-            let meta = read_meta(&path).unwrap_or(None);
-
-            threads.push(ThreadSummary {
-                id,
+/// Lists all saved threads (sorted by modification time, newest first).
+///
+/// # Errors
+/// Returns an error if the threads directory cannot be read.
+pub fn list_threads() -> Result<Vec<ThreadSummary>> {
+    let mut threads: Vec<ThreadSummary> = list_thread_files(&threads_dir())?
+        .into_iter()
+        .map(|file| {
+            let meta = read_meta(&file.path).unwrap_or(None);
+            ThreadSummary {
+                id: file.id,
                 title: meta.as_ref().and_then(|m| m.title.clone()),
                 root_path: meta.as_ref().and_then(|m| m.root_path.clone()),
-                modified,
+                modified: file.modified,
                 handoff_from: meta.and_then(|m| m.handoff_from),
-            });
-        }
-    }
+            }
+        })
+        .collect();
 
     // Sort by modification time (newest first)
     threads.sort_by_key(|thread| std::cmp::Reverse(thread.modified));
