@@ -48,6 +48,14 @@ pub struct ExecSubagentOptions {
     pub activity_parent_thread_id: Option<String>,
     /// Named subagent (e.g. `"explorer"`) when `track_activity` is true.
     pub activity_subagent_name: Option<String>,
+    /// Origin kind recorded in the child thread's meta (e.g. `"subagent"`,
+    /// `"helper:title"`). When set, the child persists a tagged thread instead
+    /// of running throwaway. `None` leaves the child thread untagged.
+    pub thread_origin_kind: Option<String>,
+    /// Parent thread id recorded in the child thread's meta.
+    pub thread_parent_id: Option<String>,
+    /// Named subagent recorded in the child thread's meta (subagent runs).
+    pub thread_subagent_name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -63,7 +71,8 @@ impl TempPromptFile {
 
 /// Runs an isolated child `zdx exec` process and returns response text only.
 ///
-/// The child process always runs with `--no-thread` to avoid thread pollution.
+/// The child persists its own thread (tagged via `thread_origin_kind` and
+/// friends) so its usage is captured by thread-scanning stats.
 ///
 /// # Errors
 /// Returns an error if the child process fails, times out, or produces empty output.
@@ -155,8 +164,22 @@ fn build_exec_args(
 ) -> Vec<OsString> {
     let mut args = vec![OsString::from("--root"), root.as_os_str().to_os_string()];
 
+    // Global thread-lineage flags (before the subcommand) so the persisted
+    // child thread records its subagent/helper origin in its meta line.
+    if let Some(kind) = normalize_optional(options.thread_origin_kind.as_deref()) {
+        args.push(OsString::from("--thread-origin-kind"));
+        args.push(OsString::from(kind));
+    }
+    if let Some(parent) = normalize_optional(options.thread_parent_id.as_deref()) {
+        args.push(OsString::from("--thread-parent-id"));
+        args.push(OsString::from(parent));
+    }
+    if let Some(name) = normalize_optional(options.thread_subagent_name.as_deref()) {
+        args.push(OsString::from("--thread-subagent-name"));
+        args.push(OsString::from(name));
+    }
+
     args.extend([
-        OsString::from("--no-thread"),
         OsString::from("exec"),
         OsString::from("--prompt-file"),
         prompt_file.as_os_str().to_os_string(),
@@ -345,7 +368,6 @@ mod tests {
             vec![
                 "--root",
                 "/tmp/project",
-                "--no-thread",
                 "exec",
                 "--prompt-file",
                 "/tmp/subagent-prompt.md",
@@ -374,6 +396,9 @@ mod tests {
                 activity_kind: None,
                 activity_parent_thread_id: None,
                 activity_subagent_name: None,
+                thread_origin_kind: None,
+                thread_parent_id: None,
+                thread_subagent_name: None,
             },
             Some(system_prompt_file),
         );
@@ -387,7 +412,6 @@ mod tests {
             vec![
                 "--root",
                 "/tmp/project",
-                "--no-thread",
                 "exec",
                 "--prompt-file",
                 "/tmp/subagent-prompt.md",
@@ -402,6 +426,43 @@ mod tests {
                 "/tmp/effective-system-prompt.md",
                 "-t",
                 "low",
+                "--no-activity"
+            ]
+        );
+    }
+
+    #[test]
+    fn build_exec_args_emits_thread_lineage_flags() {
+        let args = build_exec_args(
+            Path::new("/tmp/project"),
+            Path::new("/tmp/subagent-prompt.md"),
+            &ExecSubagentOptions {
+                thread_origin_kind: Some("subagent".to_string()),
+                thread_parent_id: Some("thread-parent".to_string()),
+                thread_subagent_name: Some("explorer".to_string()),
+                ..Default::default()
+            },
+            None,
+        );
+        let args: Vec<String> = args
+            .iter()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+
+        assert_eq!(
+            args,
+            vec![
+                "--root",
+                "/tmp/project",
+                "--thread-origin-kind",
+                "subagent",
+                "--thread-parent-id",
+                "thread-parent",
+                "--thread-subagent-name",
+                "explorer",
+                "exec",
+                "--prompt-file",
+                "/tmp/subagent-prompt.md",
                 "--no-activity"
             ]
         );
@@ -431,7 +492,6 @@ mod tests {
             vec![
                 "--root",
                 "/tmp/project",
-                "--no-thread",
                 "exec",
                 "--prompt-file",
                 "/tmp/subagent-prompt.md",

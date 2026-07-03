@@ -32,11 +32,11 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - `core/interrupt.rs`: signal handling
 - `core/agent.rs`: agent loop + event channels
 - `core/qmd.rs`: qmd binary discovery and setup helpers
-- `core/subagent.rs`: child `zdx exec` subagent runner
+- `core/subagent.rs`: child `zdx exec` subagent runner. Child runs persist their own thread JSONL tagged via `ExecSubagentOptions::thread_origin_kind`/`thread_parent_id`/`thread_subagent_name` (so their usage is captured by `usage_stats`); tagged threads are hidden from default listings.
 - `core/thread_export.rs`: clean Markdown transcript exports derived from saved thread JSONL
 - `core/title_generation.rs`: LLM-based title generation (shared by TUI + bot)
 - `core/tldr_generation.rs`: LLM-based thread TLDR/recap generation (shared by TUI)
-- `core/thread_persistence.rs`: thread persistence
+- `core/thread_persistence.rs`: thread persistence. `list_threads()` hides child runs (any thread with `Meta.origin_kind` set — subagents/helpers); `list_all_threads()` includes them. Usage stats scan raw files (`list_thread_files`) so they still count child runs.
 - `core/usage_stats.rs`: usage/cost aggregation over saved threads (per provider/model), backed by a derived, disposable SQLite cache at `$ZDX_HOME/cache/usage.sqlite` (`rusqlite`, bundled) that re-scans only changed threads
 - `core/worktree.rs`: git worktree management helpers
 

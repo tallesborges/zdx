@@ -288,7 +288,10 @@ fn build_exec_options(
         track_activity: true,
         activity_kind: Some("subagent".to_string()),
         activity_parent_thread_id: ctx.current_thread_id.clone(),
-        activity_subagent_name: Some(subagent_name),
+        activity_subagent_name: Some(subagent_name.clone()),
+        thread_origin_kind: Some("subagent".to_string()),
+        thread_parent_id: ctx.current_thread_id.clone(),
+        thread_subagent_name: Some(subagent_name),
     }
 }
 

@@ -85,7 +85,7 @@ ZDX solves this with a boring, reliable core:
 - `zdx imagine -p, --prompt <PROMPT> [--out PATH] [--model MODEL] [--aspect RATIO] [--size SIZE]` — generate images with Gemini image models
 - `zdx mcp servers|auth <SERVER>|logout <SERVER>|tools <SERVER>|schema <SERVER> <TOOL>|call <SERVER> <TOOL> --json '{...}'` — inspect, authenticate, and call configured MCP servers through the helper CLI
 - `zdx automations list|validate|daemon|runs [NAME] [--date*] [--json]|run <NAME>`
-- `zdx threads list|show <ID>|resume [ID]|search [QUERY] [--date*] [--limit N] [--json]|tools [TOOL] [--failed] [--date*] [--limit N] [--json]`
+- `zdx threads list [--all]|show <ID>|resume [ID]|search [QUERY] [--date*] [--limit N] [--json]|tools [TOOL] [--failed] [--date*] [--limit N] [--json]`
 - `zdx config init|path`
 
 **Exit codes:** `0` success, `1` runtime error, `2` CLI usage error, `130` interrupted.
@@ -136,13 +136,14 @@ Threads are append-only **JSONL** event logs (thread events are never modified o
 
 ### Format
 
-- First line is `meta` with `schema_version` and optional `title`.
+- First line is `meta` with `schema_version`, optional `title`, and optional lineage fields (`origin_kind`, `parent_thread_id`, `subagent_name`) for threads spawned by another agent run.
 - Timestamps are RFC3339 UTC.
 - Event types: `meta`, `message`, `tool_use`, `tool_result`, `interrupted`, `reasoning`, `usage`, `notice`.
 - `tool_use` events carry `id_origin` (`real` when the provider emitted the id, `synthesized` when zdx generated one because the provider omitted it; default `synthesized` for old transcripts) and an optional `replay` token (e.g. Gemini per-part `thoughtSignature`). Replay metadata is preserved verbatim so multi-turn provider caches (e.g. Gemini's implicit prompt cache) can hit on subsequent turns.
 - `usage` events carry optional `model` and `provider` fields recording which model/provider produced that usage, so token/cost can be attributed per provider even when the model is switched mid-thread. Both default to absent on older transcripts (attribution then falls back to the thread's model). A request's terminal `usage` event also carries optional `duration_ms` (wall-clock request time) and `ttft_ms` (time-to-first-token) for latency/throughput stats; both are absent on interim/failed usage and on older transcripts. Adding these fields is additive and does not bump `schema_version`.
 - `message` and `reasoning` events also carry an optional `replay` token for the same reason.
 - `notice` events (e.g. model `refusal`, `model_context_window_exceeded`) are persisted for UI replay and MUST NOT be rehydrated as conversation messages sent back to providers.
+- Child runs spawned by another agent — user-visible subagents (`invoke_subagent`) and internal helpers (title, tldr, handoff, prompt-builder, `read_thread`) — persist their own thread JSONL tagged with `origin_kind` (e.g. `subagent`, `helper:title`) plus `parent_thread_id`/`subagent_name`. These threads are hidden by default from `zdx threads list`, the TUI thread picker, `thread_search`, the monitor dashboard, and memory/qmd export (use `zdx threads list --all` to include them), but their token usage IS counted by `zdx stats`. `zdx threads show <id>` displays lineage: a parent-link header when the thread is itself a child, and a "Child runs" section listing each spawned child with its tokens and cost.
 - Threads remain readable even if interrupted mid-stream.
 
 ### Durability

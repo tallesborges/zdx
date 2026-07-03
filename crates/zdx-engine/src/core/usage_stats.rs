@@ -157,6 +157,29 @@ pub fn aggregate_usage(default_model: &str) -> Result<UsageStats> {
     aggregate_usage_at(&paths::threads_dir(), &cache_path(), default_model)
 }
 
+/// Aggregates usage/cost for a single thread by id, reusing the same lean
+/// scan, attribution, and costing path as the global aggregator.
+///
+/// `default_model` attributes usage events that lack a per-request
+/// model/provider (older transcripts), typically the active `config.model`.
+///
+/// # Errors
+/// Returns an error if the thread file cannot be read or parsed.
+pub fn thread_usage_stats(thread_id: &str, default_model: &str) -> Result<UsageStats> {
+    thread_usage_stats_at(&paths::threads_dir(), thread_id, default_model)
+}
+
+fn thread_usage_stats_at(
+    threads_dir: &Path,
+    thread_id: &str,
+    default_model: &str,
+) -> Result<UsageStats> {
+    let path = threads_dir.join(format!("{thread_id}.jsonl"));
+    let scan = scan_thread_file(&path)?;
+    let buckets = resolve_thread_buckets(&scan, default_model);
+    Ok(finalize(buckets, 1, Vec::new()))
+}
+
 fn aggregate_usage_at(
     threads_dir: &Path,
     cache_path: &Path,
@@ -756,6 +779,34 @@ mod tests {
         format!(
             r#"{{"type":"usage","input_tokens":{input},"output_tokens":{output},"cache_read_tokens":0,"cache_write_tokens":0{attribution},"ts":"t"}}"#
         )
+    }
+
+    #[test]
+    fn thread_usage_stats_scopes_to_one_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let threads = dir.path().join("threads");
+        std::fs::create_dir_all(&threads).unwrap();
+
+        write_thread(
+            &threads,
+            "child",
+            &[
+                usage_line(100, 50, Some("gpt-5.5"), Some("openai-codex")),
+                usage_line(20, 10, Some("gpt-5.5"), Some("openai-codex")),
+            ],
+        );
+        // A sibling thread must NOT contribute to the single-thread stats.
+        write_thread(
+            &threads,
+            "other",
+            &[usage_line(999, 999, Some("gpt-5.5"), Some("openai-codex"))],
+        );
+
+        let stats = thread_usage_stats_at(&threads, "child", "claude-opus-4-8").unwrap();
+        assert_eq!(stats.threads_scanned, 1);
+        assert_eq!(stats.totals.requests, 2);
+        assert_eq!((stats.totals.input, stats.totals.output), (120, 60));
+        assert_eq!(stats.totals.tokens(), 180);
     }
 
     #[test]

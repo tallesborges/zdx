@@ -113,11 +113,11 @@ fn cost_cell(row: &UsageRow) -> String {
     }
 }
 
-fn format_cost(cost: f64) -> String {
+pub(crate) fn format_cost(cost: f64) -> String {
     format!("${cost:.2}")
 }
 
-fn format_tokens(count: u64) -> String {
+pub(crate) fn format_tokens(count: u64) -> String {
     if count >= 1_000_000_000 {
         format!("{:.1}B", count as f64 / 1_000_000_000.0)
     } else if count >= 1_000_000 {

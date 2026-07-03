@@ -45,6 +45,7 @@ async fn run_subagent(
         tools_override: None,
         event_filter: Some(vec!["turn_finished".to_string()]),
         timeout: Some(Duration::from_secs(PROMPT_BUILDER_TIMEOUT_SECS)),
+        thread_origin_kind: Some("helper:prompt_builder".to_string()),
         ..Default::default()
     };
 

@@ -537,6 +537,7 @@ mod tests {
                 root_path: Some(current_root.clone()),
                 modified: None,
                 handoff_from: None,
+                ..Default::default()
             },
             ThreadSummary {
                 id: "thread-2".to_string(),
@@ -544,6 +545,7 @@ mod tests {
                 root_path: Some(current_root),
                 modified: None,
                 handoff_from: None,
+                ..Default::default()
             },
         ];
         let (state, _) = ThreadPickerState::open(
@@ -567,6 +569,7 @@ mod tests {
             root_path: None,
             modified: None,
             handoff_from: None,
+            ..Default::default()
         }];
         let original_cells = vec![
             HistoryCell::user("test message"),
@@ -597,6 +600,7 @@ mod tests {
                 root_path: Some(current_root.clone()),
                 modified: None,
                 handoff_from: Some("thread-a".to_string()),
+                ..Default::default()
             },
             ThreadSummary {
                 id: "thread-a".to_string(),
@@ -604,6 +608,7 @@ mod tests {
                 root_path: Some(current_root),
                 modified: None,
                 handoff_from: None,
+                ..Default::default()
             },
         ];
         let (state, _) = ThreadPickerState::open(
@@ -634,6 +639,7 @@ mod tests {
                 root_path: None,
                 modified: None,
                 handoff_from: None,
+                ..Default::default()
             },
             ThreadSummary {
                 id: "s2".to_string(),
@@ -641,6 +647,7 @@ mod tests {
                 root_path: None,
                 modified: None,
                 handoff_from: None,
+                ..Default::default()
             },
             ThreadSummary {
                 id: "s3".to_string(),
@@ -648,6 +655,7 @@ mod tests {
                 root_path: None,
                 modified: None,
                 handoff_from: None,
+                ..Default::default()
             },
         ];
         let (mut state, _) = ThreadPickerState::open(
@@ -678,6 +686,7 @@ mod tests {
                     root_path: None,
                     modified: None,
                     handoff_from: None,
+                    ..Default::default()
                 })
                 .collect(),
             HashSet::new(),
@@ -716,6 +725,7 @@ mod tests {
                     root_path: None,
                     modified: None,
                     handoff_from: None,
+                    ..Default::default()
                 })
                 .collect(),
             HashSet::new(),
