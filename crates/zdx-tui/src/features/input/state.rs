@@ -34,6 +34,18 @@ pub struct PendingImage {
     pub source_path: Option<String>,
 }
 
+/// A prompt queued while a turn is running, sent after the turn completes.
+///
+/// Carries the attached images alongside the text so queued image attachments
+/// are not dropped when the prompt is later drained.
+#[derive(Debug, Clone)]
+pub struct QueuedPrompt {
+    /// The prompt text.
+    pub text: String,
+    /// Images attached to the prompt at enqueue time.
+    pub images: Vec<PendingImage>,
+}
+
 /// Handoff feature state machine.
 ///
 /// Models the lifecycle of a handoff operation:
@@ -212,7 +224,7 @@ pub struct InputState {
     pub prompt_builder: PromptBuilderState,
 
     /// Queued prompts to send after the current turn completes.
-    pub queued: std::collections::VecDeque<String>,
+    pub queued: std::collections::VecDeque<QueuedPrompt>,
 
     /// Pending pastes waiting for expansion on submission.
     pub pending_pastes: Vec<PendingPaste>,
@@ -899,13 +911,13 @@ impl InputState {
         self.reset_navigation();
     }
 
-    /// Enqueues a prompt for later sending.
-    pub fn enqueue_prompt(&mut self, text: String) {
-        self.queued.push_back(text);
+    /// Enqueues a prompt (with any attached images) for later sending.
+    pub fn enqueue_prompt(&mut self, text: String, images: Vec<PendingImage>) {
+        self.queued.push_back(QueuedPrompt { text, images });
     }
 
     /// Pops the next queued prompt, if any.
-    pub fn pop_queued_prompt(&mut self) -> Option<String> {
+    pub fn pop_queued_prompt(&mut self) -> Option<QueuedPrompt> {
         self.queued.pop_front()
     }
 
@@ -922,7 +934,7 @@ impl InputState {
         self.queued
             .iter()
             .take(max_items)
-            .map(|item| item.lines().next().unwrap_or("").to_string())
+            .map(|item| item.text.lines().next().unwrap_or("").to_string())
             .collect()
     }
 
@@ -1033,5 +1045,29 @@ mod tests {
         input.set_text(&new_text);
         assert!(input.has_images());
         assert_eq!(input.pending_images.len(), 1);
+    }
+
+    #[test]
+    fn enqueued_prompt_carries_its_attached_images() {
+        // Regression: queuing a prompt (while a turn is running) used to drop
+        // attached images because the queue stored text only. The queued
+        // prompt must round-trip its images so they are sent on drain.
+        let mut input = InputState::new();
+        input.attach_image("image/png".to_string(), "AAAA".to_string(), None);
+        assert!(input.has_images());
+
+        let text = input.get_text();
+        let images = input.take_images();
+        assert_eq!(images.len(), 1);
+        input.enqueue_prompt(text, images);
+        // Taking images clears them from the composer, but the queue keeps them.
+        assert!(!input.has_images());
+        assert!(input.has_queued());
+
+        let queued = input.pop_queued_prompt().expect("one queued prompt");
+        assert_eq!(queued.images.len(), 1);
+        assert_eq!(queued.images[0].mime_type, "image/png");
+        assert_eq!(queued.images[0].data, "AAAA");
+        assert!(!input.has_queued());
     }
 }
