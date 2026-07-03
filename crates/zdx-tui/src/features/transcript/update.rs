@@ -180,6 +180,7 @@ pub fn handle_agent_event(
             output_tokens,
             cache_read_input_tokens,
             cache_creation_input_tokens,
+            ..
         } => {
             mutations.push(StateMutation::Thread(ThreadMutation::UpdateUsage {
                 input: *input_tokens,

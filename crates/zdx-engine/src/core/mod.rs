@@ -11,6 +11,7 @@
 //! - `thread_persistence`: Thread persistence
 //! - `title_generation`: LLM-based title generation
 //! - `tldr_generation`: LLM-based thread TLDR/recap generation
+//! - `usage_stats`: Usage/cost aggregation over saved threads
 //! - `worktree`: Git worktree management helpers
 
 pub mod agent;
@@ -23,4 +24,5 @@ pub mod thread_export;
 pub mod thread_persistence;
 pub mod title_generation;
 pub mod tldr_generation;
+pub mod usage_stats;
 pub mod worktree;

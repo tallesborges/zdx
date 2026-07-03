@@ -892,7 +892,15 @@ async fn run_turn_inner(
                 .await
                 {
                     Ok(stream) => {
-                        match consume_stream(stream, &messages, sender, cancel, &setup.model).await
+                        match consume_stream(
+                            stream,
+                            &messages,
+                            sender,
+                            cancel,
+                            &setup.model,
+                            &setup.provider,
+                        )
+                        .await
                         {
                             Ok(state) => Ok(state),
                             Err((err, state)) => {
@@ -1036,6 +1044,9 @@ async fn run_turn_inner(
 
 struct RunTurnSetup {
     model: String,
+    /// Provider id serving the request (e.g. `anthropic`, `claude-cli`, or a
+    /// custom provider name). Attached to emitted usage events for attribution.
+    provider: String,
     client: Box<dyn StreamingProvider>,
     tools: Vec<ToolDefinition>,
     enabled_tools: HashSet<String>,
@@ -1051,7 +1062,20 @@ fn build_run_turn_setup(
     if let Some((custom_cfg, bare_model)) =
         config.providers.custom_provider_for_model(&config.model)
     {
-        return build_custom_run_turn_setup(config, options, thread_id, custom_cfg, bare_model);
+        let provider_name = config
+            .model
+            .split_once(':')
+            .or_else(|| config.model.split_once('/'))
+            .map(|(prefix, _)| prefix.trim().to_string())
+            .unwrap_or_default();
+        return build_custom_run_turn_setup(
+            config,
+            options,
+            thread_id,
+            custom_cfg,
+            bare_model,
+            provider_name,
+        );
     }
 
     let selection = resolve_provider(&config.model);
@@ -1114,6 +1138,7 @@ fn build_run_turn_setup(
 
     Ok(RunTurnSetup {
         model: selection.model,
+        provider: provider.id().to_string(),
         client,
         tools,
         enabled_tools,
@@ -1130,6 +1155,7 @@ fn build_custom_run_turn_setup(
     thread_id: Option<&str>,
     custom_cfg: &crate::config::CustomProviderConfig,
     bare_model: String,
+    provider_name: String,
 ) -> Result<RunTurnSetup> {
     let thinking_enabled = crate::models::model_supports_reasoning(&config.model)
         && config.thinking_level.is_enabled();
@@ -1160,6 +1186,7 @@ fn build_custom_run_turn_setup(
 
     Ok(RunTurnSetup {
         model: bare_model,
+        provider: provider_name,
         client,
         tools,
         enabled_tools,
@@ -1277,6 +1304,10 @@ struct StreamState {
     /// in `pending_usage`, so the retry contributes no leftover usage
     /// events.
     emitted_visible_content: bool,
+    /// Provider id serving this stream, attached to emitted `UsageUpdate`
+    /// events for per-provider attribution. Empty in unit tests that build a
+    /// `StreamState` directly and don't assert provider.
+    provider: String,
 }
 
 impl StreamState {
@@ -1287,6 +1318,7 @@ impl StreamState {
             usage_seen: crate::providers::Usage::default(),
             pending_usage: crate::providers::Usage::default(),
             emitted_visible_content: false,
+            provider: String::new(),
         }
     }
 
@@ -1309,6 +1341,8 @@ impl StreamState {
             output_tokens: usage.output_tokens,
             cache_read_input_tokens: usage.cache_read_input_tokens,
             cache_creation_input_tokens: usage.cache_creation_input_tokens,
+            model: self.turn.model.clone(),
+            provider: self.provider.clone(),
         });
     }
 }
@@ -1367,8 +1401,10 @@ async fn consume_stream(
     sender: &EventSender,
     cancel: Option<&CancellationToken>,
     model: &str,
+    provider: &str,
 ) -> std::result::Result<StreamState, (TurnError, StreamState)> {
     let mut state = StreamState::new(model.to_string());
+    state.provider = provider.to_string();
 
     loop {
         if interrupt::is_interrupted() || cancel.is_some_and(CancellationToken::is_cancelled) {
@@ -2403,6 +2439,7 @@ mod tests {
                     output_tokens,
                     cache_read_input_tokens,
                     cache_creation_input_tokens,
+                    ..
                 } => Some((
                     *input_tokens,
                     *output_tokens,
@@ -3177,7 +3214,7 @@ mod tests {
         )];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let result = consume_stream(provider_stream, &[], &sender, None, "", "").await;
         let Err((err, state)) = result else {
             panic!("stream should error out");
         };
@@ -3214,7 +3251,7 @@ mod tests {
         let events: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![Err(transport_err)];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let result = consume_stream(provider_stream, &[], &sender, None, "", "").await;
         let Err((err, state)) = result else {
             panic!("stream should error out");
         };
@@ -3264,7 +3301,7 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let result = consume_stream(provider_stream, &[], &sender, None, "", "").await;
         let Err((_err, state)) = result else {
             panic!("stream should error out");
         };
@@ -3300,6 +3337,7 @@ mod tests {
                 output_tokens,
                 cache_read_input_tokens,
                 cache_creation_input_tokens,
+                ..
             } => {
                 assert_eq!(*input_tokens, 11);
                 assert_eq!(*output_tokens, 7);
@@ -3362,7 +3400,7 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let result = consume_stream(provider_stream, &[], &sender, None, "", "").await;
         let Err((_err, state)) = result else {
             panic!("stream should error out");
         };
@@ -3409,7 +3447,7 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let _ = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let _ = consume_stream(provider_stream, &[], &sender, None, "", "").await;
 
         let usage_evt = rx.try_recv().expect("expected UsageUpdate first");
         assert!(
@@ -3460,7 +3498,7 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let _ = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let _ = consume_stream(provider_stream, &[], &sender, None, "", "").await;
 
         let usage_evt = rx.try_recv().expect("expected UsageUpdate first");
         assert!(
@@ -3515,7 +3553,7 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let _ = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let _ = consume_stream(provider_stream, &[], &sender, None, "", "").await;
 
         // First event must be the flushed UsageUpdate (triggered by the
         // ToolUse start arm). The subsequent InputJsonDelta does not need
@@ -3577,7 +3615,7 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let _ = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let _ = consume_stream(provider_stream, &[], &sender, None, "", "").await;
 
         let first = rx.try_recv().expect("expected first event");
         assert!(
@@ -3630,7 +3668,7 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let _ = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let _ = consume_stream(provider_stream, &[], &sender, None, "", "").await;
 
         let first = rx.try_recv().expect("expected first event");
         assert!(
@@ -3688,7 +3726,7 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let result = consume_stream(provider_stream, &[], &sender, None, "", "").await;
         let Err((_err, state)) = result else {
             panic!("stream should error out");
         };
@@ -3735,7 +3773,7 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let result = consume_stream(provider_stream, &[], &sender, None, "", "").await;
         let Ok(state) = result else {
             panic!("stream should succeed on EOF");
         };
@@ -3786,7 +3824,7 @@ mod tests {
             canceller.cancel();
         });
 
-        let result = consume_stream(provider_stream, &[], &sender, Some(&cancel), "").await;
+        let result = consume_stream(provider_stream, &[], &sender, Some(&cancel), "", "").await;
         let Err((err, state)) = result else {
             panic!("stream should be interrupted");
         };
@@ -3836,7 +3874,7 @@ mod tests {
             )),
         ];
         let s1: ProviderStream = Box::pin(stream::iter(attempt1));
-        let r1 = consume_stream(s1, &[], &sender, None, "").await;
+        let r1 = consume_stream(s1, &[], &sender, None, "", "").await;
         let Err((_, discarded)) = r1 else {
             panic!("attempt 1 should fail");
         };
@@ -3862,7 +3900,7 @@ mod tests {
             }),
         ];
         let s2: ProviderStream = Box::pin(stream::iter(attempt2));
-        let r2 = consume_stream(s2, &[], &sender, None, "").await;
+        let r2 = consume_stream(s2, &[], &sender, None, "", "").await;
         assert!(r2.is_ok(), "attempt 2 should succeed");
 
         // Drain rx and pin the strict ordering: exactly one UsageUpdate
@@ -3924,7 +3962,7 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let result = consume_stream(provider_stream, &[], &sender, None, "", "").await;
         let Err((_err, state)) = result else {
             panic!("stream should error out");
         };
@@ -3962,7 +4000,7 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None, "").await;
+        let result = consume_stream(provider_stream, &[], &sender, None, "", "").await;
         let Err((_err, state)) = result else {
             panic!("stream should error out");
         };
@@ -4396,6 +4434,7 @@ mod tests {
 
         let setup = RunTurnSetup {
             model: "gemini-3-pro-preview".to_string(),
+            provider: "gemini".to_string(),
             client: Box::new(GeminiClient::new(GeminiConfig {
                 api_key: "x".to_string(),
                 base_url: "https://example.invalid".to_string(),
