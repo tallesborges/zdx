@@ -1,7 +1,10 @@
+use std::time::Duration;
+
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs, Wrap};
+use zdx_engine::core::usage_stats::{UsageRow, UsageStats, UsageTotals};
 
-use crate::app::{ConfigLine, MonitorApp, Section};
+use crate::app::{CachedUsageStats, ConfigLine, MonitorApp, Section};
 
 pub fn render(f: &mut Frame, app: &MonitorApp) {
     let chunks = Layout::default()
@@ -20,6 +23,7 @@ pub fn render(f: &mut Frame, app: &MonitorApp) {
         Section::ActiveAgents => render_active_agents(f, app, chunks[1]),
         Section::Config => render_config(f, app, chunks[1]),
         Section::Threads => render_threads(f, app, chunks[1]),
+        Section::Usage => render_usage(f, app, chunks[1]),
         Section::Automations => render_automations(f, app, chunks[1]),
         Section::Logs => render_logs(f, app, chunks[1]),
     }
@@ -109,6 +113,7 @@ fn footer_hint(section: Section) -> &'static str {
         Section::ActiveAgents | Section::Automations => "↑↓ navigate • Tab switch • q quit",
         Section::Config => "↑↓ scroll • PgUp/PgDn page • Tab switch • q quit",
         Section::Threads => "↑↓ navigate • y copy thread ID • Tab switch • q quit",
+        Section::Usage => "↑↓ scroll • PgUp/PgDn page • R refresh • Tab switch • q quit",
         Section::Logs => {
             "↑↓ select • PgUp/PgDn page • Enter open • G/End follow • Tab switch • q quit"
         }
@@ -279,6 +284,230 @@ fn render_threads(f: &mut Frame, app: &MonitorApp, area: Rect) {
             .title("Threads (y=copy ID)"),
     );
     f.render_widget(list, area);
+}
+
+fn render_usage(f: &mut Frame, app: &MonitorApp, area: Rect) {
+    let Some(cached) = &app.usage_stats else {
+        let p = Paragraph::new(" Computing usage stats…")
+            .style(Style::default().fg(Color::DarkGray))
+            .block(Block::default().borders(Borders::ALL).title(" Usage "));
+        f.render_widget(p, area);
+        return;
+    };
+
+    let lines = build_usage_lines(cached);
+    let total_lines = lines.len();
+    let visible_lines = area.height.saturating_sub(2) as usize;
+    let max_scroll = total_lines.saturating_sub(visible_lines);
+    let scroll = app.usage_scroll.min(max_scroll);
+
+    let scroll_info = if total_lines > visible_lines {
+        let percent = (scroll * 100).checked_div(max_scroll).unwrap_or(100);
+        format!(" [{percent}%]")
+    } else {
+        String::new()
+    };
+    let title = format!(
+        " Usage — {} thread(s) scanned{scroll_info} ",
+        cached.stats.threads_scanned
+    );
+
+    let p = Paragraph::new(Text::from(lines))
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .scroll((scroll as u16, 0));
+    f.render_widget(p, area);
+}
+
+/// Rendered line count of the cached usage view, used for scroll clamping.
+pub(crate) fn usage_line_count(cached: &CachedUsageStats) -> usize {
+    build_usage_lines(cached).len()
+}
+
+/// Build the styled display lines for the Usage tab. Mirrors the `zdx stats`
+/// CLI output so both surfaces show identical numbers.
+fn build_usage_lines(cached: &CachedUsageStats) -> Vec<Line<'static>> {
+    let stats = &cached.stats;
+    let mut lines = usage_banner_lines(cached);
+
+    if stats.threads_scanned == 0 || stats.totals.requests == 0 {
+        lines.push(Line::from(format!(
+            "No usage found in {} thread(s).",
+            stats.threads_scanned
+        )));
+        push_usage_warnings(&mut lines, stats);
+        return lines;
+    }
+
+    lines.extend(usage_totals_lines(&stats.totals));
+    lines.push(Line::from(""));
+    lines.extend(usage_table("By provider:", None, &stats.by_provider));
+    lines.push(Line::from(""));
+    lines.extend(usage_table("By model:", Some("MODEL"), &stats.by_model));
+
+    if stats.by_model.iter().any(|row| row.estimated) {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "* estimated — attributed without a per-request provider (older usage or fallback).",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    push_usage_warnings(&mut lines, stats);
+    lines
+}
+
+/// The banner/header block shown above the tables (title, scope, freshness).
+fn usage_banner_lines(cached: &CachedUsageStats) -> Vec<Line<'static>> {
+    let dim = Style::default().fg(Color::DarkGray);
+    vec![
+        Line::from(Span::styled(
+            "zdx usage stats (estimated)",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "Global across all ZDX threads under $ZDX_HOME/threads.",
+            dim,
+        )),
+        Line::from(Span::styled(
+            "Estimated: old usage lacks per-request model/provider; subagent/helper + image \
+             spend excluded; subscription providers shown as flat-rate.",
+            dim,
+        )),
+        Line::from(Span::styled(
+            format!(
+                "Updated {} ago · press R to refresh",
+                format_age(cached.computed_at.elapsed())
+            ),
+            dim,
+        )),
+        Line::from(""),
+    ]
+}
+
+/// Overall totals (request/token counts and billed/subscription summary).
+fn usage_totals_lines(t: &UsageTotals) -> Vec<Line<'static>> {
+    vec![
+        Line::from(format!(
+            "Overall: {} requests · {} tokens (in {} / out {} / cache-r {} / cache-w {})",
+            t.requests,
+            format_usage_tokens(t.tokens()),
+            format_usage_tokens(t.input),
+            format_usage_tokens(t.output),
+            format_usage_tokens(t.cache_read),
+            format_usage_tokens(t.cache_write),
+        )),
+        Line::from(format!(
+            "Billed: {}   Subscription tokens: {}   Unknown-pricing rows: {}",
+            format_usage_cost(t.billed_usd),
+            format_usage_tokens(t.subscription_tokens),
+            t.unknown_pricing_rows,
+        )),
+    ]
+}
+
+/// A titled table of usage rows. When `model_header` is set the rows include a
+/// leading model column (the by-model table); otherwise it's provider-only.
+fn usage_table(title: &str, model_header: Option<&str>, rows: &[UsageRow]) -> Vec<Line<'static>> {
+    let dim = Style::default().fg(Color::DarkGray);
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(rows.len() + 2);
+    lines.push(Line::from(Span::styled(
+        title.to_string(),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )));
+    let header = match model_header {
+        Some(model) => format!(
+            "  {model:<34} {:<16} {:>8} {:>10} {:>14}",
+            "PROVIDER", "REQ", "TOKENS", "COST"
+        ),
+        None => format!(
+            "  {:<16} {:>8} {:>10} {:>14}",
+            "PROVIDER", "REQ", "TOKENS", "COST"
+        ),
+    };
+    lines.push(Line::from(Span::styled(header, dim)));
+    for row in rows {
+        let line = if model_header.is_some() {
+            format!(
+                "  {:<34} {:<16} {:>8} {:>10} {:>14}",
+                truncate_chars(row.model.as_deref().unwrap_or("-"), 34),
+                truncate_chars(&row.provider, 16),
+                row.requests,
+                format_usage_tokens(row.tokens()),
+                usage_cost_cell(row),
+            )
+        } else {
+            format!(
+                "  {:<16} {:>8} {:>10} {:>14}",
+                truncate_chars(&row.provider, 16),
+                row.requests,
+                format_usage_tokens(row.tokens()),
+                usage_cost_cell(row),
+            )
+        };
+        lines.push(Line::from(line));
+    }
+    lines
+}
+
+fn push_usage_warnings(lines: &mut Vec<Line<'static>>, stats: &UsageStats) {
+    if stats.warnings.is_empty() {
+        return;
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("{} thread(s) skipped:", stats.warnings.len()),
+        Style::default().fg(Color::Yellow),
+    )));
+    for warning in &stats.warnings {
+        lines.push(Line::from(Span::styled(
+            format!("  - {warning}"),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+}
+
+fn usage_cost_cell(row: &UsageRow) -> String {
+    let base = if row.subscription {
+        "subscription".to_string()
+    } else if !row.cost_known {
+        "unknown".to_string()
+    } else {
+        format_usage_cost(row.cost_usd)
+    };
+    if row.estimated {
+        format!("{base}*")
+    } else {
+        base
+    }
+}
+
+fn format_usage_cost(cost: f64) -> String {
+    format!("${cost:.2}")
+}
+
+fn format_usage_tokens(count: u64) -> String {
+    if count >= 1_000_000_000 {
+        format!("{:.1}B", count as f64 / 1_000_000_000.0)
+    } else if count >= 1_000_000 {
+        format!("{:.1}M", count as f64 / 1_000_000.0)
+    } else if count >= 1_000 {
+        format!("{:.1}k", count as f64 / 1_000.0)
+    } else {
+        count.to_string()
+    }
+}
+
+fn format_age(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{}h", secs / 3600)
+    }
 }
 
 fn render_automations(f: &mut Frame, app: &MonitorApp, area: Rect) {
