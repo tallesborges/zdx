@@ -15,6 +15,7 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::prelude::*;
 use serde_json::Value;
 use zdx_engine::config::{self, paths};
+use zdx_engine::core::usage_stats::{self, UsageStats};
 use zdx_engine::{agent_activity, automations, pidfile};
 
 use crate::ui;
@@ -201,6 +202,20 @@ pub struct MonitorApp {
     pub supervised_services: BTreeSet<String>,
     /// Per-service cooldown for automatic restart attempts.
     pub last_auto_restart: BTreeMap<String, Instant>,
+    /// Cached usage/cost aggregation for the Usage tab (computed lazily).
+    pub usage_stats: Option<CachedUsageStats>,
+    /// Vertical scroll offset for the Usage tab.
+    pub usage_scroll: usize,
+    /// Rendered line count of the cached usage view (for scroll clamping).
+    pub usage_line_count: usize,
+    /// Default model used to attribute legacy usage (mirrors `config.model`).
+    pub default_model: String,
+}
+
+/// A cached snapshot of the usage aggregation plus when it was computed.
+pub struct CachedUsageStats {
+    pub stats: UsageStats,
+    pub computed_at: Instant,
 }
 
 pub struct ThreadInfo {
@@ -239,16 +254,18 @@ pub enum Section {
     ActiveAgents,
     Config,
     Threads,
+    Usage,
     Automations,
     Logs,
 }
 
 impl Section {
-    pub const ALL: [Section; 6] = [
+    pub const ALL: [Section; 7] = [
         Section::Services,
         Section::ActiveAgents,
         Section::Config,
         Section::Threads,
+        Section::Usage,
         Section::Automations,
         Section::Logs,
     ];
@@ -259,6 +276,7 @@ impl Section {
             Section::ActiveAgents => "Active Agents",
             Section::Config => "Config",
             Section::Threads => "Threads",
+            Section::Usage => "Usage",
             Section::Automations => "Automations",
             Section::Logs => "Logs",
         }
@@ -269,7 +287,8 @@ impl Section {
             Section::Services => Section::ActiveAgents,
             Section::ActiveAgents => Section::Config,
             Section::Config => Section::Threads,
-            Section::Threads => Section::Automations,
+            Section::Threads => Section::Usage,
+            Section::Usage => Section::Automations,
             Section::Automations => Section::Logs,
             Section::Logs => Section::Services,
         }
@@ -280,7 +299,7 @@ impl MonitorApp {
     fn item_count(&self) -> usize {
         match self.active_section {
             Section::Services => self.services.len(),
-            Section::Config | Section::Logs => 0,
+            Section::Config | Section::Logs | Section::Usage => 0,
             Section::ActiveAgents => self.active_agents.len(),
             Section::Threads => self.threads.len(),
             Section::Automations => self.automations.len(),
@@ -322,6 +341,52 @@ fn config_page_size(app: &MonitorApp) -> usize {
 /// Maximum valid scroll offset so the last line stays visible.
 fn config_max_scroll(app: &MonitorApp) -> usize {
     app.config_line_count.saturating_sub(config_page_size(app))
+}
+
+/// Visible content rows in the Usage panel (same chrome as Config).
+fn usage_page_size(app: &MonitorApp) -> usize {
+    (app.terminal_height.saturating_sub(8) as usize).max(1)
+}
+
+/// Maximum valid scroll offset for the Usage panel.
+fn usage_max_scroll(app: &MonitorApp) -> usize {
+    app.usage_line_count.saturating_sub(usage_page_size(app))
+}
+
+/// How long a cached usage snapshot stays fresh before an on-tick refresh.
+const USAGE_STALE_AFTER: Duration = Duration::from_secs(30);
+
+/// Recompute usage stats from scratch, replacing the cache on success.
+/// On failure the previous cache is kept and the error is surfaced.
+fn recompute_usage(app: &mut MonitorApp) {
+    match usage_stats::aggregate_usage(&app.default_model) {
+        Ok(stats) => {
+            let cached = CachedUsageStats {
+                stats,
+                computed_at: Instant::now(),
+            };
+            app.usage_line_count = ui::usage_line_count(&cached);
+            app.usage_stats = Some(cached);
+            app.usage_scroll = app.usage_scroll.min(usage_max_scroll(app));
+        }
+        Err(err) => app.set_status(format!("Usage stats failed: {err}")),
+    }
+}
+
+/// Refresh the usage cache when needed. Only runs while the Usage tab is
+/// active (unless `force`d by the refresh key) and only recomputes when the
+/// cache is missing or stale — never on every tick.
+fn refresh_usage(app: &mut MonitorApp, force: bool) {
+    if !force && app.active_section != Section::Usage {
+        return;
+    }
+    let stale = app
+        .usage_stats
+        .as_ref()
+        .is_none_or(|c| c.computed_at.elapsed() >= USAGE_STALE_AFTER);
+    if force || stale {
+        recompute_usage(app);
+    }
 }
 
 /// Number of log lines tailed from the newest log file.
@@ -397,6 +462,7 @@ fn load_logs(max_lines: usize) -> (Option<String>, Vec<String>) {
 fn build_app(root: &Path) -> Result<MonitorApp> {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let config = config::Config::load().context("load config")?;
+    let default_model = config.model.clone();
     let config_lines = build_config_lines(&config);
     let config_line_count = rendered_line_count(&config_lines);
     let (log_file_name, log_lines) = load_logs(LOG_TAIL_LINES);
@@ -425,6 +491,10 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
         should_quit: false,
         supervised_services: BTreeSet::new(),
         last_auto_restart: BTreeMap::new(),
+        usage_stats: None,
+        usage_scroll: 0,
+        usage_line_count: 0,
+        default_model,
     })
 }
 
@@ -469,6 +539,7 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
             app.active_section = app.active_section.next();
             app.selected_index = 0;
             app.config_scroll = 0;
+            app.usage_scroll = 0;
             if app.active_section == Section::Logs {
                 app.log_follow = true;
                 let total = app.log_lines.len();
@@ -483,6 +554,9 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
             if app.active_section == Section::Config {
                 let max = config_max_scroll(app);
                 app.config_scroll = app.config_scroll.saturating_add(1).min(max);
+            } else if app.active_section == Section::Usage {
+                let max = usage_max_scroll(app);
+                app.usage_scroll = app.usage_scroll.saturating_add(1).min(max);
             } else {
                 let count = app.item_count();
                 if count > 0 {
@@ -493,6 +567,8 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
         KeyCode::Char('k') | KeyCode::Up => {
             if app.active_section == Section::Config {
                 app.config_scroll = app.config_scroll.saturating_sub(1);
+            } else if app.active_section == Section::Usage {
+                app.usage_scroll = app.usage_scroll.saturating_sub(1);
             } else if app.selected_index > 0 {
                 app.selected_index -= 1;
             }
@@ -505,6 +581,19 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
         KeyCode::PageUp if app.active_section == Section::Config => {
             let page = config_page_size(app);
             app.config_scroll = app.config_scroll.saturating_sub(page);
+        }
+        KeyCode::PageDown if app.active_section == Section::Usage => {
+            let page = usage_page_size(app);
+            let max = usage_max_scroll(app);
+            app.usage_scroll = app.usage_scroll.saturating_add(page).min(max);
+        }
+        KeyCode::PageUp if app.active_section == Section::Usage => {
+            let page = usage_page_size(app);
+            app.usage_scroll = app.usage_scroll.saturating_sub(page);
+        }
+        KeyCode::Char('R') if app.active_section == Section::Usage => {
+            recompute_usage(app);
+            app.set_status("Usage stats refreshed");
         }
         KeyCode::Char('y') => copy_selected_thread_id(app),
         KeyCode::Char('r') => restart_selected_service(app),
@@ -608,6 +697,9 @@ fn handle_mouse_event(app: &mut MonitorApp, kind: MouseEventKind) {
             if app.active_section == Section::Config {
                 let max = config_max_scroll(app);
                 app.config_scroll = app.config_scroll.saturating_add(1).min(max);
+            } else if app.active_section == Section::Usage {
+                let max = usage_max_scroll(app);
+                app.usage_scroll = app.usage_scroll.saturating_add(1).min(max);
             } else if app.active_section == Section::Logs {
                 let total = app.log_lines.len();
                 if total > 0 && app.log_selected + 1 < total {
@@ -627,6 +719,8 @@ fn handle_mouse_event(app: &mut MonitorApp, kind: MouseEventKind) {
         MouseEventKind::ScrollUp => {
             if app.active_section == Section::Config {
                 app.config_scroll = app.config_scroll.saturating_sub(1);
+            } else if app.active_section == Section::Usage {
+                app.usage_scroll = app.usage_scroll.saturating_sub(1);
             } else if app.active_section == Section::Logs {
                 if app.log_selected > 0 {
                     app.log_selected -= 1;
@@ -772,6 +866,7 @@ fn refresh_app(app: &mut MonitorApp) {
     }
     app.clamp_selection();
     supervise_services(app);
+    refresh_usage(app, false);
 }
 
 /// Run the monitor dashboard.
