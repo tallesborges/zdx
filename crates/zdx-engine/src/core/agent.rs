@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::future;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Result, anyhow};
 use futures_util::StreamExt;
@@ -882,34 +883,38 @@ async fn run_turn_inner(
                 let outcome: std::result::Result<
                     StreamState,
                     (TurnError, bool, Option<StreamState>),
-                > = match request_stream(
-                    &setup.client,
-                    &messages,
-                    &setup.tools,
-                    system_prompt,
-                    cancel,
-                )
-                .await
-                {
-                    Ok(stream) => {
-                        match consume_stream(
-                            stream,
-                            &messages,
-                            sender,
-                            cancel,
-                            &setup.model,
-                            &setup.provider,
-                        )
-                        .await
-                        {
-                            Ok(state) => Ok(state),
-                            Err((err, state)) => {
-                                let can_retry = can_transparently_retry_stream(&state);
-                                Err((err, can_retry, Some(state)))
+                > = {
+                    let request_started_at = Instant::now();
+                    match request_stream(
+                        &setup.client,
+                        &messages,
+                        &setup.tools,
+                        system_prompt,
+                        cancel,
+                    )
+                    .await
+                    {
+                        Ok(stream) => {
+                            match consume_stream(
+                                stream,
+                                &messages,
+                                sender,
+                                cancel,
+                                &setup.model,
+                                &setup.provider,
+                                request_started_at,
+                            )
+                            .await
+                            {
+                                Ok(state) => Ok(state),
+                                Err((err, state)) => {
+                                    let can_retry = can_transparently_retry_stream(&state);
+                                    Err((err, can_retry, Some(state)))
+                                }
                             }
                         }
+                        Err(err) => Err((err, true, None)),
                     }
-                    Err(err) => Err((err, true, None)),
                 };
 
                 match outcome {
@@ -1308,6 +1313,14 @@ struct StreamState {
     /// events for per-provider attribution. Empty in unit tests that build a
     /// `StreamState` directly and don't assert provider.
     provider: String,
+    /// When this attempt's provider request was initiated (before the stream
+    /// opened). Used to derive per-request latency on the terminal usage
+    /// event. Defaults to construction time; `consume_stream` overrides it
+    /// with the pre-request timestamp.
+    request_started_at: Instant,
+    /// When the first content token (text/reasoning/tool) arrived, for
+    /// time-to-first-token. `None` if no content arrived this attempt.
+    first_token_at: Option<Instant>,
 }
 
 impl StreamState {
@@ -1319,11 +1332,22 @@ impl StreamState {
             pending_usage: crate::providers::Usage::default(),
             emitted_visible_content: false,
             provider: String::new(),
+            request_started_at: Instant::now(),
+            first_token_at: None,
         }
     }
 
     fn needs_tool_execution(&self) -> bool {
         self.stop_reason.as_deref() == Some("tool_use") && self.turn.has_tool_uses()
+    }
+
+    /// Marks that visible assistant content was emitted, capturing the
+    /// first-token timestamp on the initial transition.
+    fn mark_visible_content(&mut self) {
+        if self.first_token_at.is_none() {
+            self.first_token_at = Some(Instant::now());
+        }
+        self.emitted_visible_content = true;
     }
 
     /// Emits one combined `AgentEvent::UsageUpdate` for any buffered usage
@@ -1332,6 +1356,40 @@ impl StreamState {
     /// exec) are additive, so a single combined event is equivalent to
     /// emitting each accumulated delta separately.
     fn flush_pending_usage(&mut self, sender: &EventSender) {
+        self.emit_pending_usage(sender, None, None);
+    }
+
+    /// Terminal flush for a successful request: attaches per-request latency
+    /// (wall-clock duration + time-to-first-token) to the emitted usage
+    /// event. Used only on the `consume_stream` EOF-success path so timing
+    /// rides exactly one usage event per request (no double counting across
+    /// fragmented flushes).
+    fn flush_final_usage(&mut self, sender: &EventSender) {
+        if self.pending_usage.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let duration_ms = u64::try_from(
+            now.saturating_duration_since(self.request_started_at)
+                .as_millis(),
+        )
+        .unwrap_or(u64::MAX);
+        let ttft_ms = self.first_token_at.map(|t| {
+            u64::try_from(
+                t.saturating_duration_since(self.request_started_at)
+                    .as_millis(),
+            )
+            .unwrap_or(u64::MAX)
+        });
+        self.emit_pending_usage(sender, Some(duration_ms), ttft_ms);
+    }
+
+    fn emit_pending_usage(
+        &mut self,
+        sender: &EventSender,
+        duration_ms: Option<u64>,
+        ttft_ms: Option<u64>,
+    ) {
         if self.pending_usage.is_empty() {
             return;
         }
@@ -1343,6 +1401,8 @@ impl StreamState {
             cache_creation_input_tokens: usage.cache_creation_input_tokens,
             model: self.turn.model.clone(),
             provider: self.provider.clone(),
+            duration_ms,
+            ttft_ms,
         });
     }
 }
@@ -1402,9 +1462,11 @@ async fn consume_stream(
     cancel: Option<&CancellationToken>,
     model: &str,
     provider: &str,
+    request_started_at: Instant,
 ) -> std::result::Result<StreamState, (TurnError, StreamState)> {
     let mut state = StreamState::new(model.to_string());
     state.provider = provider.to_string();
+    state.request_started_at = request_started_at;
 
     loop {
         if interrupt::is_interrupted() || cancel.is_some_and(CancellationToken::is_cancelled) {
@@ -1421,8 +1483,10 @@ async fn consume_stream(
                 // EOF without an explicit `MessageCompleted`: defensive
                 // flush so any buffered usage from a `MessageStart` /
                 // `MessageDelta` tick that hadn't yet hit a visible event
-                // still reaches downstream consumers on success.
-                state.flush_pending_usage(sender);
+                // still reaches downstream consumers on success. This is the
+                // request's terminal usage event, so it carries per-request
+                // latency.
+                state.flush_final_usage(sender);
                 return Ok(state);
             }
             Err(_) => continue,
@@ -1449,7 +1513,7 @@ fn handle_stream_event(
             part.text.push_str(&text);
             state.flush_pending_usage(sender);
             sender.send(AgentEvent::AssistantDelta { text });
-            state.emitted_visible_content = true;
+            state.mark_visible_content();
         }
         StreamEvent::ContentBlockStart {
             index,
@@ -1461,7 +1525,7 @@ fn handle_stream_event(
         } => {
             state.flush_pending_usage(sender);
             handle_tool_content_start(index, id, name, id_origin, sender, &mut state.turn);
-            state.emitted_visible_content = true;
+            state.mark_visible_content();
         }
         StreamEvent::ContentBlockStart {
             index,
@@ -1506,7 +1570,7 @@ fn handle_stream_event(
             if let Some(event) = build_input_json_delta(index, &partial_json, &mut state.turn) {
                 state.flush_pending_usage(sender);
                 sender.send(event);
-                state.emitted_visible_content = true;
+                state.mark_visible_content();
             }
         }
         StreamEvent::ReasoningDelta { index, reasoning } => {
@@ -1524,7 +1588,7 @@ fn handle_stream_event(
             if let Some(event) = event_opt {
                 state.flush_pending_usage(sender);
                 sender.send(event);
-                state.emitted_visible_content = true;
+                state.mark_visible_content();
             }
         }
         StreamEvent::ReasoningSignatureDelta {
@@ -1548,7 +1612,7 @@ fn handle_stream_event(
                 if let Some(event) = tool_event {
                     sender.send(event);
                 }
-                state.emitted_visible_content = true;
+                state.mark_visible_content();
             }
             // Per-part Gemini signatures (text + tool_use) ride this channel.
             // Reasoning signatures still flow through `ReasoningSignatureDelta`
@@ -3214,7 +3278,16 @@ mod tests {
         )];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None, "", "").await;
+        let result = consume_stream(
+            provider_stream,
+            &[],
+            &sender,
+            None,
+            "",
+            "",
+            std::time::Instant::now(),
+        )
+        .await;
         let Err((err, state)) = result else {
             panic!("stream should error out");
         };
@@ -3251,7 +3324,16 @@ mod tests {
         let events: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![Err(transport_err)];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None, "", "").await;
+        let result = consume_stream(
+            provider_stream,
+            &[],
+            &sender,
+            None,
+            "",
+            "",
+            std::time::Instant::now(),
+        )
+        .await;
         let Err((err, state)) = result else {
             panic!("stream should error out");
         };
@@ -3301,7 +3383,16 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None, "", "").await;
+        let result = consume_stream(
+            provider_stream,
+            &[],
+            &sender,
+            None,
+            "",
+            "",
+            std::time::Instant::now(),
+        )
+        .await;
         let Err((_err, state)) = result else {
             panic!("stream should error out");
         };
@@ -3400,7 +3491,16 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None, "", "").await;
+        let result = consume_stream(
+            provider_stream,
+            &[],
+            &sender,
+            None,
+            "",
+            "",
+            std::time::Instant::now(),
+        )
+        .await;
         let Err((_err, state)) = result else {
             panic!("stream should error out");
         };
@@ -3447,7 +3547,16 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let _ = consume_stream(provider_stream, &[], &sender, None, "", "").await;
+        let _ = consume_stream(
+            provider_stream,
+            &[],
+            &sender,
+            None,
+            "",
+            "",
+            std::time::Instant::now(),
+        )
+        .await;
 
         let usage_evt = rx.try_recv().expect("expected UsageUpdate first");
         assert!(
@@ -3498,7 +3607,16 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let _ = consume_stream(provider_stream, &[], &sender, None, "", "").await;
+        let _ = consume_stream(
+            provider_stream,
+            &[],
+            &sender,
+            None,
+            "",
+            "",
+            std::time::Instant::now(),
+        )
+        .await;
 
         let usage_evt = rx.try_recv().expect("expected UsageUpdate first");
         assert!(
@@ -3553,7 +3671,16 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let _ = consume_stream(provider_stream, &[], &sender, None, "", "").await;
+        let _ = consume_stream(
+            provider_stream,
+            &[],
+            &sender,
+            None,
+            "",
+            "",
+            std::time::Instant::now(),
+        )
+        .await;
 
         // First event must be the flushed UsageUpdate (triggered by the
         // ToolUse start arm). The subsequent InputJsonDelta does not need
@@ -3615,7 +3742,16 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let _ = consume_stream(provider_stream, &[], &sender, None, "", "").await;
+        let _ = consume_stream(
+            provider_stream,
+            &[],
+            &sender,
+            None,
+            "",
+            "",
+            std::time::Instant::now(),
+        )
+        .await;
 
         let first = rx.try_recv().expect("expected first event");
         assert!(
@@ -3668,7 +3804,16 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let _ = consume_stream(provider_stream, &[], &sender, None, "", "").await;
+        let _ = consume_stream(
+            provider_stream,
+            &[],
+            &sender,
+            None,
+            "",
+            "",
+            std::time::Instant::now(),
+        )
+        .await;
 
         let first = rx.try_recv().expect("expected first event");
         assert!(
@@ -3726,7 +3871,16 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None, "", "").await;
+        let result = consume_stream(
+            provider_stream,
+            &[],
+            &sender,
+            None,
+            "",
+            "",
+            std::time::Instant::now(),
+        )
+        .await;
         let Err((_err, state)) = result else {
             panic!("stream should error out");
         };
@@ -3773,7 +3927,16 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None, "", "").await;
+        let result = consume_stream(
+            provider_stream,
+            &[],
+            &sender,
+            None,
+            "",
+            "",
+            std::time::Instant::now(),
+        )
+        .await;
         let Ok(state) = result else {
             panic!("stream should succeed on EOF");
         };
@@ -3824,7 +3987,16 @@ mod tests {
             canceller.cancel();
         });
 
-        let result = consume_stream(provider_stream, &[], &sender, Some(&cancel), "", "").await;
+        let result = consume_stream(
+            provider_stream,
+            &[],
+            &sender,
+            Some(&cancel),
+            "",
+            "",
+            std::time::Instant::now(),
+        )
+        .await;
         let Err((err, state)) = result else {
             panic!("stream should be interrupted");
         };
@@ -3874,7 +4046,7 @@ mod tests {
             )),
         ];
         let s1: ProviderStream = Box::pin(stream::iter(attempt1));
-        let r1 = consume_stream(s1, &[], &sender, None, "", "").await;
+        let r1 = consume_stream(s1, &[], &sender, None, "", "", std::time::Instant::now()).await;
         let Err((_, discarded)) = r1 else {
             panic!("attempt 1 should fail");
         };
@@ -3900,7 +4072,7 @@ mod tests {
             }),
         ];
         let s2: ProviderStream = Box::pin(stream::iter(attempt2));
-        let r2 = consume_stream(s2, &[], &sender, None, "", "").await;
+        let r2 = consume_stream(s2, &[], &sender, None, "", "", std::time::Instant::now()).await;
         assert!(r2.is_ok(), "attempt 2 should succeed");
 
         // Drain rx and pin the strict ordering: exactly one UsageUpdate
@@ -3962,7 +4134,16 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None, "", "").await;
+        let result = consume_stream(
+            provider_stream,
+            &[],
+            &sender,
+            None,
+            "",
+            "",
+            std::time::Instant::now(),
+        )
+        .await;
         let Err((_err, state)) = result else {
             panic!("stream should error out");
         };
@@ -4000,7 +4181,16 @@ mod tests {
         ];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
-        let result = consume_stream(provider_stream, &[], &sender, None, "", "").await;
+        let result = consume_stream(
+            provider_stream,
+            &[],
+            &sender,
+            None,
+            "",
+            "",
+            std::time::Instant::now(),
+        )
+        .await;
         let Err((_err, state)) = result else {
             panic!("stream should error out");
         };

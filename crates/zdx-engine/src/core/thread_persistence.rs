@@ -211,6 +211,15 @@ pub enum ThreadEvent {
         /// or a custom provider name). `None` on older transcripts.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider: Option<String>,
+        /// Wall-clock request duration in milliseconds. `Some` only on the
+        /// terminal usage event of a successful request. `None` on older
+        /// transcripts and interim/failed usage.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+        /// Time-to-first-token in milliseconds. `Some` only on the terminal
+        /// usage event when content arrived. `None` on older transcripts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ttft_ms: Option<u64>,
         ts: String,
     },
 
@@ -326,8 +335,15 @@ impl ThreadEvent {
         }
     }
 
-    /// Creates a new usage event with optional model/provider attribution.
-    pub fn usage(usage: Usage, model: Option<String>, provider: Option<String>) -> Self {
+    /// Creates a new usage event with optional model/provider attribution and
+    /// per-request latency (present only on a request's terminal usage event).
+    pub fn usage(
+        usage: Usage,
+        model: Option<String>,
+        provider: Option<String>,
+        duration_ms: Option<u64>,
+        ttft_ms: Option<u64>,
+    ) -> Self {
         Self::Usage {
             input_tokens: usage.input,
             output_tokens: usage.output,
@@ -335,6 +351,8 @@ impl ThreadEvent {
             cache_write_tokens: usage.cache_write,
             model,
             provider,
+            duration_ms,
+            ttft_ms,
             ts: chrono_timestamp(),
         }
     }
@@ -1043,6 +1061,8 @@ impl UsagePersistor {
                 cache_creation_input_tokens,
                 model,
                 provider,
+                duration_ms,
+                ttft_ms,
             } => {
                 self.current_model = (!model.is_empty()).then(|| model.clone());
                 self.current_provider = (!provider.is_empty()).then(|| provider.clone());
@@ -1063,9 +1083,13 @@ impl UsagePersistor {
                 if *output_tokens > 0 {
                     if let Some(mut usage) = self.pending.take() {
                         usage.output += *output_tokens;
-                        events.push(self.usage_event(usage));
+                        events.push(self.usage_event(usage, *duration_ms, *ttft_ms));
                     } else {
-                        events.push(self.usage_event(Usage::new(0, *output_tokens, 0, 0)));
+                        events.push(self.usage_event(
+                            Usage::new(0, *output_tokens, 0, 0),
+                            *duration_ms,
+                            *ttft_ms,
+                        ));
                     }
                 }
             }
@@ -1125,16 +1149,24 @@ impl UsagePersistor {
         if let Some(usage) = self.pending.take()
             && usage.total() > 0
         {
-            events.push(self.usage_event(usage));
+            events.push(self.usage_event(usage, None, None));
         }
     }
 
-    /// Builds a usage `ThreadEvent`, attaching the current model/provider.
-    fn usage_event(&self, usage: Usage) -> ThreadEvent {
+    /// Builds a usage `ThreadEvent`, attaching the current model/provider and
+    /// optional per-request latency (present only on terminal usage events).
+    fn usage_event(
+        &self,
+        usage: Usage,
+        duration_ms: Option<u64>,
+        ttft_ms: Option<u64>,
+    ) -> ThreadEvent {
         ThreadEvent::usage(
             usage,
             self.current_model.clone(),
             self.current_provider.clone(),
+            duration_ms,
+            ttft_ms,
         )
     }
 
@@ -3159,7 +3191,7 @@ mod tests {
 
     #[test]
     fn test_usage_event_serialization() {
-        let usage = ThreadEvent::usage(Usage::new(1000, 500, 2000, 100), None, None);
+        let usage = ThreadEvent::usage(Usage::new(1000, 500, 2000, 100), None, None, None, None);
         let json = serde_json::to_string(&usage).unwrap();
         assert!(json.contains("\"type\":\"usage\""));
         assert!(json.contains("\"input_tokens\":1000"));
@@ -3194,10 +3226,10 @@ mod tests {
         let events = vec![
             ThreadEvent::user_message("hello"),
             ThreadEvent::assistant_message("hi"),
-            ThreadEvent::usage(Usage::new(100, 50, 200, 25), None, None),
+            ThreadEvent::usage(Usage::new(100, 50, 200, 25), None, None, None, None),
             ThreadEvent::user_message("bye"),
             ThreadEvent::assistant_message("goodbye"),
-            ThreadEvent::usage(Usage::new(150, 75, 300, 30), None, None),
+            ThreadEvent::usage(Usage::new(150, 75, 300, 30), None, None, None, None),
         ];
 
         let (cumulative, latest) = extract_usage_from_thread_events(&events);
@@ -3210,9 +3242,9 @@ mod tests {
         // Latest must keep context tokens and fold the output-only tail rather
         // than collapsing to the final zero-context fragment.
         let events = vec![
-            ThreadEvent::usage(Usage::new(2, 3, 250_000, 880), None, None),
-            ThreadEvent::usage(Usage::new(0, 1522, 0, 0), None, None),
-            ThreadEvent::usage(Usage::new(0, 480, 0, 0), None, None),
+            ThreadEvent::usage(Usage::new(2, 3, 250_000, 880), None, None, None, None),
+            ThreadEvent::usage(Usage::new(0, 1522, 0, 0), None, None, None, None),
+            ThreadEvent::usage(Usage::new(0, 480, 0, 0), None, None, None, None),
         ];
 
         let (cumulative, latest) = extract_usage_from_thread_events(&events);
@@ -3247,6 +3279,8 @@ mod tests {
                 Usage::new(1000, 500, 2000, 100),
                 None,
                 None,
+                None,
+                None,
             ))
             .unwrap();
 
@@ -3258,6 +3292,68 @@ mod tests {
         // Single event: cumulative = latest
         assert_eq!(cumulative, Usage::new(1000, 500, 2000, 100));
         assert_eq!(latest, Usage::new(1000, 500, 2000, 100));
+    }
+
+    #[tokio::test]
+    async fn test_persist_task_records_latency_on_terminal_usage() {
+        let _temp = setup_temp_zdx_home();
+
+        let thread = Thread::with_id(unique_thread_id("usage-latency")).unwrap();
+        let (tx, rx) = create_event_channel();
+        let persist_handle = spawn_thread_persist_task(thread.clone(), rx);
+
+        // Interim usage (input only) carries no latency.
+        tx.send(Arc::new(AgentEvent::UsageUpdate {
+            input_tokens: 100,
+            output_tokens: 0,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            model: "m".to_string(),
+            provider: "p".to_string(),
+            duration_ms: None,
+            ttft_ms: None,
+        }))
+        .unwrap();
+        // Terminal usage (output) carries per-request latency.
+        tx.send(Arc::new(AgentEvent::UsageUpdate {
+            input_tokens: 0,
+            output_tokens: 50,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            model: "m".to_string(),
+            provider: "p".to_string(),
+            duration_ms: Some(1234),
+            ttft_ms: Some(56),
+        }))
+        .unwrap();
+        tx.send(Arc::new(AgentEvent::TurnFinished {
+            status: TurnStatus::Completed,
+            final_text: "done".to_string(),
+            messages: Vec::new(),
+            prior_message_count: 0,
+        }))
+        .unwrap();
+        drop(tx);
+
+        persist_handle.await.unwrap();
+
+        // Reload from on-disk JSONL: the merged usage event preserves latency
+        // through a serde round-trip.
+        let events = thread.read_events().unwrap();
+        let usage = events
+            .iter()
+            .find_map(|e| match e {
+                ThreadEvent::Usage {
+                    input_tokens,
+                    output_tokens,
+                    duration_ms,
+                    ttft_ms,
+                    ..
+                } => Some((*input_tokens, *output_tokens, *duration_ms, *ttft_ms)),
+                _ => None,
+            })
+            .expect("expected a persisted usage event");
+        assert_eq!(usage, (100, 50, Some(1234), Some(56)));
     }
 
     #[tokio::test]
@@ -3275,6 +3371,8 @@ mod tests {
             cache_creation_input_tokens: 5,
             model: String::new(),
             provider: String::new(),
+            duration_ms: None,
+            ttft_ms: None,
         }))
         .unwrap();
         tx.send(Arc::new(AgentEvent::UsageUpdate {
@@ -3284,6 +3382,8 @@ mod tests {
             cache_creation_input_tokens: 0,
             model: String::new(),
             provider: String::new(),
+            duration_ms: None,
+            ttft_ms: None,
         }))
         .unwrap();
         tx.send(Arc::new(AgentEvent::TurnFinished {
@@ -3325,6 +3425,8 @@ mod tests {
             cache_creation_input_tokens: 5,
             model: "claude-opus-4-6".to_string(),
             provider: "claude-cli".to_string(),
+            duration_ms: None,
+            ttft_ms: None,
         }))
         .unwrap();
         drop(tx);
@@ -3360,6 +3462,8 @@ mod tests {
             cache_creation_input_tokens: 25,
             model: String::new(),
             provider: String::new(),
+            duration_ms: None,
+            ttft_ms: None,
         }))
         .unwrap();
         tx.send(Arc::new(AgentEvent::TurnFinished {
@@ -3415,6 +3519,8 @@ mod tests {
             cache_creation_input_tokens: 6,
             model: String::new(),
             provider: String::new(),
+            duration_ms: None,
+            ttft_ms: None,
         }))
         .unwrap();
         drop(tx);
