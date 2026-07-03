@@ -11,6 +11,7 @@ pub mod imagine;
 pub mod mcp;
 pub mod memory;
 pub mod models;
+pub mod stats;
 pub mod telegram;
 pub mod threads;
 pub mod worktree;

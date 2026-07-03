@@ -175,6 +175,8 @@ enum Commands {
         #[command(subcommand)]
         command: ThreadCommands,
     },
+    /// Show usage and cost totals per provider and model, across saved threads
+    Stats,
     /// Search and index ZDX memory collections
     Memory {
         #[command(subcommand)]
@@ -899,6 +901,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             .await
         }
         Commands::Threads { command } => dispatch_threads(command, context).await,
+        Commands::Stats => commands::stats::run(context.config),
         Commands::Imagine {
             prompt,
             out,
