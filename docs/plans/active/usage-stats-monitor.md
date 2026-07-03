@@ -1,7 +1,15 @@
+# Status
+- **MVP complete (Slices 1–4), verified, uncommitted.** `just ci` / `just test` green (1230 tests) as of 2026-07-01.
+  - Slice 1 — `zdx stats` + shared cost helper: ✅ done.
+  - Slice 2 — model+provider on usage events: ✅ done.
+  - Slice 3 — fork dedup: ✅ resolved (no dedup needed; guard test added).
+  - Slice 4 — monitor `Usage` tab: ✅ done.
+- **Remaining is post-MVP:** Polish Phase 1 (`--json` + time ranges, CLI), Phase 2 (per-project breakdown + cache savings, CLI **and** monitor), Phase 3 (fast incremental stats / derived SQLite cache — **recommended next** given current scan slowness), Phase 4 (latency: tok/s + TTFT, CLI **and** monitor), plus the Later / Deferred list.
+
 # Goals
 - Let the user see token usage and USD cost broken down **per provider** and **per model**, derived from saved threads.
 - Attribute usage correctly when the model/provider is switched mid-thread.
-- Avoid double-counting usage from forked threads (which copy the parent's events).
+- Avoid double-counting usage across forked/`/btw`/handoff threads (verified: none copy the parent's usage events, so no dedup is required — see Slice 3).
 - Record the model **and provider** on each usage event so any saved thread can answer "which model/provider produced this usage" (also surfaced in `zdx threads show`).
 - Surface the breakdown in two read-only places: a `zdx stats` CLI summary and a `Usage` tab in `zdx-monitor`.
 
@@ -16,7 +24,7 @@
 
 # Dependencies & sequencing
 - This plan **subsumes** the former `docs/plans/active/thread-model-metadata.md` (now removed). That plan's schema work — recording model on each `usage` event — is folded into **Slice 2** here, with its open decision #1 resolved in favor of storing **provider too** (a per-provider cost feature cannot derive provider from a bare model id: `resolve_provider("claude-opus-4-6")` defaults to Anthropic even if it ran via `claude-cli`, `crates/zdx-providers/src/lib.rs:535`).
-- Ship-first ordering is preserved: Slice 1 ships an *estimated* summary over existing data; Slice 2 makes it accurate for new data; Slice 3 removes fork double-counting; Slice 4 mirrors it in the monitor.
+- Ship-first ordering is preserved: Slice 1 ships an *estimated* summary over existing data; Slice 2 makes it accurate for new data; Slice 3 confirmed forks need no dedup; Slice 4 mirrors it in the monitor.
 
 # Design principles
 - User journey drives order: get a visible summary first, then make it accurate.
@@ -57,29 +65,29 @@ Capabilities that already exist and must be reused, not rebuilt.
 
 # MVP slices (ship-shaped, demoable)
 
-## Slice 1: `zdx stats` summary + shared cost helper (estimated / legacy)
+## Slice 1: `zdx stats` summary + shared cost helper (estimated / legacy) — ✅ DONE
 - **Goal**: A working summary today, scanning current JSONL with no schema changes. Numbers are **estimated** until Slice 2/3 land — ship it labeled as such.
 - **Scope checklist**:
-  - [ ] Relocate cost math into `zdx-engine` next to `ModelPricing` as pure helpers (e.g. `models::calculate_cost(usage, pricing)` + `cache_savings`). Update **all three** callers to delegate: TUI (`state.rs:230`), bot (`message.rs:1883`), and the new aggregator. (Layering is safe: tui/monitor/cli/bot all depend on `zdx-engine`, not vice versa.)
-  - [ ] New shared aggregator module in `zdx-engine` (e.g. `crates/zdx-engine/src/core/usage_stats.rs`): reuse `list_threads()` + `load_thread_events()` (no hand-rolled dir scans), sum `Usage` events per thread.
-  - [ ] **Resilience**: return `StatsResult { totals, warnings: Vec<…> }`; skip any thread that fails to read/parse and record a warning rather than aborting the whole scan.
-  - [ ] **Subscription handling**: classify each row via `ProviderKind::from_id(provider).is_subscription()`. Subscription providers report tokens + `subscription` (no billed USD), excluded from the billed-USD total. Non-subscription with known pricing → USD. Missing pricing → "cost unknown" bucket (never panic).
-  - [ ] Best-effort attribution for old data: attribute a thread's usage to its `model_override` (existing meta helper), falling back to the config default model; resolve provider via `provider_for_model`.
-  - [ ] `zdx stats` subcommand: add `Stats` variant to `Commands` (`mod.rs:76`), route in `dispatch_command`, add `commands/stats.rs` modeled on `commands/threads.rs`.
-  - [ ] Print: overall totals (requests, tokens, billed USD, subscription tokens) + per-provider table + per-model table + a banner: "Estimated — global across all ZDX threads; old usage lacks per-request model/provider; forked threads may be double-counted; subagent/helper + image spend excluded; subscription providers shown as flat-rate."
+  - [x] Relocate cost math into `zdx-engine` next to `ModelPricing` as pure helpers (e.g. `models::calculate_cost(usage, pricing)` + `cache_savings`). Update **all three** callers to delegate: TUI (`state.rs:230`), bot (`message.rs:1883`), and the new aggregator. (Layering is safe: tui/monitor/cli/bot all depend on `zdx-engine`, not vice versa.)
+  - [x] New shared aggregator module in `zdx-engine` (e.g. `crates/zdx-engine/src/core/usage_stats.rs`): reuse `list_threads()` + `load_thread_events()` (no hand-rolled dir scans), sum `Usage` events per thread.
+  - [x] **Resilience**: return `StatsResult { totals, warnings: Vec<…> }`; skip any thread that fails to read/parse and record a warning rather than aborting the whole scan.
+  - [x] **Subscription handling**: classify each row via `ProviderKind::from_id(provider).is_subscription()`. Subscription providers report tokens + `subscription` (no billed USD), excluded from the billed-USD total. Non-subscription with known pricing → USD. Missing pricing → "cost unknown" bucket (never panic).
+  - [x] Best-effort attribution for old data: attribute a thread's usage to its `model_override` (existing meta helper), falling back to the config default model; resolve provider via `provider_for_model`.
+  - [x] `zdx stats` subcommand: add `Stats` variant to `Commands` (`mod.rs:76`), route in `dispatch_command`, add `commands/stats.rs` modeled on `commands/threads.rs`.
+  - [x] Print: overall totals (requests, tokens, billed USD, subscription tokens) + per-provider table + per-model table + a banner: "Estimated — global across all ZDX threads; old usage lacks per-request model/provider; subagent/helper + image spend excluded; subscription providers shown as flat-rate."
 - **✅ Demo**: `zdx stats` prints overall totals and per-model/per-provider breakdowns that sum to the overall total, with the estimated/scope banner shown, and does not crash on an unreadable or unknown-model thread.
 - **Risks / failure modes**:
-  - Known inaccuracy until Slice 2/3 (mis-attributed switches, double-counted forks) can make **dollar totals wrong** — hence the banner. Consider landing Slice 1+2 together before treating output as real cost.
+  - Known inaccuracy until Slice 2 (mis-attributed model switches for *old* data) can make **dollar totals wrong** — hence the banner. New data (post-Slice-2) attributes per request.
 
-## Slice 2: Record model + provider on usage events (folded schema work)
+## Slice 2: Record model + provider on usage events (folded schema work) — ✅ DONE
 - **Goal**: New usage is attributed to the exact model/provider that produced it, even across mid-thread switches; the aggregator consumes it.
 - **Scope checklist**:
-  - [ ] Add `model: String` + `provider: String` to `AgentEvent::UsageUpdate` (`crates/zdx-types/src/events.rs:136`). Provider string = `ProviderKind::id()`.
-  - [ ] Carry `provider` on `RunTurnSetup` (currently model-only) — it's already resolved as a local `ProviderKind` in `build_run_turn_setup` (`crates/zdx-engine/src/core/agent.rs:1051`) — and onto `StreamState`, so `flush_pending_usage` (`:1185`) emits both directly rather than re-resolving from config.
-  - [ ] Add `model: Option<String>` + `provider: Option<String>` to the persisted `Usage` ThreadEvent (`thread_persistence.rs:203`) with `#[serde(default, skip_serializing_if = "Option::is_none")]`. Update the `ThreadEvent::usage(...)` constructor signature to accept them.
-  - [ ] `UsagePersistor`: replace loose `pending: Option<Usage>` with `pending: Option<PendingUsage { usage, model, provider }>` and a `current_model`/`current_provider` carry, so **every** flush path — including `finish()` (`thread_persistence.rs:~1107`) and output-only usage — attaches the right metadata. (The persistor only sees the event stream; metadata must ride the event.)
-  - [ ] Surface in `zdx threads show`: `format_transcript` currently skips `Usage` events (`thread_persistence.rs:2232`); derive a "Models used: …" line (folded from the former thread-model-metadata plan).
-  - [ ] Aggregator resolution order: (a) event has provider → `find_by_provider_and_id(provider, model)`; (b) model string is provider-qualified → parse + resolve; (c) bare id → `find_by_id`, mark row **estimated**.
+  - [x] Add `model: String` + `provider: String` to `AgentEvent::UsageUpdate` (`crates/zdx-types/src/events.rs:136`). Provider string = `ProviderKind::id()`.
+  - [x] Carry `provider` on `RunTurnSetup` (currently model-only) — it's already resolved as a local `ProviderKind` in `build_run_turn_setup` (`crates/zdx-engine/src/core/agent.rs:1051`) — and onto `StreamState`, so `flush_pending_usage` (`:1185`) emits both directly rather than re-resolving from config.
+  - [x] Add `model: Option<String>` + `provider: Option<String>` to the persisted `Usage` ThreadEvent (`thread_persistence.rs:203`) with `#[serde(default, skip_serializing_if = "Option::is_none")]`. Update the `ThreadEvent::usage(...)` constructor signature to accept them.
+  - [x] `UsagePersistor`: replace loose `pending: Option<Usage>` with `pending: Option<PendingUsage { usage, model, provider }>` and a `current_model`/`current_provider` carry, so **every** flush path — including `finish()` (`thread_persistence.rs:~1107`) and output-only usage — attaches the right metadata. (The persistor only sees the event stream; metadata must ride the event.)
+  - [x] Surface in `zdx threads show`: `format_transcript` currently skips `Usage` events (`thread_persistence.rs:2232`); derive a "Models used: …" line (folded from the former thread-model-metadata plan).
+  - [x] Aggregator resolution order: (a) event has provider → `find_by_provider_and_id(provider, model)`; (b) model string is provider-qualified → parse + resolve; (c) bare id → `find_by_id`, mark row **estimated**.
 - **Blast radius** (must update or use `..`): exhaustive `UsageUpdate` destructure in TUI (`crates/zdx-tui/src/features/transcript/update.rs:178`) and engine unit tests; `ThreadEvent::usage()` call sites (3 prod in the persistor + ~5–8 tests in `thread_persistence.rs` ~3106–3190); the subagent test fixture string (`subagent.rs:460`).
 - **Docs**: update `docs/SPEC.md` §8 to note `usage` carries optional `model`/`provider`; add a short usage-stats data-flow note to `docs/ARCHITECTURE.md`; update `crates/zdx-engine/AGENTS.md` (new `core/usage_stats.rs`) and `crates/zdx-cli/AGENTS.md` (new `commands/stats.rs`).
 - **✅ Demo**: in one thread, switch model mid-conversation, send a turn on each; `zdx stats` shows two distinct model/provider rows with the right split; `zdx threads show <id>` lists the models used. A round-trip test (emit `UsageUpdate{model,provider}` → persist → reload) preserves both fields.
@@ -87,27 +95,23 @@ Capabilities that already exist and must be reused, not rebuilt.
   - Schema must stay additive — verify an old transcript (no model/provider on usage) still loads and aggregates via fallback. No `SCHEMA_VERSION` bump.
   - Usage may arrive in multiple fragments per turn — attaching model/provider to *every* usage event (not a separate "model changed" event) keeps aggregation order-insensitive.
 
-## Slice 3: Fork de-duplication (fork only; handoff/`/btw` need none)
-- **Goal**: Forked threads stop inflating totals; handoff lineage is recorded for UI only.
-- **Scope checklist**:
-  - [ ] Add `fork_from: Option<String>` + `inherited_event_count: usize` to `Meta` (`thread_persistence.rs:125`), alongside existing `handoff_from`. Update the `meta_with_root*` constructors and direct `Meta { … }` literals (TUI `transcript/build.rs:153,297`; `thread_persistence.rs:~4042`).
-  - [ ] In `fork_thread_sync` (`crates/zdx-tui/src/runtime/handlers/thread.rs:392`): after copying the parent prefix, write **fresh** lineage metadata on the new child — `fork_from = parent_id`, `inherited_event_count = events.len()`. Do **not** preserve the parent's own `fork_from`/`inherited_event_count`, or a fork-of-a-fork will skip only the original prefix and double-count the middle segment.
-  - [ ] Aggregator skips the first `inherited_event_count` events of any thread with `fork_from`.
-  - [ ] Handoff: leave `handoff_from` for lineage/UI but do **not** skip events — handoff creates a fresh thread with no copied parent events (`thread_create` → `Thread::new_with_root_and_source`, `crates/zdx-tui/src/runtime/handlers/thread.rs:316`).
-  - [ ] `/btw` side-chats: **no dedup needed and none should be added.** `/btw` persists base context via `messages_to_events(base_messages)` (`crates/zdx-tui/src/runtime/handlers/agent.rs:151`), and `ChatMessage` carries no usage — so a btw thread's file contains **only its own** `Usage` events.
-  - [ ] Docs: note `meta.fork_from`/`inherited_event_count` in SPEC §8 metadata.
-- **✅ Demo**: fork a thread after some usage, run a new turn in the fork; `zdx stats` total increases only by the fork's *new* usage. Fork the fork and confirm no double-count of the middle segment. Open a `/btw` side-chat, run a turn, confirm its cost is counted exactly once and the parent's prior cost is unchanged.
-- **Risks / failure modes**:
-  - Must not change fork replay or context-window display (forks still need the full inherited transcript for context).
-  - If count-based boundaries prove fragile, fall back to an explicit persisted `ThreadEvent::LineageBoundary { source_thread_id }` after the copied prefix; aggregation counts usage only after the last boundary.
+## Slice 3: Fork de-duplication — RESOLVED (no dedup needed)
+- **Finding (verified in code + test)**: the dedup this slice was designed for is unnecessary. Forks do **not** copy the parent's usage. The timeline fork (`ForkThread`/`ForkThreadAsTab` → `fork_thread_sync`) is built from `cells_to_events(&cells)` (`crates/zdx-tui/src/overlays/timeline.rs:317`), which only reconstructs message/reasoning/tool events from display cells — it emits no `Usage` (and no `Meta`) events. So a forked thread's file contains only its own usage, exactly like `/btw` (`messages_to_events`) and handoff (fresh thread, no copy). The earlier premise ("`fork_thread_sync` appends raw events including `Usage`") was wrong: the events it appends are display-derived, not raw thread JSONL.
+- **What was done**: added a guard test `cells_to_events_never_emits_usage_or_meta` (`crates/zdx-tui/src/overlays/timeline.rs`) locking the invariant that fork/`/btw` context reconstruction never carries usage/meta, so a future change can't silently reintroduce double-counting.
+- **Not done (intentionally)**: no `Meta.fork_from`/`inherited_event_count`, no aggregator skip logic, no `LineageBoundary` event — all would be dead code with nothing to skip. Revisit only if fork is ever changed to persist raw thread events (incl. `Usage`); the guard test would need to move to `fork_thread_sync` at that point.
+- **✅ Demo**: `cargo nextest run -p zdx-tui cells_to_events` passes; aggregating a forked thread adds only its own new usage (parent's usage stays counted once in the parent file).
 
-## Slice 4: `Usage` tab in zdx-monitor
+## Slice 4: `Usage` tab in zdx-monitor — ✅ DONE
 - **Goal**: Same breakdown visible in the live monitor dashboard.
 - **Scope checklist**:
-  - [ ] Add `Usage` to `Section`, `Section::ALL`, label, and `next()` (`crates/zdx-monitor/src/app.rs:236`).
-  - [ ] Add `Section::Usage => render_usage(...)` (`crates/zdx-monitor/src/ui.rs:18`) + footer hint; model `render_usage` on `render_threads` (`ui.rs:258`).
-  - [ ] **Refresh mechanism** (monitor refreshes every 1s tick + on keypress): store `usage_stats: Option<CachedUsageStats { computed_at }>`; compute lazily on first entry to the Usage tab and at startup; recompute only when stale (interval or thread-dir mtime change), **not** on every tick. Add a dedicated refresh key that doesn't collide with `r` (restart service).
-  - [ ] Update `crates/zdx-monitor/AGENTS.md` if new files are added.
+  - [x] Add `Usage` to `Section`, `Section::ALL`, label, and `next()` (`crates/zdx-monitor/src/app.rs`). Placed between `Threads` and `Automations`.
+  - [x] Add `Section::Usage => render_usage(...)` (`crates/zdx-monitor/src/ui.rs`) + footer hint.
+  - [x] **Refresh mechanism** (monitor refreshes every 1s tick + on keypress): store `usage_stats: Option<CachedUsageStats { stats, computed_at }>`; recompute only when stale or via a dedicated refresh key, **not** on every tick. Added `R` (Shift+R) as the refresh key (distinct from `r` = restart service).
+  - [x] Update `crates/zdx-monitor/AGENTS.md` if new files are added → no new files, so left unchanged.
+- **Implemented as**:
+  - `render_usage` builds the same overall/per-provider/per-model tables as `zdx stats` (shared `usage_stats::aggregate_usage`), rendered as a **scrollable Paragraph** (modeled on `render_config` for scroll, not `render_threads`) with `j/k`, PgUp/PgDn, and mouse-wheel scrolling.
+  - Compute is **lazy on first entry** to the tab (not at startup, to avoid scanning all threads at launch); while the tab is active it auto-refreshes only when the cache is older than `USAGE_STALE_AFTER = 30s`; `R` forces an immediate recompute. A one-time scan failure keeps the previous cache and surfaces a status message.
+  - Attribution uses `default_model` captured from `config.model` at monitor startup.
 - **✅ Demo**: `just monitor` → Tab to `Usage` → see overall + per-provider/per-model tables matching `zdx stats`, without per-second rescans.
 - **Risks / failure modes**:
   - Full rescan on every tick would be slow with many threads — the cache mechanism above is required, not optional.
@@ -126,11 +130,11 @@ Capabilities that already exist and must be reused, not rebuilt.
 - **Attribution carrier**: `model`+`provider` directly on every usage event (order-insensitive across fragmented updates), not a separate model-change event.
 - **Cost helper consolidation includes the bot** — all three current formulas collapse into one engine helper.
 - **Subscription display**: subscription providers shown as flat-rate `subscription` (tokens only), excluded from billed-USD total; an optional token-equivalent estimate may be shown parenthetically. Note: historical data can't distinguish Anthropic API-key vs OAuth (only provider kind is stored), so the `is_subscription` provider-kind flag is the classifier.
-- **Fork dedup boundary**: `Meta.fork_from` + `inherited_event_count` written fresh on each fork; explicit `LineageBoundary` event is the fallback if nested forks prove fragile.
-- **Handoff**: lineage-only (`handoff_from`); no usage dedup.
+- **Fork dedup**: not needed (Slice 3 resolved). Forks reconstruct context from display cells (`cells_to_events`), which carry no usage events, so nothing is double-counted. A guard test locks the invariant; no lineage metadata or skip logic was added.
+- **Handoff / `/btw`**: also carry no inherited usage (fresh thread / `messages_to_events`); no dedup.
 - **Aggregator location**: one shared `zdx-engine` module consumed by CLI and monitor.
-- **Storage**: on-demand JSONL scan now; a derived SQLite cache with incremental offset+mtime sync is deferred until scans are measurably slow.
-- **Slice 1 framing**: ship as explicitly "estimated/legacy"; drop the banner once Slice 2+3 land (or land 1+2 together before presenting real cost).
+- **Storage**: on-demand JSONL scan for the MVP; a derived SQLite cache with incremental offset+mtime sync is now **promoted to Phase 3** (triggered by measured slowness at ~5k+ threads). JSONL stays canonical.
+- **Slice 1 framing**: ship as explicitly "estimated/legacy"; drop the banner once Slice 2 makes new data attributable (Slice 3 needed no change — forks don't double-count).
 
 # Testing
 - Manual smoke demos per slice (the ✅ Demo lines above).
@@ -140,7 +144,7 @@ Capabilities that already exist and must be reused, not rebuilt.
   - Subscription provider → bucketed as subscription, excluded from billed USD.
   - Unknown model → "cost unknown" bucket, no panic.
   - Malformed JSON line skipped; unreadable thread file skipped with a warning (scan still completes).
-  - Forked thread with `fork_from` counts only post-fork usage; fork-of-fork doesn't double-count the middle segment.
+  - Fork/`/btw` context reconstruction (`cells_to_events`) carries no usage events (guard test), so forks add only their own usage — no double-count.
   - Round-trip: `UsageUpdate{model,provider}` → persist → reload preserves both.
 - CLI integration test in `crates/zdx-cli/tests/` asserting `zdx stats` output structure; assert CLI and monitor call the same aggregator (no separate math).
 - Verification: `just ci-fast` during iteration; `cargo nextest run -p zdx-engine` for persistence/round-trip/dedup tests; `just test` before wrapping up.
@@ -151,16 +155,38 @@ Capabilities that already exist and must be reused, not rebuilt.
 - Add `--json` output and time-range filtering (e.g. `--since 7d`) bucketed by day, using each usage event's RFC3339 `ts` (already present); skip/warn on malformed timestamps.
 - ✅ Check-in demo: `zdx stats --since 7d --json` returns a machine-readable per-day, per-model breakdown.
 
-## Phase 2: Richer breakdowns
-- Add per-project/folder breakdown via `meta.root_path` (with an "unknown project" bucket for old/missing roots); show cache-hit savings (the consolidated helper).
-- ✅ Check-in demo: `zdx stats` shows a cache-savings figure and a per-project split.
+## Phase 2: Richer breakdowns (CLI **and** monitor)
+- **Goal**: Add a per-project/folder breakdown and a cache-hit savings figure, surfaced identically in `zdx stats` and the monitor `Usage` tab (same shared aggregator, no second math).
+- **Scope checklist**:
+  - [ ] **Aggregator (shared)**: extend `UsageStats` with a `by_project: Vec<UsageRow>`-style breakdown keyed off `meta.root_path` (with an "unknown project" bucket for old/missing roots), and a cache-savings total on `UsageTotals` computed via the consolidated cost helper (`cache_savings`). All new fields live once in `crates/zdx-engine/src/core/usage_stats.rs`.
+  - [ ] **CLI render**: `crates/zdx-cli/src/cli/commands/stats.rs` prints the cache-savings figure in the overall block and a new "By project:" table.
+  - [ ] **Monitor render**: extend `build_usage_lines` in `crates/zdx-monitor/src/ui.rs` to add the cache-savings figure to the totals block and a "By project:" table (reuse the existing `usage_table(...)` helper). Scroll math needs no change — `usage_line_count` is derived from the same lines.
+  - [ ] Keep numbers identical across both surfaces (existing contract) and keep the per-provider/per-model tables unchanged.
+- **✅ Check-in demo**: `zdx stats` **and** `just monitor` → `Usage` tab both show a cache-savings figure and a per-project split, with matching numbers.
 - Note: a per-agent-type (main/subagent/advisor) breakdown is **not** included here — subagent/advisor transcripts aren't persisted; it depends on the deferred usage ledger.
+
+## Phase 3: Fast, incremental stats (derived SQLite cache) — recommended next
+- **Goal**: Keep aggregation fast at thousands of threads and stop the monitor freezing. JSONL stays canonical; SQLite is a **derived, disposable cache only** (consistent with Non-goals — this is not a storage migration). Prompted by real slowness at ~5k+ threads: today `aggregate_usage` fully parses every event of every thread synchronously on the monitor's UI thread.
+- **Scope checklist**:
+  - [ ] **Don't block the UI**: run `aggregate_usage` off the monitor event loop (worker thread + channel); render a "Computing… (N threads)" placeholder and swap in the result when ready. The dashboard must stay live during a scan.
+  - [ ] **Lean scan**: read thread JSONL line-by-line and only parse `usage`/`meta` (peek `"type"`, deserialize a minimal struct), skipping the large message/reasoning/tool payloads that the aggregator currently deserializes and discards.
+  - [ ] **Incremental cache**: persist per-thread partial aggregates in a derived SQLite db (e.g. `$ZDX_HOME/cache/usage.sqlite`) keyed by `(thread_id, mtime, size)` with a stored byte offset; on refresh only re-scan threads whose mtime/size changed and resume from the last fully-parsed offset. Rebuild transparently if the cache is missing/corrupt.
+  - [ ] Both `zdx stats` and the monitor read through the same cached path; first run backfills, later runs are incremental. Drop the fixed 30s auto-refresh in favor of cheap incremental refresh (plus manual `R`).
+- **✅ Check-in demo**: with thousands of threads, first `zdx stats` builds the cache; a second run and the monitor `Usage` tab return near-instantly, re-scanning only changed threads; opening the tab never freezes the dashboard.
+- **Risks**: cache-invalidation correctness — append-only threads mean the offset-resume must handle a skipped partial last line (as `read_events` already does); keep JSONL authoritative and treat the cache as safe to delete.
+
+## Phase 4: Latency metrics (tokens/sec, TTFT) — CLI **and** monitor
+- **Goal**: Compare provider/model speed via tokens-per-second and time-to-first-token, surfaced in `zdx stats` and the monitor `Usage` tab.
+- **Scope checklist**:
+  - [ ] **Schema (additive)**: record per-request timing on the usage event — e.g. `duration_ms` (request wall time) + `ttft_ms` (time to first token) — as optional fields with serde defaults (no `SCHEMA_VERSION` bump; old transcripts load as `None`). Emit where usage is flushed (`flush_pending_usage` / stream state), reusing the model/provider carry added in Slice 2.
+  - [ ] **Aggregator (shared)**: derive tok/s (`output_tokens / duration`) and a TTFT summary (e.g. median) per provider/model in `usage_stats.rs`, ignoring rows that lack timing.
+  - [ ] **Render (both surfaces)**: add tok/s + TTFT to the `zdx stats` tables and to `build_usage_lines` in the monitor; show `—` where timing is absent.
+- **✅ Check-in demo**: after new turns, `zdx stats` and the monitor `Usage` tab show tok/s and TTFT per model/provider; pre-change usage shows `—` and never breaks aggregation.
+- **Note**: like Slice 2, only data recorded after this lands is measurable; old usage has no timing.
 
 # Later / Deferred
 - **Subagent/helper usage ledger** — capture cost from `--no-thread` child execs (subagents + internal helpers) via a separate append-only usage ledger or a parent-thread usage event. Unlocks the per-agent-type breakdown. Revisit when total-spend accuracy matters more than per-thread breakdown.
 - **Image-generation cost** — `zdx imagine` spend; needs a non-token pricing unit and a usage sink. Revisit if image spend matters.
-- **Derived SQLite stats cache** (incremental offset+mtime sync, oh-my-pi style) — revisit when on-demand scans feel slow (many hundreds/thousands of threads).
-- **Latency / tokens-per-second / TTFT** — requires recording per-request timing in the usage event; revisit if perf comparison across providers is wanted.
 - **`meta.model` mirror for fast listing** — a thread-level model badge in `threads list`/picker without scanning events (former metadata plan's Phase 3). Defer unless list-level display is needed.
 - **Backfilling old multi-model threads** — only resolvable heuristically; revisit only if historical accuracy is requested.
 - **Error-rate metric** — depends on persisting per-request stop reason/errors alongside usage; revisit if reliability comparison is wanted.
