@@ -1046,7 +1046,8 @@ fn handle_submit_while_agent_running(
 
     input.history.push(text.to_string());
     input.reset_navigation();
-    input.enqueue_prompt(text.to_string());
+    let images = input.take_images();
+    input.enqueue_prompt(text.to_string(), images);
     input.clear();
     (vec![], vec![], None)
 }

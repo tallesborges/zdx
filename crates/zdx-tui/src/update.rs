@@ -599,7 +599,7 @@ fn maybe_send_next_queued_prompt_for_tab(
         return true;
     }
 
-    let Some(text) = tui.input.pop_queued_prompt() else {
+    let Some(queued) = tui.input.pop_queued_prompt() else {
         return false;
     };
 
@@ -610,8 +610,13 @@ fn maybe_send_next_queued_prompt_for_tab(
         && thread_id.is_some()
         && tui.thread.title.is_none()
         && !tui.tasks.state(TaskKind::ThreadTitle).is_running();
-    let (queue_effects, queue_mutations) =
-        input::build_send_effects_for_tab(&text, thread_id, should_suggest_title, vec![], tab);
+    let (queue_effects, queue_mutations) = input::build_send_effects_for_tab(
+        &queued.text,
+        thread_id,
+        should_suggest_title,
+        queued.images,
+        tab,
+    );
     apply_tab_mutations(tui, queue_mutations);
     effects.extend(queue_effects);
     true
@@ -1904,7 +1909,9 @@ mod tests {
     fn test_queue_drains_on_turn_finished() {
         let config = zdx_engine::config::Config::default();
         let mut app = AppState::new(config, PathBuf::new(), None, None);
-        app.tui.input.enqueue_prompt("queued prompt".to_string());
+        app.tui
+            .input
+            .enqueue_prompt("queued prompt".to_string(), vec![]);
 
         let effects = update(
             &mut app,
@@ -1958,7 +1965,7 @@ mod tests {
         app.background_tab_mut(background_tab_id)
             .expect("background tab")
             .input
-            .enqueue_prompt("queued background prompt".to_string());
+            .enqueue_prompt("queued background prompt".to_string(), vec![]);
 
         let effects = update(
             &mut app,
