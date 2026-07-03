@@ -4,7 +4,7 @@
   - Slice 2 — model+provider on usage events: ✅ done.
   - Slice 3 — fork dedup: ✅ resolved (no dedup needed; guard test added).
   - Slice 4 — monitor `Usage` tab: ✅ done.
-- **Remaining is post-MVP:** Polish Phase 1 (`--json` + time ranges, CLI), Phase 2 (per-project breakdown + cache savings, CLI **and** monitor), Phase 3 (fast incremental stats / derived SQLite cache — **recommended next** given current scan slowness), Phase 4 (latency: tok/s + TTFT, CLI **and** monitor), plus the Later / Deferred list.
+- **Remaining is post-MVP:** Polish Phase 1 (`--json` + time ranges, CLI), Phase 2 (per-project breakdown + cache savings, CLI **and** monitor), ~~Phase 3~~ **✅ done** (lean scan + non-blocking monitor scan + incremental SQLite cache — repeat scans ~100× faster), Phase 4 (latency: tok/s + TTFT, CLI **and** monitor — **recording schema landed**; aggregation/display pending), plus the Later / Deferred list.
 
 # Goals
 - Let the user see token usage and USD cost broken down **per provider** and **per model**, derived from saved threads.
@@ -165,20 +165,26 @@ Capabilities that already exist and must be reused, not rebuilt.
 - **✅ Check-in demo**: `zdx stats` **and** `just monitor` → `Usage` tab both show a cache-savings figure and a per-project split, with matching numbers.
 - Note: a per-agent-type (main/subagent/advisor) breakdown is **not** included here — subagent/advisor transcripts aren't persisted; it depends on the deferred usage ledger.
 
-## Phase 3: Fast, incremental stats (derived SQLite cache) — recommended next
-- **Goal**: Keep aggregation fast at thousands of threads and stop the monitor freezing. JSONL stays canonical; SQLite is a **derived, disposable cache only** (consistent with Non-goals — this is not a storage migration). Prompted by real slowness at ~5k+ threads: today `aggregate_usage` fully parses every event of every thread synchronously on the monitor's UI thread.
+## Phase 3: Fast, non-blocking stats — ✅ DONE
+- **Goal**: Keep aggregation fast at thousands of threads and stop the monitor freezing. JSONL stays canonical; the cache is a **derived, disposable** artifact only (consistent with Non-goals — not a storage migration).
+- **Baseline (measured, 5263 threads / 1.1 GB JSONL)**: full-parse `aggregate_usage` = **~2.0 s warm / ~6.4 s cold**, run synchronously on the monitor UI thread (that was the freeze).
 - **Scope checklist**:
-  - [ ] **Don't block the UI**: run `aggregate_usage` off the monitor event loop (worker thread + channel); render a "Computing… (N threads)" placeholder and swap in the result when ready. The dashboard must stay live during a scan.
-  - [ ] **Lean scan**: read thread JSONL line-by-line and only parse `usage`/`meta` (peek `"type"`, deserialize a minimal struct), skipping the large message/reasoning/tool payloads that the aggregator currently deserializes and discards.
-  - [ ] **Incremental cache**: persist per-thread partial aggregates in a derived SQLite db (e.g. `$ZDX_HOME/cache/usage.sqlite`) keyed by `(thread_id, mtime, size)` with a stored byte offset; on refresh only re-scan threads whose mtime/size changed and resume from the last fully-parsed offset. Rebuild transparently if the cache is missing/corrupt.
-  - [ ] Both `zdx stats` and the monitor read through the same cached path; first run backfills, later runs are incremental. Drop the fixed 30s auto-refresh in favor of cheap incremental refresh (plus manual `R`).
-- **✅ Check-in demo**: with thousands of threads, first `zdx stats` builds the cache; a second run and the monitor `Usage` tab return near-instantly, re-scanning only changed threads; opening the tab never freezes the dashboard.
-- **Risks**: cache-invalidation correctness — append-only threads mean the offset-resume must handle a skipped partial last line (as `read_events` already does); keep JSONL authoritative and treat the cache as safe to delete.
+  - [x] **Don't block the UI**: `aggregate_usage` runs on a worker thread (`std::thread` + `mpsc`); the monitor shows a "Computing usage stats…" placeholder (and a "· refreshing" title hint over a stale cache) and swaps in the result via `poll_usage_result` on the next tick. The dashboard stays live during a scan; `R` triggers a background refresh.
+  - [x] **Lean scan**: `usage_stats.rs` reads each thread JSONL line-by-line and only parses `usage`/`meta` (peeks `"type"` via `LineTag`, then a minimal struct), skipping large message/reasoning/tool payloads. **Result: ~2.0 s → ~1.08 s warm (~2×).** Covered by `lean_reader_extracts_usage_and_meta_skips_other_lines`.
+  - [x] **Incremental SQLite cache**: `$ZDX_HOME/cache/usage.sqlite` (via `rusqlite`, bundled) stores each thread's resolved per-`(provider, model)` buckets in `thread_usage`, keyed by `(thread_id, mtime, size)` in `thread_meta`. Each run lists files, re-scans only threads whose `(mtime, size)` changed, prunes deleted threads, then sums cached rows. `cache_meta` holds `schema_version` + `default_model`; a mismatch drops/rebuilds. Corrupt/unreadable file → delete + recreate. Cost stays out of the cache (raw tokens only), so pricing changes reflect immediately. Falls back to a full lean scan if the cache can't be opened. WAL + `busy_timeout` for CLI/monitor concurrency.
+  - [x] Both `zdx stats` and the monitor read the same cached aggregator (no second math). The 30 s monitor auto-refresh is non-blocking and now cheap (incremental).
+- **Measured result (5263 threads / 1.1 GB)**: first run builds a **2.1 MB** cache in ~3.2 s; **repeat runs ~0.02–0.03 s (~100×)**, re-scanning only changed threads. Output identical.
+- **Tests**: `cache_incremental_reflects_new_changed_and_deleted_threads`, `cache_rebuilds_when_corrupt`, `cache_reattributes_when_default_model_changes` (all path-explicit via `aggregate_usage_at`, temp dirs, no env mutation).
+- **✅ Demo**: `just monitor` → `Usage` never freezes; `zdx stats` is ~0.02 s on repeat runs, correct after adding/removing/editing threads.
+- **Not done (intentionally)**: byte-offset *resume* for a single ever-growing thread (changed threads are re-scanned whole — cheap since only the active thread changes between runs). Revisit only if one enormous thread dominates re-scan cost.
+
+
 
 ## Phase 4: Latency metrics (tokens/sec, TTFT) — CLI **and** monitor
 - **Goal**: Compare provider/model speed via tokens-per-second and time-to-first-token, surfaced in `zdx stats` and the monitor `Usage` tab.
+- **Sequencing (decided — option A)**: the **recording schema landed first, before Phase 3**, because old data can never be backfilled with timing — recording early maximizes historical coverage. Aggregation/display remain deferred until after Phase 3.
 - **Scope checklist**:
-  - [ ] **Schema (additive)**: record per-request timing on the usage event — e.g. `duration_ms` (request wall time) + `ttft_ms` (time to first token) — as optional fields with serde defaults (no `SCHEMA_VERSION` bump; old transcripts load as `None`). Emit where usage is flushed (`flush_pending_usage` / stream state), reusing the model/provider carry added in Slice 2.
+  - [x] **Schema (additive)**: record per-request timing on the usage event — `duration_ms` (request wall time) + `ttft_ms` (time to first token) — as optional fields with serde defaults (no `SCHEMA_VERSION` bump; old transcripts load as `None`). Done: added to `AgentEvent::UsageUpdate` and the persisted `Usage` `ThreadEvent`; measured in `StreamState` (`request_started_at` captured before `request_stream`, `first_token_at` at the first content token) and attached on exactly the `consume_stream` EOF-success flush (`flush_final_usage`) so it rides one usage event per request; the persistor carries it onto the terminal usage `ThreadEvent`.
   - [ ] **Aggregator (shared)**: derive tok/s (`output_tokens / duration`) and a TTFT summary (e.g. median) per provider/model in `usage_stats.rs`, ignoring rows that lack timing.
   - [ ] **Render (both surfaces)**: add tok/s + TTFT to the `zdx stats` tables and to `build_usage_lines` in the monitor; show `—` where timing is absent.
 - **✅ Check-in demo**: after new turns, `zdx stats` and the monitor `Usage` tab show tok/s and TTFT per model/provider; pre-change usage shows `—` and never breaks aggregation.
