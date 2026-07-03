@@ -44,6 +44,7 @@ zdx-assets.workspace = true
 zdx-providers.workspace = true
 zdx-tools.workspace = true
 zdx-types.workspace = true
+rusqlite = { version = "0.40.1", features = ["bundled"] }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
