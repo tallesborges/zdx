@@ -238,6 +238,7 @@ mod tests {
             root_path: None,
             modified: None,
             handoff_from: handoff_from.map(std::string::ToString::to_string),
+            ..Default::default()
         }
     }
 
@@ -407,6 +408,7 @@ mod tests {
                 root_path: None,
                 modified: None,
                 handoff_from: Some("B".to_string()),
+                ..Default::default()
             },
             ThreadSummary {
                 id: "B".to_string(),
@@ -414,6 +416,7 @@ mod tests {
                 root_path: None,
                 modified: None,
                 handoff_from: Some("A".to_string()),
+                ..Default::default()
             },
         ];
         let result = flatten_as_tree(&threads);

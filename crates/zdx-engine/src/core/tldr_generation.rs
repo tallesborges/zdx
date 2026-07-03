@@ -44,6 +44,7 @@ pub async fn generate_tldr(thread_id: &str, tldr_model: &str, root: &Path) -> Re
         tools_override: None,
         event_filter: Some(vec!["turn_finished".to_string()]),
         timeout: Some(Duration::from_mins(1)),
+        thread_origin_kind: Some("helper:tldr".to_string()),
         ..Default::default()
     };
 

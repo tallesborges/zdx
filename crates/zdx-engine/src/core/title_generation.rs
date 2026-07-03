@@ -29,6 +29,7 @@ pub async fn generate_title(message: &str, title_model: &str, root: &Path) -> Re
         tools_override: None,
         event_filter: Some(vec!["turn_finished".to_string()]),
         timeout: Some(Duration::from_mins(1)),
+        thread_origin_kind: Some("helper:title".to_string()),
         ..Default::default()
     };
 

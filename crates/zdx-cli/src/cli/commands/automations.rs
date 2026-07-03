@@ -381,6 +381,7 @@ fn resolve_automation_thread_opts(
     ThreadPersistenceOptions {
         thread_id: Some(default_thread_id),
         no_save: false,
+        ..Default::default()
     }
 }
 
@@ -555,6 +556,7 @@ mod tests {
         let opts = ThreadPersistenceOptions {
             thread_id: None,
             no_save: false,
+            ..Default::default()
         };
 
         let now = Utc.with_ymd_and_hms(2026, 2, 12, 7, 45, 0).unwrap();
@@ -571,6 +573,7 @@ mod tests {
         let opts = ThreadPersistenceOptions {
             thread_id: None,
             no_save: false,
+            ..Default::default()
         };
 
         let now = Utc.with_ymd_and_hms(2026, 2, 12, 7, 45, 0).unwrap();
@@ -587,6 +590,7 @@ mod tests {
         let opts = ThreadPersistenceOptions {
             thread_id: None,
             no_save: true,
+            ..Default::default()
         };
 
         let now = Utc.with_ymd_and_hms(2026, 2, 12, 7, 45, 0).unwrap();
@@ -600,6 +604,7 @@ mod tests {
         let opts = ThreadPersistenceOptions {
             thread_id: Some("custom-thread".to_string()),
             no_save: false,
+            ..Default::default()
         };
 
         let now = Utc.with_ymd_and_hms(2026, 2, 12, 7, 45, 0).unwrap();

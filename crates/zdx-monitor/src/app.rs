@@ -973,7 +973,7 @@ fn load_threads() -> Vec<ThreadInfo> {
 
     entries
         .into_iter()
-        .map(|entry| {
+        .filter_map(|entry| {
             let path = entry.path();
             let id = path
                 .file_stem()
@@ -991,35 +991,43 @@ fn load_threads() -> Vec<ThreadInfo> {
                 })
                 .unwrap_or_default();
 
-            let (title, surface) = read_thread_meta(&path);
+            let (title, surface, origin_kind) = read_thread_meta(&path);
+            // Hide child runs (subagents/helpers) from the dashboard list.
+            if origin_kind.is_some() {
+                return None;
+            }
 
-            ThreadInfo {
+            Some(ThreadInfo {
                 id,
                 title,
                 surface,
                 modified,
-            }
+            })
         })
         .collect()
 }
 
-fn read_thread_meta(path: &Path) -> (Option<String>, Option<String>) {
+fn read_thread_meta(path: &Path) -> (Option<String>, Option<String>, Option<String>) {
     use std::io::BufRead;
     let Ok(file) = fs::File::open(path) else {
-        return (None, None);
+        return (None, None, None);
     };
     let reader = io::BufReader::new(file);
     let Some(Ok(line)) = reader.lines().next() else {
-        return (None, None);
+        return (None, None, None);
     };
     let first_line = line;
     let v: Value = match serde_json::from_str(&first_line) {
         Ok(v) => v,
-        Err(_) => return (None, None),
+        Err(_) => return (None, None, None),
     };
     let title = v.get("title").and_then(Value::as_str).map(String::from);
     let surface = v.get("surface").and_then(Value::as_str).map(String::from);
-    (title, surface)
+    let origin_kind = v
+        .get("origin_kind")
+        .and_then(Value::as_str)
+        .map(String::from);
+    (title, surface, origin_kind)
 }
 
 fn load_automations(root: &Path) -> Vec<AutomationInfo> {

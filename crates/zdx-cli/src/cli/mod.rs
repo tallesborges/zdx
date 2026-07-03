@@ -62,6 +62,19 @@ struct ThreadArgs {
     /// Do not save the thread
     #[arg(long = "no-thread")]
     no_save: bool,
+
+    /// Internal: origin kind recorded in a new thread's meta (e.g. `subagent`,
+    /// `helper:title`). Set by parent agent runs that spawn child execs.
+    #[arg(long = "thread-origin-kind", hide = true, value_name = "KIND")]
+    thread_origin_kind: Option<String>,
+
+    /// Internal: parent thread id recorded in a new thread's meta.
+    #[arg(long = "thread-parent-id", hide = true, value_name = "ID")]
+    thread_parent_id: Option<String>,
+
+    /// Internal: named subagent recorded in a new thread's meta.
+    #[arg(long = "thread-subagent-name", hide = true, value_name = "NAME")]
+    thread_subagent_name: Option<String>,
 }
 
 impl From<&ThreadArgs> for ThreadPersistenceOptions {
@@ -69,6 +82,9 @@ impl From<&ThreadArgs> for ThreadPersistenceOptions {
         ThreadPersistenceOptions {
             thread_id: args.thread.clone(),
             no_save: args.no_save,
+            origin_kind: args.thread_origin_kind.clone(),
+            parent_thread_id: args.thread_parent_id.clone(),
+            subagent_name: args.thread_subagent_name.clone(),
         }
     }
 }
@@ -261,7 +277,11 @@ enum Commands {
 #[derive(clap::Subcommand)]
 enum ThreadCommands {
     /// Lists saved threads
-    List,
+    List {
+        /// Include child runs (subagents/helpers) normally hidden from the list
+        #[arg(long)]
+        all: bool,
+    },
     /// Shows a specific thread
     Show {
         /// The ID of the thread to show
@@ -1009,8 +1029,8 @@ async fn dispatch_bot(command: Option<BotCommands>, context: &DispatchContext<'_
 
 async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>) -> Result<()> {
     match command {
-        ThreadCommands::List => commands::threads::list(),
-        ThreadCommands::Show { id } => commands::threads::show(&id),
+        ThreadCommands::List { all } => commands::threads::list(all),
+        ThreadCommands::Show { id } => commands::threads::show(&id, context.config),
         ThreadCommands::Resume { id } => commands::threads::resume(id, context.config).await,
         ThreadCommands::Rename { id, title } => commands::threads::rename(&id, &title),
         ThreadCommands::Append { id, role, text } => commands::threads::append(&id, &role, &text),

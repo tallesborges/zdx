@@ -126,6 +126,17 @@ pub enum ThreadEvent {
         /// The ID of the parent thread this was handed off from (if any).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         handoff_from: Option<String>,
+        /// Origin kind for threads spawned by another agent run (e.g.
+        /// `"subagent"`, `"helper:title"`). `None` for top-level user threads.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin_kind: Option<String>,
+        /// Parent thread id that spawned this run (subagent/helper). `None`
+        /// for top-level user threads.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_thread_id: Option<String>,
+        /// Named subagent (e.g. `"explorer"`) when `origin_kind == "subagent"`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_name: Option<String>,
         /// Model override for this thread (overrides config.model).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model_override: Option<String>,
@@ -244,6 +255,9 @@ impl ThreadEvent {
             title: None,
             root_path,
             handoff_from: None,
+            origin_kind: None,
+            parent_thread_id: None,
+            subagent_name: None,
             model_override: None,
             thinking_override: None,
             pending_topic_title: false,
@@ -261,6 +275,32 @@ impl ThreadEvent {
             title: None,
             root_path,
             handoff_from,
+            origin_kind: None,
+            parent_thread_id: None,
+            subagent_name: None,
+            model_override: None,
+            thinking_override: None,
+            pending_topic_title: false,
+            ts: chrono_timestamp(),
+        }
+    }
+
+    /// Creates a new meta event carrying subagent/helper lineage.
+    pub fn meta_with_lineage(
+        root_path: Option<String>,
+        handoff_from: Option<String>,
+        origin_kind: Option<String>,
+        parent_thread_id: Option<String>,
+        subagent_name: Option<String>,
+    ) -> Self {
+        Self::Meta {
+            schema_version: SCHEMA_VERSION,
+            title: None,
+            root_path,
+            handoff_from,
+            origin_kind,
+            parent_thread_id,
+            subagent_name,
             model_override: None,
             thinking_override: None,
             pending_topic_title: false,
@@ -455,6 +495,10 @@ pub struct Thread {
     root_path: Option<String>,
     /// The ID of the parent thread this was handed off from (if any).
     handoff_from: Option<String>,
+    /// Subagent/helper lineage recorded in the meta line for new threads.
+    origin_kind: Option<String>,
+    parent_thread_id: Option<String>,
+    subagent_name: Option<String>,
 }
 
 impl Thread {
@@ -531,6 +575,9 @@ impl Thread {
             is_new,
             root_path,
             handoff_from,
+            origin_kind: None,
+            parent_thread_id: None,
+            subagent_name: None,
         })
     }
 
@@ -556,15 +603,37 @@ impl Thread {
             is_new,
             root_path: None,
             handoff_from: None,
+            origin_kind: None,
+            parent_thread_id: None,
+            subagent_name: None,
         })
+    }
+
+    /// Records subagent/helper lineage in the thread's meta line.
+    ///
+    /// Only effective before the meta event is written (i.e. on a new thread);
+    /// on an existing thread the meta line is already persisted and this is a
+    /// no-op for on-disk state.
+    pub fn set_origin(
+        &mut self,
+        origin_kind: Option<String>,
+        parent_thread_id: Option<String>,
+        subagent_name: Option<String>,
+    ) {
+        self.origin_kind = origin_kind;
+        self.parent_thread_id = parent_thread_id;
+        self.subagent_name = subagent_name;
     }
 
     /// Ensures the meta event is written for new threads.
     fn ensure_meta(&mut self) -> Result<()> {
         if self.is_new {
-            self.append_raw(&ThreadEvent::meta_with_root_and_source(
+            self.append_raw(&ThreadEvent::meta_with_lineage(
                 self.root_path.clone(),
                 self.handoff_from.clone(),
+                self.origin_kind.clone(),
+                self.parent_thread_id.clone(),
+                self.subagent_name.clone(),
             ))?;
             self.is_new = false;
         }
@@ -907,6 +976,9 @@ struct ThreadMeta {
     title: Option<String>,
     root_path: Option<String>,
     handoff_from: Option<String>,
+    origin_kind: Option<String>,
+    parent_thread_id: Option<String>,
+    subagent_name: Option<String>,
     model_override: Option<String>,
     thinking_override: Option<crate::config::ThinkingLevel>,
     pending_topic_title: bool,
@@ -943,6 +1015,9 @@ fn read_meta(path: &PathBuf) -> Result<Option<ThreadMeta>> {
         title,
         root_path,
         handoff_from,
+        origin_kind,
+        parent_thread_id,
+        subagent_name,
         model_override,
         thinking_override,
         pending_topic_title,
@@ -953,6 +1028,9 @@ fn read_meta(path: &PathBuf) -> Result<Option<ThreadMeta>> {
             title,
             root_path,
             handoff_from,
+            origin_kind,
+            parent_thread_id,
+            subagent_name,
             model_override,
             thinking_override,
             pending_topic_title,
@@ -1178,7 +1256,7 @@ impl UsagePersistor {
 }
 
 /// Summary information about a saved thread.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ThreadSummary {
     pub id: String,
     pub title: Option<String>,
@@ -1186,6 +1264,13 @@ pub struct ThreadSummary {
     pub modified: Option<SystemTime>,
     /// The ID of the parent thread this was handed off from (if any).
     pub handoff_from: Option<String>,
+    /// Origin kind for threads spawned by another agent run (subagent/helper).
+    /// `None` for top-level user threads.
+    pub origin_kind: Option<String>,
+    /// Parent thread id that spawned this run (subagent/helper).
+    pub parent_thread_id: Option<String>,
+    /// Named subagent when `origin_kind == "subagent"`.
+    pub subagent_name: Option<String>,
 }
 
 impl ThreadSummary {
@@ -1194,6 +1279,12 @@ impl ThreadSummary {
         self.title
             .clone()
             .unwrap_or_else(|| short_thread_id(&self.id))
+    }
+
+    /// Whether this thread was spawned by another agent run (subagent/helper)
+    /// rather than started directly by a user.
+    pub fn is_child_run(&self) -> bool {
+        self.origin_kind.is_some()
     }
 }
 
@@ -1750,11 +1841,29 @@ pub(crate) fn list_thread_files(dir: &Path) -> Result<Vec<ThreadFileMeta>> {
     Ok(files)
 }
 
-/// Lists all saved threads (sorted by modification time, newest first).
+/// Lists top-level saved threads (sorted by modification time, newest first).
+///
+/// Child runs spawned by another agent (subagents and internal helpers, i.e.
+/// any thread with `origin_kind` set) are excluded so they don't clutter
+/// pickers, `threads list`, search, memory export, or latest-thread resume.
+/// Use [`list_all_threads`] to include them. Usage stats are computed from a
+/// separate raw file scan (`list_thread_files`) and still count child runs.
 ///
 /// # Errors
 /// Returns an error if the threads directory cannot be read.
 pub fn list_threads() -> Result<Vec<ThreadSummary>> {
+    Ok(list_all_threads()?
+        .into_iter()
+        .filter(|thread| !thread.is_child_run())
+        .collect())
+}
+
+/// Lists all saved threads including child runs (subagents/helpers), sorted by
+/// modification time, newest first.
+///
+/// # Errors
+/// Returns an error if the threads directory cannot be read.
+pub fn list_all_threads() -> Result<Vec<ThreadSummary>> {
     let mut threads: Vec<ThreadSummary> = list_thread_files(&threads_dir())?
         .into_iter()
         .map(|file| {
@@ -1764,7 +1873,10 @@ pub fn list_threads() -> Result<Vec<ThreadSummary>> {
                 title: meta.as_ref().and_then(|m| m.title.clone()),
                 root_path: meta.as_ref().and_then(|m| m.root_path.clone()),
                 modified: file.modified,
-                handoff_from: meta.and_then(|m| m.handoff_from),
+                handoff_from: meta.as_ref().and_then(|m| m.handoff_from.clone()),
+                origin_kind: meta.as_ref().and_then(|m| m.origin_kind.clone()),
+                parent_thread_id: meta.as_ref().and_then(|m| m.parent_thread_id.clone()),
+                subagent_name: meta.and_then(|m| m.subagent_name),
             }
         })
         .collect();
@@ -2360,6 +2472,13 @@ pub struct ThreadPersistenceOptions {
     pub thread_id: Option<String>,
     /// Do not save the thread.
     pub no_save: bool,
+    /// Origin kind recorded in a new thread's meta (e.g. `subagent`,
+    /// `helper:title`). Applied only when creating a new thread.
+    pub origin_kind: Option<String>,
+    /// Parent thread id recorded in a new thread's meta.
+    pub parent_thread_id: Option<String>,
+    /// Named subagent recorded in a new thread's meta.
+    pub subagent_name: Option<String>,
 }
 
 impl ThreadPersistenceOptions {
@@ -2380,7 +2499,13 @@ impl ThreadPersistenceOptions {
             return Ok(Some(Thread::with_id(id.clone())?));
         }
 
-        Ok(Some(Thread::new_with_root(root)?))
+        let mut thread = Thread::new_with_root(root)?;
+        thread.set_origin(
+            self.origin_kind.clone(),
+            self.parent_thread_id.clone(),
+            self.subagent_name.clone(),
+        );
+        Ok(Some(thread))
     }
 }
 
@@ -4283,6 +4408,55 @@ mod tests {
 
         thread.set_pending_topic_title(false).unwrap();
         assert!(!read_thread_pending_topic_title(&thread_id).unwrap());
+    }
+
+    #[test]
+    fn test_thread_lineage_roundtrip_and_list_filtering() {
+        let _temp = setup_temp_zdx_home();
+
+        // A normal top-level thread.
+        let normal_id = unique_thread_id("lineage-normal");
+        let mut normal = Thread::with_id(normal_id.clone()).unwrap();
+        normal.append(&ThreadEvent::user_message("hi")).unwrap();
+
+        // A tagged subagent child thread.
+        let child_id = unique_thread_id("lineage-child");
+        let mut child = Thread::with_id(child_id.clone()).unwrap();
+        child.set_origin(
+            Some("subagent".to_string()),
+            Some(normal_id.clone()),
+            Some("explorer".to_string()),
+        );
+        child.append(&ThreadEvent::user_message("do work")).unwrap();
+
+        // Lineage round-trips through the meta line; a normal thread has none.
+        let child_meta = read_meta(&threads_dir().join(format!("{child_id}.jsonl")))
+            .unwrap()
+            .unwrap();
+        assert_eq!(child_meta.origin_kind.as_deref(), Some("subagent"));
+        assert_eq!(
+            child_meta.parent_thread_id.as_deref(),
+            Some(normal_id.as_str())
+        );
+        assert_eq!(child_meta.subagent_name.as_deref(), Some("explorer"));
+
+        let normal_meta = read_meta(&threads_dir().join(format!("{normal_id}.jsonl")))
+            .unwrap()
+            .unwrap();
+        assert!(normal_meta.origin_kind.is_none());
+
+        // Default listing hides the child; the all-listing includes it.
+        let default_ids: Vec<String> = list_threads().unwrap().into_iter().map(|s| s.id).collect();
+        assert!(default_ids.contains(&normal_id));
+        assert!(!default_ids.contains(&child_id));
+
+        let all_ids: Vec<String> = list_all_threads()
+            .unwrap()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert!(all_ids.contains(&normal_id));
+        assert!(all_ids.contains(&child_id));
     }
 
     #[test]

@@ -6,8 +6,10 @@ use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use zdx_engine::config;
 use zdx_engine::core::thread_export::{self, ThreadExportOptions};
-use zdx_engine::core::thread_persistence;
+use zdx_engine::core::thread_persistence::{self, ThreadSummary};
+use zdx_engine::core::usage_stats::{self, UsageTotals};
 
+use super::stats::{format_cost, format_tokens};
 use crate::modes;
 
 /// Appends a message to an existing thread.
@@ -51,8 +53,12 @@ pub struct ToolsCommandOptions {
     pub json: bool,
 }
 
-pub fn list() -> Result<()> {
-    let threads = thread_persistence::list_threads().context("list threads")?;
+pub fn list(include_children: bool) -> Result<()> {
+    let threads = if include_children {
+        thread_persistence::list_all_threads().context("list threads")?
+    } else {
+        thread_persistence::list_threads().context("list threads")?
+    };
     if threads.is_empty() {
         println!("No threads found.");
     } else {
@@ -62,21 +68,110 @@ pub fn list() -> Result<()> {
                 .and_then(thread_persistence::format_timestamp)
                 .unwrap_or_else(|| "unknown".to_string());
             let display_title = info.display_title();
-            println!("{}  {}  {}", display_title, info.id, modified_str);
+            let origin = info
+                .origin_kind
+                .as_deref()
+                .map_or_else(String::new, |kind| match info.parent_thread_id.as_deref() {
+                    Some(parent) => {
+                        format!(
+                            "  [{kind} ← {}]",
+                            thread_persistence::short_thread_id(parent)
+                        )
+                    }
+                    None => format!("  [{kind}]"),
+                });
+            println!("{display_title}  {}  {modified_str}{origin}", info.id);
         }
     }
     Ok(())
 }
 
-pub fn show(id: &str) -> Result<()> {
+pub fn show(id: &str, config: &config::Config) -> Result<()> {
     let events = thread_persistence::load_thread_events(id)
         .with_context(|| format!("load thread '{id}'"))?;
     if events.is_empty() {
         println!("Thread '{id}' is empty or not found.");
-    } else {
-        println!("{}", thread_persistence::format_transcript(&events));
+        return Ok(());
     }
+
+    // Lineage (needs the full list so hidden child runs are visible here).
+    let all = thread_persistence::list_all_threads().unwrap_or_default();
+
+    if let Some(this) = all.iter().find(|s| s.id == id)
+        && let Some(kind) = this.origin_kind.as_deref()
+    {
+        let label = this
+            .subagent_name
+            .as_deref()
+            .map_or_else(|| kind.to_string(), |name| format!("{kind}/{name}"));
+        match this.parent_thread_id.as_deref() {
+            Some(parent) => println!(
+                "↳ Child run [{label}] of {}\n",
+                thread_persistence::short_thread_id(parent)
+            ),
+            None => println!("↳ Child run [{label}]\n"),
+        }
+    }
+
+    println!("{}", thread_persistence::format_transcript(&events));
+
+    print_child_runs(id, &all, config);
     Ok(())
+}
+
+/// Prints the child runs (subagents/helpers) spawned by thread `id`, each with
+/// its token/cost totals. Subagent children are listed before helper children.
+fn print_child_runs(id: &str, all: &[ThreadSummary], config: &config::Config) {
+    let mut children: Vec<&ThreadSummary> = all
+        .iter()
+        .filter(|s| s.parent_thread_id.as_deref() == Some(id))
+        .collect();
+    if children.is_empty() {
+        return;
+    }
+    // Subagents first, then helpers; `all` is already newest-first within each.
+    children.sort_by_key(|s| {
+        s.origin_kind
+            .as_deref()
+            .is_some_and(|kind| kind.starts_with("helper"))
+    });
+
+    println!("\n── Child runs ({}) ──", children.len());
+    for child in children {
+        let kind = child.origin_kind.as_deref().unwrap_or("child");
+        let name = child
+            .subagent_name
+            .as_deref()
+            .map_or_else(String::new, |n| format!("/{n}"));
+        let (tokens, cost) = match usage_stats::thread_usage_stats(&child.id, &config.model) {
+            Ok(stats) => (
+                format_tokens(stats.totals.tokens()),
+                thread_cost_cell(&stats.totals),
+            ),
+            Err(_) => ("—".to_string(), "—".to_string()),
+        };
+        println!(
+            "  {:<22} {:<10} {:>8} tok  {:>10}",
+            format!("{kind}{name}"),
+            thread_persistence::short_thread_id(&child.id),
+            tokens,
+            cost,
+        );
+    }
+}
+
+/// Cost cell for a whole thread's totals: billed USD, `subscription`,
+/// `unknown`, or `$0.00` when there is nothing billable.
+fn thread_cost_cell(t: &UsageTotals) -> String {
+    if t.billed_usd > 0.0 {
+        format_cost(t.billed_usd)
+    } else if t.subscription_tokens > 0 {
+        "subscription".to_string()
+    } else if t.unknown_pricing_rows > 0 {
+        "unknown".to_string()
+    } else {
+        format_cost(0.0)
+    }
 }
 
 pub fn rename(id: &str, title: &str) -> Result<()> {
