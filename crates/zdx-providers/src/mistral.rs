@@ -16,7 +16,6 @@ pub struct MistralConfig {
     pub model: String,
     pub max_tokens: Option<u32>,
     pub prompt_cache_key: Option<String>,
-    pub thinking_enabled: bool,
 }
 
 impl MistralConfig {
@@ -38,7 +37,6 @@ impl MistralConfig {
         config_base_url: Option<&str>,
         config_api_key: Option<&str>,
         prompt_cache_key: Option<String>,
-        thinking_enabled: bool,
     ) -> Result<Self> {
         let api_key = ProviderKind::Mistral.resolve_api_key(config_api_key)?;
         let base_url = ProviderKind::Mistral.resolve_base_url(config_base_url)?;
@@ -49,7 +47,6 @@ impl MistralConfig {
             model,
             max_tokens,
             prompt_cache_key,
-            thinking_enabled,
         })
     }
 }
@@ -72,8 +69,8 @@ impl MistralClient {
                 prompt_cache_key: config.prompt_cache_key,
                 extra_headers: HeaderMap::new(),
                 include_usage: true,
-                include_reasoning_content: config.thinking_enabled,
-                thinking: Some(config.thinking_enabled.into()),
+                include_reasoning_content: false,
+                thinking: None,
             }),
         }
     }
@@ -107,6 +104,5 @@ pub fn build(
         ctx.base_url,
         ctx.api_key,
         ctx.cache_key.clone(),
-        ctx.thinking_level.is_enabled(),
     )?)))
 }
