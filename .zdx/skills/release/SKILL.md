@@ -9,7 +9,7 @@ zdx releases are **manual and intentional** — cut one when a set of features/f
 
 ## Source of truth
 
-- Version: `crates/zdx-cli/Cargo.toml` → `[package] version`.
+- Version: root `Cargo.toml` → `[workspace.package] version`. All crates inherit it via `version.workspace = true`, and `zdx --version` reports it (clap reads `CARGO_PKG_VERSION`). Bump it in this one place.
 - Tag convention: `v<version>` (e.g. version `0.4.0` → tag `v0.4.0`).
 - Binaries built by the workflow: `aarch64-apple-darwin` (macOS), `x86_64-unknown-linux-gnu`.
 
@@ -28,7 +28,7 @@ Group commits into a short changelog (Features / Fixes / Other). Prefer the user
 
 ### 2. Pick the next version
 
-Semver on `crates/zdx-cli/Cargo.toml` (currently pre-1.0, so):
+Semver on root `Cargo.toml` → `[workspace.package] version` (currently pre-1.0, so):
 - Breaking / big feature set → bump **minor** (`0.3.0` → `0.4.0`).
 - Small fixes only → bump **patch** (`0.3.0` → `0.3.1`).
 
