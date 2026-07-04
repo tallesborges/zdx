@@ -15,8 +15,8 @@ fn print_stats(stats: &UsageStats) {
     println!("zdx usage stats (estimated)");
     println!("Global across all ZDX threads under $ZDX_HOME/threads.");
     println!(
-        "Estimated: old usage lacks per-request model/provider; subagent/helper + image \
-         spend excluded; subscription providers shown as flat-rate."
+        "Estimated: old usage lacks per-request model/provider; includes saved \
+         subagent/helper runs; image spend excluded; subscription providers shown as flat-rate."
     );
     println!();
 
