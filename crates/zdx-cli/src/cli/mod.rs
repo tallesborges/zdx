@@ -12,7 +12,7 @@ mod commands;
 
 #[derive(Parser)]
 #[command(name = "zdx")]
-#[command(version = "0.1")]
+#[command(version)]
 #[command(author = "Talles Borges <talles.borges92@gmail.com>")]
 #[command(about = "ZDX Agentic CLI Tool")]
 struct Cli {
