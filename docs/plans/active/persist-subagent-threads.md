@@ -3,7 +3,7 @@
   - Slice 1 — persist all child threads + lineage meta: ✅ done.
   - Slice 2 — default-hide tagged threads across listing surfaces + `threads list --all`: ✅ done.
   - Phase 1 — parent→child lineage in `zdx threads show` (parent link + child-runs section with per-child cost): ✅ done.
-  - Remaining: Phase 2 (per-agent-type usage breakdown in `zdx stats`/monitor), post-MVP.
+  - Phase 2 (per-agent-type usage breakdown in `zdx stats`/monitor): **deferred — not needed now** (moved to Later / Deferred). The plan's shipped scope is complete.
 
 # Goals
 - Persist subagent runs as real thread JSONL instead of throwing them away with `--no-thread`, so their token usage/cost is captured by the existing thread-scanning stats (`crates/zdx-engine/src/core/usage_stats.rs`) with **no separate ledger**.
@@ -116,10 +116,10 @@
 - **Picker decision:** the live thread picker is intentionally flat (`visible_tree_items` maps to depth-0; `flatten_as_tree` is unused in production), so re-introducing tree nesting was deliberately skipped to avoid fighting that design. `threads show` is the lineage/cost surface; children remain in `threads list --all`.
 - ✅ Check-in demo: `zdx threads show <parent>` reveals its subagent children and their individual costs; `zdx threads show <child>` shows its parent link.
 
-## Phase 2: Per-agent-type usage breakdown
-- With `origin_kind` persisted, extend `usage_stats` to break spend down by main vs subagent vs helper (the breakdown deferred in `usage-stats-monitor.md` Phase 2), surfaced identically in `zdx stats` and the monitor.
-- ✅ Check-in demo: `zdx stats` shows a main/subagent/helper split with matching monitor numbers.
+## Phase 2: Per-agent-type usage breakdown — DEFERRED (not needed now)
+- Moved to Later / Deferred at the user's request; the shipped scope (Slices 1–2 + Phase 1) already covers the goal.
 
 # Later / Deferred
+- **Per-agent-type usage breakdown** (deferred — not needed now) — with `origin_kind` persisted, `usage_stats` could split spend by main vs subagent vs helper, surfaced identically in `zdx stats` and the monitor. Revisit if a main/subagent/helper cost split becomes useful.
 - **Retention/pruning** of tagged child threads (they multiply faster than main threads, especially helpers) — a `zdx threads prune` policy. Revisit if disk/volume becomes a concern.
 - **Image-generation cost** (`zdx imagine`) — unchanged non-goal from `usage-stats-monitor.md`; needs non-token pricing.
