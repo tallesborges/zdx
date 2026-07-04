@@ -16,7 +16,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::common::text::truncate_with_ellipsis;
 use crate::common::{Scrollbar, TaskKind};
-use crate::state::{AgentState, AppState, TuiState};
+use crate::state::{AgentState, AppState, TuiState, TurnOutcome};
 use crate::statusline::render_debug_status_line;
 use crate::{input, transcript};
 
@@ -269,29 +269,60 @@ fn bottom_align_lines(lines: Vec<Line<'static>>, transcript_height: usize) -> Ve
 /// Renders the tab bar showing all open tabs.
 fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
     let mut spans: Vec<Span> = Vec::new();
-    let active_label = format!("tab {}", app.tui.tab_id.0 + 1);
-    spans.push(Span::styled(
-        format!(" {active_label} "),
-        Style::default().fg(Color::Black).bg(Color::Cyan),
-    ));
 
-    // Background tabs
-    for tab in &app.background_tabs {
+    // Render tabs in a stable creation order (by tab id) so each tab keeps its
+    // position; the highlight moves to whichever tab is active. Running tabs
+    // share the active tab's spinner clock — only that counter advances each
+    // tick, so it drives the animation.
+    let mut tabs: Vec<&TuiState> = app.all_tabs().collect();
+    tabs.sort_by_key(|tab| tab.tab_id.0);
+    let spinner = SPINNER_FRAMES
+        [(app.tui.spinner_frame / transcript::SPINNER_SPEED_DIVISOR) % SPINNER_FRAMES.len()];
+    let active_id = app.tui.tab_id;
+
+    for (i, tab) in tabs.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
         let label = format!("tab {}", tab.tab_id.0 + 1);
-        let activity = if tab.agent_state.is_running() {
-            "*"
+        if tab.tab_id == active_id {
+            spans.push(Span::styled(
+                format!(" {label} "),
+                Style::default().fg(Color::Black).bg(Color::Cyan),
+            ));
         } else {
-            ""
-        };
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            format!(" {label}{activity} "),
-            Style::default().fg(Color::Gray),
-        ));
+            spans.push(Span::styled(
+                format!(" {label} "),
+                Style::default().fg(Color::Gray),
+            ));
+            if let Some((glyph, color)) = background_tab_marker(tab, spinner) {
+                spans.push(Span::styled(
+                    format!("{glyph} "),
+                    Style::default().fg(color),
+                ));
+            }
+        }
     }
 
     let tab_bar = Paragraph::new(Line::from(spans)).alignment(Alignment::Left);
     frame.render_widget(tab_bar, area);
+}
+
+/// Activity marker (glyph + color) shown after a background tab's label:
+/// an animated spinner while the agent is running, or an unseen-completion
+/// check/cross once a background turn has finished but the tab hasn't been
+/// opened yet.
+fn background_tab_marker(tab: &TuiState, spinner: &'static str) -> Option<(&'static str, Color)> {
+    if tab.agent_state.is_running() {
+        return Some((spinner, Color::Yellow));
+    }
+    if tab.unseen_completion {
+        return Some(match tab.last_turn_outcome {
+            Some(TurnOutcome::Failed) => ("✗", Color::Red),
+            _ => ("✓", Color::Green),
+        });
+    }
+    None
 }
 
 /// Formats a duration for the status line display.

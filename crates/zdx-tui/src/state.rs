@@ -149,6 +149,10 @@ impl AppState {
             || tui.tasks.is_any_running()
             || tui.transcript.selection.has_pending_clear()
             || tui.input.handoff.is_generating()
+            || self
+                .background_tabs
+                .iter()
+                .any(|tab| tab.agent_state.is_running())
             || matches!(
                 &self.overlay,
                 Some(Overlay::ThreadPicker(picker)) if picker.should_show_copied()
@@ -240,6 +244,7 @@ impl AppState {
             let mut target = self.background_tabs.remove(pos);
             std::mem::swap(&mut self.tui, &mut target);
             self.background_tabs.push(target);
+            self.tui.unseen_completion = false;
         }
     }
 
@@ -255,6 +260,7 @@ impl AppState {
     pub fn close_active_tab(&mut self) -> bool {
         if let Some(target) = self.background_tabs.pop() {
             self.tui = target;
+            self.tui.unseen_completion = false;
             true
         } else {
             false
@@ -372,6 +378,10 @@ pub struct TuiState {
     pub agent_state: AgentState,
     /// Outcome of the most recent finished turn, for the idle cmux status pill.
     pub last_turn_outcome: Option<TurnOutcome>,
+    /// True when this tab finished a turn while in the background and the user
+    /// hasn't opened it since. Drives the "unseen completion" tab-bar marker;
+    /// cleared when the tab becomes active.
+    pub unseen_completion: bool,
     /// Spinner animation frame counter (for running tools).
     pub spinner_frame: usize,
     /// Git branch name (cached at startup).
@@ -475,6 +485,7 @@ impl TuiState {
             system_prompt,
             agent_state: AgentState::Idle,
             last_turn_outcome: None,
+            unseen_completion: false,
             spinner_frame: 0,
             git_branch,
             display_path,

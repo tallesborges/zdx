@@ -409,6 +409,9 @@ fn finalize_agent_event_for_tab(
         });
 
         if !continues {
+            if matches!(tab, input::TabContext::Background(_)) {
+                tui.unseen_completion = true;
+            }
             if cmux {
                 effects.push(UiEffect::CmuxProgressClear);
             }
@@ -1294,19 +1297,20 @@ pub fn cycle_tab(app: &mut AppState, direction: i32) {
         return;
     }
 
-    // Build ordered list of all tab IDs: active first, then background
-    let mut all_ids: Vec<TabId> = Vec::with_capacity(app.tab_count());
-    all_ids.push(app.tui.tab_id);
-    for tab in &app.background_tabs {
-        all_ids.push(tab.tab_id);
-    }
+    // Stable creation order (by tab id) so cycling matches the visual tab
+    // order in the tab bar.
+    let mut all_ids: Vec<TabId> = app.all_tabs().map(|tab| tab.tab_id).collect();
+    all_ids.sort_by_key(|id| id.0);
 
     // Find current position and compute target
-    let current_pos = 0usize; // Active tab is always at position 0 in our view
+    let current_pos = all_ids
+        .iter()
+        .position(|id| *id == app.tui.tab_id)
+        .unwrap_or(0);
     let len = all_ids.len() as i32;
     let target_pos = ((current_pos as i32 + direction).rem_euclid(len)) as usize;
 
-    if target_pos != current_pos {
+    if all_ids[target_pos] != app.tui.tab_id {
         app.switch_to_tab(all_ids[target_pos]);
     }
 }
@@ -1347,6 +1351,7 @@ fn create_btw_tab(
         system_prompt: parent.system_prompt.clone(),
         agent_state: AgentState::Idle,
         last_turn_outcome: None,
+        unseen_completion: false,
         spinner_frame: 0,
         git_branch: parent.git_branch.clone(),
         display_path: parent.display_path.clone(),
@@ -1451,6 +1456,7 @@ fn create_thread_tab(
         system_prompt: parent.system_prompt.clone(),
         agent_state: AgentState::Idle,
         last_turn_outcome: None,
+        unseen_completion: false,
         spinner_frame: 0,
         git_branch: parent.git_branch.clone(),
         display_path: parent.display_path.clone(),
