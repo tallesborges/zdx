@@ -17,6 +17,7 @@ Create a **ship-first (ship-shaped) implementation plan** that unlocks the user 
 - **Ship-first**: prioritize a "daily-usable" MVP early; iterate and refine after.
 - **Demoable slices**: every slice must produce a runnable, testable increment and include ✅ Demo criteria.
 - **Scope discipline**: keep slices small; avoid big rewrites before there's something to dogfood.
+- **Reuse before rebuild**: before proposing any new module, config, schema, or abstraction, explore the codebase for existing functionality/patterns that already do it (or most of it). Prefer extending/reusing what exists over introducing a parallel implementation. New scaffolding must be justified against what already exists.
 
 ## Important
 
