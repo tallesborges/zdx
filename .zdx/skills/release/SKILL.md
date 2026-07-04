@@ -28,11 +28,16 @@ Group commits into a short changelog (Features / Fixes / Other). Prefer the user
 
 ### 2. Pick the next version
 
-Semver on root `Cargo.toml` → `[workspace.package] version` (currently pre-1.0, so):
-- Breaking / big feature set → bump **minor** (`0.3.0` → `0.4.0`).
-- Small fixes only → bump **patch** (`0.3.0` → `0.3.1`).
+Semver on root `Cargo.toml` → `[workspace.package] version`. Pre-1.0 (`0.y.z`), so `y` acts like "major" and `z` like "patch". Decide by scanning the conventional-commit types in `git log <last-tag>..HEAD`:
 
-Confirm the version with the user if unsure.
+| Commits since last release | Bump | Example |
+|----------------------------|------|---------|
+| Any `feat`, or any breaking change (`!` / `BREAKING CHANGE`) | **minor** | `0.4.0` → `0.5.0` |
+| Only `fix` / `perf` / `refactor` / `chore` / `docs` / `test` / `build` / `ci` (nothing users can newly invoke, nothing breaking) | **patch** | `0.4.0` → `0.4.1` |
+
+Rule of thumb: one `feat` or `!` anywhere in the range forces a minor; an all-fixes/chores/docs range is a patch. Pre-1.0 keeps breaking changes in the minor slot (no major bump until 1.0). Confirm the version with the user if unsure.
+
+> This type-based decision assumes every commit follows **Conventional Commits** (`type(scope): summary`), which the `git-workflow` skill already enforces. If the range has non-conventional subjects you can't classify, fall back to judging by actual user-visible behavior — any new user-invocable capability → minor; otherwise patch — and lean on the user's framing of "what shipped" from step 1.
 
 ### 3. Bump the version and commit
 
