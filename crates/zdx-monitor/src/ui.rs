@@ -374,8 +374,8 @@ fn usage_banner_lines(cached: &CachedUsageStats) -> Vec<Line<'static>> {
             dim,
         )),
         Line::from(Span::styled(
-            "Estimated: old usage lacks per-request model/provider; subagent/helper + image \
-             spend excluded; subscription providers shown as flat-rate.",
+            "Estimated: old usage lacks per-request model/provider; includes saved \
+             subagent/helper runs; image spend excluded; subscription providers shown as flat-rate.",
             dim,
         )),
         Line::from(Span::styled(
