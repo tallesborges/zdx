@@ -1,5 +1,13 @@
 # JSON Default Output for ZDX CLI
 
+# Status
+- Slice 2 (`exec` structured JSONL by default): ✅ landed — stdout emits compact JSONL agent events (`ExecRenderer`, `crates/zdx-cli/src/modes/exec.rs`); `info!`/`warn!` tracing to stderr cleanup still pending.
+- Slice 1 (`CliOutput<T>` envelope + top-level JSON error handler): ⏳ not started — **foundation that blocks Slices 3–6** (no `CliOutput` type in code).
+- Slices 3–5 (`threads` / `automations` / remaining commands → JSON by default): ⏳ not started.
+- Slice 6 (structured JSON errors on all failure paths): ⏳ not started.
+- Slice 7 (`truncated` → `has_more` in glob/grep outputs): ⏳ not started (no `has_more` field in code).
+- Polish Phase 1 + Later: deferred.
+
 # Goals
 - All finite ZDX CLI commands output JSON to stdout by default
 - Structured errors in JSON to stderr
@@ -71,14 +79,14 @@
 - **Risks / failure modes**:
   - clap usage errors may bypass the handler → wrap clap error handling too
 
-## Slice 2: Convert `exec` to structured streaming JSON by default
+## Slice 2: Convert `exec` to structured streaming JSON by default — ✅ landed (stderr log cleanup pending)
 - **Goal**: `zdx exec` stays finite, but emits machine-readable JSONL events instead of mixed human text/log lines
 - **Scope checklist**:
-  - [ ] Replace text streaming on stdout with compact JSONL events (`assistant_delta`, `tool_started`, `tool_completed`, `turn_completed`, etc.)
-  - [ ] Remove human-oriented debug/status lines from `stderr` in exec mode; emit structured events instead
-  - [ ] Keep event ordering stable enough for agents/scripts to consume incrementally
-  - [ ] Preserve thread persistence and tool loop behavior unchanged
-  - [ ] Ensure the final event includes the accumulated result (`turn_completed` / final text)
+  - [x] Replace text streaming on stdout with compact JSONL events (`assistant_delta`, `tool_started`, `tool_completed`, `turn_completed`, etc.) — `ExecRenderer::handle_event` writes `serde_json::to_string(&event)` per line; note final event is `turn_finished` (not `turn_completed`)
+  - [ ] Remove human-oriented debug/status lines from `stderr` in exec mode; emit structured events instead — **partial**: stdout is clean JSONL, but `log_effective_context`/warnings still emit `info!`/`warn!` tracing (`exec.rs:79-101,140`)
+  - [x] Keep event ordering stable enough for agents/scripts to consume incrementally — single-consumer channel preserves order
+  - [x] Preserve thread persistence and tool loop behavior unchanged — `spawn_thread_persist_task` + `run_turn` retained
+  - [x] Ensure the final event includes the accumulated result (`turn_completed` / final text) — `emit_final_turn_finished` emits `TurnFinished { final_text }`
 - **✅ Demo**: `zdx exec -p "Say hello" | jq -c 'select(.type == "turn_completed") | .final_text'` prints the final assistant text from the JSONL stream
 - **Risks / failure modes**:
   - Existing scripts/tests that grep raw assistant text or stderr status lines may need updates
