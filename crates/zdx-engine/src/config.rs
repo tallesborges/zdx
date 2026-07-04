@@ -1092,6 +1092,24 @@ impl Config {
     /// - filtered by enabled providers in config
     #[must_use]
     pub fn subagent_available_models(&self) -> Vec<String> {
+        self.subagent_available_models_from(
+            crate::models::available_models()
+                .iter()
+                .map(|model| (model.provider, model.id)),
+        )
+    }
+
+    /// Filters candidate `(provider, model_id)` pairs down to the ones whose
+    /// provider is enabled in this config, returning deduplicated
+    /// `provider:id` strings.
+    ///
+    /// Pure over its inputs: used by [`Self::subagent_available_models`] with
+    /// the global model registry, and directly by tests with a fixed list so
+    /// the filter can be exercised without reading `$ZDX_HOME/models.toml`.
+    fn subagent_available_models_from<'a>(
+        &self,
+        models: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Vec<String> {
         use std::collections::HashSet;
 
         let enabled_providers: HashSet<&str> = crate::providers::ProviderKind::all()
@@ -1101,12 +1119,12 @@ impl Config {
             .collect();
 
         let mut seen = HashSet::new();
-        crate::models::available_models()
-            .iter()
-            .filter(|model| enabled_providers.contains(model.provider))
-            .filter_map(|model| {
-                let id = format!("{}:{}", model.provider, model.id);
-                seen.insert(id.to_ascii_lowercase()).then_some(id)
+        models
+            .into_iter()
+            .filter(|&(provider, _)| enabled_providers.contains(provider))
+            .filter_map(|(provider, id)| {
+                let full = format!("{provider}:{id}");
+                seen.insert(full.to_ascii_lowercase()).then_some(full)
             })
             .collect()
     }
@@ -3113,8 +3131,20 @@ available_models = ["codex:gpt-5.3-codex"]
             ..Default::default()
         };
 
-        let models = config.subagent_available_models();
-        assert!(!models.is_empty());
+        // Inject a fixed candidate list so the assertion is hermetic — it no
+        // longer depends on the global registry ($ZDX_HOME/models.toml).
+        let models = config.subagent_available_models_from([
+            ("openai", "gpt-5.2"),
+            ("openai", "gpt-5.2-mini"),
+            ("anthropic", "claude-sonnet-4-5"),
+            ("gemini", "gemini-3.1-flash"),
+        ]);
+        assert_eq!(models.len(), 2);
         assert!(models.iter().all(|id| id.starts_with("openai:")));
+        assert!(
+            !models
+                .iter()
+                .any(|id| id.starts_with("anthropic:") || id.starts_with("gemini:"))
+        );
     }
 }
