@@ -1,5 +1,11 @@
 # Ship-First Plan: Reasoning Levels Refactor
 
+## Status
+- Slice 1 (Moonshot `thinking` payload fix): ✅ core done — the `thinking: {type}` payload is wired; the temperature tweak (1.0/0.6) is still pending.
+- Slice 2 (model-aware reasoning UI / `reasoning_mode` capability): ⏳ not started (no `reasoning_mode` in code).
+- Slice 3 (unified `ReasoningConfig` dispatch): ⏳ not started (no provider-agnostic `ReasoningConfig` enum).
+- Polish Phases 1–2 + Later: deferred.
+
 ## Goals
 - Fix Moonshot/Kimi K2.5 to use correct `thinking` parameter (binary on/off) instead of `reasoning_effort`
 - Improve reasoning UI to adapt to each model's actual capabilities (levels vs binary vs budget-based)
@@ -46,14 +52,14 @@
 
 ## MVP slices (ship-shaped, demoable)
 
-### Slice 1: Fix Moonshot reasoning parameter
+### Slice 1: Fix Moonshot reasoning parameter — ✅ core done (temperature tweak pending)
 - **Goal**: Make Kimi K2.5 reasoning actually work end-to-end
 - **Scope checklist**:
-  - [ ] Add `thinking: Option<ThinkingType>` to `OpenAIChatCompletionsConfig` (separate from `reasoning_effort`)
-  - [ ] Update `ChatCompletionRequest` to serialize `thinking` as `{"type": "enabled/disabled"}` when set
-  - [ ] Update `MoonshotClient` to map any enabled `ThinkingLevel` → `thinking: {type: "enabled"}` instead of `reasoning_effort`
-  - [ ] Pass `thinking: {type: "disabled"}` when `ThinkingLevel::Off`
-  - [ ] Update temperature logic: thinking mode = 1.0, non-thinking = 0.6 (per Moonshot docs)
+  - [x] Add `thinking: Option<ThinkingType>` to `OpenAIChatCompletionsConfig` (separate from `reasoning_effort`) — `ThinkingConfig` field at `crates/zdx-providers/src/openai/chat_completions.rs:36`
+  - [x] Update `ChatCompletionRequest` to serialize `thinking` as `{"type": "enabled/disabled"}` when set — `ThinkingConfig` with `#[serde(rename = "type")]` + `From<bool>` at `chat_completions.rs:159,172`
+  - [x] Update `MoonshotClient` to map any enabled `ThinkingLevel` → `thinking: {type: "enabled"}` instead of `reasoning_effort` — `crates/zdx-providers/src/moonshot.rs:71,74`
+  - [x] Pass `thinking: {type: "disabled"}` when `ThinkingLevel::Off` — handled by `From<bool>` (false → "disabled")
+  - [ ] Update temperature logic: thinking mode = 1.0, non-thinking = 0.6 (per Moonshot docs) — **not implemented** (no `temperature` set anywhere in `zdx-providers`)
 - **✅ Demo**: 
   - Select Kimi K2.5 → enable thinking → send message → see reasoning content stream
   - Disable thinking → verify `thinking: {type: "disabled"}` sent (no reasoning output)
