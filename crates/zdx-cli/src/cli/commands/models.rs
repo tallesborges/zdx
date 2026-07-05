@@ -195,6 +195,56 @@ pub async fn update(config: &config::Config) -> Result<()> {
     Ok(())
 }
 
+/// Lists available models with the exact `provider:model` id to pass to `-m`.
+pub fn list(config: &config::Config, provider: Option<&str>, json: bool) -> Result<()> {
+    use zdx_engine::models::{ModelOption, available_models, custom_provider_models};
+
+    let mut models: Vec<&ModelOption> = available_models().iter().collect();
+    models.extend(custom_provider_models(&config.providers));
+    if let Some(provider) = provider {
+        models.retain(|m| m.provider.eq_ignore_ascii_case(provider));
+    }
+    models.sort_by(|a, b| (a.provider, a.id).cmp(&(b.provider, b.id)));
+
+    if json {
+        let items: Vec<serde_json::Value> = models
+            .iter()
+            .map(|m| {
+                serde_json::json!({
+                    "id": format!("{}:{}", m.provider, m.id),
+                    "provider": m.provider,
+                    "model": m.id,
+                    "display_name": m.display_name,
+                    "context_limit": m.context_limit,
+                    "reasoning": m.capabilities.reasoning,
+                    "input_images": m.capabilities.input_images,
+                    "pricing": {
+                        "input": m.pricing.input,
+                        "output": m.pricing.output,
+                        "cache_read": m.pricing.cache_read,
+                        "cache_write": m.pricing.cache_write,
+                    },
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&items)?);
+        return Ok(());
+    }
+
+    let width = models
+        .iter()
+        .map(|m| m.provider.len() + 1 + m.id.len())
+        .max()
+        .unwrap_or(0);
+
+    for m in &models {
+        let full_id = format!("{}:{}", m.provider, m.id);
+        println!("{full_id:<width$}  {}", m.display_name);
+    }
+
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 struct ProviderSpec<'a> {
     provider_id: &'static str,

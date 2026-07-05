@@ -571,6 +571,15 @@ enum BotProfileCommands {
 enum ModelsCommands {
     /// Fetch and update the models registry from models.dev
     Update,
+    /// List available models with the exact id to pass to `-m`
+    List {
+        /// Only show models from this provider (e.g. `claude-cli`, `openai`)
+        #[arg(long)]
+        provider: Option<String>,
+        /// Output as JSON instead of a table
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -1177,6 +1186,9 @@ fn dispatch_logout(flags: (bool, bool, bool, bool, bool)) -> Result<()> {
 async fn dispatch_models(command: ModelsCommands, context: &DispatchContext<'_>) -> Result<()> {
     match command {
         ModelsCommands::Update => commands::models::update(context.config).await,
+        ModelsCommands::List { provider, json } => {
+            commands::models::list(context.config, provider.as_deref(), json)
+        }
     }
 }
 
