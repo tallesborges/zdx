@@ -1,3 +1,13 @@
+> **Status: DRAFT — exploratory, not committed.** This captures a direction from brainstorming, not a decision to build. The core idea (is a live cockpit worth it at all?) is still open, and the action-loop half is the shakiest part. Expect to revise or drop sections. Nothing here should be built until this banner is removed.
+
+# Open questions (unresolved)
+- Is the whole cockpit worth building, or is a plain daily report enough? (core doubt)
+- Is the write-back action loop actually useful, or just the read-only vision? Could ship read-only forever.
+- Does free-form + anchors feel good in practice, or is it fiddly to type in nvim?
+- Where do these files really belong — `$ZDX_HOME/cockpit/` or inside a project?
+- Does this overlap too much with `morning-report`? Merge instead of add?
+- _(add your own doubts here)_
+
 # Goals
 - A live, terminal-native "cockpit" the user reads in a nvim/LazyVim split while working, no context switch.
 - Give the user a clear vision of their day: what needs action / open loops, what they're working on now, what they finished today, where their attention should go — plus proactive insights the AI can see that the user might be missing.
