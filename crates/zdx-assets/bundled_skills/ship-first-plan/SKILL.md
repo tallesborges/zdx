@@ -1,6 +1,6 @@
 ---
 name: ship-first-plan
-description: Create a ship-first (ship-shaped) implementation plan with demoable MVP slices. Use when a user asks for an implementation plan, MVP plan, shipping plan, or wants to break down a feature into incremental, demoable slices. Emphasizes user journey order and daily-usable increments over polished completeness.
+description: Create a ship-first (ship-shaped) implementation plan with demoable MVP phases. Use when a user asks for an implementation plan, MVP plan, shipping plan, or wants to break down a feature into incremental, demoable phases. Emphasizes user journey order and daily-usable increments over polished completeness.
 metadata:
   short-description: Create a ship-shaped MVP plan
 ---
@@ -9,14 +9,14 @@ metadata:
 
 ## Goal
 
-Create a **ship-first (ship-shaped) implementation plan** that unlocks the user journey as early as possible with demoable, incremental slices.
+Create a **ship-first (ship-shaped) implementation plan** that unlocks the user journey as early as possible with demoable, incremental phases.
 
 ## Hard constraints
 
 - **User journey drives order**: derive the primary user journey from the Inputs and order work to unlock that journey as early as possible.
 - **Ship-first**: prioritize a "daily-usable" MVP early; iterate and refine after.
-- **Demoable slices**: every slice must produce a runnable, testable increment and include ✅ Demo criteria.
-- **Scope discipline**: keep slices small; avoid big rewrites before there's something to dogfood.
+- **Demoable phases**: every phase must produce a runnable, testable increment and include ✅ Demo criteria.
+- **Scope discipline**: keep phases small; avoid big rewrites before there's something to dogfood.
 - **Reuse before rebuild**: before proposing any new module, config, schema, or abstraction, explore the codebase for existing functionality/patterns that already do it (or most of it). Prefer extending/reusing what exists over introducing a parallel implementation. New scaffolding must be justified against what already exists.
 
 ## Important
@@ -44,7 +44,7 @@ Operate in read-only mode throughout. Do not write or update files.
    - Sharpen it inline with one focused clarification question, or
    - Suggest running the `define-goal` skill first when the goal needs a deeper shaping pass.
 
-   Do not proceed to slicing until the goal passes this gate. Slices inherit their `✅ Demo` rigor from this criterion — a vague goal produces vague demos.
+   Do not proceed to phasing until the goal passes this gate. Phases inherit their `✅ Demo` rigor from this criterion — a vague goal produces vague demos.
 
 2. **Deep context gathering with Explorer**
    - Delegate to `explorer` to gather codebase facts relevant to the feature: directory structure, existing patterns, related modules, test conventions, and likely touchpoints.
@@ -65,12 +65,19 @@ Operate in read-only mode throughout. Do not write or update files.
    - Include Oracle's findings (risks, blind spots, suggestions) as a brief addendum after the plan.
 
 6. **Save the plan**
-   - Write the plan to `docs/plans/active/<slug>.md` in the project root.
-   - If a plan with that slug already exists, confirm with the user before overwriting.
+   - Plans live under `docs/plans/` with a simple stage-based lifecycle:
+     - `drafts/` — exploratory, not yet green-lit (may be revised or dropped)
+     - `active/` — committed, being built
+     - `done/` — completed
+     - `archived/` — abandoned or superseded
+   - Save an exploratory / not-yet-approved plan to `docs/plans/drafts/<slug>.md`; save a committed plan to `docs/plans/active/<slug>.md`.
+   - If a plan with that slug already exists in any stage, confirm with the user before overwriting.
 
 ## Plan template (follow exactly)
 
 ```markdown
+> Stage: drafts | active | done | archived. Keep this plan current while working: when a scope item is finished, check its box `[ ]`→`[x]`; when a phase's ✅ demo passes, mark the phase done (with date). The plan file is the source of truth, not memory.
+
 # Goals
 - (tight list of user-visible outcomes)
 
@@ -93,10 +100,10 @@ List capabilities that already exist and should not be rebuilt.
 - ✅ Demo: (how to verify quickly)
 - Gaps: (only if any)
 
-# MVP slices (ship-shaped, demoable)
-Define Slice 1..N in user-journey order.
+# MVP phases (ship-shaped, demoable)
+Define Phase 1..N in user-journey order.
 
-## Slice 1: <name>
+## Phase 1: <name>
 - **Goal**: ...
 - **Scope checklist**:
   - [ ] ...
@@ -105,7 +112,7 @@ Define Slice 1..N in user-journey order.
 - **Risks / failure modes**:
   - ...
 
-## Slice 2: <name>
+## Phase 2: <name>
 ...
 
 # Contracts (guardrails)
@@ -117,14 +124,14 @@ List only decisions that would cause rework if postponed (derived from Inputs).
 - ...
 
 # Testing
-- Manual smoke demos per slice
+- Manual smoke demos per phase
 - Minimal regression tests only for contracts
 
-# Polish phases (after MVP)
-Group improvements into phases, each with a ✅ check-in demo.
+# Polish rounds (after MVP)
+Group improvements into rounds, each with a ✅ check-in demo.
 Limited strictly to scope present in Inputs.
 
-## Phase 1: <name>
+## Polish round 1: <name>
 - ...
 - ✅ Check-in demo: ...
 
@@ -133,18 +140,18 @@ Explicit list of "not now" items + what would trigger revisiting them.
 - ...
 ```
 
-## Slice guidance
+## Phase guidance
 
-**Good slices:**
+**Good phases:**
 - Unlock a step in the user journey
 - Are runnable and testable
 - Have clear ✅ Demo criteria
 - "Ugly but functional" over "polished but incomplete"
 
 **Avoid:**
-- Slices that don't produce user-visible value
+- Phases that don't produce user-visible value
 - Big rewrites before something to dogfood
 - Adding complexity without paying rent in user value
-- Slices too large to finish and demo quickly
+- Phases too large to finish and demo quickly
 
 
