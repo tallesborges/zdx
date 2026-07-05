@@ -334,6 +334,7 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 
 - Path: `<base>/models.toml` (falls back to `default_models.toml` when missing).
 - Tracks available models per provider. Entries support `*` wildcards for `zdx models update`.
+- `zdx models list` prints the loaded registry as `provider:model` ids (the exact value accepted by `-m`), with `--provider <id>` to filter by provider and `--json` for machine-readable output.
 
 ---
 
