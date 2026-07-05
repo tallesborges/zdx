@@ -297,9 +297,10 @@ fn handle_voice_transcribed(
     match result {
         Ok(Some(text)) => {
             app.tui.input.voice.mark_idle();
+            let labeled = format!("Audio transcript:\n{text}");
             apply_mutations(
                 &mut app.tui,
-                vec![StateMutation::Input(InputMutation::InsertText(text))],
+                vec![StateMutation::Input(InputMutation::InsertText(labeled))],
             );
         }
         Ok(None) => {
