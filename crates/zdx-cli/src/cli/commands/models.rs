@@ -196,11 +196,16 @@ pub async fn update(config: &config::Config) -> Result<()> {
 }
 
 /// Lists available models with the exact `provider:model` id to pass to `-m`.
-pub fn list(config: &config::Config, provider: Option<&str>, json: bool) -> Result<()> {
+///
+/// Defaults to models from enabled providers only; `all` includes disabled ones.
+pub fn list(config: &config::Config, provider: Option<&str>, all: bool, json: bool) -> Result<()> {
     use zdx_engine::models::{ModelOption, available_models, custom_provider_models};
 
     let mut models: Vec<&ModelOption> = available_models().iter().collect();
     models.extend(custom_provider_models(&config.providers));
+    if !all {
+        models.retain(|m| config.providers.is_enabled(m.provider));
+    }
     if let Some(provider) = provider {
         models.retain(|m| m.provider.eq_ignore_ascii_case(provider));
     }

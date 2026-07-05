@@ -576,6 +576,9 @@ enum ModelsCommands {
         /// Only show models from this provider (e.g. `claude-cli`, `openai`)
         #[arg(long)]
         provider: Option<String>,
+        /// Include models from disabled providers (default: enabled only)
+        #[arg(long)]
+        all: bool,
         /// Output as JSON instead of a table
         #[arg(long)]
         json: bool,
@@ -1186,9 +1189,11 @@ fn dispatch_logout(flags: (bool, bool, bool, bool, bool)) -> Result<()> {
 async fn dispatch_models(command: ModelsCommands, context: &DispatchContext<'_>) -> Result<()> {
     match command {
         ModelsCommands::Update => commands::models::update(context.config).await,
-        ModelsCommands::List { provider, json } => {
-            commands::models::list(context.config, provider.as_deref(), json)
-        }
+        ModelsCommands::List {
+            provider,
+            all,
+            json,
+        } => commands::models::list(context.config, provider.as_deref(), all, json),
     }
 }
 
