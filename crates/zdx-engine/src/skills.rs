@@ -978,7 +978,9 @@ mod tests {
 
     #[test]
     fn test_skill_access_path_uses_bundled_env_var_path() {
-        let root = ensure_bundled_skills_materialized().unwrap();
+        // Pure path math: no materialization, so it never races on the shared
+        // real `$ZDX_HOME/bundled-skills`.
+        let root = bundled_skills_dir();
         let skill = Skill {
             name: "memory".to_string(),
             description: "Memory helper".to_string(),
@@ -995,7 +997,12 @@ mod tests {
 
     #[test]
     fn test_read_skill_content_supports_bundled_skill() {
-        let root = ensure_bundled_skills_materialized().unwrap();
+        // Materialize into an isolated temp dir (like
+        // `test_load_skills_includes_bundled_fallbacks`) so parallel tests do not
+        // race on the shared real `$ZDX_HOME/bundled-skills`.
+        let dir = tempdir().unwrap();
+        let root =
+            materialize_bundled_skills_into(dir.path(), bundled_skills_manifest_hash()).unwrap();
         let skill = Skill {
             name: "memory".to_string(),
             description: "Memory helper".to_string(),
