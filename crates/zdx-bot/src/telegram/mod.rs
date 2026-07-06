@@ -373,6 +373,76 @@ impl TelegramClient {
         .await
     }
 
+    /// Send an OGG/Opus file as a Telegram voice note (waveform + playback speed).
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub async fn send_voice_from_path(
+        &self,
+        chat_id: i64,
+        voice_path: &Path,
+        reply_to_message_id: Option<i64>,
+        message_thread_id: Option<i64>,
+        reply_parameters: Option<ReplyParameters>,
+    ) -> Result<()> {
+        let voice_data = std::fs::read(voice_path)
+            .with_context(|| format!("read voice file {}", voice_path.display()))?;
+        let file_name = voice_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("voice.ogg");
+
+        self.send_media_multipart(
+            "sendVoice",
+            "voice",
+            chat_id,
+            &voice_data,
+            file_name,
+            "audio/ogg",
+            reply_to_message_id,
+            message_thread_id,
+            reply_parameters,
+        )
+        .await
+    }
+
+    /// Send an audio file (MP3/M4A/WAV) as a Telegram audio message.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub async fn send_audio_from_path(
+        &self,
+        chat_id: i64,
+        audio_path: &Path,
+        reply_to_message_id: Option<i64>,
+        message_thread_id: Option<i64>,
+        reply_parameters: Option<ReplyParameters>,
+    ) -> Result<()> {
+        let audio_data = std::fs::read(audio_path)
+            .with_context(|| format!("read audio file {}", audio_path.display()))?;
+        let file_name = audio_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("audio.mp3");
+        let mime_type = infer::get(&audio_data).map_or_else(
+            || "audio/mpeg".to_string(),
+            |kind| kind.mime_type().to_string(),
+        );
+
+        self.send_media_multipart(
+            "sendAudio",
+            "audio",
+            chat_id,
+            &audio_data,
+            file_name,
+            &mime_type,
+            reply_to_message_id,
+            message_thread_id,
+            reply_parameters,
+        )
+        .await
+    }
+
     ///
     /// # Errors
     /// Returns an error if the operation fails.
@@ -816,6 +886,57 @@ impl TelegramClient {
         }
 
         let _: Message = self.post_multipart("sendDocument", form).await?;
+        Ok(())
+    }
+
+    /// Uploads `data` under `field` via `method` (e.g. `sendVoice`/`voice`,
+    /// `sendAudio`/`audio`). Shared by the voice/audio senders.
+    #[allow(clippy::too_many_arguments)]
+    async fn send_media_multipart(
+        &self,
+        method: &str,
+        field: &'static str,
+        chat_id: i64,
+        data: &[u8],
+        file_name: &str,
+        mime_type: &str,
+        reply_to_message_id: Option<i64>,
+        message_thread_id: Option<i64>,
+        reply_parameters: Option<ReplyParameters>,
+    ) -> Result<()> {
+        if data.len() > TELEGRAM_DOCUMENT_MAX_BYTES {
+            bail!(
+                "{field} exceeds Telegram limit ({} bytes > {} bytes)",
+                data.len(),
+                TELEGRAM_DOCUMENT_MAX_BYTES
+            );
+        }
+
+        let part = reqwest::multipart::Part::bytes(data.to_vec())
+            .file_name(file_name.to_string())
+            .mime_str(mime_type)
+            .with_context(|| format!("set {field} mime type"))?;
+
+        let mut form = reqwest::multipart::Form::new()
+            .text("chat_id", chat_id.to_string())
+            .part(field, part);
+
+        if let Some(reply_to_message_id) = reply_to_message_id {
+            form = form
+                .text("reply_to_message_id", reply_to_message_id.to_string())
+                .text("allow_sending_without_reply", "true".to_string());
+        }
+        if let Some(message_thread_id) = message_thread_id {
+            form = form.text("message_thread_id", message_thread_id.to_string());
+        }
+        if let Some(reply_parameters) = reply_parameters {
+            form = form.text(
+                "reply_parameters",
+                serde_json::to_string(&reply_parameters).context("serialize reply_parameters")?,
+            );
+        }
+
+        let _: Message = self.post_multipart(method, form).await?;
         Ok(())
     }
 

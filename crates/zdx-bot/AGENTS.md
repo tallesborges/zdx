@@ -11,7 +11,7 @@ Scope: Telegram bot runtime, ingest/handler flow, queueing, and Telegram API int
 - `src/bot/context.rs`: shared bot context
 - `src/bot/queue.rs`: per-chat queueing helpers
 - `src/handlers/mod.rs`: handler module exports
-- `src/handlers/message.rs`: message flow orchestration
+- `src/handlers/message.rs`: message flow orchestration (incl. `<media>` routing: image→`sendPhoto`, `.ogg/.oga/.opus`→`sendVoice`, `.mp3/.m4a/.wav`→`sendAudio`, else `sendDocument`)
 - `src/ingest/mod.rs`: Telegram message parsing + attachment loading
 - `src/agent/mod.rs`: thread log + agent turn helpers
 - `src/telegram/mod.rs`: Telegram API client + tool wiring

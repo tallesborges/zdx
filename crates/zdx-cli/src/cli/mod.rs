@@ -186,6 +186,32 @@ enum Commands {
         source: Vec<String>,
     },
 
+    /// Synthesize speech audio from text with `OpenAI` or Mistral TTS
+    Speak {
+        /// The text to synthesize into speech
+        text: String,
+
+        /// Output audio path (defaults to `$ZDX_HOME/artifacts/speech/`)
+        #[arg(short, long, value_name = "PATH")]
+        out: Option<String>,
+
+        /// Provider to use (`mistral`, `openai`, `gemini`, or `xai`; defaults to auto-detect, Mistral first)
+        #[arg(long, value_name = "PROVIDER")]
+        provider: Option<String>,
+
+        /// Model to use (provider-prefixed, e.g. `openai:gpt-4o-mini-tts`, `mistral:voxtral-mini-tts-latest`, `gemini:gemini-3.1-flash-tts-preview`)
+        #[arg(long, value_name = "MODEL")]
+        model: Option<String>,
+
+        /// Voice to use (provider-specific, e.g. `coral` for `OpenAI`, `en_paul_neutral` for Mistral, `Kore` for Gemini, `eve` for xAI)
+        #[arg(long, value_name = "VOICE")]
+        voice: Option<String>,
+
+        /// Output audio format (mp3, opus, aac, flac, wav, pcm)
+        #[arg(long, value_name = "FORMAT")]
+        format: Option<String>,
+    },
+
     /// Manage saved conversation threads
     Threads {
         #[command(subcommand)]
@@ -827,6 +853,15 @@ struct ImagineCommandInput {
     source: Vec<String>,
 }
 
+struct SpeakCommandInput {
+    text: String,
+    out: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    voice: Option<String>,
+    format: Option<String>,
+}
+
 fn read_exec_input_file(path: &std::path::Path, description: &str) -> Result<String> {
     std::fs::read_to_string(path).with_context(|| format!("read {description} {}", path.display()))
 }
@@ -894,6 +929,22 @@ async fn run_imagine_command(
     .await
 }
 
+async fn run_speak_command(context: &DispatchContext<'_>, input: SpeakCommandInput) -> Result<()> {
+    let root_path = resolve_root(context.root, context.worktree_id)?;
+    commands::speak::run(commands::speak::SpeakRunOptions {
+        root: &root_path,
+        text: &input.text,
+        out: input.out.as_deref(),
+        provider: input.provider.as_deref(),
+        model: input.model.as_deref(),
+        voice: input.voice.as_deref(),
+        format: input.format.as_deref(),
+        config: context.config,
+    })
+    .await
+}
+
+#[allow(clippy::too_many_lines)]
 async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> Result<()> {
     match command {
         Commands::Bot { command } => Box::pin(dispatch_bot(command, context)).await,
@@ -951,6 +1002,27 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
                     aspect,
                     size,
                     source,
+                },
+            )
+            .await
+        }
+        Commands::Speak {
+            text,
+            out,
+            provider,
+            model,
+            voice,
+            format,
+        } => {
+            run_speak_command(
+                context,
+                SpeakCommandInput {
+                    text,
+                    out,
+                    provider,
+                    model,
+                    voice,
+                    format,
                 },
             )
             .await

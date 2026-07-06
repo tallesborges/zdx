@@ -401,6 +401,20 @@ pub struct TranscriptionConfig {
     pub language: Option<String>,
 }
 
+/// Text-to-speech (speech synthesis) configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SpeechConfig {
+    /// Speech provider: "openai" (default) or "mistral"
+    pub provider: Option<String>,
+    /// Model to use for speech synthesis (provider-specific)
+    pub model: Option<String>,
+    /// Voice to use (provider-specific)
+    pub voice: Option<String>,
+    /// Output audio format (e.g. "mp3")
+    pub format: Option<String>,
+}
+
 /// Turn-completion notification configuration for the interactive TUI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -605,6 +619,10 @@ pub struct Config {
     /// Shared audio transcription configuration for TUI/CLI and as the default for integrations.
     #[serde(default)]
     pub transcription: TranscriptionConfig,
+
+    /// Shared text-to-speech configuration for the `zdx speak` CLI and bot audio replies.
+    #[serde(default)]
+    pub speech: SpeechConfig,
 
     /// qmd search backend configuration.
     #[serde(default)]
@@ -1266,6 +1284,7 @@ impl Default for Config {
             prompt_template: PromptTemplateConfig::default(),
             memory: MemoryConfig::default(),
             transcription: TranscriptionConfig::default(),
+            speech: SpeechConfig::default(),
             qmd: QmdConfig::default(),
             notifications: NotificationsConfig::default(),
             telegram: TelegramConfig::default(),
