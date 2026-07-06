@@ -41,17 +41,17 @@
 ## Slice 1: `zdx transcribe <file>` CLI subcommand
 - **Goal**: A terminal command that transcribes an audio file and prints the text.
 - **Scope checklist**:
-  - [ ] `Commands::Transcribe { file: String, provider: Option<String>, model: Option<String>, language: Option<String> }` in `crates/zdx-cli/src/cli/mod.rs`.
-  - [ ] Thin handler `crates/zdx-cli/src/cli/commands/transcribe.rs`: read the file bytes + infer mime/filename, build a `TranscriptionConfig` from flags overlaid on `Config.transcription`, call `zdx_engine::audio::transcribe::transcribe_audio_if_configured`, `println!` the transcript; clear message when no provider is configured (`Ok(None)`).
-  - [ ] Register `pub mod transcribe;` in `cli/commands/mod.rs`; update `crates/zdx-cli/AGENTS.md` "Where things are".
-  - [ ] Integration test under `crates/zdx-cli/tests/integration/` (arg parsing; missing-file error; no-provider message).
+  - [x] `Commands::Transcribe { file: String, provider: Option<String>, model: Option<String>, language: Option<String> }` in `crates/zdx-cli/src/cli/mod.rs`.
+  - [x] Thin handler `crates/zdx-cli/src/cli/commands/transcribe.rs`: read the file bytes + infer mime/filename, build a `TranscriptionConfig` from flags overlaid on `Config.transcription`, call `zdx_engine::audio::transcribe::transcribe_audio_if_configured`, `println!` the transcript; clear message when no provider is configured (`Ok(None)`).
+  - [x] Register `pub mod transcribe;` in `cli/commands/mod.rs`; update `crates/zdx-cli/AGENTS.md` "Where things are".
+  - [x] Integration test under `crates/zdx-cli/tests/integration/` (arg parsing; missing-file error; no-provider message).
 - **✅ Demo**: `zdx transcribe sample.ogg` prints the transcript (or a clear "configure OpenAI/Mistral" message when unset).
 - **Risks / failure modes**: none new — reuses the existing engine path.
 
 ## Slice 2 (optional): Skill to teach `zdx transcribe`
 - **Goal**: On-demand transcription is discoverable by the agent for explicit file/attachment requests.
 - **Scope checklist**:
-  - [ ] Add or extend a skill that teaches `zdx transcribe` usage and when to use it (explicit "transcribe this file" requests), without interfering with automatic bot/TUI transcription.
+  - [x] Add or extend a skill that teaches `zdx transcribe` usage and when to use it (explicit "transcribe this file" requests), without interfering with automatic bot/TUI transcription. Shipped as bundled skill `crates/zdx-assets/bundled_skills/transcription/SKILL.md`.
 - **✅ Demo**: asking the bot to transcribe a specific audio file triggers `zdx transcribe` and returns the text.
 - **Risks / failure modes**: skill over-triggering vs the automatic path — constrain the description to explicit file transcription.
 
