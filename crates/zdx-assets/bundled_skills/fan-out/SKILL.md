@@ -1,11 +1,11 @@
 ---
 name: fan-out
-description: "Use when the user wants to send one prompt to several models at once and see every answer — e.g. 'get a second opinion from GPT-5 and Gemini', 'have 3 models review this code', 'compare how different models answer this', 'ask a few models and show me all replies', or 'run this across multiple models'. Dispatches the same prompt to N models in parallel via `zdx exec` and returns all answers with a per-model thread id for follow-up. Not for single-model calls or prose drafting."
+description: "Use when the user wants to send one prompt to several models at once and see every answer — e.g. 'get a second opinion from GPT-5 and Gemini', 'have 3 models review this code', 'compare how different models answer this', 'ask a few models and show me all replies', or 'run this across multiple models'. Dispatches the same prompt to N models in parallel via `zdx exec` and returns all answers with a per-model thread id for follow-up. Not for single-model calls."
 ---
 
 # Fan-out
 
-Send one prompt to several models in parallel and return all their answers together. This is the "panel of models" primitive: one prompt in, N answers out. The `bench` skill builds on this by adding a judge that ranks the answers — fan-out itself just collects them.
+Send one prompt to several models in parallel and return all their answers together. This is the "panel of models" primitive: one prompt in, N answers out.
 
 This skill is loaded into the **calling agent's** context — it is *not* a subagent. The agent runs the `zdx exec` calls itself via `bash`, then composes the reply. No subagent hop.
 
@@ -16,7 +16,6 @@ This skill is loaded into the **calling agent's** context — it is *not* a suba
 
 Do **not** use for:
 - A single-model call — just run `zdx exec -m <model>` directly.
-- Judging/ranking the answers — that's the `bench` skill (fan-out + a judge pass).
 
 ## 1. Pick the models
 Discover valid `-m` ids (these print in the exact `provider:model` form to pass to `-m`):
@@ -30,7 +29,9 @@ zdx models list --json                # machine-readable (id, provider, pricing,
 Use the models the user named. If they didn't name any, pick a small sensible spread (e.g. one strong model per major provider they have enabled) and say which you chose. Never invent ids — take them from `zdx models list`.
 
 ## 2. Build the prompt
-The sub-runs use `--no-system-prompt`, so each model has **no other context**. The prompt must be fully self-contained: fold in the task, any source text/code, the audience, and the exact output you want. Gather the real material first (read the file the user referenced, the prior message, etc.) and put it all inside `-p`.
+By default each model runs with the full ZDX system prompt and project context (`AGENTS.md`, memory, skills), so it answers as a context-aware agent. Still make the prompt self-contained for the task: fold in what you want done, any source text/code the user pasted, the audience, and the exact output shape. Gather the real material first (read the file the user referenced, the prior message, etc.) and put it inside `-p`.
+
+If you pass `--no-system-prompt` (clean/isolated mode), the model sees **only** your prompt — then it must carry every bit of context it needs.
 
 For prompts with quotes/newlines, write the prompt to `$ZDX_ARTIFACT_DIR/tmp/` and pass it via `-p "$(cat <file>)"` to avoid shell-escaping issues.
 
@@ -45,8 +46,8 @@ python3 scripts/fanout.py -p "$(cat "$ZDX_ARTIFACT_DIR/tmp/fanout-prompt.txt")" 
 Options:
 - `-m PROVIDER:MODEL` — repeat per model (ids from `zdx models list`).
 - `-p "..."` or `--prompt-file FILE` — the self-contained prompt.
-- `--with-tools` — let models explore (default is a clean one-shot, `--no-tools`).
-- `--with-system-prompt` — keep full context (default `--no-system-prompt`).
+- `--with-tools` — let models explore/read files (default: `--no-tools`).
+- `--no-system-prompt` — clean/isolated run, no ZDX context (default: full context on).
 - `-t LEVEL` — thinking level (default `off`); `--prefix` — thread-id prefix.
 
 The script runs all models in parallel (cost ≈ one call, not N), persists each under a known thread id, parses `zdx exec` output directly (no `jq`), and emits the index-first block described below. It prints per-model `(ERROR)` markers instead of failing the whole run.
@@ -73,7 +74,7 @@ Any model's thread is resumable — send a follow-up to the same id:
 
 ```
 zdx --thread fanout-<ts>-<slug> exec -m <model> \
-    -t off --no-tools --no-system-prompt \
+    -t off --no-tools \
     --filter assistant_completed -p "<follow-up question>" | jq -r .text
 ```
 
