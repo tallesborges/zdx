@@ -1,6 +1,6 @@
 ---
 name: imagine
-description: "Generate and edit images. Outputs PNG files. Use when the user wants any visual creative output, an image generated from a description, or wants to modify an existing image in any way — editing, transforming, or adding visual elements."
+description: "Generate and edit images. Saves the image and prints the exact path it wrote. Use when the user wants any visual creative output, an image generated from a description, or wants to modify an existing image in any way — editing, transforming, or adding visual elements."
 ---
 
 # Imagine – Image Generation & Editing via `zdx imagine`
@@ -15,13 +15,13 @@ zdx imagine --prompt <PROMPT> [OPTIONS]
 Options:
   -p, --prompt <PROMPT>   Text prompt (required)
   -s, --source <IMAGE>    Source image for editing (repeatable for multi-image)
-  -o, --out <PATH>        Output path (default: $ZDX_HOME/artifacts/image-<timestamp>.png)
+  -o, --out <PATH>        Output path — written exactly as given (default: $ZDX_HOME/artifacts/image-<timestamp>.<ext>)
       --model <MODEL>     Model override (default: gemini:gemini-3.1-flash-image-preview)
       --aspect <RATIO>    Aspect ratio (Gemini only; see table below)
       --size <SIZE>       512px | 1K (default) | 2K | 4K
 ```
 
-Output: prints the saved file path(s) to stdout.
+Output: prints the exact saved file path(s) to stdout. `--out` is honored literally; the model picks the image format (often JPEG for Gemini), so a file named `.png` may actually hold JPEG bytes. That is fine — zdx reads images by content, not extension. Use `--out` to control the path and always view/attach the printed path.
 
 When running inside zdx (TUI, bot, or CLI), `$ZDX_ARTIFACT_DIR` is the preferred output location. Pass it via `--out`:
 
@@ -72,7 +72,7 @@ zdx imagine -p "Add a neon sign above the doorway, keep the rest unchanged" -s s
 
 ## Output location
 
-Images are saved to `$ZDX_ARTIFACT_DIR` when set, otherwise `$ZDX_HOME/artifacts/`. Use `--out` to specify the path:
+Images are saved to `$ZDX_ARTIFACT_DIR` when set, otherwise `$ZDX_HOME/artifacts/`. Use `--out` to set the exact path:
 
 ```bash
 zdx imagine -p "..." --out "$ZDX_ARTIFACT_DIR/descriptive-name.png"
@@ -277,7 +277,7 @@ For non-explainer use cases, see `references/prompt-templates.md` for templates 
 ## Workflow tips
 
 - Always view the generated image after creation to verify quality.
-- Images are saved to `$ZDX_ARTIFACT_DIR` when set. Use `--out` for descriptive filenames.
+- Images are saved to `$ZDX_ARTIFACT_DIR` when set. Use `--out` for descriptive filenames; the path is written exactly as given.
 - If the model returns no images, check the prompt for policy violations or try rephrasing.
 - Use `--size 2K` or `4K` only when you specifically need higher resolution.
 - For iterative refinement, keep the base prompt and tweak one element at a time.
