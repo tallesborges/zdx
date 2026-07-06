@@ -78,8 +78,9 @@ def main() -> int:
                     help="Thinking level for each run (default: off).")
     ap.add_argument("--with-tools", action="store_true",
                     help="Let models use tools (default: --no-tools).")
-    ap.add_argument("--with-system-prompt", action="store_true",
-                    help="Keep the full system prompt/context (default: --no-system-prompt).")
+    ap.add_argument("--no-system-prompt", action="store_true",
+                    help="Run clean/isolated with no ZDX system prompt or project "
+                         "context (default: full context on).")
     ap.add_argument("--prefix", default="fanout", help="Thread id prefix (default: fanout).")
     args = ap.parse_args()
 
@@ -106,7 +107,7 @@ def main() -> int:
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         futures = {
             pool.submit(run_model, m, tid, prompt, args.thinking,
-                        not args.with_tools, not args.with_system_prompt): m
+                        not args.with_tools, args.no_system_prompt): m
             for (m, tid) in jobs
         }
         results = {f.result()[0]: f.result() for f in concurrent.futures.as_completed(futures)}
