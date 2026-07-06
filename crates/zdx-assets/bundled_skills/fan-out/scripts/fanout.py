@@ -9,7 +9,7 @@ model's answer inline. Continue any model with:
 
 Usage:
     fanout.py -p "PROMPT" -m claude-cli:claude-opus-4-8 -m openai:gpt-5.5
-    fanout.py --prompt-file brief.txt -m gemini:gemini-3-pro-preview --with-tools
+    fanout.py --prompt-file brief.txt -m gemini:gemini-3-pro-preview --no-tools
 
 Discover valid `-m` ids with: `zdx models list [--provider X] [--json]`.
 Stdlib only; no third-party deps and no `jq`.
@@ -76,8 +76,8 @@ def main() -> int:
     src.add_argument("--prompt-file", help="Read the prompt from this file.")
     ap.add_argument("-t", "--thinking", default="off",
                     help="Thinking level for each run (default: off).")
-    ap.add_argument("--with-tools", action="store_true",
-                    help="Let models use tools (default: --no-tools).")
+    ap.add_argument("--no-tools", action="store_true",
+                    help="Disable tools; clean one-shot answers (default: tools on).")
     ap.add_argument("--no-system-prompt", action="store_true",
                     help="Run clean/isolated with no ZDX system prompt or project "
                          "context (default: full context on).")
@@ -107,7 +107,7 @@ def main() -> int:
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         futures = {
             pool.submit(run_model, m, tid, prompt, args.thinking,
-                        not args.with_tools, args.no_system_prompt): m
+                        args.no_tools, args.no_system_prompt): m
             for (m, tid) in jobs
         }
         results = {f.result()[0]: f.result() for f in concurrent.futures.as_completed(futures)}

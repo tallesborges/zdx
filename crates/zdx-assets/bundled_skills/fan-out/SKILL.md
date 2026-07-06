@@ -46,7 +46,7 @@ python3 scripts/fanout.py -p "$(cat "$ZDX_ARTIFACT_DIR/tmp/fanout-prompt.txt")" 
 Options:
 - `-m PROVIDER:MODEL` — repeat per model (ids from `zdx models list`).
 - `-p "..."` or `--prompt-file FILE` — the self-contained prompt.
-- `--with-tools` — let models explore/read files (default: `--no-tools`).
+- `--no-tools` — disable tools for clean one-shot answers (default: tools on, models can read/explore).
 - `--no-system-prompt` — clean/isolated run, no ZDX context (default: full context on).
 - `-t LEVEL` — thinking level (default `off`); `--prefix` — thread-id prefix.
 
@@ -74,8 +74,7 @@ Any model's thread is resumable — send a follow-up to the same id:
 
 ```
 zdx --thread fanout-<ts>-<slug> exec -m <model> \
-    -t off --no-tools \
-    --filter assistant_completed -p "<follow-up question>" | jq -r .text
+    -t off --filter assistant_completed -p "<follow-up question>" | jq -r .text
 ```
 
 Use the same `-m` and flags as the original run so the continuation stays consistent.
