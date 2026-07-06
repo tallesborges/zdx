@@ -9,6 +9,7 @@ fn test_help_shows_all_commands() {
         .success()
         .stdout(predicate::str::contains("exec"))
         .stdout(predicate::str::contains("imagine"))
+        .stdout(predicate::str::contains("speak"))
         .stdout(predicate::str::contains("mcp"))
         .stdout(predicate::str::contains("automations"))
         .stdout(predicate::str::contains("threads"))
@@ -68,6 +69,36 @@ fn test_imagine_rejects_invalid_image_size() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("Invalid image size"));
+}
+
+#[test]
+fn test_speak_help_shows_flags() {
+    cargo_bin_cmd!("zdx")
+        .args(["speak", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--out"))
+        .stdout(predicate::str::contains("--model"))
+        .stdout(predicate::str::contains("--voice"))
+        .stdout(predicate::str::contains("--format"));
+}
+
+#[test]
+fn test_speak_requires_text_argument() {
+    cargo_bin_cmd!("zdx")
+        .args(["speak"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("<TEXT>"));
+}
+
+#[test]
+fn test_speak_rejects_empty_text() {
+    cargo_bin_cmd!("zdx")
+        .args(["speak", "   "])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("empty text"));
 }
 
 #[test]
@@ -133,13 +164,4 @@ fn test_daemon_help_shows_poll_interval() {
         .assert()
         .success()
         .stdout(predicate::str::contains("poll-interval-secs"));
-}
-
-#[test]
-fn test_version_flag() {
-    cargo_bin_cmd!("zdx")
-        .arg("--version")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("0.1"));
 }

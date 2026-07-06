@@ -57,6 +57,18 @@ tldr_model = "gemini:gemini-3.1-flash-lite-preview"
 # model = "whisper-1"
 # language = "en"
 
+# Shared text-to-speech configuration
+# Used by the `zdx speak` CLI and bot audio replies.
+# provider: Speech provider to use ("mistral" or "openai", defaults to auto-detect: Mistral first)
+# model: Model to use for speech synthesis (provider-specific, defaults to "voxtral-mini-tts-latest" for Mistral, "gpt-4o-mini-tts" for OpenAI)
+# voice: Voice to use (provider-specific, e.g. "en_paul_neutral" for Mistral, "coral" for OpenAI)
+# format: Output audio format (e.g. "ogg" for a Telegram voice note, "mp3"; defaults to "ogg")
+[speech]
+# provider = "mistral"
+# model = "voxtral-mini-tts-latest"
+# voice = "en_paul_neutral"
+# format = "ogg"
+
 # Subagent delegation configuration
 # enabled: Expose invoke_subagent tool to the model.
 # available_models: Auto-populated from enabled providers + model registry (TUI picker source).

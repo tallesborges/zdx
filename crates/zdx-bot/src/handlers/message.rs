@@ -1597,6 +1597,28 @@ async fn send_media_responses(
                     reply_parameters,
                 )
                 .await
+        } else if is_voice_note_path(&media_path) {
+            context
+                .client()
+                .send_voice_from_path(
+                    incoming.chat_id,
+                    &media_path,
+                    reply_to_message_id,
+                    reply_ctx.topic_id,
+                    reply_parameters,
+                )
+                .await
+        } else if is_audio_path(&media_path) {
+            context
+                .client()
+                .send_audio_from_path(
+                    incoming.chat_id,
+                    &media_path,
+                    reply_to_message_id,
+                    reply_ctx.topic_id,
+                    reply_parameters,
+                )
+                .await
         } else {
             context
                 .client()
@@ -1766,6 +1788,23 @@ fn is_image_path(path: &Path) -> bool {
             matches!(
                 ext.to_ascii_lowercase().as_str(),
                 "png" | "jpg" | "jpeg" | "webp"
+            )
+        })
+}
+
+fn is_voice_note_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| matches!(ext.to_ascii_lowercase().as_str(), "ogg" | "oga" | "opus"))
+}
+
+fn is_audio_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "mp3" | "m4a" | "wav" | "aac" | "flac"
             )
         })
 }
@@ -1963,7 +2002,27 @@ fn thread_id_for_chat(chat_id: i64, message_thread_id: Option<i64>) -> String {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{format_whereami_message, is_image_path, parse_final_response};
+    use super::{
+        format_whereami_message, is_audio_path, is_image_path, is_voice_note_path,
+        parse_final_response,
+    };
+
+    #[test]
+    fn media_path_routing_classifies_by_extension() {
+        assert!(is_image_path(Path::new("/tmp/a.png")));
+        assert!(is_voice_note_path(Path::new("/tmp/a.ogg")));
+        assert!(is_voice_note_path(Path::new("/tmp/A.OPUS")));
+        assert!(is_audio_path(Path::new("/tmp/a.mp3")));
+        assert!(is_audio_path(Path::new("/tmp/a.wav")));
+
+        // Voice-note and generic-audio buckets stay disjoint.
+        assert!(!is_audio_path(Path::new("/tmp/a.ogg")));
+        assert!(!is_voice_note_path(Path::new("/tmp/a.mp3")));
+
+        // Non-audio files fall through to the document sender.
+        assert!(!is_voice_note_path(Path::new("/tmp/a.pdf")));
+        assert!(!is_audio_path(Path::new("/tmp/a.pdf")));
+    }
 
     #[test]
     fn parse_final_response_extracts_media_wrapper_format() {
