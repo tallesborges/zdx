@@ -15,4 +15,5 @@ pub mod speak;
 pub mod stats;
 pub mod telegram;
 pub mod threads;
+pub mod transcribe;
 pub mod worktree;

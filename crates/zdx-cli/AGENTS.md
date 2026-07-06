@@ -11,6 +11,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 - `src/cli/commands/daemon.rs`: scheduled automations daemon loop
 - `src/cli/commands/imagine.rs`: image generation command handler (`zdx imagine`)
 - `src/cli/commands/speak.rs`: text-to-speech command handler (`zdx speak`); thin wrapper over `zdx_engine::audio::speak::synthesize_speech`
+- `src/cli/commands/transcribe.rs`: speech-to-text command handler (`zdx transcribe <file>`); thin wrapper over `zdx_engine::audio::transcribe::transcribe_audio_if_configured`
 - `src/cli/commands/memory.rs`: memory indexing/search commands (`zdx memory index`, `zdx memory search`)
 - `src/cli/commands/mcp.rs`: MCP helper commands (`servers`, `tools`, `schema`, `call`)
 - `src/cli/commands/stats.rs`: usage/cost summary command handler (`zdx stats`)

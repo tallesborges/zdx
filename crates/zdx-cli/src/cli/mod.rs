@@ -212,6 +212,24 @@ enum Commands {
         format: Option<String>,
     },
 
+    /// Transcribe an audio file to text with `OpenAI` or Mistral
+    Transcribe {
+        /// Path to the audio file to transcribe
+        file: String,
+
+        /// Provider to use (`openai` or `mistral`; defaults to auto-detect)
+        #[arg(long, value_name = "PROVIDER")]
+        provider: Option<String>,
+
+        /// Model to use (provider-prefixed, e.g. `openai:whisper-1`, `mistral:voxtral-mini-latest`)
+        #[arg(long, value_name = "MODEL")]
+        model: Option<String>,
+
+        /// Language hint (ISO 639-1 code, e.g. `en`, `pt`)
+        #[arg(long, value_name = "LANG")]
+        language: Option<String>,
+    },
+
     /// Manage saved conversation threads
     Threads {
         #[command(subcommand)]
@@ -1025,6 +1043,21 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
                     format,
                 },
             )
+            .await
+        }
+        Commands::Transcribe {
+            file,
+            provider,
+            model,
+            language,
+        } => {
+            commands::transcribe::run(commands::transcribe::TranscribeRunOptions {
+                file: &file,
+                provider: provider.as_deref(),
+                model: model.as_deref(),
+                language: language.as_deref(),
+                config: context.config,
+            })
             .await
         }
         Commands::Memory { command } => dispatch_memory(command, context),
