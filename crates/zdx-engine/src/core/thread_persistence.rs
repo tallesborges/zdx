@@ -1912,6 +1912,15 @@ pub fn extract_title_from_events(events: &[ThreadEvent]) -> Option<String> {
     })
 }
 
+/// Extracts the parent handoff thread ID from events (if this thread was
+/// created by a `/handoff`).
+pub fn extract_handoff_from_from_events(events: &[ThreadEvent]) -> Option<String> {
+    events.iter().find_map(|event| match event {
+        ThreadEvent::Meta { handoff_from, .. } => handoff_from.clone(),
+        _ => None,
+    })
+}
+
 /// Returns the ID of the most recently modified thread.
 ///
 /// Returns None if no threads exist.
@@ -2520,6 +2529,23 @@ mod tests {
     use crate::core::agent::create_event_channel;
     use crate::core::events::{AgentEvent, TurnStatus};
     use crate::providers::ReplayToken;
+
+    #[test]
+    fn extract_handoff_from_reads_meta_parent() {
+        let with_parent = vec![ThreadEvent::meta_with_root_and_source(
+            None,
+            Some("parent-123".to_string()),
+        )];
+        assert_eq!(
+            extract_handoff_from_from_events(&with_parent),
+            Some("parent-123".to_string())
+        );
+
+        let without_parent = vec![ThreadEvent::meta_with_root_and_source(None, None)];
+        assert_eq!(extract_handoff_from_from_events(&without_parent), None);
+
+        assert_eq!(extract_handoff_from_from_events(&[]), None);
+    }
 
     fn setup_temp_zdx_home() -> &'static TempDir {
         static ZDX_HOME: OnceLock<TempDir> = OnceLock::new();

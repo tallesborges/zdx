@@ -39,12 +39,12 @@
 ## Slice 1: Full lineage in the handoff prefix
 - **Goal**: The "Continuing from …" line lists the entire ancestor chain with titles, so the new assistant knows every prior thread and can `read_thread` any of them.
 - **Scope checklist**:
-  - [ ] In `handoff.rs`, walk `handoff_from` from the source thread up to the root. Build the lookup once from `thread_persistence::list_all_threads()` (id → `{ title, handoff_from }`); stop when a thread has no `handoff_from` or its parent isn't found.
-  - [ ] Collect `(id, display_title)` per ancestor (use `ThreadSummary::display_title()`).
-  - [ ] Update `build_handoff_prefix` to render the chain when there is more than the source thread, e.g.:
+  - [x] In `handoff.rs`, walk `handoff_from` from the source thread up to the root. Build the lookup once from `thread_persistence::list_all_threads()` (id → `{ title, handoff_from }`); stop when a thread has no `handoff_from` or its parent isn't found.
+  - [x] Collect `(id, display_title)` per ancestor (use `ThreadSummary::display_title()`).
+  - [x] Update `build_handoff_prefix` to render the chain when there is more than the source thread, e.g.:
         `Continuing from D "title". Lineage: D "title" ← C "title" ← B "title" ← A "title". Call read_thread on any thread ID above for missing context.`
         Single-thread (no ancestors) keeps today's shorter wording.
-  - [ ] User's literal next message still leads the first message, unchanged.
+  - [x] User's literal next message still leads the first message, unchanged.
 - **✅ Demo**: `just run` → create threads via a chain of 3 `/handoff`s → the final new thread's first message shows all ancestor IDs + titles in the lineage line; `read_thread` on the oldest ID returns its context.
 - **Risks / failure modes**:
   - Titles missing → `display_title()` already falls back to a short ID.
@@ -53,8 +53,8 @@
 ## Slice 2 (fast-follow): read_thread surfaces its parent
 - **Goal**: Even handoffs created before Slice 1 can be walked — reading a thread reveals its own parent so the agent can climb the chain lazily.
 - **Scope checklist**:
-  - [ ] In `read_thread.rs`, after loading the thread, include the thread's own `handoff_from` (if any) as a small metadata line prepended/appended outside the extractor answer, e.g. `Parent handoff thread: <id>`.
-  - [ ] Pull `handoff_from` from meta (reuse `list_all_threads()` lookup or a single meta read).
+  - [x] In `read_thread.rs`, after loading the thread, include the thread's own `handoff_from` (if any) as a small metadata line prepended/appended outside the extractor answer, e.g. `Parent handoff thread: <id>`.
+  - [x] Pull `handoff_from` from meta (reuse `list_all_threads()` lookup or a single meta read).
 - **✅ Demo**: `read_thread` on a mid-chain thread returns its answer plus a `Parent handoff thread: <id>` line; agent can call `read_thread` on that parent next.
 - **Risks / failure modes**:
   - Thread with no parent → omit the line entirely.

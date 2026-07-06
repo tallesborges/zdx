@@ -86,9 +86,16 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
 
     let thread_content = tp::format_transcript(&events);
     let prompt = build_read_thread_prompt(&thread_content, &goal, &build_zdx_context(&ctx.root));
+    let parent = tp::extract_handoff_from_from_events(&events);
 
     match run_subagent(prompt, ctx).await {
-        Ok(response) => ToolOutput::success(Value::String(response)),
+        Ok(response) => {
+            let output = match &parent {
+                Some(parent_id) => format!("{response}\n\nParent handoff thread: {parent_id}"),
+                None => response,
+            };
+            ToolOutput::success(Value::String(output))
+        }
         Err(err) => ToolOutput::failure("execution_failed", "Read thread failed", Some(err)),
     }
 }
