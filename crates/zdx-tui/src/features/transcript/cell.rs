@@ -270,6 +270,23 @@ fn streaming_discriminator(content_len: usize, is_streaming: bool, is_interrupte
     (content_len << 2) | (usize::from(is_streaming) << 1) | usize::from(is_interrupted)
 }
 
+/// Lifecycle state of a child subagent tool call (see `SubagentStreamSink`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildToolState {
+    Running,
+    Done,
+    Error,
+}
+
+/// A single child tool call relayed live from a running `invoke_subagent`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChildToolEntry {
+    pub id: String,
+    pub name: String,
+    pub key_arg: Option<String>,
+    pub state: ChildToolState,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum HistoryCell {
     /// User input message.
@@ -305,6 +322,8 @@ pub enum HistoryCell {
         input_delta: Option<String>,
         /// Accumulated streaming output (stdout/stderr) from `ToolOutputDelta` events.
         output_delta: Option<String>,
+        /// Live child tool activity relayed from a running `invoke_subagent`.
+        child_tools: Vec<ChildToolEntry>,
         state: ToolState,
         started_at: DateTime<Utc>,
         /// Timestamp when the tool finished (Done, Error, or Cancelled).
@@ -419,6 +438,7 @@ impl HistoryCell {
             input,
             input_delta: None,
             output_delta: None,
+            child_tools: Vec::new(),
             state: ToolState::Running,
             started_at: now,
             completed_at: None,
@@ -597,6 +617,85 @@ impl HistoryCell {
             }
             _ => panic!("append_tool_output_delta called on non-tool cell"),
         }
+    }
+
+    /// Applies a streaming `ToolOutputDelta` chunk to a tool cell.
+    ///
+    /// For `invoke_subagent` cells the chunk is a compact JSON descriptor of a
+    /// child tool's lifecycle (`{"t":"start"|"input"|"done"|"error", …}`) and
+    /// updates the structured `child_tools` list. Any other cell — or a chunk
+    /// that isn't a recognized child-tool event — appends as raw output text.
+    ///
+    /// # Panics
+    /// Panics if called on a non-tool cell.
+    pub fn apply_tool_output_delta(&mut self, chunk: &str) {
+        let is_subagent = matches!(self, HistoryCell::Tool { name, .. } if name.eq_ignore_ascii_case("invoke_subagent"));
+        if is_subagent && self.apply_child_tool_delta(chunk) {
+            return;
+        }
+        self.append_tool_output_delta(chunk);
+    }
+
+    /// Applies one compact child-tool JSON chunk to `child_tools`.
+    ///
+    /// Returns `true` when the chunk was a recognized child-tool event (and
+    /// consumed), `false` when it should fall through to raw output append.
+    fn apply_child_tool_delta(&mut self, chunk: &str) -> bool {
+        let HistoryCell::Tool { child_tools, .. } = self else {
+            return false;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(chunk) else {
+            return false;
+        };
+        let (Some(kind), Some(id)) = (
+            value.get("t").and_then(Value::as_str),
+            value.get("id").and_then(Value::as_str),
+        ) else {
+            return false;
+        };
+
+        match kind {
+            "start" => {
+                if !child_tools.iter().any(|entry| entry.id == id) {
+                    let name = value
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    child_tools.push(ChildToolEntry {
+                        id: id.to_string(),
+                        name,
+                        key_arg: None,
+                        state: ChildToolState::Running,
+                    });
+                }
+            }
+            "input" => {
+                let arg = value.get("arg").and_then(Value::as_str).map(str::to_string);
+                if let Some(entry) = child_tools.iter_mut().find(|entry| entry.id == id) {
+                    entry.key_arg = arg;
+                } else {
+                    child_tools.push(ChildToolEntry {
+                        id: id.to_string(),
+                        name: String::new(),
+                        key_arg: arg,
+                        state: ChildToolState::Running,
+                    });
+                }
+            }
+            "done" => {
+                if let Some(entry) = child_tools.iter_mut().find(|entry| entry.id == id) {
+                    entry.state = ChildToolState::Done;
+                }
+            }
+            "error" => {
+                if let Some(entry) = child_tools.iter_mut().find(|entry| entry.id == id) {
+                    entry.state = ChildToolState::Error;
+                }
+            }
+            _ => return false,
+        }
+        true
     }
 
     /// Sets the result on a tool cell and updates state to Done or Error.
@@ -787,6 +886,7 @@ impl HistoryCell {
                 state,
                 input,
                 result,
+                child_tools,
                 ..
             } => {
                 let mut lines = Vec::new();
@@ -840,6 +940,66 @@ impl HistoryCell {
                 lines.push(StyledLine {
                     spans: header_spans,
                 });
+
+                // Live child subagent tool activity, rendered as a small tree
+                // under the header. Capped to the most recent rows.
+                if !child_tools.is_empty() {
+                    const MAX_CHILD_ROWS: usize = 5;
+                    let total = child_tools.len();
+                    let skip = total.saturating_sub(MAX_CHILD_ROWS);
+                    if skip > 0 {
+                        lines.push(StyledLine {
+                            spans: vec![StyledSpan {
+                                text: format!("… {skip} more"),
+                                style: Style::ToolOutput,
+                            }],
+                        });
+                    }
+                    for (idx, entry) in child_tools.iter().enumerate().skip(skip) {
+                        let is_last = idx + 1 == total;
+                        let branch = if is_last { "└─ " } else { "├─ " };
+                        let (glyph, glyph_style) = match entry.state {
+                            ChildToolState::Running => (
+                                SPINNER_FRAMES[spinner_frame % SPINNER_FRAMES.len()].to_string(),
+                                Style::ToolRunning,
+                            ),
+                            ChildToolState::Done => ("✓".to_string(), Style::ToolSuccess),
+                            ChildToolState::Error => ("✗".to_string(), Style::ToolError),
+                        };
+                        let mut spans = vec![
+                            StyledSpan {
+                                text: branch.to_string(),
+                                style: Style::Plain,
+                            },
+                            StyledSpan {
+                                text: glyph,
+                                style: glyph_style,
+                            },
+                            StyledSpan {
+                                text: " ".to_string(),
+                                style: Style::Plain,
+                            },
+                            StyledSpan {
+                                text: entry.name.clone(),
+                                style: Style::ToolStatus,
+                            },
+                        ];
+                        if let Some(arg) = entry.key_arg.as_deref().filter(|arg| !arg.is_empty()) {
+                            let used_width =
+                                spans.iter().map(|s| ratatui_width(&s.text)).sum::<usize>() + 2;
+                            let remaining = width.saturating_sub(used_width).max(4);
+                            spans.push(StyledSpan {
+                                text: "  ".to_string(),
+                                style: Style::Plain,
+                            });
+                            spans.push(StyledSpan {
+                                text: truncate_with_ellipsis(arg, remaining),
+                                style: Style::ToolOutput,
+                            });
+                        }
+                        lines.push(StyledLine { spans });
+                    }
+                }
 
                 // Live `input_delta` / `output_delta` streaming is rendered only
                 // in the tool detail overlay (`overlays/tool_detail.rs`) to keep
@@ -1960,5 +2120,89 @@ mod tests {
             HistoryCell::Assistant { is_streaming, .. } => assert!(!*is_streaming),
             _ => panic!("Expected assistant cell"),
         }
+    }
+
+    fn child_tools_of(cell: &HistoryCell) -> &[ChildToolEntry] {
+        match cell {
+            HistoryCell::Tool { child_tools, .. } => child_tools,
+            _ => panic!("Expected tool cell"),
+        }
+    }
+
+    fn output_delta_of(cell: &HistoryCell) -> Option<&str> {
+        match cell {
+            HistoryCell::Tool { output_delta, .. } => output_delta.as_deref(),
+            _ => panic!("Expected tool cell"),
+        }
+    }
+
+    #[test]
+    fn apply_child_tool_delta_tracks_lifecycle() {
+        let mut cell =
+            HistoryCell::tool_running("parent", "Invoke_Subagent", serde_json::json!({}));
+        cell.apply_tool_output_delta(r#"{"t":"start","id":"c1","name":"read"}"#);
+        cell.apply_tool_output_delta(r#"{"t":"input","id":"c1","arg":"Cargo.toml"}"#);
+        cell.apply_tool_output_delta(r#"{"t":"start","id":"c2","name":"bash"}"#);
+        cell.apply_tool_output_delta(r#"{"t":"done","id":"c1"}"#);
+        cell.apply_tool_output_delta(r#"{"t":"error","id":"c2"}"#);
+
+        // Structured chunks must not leak into raw output.
+        assert_eq!(output_delta_of(&cell), None);
+
+        let child_tools = child_tools_of(&cell);
+        assert_eq!(child_tools.len(), 2);
+        assert_eq!(child_tools[0].id, "c1");
+        assert_eq!(child_tools[0].name, "read");
+        assert_eq!(child_tools[0].key_arg.as_deref(), Some("Cargo.toml"));
+        assert_eq!(child_tools[0].state, ChildToolState::Done);
+        assert_eq!(child_tools[1].id, "c2");
+        assert_eq!(child_tools[1].name, "bash");
+        assert_eq!(child_tools[1].state, ChildToolState::Error);
+    }
+
+    #[test]
+    fn apply_child_tool_delta_handles_input_before_start() {
+        let mut cell =
+            HistoryCell::tool_running("parent", "invoke_subagent", serde_json::json!({}));
+        cell.apply_tool_output_delta(r#"{"t":"input","id":"c1","arg":"**/*.rs"}"#);
+        cell.apply_tool_output_delta(r#"{"t":"start","id":"c1","name":"glob"}"#);
+
+        let child_tools = child_tools_of(&cell);
+        assert_eq!(
+            child_tools.len(),
+            1,
+            "start dedups against the input-created row"
+        );
+        assert_eq!(child_tools[0].key_arg.as_deref(), Some("**/*.rs"));
+        assert_eq!(child_tools[0].state, ChildToolState::Running);
+    }
+
+    #[test]
+    fn apply_tool_output_delta_falls_back_to_raw_for_unknown_and_non_json() {
+        let mut cell =
+            HistoryCell::tool_running("parent", "invoke_subagent", serde_json::json!({}));
+        cell.apply_tool_output_delta(r#"{"t":"mystery","id":"c1"}"#);
+        cell.apply_tool_output_delta("plain text");
+
+        assert!(child_tools_of(&cell).is_empty());
+        assert_eq!(
+            output_delta_of(&cell),
+            Some(r#"{"t":"mystery","id":"c1"}plain text"#)
+        );
+    }
+
+    #[test]
+    fn apply_tool_output_delta_appends_raw_for_non_subagent_tool() {
+        let mut cell = HistoryCell::tool_running("t", "bash", serde_json::json!({}));
+        cell.apply_tool_output_delta(r#"{"t":"start","id":"c1","name":"read"}"#);
+
+        assert!(
+            child_tools_of(&cell).is_empty(),
+            "non-subagent tools must not parse child-tool chunks"
+        );
+        assert_eq!(
+            output_delta_of(&cell),
+            Some(r#"{"t":"start","id":"c1","name":"read"}"#)
+        );
     }
 }

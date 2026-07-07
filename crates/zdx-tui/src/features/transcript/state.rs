@@ -476,7 +476,7 @@ impl TranscriptState {
         if let Some(index) = self.cells.iter().position(
             |c| matches!(c, super::HistoryCell::Tool { tool_use_id, state, .. } if tool_use_id == tool_id && *state == super::ToolState::Running),
         ) {
-            self.cells[index].append_tool_output_delta(chunk);
+            self.cells[index].apply_tool_output_delta(chunk);
             self.mark_line_info_dirty_from(index);
         }
     }

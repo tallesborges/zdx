@@ -2,6 +2,8 @@
 
 Stream real-time tool activity from child subagent processes to the parent — visible in the TUI as a one-hop child tool activity list inside the `invoke_subagent` cell.
 
+> **Progress:** ✅ Both slices shipped. Slice 1 (engine): `run_exec_subagent_with_cancel` takes an optional `SubagentStreamSink`, streams child stdout line-by-line (concurrent stderr drain) and re-emits child tool lifecycle events as `ToolOutputDelta` JSON chunks (`{"t":"start"|"input"|"done"|"error", …}`); `invoke_subagent` widens its exec `--filter` and builds the sink from `ctx.event_sender`/`ctx.tool_use_id`. Slice 2 (TUI): `HistoryCell::Tool` gained `child_tools: Vec<ChildToolEntry>`; `apply_tool_output_delta` parses the chunks for `invoke_subagent` cells (raw-append fallback otherwise), rendered as a live `⟳/✓/✗` tree in the transcript cell and in the tool-detail overlay.
+
 ## Goals
 
 - While a subagent runs, the TUI shows a live list of child tool calls (name + key arg, spinner/checkmark)

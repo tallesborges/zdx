@@ -23,7 +23,7 @@ mod update;
 // Re-export existing display types
 // Re-export build function
 pub use build::build_transcript_from_events;
-pub use cell::{CellId, HistoryCell, ToolState};
+pub use cell::{CellId, ChildToolEntry, ChildToolState, HistoryCell, ToolState};
 // Re-export the shared reasoning-display helper so the message-reload path
 // in `crate::state` can share the same display logic as build.rs and
 // update.rs.

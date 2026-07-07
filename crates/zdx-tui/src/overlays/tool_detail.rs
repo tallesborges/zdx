@@ -17,7 +17,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use super::OverlayUpdate;
 use super::render_utils::centered_rect;
-use crate::transcript::{HistoryCell, SPINNER_SPEED_DIVISOR, ToolState};
+use crate::transcript::{ChildToolState, HistoryCell, SPINNER_SPEED_DIVISOR, ToolState};
 
 /// Spinner frames for popup title animation.
 const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
@@ -196,6 +196,7 @@ impl ToolDetailState {
             completed_at,
             input_delta,
             output_delta,
+            child_tools,
             ..
         } = cell
         else {
@@ -264,6 +265,29 @@ impl ToolDetailState {
             )));
         }
         lines.push(Line::from(""));
+
+        // --- Child tools section (relayed subagent activity) ---
+        if !child_tools.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "─── Child tools ───",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for entry in child_tools {
+                let (glyph, color) = match entry.state {
+                    ChildToolState::Running => ("⟳", Color::Cyan),
+                    ChildToolState::Done => ("✓", Color::Green),
+                    ChildToolState::Error => ("✗", Color::Red),
+                };
+                let mut text = format!("{glyph} {}", entry.name);
+                if let Some(arg) = entry.key_arg.as_deref().filter(|arg| !arg.is_empty()) {
+                    let _ = write!(text, "  {arg}");
+                }
+                lines.push(Line::from(Span::styled(text, Style::default().fg(color))));
+            }
+            lines.push(Line::from(""));
+        }
 
         // --- Output section ---
         lines.push(Line::from(Span::styled(
