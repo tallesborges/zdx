@@ -9,7 +9,9 @@ use serde_json::{Value, json};
 use super::{ToolContext, ToolDefinition, ToolSet, toolset_tool_names};
 use crate::core::context::{PromptContextInclusion, build_prompt_with_context_and_layers};
 use crate::core::events::ToolOutput;
-use crate::core::subagent::{ExecSubagentOptions, run_exec_subagent};
+use crate::core::subagent::{
+    ExecSubagentOptions, SubagentStreamSink, run_exec_subagent_with_cancel,
+};
 use crate::providers::{ProviderKind, resolve_provider};
 use crate::subagents::{self, RuntimeSubagentSelection, SubagentSummary};
 
@@ -91,7 +93,17 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
 
     let options = build_exec_options(definition, ctx, model, system_prompt);
 
-    match run_exec_subagent(&ctx.root, &prompt, &options).await {
+    // Relay the child's tool activity live to the parent's `invoke_subagent`
+    // cell when the engine wired an event sender + tool id for this call.
+    let stream = match (ctx.event_sender.clone(), ctx.tool_use_id.clone()) {
+        (Some(sender), Some(parent_tool_id)) => Some(SubagentStreamSink {
+            sender,
+            parent_tool_id,
+        }),
+        _ => None,
+    };
+
+    match run_exec_subagent_with_cancel(&ctx.root, &prompt, &options, None, stream).await {
         Ok(response) => ToolOutput::success(Value::String(response)),
         Err(err) => ToolOutput::failure(
             "execution_failed",
@@ -283,7 +295,12 @@ fn build_exec_options(
         no_tools: false,
         no_system_prompt: false,
         tools_override: definition.and_then(|definition| definition.tools.clone()),
-        event_filter: Some(vec!["turn_finished".to_string()]),
+        event_filter: Some(vec![
+            "turn_finished".to_string(),
+            "tool_started".to_string(),
+            "tool_input_completed".to_string(),
+            "tool_completed".to_string(),
+        ]),
         timeout: ctx.timeout,
         track_activity: true,
         activity_kind: Some("subagent".to_string()),

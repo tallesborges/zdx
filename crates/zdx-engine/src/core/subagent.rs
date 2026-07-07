@@ -3,6 +3,7 @@
 //! Provides a reusable way to run an isolated child `zdx exec` process and
 //! capture response text only.
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::Path;
@@ -10,11 +11,14 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
+use serde_json::Value;
 use tempfile::{Builder, TempPath};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
-use crate::core::events::AgentEvent;
+use crate::core::agent::EventSender;
+use crate::core::events::{AgentEvent, TurnStatus};
 
 /// Options for a child `zdx exec` subagent run.
 #[derive(Debug, Clone, Default)]
@@ -81,7 +85,7 @@ pub async fn run_exec_subagent(
     prompt: &str,
     options: &ExecSubagentOptions,
 ) -> Result<String> {
-    run_exec_subagent_with_cancel(root, prompt, options, None).await
+    run_exec_subagent_with_cancel(root, prompt, options, None, None).await
 }
 
 /// Runs an isolated child `zdx exec` process with optional cancellation support.
@@ -94,6 +98,7 @@ pub async fn run_exec_subagent_with_cancel(
     prompt: &str,
     options: &ExecSubagentOptions,
     cancel: Option<CancellationToken>,
+    stream: Option<SubagentStreamSink>,
 ) -> Result<String> {
     let prompt = prompt.trim();
     ensure!(!prompt.is_empty(), "Subagent prompt cannot be empty");
@@ -128,6 +133,10 @@ pub async fn run_exec_subagent_with_cancel(
         .spawn()
         .map_err(|err| anyhow::anyhow!("Failed to spawn subagent: {err}"))?;
 
+    if let Some(sink) = stream {
+        return run_child_streaming(child, cancel, options.timeout, sink).await;
+    }
+
     let wait_future = child.wait_with_output();
     let output = match (cancel, options.timeout) {
         (Some(cancel), Some(timeout)) => {
@@ -154,6 +163,227 @@ pub async fn run_exec_subagent_with_cancel(
     };
 
     process_subagent_output(&output)
+}
+
+/// Live sink for relaying a child subagent's tool activity to the parent.
+///
+/// Each child tool lifecycle event is re-emitted as an `AgentEvent::ToolOutputDelta`
+/// on the parent's event stream, keyed by the parent `invoke_subagent` tool id.
+/// The `chunk` is a compact JSON object (`{"t":"start"|"input"|"done"|"error", ...}`)
+/// that the TUI parses into a child tool activity list.
+pub struct SubagentStreamSink {
+    pub sender: EventSender,
+    pub parent_tool_id: String,
+}
+
+impl SubagentStreamSink {
+    fn emit(&self, chunk: &Value) {
+        self.sender.send(AgentEvent::ToolOutputDelta {
+            id: self.parent_tool_id.clone(),
+            chunk: chunk.to_string(),
+        });
+    }
+
+    fn emit_start(&self, id: &str, name: &str) {
+        self.emit(&serde_json::json!({ "t": "start", "id": id, "name": name }));
+    }
+
+    fn emit_input(&self, id: &str, arg: &str) {
+        self.emit(&serde_json::json!({ "t": "input", "id": id, "arg": arg }));
+    }
+
+    fn emit_done(&self, id: &str) {
+        self.emit(&serde_json::json!({ "t": "done", "id": id }));
+    }
+
+    fn emit_error(&self, id: &str) {
+        self.emit(&serde_json::json!({ "t": "error", "id": id }));
+    }
+}
+
+/// Result of draining a child subagent's stdout event stream.
+struct StreamOutcome {
+    final_text: Option<String>,
+    turn_failed: Option<String>,
+}
+
+/// Streams a child `zdx exec` process: relays tool activity live via `sink`,
+/// drains stderr concurrently to avoid pipe deadlocks, and returns the final
+/// turn text (preserving the same completion/failure semantics as the
+/// non-streaming path).
+async fn run_child_streaming(
+    mut child: tokio::process::Child,
+    cancel: Option<CancellationToken>,
+    timeout: Option<Duration>,
+    sink: SubagentStreamSink,
+) -> Result<String> {
+    let stdout = child
+        .stdout
+        .take()
+        .context("Subagent stdout was not piped")?;
+    let stderr = child
+        .stderr
+        .take()
+        .context("Subagent stderr was not piped")?;
+
+    // Drain stderr concurrently so the child never blocks on a full pipe.
+    let stderr_handle = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        let mut reader = BufReader::new(stderr);
+        let _ = reader.read_to_end(&mut buf).await;
+        buf
+    });
+
+    let read_future = read_stdout_events(stdout, &sink);
+
+    let outcome = match (cancel, timeout) {
+        (Some(cancel), Some(timeout)) => tokio::select! {
+            () = cancel.cancelled() => bail!("Subagent cancelled"),
+            result = tokio::time::timeout(timeout, read_future) => result
+                .with_context(|| format!("Subagent timed out after {} seconds", timeout.as_secs()))??,
+        },
+        (Some(cancel), None) => tokio::select! {
+            () = cancel.cancelled() => bail!("Subagent cancelled"),
+            result = read_future => result?,
+        },
+        (None, Some(timeout)) => tokio::time::timeout(timeout, read_future)
+            .await
+            .with_context(|| format!("Subagent timed out after {} seconds", timeout.as_secs()))??,
+        (None, None) => read_future.await?,
+    };
+
+    // Await the child exit and stderr drain before returning so diagnostics are
+    // complete and no pipe is left dangling.
+    let status = child.wait().await.context("Failed to wait for subagent")?;
+    let stderr_buf = stderr_handle.await.unwrap_or_default();
+
+    if let Some(message) = outcome.turn_failed {
+        bail!("Subagent turn failed: {message}");
+    }
+
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr_buf);
+        let stderr = stderr.trim();
+        if stderr.is_empty() {
+            let code = status.code().unwrap_or(-1);
+            bail!("Subagent failed with exit code {code}");
+        }
+        bail!("Subagent failed: {stderr}");
+    }
+
+    match outcome.final_text {
+        Some(text) if !text.trim().is_empty() => Ok(text),
+        _ => bail!("Subagent returned empty output"),
+    }
+}
+
+/// Reads JSONL agent events from a child's stdout, relaying tool lifecycle
+/// events through `sink` and capturing the terminal turn result.
+async fn read_stdout_events<R: AsyncRead + Unpin>(
+    reader: R,
+    sink: &SubagentStreamSink,
+) -> Result<StreamOutcome> {
+    let mut lines = BufReader::new(reader).lines();
+    let mut seen_ids: HashSet<String> = HashSet::new();
+    let mut final_text = None;
+    let mut turn_failed = None;
+
+    while let Some(line) = lines
+        .next_line()
+        .await
+        .context("Failed to read subagent stdout")?
+    {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<AgentEvent>(trimmed) else {
+            continue;
+        };
+        match event {
+            AgentEvent::ToolInputCompleted { id, name, input } => {
+                let name = name.to_ascii_lowercase();
+                if seen_ids.insert(id.clone()) {
+                    sink.emit_start(&id, &name);
+                }
+                if let Some(arg) = extract_key_arg(&name, &input) {
+                    sink.emit_input(&id, &arg);
+                }
+            }
+            AgentEvent::ToolStarted { id, name } if seen_ids.insert(id.clone()) => {
+                sink.emit_start(&id, &name.to_ascii_lowercase());
+            }
+            AgentEvent::ToolCompleted { id, result } => {
+                if result.is_ok() {
+                    sink.emit_done(&id);
+                } else {
+                    sink.emit_error(&id);
+                }
+            }
+            AgentEvent::TurnFinished {
+                status,
+                final_text: text,
+                ..
+            } => match status {
+                TurnStatus::Completed | TurnStatus::Interrupted => final_text = Some(text),
+                TurnStatus::Failed { message, .. } => turn_failed = Some(message),
+            },
+            _ => {}
+        }
+    }
+
+    Ok(StreamOutcome {
+        final_text,
+        turn_failed,
+    })
+}
+
+/// Extracts the most useful single argument to display for a child tool call.
+///
+/// Tool names are matched lowercase (the engine normalizes them). Reads only
+/// the needed field so large `write`/`edit` inputs are not cloned wholesale.
+fn extract_key_arg(tool_name: &str, input: &Value) -> Option<String> {
+    match tool_name {
+        "bash" => input
+            .get("command")
+            .and_then(Value::as_str)
+            .map(truncate_command),
+        "read" | "edit" | "write" => input
+            .get("file_path")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        "glob" | "grep" => input
+            .get("pattern")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        "fetch_webpage" => input.get("url").and_then(Value::as_str).map(str::to_string),
+        "web_search" => input
+            .get("search_queries")
+            .and_then(Value::as_array)
+            .and_then(|queries| queries.first())
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        "invoke_subagent" => Some(
+            input
+                .get("subagent")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("task")
+                .to_string(),
+        ),
+        _ => None,
+    }
+}
+
+fn truncate_command(command: &str) -> String {
+    const MAX_CHARS: usize = 60;
+    let trimmed = command.trim();
+    if trimmed.chars().count() <= MAX_CHARS {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(MAX_CHARS).collect();
+    format!("{head}…")
 }
 
 fn build_exec_args(
@@ -559,5 +789,142 @@ mod tests {
         drop(file);
 
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn extract_key_arg_reads_expected_field_per_tool() {
+        use serde_json::json;
+
+        assert_eq!(
+            extract_key_arg("read", &json!({ "file_path": "Cargo.toml" })).as_deref(),
+            Some("Cargo.toml")
+        );
+        assert_eq!(
+            extract_key_arg("write", &json!({ "file_path": "src/lib.rs" })).as_deref(),
+            Some("src/lib.rs")
+        );
+        assert_eq!(
+            extract_key_arg("glob", &json!({ "pattern": "**/*.rs" })).as_deref(),
+            Some("**/*.rs")
+        );
+        assert_eq!(
+            extract_key_arg("grep", &json!({ "pattern": "TODO" })).as_deref(),
+            Some("TODO")
+        );
+        assert_eq!(
+            extract_key_arg("fetch_webpage", &json!({ "url": "https://example.com" })).as_deref(),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            extract_key_arg(
+                "web_search",
+                &json!({ "search_queries": ["rust async", "tokio"] })
+            )
+            .as_deref(),
+            Some("rust async")
+        );
+        assert_eq!(
+            extract_key_arg("invoke_subagent", &json!({ "subagent": "explorer" })).as_deref(),
+            Some("explorer")
+        );
+        // invoke_subagent with no explicit subagent falls back to the default alias.
+        assert_eq!(
+            extract_key_arg("invoke_subagent", &json!({ "prompt": "go" })).as_deref(),
+            Some("task")
+        );
+        // Unknown tools have no key arg.
+        assert_eq!(extract_key_arg("todo_write", &json!({ "todos": [] })), None);
+    }
+
+    #[test]
+    fn truncate_command_caps_long_input() {
+        let short = "cargo build";
+        assert_eq!(truncate_command(short), short);
+
+        let long = "a".repeat(200);
+        let truncated = truncate_command(&long);
+        assert!(truncated.ends_with('…'));
+        assert_eq!(truncated.chars().count(), 61); // 60 chars + ellipsis
+    }
+
+    fn make_sink() -> (SubagentStreamSink, crate::core::agent::AgentEventRx) {
+        let (tx, rx) = crate::core::agent::create_event_channel();
+        let sink = SubagentStreamSink {
+            sender: EventSender::new(tx),
+            parent_tool_id: "parent-tool".to_string(),
+        };
+        (sink, rx)
+    }
+
+    fn jsonl(events: &[AgentEvent]) -> String {
+        events
+            .iter()
+            .map(|event| serde_json::to_string(event).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[tokio::test]
+    async fn read_stdout_events_relays_child_tools_and_final_text() {
+        let (sink, mut rx) = make_sink();
+        // Engine order: ToolInputCompleted (carries the arg) before ToolStarted.
+        let events = vec![
+            AgentEvent::ToolInputCompleted {
+                id: "tu1".to_string(),
+                name: "Read".to_string(),
+                input: serde_json::json!({ "file_path": "Cargo.toml" }),
+            },
+            AgentEvent::ToolStarted {
+                id: "tu1".to_string(),
+                name: "Read".to_string(),
+            },
+            AgentEvent::ToolCompleted {
+                id: "tu1".to_string(),
+                result: crate::core::events::ToolOutput::success(serde_json::json!("ok")),
+            },
+            AgentEvent::TurnFinished {
+                status: crate::core::events::TurnStatus::Completed,
+                final_text: "all done".to_string(),
+                messages: Vec::new(),
+                prior_message_count: 0,
+            },
+        ];
+        let bytes = jsonl(&events);
+
+        let outcome = read_stdout_events(bytes.as_bytes(), &sink).await.unwrap();
+        assert_eq!(outcome.final_text.as_deref(), Some("all done"));
+        assert!(outcome.turn_failed.is_none());
+
+        drop(sink);
+        let mut kinds = Vec::new();
+        while let Some(event) = rx.recv().await {
+            if let AgentEvent::ToolOutputDelta { id, chunk } = event.as_ref() {
+                assert_eq!(id, "parent-tool");
+                let value: Value = serde_json::from_str(chunk).unwrap();
+                kinds.push(value["t"].as_str().unwrap().to_string());
+            }
+        }
+        // start + input from ToolInputCompleted (ToolStarted deduped), then done.
+        assert_eq!(kinds, vec!["start", "input", "done"]);
+    }
+
+    #[tokio::test]
+    async fn read_stdout_events_reports_turn_failure() {
+        let (sink, _rx) = make_sink();
+        let events = vec![AgentEvent::TurnFinished {
+            status: crate::core::events::TurnStatus::Failed {
+                kind: crate::core::events::ErrorKind::Internal,
+                message: "boom".to_string(),
+                details: None,
+            },
+            final_text: String::new(),
+            messages: Vec::new(),
+            prior_message_count: 0,
+        }];
+        let bytes = jsonl(&events);
+
+        let outcome = read_stdout_events(bytes.as_bytes(), &sink).await.unwrap();
+        assert_eq!(outcome.turn_failed.as_deref(), Some("boom"));
+        assert!(outcome.final_text.is_none());
     }
 }

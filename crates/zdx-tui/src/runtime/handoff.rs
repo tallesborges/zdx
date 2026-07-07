@@ -144,7 +144,7 @@ async fn run_subagent(
         ..Default::default()
     };
 
-    run_exec_subagent_with_cancel(&root, &generation_prompt, &options, Some(cancel))
+    run_exec_subagent_with_cancel(&root, &generation_prompt, &options, Some(cancel), None)
         .await
         .map_err(|err| format!("{err:#}"))
 }
