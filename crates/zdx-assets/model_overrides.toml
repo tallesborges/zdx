@@ -32,3 +32,17 @@ context_limit = 1000000
 [[override]]
 id = "openrouter:z-ai/glm-4.7"
 output = 1.5
+
+# Claude Sonnet 5 — models.dev reports introductory pricing ($2/$10) and wrong output_limit (128K).
+# Standard pricing from Sep 1, 2026; output_limit sourced from Anthropic docs.
+# https://platform.claude.com/docs/en/about-claude/pricing — verified 2026-07-07
+[[override]]
+id = "claude-sonnet-5"
+input = 3.0
+output = 15.0
+output_limit = 64000
+
+# Claude Sonnet 5 (claude-cli) — same wrong output_limit from models.dev.
+[[override]]
+id = "claude-cli:claude-sonnet-5"
+output_limit = 64000
