@@ -33,6 +33,26 @@ pub fn render_overlay_container(frame: &mut Frame, area: Rect, title: &str, bord
     frame.render_widget(block, area);
 }
 
+/// Clears characters from the end of the string back to the previous word boundary.
+pub fn clear_word_left(input: &mut String) {
+    let trimmed_len = input.trim_end().len();
+    if trimmed_len == 0 {
+        input.clear();
+        return;
+    }
+
+    input.truncate(trimmed_len);
+    let mut chars: Vec<char> = input.chars().collect();
+    while let Some(&ch) = chars.last() {
+        if ch.is_whitespace() {
+            break;
+        }
+        chars.pop();
+    }
+    input.clear();
+    input.extend(chars);
+}
+
 /// Input configuration for an overlay.
 pub struct OverlayConfig<'a> {
     pub title: &'a str,

@@ -129,7 +129,7 @@ impl ThreadPickerState {
             }
             KeyCode::Backspace => {
                 if alt {
-                    clear_word_left(&mut self.filter);
+                    super::render_utils::clear_word_left(&mut self.filter);
                 } else {
                     self.filter.pop();
                 }
@@ -478,26 +478,6 @@ fn thread_fuzzy_score(thread: &ThreadSummary, filter: &str) -> Option<u32> {
         (None, Some(b)) => Some(b),
         (None, None) => None,
     }
-}
-
-/// Clears characters from the end of the string back to the previous word boundary.
-fn clear_word_left(input: &mut String) {
-    let trimmed_len = input.trim_end().len();
-    if trimmed_len == 0 {
-        input.clear();
-        return;
-    }
-
-    input.truncate(trimmed_len);
-    let mut chars: Vec<char> = input.chars().collect();
-    while let Some(&ch) = chars.last() {
-        if ch.is_whitespace() {
-            break;
-        }
-        chars.pop();
-    }
-    input.clear();
-    input.extend(chars);
 }
 
 #[cfg(test)]
