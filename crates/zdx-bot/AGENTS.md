@@ -11,7 +11,12 @@ Scope: Telegram bot runtime, ingest/handler flow, queueing, and Telegram API int
 - `src/bot/context.rs`: shared bot context
 - `src/bot/queue.rs`: per-chat queueing helpers
 - `src/handlers/mod.rs`: handler module exports
-- `src/handlers/message.rs`: message flow orchestration (incl. `<media>` routing: image→`sendPhoto`, `.ogg/.oga/.opus`→`sendVoice`, `.mp3/.m4a/.wav`→`sendAudio`, else `sendDocument`)
+- `src/handlers/message/mod.rs`: message intake orchestration + shared turn types (`ReplyContext`, `TurnStatus`, `TurnResult`, `SpawnRequest`, `StatusSnapshot`); re-exports the keyboard builders
+- `src/handlers/message/commands.rs`: slash-command handlers (`/new`, `/model`, `/thinking`, `/status`, `/whereami`, thread/worktree, exit) + model/provider/thinking keyboards
+- `src/handlers/message/turn.rs`: agent turn lifecycle (`run_agent_turn`, spawn/stream/finalize)
+- `src/handlers/message/status.rs`: turn status setup/update/cleanup + status-message formatting (usage, pricing, context)
+- `src/handlers/message/response.rs`: final response sending (text send/edit/fallback)
+- `src/handlers/message/media.rs`: `<media>` routing parse + path classification (image→`sendPhoto`, `.ogg/.oga/.opus`→`sendVoice`, `.mp3/.m4a/.wav`→`sendAudio`, else `sendDocument`)
 - `src/ingest/mod.rs`: Telegram message parsing + attachment loading
 - `src/agent/mod.rs`: thread log + agent turn helpers
 - `src/telegram/mod.rs`: Telegram API client + tool wiring
