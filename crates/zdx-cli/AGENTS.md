@@ -5,6 +5,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 ## Where things are
 
 - `src/main.rs`: binary entrypoint
+- `build.rs`: compile-time CLI version/build metadata
 - `src/cli/`: argument structs + command dispatch
 - `src/cli/commands/automations.rs`: automations commands (`list`, `validate`, `run`)
 - `src/cli/commands/bot.rs`: Telegram bot setup/init command handler (`zdx bot init`)
