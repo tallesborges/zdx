@@ -10,9 +10,11 @@ use zdx_engine::core::{interrupt, worktree};
 
 mod commands;
 
+const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("ZDX_BUILD_ID"));
+
 #[derive(Parser)]
 #[command(name = "zdx")]
-#[command(version)]
+#[command(version = VERSION)]
 #[command(author = "Talles Borges <talles.borges92@gmail.com>")]
 #[command(about = "ZDX Agentic CLI Tool")]
 struct Cli {

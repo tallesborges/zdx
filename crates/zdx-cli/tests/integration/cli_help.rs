@@ -2,6 +2,15 @@ use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 
 #[test]
+fn test_version_includes_build_id() {
+    cargo_bin_cmd!("zdx")
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("+build."));
+}
+
+#[test]
 fn test_help_shows_all_commands() {
     cargo_bin_cmd!("zdx")
         .arg("--help")
