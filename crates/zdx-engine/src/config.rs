@@ -1519,9 +1519,10 @@ fn default_openai_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gpt-5.6-sol".to_string(),
+            "gpt-5.6-terra".to_string(),
+            "gpt-5.6-luna".to_string(),
             "gpt-5.5".to_string(),
-            "gpt-5.4".to_string(),
-            "gpt-5.4-mini".to_string(),
             "gpt-5.4-nano".to_string(),
         ],
         ..Default::default()
@@ -1532,9 +1533,10 @@ fn default_openai_codex_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gpt-5.6-sol".to_string(),
+            "gpt-5.6-terra".to_string(),
+            "gpt-5.6-luna".to_string(),
             "gpt-5.5".to_string(),
-            "gpt-5.4".to_string(),
-            "gpt-5.4-mini".to_string(),
         ],
         ..Default::default()
     }
