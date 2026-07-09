@@ -1240,13 +1240,13 @@ mod tests {
 
     #[test]
     fn test_lookup_default_model_meta_provider_uses_underlying_defaults() {
-        let result = lookup_default_model("opencode-go:glm-5.1");
+        let result = lookup_default_model("opencode-go:glm-5.2");
         assert!(result.is_some(), "Should find glm model for opencode-go");
     }
 
     #[test]
     fn test_lookup_default_model_meta_provider_normalizes_thinking_suffix() {
-        let result = lookup_default_model("opencode-go:glm-5.1-thinking");
+        let result = lookup_default_model("opencode-go:glm-5.2-thinking");
         assert!(
             result.is_some(),
             "Should map -thinking variant to base model default"

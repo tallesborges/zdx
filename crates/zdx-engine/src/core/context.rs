@@ -2578,7 +2578,7 @@ mod tests {
             "Use `oracle` for difficult diagnosis, debugging dead ends, architecture tradeoffs, or advisory review."
         ));
         assert!(prompt.contains(
-            "Use `task` for scoped, self-contained implementation work when no named specialist fits better."
+            "Use `task` for scoped implementation when no named specialist fits better."
         ));
         assert!(prompt.contains("Task (`task`)"));
         assert!(prompt.contains("Oracle (`oracle`)"));
