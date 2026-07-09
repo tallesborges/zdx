@@ -80,7 +80,6 @@ Delegate scoped work to isolated child agents:
 - **`task`** — general-purpose delegated execution (default)
 - **`explorer`** — read-only, multi-round local/repo/thread/doc exploration (has read-only `bash`)
 - **`oracle`** — deep-reasoning advisor for review, debugging, planning, and architecture
-- **`thread-searcher`** — saved-conversation retrieval and multi-thread synthesis
 
 ### Skills & commands
 

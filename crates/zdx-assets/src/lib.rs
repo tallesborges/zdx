@@ -66,9 +66,6 @@ pub const MODEL_OVERRIDES_TOML: &str = include_str!("../model_overrides.toml");
 /// Built-in `explorer` subagent definition.
 pub const EXPLORER_SUBAGENT: &str = include_str!("../subagents/explorer.md");
 
-/// Built-in `thread-searcher` subagent definition.
-pub const THREAD_SEARCHER_SUBAGENT: &str = include_str!("../subagents/thread-searcher.md");
-
 /// Built-in `oracle` subagent definition.
 pub const ORACLE_SUBAGENT: &str = include_str!("../subagents/oracle.md");
 

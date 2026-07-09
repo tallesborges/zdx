@@ -6,7 +6,7 @@ Turn what we just did in this thread into a reusable skill.
 Rules:
 - The conversation history above is your source material. Do not template-inject anything — just look back at the actual messages.
 - Pay extra attention to where the user corrected, redirected, or refined what you were doing. Those moments are the real preferences worth encoding.
-- Use Thread Searcher only if you need older context that has scrolled out of the active conversation.
+- Use memory/thread tools if you need older context that has scrolled out of the active conversation.
 - Skills earn their context tax by being auto-invoked when the model recognizes the situation. If the workflow is fundamentally user-fired at a chosen moment, suggest a custom command (`.zdx/commands/<name>.md`) instead of a skill and stop.
 - Do not over-interview. A simple two-step workflow does not need four rounds of questions.
 - Never invent steps that did not happen in the thread.
@@ -17,7 +17,7 @@ Phase 1 — Analyze the thread (silent):
 - What were the distinct steps in order?
 - What artifact or signal proved each step was done (not "wrote code" but "PR open with CI green")?
 - Where did the user steer or correct?
-- What tools and subagents were used? (Explorer, Oracle, Thread Searcher, Task, `bash`, `edit`, etc.)
+- What tools and subagents were used? (Explorer, Oracle, Task, `bash`, `edit`, etc.)
 - What were the goals and final success criteria?
 
 Phase 2 — Interview the user, one focused round at a time:
@@ -89,7 +89,7 @@ Drafting rules:
 - Concurrent steps use sub-numbers: `3a`, `3b`.
 - Steps the user must do get `[human]` in the title.
 - Keep simple skills simple — a 2-step workflow doesn't need annotations on every step.
-- Reference zdx subagents in prose as proper nouns: Explorer, Oracle, Thread Searcher, Task. Use the lowercase id (`oracle`, `explorer`, `thread-searcher`, `task`) only when naming the literal value passed to `invoke_subagent`.
+- Reference zdx subagents in prose as proper nouns: Explorer, Oracle, Task. Use the lowercase id (`oracle`, `explorer`, `task`) only when naming the literal value passed to `invoke_subagent`.
 - Artifacts emitted by the skill at runtime should default to `$ZDX_ARTIFACT_DIR` when relevant.
 
 Phase 4 — Review, save, validate:

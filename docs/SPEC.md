@@ -327,7 +327,6 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 - Explicit subagent skill dependencies are resolved from enabled sources even if global `include_skills` / `ignored_skills` filters would otherwise hide them.
 - Built-in subagents currently include:
   - `explorer`: a read-only local exploration specialist for open-ended multi-step discovery across the current workspace, broader machine-local filesystem paths, and saved thread history.
-  - `thread-searcher`: a saved-thread retrieval and audit specialist that can iterate on `thread_search`, use `zdx threads tools` for tool-usage/failure audits, and use `read_thread` to answer questions from prior ZDX conversations.
   - `oracle`: a read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions. Its output is advisory and should be independently validated by the parent agent.
 
 ### Models registry
