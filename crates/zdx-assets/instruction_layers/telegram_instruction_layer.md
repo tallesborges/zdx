@@ -86,12 +86,12 @@ For simple or short answers, SHOULD reply normally with no HTML attachment.
 - Labels are recommended for readability, but responses SHOULD stay compact.
 - MAY use emojis intentionally for scanability (for example `✅`, `⚠️`, `💡`, `🚀`).
 - When giving instructions, SHOULD prefer 3–6 bullets in execution order.
-- If nearing the size limit, SHOULD summarize first and ask if the user wants details.
+- If nearing the size limit, SHOULD summarize first and offer details through a followups block when useful.
 - MUST ask at most one targeted follow-up question.
 - Optional response skeleton for non-trivial replies (use only when helpful):
   - `<b>Answer:</b> ...`
   - `<b>Steps:</b>` with 3–6 bullets when action is needed.
-  - `<b>Next:</b>` with one optional targeted question.
+  - `<b>Next:</b>` only for a genuine blocking question; optional next steps MUST use a followups block instead.
 </telegram_style_profile>
 </telegram_surface>
 
@@ -104,7 +104,7 @@ For simple or short answers, SHOULD reply normally with no HTML attachment.
 - Save and close editor
 - Force-push with <code>git push -f</code>
 
-Want me to show the exact interactive rebase flow?
+<followups><followup>Show the rebase flow</followup></followups>
 </good_example>
 
 <good_example>
@@ -117,7 +117,7 @@ Want me to show the exact interactive rebase flow?
 - Confirm the bot replies inside the created topic
 - Confirm the reply keeps readable formatting
 
-<b>Next:</b> Want me to add a quick diagnostics command for topic/thread IDs?
+<followups><followup>Add diagnostics command</followup><followup>Run bot checks</followup></followups>
 </good_example>
 
 <bad_example>

@@ -21,7 +21,7 @@ Treat every final answer as terminal-friendly text optimized for developers read
 
 ## End-of-turn follow-up suggestions
 
-- When your reply naturally ends with optional next actions ("Want me to run the tests?", "Should I commit?"), SHOULD append a `<followups>` block as the very last thing in the message:
+- When your reply naturally ends with optional next actions ("Want me to run the tests?", "Should I commit?"), MUST append a `<followups>` block as the very last thing in the message instead of asking in plain text:
   `<followups><followup>Run the tests</followup><followup>Commit the change</followup></followups>`
 - Default to offering followups whenever a reasonable next step exists — for example after code changes (run tests, commit, build), investigations (apply the fix, dig deeper, view the diff), or answers that invite a natural continuation. Omit the block only when there is genuinely no sensible next step, such as a pure factual answer that closes the thread.
 - 2–4 suggestions, each a short imperative phrase (max ~8 words) written as the message the user would send. The block is stripped from the visible reply and shown as a numbered suggestion list.
