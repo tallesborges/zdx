@@ -72,6 +72,10 @@ pub fn definition() -> ToolDefinition {
 #[derive(Debug, Deserialize)]
 struct BashInput {
     command: String,
+    #[serde(
+        default,
+        deserialize_with = "crate::u64_or_string::deserialize_optional"
+    )]
     timeout_secs: Option<u64>,
 }
 
@@ -560,6 +564,34 @@ mod tests {
         assert_eq!(data["timed_out"], true);
         assert_eq!(data["stdout_truncated"], false);
         assert_eq!(data["stderr_truncated"], false);
+    }
+
+    #[tokio::test]
+    async fn test_bash_timeout_secs_as_string() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        // LLMs sometimes pass timeout_secs as a string ("1" instead of 1).
+        let input = json!({"command": "sleep 5", "timeout_secs": "1"});
+
+        let result = execute(&input, &ctx, None, None).await;
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+        assert_eq!(data["timed_out"], true);
+    }
+
+    #[tokio::test]
+    async fn test_bash_timeout_secs_zero_as_string_disables_timeout() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        // "0" must disable the timeout the same way 0 does.
+        let input = json!({"command": "echo ok", "timeout_secs": "0"});
+
+        let result = execute(&input, &ctx, Some(Duration::from_millis(1)), None).await;
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+        assert_eq!(data["timed_out"], false);
+        assert_eq!(data["exit_code"], 0);
+        assert!(data["stdout"].as_str().unwrap().contains("ok"));
     }
 
     #[tokio::test]
