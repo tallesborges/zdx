@@ -1334,6 +1334,8 @@ pub struct ProvidersConfig {
     pub zai: ProviderConfig,
     #[serde(default = "default_xai_provider")]
     pub xai: ProviderConfig,
+    #[serde(default = "default_grok_build_provider")]
+    pub grok_build: ProviderConfig,
     /// User-defined OpenAI-compatible providers, keyed by name. Used by
     /// prefixing the model with the name (e.g. `<name>:model-id`).
     #[serde(default)]
@@ -1367,6 +1369,7 @@ impl ProvidersConfig {
             id if id == ProviderKind::Minimax.id() => &self.minimax,
             id if id == ProviderKind::Zai.id() => &self.zai,
             id if id == ProviderKind::Xai.id() => &self.xai,
+            id if id == ProviderKind::GrokBuild.id() => &self.grok_build,
             _ => return true, // Unknown providers default to enabled
         };
         config.enabled.unwrap_or(true)
@@ -1396,6 +1399,7 @@ impl ProvidersConfig {
             ProviderKind::Minimax => &self.minimax,
             ProviderKind::Zai => &self.zai,
             ProviderKind::Xai => &self.xai,
+            ProviderKind::GrokBuild => &self.grok_build,
         }
     }
 
@@ -1423,6 +1427,7 @@ impl ProvidersConfig {
             ProviderKind::Minimax => &mut self.minimax,
             ProviderKind::Zai => &mut self.zai,
             ProviderKind::Xai => &mut self.xai,
+            ProviderKind::GrokBuild => &mut self.grok_build,
         }
     }
 
@@ -1478,6 +1483,7 @@ impl Default for ProvidersConfig {
             minimax: default_minimax_provider(),
             zai: default_zai_provider(),
             xai: default_xai_provider(),
+            grok_build: default_grok_build_provider(),
             custom: std::collections::HashMap::new(),
         }
     }
@@ -1677,6 +1683,14 @@ fn default_zai_provider() -> ProviderConfig {
 }
 
 fn default_xai_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec!["grok-4.5".to_string()],
+        ..Default::default()
+    }
+}
+
+fn default_grok_build_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec!["grok-4.5".to_string()],

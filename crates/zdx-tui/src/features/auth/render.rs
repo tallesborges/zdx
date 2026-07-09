@@ -7,7 +7,9 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use zdx_engine::providers::oauth::{claude_cli, gemini_cli, google_antigravity, openai_codex};
+use zdx_engine::providers::oauth::{
+    claude_cli, gemini_cli, google_antigravity, grok_build, openai_codex,
+};
 
 use crate::overlays::LoginState;
 
@@ -60,6 +62,7 @@ fn login_overlay_title(login_state: &LoginState) -> &'static str {
             zdx_engine::providers::ProviderKind::Minimax => "MiniMax API Key",
             zdx_engine::providers::ProviderKind::Zai => "Z.AI API Key",
             zdx_engine::providers::ProviderKind::Xai => "xAI API Key",
+            zdx_engine::providers::ProviderKind::GrokBuild => "Grok Build Login",
         },
     }
 }
@@ -184,11 +187,12 @@ fn render_cli_provider_entries(width: u16, selected: usize) -> Vec<Line<'static>
     let status_on = Style::default().fg(Color::Green);
     let pad = " ".repeat(2);
 
-    let providers: [(&str, LoadFn); 4] = [
+    let providers: [(&str, LoadFn); 5] = [
         ("Claude CLI", claude_cli::load_credentials),
         ("OpenAI Codex", openai_codex::load_credentials),
         ("Gemini CLI", gemini_cli::load_credentials),
         ("Google Antigravity", google_antigravity::load_credentials),
+        ("Grok Build", grok_build::load_credentials),
     ];
 
     providers

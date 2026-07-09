@@ -212,6 +212,12 @@ models = ["mimo-v2.5-pro", "mimo-v2.5"]
 fast_mode = false
 websocket = false
 
+[providers.grok_build]
+enabled = true
+models = ["grok-4.5"]
+fast_mode = false
+websocket = false
+
 [providers.custom]
 
 [providers.xiaomi_plan]

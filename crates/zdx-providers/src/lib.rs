@@ -7,6 +7,7 @@ pub mod thinking_parser;
 pub mod anthropic;
 pub mod deepseek;
 pub mod gemini;
+pub mod grok_build;
 pub mod lmstudio;
 pub mod minimax;
 pub mod mistral;
@@ -91,6 +92,7 @@ impl_streaming_provider!(
     minimax::MinimaxClient,
     zai::ZaiClient,
     xai::XaiClient,
+    grok_build::GrokBuildClient,
     opencode_go::OpencodeGoClient,
     openai_compatible::OpenAICompatibleClient,
 );
@@ -165,6 +167,7 @@ pub enum ProviderKind {
     Minimax,
     Zai,
     Xai,
+    GrokBuild,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -387,6 +390,16 @@ impl ProviderKind {
                 supports_oauth: false,
                 is_subscription: false,
             },
+            Self::GrokBuild => ProviderMeta {
+                id: "grok-build",
+                aliases: &["grokbuild"],
+                label: "Grok Build",
+                api_key_env: None,
+                base_url: "https://api.x.ai/v1",
+                base_url_env: None,
+                supports_oauth: true,
+                is_subscription: true,
+            },
         }
     }
 
@@ -412,6 +425,7 @@ impl ProviderKind {
             ProviderKind::Minimax,
             ProviderKind::Zai,
             ProviderKind::Xai,
+            ProviderKind::GrokBuild,
         ]
     }
 
@@ -526,6 +540,7 @@ impl ProviderKind {
             Self::Minimax => minimax::build(ctx),
             Self::Zai => zai::build(ctx),
             Self::Xai => xai::build(ctx),
+            Self::GrokBuild => grok_build::build(ctx),
         }
     }
 }

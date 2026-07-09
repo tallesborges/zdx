@@ -288,7 +288,7 @@ impl UpdateState {
 }
 
 #[allow(clippy::too_many_lines)]
-fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 18] {
+fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 19] {
     [
         ProviderSpec {
             provider_id: "anthropic",
@@ -397,6 +397,12 @@ fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 18] {
             api_id: "xai",
             prefix: Some("xai"),
             provider_cfg: &config.providers.xai,
+        },
+        ProviderSpec {
+            provider_id: "grok-build",
+            api_id: "xai",
+            prefix: Some("grok-build"),
+            provider_cfg: &config.providers.grok_build,
         },
     ]
 }
@@ -876,7 +882,7 @@ fn lookup_openrouter_model(
     let vendor = match provider_id {
         "xiaomi" | "xiaomi-plan" => "xiaomi",
         "minimax" => "minimax",
-        "xai" => "x-ai",
+        "xai" | "grok-build" => "x-ai",
         "anthropic" | "claude-cli" => "anthropic",
         "openai" | "openai-codex" => "openai",
         "gemini" | "gemini-cli" | "google-antigravity" => "google",
