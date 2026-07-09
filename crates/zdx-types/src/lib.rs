@@ -15,7 +15,7 @@ pub use events::{
 };
 pub use messages::{
     ChatContentBlock, ChatMessage, ContentBlockType, IdOrigin, MessageContent, ReasoningBlock,
-    ReplayToken, SignatureProvider,
+    ReplayToken, SignatureProvider, strip_voice_transcript, wrap_voice_transcript,
 };
 pub use providers::{
     ProviderError, ProviderErrorKind, ProviderResult, ProviderStream, StreamEvent, Usage,

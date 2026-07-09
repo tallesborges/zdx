@@ -661,18 +661,26 @@ fn handle_submission(
     mods: &Modifiers,
 ) -> Option<KeyResult> {
     match code {
-        KeyCode::Enter if !mods.shift() && !mods.alt() => Some(submit_input(
-            input,
-            ctx.agent_state,
-            ctx.tasks,
-            ctx.thread_id.clone(),
-            ctx.thread_title,
-            ctx.active_thread_ids,
-            ctx.config,
-            ctx.model_id,
-        )),
+        KeyCode::Enter if !mods.shift() && !mods.alt() => Some(submit_current_input(input, ctx)),
         _ => None,
     }
+}
+
+/// Submits the current composer contents through the same path as pressing
+/// Enter. Used by voice dictation to auto-send a completed transcription so
+/// it inherits the queue-while-busy, thread-busy guard, title suggestion, and
+/// attached-image handling.
+pub fn submit_current_input(input: &mut InputState, ctx: &InputContext<'_>) -> KeyResult {
+    submit_input(
+        input,
+        ctx.agent_state,
+        ctx.tasks,
+        ctx.thread_id.clone(),
+        ctx.thread_title,
+        ctx.active_thread_ids,
+        ctx.config,
+        ctx.model_id,
+    )
 }
 
 // =============================================================================

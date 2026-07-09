@@ -297,11 +297,15 @@ fn handle_voice_transcribed(
     match result {
         Ok(Some(text)) => {
             app.tui.input.voice.mark_idle();
-            let labeled = format!("Audio transcript:\n{text}");
+            if text.trim().is_empty() {
+                return vec![];
+            }
+            let tagged = zdx_types::wrap_voice_transcript(&text);
             apply_mutations(
                 &mut app.tui,
-                vec![StateMutation::Input(InputMutation::InsertText(labeled))],
+                vec![StateMutation::Input(InputMutation::InsertText(tagged))],
             );
+            return submit_after_voice(app);
         }
         Ok(None) => {
             app.tui.input.voice.mark_idle();
@@ -326,6 +330,33 @@ fn handle_voice_transcribed(
         }
     }
     vec![]
+}
+
+/// Sends the current composer contents after a voice transcription lands,
+/// reusing the same submission path as pressing Enter. Because Esc discards a
+/// recording before transcription starts, any transcription that reaches here
+/// was finished with the voice hotkey and should be sent immediately.
+fn submit_after_voice(app: &mut AppState) -> Vec<UiEffect> {
+    let thread_id = app
+        .tui
+        .thread
+        .thread_handle
+        .as_ref()
+        .map(|thread_handle| thread_handle.id.clone());
+    let active_thread_ids = app.tui.snapshot_active_thread_ids();
+    let ctx = input::InputContext {
+        agent_state: &app.tui.agent_state,
+        tasks: &app.tui.tasks,
+        thread_id,
+        thread_title: app.tui.thread.title.as_deref(),
+        config: &app.tui.config,
+        model_id: &app.tui.config.model,
+        active_thread_ids: &active_thread_ids,
+        root: app.tui.agent_opts.root.as_path(),
+    };
+    let (effects, mutations, _overlay) = input::submit_current_input(&mut app.tui.input, &ctx);
+    apply_mutations(&mut app.tui, mutations);
+    effects
 }
 
 fn handle_agent_event(

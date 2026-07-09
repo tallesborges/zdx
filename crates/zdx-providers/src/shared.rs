@@ -8,7 +8,7 @@ pub use zdx_types::providers::UsageDelta;
 pub use zdx_types::{
     ChatContentBlock, ChatMessage, ContentBlockType, IdOrigin, MessageContent, ProviderError,
     ProviderErrorKind, ProviderResult, ProviderStream, ReasoningBlock, ReplayToken,
-    SignatureProvider, StreamEvent, Usage,
+    SignatureProvider, StreamEvent, Usage, strip_voice_transcript, wrap_voice_transcript,
 };
 
 /// Standard User-Agent header for zdx API requests.

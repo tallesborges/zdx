@@ -32,7 +32,8 @@ pub use shared::{
     ChatContentBlock, ChatMessage, ContentBlockType, IdOrigin, MessageContent, ProviderError,
     ProviderErrorKind, ProviderResult, ProviderStream, ReasoningBlock, ReplayToken,
     SignatureProvider, StreamEvent, Usage, UsageDelta, error_message_from_payload,
-    map_event_stream_error, resolve_api_key, resolve_base_url,
+    map_event_stream_error, resolve_api_key, resolve_base_url, strip_voice_transcript,
+    wrap_voice_transcript,
 };
 use zdx_types::ToolDefinition;
 use zdx_types::config::{TextVerbosity, ThinkingLevel};

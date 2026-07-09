@@ -281,9 +281,55 @@ impl ChatMessage {
     }
 }
 
+/// Wraps dictated transcript text in a `<voice_transcript>` block.
+///
+/// The tag is model-facing: it signals that the message was produced by
+/// speech-to-text (so minor transcription errors are expected) without
+/// altering the words. Surfaces that display the message strip the tag for
+/// the user; only the model sees it.
+#[must_use]
+pub fn wrap_voice_transcript(text: &str) -> String {
+    format!("<voice_transcript>\n{}\n</voice_transcript>", text.trim())
+}
+
+/// Returns the inner transcript when `text` is a `<voice_transcript>` block,
+/// otherwise `None`. Lets display surfaces show dictated messages without the
+/// tag while keeping the tagged text as the source of truth.
+#[must_use]
+pub fn strip_voice_transcript(text: &str) -> Option<&str> {
+    let inner = text
+        .trim()
+        .strip_prefix("<voice_transcript>")?
+        .strip_suffix("</voice_transcript>")?;
+    Some(inner.trim())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The voice-transcript wrapper round-trips: the exact string handed to
+    /// the model strips back to the original words for display. Both the TUI
+    /// badge rendering and the bot rely on this contract.
+    #[test]
+    fn voice_transcript_wrap_then_strip_roundtrips() {
+        let wrapped = wrap_voice_transcript("  fix the login bug  ");
+        assert_eq!(
+            wrapped,
+            "<voice_transcript>\nfix the login bug\n</voice_transcript>"
+        );
+        assert_eq!(strip_voice_transcript(&wrapped), Some("fix the login bug"));
+    }
+
+    /// Plain text (typed messages) is never mistaken for a voice block.
+    #[test]
+    fn strip_voice_transcript_ignores_plain_text() {
+        assert_eq!(strip_voice_transcript("just a normal message"), None);
+        assert_eq!(
+            strip_voice_transcript("talk about <voice_transcript> tags"),
+            None
+        );
+    }
 
     /// Test: `ReplayToken::Gemini` serialization round-trips correctly with
     /// the new `model` field.
