@@ -808,9 +808,15 @@ impl HistoryCell {
                 let prefix = "│ ";
                 let mut lines = Vec::new();
 
+                // Dictated messages carry a `<voice_transcript>` tag meant only
+                // for the model. Strip it for display and mark the cell with a
+                // mic badge instead of showing the raw tag.
+                let voice_inner = zdx_engine::providers::strip_voice_transcript(content);
+                let display_content = voice_inner.unwrap_or(content);
+
                 let content_lines = render_prefixed_content(
                     prefix,
-                    content,
+                    display_content,
                     width,
                     Style::UserPrefix,
                     Style::User,
@@ -824,6 +830,20 @@ impl HistoryCell {
                     for styled_line in content_lines {
                         lines.push(highlight_image_placeholders(styled_line));
                     }
+                }
+
+                // Badge dictated messages with a mic after the prefix on line 1.
+                if voice_inner.is_some()
+                    && let Some(first) = lines.first_mut()
+                {
+                    let at = usize::from(!first.spans.is_empty());
+                    first.spans.insert(
+                        at,
+                        StyledSpan {
+                            text: "🎤 ".to_string(),
+                            style: Style::Timing,
+                        },
+                    );
                 }
 
                 // Append interrupted indicator to last line if request was cancelled
