@@ -19,6 +19,8 @@ use super::{ToolContext, ToolDefinition, ToolOutput};
 /// Maximum bytes per output stream (stdout/stderr) before truncation.
 const MAX_OUTPUT_BYTES: usize = 40 * 1024; // 40KB
 
+const DEFAULT_TIMEOUT: Duration = Duration::from_mins(2);
+
 /// Grace period to wait for reader tasks to drain after the child exits.
 ///
 /// Normally pipes close immediately once the child exits, but if a descendant
@@ -46,7 +48,7 @@ fn write_temp_file(bytes: &[u8], stream_name: &str) -> Option<String> {
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Bash".to_string(),
-        description: "Execute a shell command when no dedicated tool exists. Use Bash for builds, tests, git, gh, and other CLI workflows with no first-class tool. NEVER use grep, rg, cat, head, tail, less, find, or ls through Bash for file operations — use the dedicated Read, Grep, and Glob tools instead, which return structured output with pagination and .gitignore awareness. Chain dependent shell steps in one command, but prefer parallel tool calls for independent work. Do not use Bash to communicate with the user. Returns stdout, stderr, and exit code. When stdout or stderr is truncated, use Read on the returned temp file to inspect the full output."
+        description: "Execute a shell command when no dedicated tool exists. Use Bash for builds, tests, git, gh, and other CLI workflows with no first-class tool. NEVER use grep, rg, cat, head, tail, less, find, or ls through Bash for file operations — use the dedicated Read, Grep, and Glob tools instead, which return structured output with pagination and .gitignore awareness. Chain dependent shell steps in one command, but prefer parallel tool calls for independent work. Do not use Bash to communicate with the user. Defaults to a 120 second timeout; set timeout_secs for commands expected to run longer, or 0 to disable the timeout. Returns stdout, stderr, and exit code. When stdout or stderr is truncated, use Read on the returned temp file to inspect the full output."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -54,6 +56,11 @@ pub fn definition() -> ToolDefinition {
                 "command": {
                     "type": "string",
                     "description": "The shell command to execute"
+                },
+                "timeout_secs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Optional timeout in seconds. Defaults to 120. Use 0 to disable for a known long-running command."
                 }
             },
             "required": ["command"],
@@ -65,6 +72,18 @@ pub fn definition() -> ToolDefinition {
 #[derive(Debug, Deserialize)]
 struct BashInput {
     command: String,
+    timeout_secs: Option<u64>,
+}
+
+fn resolve_timeout(
+    requested_secs: Option<u64>,
+    configured_timeout: Option<Duration>,
+) -> Option<Duration> {
+    match requested_secs {
+        Some(0) => None,
+        Some(secs) => Some(Duration::from_secs(secs)),
+        None => configured_timeout.or(Some(DEFAULT_TIMEOUT)),
+    }
 }
 
 /// Output from a bash command execution.
@@ -136,6 +155,8 @@ pub async fn execute(
         return ToolOutput::failure("invalid_input", "command cannot be empty", None);
     }
 
+    let timeout = resolve_timeout(input.timeout_secs, timeout);
+
     match run_command(&input.command, ctx, timeout, output_tx).await {
         Ok(output) => output.into_tool_output(),
         Err(e) => e,
@@ -158,6 +179,8 @@ pub async fn run(
     if command.trim().is_empty() {
         return ToolOutput::failure("invalid_input", "command cannot be empty", None);
     }
+
+    let timeout = resolve_timeout(None, timeout);
 
     match run_command(command, ctx, timeout, output_tx).await {
         Ok(output) => output.into_tool_output(),
@@ -448,6 +471,28 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn test_bash_resolves_default_timeout() {
+        assert_eq!(resolve_timeout(None, None), Some(DEFAULT_TIMEOUT));
+        assert_eq!(
+            resolve_timeout(None, Some(Duration::from_secs(30))),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(
+            resolve_timeout(Some(300), Some(Duration::from_secs(30))),
+            Some(Duration::from_secs(300))
+        );
+        assert_eq!(
+            resolve_timeout(Some(0), Some(Duration::from_secs(30))),
+            None
+        );
+
+        assert_eq!(
+            resolve_timeout(Some(3600), Some(Duration::from_secs(30))),
+            Some(Duration::from_secs(3600))
+        );
+    }
 
     #[tokio::test]
     async fn test_bash_executes_command() {
