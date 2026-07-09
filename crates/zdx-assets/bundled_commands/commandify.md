@@ -57,7 +57,7 @@ description: <one-line description, lower case start, no trailing period>
 Drafting rules:
 - `description` is what shows in the command palette next to `/<name>`. Lead with a verb. Keep it under ~80 characters.
 - The body must read as standalone instructions to the future assistant invoked inside a thread (second person, no "I will...").
-- Reference subagents as proper nouns when applicable: Oracle (review/diagnosis), Explorer (read-only local discovery), Thread Searcher (saved-thread retrieval), Task (scoped implementation).
+- Reference subagents as proper nouns when applicable: Oracle (review/diagnosis), Explorer (read-only local discovery), Task (scoped implementation).
 - For actionable workflows, the body should normally include: opening 1-line imperative, a `Rules:` block, an explicit loop arrow when iterative (`inspect → ... → repeat`), role separation when multi-agent, and a closing `At the end, give me:` block. Drop these only when the prompt is plainly a pure transformation/data prompt.
 - Do not strip frontmatter the user already wrote into the body. If the body already starts with `---`, use it as-is and only adjust the description if needed.
 
