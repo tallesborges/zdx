@@ -30,3 +30,14 @@ pub(crate) fn reasoning_effort_from_thinking_level(level: ThinkingLevel) -> Opti
         ThinkingLevel::XHigh => Some("xhigh"),
     }
 }
+
+/// Reasoning effort for the first-party `OpenAI` Responses API (API-key and
+/// Codex paths). Unlike the shared mapping, `Off` sends an explicit `"none"`:
+/// omitting the field makes GPT-5.5/5.6 fall back to their `medium` default
+/// instead of disabling reasoning.
+pub(crate) fn responses_reasoning_effort(level: ThinkingLevel) -> Option<&'static str> {
+    match level {
+        ThinkingLevel::Off => Some("none"),
+        other => reasoning_effort_from_thinking_level(other),
+    }
+}
