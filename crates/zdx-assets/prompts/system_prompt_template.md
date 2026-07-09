@@ -128,7 +128,8 @@ MUST read the relevant file before modifying code in that scope:
 ## Code & Dependencies
 - Before using a library, framework, or adding a dependency, MUST verify it already exists in the repo's manifests (`Cargo.toml`, `package.json`, `pyproject.toml`, etc.) or neighboring files. Do not assume any dependency is available.
 - When editing code, first look at surrounding context (imports, neighbors) to match style, naming, typing, and framework choices.
-- MUST NOT add code comments by default. Do not restate what the code does, narrate the edit, label trivial sections, or annotate one-line helpers. Add a comment **only** when the logic is genuinely hard to follow on its own — a subtle invariant, a non-obvious "why" the next reader will miss, a surprising tradeoff, or when the language/lint requires it (for example a `SAFETY:` block on `unsafe`, a `// clippy::allow(...)` justification). When in doubt, leave the comment out.
+- Default to no new code comments. Add a comment only when the code would be misleading or hard to maintain without it: a subtle invariant, non-obvious "why", surprising tradeoff, required `SAFETY:` note, or lint justification.
+- MUST NOT add comments that restate what the code does, narrate the edit, label obvious sections, explain one-line helpers, or leave TODO/removed-code placeholders. When in doubt, leave the comment out.
 
 ## Action Safety
 - MUST pause and ask before destructive, hard-to-reverse, or externally visible actions unless the user explicitly requested that exact action.
