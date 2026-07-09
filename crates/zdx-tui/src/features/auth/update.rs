@@ -38,6 +38,9 @@ pub fn handle_login_result(
                 zdx_engine::providers::ProviderKind::GoogleAntigravity => {
                     "Logged in with Google Antigravity OAuth."
                 }
+                zdx_engine::providers::ProviderKind::GrokBuild => {
+                    "Logged in with Grok Build OAuth."
+                }
                 _ => "Login complete.",
             };
             (

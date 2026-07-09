@@ -7,7 +7,8 @@ use std::time::Duration;
 use anyhow::Result;
 use zdx_engine::providers::oauth::{
     OAuthCache, claude_cli as oauth_claude_cli, gemini_cli as oauth_gemini_cli,
-    google_antigravity as oauth_antigravity, openai_codex as oauth_codex,
+    google_antigravity as oauth_antigravity, grok_build as oauth_grok_build,
+    openai_codex as oauth_codex,
 };
 
 pub async fn login_anthropic() -> Result<()> {
@@ -366,6 +367,158 @@ pub fn logout_antigravity() -> Result<()> {
     }
 
     Ok(())
+}
+
+pub async fn login_grok_build() -> Result<()> {
+    if let Some(existing) = oauth_grok_build::load_credentials()? {
+        println!(
+            "Already logged in to Grok Build (token: {})",
+            oauth_claude_cli::mask_token(&existing.access)
+        );
+        print!("Do you want to replace the existing credentials? [y/N] ");
+        io::stdout().flush()?;
+
+        let mut response = String::new();
+        io::stdin().lock().read_line(&mut response)?;
+        if !response.trim().eq_ignore_ascii_case("y") {
+            println!("Login cancelled.");
+            return Ok(());
+        }
+    }
+
+    let pkce = oauth_grok_build::generate_pkce();
+    let state = uuid::Uuid::new_v4().to_string();
+    let auth_url = oauth_grok_build::build_auth_url(&pkce, &state);
+
+    println!("To log in to Grok Build with your xAI subscription:");
+    println!();
+    println!("  1. A browser window will open (or visit the URL below)");
+    println!("  2. Log in to your xAI / SuperGrok account and authorize access");
+    println!("  3. If redirected to localhost, return here to continue");
+    println!("  4. Otherwise, paste the authorization code or URL");
+    println!();
+    println!("Authorization URL:");
+    println!("  {auth_url}");
+    println!();
+
+    if std::env::var("ZDX_NO_BROWSER").is_err() {
+        let _ = open::that(&auth_url);
+    }
+
+    let code = if let Some(code) = wait_for_grok_build_code(&state) {
+        code
+    } else {
+        print!("Paste authorization code (or full redirect URL): ");
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().lock().read_line(&mut input)?;
+        let (code, provided_state) = oauth_grok_build::parse_authorization_input(&input);
+        if let Some(provided) = provided_state
+            && provided != state
+        {
+            anyhow::bail!("State mismatch");
+        }
+        code.ok_or_else(|| anyhow::anyhow!("Authorization code cannot be empty"))?
+    };
+
+    println!("Exchanging code for tokens...");
+    let credentials = oauth_grok_build::exchange_code(&code, &pkce).await?;
+    oauth_grok_build::save_credentials(&credentials)?;
+
+    let cache_path = OAuthCache::cache_path();
+    println!();
+    println!(
+        "✓ Logged in to Grok Build (token: {})",
+        oauth_claude_cli::mask_token(&credentials.access)
+    );
+    println!("  Credentials saved to: {}", cache_path.display());
+
+    Ok(())
+}
+
+pub fn logout_grok_build() -> Result<()> {
+    let had_creds = oauth_grok_build::clear_credentials()?;
+
+    if had_creds {
+        let cache_path = OAuthCache::cache_path();
+        println!("✓ Logged out from Grok Build");
+        println!("  Credentials removed from: {}", cache_path.display());
+    } else {
+        println!("Not logged in to Grok Build (no credentials found).");
+    }
+
+    Ok(())
+}
+
+fn wait_for_grok_build_code(state: &str) -> Option<String> {
+    let Ok(listener) = TcpListener::bind(format!(
+        "127.0.0.1:{}",
+        oauth_grok_build::LOCAL_CALLBACK_PORT
+    )) else {
+        return None;
+    };
+    let _ = listener.set_nonblocking(true);
+
+    let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
+    let state = state.to_string();
+
+    std::thread::spawn(move || {
+        let start = std::time::Instant::now();
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut buffer = [0u8; 2048];
+                    let _ = stream.read(&mut buffer);
+                    let request = String::from_utf8_lossy(&buffer);
+                    let code = extract_grok_build_code_from_request(&request, &state);
+                    let response = if code.is_some() {
+                        oauth_success_response()
+                    } else {
+                        oauth_error_response()
+                    };
+                    let _ = stream.write_all(response.as_bytes());
+                    let _ = tx.send(code);
+                    break;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if start.elapsed() > Duration::from_mins(2) {
+                        let _ = tx.send(None);
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(_) => {
+                    let _ = tx.send(None);
+                    break;
+                }
+            }
+        }
+    });
+
+    rx.recv_timeout(Duration::from_mins(2)).ok().flatten()
+}
+
+fn extract_grok_build_code_from_request(request: &str, expected_state: &str) -> Option<String> {
+    let mut lines = request.lines();
+    let request_line = lines.next()?;
+    let mut parts = request_line.split_whitespace();
+    let _method = parts.next()?;
+    let path = parts.next()?;
+
+    let url = url::Url::parse(&format!("http://localhost{path}")).ok()?;
+    if url.path() != oauth_grok_build::LOCAL_CALLBACK_PATH {
+        return None;
+    }
+    let state = url
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .map(|(_, v)| v.to_string())?;
+    if state != expected_state {
+        return None;
+    }
+    url.query_pairs()
+        .find(|(k, _)| k == "code")
+        .map(|(_, v)| v.to_string())
 }
 
 fn wait_for_antigravity_code(state: &str) -> Option<String> {

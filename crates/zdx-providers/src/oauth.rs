@@ -1287,6 +1287,251 @@ pub mod google_antigravity {
     }
 }
 
+/// Grok Build (xAI Grok subscription OAuth) helpers.
+///
+/// Uses the public Grok CLI desktop OAuth client to authenticate against a
+/// `SuperGrok` / X Premium+ subscription. The resulting access token is a bearer
+/// against the standard xAI Responses API (`https://api.x.ai/v1`).
+pub mod grok_build {
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use sha2::{Digest, Sha256};
+
+    use super::{Context, Deserialize, OAuthCache, OAuthCredentials, Result};
+
+    /// Provider key for Grok Build in the OAuth cache.
+    pub const PROVIDER_KEY: &str = "grok-build";
+
+    /// Public Grok CLI desktop OAuth client ID (not a secret).
+    const CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
+
+    /// xAI OAuth URLs (from `https://auth.x.ai/.well-known/openid-configuration`).
+    const AUTHORIZE_URL: &str = "https://auth.x.ai/oauth2/authorize";
+    const TOKEN_URL: &str = "https://auth.x.ai/oauth2/token";
+    /// Local OAuth callback used by the Grok CLI flow.
+    pub const LOCAL_CALLBACK_PORT: u16 = 56121;
+    pub const LOCAL_CALLBACK_PATH: &str = "/callback";
+    const REDIRECT_URI: &str = "http://127.0.0.1:56121/callback";
+    const SCOPES: &str = "openid profile email offline_access grok-cli:access api:access";
+
+    /// PKCE code verifier and challenge.
+    pub struct Pkce {
+        pub verifier: String,
+        pub challenge: String,
+    }
+
+    /// Generate PKCE code verifier and challenge.
+    pub fn generate_pkce() -> Pkce {
+        let uuid1 = uuid::Uuid::new_v4();
+        let uuid2 = uuid::Uuid::new_v4();
+        let mut verifier_bytes = [0u8; 32];
+        verifier_bytes[..16].copy_from_slice(uuid1.as_bytes());
+        verifier_bytes[16..].copy_from_slice(uuid2.as_bytes());
+        let verifier = URL_SAFE_NO_PAD.encode(verifier_bytes);
+
+        let mut hasher = Sha256::new();
+        hasher.update(verifier.as_bytes());
+        let challenge = URL_SAFE_NO_PAD.encode(hasher.finalize());
+
+        Pkce {
+            verifier,
+            challenge,
+        }
+    }
+
+    /// Build the authorization URL for the Grok Build OAuth flow.
+    ///
+    /// `plan=generic` and `referrer` are attribution tags the desktop flow
+    /// expects; `referrer` is free-form and not tied to the client ID (other
+    /// clients send their own name, e.g. `cli-proxy-api`, `hermes-agent`).
+    pub fn build_auth_url(pkce: &Pkce, state: &str) -> String {
+        let nonce = uuid::Uuid::new_v4().simple().to_string();
+        let params = [
+            ("response_type", "code"),
+            ("client_id", CLIENT_ID),
+            ("redirect_uri", REDIRECT_URI),
+            ("scope", SCOPES),
+            ("code_challenge", &pkce.challenge),
+            ("code_challenge_method", "S256"),
+            ("state", state),
+            ("nonce", &nonce),
+            ("plan", "generic"),
+            ("referrer", "zdx"),
+        ];
+
+        let query: String = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(params)
+            .finish();
+
+        format!("{AUTHORIZE_URL}?{query}")
+    }
+
+    /// Parses a pasted authorization input into code + optional state.
+    pub fn parse_authorization_input(input: &str) -> (Option<String>, Option<String>) {
+        let value = input.trim();
+        if value.is_empty() {
+            return (None, None);
+        }
+
+        if let Ok(url) = url::Url::parse(value) {
+            let code = url.query_pairs().find(|(k, _)| k == "code").map(|(_, v)| v);
+            let state = url
+                .query_pairs()
+                .find(|(k, _)| k == "state")
+                .map(|(_, v)| v);
+            return (code.map(|v| v.to_string()), state.map(|v| v.to_string()));
+        }
+
+        if let Some((code, state)) = value.split_once('#') {
+            return (Some(code.to_string()), Some(state.to_string()));
+        }
+
+        if value.contains("code=") {
+            let params = url::form_urlencoded::parse(value.as_bytes()).collect::<Vec<_>>();
+            let code = params.iter().find(|(k, _)| k == "code").map(|(_, v)| v);
+            let state = params.iter().find(|(k, _)| k == "state").map(|(_, v)| v);
+            return (
+                code.map(std::string::ToString::to_string),
+                state.map(std::string::ToString::to_string),
+            );
+        }
+
+        (Some(value.to_string()), None)
+    }
+
+    /// Exchanges an authorization code for tokens.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub async fn exchange_code(auth_code: &str, pkce: &Pkce) -> Result<OAuthCredentials> {
+        let client = reqwest::Client::new();
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("grant_type", "authorization_code")
+            .append_pair("client_id", CLIENT_ID)
+            .append_pair("code", auth_code)
+            .append_pair("code_verifier", &pkce.verifier)
+            .append_pair("redirect_uri", REDIRECT_URI)
+            .finish();
+
+        let response = client
+            .post(TOKEN_URL)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("Accept", "application/json")
+            .body(body)
+            .send()
+            .await
+            .context("Failed to send Grok Build token exchange request")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Grok Build token exchange failed (HTTP {status}): {body}");
+        }
+
+        let token_data: TokenResponse = response
+            .json()
+            .await
+            .context("Failed to parse Grok Build token response")?;
+        let expires_at = compute_expires_at(token_data.expires_in);
+
+        Ok(OAuthCredentials {
+            cred_type: "oauth".to_string(),
+            refresh: token_data.refresh_token.unwrap_or_default(),
+            access: token_data.access_token,
+            expires: expires_at,
+            account_id: None,
+        })
+    }
+
+    /// Refreshes an expired access token.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub async fn refresh_token(refresh_token: &str) -> Result<OAuthCredentials> {
+        let client = reqwest::Client::new();
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("grant_type", "refresh_token")
+            .append_pair("client_id", CLIENT_ID)
+            .append_pair("refresh_token", refresh_token)
+            .finish();
+
+        let response = client
+            .post(TOKEN_URL)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("Accept", "application/json")
+            .body(body)
+            .send()
+            .await
+            .context("Failed to send Grok Build token refresh request")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Grok Build token refresh failed (HTTP {status}): {body}");
+        }
+
+        let token_data: TokenResponse = response
+            .json()
+            .await
+            .context("Failed to parse Grok Build token response")?;
+        let expires_at = compute_expires_at(token_data.expires_in);
+
+        Ok(OAuthCredentials {
+            cred_type: "oauth".to_string(),
+            refresh: token_data
+                .refresh_token
+                .unwrap_or_else(|| refresh_token.to_string()),
+            access: token_data.access_token,
+            expires: expires_at,
+            account_id: None,
+        })
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct TokenResponse {
+        access_token: String,
+        refresh_token: Option<String>,
+        expires_in: Option<u64>,
+    }
+
+    fn compute_expires_at(expires_in_secs: Option<u64>) -> u64 {
+        let now = super::now_millis_u64();
+        let expires_in = expires_in_secs.unwrap_or(3600);
+        now + (expires_in * 1000).saturating_sub(5 * 60 * 1000)
+    }
+
+    /// Loads the Grok Build OAuth credentials from cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn load_credentials() -> Result<Option<OAuthCredentials>> {
+        let cache = OAuthCache::load()?;
+        Ok(cache.get(PROVIDER_KEY).cloned())
+    }
+
+    /// Saves Grok Build OAuth credentials to cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn save_credentials(creds: &OAuthCredentials) -> Result<()> {
+        let mut cache = OAuthCache::load()?;
+        cache.set(PROVIDER_KEY, creds.clone());
+        cache.save()?;
+        Ok(())
+    }
+
+    /// Removes the Grok Build OAuth credentials from cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn clear_credentials() -> Result<bool> {
+        let mut cache = OAuthCache::load()?;
+        let had_creds = cache.remove(PROVIDER_KEY).is_some();
+        cache.save()?;
+        Ok(had_creds)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

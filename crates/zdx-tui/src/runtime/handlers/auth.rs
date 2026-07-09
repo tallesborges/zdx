@@ -13,7 +13,9 @@ pub async fn token_exchange(
     verifier: String,
     redirect_uri: Option<String>,
 ) -> UiEvent {
-    use zdx_engine::providers::oauth::{claude_cli, gemini_cli, google_antigravity, openai_codex};
+    use zdx_engine::providers::oauth::{
+        claude_cli, gemini_cli, google_antigravity, grok_build, openai_codex,
+    };
 
     let result = match provider {
         zdx_engine::providers::ProviderKind::ClaudeCli => {
@@ -81,6 +83,18 @@ pub async fn token_exchange(
                 Err(e) => Err(e.to_string()),
             }
         }
+        zdx_engine::providers::ProviderKind::GrokBuild => {
+            let pkce = grok_build::Pkce {
+                verifier,
+                challenge: String::new(),
+            };
+            match grok_build::exchange_code(&code, &pkce).await {
+                Ok(creds) => {
+                    grok_build::save_credentials(&creds).map_err(|e| format!("Failed to save: {e}"))
+                }
+                Err(e) => Err(e.to_string()),
+            }
+        }
         _ => Err("OAuth is not supported for this provider.".to_string()),
     };
     UiEvent::LoginResult { result }
@@ -110,6 +124,14 @@ pub async fn local_auth_callback(
         }
         zdx_engine::providers::ProviderKind::GoogleAntigravity => {
             wait_for_local_code(51121, "/oauth-callback", state.as_deref())
+        }
+        zdx_engine::providers::ProviderKind::GrokBuild => {
+            use zdx_engine::providers::oauth::grok_build;
+            wait_for_local_code(
+                grok_build::LOCAL_CALLBACK_PORT,
+                grok_build::LOCAL_CALLBACK_PATH,
+                state.as_deref(),
+            )
         }
         _ => None,
     };
