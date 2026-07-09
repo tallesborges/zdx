@@ -17,7 +17,7 @@ use super::state::{
 use crate::common::{TaskKind, Tasks, sanitize_for_display};
 use crate::effects::UiEffect;
 use crate::mutations::{ConfigMutation, StateMutation, ThreadMutation, TranscriptMutation};
-use crate::overlays::{LoginState, Overlay, OverlayRequest};
+use crate::overlays::OverlayRequest;
 use crate::state::{AgentState, TabId, fast_mode_enabled_for_model, fast_mode_provider_for_model};
 use crate::transcript::HistoryCell;
 
@@ -100,11 +100,7 @@ fn is_image_path(text: &str) -> bool {
 /// Sanitizes pasted text by stripping ANSI escapes and expanding tabs to spaces.
 /// For large pastes (>1000 chars), inserts a placeholder and stores the original
 /// content for expansion on submission.
-pub fn handle_paste(
-    input: &mut InputState,
-    overlay: &mut Option<Overlay>,
-    text: &str,
-) -> Vec<UiEffect> {
+pub fn handle_paste(input: &mut InputState, text: &str) -> Vec<UiEffect> {
     // Pasting into the prompt-builder review state implicitly accepts the
     // polished prompt — the paste then modifies the composer normally.
     if input.prompt_builder.is_ready() {
@@ -117,10 +113,6 @@ pub fn handle_paste(
         return vec![UiEffect::AttachImage {
             path: path.to_string(),
         }];
-    }
-    if let Some(Overlay::Login(LoginState::AwaitingCode { .. })) = overlay {
-        // Ignore paste while waiting for OAuth callback.
-        return vec![];
     }
 
     let char_count = sanitized.chars().count();

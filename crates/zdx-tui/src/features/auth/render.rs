@@ -156,6 +156,10 @@ fn render_awaiting_code_lines(
             "Waiting for browser login callback...",
             Style::default().fg(Color::White),
         )),
+        Line::from(Span::styled(
+            "or paste the code / redirect URL here.",
+            Style::default().fg(Color::DarkGray),
+        )),
     ];
     if let Some(error) = error {
         lines.push(Line::from(""));

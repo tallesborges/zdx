@@ -733,6 +733,70 @@ fn process_login_callback(
     }
 }
 
+/// Dispatches OAuth callback-input parsing to the active provider's parser.
+fn parse_login_paste(
+    provider: zdx_engine::providers::ProviderKind,
+    text: &str,
+) -> (Option<String>, Option<String>) {
+    use zdx_engine::providers::ProviderKind;
+    use zdx_engine::providers::oauth::{
+        claude_cli, gemini_cli, google_antigravity, grok_build, openai_codex,
+    };
+    match provider {
+        ProviderKind::ClaudeCli => claude_cli::parse_authorization_input(text),
+        ProviderKind::OpenAICodex => openai_codex::parse_authorization_input(text),
+        ProviderKind::GeminiCli => gemini_cli::parse_authorization_input(text),
+        ProviderKind::GoogleAntigravity => google_antigravity::parse_authorization_input(text),
+        ProviderKind::GrokBuild => grok_build::parse_authorization_input(text),
+        _ => (None, None),
+    }
+}
+
+/// Handles a manual code/URL paste while awaiting an OAuth callback.
+///
+/// Extracts the authorization code (accepting either a bare code or the full
+/// redirect URL), validates the state when present, then runs the same token
+/// exchange the local callback would trigger.
+fn process_login_paste(
+    login_state: &mut overlays::LoginState,
+    text: &str,
+    effects: &mut Vec<UiEffect>,
+) {
+    let overlays::LoginState::AwaitingCode {
+        provider,
+        oauth_state,
+        ..
+    } = login_state
+    else {
+        return;
+    };
+    let provider = *provider;
+    let expected_state = oauth_state.clone();
+
+    let (code, pasted_state) = parse_login_paste(provider, text);
+
+    if let (Some(expected), Some(got)) = (expected_state.as_ref(), pasted_state.as_ref())
+        && expected != got
+    {
+        if let overlays::LoginState::AwaitingCode { error, .. } = login_state {
+            *error = Some("State mismatch — copy the full redirect URL again.".to_string());
+        }
+        return;
+    }
+
+    match code {
+        Some(code) => process_login_callback(login_state, Some(code), effects),
+        None => {
+            if let overlays::LoginState::AwaitingCode { error, .. } = login_state {
+                *error = Some(
+                    "Couldn't read a code from that paste. Paste the code or the full redirect URL."
+                        .to_string(),
+                );
+            }
+        }
+    }
+}
+
 fn handle_task_started_event(
     app: &mut AppState,
     kind: TaskKind,
@@ -1566,7 +1630,18 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
                 vec![]
             }
         }
-        Event::Paste(text) => input::handle_paste(&mut app.tui.input, &mut app.overlay, &text),
+        Event::Paste(text) => {
+            if let Some(overlays::Overlay::Login(
+                login_state @ overlays::LoginState::AwaitingCode { .. },
+            )) = &mut app.overlay
+            {
+                let mut effects = vec![];
+                process_login_paste(login_state, &text, &mut effects);
+                effects
+            } else {
+                input::handle_paste(&mut app.tui.input, &text)
+            }
+        }
         Event::FocusGained => {
             app.is_focused = true;
             vec![]
