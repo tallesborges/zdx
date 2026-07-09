@@ -184,6 +184,74 @@ pub mod i64_or_string {
     }
 }
 
+/// Serde helper that accepts either a JSON unsigned integer or a numeric string.
+///
+/// LLMs sometimes send `"timeout_secs": "600"` instead of `"timeout_secs": 600`.
+pub mod u64_or_string {
+    use serde::{Deserialize, Deserializer, de};
+    use serde_json::Value;
+
+    /// Deserializes a `u64` that also accepts a numeric string like `"600"`.
+    ///
+    /// # Errors
+    /// Returns an error if the value cannot be parsed as an unsigned integer.
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<u64, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum U64OrString {
+            Int(u64),
+            String(String),
+        }
+
+        match U64OrString::deserialize(deserializer)? {
+            U64OrString::Int(v) => Ok(v),
+            U64OrString::String(raw) => raw.trim().parse::<u64>().map_err(|_err| {
+                de::Error::custom(format!(
+                    "expected unsigned integer or integer string, got '{raw}'"
+                ))
+            }),
+        }
+    }
+
+    /// Deserializes an optional `u64` from a number, numeric string, empty string, or null.
+    ///
+    /// Empty strings and null become `None` so callers can fall back to defaults.
+    ///
+    /// # Errors
+    /// Returns an error if the value is present but not a non-negative integer/string.
+    pub fn deserialize_optional<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value: Option<Value> = Option::deserialize(deserializer)?;
+        match value {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::Number(n)) => n
+                .as_u64()
+                .map(Some)
+                .ok_or_else(|| de::Error::custom("expected non-negative integer")),
+            Some(Value::String(s)) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    Ok(None)
+                } else {
+                    trimmed.parse::<u64>().map(Some).map_err(|_err| {
+                        de::Error::custom(format!(
+                            "expected unsigned integer or integer string, got '{s}'"
+                        ))
+                    })
+                }
+            }
+            Some(_) => Err(de::Error::custom(
+                "expected unsigned integer or integer string",
+            )),
+        }
+    }
+}
+
 // ============================================================================
 // Tool input parsing
 // ============================================================================
