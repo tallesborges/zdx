@@ -481,7 +481,7 @@ mod tests {
         );
         assert_eq!(
             resolve_timeout(Some(300), Some(Duration::from_secs(30))),
-            Some(Duration::from_secs(300))
+            Some(Duration::from_mins(5))
         );
         assert_eq!(
             resolve_timeout(Some(0), Some(Duration::from_secs(30))),
@@ -490,7 +490,7 @@ mod tests {
 
         assert_eq!(
             resolve_timeout(Some(3600), Some(Duration::from_secs(30))),
-            Some(Duration::from_secs(3600))
+            Some(Duration::from_hours(1))
         );
     }
 
