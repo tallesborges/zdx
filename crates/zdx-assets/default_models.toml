@@ -36,57 +36,6 @@ input_images = true
 output_limit = 128000
 
 [[model]]
-id = "claude-opus-4-7"
-provider = "anthropic"
-display_name = "Claude Opus 4.7"
-context_limit = 1000000
-
-[model.pricing]
-input = 5.0
-output = 25.0
-cache_read = 0.5
-cache_write = 6.25
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 128000
-
-[[model]]
-id = "claude-opus-4-6"
-provider = "anthropic"
-display_name = "Claude Opus 4.6"
-context_limit = 1000000
-
-[model.pricing]
-input = 5.0
-output = 25.0
-cache_read = 0.5
-cache_write = 6.25
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 128000
-
-[[model]]
-id = "claude-opus-4-5"
-provider = "anthropic"
-display_name = "Claude Opus 4.5"
-context_limit = 200000
-
-[model.pricing]
-input = 5.0
-output = 25.0
-cache_read = 0.5
-cache_write = 6.25
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 64000
-
-[[model]]
 id = "claude-sonnet-5"
 provider = "anthropic"
 display_name = "Claude Sonnet 5"
@@ -97,40 +46,6 @@ input = 3.0
 output = 15.0
 cache_read = 0.2
 cache_write = 2.5
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 64000
-
-[[model]]
-id = "claude-sonnet-4-6"
-provider = "anthropic"
-display_name = "Claude Sonnet 4.6"
-context_limit = 1000000
-
-[model.pricing]
-input = 3.0
-output = 15.0
-cache_read = 0.3
-cache_write = 3.75
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 128000
-
-[[model]]
-id = "claude-sonnet-4-5"
-provider = "anthropic"
-display_name = "Claude Sonnet 4.5"
-context_limit = 1000000
-
-[model.pricing]
-input = 3.0
-output = 15.0
-cache_read = 0.3
-cache_write = 3.75
 
 [model.capabilities]
 reasoning = true
@@ -155,6 +70,23 @@ input_images = true
 output_limit = 64000
 
 [[model]]
+id = "claude-cli:claude-fable-5"
+provider = "claude-cli"
+display_name = "Claude Fable 5"
+context_limit = 1000000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
+[[model]]
 id = "claude-cli:claude-opus-4-8"
 provider = "claude-cli"
 display_name = "Claude Opus 4.8"
@@ -172,94 +104,9 @@ input_images = true
 output_limit = 128000
 
 [[model]]
-id = "claude-cli:claude-opus-4-7"
-provider = "claude-cli"
-display_name = "Claude Opus 4.7"
-context_limit = 1000000
-
-[model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 128000
-
-[[model]]
-id = "claude-cli:claude-opus-4-6"
-provider = "claude-cli"
-display_name = "Claude Opus 4.6"
-context_limit = 1000000
-
-[model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 128000
-
-[[model]]
-id = "claude-cli:claude-opus-4-5"
-provider = "claude-cli"
-display_name = "Claude Opus 4.5"
-context_limit = 200000
-
-[model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 64000
-
-[[model]]
 id = "claude-cli:claude-sonnet-5"
 provider = "claude-cli"
 display_name = "Claude Sonnet 5"
-context_limit = 1000000
-
-[model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 64000
-
-[[model]]
-id = "claude-cli:claude-sonnet-4-6"
-provider = "claude-cli"
-display_name = "Claude Sonnet 4.6"
-context_limit = 1000000
-
-[model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 128000
-
-[[model]]
-id = "claude-cli:claude-sonnet-4-5"
-provider = "claude-cli"
-display_name = "Claude Sonnet 4.5"
 context_limit = 1000000
 
 [model.pricing]
@@ -359,74 +206,6 @@ input_images = true
 output_limit = 128000
 
 [[model]]
-id = "openai:gpt-5.3-codex"
-provider = "openai"
-display_name = "GPT-5.3 Codex"
-context_limit = 400000
-
-[model.pricing]
-input = 1.75
-output = 14.0
-cache_read = 0.175
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 128000
-
-[[model]]
-id = "openai:gpt-5.3-codex-spark"
-provider = "openai"
-display_name = "GPT-5.3 Codex Spark"
-context_limit = 128000
-
-[model.pricing]
-input = 1.75
-output = 14.0
-cache_read = 0.175
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 32000
-
-[[model]]
-id = "openai:gpt-5.2-codex"
-provider = "openai"
-display_name = "GPT-5.2 Codex"
-context_limit = 400000
-
-[model.pricing]
-input = 1.75
-output = 14.0
-cache_read = 0.175
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 128000
-
-[[model]]
-id = "openai:gpt-5.1-codex-max"
-provider = "openai"
-display_name = "GPT-5.1 Codex Max"
-context_limit = 400000
-
-[model.pricing]
-input = 1.25
-output = 10.0
-cache_read = 0.125
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 128000
-
-[[model]]
 id = "gpt-5.5"
 provider = "openai-codex"
 display_name = "GPT-5.5"
@@ -464,74 +243,6 @@ output_limit = 128000
 id = "gpt-5.4-mini"
 provider = "openai-codex"
 display_name = "GPT-5.4 mini"
-context_limit = 400000
-
-[model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 128000
-
-[[model]]
-id = "gpt-5.3-codex"
-provider = "openai-codex"
-display_name = "GPT-5.3 Codex"
-context_limit = 400000
-
-[model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 128000
-
-[[model]]
-id = "gpt-5.3-codex-spark"
-provider = "openai-codex"
-display_name = "GPT-5.3 Codex Spark"
-context_limit = 128000
-
-[model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 32000
-
-[[model]]
-id = "gpt-5.2-codex"
-provider = "openai-codex"
-display_name = "GPT-5.2 Codex"
-context_limit = 400000
-
-[model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 128000
-
-[[model]]
-id = "gpt-5.1-codex-max"
-provider = "openai-codex"
-display_name = "GPT-5.1 Codex Max"
 context_limit = 400000
 
 [model.pricing]
@@ -606,23 +317,6 @@ context_limit = 262144
 input = 0.95
 output = 4.0
 cache_read = 0.16
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 262144
-
-[[model]]
-id = "moonshot:kimi-k2.5"
-provider = "moonshot"
-display_name = "Kimi K2.5"
-context_limit = 262144
-
-[model.pricing]
-input = 0.6
-output = 3.0
-cache_read = 0.1
 cache_write = 0.0
 
 [model.capabilities]
@@ -750,23 +444,6 @@ input_images = true
 output_limit = 65536
 
 [[model]]
-id = "gemini:gemini-3.1-pro-preview-customtools"
-provider = "gemini"
-display_name = "Gemini 3.1 Pro Preview Custom Tools"
-context_limit = 1048576
-
-[model.pricing]
-input = 2.0
-output = 12.0
-cache_read = 0.2
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 65536
-
-[[model]]
 id = "gemini:gemini-3.1-pro-preview"
 provider = "gemini"
 display_name = "Gemini 3.1 Pro Preview"
@@ -801,43 +478,9 @@ input_images = true
 output_limit = 65536
 
 [[model]]
-id = "gemini:gemini-3-flash-preview"
-provider = "gemini"
-display_name = "Gemini 3 Flash Preview"
-context_limit = 1048576
-
-[model.pricing]
-input = 0.5
-output = 3.0
-cache_read = 0.05
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 65536
-
-[[model]]
 id = "gemini-cli:gemini-3.5-flash"
 provider = "gemini-cli"
 display_name = "Gemini 3.5 Flash"
-context_limit = 1048576
-
-[model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 65536
-
-[[model]]
-id = "gemini-cli:gemini-3.1-pro-preview-customtools"
-provider = "gemini-cli"
-display_name = "Gemini 3.1 Pro Preview Custom Tools"
 context_limit = 1048576
 
 [model.pricing]
@@ -872,23 +515,6 @@ output_limit = 65536
 id = "gemini-cli:gemini-3.1-flash-lite-preview"
 provider = "gemini-cli"
 display_name = "Gemini 3.1 Flash Lite Preview"
-context_limit = 1048576
-
-[model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 65536
-
-[[model]]
-id = "gemini-cli:gemini-3-flash-preview"
-provider = "gemini-cli"
-display_name = "Gemini 3 Flash Preview"
 context_limit = 1048576
 
 [model.pricing]
@@ -1022,24 +648,6 @@ input_images = false
 output_limit = 65536
 
 [[model]]
-id = "opencode-go:glm-5.1"
-provider = "opencode-go"
-display_name = "GLM-5.1"
-context_limit = 202752
-
-[model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = false
-output_limit = 32768
-api = "openai-completions"
-
-[[model]]
 id = "opencode-go:glm-5.2"
 provider = "opencode-go"
 display_name = "GLM-5.2"
@@ -1148,24 +756,6 @@ output_limit = 131072
 api = "anthropic-messages"
 
 [[model]]
-id = "opencode-go:minimax-m2.7"
-provider = "opencode-go"
-display_name = "MiniMax-M2.7"
-context_limit = 204800
-
-[model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = false
-output_limit = 131072
-api = "anthropic-messages"
-
-[[model]]
 id = "opencode-go:qwen3.7-max"
 provider = "opencode-go"
 display_name = "Qwen3.7 Max"
@@ -1187,24 +777,6 @@ api = "anthropic-messages"
 id = "opencode-go:qwen3.7-plus"
 provider = "opencode-go"
 display_name = "Qwen3.7 Plus"
-context_limit = 1000000
-
-[model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 65536
-api = "anthropic-messages"
-
-[[model]]
-id = "opencode-go:qwen3.6-plus"
-provider = "opencode-go"
-display_name = "Qwen3.6 Plus"
 context_limit = 1000000
 
 [model.pricing]
@@ -1273,23 +845,6 @@ input_images = true
 output_limit = 128000
 
 [[model]]
-id = "minimax:MiniMax-M2.7"
-provider = "minimax"
-display_name = "MiniMax-M2.7"
-context_limit = 204800
-
-[model.pricing]
-input = 0.3
-output = 1.2
-cache_read = 0.06
-cache_write = 0.375
-
-[model.capabilities]
-reasoning = true
-input_images = false
-output_limit = 131072
-
-[[model]]
 id = "zai:glm-5.2"
 provider = "zai"
 display_name = "GLM-5.2"
@@ -1299,74 +854,6 @@ context_limit = 1000000
 input = 1.4
 output = 4.4
 cache_read = 0.26
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = false
-output_limit = 131072
-
-[[model]]
-id = "zai:glm-5.1"
-provider = "zai"
-display_name = "GLM-5.1"
-context_limit = 200000
-
-[model.pricing]
-input = 1.4
-output = 4.4
-cache_read = 0.26
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = false
-output_limit = 131072
-
-[[model]]
-id = "zai:glm-5-turbo"
-provider = "zai"
-display_name = "GLM-5-Turbo"
-context_limit = 200000
-
-[model.pricing]
-input = 1.2
-output = 4.0
-cache_read = 0.24
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = false
-output_limit = 131072
-
-[[model]]
-id = "zai:glm-5"
-provider = "zai"
-display_name = "GLM-5"
-context_limit = 204800
-
-[model.pricing]
-input = 1.0
-output = 3.2
-cache_read = 0.2
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = false
-output_limit = 131072
-
-[[model]]
-id = "zai:glm-4.7"
-provider = "zai"
-display_name = "GLM-4.7"
-context_limit = 204800
-
-[model.pricing]
-input = 0.6
-output = 2.2
-cache_read = 0.11
 cache_write = 0.0
 
 [model.capabilities]
@@ -1407,23 +894,6 @@ cache_write = 0.0
 reasoning = true
 input_images = true
 output_limit = 500000
-
-[[model]]
-id = "xai:grok-4.3"
-provider = "xai"
-display_name = "Grok 4.3"
-context_limit = 1000000
-
-[model.pricing]
-input = 1.25
-output = 2.5
-cache_read = 0.2
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 30000
 
 [[model]]
 id = "xai:grok-build-0.1"

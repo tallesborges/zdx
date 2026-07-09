@@ -1489,12 +1489,7 @@ fn default_anthropic_provider() -> ProviderConfig {
         models: vec![
             "claude-fable-5".to_string(),
             "claude-opus-4-8".to_string(),
-            "claude-opus-4-7".to_string(),
-            "claude-opus-4-6".to_string(),
-            "claude-opus-4-5".to_string(),
             "claude-sonnet-5".to_string(),
-            "claude-sonnet-4-6".to_string(),
-            "claude-sonnet-4-5".to_string(),
             "claude-haiku-4-5".to_string(),
         ],
         ..Default::default()
@@ -1505,13 +1500,9 @@ fn default_claude_cli_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "claude-fable-5".to_string(),
             "claude-opus-4-8".to_string(),
-            "claude-opus-4-7".to_string(),
-            "claude-opus-4-6".to_string(),
-            "claude-opus-4-5".to_string(),
             "claude-sonnet-5".to_string(),
-            "claude-sonnet-4-6".to_string(),
-            "claude-sonnet-4-5".to_string(),
             "claude-haiku-4-5".to_string(),
         ],
         ..Default::default()
@@ -1526,10 +1517,6 @@ fn default_openai_provider() -> ProviderConfig {
             "gpt-5.4".to_string(),
             "gpt-5.4-mini".to_string(),
             "gpt-5.4-nano".to_string(),
-            "gpt-5.3-codex".to_string(),
-            "gpt-5.3-codex-spark".to_string(),
-            "gpt-5.2-codex".to_string(),
-            "gpt-5.1-codex-max".to_string(),
         ],
         ..Default::default()
     }
@@ -1542,10 +1529,6 @@ fn default_openai_codex_provider() -> ProviderConfig {
             "gpt-5.5".to_string(),
             "gpt-5.4".to_string(),
             "gpt-5.4-mini".to_string(),
-            "gpt-5.3-codex".to_string(),
-            "gpt-5.3-codex-spark".to_string(),
-            "gpt-5.2-codex".to_string(),
-            "gpt-5.1-codex-max".to_string(),
         ],
         ..Default::default()
     }
@@ -1573,7 +1556,7 @@ fn default_deepseek_provider() -> ProviderConfig {
 fn default_moonshot_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["kimi-k2.6".to_string(), "kimi-k2.5".to_string()],
+        models: vec!["kimi-k2.6".to_string()],
         ..Default::default()
     }
 }
@@ -1615,10 +1598,8 @@ fn default_gemini_provider() -> ProviderConfig {
         enabled: Some(true),
         models: vec![
             "gemini-3.5-flash".to_string(),
-            "gemini-3.1-pro-preview-customtools".to_string(),
             "gemini-3.1-pro-preview".to_string(),
             "gemini-3.1-flash-lite-preview".to_string(),
-            "gemini-3-flash-preview".to_string(),
         ],
         ..Default::default()
     }
@@ -1629,10 +1610,8 @@ fn default_gemini_cli_provider() -> ProviderConfig {
         enabled: Some(true),
         models: vec![
             "gemini-3.5-flash".to_string(),
-            "gemini-3.1-pro-preview-customtools".to_string(),
             "gemini-3.1-pro-preview".to_string(),
             "gemini-3.1-flash-lite-preview".to_string(),
-            "gemini-3-flash-preview".to_string(),
         ],
         ..Default::default()
     }
@@ -1666,17 +1645,14 @@ fn default_opencode_go_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
-            "glm-5.1".to_string(),
             "glm-5.2".to_string(),
             "kimi-k2.6".to_string(),
             "kimi-k2.7-code".to_string(),
             "mimo-v2.5-pro".to_string(),
             "mimo-v2.5".to_string(),
             "minimax-m3".to_string(),
-            "minimax-m2.7".to_string(),
             "qwen3.7-max".to_string(),
             "qwen3.7-plus".to_string(),
-            "qwen3.6-plus".to_string(),
             "deepseek-v4-pro".to_string(),
             "deepseek-v4-flash".to_string(),
         ],
@@ -1687,7 +1663,7 @@ fn default_opencode_go_provider() -> ProviderConfig {
 fn default_minimax_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["MiniMax-M3".to_string(), "MiniMax-M2.7".to_string()],
+        models: vec!["MiniMax-M3".to_string()],
         ..Default::default()
     }
 }
@@ -1695,14 +1671,7 @@ fn default_minimax_provider() -> ProviderConfig {
 fn default_zai_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec![
-            "glm-5.2".to_string(),
-            "glm-5.1".to_string(),
-            "glm-5-turbo".to_string(),
-            "glm-5".to_string(),
-            "glm-4.7".to_string(),
-            "glm-4.7-flash".to_string(),
-        ],
+        models: vec!["glm-5.2".to_string(), "glm-4.7-flash".to_string()],
         ..Default::default()
     }
 }
@@ -1710,11 +1679,7 @@ fn default_zai_provider() -> ProviderConfig {
 fn default_xai_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec![
-            "grok-4.5".to_string(),
-            "grok-4.3".to_string(),
-            "grok-build-0.1".to_string(),
-        ],
+        models: vec!["grok-4.5".to_string(), "grok-build-0.1".to_string()],
         ..Default::default()
     }
 }
