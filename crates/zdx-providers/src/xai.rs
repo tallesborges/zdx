@@ -3,6 +3,7 @@
 use anyhow::Result;
 use reqwest::header::{HeaderMap, HeaderValue};
 use zdx_types::ToolDefinition;
+use zdx_types::config::ThinkingLevel;
 
 use crate::openai::responses::{ResponsesConfig, send_responses_stream};
 use crate::shared::merge_system_prompt;
@@ -18,7 +19,7 @@ pub struct XaiConfig {
     pub model: String,
     pub max_tokens: Option<u32>,
     pub prompt_cache_key: Option<String>,
-    pub thinking_enabled: bool,
+    pub reasoning_effort: String,
 }
 
 impl XaiConfig {
@@ -40,7 +41,7 @@ impl XaiConfig {
         config_base_url: Option<&str>,
         config_api_key: Option<&str>,
         prompt_cache_key: Option<String>,
-        thinking_enabled: bool,
+        reasoning_effort: String,
     ) -> Result<Self> {
         let api_key = ProviderKind::Xai.resolve_api_key(config_api_key)?;
         let base_url = ProviderKind::Xai.resolve_base_url(config_base_url)?;
@@ -51,8 +52,16 @@ impl XaiConfig {
             model,
             max_tokens,
             prompt_cache_key,
-            thinking_enabled,
+            reasoning_effort,
         })
+    }
+}
+
+fn reasoning_effort_from_thinking_level(level: ThinkingLevel) -> &'static str {
+    match level {
+        ThinkingLevel::Off | ThinkingLevel::Minimal | ThinkingLevel::Low => "low",
+        ThinkingLevel::Medium => "medium",
+        ThinkingLevel::High | ThinkingLevel::XHigh => "high",
     }
 }
 
@@ -87,7 +96,7 @@ impl XaiClient {
                 path: RESPONSES_PATH.to_string(),
                 model: config.model,
                 max_output_tokens: config.max_tokens,
-                reasoning_effort: None,
+                reasoning_effort: Some(config.reasoning_effort),
                 reasoning_summary: None,
                 instructions: None,
                 text_verbosity: None,
@@ -139,13 +148,15 @@ pub fn build(
         ctx.base_url,
         ctx.api_key,
         ctx.cache_key.clone(),
-        ctx.thinking_level.is_enabled(),
+        reasoning_effort_from_thinking_level(ctx.thinking_level).to_string(),
     )?)))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{RESPONSES_PATH, XaiClient, XaiConfig};
+    use zdx_types::config::ThinkingLevel;
+
+    use super::{RESPONSES_PATH, XaiClient, XaiConfig, reasoning_effort_from_thinking_level};
 
     fn test_config(model: &str) -> XaiConfig {
         XaiConfig {
@@ -154,20 +165,37 @@ mod tests {
             model: model.to_string(),
             max_tokens: Some(1024),
             prompt_cache_key: Some("thread-123".to_string()),
-            thinking_enabled: true,
+            reasoning_effort: "high".to_string(),
         }
     }
 
     #[test]
     fn xai_provider_uses_responses_api_for_current_models() {
-        for model in ["grok-4.3", "grok-build-0.1"] {
-            let client = XaiClient::new(test_config(model));
-            assert_eq!(client.config.path, RESPONSES_PATH);
-            assert_eq!(client.config.model, model);
-            assert_eq!(
-                client.config.include.as_ref(),
-                Some(&vec!["reasoning.encrypted_content".to_string()])
-            );
+        let client = XaiClient::new(test_config("grok-4.5"));
+        assert_eq!(client.config.path, RESPONSES_PATH);
+        assert_eq!(client.config.model, "grok-4.5");
+        assert_eq!(client.config.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(
+            client.config.include.as_ref(),
+            Some(&vec!["reasoning.encrypted_content".to_string()])
+        );
+    }
+
+    #[test]
+    fn xai_reasoning_effort_clamps_zdx_levels() {
+        for level in [
+            ThinkingLevel::Off,
+            ThinkingLevel::Minimal,
+            ThinkingLevel::Low,
+        ] {
+            assert_eq!(reasoning_effort_from_thinking_level(level), "low");
+        }
+        assert_eq!(
+            reasoning_effort_from_thinking_level(ThinkingLevel::Medium),
+            "medium"
+        );
+        for level in [ThinkingLevel::High, ThinkingLevel::XHigh] {
+            assert_eq!(reasoning_effort_from_thinking_level(level), "high");
         }
     }
 }

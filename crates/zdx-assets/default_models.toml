@@ -911,20 +911,3 @@ cache_write = 0.0
 reasoning = true
 input_images = true
 output_limit = 500000
-
-[[model]]
-id = "xai:grok-build-0.1"
-provider = "xai"
-display_name = "Grok Build 0.1"
-context_limit = 256000
-
-[model.pricing]
-input = 1.0
-output = 2.0
-cache_read = 0.2
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 256000
