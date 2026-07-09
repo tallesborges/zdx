@@ -1564,7 +1564,7 @@ fn default_moonshot_provider() -> ProviderConfig {
 fn default_stepfun_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["step-3.5-flash".to_string()],
+        models: vec!["step-3.7-flash".to_string(), "step-3.5-flash".to_string()],
         ..Default::default()
     }
 }
