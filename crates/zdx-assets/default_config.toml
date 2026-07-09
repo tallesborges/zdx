@@ -154,14 +154,14 @@ enabled = true
 # api_key = "sk-..."  # Overrides OPENAI_API_KEY env var
 # base_url = "https://api.openai.com/v1"
 # text_verbosity = "medium"  # Options: low, medium, high
-models = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"]
+models = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4-nano"]
 fast_mode = false
 websocket = false
 
 [providers.openai_codex]
 enabled = true
 # text_verbosity = "medium"  # Options: low, medium, high
-models = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"]
+models = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"]
 fast_mode = false
 websocket = false
 # Codex models have built-in apply_patch instructions
