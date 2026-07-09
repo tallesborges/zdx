@@ -11,7 +11,7 @@ use crate::core::thread_persistence::{self as tp, ThreadEvent};
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Todo_Write".to_string(),
-        description: "Create and manage a structured todo list for the current thread. Use this for tasks with 3+ meaningful steps, multiple requested changes, or work that benefits from visible progress. Send a `todos` array of mutations such as `replace`, `add`, `update`, and `remove` — `todos` must be a real JSON array, not a quoted JSON string. Each element must be a mutation object with `op`; do not pass raw todo items like `{content,status}` directly. Use `replace` to initialize or fully reset the list, then prefer incremental `update`/`add`/`remove` ops as work advances instead of keeping a long implicit plan in prose. While unfinished work remains, keep exactly one todo `in_progress`. Example: {\"todos\":[{\"op\":\"add\",\"content\":\"Inspect bug\",\"status\":\"in_progress\"}]}".to_string(),
+        description: "Create and manage a structured todo list for the current thread. Use this for tasks with 3+ meaningful steps, multiple requested changes, or work that benefits from visible progress. Send a `todos` array of mutations such as `replace`, `add`, `update`, and `remove` — `todos` must be a real JSON array, not a quoted JSON string. Each element must be a mutation object with `op`; do not pass raw todo items like `{content,status}` directly. Use `replace` to initialize or fully reset the list, then prefer incremental `update`/`add`/`remove` ops as work advances. For `update`, send the todo `id` and only the fields that change; omit unchanged fields instead of sending empty strings. While unfinished work remains, keep exactly one todo `in_progress`. Examples: initialize with {\"todos\":[{\"op\":\"replace\",\"todos\":[{\"content\":\"Inspect bug\",\"status\":\"in_progress\"}]}]}; update status with {\"todos\":[{\"op\":\"update\",\"id\":\"todo-1\",\"status\":\"completed\"}]}".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
@@ -41,9 +41,9 @@ pub fn definition() -> ToolDefinition {
                                 }
                             },
                             "id": { "type": "string", "description": "Todo ID, e.g. todo-2, used by `update` and `remove`." },
-                            "content": { "type": "string", "description": "Todo label for `add`, or updated label for `update`." },
+                            "content": { "type": "string", "description": "Required non-empty todo label for `add`. For `update`, omit this field unless changing the label; empty values are ignored." },
                             "status": { "type": "string", "enum": ["pending", "in_progress", "completed", "abandoned"] },
-                            "details": { "type": "string", "description": "Optional temporary todo context for this thread, such as paths, constraints, or next checks." }
+                            "details": { "type": "string", "description": "Optional temporary todo context. For `update`, omit this field unless changing the details; empty values are ignored." }
                         },
                         "required": ["op"]
                     }
@@ -376,16 +376,15 @@ fn apply_ops(previous: &TodoState, ops: &[TodoOp]) -> Result<TodoState, String> 
 
                 if let Some(content) = content {
                     let content = content.trim();
-                    if content.is_empty() {
-                        return Err(format!("Todo '{id}' cannot have empty content"));
+                    if !content.is_empty() {
+                        todo.content = content.to_string();
                     }
-                    todo.content = content.to_string();
                 }
                 if let Some(status) = status {
                     todo.status = status.clone();
                 }
-                if details.is_some() {
-                    todo.details = normalize_optional_string(details.clone());
+                if let Some(details) = normalize_optional_string(details.clone()) {
+                    todo.details = Some(details);
                 }
             }
             TodoOp::Remove { id } => {
@@ -605,6 +604,43 @@ mod tests {
 
         assert!(matches!(next.todos[0].status, TodoStatus::Completed));
         assert!(matches!(next.todos[1].status, TodoStatus::InProgress));
+    }
+
+    #[test]
+    fn test_update_ignores_empty_optional_fields() {
+        let previous = TodoState {
+            todos: vec![TodoItem {
+                id: "todo-1".to_string(),
+                content: "Inspect codebase".to_string(),
+                status: TodoStatus::InProgress,
+                details: Some("Check provider schemas".to_string()),
+            }],
+            next_id: 2,
+        };
+
+        let output = execute_with_state(
+            &json!({
+                "todos": [{
+                    "op": "update",
+                    "id": "todo-1",
+                    "content": "",
+                    "details": "",
+                    "todos": [],
+                    "status": "completed"
+                }]
+            }),
+            Some(&previous),
+            None,
+        );
+
+        assert!(output.is_ok());
+        let state = state_from_output(&output).expect("state from update");
+        assert_eq!(state.todos[0].content, "Inspect codebase");
+        assert_eq!(
+            state.todos[0].details.as_deref(),
+            Some("Check provider schemas")
+        );
+        assert!(matches!(state.todos[0].status, TodoStatus::Completed));
     }
 
     #[test]
