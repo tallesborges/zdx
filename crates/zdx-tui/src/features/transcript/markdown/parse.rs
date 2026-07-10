@@ -20,6 +20,19 @@ use crate::transcript::{Style, StyledLine, StyledSpan};
 ///
 /// Falls back to plain text rendering if parsing fails.
 pub fn render_markdown(text: &str, width: usize) -> Vec<StyledLine> {
+    render_markdown_with_soft_breaks(text, width, false)
+}
+
+/// Renders markdown while preserving source newlines as display line breaks.
+pub(crate) fn render_markdown_preserving_soft_breaks(text: &str, width: usize) -> Vec<StyledLine> {
+    render_markdown_with_soft_breaks(text, width, true)
+}
+
+fn render_markdown_with_soft_breaks(
+    text: &str,
+    width: usize,
+    preserve_soft_breaks: bool,
+) -> Vec<StyledLine> {
     if text.is_empty() {
         return vec![StyledLine { spans: vec![] }];
     }
@@ -30,7 +43,7 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<StyledLine> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     let parser = Parser::new_ext(&text, options);
-    let mut renderer = MarkdownRenderer::new(width);
+    let mut renderer = MarkdownRenderer::new(width, preserve_soft_breaks);
 
     for event in parser {
         renderer.process_event(event);
@@ -343,6 +356,8 @@ struct MarkdownRenderer {
     in_blockquote: bool,
     /// Current heading level (None if not in heading).
     current_heading: Option<HeadingLevel>,
+    /// Whether `CommonMark` soft breaks remain visible line breaks.
+    preserve_soft_breaks: bool,
     /// Are we inside a table?
     in_table: bool,
     /// Are we in the table header row?
@@ -360,7 +375,7 @@ struct ListState {
 }
 
 impl MarkdownRenderer {
-    fn new(width: usize) -> Self {
+    fn new(width: usize, preserve_soft_breaks: bool) -> Self {
         Self {
             width,
             lines: Vec::new(),
@@ -371,6 +386,7 @@ impl MarkdownRenderer {
             list_stack: Vec::new(),
             in_blockquote: false,
             current_heading: None,
+            preserve_soft_breaks,
             in_table: false,
             in_table_head: false,
             table_buffer: TableBuffer::new(),
@@ -637,9 +653,9 @@ impl MarkdownRenderer {
             return;
         }
 
-        // Soft break becomes a space
+        let text = if self.preserve_soft_breaks { "\n" } else { " " };
         self.current_spans.push(StyledSpan {
-            text: " ".to_string(),
+            text: text.to_string(),
             style: self.current_style(),
         });
     }

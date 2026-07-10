@@ -11,5 +11,6 @@ mod stream;
 mod wrap;
 
 pub use parse::render_markdown;
+pub(crate) use parse::render_markdown_preserving_soft_breaks;
 pub(crate) use stream::committed_len;
 pub use stream::render_markdown_streaming;
