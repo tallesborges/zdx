@@ -60,8 +60,8 @@ pub enum EffortLevel {
 impl EffortLevel {
     /// Maps a ZDX thinking level to Anthropic's `output_config.effort`.
     ///
-    /// Model-dependent: 4.6 / Sonnet 4.6 / Opus 4.5 collapse `Minimal`+`Low`
-    /// and cap at `high`; newer models use a one-step shift up to `max`.
+    /// Model-dependent: 4.6 models skip `xhigh`, while Opus 4.5 caps at
+    /// `high`. Newer models use the shared effort names one-to-one.
     /// Returns `None` when thinking is off. Accepts provider-prefixed IDs
     /// (e.g. `claude-cli:claude-opus-4-7`).
     pub(crate) fn from_thinking_level(level: ThinkingLevel, model: &str) -> Option<Self> {
@@ -71,26 +71,33 @@ impl EffortLevel {
 
         let normalized = model.rsplit(':').next().unwrap_or(model);
 
-        if normalized.starts_with("claude-opus-4-6")
-            || normalized.starts_with("claude-sonnet-4-6")
-            || normalized.starts_with("claude-opus-4-5")
+        if normalized.starts_with("claude-opus-4-6") || normalized.starts_with("claude-sonnet-4-6")
         {
             return Some(match level {
                 ThinkingLevel::Off => unreachable!(),
-                ThinkingLevel::Minimal | ThinkingLevel::Low => Self::Low,
+                ThinkingLevel::Low => Self::Low,
                 ThinkingLevel::Medium => Self::Medium,
                 ThinkingLevel::High => Self::High,
-                ThinkingLevel::XHigh => Self::Max,
+                ThinkingLevel::XHigh | ThinkingLevel::Max => Self::Max,
+            });
+        }
+
+        if normalized.starts_with("claude-opus-4-5") {
+            return Some(match level {
+                ThinkingLevel::Off => unreachable!(),
+                ThinkingLevel::Low => Self::Low,
+                ThinkingLevel::Medium => Self::Medium,
+                ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max => Self::High,
             });
         }
 
         Some(match level {
             ThinkingLevel::Off => unreachable!(),
-            ThinkingLevel::Minimal => Self::Low,
-            ThinkingLevel::Low => Self::Medium,
-            ThinkingLevel::Medium => Self::High,
-            ThinkingLevel::High => Self::XHigh,
-            ThinkingLevel::XHigh => Self::Max,
+            ThinkingLevel::Low => Self::Low,
+            ThinkingLevel::Medium => Self::Medium,
+            ThinkingLevel::High => Self::High,
+            ThinkingLevel::XHigh => Self::XHigh,
+            ThinkingLevel::Max => Self::Max,
         })
     }
 }
@@ -410,43 +417,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn effort_opus_47_uses_one_to_one_shift_with_xhigh() {
+    fn effort_opus_47_uses_shared_names_one_to_one() {
         let m = "claude-opus-4-7";
         assert_eq!(
             EffortLevel::from_thinking_level(ThinkingLevel::Off, m),
             None
         );
         assert_eq!(
-            EffortLevel::from_thinking_level(ThinkingLevel::Minimal, m),
+            EffortLevel::from_thinking_level(ThinkingLevel::Low, m),
             Some(EffortLevel::Low)
         );
         assert_eq!(
-            EffortLevel::from_thinking_level(ThinkingLevel::Low, m),
+            EffortLevel::from_thinking_level(ThinkingLevel::Medium, m),
             Some(EffortLevel::Medium)
         );
         assert_eq!(
-            EffortLevel::from_thinking_level(ThinkingLevel::Medium, m),
+            EffortLevel::from_thinking_level(ThinkingLevel::High, m),
             Some(EffortLevel::High)
         );
         assert_eq!(
-            EffortLevel::from_thinking_level(ThinkingLevel::High, m),
+            EffortLevel::from_thinking_level(ThinkingLevel::XHigh, m),
             Some(EffortLevel::XHigh)
         );
         assert_eq!(
-            EffortLevel::from_thinking_level(ThinkingLevel::XHigh, m),
+            EffortLevel::from_thinking_level(ThinkingLevel::Max, m),
             Some(EffortLevel::Max)
         );
     }
 
     #[test]
-    fn effort_opus_48_uses_one_to_one_shift_with_xhigh() {
+    fn effort_opus_48_uses_shared_names_one_to_one() {
         let m = "claude-opus-4-8";
         assert_eq!(
             EffortLevel::from_thinking_level(ThinkingLevel::High, m),
-            Some(EffortLevel::XHigh)
+            Some(EffortLevel::High)
         );
         assert_eq!(
             EffortLevel::from_thinking_level(ThinkingLevel::XHigh, m),
+            Some(EffortLevel::XHigh)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::Max, m),
             Some(EffortLevel::Max)
         );
     }
@@ -455,23 +466,23 @@ mod tests {
     fn effort_fable_5_uses_opus_48_mapping() {
         let m = "claude-fable-5";
         assert_eq!(
-            EffortLevel::from_thinking_level(ThinkingLevel::Minimal, m),
+            EffortLevel::from_thinking_level(ThinkingLevel::Low, m),
             Some(EffortLevel::Low)
         );
         assert_eq!(
-            EffortLevel::from_thinking_level(ThinkingLevel::Low, m),
+            EffortLevel::from_thinking_level(ThinkingLevel::Medium, m),
             Some(EffortLevel::Medium)
         );
         assert_eq!(
-            EffortLevel::from_thinking_level(ThinkingLevel::Medium, m),
+            EffortLevel::from_thinking_level(ThinkingLevel::High, m),
             Some(EffortLevel::High)
         );
         assert_eq!(
-            EffortLevel::from_thinking_level(ThinkingLevel::High, m),
+            EffortLevel::from_thinking_level(ThinkingLevel::XHigh, m),
             Some(EffortLevel::XHigh)
         );
         assert_eq!(
-            EffortLevel::from_thinking_level(ThinkingLevel::XHigh, m),
+            EffortLevel::from_thinking_level(ThinkingLevel::Max, m),
             Some(EffortLevel::Max)
         );
     }
@@ -480,27 +491,27 @@ mod tests {
     fn effort_unknown_future_model_defaults_to_five_levels() {
         let m = "claude-opus-5";
         assert_eq!(
-            EffortLevel::from_thinking_level(ThinkingLevel::Minimal, m),
+            EffortLevel::from_thinking_level(ThinkingLevel::Low, m),
             Some(EffortLevel::Low)
         );
         assert_eq!(
             EffortLevel::from_thinking_level(ThinkingLevel::High, m),
-            Some(EffortLevel::XHigh)
+            Some(EffortLevel::High)
         );
         assert_eq!(
             EffortLevel::from_thinking_level(ThinkingLevel::XHigh, m),
+            Some(EffortLevel::XHigh)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::Max, m),
             Some(EffortLevel::Max)
         );
     }
 
     #[test]
-    fn effort_opus_46_collapses_minimal_low_and_skips_xhigh() {
+    fn effort_opus_46_skips_xhigh() {
         let m = "claude-opus-4-6";
         // 4.6 has no `xhigh`; High must stay at `high` (not be promoted).
-        assert_eq!(
-            EffortLevel::from_thinking_level(ThinkingLevel::Minimal, m),
-            Some(EffortLevel::Low)
-        );
         assert_eq!(
             EffortLevel::from_thinking_level(ThinkingLevel::Low, m),
             Some(EffortLevel::Low)
@@ -515,6 +526,10 @@ mod tests {
         );
         assert_eq!(
             EffortLevel::from_thinking_level(ThinkingLevel::XHigh, m),
+            Some(EffortLevel::Max)
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(ThinkingLevel::Max, m),
             Some(EffortLevel::Max)
         );
     }
@@ -524,9 +539,9 @@ mod tests {
         // claude-cli:claude-opus-4-7 should still hit the 4.7 branch.
         assert_eq!(
             EffortLevel::from_thinking_level(ThinkingLevel::High, "claude-cli:claude-opus-4-7"),
-            Some(EffortLevel::XHigh)
+            Some(EffortLevel::High)
         );
-        // And 4.6 should still collapse High → high under the cli prefix.
+        // And 4.6 should still keep High → high under the cli prefix.
         assert_eq!(
             EffortLevel::from_thinking_level(ThinkingLevel::High, "claude-cli:claude-opus-4-6"),
             Some(EffortLevel::High)

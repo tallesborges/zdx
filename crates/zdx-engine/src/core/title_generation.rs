@@ -23,7 +23,7 @@ pub async fn generate_title(message: &str, title_model: &str, root: &Path) -> Re
     let options = ExecSubagentOptions {
         model: Some(title_model.to_string()),
         system_prompt: None,
-        thinking_level: Some(ThinkingLevel::Minimal),
+        thinking_level: Some(ThinkingLevel::Low),
         no_tools: true,
         no_system_prompt: true,
         tools_override: None,

@@ -24,10 +24,10 @@ pub use responses_ws::OpenAIResponsesWsClient;
 pub(crate) fn reasoning_effort_from_thinking_level(level: ThinkingLevel) -> Option<&'static str> {
     match level {
         ThinkingLevel::Off => None,
-        ThinkingLevel::Minimal | ThinkingLevel::Low => Some("low"),
+        ThinkingLevel::Low => Some("low"),
         ThinkingLevel::Medium => Some("medium"),
         ThinkingLevel::High => Some("high"),
-        ThinkingLevel::XHigh => Some("xhigh"),
+        ThinkingLevel::XHigh | ThinkingLevel::Max => Some("xhigh"),
     }
 }
 
@@ -35,9 +35,55 @@ pub(crate) fn reasoning_effort_from_thinking_level(level: ThinkingLevel) -> Opti
 /// Codex paths). Unlike the shared mapping, `Off` sends an explicit `"none"`:
 /// omitting the field makes GPT-5.5/5.6 fall back to their `medium` default
 /// instead of disabling reasoning.
-pub(crate) fn responses_reasoning_effort(level: ThinkingLevel) -> Option<&'static str> {
+pub(crate) fn responses_reasoning_effort(
+    level: ThinkingLevel,
+    model: &str,
+) -> Option<&'static str> {
     match level {
         ThinkingLevel::Off => Some("none"),
+        ThinkingLevel::Max
+            if model
+                .rsplit(':')
+                .next()
+                .is_some_and(|id| id.starts_with("gpt-5.6")) =>
+        {
+            Some("max")
+        }
         other => reasoning_effort_from_thinking_level(other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use zdx_types::ThinkingLevel;
+
+    use super::{reasoning_effort_from_thinking_level, responses_reasoning_effort};
+
+    #[test]
+    fn generic_openai_compatible_max_clamps_to_xhigh() {
+        assert_eq!(
+            reasoning_effort_from_thinking_level(ThinkingLevel::Max),
+            Some("xhigh")
+        );
+    }
+
+    #[test]
+    fn first_party_openai_max_is_model_aware() {
+        assert_eq!(
+            responses_reasoning_effort(ThinkingLevel::Max, "gpt-5.6-sol"),
+            Some("max")
+        );
+        assert_eq!(
+            responses_reasoning_effort(ThinkingLevel::Max, "openai:gpt-5.6"),
+            Some("max")
+        );
+        assert_eq!(
+            responses_reasoning_effort(ThinkingLevel::Max, "gpt-5.5"),
+            Some("xhigh")
+        );
+        assert_eq!(
+            responses_reasoning_effort(ThinkingLevel::Off, "gpt-5.6-sol"),
+            Some("none")
+        );
     }
 }

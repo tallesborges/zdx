@@ -187,11 +187,11 @@ pub(crate) fn parse_thinking_command(text: &str) -> Option<ThinkingSubcommand> {
 fn parse_thinking_level(level: &str) -> Option<zdx_engine::config::ThinkingLevel> {
     match level.to_ascii_lowercase().as_str() {
         "off" => Some(zdx_engine::config::ThinkingLevel::Off),
-        "minimal" => Some(zdx_engine::config::ThinkingLevel::Minimal),
-        "low" => Some(zdx_engine::config::ThinkingLevel::Low),
+        "minimal" | "low" => Some(zdx_engine::config::ThinkingLevel::Low),
         "medium" => Some(zdx_engine::config::ThinkingLevel::Medium),
         "high" => Some(zdx_engine::config::ThinkingLevel::High),
         "xhigh" => Some(zdx_engine::config::ThinkingLevel::XHigh),
+        "max" => Some(zdx_engine::config::ThinkingLevel::Max),
         _ => None,
     }
 }
@@ -315,6 +315,18 @@ mod tests {
             parse_thinking_command("/thinking set medium"),
             Some(super::ThinkingSubcommand::Set(
                 zdx_engine::config::ThinkingLevel::Medium
+            ))
+        ));
+        assert!(matches!(
+            parse_thinking_command("/thinking set max"),
+            Some(super::ThinkingSubcommand::Set(
+                zdx_engine::config::ThinkingLevel::Max
+            ))
+        ));
+        assert!(matches!(
+            parse_thinking_command("/thinking set minimal"),
+            Some(super::ThinkingSubcommand::Set(
+                zdx_engine::config::ThinkingLevel::Low
             ))
         ));
         assert!(matches!(

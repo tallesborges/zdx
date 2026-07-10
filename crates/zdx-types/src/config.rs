@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Thinking level for extended thinking feature.
 ///
-/// Controls how much reasoning Claude shows before responding.
+/// Controls how much reasoning effort providers use before responding.
 /// Higher levels use more tokens but provide deeper reasoning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -12,29 +12,29 @@ pub enum ThinkingLevel {
     /// No reasoning (default)
     #[default]
     Off,
-    /// Very brief reasoning (~5% of max tokens)
-    Minimal,
-    /// Light reasoning (~20% of max tokens)
+    /// Low reasoning effort
+    #[serde(alias = "minimal")]
     Low,
-    /// Moderate reasoning (~50% of max tokens)
+    /// Medium reasoning effort
     Medium,
-    /// Deep reasoning (~80% of max tokens)
+    /// High reasoning effort
     High,
-    /// Very deep reasoning (~95% of max tokens)
+    /// Extended reasoning effort
     XHigh,
+    /// Maximum available reasoning
+    Max,
 }
 
 impl ThinkingLevel {
-    /// Returns the effort percentage of max tokens for this thinking level.
+    /// Returns the token-budget percentage for providers that require one.
     /// Returns None for Off (thinking disabled).
     pub fn effort_percent(&self) -> Option<u32> {
         match self {
             ThinkingLevel::Off => None,
-            ThinkingLevel::Minimal => Some(5),
             ThinkingLevel::Low => Some(20),
             ThinkingLevel::Medium => Some(50),
             ThinkingLevel::High => Some(80),
-            ThinkingLevel::XHigh => Some(95),
+            ThinkingLevel::XHigh | ThinkingLevel::Max => Some(95),
         }
     }
 
@@ -47,11 +47,11 @@ impl ThinkingLevel {
     pub fn description(&self) -> &'static str {
         match self {
             ThinkingLevel::Off => "No reasoning",
-            ThinkingLevel::Minimal => "Very brief (~5%)",
-            ThinkingLevel::Low => "Light (~20%)",
-            ThinkingLevel::Medium => "Moderate (~50%)",
-            ThinkingLevel::High => "Deep (~80%)",
-            ThinkingLevel::XHigh => "Very deep (~95%)",
+            ThinkingLevel::Low => "Fast and efficient",
+            ThinkingLevel::Medium => "Balanced",
+            ThinkingLevel::High => "Deep",
+            ThinkingLevel::XHigh => "Extended",
+            ThinkingLevel::Max => "Maximum capability",
         }
     }
 
@@ -59,11 +59,11 @@ impl ThinkingLevel {
     pub fn display_name(&self) -> &'static str {
         match self {
             ThinkingLevel::Off => "off",
-            ThinkingLevel::Minimal => "minimal",
             ThinkingLevel::Low => "low",
             ThinkingLevel::Medium => "medium",
             ThinkingLevel::High => "high",
             ThinkingLevel::XHigh => "xhigh",
+            ThinkingLevel::Max => "max",
         }
     }
 
@@ -71,11 +71,11 @@ impl ThinkingLevel {
     pub fn all() -> &'static [ThinkingLevel] {
         &[
             ThinkingLevel::Off,
-            ThinkingLevel::Minimal,
             ThinkingLevel::Low,
             ThinkingLevel::Medium,
             ThinkingLevel::High,
             ThinkingLevel::XHigh,
+            ThinkingLevel::Max,
         ]
     }
 
@@ -114,5 +114,17 @@ impl TextVerbosity {
             TextVerbosity::Medium => "medium",
             TextVerbosity::High => "high",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ThinkingLevel;
+
+    #[test]
+    fn legacy_minimal_deserializes_as_low() {
+        let level: ThinkingLevel = serde_json::from_str("\"minimal\"").unwrap();
+        assert_eq!(level, ThinkingLevel::Low);
+        assert_eq!(serde_json::to_string(&level).unwrap(), "\"low\"");
     }
 }

@@ -138,13 +138,13 @@ fn require_non_empty(label: &str, value: &str) -> Result<String> {
 fn parse_thinking_level(value: &str) -> Result<ThinkingLevel> {
     match value.trim().to_ascii_lowercase().as_str() {
         "off" => Ok(ThinkingLevel::Off),
-        "minimal" => Ok(ThinkingLevel::Minimal),
-        "low" => Ok(ThinkingLevel::Low),
+        "minimal" | "low" => Ok(ThinkingLevel::Low),
         "medium" => Ok(ThinkingLevel::Medium),
         "high" => Ok(ThinkingLevel::High),
         "xhigh" => Ok(ThinkingLevel::XHigh),
+        "max" => Ok(ThinkingLevel::Max),
         other => bail!(
-            "invalid thinking level: {other} (expected off, minimal, low, medium, high, or xhigh)"
+            "invalid thinking level: {other} (expected off, low, medium, high, xhigh, or max)"
         ),
     }
 }

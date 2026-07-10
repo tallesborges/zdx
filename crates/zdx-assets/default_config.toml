@@ -15,9 +15,9 @@ model = "claude-haiku-4-5"
 tool_timeout_secs = 0
 
 # Extended thinking level
-# Controls how much reasoning the model shows before responding.
-# Higher levels allocate more output tokens to reasoning.
-# Options: off, minimal (~5%), low (~20%), medium (~50%), high (~80%), xhigh (~95%)
+# Controls how much reasoning effort the model uses before responding.
+# Providers map unsupported levels to their nearest available effort.
+# Options: off, low, medium, high, xhigh, max
 # Note: when max_tokens is set, it is auto-adjusted to ensure room for both thinking and response.
 thinking_level = "off"
 handoff_model = "gemini:gemini-3-flash-preview"
@@ -113,10 +113,10 @@ websocket = false
 # Model used by the Telegram bot
 model = "claude-cli:claude-opus-4-6"
 # Thinking level used by the Telegram bot
-thinking_level = "minimal"
+thinking_level = "low"
 
-# OpenAI reasoning effort (used by Codex models).
-# Options: low, medium, high, xhigh
+# Shared reasoning effort used across providers.
+# Options: low, medium, high, xhigh, max
 
 # Provider configuration.
 # api_key: Optional API key (overrides environment variable)

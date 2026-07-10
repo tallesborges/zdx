@@ -37,7 +37,7 @@ struct Cli {
     #[arg(long)]
     model: Option<String>,
 
-    /// Override the thinking level (off, minimal, low, medium, high, xhigh)
+    /// Override the thinking level (off, low, medium, high, xhigh, max)
     #[arg(long)]
     thinking: Option<String>,
 
@@ -129,7 +129,7 @@ enum Commands {
         #[arg(short, long)]
         model: Option<String>,
 
-        /// Override the thinking level (off, minimal, low, medium, high, xhigh)
+        /// Override the thinking level (off, low, medium, high, xhigh, max)
         #[arg(short, long)]
         thinking: Option<String>,
 
@@ -590,7 +590,7 @@ enum BotCommands {
         #[arg(long, value_name = "MODEL")]
         model: Option<String>,
 
-        /// Thinking level for this project's bot (off, minimal, low, medium, high, xhigh)
+        /// Thinking level for this project's bot (off, low, medium, high, xhigh, max)
         #[arg(long, value_name = "LEVEL")]
         thinking: Option<String>,
     },

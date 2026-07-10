@@ -59,9 +59,9 @@ impl XaiConfig {
 
 fn reasoning_effort_from_thinking_level(level: ThinkingLevel) -> &'static str {
     match level {
-        ThinkingLevel::Off | ThinkingLevel::Minimal | ThinkingLevel::Low => "low",
+        ThinkingLevel::Off | ThinkingLevel::Low => "low",
         ThinkingLevel::Medium => "medium",
-        ThinkingLevel::High | ThinkingLevel::XHigh => "high",
+        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max => "high",
     }
 }
 
@@ -183,18 +183,18 @@ mod tests {
 
     #[test]
     fn xai_reasoning_effort_clamps_zdx_levels() {
-        for level in [
-            ThinkingLevel::Off,
-            ThinkingLevel::Minimal,
-            ThinkingLevel::Low,
-        ] {
+        for level in [ThinkingLevel::Off, ThinkingLevel::Low] {
             assert_eq!(reasoning_effort_from_thinking_level(level), "low");
         }
         assert_eq!(
             reasoning_effort_from_thinking_level(ThinkingLevel::Medium),
             "medium"
         );
-        for level in [ThinkingLevel::High, ThinkingLevel::XHigh] {
+        for level in [
+            ThinkingLevel::High,
+            ThinkingLevel::XHigh,
+            ThinkingLevel::Max,
+        ] {
             assert_eq!(reasoning_effort_from_thinking_level(level), "high");
         }
     }
