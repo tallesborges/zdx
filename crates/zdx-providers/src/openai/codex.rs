@@ -316,7 +316,7 @@ pub fn build(
 ) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
     Ok(Box::new(OpenAICodexClient::new(OpenAICodexConfig::new(
         ctx.model.to_string(),
-        super::responses_reasoning_effort(ctx.thinking_level).map(str::to_owned),
+        super::responses_reasoning_effort(ctx.thinking_level, ctx.model).map(str::to_owned),
         ctx.text_verbosity.or(ctx.provider_text_verbosity),
         ctx.cache_key.clone(),
         ctx.service_tier.clone(),

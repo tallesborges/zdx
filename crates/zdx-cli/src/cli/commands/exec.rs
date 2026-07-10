@@ -98,13 +98,13 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
 pub(super) fn parse_thinking_level(s: &str) -> Result<ThinkingLevel> {
     match s.to_lowercase().as_str() {
         "off" => Ok(ThinkingLevel::Off),
-        "minimal" => Ok(ThinkingLevel::Minimal),
-        "low" => Ok(ThinkingLevel::Low),
+        "minimal" | "low" => Ok(ThinkingLevel::Low),
         "medium" => Ok(ThinkingLevel::Medium),
         "high" => Ok(ThinkingLevel::High),
         "xhigh" => Ok(ThinkingLevel::XHigh),
+        "max" => Ok(ThinkingLevel::Max),
         _ => anyhow::bail!(
-            "Invalid thinking level '{s}'. Valid options: off, minimal, low, medium, high, xhigh"
+            "Invalid thinking level '{s}'. Valid options: off, low, medium, high, xhigh, max"
         ),
     }
 }

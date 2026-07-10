@@ -38,7 +38,7 @@ pub async fn generate_tldr(thread_id: &str, tldr_model: &str, root: &Path) -> Re
     let options = ExecSubagentOptions {
         model: Some(tldr_model.to_string()),
         system_prompt: None,
-        thinking_level: Some(ThinkingLevel::Minimal),
+        thinking_level: Some(ThinkingLevel::Low),
         no_tools: true,
         no_system_prompt: true,
         tools_override: None,

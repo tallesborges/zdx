@@ -28,7 +28,7 @@ pub struct SkillSourceToggles {
 pub use zdx_types::TextVerbosity;
 /// Thinking level for extended thinking feature.
 ///
-/// Controls how much reasoning Claude shows before responding.
+/// Controls how much reasoning effort providers use before responding.
 /// Higher levels use more tokens but provide deeper reasoning.
 pub use zdx_types::ThinkingLevel;
 
@@ -150,7 +150,7 @@ impl Default for TelegramConfig {
             allowlist_user_ids: Vec::new(),
             allowlist_chat_ids: Vec::new(),
             model: "claude-cli:claude-opus-4-6".to_string(),
-            thinking_level: ThinkingLevel::Minimal,
+            thinking_level: ThinkingLevel::Low,
             profiles: BTreeMap::new(),
         }
     }
@@ -2332,11 +2332,11 @@ max_tokens = 2048
     #[test]
     fn test_thinking_level_effort_percent() {
         assert_eq!(ThinkingLevel::Off.effort_percent(), None);
-        assert_eq!(ThinkingLevel::Minimal.effort_percent(), Some(5));
         assert_eq!(ThinkingLevel::Low.effort_percent(), Some(20));
         assert_eq!(ThinkingLevel::Medium.effort_percent(), Some(50));
         assert_eq!(ThinkingLevel::High.effort_percent(), Some(80));
         assert_eq!(ThinkingLevel::XHigh.effort_percent(), Some(95));
+        assert_eq!(ThinkingLevel::Max.effort_percent(), Some(95));
     }
 
     /// `ThinkingLevel`: `compute_reasoning_budget` returns correct values.
@@ -2363,15 +2363,19 @@ max_tokens = 2048
             Some(9500)
         );
 
-        // Minimal (5%) of 5000 = 250, but clamped to min 1024
+        // Low (20%) of 5000 = 1000, but clamped to min 1024
         assert_eq!(
-            ThinkingLevel::Minimal.compute_reasoning_budget(5000),
+            ThinkingLevel::Low.compute_reasoning_budget(5000),
             Some(1024)
         );
 
         // No max clamp - XHigh (95%) of 200000 = 190000
         assert_eq!(
             ThinkingLevel::XHigh.compute_reasoning_budget(200_000),
+            Some(190_000)
+        );
+        assert_eq!(
+            ThinkingLevel::Max.compute_reasoning_budget(200_000),
             Some(190_000)
         );
     }
@@ -2382,6 +2386,7 @@ max_tokens = 2048
         assert_eq!(ThinkingLevel::Off.display_name(), "off");
         assert_eq!(ThinkingLevel::Medium.display_name(), "medium");
         assert_eq!(ThinkingLevel::High.display_name(), "high");
+        assert_eq!(ThinkingLevel::Max.display_name(), "max");
     }
 
     /// `ThinkingLevel`: `all()` returns all levels.
@@ -2390,7 +2395,7 @@ max_tokens = 2048
         let all = ThinkingLevel::all();
         assert_eq!(all.len(), 6);
         assert_eq!(all[0], ThinkingLevel::Off);
-        assert_eq!(all[5], ThinkingLevel::XHigh);
+        assert_eq!(all[5], ThinkingLevel::Max);
     }
 
     /// Thinking: `effective_max_tokens` returns raw value when thinking disabled.
@@ -2661,11 +2666,11 @@ max_tokens = 4096
         assert_eq!(config.model, "test-model");
 
         // Change to different level
-        Config::save_thinking_level_to(&config_path, ThinkingLevel::Minimal).unwrap();
+        Config::save_thinking_level_to(&config_path, ThinkingLevel::Max).unwrap();
 
         // Reload and verify again
         let config = Config::load_from(&config_path).unwrap();
-        assert_eq!(config.thinking_level, ThinkingLevel::Minimal);
+        assert_eq!(config.thinking_level, ThinkingLevel::Max);
     }
 
     /// `filter_tools`: returns all tools when no filtering configured.
@@ -2834,7 +2839,7 @@ max_tokens = 4096
     fn test_telegram_config_defaults() {
         let config = TelegramConfig::default();
         assert_eq!(config.model, "claude-cli:claude-opus-4-6");
-        assert_eq!(config.thinking_level, ThinkingLevel::Minimal);
+        assert_eq!(config.thinking_level, ThinkingLevel::Low);
         assert!(config.profiles.is_empty());
     }
 

@@ -105,7 +105,6 @@ impl GeminiThinkingConfig {
         }
 
         // Gemini 2.5 (and older) models use thinkingBudget.
-        let is_flash_lite = model.contains("flash-lite");
         let is_25_pro = model.contains("2.5-pro") || model.contains("2.5 pro");
 
         match level {
@@ -115,14 +114,6 @@ impl GeminiThinkingConfig {
                     Self::Budget(128)
                 } else {
                     Self::Budget(0)
-                }
-            }
-            ThinkingLevel::Minimal => {
-                // Flash Lite minimum is 512; other 2.5 models start at 1024.
-                if is_flash_lite {
-                    Self::Budget(512)
-                } else {
-                    Self::Budget(1024)
                 }
             }
             ThinkingLevel::Low => Self::Budget(2048),
@@ -136,19 +127,25 @@ impl GeminiThinkingConfig {
                     Self::Budget(24576)
                 }
             }
+            ThinkingLevel::Max => {
+                if is_25_pro {
+                    Self::Budget(32768)
+                } else {
+                    Self::Budget(24576)
+                }
+            }
         }
     }
 
     /// Resolves a Gemini 3 `thinkingLevel` string, clamping unsupported levels.
     ///
     /// Clamping rules:
-    /// - `Off` / `Minimal`: pick the lowest supported level (minimal → low →
-    ///   medium → high).
+    /// - `Off`: pick the lowest supported level (minimal → low → medium → high).
     /// - `Low`: prefer `low`; otherwise clamp down to `minimal` if available,
     ///   else up to `medium`, else `high`.
     /// - `Medium`: prefer `medium`; otherwise clamp **up** to `high` (closer
     ///   than clamping all the way down to `minimal`/`low`).
-    /// - `High` / `XHigh`: always `high`.
+    /// - `High` / `XHigh` / `Max`: always `high`.
     fn gemini_3_level(level: ThinkingLevel, caps: GeminiCapabilities) -> Self {
         let lowest_supported = if caps.supports_minimal {
             "minimal"
@@ -161,7 +158,7 @@ impl GeminiThinkingConfig {
         };
 
         let chosen = match level {
-            ThinkingLevel::Off | ThinkingLevel::Minimal => lowest_supported,
+            ThinkingLevel::Off => lowest_supported,
             ThinkingLevel::Low => {
                 if caps.supports_low {
                     "low"
@@ -181,7 +178,7 @@ impl GeminiThinkingConfig {
                     "high"
                 }
             }
-            ThinkingLevel::High | ThinkingLevel::XHigh => "high",
+            ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max => "high",
         };
 
         Self::Level(chosen.to_string())
@@ -691,13 +688,6 @@ mod tests {
             GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Off, "gemini-3-pro-preview");
         assert!(matches!(config, GeminiThinkingConfig::Level(ref l) if l == "low"));
 
-        // Minimal -> low (Pro doesn't support "minimal"; clamp to lowest supported)
-        let config = GeminiThinkingConfig::from_thinking_level(
-            ThinkingLevel::Minimal,
-            "gemini-3-pro-preview",
-        );
-        assert!(matches!(config, GeminiThinkingConfig::Level(ref l) if l == "low"));
-
         // Low -> low
         let config =
             GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Low, "gemini-3-pro-preview");
@@ -725,10 +715,8 @@ mod tests {
         );
         assert!(matches!(config, GeminiThinkingConfig::Level(ref l) if l == "medium"));
 
-        let config = GeminiThinkingConfig::from_thinking_level(
-            ThinkingLevel::Minimal,
-            "gemini-3.1-pro-preview",
-        );
+        let config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Low, "gemini-3.1-pro-preview");
         assert!(matches!(config, GeminiThinkingConfig::Level(ref l) if l == "low"));
     }
 
@@ -740,9 +728,6 @@ mod tests {
         let model = "gemini-3.1-flash-image-preview";
 
         let config = GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Off, model);
-        assert!(matches!(config, GeminiThinkingConfig::Level(ref l) if l == "minimal"));
-
-        let config = GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Minimal, model);
         assert!(matches!(config, GeminiThinkingConfig::Level(ref l) if l == "minimal"));
 
         let config = GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Low, model);
@@ -762,11 +747,11 @@ mod tests {
 
         for level in [
             ThinkingLevel::Off,
-            ThinkingLevel::Minimal,
             ThinkingLevel::Low,
             ThinkingLevel::Medium,
             ThinkingLevel::High,
             ThinkingLevel::XHigh,
+            ThinkingLevel::Max,
         ] {
             let config = GeminiThinkingConfig::from_thinking_level(level, model);
             assert!(
@@ -784,12 +769,10 @@ mod tests {
             GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Off, "gemini-3-flash-preview");
         assert!(matches!(config, GeminiThinkingConfig::Level(ref l) if l == "minimal"));
 
-        // Minimal -> minimal
-        let config = GeminiThinkingConfig::from_thinking_level(
-            ThinkingLevel::Minimal,
-            "gemini-3-flash-preview",
-        );
-        assert!(matches!(config, GeminiThinkingConfig::Level(ref l) if l == "minimal"));
+        // Low -> low
+        let config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Low, "gemini-3-flash-preview");
+        assert!(matches!(config, GeminiThinkingConfig::Level(ref l) if l == "low"));
 
         // Medium -> medium (Flash supports medium)
         let config = GeminiThinkingConfig::from_thinking_level(
@@ -823,15 +806,12 @@ mod tests {
         assert!(matches!(config, GeminiThinkingConfig::Budget(24576)));
     }
 
-    /// Gemini 2.5 Flash Lite: minimal starts at 512.
+    /// Gemini 2.5 Flash Lite uses the shared low budget.
     #[test]
     fn test_thinking_config_gemini_25_flash_lite() {
-        // Minimal -> 512 (flash-lite minimum)
-        let config = GeminiThinkingConfig::from_thinking_level(
-            ThinkingLevel::Minimal,
-            "gemini-2.5-flash-lite",
-        );
-        assert!(matches!(config, GeminiThinkingConfig::Budget(512)));
+        let config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Low, "gemini-2.5-flash-lite");
+        assert!(matches!(config, GeminiThinkingConfig::Budget(2048)));
     }
 
     /// `GeminiThinkingConfig::to_json` produces correct format.
@@ -1704,9 +1684,9 @@ mod integration_tests {
         let tools = vec![];
         let system = Some("You are helpful");
 
-        // Gemini 2.5 Flash with minimal thinking
+        // Gemini 2.5 Flash with low thinking
         let thinking_config =
-            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Minimal, "gemini-2.5-flash");
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Low, "gemini-2.5-flash");
 
         let request = build_cloud_code_assist_request(
             &messages,
@@ -1751,11 +1731,9 @@ mod integration_tests {
         let tools = vec![];
         let system = Some("You are helpful");
 
-        // Gemini 3 Flash with minimal thinking
-        let thinking_config = GeminiThinkingConfig::from_thinking_level(
-            ThinkingLevel::Minimal,
-            "gemini-3-flash-preview",
-        );
+        // Gemini 3 Flash with low thinking
+        let thinking_config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Low, "gemini-3-flash-preview");
 
         let request = build_cloud_code_assist_request(
             &messages,
@@ -1800,11 +1778,9 @@ mod integration_tests {
         let tools = vec![];
         let system = Some("You are helpful");
 
-        // Gemini 3 Flash with minimal thinking
-        let thinking_config = GeminiThinkingConfig::from_thinking_level(
-            ThinkingLevel::Minimal,
-            "gemini-3-flash-preview",
-        );
+        // Gemini 3 Flash with low thinking
+        let thinking_config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Low, "gemini-3-flash-preview");
 
         let request = build_gemini_request(
             &messages,
@@ -1991,12 +1967,12 @@ mod integration_tests {
         assert!(matches!(config, GeminiThinkingConfig::Budget(32768)));
     }
 
-    /// Non-flash-lite Gemini 2.5: Minimal maps to 1024
+    /// Non-flash-lite Gemini 2.5: Low maps to 2048
     #[test]
-    fn test_thinking_config_gemini_25_flash_minimal() {
+    fn test_thinking_config_gemini_25_flash_low() {
         let config =
-            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Minimal, "gemini-2.5-flash");
-        assert!(matches!(config, GeminiThinkingConfig::Budget(1024)));
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Low, "gemini-2.5-flash");
+        assert!(matches!(config, GeminiThinkingConfig::Budget(2048)));
     }
 
     /// Gemini 3 `XHigh` maps to high (since `XHigh` isn't a Gemini level)

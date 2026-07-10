@@ -573,11 +573,11 @@ async fn handle_thinking_callback(
         let is_general = scope == "general";
         let level = match level_str {
             "off" => zdx_engine::config::ThinkingLevel::Off,
-            "minimal" => zdx_engine::config::ThinkingLevel::Minimal,
-            "low" => zdx_engine::config::ThinkingLevel::Low,
+            "minimal" | "low" => zdx_engine::config::ThinkingLevel::Low,
             "medium" => zdx_engine::config::ThinkingLevel::Medium,
             "high" => zdx_engine::config::ThinkingLevel::High,
             "xhigh" => zdx_engine::config::ThinkingLevel::XHigh,
+            "max" => zdx_engine::config::ThinkingLevel::Max,
             _ => {
                 let _ = client
                     .answer_callback_query(&callback.id, Some("Unknown thinking level"))
