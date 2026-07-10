@@ -327,6 +327,7 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 - Named subagents are markdown files with YAML frontmatter plus a standalone prompt body.
 - Discovery order/override precedence: built-in → `~/.zdx/subagents/` → project `.zdx/subagents/` (later sources override earlier by name).
 - `invoke_subagent` accepts `subagent: <name>`. When omitted, it uses the default/base system prompt behavior.
+- `invoke_subagent` also accepts optional per-invocation `model` and `thinking_level` overrides. Resolution precedence is explicit invocation override → named subagent profile → parent/default configuration; profile prompt, tools, and context behavior remain unchanged.
 - Reserved runtime alias `task` explicitly selects that same default delegated-worker behavior using the normal base prompt + context pipeline.
 - The `task` alias is intended for complex multi-step, output-heavy, or independently parallelizable delegated work; direct execution should stay the default for small tasks.
 - Delegated child runs should be prompted self-sufficiently: the parent should include the goal, relevant context, constraints/non-goals, expected output, and verification when relevant rather than assuming the child inherits its implicit reasoning state.
