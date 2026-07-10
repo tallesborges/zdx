@@ -10,12 +10,11 @@ use zdx_types::config::ThinkingLevel;
 
 use super::shared::{
     CloudCodeRequestParams, GeminiThinkingConfig, build_cloud_code_assist_request,
-    classify_reqwest_error,
 };
 use super::sse::GeminiSseParser;
 use crate::debug_metrics::maybe_wrap_with_metrics;
 use crate::oauth::google_antigravity as oauth_antigravity;
-use crate::shared::merge_system_prompt;
+use crate::shared::{classify_reqwest_error, merge_system_prompt};
 use crate::{ChatMessage, ProviderError, ProviderStream};
 
 const API_ENDPOINT: &str = "https://daily-cloudcode-pa.googleapis.com";

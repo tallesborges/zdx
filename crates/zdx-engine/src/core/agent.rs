@@ -3317,10 +3317,8 @@ mod tests {
 
         // Mirrors the message shape produced by the OpenAI/Anthropic/Gemini
         // SSE parsers when the underlying byte stream errors mid-poll.
-        let transport_err = ProviderError::new(
-            ProviderErrorKind::Timeout,
-            "SSE stream network error: connection reset by peer",
-        );
+        let transport_err =
+            ProviderError::transport("SSE stream network error: connection reset by peer");
         let events: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![Err(transport_err)];
         let provider_stream: ProviderStream = Box::pin(stream::iter(events));
 
@@ -3341,7 +3339,7 @@ mod tests {
             &err,
             TurnError::Provider(p)
                 if p.is_retryable()
-                    && p.kind == ProviderErrorKind::Timeout
+                    && p.kind == ProviderErrorKind::Transport
                     && p.message.contains("network error")
         ));
         assert!(

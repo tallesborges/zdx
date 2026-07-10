@@ -16,6 +16,7 @@ use super::image_generation::{
 use crate::oauth::openai_codex as oauth_codex;
 use crate::openai::responses::{ResponsesConfig, send_responses_stream};
 use crate::openai::responses_ws::{OpenAIResponsesWsClient, WsHeaderFactory};
+use crate::shared::classify_reqwest_error;
 use crate::{ProviderKind, ProviderStream};
 
 const RESPONSES_PATH: &str = "/codex/responses";
@@ -199,7 +200,7 @@ impl OpenAICodexClient {
             .json(&request)
             .send()
             .await
-            .map_err(|e| crate::ProviderError::timeout(format!("Request failed: {e}")))?;
+            .map_err(|e| classify_reqwest_error(&e))?;
 
         let status = response.status();
         let body = response.text().await.unwrap_or_default();

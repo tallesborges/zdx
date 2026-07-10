@@ -10,6 +10,7 @@ use super::image_generation::{
 };
 use super::responses_ws::OpenAIResponsesWsClient;
 use crate::openai::responses::{ResponsesConfig, StreamOptions, send_responses_stream};
+use crate::shared::classify_reqwest_error;
 use crate::{ProviderKind, ProviderStream};
 
 const RESPONSES_PATH: &str = "/responses";
@@ -129,7 +130,7 @@ impl OpenAIClient {
             .json(&request)
             .send()
             .await
-            .map_err(|e| crate::ProviderError::timeout(format!("Request failed: {e}")))?;
+            .map_err(|e| classify_reqwest_error(&e))?;
 
         let status = response.status();
         let body = response.text().await.unwrap_or_default();

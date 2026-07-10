@@ -6,10 +6,10 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 use zdx_types::ToolDefinition;
 
-use super::shared::{GeminiThinkingConfig, build_gemini_request, classify_reqwest_error};
+use super::shared::{GeminiThinkingConfig, build_gemini_request};
 use super::sse::GeminiSseParser;
 use crate::debug_metrics::maybe_wrap_with_metrics;
-use crate::shared::merge_system_prompt;
+use crate::shared::{classify_reqwest_error, merge_system_prompt};
 use crate::{ChatMessage, DebugTrace, ProviderError, ProviderKind, ProviderStream, wrap_stream};
 
 /// Gemini API configuration.

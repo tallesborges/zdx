@@ -12,7 +12,7 @@ use super::types::{
     OutputConfig, StreamingMessagesRequest, SystemBlock, ThinkingConfig,
 };
 use crate::debug_metrics::maybe_wrap_with_metrics;
-use crate::shared::{ChatMessage, ProviderError, ProviderErrorKind, ProviderStream};
+use crate::shared::{ChatMessage, ProviderError, ProviderStream, classify_reqwest_error};
 use crate::{DebugTrace, wrap_stream};
 
 pub(crate) const INTERLEAVED_THINKING_BETA_HEADER: &str = "interleaved-thinking-2025-05-14";
@@ -270,18 +270,6 @@ fn sanitize_tool_use_ids(api_messages: &mut [ApiMessage]) {
                 _ => {}
             }
         }
-    }
-}
-
-fn classify_reqwest_error(e: &reqwest::Error) -> ProviderError {
-    if e.is_timeout() {
-        ProviderError::timeout(format!("Request timed out: {e}"))
-    } else if e.is_connect() {
-        ProviderError::timeout(format!("Connection failed: {e}"))
-    } else if e.is_request() {
-        ProviderError::new(ProviderErrorKind::HttpStatus, format!("Request error: {e}"))
-    } else {
-        ProviderError::new(ProviderErrorKind::HttpStatus, format!("Network error: {e}"))
     }
 }
 
