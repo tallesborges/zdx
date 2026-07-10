@@ -15,6 +15,7 @@ Scope: embedded asset content (prompts, instruction layers, default TOMLs, bundl
 - `default_models.toml`: default model registry fallback
 - `model_overrides.toml`: pinned post-fetch overrides applied by `zdx models update` (corrects stale/promo upstream pricing and limits)
 - `bundled_skills/*/`: built-in bundled skill fallbacks; `build.rs` embeds every file under this tree
+- `bundled_skills/model-dispatch/`: named-model dispatch, fan-out, and reasoning-level comparisons
 - `bundled_commands/*.md`: built-in bundled custom slash commands; `build.rs` embeds every file under this tree
 - `subagents/*.md`: built-in standalone subagent prompts (`explorer`, `oracle`)
 
