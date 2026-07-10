@@ -1075,14 +1075,7 @@ impl HistoryCell {
                     content.trim_end()
                 };
 
-                let mut lines = render_prefixed_content(
-                    prefix,
-                    display_content,
-                    width,
-                    Style::ThinkingPrefix,
-                    Style::Thinking,
-                    false,
-                );
+                let mut lines = render_thinking_markdown(prefix, display_content, width);
 
                 // Add streaming indicator if still streaming
                 if *is_streaming
@@ -1268,6 +1261,42 @@ impl HistoryCell {
         cache.insert(cell_id, width, discriminator, Rc::clone(&lines));
         lines
     }
+}
+
+fn render_thinking_markdown(prefix: &str, content: &str, width: usize) -> Vec<StyledLine> {
+    if content.trim() == "<!-- -->" {
+        return Vec::new();
+    }
+
+    let prefix_width = ratatui_width(prefix);
+    let effective_width = width.max(prefix_width + 10);
+    let content_width = effective_width.saturating_sub(prefix_width);
+    let mut lines = crate::markdown::render_markdown_preserving_soft_breaks(content, content_width);
+    let trailing_newlines = content.chars().rev().take_while(|ch| *ch == '\n').count();
+    lines.extend((0..trailing_newlines).map(|_| StyledLine::empty()));
+
+    for (index, line) in lines.iter_mut().enumerate() {
+        for span in &mut line.spans {
+            span.style = Style::Thinking;
+        }
+        line.spans.insert(
+            0,
+            StyledSpan {
+                text: if index == 0 {
+                    prefix.to_string()
+                } else {
+                    " ".repeat(prefix_width)
+                },
+                style: if index == 0 {
+                    Style::ThinkingPrefix
+                } else {
+                    Style::Plain
+                },
+            },
+        );
+    }
+
+    lines
 }
 
 #[cfg(test)]
@@ -1687,6 +1716,66 @@ mod tests {
         // Content should use Thinking style (dim/italic)
         assert!(lines[0].spans.len() >= 2);
         assert_eq!(lines[0].spans[1].style, Style::Thinking);
+    }
+
+    #[test]
+    fn thinking_renders_codex_summary_markdown_without_markers() {
+        let mut cell =
+            HistoryCell::thinking_streaming("**Planning skill usage for task**\n\n<!-- -->");
+        cell.finalize_thinking(None);
+
+        let text: String = cell
+            .display_lines(80, 0)
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.text.as_str()))
+            .collect();
+
+        assert_eq!(text, "Thinking: Planning skill usage for task");
+        assert!(!text.contains("**"));
+        assert!(!text.contains("<!--"));
+    }
+
+    #[test]
+    fn thinking_preserves_codex_summary_body() {
+        let mut cell = HistoryCell::thinking_streaming(
+            "**Planning skill usage for task**\n\nInspect the plan before editing.",
+        );
+        cell.finalize_thinking(None);
+        let lines = cell.display_lines(80, 0);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|line| line.spans.iter().map(|span| span.text.as_str()).collect())
+            .collect();
+
+        assert_eq!(text[0], "Thinking: Planning skill usage for task");
+        assert_eq!(text[1], "          ");
+        assert_eq!(text[2], "          Inspect the plan before editing.");
+    }
+
+    #[test]
+    fn thinking_hides_exact_empty_html_placeholder() {
+        let mut cell = HistoryCell::thinking_streaming("<!-- -->");
+        cell.finalize_thinking(None);
+
+        assert!(cell.display_lines(80, 0).is_empty());
+    }
+
+    #[test]
+    fn streaming_codex_summary_split_across_deltas_renders_cleanly() {
+        let mut cell = HistoryCell::thinking_streaming("**Planning skill");
+        cell.append_thinking_delta(" usage**\n\n<!-- ");
+        cell.append_thinking_delta("-->");
+
+        let lines = cell.display_lines(80, 0);
+        let text: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.text.as_str()))
+            .collect();
+
+        assert!(text.contains("Thinking: Planning skill usage"));
+        assert!(!text.contains("**"));
+        assert!(!text.contains("<!--"));
+        assert_eq!(lines.last().unwrap().spans.last().unwrap().text, "▌");
     }
 
     #[test]
