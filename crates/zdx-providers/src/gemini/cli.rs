@@ -8,12 +8,11 @@ use zdx_types::ToolDefinition;
 
 use super::shared::{
     CloudCodeRequestParams, GeminiThinkingConfig, build_cloud_code_assist_request,
-    classify_reqwest_error,
 };
 use super::sse::GeminiSseParser;
 use crate::debug_metrics::maybe_wrap_with_metrics;
 use crate::oauth::gemini_cli as oauth_gemini_cli;
-use crate::shared::merge_system_prompt;
+use crate::shared::{classify_reqwest_error, merge_system_prompt};
 use crate::{ChatMessage, ProviderError, ProviderStream};
 
 /// Cloud Code Assist API endpoint

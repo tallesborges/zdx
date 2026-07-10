@@ -167,6 +167,10 @@ pub enum AgentEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
+    /// Transport-level request or stream failure
+    Transport,
+    /// Request construction or redirect failure
+    Request,
     /// HTTP status error (4xx, 5xx)
     HttpStatus,
     /// Connection/request timeout
@@ -212,6 +216,8 @@ pub enum TurnStatus {
 impl From<ProviderErrorKind> for ErrorKind {
     fn from(kind: ProviderErrorKind) -> Self {
         match kind {
+            ProviderErrorKind::Transport => ErrorKind::Transport,
+            ProviderErrorKind::Request => ErrorKind::Request,
             ProviderErrorKind::HttpStatus => ErrorKind::HttpStatus,
             ProviderErrorKind::Timeout => ErrorKind::Timeout,
             ProviderErrorKind::Parse => ErrorKind::Parse,
@@ -223,6 +229,8 @@ impl From<ProviderErrorKind> for ErrorKind {
 impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            ErrorKind::Transport => write!(f, "transport"),
+            ErrorKind::Request => write!(f, "request"),
             ErrorKind::HttpStatus => write!(f, "http_status"),
             ErrorKind::Timeout => write!(f, "timeout"),
             ErrorKind::Parse => write!(f, "parse"),

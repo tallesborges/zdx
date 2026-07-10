@@ -11,10 +11,7 @@ use std::collections::HashMap;
 use serde_json::{Value, json};
 use zdx_types::{ThinkingLevel, ToolDefinition};
 
-use crate::{
-    ChatContentBlock, ChatMessage, IdOrigin, MessageContent, ProviderError, ProviderErrorKind,
-    ReplayToken,
-};
+use crate::{ChatContentBlock, ChatMessage, IdOrigin, MessageContent, ReplayToken};
 
 /// Thinking configuration for Gemini models.
 ///
@@ -202,19 +199,6 @@ impl GeminiThinkingConfig {
 /// historical assistant messages serialize to identical bytes across turns
 /// (required for implicit prompt caching).
 pub const SYNTHETIC_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator";
-
-/// Classifies a reqwest error into a `ProviderError`.
-pub fn classify_reqwest_error(e: &reqwest::Error) -> ProviderError {
-    if e.is_timeout() {
-        ProviderError::timeout(format!("Request timed out: {e}"))
-    } else if e.is_connect() {
-        ProviderError::timeout(format!("Connection failed: {e}"))
-    } else if e.is_request() {
-        ProviderError::new(ProviderErrorKind::HttpStatus, format!("Request error: {e}"))
-    } else {
-        ProviderError::new(ProviderErrorKind::HttpStatus, format!("Network error: {e}"))
-    }
-}
 
 /// Builds Gemini-format contents array from chat messages.
 ///

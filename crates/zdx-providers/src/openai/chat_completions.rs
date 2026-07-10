@@ -12,6 +12,7 @@ use serde_json::Value;
 use zdx_types::{ToolDefinition, ToolResult};
 
 use crate::debug_metrics::maybe_wrap_with_metrics;
+use crate::shared::classify_reqwest_error;
 use crate::{
     ChatContentBlock, ChatMessage, ContentBlockType, DebugTrace, MessageContent, ProviderError,
     ProviderErrorKind, ProviderResult, ProviderStream, StreamEvent, Usage,
@@ -126,18 +127,6 @@ fn build_headers(api_key: &str, extra_headers: &HeaderMap) -> anyhow::Result<Hea
     }
 
     Ok(headers)
-}
-
-fn classify_reqwest_error(e: &reqwest::Error) -> ProviderError {
-    if e.is_timeout() {
-        ProviderError::timeout(format!("Request timed out: {e}"))
-    } else if e.is_connect() {
-        ProviderError::timeout(format!("Connection failed: {e}"))
-    } else if e.is_request() {
-        ProviderError::new(ProviderErrorKind::HttpStatus, format!("Request error: {e}"))
-    } else {
-        ProviderError::new(ProviderErrorKind::HttpStatus, format!("Network error: {e}"))
-    }
 }
 
 #[derive(Debug, Serialize)]
@@ -708,9 +697,9 @@ impl<S> ChatCompletionsSseParser<S> {
     fn handle_chunk(&mut self, value: &Value) {
         // Handle errors first - these are terminal, no completion should follow
         if let Some(error) = value.get("error") {
-            let error_type = error
-                .get("type")
-                .and_then(|v| v.as_str())
+            let error_type = ["code", "type"]
+                .iter()
+                .find_map(|key| error.get(key).and_then(Value::as_str))
                 .unwrap_or("error")
                 .to_string();
             let message = error_message_from_payload(error, &["message"]);
@@ -977,9 +966,30 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ChatCompletionRequest, ContentBlockType, OpenAIChatCompletionsConfig, StreamEvent,
-        ThinkingConfig, parse_usage,
+        ChatCompletionRequest, ChatCompletionsSseParser, ContentBlockType,
+        OpenAIChatCompletionsConfig, StreamEvent, ThinkingConfig, parse_usage,
     };
+
+    #[test]
+    fn test_stream_error_uses_type_when_code_is_not_a_string() {
+        let stream =
+            futures_util::stream::empty::<std::result::Result<bytes::Bytes, std::io::Error>>();
+        let mut parser = ChatCompletionsSseParser::new(stream, "test-model".to_string());
+
+        parser.handle_chunk(&json!({
+            "error": {
+                "code": null,
+                "type": "overloaded_error",
+                "message": "busy"
+            }
+        }));
+
+        assert!(matches!(
+            parser.pending.pop_front(),
+            Some(StreamEvent::Error { error_type, message })
+                if error_type == "overloaded_error" && message == "busy"
+        ));
+    }
 
     #[test]
     fn test_request_flattens_extra_body_fields() {

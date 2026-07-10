@@ -12,6 +12,10 @@ use crate::messages::{ContentBlockType, IdOrigin, SignatureProvider};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderErrorKind {
+    /// Transport-level request or stream failure
+    Transport,
+    /// Request construction or redirect failure
+    Request,
     /// HTTP status error (4xx, 5xx)
     HttpStatus,
     /// Connection timeout or request timeout
@@ -25,6 +29,8 @@ pub enum ProviderErrorKind {
 impl fmt::Display for ProviderErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            ProviderErrorKind::Transport => write!(f, "transport"),
+            ProviderErrorKind::Request => write!(f, "request"),
             ProviderErrorKind::HttpStatus => write!(f, "http_status"),
             ProviderErrorKind::Timeout => write!(f, "timeout"),
             ProviderErrorKind::Parse => write!(f, "parse"),
@@ -38,6 +44,12 @@ impl fmt::Display for ProviderErrorKind {
 pub struct ProviderError {
     /// Error category
     pub kind: ProviderErrorKind,
+    /// HTTP response status when available
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    /// Provider-native error code or type when available
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     /// One-line summary suitable for display
     pub message: String,
     /// Optional additional details (e.g., raw error body)
@@ -74,11 +86,55 @@ const RETRYABLE_PATTERNS: &[&str] = &[
     "retry delay",
 ];
 
+const TERMINAL_PATTERNS: &[&str] = &[
+    "insufficient_quota",
+    "quota exceeded",
+    "out of budget",
+    "billing",
+    "monthly usage limit",
+    "weekly usage limit",
+    "daily usage limit",
+    "free usage limit",
+    "usage limit reached",
+    "available balance",
+    "invalid api key",
+    "invalid_api_key",
+];
+
+const TERMINAL_CODES: &[&str] = &[
+    "insufficient_quota",
+    "billing_error",
+    "billing_not_active",
+    "usage_limit",
+    "usage_limit_reached",
+    "monthly_usage_limit",
+    "free_usage_limit",
+    "invalid_api_key",
+    "authentication_error",
+    "permission_error",
+    "invalid_request",
+    "invalid_request_error",
+];
+
+const TRANSIENT_CODES: &[&str] = &[
+    "overloaded",
+    "overloaded_error",
+    "rate_limit",
+    "rate_limit_error",
+    "resource_exhausted",
+    "service_unavailable",
+    "server_error",
+    "internal_error",
+    "temporarily_unavailable",
+];
+
 impl ProviderError {
     /// Creates a new provider error.
     pub fn new(kind: ProviderErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
+            status: None,
+            code: None,
             message: message.into(),
             details: None,
         }
@@ -86,24 +142,18 @@ impl ProviderError {
 
     /// Creates an HTTP status error.
     pub fn http_status(status: u16, body: &str) -> Self {
-        let message = format!("HTTP {status}");
-        let details = if body.is_empty() {
-            None
-        } else {
-            if let Ok(json) = serde_json::from_str::<Value>(body)
-                && let Some(error_obj) = json.get("error")
-                && let Some(msg) = error_obj.get("message").and_then(|v| v.as_str())
-            {
-                return Self {
-                    kind: ProviderErrorKind::HttpStatus,
-                    message: format!("HTTP {status}: {msg}"),
-                    details: Some(body.to_string()),
-                };
-            }
-            Some(body.to_string())
-        };
+        let parsed = serde_json::from_str::<Value>(body).ok();
+        let code = parsed.as_ref().and_then(extract_error_code);
+        let provider_message = parsed.as_ref().and_then(extract_error_message);
+        let message = provider_message.map_or_else(
+            || format!("HTTP {status}"),
+            |message| format!("HTTP {status}: {message}"),
+        );
+        let details = (!body.is_empty()).then(|| body.to_string());
         Self {
             kind: ProviderErrorKind::HttpStatus,
+            status: Some(status),
+            code,
             message,
             details,
         }
@@ -114,10 +164,22 @@ impl ProviderError {
         Self::new(ProviderErrorKind::Timeout, message)
     }
 
+    /// Creates a transport error.
+    pub fn transport(message: impl Into<String>) -> Self {
+        Self::new(ProviderErrorKind::Transport, message)
+    }
+
+    /// Creates a request-construction error.
+    pub fn request(message: impl Into<String>) -> Self {
+        Self::new(ProviderErrorKind::Request, message)
+    }
+
     /// Creates an API error (from mid-stream error event).
     pub fn api_error(error_type: &str, message: &str) -> Self {
         Self {
             kind: ProviderErrorKind::ApiError,
+            status: None,
+            code: Some(error_type.to_string()),
             message: format!("{error_type}: {message}"),
             details: None,
         }
@@ -125,16 +187,82 @@ impl ProviderError {
 
     /// Returns true if this error is transient and safe to retry automatically.
     pub fn is_retryable(&self) -> bool {
-        if matches!(self.kind, ProviderErrorKind::Parse) {
-            return false;
+        match self.kind {
+            ProviderErrorKind::Transport | ProviderErrorKind::Timeout => return true,
+            ProviderErrorKind::Request | ProviderErrorKind::Parse => return false,
+            ProviderErrorKind::HttpStatus | ProviderErrorKind::ApiError => {}
         }
+
+        let normalized_code = self.code.as_deref().map(normalize_code);
         let haystack = format!(
             "{} {}",
             self.message.to_lowercase(),
             self.details.as_deref().unwrap_or("").to_lowercase()
         );
+
+        if normalized_code
+            .as_deref()
+            .is_some_and(|code| TERMINAL_CODES.contains(&code))
+            || TERMINAL_PATTERNS
+                .iter()
+                .any(|pattern| haystack.contains(pattern))
+        {
+            return false;
+        }
+
+        if matches!(self.kind, ProviderErrorKind::HttpStatus)
+            && let Some(status) = self.status
+            && (status == 408 || status == 429 || (500..=599).contains(&status))
+        {
+            return true;
+        }
+
+        if normalized_code
+            .as_deref()
+            .is_some_and(|code| TRANSIENT_CODES.contains(&code))
+        {
+            return true;
+        }
+
+        if matches!(self.kind, ProviderErrorKind::HttpStatus) && self.status.is_some() {
+            return false;
+        }
+
         RETRYABLE_PATTERNS.iter().any(|p| haystack.contains(p))
     }
+}
+
+fn extract_error_code(payload: &Value) -> Option<String> {
+    let error = payload.get("error").unwrap_or(payload);
+    ["code", "type", "status"].iter().find_map(|key| {
+        error
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn extract_error_message(payload: &Value) -> Option<&str> {
+    payload
+        .get("error")
+        .unwrap_or(payload)
+        .get("message")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+}
+
+fn normalize_code(code: &str) -> String {
+    code.trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|character| match character {
+            '-' | ' ' => '_',
+            other => other,
+        })
+        .collect()
 }
 
 impl fmt::Display for ProviderError {
@@ -312,26 +440,117 @@ mod tests {
     #[test]
     fn test_retryable_overloaded() {
         let err = ProviderError::api_error("overloaded_error", "API is temporarily overloaded");
+        assert_eq!(err.code.as_deref(), Some("overloaded_error"));
         assert!(err.is_retryable());
     }
 
     #[test]
     fn test_retryable_rate_limit() {
         assert!(ProviderError::api_error("rate_limit_error", "Rate limit").is_retryable());
-        assert!(ProviderError::new(ProviderErrorKind::HttpStatus, "HTTP 429").is_retryable());
+        assert!(ProviderError::http_status(429, "").is_retryable());
     }
 
     #[test]
-    fn test_retryable_http_5xx() {
-        for code in ["HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504"] {
-            let err = ProviderError::new(ProviderErrorKind::HttpStatus, code);
-            assert!(err.is_retryable(), "expected retryable: {code}");
+    fn test_structured_http_status_classification() {
+        for status in [408, 429, 500, 502, 503, 504, 529, 599] {
+            let err = ProviderError::http_status(status, "");
+            assert!(err.is_retryable(), "expected retryable HTTP {status}");
         }
+        for status in [400, 401, 403, 404, 422] {
+            let err = ProviderError::http_status(status, "");
+            assert!(!err.is_retryable(), "expected terminal HTTP {status}");
+        }
+    }
+
+    #[test]
+    fn test_http_status_extracts_common_provider_codes() {
+        let openai = ProviderError::http_status(
+            429,
+            r#"{"error":{"message":"quota exhausted","type":"insufficient_quota"}}"#,
+        );
+        assert_eq!(openai.status, Some(429));
+        assert_eq!(openai.code.as_deref(), Some("insufficient_quota"));
+        assert!(openai.message.contains("quota exhausted"));
+
+        let anthropic = ProviderError::http_status(
+            529,
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"busy"}}"#,
+        );
+        assert_eq!(anthropic.code.as_deref(), Some("overloaded_error"));
+        assert!(anthropic.is_retryable());
+
+        let gemini = ProviderError::http_status(
+            429,
+            r#"{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"retry later"}}"#,
+        );
+        assert_eq!(gemini.code.as_deref(), Some("RESOURCE_EXHAUSTED"));
+        assert!(gemini.is_retryable());
+    }
+
+    #[test]
+    fn test_terminal_provider_evidence_overrides_retryable_status_or_text() {
+        let quota = ProviderError::http_status(
+            429,
+            r#"{"error":{"type":"insufficient_quota","message":"server error"}}"#,
+        );
+        assert!(!quota.is_retryable());
+
+        let billing = ProviderError::http_status(
+            503,
+            r#"{"error":{"message":"Billing account is not active"}}"#,
+        );
+        assert!(!billing.is_retryable());
+
+        let invalid = ProviderError::api_error("invalid_request_error", "internal error");
+        assert!(!invalid.is_retryable());
+    }
+
+    #[test]
+    fn test_transient_provider_code_overrides_otherwise_terminal_http_status() {
+        let overloaded = ProviderError::http_status(
+            400,
+            r#"{"error":{"type":"overloaded_error","message":"busy"}}"#,
+        );
+        assert!(overloaded.is_retryable());
+    }
+
+    #[test]
+    fn test_unknown_unstructured_errors_use_text_fallback() {
+        assert!(
+            ProviderError::new(ProviderErrorKind::ApiError, "upstream connect failed")
+                .is_retryable()
+        );
+        assert!(!ProviderError::new(ProviderErrorKind::ApiError, "bad model").is_retryable());
+    }
+
+    #[test]
+    fn test_provider_error_structured_metadata_serialization() {
+        let structured = ProviderError::http_status(
+            529,
+            r#"{"error":{"type":"overloaded_error","message":"busy"}}"#,
+        );
+        let json = serde_json::to_value(&structured).unwrap();
+        assert_eq!(json["status"], 529);
+        assert_eq!(json["code"], "overloaded_error");
+
+        let plain = serde_json::to_value(ProviderError::transport("disconnected")).unwrap();
+        assert!(plain.get("status").is_none());
+        assert!(plain.get("code").is_none());
+
+        let restored: ProviderError = serde_json::from_value(serde_json::json!({
+            "kind": "transport",
+            "message": "legacy",
+            "details": null
+        }))
+        .unwrap();
+        assert_eq!(restored.status, None);
+        assert_eq!(restored.code, None);
     }
 
     #[test]
     fn test_retryable_timeout_and_network() {
         assert!(ProviderError::timeout("Connection timed out").is_retryable());
+        assert!(ProviderError::transport("error sending request for url").is_retryable());
         assert!(
             ProviderError::new(
                 ProviderErrorKind::HttpStatus,
@@ -343,9 +562,8 @@ mod tests {
 
     #[test]
     fn test_not_retryable() {
+        assert!(!ProviderError::request("builder error").is_retryable());
         assert!(!ProviderError::new(ProviderErrorKind::Parse, "Invalid JSON").is_retryable());
         assert!(!ProviderError::api_error("invalid_request", "Bad model").is_retryable());
-        assert!(!ProviderError::new(ProviderErrorKind::HttpStatus, "HTTP 400").is_retryable());
-        assert!(!ProviderError::new(ProviderErrorKind::HttpStatus, "HTTP 401").is_retryable());
     }
 }

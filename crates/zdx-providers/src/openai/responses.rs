@@ -10,9 +10,10 @@ pub use super::responses_types::{
     SummaryItem, TextConfig,
 };
 use crate::debug_metrics::maybe_wrap_with_metrics;
+use crate::shared::classify_reqwest_error;
 use crate::{
-    ChatContentBlock, ChatMessage, DebugTrace, ProviderError, ProviderErrorKind, ProviderStream,
-    ReasoningBlock, ReplayToken, wrap_stream,
+    ChatContentBlock, ChatMessage, DebugTrace, ProviderError, ProviderStream, ReasoningBlock,
+    ReplayToken, wrap_stream,
 };
 
 /// Shared configuration for Responses API requests.
@@ -86,18 +87,6 @@ pub async fn send_responses_stream(
     let event_stream = ResponsesSseParser::new(byte_stream, config.model.clone());
 
     Ok(maybe_wrap_with_metrics(event_stream))
-}
-
-fn classify_reqwest_error(e: &reqwest::Error) -> ProviderError {
-    if e.is_timeout() {
-        ProviderError::timeout(format!("Request timed out: {e}"))
-    } else if e.is_connect() {
-        ProviderError::timeout(format!("Connection failed: {e}"))
-    } else if e.is_request() {
-        ProviderError::new(ProviderErrorKind::HttpStatus, format!("Request error: {e}"))
-    } else {
-        ProviderError::new(ProviderErrorKind::HttpStatus, format!("Network error: {e}"))
-    }
 }
 
 /// Builds the full Responses request body for the HTTP/SSE path.

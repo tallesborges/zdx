@@ -128,21 +128,18 @@ pub fn error_message_from_payload(error: &Value, message_keys: &[&str]) -> Strin
 /// SSE framing/UTF-8 parser failures (non-retryable).
 ///
 /// Transport failures (socket reset, connection dropped, etc.) are classified
-/// as `ProviderErrorKind::Timeout` with an explicit `"network error"` token
-/// so `ProviderError::is_retryable()` matches them via `RETRYABLE_PATTERNS`
-/// and the engine's transparent retry loop can recover before any visible
-/// output. UTF-8 / SSE-parser errors stay as `ProviderErrorKind::Parse` and
-/// remain non-retryable, matching the contract that real protocol/decoding
-/// bugs should surface as fatal turn failures rather than auto-retried.
+/// as `ProviderErrorKind::Transport`, so the engine's transparent retry loop
+/// can recover before any visible output. UTF-8 / SSE-parser errors stay as
+/// `ProviderErrorKind::Parse` and remain non-retryable, matching the contract
+/// that real protocol/decoding bugs should surface as fatal turn failures.
 pub fn map_event_stream_error<E>(err: EventStreamError<E>) -> ProviderError
 where
     E: std::fmt::Display,
 {
     match err {
-        EventStreamError::Transport(e) => ProviderError::new(
-            ProviderErrorKind::Timeout,
-            format!("SSE stream network error: {e}"),
-        ),
+        EventStreamError::Transport(e) => {
+            ProviderError::transport(format!("SSE stream network error: {e}"))
+        }
         EventStreamError::Utf8(e) => ProviderError::new(
             ProviderErrorKind::Parse,
             format!("SSE stream UTF-8 error: {e}"),
@@ -151,6 +148,19 @@ where
             ProviderErrorKind::Parse,
             format!("SSE stream parse error: {e}"),
         ),
+    }
+}
+
+/// Classifies a `reqwest` failure using its typed error category.
+pub fn classify_reqwest_error(err: &reqwest::Error) -> ProviderError {
+    if err.is_builder() || err.is_redirect() || err.is_decode() {
+        ProviderError::request(format!("Request error: {err}"))
+    } else if err.is_timeout() {
+        ProviderError::timeout(format!("Request timed out: {err}"))
+    } else if let Some(status) = err.status() {
+        ProviderError::http_status(status.as_u16(), "")
+    } else {
+        ProviderError::transport(format!("Request transport error: {err}"))
     }
 }
 
@@ -204,7 +214,7 @@ mod tests {
         let err: EventStreamError<std::io::Error> = EventStreamError::Transport(io_err);
         let mapped = map_event_stream_error(err);
 
-        assert_eq!(mapped.kind, ProviderErrorKind::Timeout);
+        assert_eq!(mapped.kind, ProviderErrorKind::Transport);
         assert!(mapped.message.contains("network error"));
         assert!(
             mapped.is_retryable(),
@@ -223,5 +233,43 @@ mod tests {
             !mapped.is_retryable(),
             "UTF-8 framing errors must stay non-retryable, got {mapped:?}",
         );
+    }
+
+    #[tokio::test]
+    async fn test_classify_reqwest_send_error_is_transport() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            drop(stream);
+        });
+
+        let raw = reqwest::Client::new()
+            .post(format!("http://{address}"))
+            .body("request body")
+            .send()
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+
+        assert!(raw.is_request(), "expected reqwest request error: {raw:?}");
+        assert!(raw.to_string().contains("error sending request"));
+        let mapped = classify_reqwest_error(&raw);
+        assert_eq!(mapped.kind, ProviderErrorKind::Transport);
+        assert!(mapped.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn test_classify_reqwest_builder_error_is_not_retryable() {
+        let raw = reqwest::Client::new()
+            .get("http://[::1")
+            .send()
+            .await
+            .unwrap_err();
+
+        assert!(raw.is_builder(), "expected reqwest builder error: {raw:?}");
+        let mapped = classify_reqwest_error(&raw);
+        assert_eq!(mapped.kind, ProviderErrorKind::Request);
+        assert!(!mapped.is_retryable());
     }
 }

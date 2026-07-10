@@ -119,6 +119,14 @@ ZDX solves this with a boring, reliable core:
 - Full-screen alt-screen TUI; **does not print transcript to stdout while active**.
 - Any diagnostics are shown in the UI; optional file logging is acceptable.
 
+### Provider retries
+
+- Before visible assistant output or tool activity begins, ZDX automatically retries transient provider failures up to three times with exponential backoff.
+- Typed transport failures, timeouts, HTTP `408`, HTTP `429`, HTTP `500..=599`, and known provider overload/rate-limit codes are transient.
+- Request construction, parsing/protocol failures, authentication, permission, quota, billing, and usage-limit failures are terminal and are not automatically retried.
+- Structured transport kind, HTTP status, and provider code/type take precedence. Text matching is used only for unknown or unstructured provider/gateway errors.
+- Once visible output or tool activity begins, provider failures stop the turn instead of transparently retrying and risking duplicate output or tool execution.
+
 ---
 
 ## 8) Threads

@@ -13,9 +13,9 @@ use futures_util::{SinkExt, Stream, StreamExt};
 use serde_json::Value;
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, OwnedMutexGuard};
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
+use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 use zdx_types::ToolDefinition;
 
@@ -154,7 +154,7 @@ impl OpenAIResponsesWsClient {
         };
         if let Err(e) = send_result {
             guard.socket = None;
-            return Err(ProviderError::timeout(format!("WebSocket send failed: {e}")).into());
+            return Err(classify_websocket_error(e).into());
         }
 
         let turn = TurnState {
@@ -170,7 +170,7 @@ impl OpenAIResponsesWsClient {
         let ws_url = to_ws_url(&self.config.base_url, &self.config.path);
         let mut request = ws_url
             .into_client_request()
-            .map_err(|e| ProviderError::timeout(format!("Invalid WebSocket URL: {e}")))?;
+            .map_err(|e| ProviderError::request(format!("Invalid WebSocket URL: {e}")))?;
         for (name, value) in (self.header_factory)().await? {
             let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|e| {
                 ProviderError::new(
@@ -189,7 +189,7 @@ impl OpenAIResponsesWsClient {
 
         let (socket, _response) = connect_async(request)
             .await
-            .map_err(|e| ProviderError::timeout(format!("WebSocket connect failed: {e}")))?;
+            .map_err(classify_websocket_error)?;
         Ok(socket)
     }
 }
@@ -269,9 +269,39 @@ enum Ingest {
     Failed(ProviderError),
 }
 
-fn ingest_frame<E: std::fmt::Display>(
+fn classify_websocket_error(err: WsError) -> ProviderError {
+    match err {
+        WsError::ConnectionClosed
+        | WsError::AlreadyClosed
+        | WsError::Io(_)
+        | WsError::Tls(_)
+        | WsError::WriteBufferFull(_) => {
+            ProviderError::transport(format!("WebSocket transport error: {err}"))
+        }
+        WsError::Http(response) => {
+            let status = response.status().as_u16();
+            let body = response
+                .body()
+                .as_deref()
+                .map(String::from_utf8_lossy)
+                .unwrap_or_default();
+            ProviderError::http_status(status, &body)
+        }
+        WsError::Url(_) | WsError::HttpFormat(_) => {
+            ProviderError::request(format!("WebSocket request error: {err}"))
+        }
+        WsError::Capacity(_) | WsError::Protocol(_) | WsError::Utf8(_) | WsError::AttackAttempt => {
+            ProviderError::new(
+                ProviderErrorKind::Parse,
+                format!("WebSocket protocol error: {err}"),
+            )
+        }
+    }
+}
+
+fn ingest_frame(
     mapper: &mut ResponsesEventMapper,
-    frame: Option<std::result::Result<Message, E>>,
+    frame: Option<std::result::Result<Message, WsError>>,
 ) -> Ingest {
     match frame {
         Some(Ok(Message::Text(text))) => {
@@ -285,11 +315,11 @@ fn ingest_frame<E: std::fmt::Display>(
                 Ingest::Continue
             }
         }
-        Some(Ok(Message::Close(_))) | None => Ingest::Failed(ProviderError::timeout(
+        Some(Ok(Message::Close(_))) | None => Ingest::Failed(ProviderError::transport(
             "WebSocket closed before response.completed",
         )),
         Some(Ok(_)) => Ingest::Continue,
-        Some(Err(err)) => Ingest::Failed(ProviderError::timeout(format!("WebSocket error: {err}"))),
+        Some(Err(err)) => Ingest::Failed(classify_websocket_error(err)),
     }
 }
 
@@ -354,7 +384,6 @@ fn turn_event_stream(turn: TurnState) -> impl Stream<Item = ProviderResult<Strea
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use tokio_tungstenite::tungstenite::Error as WsError;
 
     use super::*;
     use crate::ContentBlockType;
@@ -426,13 +455,40 @@ mod tests {
     fn ingest_frame_fails_on_close_or_eof() {
         let mut mapper = ResponsesEventMapper::new("gpt-test".to_string());
         assert!(matches!(
-            ingest_frame::<WsError>(&mut mapper, Some(Ok(Message::Close(None)))),
+            ingest_frame(&mut mapper, Some(Ok(Message::Close(None)))),
             Ingest::Failed(_)
         ));
-        assert!(matches!(
-            ingest_frame::<WsError>(&mut mapper, None),
-            Ingest::Failed(_)
+        assert!(matches!(ingest_frame(&mut mapper, None), Ingest::Failed(_)));
+    }
+
+    #[test]
+    fn websocket_request_errors_are_not_retryable() {
+        let err = "not a websocket URL".into_client_request().unwrap_err();
+        let mapped = classify_websocket_error(err);
+        assert_eq!(mapped.kind, ProviderErrorKind::Request);
+        assert!(!mapped.is_retryable());
+    }
+
+    #[test]
+    fn websocket_handshake_auth_errors_are_not_retryable() {
+        let response = tokio_tungstenite::tungstenite::http::Response::builder()
+            .status(401)
+            .body(Some(br#"{"error":"unauthorized"}"#.to_vec()))
+            .unwrap();
+        let mapped = classify_websocket_error(WsError::Http(Box::new(response)));
+        assert_eq!(mapped.kind, ProviderErrorKind::HttpStatus);
+        assert!(!mapped.is_retryable());
+    }
+
+    #[test]
+    fn websocket_io_errors_are_retryable_transport_failures() {
+        let err = WsError::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "reset by peer",
         ));
+        let mapped = classify_websocket_error(err);
+        assert_eq!(mapped.kind, ProviderErrorKind::Transport);
+        assert!(mapped.is_retryable());
     }
 
     #[test]
