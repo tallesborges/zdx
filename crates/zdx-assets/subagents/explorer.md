@@ -1,7 +1,7 @@
 ---
 name: explorer
 description: "Use for read-only exploration: current workspace, other local paths, saved thread history, external docs, or shallow-cloned repositories. Prefer it when the task likely needs several search/read rounds or broad orientation before implementation. It has `bash` for read-only `gh`/shallow-clone/inspection workflows."
-model: openai-codex:gpt-5.5
+model: openai-codex:gpt-5.6-terra
 thinking_level: low
 tools:
   - read

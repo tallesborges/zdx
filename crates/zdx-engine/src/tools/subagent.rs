@@ -37,6 +37,15 @@ pub fn definition_with_subagents(subagents: &[SubagentSummary]) -> ToolDefinitio
                     "type": "string",
                     "description": build_subagent_field_description(subagents),
                     "enum": valid_subagents
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Optional model override for this invocation. Set only when the user explicitly requests this model; otherwise omit it to preserve the named subagent profile. Must be an available subagent model."
+                },
+                "thinking_level": {
+                    "type": "string",
+                    "description": "Optional reasoning-level override for this invocation. Set only when the user explicitly requests this level; otherwise omit it to preserve the named subagent profile.",
+                    "enum": ["off", "low", "medium", "high", "xhigh", "max"]
                 }
             },
             "required": ["prompt"],
@@ -49,6 +58,8 @@ pub fn definition_with_subagents(subagents: &[SubagentSummary]) -> ToolDefinitio
 struct SubagentInput {
     prompt: String,
     subagent: Option<String>,
+    model: Option<String>,
+    thinking_level: Option<crate::config::ThinkingLevel>,
 }
 
 /// Executes the `invoke_subagent` tool and returns a structured envelope.
@@ -76,7 +87,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         RuntimeSubagentSelection::Named(definition) => Some(definition),
     };
 
-    let model = match resolve_execution_model(definition, &config, ctx) {
+    let model = match resolve_execution_model(definition, &config, ctx, input.model.as_deref()) {
         Ok(model) => model,
         Err(err) => return err,
     };
@@ -91,7 +102,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(err) => return err,
     };
 
-    let options = build_exec_options(definition, ctx, model, system_prompt);
+    let options = build_exec_options(definition, ctx, model, system_prompt, input.thinking_level);
 
     // Relay the child's tool activity live to the parent's `invoke_subagent`
     // cell when the engine wired an event sender + tool id for this call.
@@ -212,8 +223,15 @@ fn resolve_execution_model(
     definition: Option<&subagents::SubagentDefinition>,
     config: &crate::config::Config,
     ctx: &ToolContext,
+    model_override: Option<&str>,
 ) -> Result<String, ToolOutput> {
-    let model = match definition.and_then(|definition| definition.model.clone()) {
+    let explicit_model = model_override
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string);
+    let model = match explicit_model
+        .or_else(|| definition.and_then(|definition| definition.model.clone()))
+    {
         Some(model) => {
             if let Some(err) = validate_model_supported(&model, ctx) {
                 return Err(err);
@@ -281,6 +299,7 @@ fn build_exec_options(
     ctx: &ToolContext,
     model: String,
     system_prompt: String,
+    thinking_override: Option<crate::config::ThinkingLevel>,
 ) -> ExecSubagentOptions {
     let subagent_name = definition.map_or_else(
         || subagents::TASK_BUILTIN_ALIAS_NAME.to_string(),
@@ -289,9 +308,11 @@ fn build_exec_options(
     ExecSubagentOptions {
         model: Some(model),
         system_prompt: Some(system_prompt),
-        thinking_level: definition
-            .and_then(|definition| definition.thinking_level)
-            .or(ctx.thinking_level),
+        thinking_level: thinking_override.or_else(|| {
+            definition
+                .and_then(|definition| definition.thinking_level)
+                .or(ctx.thinking_level)
+        }),
         no_tools: false,
         no_system_prompt: false,
         tools_override: definition.and_then(|definition| definition.tools.clone()),
@@ -341,7 +362,7 @@ fn build_subagent_field_description(subagents: &[SubagentSummary]) -> String {
 }
 
 fn build_description(subagents: &[SubagentSummary]) -> String {
-    let mut description = "Delegate a scoped task to an isolated child agent run. Choose the named specialist when one clearly fits: use `explorer` for multi-round local exploration, repo understanding, or thread-history discovery; use `oracle` for deep diagnosis, debugging dead ends, architecture, or tradeoff analysis; use `task` for scoped implementation when no named specialist fits better. Exact one-hop reads or exact string/symbol lookups are direct work and should not be delegated. When multiple subtasks are independent, call `invoke_subagent` multiple times in the same response to run them in parallel; `explorer` is especially appropriate for fan-out across separate search areas. Child runs are self-contained and do not share your full parent reasoning or implicit context, so every important decision, relevant detail, file path, constraint, non-goal, and acceptance criterion must be made explicit in the prompt. Provide a focused prompt with the goal, relevant context, constraints/non-goals, file paths, expected output, and how success should be verified. Trust but verify: if a child reports edits or claims you plan to rely on, inspect the resulting files or key evidence before reporting success. Use `subagent` to select a named configuration, or `task` for the default delegated ZDX behavior when no named specialist fits. Returns response text only. Skill names are invalid unless they are also listed as supported subagents.".to_string();
+    let mut description = "Delegate a scoped task to an isolated child agent run. Choose the named specialist when one clearly fits: use `explorer` for multi-round local exploration, repo understanding, or thread-history discovery; use `oracle` for deep diagnosis, debugging dead ends, architecture, or tradeoff analysis; use `task` for scoped implementation when no named specialist fits better. Exact one-hop reads or exact string/symbol lookups are direct work and should not be delegated. When multiple subtasks are independent, call `invoke_subagent` multiple times in the same response to run them in parallel; `explorer` is especially appropriate for fan-out across separate search areas. Child runs are self-contained and do not share your full parent reasoning or implicit context, so every important decision, relevant detail, file path, constraint, non-goal, and acceptance criterion must be made explicit in the prompt. Provide a focused prompt with the goal, relevant context, constraints/non-goals, file paths, expected output, and how success should be verified. Trust but verify: if a child reports edits or claims you plan to rely on, inspect the resulting files or key evidence before reporting success. Use `subagent` to select a named configuration, or `task` for the default delegated ZDX behavior when no named specialist fits. Optional `model` and `thinking_level` values are user-controlled overrides for that invocation only; never change a named subagent's defaults autonomously. Returns response text only. Skill names are invalid unless they are also listed as supported subagents.".to_string();
 
     if !subagents.is_empty() {
         let listed = subagents
@@ -484,6 +505,7 @@ mod tests {
             .unwrap();
         assert!(required.iter().any(|v| v == "prompt"));
         assert!(!required.iter().any(|v| v == "model"));
+        assert!(!required.iter().any(|v| v == "thinking_level"));
         assert!(!required.iter().any(|v| v == "subagent"));
 
         let subagent = def
@@ -504,7 +526,8 @@ mod tests {
         let props = def.input_schema.get("properties").unwrap();
         assert!(props.get("system_prompt").is_none());
         assert!(props.get("subagent").is_some());
-        assert!(props.get("model").is_none());
+        assert!(props.get("model").is_some());
+        assert!(props.get("thinking_level").is_some());
     }
 
     #[test]
@@ -515,13 +538,83 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_model_priority() {
+    fn test_input_validation_accepts_invocation_overrides() {
+        let input = json!({
+            "prompt": "inspect this",
+            "subagent": "explorer",
+            "model": "openai-codex:gpt-5.6-luna",
+            "thinking_level": "high"
+        });
+        let parsed: SubagentInput = serde_json::from_value(input).unwrap();
+
+        assert_eq!(parsed.model.as_deref(), Some("openai-codex:gpt-5.6-luna"));
+        assert_eq!(
+            parsed.thinking_level,
+            Some(crate::config::ThinkingLevel::High)
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_prefers_invocation_override() {
         let mut ctx = ToolContext::new(std::path::PathBuf::from("."), None);
         ctx.model = Some("openai:gpt-5.2".to_string());
+        ctx.subagent_available_models = vec![
+            "openai:gpt-5.5".to_string(),
+            "openai-codex:gpt-5.6-luna".to_string(),
+        ];
+        let definition = subagents::SubagentDefinition {
+            name: "explorer".to_string(),
+            description: "desc".to_string(),
+            path: std::path::PathBuf::from("explorer.md"),
+            source: subagents::SubagentSource::BuiltIn,
+            model: Some("openai:gpt-5.5".to_string()),
+            thinking_level: Some(crate::config::ThinkingLevel::Low),
+            tools: Some(vec!["read".to_string()]),
+            skills: None,
+            auto_loaded_skills: None,
+            prompt_body: "body".to_string(),
+        };
 
         assert_eq!(
-            normalize_optional(ctx.model.clone()).as_deref(),
-            Some("openai:gpt-5.2")
+            resolve_execution_model(
+                Some(&definition),
+                &crate::config::Config::default(),
+                &ctx,
+                Some("openai-codex:gpt-5.6-luna")
+            )
+            .unwrap(),
+            "openai-codex:gpt-5.6-luna"
+        );
+    }
+
+    #[test]
+    fn test_build_exec_options_prefers_invocation_thinking_override() {
+        let mut ctx = ToolContext::new(std::path::PathBuf::from("."), None);
+        ctx.thinking_level = Some(crate::config::ThinkingLevel::Low);
+        let definition = subagents::SubagentDefinition {
+            name: "explorer".to_string(),
+            description: "desc".to_string(),
+            path: std::path::PathBuf::from("explorer.md"),
+            source: subagents::SubagentSource::BuiltIn,
+            model: None,
+            thinking_level: Some(crate::config::ThinkingLevel::Medium),
+            tools: Some(vec!["read".to_string()]),
+            skills: None,
+            auto_loaded_skills: None,
+            prompt_body: "body".to_string(),
+        };
+
+        let options = build_exec_options(
+            Some(&definition),
+            &ctx,
+            "openai-codex:gpt-5.6-luna".to_string(),
+            "system".to_string(),
+            Some(crate::config::ThinkingLevel::High),
+        );
+
+        assert_eq!(
+            options.thinking_level,
+            Some(crate::config::ThinkingLevel::High)
         );
     }
 
