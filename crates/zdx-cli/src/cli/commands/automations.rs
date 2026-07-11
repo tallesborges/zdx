@@ -537,7 +537,7 @@ mod tests {
             ok: true,
             error: None,
             schedule: Some("0 8 * * *".to_string()),
-            model: Some("gemini-cli:gemini-2.5-flash".to_string()),
+            model: Some("gemini:gemini-2.5-flash".to_string()),
             subagent: Some("task".to_string()),
         };
 
