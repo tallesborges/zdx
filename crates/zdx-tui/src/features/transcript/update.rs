@@ -692,10 +692,10 @@ pub fn apply_pending_delta(transcript: &mut TranscriptState, agent_state: &mut A
     }
 }
 
-/// Formats follow-up suggestions into a system cell body.
+/// Formats suggested replies into a system cell body.
 fn format_followups(items: &[String]) -> String {
     use std::fmt::Write;
-    let mut out = String::from("💡 Suggested next steps (Ctrl+F to pick):");
+    let mut out = String::from("💡 Suggested replies (Ctrl+F to pick):");
     for (idx, item) in items.iter().enumerate() {
         let _ = write!(out, "\n  {}. {item}", idx + 1);
     }

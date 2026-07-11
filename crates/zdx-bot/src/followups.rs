@@ -1,4 +1,4 @@
-//! End-of-turn follow-up suggestion buttons.
+//! Suggested-reply buttons using the internal `<followups>` protocol.
 //!
 //! The model appends a `<followups>` block to its final reply; the bot strips
 //! it, sends a separate message with one inline button per suggestion, and a
@@ -25,7 +25,7 @@ pub(crate) fn new_followup_map() -> FollowupMap {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
-/// Sends the follow-up buttons message and registers the suggestions for
+/// Sends the suggested-replies message and registers the options for
 /// callback lookup.
 pub(crate) async fn send_followups(
     context: &BotContext,
@@ -61,7 +61,7 @@ pub(crate) async fn send_followups(
         .client()
         .send_message_with_markup(
             chat_id,
-            "💡 <i>Next steps — tap or ignore:</i>",
+            "💡 <i>Suggested replies</i>",
             None,
             topic_id,
             &markup,

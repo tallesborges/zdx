@@ -32,7 +32,7 @@ pub enum StateMutation {
     SetSystemPrompt(Option<String>),
     SetLastSkillRepo(String),
     SetLoadedSkills(Vec<zdx_engine::skills::Skill>),
-    /// Replace the active tab's end-of-turn follow-up suggestions (empty clears).
+    /// Replace the active tab's suggested replies (empty clears).
     SetLastFollowups(Vec<String>),
     /// Toggle the debug status line visibility.
     ToggleDebugStatus,

@@ -9,7 +9,7 @@ use super::OverlayUpdate;
 use crate::mutations::StateMutation;
 use crate::state::TuiState;
 
-/// Picker for the most recent reply's end-of-turn follow-up suggestions.
+/// Picker for the most recent reply's suggested replies.
 ///
 /// Enter sends the selected suggestion as the next user message (the normal
 /// submit path); Esc dismisses the picker without sending.
@@ -96,7 +96,7 @@ fn render_followup_picker(
         area,
         input_top_y,
         &OverlayConfig {
-            title: "Follow-up suggestions",
+            title: "Suggested replies",
             border_color: Color::Green,
             width: 60,
             height: picker_height,
