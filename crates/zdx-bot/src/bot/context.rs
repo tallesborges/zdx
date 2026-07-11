@@ -7,7 +7,9 @@ use tokio_util::sync::CancellationToken;
 use zdx_engine::config::{Config, TelegramProfileConfig};
 use zdx_engine::core::agent::ToolConfig;
 
+use crate::command_picker::CommandPickerMap;
 use crate::followups::FollowupMap;
+use crate::staging::StagingMap;
 use crate::telegram::TelegramClient;
 
 /// Key for the per-turn cancellation map: (`chat_id`, `user_message_id`).
@@ -44,6 +46,8 @@ pub(crate) struct BotContext {
     cancel_map: CancelMap,
     queue_cancel_map: QueueCancelMap,
     followup_map: FollowupMap,
+    staging_map: StagingMap,
+    command_picker_map: CommandPickerMap,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +65,8 @@ pub(crate) struct BotContextDeps {
     pub cancel_map: CancelMap,
     pub queue_cancel_map: QueueCancelMap,
     pub followup_map: FollowupMap,
+    pub staging_map: StagingMap,
+    pub command_picker_map: CommandPickerMap,
 }
 
 impl BotContext {
@@ -74,6 +80,8 @@ impl BotContext {
             cancel_map,
             queue_cancel_map,
             followup_map,
+            staging_map,
+            command_picker_map,
         } = deps;
         let root = root.canonicalize().unwrap_or(root);
         Self {
@@ -88,6 +96,8 @@ impl BotContext {
             cancel_map,
             queue_cancel_map,
             followup_map,
+            staging_map,
+            command_picker_map,
         }
     }
 
@@ -159,6 +169,14 @@ impl BotContext {
     pub(crate) fn followup_map(&self) -> &FollowupMap {
         &self.followup_map
     }
+
+    pub(crate) fn staging_map(&self) -> &StagingMap {
+        &self.staging_map
+    }
+
+    pub(crate) fn command_picker_map(&self) -> &CommandPickerMap {
+        &self.command_picker_map
+    }
 }
 
 fn profile_root_path(profile: &TelegramProfileConfig) -> PathBuf {
@@ -220,6 +238,8 @@ mod tests {
                 cancel_map: new_cancel_map(),
                 queue_cancel_map: new_queue_cancel_map(),
                 followup_map: crate::followups::new_followup_map(),
+                staging_map: crate::staging::new_staging_map(),
+                command_picker_map: crate::command_picker::new_command_picker_map(),
             },
         )
     }

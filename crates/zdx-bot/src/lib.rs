@@ -16,10 +16,12 @@ use crate::telegram::{CallbackQuery, TelegramClient, TelegramSettings};
 
 mod agent;
 mod bot;
+mod command_picker;
 mod commands;
 mod followups;
 mod handlers;
 mod ingest;
+mod staging;
 pub mod telegram;
 mod topic_title;
 mod transcribe;
@@ -116,6 +118,8 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
             cancel_map,
             queue_cancel_map,
             followup_map: followups::new_followup_map(),
+            staging_map: staging::new_staging_map(),
+            command_picker_map: command_picker::new_command_picker_map(),
         },
     ));
     let chat_queues = new_chat_queues();
@@ -297,6 +301,10 @@ async fn handle_callback_query(
         }
     } else if let Some(rest) = data.strip_prefix("fu:") {
         followups::handle_callback(context, chat_queues, client, &callback, rest).await;
+    } else if let Some(rest) = data.strip_prefix("stg:") {
+        staging::handle_callback(context, chat_queues, client, &callback, rest).await;
+    } else if let Some(rest) = data.strip_prefix("cmd:") {
+        command_picker::handle_callback(context, chat_queues, client, &callback, rest).await;
     } else if data.starts_with("model_provider:")
         || data.starts_with("model_pick:")
         || data.starts_with("model_back:")

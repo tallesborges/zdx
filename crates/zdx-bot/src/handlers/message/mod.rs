@@ -78,6 +78,19 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         return Ok(());
     }
 
+    if crate::staging::handle_staging_flow(
+        context,
+        &incoming,
+        reply_ctx.reply_to_message_id,
+        reply_ctx.topic_id,
+        &thread_id,
+    )
+    .await?
+    {
+        cleanup_provisional_status(context, Some(incoming.chat_id), provisional_status).await;
+        return Ok(());
+    }
+
     run_agent_turn(
         context,
         incoming,
@@ -231,7 +244,7 @@ fn format_user_error_message(message: &str) -> String {
     )
 }
 
-fn thread_id_for_chat(chat_id: i64, message_thread_id: Option<i64>) -> String {
+pub(crate) fn thread_id_for_chat(chat_id: i64, message_thread_id: Option<i64>) -> String {
     match message_thread_id {
         Some(topic_id) => format!("telegram-{chat_id}-topic-{topic_id}"),
         None => format!("telegram-{chat_id}"),

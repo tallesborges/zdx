@@ -49,12 +49,28 @@ pub(super) async fn handle_thread_setup_commands(
             reply_ctx.topic_id,
         )
         .await?
+        || handle_tldr_command(
+            context,
+            incoming,
+            thread_id,
+            reply_ctx.reply_to_message_id,
+            reply_ctx.topic_id,
+        )
+        .await?
         || handle_thread_commands(
             context,
             incoming,
             thread_id,
             reply_ctx.reply_to_message_id,
             reply_ctx.topic_id,
+        )
+        .await?
+        || crate::command_picker::handle_commands_command(
+            context,
+            incoming,
+            reply_ctx.reply_to_message_id,
+            reply_ctx.topic_id,
+            thread_id,
         )
         .await?)
 }
@@ -78,7 +94,14 @@ pub(super) async fn handle_general_forum_commands(
     let Some(command) = parse_command(text) else {
         return Ok(false);
     };
-    if !matches!(command, BotCommand::New | BotCommand::WorktreeCreate) {
+    if !matches!(
+        command,
+        BotCommand::New
+            | BotCommand::WorktreeCreate
+            | BotCommand::Handoff
+            | BotCommand::Commands
+            | BotCommand::PromptBuilder
+    ) {
         return Ok(false);
     }
 
@@ -130,9 +153,13 @@ pub(super) async fn handle_general_forum_commands(
             return Ok(true);
         }
         BotCommand::WorktreeCreate => "/worktree must be used inside a topic, not General.",
+        BotCommand::Handoff => "/handoff must be used inside a topic, not General.",
+        BotCommand::Commands => "/commands must be used inside a topic, not General.",
+        BotCommand::PromptBuilder => "/prompt_builder must be used inside a topic, not General.",
         BotCommand::Exit => unreachable!("exit is handled by handle_exit_command"),
         BotCommand::Status => unreachable!("status is handled by handle_status_command"),
         BotCommand::WhereAmI => unreachable!("whereami is handled by handle_whereami_command"),
+        BotCommand::Tldr => unreachable!("tldr is handled by handle_tldr_command"),
     };
     context
         .client()
@@ -487,6 +514,70 @@ async fn handle_whereami_command(
     Ok(true)
 }
 
+async fn handle_tldr_command(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    thread_id: &str,
+    reply_to_message_id: Option<i64>,
+    topic_id: Option<i64>,
+) -> Result<bool> {
+    if !incoming.images.is_empty() || !incoming.audios.is_empty() {
+        return Ok(false);
+    }
+    if !incoming
+        .text
+        .as_deref()
+        .is_some_and(|text| matches!(parse_command(text), Some(BotCommand::Tldr)))
+    {
+        return Ok(false);
+    }
+
+    let placeholder = context
+        .client()
+        .send_message_with_markup(
+            incoming.chat_id,
+            "⏳ Generating TLDR…",
+            reply_to_message_id,
+            topic_id,
+            &InlineKeyboardMarkup {
+                inline_keyboard: vec![],
+            },
+        )
+        .await?;
+
+    let config = context.config();
+    let root = crate::command_picker::command_root(context, incoming.chat_id, thread_id)?;
+    let text = match zdx_engine::core::tldr_generation::generate_tldr(
+        thread_id,
+        &config.tldr_model,
+        &root,
+    )
+    .await
+    {
+        Ok(recap) => format!(
+            "📝 <b>TLDR</b>\n{}",
+            escape_html(&truncate_recap(&recap, 3900))
+        ),
+        Err(err) => format!(
+            "⚠️ TLDR failed:\n<blockquote><code>{}</code></blockquote>",
+            escape_html(&format!("{err:#}"))
+        ),
+    };
+    context
+        .client()
+        .edit_message_text(incoming.chat_id, placeholder.id, &text, None)
+        .await?;
+    Ok(true)
+}
+
+fn truncate_recap(recap: &str, max_chars: usize) -> String {
+    if recap.chars().count() <= max_chars {
+        return recap.to_string();
+    }
+    let truncated: String = recap.chars().take(max_chars.saturating_sub(1)).collect();
+    format!("{truncated}…")
+}
+
 pub(super) fn format_whereami_message(
     chat_id: i64,
     topic_id: Option<i64>,
@@ -718,7 +809,17 @@ async fn handle_thread_commands(
                 .await?;
             return Ok(true);
         }
-        BotCommand::Exit | BotCommand::Status | BotCommand::WhereAmI => return Ok(false),
+        // Handoff/PromptBuilder run via the staging flow; Commands via the
+        // picker handler; Tldr via handle_tldr_command.
+        BotCommand::Exit
+        | BotCommand::Status
+        | BotCommand::WhereAmI
+        | BotCommand::Handoff
+        | BotCommand::Commands
+        | BotCommand::Tldr
+        | BotCommand::PromptBuilder => {
+            return Ok(false);
+        }
         BotCommand::WorktreeCreate => {}
     }
 

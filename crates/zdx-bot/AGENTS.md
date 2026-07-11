@@ -6,6 +6,8 @@ Scope: Telegram bot runtime, ingest/handler flow, queueing, and Telegram API int
 
 - `src/lib.rs`: bot crate entrypoint
 - `src/followups.rs`: end-of-turn follow-up suggestion buttons (`<followups>` tag → tap dispatches new turn)
+- `src/staging.rs`: staged (memory-only) slash-command flow — `/handoff` + `/prompt_builder` input capture, Accept/Discard/regenerate; handoff Accept seeds a new topic with `handoff_from`, prompt-builder Accept runs the prompt in place
+- `src/command_picker.rs`: `/commands` picker — project/context `.md` commands only (picker-only; built-ins live in the native `/` menu)
 - `src/commands.rs`: centralized slash-command parsing and matching
 - `src/bot/mod.rs`: bot module exports
 - `src/bot/context.rs`: shared bot context
