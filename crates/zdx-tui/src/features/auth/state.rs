@@ -18,16 +18,13 @@ pub enum AuthStatus {
 impl AuthStatus {
     /// Detects the current authentication type.
     pub fn detect() -> Self {
-        use zdx_engine::providers::oauth::{claude_cli, gemini_cli, grok_build, openai_codex};
+        use zdx_engine::providers::oauth::{claude_cli, grok_build, openai_codex};
 
         // Check for OAuth credentials first
         if let Ok(Some(_creds)) = claude_cli::load_credentials() {
             return AuthStatus::OAuth;
         }
         if let Ok(Some(_creds)) = openai_codex::load_credentials() {
-            return AuthStatus::OAuth;
-        }
-        if let Ok(Some(_creds)) = gemini_cli::load_credentials() {
             return AuthStatus::OAuth;
         }
         if let Ok(Some(_creds)) = grok_build::load_credentials() {

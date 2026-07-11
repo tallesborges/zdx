@@ -14,7 +14,7 @@ pub use zdx_types::{
 /// Standard User-Agent header for zdx API requests.
 ///
 /// Used by all API-key providers for identification. OAuth providers
-/// (Claude CLI, Gemini CLI) use mimicked User-Agents for compatibility.
+/// use mimicked User-Agents for compatibility.
 pub const USER_AGENT: &str = concat!("zdx/", env!("CARGO_PKG_VERSION"));
 
 /// Parses a string into an HTTP header value, returning a contextual error

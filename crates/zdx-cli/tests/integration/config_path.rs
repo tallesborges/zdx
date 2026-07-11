@@ -183,7 +183,7 @@ fn test_automations_runs_reads_jsonl_log() {
     fs::write(
         &runs_path,
         concat!(
-            r#"{"automation":"morning-report","trigger":"manual","attempt":1,"max_attempts":1,"started_at":"2026-02-11T08:00:00Z","finished_at":"2026-02-11T08:00:01Z","duration_ms":1000,"ok":true,"error":null,"schedule":"0 8 * * *","model":"gemini-cli:gemini-2.5-flash"}"#,
+            r#"{"automation":"morning-report","trigger":"manual","attempt":1,"max_attempts":1,"started_at":"2026-02-11T08:00:00Z","finished_at":"2026-02-11T08:00:01Z","duration_ms":1000,"ok":true,"error":null,"schedule":"0 8 * * *","model":"gemini:gemini-2.5-flash"}"#,
             "\n"
         ),
     )

@@ -590,7 +590,7 @@ pub struct CloudCodeRequestParams<'a> {
 /// Builds a Cloud Code Assist request body (for OAuth auth).
 ///
 /// `session_id` and `prompt_seq` are used to generate `user_prompt_id` in the format
-/// used by the official Gemini CLI: `<session_id>########<seq>`.
+/// used by Google Cloud Code Assist clients: `<session_id>########<seq>`.
 pub fn build_cloud_code_assist_request(
     messages: &[ChatMessage],
     tools: &[ToolDefinition],
@@ -637,7 +637,7 @@ pub fn build_cloud_code_assist_request(
         inner_request["generationConfig"] = generation_config;
     }
 
-    // Format matches official Gemini CLI: <session_id>########<seq>
+    // Format matches Google Cloud Code Assist clients: <session_id>########<seq>
     let user_prompt_id = format!("{}########{}", params.session_id, params.prompt_seq);
 
     let mut outer_request = json!({

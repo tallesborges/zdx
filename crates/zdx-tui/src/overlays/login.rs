@@ -40,7 +40,6 @@ impl LoginState {
         &[
             ProviderKind::ClaudeCli,
             ProviderKind::OpenAICodex,
-            ProviderKind::GeminiCli,
             ProviderKind::GoogleAntigravity,
             ProviderKind::GrokBuild,
         ]
@@ -86,31 +85,6 @@ impl LoginState {
                 let pkce = openai_codex::generate_pkce();
                 let oauth_state = uuid::Uuid::new_v4().to_string();
                 let url = openai_codex::build_auth_url(&pkce, &oauth_state);
-                let oauth_state_copy = oauth_state.clone();
-                let state = LoginState::AwaitingCode {
-                    provider,
-                    url: url.clone(),
-                    pkce_verifier: pkce.verifier,
-                    oauth_state: Some(oauth_state),
-                    redirect_uri: None,
-                    error,
-                };
-                let effects = vec![
-                    UiEffect::OpenBrowser { url },
-                    UiEffect::StartLocalAuthCallback {
-                        provider,
-                        state: Some(oauth_state_copy),
-                        port: None,
-                    },
-                ];
-                (state, effects)
-            }
-            ProviderKind::GeminiCli => {
-                use zdx_engine::providers::oauth::gemini_cli;
-
-                let pkce = gemini_cli::generate_pkce();
-                let oauth_state = uuid::Uuid::new_v4().to_string();
-                let url = gemini_cli::build_auth_url(&pkce, &oauth_state);
                 let oauth_state_copy = oauth_state.clone();
                 let state = LoginState::AwaitingCode {
                     provider,

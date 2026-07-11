@@ -13,9 +13,7 @@ pub async fn token_exchange(
     verifier: String,
     redirect_uri: Option<String>,
 ) -> UiEvent {
-    use zdx_engine::providers::oauth::{
-        claude_cli, gemini_cli, google_antigravity, grok_build, openai_codex,
-    };
+    use zdx_engine::providers::oauth::{claude_cli, google_antigravity, grok_build, openai_codex};
 
     let result = match provider {
         zdx_engine::providers::ProviderKind::ClaudeCli => {
@@ -43,26 +41,6 @@ pub async fn token_exchange(
             match openai_codex::exchange_code(&code, &pkce).await {
                 Ok(creds) => openai_codex::save_credentials(&creds)
                     .map_err(|e| format!("Failed to save: {e}")),
-                Err(e) => Err(e.to_string()),
-            }
-        }
-        zdx_engine::providers::ProviderKind::GeminiCli => {
-            let pkce = gemini_cli::Pkce {
-                verifier,
-                challenge: String::new(),
-            };
-            match gemini_cli::exchange_code(&code, &pkce).await {
-                Ok(mut creds) => {
-                    // Discover project ID after getting tokens
-                    match gemini_cli::discover_project(&creds.access).await {
-                        Ok(project_id) => {
-                            creds.account_id = Some(project_id);
-                            gemini_cli::save_credentials(&creds)
-                                .map_err(|e| format!("Failed to save: {e}"))
-                        }
-                        Err(e) => Err(format!("Failed to discover project: {e}")),
-                    }
-                }
                 Err(e) => Err(e.to_string()),
             }
         }
@@ -118,9 +96,6 @@ pub async fn local_auth_callback(
         }
         zdx_engine::providers::ProviderKind::OpenAICodex => {
             wait_for_local_code(1455, "/auth/callback", state.as_deref())
-        }
-        zdx_engine::providers::ProviderKind::GeminiCli => {
-            wait_for_local_code(8085, "/oauth2callback", state.as_deref())
         }
         zdx_engine::providers::ProviderKind::GoogleAntigravity => {
             wait_for_local_code(51121, "/oauth-callback", state.as_deref())

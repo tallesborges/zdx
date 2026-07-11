@@ -733,7 +733,6 @@ fn process_login_callback(
             *provider,
             zdx_engine::providers::ProviderKind::ClaudeCli
                 | zdx_engine::providers::ProviderKind::OpenAICodex
-                | zdx_engine::providers::ProviderKind::GeminiCli
                 | zdx_engine::providers::ProviderKind::GoogleAntigravity
                 | zdx_engine::providers::ProviderKind::GrokBuild
         )
@@ -770,13 +769,10 @@ fn parse_login_paste(
     text: &str,
 ) -> (Option<String>, Option<String>) {
     use zdx_engine::providers::ProviderKind;
-    use zdx_engine::providers::oauth::{
-        claude_cli, gemini_cli, google_antigravity, grok_build, openai_codex,
-    };
+    use zdx_engine::providers::oauth::{claude_cli, google_antigravity, grok_build, openai_codex};
     match provider {
         ProviderKind::ClaudeCli => claude_cli::parse_authorization_input(text),
         ProviderKind::OpenAICodex => openai_codex::parse_authorization_input(text),
-        ProviderKind::GeminiCli => gemini_cli::parse_authorization_input(text),
         ProviderKind::GoogleAntigravity => google_antigravity::parse_authorization_input(text),
         ProviderKind::GrokBuild => grok_build::parse_authorization_input(text),
         _ => (None, None),

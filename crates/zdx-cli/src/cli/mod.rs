@@ -271,9 +271,6 @@ enum Commands {
         /// Provider to log in to
         #[arg(long = "openai-codex")]
         openai_codex: bool,
-        /// Provider to log in to (Google Cloud Code Assist)
-        #[arg(long = "gemini-cli")]
-        gemini_cli: bool,
         /// Provider to log in to (Google Antigravity)
         #[arg(long = "antigravity")]
         antigravity: bool,
@@ -293,9 +290,6 @@ enum Commands {
         /// Provider to log out from
         #[arg(long = "openai-codex")]
         openai_codex: bool,
-        /// Provider to log out from (Google Cloud Code Assist)
-        #[arg(long = "gemini-cli")]
-        gemini_cli: bool,
         /// Provider to log out from (Google Antigravity)
         #[arg(long = "antigravity")]
         antigravity: bool,
@@ -1076,35 +1070,16 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             anthropic,
             claude_cli,
             openai_codex,
-            gemini_cli,
             antigravity,
             grok_build,
-        } => {
-            dispatch_login((
-                anthropic,
-                claude_cli,
-                openai_codex,
-                gemini_cli,
-                antigravity,
-                grok_build,
-            ))
-            .await
-        }
+        } => dispatch_login((anthropic, claude_cli, openai_codex, antigravity, grok_build)).await,
         Commands::Logout {
             anthropic,
             claude_cli,
             openai_codex,
-            gemini_cli,
             antigravity,
             grok_build,
-        } => dispatch_logout((
-            anthropic,
-            claude_cli,
-            openai_codex,
-            gemini_cli,
-            antigravity,
-            grok_build,
-        )),
+        } => dispatch_logout((anthropic, claude_cli, openai_codex, antigravity, grok_build)),
         Commands::Models { command } => dispatch_models(command, context).await,
         Commands::Monitor => dispatch_monitor(context),
         Commands::Telegram { command } => dispatch_telegram(command, context).await,
@@ -1308,12 +1283,12 @@ fn dispatch_config(command: &ConfigCommands) -> Result<()> {
     }
 }
 
-async fn dispatch_login(flags: (bool, bool, bool, bool, bool, bool)) -> Result<()> {
+async fn dispatch_login(flags: (bool, bool, bool, bool, bool)) -> Result<()> {
     let provider = select_auth_provider(flags)?;
     login_provider(provider).await
 }
 
-fn dispatch_logout(flags: (bool, bool, bool, bool, bool, bool)) -> Result<()> {
+fn dispatch_logout(flags: (bool, bool, bool, bool, bool)) -> Result<()> {
     let provider = select_auth_provider(flags)?;
     logout_provider(provider)
 }
@@ -1390,21 +1365,19 @@ enum AuthProvider {
     Anthropic,
     ClaudeCli,
     OpenaiCodex,
-    GeminiCli,
     Antigravity,
     GrokBuild,
 }
 
-fn select_auth_provider(flags: (bool, bool, bool, bool, bool, bool)) -> Result<AuthProvider> {
+fn select_auth_provider(flags: (bool, bool, bool, bool, bool)) -> Result<AuthProvider> {
     match flags {
-        (true, false, false, false, false, false) => Ok(AuthProvider::Anthropic),
-        (false, true, false, false, false, false) => Ok(AuthProvider::ClaudeCli),
-        (false, false, true, false, false, false) => Ok(AuthProvider::OpenaiCodex),
-        (false, false, false, true, false, false) => Ok(AuthProvider::GeminiCli),
-        (false, false, false, false, true, false) => Ok(AuthProvider::Antigravity),
-        (false, false, false, false, false, true) => Ok(AuthProvider::GrokBuild),
+        (true, false, false, false, false) => Ok(AuthProvider::Anthropic),
+        (false, true, false, false, false) => Ok(AuthProvider::ClaudeCli),
+        (false, false, true, false, false) => Ok(AuthProvider::OpenaiCodex),
+        (false, false, false, true, false) => Ok(AuthProvider::Antigravity),
+        (false, false, false, false, true) => Ok(AuthProvider::GrokBuild),
         _ => anyhow::bail!(
-            "Please specify a provider: --anthropic, --claude-cli, --openai-codex, --gemini-cli, --antigravity, or --grok-build"
+            "Please specify a provider: --anthropic, --claude-cli, --openai-codex, --antigravity, or --grok-build"
         ),
     }
 }
@@ -1414,7 +1387,6 @@ async fn login_provider(provider: AuthProvider) -> Result<()> {
         AuthProvider::Anthropic => commands::auth::login_anthropic().await,
         AuthProvider::ClaudeCli => commands::auth::login_claude_cli().await,
         AuthProvider::OpenaiCodex => commands::auth::login_openai_codex().await,
-        AuthProvider::GeminiCli => commands::auth::login_gemini_cli().await,
         AuthProvider::Antigravity => commands::auth::login_antigravity().await,
         AuthProvider::GrokBuild => commands::auth::login_grok_build().await,
     }
@@ -1428,7 +1400,6 @@ fn logout_provider(provider: AuthProvider) -> Result<()> {
         }
         AuthProvider::ClaudeCli => commands::auth::logout_claude_cli(),
         AuthProvider::OpenaiCodex => commands::auth::logout_openai_codex(),
-        AuthProvider::GeminiCli => commands::auth::logout_gemini_cli(),
         AuthProvider::Antigravity => commands::auth::logout_antigravity(),
         AuthProvider::GrokBuild => commands::auth::logout_grok_build(),
     }
