@@ -1320,8 +1320,6 @@ pub struct ProvidersConfig {
     pub xiaomi_plan: ProviderConfig,
     #[serde(default = "default_gemini_provider")]
     pub gemini: ProviderConfig,
-    #[serde(default = "default_gemini_cli_provider")]
-    pub gemini_cli: ProviderConfig,
     #[serde(default = "default_google_antigravity_provider")]
     pub google_antigravity: ProviderConfig,
     #[serde(default = "default_mistral_provider")]
@@ -1347,7 +1345,7 @@ pub struct ProvidersConfig {
 impl ProvidersConfig {
     /// Returns whether a provider is enabled by its string identifier.
     ///
-    /// Provider IDs match the model registry format (e.g., "anthropic", "openai", "gemini-cli").
+    /// Provider IDs match the model registry format (e.g., "anthropic", "openai", "gemini").
     /// Returns true if the provider is not found (unknown providers default to enabled).
     pub fn is_enabled(&self, provider_id: &str) -> bool {
         use crate::providers::ProviderKind;
@@ -1365,7 +1363,6 @@ impl ProvidersConfig {
             id if id == ProviderKind::Xiaomi.id() => &self.xiaomi,
             id if id == ProviderKind::XiaomiPlan.id() => &self.xiaomi_plan,
             id if id == ProviderKind::Gemini.id() => &self.gemini,
-            id if id == ProviderKind::GeminiCli.id() => &self.gemini_cli,
             id if id == ProviderKind::GoogleAntigravity.id() => &self.google_antigravity,
             id if id == ProviderKind::OpencodeGo.id() => &self.opencode_go,
             id if id == ProviderKind::Minimax.id() => &self.minimax,
@@ -1396,7 +1393,6 @@ impl ProvidersConfig {
             ProviderKind::Xiaomi => &self.xiaomi,
             ProviderKind::XiaomiPlan => &self.xiaomi_plan,
             ProviderKind::Gemini => &self.gemini,
-            ProviderKind::GeminiCli => &self.gemini_cli,
             ProviderKind::GoogleAntigravity => &self.google_antigravity,
             ProviderKind::OpencodeGo => &self.opencode_go,
             ProviderKind::Minimax => &self.minimax,
@@ -1425,7 +1421,6 @@ impl ProvidersConfig {
             ProviderKind::Xiaomi => &mut self.xiaomi,
             ProviderKind::XiaomiPlan => &mut self.xiaomi_plan,
             ProviderKind::Gemini => &mut self.gemini,
-            ProviderKind::GeminiCli => &mut self.gemini_cli,
             ProviderKind::GoogleAntigravity => &mut self.google_antigravity,
             ProviderKind::OpencodeGo => &mut self.opencode_go,
             ProviderKind::Minimax => &mut self.minimax,
@@ -1474,7 +1469,6 @@ impl Default for ProvidersConfig {
             openai_codex: default_openai_codex_provider(),
             openai: default_openai_provider(),
             gemini: default_gemini_provider(),
-            gemini_cli: default_gemini_cli_provider(),
             google_antigravity: default_google_antigravity_provider(),
             openrouter: default_openrouter_provider(),
             deepseek: default_deepseek_provider(),
@@ -1616,18 +1610,6 @@ fn default_xiaomi_plan_provider() -> ProviderConfig {
 }
 
 fn default_gemini_provider() -> ProviderConfig {
-    ProviderConfig {
-        enabled: Some(true),
-        models: vec![
-            "gemini-3.5-flash".to_string(),
-            "gemini-3.1-pro-preview".to_string(),
-            "gemini-3.1-flash-lite-preview".to_string(),
-        ],
-        ..Default::default()
-    }
-}
-
-fn default_gemini_cli_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
@@ -3122,10 +3104,6 @@ available_models = ["codex:gpt-5.3-codex"]
                 gemini: ProviderConfig {
                     enabled: Some(false),
                     ..default_gemini_provider()
-                },
-                gemini_cli: ProviderConfig {
-                    enabled: Some(false),
-                    ..default_gemini_cli_provider()
                 },
                 google_antigravity: ProviderConfig {
                     enabled: Some(false),

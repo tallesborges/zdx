@@ -61,8 +61,7 @@ struct OpenPart {
 impl<S> GeminiSseParser<S> {
     /// Creates a new parser with custom tool ID prefix.
     ///
-    /// The tool ID prefix is used to distinguish tools from different providers
-    /// (e.g., "gemini" for API key, "gemini-cli" for OAuth).
+    /// The tool ID prefix is used to distinguish tools from different providers.
     pub fn new(stream: S, model: String, tool_id_prefix: &str) -> Self
     where
         S: Eventsource,

@@ -32,9 +32,6 @@ pub fn handle_login_result(
                 zdx_engine::providers::ProviderKind::OpenAICodex => {
                     "Logged in with OpenAI Codex OAuth."
                 }
-                zdx_engine::providers::ProviderKind::GeminiCli => {
-                    "Logged in with Gemini CLI OAuth."
-                }
                 zdx_engine::providers::ProviderKind::GoogleAntigravity => {
                     "Logged in with Google Antigravity OAuth."
                 }

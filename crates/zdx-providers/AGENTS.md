@@ -6,10 +6,10 @@ LLM provider implementations extracted from `zdx-core`.
 
 - `src/lib.rs` — crate root: module declarations, `ProviderKind`, `ProviderSelection`, `resolve_provider()`, `ProviderBuildContext`
 - `src/shared.rs` — provider-agnostic helpers (`resolve_api_key`, `resolve_base_url`, `merge_system_prompt`, `USER_AGENT`); re-exports value types from `zdx-types`
-- `src/oauth.rs` — OAuth token storage/retrieval (Claude CLI, OpenAI Codex, Gemini CLI, Google Antigravity, Grok Build)
+- `src/oauth.rs` — OAuth token storage/retrieval (Claude CLI, OpenAI Codex, Google Antigravity, Grok Build)
 - `src/anthropic/` — Anthropic Messages API + Claude CLI OAuth provider
 - `src/openai/` — OpenAI Responses/Chat Completions/image generation API + Codex OAuth provider
-- `src/gemini/` — Google Gemini API + Gemini CLI OAuth + Antigravity OAuth providers
+- `src/gemini/` — Google Gemini API + Antigravity OAuth providers
 - `src/openrouter.rs`, `src/deepseek.rs`, `src/mistral.rs`, `src/moonshot.rs`, `src/stepfun.rs`, `src/xiaomi.rs`, `src/minimax.rs`, `src/zai.rs`, `src/xai.rs` — thin OpenAI-compatible providers
 - `src/grok_build.rs` — Grok Build provider: xAI Grok subscription OAuth over the xAI Responses API (bearer from `oauth::grok_build`, refreshed on demand)
 - `src/openai_compatible.rs` — generic OpenAI-compatible chat-completions client for user-defined "custom" providers (`[providers.custom.<name>]`); carries no `ProviderKind`, built directly by the engine from a resolved base URL + API key
