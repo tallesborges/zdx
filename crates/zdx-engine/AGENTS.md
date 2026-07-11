@@ -32,6 +32,8 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - `core/context.rs`: project context loading (`AGENTS.md`/`CLAUDE.md`, memory)
 - `core/interrupt.rs`: signal handling
 - `core/agent.rs`: agent loop + event channels
+- `core/handoff_generation.rs`: LLM-based handoff context generation (shared by TUI + bot)
+- `core/prompt_builder_generation.rs`: LLM-based prompt-builder generation (shared by TUI + bot)
 - `core/qmd.rs`: qmd binary discovery and setup helpers
 - `core/subagent.rs`: child `zdx exec` subagent runner. Child runs persist their own thread JSONL tagged via `ExecSubagentOptions::thread_origin_kind`/`thread_parent_id`/`thread_subagent_name` (so their usage is captured by `usage_stats`); tagged threads are hidden from default listings.
 - `core/thread_export.rs`: clean Markdown transcript exports derived from saved thread JSONL

@@ -5,6 +5,8 @@
 //! - `context`: Project context loading (AGENTS.md files)
 //! - `interrupt`: Signal handling for graceful interruption
 //! - `agent`: Agent loop and event channels
+//! - `handoff_generation`: LLM-based handoff context generation
+//! - `prompt_builder_generation`: LLM-based prompt-builder generation
 //! - `qmd`: qmd binary discovery and setup
 //! - `subagent`: Child `zdx exec` subagent runner
 //! - `thread_export`: Thread transcript exports
@@ -17,7 +19,9 @@
 pub mod agent;
 pub mod context;
 pub mod events;
+pub mod handoff_generation;
 pub mod interrupt;
+pub mod prompt_builder_generation;
 pub mod qmd;
 pub mod subagent;
 pub mod thread_export;
