@@ -404,7 +404,7 @@ pub struct TuiState {
     /// for up to 1s instead of hitting the filesystem on the per-keystroke path.
     pub(crate) active_threads_scan: HashSet<String>,
     pub(crate) active_threads_scanned_at: Option<Instant>,
-    /// Follow-up suggestions from the most recent reply (Ctrl+F to pick).
+    /// Suggested replies from the most recent reply (Ctrl+F to pick).
     pub last_followups: Vec<String>,
 }
 

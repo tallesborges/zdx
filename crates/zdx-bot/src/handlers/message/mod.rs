@@ -283,6 +283,17 @@ mod tests {
     }
 
     #[test]
+    fn parse_final_response_extracts_text_followups_and_media() {
+        let parsed = parse_final_response(
+            "Done.\n<followups><followup>Open the report</followup></followups>\n\
+             <medias><media>/tmp/out.png</media></medias>",
+        );
+        assert_eq!(parsed.text, "Done.");
+        assert_eq!(parsed.followups, vec!["Open the report"]);
+        assert_eq!(parsed.media_paths, vec![PathBuf::from("/tmp/out.png")]);
+    }
+
+    #[test]
     fn parse_final_response_extracts_multiple_media_entries() {
         let parsed = parse_final_response(
             "<medias><media>/tmp/one.png</media><media>/tmp/two.pdf</media></medias>",
