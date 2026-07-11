@@ -163,6 +163,16 @@ impl Thread {
         self.subagent_name = subagent_name;
     }
 
+    /// Records the parent thread this thread was handed off from.
+    ///
+    /// Use with [`Thread::with_id`] when the thread ID is fixed by the caller
+    /// (e.g. Telegram topic threads). Only effective before the meta event is
+    /// written (i.e. on a new thread); on an existing thread the meta line is
+    /// already persisted and this is a no-op for on-disk state.
+    pub fn set_handoff_from(&mut self, handoff_from: Option<String>) {
+        self.handoff_from = handoff_from;
+    }
+
     /// Ensures the meta event is written for new threads.
     fn ensure_meta(&mut self) -> Result<()> {
         if self.is_new {

@@ -5,6 +5,10 @@ pub(crate) enum BotCommand {
     Status,
     WhereAmI,
     WorktreeCreate,
+    Handoff,
+    Commands,
+    Tldr,
+    PromptBuilder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +71,42 @@ const COMMAND_DEFS: &[CommandDef] = &[
             description: "Enable worktree for this thread",
         },
     },
+    CommandDef {
+        command: BotCommand::Handoff,
+        patterns: &["/handoff"],
+        blocks_topic_autocreate: true,
+        telegram_spec: TelegramCommandSpec {
+            command: "handoff",
+            description: "Hand off this topic's context into a new topic",
+        },
+    },
+    CommandDef {
+        command: BotCommand::Commands,
+        patterns: &["/commands"],
+        blocks_topic_autocreate: true,
+        telegram_spec: TelegramCommandSpec {
+            command: "commands",
+            description: "Show commands available in this project context",
+        },
+    },
+    CommandDef {
+        command: BotCommand::Tldr,
+        patterns: &["/tldr"],
+        blocks_topic_autocreate: true,
+        telegram_spec: TelegramCommandSpec {
+            command: "tldr",
+            description: "Recap this topic's conversation",
+        },
+    },
+    CommandDef {
+        command: BotCommand::PromptBuilder,
+        patterns: &["/prompt-builder", "/prompt_builder", "/promptbuilder"],
+        blocks_topic_autocreate: true,
+        telegram_spec: TelegramCommandSpec {
+            command: "prompt_builder",
+            description: "Draft a polished prompt from a short intent",
+        },
+    },
 ];
 
 pub(crate) fn telegram_command_specs() -> Vec<TelegramCommandSpec> {
@@ -81,6 +121,17 @@ pub(crate) fn telegram_command_specs() -> Vec<TelegramCommandSpec> {
         description: "View or change the thinking level",
     });
     specs
+}
+
+/// Native bot command names that custom `.md` commands may not shadow in the
+/// `/commands` picker (mirrors the TUI's `builtin_names` rule).
+pub(crate) fn native_command_names() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = COMMAND_DEFS
+        .iter()
+        .map(|def| def.telegram_spec.command)
+        .collect();
+    names.extend(["model", "thinking", "cancel"]);
+    names
 }
 
 pub(crate) fn parse_command(text: &str) -> Option<BotCommand> {
@@ -110,7 +161,7 @@ pub(crate) fn is_topic_blocking_command(text: &str) -> bool {
 pub(crate) fn bypasses_queue(text: &str) -> bool {
     matches!(
         parse_command(text),
-        Some(BotCommand::Status | BotCommand::WhereAmI)
+        Some(BotCommand::Status | BotCommand::WhereAmI | BotCommand::Tldr)
     )
 }
 
@@ -221,6 +272,12 @@ mod tests {
             parse_command(" /whereami@zdx_bot "),
             Some(BotCommand::WhereAmI)
         );
+        assert_eq!(parse_command("/handoff"), Some(BotCommand::Handoff));
+        assert_eq!(
+            parse_command(" /handoff@zdx_bot "),
+            Some(BotCommand::Handoff)
+        );
+        assert_eq!(parse_command("/handoff please"), None);
     }
 
     #[test]
@@ -264,6 +321,7 @@ mod tests {
         assert!(is_topic_blocking_command("/whereami"));
         assert!(is_topic_blocking_command("/whereami@zdx_bot"));
         assert!(is_topic_blocking_command("/worktree"));
+        assert!(is_topic_blocking_command("/handoff"));
         assert!(is_topic_blocking_command("/model"));
         assert!(is_topic_blocking_command("/model list"));
         assert!(is_topic_blocking_command("/thinking"));
@@ -279,6 +337,18 @@ mod tests {
         assert!(bypasses_queue("/whereami@zdx_bot"));
         assert!(!bypasses_queue("/new"));
         assert!(!bypasses_queue("/model"));
+        assert!(!bypasses_queue("/handoff"));
+        assert!(bypasses_queue("/tldr"));
+        assert_eq!(parse_command("/tldr"), Some(BotCommand::Tldr));
+        assert!(!bypasses_queue("/prompt-builder"));
+        assert_eq!(
+            parse_command("/prompt-builder"),
+            Some(BotCommand::PromptBuilder)
+        );
+        assert_eq!(
+            parse_command("/prompt_builder@zdx_bot"),
+            Some(BotCommand::PromptBuilder)
+        );
     }
 
     #[test]

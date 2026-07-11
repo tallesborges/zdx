@@ -458,3 +458,20 @@ When the Telegram bot is used in a forum-enabled supergroup:
 - Topic title generation rules:
   - if the topic was created from a normal message in `General`, the bot may auto-generate the topic title from that first routed message
   - if the topic was created by `/new` in `General`, the bot waits and auto-generates the topic title from the first later in-topic message that contains usable text (plain text or audio transcript)
+- `/handoff` (inside a topic) starts a staged, memory-only handoff flow:
+  - the next message (text or voice transcript) is consumed as the handoff input — it never runs an agent turn and is never persisted to the topic's thread
+  - the bot shows a generated handoff preview with Accept / Discard buttons; sending another message regenerates the preview from the new input
+  - Accept creates a new topic whose thread records `handoff_from` (source thread) and runs the first agent turn there with the generated handoff prompt
+  - Discard (or `/cancel`) deletes the staging messages — the bot's own always, the user's best-effort (needs `can_delete_messages`) — and leaves the source thread untouched
+  - `/handoff` outside a forum topic (DM or `General`) does not start staging; the bot explains it needs a topic
+  - stale staging sessions expire; a message after expiry runs as a normal agent turn
+- `/commands` (inside a topic or DM) posts a context-dependent command picker:
+  - lists only the custom `.md` commands the TUI would show for the chat's bound project (bundled + `$ZDX_HOME/commands` + project `.zdx/commands`); agent built-ins live in the native `/` menu instead
+  - custom `.md` commands are picker-only on the bot: they are not typed commands and are not registered in the native `/` menu
+  - tapping a custom command dispatches its prompt content as a normal agent turn in the current topic
+  - the picker is one-shot: a tap consumes it; Dismiss deletes it
+- `/tldr` (typed, native menu) posts a recap of the current thread (read-only, `tldr_model`); like `/status` it bypasses the queue and does not auto-create topics from `General`
+- `/prompt_builder` (typed, native menu; `/prompt-builder` also accepted) starts the same staged flow as `/handoff` with the intent as input:
+  - works inside topics and DMs (not `General`); the generated prompt is previewed with Accept / Discard buttons and regenerates on a new message
+  - Accept runs the generated prompt as the user's real message in the current topic (a normal agent turn); the preview message is kept (edited) as the turn's reply anchor
+  - Discard / `/cancel` delete the staging messages and leave the thread untouched
