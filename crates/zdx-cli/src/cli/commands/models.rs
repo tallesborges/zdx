@@ -288,7 +288,7 @@ impl UpdateState {
 }
 
 #[allow(clippy::too_many_lines)]
-fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 19] {
+fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 20] {
     [
         ProviderSpec {
             provider_id: "anthropic",
@@ -403,6 +403,12 @@ fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 19] {
             api_id: "xai",
             prefix: Some("grok-build"),
             provider_cfg: &config.providers.grok_build,
+        },
+        ProviderSpec {
+            provider_id: "meta",
+            api_id: "meta",
+            prefix: Some("meta"),
+            provider_cfg: &config.providers.meta,
         },
     ]
 }
@@ -1263,6 +1269,38 @@ mod tests {
                 && s.api_id == "opencode-go"
                 && s.prefix == Some("opencode-go")
         }));
+    }
+
+    #[test]
+    fn test_provider_specs_includes_meta() {
+        let config = config::Config::default();
+        let specs = provider_specs(&config);
+
+        assert!(
+            specs.iter().any(|s| {
+                s.provider_id == "meta" && s.api_id == "meta" && s.prefix == Some("meta")
+            }),
+            "provider_specs must include meta so `zdx models update` keeps Muse Spark"
+        );
+    }
+
+    #[test]
+    fn test_lookup_default_model_meta_preserves_muse_spark_metadata() {
+        // Meta is not on models.dev, so `zdx models update` falls back to the
+        // embedded default record. Verify it carries the pinned Muse Spark
+        // pricing/context/capabilities instead of a "(custom)" placeholder.
+        let result = lookup_default_model("meta:muse-spark-1.1");
+        assert!(result.is_some(), "Should find meta model in defaults");
+
+        let model = result.unwrap();
+        assert_eq!(model.provider, "meta");
+        assert_eq!(model.display_name, "Muse Spark 1.1");
+        assert!(!model.display_name.contains("custom"));
+        assert_eq!(model.context_limit, 1_000_000);
+        assert_eq!(model.pricing.input, 1.25);
+        assert_eq!(model.pricing.output, 4.25);
+        assert!(model.capabilities.reasoning);
+        assert!(model.capabilities.input_images);
     }
 
     #[test]

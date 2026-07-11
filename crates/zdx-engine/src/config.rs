@@ -1336,6 +1336,8 @@ pub struct ProvidersConfig {
     pub xai: ProviderConfig,
     #[serde(default = "default_grok_build_provider")]
     pub grok_build: ProviderConfig,
+    #[serde(default = "default_meta_provider")]
+    pub meta: ProviderConfig,
     /// User-defined OpenAI-compatible providers, keyed by name. Used by
     /// prefixing the model with the name (e.g. `<name>:model-id`).
     #[serde(default)]
@@ -1370,6 +1372,7 @@ impl ProvidersConfig {
             id if id == ProviderKind::Zai.id() => &self.zai,
             id if id == ProviderKind::Xai.id() => &self.xai,
             id if id == ProviderKind::GrokBuild.id() => &self.grok_build,
+            id if id == ProviderKind::Meta.id() => &self.meta,
             _ => return true, // Unknown providers default to enabled
         };
         config.enabled.unwrap_or(true)
@@ -1400,6 +1403,7 @@ impl ProvidersConfig {
             ProviderKind::Zai => &self.zai,
             ProviderKind::Xai => &self.xai,
             ProviderKind::GrokBuild => &self.grok_build,
+            ProviderKind::Meta => &self.meta,
         }
     }
 
@@ -1428,6 +1432,7 @@ impl ProvidersConfig {
             ProviderKind::Zai => &mut self.zai,
             ProviderKind::Xai => &mut self.xai,
             ProviderKind::GrokBuild => &mut self.grok_build,
+            ProviderKind::Meta => &mut self.meta,
         }
     }
 
@@ -1484,6 +1489,7 @@ impl Default for ProvidersConfig {
             zai: default_zai_provider(),
             xai: default_xai_provider(),
             grok_build: default_grok_build_provider(),
+            meta: default_meta_provider(),
             custom: std::collections::HashMap::new(),
         }
     }
@@ -1565,6 +1571,14 @@ fn default_moonshot_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec!["kimi-k2.6".to_string()],
+        ..Default::default()
+    }
+}
+
+fn default_meta_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec!["muse-spark-1.1".to_string()],
         ..Default::default()
     }
 }

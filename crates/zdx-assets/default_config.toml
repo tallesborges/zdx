@@ -218,6 +218,12 @@ models = ["grok-4.5"]
 fast_mode = false
 websocket = false
 
+[providers.meta]
+enabled = true
+models = ["muse-spark-1.1"]
+fast_mode = false
+websocket = false
+
 [providers.custom]
 
 [providers.xiaomi_plan]

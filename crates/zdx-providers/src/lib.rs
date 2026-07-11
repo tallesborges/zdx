@@ -9,6 +9,7 @@ pub mod deepseek;
 pub mod gemini;
 pub mod grok_build;
 pub mod lmstudio;
+pub mod meta;
 pub mod minimax;
 pub mod mistral;
 pub mod moonshot;
@@ -94,6 +95,7 @@ impl_streaming_provider!(
     zai::ZaiClient,
     xai::XaiClient,
     grok_build::GrokBuildClient,
+    meta::MetaClient,
     opencode_go::OpencodeGoClient,
     openai_compatible::OpenAICompatibleClient,
 );
@@ -169,6 +171,7 @@ pub enum ProviderKind {
     Zai,
     Xai,
     GrokBuild,
+    Meta,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -401,6 +404,16 @@ impl ProviderKind {
                 supports_oauth: true,
                 is_subscription: true,
             },
+            Self::Meta => ProviderMeta {
+                id: "meta",
+                aliases: &[],
+                label: "Meta",
+                api_key_env: Some("META_API_KEY"),
+                base_url: "https://api.meta.ai/v1",
+                base_url_env: Some("META_API_BASE"),
+                supports_oauth: false,
+                is_subscription: false,
+            },
         }
     }
 
@@ -427,6 +440,7 @@ impl ProviderKind {
             ProviderKind::Zai,
             ProviderKind::Xai,
             ProviderKind::GrokBuild,
+            ProviderKind::Meta,
         ]
     }
 
@@ -542,6 +556,7 @@ impl ProviderKind {
             Self::Zai => zai::build(ctx),
             Self::Xai => xai::build(ctx),
             Self::GrokBuild => grok_build::build(ctx),
+            Self::Meta => meta::build(ctx),
         }
     }
 }

@@ -63,6 +63,7 @@ fn login_overlay_title(login_state: &LoginState) -> &'static str {
             zdx_engine::providers::ProviderKind::Zai => "Z.AI API Key",
             zdx_engine::providers::ProviderKind::Xai => "xAI API Key",
             zdx_engine::providers::ProviderKind::GrokBuild => "Grok Build Login",
+            zdx_engine::providers::ProviderKind::Meta => "Meta API Key",
         },
     }
 }

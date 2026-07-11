@@ -59,7 +59,7 @@ Just the ones I use — but that turns out to be a lot.
 
 ### Providers & models
 
-- **API providers** — Anthropic, OpenAI, Google Gemini, xAI (Grok), DeepSeek, Moonshot (Kimi), MiniMax, Mistral, StepFun, Z.ai (GLM), Xiaomi MiMo
+- **API providers** — Anthropic, OpenAI, Google Gemini, xAI (Grok), DeepSeek, Moonshot (Kimi), MiniMax, Mistral, StepFun, Z.ai (GLM), Xiaomi MiMo, Meta (Muse Spark)
 - **Subscription / CLI auth** — Claude CLI, Gemini CLI, OpenAI Codex, Google Antigravity, Xiaomi Token Plan
 - **Aggregators** — OpenRouter, opencode-go
 - **Local** — LM Studio
