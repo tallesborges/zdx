@@ -37,6 +37,12 @@ enum BlockKind {
     Reasoning,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TerminalOutcome {
+    Completed,
+    Incomplete,
+}
+
 /// State for tracking a reasoning item being streamed.
 #[derive(Debug, Clone)]
 struct ReasoningState {
@@ -91,6 +97,36 @@ fn extract_function_call_arguments(item: &Value) -> Option<String> {
     })
 }
 
+fn usage_from_response(response: &Value) -> Usage {
+    let usage = response.get("usage").unwrap_or(&Value::Null);
+    let input_details = usage.get("input_tokens_details").unwrap_or(&Value::Null);
+    let cache_read_input_tokens = input_details
+        .get("cached_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let cache_creation_input_tokens = input_details
+        .get("cache_write_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let input_tokens = usage
+        .get("input_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .saturating_sub(cache_read_input_tokens)
+        .saturating_sub(cache_creation_input_tokens);
+    let output_tokens = usage
+        .get("output_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+
+    Usage {
+        input_tokens,
+        output_tokens,
+        cache_read_input_tokens,
+        cache_creation_input_tokens,
+    }
+}
+
 /// Maps `OpenAI` Responses JSON events to `StreamEvent`s. The payloads are
 /// byte-identical over SSE and WebSocket, so both transports feed this mapper.
 pub struct ResponsesEventMapper {
@@ -98,6 +134,7 @@ pub struct ResponsesEventMapper {
     state: StreamState,
     pending: VecDeque<StreamEvent>,
     last_response_id: Option<String>,
+    terminal_outcome: Option<TerminalOutcome>,
 }
 
 impl ResponsesEventMapper {
@@ -107,6 +144,7 @@ impl ResponsesEventMapper {
             state: StreamState::new(),
             pending: VecDeque::new(),
             last_response_id: None,
+            terminal_outcome: None,
         }
     }
 
@@ -116,8 +154,17 @@ impl ResponsesEventMapper {
     /// Returns a parse error if the payload is not valid JSON.
     pub fn push_json(&mut self, data: &str) -> ProviderResult<()> {
         let trimmed = data.trim();
-        if trimmed.is_empty() || trimmed == "[DONE]" {
+        if trimmed.is_empty() {
             return Ok(());
+        }
+        if trimmed == "[DONE]" {
+            return if self.terminal_outcome.is_some() {
+                Ok(())
+            } else {
+                Err(ProviderError::transport(
+                    "Responses stream ended before a terminal event",
+                ))
+            };
         }
 
         let value = serde_json::from_str::<Value>(trimmed).map_err(|err| {
@@ -138,6 +185,10 @@ impl ResponsesEventMapper {
     /// Most recent server `response.id` (used for WebSocket continuation).
     pub fn last_response_id(&self) -> Option<&str> {
         self.last_response_id.as_deref()
+    }
+
+    pub(crate) fn terminal_outcome(&self) -> Option<TerminalOutcome> {
+        self.terminal_outcome
     }
 
     #[allow(
@@ -429,28 +480,8 @@ impl ResponsesEventMapper {
                 if !response_id.is_empty() {
                     self.last_response_id = Some(response_id.to_string());
                 }
-                let usage = response.get("usage").unwrap_or(&Value::Null);
-                let cached = usage
-                    .get("input_tokens_details")
-                    .and_then(|v| v.get("cached_tokens"))
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0);
-                let input_tokens = usage
-                    .get("input_tokens")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0)
-                    .saturating_sub(cached);
-                let output_tokens = usage
-                    .get("output_tokens")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0);
-
-                let usage = Usage {
-                    input_tokens,
-                    output_tokens,
-                    cache_read_input_tokens: cached,
-                    cache_creation_input_tokens: 0,
-                };
+                self.terminal_outcome = Some(TerminalOutcome::Completed);
+                let usage = usage_from_response(response);
 
                 let stop_reason = if self.state.saw_tool {
                     "tool_use"
@@ -477,6 +508,42 @@ impl ResponsesEventMapper {
                     .pop_front()
                     .expect("pending should contain events"))
             }
+            "response.incomplete" => {
+                let response = value.get("response").unwrap_or(&Value::Null);
+                self.terminal_outcome = Some(TerminalOutcome::Incomplete);
+                let usage = usage_from_response(response);
+                let stop_reason = response
+                    .get("incomplete_details")
+                    .and_then(|details| details.get("reason"))
+                    .and_then(Value::as_str)
+                    .filter(|reason| !reason.is_empty())
+                    .unwrap_or("incomplete");
+
+                self.pending.push_back(StreamEvent::MessageStart {
+                    model: self.model.clone(),
+                    usage: usage.clone(),
+                });
+                self.pending.push_back(StreamEvent::MessageDelta {
+                    stop_reason: Some(stop_reason.to_string()),
+                    usage: Some(usage.into()),
+                });
+                self.pending.push_back(StreamEvent::MessageCompleted);
+
+                Ok(self
+                    .pending
+                    .pop_front()
+                    .expect("pending should contain events"))
+            }
+            "response.failed" => {
+                let response = value.get("response").unwrap_or(&Value::Null);
+                let error = response.get("error").unwrap_or(&Value::Null);
+                let error_type = error
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .unwrap_or("response_failed");
+                let message = error_message_from_payload(error, &["message"]);
+                Err(ProviderError::api_error(error_type, &message))
+            }
             "error" => {
                 let error_type = value
                     .get("code")
@@ -500,6 +567,7 @@ impl ResponsesEventMapper {
 pub struct ResponsesSseParser<S> {
     inner: EventStream<S>,
     mapper: ResponsesEventMapper,
+    finished: bool,
 }
 
 impl<S> ResponsesSseParser<S> {
@@ -510,6 +578,7 @@ impl<S> ResponsesSseParser<S> {
         Self {
             inner: stream.eventsource(),
             mapper: ResponsesEventMapper::new(model),
+            finished: false,
         }
     }
 }
@@ -528,21 +597,35 @@ where
         use std::task::Poll;
 
         loop {
+            if self.finished {
+                return Poll::Ready(None);
+            }
             if let Some(event) = self.mapper.pop() {
                 return Poll::Ready(Some(Ok(event)));
+            }
+            if self.mapper.terminal_outcome().is_some() {
+                self.finished = true;
+                return Poll::Ready(None);
             }
 
             let inner = Pin::new(&mut self.inner);
             match inner.poll_next(cx) {
                 Poll::Ready(Some(Ok(event))) => {
                     if let Err(err) = self.mapper.push_json(&event.data) {
+                        self.finished = true;
                         return Poll::Ready(Some(Err(err)));
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
+                    self.finished = true;
                     return Poll::Ready(Some(Err(map_event_stream_error(e))));
                 }
-                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(None) => {
+                    self.finished = true;
+                    return Poll::Ready(Some(Err(ProviderError::transport(
+                        "Responses stream closed before a terminal event",
+                    ))));
+                }
                 Poll::Pending => return Poll::Pending,
             }
         }
@@ -558,6 +641,195 @@ mod tests {
 
     fn mapper() -> ResponsesEventMapper {
         ResponsesEventMapper::new("gpt-5.3-codex-spark".to_string())
+    }
+
+    #[test]
+    fn response_usage_separates_uncached_read_and_write_tokens() {
+        let usage = usage_from_response(&json!({
+            "usage": {
+                "input_tokens": 20,
+                "output_tokens": 7,
+                "input_tokens_details": {
+                    "cached_tokens": 2,
+                    "cache_write_tokens": 3
+                }
+            }
+        }));
+
+        assert_eq!(usage.input_tokens, 15);
+        assert_eq!(usage.output_tokens, 7);
+        assert_eq!(usage.cache_read_input_tokens, 2);
+        assert_eq!(usage.cache_creation_input_tokens, 3);
+    }
+
+    #[test]
+    fn response_usage_defaults_missing_cache_details_to_zero() {
+        let usage = usage_from_response(&json!({
+            "usage": { "input_tokens": 20, "output_tokens": 7 }
+        }));
+
+        assert_eq!(usage.input_tokens, 20);
+        assert_eq!(usage.output_tokens, 7);
+        assert_eq!(usage.cache_read_input_tokens, 0);
+        assert_eq!(usage.cache_creation_input_tokens, 0);
+    }
+
+    #[test]
+    fn response_usage_saturates_inconsistent_cache_totals() {
+        let usage = usage_from_response(&json!({
+            "usage": {
+                "input_tokens": 4,
+                "input_tokens_details": {
+                    "cached_tokens": 3,
+                    "cache_write_tokens": 3
+                }
+            }
+        }));
+
+        assert_eq!(usage.input_tokens, 0);
+        assert_eq!(usage.cache_read_input_tokens, 3);
+        assert_eq!(usage.cache_creation_input_tokens, 3);
+    }
+
+    #[test]
+    fn response_incomplete_preserves_reason_and_usage() {
+        let mut mapper = mapper();
+        let event = mapper
+            .map_event(json!({
+                "type": "response.incomplete",
+                "response": {
+                    "status": "incomplete",
+                    "incomplete_details": { "reason": "max_tokens" },
+                    "usage": {
+                        "input_tokens": 20,
+                        "output_tokens": 7,
+                        "input_tokens_details": {
+                            "cached_tokens": 2,
+                            "cache_write_tokens": 3
+                        }
+                    }
+                }
+            }))
+            .unwrap();
+
+        assert!(matches!(
+            event,
+            StreamEvent::MessageStart {
+                usage: Usage {
+                    input_tokens: 15,
+                    output_tokens: 7,
+                    cache_read_input_tokens: 2,
+                    cache_creation_input_tokens: 3,
+                },
+                ..
+            }
+        ));
+        assert!(matches!(
+            mapper.pop(),
+            Some(StreamEvent::MessageDelta {
+                stop_reason: Some(reason),
+                ..
+            }) if reason == "max_tokens"
+        ));
+        assert_eq!(mapper.terminal_outcome(), Some(TerminalOutcome::Incomplete));
+        assert_eq!(mapper.last_response_id(), None);
+    }
+
+    #[test]
+    fn response_incomplete_does_not_assume_token_limit() {
+        let mut mapper = mapper();
+        let _ = mapper
+            .map_event(json!({
+                "type": "response.incomplete",
+                "response": {
+                    "incomplete_details": { "reason": "content_filter" }
+                }
+            }))
+            .unwrap();
+
+        assert!(matches!(
+            mapper.pop(),
+            Some(StreamEvent::MessageDelta {
+                stop_reason: Some(reason),
+                ..
+            }) if reason == "content_filter"
+        ));
+    }
+
+    #[test]
+    fn response_failed_surfaces_provider_error() {
+        let mut mapper = mapper();
+        let err = mapper
+            .map_event(json!({
+                "type": "response.failed",
+                "response": {
+                    "status": "failed",
+                    "error": {
+                        "code": "server_error",
+                        "message": "The model failed to generate a response."
+                    }
+                }
+            }))
+            .unwrap_err();
+
+        assert_eq!(err.kind, ProviderErrorKind::ApiError);
+        assert_eq!(err.code.as_deref(), Some("server_error"));
+        assert!(err.message.contains("failed to generate"));
+        assert_eq!(mapper.last_response_id(), None);
+    }
+
+    #[tokio::test]
+    async fn eof_before_terminal_event_is_retryable() {
+        use futures_util::StreamExt;
+
+        let byte_stream = stream::empty::<std::result::Result<bytes::Bytes, std::io::Error>>();
+        let mut parser = ResponsesSseParser::new(byte_stream, "gpt-test".to_string());
+        let err = parser
+            .next()
+            .await
+            .expect("stream should emit a terminal error")
+            .expect_err("premature EOF must fail");
+
+        assert_eq!(err.kind, ProviderErrorKind::Transport);
+        assert!(err.is_retryable());
+        assert!(parser.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn completed_event_ends_stream_without_waiting_for_eof() {
+        use futures_util::StreamExt;
+
+        let sse = bytes::Bytes::from_static(
+            b"data: {\"type\":\"response.completed\",\"response\":{}}\n\n",
+        );
+        let byte_stream = stream::iter([Ok::<_, std::io::Error>(sse)]).chain(stream::pending());
+        let mut parser = ResponsesSseParser::new(byte_stream, "gpt-test".to_string());
+
+        assert!(matches!(
+            parser.next().await,
+            Some(Ok(StreamEvent::MessageDelta { .. }))
+        ));
+        assert!(matches!(
+            parser.next().await,
+            Some(Ok(StreamEvent::MessageCompleted))
+        ));
+        assert!(matches!(
+            parser.next().await,
+            Some(Ok(StreamEvent::MessageStart { .. }))
+        ));
+        assert!(parser.next().await.is_none());
+    }
+
+    #[test]
+    fn done_marker_requires_a_terminal_event() {
+        let mut mapper = mapper();
+        let err = mapper.push_json("[DONE]").unwrap_err();
+        assert_eq!(err.kind, ProviderErrorKind::Transport);
+
+        mapper
+            .push_json(r#"{"type":"response.completed","response":{}}"#)
+            .unwrap();
+        assert!(mapper.push_json("[DONE]").is_ok());
     }
 
     #[test]

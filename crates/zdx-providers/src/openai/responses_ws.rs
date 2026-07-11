@@ -251,21 +251,10 @@ fn to_ws_url(base_url: &str, path: &str) -> String {
     format!("{ws_base}{path}")
 }
 
-fn frame_is_terminal(text: &str) -> bool {
-    serde_json::from_str::<Value>(text)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("type")
-                .and_then(Value::as_str)
-                .map(|kind| kind == "response.completed" || kind == "response.done")
-        })
-        .unwrap_or(false)
-}
-
 enum Ingest {
     Continue,
     Completed,
+    Incomplete,
     Failed(ProviderError),
 }
 
@@ -305,18 +294,17 @@ fn ingest_frame(
 ) -> Ingest {
     match frame {
         Some(Ok(Message::Text(text))) => {
-            let terminal = frame_is_terminal(text.as_str());
             if let Err(err) = mapper.push_json(text.as_str()) {
                 return Ingest::Failed(err);
             }
-            if terminal {
-                Ingest::Completed
-            } else {
-                Ingest::Continue
+            match mapper.terminal_outcome() {
+                Some(super::responses_sse::TerminalOutcome::Completed) => Ingest::Completed,
+                Some(super::responses_sse::TerminalOutcome::Incomplete) => Ingest::Incomplete,
+                None => Ingest::Continue,
             }
         }
         Some(Ok(Message::Close(_))) | None => Ingest::Failed(ProviderError::transport(
-            "WebSocket closed before response.completed",
+            "WebSocket closed before a terminal response event",
         )),
         Some(Ok(_)) => Ingest::Continue,
         Some(Err(err)) => Ingest::Failed(classify_websocket_error(err)),
@@ -337,6 +325,11 @@ impl TurnState {
     fn record_success(&mut self) {
         self.guard.last_response_id = self.mapper.last_response_id().map(str::to_owned);
         self.guard.last_input = std::mem::take(&mut self.pending_snapshot);
+    }
+
+    fn record_incomplete(&mut self) {
+        self.guard.last_response_id = None;
+        self.guard.last_input.clear();
     }
 }
 
@@ -373,6 +366,10 @@ fn turn_event_stream(turn: TurnState) -> impl Stream<Item = ProviderResult<Strea
                 Ingest::Continue => {}
                 Ingest::Completed => {
                     st.record_success();
+                    st.completed = true;
+                }
+                Ingest::Incomplete => {
+                    st.record_incomplete();
                     st.completed = true;
                 }
                 Ingest::Failed(err) => return Some((Err(err), None)),
@@ -462,6 +459,51 @@ mod tests {
     }
 
     #[test]
+    fn ingest_frame_distinguishes_incomplete_and_failed_responses() {
+        let mut mapper = ResponsesEventMapper::new("gpt-test".to_string());
+        let incomplete = ingest_frame(
+            &mut mapper,
+            Some(Ok(text(
+                r#"{"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_tokens"}}}"#,
+            ))),
+        );
+        assert!(matches!(incomplete, Ingest::Incomplete));
+        assert_eq!(mapper.last_response_id(), None);
+
+        let mut mapper = ResponsesEventMapper::new("gpt-test".to_string());
+        let failed = ingest_frame(
+            &mut mapper,
+            Some(Ok(text(
+                r#"{"type":"response.failed","response":{"error":{"code":"server_error","message":"failed"}}}"#,
+            ))),
+        );
+        assert!(matches!(failed, Ingest::Failed(_)));
+        assert_eq!(mapper.last_response_id(), None);
+    }
+
+    #[tokio::test]
+    async fn incomplete_turn_clears_continuation_state() {
+        let session = Arc::new(Mutex::new(SessionInner {
+            socket: None,
+            last_response_id: Some("resp_old".to_string()),
+            last_input: vec![json!({"old": true})],
+        }));
+        let guard = session.lock_owned().await;
+        let mut turn = TurnState {
+            guard,
+            mapper: ResponsesEventMapper::new("gpt-test".to_string()),
+            pending_snapshot: vec![json!({"new": true})],
+            completed: false,
+        };
+
+        turn.record_incomplete();
+
+        assert_eq!(turn.guard.last_response_id, None);
+        assert!(turn.guard.last_input.is_empty());
+        assert_eq!(turn.pending_snapshot, vec![json!({"new": true})]);
+    }
+
+    #[test]
     fn websocket_request_errors_are_not_retryable() {
         let err = "not a websocket URL".into_client_request().unwrap_err();
         let mapped = classify_websocket_error(err);
@@ -544,13 +586,17 @@ mod tests {
     }
 
     #[test]
-    fn frame_is_terminal_detects_completion() {
-        assert!(frame_is_terminal(r#"{"type":"response.completed"}"#));
-        assert!(frame_is_terminal(r#"{"type":"response.done"}"#));
-        assert!(!frame_is_terminal(
-            r#"{"type":"response.output_text.delta"}"#
-        ));
-        assert!(!frame_is_terminal("not json"));
+    fn ingest_frame_detects_completed_compatibility_events() {
+        for event_type in ["response.completed", "response.done"] {
+            let mut mapper = ResponsesEventMapper::new("gpt-test".to_string());
+            let frame = text(&format!(
+                r#"{{"type":"{event_type}","response":{{"id":"resp_1"}}}}"#
+            ));
+            assert!(matches!(
+                ingest_frame(&mut mapper, Some(Ok(frame))),
+                Ingest::Completed
+            ));
+        }
     }
 
     #[test]
