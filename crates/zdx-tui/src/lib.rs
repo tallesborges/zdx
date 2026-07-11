@@ -20,6 +20,7 @@ pub use features::transcript::markdown;
 pub use features::{auth, input, statusline, thread, transcript};
 pub use runtime::TuiRuntime;
 use zdx_engine::config::Config;
+use zdx_engine::core::context::ContextWarning;
 use zdx_engine::core::thread_persistence::Thread;
 use zdx_engine::providers::ChatMessage;
 use zdx_engine::skills::Skill;
@@ -34,6 +35,13 @@ pub(crate) fn tui_instruction_layers() -> Vec<&'static str> {
         .then_some(trimmed)
         .into_iter()
         .collect()
+}
+
+fn format_context_warning(warning: &ContextWarning) -> String {
+    match &warning.path {
+        Some(path) => format!("{} (path: {})", warning.message, path.display()),
+        None => warning.message.clone(),
+    }
 }
 
 /// Runs the interactive chat loop.
@@ -94,7 +102,7 @@ pub async fn run_interactive_chat_with_history(
 
     // Emit warnings from context loading (per SPEC §10)
     for warning in &effective.warnings {
-        writeln!(err, "Warning: {}", warning.message)?;
+        writeln!(err, "Warning: {}", format_context_warning(warning))?;
     }
 
     // Small delay so user can see the info before TUI takes over
@@ -189,9 +197,24 @@ pub(crate) fn thread_startup_messages(
 mod tests {
     use std::path::{Path, PathBuf};
 
+    use zdx_engine::core::context::ContextWarning;
     use zdx_engine::skills::{Skill, SkillSource};
 
-    use super::thread_startup_messages;
+    use super::{format_context_warning, thread_startup_messages};
+
+    #[test]
+    fn context_warning_includes_its_path() {
+        let warning = ContextWarning {
+            path: Some(PathBuf::from("/tmp/skills/example/SKILL.md")),
+            message: "Failed to read skill file: No such file or directory (os error 2)"
+                .to_string(),
+        };
+
+        assert_eq!(
+            format_context_warning(&warning),
+            "Failed to read skill file: No such file or directory (os error 2) (path: /tmp/skills/example/SKILL.md)"
+        );
+    }
 
     #[test]
     fn thread_startup_messages_include_context_and_skills() {
