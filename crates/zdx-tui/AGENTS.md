@@ -20,8 +20,8 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 - `runtime/image_ops.rs`: shared image loading/transform helpers (preview + attachments)
 - `runtime/handlers/voice.rs`: microphone capture + voice transcription task handlers
 - `runtime/handlers/`: side-effect handlers (thread ops, agent spawn, auth, skills)
-- `runtime/handoff.rs`: handoff generation handlers
-- `runtime/prompt_builder.rs`: prompt-builder generation handlers
+- `runtime/handoff.rs`: handoff generation handlers (thin adapter over `zdx_engine::core::handoff_generation`)
+- `runtime/prompt_builder.rs`: prompt-builder generation handlers (thin adapter over `zdx_engine::core::prompt_builder_generation`)
 - `runtime/thread_title.rs`: auto-title handlers
 - `runtime/thread_tldr.rs`: thread TLDR/recap handlers
 
