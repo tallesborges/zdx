@@ -214,16 +214,16 @@ enum Commands {
         format: Option<String>,
     },
 
-    /// Transcribe an audio file to text with `OpenAI` or Mistral
+    /// Transcribe an audio file to text with `OpenAI`, Mistral, or xAI
     Transcribe {
         /// Path to the audio file to transcribe
         file: String,
 
-        /// Provider to use (`openai` or `mistral`; defaults to auto-detect)
+        /// Provider to use (`openai`, `mistral`, or `xai`; defaults to auto-detect)
         #[arg(long, value_name = "PROVIDER")]
         provider: Option<String>,
 
-        /// Model to use (provider-prefixed, e.g. `openai:whisper-1`, `mistral:voxtral-mini-latest`)
+        /// Model to use (provider-prefixed, e.g. `openai:whisper-1`, `mistral:voxtral-mini-latest`, `xai:grok-stt`)
         #[arg(long, value_name = "MODEL")]
         model: Option<String>,
 

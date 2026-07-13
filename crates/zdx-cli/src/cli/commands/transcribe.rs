@@ -48,7 +48,7 @@ pub async fn run(options: TranscribeRunOptions<'_>) -> Result<()> {
     match transcript {
         Some(text) => println!("{text}"),
         None => eprintln!(
-            "No transcription provider configured. Set OPENAI_API_KEY or MISTRAL_API_KEY, or add a [transcription] provider in config.toml."
+            "No transcription provider configured. Set OPENAI_API_KEY, MISTRAL_API_KEY, or XAI_API_KEY, or add a [transcription] provider in config.toml."
         ),
     }
 

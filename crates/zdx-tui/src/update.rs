@@ -313,7 +313,7 @@ fn handle_voice_transcribed(
                 &mut app.tui,
                 vec![StateMutation::Transcript(
                     TranscriptMutation::AppendSystemMessage(
-                        "Voice transcription unavailable. Configure an OpenAI or Mistral transcription provider (or set ZDX_TRANSCRIPTION_MODEL).".to_string(),
+                        "Voice transcription unavailable. Configure an OpenAI, Mistral, or xAI transcription provider (or set ZDX_TRANSCRIPTION_MODEL).".to_string(),
                     ),
                 )],
             );
