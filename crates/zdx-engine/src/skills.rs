@@ -155,6 +155,9 @@ fn bundled_skills_are_current(root: &Path, expected_hash: &str) -> bool {
         return false;
     };
     existing_hash.trim() == expected_hash
+        && bundled_skill_assets()
+            .iter()
+            .all(|asset| root.join(asset.relative_path).is_file())
 }
 
 fn materialize_bundled_skills_into(
@@ -939,7 +942,7 @@ mod tests {
     }
 
     #[test]
-    fn test_materialize_bundled_skills_does_not_check_individual_files() {
+    fn test_materialize_bundled_skills_rewrites_when_an_asset_is_missing() {
         let dir = tempdir().unwrap();
         let root =
             materialize_bundled_skills_into(dir.path(), bundled_skills_manifest_hash()).unwrap();
@@ -953,7 +956,7 @@ mod tests {
             materialize_bundled_skills_into(dir.path(), bundled_skills_manifest_hash()).unwrap();
 
         assert_eq!(rematerialized_root, root);
-        assert!(!script_path.exists());
+        assert!(script_path.is_file());
     }
 
     #[test]
