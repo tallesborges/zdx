@@ -393,7 +393,7 @@ fn default_tldr_model() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct TranscriptionConfig {
-    /// Transcription provider: "openai" (default) or "mistral"
+    /// Transcription provider: "openai" (default), "mistral", or "xai"
     pub provider: Option<String>,
     /// Model to use for transcription (provider-specific)
     pub model: Option<String>,

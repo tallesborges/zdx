@@ -6,6 +6,7 @@ use crate::providers::{ProviderKind, resolve_provider};
 
 const DEFAULT_OPENAI_MODEL: &str = "whisper-1";
 const DEFAULT_MISTRAL_MODEL: &str = "voxtral-mini-latest";
+const DEFAULT_XAI_MODEL: &str = "grok-stt";
 
 #[derive(Debug)]
 pub struct OperationCancelled;
@@ -28,7 +29,11 @@ struct TranscriptionResponse {
 }
 
 /// Supported transcription providers.
-const TRANSCRIPTION_PROVIDERS: &[ProviderKind] = &[ProviderKind::OpenAI, ProviderKind::Mistral];
+const TRANSCRIPTION_PROVIDERS: &[ProviderKind] = &[
+    ProviderKind::OpenAI,
+    ProviderKind::Mistral,
+    ProviderKind::Xai,
+];
 
 /// Transcribes audio if a supported provider is configured.
 ///
@@ -59,6 +64,7 @@ pub async fn transcribe_audio_if_configured(
         .filter(|s| !s.is_empty());
 
     let transcript = transcribe_audio(TranscriptionRequest {
+        provider,
         provider_name: provider.label(),
         base_url: &base_url,
         api_key: &api_key,
@@ -97,7 +103,7 @@ fn resolve_model(
         let selection = resolve_provider(&model_str);
         if !TRANSCRIPTION_PROVIDERS.contains(&selection.kind) {
             return Err(anyhow!(
-                "Unsupported transcription provider: {}. Only OpenAI and Mistral are supported.",
+                "Unsupported transcription provider: {}. Only OpenAI, Mistral, and xAI are supported.",
                 selection.kind.label()
             ));
         }
@@ -127,8 +133,9 @@ fn parse_provider(value: &str) -> Result<ProviderKind> {
     match value.to_ascii_lowercase().as_str() {
         "openai" => Ok(ProviderKind::OpenAI),
         "mistral" => Ok(ProviderKind::Mistral),
+        "xai" | "grok" | "x" => Ok(ProviderKind::Xai),
         other => Err(anyhow!(
-            "Unsupported transcription provider: {other}. Only OpenAI and Mistral are supported."
+            "Unsupported transcription provider: {other}. Only OpenAI, Mistral, and xAI are supported."
         )),
     }
 }
@@ -136,11 +143,13 @@ fn parse_provider(value: &str) -> Result<ProviderKind> {
 fn default_model(provider: ProviderKind) -> &'static str {
     match provider {
         ProviderKind::Mistral => DEFAULT_MISTRAL_MODEL,
+        ProviderKind::Xai => DEFAULT_XAI_MODEL,
         _ => DEFAULT_OPENAI_MODEL,
     }
 }
 
 struct TranscriptionRequest<'a> {
+    provider: ProviderKind,
     provider_name: &'a str,
     base_url: &'a str,
     api_key: &'a str,
@@ -154,6 +163,7 @@ struct TranscriptionRequest<'a> {
 
 async fn transcribe_audio(request: TranscriptionRequest<'_>) -> Result<String> {
     let TranscriptionRequest {
+        provider,
         provider_name,
         base_url,
         api_key,
@@ -177,15 +187,33 @@ async fn transcribe_audio(request: TranscriptionRequest<'_>) -> Result<String> {
         part = part.mime_str(mime)?;
     }
 
-    let mut form = reqwest::multipart::Form::new()
-        .text("model", model.to_string())
-        .part("file", part);
+    // xAI Grok STT uses a different endpoint (`/stt`) and requires the `file`
+    // field to come last in the multipart form. `format=true` enables
+    // punctuation/casing but xAI rejects it unless `language` is also set, so we
+    // only request formatting when a language hint is configured. OpenAI/Mistral
+    // use the OpenAI-compatible `/audio/transcriptions` shape.
+    let (url, form) = if provider == ProviderKind::Xai {
+        let mut form = reqwest::multipart::Form::new().text("model", model.to_string());
+        if let Some(lang) = language {
+            form = form
+                .text("language", lang.to_string())
+                .text("format", "true");
+        }
+        form = form.part("file", part);
+        (format!("{}/stt", base_url.trim_end_matches('/')), form)
+    } else {
+        let mut form = reqwest::multipart::Form::new()
+            .text("model", model.to_string())
+            .part("file", part);
+        if let Some(lang) = language {
+            form = form.text("language", lang.to_string());
+        }
+        (
+            format!("{}/audio/transcriptions", base_url.trim_end_matches('/')),
+            form,
+        )
+    };
 
-    if let Some(lang) = language {
-        form = form.text("language", lang.to_string());
-    }
-
-    let url = format!("{}/audio/transcriptions", base_url.trim_end_matches('/'));
     let request = client
         .post(&url)
         .bearer_auth(api_key)
