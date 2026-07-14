@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -17,6 +17,7 @@ use ratatui::prelude::*;
 use serde_json::Value;
 use zdx_engine::config::{self, paths};
 use zdx_engine::core::usage_stats::{self, UsageStats};
+use zdx_engine::providers::subscription_quota::{self, QuotaError, SubscriptionQuota};
 use zdx_engine::{agent_activity, automations, pidfile};
 
 use crate::ui;
@@ -214,12 +215,35 @@ pub struct MonitorApp {
     /// Receiver for an in-flight background usage scan, if any. The scan runs
     /// off the UI thread so the dashboard never freezes during aggregation.
     pub usage_rx: Option<mpsc::Receiver<Result<UsageStats>>>,
+    /// Cached subscription-quota snapshot per provider (read-only OAuth).
+    pub quotas: Option<CachedQuotas>,
+    /// Receiver for an in-flight background quota fetch, if any.
+    pub quota_rx: Option<mpsc::Receiver<QuotaFetchResult>>,
+    /// Per-provider rate-limit cooldown: don't refetch before this instant.
+    pub quota_backoff: HashMap<&'static str, Instant>,
 }
+
+/// Result payload from a background quota fetch: one entry per provider.
+type QuotaFetchResult = Vec<(&'static str, std::result::Result<SubscriptionQuota, QuotaError>)>;
 
 /// A cached snapshot of the usage aggregation plus when it was computed.
 pub struct CachedUsageStats {
     pub stats: UsageStats,
     pub computed_at: Instant,
+}
+
+/// Cached per-provider subscription quota snapshot plus when it was fetched.
+pub struct CachedQuotas {
+    pub entries: Vec<QuotaEntry>,
+    pub computed_at: Instant,
+}
+
+/// One provider's latest quota state. `quota` holds the last good value;
+/// when `error` is set alongside a `quota`, the value is stale.
+pub struct QuotaEntry {
+    pub provider: &'static str,
+    pub quota: Option<SubscriptionQuota>,
+    pub error: Option<String>,
 }
 
 pub struct ThreadInfo {
@@ -389,7 +413,7 @@ fn poll_usage_result(app: &mut MonitorApp) {
                         stats,
                         computed_at: Instant::now(),
                     };
-                    app.usage_line_count = ui::usage_line_count(&cached);
+                    app.usage_line_count = ui::usage_line_count(&cached, app.quotas.as_ref());
                     app.usage_stats = Some(cached);
                     app.usage_scroll = app.usage_scroll.min(usage_max_scroll(app));
                 }
@@ -414,6 +438,155 @@ fn refresh_usage(app: &mut MonitorApp) {
         .is_none_or(|c| c.computed_at.elapsed() >= USAGE_STALE_AFTER);
     if stale {
         start_usage_scan(app);
+    }
+}
+
+/// How long a cached quota snapshot stays fresh. Deliberately slow — these are
+/// undocumented network endpoints, not cheap local scans.
+#[allow(clippy::duration_suboptimal_units)]
+const QUOTA_STALE_AFTER: Duration = Duration::from_secs(5 * 60);
+
+/// Spawn a background subscription-quota fetch unless one is in flight. Runs on
+/// its own thread with a current-thread Tokio runtime (the monitor has no
+/// ambient runtime); read-only — never refreshes or writes OAuth tokens.
+fn start_quota_fetch(app: &mut MonitorApp) {
+    if app.quota_rx.is_some() {
+        return;
+    }
+    // Skip providers still inside a rate-limit cooldown so `R` and the on-tick
+    // refresh cannot hammer a 429'd endpoint.
+    let now = Instant::now();
+    let ready = |provider: &'static str| {
+        app.quota_backoff
+            .get(provider)
+            .is_none_or(|until| *until <= now)
+    };
+    let fetch_claude = ready(subscription_quota::PROVIDER_CLAUDE);
+    let fetch_codex = ready(subscription_quota::PROVIDER_CODEX);
+    if !fetch_claude && !fetch_codex {
+        return;
+    }
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let results = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map(|rt| {
+                rt.block_on(async {
+                    let mut out: QuotaFetchResult = Vec::new();
+                    if fetch_claude {
+                        out.push((
+                            subscription_quota::PROVIDER_CLAUDE,
+                            subscription_quota::fetch_claude_quota().await,
+                        ));
+                    }
+                    if fetch_codex {
+                        out.push((
+                            subscription_quota::PROVIDER_CODEX,
+                            subscription_quota::fetch_codex_quota().await,
+                        ));
+                    }
+                    out
+                })
+            })
+            .unwrap_or_default();
+        let _ = tx.send(results);
+    });
+    app.quota_rx = Some(rx);
+}
+
+/// Recompute the cached Usage view's line count (the subscription block affects
+/// it). No-op when the usage cache is absent.
+fn recompute_usage_line_count(app: &mut MonitorApp) {
+    let count = match &app.usage_stats {
+        Some(cached) => ui::usage_line_count(cached, app.quotas.as_ref()),
+        None => return,
+    };
+    app.usage_line_count = count;
+}
+
+/// Default rate-limit cooldown when a 429 carried no `Retry-After`.
+#[allow(clippy::duration_suboptimal_units)]
+const QUOTA_BACKOFF_DEFAULT: Duration = Duration::from_secs(60);
+
+/// Collect a finished background quota fetch, merging results while preserving
+/// the last good value for a provider whose refresh failed. Providers absent
+/// from `results` (e.g. skipped for cooldown) keep their existing entry.
+fn poll_quota_result(app: &mut MonitorApp) {
+    let Some(rx) = &app.quota_rx else {
+        return;
+    };
+    let results = match rx.try_recv() {
+        Ok(results) => results,
+        Err(mpsc::TryRecvError::Empty) => return,
+        Err(mpsc::TryRecvError::Disconnected) => {
+            app.quota_rx = None;
+            return;
+        }
+    };
+    app.quota_rx = None;
+
+    let mut entries: Vec<QuotaEntry> = app.quotas.take().map(|c| c.entries).unwrap_or_default();
+    for (provider, res) in results {
+        let idx = entries.iter().position(|e| e.provider == provider);
+        let prev_quota = idx.and_then(|i| entries[i].quota.clone());
+        let new_entry = match res {
+            Ok(quota) => {
+                app.quota_backoff.remove(provider);
+                Some(QuotaEntry {
+                    provider,
+                    quota: Some(quota),
+                    error: None,
+                })
+            }
+            // Not logged in: drop the row unless we already had a value.
+            Err(QuotaError::NotAuthenticated) => prev_quota.map(|quota| QuotaEntry {
+                provider,
+                quota: Some(quota),
+                error: Some(QuotaError::NotAuthenticated.reason()),
+            }),
+            Err(err) => {
+                if let QuotaError::RateLimited { retry_after_secs } = err {
+                    let cooldown = retry_after_secs
+                        .map_or(QUOTA_BACKOFF_DEFAULT, Duration::from_secs);
+                    app.quota_backoff
+                        .insert(provider, Instant::now() + cooldown);
+                }
+                Some(QuotaEntry {
+                    provider,
+                    quota: prev_quota,
+                    error: Some(err.reason()),
+                })
+            }
+        };
+        match (idx, new_entry) {
+            (Some(i), Some(entry)) => entries[i] = entry,
+            (Some(i), None) => {
+                entries.remove(i);
+            }
+            (None, Some(entry)) => entries.push(entry),
+            (None, None) => {}
+        }
+    }
+    app.quotas = Some(CachedQuotas {
+        entries,
+        computed_at: Instant::now(),
+    });
+    recompute_usage_line_count(app);
+}
+
+/// Starts a background quota refresh when the Usage tab is active and the cache
+/// is missing or stale. Independent of the usage-aggregation scan.
+fn refresh_quota(app: &mut MonitorApp) {
+    if app.active_section != Section::Usage {
+        return;
+    }
+    let stale = app
+        .quotas
+        .as_ref()
+        .is_none_or(|c| c.computed_at.elapsed() >= QUOTA_STALE_AFTER);
+    if stale {
+        start_quota_fetch(app);
     }
 }
 
@@ -524,6 +697,9 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
         usage_line_count: 0,
         default_model,
         usage_rx: None,
+        quotas: None,
+        quota_rx: None,
+        quota_backoff: HashMap::new(),
     })
 }
 
@@ -622,6 +798,7 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
         }
         KeyCode::Char('R') if app.active_section == Section::Usage => {
             start_usage_scan(app);
+            start_quota_fetch(app);
             app.set_status("Refreshing usage stats…");
         }
         KeyCode::Char('y') => copy_selected_thread_id(app),
@@ -897,6 +1074,8 @@ fn refresh_app(app: &mut MonitorApp) {
     supervise_services(app);
     poll_usage_result(app);
     refresh_usage(app);
+    poll_quota_result(app);
+    refresh_quota(app);
 }
 
 /// Run the monitor dashboard.

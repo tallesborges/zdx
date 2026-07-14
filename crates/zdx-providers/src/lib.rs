@@ -20,6 +20,7 @@ pub mod opencode_go;
 pub mod openrouter;
 pub mod shared;
 pub mod stepfun;
+pub mod subscription_quota;
 pub mod xai;
 pub mod xiaomi;
 pub mod xiaomi_plan;

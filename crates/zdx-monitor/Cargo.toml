@@ -18,4 +18,5 @@ crossterm.workspace = true
 ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
 zdx-engine = { path = "../zdx-engine" }
