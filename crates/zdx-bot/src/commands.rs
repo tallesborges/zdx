@@ -9,6 +9,7 @@ pub(crate) enum BotCommand {
     Commands,
     Tldr,
     PromptBuilder,
+    ThreadId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +108,15 @@ const COMMAND_DEFS: &[CommandDef] = &[
             description: "Draft a polished prompt from a short intent",
         },
     },
+    CommandDef {
+        command: BotCommand::ThreadId,
+        patterns: &["/threadid", "/thread_id", "/thread-id"],
+        blocks_topic_autocreate: true,
+        telegram_spec: TelegramCommandSpec {
+            command: "threadid",
+            description: "Show only the thread ID",
+        },
+    },
 ];
 
 pub(crate) fn telegram_command_specs() -> Vec<TelegramCommandSpec> {
@@ -161,7 +171,7 @@ pub(crate) fn is_topic_blocking_command(text: &str) -> bool {
 pub(crate) fn bypasses_queue(text: &str) -> bool {
     matches!(
         parse_command(text),
-        Some(BotCommand::Status | BotCommand::WhereAmI | BotCommand::Tldr)
+        Some(BotCommand::Status | BotCommand::WhereAmI | BotCommand::Tldr | BotCommand::ThreadId)
     )
 }
 
