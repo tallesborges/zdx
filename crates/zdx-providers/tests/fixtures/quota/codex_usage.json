@@ -1,0 +1,48 @@
+{
+  "user_id": "user-REDACTED",
+  "account_id": "user-REDACTED",
+  "email": "redacted@example.com",
+  "plan_type": "prolite",
+  "rate_limit": {
+    "allowed": true,
+    "limit_reached": false,
+    "primary_window": {
+      "used_percent": 6,
+      "limit_window_seconds": 604800,
+      "reset_after_seconds": 528597,
+      "reset_at": 1784502675
+    },
+    "secondary_window": null
+  },
+  "code_review_rate_limit": null,
+  "additional_rate_limits": [
+    {
+      "limit_name": "GPT-5.3-Codex-Spark",
+      "metered_feature": "codex_bengalfox",
+      "rate_limit": {
+        "allowed": true,
+        "limit_reached": false,
+        "primary_window": {
+          "used_percent": 0,
+          "limit_window_seconds": 604800,
+          "reset_after_seconds": 604800,
+          "reset_at": 1784578878
+        },
+        "secondary_window": null
+      }
+    }
+  ],
+  "credits": {
+    "has_credits": false,
+    "unlimited": false,
+    "overage_limit_reached": false,
+    "balance": "0",
+    "approx_local_messages": [0, 0],
+    "approx_cloud_messages": [0, 0]
+  },
+  "spend_control": { "reached": false, "individual_limit": null },
+  "rate_limit_reached_type": null,
+  "promo": null,
+  "referral_beacon": null,
+  "rate_limit_reset_credits": { "available_count": 5 }
+}

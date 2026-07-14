@@ -4652,6 +4652,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "tokio",
  "zdx-engine",
 ]
 

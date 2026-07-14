@@ -1,10 +1,12 @@
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs, Wrap};
 use zdx_engine::core::usage_stats::{UsageRow, UsageStats, UsageTotals};
+use zdx_engine::providers::subscription_quota::QuotaWindow;
 
-use crate::app::{CachedUsageStats, ConfigLine, MonitorApp, Section};
+use crate::app::{CachedQuotas, CachedUsageStats, ConfigLine, MonitorApp, QuotaEntry, Section};
 
 pub fn render(f: &mut Frame, app: &MonitorApp) {
     let chunks = Layout::default()
@@ -295,7 +297,7 @@ fn render_usage(f: &mut Frame, app: &MonitorApp, area: Rect) {
         return;
     };
 
-    let lines = build_usage_lines(cached);
+    let lines = build_usage_lines(cached, app.quotas.as_ref());
     let total_lines = lines.len();
     let visible_lines = area.height.saturating_sub(2) as usize;
     let max_scroll = total_lines.saturating_sub(visible_lines);
@@ -324,15 +326,17 @@ fn render_usage(f: &mut Frame, app: &MonitorApp, area: Rect) {
 }
 
 /// Rendered line count of the cached usage view, used for scroll clamping.
-pub(crate) fn usage_line_count(cached: &CachedUsageStats) -> usize {
-    build_usage_lines(cached).len()
+pub(crate) fn usage_line_count(cached: &CachedUsageStats, quotas: Option<&CachedQuotas>) -> usize {
+    build_usage_lines(cached, quotas).len()
 }
 
 /// Build the styled display lines for the Usage tab. Mirrors the `zdx stats`
-/// CLI output so both surfaces show identical numbers.
-fn build_usage_lines(cached: &CachedUsageStats) -> Vec<Line<'static>> {
+/// CLI output so both surfaces show identical numbers, with a live subscription
+/// quota block on top.
+fn build_usage_lines(cached: &CachedUsageStats, quotas: Option<&CachedQuotas>) -> Vec<Line<'static>> {
     let stats = &cached.stats;
-    let mut lines = usage_banner_lines(cached);
+    let mut lines = subscription_lines(quotas);
+    lines.extend(usage_banner_lines(cached));
 
     if stats.threads_scanned == 0 || stats.totals.requests == 0 {
         lines.push(Line::from(format!(
@@ -358,6 +362,132 @@ fn build_usage_lines(cached: &CachedUsageStats) -> Vec<Line<'static>> {
     }
 
     push_usage_warnings(&mut lines, stats);
+    lines
+}
+
+/// Human-friendly provider name for the subscription block.
+fn provider_display(provider: &str) -> &str {
+    match provider {
+        "claude-cli" => "Claude",
+        "openai-codex" => "Codex",
+        other => other,
+    }
+}
+
+/// Format a reset instant as a short "resets in …" string.
+fn format_reset_in(dt: DateTime<Utc>) -> String {
+    let secs = (dt - Utc::now()).num_seconds();
+    if secs <= 0 {
+        return "reset due".to_string();
+    }
+    let days = secs / 86_400;
+    let hours = (secs % 86_400) / 3_600;
+    let mins = (secs % 3_600) / 60;
+    if days > 0 {
+        format!("resets in {days}d {hours}h")
+    } else if hours > 0 {
+        format!("resets in {hours}h {mins}m")
+    } else {
+        format!("resets in {mins}m")
+    }
+}
+
+/// Color a window by how much quota it has consumed.
+fn quota_percent_color(used_percent: f64) -> Color {
+    if used_percent >= 90.0 {
+        Color::Red
+    } else if used_percent >= 75.0 {
+        Color::Yellow
+    } else {
+        Color::Green
+    }
+}
+
+/// Width (in cells) of the quota usage bar.
+const QUOTA_BAR_WIDTH: usize = 20;
+
+/// A filled/empty block bar for a 0..=100 percentage.
+fn quota_bar(used_percent: f64) -> String {
+    let pct = used_percent.clamp(0.0, 100.0);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let filled = ((pct / 100.0) * QUOTA_BAR_WIDTH as f64).round() as usize;
+    let filled = filled.min(QUOTA_BAR_WIDTH);
+    format!("{}{}", "█".repeat(filled), "░".repeat(QUOTA_BAR_WIDTH - filled))
+}
+
+/// One window rendered as `label  ▕████░░░░▏  47%   resets in …`.
+fn quota_window_line(w: &QuotaWindow) -> Line<'static> {
+    let color = quota_percent_color(w.used_percent);
+    let mut spans = vec![
+        Span::raw(format!("    {:<7} ", w.label)),
+        Span::styled(
+            format!("▕{}▏", quota_bar(w.used_percent)),
+            Style::default().fg(color),
+        ),
+        Span::styled(
+            format!(" {:>3.0}%", w.used_percent),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    if let Some(dt) = w.resets_at {
+        spans.push(Span::styled(
+            format!("   {}", format_reset_in(dt)),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// Lines describing a provider's quota: a bold name/plan header followed by one
+/// bar line per window, or a single dim `unavailable` line.
+fn subscription_entry_lines(entry: &QuotaEntry) -> Vec<Line<'static>> {
+    let dim = Style::default().fg(Color::DarkGray);
+    let name = provider_display(entry.provider);
+    let Some(quota) = &entry.quota else {
+        let reason = entry.error.as_deref().unwrap_or("unavailable");
+        return vec![Line::from(Span::styled(format!("  {name}   {reason}"), dim))];
+    };
+    let plan = quota
+        .plan
+        .as_ref()
+        .map(|p| format!("  [{p}]"))
+        .unwrap_or_default();
+    let stale = entry
+        .error
+        .as_ref()
+        .map(|e| format!("   · stale ({e})"))
+        .unwrap_or_default();
+    let mut lines = vec![Line::from(vec![
+        Span::styled(format!("  {name}"), Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(plan, dim),
+        Span::styled(stale, dim),
+    ])];
+    for w in &quota.windows {
+        lines.push(quota_window_line(w));
+    }
+    lines
+}
+
+/// The subscription-quota block rendered at the top of the Usage tab.
+fn subscription_lines(quotas: Option<&CachedQuotas>) -> Vec<Line<'static>> {
+    let dim = Style::default().fg(Color::DarkGray);
+    let mut lines = vec![Line::from(Span::styled(
+        "Subscriptions",
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    ))];
+    match quotas {
+        None => lines.push(Line::from(Span::styled("  loading…", dim))),
+        Some(cached) if cached.entries.is_empty() => lines.push(Line::from(Span::styled(
+            "  No subscription providers logged in.",
+            dim,
+        ))),
+        Some(cached) => {
+            for entry in &cached.entries {
+                lines.extend(subscription_entry_lines(entry));
+            }
+        }
+    }
+    lines.push(Line::from(""));
     lines
 }
 
@@ -773,3 +903,83 @@ fn truncate_spans(spans: Vec<Span<'static>>, max_chars: usize) -> Vec<Span<'stat
     ));
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::QuotaEntry;
+    use zdx_engine::providers::subscription_quota::SubscriptionQuota;
+
+    #[test]
+    fn percent_color_thresholds() {
+        assert_eq!(quota_percent_color(0.0), Color::Green);
+        assert_eq!(quota_percent_color(74.9), Color::Green);
+        assert_eq!(quota_percent_color(75.0), Color::Yellow);
+        assert_eq!(quota_percent_color(89.9), Color::Yellow);
+        assert_eq!(quota_percent_color(90.0), Color::Red);
+        assert_eq!(quota_percent_color(100.0), Color::Red);
+    }
+
+    #[test]
+    fn near_limit_window_renders_red_span() {
+        let entry = QuotaEntry {
+            provider: "claude-cli",
+            quota: Some(SubscriptionQuota {
+                plan: None,
+                windows: vec![
+                    QuotaWindow {
+                        label: "5h".to_string(),
+                        used_percent: 12.0,
+                        resets_at: None,
+                    },
+                    QuotaWindow {
+                        label: "weekly".to_string(),
+                        used_percent: 95.0,
+                        resets_at: None,
+                    },
+                ],
+            }),
+            error: None,
+        };
+        let lines = subscription_entry_lines(&entry);
+        let spans: Vec<_> = lines.iter().flat_map(|l| l.spans.iter()).collect();
+        let green = spans
+            .iter()
+            .any(|s| s.content.contains("12%") && s.style.fg == Some(Color::Green));
+        let red = spans
+            .iter()
+            .any(|s| s.content.contains("95%") && s.style.fg == Some(Color::Red));
+        // Each window renders a filled/empty bar of fixed width.
+        let has_bar = spans.iter().any(|s| s.content.contains('█'));
+        assert!(green, "low window percent should be green");
+        assert!(red, "near-limit window percent should be red");
+        assert!(has_bar, "windows should render a bar");
+    }
+
+    #[test]
+    fn unavailable_entry_renders_dim_reason() {
+        let entry = QuotaEntry {
+            provider: "openai-codex",
+            quota: None,
+            error: Some("rate limited".to_string()),
+        };
+        let lines = subscription_entry_lines(&entry);
+        assert_eq!(lines.len(), 1);
+        assert!(
+            lines[0]
+                .spans
+                .iter()
+                .any(|s| s.content.contains("Codex") && s.content.contains("rate limited"))
+        );
+    }
+
+    #[test]
+    fn quota_bar_fills_proportionally() {
+        assert_eq!(quota_bar(0.0).chars().filter(|c| *c == '█').count(), 0);
+        assert_eq!(quota_bar(100.0).chars().filter(|c| *c == '█').count(), QUOTA_BAR_WIDTH);
+        assert_eq!(quota_bar(50.0).chars().filter(|c| *c == '█').count(), QUOTA_BAR_WIDTH / 2);
+        // Out-of-range values are clamped, never panic or overflow the bar.
+        assert_eq!(quota_bar(150.0).chars().filter(|c| *c == '█').count(), QUOTA_BAR_WIDTH);
+    }
+}
+
