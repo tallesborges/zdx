@@ -57,6 +57,14 @@ pub(super) async fn handle_thread_setup_commands(
             reply_ctx.topic_id,
         )
         .await?
+        || handle_threadid_command(
+            context,
+            incoming,
+            thread_id,
+            reply_ctx.reply_to_message_id,
+            reply_ctx.topic_id,
+        )
+        .await?
         || handle_thread_commands(
             context,
             incoming,
@@ -160,6 +168,7 @@ pub(super) async fn handle_general_forum_commands(
         BotCommand::Status => unreachable!("status is handled by handle_status_command"),
         BotCommand::WhereAmI => unreachable!("whereami is handled by handle_whereami_command"),
         BotCommand::Tldr => unreachable!("tldr is handled by handle_tldr_command"),
+        BotCommand::ThreadId => unreachable!("threadid is handled by handle_threadid_command"),
     };
     context
         .client()
@@ -514,6 +523,36 @@ async fn handle_whereami_command(
     Ok(true)
 }
 
+async fn handle_threadid_command(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    thread_id: &str,
+    reply_to_message_id: Option<i64>,
+    topic_id: Option<i64>,
+) -> Result<bool> {
+    if !incoming.images.is_empty() || !incoming.audios.is_empty() {
+        return Ok(false);
+    }
+    if !incoming
+        .text
+        .as_deref()
+        .is_some_and(|text| matches!(parse_command(text), Some(BotCommand::ThreadId)))
+    {
+        return Ok(false);
+    }
+
+    let message = format!(
+        "<b>Thread ID</b> <i>(tap to copy)</i>\n<code>{}</code>",
+        escape_html(thread_id)
+    );
+    context
+        .client()
+        .send_message(incoming.chat_id, &message, reply_to_message_id, topic_id)
+        .await?;
+
+    Ok(true)
+}
+
 async fn handle_tldr_command(
     context: &BotContext,
     incoming: &crate::types::IncomingMessage,
@@ -817,6 +856,7 @@ async fn handle_thread_commands(
         | BotCommand::Handoff
         | BotCommand::Commands
         | BotCommand::Tldr
+        | BotCommand::ThreadId
         | BotCommand::PromptBuilder => {
             return Ok(false);
         }
