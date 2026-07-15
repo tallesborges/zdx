@@ -23,6 +23,13 @@ pub struct RunRecord {
     pub thread_id: Option<String>,
     pub surface: Option<String>,
     pub model: Option<String>,
+    /// Provider id serving the request (e.g. `anthropic`, `claude-cli`, or a
+    /// custom provider name).
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Thinking/reasoning level for this run (e.g. `off`, `high`, `max`).
+    #[serde(default)]
+    pub thinking: Option<String>,
     /// Logical role of this run, e.g. `"chat"`, `"exec"`, `"telegram"`,
     /// `"subagent"`. `None` is allowed for older markers and ad-hoc runs.
     #[serde(default)]
@@ -43,6 +50,8 @@ pub struct StartParams<'a> {
     pub thread_id: Option<&'a str>,
     pub surface: Option<&'a str>,
     pub model: Option<&'a str>,
+    pub provider: Option<&'a str>,
+    pub thinking: Option<&'a str>,
     pub kind: Option<&'a str>,
     pub parent_thread_id: Option<&'a str>,
     pub subagent_name: Option<&'a str>,
@@ -78,6 +87,8 @@ pub fn start(params: StartParams<'_>) -> Option<RunGuard> {
         thread_id: params.thread_id.map(String::from),
         surface: params.surface.map(String::from),
         model: params.model.map(String::from),
+        provider: params.provider.map(String::from),
+        thinking: params.thinking.map(String::from),
         kind: params.kind.map(String::from),
         parent_thread_id: params.parent_thread_id.map(String::from),
         subagent_name: params.subagent_name.map(String::from),

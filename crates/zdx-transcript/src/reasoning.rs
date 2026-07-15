@@ -25,7 +25,7 @@ pub(crate) const REDACTED_REASONING_PLACEHOLDER: &str = "[redacted reasoning]";
 ///   `replay` is `ReplayToken::AnthropicRedacted`, so the redacted block
 ///   renders as a visible placeholder rather than being silently dropped.
 /// - `None` otherwise — nothing visible to show; the caller skips the cell.
-pub(crate) fn reasoning_display_text<'a>(
+pub fn reasoning_display_text<'a>(
     text: Option<&'a str>,
     replay: Option<&ReplayToken>,
 ) -> Option<&'a str> {

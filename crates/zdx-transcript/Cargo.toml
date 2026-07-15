@@ -1,5 +1,5 @@
 [package]
-name = "zdx-monitor"
+name = "zdx-transcript"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,12 +12,11 @@ doctest = false
 workspace = true
 
 [dependencies]
-anyhow.workspace = true
-chrono.workspace = true
-crossterm.workspace = true
-ratatui.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-tokio.workspace = true
 zdx-engine = { path = "../zdx-engine" }
-zdx-transcript = { path = "../zdx-transcript" }
+
+chrono.workspace = true
+pulldown-cmark.workspace = true
+ratatui.workspace = true
+serde_json.workspace = true
+unicode-segmentation.workspace = true
+unicode-width.workspace = true

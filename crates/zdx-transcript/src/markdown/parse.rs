@@ -8,8 +8,8 @@ use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, T
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::wrap::{WrapOptions, wrap_styled_spans};
-use crate::common::{ratatui_width, sanitize_for_display};
-use crate::transcript::{Style, StyledLine, StyledSpan};
+use crate::style::{Style, StyledLine, StyledSpan};
+use crate::text::{ratatui_width, sanitize_for_display};
 
 /// Renders markdown text into styled lines.
 ///

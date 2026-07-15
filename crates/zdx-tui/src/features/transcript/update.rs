@@ -10,11 +10,10 @@ use ratatui::layout::Rect;
 use zdx_engine::core::events::{AgentEvent, TurnStatus};
 use zdx_engine::core::interrupt;
 
-use super::reasoning::reasoning_display_text;
 use crate::effects::UiEffect;
 use crate::mutations::{StateMutation, ThreadMutation};
 use crate::state::AgentState;
-use crate::transcript::{HistoryCell, LineInteraction, TranscriptState};
+use crate::transcript::{HistoryCell, LineInteraction, TranscriptState, reasoning_display_text};
 
 /// Lines to scroll per mouse wheel tick.
 const MOUSE_SCROLL_LINES: usize = 3;

@@ -853,6 +853,8 @@ async fn run_turn_inner(
             thread_id,
             surface: options.surface.as_deref(),
             model: Some(setup.model.as_str()),
+            provider: Some(setup.provider.as_str()),
+            thinking: Some(setup.thinking_level.display_name()),
             kind: options.activity_kind.as_deref(),
             parent_thread_id: options.activity_parent_thread_id.as_deref(),
             subagent_name: options.activity_subagent_name.as_deref(),
@@ -1052,6 +1054,8 @@ struct RunTurnSetup {
     /// Provider id serving the request (e.g. `anthropic`, `claude-cli`, or a
     /// custom provider name). Attached to emitted usage events for attribution.
     provider: String,
+    /// Thinking/reasoning level effectively used for this run.
+    thinking_level: ThinkingLevel,
     client: Box<dyn StreamingProvider>,
     tools: Vec<ToolDefinition>,
     enabled_tools: HashSet<String>,
@@ -1144,6 +1148,7 @@ fn build_run_turn_setup(
     Ok(RunTurnSetup {
         model: selection.model,
         provider: provider.id().to_string(),
+        thinking_level,
         client,
         tools,
         enabled_tools,
@@ -1164,6 +1169,11 @@ fn build_custom_run_turn_setup(
 ) -> Result<RunTurnSetup> {
     let thinking_enabled = crate::models::model_supports_reasoning(&config.model)
         && config.thinking_level.is_enabled();
+    let thinking_level = if thinking_enabled {
+        config.thinking_level
+    } else {
+        ThinkingLevel::Off
+    };
     let base_url = custom_cfg.effective_base_url()?;
     let api_key = custom_cfg.resolve_api_key()?;
     let client = crate::providers::openai_compatible::build_custom(
@@ -1192,6 +1202,7 @@ fn build_custom_run_turn_setup(
     Ok(RunTurnSetup {
         model: bare_model,
         provider: provider_name,
+        thinking_level,
         client,
         tools,
         enabled_tools,
@@ -4623,6 +4634,7 @@ mod tests {
         let setup = RunTurnSetup {
             model: "gemini-3-pro-preview".to_string(),
             provider: "gemini".to_string(),
+            thinking_level: ThinkingLevel::Off,
             client: Box::new(GeminiClient::new(GeminiConfig {
                 api_key: "x".to_string(),
                 base_url: "https://example.invalid".to_string(),

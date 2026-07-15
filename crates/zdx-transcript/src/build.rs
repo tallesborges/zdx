@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use zdx_engine::core::events::ToolOutput;
 use zdx_engine::core::thread_persistence::ThreadEvent;
 
-use super::HistoryCell;
-use super::reasoning::reasoning_display_text;
+use crate::cell::HistoryCell;
+use crate::reasoning::reasoning_display_text;
 
 /// Builds transcript cells from thread events.
 ///
@@ -137,8 +137,8 @@ fn flush_pending_assistant(
 mod tests {
     use serde_json::json;
 
-    use super::super::ToolState;
     use super::*;
+    use crate::cell::ToolState;
 
     #[test]
     fn test_build_transcript_from_events_empty() {

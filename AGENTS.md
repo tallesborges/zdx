@@ -9,6 +9,7 @@ This monorepo now uses scoped `AGENTS.md` files per crate.
 - `AGENTS.md` (this file): workspace-level conventions + index
 - `crates/zdx-assets/AGENTS.md`: embedded assets (prompts, default TOMLs, bundled skills, built-in subagents)
 - `crates/zdx-types/AGENTS.md`: pure shared value types and pure helper logic for providers, tools, events
+- `crates/zdx-transcript/`: shared transcript display model + rendering (thread events → `HistoryCell`s → styled/ratatui lines; markdown, wrapping, tool pairing). Reused by `zdx-tui` and `zdx-monitor`.
 - `crates/zdx-providers/AGENTS.md`: LLM provider implementations (Anthropic, OpenAI, Gemini, etc.)
 - `crates/zdx-engine/AGENTS.md`: core engine — runtime, config, agent orchestration, tools
 - `crates/zdx-tui/AGENTS.md`: TUI architecture map + runtime/features conventions

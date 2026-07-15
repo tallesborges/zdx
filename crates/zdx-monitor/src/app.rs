@@ -3,7 +3,7 @@ use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use std::{fs, io};
 
 use anyhow::{Context, Result};
@@ -16,6 +16,7 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::prelude::*;
 use serde_json::Value;
 use zdx_engine::config::{self, paths};
+use zdx_engine::core::thread_persistence;
 use zdx_engine::core::usage_stats::{self, UsageStats};
 use zdx_engine::providers::subscription_quota::{self, QuotaError, SubscriptionQuota};
 use zdx_engine::{agent_activity, automations, pidfile};
@@ -184,11 +185,14 @@ pub struct MonitorApp {
     pub config_line_count: usize,
     pub config_scroll: usize,
     pub terminal_height: u16,
+    pub terminal_width: u16,
     pub root: PathBuf,
     pub threads: Vec<ThreadInfo>,
     pub automations: Vec<AutomationInfo>,
     pub services: Vec<ServiceInfo>,
     pub active_agents: Vec<ActiveAgentInfo>,
+    /// Open transcript overlay for a selected active agent, if any.
+    pub agent_overlay: Option<AgentOverlayState>,
     pub log_file_name: Option<String>,
     pub log_lines: Vec<String>,
     pub log_selected: usize,
@@ -224,7 +228,10 @@ pub struct MonitorApp {
 }
 
 /// Result payload from a background quota fetch: one entry per provider.
-type QuotaFetchResult = Vec<(&'static str, std::result::Result<SubscriptionQuota, QuotaError>)>;
+type QuotaFetchResult = Vec<(
+    &'static str,
+    std::result::Result<SubscriptionQuota, QuotaError>,
+)>;
 
 /// A cached snapshot of the usage aggregation plus when it was computed.
 pub struct CachedUsageStats {
@@ -270,10 +277,39 @@ pub struct ActiveAgentInfo {
     pub pid: u32,
     pub surface: String,
     pub thread_id: String,
+    /// Full (un-truncated) thread id used to locate the transcript file.
+    /// `None` for tracked runs that don't persist a thread.
+    pub full_thread_id: Option<String>,
     pub model: String,
+    pub provider: String,
+    pub thinking: String,
     pub uptime: String,
     pub kind: Option<String>,
     pub subagent_name: Option<String>,
+}
+
+/// State for the Active Agents transcript overlay (drill-in on `Enter`).
+pub struct AgentOverlayState {
+    /// Thread id captured when the overlay was opened (never re-derived from
+    /// the live selection).
+    pub thread_id: String,
+    /// Header label, e.g. `provider:model@thinking abc12345`.
+    pub title: String,
+    /// Rendered transcript lines (formatted markdown via `zdx-transcript`).
+    pub lines: Vec<Line<'static>>,
+    /// Manual top-line scroll offset. `None` follows the newest content.
+    pub scroll: Option<usize>,
+    /// The captured run is no longer active (marker gone). Presentation only —
+    /// reads continue while the overlay is open.
+    pub ended: bool,
+    /// No thread id was available for this run.
+    pub unavailable: bool,
+    /// Last-seen transcript file size, to skip reparsing unchanged files.
+    pub file_len: u64,
+    /// Last-seen transcript file mtime, to skip reparsing unchanged files.
+    pub file_mtime: Option<SystemTime>,
+    /// Width the transcript was last rendered at (re-render on resize).
+    pub width: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -547,8 +583,8 @@ fn poll_quota_result(app: &mut MonitorApp) {
             }),
             Err(err) => {
                 if let QuotaError::RateLimited { retry_after_secs } = err {
-                    let cooldown = retry_after_secs
-                        .map_or(QUOTA_BACKOFF_DEFAULT, Duration::from_secs);
+                    let cooldown =
+                        retry_after_secs.map_or(QUOTA_BACKOFF_DEFAULT, Duration::from_secs);
                     app.quota_backoff
                         .insert(provider, Instant::now() + cooldown);
                 }
@@ -674,11 +710,13 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
         config_line_count,
         config_scroll: 0,
         terminal_height: 24,
+        terminal_width: 80,
         root: root.clone(),
         threads: load_threads(),
         automations: load_automations(&root),
         services,
         active_agents: load_active_agents(),
+        agent_overlay: None,
         log_file_name,
         log_lines,
         log_selected: 0,
@@ -723,6 +761,10 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
 }
 
 fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
+    if app.agent_overlay.is_some() {
+        handle_agent_overlay_key(app, key.code);
+        return;
+    }
     if app.log_overlay_open {
         handle_log_overlay_key(app, key.code);
         return;
@@ -803,7 +845,13 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
         }
         KeyCode::Char('y') => copy_selected_thread_id(app),
         KeyCode::Char('r') => restart_selected_service(app),
-        KeyCode::Enter => toggle_selected_service(app),
+        KeyCode::Enter => {
+            if app.active_section == Section::ActiveAgents {
+                open_agent_overlay(app);
+            } else {
+                toggle_selected_service(app);
+            }
+        }
         _ => {}
     }
 }
@@ -895,6 +943,17 @@ fn copy_selected_log_entry(app: &mut MonitorApp) {
 }
 
 fn handle_mouse_event(app: &mut MonitorApp, kind: MouseEventKind) {
+    let overlay_page = agent_overlay_page_size(app);
+    if let Some(state) = app.agent_overlay.as_mut() {
+        let max_offset = state.lines.len().saturating_sub(overlay_page);
+        let cur = state.scroll.unwrap_or(max_offset);
+        match kind {
+            MouseEventKind::ScrollDown => state.scroll = Some((cur + 1).min(max_offset)),
+            MouseEventKind::ScrollUp => state.scroll = Some(cur.saturating_sub(1)),
+            _ => {}
+        }
+        return;
+    }
     if app.log_overlay_open {
         return;
     }
@@ -1093,23 +1152,34 @@ pub fn run(root: &Path) -> Result<()> {
     loop {
         terminal.draw(|f| ui::render(f, &app))?;
         app.terminal_height = terminal.size().map_or(24, |r| r.height);
+        app.terminal_width = terminal.size().map_or(80, |r| r.width);
 
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
         if event::poll(timeout).context("poll events")? {
-            match event::read().context("read event")? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    handle_key_event(&mut app, key);
-                    refresh_app(&mut app);
+            // Drain every queued event in one pass before redrawing. Otherwise a
+            // burst (e.g. a fast mouse scroll) is processed one-per-frame and a
+            // following key press like Esc is starved behind the backlog, which
+            // looks like a freeze.
+            loop {
+                match event::read().context("read event")? {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => {
+                        handle_key_event(&mut app, key);
+                        refresh_app(&mut app);
+                    }
+                    Event::Mouse(mouse) => {
+                        handle_mouse_event(&mut app, mouse.kind);
+                    }
+                    _ => {}
                 }
-                Event::Mouse(mouse) => {
-                    handle_mouse_event(&mut app, mouse.kind);
+                if app.should_quit || !event::poll(Duration::ZERO).context("poll events")? {
+                    break;
                 }
-                _ => {}
             }
         }
 
         if last_tick.elapsed() >= tick_rate {
             refresh_app(&mut app);
+            refresh_agent_overlay(&mut app);
             last_tick = Instant::now();
         }
 
@@ -1357,11 +1427,223 @@ fn load_active_agents() -> Vec<ActiveAgentInfo> {
                 pid: r.pid,
                 surface: r.surface.unwrap_or_else(|| "-".to_string()),
                 thread_id: short_thread,
+                full_thread_id: r.thread_id.filter(|id| !id.is_empty()),
                 model: r.model.unwrap_or_else(|| "-".to_string()),
+                provider: r.provider.unwrap_or_else(|| "-".to_string()),
+                thinking: r.thinking.unwrap_or_else(|| "-".to_string()),
                 uptime: agent_activity::uptime_since(&r.started_at),
                 kind: r.kind,
                 subagent_name: r.subagent_name,
             }
         })
         .collect()
+}
+
+/// Path to a thread's transcript JSONL.
+fn transcript_path(id: &str) -> PathBuf {
+    paths::threads_dir().join(format!("{id}.jsonl"))
+}
+
+/// Max transcript cells kept for rendering (bounds render size, not I/O).
+/// Applied after building cells so `tool_use`/`tool_result` pairs never split.
+const TRANSCRIPT_MAX_CELLS: usize = 200;
+
+/// Reads a thread transcript and renders it to formatted ratatui lines using
+/// the shared `zdx-transcript` renderer (markdown, wrapping, tool pairing).
+/// Best-effort; a missing file yields no lines.
+fn read_thread_transcript(id: &str, width: usize) -> Vec<Line<'static>> {
+    let events = thread_persistence::load_thread_events(id).unwrap_or_default();
+    let cells = zdx_transcript::build_transcript_from_events(&events);
+    let start = cells.len().saturating_sub(TRANSCRIPT_MAX_CELLS);
+    zdx_transcript::cells_to_lines(&cells[start..], width.max(1))
+}
+
+/// Number of visible transcript rows in the full-screen overlay.
+fn agent_overlay_page_size(app: &MonitorApp) -> usize {
+    (app.terminal_height.saturating_sub(2) as usize).max(1)
+}
+
+/// Opens the transcript overlay for the currently selected active agent.
+fn open_agent_overlay(app: &mut MonitorApp) {
+    let Some(a) = app.active_agents.get(app.selected_index) else {
+        return;
+    };
+    let title = format!("{}:{}@{} {}", a.provider, a.model, a.thinking, a.thread_id);
+    let width = app.terminal_width.saturating_sub(2) as usize;
+    match a.full_thread_id.clone() {
+        Some(id) => {
+            let mut state = AgentOverlayState {
+                thread_id: id,
+                title,
+                lines: Vec::new(),
+                scroll: None,
+                ended: false,
+                unavailable: false,
+                file_len: 0,
+                file_mtime: None,
+                width,
+            };
+            load_transcript_into(&mut state);
+            app.agent_overlay = Some(state);
+        }
+        None => {
+            app.agent_overlay = Some(AgentOverlayState {
+                thread_id: String::new(),
+                title,
+                lines: vec![Line::from("transcript unavailable (no thread id)")],
+                scroll: None,
+                ended: false,
+                unavailable: true,
+                file_len: 0,
+                file_mtime: None,
+                width,
+            });
+        }
+    }
+}
+
+/// File length + mtime used to detect transcript changes between ticks.
+/// Missing/unreadable file collapses to `(0, None)`.
+fn transcript_file_fingerprint(path: &Path) -> (u64, Option<SystemTime>) {
+    fs::metadata(path).map_or((0, None), |m| (m.len(), m.modified().ok()))
+}
+
+/// (Re)loads the transcript for an open overlay and records file len/mtime.
+fn load_transcript_into(state: &mut AgentOverlayState) {
+    let path = transcript_path(&state.thread_id);
+    let (len, mtime) = transcript_file_fingerprint(&path);
+    state.file_len = len;
+    state.file_mtime = mtime;
+    state.lines = read_thread_transcript(&state.thread_id, state.width);
+}
+
+/// Timed-tick refresh for the open transcript overlay. Skips reparsing when the
+/// file and render width are unchanged. Marks the run ended when its marker
+/// disappears, but keeps reading (the final assistant message may still be
+/// persisting).
+fn refresh_agent_overlay(app: &mut MonitorApp) {
+    let width = app.terminal_width.saturating_sub(2) as usize;
+    let Some(state) = app.agent_overlay.as_mut() else {
+        return;
+    };
+    if state.unavailable {
+        return;
+    }
+    state.ended = !app
+        .active_agents
+        .iter()
+        .any(|a| a.full_thread_id.as_deref() == Some(state.thread_id.as_str()));
+
+    let path = transcript_path(&state.thread_id);
+    let (len, mtime) = transcript_file_fingerprint(&path);
+    if len == state.file_len && mtime == state.file_mtime && width == state.width {
+        return;
+    }
+    state.file_len = len;
+    state.file_mtime = mtime;
+    state.width = width;
+    state.lines = read_thread_transcript(&state.thread_id, width);
+}
+
+/// Handles a key while the transcript overlay is open.
+fn handle_agent_overlay_key(app: &mut MonitorApp, key: KeyCode) {
+    let page = agent_overlay_page_size(app);
+    let Some(state) = app.agent_overlay.as_mut() else {
+        return;
+    };
+    let max_offset = state.lines.len().saturating_sub(page);
+    // `None` means following the newest content; step from the bottom.
+    let cur = state.scroll.unwrap_or(max_offset);
+    match key {
+        KeyCode::Esc | KeyCode::Char('q') => app.agent_overlay = None,
+        KeyCode::Char('j') | KeyCode::Down => state.scroll = Some((cur + 1).min(max_offset)),
+        KeyCode::Char('k') | KeyCode::Up => state.scroll = Some(cur.saturating_sub(1)),
+        KeyCode::PageDown => state.scroll = Some((cur + page).min(max_offset)),
+        KeyCode::PageUp => state.scroll = Some(cur.saturating_sub(page)),
+        KeyCode::Char('g') | KeyCode::Home => state.scroll = Some(0),
+        KeyCode::Char('G') | KeyCode::End => state.scroll = None,
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod transcript_tests {
+    use zdx_engine::core::thread_persistence::ThreadEvent;
+
+    use super::*;
+
+    fn parse(lines: &[&str]) -> Vec<ThreadEvent> {
+        lines
+            .iter()
+            .filter_map(|l| serde_json::from_str::<ThreadEvent>(l).ok())
+            .collect()
+    }
+
+    fn line_text(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    fn render(events: &[ThreadEvent], width: usize) -> Vec<String> {
+        let cells = zdx_transcript::build_transcript_from_events(events);
+        zdx_transcript::cells_to_lines(&cells, width)
+            .iter()
+            .map(line_text)
+            .collect()
+    }
+
+    #[test]
+    fn renders_formatted_transcript_with_paired_tools_and_notice() {
+        let events = parse(&[
+            r#"{"type":"meta","schema_version":1,"ts":"t"}"#,
+            r#"{"type":"message","role":"user","text":"hello there","ts":"t"}"#,
+            r#"{"type":"message","role":"assistant","text":"**bold** answer","ts":"t"}"#,
+            r#"{"type":"tool_use","id":"t1","name":"grep","input":{"pattern":"foo"},"ts":"t"}"#,
+            r#"{"type":"tool_result","tool_use_id":"t1","output":"match","ok":true,"ts":"t"}"#,
+            r#"{"type":"notice","kind":"refusal","message":"heads up","ts":"t"}"#,
+            r#"{"type":"usage","input_tokens":1,"output_tokens":2,"cache_read_tokens":0,"cache_write_tokens":0,"ts":"t"}"#,
+            r"{ malformed line",
+        ]);
+        let lines = render(&events, 80);
+        let joined = lines.join("\n");
+
+        assert!(
+            joined.contains("hello there"),
+            "user text present: {joined}"
+        );
+        assert!(
+            joined.contains("answer"),
+            "assistant text present: {joined}"
+        );
+        assert!(joined.contains("grep"), "tool name present: {joined}");
+        assert!(joined.contains("heads up"), "notice present: {joined}");
+        // Markdown bold markers are consumed, not rendered literally.
+        assert!(!joined.contains("**bold**"), "markdown parsed: {joined}");
+    }
+
+    #[test]
+    fn inserts_blank_line_between_cells() {
+        let events = parse(&[
+            r#"{"type":"message","role":"user","text":"one","ts":"t"}"#,
+            r#"{"type":"message","role":"assistant","text":"two","ts":"t"}"#,
+        ]);
+        let cells = zdx_transcript::build_transcript_from_events(&events);
+        let lines = zdx_transcript::cells_to_lines(&cells, 80);
+        let blanks = lines.iter().filter(|l| line_text(l).is_empty()).count();
+        assert!(
+            blanks >= cells.len(),
+            "one blank separator per cell: blanks={blanks} cells={}",
+            cells.len()
+        );
+    }
+
+    #[test]
+    fn narrower_width_wraps_into_more_lines() {
+        let events = parse(&[
+            r#"{"type":"message","role":"assistant","text":"the quick brown fox jumps over the lazy dog again and again","ts":"t"}"#,
+        ]);
+        let cells = zdx_transcript::build_transcript_from_events(&events);
+        let wide = zdx_transcript::cells_to_lines(&cells, 100).len();
+        let narrow = zdx_transcript::cells_to_lines(&cells, 20).len();
+        assert!(narrow > wide, "narrow={narrow} wide={wide}");
+    }
 }
