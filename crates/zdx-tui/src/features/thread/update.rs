@@ -116,12 +116,16 @@ pub fn handle_thread_event(
             context_paths,
             skills,
             initial_input,
+            model_override,
+            thinking_override,
         } => {
             handle_thread_created(
                 thread_handle,
                 context_paths,
                 skills,
                 initial_input,
+                model_override,
+                thinking_override,
                 &mut mutations,
             );
             vec![]
@@ -312,6 +316,8 @@ fn handle_thread_created(
     context_paths: Vec<PathBuf>,
     skills: Vec<zdx_engine::skills::Skill>,
     initial_input: Option<String>,
+    model_override: Option<String>,
+    thinking_override: Option<ThinkingLevel>,
     mutations: &mut Vec<StateMutation>,
 ) {
     let startup_messages =
@@ -321,13 +327,13 @@ fn handle_thread_created(
         thread_handle,
     ))));
     mutations.push(StateMutation::Thread(ThreadMutation::SetOverrides {
-        model_override: None,
-        thinking_override: None,
+        model_override: model_override.clone(),
+        thinking_override,
     }));
     mutations.push(StateMutation::Thread(ThreadMutation::SetTitle(None)));
     mutations.push(StateMutation::SetActiveThreadOverrides {
-        model_override: None,
-        thinking_override: None,
+        model_override,
+        thinking_override,
     });
     mutations.push(StateMutation::Input(InputMutation::ClearQueue));
     if let Some(text) = initial_input {

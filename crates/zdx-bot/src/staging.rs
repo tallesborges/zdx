@@ -475,10 +475,24 @@ async fn accept_handoff(
     };
 
     // Pre-create the new thread so its meta records the handoff lineage and
-    // a pending auto-title before the first turn opens it.
+    // a pending auto-title before the first turn opens it. Inherit the source
+    // thread's model/thinking overrides so the handoff continues with the same
+    // effective model and thinking level.
+    let inherited_model = thread_persistence::read_thread_model_override(source_thread_id)
+        .ok()
+        .flatten();
+    let inherited_thinking = thread_persistence::read_thread_thinking_override(source_thread_id)
+        .ok()
+        .flatten();
     let new_thread_id = thread_id_for_chat(chat_id, Some(new_topic_id));
     let created = thread_persistence::Thread::with_id(new_thread_id).and_then(|mut thread| {
         thread.set_handoff_from(Some(source_thread_id.to_string()));
+        if let Some(model) = inherited_model {
+            thread.set_model_override(Some(model))?;
+        }
+        if let Some(level) = inherited_thinking {
+            thread.set_thinking_override(Some(level))?;
+        }
         thread.set_pending_topic_title(true)
     });
     if let Err(err) = created {
