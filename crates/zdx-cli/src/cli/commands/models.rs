@@ -1291,8 +1291,8 @@ mod tests {
         assert_eq!(model.display_name, "Muse Spark 1.1");
         assert!(!model.display_name.contains("custom"));
         assert_eq!(model.context_limit, 1_000_000);
-        assert_eq!(model.pricing.input, 1.25);
-        assert_eq!(model.pricing.output, 4.25);
+        assert!((model.pricing.input - 1.25).abs() < f64::EPSILON);
+        assert!((model.pricing.output - 4.25).abs() < f64::EPSILON);
         assert!(model.capabilities.reasoning);
         assert!(model.capabilities.input_images);
     }

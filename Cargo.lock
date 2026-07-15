@@ -4654,6 +4654,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "zdx-engine",
+ "zdx-transcript",
 ]
 
 [[package]]
@@ -4702,6 +4703,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "zdx-transcript"
+version = "0.6.0"
+dependencies = [
+ "chrono",
+ "pulldown-cmark",
+ "ratatui",
+ "serde_json",
+ "unicode-segmentation",
+ "unicode-width",
+ "zdx-engine",
+]
+
+[[package]]
 name = "zdx-tui"
 version = "0.6.0"
 dependencies = [
@@ -4733,6 +4747,7 @@ dependencies = [
  "url",
  "uuid",
  "zdx-engine",
+ "zdx-transcript",
  "zdx-types",
 ]
 

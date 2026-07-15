@@ -6,7 +6,9 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs, W
 use zdx_engine::core::usage_stats::{UsageRow, UsageStats, UsageTotals};
 use zdx_engine::providers::subscription_quota::QuotaWindow;
 
-use crate::app::{CachedQuotas, CachedUsageStats, ConfigLine, MonitorApp, QuotaEntry, Section};
+use crate::app::{
+    AgentOverlayState, CachedQuotas, CachedUsageStats, ConfigLine, MonitorApp, QuotaEntry, Section,
+};
 
 pub fn render(f: &mut Frame, app: &MonitorApp) {
     let chunks = Layout::default()
@@ -34,6 +36,10 @@ pub fn render(f: &mut Frame, app: &MonitorApp) {
 
     if app.log_overlay_open && app.active_section == Section::Logs {
         render_log_overlay(f, app, f.area());
+    }
+
+    if let Some(state) = &app.agent_overlay {
+        render_agent_overlay(f, state, f.area());
     }
 }
 
@@ -112,7 +118,8 @@ fn footer_hint(section: Section) -> &'static str {
         Section::Services => {
             "↑↓ navigate • Enter toggle • r restart • ^R supervise • Tab switch • q quit"
         }
-        Section::ActiveAgents | Section::Automations => "↑↓ navigate • Tab switch • q quit",
+        Section::ActiveAgents => "↑↓ navigate • Enter inspect • Tab switch • q quit",
+        Section::Automations => "↑↓ navigate • Tab switch • q quit",
         Section::Config => "↑↓ scroll • PgUp/PgDn page • Tab switch • q quit",
         Section::Threads => "↑↓ navigate • y copy thread ID • Tab switch • q quit",
         Section::Usage => "↑↓ scroll • PgUp/PgDn page • R refresh • Tab switch • q quit",
@@ -154,7 +161,8 @@ fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
             );
             let suffix = format!(" thread:{} up {}", a.thread_id, a.uptime);
             let model_width = inner_width.saturating_sub(prefix.len() + suffix.len());
-            let model = truncate_chars(&a.model, model_width);
+            let model_desc = format!("{}:{}@{}", a.provider, a.model, a.thinking);
+            let model = truncate_chars(&model_desc, model_width);
             let line = format!("{prefix}{model:<model_width$}{suffix}");
             let style = if i == app.selected_index {
                 Style::default()
@@ -333,7 +341,10 @@ pub(crate) fn usage_line_count(cached: &CachedUsageStats, quotas: Option<&Cached
 /// Build the styled display lines for the Usage tab. Mirrors the `zdx stats`
 /// CLI output so both surfaces show identical numbers, with a live subscription
 /// quota block on top.
-fn build_usage_lines(cached: &CachedUsageStats, quotas: Option<&CachedQuotas>) -> Vec<Line<'static>> {
+fn build_usage_lines(
+    cached: &CachedUsageStats,
+    quotas: Option<&CachedQuotas>,
+) -> Vec<Line<'static>> {
     let stats = &cached.stats;
     let mut lines = subscription_lines(quotas);
     lines.extend(usage_banner_lines(cached));
@@ -412,7 +423,11 @@ fn quota_bar(used_percent: f64) -> String {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let filled = ((pct / 100.0) * QUOTA_BAR_WIDTH as f64).round() as usize;
     let filled = filled.min(QUOTA_BAR_WIDTH);
-    format!("{}{}", "█".repeat(filled), "░".repeat(QUOTA_BAR_WIDTH - filled))
+    format!(
+        "{}{}",
+        "█".repeat(filled),
+        "░".repeat(QUOTA_BAR_WIDTH - filled)
+    )
 }
 
 /// One window rendered as `label  ▕████░░░░▏  47%   resets in …`.
@@ -445,7 +460,10 @@ fn subscription_entry_lines(entry: &QuotaEntry) -> Vec<Line<'static>> {
     let name = provider_display(entry.provider);
     let Some(quota) = &entry.quota else {
         let reason = entry.error.as_deref().unwrap_or("unavailable");
-        return vec![Line::from(Span::styled(format!("  {name}   {reason}"), dim))];
+        return vec![Line::from(Span::styled(
+            format!("  {name}   {reason}"),
+            dim,
+        ))];
     };
     let plan = quota
         .plan
@@ -458,7 +476,10 @@ fn subscription_entry_lines(entry: &QuotaEntry) -> Vec<Line<'static>> {
         .map(|e| format!("   · stale ({e})"))
         .unwrap_or_default();
     let mut lines = vec![Line::from(vec![
-        Span::styled(format!("  {name}"), Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("  {name}"),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Span::styled(plan, dim),
         Span::styled(stale, dim),
     ])];
@@ -473,7 +494,9 @@ fn subscription_lines(quotas: Option<&CachedQuotas>) -> Vec<Line<'static>> {
     let dim = Style::default().fg(Color::DarkGray);
     let mut lines = vec![Line::from(Span::styled(
         "Subscriptions",
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
     ))];
     match quotas {
         None => lines.push(Line::from(Span::styled("  loading…", dim))),
@@ -744,6 +767,47 @@ fn render_log_overlay(f: &mut Frame, app: &MonitorApp, area: Rect) {
     f.render_widget(body, popup_area);
 }
 
+fn render_agent_overlay(f: &mut Frame, state: &AgentOverlayState, area: Rect) {
+    f.render_widget(Clear, area);
+
+    let status = if state.unavailable {
+        ""
+    } else if state.ended {
+        " · ENDED"
+    } else if state.scroll.is_none() {
+        " · FOLLOW"
+    } else {
+        ""
+    };
+    let title = format!(" {}{status} · Esc close ", state.title);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(title);
+
+    let total = state.lines.len();
+    if total == 0 {
+        let p = Paragraph::new(" No transcript yet for this run.")
+            .style(Style::default().fg(Color::DarkGray))
+            .block(block);
+        f.render_widget(p, area);
+        return;
+    }
+
+    let visible_rows = area.height.saturating_sub(2) as usize;
+    let max_offset = total.saturating_sub(visible_rows);
+    let offset = state.scroll.unwrap_or(max_offset).min(max_offset);
+    let end = (offset + visible_rows).min(total);
+
+    let items: Vec<ListItem> = state.lines[offset..end]
+        .iter()
+        .map(|line| ListItem::new(line.clone()))
+        .collect();
+
+    let list = List::new(items).block(block);
+    f.render_widget(list, area);
+}
+
 /// Build a centered Rect using `percent_x` × `percent_y` of `area`.
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let popup_w = area.width.saturating_mul(percent_x) / 100;
@@ -906,9 +970,10 @@ fn truncate_spans(spans: Vec<Span<'static>>, max_chars: usize) -> Vec<Span<'stat
 
 #[cfg(test)]
 mod tests {
+    use zdx_engine::providers::subscription_quota::SubscriptionQuota;
+
     use super::*;
     use crate::app::QuotaEntry;
-    use zdx_engine::providers::subscription_quota::SubscriptionQuota;
 
     #[test]
     fn percent_color_thresholds() {
@@ -976,10 +1041,18 @@ mod tests {
     #[test]
     fn quota_bar_fills_proportionally() {
         assert_eq!(quota_bar(0.0).chars().filter(|c| *c == '█').count(), 0);
-        assert_eq!(quota_bar(100.0).chars().filter(|c| *c == '█').count(), QUOTA_BAR_WIDTH);
-        assert_eq!(quota_bar(50.0).chars().filter(|c| *c == '█').count(), QUOTA_BAR_WIDTH / 2);
+        assert_eq!(
+            quota_bar(100.0).chars().filter(|c| *c == '█').count(),
+            QUOTA_BAR_WIDTH
+        );
+        assert_eq!(
+            quota_bar(50.0).chars().filter(|c| *c == '█').count(),
+            QUOTA_BAR_WIDTH / 2
+        );
         // Out-of-range values are clamped, never panic or overflow the bar.
-        assert_eq!(quota_bar(150.0).chars().filter(|c| *c == '█').count(), QUOTA_BAR_WIDTH);
+        assert_eq!(
+            quota_bar(150.0).chars().filter(|c| *c == '█').count(),
+            QUOTA_BAR_WIDTH
+        );
     }
 }
-

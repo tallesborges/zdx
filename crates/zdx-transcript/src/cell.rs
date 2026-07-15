@@ -14,9 +14,9 @@ use serde_json::Value;
 use zdx_engine::core::events::ToolOutput;
 use zdx_engine::providers::ReplayToken;
 
-use super::style::{Style, StyledLine, StyledSpan};
-use super::wrap::{WrapCache, render_prefixed_content};
-use crate::common::{ratatui_width, truncate_with_ellipsis};
+use crate::style::{Style, StyledLine, StyledSpan};
+use crate::text::{ratatui_width, truncate_with_ellipsis};
+use crate::wrap::{WrapCache, render_prefixed_content};
 
 fn value_as_trimmed_str<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
     let value = input.get(key)?.as_str()?.trim();

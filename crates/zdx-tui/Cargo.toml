@@ -12,6 +12,7 @@ doctest = false
 workspace = true
 [dependencies]
 zdx-engine = { path = "../zdx-engine" }
+zdx-transcript = { path = "../zdx-transcript" }
 zdx-types = { path = "../zdx-types" }
 
 anyhow.workspace = true

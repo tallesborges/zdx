@@ -1,7 +1,7 @@
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::common::ratatui_width;
-use crate::transcript::{Style, StyledLine, StyledSpan};
+use crate::style::{Style, StyledLine, StyledSpan};
+use crate::text::ratatui_width;
 
 /// Options for wrapping styled spans with hanging indents.
 #[derive(Debug, Clone, Default)]

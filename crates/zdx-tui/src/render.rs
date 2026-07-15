@@ -14,8 +14,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::common::text::truncate_with_ellipsis;
-use crate::common::{Scrollbar, TaskKind};
+use crate::common::{Scrollbar, TaskKind, truncate_with_ellipsis};
 use crate::state::{AgentState, AppState, TuiState, TurnOutcome};
 use crate::statusline::render_debug_status_line;
 use crate::{input, transcript};

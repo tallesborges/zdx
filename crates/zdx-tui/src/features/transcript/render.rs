@@ -7,8 +7,9 @@
 //! - Style conversion helpers
 //! - Cell line count calculation
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
+use zdx_transcript::{convert_style, convert_styled_line};
 
 use crate::common::ratatui_text;
 use crate::state::TuiState;
@@ -241,23 +242,6 @@ pub fn calculate_cell_line_counts(
 // Style Conversion Helpers
 // ============================================================================
 
-/// Converts a transcript `StyledLine` to a ratatui Line.
-///
-/// Exposed within the crate so overlays (e.g. the TLDR overlay) can
-/// render styled markdown via `markdown::render_markdown` without
-/// duplicating the style-conversion logic.
-pub(crate) fn convert_styled_line(styled_line: &StyledLine) -> Line<'static> {
-    let spans: Vec<Span<'static>> = styled_line
-        .spans
-        .iter()
-        .map(|s| {
-            let style = convert_style(s.style);
-            Span::styled(ratatui_text(&s.text).into_owned(), style)
-        })
-        .collect();
-    Line::from(spans)
-}
-
 fn detect_line_interaction(styled_line: &StyledLine) -> Option<LineInteraction> {
     // Detect tool header lines: must have both an icon span (state style) AND
     // a name span (ToolStatus). Error detail lines use ToolError but lack ToolStatus,
@@ -382,68 +366,4 @@ fn convert_styled_line_with_selection(
     }
 
     Line::from(result_spans)
-}
-
-/// Converts a transcript Style to a ratatui Style.
-fn convert_style(style: TranscriptStyle) -> Style {
-    match style {
-        TranscriptStyle::Plain => Style::default(),
-        TranscriptStyle::UserPrefix | TranscriptStyle::ToolSuccess => Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
-        TranscriptStyle::User | TranscriptStyle::BlockQuote => Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::ITALIC),
-        TranscriptStyle::Assistant => Style::default().fg(Color::White),
-        TranscriptStyle::StreamingCursor => Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::SLOW_BLINK),
-        TranscriptStyle::SystemPrefix => Style::default()
-            .fg(Color::Magenta)
-            .add_modifier(Modifier::BOLD),
-        TranscriptStyle::System | TranscriptStyle::ToolOutput | TranscriptStyle::CodeFence => {
-            Style::default().fg(Color::DarkGray)
-        }
-        TranscriptStyle::ToolStatus => Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-        TranscriptStyle::ToolError => Style::default().fg(Color::Red),
-        TranscriptStyle::ToolRunning | TranscriptStyle::CodeInline | TranscriptStyle::CodeBlock => {
-            Style::default().fg(Color::Cyan)
-        }
-        TranscriptStyle::ToolCancelled => Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::CROSSED_OUT | Modifier::BOLD),
-        TranscriptStyle::ToolTruncation | TranscriptStyle::ToolBracket => Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::DIM),
-        TranscriptStyle::ThinkingPrefix => Style::default()
-            .fg(Color::Magenta)
-            .add_modifier(Modifier::DIM),
-        TranscriptStyle::Thinking | TranscriptStyle::Timing => Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::DIM | Modifier::ITALIC),
-        TranscriptStyle::Interrupted | TranscriptStyle::TableBorder => Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::DIM),
-
-        // Markdown styles
-        TranscriptStyle::Emphasis => Style::default().add_modifier(Modifier::ITALIC),
-        TranscriptStyle::Strong | TranscriptStyle::H2 => {
-            Style::default().add_modifier(Modifier::BOLD)
-        }
-        TranscriptStyle::H1 => Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        TranscriptStyle::H3 => Style::default()
-            .add_modifier(Modifier::ITALIC)
-            .fg(Color::White),
-        TranscriptStyle::Link => Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::UNDERLINED),
-        TranscriptStyle::ListBullet | TranscriptStyle::ListNumber => {
-            Style::default().fg(Color::Yellow)
-        }
-        TranscriptStyle::ImagePlaceholder => Style::default()
-            .fg(Color::Magenta)
-            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-    }
 }

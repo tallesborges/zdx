@@ -4,9 +4,9 @@ use std::rc::Rc;
 
 use unicode_segmentation::UnicodeSegmentation;
 
-use super::cell::CellId;
-use super::style::{Style, StyledLine, StyledSpan};
-use crate::common::ratatui_width;
+use crate::cell::CellId;
+use crate::style::{Style, StyledLine, StyledSpan};
+use crate::text::ratatui_width;
 
 /// Cache for wrapped lines to avoid re-computing on every frame.
 ///

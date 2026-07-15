@@ -1,5 +1,5 @@
 use super::parse::render_markdown;
-use crate::transcript::StyledLine;
+use crate::style::StyledLine;
 
 /// Maximum bytes to buffer before forcing a commit, even without a newline.
 /// This prevents very long paragraphs from delaying rendering indefinitely.
