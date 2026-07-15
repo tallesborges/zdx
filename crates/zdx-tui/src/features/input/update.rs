@@ -733,7 +733,7 @@ fn handle_favorites(
         vec![
             StateMutation::Config(ConfigMutation::SetModel(model)),
             StateMutation::Config(ConfigMutation::SetThinkingLevel(level)),
-            StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(message)),
+            StateMutation::Transcript(TranscriptMutation::AppendOrReplaceSwitchNotice(message)),
         ],
         None,
     ))

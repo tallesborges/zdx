@@ -148,9 +148,11 @@ impl ModelPickerState {
                             },
                             thinking_override: tui.thread.thinking_override,
                         },
-                        StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(
-                            format!("Switched to {display_name}"),
-                        )),
+                        StateMutation::Transcript(
+                            TranscriptMutation::AppendOrReplaceSwitchNotice(format!(
+                                "Switched to {display_name}"
+                            )),
+                        ),
                     ])
             }
             // Ctrl+U (or Command+Backspace on macOS): clear the current line

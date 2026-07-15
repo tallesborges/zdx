@@ -307,6 +307,12 @@ pub struct TranscriptState {
     /// `handle_frame` patch line info incrementally instead of clearing and
     /// rebuilding the whole transcript every frame.
     line_info_dirty: Option<usize>,
+
+    /// Cell id of the last model/preset switch notice, while it is still the
+    /// trailing cell. Lets repeated switches replace it in place instead of
+    /// stacking one banner per switch. Cleared implicitly once any other cell
+    /// becomes the last cell.
+    last_switch_cell_id: Option<super::CellId>,
 }
 
 impl Default for TranscriptState {
@@ -324,6 +330,7 @@ impl Default for TranscriptState {
             active_user_cell_id: None,
             // Force an initial full build on the first frame.
             line_info_dirty: Some(0),
+            last_switch_cell_id: None,
         }
     }
 }
@@ -637,6 +644,28 @@ impl TranscriptState {
             TranscriptMutation::AppendSystemMessage(message) => {
                 self.push_cell(super::HistoryCell::system(message));
             }
+            TranscriptMutation::AppendOrReplaceSwitchNotice(message) => {
+                let coalesce = self
+                    .last_switch_cell_id
+                    .is_some_and(|id| self.cells.last().is_some_and(|c| c.id() == id));
+                if coalesce
+                    && let Some(super::HistoryCell::System {
+                        content,
+                        created_at,
+                        ..
+                    }) = self.cells.last_mut()
+                {
+                    *content = message;
+                    *created_at = chrono::Utc::now();
+                    let last = self.cells.len() - 1;
+                    self.mark_line_info_dirty_from(last);
+                } else {
+                    let cell = super::HistoryCell::system(message);
+                    let id = cell.id();
+                    self.push_cell(cell);
+                    self.last_switch_cell_id = Some(id);
+                }
+            }
             TranscriptMutation::Clear => self.reset(),
             TranscriptMutation::ReplaceCells(cells) => {
                 self.cells = cells;
@@ -836,7 +865,44 @@ fn is_word_grapheme(grapheme: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transcript::LineMapping;
+    use crate::transcript::{HistoryCell, LineMapping};
+
+    fn last_content(state: &TranscriptState) -> Option<&str> {
+        match state.cells().last() {
+            Some(HistoryCell::System { content, .. }) => Some(content.as_str()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn switch_notice_coalesces_until_a_message_breaks_the_chain() {
+        let mut state = TranscriptState::default();
+        for alias in ["Balanced", "Smart", "Fast"] {
+            state.apply(TranscriptMutation::AppendOrReplaceSwitchNotice(format!(
+                "Switched to {alias}"
+            )));
+        }
+        // Three consecutive switches collapse into one banner with the latest text.
+        assert_eq!(state.cells().len(), 1);
+        assert_eq!(last_content(&state), Some("Switched to Fast"));
+
+        // A real message breaks the chain, so the next switch appends fresh.
+        state.apply(TranscriptMutation::AppendCell(Box::new(HistoryCell::user(
+            "hello",
+        ))));
+        state.apply(TranscriptMutation::AppendOrReplaceSwitchNotice(
+            "Switched to Reason".to_string(),
+        ));
+        assert_eq!(state.cells().len(), 3);
+        assert_eq!(last_content(&state), Some("Switched to Reason"));
+
+        // Further switches now coalesce onto the new banner.
+        state.apply(TranscriptMutation::AppendOrReplaceSwitchNotice(
+            "Switched to Balanced".to_string(),
+        ));
+        assert_eq!(state.cells().len(), 3);
+        assert_eq!(last_content(&state), Some("Switched to Balanced"));
+    }
 
     // ========================================================================
     // Lazy Rendering Tests
