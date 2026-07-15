@@ -43,6 +43,10 @@ pub enum StateMutation {
 pub enum TranscriptMutation {
     AppendCell(Box<HistoryCell>),
     AppendSystemMessage(String),
+    /// Appends a system notice, but replaces the previous one in place when it
+    /// is still the last cell (no message since). Used to coalesce repeated
+    /// model/preset switches instead of stacking one banner per switch.
+    AppendOrReplaceSwitchNotice(String),
     Clear,
     ReplaceCells(Vec<HistoryCell>),
     ResetScroll,
