@@ -393,9 +393,9 @@ fn default_tldr_model() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct TranscriptionConfig {
-    /// Transcription provider: "openai" (default), "mistral", or "xai"
-    pub provider: Option<String>,
-    /// Model to use for transcription (provider-specific)
+    /// Model to use for transcription: a `provider:model` id (e.g.
+    /// `elevenlabs:scribe_v2`) or a bare provider name (e.g. `mistral`) to use
+    /// that provider's default model.
     pub model: Option<String>,
     /// Language hint (ISO 639-1 code like "en", "pt", etc.)
     pub language: Option<String>,
@@ -1336,6 +1336,8 @@ pub struct ProvidersConfig {
     pub grok_build: ProviderConfig,
     #[serde(default = "default_meta_provider")]
     pub meta: ProviderConfig,
+    #[serde(default = "default_elevenlabs_provider")]
+    pub elevenlabs: ProviderConfig,
     /// User-defined OpenAI-compatible providers, keyed by name. Used by
     /// prefixing the model with the name (e.g. `<name>:model-id`).
     #[serde(default)]
@@ -1370,6 +1372,7 @@ impl ProvidersConfig {
             id if id == ProviderKind::Xai.id() => &self.xai,
             id if id == ProviderKind::GrokBuild.id() => &self.grok_build,
             id if id == ProviderKind::Meta.id() => &self.meta,
+            id if id == ProviderKind::ElevenLabs.id() => &self.elevenlabs,
             _ => return true, // Unknown providers default to enabled
         };
         config.enabled.unwrap_or(true)
@@ -1400,6 +1403,7 @@ impl ProvidersConfig {
             ProviderKind::Xai => &self.xai,
             ProviderKind::GrokBuild => &self.grok_build,
             ProviderKind::Meta => &self.meta,
+            ProviderKind::ElevenLabs => &self.elevenlabs,
         }
     }
 
@@ -1428,6 +1432,7 @@ impl ProvidersConfig {
             ProviderKind::Xai => &mut self.xai,
             ProviderKind::GrokBuild => &mut self.grok_build,
             ProviderKind::Meta => &mut self.meta,
+            ProviderKind::ElevenLabs => &mut self.elevenlabs,
         }
     }
 
@@ -1484,6 +1489,7 @@ impl Default for ProvidersConfig {
             xai: default_xai_provider(),
             grok_build: default_grok_build_provider(),
             meta: default_meta_provider(),
+            elevenlabs: default_elevenlabs_provider(),
             custom: std::collections::HashMap::new(),
         }
     }
@@ -1692,6 +1698,13 @@ fn default_grok_build_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec!["grok-4.5".to_string()],
+        ..Default::default()
+    }
+}
+
+fn default_elevenlabs_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
         ..Default::default()
     }
 }
@@ -1940,7 +1953,6 @@ models = ["model-a", "model-b"]
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.model, "claude-3-opus");
         assert_eq!(config.max_tokens, None);
-        assert!(config.transcription.provider.is_none());
         assert!(config.transcription.model.is_none());
         assert!(config.transcription.language.is_none());
         assert_eq!(config.qmd.command, "qmd");
@@ -1954,16 +1966,17 @@ models = ["model-a", "model-b"]
         fs::write(
             &config_path,
             r#"[transcription]
-provider = "openai"
-model = "whisper-1"
+model = "elevenlabs:scribe_v2"
 language = "pt"
 "#,
         )
         .unwrap();
 
         let config = Config::load_from(&config_path).unwrap();
-        assert_eq!(config.transcription.provider.as_deref(), Some("openai"));
-        assert_eq!(config.transcription.model.as_deref(), Some("whisper-1"));
+        assert_eq!(
+            config.transcription.model.as_deref(),
+            Some("elevenlabs:scribe_v2")
+        );
         assert_eq!(config.transcription.language.as_deref(), Some("pt"));
     }
 
@@ -2826,7 +2839,6 @@ max_tokens = 4096
     #[test]
     fn test_transcription_config_defaults() {
         let config = TranscriptionConfig::default();
-        assert!(config.provider.is_none());
         assert!(config.model.is_none());
         assert!(config.language.is_none());
     }

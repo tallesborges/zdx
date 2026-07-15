@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use tokio_util::sync::CancellationToken;
 
-use crate::audio::transcribe::OperationCancelled;
+use crate::audio::send_checked;
 use crate::config::{Config, SpeechConfig};
 use crate::providers::{ProviderKind, resolve_provider};
 
@@ -280,38 +280,6 @@ struct SpeechRequest<'a> {
     voice: &'a str,
     format: &'a str,
     cancel_token: Option<&'a CancellationToken>,
-}
-
-/// Sends a request, honoring cancellation, and returns the response only on a
-/// success status (otherwise an error carrying the response body). Shared by the
-/// `/audio/speech`, `/tts`, and Gemini `generateContent` request paths.
-async fn send_checked(
-    request: reqwest::RequestBuilder,
-    cancel_token: Option<&CancellationToken>,
-    context: &str,
-) -> Result<reqwest::Response> {
-    if cancel_token.is_some_and(CancellationToken::is_cancelled) {
-        return Err(OperationCancelled.into());
-    }
-
-    let send = request.send();
-    let response = if let Some(token) = cancel_token {
-        tokio::select! {
-            () = token.cancelled() => return Err(OperationCancelled.into()),
-            response = send => response,
-        }
-    } else {
-        send.await
-    }
-    .with_context(|| format!("{context} request failed"))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(anyhow!("{context} failed: {status} {body}"));
-    }
-
-    Ok(response)
 }
 
 async fn synthesize(request: SpeechRequest<'_>) -> Result<SpeechAudio> {

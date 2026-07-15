@@ -49,12 +49,12 @@ tldr_model = "gemini:gemini-3.1-flash-lite-preview"
 
 # Shared audio transcription configuration
 # Used by TUI/CLI voice transcription and as the default for integrations.
-# provider: Transcription provider to use ("openai" or "mistral", defaults to auto-detect)
-# model: Model to use for transcription (provider-specific, defaults to "whisper-1" for OpenAI, "voxtral-mini-latest" for Mistral)
+# model: provider:model id (e.g. "elevenlabs:scribe_v2", "mistral:voxtral-mini-latest")
+#        or a bare provider name ("openai", "mistral", "xai", "elevenlabs") for its default model.
+#        Omit to auto-detect from available API keys (OpenAI, then Mistral, xAI, ElevenLabs).
 # language: Optional language hint (ISO 639-1 code like "en", "pt", "es") for better accuracy
 [transcription]
-# provider = "openai"
-# model = "whisper-1"
+# model = "elevenlabs:scribe_v2"
 # language = "en"
 
 # Shared text-to-speech configuration
@@ -215,6 +215,12 @@ websocket = false
 [providers.grok_build]
 enabled = true
 models = ["grok-4.5"]
+fast_mode = false
+websocket = false
+
+[providers.elevenlabs]
+enabled = true
+models = []
 fast_mode = false
 websocket = false
 

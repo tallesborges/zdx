@@ -8,7 +8,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - `src/providers.rs`: re-export of `zdx_providers::*`
 - `src/audio/mod.rs`: shared audio module exports
 - `src/audio/speak.rs`: shared text-to-speech (TTS) synthesis helpers (OpenAI/Mistral); default OGG/Opus output via ffmpeg transcode with MP3 fallback
-- `src/audio/transcribe.rs`: shared audio transcription helpers (OpenAI/Mistral via `/audio/transcriptions`; xAI Grok STT via `/stt`)
+- `src/audio/transcribe.rs`: shared audio transcription helpers (OpenAI/Mistral via `/audio/transcriptions`; xAI Grok STT via `/stt`; ElevenLabs Scribe via `/v1/speech-to-text` with `xi-api-key`)
 - `src/agent_activity.rs`: active-run registry (ephemeral marker files for agent turns)
 - `src/automations.rs`: automation discovery + frontmatter parsing
 - `src/config.rs`: config loading + paths (embeds `zdx_assets::DEFAULT_CONFIG_TOML`)

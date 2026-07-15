@@ -1,39 +1,181 @@
 use anyhow::{Context, Result, anyhow};
 use tokio_util::sync::CancellationToken;
 
+use crate::audio::send_checked;
+pub use crate::audio::{OperationCancelled, is_operation_cancelled};
 use crate::config::{Config, TranscriptionConfig};
 use crate::providers::{ProviderKind, resolve_provider};
 
-const DEFAULT_OPENAI_MODEL: &str = "whisper-1";
-const DEFAULT_MISTRAL_MODEL: &str = "voxtral-mini-latest";
-const DEFAULT_XAI_MODEL: &str = "grok-stt";
-
-#[derive(Debug)]
-pub struct OperationCancelled;
-
-impl std::fmt::Display for OperationCancelled {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "operation cancelled")
-    }
+/// How a transcription provider authenticates its HTTP request.
+#[derive(Debug, Clone, Copy)]
+enum SttAuth {
+    /// `Authorization: Bearer <key>` (OpenAI-compatible providers, xAI).
+    Bearer,
+    /// `xi-api-key: <key>` header (`ElevenLabs`).
+    XiApiKey,
 }
 
-impl std::error::Error for OperationCancelled {}
+/// Static descriptor for a supported speech-to-text provider.
+///
+/// This is the single source of truth for STT provider metadata: default model,
+/// diarization capability, auth scheme, and auto-detect priority (list order).
+/// Wire-format details (endpoint, multipart fields, response shape) stay in the
+/// explicit `build_stt_form`/`parse_transcript` matches since they diverge too
+/// much to table-drive cleanly.
+struct SttProvider {
+    kind: ProviderKind,
+    default_model: &'static str,
+    diarize: bool,
+    auth: SttAuth,
+}
 
-pub fn is_operation_cancelled(err: &anyhow::Error) -> bool {
-    err.downcast_ref::<OperationCancelled>().is_some()
+/// Supported transcription providers, in auto-detect priority order.
+const STT_PROVIDERS: &[SttProvider] = &[
+    SttProvider {
+        kind: ProviderKind::OpenAI,
+        default_model: "whisper-1",
+        diarize: false,
+        auth: SttAuth::Bearer,
+    },
+    SttProvider {
+        kind: ProviderKind::Mistral,
+        default_model: "voxtral-mini-latest",
+        diarize: true,
+        auth: SttAuth::Bearer,
+    },
+    SttProvider {
+        kind: ProviderKind::Xai,
+        default_model: "grok-stt",
+        diarize: false,
+        auth: SttAuth::Bearer,
+    },
+    SttProvider {
+        kind: ProviderKind::ElevenLabs,
+        default_model: "scribe_v2",
+        diarize: true,
+        auth: SttAuth::XiApiKey,
+    },
+];
+
+fn stt_provider(kind: ProviderKind) -> Option<&'static SttProvider> {
+    STT_PROVIDERS.iter().find(|p| p.kind == kind)
+}
+
+fn require_stt_provider(kind: ProviderKind) -> Result<&'static SttProvider> {
+    stt_provider(kind).ok_or_else(|| {
+        anyhow!(
+            "Unsupported transcription provider: {}. Only OpenAI, Mistral, xAI, and ElevenLabs are supported.",
+            kind.label()
+        )
+    })
+}
+
+/// Returns whether a provider has an API key available (config or env).
+fn provider_has_key(config: &Config, kind: ProviderKind) -> bool {
+    kind.resolve_api_key(config.providers.get(kind).api_key.as_deref())
+        .is_ok()
+}
+
+/// Returns whether the given transcription provider id has an API key available.
+///
+/// Shared definition of "configured" used by both auto-detection and
+/// `zdx transcribe --list-models`.
+#[must_use]
+pub fn is_provider_configured(config: &Config, provider_id: &str) -> bool {
+    ProviderKind::from_id(provider_id).is_some_and(|kind| provider_has_key(config, kind))
+}
+
+/// A transcription result. `segments` is populated only when diarization is
+/// requested and the provider returns speaker-attributed segments.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Transcript {
+    pub text: String,
+    pub segments: Vec<TranscriptSegment>,
+}
+
+/// A speaker-attributed span of a diarized transcript.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TranscriptSegment {
+    /// Raw provider speaker id (e.g. `speaker_0`); `None` when unattributed.
+    pub speaker: Option<String>,
+    /// Segment start time in seconds, if provided.
+    pub start: Option<f64>,
+    /// Segment end time in seconds, if provided.
+    pub end: Option<f64>,
+    pub text: String,
+}
+
+/// A supported transcription model, for discovery via `zdx transcribe --list-models`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TranscriptionModel {
+    /// Provider id, e.g. `elevenlabs`.
+    pub provider: &'static str,
+    /// Human label, e.g. `ElevenLabs`.
+    pub label: &'static str,
+    /// Full `--model` selector, e.g. `elevenlabs:scribe_v2`.
+    pub id: String,
+    /// Default model id for the provider.
+    pub model: &'static str,
+    /// Environment variable holding the API key, if any.
+    pub api_key_env: Option<&'static str>,
+    /// Whether the provider supports `--diarize`.
+    pub diarize: bool,
+}
+
+/// Returns the transcription models zdx supports, in auto-detect priority order.
+#[must_use]
+pub fn supported_models() -> Vec<TranscriptionModel> {
+    STT_PROVIDERS
+        .iter()
+        .map(|p| TranscriptionModel {
+            provider: p.kind.id(),
+            label: p.kind.label(),
+            id: format!("{}:{}", p.kind.id(), p.default_model),
+            model: p.default_model,
+            api_key_env: p.kind.api_key_env_var(),
+            diarize: p.diarize,
+        })
+        .collect()
 }
 
 #[derive(serde::Deserialize)]
-struct TranscriptionResponse {
+struct TextOnlyResponse {
     text: String,
 }
 
-/// Supported transcription providers.
-const TRANSCRIPTION_PROVIDERS: &[ProviderKind] = &[
-    ProviderKind::OpenAI,
-    ProviderKind::Mistral,
-    ProviderKind::Xai,
-];
+/// `ElevenLabs` Scribe response with word-level diarization.
+#[derive(serde::Deserialize)]
+struct ElevenLabsResponse {
+    text: String,
+    #[serde(default)]
+    words: Vec<ElevenLabsWord>,
+}
+
+#[derive(serde::Deserialize)]
+struct ElevenLabsWord {
+    #[serde(default)]
+    text: String,
+    speaker_id: Option<String>,
+    start: Option<f64>,
+    end: Option<f64>,
+}
+
+/// Mistral Voxtral response with segment-level diarization.
+#[derive(serde::Deserialize)]
+struct VoxtralResponse {
+    text: String,
+    #[serde(default)]
+    segments: Vec<VoxtralSegment>,
+}
+
+#[derive(serde::Deserialize)]
+struct VoxtralSegment {
+    speaker: Option<String>,
+    start: Option<f64>,
+    end: Option<f64>,
+    #[serde(default)]
+    text: String,
+}
 
 /// Transcribes audio if a supported provider is configured.
 ///
@@ -49,9 +191,47 @@ pub async fn transcribe_audio_if_configured(
     mime_type: Option<&str>,
     cancel_token: Option<&CancellationToken>,
 ) -> Result<Option<String>> {
+    let result = transcribe_audio_detailed(
+        config,
+        transcription,
+        bytes,
+        filename,
+        mime_type,
+        false,
+        cancel_token,
+    )
+    .await?;
+    Ok(result.map(|transcript| transcript.text))
+}
+
+/// Transcribes audio, optionally with speaker diarization, returning the full
+/// [`Transcript`] (text plus speaker segments).
+///
+/// Returns `Ok(None)` if no transcription provider is available.
+///
+/// # Errors
+/// Returns an error if the operation fails, or if `diarize` is requested for a
+/// provider that does not support it.
+pub async fn transcribe_audio_detailed(
+    config: &Config,
+    transcription: &TranscriptionConfig,
+    bytes: Vec<u8>,
+    filename: &str,
+    mime_type: Option<&str>,
+    diarize: bool,
+    cancel_token: Option<&CancellationToken>,
+) -> Result<Option<Transcript>> {
     let Some((provider, model)) = resolve_model(config, transcription)? else {
         return Ok(None);
     };
+    let descriptor = require_stt_provider(provider)?;
+
+    if diarize && !descriptor.diarize {
+        return Err(anyhow!(
+            "Diarization is not supported by {}. Only Mistral (Voxtral) and ElevenLabs support --diarize.",
+            provider.label()
+        ));
+    }
 
     let provider_config = config.providers.get(provider);
     let api_key = provider.resolve_api_key(provider_config.api_key.as_deref())?;
@@ -66,6 +246,7 @@ pub async fn transcribe_audio_if_configured(
     let transcript = transcribe_audio(TranscriptionRequest {
         provider,
         provider_name: provider.label(),
+        auth: descriptor.auth,
         base_url: &base_url,
         api_key: &api_key,
         model: &model,
@@ -73,21 +254,23 @@ pub async fn transcribe_audio_if_configured(
         filename,
         mime_type,
         language,
+        diarize,
         cancel_token,
     })
     .await?;
 
-    let trimmed = transcript.trim();
-    if trimmed.is_empty() {
+    if transcript.text.trim().is_empty() && transcript.segments.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(trimmed.to_string()))
+        Ok(Some(transcript))
     }
 }
 
 /// Resolves the transcription provider and model.
 ///
-/// Priority: `ZDX_TRANSCRIPTION_MODEL` env var > explicit config model > explicit provider > auto-detect.
+/// Priority: `ZDX_TRANSCRIPTION_MODEL` env var > config model > auto-detect.
+/// A model string may be a full `provider:model` id, or a bare provider
+/// name/alias (e.g. `elevenlabs`) which selects that provider's default model.
 /// Returns `Ok(None)` if no provider is available.
 fn resolve_model(
     config: &Config,
@@ -100,57 +283,25 @@ fn resolve_model(
         .filter(|v| !v.is_empty());
 
     if let Some(model_str) = model_str {
-        let selection = resolve_provider(&model_str);
-        if !TRANSCRIPTION_PROVIDERS.contains(&selection.kind) {
-            return Err(anyhow!(
-                "Unsupported transcription provider: {}. Only OpenAI, Mistral, and xAI are supported.",
-                selection.kind.label()
-            ));
+        // A bare provider name/alias selects that provider's default model.
+        if let Some(provider) = ProviderKind::from_id(&model_str) {
+            let descriptor = require_stt_provider(provider)?;
+            return Ok(Some((provider, descriptor.default_model.to_string())));
         }
+        let selection = resolve_provider(&model_str);
+        require_stt_provider(selection.kind)?;
         return Ok(Some((selection.kind, selection.model)));
     }
 
-    if let Some(provider_str) = transcription
-        .provider
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        let provider = parse_provider(provider_str)?;
-        return Ok(Some((provider, default_model(provider).to_string())));
-    }
-
-    Ok(TRANSCRIPTION_PROVIDERS.iter().find_map(|&provider| {
-        let provider_config = config.providers.get(provider);
-        provider
-            .resolve_api_key(provider_config.api_key.as_deref())
-            .ok()
-            .map(|_| (provider, default_model(provider).to_string()))
+    Ok(STT_PROVIDERS.iter().find_map(|p| {
+        provider_has_key(config, p.kind).then(|| (p.kind, p.default_model.to_string()))
     }))
-}
-
-fn parse_provider(value: &str) -> Result<ProviderKind> {
-    match value.to_ascii_lowercase().as_str() {
-        "openai" => Ok(ProviderKind::OpenAI),
-        "mistral" => Ok(ProviderKind::Mistral),
-        "xai" | "grok" | "x" => Ok(ProviderKind::Xai),
-        other => Err(anyhow!(
-            "Unsupported transcription provider: {other}. Only OpenAI, Mistral, and xAI are supported."
-        )),
-    }
-}
-
-fn default_model(provider: ProviderKind) -> &'static str {
-    match provider {
-        ProviderKind::Mistral => DEFAULT_MISTRAL_MODEL,
-        ProviderKind::Xai => DEFAULT_XAI_MODEL,
-        _ => DEFAULT_OPENAI_MODEL,
-    }
 }
 
 struct TranscriptionRequest<'a> {
     provider: ProviderKind,
     provider_name: &'a str,
+    auth: SttAuth,
     base_url: &'a str,
     api_key: &'a str,
     model: &'a str,
@@ -158,13 +309,15 @@ struct TranscriptionRequest<'a> {
     filename: &'a str,
     mime_type: Option<&'a str>,
     language: Option<&'a str>,
+    diarize: bool,
     cancel_token: Option<&'a CancellationToken>,
 }
 
-async fn transcribe_audio(request: TranscriptionRequest<'_>) -> Result<String> {
+async fn transcribe_audio(request: TranscriptionRequest<'_>) -> Result<Transcript> {
     let TranscriptionRequest {
         provider,
         provider_name,
+        auth,
         base_url,
         api_key,
         model,
@@ -172,12 +325,9 @@ async fn transcribe_audio(request: TranscriptionRequest<'_>) -> Result<String> {
         filename,
         mime_type,
         language,
+        diarize,
         cancel_token,
     } = request;
-
-    if cancel_token.is_some_and(CancellationToken::is_cancelled) {
-        return Err(OperationCancelled.into());
-    }
 
     let client = reqwest::Client::new();
     let mut part = reqwest::multipart::Part::bytes(bytes).file_name(filename.to_string());
@@ -187,65 +337,157 @@ async fn transcribe_audio(request: TranscriptionRequest<'_>) -> Result<String> {
         part = part.mime_str(mime)?;
     }
 
-    // xAI Grok STT uses a different endpoint (`/stt`) and requires the `file`
-    // field to come last in the multipart form. `format=true` enables
-    // punctuation/casing but xAI rejects it unless `language` is also set, so we
-    // only request formatting when a language hint is configured. OpenAI/Mistral
-    // use the OpenAI-compatible `/audio/transcriptions` shape.
-    let (url, form) = if provider == ProviderKind::Xai {
-        let mut form = reqwest::multipart::Form::new().text("model", model.to_string());
-        if let Some(lang) = language {
-            form = form
-                .text("language", lang.to_string())
-                .text("format", "true");
-        }
-        form = form.part("file", part);
-        (format!("{}/stt", base_url.trim_end_matches('/')), form)
-    } else {
-        let mut form = reqwest::multipart::Form::new()
-            .text("model", model.to_string())
-            .part("file", part);
-        if let Some(lang) = language {
-            form = form.text("language", lang.to_string());
-        }
-        (
-            format!("{}/audio/transcriptions", base_url.trim_end_matches('/')),
-            form,
-        )
+    let (url, form) = build_stt_form(provider, base_url, model, language, diarize, part);
+
+    let post = client.post(&url);
+    let post = match auth {
+        SttAuth::Bearer => post.bearer_auth(api_key),
+        SttAuth::XiApiKey => post.header("xi-api-key", api_key),
     };
 
-    let request = client
-        .post(&url)
-        .bearer_auth(api_key)
-        .multipart(form)
-        .send();
-    let response = if let Some(token) = cancel_token {
-        tokio::select! {
-            () = token.cancelled() => return Err(OperationCancelled.into()),
-            response = request => response,
-        }
-    } else {
-        request.await
-    }
-    .with_context(|| {
-        format!(
-            "{provider_name} transcription request failed (url={url}, model={model}, filename={filename}, mime_type={})",
-            mime_type.unwrap_or("unknown")
-        )
+    let context =
+        format!("{provider_name} transcription (url={url}, model={model}, filename={filename})");
+    let response = send_checked(post.multipart(form), cancel_token, &context).await?;
+
+    let body = response.text().await.with_context(|| {
+        format!("read {provider_name} transcription response (model={model}, filename={filename})")
     })?;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(anyhow!(
-            "{provider_name} transcription failed: {status} {body}"
-        ));
-    }
-
-    let payload: TranscriptionResponse = response.json().await.with_context(|| {
+    parse_transcript(provider, diarize, &body).with_context(|| {
         format!(
             "decode {provider_name} transcription response (model={model}, filename={filename})"
         )
-    })?;
-    Ok(payload.text)
+    })
+}
+
+/// Builds the endpoint URL and multipart form for a provider's STT request.
+///
+/// xAI Grok STT uses a distinct `/stt` endpoint that requires the `file` field
+/// last and gates `format=true` behind a language hint. `ElevenLabs` Scribe uses
+/// `/v1/speech-to-text` with a `model_id` field; diarization is opt-in via
+/// `diarize=true`. Mistral Voxtral needs segment timestamps enabled alongside
+/// `diarize`. OpenAI/Mistral otherwise use the OpenAI-compatible
+/// `/audio/transcriptions` shape.
+fn build_stt_form(
+    provider: ProviderKind,
+    base_url: &str,
+    model: &str,
+    language: Option<&str>,
+    diarize: bool,
+    part: reqwest::multipart::Part,
+) -> (String, reqwest::multipart::Form) {
+    let base = base_url.trim_end_matches('/');
+    match provider {
+        ProviderKind::Xai => {
+            let mut form = reqwest::multipart::Form::new().text("model", model.to_string());
+            if let Some(lang) = language {
+                form = form
+                    .text("language", lang.to_string())
+                    .text("format", "true");
+            }
+            form = form.part("file", part);
+            (format!("{base}/stt"), form)
+        }
+        ProviderKind::ElevenLabs => {
+            let mut form = reqwest::multipart::Form::new()
+                .text("model_id", model.to_string())
+                .part("file", part);
+            if diarize {
+                form = form.text("diarize", "true");
+            }
+            if let Some(lang) = language {
+                form = form.text("language_code", lang.to_string());
+            }
+            (format!("{base}/v1/speech-to-text"), form)
+        }
+        _ => {
+            let mut form = reqwest::multipart::Form::new()
+                .text("model", model.to_string())
+                .part("file", part);
+            if let Some(lang) = language {
+                form = form.text("language", lang.to_string());
+            }
+            if diarize {
+                // Voxtral requires segment-level timestamps when diarizing.
+                form = form
+                    .text("diarize", "true")
+                    .text("timestamp_granularities[]", "segment");
+            }
+            (format!("{base}/audio/transcriptions"), form)
+        }
+    }
+}
+
+/// Parses a provider response body into a [`Transcript`], extracting diarized
+/// segments when available.
+fn parse_transcript(provider: ProviderKind, diarize: bool, body: &str) -> Result<Transcript> {
+    if !diarize {
+        let payload: TextOnlyResponse = serde_json::from_str(body)?;
+        return Ok(Transcript {
+            text: payload.text,
+            segments: Vec::new(),
+        });
+    }
+
+    match provider {
+        ProviderKind::ElevenLabs => {
+            let payload: ElevenLabsResponse = serde_json::from_str(body)?;
+            Ok(Transcript {
+                text: payload.text,
+                segments: group_elevenlabs_words(payload.words),
+            })
+        }
+        ProviderKind::Mistral => {
+            let payload: VoxtralResponse = serde_json::from_str(body)?;
+            let segments = payload
+                .segments
+                .into_iter()
+                .map(|s| TranscriptSegment {
+                    speaker: s.speaker,
+                    start: s.start,
+                    end: s.end,
+                    text: s.text.trim().to_string(),
+                })
+                .filter(|s| !s.text.is_empty())
+                .collect();
+            Ok(Transcript {
+                text: payload.text,
+                segments,
+            })
+        }
+        _ => {
+            let payload: TextOnlyResponse = serde_json::from_str(body)?;
+            Ok(Transcript {
+                text: payload.text,
+                segments: Vec::new(),
+            })
+        }
+    }
+}
+
+/// Collapses `ElevenLabs` word-level output into contiguous speaker segments.
+fn group_elevenlabs_words(words: Vec<ElevenLabsWord>) -> Vec<TranscriptSegment> {
+    let mut segments: Vec<TranscriptSegment> = Vec::new();
+    for word in words {
+        let speaker = word.speaker_id.clone();
+        match segments.last_mut() {
+            Some(seg) if seg.speaker == speaker => {
+                seg.text.push_str(&word.text);
+                if word.end.is_some() {
+                    seg.end = word.end;
+                }
+            }
+            _ => segments.push(TranscriptSegment {
+                speaker,
+                start: word.start,
+                end: word.end,
+                text: word.text,
+            }),
+        }
+    }
+    for seg in &mut segments {
+        seg.text = seg.text.trim().to_string();
+    }
+    segments.retain(|seg| !seg.text.is_empty());
+    segments
 }
