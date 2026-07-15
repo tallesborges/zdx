@@ -2157,6 +2157,8 @@ mod tests {
                     source: SkillSource::BuiltIn,
                 }],
                 initial_input: Some(prompt.clone()),
+                model_override: None,
+                thinking_override: None,
             }),
         );
 

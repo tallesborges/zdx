@@ -90,6 +90,10 @@ pub enum ThreadUiEvent {
         skills: Vec<zdx_engine::skills::Skill>,
         /// If set, pre-fill the input buffer after thread creation.
         initial_input: Option<String>,
+        /// Per-thread model override inherited from a handoff source (if any).
+        model_override: Option<String>,
+        /// Per-thread thinking override inherited from a handoff source (if any).
+        thinking_override: Option<zdx_engine::config::ThinkingLevel>,
     },
 
     /// Forked thread created successfully.

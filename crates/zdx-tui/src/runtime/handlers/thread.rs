@@ -317,19 +317,40 @@ pub async fn thread_create(
     initial_input: Option<String>,
 ) -> UiEvent {
     tokio::task::spawn_blocking(move || {
-        let thread_result = match handoff_from {
+        let thread_result = match &handoff_from {
             Some(source_thread_id) => {
-                tp::Thread::new_with_root_and_source(&root, Some(source_thread_id))
+                tp::Thread::new_with_root_and_source(&root, Some(source_thread_id.clone()))
             }
             None => tp::Thread::new_with_root(&root),
         };
-        let thread_handle = match thread_result {
+        let mut thread_handle = match thread_result {
             Ok(thread_handle) => thread_handle,
             Err(e) => {
                 return UiEvent::Thread(ThreadUiEvent::CreateFailed {
                     error: format!("Failed to create thread: {e}"),
                 });
             }
+        };
+
+        // Inherit the source thread's per-thread model/thinking overrides so a
+        // handoff continues with the same effective model and thinking level.
+        let (model_override, thinking_override) = match &handoff_from {
+            Some(source_thread_id) => {
+                let model_override = tp::read_thread_model_override(source_thread_id)
+                    .ok()
+                    .flatten();
+                let thinking_override = tp::read_thread_thinking_override(source_thread_id)
+                    .ok()
+                    .flatten();
+                if let Some(model) = &model_override {
+                    let _ = thread_handle.set_model_override(Some(model.clone()));
+                }
+                if let Some(level) = thinking_override {
+                    let _ = thread_handle.set_thinking_override(Some(level));
+                }
+                (model_override, thinking_override)
+            }
+            None => (None, None),
         };
 
         // Load project context file paths and skills
@@ -347,6 +368,8 @@ pub async fn thread_create(
             context_paths: context.loaded_agents_paths.clone(),
             skills: context.loaded_skills,
             initial_input,
+            model_override,
+            thinking_override,
         })
     })
     .await
