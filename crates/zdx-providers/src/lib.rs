@@ -171,6 +171,7 @@ pub enum ProviderKind {
     Xai,
     GrokBuild,
     Meta,
+    ElevenLabs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -403,6 +404,16 @@ impl ProviderKind {
                 supports_oauth: false,
                 is_subscription: false,
             },
+            Self::ElevenLabs => ProviderMeta {
+                id: "elevenlabs",
+                aliases: &["11labs", "eleven"],
+                label: "ElevenLabs",
+                api_key_env: Some("ELEVENLABS_API_KEY"),
+                base_url: "https://api.elevenlabs.io",
+                base_url_env: Some("ELEVENLABS_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: false,
+            },
         }
     }
 
@@ -429,6 +440,7 @@ impl ProviderKind {
             ProviderKind::Xai,
             ProviderKind::GrokBuild,
             ProviderKind::Meta,
+            ProviderKind::ElevenLabs,
         ]
     }
 
@@ -544,6 +556,11 @@ impl ProviderKind {
             Self::Xai => xai::build(ctx),
             Self::GrokBuild => grok_build::build(ctx),
             Self::Meta => meta::build(ctx),
+            // ElevenLabs is a speech-to-text-only provider (Scribe); it is used
+            // by the transcription pipeline, not the chat/streaming path.
+            Self::ElevenLabs => anyhow::bail!(
+                "ElevenLabs is a speech-to-text provider and cannot be used as a chat model"
+            ),
         }
     }
 }

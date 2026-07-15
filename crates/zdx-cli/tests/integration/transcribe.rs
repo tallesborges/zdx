@@ -11,9 +11,21 @@ fn test_transcribe_help_shows_flags() {
         .args(["transcribe", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("--provider"))
         .stdout(predicate::str::contains("--model"))
-        .stdout(predicate::str::contains("--language"));
+        .stdout(predicate::str::contains("--language"))
+        .stdout(predicate::str::contains("--diarize"))
+        .stdout(predicate::str::contains("--json"))
+        .stdout(predicate::str::contains("--list-models"));
+}
+
+#[test]
+fn test_transcribe_list_models_lists_providers() {
+    cargo_bin_cmd!("zdx")
+        .args(["transcribe", "--list-models"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("elevenlabs:scribe_v2"))
+        .stdout(predicate::str::contains("mistral:voxtral-mini-latest"));
 }
 
 #[test]
@@ -47,6 +59,8 @@ fn test_transcribe_reports_when_no_provider_configured() {
         .env("ZDX_HOME", home.path())
         .env_remove("OPENAI_API_KEY")
         .env_remove("MISTRAL_API_KEY")
+        .env_remove("XAI_API_KEY")
+        .env_remove("ELEVENLABS_API_KEY")
         .env_remove("ZDX_TRANSCRIPTION_MODEL")
         .args(["transcribe", audio.path().to_str().expect("audio path")])
         .assert()

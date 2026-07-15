@@ -15,9 +15,12 @@ Only use this skill when the user **explicitly** points at a specific audio file
 zdx transcribe <FILE> [OPTIONS]
 
 Options:
-      --provider <NAME>   openai or mistral (default: auto-detect, OpenAI first)
-      --model <MODEL>     Provider-prefixed override, e.g. openai:whisper-1, mistral:voxtral-mini-latest
+      --model <MODEL>     provider:model id (e.g. elevenlabs:scribe_v2, mistral:voxtral-mini-latest)
+                          or a bare provider name (openai, mistral, xai, elevenlabs) for its default
       --language <LANG>   Language hint, ISO 639-1 (e.g. en, pt)
+      --diarize           Label speakers (Mistral/Voxtral or ElevenLabs only)
+      --json              Emit JSON (text + diarized segments) instead of plain text
+      --list-models       List the supported transcription models (with --json for machine output)
 ```
 
 Output: prints the transcript text to stdout (nothing else). If no provider is configured, it prints a short "no provider" notice to stderr and exits without transcribing.
@@ -32,9 +35,21 @@ zdx transcribe "$ZDX_ARTIFACT_DIR/note.ogg"
 
 ## Providers
 
-- **Auto-detect order: OpenAI first, then Mistral.** OpenAI uses `whisper-1` (`OPENAI_API_KEY`); Mistral uses `voxtral-mini-latest` (`MISTRAL_API_KEY`). This is the reverse of `zdx speak`, which prefers Mistral.
-- Pass `--provider openai|mistral` only when the user asks for a specific one or the default isn't configured.
-- Voxtral is stronger on diarization/timestamps and multilingual audio; `whisper-1` is a solid general default.
+- **Auto-detect order: OpenAI → Mistral → xAI → ElevenLabs.** OpenAI uses `whisper-1` (`OPENAI_API_KEY`); Mistral uses `voxtral-mini-latest` (`MISTRAL_API_KEY`); xAI uses `grok-stt` (`XAI_API_KEY`); ElevenLabs uses `scribe_v2` (`ELEVENLABS_API_KEY`). This is the reverse of `zdx speak`, which prefers Mistral.
+- Run `zdx transcribe --list-models` to see the supported models and which have an API key configured.
+- To pick a specific provider, pass `--model <provider>` (default model) or `--model <provider>:<model>` (exact model). There is no separate `--provider` flag.
+- Voxtral and ElevenLabs Scribe v2 both support **speaker diarization** (`--diarize`); OpenAI `whisper-1` and xAI do not. ElevenLabs Scribe v2 is state-of-the-art accuracy across 90+ languages; `whisper-1` is a solid general default.
+
+## Diarization & JSON
+
+- `--diarize` labels who spoke, formatted as `[mm:ss] Speaker N: ...` blocks. Only **Mistral (Voxtral)** and **ElevenLabs** support it; requesting it for OpenAI/xAI errors out.
+- `--json` emits `{ "text": ..., "segments": [{ "speaker", "start", "end", "text" }] }` for programmatic use (e.g. meeting tools). Combine with `--diarize` to populate `segments`.
+- Voxtral returns segment-level speakers; ElevenLabs returns word-level speakers that zdx groups into contiguous speaker segments.
+
+```bash
+zdx transcribe meeting.m4a --model elevenlabs --diarize
+zdx transcribe meeting.m4a --model mistral:voxtral-mini-latest --diarize --json > meeting.json
+```
 
 ## When to use
 
@@ -50,11 +65,11 @@ zdx transcribe /path/to/recording.ogg
 
 **Force Mistral with a language hint:**
 ```bash
-zdx transcribe meeting.mp3 --provider mistral --language en
+zdx transcribe meeting.mp3 --model mistral --language en
 ```
 
 ## Notes & limits
 
-- Supported providers are **OpenAI + Mistral only** — no local/offline ASR.
+- Supported providers are **OpenAI, Mistral, xAI, and ElevenLabs** — no local/offline ASR.
 - Common audio formats work (ogg/opus, mp3, m4a, wav, flac, aac, webm); the provider infers the format from the file.
 - Transcription is read-only: it never modifies the source file.

@@ -214,22 +214,32 @@ enum Commands {
         format: Option<String>,
     },
 
-    /// Transcribe an audio file to text with `OpenAI`, Mistral, or xAI
+    /// Transcribe an audio file to text with `OpenAI`, Mistral, xAI, or `ElevenLabs`
     Transcribe {
         /// Path to the audio file to transcribe
-        file: String,
+        #[arg(required_unless_present = "list_models")]
+        file: Option<String>,
 
-        /// Provider to use (`openai`, `mistral`, or `xai`; defaults to auto-detect)
-        #[arg(long, value_name = "PROVIDER")]
-        provider: Option<String>,
-
-        /// Model to use (provider-prefixed, e.g. `openai:whisper-1`, `mistral:voxtral-mini-latest`, `xai:grok-stt`)
+        /// Model: a `provider:model` id (e.g. `elevenlabs:scribe_v2`) or a bare
+        /// provider name (e.g. `mistral`) for that provider's default model
         #[arg(long, value_name = "MODEL")]
         model: Option<String>,
 
         /// Language hint (ISO 639-1 code, e.g. `en`, `pt`)
         #[arg(long, value_name = "LANG")]
         language: Option<String>,
+
+        /// Label speakers in the transcript (Mistral/Voxtral or `ElevenLabs` only)
+        #[arg(long)]
+        diarize: bool,
+
+        /// Emit JSON (text plus diarized segments) instead of plain text
+        #[arg(long)]
+        json: bool,
+
+        /// List the supported transcription models and exit
+        #[arg(long)]
+        list_models: bool,
     },
 
     /// Manage saved conversation threads
@@ -1048,16 +1058,24 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             .await
         }
         Commands::Transcribe {
+            list_models: true,
+            json,
+            ..
+        } => commands::transcribe::list_models(context.config, json),
+        Commands::Transcribe {
             file,
-            provider,
             model,
             language,
+            diarize,
+            json,
+            list_models: false,
         } => {
             commands::transcribe::run(commands::transcribe::TranscribeRunOptions {
-                file: &file,
-                provider: provider.as_deref(),
+                file: file.as_deref(),
                 model: model.as_deref(),
                 language: language.as_deref(),
+                diarize,
+                json,
                 config: context.config,
             })
             .await
