@@ -137,10 +137,11 @@ pub async fn generate_handoff(
     let lineage = collect_lineage(thread_id);
     let handoff_prefix = build_handoff_prefix(&lineage, next_message);
 
+    let (model, thinking) = crate::models::split_model_thinking(handoff_model);
     let options = ExecSubagentOptions {
-        model: Some(handoff_model.to_string()),
+        model: Some(model.to_string()),
         system_prompt: None,
-        thinking_level: Some(ThinkingLevel::Low),
+        thinking_level: Some(thinking.unwrap_or(ThinkingLevel::Low)),
         no_tools: true,
         no_system_prompt: true,
         tools_override: None,

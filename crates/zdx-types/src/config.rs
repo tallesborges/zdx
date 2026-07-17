@@ -67,6 +67,20 @@ impl ThinkingLevel {
         }
     }
 
+    /// Parses a level from its [`Self::display_name`] (case-insensitive).
+    /// Accepts `minimal` as an alias for `low` (matching the serde alias).
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "off" => Some(ThinkingLevel::Off),
+            "low" | "minimal" => Some(ThinkingLevel::Low),
+            "medium" => Some(ThinkingLevel::Medium),
+            "high" => Some(ThinkingLevel::High),
+            "xhigh" => Some(ThinkingLevel::XHigh),
+            "max" => Some(ThinkingLevel::Max),
+            _ => None,
+        }
+    }
+
     /// Returns all thinking levels for iteration (e.g., in picker).
     pub fn all() -> &'static [ThinkingLevel] {
         &[

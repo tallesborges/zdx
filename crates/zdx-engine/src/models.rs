@@ -192,6 +192,29 @@ pub fn model_supports_reasoning(id: &str) -> bool {
     ModelOption::find_by_id(id).is_none_or(|model| model.capabilities.reasoning)
 }
 
+/// Splits a `model@thinking` spec into the bare model id and an optional
+/// thinking level.
+///
+/// `"gemini:x@high"` → `("gemini:x", Some(High))`. When there is no `@` suffix,
+/// or the suffix isn't a known level, returns `(spec, None)` so the caller can
+/// apply its own default.
+pub fn split_model_thinking(spec: &str) -> (&str, Option<crate::config::ThinkingLevel>) {
+    if let Some((model, suffix)) = spec.rsplit_once('@')
+        && let Some(level) = crate::config::ThinkingLevel::from_name(suffix)
+    {
+        (model, Some(level))
+    } else {
+        (spec, None)
+    }
+}
+
+/// Formats a `model@thinking` spec — the inverse of [`split_model_thinking`].
+/// Kept adjacent so the persisted syntax has one source of truth.
+#[must_use]
+pub fn format_model_thinking(model: &str, level: crate::config::ThinkingLevel) -> String {
+    format!("{model}@{}", level.display_name())
+}
+
 /// Returns the bare model id (with any leading `provider:` prefix stripped).
 ///
 /// `provider` should match the `ModelOption::provider` field. If the id does
@@ -265,7 +288,22 @@ pub fn wildcard_match(pattern: &str, text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{bare_model_id, model_id_matches_patterns, wildcard_match};
+    use super::{bare_model_id, model_id_matches_patterns, split_model_thinking, wildcard_match};
+    use crate::config::ThinkingLevel;
+
+    #[test]
+    fn split_model_thinking_parses_suffix_and_defaults() {
+        assert_eq!(
+            split_model_thinking("gemini:x@high"),
+            ("gemini:x", Some(ThinkingLevel::High))
+        );
+        assert_eq!(split_model_thinking("gemini:x"), ("gemini:x", None));
+        // Unknown suffix is not treated as a level.
+        assert_eq!(
+            split_model_thinking("gemini:x@bogus"),
+            ("gemini:x@bogus", None)
+        );
+    }
 
     #[test]
     fn wildcard_match_exact_and_star() {

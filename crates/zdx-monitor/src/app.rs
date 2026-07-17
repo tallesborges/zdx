@@ -17,6 +17,7 @@ use ratatui::prelude::*;
 use serde_json::Value;
 use zdx_engine::config::{self, paths};
 use zdx_engine::core::thread_persistence;
+use zdx_engine::models::available_models;
 use zdx_engine::core::usage_stats::{self, UsageStats};
 use zdx_engine::providers::subscription_quota::{self, QuotaError, SubscriptionQuota};
 use zdx_engine::{agent_activity, automations, pidfile};
@@ -164,6 +165,20 @@ pub fn build_config_lines(config: &config::Config) -> Vec<ConfigLine> {
 
     let mut lines = Vec::new();
 
+    // Show the main model with its thinking level inline (`model@thinking`) and
+    // drop the standalone `thinking_level` row; role models carry `@thinking`
+    // in their own stored value already.
+    if let Some(level) = core_rows
+        .iter()
+        .find(|(k, _)| k == "thinking_level")
+        .map(|(_, v)| v.clone())
+    {
+        if let Some(model_row) = core_rows.iter_mut().find(|(k, _)| k == "model") {
+            model_row.1 = format!("{}@{level}", model_row.1);
+        }
+        core_rows.retain(|(k, _)| k != "thinking_level");
+    }
+
     if !core_rows.is_empty() {
         lines.push(ConfigLine::Section("core".to_string()));
         for (k, v) in core_rows {
@@ -184,6 +199,11 @@ pub struct MonitorApp {
     pub config_lines: Vec<ConfigLine>,
     pub config_line_count: usize,
     pub config_scroll: usize,
+    /// Index into the editable model rows of the Config tab (see
+    /// `editable_config_rows`). Selects which model field `Enter` edits.
+    pub config_selected: usize,
+    /// Open model-picker overlay for editing a Config model field, if any.
+    pub model_picker: Option<ModelPickerState>,
     pub terminal_height: u16,
     pub terminal_width: u16,
     pub root: PathBuf,
@@ -709,6 +729,8 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
         config_lines,
         config_line_count,
         config_scroll: 0,
+        config_selected: 0,
+        model_picker: None,
         terminal_height: 24,
         terminal_width: 80,
         root: root.clone(),
@@ -761,6 +783,10 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
 }
 
 fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
+    if app.model_picker.is_some() {
+        handle_model_picker_key(app, key.code);
+        return;
+    }
     if app.agent_overlay.is_some() {
         handle_agent_overlay_key(app, key.code);
         return;
@@ -799,8 +825,7 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
         }
         KeyCode::Char('j') | KeyCode::Down => {
             if app.active_section == Section::Config {
-                let max = config_max_scroll(app);
-                app.config_scroll = app.config_scroll.saturating_add(1).min(max);
+                move_config_selection(app, true);
             } else if app.active_section == Section::Usage {
                 let max = usage_max_scroll(app);
                 app.usage_scroll = app.usage_scroll.saturating_add(1).min(max);
@@ -813,7 +838,7 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
         }
         KeyCode::Char('k') | KeyCode::Up => {
             if app.active_section == Section::Config {
-                app.config_scroll = app.config_scroll.saturating_sub(1);
+                move_config_selection(app, false);
             } else if app.active_section == Section::Usage {
                 app.usage_scroll = app.usage_scroll.saturating_sub(1);
             } else if app.selected_index > 0 {
@@ -848,6 +873,8 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
         KeyCode::Enter => {
             if app.active_section == Section::ActiveAgents {
                 open_agent_overlay(app);
+            } else if app.active_section == Section::Config {
+                open_model_picker(app);
             } else {
                 toggle_selected_service(app);
             }
@@ -943,6 +970,19 @@ fn copy_selected_log_entry(app: &mut MonitorApp) {
 }
 
 fn handle_mouse_event(app: &mut MonitorApp, kind: MouseEventKind) {
+    if app.model_picker.is_some() {
+        if let Some(picker) = app.model_picker.as_mut() {
+            match kind {
+                MouseEventKind::ScrollUp => picker.selected = picker.selected.saturating_sub(1),
+                MouseEventKind::ScrollDown => {
+                    let last = picker.matches.len().saturating_sub(1);
+                    picker.selected = (picker.selected + 1).min(last);
+                }
+                _ => {}
+            }
+        }
+        return;
+    }
     let overlay_page = agent_overlay_page_size(app);
     if let Some(state) = app.agent_overlay.as_mut() {
         let max_offset = state.lines.len().saturating_sub(overlay_page);
@@ -1566,6 +1606,350 @@ fn handle_agent_overlay_key(app: &mut MonitorApp, key: KeyCode) {
     }
 }
 
+// ============================================================================
+// Config model editing (Config tab → model picker overlay)
+// ============================================================================
+
+/// Kind of an editable model field, which determines the picker's model source,
+/// whether it has a thinking step, and how it is persisted.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ModelFieldKind {
+    /// Chat/agent model (`available_models`, has a thinking step).
+    Chat,
+    /// Speech-to-text model (curated STT list, no thinking).
+    Transcription,
+    /// Text-to-speech model (curated TTS list, no thinking).
+    Speech,
+}
+
+/// An editable model row on the Config tab.
+pub struct EditableModelField {
+    /// Index into `config_lines` of the row.
+    pub line_index: usize,
+    /// Config path to persist (`model`, `title_model`, `transcription.model`…).
+    pub path: String,
+    /// Field kind.
+    pub kind: ModelFieldKind,
+}
+
+/// Editable model rows on the Config tab, resolved with section context so the
+/// (section, key) pair maps to the right config path and kind.
+pub(crate) fn editable_model_fields(lines: &[ConfigLine]) -> Vec<EditableModelField> {
+    let mut out = Vec::new();
+    let mut section = String::new();
+    for (i, cl) in lines.iter().enumerate() {
+        match cl {
+            ConfigLine::Section(name) => section.clone_from(name),
+            ConfigLine::Row(key, _) => {
+                let mapped = match (section.as_str(), key.as_str()) {
+                    (
+                        "core",
+                        "model" | "title_model" | "tldr_model" | "handoff_model"
+                        | "read_thread_model",
+                    ) => Some((key.clone(), ModelFieldKind::Chat)),
+                    ("transcription", "model") => {
+                        Some(("transcription.model".to_string(), ModelFieldKind::Transcription))
+                    }
+                    ("speech", "model") => {
+                        Some(("speech.model".to_string(), ModelFieldKind::Speech))
+                    }
+                    _ => None,
+                };
+                if let Some((path, kind)) = mapped {
+                    out.push(EditableModelField {
+                        line_index: i,
+                        path,
+                        kind,
+                    });
+                }
+            }
+            ConfigLine::Separator => {}
+        }
+    }
+    out
+}
+
+/// Rendered row offset of `config_lines[target]`, mirroring `render_config`
+/// (a blank spacer precedes every section except the first).
+fn config_line_render_row(lines: &[ConfigLine], target: usize) -> usize {
+    let mut row = 0usize;
+    let mut is_first = true;
+    for (i, cl) in lines.iter().enumerate() {
+        if i == target {
+            return row;
+        }
+        match cl {
+            ConfigLine::Section(_) => {
+                if !is_first {
+                    row += 1;
+                }
+                row += 1;
+                is_first = false;
+            }
+            ConfigLine::Separator | ConfigLine::Row(..) => row += 1,
+        }
+    }
+    row
+}
+
+/// Scrolls the Config panel so the selected editable row stays visible.
+fn ensure_config_selection_visible(app: &mut MonitorApp) {
+    let fields = editable_model_fields(&app.config_lines);
+    let Some(field) = fields.get(app.config_selected) else {
+        return;
+    };
+    let render_row = config_line_render_row(&app.config_lines, field.line_index);
+    let page = config_page_size(app);
+    if render_row < app.config_scroll {
+        app.config_scroll = render_row;
+    } else if render_row >= app.config_scroll + page {
+        app.config_scroll = render_row + 1 - page;
+    }
+}
+
+/// Moves the Config model-row selection and keeps it visible.
+fn move_config_selection(app: &mut MonitorApp, forward: bool) {
+    let count = editable_model_fields(&app.config_lines).len();
+    if count == 0 {
+        return;
+    }
+    app.config_selected = if forward {
+        (app.config_selected + 1).min(count - 1)
+    } else {
+        app.config_selected.saturating_sub(1)
+    };
+    ensure_config_selection_visible(app);
+}
+
+/// Opens the model picker for the currently selected Config model row.
+fn open_model_picker(app: &mut MonitorApp) {
+    let fields = editable_model_fields(&app.config_lines);
+    let Some(field) = fields.get(app.config_selected) else {
+        return;
+    };
+    let (path, kind, line_index) = (field.path.clone(), field.kind, field.line_index);
+    let current = match &app.config_lines[line_index] {
+        // Ignore the `(unset)`/`(empty)` display placeholders.
+        ConfigLine::Row(_, v) if matches!(v.as_str(), "(unset)" | "(empty)") => String::new(),
+        ConfigLine::Row(_, v) => v.clone(),
+        _ => String::new(),
+    };
+    app.model_picker = Some(ModelPickerState::new(path, kind, &current));
+}
+
+/// Reloads config lines from disk after an edit, clamping selection.
+fn reload_config_lines(app: &mut MonitorApp) {
+    let Ok(cfg) = config::Config::load() else {
+        app.set_status("Failed to reload config");
+        return;
+    };
+    app.default_model.clone_from(&cfg.model);
+    app.config_lines = build_config_lines(&cfg);
+    app.config_line_count = rendered_line_count(&app.config_lines);
+    let count = editable_model_fields(&app.config_lines).len();
+    if app.config_selected >= count {
+        app.config_selected = count.saturating_sub(1);
+    }
+}
+
+/// Which step of the model+thinking picker is active.
+#[derive(PartialEq, Eq)]
+pub enum PickerPhase {
+    Model,
+    Thinking,
+}
+
+/// Two-step picker for editing a Config model field. Chat models pick a model
+/// then a thinking level; audio (STT/TTS) models pick a model only and commit.
+pub struct ModelPickerState {
+    /// Config path being edited (e.g. `title_model`, `transcription.model`).
+    pub field: String,
+    /// Field kind (drives model source, thinking step, and persistence).
+    pub kind: ModelFieldKind,
+    /// Active step.
+    pub phase: PickerPhase,
+    /// Typed filter text (model step).
+    pub filter: String,
+    /// All selectable model ids (`provider:id`), sorted.
+    pub items: Vec<String>,
+    /// Indices into `items` matching the current filter.
+    pub matches: Vec<usize>,
+    /// Index into `matches` of the highlighted row.
+    pub selected: usize,
+    /// Model chosen in step 1 (used by the thinking step).
+    pub chosen_model: String,
+    /// Thinking level the field had when the picker opened.
+    pub thinking_current: config::ThinkingLevel,
+    /// Index into `config::ThinkingLevel::all()` of the highlighted level.
+    pub thinking_selected: usize,
+}
+
+impl ModelPickerState {
+    fn new(field: String, kind: ModelFieldKind, current: &str) -> Self {
+        let (model_part, thinking_part) = zdx_engine::models::split_model_thinking(current);
+        let thinking_current = thinking_part.unwrap_or(config::ThinkingLevel::Low);
+        let thinking_selected = config::ThinkingLevel::all()
+            .iter()
+            .position(|l| *l == thinking_current)
+            .unwrap_or(0);
+
+        let mut items: Vec<String> = match kind {
+            ModelFieldKind::Chat => available_models()
+                .iter()
+                .map(|m| format!("{}:{}", m.provider, m.id))
+                .collect(),
+            ModelFieldKind::Transcription => {
+                zdx_engine::audio::transcribe::transcription_model_options()
+            }
+            ModelFieldKind::Speech => zdx_engine::audio::speak::speech_model_options(),
+        };
+        items.sort();
+        items.dedup();
+
+        let mut state = Self {
+            field,
+            kind,
+            phase: PickerPhase::Model,
+            filter: String::new(),
+            items,
+            matches: Vec::new(),
+            selected: 0,
+            chosen_model: model_part.to_string(),
+            thinking_current,
+            thinking_selected,
+        };
+        state.recompute();
+        // Preselect the current value (exact `provider:id` or bare `id`).
+        if let Some(pos) = state.matches.iter().position(|&i| {
+            let item = &state.items[i];
+            item.as_str() == model_part || item.rsplit(':').next() == Some(model_part)
+        }) {
+            state.selected = pos;
+        }
+        state
+    }
+
+    /// Whether this field has a thinking step (chat models only).
+    fn has_thinking(&self) -> bool {
+        self.kind == ModelFieldKind::Chat
+    }
+
+    fn recompute(&mut self) {
+        let needle = self.filter.to_lowercase();
+        self.matches = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, it)| needle.is_empty() || it.to_lowercase().contains(&needle))
+            .map(|(i, _)| i)
+            .collect();
+        if self.selected >= self.matches.len() {
+            self.selected = self.matches.len().saturating_sub(1);
+        }
+    }
+
+    /// The `provider:id` of the highlighted model row, if any.
+    pub fn selected_model(&self) -> Option<&str> {
+        self.matches
+            .get(self.selected)
+            .map(|&i| self.items[i].as_str())
+    }
+
+    /// The highlighted thinking level.
+    pub fn selected_thinking(&self) -> config::ThinkingLevel {
+        config::ThinkingLevel::all()
+            .get(self.thinking_selected)
+            .copied()
+            .unwrap_or(config::ThinkingLevel::Low)
+    }
+}
+
+/// Persists the picker's chosen model (+ thinking for chat models).
+fn commit_model_picker(app: &mut MonitorApp) {
+    let Some(picker) = app.model_picker.as_ref() else {
+        return;
+    };
+    let field = picker.field.clone();
+    let model = picker.chosen_model.clone();
+    let level = picker.selected_thinking();
+
+    let (result, shown) = match picker.kind {
+        // Main model: separate `model` + `thinking_level` fields.
+        ModelFieldKind::Chat if field == "model" => (
+            config::Config::save_model_field("model", &model)
+                .and_then(|()| config::Config::save_thinking_level(level)),
+            zdx_engine::models::format_model_thinking(&model, level),
+        ),
+        // Role chat models: thinking carried inline as `model@thinking`.
+        ModelFieldKind::Chat => {
+            let combined = zdx_engine::models::format_model_thinking(&model, level);
+            (
+                config::Config::save_model_field(&field, &combined),
+                combined,
+            )
+        }
+        // Audio (STT/TTS): model only, no thinking.
+        ModelFieldKind::Transcription | ModelFieldKind::Speech => {
+            (config::Config::save_model_field(&field, &model), model.clone())
+        }
+    };
+
+    match result {
+        Ok(()) => {
+            app.model_picker = None;
+            reload_config_lines(app);
+            app.set_status(format!("Set {field} = {shown}"));
+        }
+        Err(e) => app.set_status(format!("Failed to set {field}: {e}")),
+    }
+}
+
+/// Handles a key while the model picker overlay is open.
+fn handle_model_picker_key(app: &mut MonitorApp, key: KeyCode) {
+    let Some(picker) = app.model_picker.as_mut() else {
+        return;
+    };
+    match picker.phase {
+        PickerPhase::Model => match key {
+            KeyCode::Esc => app.model_picker = None,
+            KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
+            KeyCode::Down => {
+                let last = picker.matches.len().saturating_sub(1);
+                picker.selected = (picker.selected + 1).min(last);
+            }
+            KeyCode::Backspace => {
+                picker.filter.pop();
+                picker.recompute();
+            }
+            KeyCode::Char(c) => {
+                picker.filter.push(c);
+                picker.recompute();
+            }
+            KeyCode::Enter => {
+                if let Some(model) = picker.selected_model().map(str::to_string) {
+                    picker.chosen_model = model;
+                    if picker.has_thinking() {
+                        picker.phase = PickerPhase::Thinking;
+                    } else {
+                        commit_model_picker(app);
+                    }
+                }
+            }
+            _ => {}
+        },
+        PickerPhase::Thinking => match key {
+            KeyCode::Esc => picker.phase = PickerPhase::Model,
+            KeyCode::Up => picker.thinking_selected = picker.thinking_selected.saturating_sub(1),
+            KeyCode::Down => {
+                let last = config::ThinkingLevel::all().len().saturating_sub(1);
+                picker.thinking_selected = (picker.thinking_selected + 1).min(last);
+            }
+            KeyCode::Enter => commit_model_picker(app),
+            _ => {}
+        },
+    }
+}
+
 #[cfg(test)]
 mod transcript_tests {
     use zdx_engine::core::thread_persistence::ThreadEvent;
@@ -1645,5 +2029,81 @@ mod transcript_tests {
         let wide = zdx_transcript::cells_to_lines(&cells, 100).len();
         let narrow = zdx_transcript::cells_to_lines(&cells, 20).len();
         assert!(narrow > wide, "narrow={narrow} wide={wide}");
+    }
+
+    #[test]
+    fn editable_fields_resolve_path_and_kind_by_section() {
+        let lines = vec![
+            ConfigLine::Section("core".into()),
+            ConfigLine::Row("model".into(), "x".into()),
+            ConfigLine::Row("title_model".into(), "y".into()),
+            ConfigLine::Row("verbose".into(), "true".into()),
+            ConfigLine::Section("transcription".into()),
+            ConfigLine::Row("model".into(), "z".into()),
+            ConfigLine::Row("language".into(), "en".into()),
+            ConfigLine::Section("speech".into()),
+            ConfigLine::Row("model".into(), "w".into()),
+        ];
+        let fields = editable_model_fields(&lines);
+        let got: Vec<(&str, ModelFieldKind)> =
+            fields.iter().map(|f| (f.path.as_str(), f.kind)).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("model", ModelFieldKind::Chat),
+                ("title_model", ModelFieldKind::Chat),
+                ("transcription.model", ModelFieldKind::Transcription),
+                ("speech.model", ModelFieldKind::Speech),
+            ]
+        );
+    }
+
+    #[test]
+    fn model_picker_filters_and_reports_selection() {
+        let mut p = ModelPickerState::new(
+            "title_model".to_string(),
+            ModelFieldKind::Chat,
+            "no-such-model",
+        );
+        assert!(!p.items.is_empty(), "registry should list models");
+        let before = p.matches.len();
+        p.filter.push_str("claude");
+        p.recompute();
+        assert!(p.matches.len() <= before);
+        assert!(
+            p.matches
+                .iter()
+                .all(|&i| p.items[i].to_lowercase().contains("claude"))
+        );
+        if let Some(sel) = p.selected_model() {
+            assert!(sel.to_lowercase().contains("claude"));
+        }
+    }
+
+    #[test]
+    fn speech_picker_lists_curated_options_without_thinking() {
+        let p = ModelPickerState::new("speech.model".to_string(), ModelFieldKind::Speech, "");
+        assert!(!p.has_thinking());
+        assert!(p.items.iter().all(|o| o.contains(':')));
+        assert!(p.items.iter().any(|o| o.starts_with("mistral:")));
+    }
+
+    #[test]
+    fn model_picker_parses_inline_thinking_suffix() {
+        let p = ModelPickerState::new(
+            "title_model".to_string(),
+            ModelFieldKind::Chat,
+            "gemini:some-model@high",
+        );
+        assert_eq!(p.thinking_current, config::ThinkingLevel::High);
+        assert_eq!(p.chosen_model, "gemini:some-model");
+
+        // No suffix defaults to Low.
+        let p2 = ModelPickerState::new(
+            "tldr_model".to_string(),
+            ModelFieldKind::Chat,
+            "gemini:some-model",
+        );
+        assert_eq!(p2.thinking_current, config::ThinkingLevel::Low);
     }
 }

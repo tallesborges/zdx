@@ -59,13 +59,12 @@ tldr_model = "gemini:gemini-3.1-flash-lite-preview"
 
 # Shared text-to-speech configuration
 # Used by the `zdx speak` CLI and bot audio replies.
-# provider: Speech provider to use ("mistral" or "openai", defaults to auto-detect: Mistral first)
-# model: Model to use for speech synthesis (provider-specific, defaults to "voxtral-mini-tts-latest" for Mistral, "gpt-4o-mini-tts" for OpenAI)
+# model: provider:model id (e.g. "mistral:voxtral-mini-tts-latest", "openai:gpt-4o-mini-tts")
+#        or a bare provider name ("openai", "mistral", "gemini", "xai") for its default model.
 # voice: Voice to use (provider-specific, e.g. "en_paul_neutral" for Mistral, "coral" for OpenAI)
 # format: Output audio format (e.g. "ogg" for a Telegram voice note, "mp3"; defaults to "ogg")
 [speech]
-# provider = "mistral"
-# model = "voxtral-mini-tts-latest"
+# model = "mistral:voxtral-mini-tts-latest"
 # voice = "en_paul_neutral"
 # format = "ogg"
 

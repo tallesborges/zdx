@@ -405,9 +405,9 @@ pub struct TranscriptionConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct SpeechConfig {
-    /// Speech provider: "openai" (default) or "mistral"
-    pub provider: Option<String>,
-    /// Model to use for speech synthesis (provider-specific)
+    /// Model to use for speech synthesis: a `provider:model` id (e.g.
+    /// `mistral:voxtral-mini-tts-latest`) or a bare provider name (e.g.
+    /// `openai`) to use that provider's default model.
     pub model: Option<String>,
     /// Voice to use (provider-specific)
     pub voice: Option<String>,
@@ -539,6 +539,13 @@ impl ModelFavorite {
     #[must_use]
     pub fn matches(&self, model: &str, thinking: ThinkingLevel) -> bool {
         self.thinking == thinking && models_equivalent(&self.model, model)
+    }
+
+    /// True if this favorite's model resolves to one of the given available
+    /// model ids. Bare and `provider:`-prefixed ids are treated as equivalent.
+    #[must_use]
+    pub fn model_available(&self, available: &[String]) -> bool {
+        available.iter().any(|m| models_equivalent(&self.model, m))
     }
 }
 
@@ -894,9 +901,41 @@ impl Config {
     /// # Errors
     /// Returns an error if the operation fails.
     pub fn save_model_to(path: &Path, model: &str) -> Result<()> {
-        use toml_edit::{DocumentMut, value};
+        Self::save_model_field_to(path, "model", model)
+    }
 
-        // Start from template, merge user values if file exists
+    /// Top-level model fields that can be edited from the monitor Config tab.
+    pub const EDITABLE_MODEL_FIELDS: &'static [&'static str] = &[
+        "model",
+        "title_model",
+        "tldr_model",
+        "handoff_model",
+        "read_thread_model",
+        "transcription.model",
+        "speech.model",
+    ];
+
+    /// Saves a single top-level model field (one of [`Self::EDITABLE_MODEL_FIELDS`]).
+    ///
+    /// # Errors
+    /// Returns an error if the field is not editable or the write fails.
+    pub fn save_model_field(field: &str, model: &str) -> Result<()> {
+        Self::save_model_field_to(&paths::config_path(), field, model)
+    }
+
+    /// Saves a single top-level model field to a specific config path,
+    /// preserving existing fields and comments via `toml_edit`.
+    ///
+    /// # Errors
+    /// Returns an error if the field is not editable or the write fails.
+    pub fn save_model_field_to(path: &Path, field: &str, model: &str) -> Result<()> {
+        use toml_edit::{DocumentMut, Item, value};
+
+        anyhow::ensure!(
+            Self::EDITABLE_MODEL_FIELDS.contains(&field),
+            "not an editable model field: {field}"
+        );
+
         let contents = if path.exists() {
             let user_config = fs::read_to_string(path)
                 .with_context(|| format!("Failed to read config from {}", path.display()))?;
@@ -905,13 +944,20 @@ impl Config {
             default_config_template().to_string()
         };
 
-        // Parse as editable document
         let mut doc: DocumentMut = contents
             .parse()
             .with_context(|| format!("Failed to parse config from {}", path.display()))?;
 
-        // Update model field
-        doc["model"] = value(model);
+        // Support one level of nesting (e.g. `transcription.model`).
+        match field.split_once('.') {
+            Some((table, key)) => {
+                if doc.get(table).and_then(Item::as_table).is_none() {
+                    doc[table] = Item::Table(toml_edit::Table::new());
+                }
+                doc[table][key] = value(model);
+            }
+            None => doc[field] = value(model),
+        }
 
         Self::write_config(path, &doc.to_string())
     }

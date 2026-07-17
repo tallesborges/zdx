@@ -197,10 +197,6 @@ enum Commands {
         #[arg(short, long, value_name = "PATH")]
         out: Option<String>,
 
-        /// Provider to use (`mistral`, `openai`, `gemini`, or `xai`; defaults to auto-detect, Mistral first)
-        #[arg(long, value_name = "PROVIDER")]
-        provider: Option<String>,
-
         /// Model to use (provider-prefixed, e.g. `openai:gpt-4o-mini-tts`, `mistral:voxtral-mini-tts-latest`, `gemini:gemini-3.1-flash-tts-preview`)
         #[arg(long, value_name = "MODEL")]
         model: Option<String>,
@@ -886,7 +882,6 @@ struct ImagineCommandInput {
 struct SpeakCommandInput {
     text: String,
     out: Option<String>,
-    provider: Option<String>,
     model: Option<String>,
     voice: Option<String>,
     format: Option<String>,
@@ -965,7 +960,6 @@ async fn run_speak_command(context: &DispatchContext<'_>, input: SpeakCommandInp
         root: &root_path,
         text: &input.text,
         out: input.out.as_deref(),
-        provider: input.provider.as_deref(),
         model: input.model.as_deref(),
         voice: input.voice.as_deref(),
         format: input.format.as_deref(),
@@ -1039,7 +1033,6 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
         Commands::Speak {
             text,
             out,
-            provider,
             model,
             voice,
             format,
@@ -1049,7 +1042,6 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
                 SpeakCommandInput {
                     text,
                     out,
-                    provider,
                     model,
                     voice,
                     format,

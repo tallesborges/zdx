@@ -20,10 +20,11 @@ use crate::prompts::THREAD_TITLE_PROMPT_TEMPLATE;
 pub async fn generate_title(message: &str, title_model: &str, root: &Path) -> Result<String> {
     let prompt = THREAD_TITLE_PROMPT_TEMPLATE.replace("{{MESSAGE}}", message);
 
+    let (model, thinking) = crate::models::split_model_thinking(title_model);
     let options = ExecSubagentOptions {
-        model: Some(title_model.to_string()),
+        model: Some(model.to_string()),
         system_prompt: None,
-        thinking_level: Some(ThinkingLevel::Low),
+        thinking_level: Some(thinking.unwrap_or(ThinkingLevel::Low)),
         no_tools: true,
         no_system_prompt: true,
         tools_override: None,

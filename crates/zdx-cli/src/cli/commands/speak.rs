@@ -12,7 +12,6 @@ pub struct SpeakRunOptions<'a> {
     pub root: &'a Path,
     pub text: &'a str,
     pub out: Option<&'a str>,
-    pub provider: Option<&'a str>,
     pub model: Option<&'a str>,
     pub voice: Option<&'a str>,
     pub format: Option<&'a str>,
@@ -22,10 +21,6 @@ pub struct SpeakRunOptions<'a> {
 pub async fn run(options: SpeakRunOptions<'_>) -> Result<()> {
     let base = &options.config.speech;
     let speech = SpeechConfig {
-        provider: options
-            .provider
-            .map(str::to_string)
-            .or_else(|| base.provider.clone()),
         model: options
             .model
             .map(str::to_string)
