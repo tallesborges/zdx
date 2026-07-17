@@ -35,10 +35,11 @@ pub async fn generate_tldr(thread_id: &str, tldr_model: &str, root: &Path) -> Re
         .replace("{{ZDX_CONTEXT}}", &build_zdx_context(root))
         .replace("{{TRANSCRIPT}}", trimmed);
 
+    let (model, thinking) = crate::models::split_model_thinking(tldr_model);
     let options = ExecSubagentOptions {
-        model: Some(tldr_model.to_string()),
+        model: Some(model.to_string()),
         system_prompt: None,
-        thinking_level: Some(ThinkingLevel::Low),
+        thinking_level: Some(thinking.unwrap_or(ThinkingLevel::Low)),
         no_tools: true,
         no_system_prompt: true,
         tools_override: None,

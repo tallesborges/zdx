@@ -184,8 +184,8 @@ async fn transcode_to_ogg_opus_with(ffmpeg_bin: &str, audio: &[u8]) -> Result<Op
 
 /// Resolves the speech provider and model.
 ///
-/// Priority: `ZDX_SPEECH_MODEL` env var > explicit config model > explicit provider > auto-detect.
-/// Returns `Ok(None)` if no provider is available.
+/// Priority: `ZDX_SPEECH_MODEL` env var > `[speech].model` (`provider:model`) >
+/// auto-detect the first configured provider. Returns `Ok(None)` if none.
 fn resolve_model(config: &Config, speech: &SpeechConfig) -> Result<Option<(ProviderKind, String)>> {
     let model_str = std::env::var("ZDX_SPEECH_MODEL")
         .ok()
@@ -204,16 +204,6 @@ fn resolve_model(config: &Config, speech: &SpeechConfig) -> Result<Option<(Provi
         return Ok(Some((selection.kind, selection.model)));
     }
 
-    if let Some(provider_str) = speech
-        .provider
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        let provider = parse_provider(provider_str)?;
-        return Ok(Some((provider, default_model(provider).to_string())));
-    }
-
     Ok(SPEECH_PROVIDERS.iter().find_map(|&provider| {
         let provider_config = config.providers.get(provider);
         provider
@@ -223,16 +213,14 @@ fn resolve_model(config: &Config, speech: &SpeechConfig) -> Result<Option<(Provi
     }))
 }
 
-fn parse_provider(value: &str) -> Result<ProviderKind> {
-    match value.to_ascii_lowercase().as_str() {
-        "openai" => Ok(ProviderKind::OpenAI),
-        "mistral" => Ok(ProviderKind::Mistral),
-        "gemini" => Ok(ProviderKind::Gemini),
-        "xai" | "grok" | "x" => Ok(ProviderKind::Xai),
-        other => Err(anyhow!(
-            "Unsupported speech provider: {other}. Only OpenAI, Mistral, Gemini, and xAI are supported."
-        )),
-    }
+/// Curated `provider:model` speech (TTS) options — one default per supported
+/// provider. Source of truth for the monitor Config picker.
+#[must_use]
+pub fn speech_model_options() -> Vec<String> {
+    SPEECH_PROVIDERS
+        .iter()
+        .map(|&kind| format!("{}:{}", kind.id(), default_model(kind)))
+        .collect()
 }
 
 fn default_model(provider: ProviderKind) -> &'static str {
@@ -505,20 +493,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_model_uses_provider_field_default_model() {
-        let config = Config::default();
-        let speech = SpeechConfig {
-            provider: Some("mistral".to_string()),
-            ..SpeechConfig::default()
-        };
-        let resolved = resolve_model(&config, &speech).unwrap();
-        assert_eq!(
-            resolved,
-            Some((ProviderKind::Mistral, DEFAULT_MISTRAL_MODEL.to_string()))
-        );
-    }
-
-    #[test]
     fn resolve_model_rejects_unsupported_provider() {
         let config = Config::default();
         let speech = SpeechConfig {
@@ -595,28 +569,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_provider_accepts_xai_aliases() {
-        assert_eq!(parse_provider("xai").unwrap(), ProviderKind::Xai);
-        assert_eq!(parse_provider("grok").unwrap(), ProviderKind::Xai);
-        assert_eq!(parse_provider("Gemini").unwrap(), ProviderKind::Gemini);
-        assert!(parse_provider("anthropic").is_err());
-    }
-
-    #[test]
-    fn resolve_model_uses_gemini_provider_field() {
-        let config = Config::default();
-        let speech = SpeechConfig {
-            provider: Some("gemini".to_string()),
-            ..SpeechConfig::default()
-        };
-        let resolved = resolve_model(&config, &speech).unwrap();
-        assert_eq!(
-            resolved,
-            Some((
-                ProviderKind::Gemini,
-                "gemini-3.1-flash-tts-preview".to_string()
-            ))
-        );
+    fn speech_model_options_lists_each_provider_default() {
+        let opts = speech_model_options();
+        assert!(opts.contains(&"mistral:voxtral-mini-tts-latest".to_string()));
+        assert!(opts.contains(&"openai:gpt-4o-mini-tts".to_string()));
+        assert!(opts.iter().all(|o| o.contains(':')));
     }
 
     #[test]

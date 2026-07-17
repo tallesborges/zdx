@@ -61,6 +61,20 @@ fn stt_provider(kind: ProviderKind) -> Option<&'static SttProvider> {
     STT_PROVIDERS.iter().find(|p| p.kind == kind)
 }
 
+impl SttProvider {
+    /// The `provider:model` selector string for this provider's default model.
+    fn selector(&self) -> String {
+        format!("{}:{}", self.kind.id(), self.default_model)
+    }
+}
+
+/// Curated `provider:model` transcription (STT) options — one default per
+/// supported provider. Source of truth for the monitor Config picker.
+#[must_use]
+pub fn transcription_model_options() -> Vec<String> {
+    STT_PROVIDERS.iter().map(SttProvider::selector).collect()
+}
+
 fn require_stt_provider(kind: ProviderKind) -> Result<&'static SttProvider> {
     stt_provider(kind).ok_or_else(|| {
         anyhow!(
@@ -130,7 +144,7 @@ pub fn supported_models() -> Vec<TranscriptionModel> {
         .map(|p| TranscriptionModel {
             provider: p.kind.id(),
             label: p.kind.label(),
-            id: format!("{}:{}", p.kind.id(), p.default_model),
+            id: p.selector(),
             model: p.default_model,
             api_key_env: p.kind.api_key_env_var(),
             diarize: p.diarize,
