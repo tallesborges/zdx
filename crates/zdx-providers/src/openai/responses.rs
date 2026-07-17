@@ -147,8 +147,8 @@ pub(crate) fn build_request_body_from_input(
             }),
         include: config.include.clone(),
         input,
+        tool_choice: tool_defs.as_ref().and(config.tool_choice.clone()),
         tools: tool_defs,
-        tool_choice: config.tool_choice.clone(),
         truncation: config.truncation.clone(),
         prompt_cache_key: config.prompt_cache_key.clone(),
         parallel_tool_calls: config.parallel_tool_calls,
@@ -436,5 +436,31 @@ mod tests {
 
         let input = build_input(&messages, None);
         assert_eq!(input[0].phase.as_deref(), Some("commentary"));
+    }
+
+    #[test]
+    fn tool_choice_is_omitted_when_no_tools_are_specified() {
+        let config = ResponsesConfig {
+            base_url: "https://api.x.ai/v1".to_string(),
+            path: "/responses".to_string(),
+            model: "grok-4.5".to_string(),
+            max_output_tokens: None,
+            reasoning_effort: None,
+            reasoning_summary: None,
+            instructions: None,
+            text_verbosity: None,
+            store: Some(false),
+            include: None,
+            stream_options: None,
+            prompt_cache_key: None,
+            parallel_tool_calls: Some(true),
+            tool_choice: Some("auto".to_string()),
+            truncation: None,
+            service_tier: None,
+        };
+
+        let without_tools = build_request_body_from_input(&config, vec![], &[], None);
+        assert!(without_tools.tools.is_none());
+        assert!(without_tools.tool_choice.is_none());
     }
 }
