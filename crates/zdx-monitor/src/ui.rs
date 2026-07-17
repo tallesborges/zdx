@@ -464,6 +464,12 @@ fn quota_window_line(w: &QuotaWindow) -> Line<'static> {
             Style::default().fg(Color::DarkGray),
         ));
     }
+    if let Some(model) = &w.scope {
+        spans.push(Span::styled(
+            format!("   · {model}"),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
     Line::from(spans)
 }
 
@@ -925,7 +931,11 @@ fn render_picker_thinking(f: &mut Frame, picker: &ModelPickerState, popup: Rect)
             } else if is_current {
                 style = style.fg(Color::Green);
             }
-            let text = format!("{marker}{:<7} {}", level.display_name(), level.description());
+            let text = format!(
+                "{marker}{:<7} {}",
+                level.display_name(),
+                level.description()
+            );
             ListItem::new(Line::from(text)).style(style)
         })
         .collect();
@@ -1121,11 +1131,13 @@ mod tests {
                         label: "5h".to_string(),
                         used_percent: 12.0,
                         resets_at: None,
+                        scope: None,
                     },
                     QuotaWindow {
                         label: "weekly".to_string(),
                         used_percent: 95.0,
                         resets_at: None,
+                        scope: None,
                     },
                 ],
             }),
