@@ -35,6 +35,9 @@ pub struct QuotaWindow {
     pub used_percent: f64,
     /// When the window resets, if the provider reported it.
     pub resets_at: Option<DateTime<Utc>>,
+    /// Model this window is scoped to, when the limit is model-specific
+    /// (e.g. Claude's per-model weekly limit like `"Fable"`).
+    pub scope: Option<String>,
 }
 
 /// A provider's subscription quota snapshot.
@@ -127,7 +130,10 @@ fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<u64> {
         .ok()
 }
 
-fn error_for_status(status: reqwest::StatusCode, headers: &reqwest::header::HeaderMap) -> QuotaError {
+fn error_for_status(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) -> QuotaError {
     match status.as_u16() {
         401 | 403 => QuotaError::Unauthorized,
         429 => QuotaError::RateLimited {
@@ -179,7 +185,10 @@ pub async fn fetch_codex_quota() -> Result<SubscriptionQuota, QuotaError> {
     if creds.is_expired() {
         return Err(QuotaError::Expired);
     }
-    let account_id = creds.account_id.clone().ok_or(QuotaError::NotAuthenticated)?;
+    let account_id = creds
+        .account_id
+        .clone()
+        .ok_or(QuotaError::NotAuthenticated)?;
 
     let resp = quota_client()?
         .get(CODEX_USAGE_URL)
@@ -224,6 +233,7 @@ impl ClaudeFlatWindow {
             label: label.to_string(),
             used_percent: self.utilization.unwrap_or(0.0),
             resets_at: parse_rfc3339(self.resets_at.as_deref()),
+            scope: None,
         }
     }
 }
@@ -233,7 +243,17 @@ struct ClaudeLimit {
     group: Option<String>,
     percent: Option<f64>,
     resets_at: Option<String>,
-    scope: Option<serde_json::Value>,
+    scope: Option<ClaudeScope>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeScope {
+    model: Option<ClaudeScopeModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeScopeModel {
+    display_name: Option<String>,
 }
 
 fn parse_rfc3339(s: Option<&str>) -> Option<DateTime<Utc>> {
@@ -251,19 +271,24 @@ fn parse_claude(wire: &ClaudeUsageWire) -> Option<SubscriptionQuota> {
     let mut windows = Vec::new();
 
     for limit in &wire.limits {
-        // MVP: only the top-level (unscoped) session + weekly windows.
-        if limit.scope.is_some() {
-            continue;
-        }
-        let label = match limit.group.as_deref() {
-            Some("session") => "5h",
-            Some("weekly") => "weekly",
+        let scoped_model = limit
+            .scope
+            .as_ref()
+            .and_then(|s| s.model.as_ref())
+            .and_then(|m| m.display_name.as_deref());
+        // Session + weekly (both the account-wide window and any per-model
+        // weekly limit, e.g. "Fable"). Other scoped limits are skipped.
+        let (label, scope) = match (limit.group.as_deref(), scoped_model) {
+            (Some("session"), None) => ("5h", None),
+            (Some("weekly"), None) => ("weekly", None),
+            (Some("weekly"), Some(model)) => ("weekly", Some(model.to_string())),
             _ => continue,
         };
         windows.push(QuotaWindow {
             label: label.to_string(),
             used_percent: limit.percent.unwrap_or(0.0),
             resets_at: parse_rfc3339(limit.resets_at.as_deref()),
+            scope,
         });
     }
 
@@ -318,9 +343,8 @@ fn codex_window(w: &CodexWindow) -> QuotaWindow {
     QuotaWindow {
         label: codex_window_label(w.limit_window_seconds).to_string(),
         used_percent: w.used_percent.unwrap_or(0.0),
-        resets_at: w
-            .reset_at
-            .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
+        resets_at: w.reset_at.and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
+        scope: None,
     }
 }
 
@@ -356,17 +380,24 @@ mod tests {
 
     #[test]
     fn parses_claude_limits_array() {
-        let wire: ClaudeUsageWire = serde_json::from_str(&load_fixture("claude_usage.json")).unwrap();
+        let wire: ClaudeUsageWire =
+            serde_json::from_str(&load_fixture("claude_usage.json")).unwrap();
         let quota = parse_claude(&wire).expect("claude quota");
-        // Only the two unscoped windows (session + weekly_all); the scoped row is skipped.
-        assert_eq!(quota.windows.len(), 2);
+        // Session + account-wide weekly + the model-scoped weekly (e.g. "Fable").
+        assert_eq!(quota.windows.len(), 3);
         let session = &quota.windows[0];
         assert_eq!(session.label, "5h");
         assert!((session.used_percent - 0.0).abs() < f64::EPSILON);
+        assert!(session.scope.is_none());
         let weekly = &quota.windows[1];
         assert_eq!(weekly.label, "weekly");
         assert!((weekly.used_percent - 45.0).abs() < f64::EPSILON);
         assert!(weekly.resets_at.is_some());
+        assert!(weekly.scope.is_none());
+        // The scoped weekly window carries the model display name.
+        let scoped = &quota.windows[2];
+        assert_eq!(scoped.label, "weekly");
+        assert_eq!(scoped.scope.as_deref(), Some("Opus"));
     }
 
     #[test]
@@ -444,7 +475,8 @@ mod tests {
     #[test]
     fn error_reasons_are_bounded_and_nonempty() {
         for e in [
-            QuotaError::NotAuthenticated,            QuotaError::Expired,
+            QuotaError::NotAuthenticated,
+            QuotaError::Expired,
             QuotaError::Unauthorized,
             QuotaError::RateLimited {
                 retry_after_secs: Some(30),
