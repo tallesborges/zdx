@@ -183,7 +183,7 @@ websocket = false
 enabled = true
 # api_key = "sk-..."  # Overrides MOONSHOT_API_KEY env var
 # base_url = "https://api.moonshot.ai/v1"
-models = ["kimi-k2.6"]
+models = ["kimi-k3", "kimi-k2.6"]
 fast_mode = false
 websocket = false
 
