@@ -1701,7 +1701,9 @@ fn default_opencode_go_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "grok-4.5".to_string(),
             "glm-5.2".to_string(),
+            "kimi-k3".to_string(),
             "kimi-k2.6".to_string(),
             "kimi-k2.7-code".to_string(),
             "mimo-v2.5-pro".to_string(),
@@ -1711,6 +1713,7 @@ fn default_opencode_go_provider() -> ProviderConfig {
             "qwen3.7-plus".to_string(),
             "deepseek-v4-pro".to_string(),
             "deepseek-v4-flash".to_string(),
+            "hy3-preview".to_string(),
         ],
         ..Default::default()
     }
