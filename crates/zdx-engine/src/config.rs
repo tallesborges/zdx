@@ -1616,7 +1616,7 @@ fn default_deepseek_provider() -> ProviderConfig {
 fn default_moonshot_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["kimi-k2.6".to_string()],
+        models: vec!["kimi-k3".to_string(), "kimi-k2.6".to_string()],
         ..Default::default()
     }
 }

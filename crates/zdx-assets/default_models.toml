@@ -342,6 +342,23 @@ input_images = false
 output_limit = 384000
 
 [[model]]
+id = "moonshot:kimi-k3"
+provider = "moonshot"
+display_name = "Kimi K3"
+context_limit = 1048576
+
+[model.pricing]
+input = 3.0
+output = 15.0
+cache_read = 0.3
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 131072
+
+[[model]]
 id = "moonshot:kimi-k2.6"
 provider = "moonshot"
 display_name = "Kimi K2.6"
@@ -365,9 +382,9 @@ display_name = "Step 3.7 Flash"
 context_limit = 256000
 
 [model.pricing]
-input = 0.2
-output = 1.15
-cache_read = 0.04
+input = 0.185
+output = 1.11
+cache_read = 0.037
 cache_write = 0.0
 
 [model.capabilities]
