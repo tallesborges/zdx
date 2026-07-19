@@ -728,9 +728,12 @@ fn model_api_hint(
         .and_then(|provider| provider.npm.as_deref());
 
     let api = match npm {
-        Some("@ai-sdk/openai") => "openai-responses",
+        // The opencode-go proxy exposes OpenAI-family models via its
+        // openai-compatible `/v1/chat/completions` endpoint, not the OpenAI
+        // Responses API — e.g. grok-4.5 (models.dev tags it `@ai-sdk/openai`)
+        // is served at `/zen/go/v1/chat/completions`.
+        Some("@ai-sdk/openai" | "@ai-sdk/openai-compatible") => "openai-completions",
         Some("@ai-sdk/google") => "google-generative-ai",
-        Some("@ai-sdk/openai-compatible") => "openai-completions",
         // The proxy serves these models only via the Anthropic Messages API
         // (`/v1/messages`); e.g. qwen3.7-max rejects the chat-completions
         // ("oa-compat") format with a 401.
@@ -1350,9 +1353,11 @@ mod tests {
     #[test]
     fn test_model_api_hint_for_meta_provider_prefers_source_provider_over_npm() {
         // The npm field reflects the AI-SDK adapter used internally by the
-        // proxy, which may differ from the actual wire format.  We trust npm
-        // for most adapters but override @ai-sdk/anthropic for known
-        // third-party models like minimax.
+        // proxy, which may differ from the actual wire format. The opencode-go
+        // proxy only exposes openai-compatible chat-completions and anthropic
+        // messages endpoints, so @ai-sdk/openai maps to openai-completions
+        // (not the OpenAI Responses API) and @ai-sdk/anthropic to
+        // anthropic-messages for known third-party models like minimax.
         let model = ModelEntry {
             id: "gpt-5".to_string(),
             name: "GPT-5".to_string(),
@@ -1366,10 +1371,10 @@ mod tests {
             }),
         };
 
-        // npm @ai-sdk/openai → openai-responses (trusted)
+        // npm @ai-sdk/openai → openai-completions (proxy has no Responses API)
         assert_eq!(
             model_api_hint("opencode-go", Some("opencode-go"), &model).as_deref(),
-            Some("openai-responses")
+            Some("openai-completions")
         );
 
         // npm @ai-sdk/anthropic for minimax → anthropic-messages
