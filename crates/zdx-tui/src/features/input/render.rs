@@ -312,10 +312,10 @@ pub fn render_input_with_cursor(
         .fg(Color::DarkGray)
         .add_modifier(Modifier::DIM);
 
-    // Show the favorite alias instead of the model id when one matches.
+    // Show the favorite alias alongside the actual model id when one matches.
     let favorite_alias = state.config.active_favorite_alias();
     let label = match favorite_alias {
-        Some(alias) => format!(" {alias}"),
+        Some(alias) => format!(" {alias} · {}", state.config.model),
         None => format!(" {}", state.config.model),
     };
     let mut title_spans = vec![Span::styled(label, base_style)];
@@ -324,9 +324,7 @@ pub fn render_input_with_cursor(
         title_spans.push(Span::styled(" [F]", fast_style));
     }
 
-    // Thinking badge, unless a favorite alias already implies it.
-    if favorite_alias.is_none()
-        && state.config.thinking_level != ThinkingLevel::Off
+    if state.config.thinking_level != ThinkingLevel::Off
         && model_supports_reasoning(&state.config.model)
     {
         title_spans.push(Span::styled(
