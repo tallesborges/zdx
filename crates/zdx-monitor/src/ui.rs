@@ -395,6 +395,8 @@ fn provider_display(provider: &str) -> &str {
     match provider {
         "claude-cli" => "Claude",
         "openai-codex" => "Codex",
+        "google-antigravity" => "Antigravity",
+        "grok-build" => "Grok",
         other => other,
     }
 }

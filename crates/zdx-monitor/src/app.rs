@@ -512,14 +512,16 @@ fn start_quota_fetch(app: &mut MonitorApp) {
     // Skip providers still inside a rate-limit cooldown so `R` and the on-tick
     // refresh cannot hammer a 429'd endpoint.
     let now = Instant::now();
-    let ready = |provider: &'static str| {
-        app.quota_backoff
-            .get(provider)
-            .is_none_or(|until| *until <= now)
-    };
-    let fetch_claude = ready(subscription_quota::PROVIDER_CLAUDE);
-    let fetch_codex = ready(subscription_quota::PROVIDER_CODEX);
-    if !fetch_claude && !fetch_codex {
+    let ready: Vec<(&'static str, subscription_quota::QuotaFetcher)> = subscription_quota::FETCHERS
+        .iter()
+        .filter(|(provider, _)| {
+            app.quota_backoff
+                .get(*provider)
+                .is_none_or(|until| *until <= now)
+        })
+        .copied()
+        .collect();
+    if ready.is_empty() {
         return;
     }
     let (tx, rx) = mpsc::channel();
@@ -529,18 +531,9 @@ fn start_quota_fetch(app: &mut MonitorApp) {
             .build()
             .map(|rt| {
                 rt.block_on(async {
-                    let mut out: QuotaFetchResult = Vec::new();
-                    if fetch_claude {
-                        out.push((
-                            subscription_quota::PROVIDER_CLAUDE,
-                            subscription_quota::fetch_claude_quota().await,
-                        ));
-                    }
-                    if fetch_codex {
-                        out.push((
-                            subscription_quota::PROVIDER_CODEX,
-                            subscription_quota::fetch_codex_quota().await,
-                        ));
+                    let mut out: QuotaFetchResult = Vec::with_capacity(ready.len());
+                    for (provider, fetch) in ready {
+                        out.push((provider, fetch().await));
                     }
                     out
                 })
