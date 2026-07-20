@@ -2,14 +2,14 @@
 
 # Subscription Quota Monitor
 
-> Show remaining subscription quota (5-hour + weekly limits) for Claude Code and OpenAI Codex inside `zdx monitor`.
+> Show remaining subscription quota (session + weekly limits, credits, per-model buckets) for the user's OAuth subscriptions inside `zdx monitor`.
 > Source feature note: "ZDX Feature — ZDX Monitor" → Usage/Spend panel → "Limits / Subscriptions — remaining quota, spend-cap headroom when the provider exposes it".
 
 # Goals
-- Surface each configured subscription provider's live quota in the monitor `Usage` tab: percent used / remaining and time-until-reset, for both the ~5-hour rolling window and the weekly window.
-- Cover the two subscriptions the user has today: **Anthropic Claude (claude-cli OAuth)** and **OpenAI Codex (ChatGPT OAuth)**.
-- Reuse zdx's own stored OAuth tokens (`$ZDX_HOME/oauth.json`) — no scraping of external `~/.claude` / `~/.codex` files.
-- Keep it honest: label the data `Provider (live)` vs stale/unavailable, and mark these integrations as undocumented/best-effort.
+- Surface each configured subscription provider's live quota in the monitor `Usage` tab: percent used / remaining and time-until-reset, per window.
+- Cover all four subscriptions the user has: **Claude (claude-cli OAuth)**, **Codex (ChatGPT OAuth)**, **Google Antigravity (Cloud Code Assist OAuth)**, and **Grok Build (xAI OAuth)**.
+- Reuse zdx's own stored OAuth tokens (`$ZDX_HOME/oauth.json`) — no scraping of external CLI credential files.
+- Keep it honest: label the data `live` vs `stale`/`unavailable`, and mark these integrations as undocumented/best-effort.
 
 # Non-goals
 - Billed-USD accuracy for subscriptions — they stay flat-rate `subscription` in the existing token/cost aggregator (`usage-stats-monitor.md` contract). This feature is about **quota headroom**, not spend.
@@ -98,6 +98,20 @@ The monitor must **never refresh or write** OAuth tokens. Today `OAuthCache::sav
 ## Phase 2: Add the second provider — ✅ FOLDED INTO PHASE 1
 - Codex (`fetch_codex_quota`) shipped alongside Claude in Phase 1: same neutral `SubscriptionQuota`, `chatgpt-account-id` always sent, windows labeled from `limit_window_seconds`, `NotAuthenticated` rows hidden. No separate work remaining; the `is_subscription()`-enumeration pitfall is avoided (only the two explicit fetchers exist).
 
+## Phase 3: Antigravity + Grok + fetcher registry — ✅ DONE (2026-07-19)
+- **Goal**: Cover the user's other two subscriptions and make adding providers cheap.
+- **Live probe results (verified with zdx's own refreshed tokens)**:
+  - **Antigravity** — `POST https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota`, Bearer + JSON `{"project": <account_id>}` → HTTP 200. Body is `buckets[]`, one per model: `{ modelId, tokenType: "REQUESTS", remainingFraction (0–1), resetTime (RFC3339, ~daily) }`. Per-model **request** quotas, not a session/weekly window.
+  - **Grok** — `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`, Bearer + `X-XAI-Token-Auth: xai-grok-cli` + `x-grok-client-version` + `x-grok-client-mode: interactive` → HTTP 200 **JSON**: `config.creditUsagePercent` (0–100), `config.currentPeriod.{type=USAGE_PERIOD_TYPE_WEEKLY|MONTHLY, end}`, `config.subscriptionTier`. Weekly credit budget only (no hourly). Endpoint discovered from the open-source `xai-org/grok-build` repo (`crates/codegen/xai-grok-shell/src/extensions/billing.rs`) — this replaced the fragile gRPC-web/protobuf path CodexBar uses.
+- **Scope checklist**:
+  - [x] `fetch_antigravity_quota` (fixture `antigravity_usage.json`): map buckets → windows; **collapse buckets with equal used%/reset** so an idle account shows one row, and tag diverging per-model rows via `QuotaWindow.scope` (`gemini-3-pro-preview` / `N models`). Label `quota`.
+  - [x] `fetch_grok_quota` (fixture `grok_usage.json`): one window, `used% = creditUsagePercent`, `resets_at = currentPeriod.end`, label from period type, plan = `subscriptionTier`. `credit_usage_percent` absent → 0% (proto3 JSON omits zeros), not an error.
+  - [x] Both reuse `google_antigravity::load_credentials()` / `grok_build::load_credentials()` (read-only) and the shared `require_creds` + `quota_client` + `error_for_status` helpers.
+  - [x] **Fetcher registry**: `pub const FETCHERS: &[(&str, QuotaFetcher)]` in `subscription_quota.rs`; the monitor's `start_quota_fetch` iterates it (∩ cooldown) instead of hard-coding providers. Adding a provider = one `fetch_*` + one registry entry.
+  - [x] `provider_display` labels for `google-antigravity` → "Antigravity", `grok-build` → "Grok".
+- **✅ Demo (verified 2026-07-19)**: `just monitor` → `Usage` shows all four — Claude (5h/weekly/·Fable), Codex `[prolite]`, Antigravity (collapsed `quota` row), Grok (`weekly` credit %). 248 tests green, `cargo clippy` clean.
+- **Notes**: Antigravity/Grok OAuth tokens expire fast; when expired the monitor (read-only) shows `expired · re-login in zdx` until a normal zdx run on that provider refreshes them.
+
 # Contracts (guardrails)
 - The subscription-quota fetch runs on an **independent** monitor worker with its own cache; it never shares the usage-aggregation job, so a slow/hanging network call cannot delay the local token/cost tables. The UI thread never blocks on network.
 - Reuse zdx's `oauth.json` **read-only**; the monitor never refreshes or writes tokens (no external `~/.claude`/`~/.codex` reads either).
@@ -137,8 +151,8 @@ The monitor must **never refresh or write** OAuth tokens. Today `OAuthCache::sav
 - ✅ Check-in demo: near-limit windows render highlighted; a one-line summary string is available.
 
 # Later / Deferred
-- Additional subscription providers (e.g. `grok-build`, Gemini OAuth) — add a `fetch_*` + registry entry when the user has them and an endpoint is known.
-- Extra/scoped limits + credits (Anthropic scoped weekly limits like `seven_day_sonnet`, Codex named/metered limits, reset-credit availability, spend-cap headroom) — parse unknown fields permissively but only render the primary session + aggregate weekly windows in MVP; surface the rest later if useful.
+- Additional subscription providers (Gemini OAuth, xAI API key, etc.) — add a `fetch_*` + `FETCHERS` entry when the user has them and an endpoint is known. (Claude, Codex, Antigravity, Grok all shipped.)
+- Extra/scoped limits + credits (Codex `additional_rate_limits` like GPT-5.3-Codex-Spark, Codex reset-credit availability, Grok `prepaidBalance`/on-demand, Antigravity non-REQUESTS token types, spend-cap headroom) — parse permissively but not rendered yet; surface later if useful. (Claude per-model scoped weekly like `Fable` is already shown.)
 - Multi-account support — the OAuth cache holds one record per provider; revisit only if multiple accounts per provider are needed.
 - Passive header/SSE-based quota capture (e.g. Codex `x-codex-*` response headers, `codex.rate_limits` events; Anthropic `anthropic-ratelimit-*`) piggybacked on real completions to avoid extra calls — revisit if the dedicated endpoints prove unreliable or rate-limited.
 - Historical quota trends / charts — only if the user wants tracking over time.
