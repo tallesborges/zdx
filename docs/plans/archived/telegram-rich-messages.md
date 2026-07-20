@@ -1,4 +1,9 @@
-> Stage: drafts | active | done | archived. Keep this plan current while working: when a scope item is finished, check its box `[ ]`→`[x]`; when a phase's ✅ demo passes, mark the phase done (with date). The plan file is the source of truth, not memory.
+> Stage: archived (abandoned 2026-07-20). Implemented and dogfooded, then reverted.
+
+# Outcome: reverted — I did not like it (2026-07-20)
+Rich messages were fully built (default send path) and the Telegram output contract was updated to emit native headings and tables. After dogfooding, I did not like the result: the native rendering felt worse than the compact classic style for everyday chat (notably the larger heading fonts), and the existing HTML-attachment path already handles the "I need the full detail" case better than an inline table.
+
+Decision: revert to the classic HTML send path. The only thing kept was the unrelated cleanup — restructuring the Telegram instruction layer from dated XML wrappers into lean Markdown (same classic rules, just tidier). This plan is archived for reference only.
 
 # Goals
 - Send final assistant answers as Telegram **rich messages** (`sendRichMessage` with an `html` field) so replies can render native headings, tables, lists, collapsible `<details>`, and longer content (up to 32768 chars).
