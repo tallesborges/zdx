@@ -51,7 +51,9 @@ pub enum TranscriptMutation {
     ReplaceCells(Vec<HistoryCell>),
     ResetScroll,
     ClearWrapCache,
-    SetScrollOffset { offset: usize },
+    SetScrollOffset {
+        offset: usize,
+    },
     SetScrollMode(ScrollMode),
     ScrollToTop,
     ScrollToBottom,

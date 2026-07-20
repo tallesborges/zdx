@@ -17,8 +17,8 @@ use ratatui::prelude::*;
 use serde_json::Value;
 use zdx_engine::config::{self, paths};
 use zdx_engine::core::thread_persistence;
-use zdx_engine::models::available_models;
 use zdx_engine::core::usage_stats::{self, UsageStats};
+use zdx_engine::models::available_models;
 use zdx_engine::providers::subscription_quota::{self, QuotaError, SubscriptionQuota};
 use zdx_engine::{agent_activity, automations, pidfile};
 
@@ -1640,9 +1640,10 @@ pub(crate) fn editable_model_fields(lines: &[ConfigLine]) -> Vec<EditableModelFi
                         "model" | "title_model" | "tldr_model" | "handoff_model"
                         | "read_thread_model",
                     ) => Some((key.clone(), ModelFieldKind::Chat)),
-                    ("transcription", "model") => {
-                        Some(("transcription.model".to_string(), ModelFieldKind::Transcription))
-                    }
+                    ("transcription", "model") => Some((
+                        "transcription.model".to_string(),
+                        ModelFieldKind::Transcription,
+                    )),
                     ("speech", "model") => {
                         Some(("speech.model".to_string(), ModelFieldKind::Speech))
                     }
@@ -1882,9 +1883,10 @@ fn commit_model_picker(app: &mut MonitorApp) {
             )
         }
         // Audio (STT/TTS): model only, no thinking.
-        ModelFieldKind::Transcription | ModelFieldKind::Speech => {
-            (config::Config::save_model_field(&field, &model), model.clone())
-        }
+        ModelFieldKind::Transcription | ModelFieldKind::Speech => (
+            config::Config::save_model_field(&field, &model),
+            model.clone(),
+        ),
     };
 
     match result {
