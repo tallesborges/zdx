@@ -117,6 +117,11 @@ pub enum ThreadEvent {
         /// Whether the next qualifying user message should generate the topic title.
         #[serde(default, skip_serializing_if = "is_false")]
         pending_topic_title: bool,
+        /// Source thread this thread aliases (redirects) to. When set, the bot
+        /// loads history from and persists new events to the source thread; this
+        /// thread stays a thin pointer (used by Telegram "resume" topics).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alias_to: Option<String>,
         ts: String,
     },
 
@@ -232,6 +237,7 @@ impl ThreadEvent {
             model_override: None,
             thinking_override: None,
             pending_topic_title: false,
+            alias_to: None,
             ts: chrono_timestamp(),
         }
     }
@@ -252,6 +258,7 @@ impl ThreadEvent {
             model_override: None,
             thinking_override: None,
             pending_topic_title: false,
+            alias_to: None,
             ts: chrono_timestamp(),
         }
     }
@@ -275,6 +282,7 @@ impl ThreadEvent {
             model_override: None,
             thinking_override: None,
             pending_topic_title: false,
+            alias_to: None,
             ts: chrono_timestamp(),
         }
     }

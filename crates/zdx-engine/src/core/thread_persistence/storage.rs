@@ -283,6 +283,16 @@ impl Thread {
         rewrite_meta_with_pending_topic_title(&self.path, pending_topic_title)?;
         Ok(())
     }
+
+    /// Updates the alias (source thread redirect) stored in the meta event.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn set_alias(&mut self, alias_to: Option<String>) -> Result<()> {
+        self.ensure_meta()?;
+        rewrite_meta_with_alias(&self.path, alias_to)?;
+        Ok(())
+    }
 }
 
 /// Reads thread events from a file path, with backward compatibility.
@@ -518,6 +528,47 @@ fn rewrite_meta_with_pending_topic_title(path: &PathBuf, pending_topic_title: bo
     Ok(())
 }
 
+/// Rewrites the meta event with an updated alias, preserving the rest of the file.
+fn rewrite_meta_with_alias(path: &PathBuf, alias_to: Option<String>) -> Result<()> {
+    let file = fs::File::open(path).context("Failed to open thread file")?;
+    let reader = BufReader::new(file);
+
+    let temp_path = path.with_extension("jsonl.tmp");
+    let mut temp = fs::File::create(&temp_path).context("Failed to create temp thread file")?;
+
+    let mut lines = reader.lines();
+    let first_line = lines
+        .next()
+        .transpose()
+        .context("Failed to read meta line")?
+        .ok_or_else(|| anyhow!("Thread file is empty"))?;
+
+    let mut meta_event: ThreadEvent =
+        serde_json::from_str(&first_line).context("Failed to parse meta event")?;
+    match meta_event {
+        ThreadEvent::Meta {
+            alias_to: ref mut meta_alias,
+            ..
+        } => {
+            *meta_alias = alias_to;
+        }
+        _ => bail!("First thread event is not a meta event"),
+    }
+
+    let new_meta =
+        serde_json::to_string(&meta_event).context("Failed to serialize updated meta event")?;
+    writeln!(temp, "{new_meta}").context("Failed to write updated meta")?;
+
+    for line in lines {
+        let line = line.context("Failed to read thread line")?;
+        writeln!(temp, "{line}").context("Failed to write thread line")?;
+    }
+
+    temp.sync_all().context("Failed to sync temp thread file")?;
+    fs::rename(&temp_path, path).context("Failed to replace thread file")?;
+    Ok(())
+}
+
 /// Reads only the meta line to extract title (backward compatible).
 /// Parsed meta fields from the first line of a thread file.
 pub(crate) struct ThreadMeta {
@@ -530,6 +581,7 @@ pub(crate) struct ThreadMeta {
     model_override: Option<String>,
     thinking_override: Option<crate::config::ThinkingLevel>,
     pending_topic_title: bool,
+    alias_to: Option<String>,
 }
 
 /// Reads and parses the meta line from a thread file (single open + parse).
@@ -569,6 +621,7 @@ pub(crate) fn read_meta(path: &PathBuf) -> Result<Option<ThreadMeta>> {
         model_override,
         thinking_override,
         pending_topic_title,
+        alias_to,
         ..
     } = parsed
     {
@@ -582,6 +635,7 @@ pub(crate) fn read_meta(path: &PathBuf) -> Result<Option<ThreadMeta>> {
             model_override,
             thinking_override,
             pending_topic_title,
+            alias_to,
         }))
     } else {
         Ok(None)
@@ -606,6 +660,10 @@ fn read_meta_thinking_override(path: &PathBuf) -> Result<Option<crate::config::T
 
 fn read_meta_pending_topic_title(path: &PathBuf) -> Result<bool> {
     Ok(read_meta(path)?.is_some_and(|m| m.pending_topic_title))
+}
+
+fn read_meta_alias(path: &PathBuf) -> Result<Option<String>> {
+    Ok(read_meta(path)?.and_then(|m| m.alias_to))
 }
 
 /// Generates a unique thread ID using UUID v4.
@@ -823,6 +881,21 @@ pub fn read_thread_thinking_override(id: &str) -> Result<Option<crate::config::T
 pub fn read_thread_pending_topic_title(id: &str) -> Result<bool> {
     let path = threads_dir().join(format!("{id}.jsonl"));
     read_meta_pending_topic_title(&path)
+}
+
+/// Reads a thread's alias (source thread it redirects to) by ID, if any.
+///
+/// # Errors
+/// Returns an error if the operation fails.
+pub fn read_thread_alias(id: &str) -> Result<Option<String>> {
+    let path = threads_dir().join(format!("{id}.jsonl"));
+    read_meta_alias(&path)
+}
+
+/// Returns whether a thread file exists for the given ID.
+#[must_use]
+pub fn thread_exists(id: &str) -> bool {
+    threads_dir().join(format!("{id}.jsonl")).exists()
 }
 
 /// Updates a thread's title by ID.

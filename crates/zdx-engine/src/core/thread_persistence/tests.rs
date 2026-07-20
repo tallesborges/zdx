@@ -1916,6 +1916,30 @@ fn test_pending_topic_title_roundtrip() {
 }
 
 #[test]
+fn test_alias_roundtrip() {
+    let _temp = setup_temp_zdx_home();
+
+    let thread_id = unique_thread_id("alias");
+    let mut thread = Thread::with_id(thread_id.clone()).unwrap();
+
+    assert_eq!(read_thread_alias(&thread_id).unwrap(), None);
+
+    thread
+        .set_alias(Some("source-thread-123".to_string()))
+        .unwrap();
+    assert_eq!(
+        read_thread_alias(&thread_id).unwrap(),
+        Some("source-thread-123".to_string())
+    );
+
+    let events = thread.read_events().unwrap();
+    assert!(matches!(events[0], ThreadEvent::Meta { .. }));
+
+    thread.set_alias(None).unwrap();
+    assert_eq!(read_thread_alias(&thread_id).unwrap(), None);
+}
+
+#[test]
 fn test_thread_lineage_roundtrip_and_list_filtering() {
     let _temp = setup_temp_zdx_home();
 
