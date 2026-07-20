@@ -12,6 +12,7 @@ use crate::bot::{
     BotContext, BotContextDeps, CancelKey, QueueCancelKey, dispatch_message, new_cancel_map,
     new_chat_queues, new_queue_cancel_map,
 };
+use crate::handlers::message::ModelPickerScope;
 use crate::telegram::{CallbackQuery, TelegramClient, TelegramSettings};
 
 mod agent;
@@ -120,6 +121,7 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
             followup_map: followups::new_followup_map(),
             staging_map: staging::new_staging_map(),
             command_picker_map: command_picker::new_command_picker_map(),
+            launcher_map: crate::handlers::message::new_launcher_map(),
         },
     ));
     let chat_queues = new_chat_queues();
@@ -305,6 +307,14 @@ async fn handle_callback_query(
         staging::handle_callback(context, chat_queues, client, &callback, rest).await;
     } else if let Some(rest) = data.strip_prefix("cmd:") {
         command_picker::handle_callback(context, chat_queues, client, &callback, rest).await;
+    } else if let Some(rest) = data.strip_prefix("nt:") {
+        crate::handlers::message::handle_launcher_callback(
+            context.as_ref(),
+            client,
+            &callback,
+            rest,
+        )
+        .await;
     } else if data.starts_with("model_provider:")
         || data.starts_with("model_pick:")
         || data.starts_with("model_back:")
@@ -428,24 +438,69 @@ fn model_picker_header(
     context: &BotContext,
     chat_id: i64,
     thread_id: Option<i64>,
-    is_general: bool,
+    scope: ModelPickerScope,
 ) -> String {
     let config = context.config();
-    if is_general {
-        format!("Current model: <code>{}</code>", config.model)
-    } else {
-        let override_info = zdx_engine::core::thread_persistence::read_thread_model_override(
-            &telegram_thread_id(chat_id, thread_id),
-        )
-        .ok()
-        .flatten()
-        .map_or_else(String::new, |m| {
-            format!("\nCurrent override: <code>{m}</code>")
-        });
-        format!(
-            "Current model: <code>{}</code>{override_info}",
-            config.model
-        )
+    match scope {
+        ModelPickerScope::General => format!("Current model: <code>{}</code>", config.model),
+        ModelPickerScope::NewThread => {
+            format!(
+                "Pick a model for a new thread. Default: <code>{}</code>",
+                config.model
+            )
+        }
+        ModelPickerScope::Topic => {
+            let override_info = zdx_engine::core::thread_persistence::read_thread_model_override(
+                &telegram_thread_id(chat_id, thread_id),
+            )
+            .ok()
+            .flatten()
+            .map_or_else(String::new, |m| {
+                format!("\nCurrent override: <code>{m}</code>")
+            });
+            format!(
+                "Current model: <code>{}</code>{override_info}",
+                config.model
+            )
+        }
+    }
+}
+
+/// Apply a picked model according to the picker scope, returning the reply text.
+async fn resolve_model_pick(
+    context: &BotContext,
+    scope: ModelPickerScope,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    model_id: &str,
+) -> String {
+    match scope {
+        ModelPickerScope::General => match Config::save_telegram_model(model_id) {
+            Ok(()) => {
+                context.update_config(|cfg| {
+                    cfg.telegram.model = model_id.to_string();
+                    cfg.model = model_id.to_string();
+                });
+                format!("✅ Default model set to <code>{model_id}</code>.")
+            }
+            Err(err) => format!("❌ Failed to save model: {err}"),
+        },
+        ModelPickerScope::Topic => set_topic_model(chat_id, thread_id, model_id),
+        ModelPickerScope::NewThread => {
+            match crate::handlers::message::create_topic_with_model(
+                context, chat_id, model_id, None,
+            )
+            .await
+            {
+                Ok(_) => format!(
+                    "🆕 New thread created with model <code>{model_id}</code>. Open it to continue."
+                ),
+                Err(err) => {
+                    tracing::error!(chat_id, %err, "launcher: failed to create custom topic");
+                    "❌ Couldn't create the new thread.".to_string()
+                }
+            }
+        }
     }
 }
 
@@ -470,9 +525,10 @@ async fn handle_model_callback(
         let Some((provider, scope)) = rest.split_once(':') else {
             return;
         };
-        let is_general = scope == "general";
-        let keyboard =
-            crate::handlers::message::build_models_keyboard(context, provider, is_general);
+        let Some(scope) = ModelPickerScope::from_data(scope) else {
+            return;
+        };
+        let keyboard = crate::handlers::message::build_models_keyboard(context, provider, scope);
         let header = format!("Select a <b>{provider}</b> model:");
         if let Err(err) = client
             .edit_message_text(chat_id, message_id, &header, Some(&keyboard))
@@ -491,7 +547,9 @@ async fn handle_model_callback(
         let Some((provider, index_str)) = provider_and_index.rsplit_once(':') else {
             return;
         };
-        let is_general = scope == "general";
+        let Some(scope) = ModelPickerScope::from_data(scope) else {
+            return;
+        };
         let Some(index) = index_str.parse::<usize>().ok() else {
             let _ = client
                 .answer_callback_query(&callback.id, Some("Invalid model selection"))
@@ -506,20 +564,7 @@ async fn handle_model_callback(
             return;
         };
 
-        let reply = if is_general {
-            match Config::save_telegram_model(model_id) {
-                Ok(()) => {
-                    context.update_config(|cfg| {
-                        cfg.telegram.model.clone_from(model_id);
-                        cfg.model.clone_from(model_id);
-                    });
-                    format!("✅ Default model set to <code>{model_id}</code>.")
-                }
-                Err(err) => format!("❌ Failed to save model: {err}"),
-            }
-        } else {
-            set_topic_model(chat_id, msg.thread_id, model_id)
-        };
+        let reply = resolve_model_pick(context, scope, chat_id, msg.thread_id, model_id).await;
 
         if let Err(err) = client
             .edit_message_text(chat_id, message_id, &reply, None)
@@ -528,9 +573,11 @@ async fn handle_model_callback(
             eprintln!("Failed to edit message for model set: {err}");
         }
     } else if let Some(scope) = data.strip_prefix("model_back:") {
-        let is_general = scope == "general";
-        let keyboard = crate::handlers::message::build_provider_keyboard(context, is_general);
-        let header = model_picker_header(context, chat_id, msg.thread_id, is_general);
+        let Some(scope) = ModelPickerScope::from_data(scope) else {
+            return;
+        };
+        let keyboard = crate::handlers::message::build_provider_keyboard(context, scope);
+        let header = model_picker_header(context, chat_id, msg.thread_id, scope);
 
         if let Err(err) = client
             .edit_message_text(chat_id, message_id, &header, Some(&keyboard))
@@ -539,18 +586,29 @@ async fn handle_model_callback(
             eprintln!("Failed to edit message for model back: {err}");
         }
     } else if let Some(scope) = data.strip_prefix("model_cancel:") {
-        let is_general = scope == "general";
-        let current = if is_general {
-            context.config().model
-        } else {
-            current_topic_model(context, chat_id, msg.thread_id)
+        let Some(scope) = ModelPickerScope::from_data(scope) else {
+            return;
         };
-        let reply = format!("Model change cancelled. Current model: <code>{current}</code>");
-        if let Err(err) = client
-            .edit_message_text(chat_id, message_id, &reply, None)
-            .await
-        {
-            eprintln!("Failed to edit message for model cancel: {err}");
+        if scope == ModelPickerScope::NewThread {
+            // Launched from the launcher — return to the launcher menu.
+            if let Err(err) =
+                crate::handlers::message::render_launcher(context, chat_id, message_id).await
+            {
+                tracing::warn!(chat_id, %err, "failed to restore launcher after custom cancel");
+            }
+        } else {
+            let current = if scope == ModelPickerScope::General {
+                context.config().model
+            } else {
+                current_topic_model(context, chat_id, msg.thread_id)
+            };
+            let reply = format!("Model change cancelled. Current model: <code>{current}</code>");
+            if let Err(err) = client
+                .edit_message_text(chat_id, message_id, &reply, None)
+                .await
+            {
+                eprintln!("Failed to edit message for model cancel: {err}");
+            }
         }
     }
 

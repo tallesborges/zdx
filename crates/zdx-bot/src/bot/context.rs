@@ -9,6 +9,7 @@ use zdx_engine::core::agent::ToolConfig;
 
 use crate::command_picker::CommandPickerMap;
 use crate::followups::FollowupMap;
+use crate::handlers::message::LauncherMap;
 use crate::staging::StagingMap;
 use crate::telegram::TelegramClient;
 
@@ -48,6 +49,7 @@ pub(crate) struct BotContext {
     followup_map: FollowupMap,
     staging_map: StagingMap,
     command_picker_map: CommandPickerMap,
+    launcher_map: LauncherMap,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +69,7 @@ pub(crate) struct BotContextDeps {
     pub followup_map: FollowupMap,
     pub staging_map: StagingMap,
     pub command_picker_map: CommandPickerMap,
+    pub launcher_map: LauncherMap,
 }
 
 impl BotContext {
@@ -82,6 +85,7 @@ impl BotContext {
             followup_map,
             staging_map,
             command_picker_map,
+            launcher_map,
         } = deps;
         let root = root.canonicalize().unwrap_or(root);
         Self {
@@ -98,6 +102,7 @@ impl BotContext {
             followup_map,
             staging_map,
             command_picker_map,
+            launcher_map,
         }
     }
 
@@ -177,6 +182,10 @@ impl BotContext {
     pub(crate) fn command_picker_map(&self) -> &CommandPickerMap {
         &self.command_picker_map
     }
+
+    pub(crate) fn launcher_map(&self) -> &LauncherMap {
+        &self.launcher_map
+    }
 }
 
 fn profile_root_path(profile: &TelegramProfileConfig) -> PathBuf {
@@ -240,6 +249,7 @@ mod tests {
                 followup_map: crate::followups::new_followup_map(),
                 staging_map: crate::staging::new_staging_map(),
                 command_picker_map: crate::command_picker::new_command_picker_map(),
+                launcher_map: crate::handlers::message::new_launcher_map(),
             },
         )
     }

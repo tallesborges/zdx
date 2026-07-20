@@ -13,12 +13,19 @@ use crate::ingest::{self, AllowlistConfig};
 use crate::telegram::{InlineKeyboardMarkup, Message, ReplyParameters};
 
 mod commands;
+mod launcher;
 mod media;
 mod response;
 mod status;
 mod turn;
 
-pub(crate) use commands::{build_models_keyboard, build_provider_keyboard, models_for_provider};
+pub(crate) use commands::{
+    ModelPickerScope, build_models_keyboard, build_provider_keyboard, models_for_provider,
+};
+pub(crate) use launcher::{
+    LauncherMap, create_topic_with_model, handle_callback as handle_launcher_callback,
+    new_launcher_map, render_launcher, schedule_repost as schedule_launcher_repost,
+};
 
 /// Groups the reply-targeting fields that travel together through the turn pipeline.
 struct ReplyContext {
@@ -73,6 +80,9 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     );
 
     let thread_id = thread_id_for_chat(incoming.chat_id, reply_ctx.topic_id);
+    // Resumed topics alias to a source thread; resolve so history load + writes
+    // (and model/thinking/root overrides) target the source thread.
+    let thread_id = resolve_effective_thread_id(&thread_id);
     if handle_thread_setup_commands(context, &incoming, &reply_ctx, &thread_id).await? {
         cleanup_provisional_status(context, Some(incoming.chat_id), provisional_status).await;
         return Ok(());
@@ -248,6 +258,16 @@ pub(crate) fn thread_id_for_chat(chat_id: i64, message_thread_id: Option<i64>) -
     match message_thread_id {
         Some(topic_id) => format!("telegram-{chat_id}-topic-{topic_id}"),
         None => format!("telegram-{chat_id}"),
+    }
+}
+
+/// Follow a single `alias_to` hop so a resumed topic reads history from and
+/// persists new events to its source thread. One hop only (no chains/loops);
+/// a no-op when the thread has no alias.
+pub(crate) fn resolve_effective_thread_id(id: &str) -> String {
+    match zdx_engine::core::thread_persistence::read_thread_alias(id) {
+        Ok(Some(source)) => source,
+        _ => id.to_string(),
     }
 }
 

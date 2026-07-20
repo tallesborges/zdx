@@ -10,6 +10,7 @@ pub(crate) enum BotCommand {
     Tldr,
     PromptBuilder,
     ThreadId,
+    Launcher,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +116,15 @@ const COMMAND_DEFS: &[CommandDef] = &[
         telegram_spec: TelegramCommandSpec {
             command: "threadid",
             description: "Show only the thread ID",
+        },
+    },
+    CommandDef {
+        command: BotCommand::Launcher,
+        patterns: &["/launcher", "/menu"],
+        blocks_topic_autocreate: true,
+        telegram_spec: TelegramCommandSpec {
+            command: "launcher",
+            description: "Show the model launcher (General only)",
         },
     },
 ];
@@ -288,6 +298,45 @@ mod tests {
             Some(BotCommand::Handoff)
         );
         assert_eq!(parse_command("/handoff please"), None);
+    }
+
+    #[test]
+    fn parse_launcher_command_aliases() {
+        assert_eq!(parse_command("/launcher"), Some(BotCommand::Launcher));
+        assert_eq!(
+            parse_command("/launcher@zdx_bot"),
+            Some(BotCommand::Launcher)
+        );
+        assert_eq!(parse_command("/menu"), Some(BotCommand::Launcher));
+        assert_eq!(parse_command("/menu@zdx_bot"), Some(BotCommand::Launcher));
+        assert!(is_topic_blocking_command("/launcher"));
+    }
+
+    #[test]
+    fn model_picker_scope_roundtrips() {
+        use crate::handlers::message::ModelPickerScope;
+        for scope in [
+            ModelPickerScope::General,
+            ModelPickerScope::Topic,
+            ModelPickerScope::NewThread,
+        ] {
+            assert_eq!(ModelPickerScope::from_data(scope.as_str()), Some(scope));
+        }
+        assert_eq!(ModelPickerScope::from_data("bogus"), None);
+    }
+
+    #[test]
+    fn model_pick_callback_data_within_telegram_limit() {
+        use crate::handlers::message::ModelPickerScope;
+        // Worst case: longest provider name + a two-digit index + newthread scope.
+        let provider = "google_antigravity";
+        let scope = ModelPickerScope::NewThread.as_str();
+        let data = format!("model_pick:{provider}:99:{scope}");
+        assert!(
+            data.len() <= 64,
+            "callback data too long: {data} ({})",
+            data.len()
+        );
     }
 
     #[test]
