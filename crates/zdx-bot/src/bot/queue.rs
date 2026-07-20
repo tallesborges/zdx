@@ -88,10 +88,13 @@ pub(crate) async fn dispatch_message(
                 Ok(topic_id) => {
                     tracing::info!(topic_name = %topic_name, topic_id, chat_id = message.chat.id, "Created topic");
                     // Enqueue with the new topic ID so handler knows to use it
+                    let chat_id = message.chat.id;
                     let mut message = message;
                     message.thread_id = Some(topic_id);
                     message.synthetic_topic_routed_from_general = true;
                     enqueue_message(&queues, &context, message).await;
+                    // Keep the launcher (if any) as the last message in General.
+                    crate::handlers::message::schedule_launcher_repost(&context, chat_id);
                 }
                 Err(err) => {
                     tracing::error!(chat_id = message.chat.id, %err, "Failed to create topic");

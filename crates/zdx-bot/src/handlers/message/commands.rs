@@ -83,6 +83,55 @@ pub(super) async fn handle_thread_setup_commands(
         .await?)
 }
 
+/// `/new` in General: create an empty forum topic marked for auto-titling on
+/// the first real message. Errors are surfaced to the user, not propagated.
+async fn create_empty_topic_from_new(
+    context: &BotContext,
+    chat_id: i64,
+    reply_to_message_id: Option<i64>,
+) -> Result<()> {
+    let topic_name = format!("Chat {}", chrono::Utc::now().format("%Y-%m-%d %H:%M"));
+    match context
+        .client()
+        .create_forum_topic(chat_id, &topic_name)
+        .await
+    {
+        Ok(topic_id) => {
+            let thread_id = thread_id_for_chat(chat_id, Some(topic_id));
+            if let Err(err) = thread_persistence::Thread::with_id(thread_id.clone())
+                .and_then(|mut thread| thread.set_pending_topic_title(true))
+            {
+                tracing::warn!(
+                    chat_id,
+                    topic_id,
+                    thread_id = %thread_id,
+                    %err,
+                    "Created empty topic but failed to mark pending auto-title"
+                );
+            }
+            tracing::info!(
+                chat_id,
+                topic_id,
+                topic_name = %topic_name,
+                "Created empty topic from /new in General"
+            );
+        }
+        Err(err) => {
+            tracing::error!(chat_id, %err, "Failed to create empty topic from /new in General");
+            context
+                .client()
+                .send_message(
+                    chat_id,
+                    "⚠️ I couldn't create a new topic. Please try again.",
+                    reply_to_message_id,
+                    None,
+                )
+                .await?;
+        }
+    }
+    Ok(())
+}
+
 pub(super) async fn handle_general_forum_commands(
     context: &BotContext,
     incoming: &crate::types::IncomingMessage,
@@ -109,54 +158,30 @@ pub(super) async fn handle_general_forum_commands(
             | BotCommand::Handoff
             | BotCommand::Commands
             | BotCommand::PromptBuilder
+            | BotCommand::Launcher
     ) {
         return Ok(false);
     }
 
     let message = match command {
         BotCommand::New => {
-            let topic_name = format!("Chat {}", chrono::Utc::now().format("%Y-%m-%d %H:%M"));
-            match context
-                .client()
-                .create_forum_topic(incoming.chat_id, &topic_name)
-                .await
+            create_empty_topic_from_new(context, incoming.chat_id, reply_to_message_id).await?;
+            return Ok(true);
+        }
+        BotCommand::Launcher => {
+            if let Err(err) =
+                super::launcher::post_launcher(context, incoming.chat_id, reply_to_message_id).await
             {
-                Ok(topic_id) => {
-                    let thread_id = thread_id_for_chat(incoming.chat_id, Some(topic_id));
-                    if let Err(err) = thread_persistence::Thread::with_id(thread_id.clone())
-                        .and_then(|mut thread| thread.set_pending_topic_title(true))
-                    {
-                        tracing::warn!(
-                            chat_id = incoming.chat_id,
-                            topic_id,
-                            thread_id = %thread_id,
-                            %err,
-                            "Created empty topic but failed to mark pending auto-title"
-                        );
-                    }
-                    tracing::info!(
-                        chat_id = incoming.chat_id,
-                        topic_id,
-                        topic_name = %topic_name,
-                        "Created empty topic from /new in General"
-                    );
-                }
-                Err(err) => {
-                    tracing::error!(
-                        chat_id = incoming.chat_id,
-                        %err,
-                        "Failed to create empty topic from /new in General"
-                    );
-                    context
-                        .client()
-                        .send_message(
-                            incoming.chat_id,
-                            "⚠️ I couldn't create a new topic. Please try again.",
-                            reply_to_message_id,
-                            None,
-                        )
-                        .await?;
-                }
+                tracing::error!(chat_id = incoming.chat_id, %err, "Failed to post launcher");
+                context
+                    .client()
+                    .send_message(
+                        incoming.chat_id,
+                        "⚠️ I couldn't post the launcher. Please try again.",
+                        reply_to_message_id,
+                        None,
+                    )
+                    .await?;
             }
             return Ok(true);
         }
@@ -258,7 +283,14 @@ async fn handle_model_command(
                 format!("Current model: <code>{current}</code>")
             };
 
-            let keyboard = build_provider_keyboard(context, is_general);
+            let keyboard = build_provider_keyboard(
+                context,
+                if is_general {
+                    ModelPickerScope::General
+                } else {
+                    ModelPickerScope::Topic
+                },
+            );
             context
                 .client()
                 .send_message_with_markup(
@@ -658,14 +690,52 @@ pub(super) fn format_whereami_message(
     lines.join("\n")
 }
 
+/// Target of a model-picker interaction. Encoded in callback data so a tapped
+/// model applies to the right place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModelPickerScope {
+    /// `/model` in General — edits the default Telegram model.
+    General,
+    /// `/model` in a topic — sets the per-topic override.
+    Topic,
+    /// Launcher `🎛 Custom` — creates a new topic pre-set to the picked model.
+    NewThread,
+}
+
+impl ModelPickerScope {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::General => "general",
+            Self::Topic => "topic",
+            Self::NewThread => "newthread",
+        }
+    }
+
+    pub(crate) fn from_data(s: &str) -> Option<Self> {
+        match s {
+            "general" => Some(Self::General),
+            "topic" => Some(Self::Topic),
+            "newthread" => Some(Self::NewThread),
+            _ => None,
+        }
+    }
+}
+
 /// Build an inline keyboard showing provider names as buttons.
-/// Callback data format: `model_provider:{provider}:{scope}` where scope is `general` or `topic`.
+/// Callback data format: `model_provider:{provider}:{scope}`.
 pub(crate) fn build_provider_keyboard(
     context: &BotContext,
-    is_general: bool,
+    scope: ModelPickerScope,
 ) -> InlineKeyboardMarkup {
     let models = context.config().subagent_available_models();
-    let scope = if is_general { "general" } else { "topic" };
+    // The launcher's Custom flow returns to the launcher menu, so label its
+    // exit "← Back"; the standalone `/model` flow keeps "✖ Cancel".
+    let exit_label = if scope == ModelPickerScope::NewThread {
+        "← Back"
+    } else {
+        "✖ Cancel"
+    };
+    let scope = scope.as_str();
 
     // Extract unique providers (part before ':')
     let mut providers: Vec<String> = Vec::new();
@@ -691,7 +761,7 @@ pub(crate) fn build_provider_keyboard(
         .collect();
 
     rows.push(vec![InlineKeyboardButton {
-        text: "✖ Cancel".to_string(),
+        text: exit_label.to_string(),
         callback_data: Some(format!("model_cancel:{scope}")),
         url: None,
     }]);
@@ -715,9 +785,9 @@ pub(crate) fn models_for_provider(context: &BotContext, provider: &str) -> Vec<S
 pub(crate) fn build_models_keyboard(
     context: &BotContext,
     provider: &str,
-    is_general: bool,
+    scope: ModelPickerScope,
 ) -> InlineKeyboardMarkup {
-    let scope = if is_general { "general" } else { "topic" };
+    let scope = scope.as_str();
     let filtered = models_for_provider(context, provider);
 
     let indexed: Vec<(usize, &String)> = filtered.iter().enumerate().collect();
@@ -859,6 +929,18 @@ async fn handle_thread_commands(
         | BotCommand::ThreadId
         | BotCommand::PromptBuilder => {
             return Ok(false);
+        }
+        BotCommand::Launcher => {
+            context
+                .client()
+                .send_message(
+                    incoming.chat_id,
+                    "/launcher is only available in General.",
+                    reply_to_message_id,
+                    topic_id,
+                )
+                .await?;
+            return Ok(true);
         }
         BotCommand::WorktreeCreate => {}
     }

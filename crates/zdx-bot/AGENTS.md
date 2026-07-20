@@ -14,7 +14,9 @@ Scope: Telegram bot runtime, ingest/handler flow, queueing, and Telegram API int
 - `src/bot/queue.rs`: per-chat queueing helpers
 - `src/handlers/mod.rs`: handler module exports
 - `src/handlers/message/mod.rs`: message intake orchestration + shared turn types (`ReplyContext`, `TurnStatus`, `TurnResult`, `SpawnRequest`, `StatusSnapshot`); re-exports the keyboard builders
-- `src/handlers/message/commands.rs`: slash-command handlers (`/new`, `/model`, `/thinking`, `/status`, `/whereami`, thread/worktree, exit) + model/provider/thinking keyboards
+- `src/handlers/message/commands.rs`: slash-command handlers (`/new`, `/model`, `/thinking`, `/status`, `/whereami`, `/launcher`, thread/worktree, exit) + model/provider/thinking keyboards + `ModelPickerScope` (General/Topic/NewThread)
+- `src/handlers/message/launcher.rs`: General-topic thread launcher — bot-visible `[[favorites]]` filter, `create_topic_with_model`, `create_topic_resuming`, `/launcher` keyboard (`nt:p:{alias}`/`nt:custom`/`nt:resume`) + callback routing; Custom opens the model picker in `NewThread` scope; `🔄 Continue` picker resumes a source thread via `alias_to`; `LauncherMap` + `schedule_repost` keep the launcher as the last message in General (debounced per-chat repost)
+- `src/handlers/message/mod.rs`: message intake orchestration + shared turn types; `thread_id_for_chat` + `resolve_effective_thread_id` (follows one `alias_to` hop so resumed topics load/persist to the source thread); re-exports the keyboard builders
 - `src/handlers/message/turn.rs`: agent turn lifecycle (`run_agent_turn`, spawn/stream/finalize)
 - `src/handlers/message/status.rs`: turn status setup/update/cleanup + status-message formatting (usage, pricing, context)
 - `src/handlers/message/response.rs`: final response sending (text send/edit/fallback)
