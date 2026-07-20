@@ -161,6 +161,7 @@ mod tests {
                 model_override: None,
                 thinking_override: None,
                 pending_topic_title: false,
+                alias_to: None,
                 ts: "2024-01-01T00:00:00Z".to_string(),
             },
             ThreadEvent::Message {
@@ -308,6 +309,7 @@ mod tests {
                 model_override: None,
                 thinking_override: None,
                 pending_topic_title: false,
+                alias_to: None,
                 ts: "2024-01-01T00:00:00Z".to_string(),
             },
             ThreadEvent::Message {
