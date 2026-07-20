@@ -1,30 +1,55 @@
 //! Live subscription-quota readers for flat-rate OAuth providers.
 //!
-//! Reads the undocumented usage/quota endpoints that Claude Code and the Codex
-//! CLI expose, using zdx's own stored OAuth tokens **read-only** (never
-//! refreshed or written from here — see the subscription-quota-monitor plan).
+//! Reads the (mostly undocumented) usage/quota endpoints that Claude Code,
+//! Codex CLI, Google Antigravity, and Grok Build expose, using zdx's own
+//! stored OAuth tokens **read-only** (never refreshed or written from here —
+//! see the subscription-quota-monitor plan).
 //!
-//! Both endpoints are undocumented and may change; parsing is permissive and
+//! These endpoints are undocumented and may change; parsing is permissive and
 //! failures degrade to a bounded [`QuotaError`] rather than propagating raw
 //! provider response bodies (which are never logged or surfaced).
 
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
 
-use crate::oauth::{OAuthCredentials, claude_cli, openai_codex};
+use crate::oauth::{OAuthCredentials, claude_cli, google_antigravity, grok_build, openai_codex};
 
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+const ANTIGRAVITY_QUOTA_URL: &str =
+    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
+const GROK_BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 
 /// Provider id for the Claude (claude-cli) subscription.
 pub const PROVIDER_CLAUDE: &str = claude_cli::PROVIDER_KEY;
 /// Provider id for the Codex (openai-codex) subscription.
 pub const PROVIDER_CODEX: &str = openai_codex::PROVIDER_KEY;
+/// Provider id for the Google Antigravity subscription.
+pub const PROVIDER_ANTIGRAVITY: &str = google_antigravity::PROVIDER_KEY;
+/// Provider id for the Grok Build (xAI) subscription.
+pub const PROVIDER_GROK: &str = grok_build::PROVIDER_KEY;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A boxed quota-fetch future.
+pub type QuotaFuture = Pin<Box<dyn Future<Output = Result<SubscriptionQuota, QuotaError>> + Send>>;
+/// A read-only quota fetcher for one provider.
+pub type QuotaFetcher = fn() -> QuotaFuture;
+
+/// Registry of supported subscription-quota fetchers, keyed by provider id.
+/// The monitor iterates this (intersected with credential presence) — adding a
+/// provider is one new `fetch_*` + one entry here, no new render code.
+pub const FETCHERS: &[(&str, QuotaFetcher)] = &[
+    (PROVIDER_CLAUDE, || Box::pin(fetch_claude_quota())),
+    (PROVIDER_CODEX, || Box::pin(fetch_codex_quota())),
+    (PROVIDER_ANTIGRAVITY, || Box::pin(fetch_antigravity_quota())),
+    (PROVIDER_GROK, || Box::pin(fetch_grok_quota())),
+];
 
 /// A single rate-limit window (e.g. the ~5h session window or the weekly window).
 #[derive(Debug, Clone, PartialEq)]
@@ -211,6 +236,68 @@ pub async fn fetch_codex_quota() -> Result<SubscriptionQuota, QuotaError> {
     parse_codex(&wire).ok_or(QuotaError::Incompatible)
 }
 
+/// Fetches the Google Antigravity subscription quota.
+///
+/// # Errors
+/// Returns a bounded [`QuotaError`] on missing/expired creds or endpoint failure.
+pub async fn fetch_antigravity_quota() -> Result<SubscriptionQuota, QuotaError> {
+    let creds = require_creds(google_antigravity::load_credentials())?;
+    if creds.is_expired() {
+        return Err(QuotaError::Expired);
+    }
+    let body = serde_json::json!({ "project": creds.account_id.clone().unwrap_or_default() });
+
+    let resp = quota_client()?
+        .post(ANTIGRAVITY_QUOTA_URL)
+        .header("Authorization", format!("Bearer {}", creds.access))
+        .header("user-agent", concat!("zdx/", env!("CARGO_PKG_VERSION")))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| classify_send(&e))?;
+
+    if !resp.status().is_success() {
+        return Err(error_for_status(resp.status(), resp.headers()));
+    }
+
+    let wire: AntigravityUsageWire = resp.json().await.map_err(|err| {
+        tracing::debug!(%err, "quota: antigravity response decode failed");
+        QuotaError::Incompatible
+    })?;
+    parse_antigravity(&wire).ok_or(QuotaError::Incompatible)
+}
+
+/// Fetches the Grok Build (xAI) subscription quota.
+///
+/// # Errors
+/// Returns a bounded [`QuotaError`] on missing/expired creds or endpoint failure.
+pub async fn fetch_grok_quota() -> Result<SubscriptionQuota, QuotaError> {
+    let creds = require_creds(grok_build::load_credentials())?;
+    if creds.is_expired() {
+        return Err(QuotaError::Expired);
+    }
+
+    let resp = quota_client()?
+        .get(GROK_BILLING_URL)
+        .header("Authorization", format!("Bearer {}", creds.access))
+        .header("X-XAI-Token-Auth", "xai-grok-cli")
+        .header("x-grok-client-version", "1.0.0")
+        .header("x-grok-client-mode", "interactive")
+        .send()
+        .await
+        .map_err(|e| classify_send(&e))?;
+
+    if !resp.status().is_success() {
+        return Err(error_for_status(resp.status(), resp.headers()));
+    }
+
+    let wire: GrokBillingWire = resp.json().await.map_err(|err| {
+        tracing::debug!(%err, "quota: grok response decode failed");
+        QuotaError::Incompatible
+    })?;
+    parse_grok(&wire).ok_or(QuotaError::Incompatible)
+}
+
 // --- Claude wire shape ---
 
 #[derive(Debug, Deserialize)]
@@ -367,6 +454,127 @@ fn parse_codex(wire: &CodexUsageWire) -> Option<SubscriptionQuota> {
     })
 }
 
+// --- Antigravity wire shape ---
+
+#[derive(Debug, Deserialize)]
+struct AntigravityUsageWire {
+    #[serde(default)]
+    buckets: Vec<AntigravityBucket>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AntigravityBucket {
+    model_id: Option<String>,
+    remaining_fraction: Option<f64>,
+    reset_time: Option<String>,
+}
+
+/// Parses Antigravity per-model request buckets into windows. Buckets that
+/// share the same used% and reset are collapsed (an untouched account has one
+/// "all models" row rather than one row per model).
+fn parse_antigravity(wire: &AntigravityUsageWire) -> Option<SubscriptionQuota> {
+    if wire.buckets.is_empty() {
+        return None;
+    }
+    let total = wire.buckets.len();
+
+    // Group by (used% ×10 rounded, reset), preserving each group's models.
+    let mut groups: Vec<(i64, Option<String>, Vec<String>)> = Vec::new();
+    for bucket in &wire.buckets {
+        let used = (1.0 - bucket.remaining_fraction.unwrap_or(1.0)) * 100.0;
+        #[allow(clippy::cast_possible_truncation)]
+        let used_key = (used * 10.0).round() as i64;
+        let model = bucket.model_id.clone().unwrap_or_default();
+        if let Some(group) = groups
+            .iter_mut()
+            .find(|g| g.0 == used_key && g.1 == bucket.reset_time)
+        {
+            group.2.push(model);
+        } else {
+            groups.push((used_key, bucket.reset_time.clone(), vec![model]));
+        }
+    }
+    groups.sort_by_key(|g| std::cmp::Reverse(g.0));
+
+    let windows = groups
+        .into_iter()
+        .map(|(used_key, reset, models)| {
+            let scope = if models.len() == total {
+                None
+            } else if models.len() == 1 {
+                Some(models[0].clone())
+            } else {
+                Some(format!("{} models", models.len()))
+            };
+            QuotaWindow {
+                label: "quota".to_string(),
+                #[allow(clippy::cast_precision_loss)]
+                used_percent: used_key as f64 / 10.0,
+                resets_at: parse_rfc3339(reset.as_deref()),
+                scope,
+            }
+        })
+        .collect();
+    Some(SubscriptionQuota {
+        plan: None,
+        windows,
+    })
+}
+
+// --- Grok wire shape ---
+
+#[derive(Debug, Deserialize)]
+struct GrokBillingWire {
+    config: Option<GrokConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GrokConfig {
+    credit_usage_percent: Option<f64>,
+    current_period: Option<GrokPeriod>,
+    subscription_tier: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GrokPeriod {
+    #[serde(rename = "type")]
+    period_type: Option<String>,
+    end: Option<String>,
+}
+
+fn grok_period_label(period_type: Option<&str>) -> &'static str {
+    match period_type {
+        Some("USAGE_PERIOD_TYPE_MONTHLY") => "monthly",
+        _ => "weekly",
+    }
+}
+
+/// Parses the Grok Build credits config into a single credit-usage window.
+fn parse_grok(wire: &GrokBillingWire) -> Option<SubscriptionQuota> {
+    let config = wire.config.as_ref()?;
+    // proto3 JSON omits zero-valued scalars, so absent usage means 0%.
+    let used_percent = config.credit_usage_percent.unwrap_or(0.0);
+    let (label, reset) = match &config.current_period {
+        Some(p) => (
+            grok_period_label(p.period_type.as_deref()),
+            p.end.as_deref(),
+        ),
+        None => ("weekly", None),
+    };
+    Some(SubscriptionQuota {
+        plan: config.subscription_tier.clone(),
+        windows: vec![QuotaWindow {
+            label: label.to_string(),
+            used_percent,
+            resets_at: parse_rfc3339(reset),
+            scope: None,
+        }],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,6 +641,70 @@ mod tests {
         assert!((w.used_percent - 6.0).abs() < f64::EPSILON);
         // 1784502675 → a valid UTC instant.
         assert_eq!(w.resets_at, Utc.timestamp_opt(1_784_502_675, 0).single());
+    }
+
+    #[test]
+    fn parses_antigravity_groups_used_and_full_buckets() {
+        let wire: AntigravityUsageWire =
+            serde_json::from_str(&load_fixture("antigravity_usage.json")).unwrap();
+        let quota = parse_antigravity(&wire).expect("antigravity quota");
+        // 1 used model (pro at 60%) + 2 full models grouped together = 2 windows.
+        assert_eq!(quota.windows.len(), 2);
+        let used = &quota.windows[0];
+        assert!((used.used_percent - 60.0).abs() < f64::EPSILON);
+        assert_eq!(used.scope.as_deref(), Some("gemini-3-pro-preview"));
+        assert!(used.resets_at.is_some());
+        let full = &quota.windows[1];
+        assert!((full.used_percent - 0.0).abs() < f64::EPSILON);
+        assert_eq!(full.scope.as_deref(), Some("2 models"));
+    }
+
+    #[test]
+    fn antigravity_all_full_collapses_to_one_unscoped_window() {
+        let wire = AntigravityUsageWire {
+            buckets: vec![
+                AntigravityBucket {
+                    model_id: Some("a".to_string()),
+                    remaining_fraction: Some(1.0),
+                    reset_time: Some("2026-07-20T15:46:40Z".to_string()),
+                },
+                AntigravityBucket {
+                    model_id: Some("b".to_string()),
+                    remaining_fraction: Some(1.0),
+                    reset_time: Some("2026-07-20T15:46:40Z".to_string()),
+                },
+            ],
+        };
+        let quota = parse_antigravity(&wire).expect("antigravity quota");
+        assert_eq!(quota.windows.len(), 1);
+        assert!((quota.windows[0].used_percent - 0.0).abs() < f64::EPSILON);
+        assert!(quota.windows[0].scope.is_none());
+    }
+
+    #[test]
+    fn parses_grok_credit_usage() {
+        let wire: GrokBillingWire = serde_json::from_str(&load_fixture("grok_usage.json")).unwrap();
+        let quota = parse_grok(&wire).expect("grok quota");
+        assert_eq!(quota.plan.as_deref(), Some("SuperGrok Heavy"));
+        assert_eq!(quota.windows.len(), 1);
+        let w = &quota.windows[0];
+        assert_eq!(w.label, "weekly");
+        assert!((w.used_percent - 12.0).abs() < f64::EPSILON);
+        assert!(w.resets_at.is_some());
+    }
+
+    #[test]
+    fn grok_missing_usage_percent_is_zero_not_error() {
+        let wire = GrokBillingWire {
+            config: Some(GrokConfig {
+                credit_usage_percent: None,
+                current_period: None,
+                subscription_tier: None,
+            }),
+        };
+        let quota = parse_grok(&wire).expect("grok quota");
+        assert!((quota.windows[0].used_percent - 0.0).abs() < f64::EPSILON);
+        assert!(parse_grok(&GrokBillingWire { config: None }).is_none());
     }
 
     #[test]
