@@ -1095,7 +1095,7 @@ impl TuiRuntime {
             // Prompt-builder effect
             UiEffect::StartPromptBuilder { intent } => {
                 let root = self.state.tui.agent_opts.root.clone();
-                let model = Some(self.state.tui.config.model.clone());
+                let model = Some(self.state.tui.config.prompt_builder_model.clone());
                 let meta = TaskMeta::PromptBuilder {
                     intent: intent.clone(),
                 };

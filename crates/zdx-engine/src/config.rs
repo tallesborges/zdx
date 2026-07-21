@@ -389,6 +389,11 @@ fn default_tldr_model() -> String {
     Config::DEFAULT_TLDR_MODEL.to_string()
 }
 
+/// Default value for serde when `prompt_builder_model` is missing.
+fn default_prompt_builder_model() -> String {
+    Config::DEFAULT_PROMPT_BUILDER_MODEL.to_string()
+}
+
 /// Transcription configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -599,6 +604,10 @@ pub struct Config {
     #[serde(default = "default_tldr_model")]
     pub tldr_model: String,
 
+    /// Model to use for the prompt-builder subagent.
+    #[serde(default = "default_prompt_builder_model")]
+    pub prompt_builder_model: String,
+
     /// Thinking level for extended thinking feature
     #[serde(default)]
     pub thinking_level: ThinkingLevel,
@@ -653,6 +662,7 @@ impl Config {
     const DEFAULT_TITLE_MODEL: &str = "gemini:gemini-3.1-flash-lite-preview";
     const DEFAULT_READ_THREAD_MODEL: &str = "gemini:gemini-3.1-flash-lite-preview";
     const DEFAULT_TLDR_MODEL: &str = "gemini:gemini-3.1-flash-lite-preview";
+    const DEFAULT_PROMPT_BUILDER_MODEL: &str = "openai:gpt-5.6-terra@low";
 
     /// Loads configuration from the default config path.
     ///
@@ -911,6 +921,7 @@ impl Config {
         "tldr_model",
         "handoff_model",
         "read_thread_model",
+        "prompt_builder_model",
         "transcription.model",
         "speech.model",
     ];
@@ -1323,6 +1334,7 @@ impl Default for Config {
             title_model: Self::DEFAULT_TITLE_MODEL.to_string(),
             read_thread_model: Self::DEFAULT_READ_THREAD_MODEL.to_string(),
             tldr_model: Self::DEFAULT_TLDR_MODEL.to_string(),
+            prompt_builder_model: Self::DEFAULT_PROMPT_BUILDER_MODEL.to_string(),
             thinking_level: ThinkingLevel::default(),
             favorites: Vec::new(),
             skills: SkillsConfig::default(),
