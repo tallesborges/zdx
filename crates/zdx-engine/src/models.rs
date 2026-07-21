@@ -3,10 +3,10 @@
 //! Loads models from `<base>/models.toml` when present, otherwise falls back to
 //! `default_models.toml`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use serde::Deserialize;
 
@@ -116,51 +116,80 @@ pub fn available_models() -> &'static [ModelOption] {
         .as_slice()
 }
 
-static CUSTOM_MODELS: OnceLock<Vec<ModelOption>> = OnceLock::new();
+static CUSTOM_MODELS: OnceLock<Mutex<HashMap<String, &'static [ModelOption]>>> = OnceLock::new();
 
 /// Synthesizes picker entries for custom providers (`[providers.custom.<name>]`)
 /// so their configured models show up. Pricing/context are zeroed (not in the
-/// registry). Leaked and cached once per process; the first call's config wins.
+/// registry).
+///
+/// Results are leaked to `'static` and cached keyed on the provider→models
+/// pairs that shape the output, so distinct configs return distinct slices
+/// (one leak per distinct config, not per call) instead of the first caller's
+/// config winning for the whole process.
+///
+/// # Panics
+/// Panics if the internal custom-models cache mutex is poisoned.
 pub fn custom_provider_models(
     providers: &crate::config::ProvidersConfig,
 ) -> &'static [ModelOption] {
-    CUSTOM_MODELS
-        .get_or_init(|| {
-            let mut out = Vec::new();
-            for (name, cfg) in &providers.custom {
-                let provider = name.trim();
-                if provider.is_empty() {
-                    continue;
-                }
-                for model in &cfg.models {
-                    let id = model.trim();
-                    if id.is_empty() {
-                        continue;
-                    }
-                    out.push(ModelOption {
-                        id: leak_string(id.to_string()),
-                        provider: leak_string(provider.to_string()),
-                        display_name: leak_string(id.to_string()),
-                        pricing: ModelPricing {
-                            input: 0.0,
-                            output: 0.0,
-                            cache_read: 0.0,
-                            cache_write: 0.0,
-                        },
-                        context_limit: 0,
-                        capabilities: ModelCapabilities {
-                            reasoning: true,
-                            input_images: false,
-                            output_limit: 0,
-                            api: Some("openai-completions"),
-                        },
-                    });
-                }
+    let mut entries: Vec<(&str, &[String])> = providers
+        .custom
+        .iter()
+        .map(|(name, cfg)| (name.trim(), cfg.models.as_slice()))
+        .filter(|(name, _)| !name.is_empty())
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+
+    let mut key = String::new();
+    for (provider, models) in &entries {
+        key.push_str(provider);
+        key.push('\u{1f}');
+        for model in *models {
+            key.push_str(model.trim());
+            key.push('\u{1e}');
+        }
+        key.push('\u{1d}');
+    }
+
+    let cache = CUSTOM_MODELS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().expect("custom models cache poisoned");
+    if let Some(models) = guard.get(&key) {
+        return models;
+    }
+
+    let mut out = Vec::new();
+    for (provider, models) in &entries {
+        for model in *models {
+            let id = model.trim();
+            if id.is_empty() {
+                continue;
             }
-            out
-        })
-        .as_slice()
+            out.push(ModelOption {
+                id: leak_string(id.to_string()),
+                provider: leak_string((*provider).to_string()),
+                display_name: leak_string(id.to_string()),
+                pricing: ModelPricing {
+                    input: 0.0,
+                    output: 0.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                },
+                context_limit: 0,
+                capabilities: ModelCapabilities {
+                    reasoning: true,
+                    input_images: false,
+                    output_limit: 0,
+                    api: Some("openai-completions"),
+                },
+            });
+        }
+    }
+
+    let leaked: &'static [ModelOption] = Box::leak(out.into_boxed_slice());
+    guard.insert(key, leaked);
+    leaked
 }
+
 
 impl ModelOption {
     /// Finds a model by its ID.
@@ -288,8 +317,39 @@ pub fn wildcard_match(pattern: &str, text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{bare_model_id, model_id_matches_patterns, split_model_thinking, wildcard_match};
-    use crate::config::ThinkingLevel;
+    use super::{
+        bare_model_id, custom_provider_models, model_id_matches_patterns, split_model_thinking,
+        wildcard_match,
+    };
+    use crate::config::{CustomProviderConfig, ProvidersConfig, ThinkingLevel};
+
+    fn providers_with(name: &str, models: &[&str]) -> ProvidersConfig {
+        let mut providers = ProvidersConfig::default();
+        providers.custom.insert(
+            name.to_string(),
+            CustomProviderConfig {
+                models: models.iter().map(|m| (*m).to_string()).collect(),
+                ..Default::default()
+            },
+        );
+        providers
+    }
+
+    #[test]
+    fn custom_provider_models_honors_distinct_configs() {
+        let a = custom_provider_models(&providers_with("prov-a", &["m1", "m2"]));
+        let b = custom_provider_models(&providers_with("prov-b", &["m3"]));
+
+        let ids_a: Vec<_> = a.iter().map(|m| (m.provider, m.id)).collect();
+        let ids_b: Vec<_> = b.iter().map(|m| (m.provider, m.id)).collect();
+
+        assert_eq!(ids_a, vec![("prov-a", "m1"), ("prov-a", "m2")]);
+        assert_eq!(ids_b, vec![("prov-b", "m3")]);
+
+        // Same config returns the identical cached slice (no re-leak per call).
+        let a_again = custom_provider_models(&providers_with("prov-a", &["m1", "m2"]));
+        assert_eq!(a.as_ptr(), a_again.as_ptr());
+    }
 
     #[test]
     fn split_model_thinking_parses_suffix_and_defaults() {
