@@ -21,8 +21,9 @@ pub async fn prompt_builder_generation(
     model: Option<String>,
     root: PathBuf,
     cancel: Option<CancellationToken>,
+    parent_thread_id: Option<String>,
 ) -> UiEvent {
-    let result = generate_prompt_builder(&intent, model, &root, cancel)
+    let result = generate_prompt_builder(&intent, model, &root, cancel, parent_thread_id)
         .await
         .map_err(|err| format!("{err:#}"));
     UiEvent::PromptBuilderResult { intent, result }

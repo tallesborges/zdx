@@ -384,6 +384,7 @@ async fn run_prompt_builder_generation(
         Some(config.prompt_builder_model.clone()),
         &root,
         None,
+        Some(thread_id.to_string()),
     )
     .await
 }

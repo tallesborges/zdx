@@ -124,6 +124,7 @@ async fn run_subagent(prompt: String, ctx: &ToolContext) -> Result<String, Strin
         event_filter: Some(vec!["turn_finished".to_string()]),
         timeout: ctx.timeout,
         activity_kind: Some("helper:read_thread".to_string()),
+        activity_parent_thread_id: ctx.current_thread_id.clone(),
         thread_origin_kind: Some("helper:read_thread".to_string()),
         thread_parent_id: ctx.current_thread_id.clone(),
         ..Default::default()

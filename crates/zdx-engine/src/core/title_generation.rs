@@ -17,7 +17,12 @@ use crate::prompts::THREAD_TITLE_PROMPT_TEMPLATE;
 ///
 /// # Errors
 /// Returns an error if the subagent fails, times out, or produces an empty/invalid title.
-pub async fn generate_title(message: &str, title_model: &str, root: &Path) -> Result<String> {
+pub async fn generate_title(
+    message: &str,
+    title_model: &str,
+    root: &Path,
+    parent_thread_id: Option<&str>,
+) -> Result<String> {
     let prompt = THREAD_TITLE_PROMPT_TEMPLATE.replace("{{MESSAGE}}", message);
 
     let (model, thinking) = crate::models::split_model_thinking(title_model);
@@ -31,6 +36,7 @@ pub async fn generate_title(message: &str, title_model: &str, root: &Path) -> Re
         event_filter: Some(vec!["turn_finished".to_string()]),
         timeout: Some(Duration::from_mins(1)),
         activity_kind: Some("helper:title".to_string()),
+        activity_parent_thread_id: parent_thread_id.map(str::to_string),
         thread_origin_kind: Some("helper:title".to_string()),
         ..Default::default()
     };
