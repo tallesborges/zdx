@@ -21,7 +21,7 @@ use crate::oauth::{OAuthCredentials, claude_cli, google_antigravity, grok_build,
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const ANTIGRAVITY_QUOTA_URL: &str =
-    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
 const GROK_BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 
 /// Provider id for the Claude (claude-cli) subscription.
@@ -250,7 +250,9 @@ pub async fn fetch_antigravity_quota() -> Result<SubscriptionQuota, QuotaError> 
     let resp = quota_client()?
         .post(ANTIGRAVITY_QUOTA_URL)
         .header("Authorization", format!("Bearer {}", creds.access))
-        .header("user-agent", concat!("zdx/", env!("CARGO_PKG_VERSION")))
+        .header("Accept", "application/json")
+        // The quota-summary endpoint requires an Antigravity-style UA (a plain UA 401s).
+        .header("user-agent", "antigravity/cli/1.0.0")
         .json(&body)
         .send()
         .await
@@ -459,63 +461,58 @@ fn parse_codex(wire: &CodexUsageWire) -> Option<SubscriptionQuota> {
 #[derive(Debug, Deserialize)]
 struct AntigravityUsageWire {
     #[serde(default)]
+    groups: Vec<AntigravityGroup>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AntigravityGroup {
+    display_name: Option<String>,
+    #[serde(default)]
     buckets: Vec<AntigravityBucket>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AntigravityBucket {
-    model_id: Option<String>,
+    window: Option<String>,
     remaining_fraction: Option<f64>,
     reset_time: Option<String>,
 }
 
-/// Parses Antigravity per-model request buckets into windows. Buckets that
-/// share the same used% and reset are collapsed (an untouched account has one
-/// "all models" row rather than one row per model).
-fn parse_antigravity(wire: &AntigravityUsageWire) -> Option<SubscriptionQuota> {
-    if wire.buckets.is_empty() {
-        return None;
+fn antigravity_window_label(window: Option<&str>) -> &'static str {
+    match window {
+        Some("5h") => "5h",
+        _ => "weekly",
     }
-    let total = wire.buckets.len();
+}
 
-    // Group by (used% ×10 rounded, reset), preserving each group's models.
-    let mut groups: Vec<(i64, Option<String>, Vec<String>)> = Vec::new();
-    for bucket in &wire.buckets {
-        let used = (1.0 - bucket.remaining_fraction.unwrap_or(1.0)) * 100.0;
-        #[allow(clippy::cast_possible_truncation)]
-        let used_key = (used * 10.0).round() as i64;
-        let model = bucket.model_id.clone().unwrap_or_default();
-        if let Some(group) = groups
-            .iter_mut()
-            .find(|g| g.0 == used_key && g.1 == bucket.reset_time)
-        {
-            group.2.push(model);
-        } else {
-            groups.push((used_key, bucket.reset_time.clone(), vec![model]));
+/// Parses the Antigravity quota summary into weekly/5h windows for the Gemini
+/// model group only (other groups like Claude/GPT are not used). The group name
+/// rides on `QuotaWindow.scope`.
+fn parse_antigravity(wire: &AntigravityUsageWire) -> Option<SubscriptionQuota> {
+    let mut windows = Vec::new();
+    for group in &wire.groups {
+        let is_gemini = group
+            .display_name
+            .as_deref()
+            .is_some_and(|name| name.to_ascii_lowercase().contains("gemini"));
+        if !is_gemini {
+            continue;
+        }
+        for bucket in &group.buckets {
+            let used = (1.0 - bucket.remaining_fraction.unwrap_or(1.0)) * 100.0;
+            windows.push(QuotaWindow {
+                label: antigravity_window_label(bucket.window.as_deref()).to_string(),
+                used_percent: used,
+                resets_at: parse_rfc3339(bucket.reset_time.as_deref()),
+                scope: group.display_name.clone(),
+            });
         }
     }
-    groups.sort_by_key(|g| std::cmp::Reverse(g.0));
-
-    let windows = groups
-        .into_iter()
-        .map(|(used_key, reset, models)| {
-            let scope = if models.len() == total {
-                None
-            } else if models.len() == 1 {
-                Some(models[0].clone())
-            } else {
-                Some(format!("{} models", models.len()))
-            };
-            QuotaWindow {
-                label: "quota".to_string(),
-                #[allow(clippy::cast_precision_loss)]
-                used_percent: used_key as f64 / 10.0,
-                resets_at: parse_rfc3339(reset.as_deref()),
-                scope,
-            }
-        })
-        .collect();
+    if windows.is_empty() {
+        return None;
+    }
     Some(SubscriptionQuota {
         plan: None,
         windows,
@@ -644,41 +641,43 @@ mod tests {
     }
 
     #[test]
-    fn parses_antigravity_groups_used_and_full_buckets() {
+    fn parses_antigravity_grouped_weekly_and_5h() {
         let wire: AntigravityUsageWire =
             serde_json::from_str(&load_fixture("antigravity_usage.json")).unwrap();
         let quota = parse_antigravity(&wire).expect("antigravity quota");
-        // 1 used model (pro at 60%) + 2 full models grouped together = 2 windows.
+        // Only the Gemini group is kept: weekly + 5h = 2 windows (Claude/GPT dropped).
         assert_eq!(quota.windows.len(), 2);
-        let used = &quota.windows[0];
-        assert!((used.used_percent - 60.0).abs() < f64::EPSILON);
-        assert_eq!(used.scope.as_deref(), Some("gemini-3-pro-preview"));
-        assert!(used.resets_at.is_some());
-        let full = &quota.windows[1];
-        assert!((full.used_percent - 0.0).abs() < f64::EPSILON);
-        assert_eq!(full.scope.as_deref(), Some("2 models"));
+        assert!(
+            quota
+                .windows
+                .iter()
+                .all(|w| w.scope.as_deref() == Some("Gemini Models"))
+        );
+        let gemini_weekly = &quota.windows[0];
+        assert_eq!(gemini_weekly.label, "weekly");
+        // remainingFraction 0.9971372 → ~0.29% used.
+        assert!(gemini_weekly.used_percent < 1.0);
+        assert!(gemini_weekly.resets_at.is_some());
+        let gemini_5h = &quota.windows[1];
+        assert_eq!(gemini_5h.label, "5h");
+        // remainingFraction 0.4 → 60% used.
+        assert!((gemini_5h.used_percent - 60.0).abs() < 1e-6);
     }
 
     #[test]
-    fn antigravity_all_full_collapses_to_one_unscoped_window() {
+    fn antigravity_non_gemini_groups_are_dropped() {
         let wire = AntigravityUsageWire {
-            buckets: vec![
-                AntigravityBucket {
-                    model_id: Some("a".to_string()),
+            groups: vec![AntigravityGroup {
+                display_name: Some("Claude and GPT models".to_string()),
+                buckets: vec![AntigravityBucket {
+                    window: Some("weekly".to_string()),
                     remaining_fraction: Some(1.0),
-                    reset_time: Some("2026-07-20T15:46:40Z".to_string()),
-                },
-                AntigravityBucket {
-                    model_id: Some("b".to_string()),
-                    remaining_fraction: Some(1.0),
-                    reset_time: Some("2026-07-20T15:46:40Z".to_string()),
-                },
-            ],
+                    reset_time: None,
+                }],
+            }],
         };
-        let quota = parse_antigravity(&wire).expect("antigravity quota");
-        assert_eq!(quota.windows.len(), 1);
-        assert!((quota.windows[0].used_percent - 0.0).abs() < f64::EPSILON);
-        assert!(quota.windows[0].scope.is_none());
+        // No Gemini group → nothing to show.
+        assert!(parse_antigravity(&wire).is_none());
     }
 
     #[test]
