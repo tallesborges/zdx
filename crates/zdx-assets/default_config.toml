@@ -224,6 +224,18 @@ models = []
 fast_mode = false
 websocket = false
 
+[providers.alibaba]
+enabled = true
+models = ["qwen3-max", "qwen-plus", "qwen-flash"]
+fast_mode = false
+websocket = false
+
+[providers.qwen_code]
+enabled = false
+models = ["qwen3-coder-plus", "qwen3-coder-next"]
+fast_mode = false
+websocket = false
+
 [providers.meta]
 enabled = true
 models = ["muse-spark-1.1"]

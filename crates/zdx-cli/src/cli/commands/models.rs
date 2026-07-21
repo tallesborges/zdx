@@ -288,7 +288,7 @@ impl UpdateState {
 }
 
 #[allow(clippy::too_many_lines)]
-fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 19] {
+fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 21] {
     [
         ProviderSpec {
             provider_id: "anthropic",
@@ -403,6 +403,18 @@ fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 19] {
             api_id: "meta",
             prefix: Some("meta"),
             provider_cfg: &config.providers.meta,
+        },
+        ProviderSpec {
+            provider_id: "alibaba",
+            api_id: "alibaba",
+            prefix: Some("alibaba"),
+            provider_cfg: &config.providers.alibaba,
+        },
+        ProviderSpec {
+            provider_id: "qwen-code",
+            api_id: "alibaba-coding-plan",
+            prefix: Some("qwen-code"),
+            provider_cfg: &config.providers.qwen_code,
         },
     ]
 }
@@ -884,6 +896,7 @@ fn lookup_openrouter_model(
     // Map our provider IDs to OpenRouter vendor prefixes
     let vendor = match provider_id {
         "xiaomi" | "xiaomi-plan" => "xiaomi",
+        "alibaba" | "qwen-code" => "qwen",
         "minimax" => "minimax",
         "xai" | "grok-build" => "x-ai",
         "anthropic" | "claude-cli" => "anthropic",
@@ -1318,6 +1331,27 @@ mod tests {
                     && s.prefix == Some("xiaomi-plan")
             }),
             "provider_specs must include xiaomi-plan so `zdx models update` keeps Plan models"
+        );
+    }
+
+    #[test]
+    fn test_provider_specs_includes_alibaba_and_qwen_code() {
+        let config = config::Config::default();
+        let specs = provider_specs(&config);
+
+        assert!(
+            specs.iter().any(|s| {
+                s.provider_id == "alibaba" && s.api_id == "alibaba" && s.prefix == Some("alibaba")
+            }),
+            "provider_specs must include alibaba"
+        );
+        assert!(
+            specs.iter().any(|s| {
+                s.provider_id == "qwen-code"
+                    && s.api_id == "alibaba-coding-plan"
+                    && s.prefix == Some("qwen-code")
+            }),
+            "provider_specs must include qwen-code (models.dev api_id alibaba-coding-plan)"
         );
     }
 
