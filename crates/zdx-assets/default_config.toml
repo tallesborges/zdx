@@ -24,6 +24,7 @@ handoff_model = "gemini:gemini-3-flash-preview"
 title_model = "gemini:gemini-3.1-flash-lite-preview"
 read_thread_model = "gemini:gemini-3.1-flash-lite-preview"
 tldr_model = "gemini:gemini-3.1-flash-lite-preview"
+prompt_builder_model = "openai:gpt-5.6-terra@low"
 
 # System prompt (inline)
 # system_prompt = "You are a helpful coding assistant."

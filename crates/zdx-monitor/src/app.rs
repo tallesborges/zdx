@@ -137,6 +137,16 @@ fn build_section_lines(section_obj: &serde_json::Map<String, Value>) -> Vec<Conf
 /// Serialize `config` to JSON and flatten it into displayable lines.
 /// Top-level scalars are grouped under a synthetic "core" section.
 /// Top-level objects each become their own named section.
+/// Config model fields handled by helper subagents, grouped together on the
+/// Config tab (in display order) instead of being scattered through `core`.
+const HELPER_MODEL_KEYS: [&str; 5] = [
+    "title_model",
+    "tldr_model",
+    "handoff_model",
+    "prompt_builder_model",
+    "read_thread_model",
+];
+
 pub fn build_config_lines(config: &config::Config) -> Vec<ConfigLine> {
     let value = match serde_json::to_value(config) {
         Ok(v) => v,
@@ -179,9 +189,25 @@ pub fn build_config_lines(config: &config::Config) -> Vec<ConfigLine> {
         core_rows.retain(|(k, _)| k != "thinking_level");
     }
 
+    // Pull helper-subagent model fields out of `core` into their own group so
+    // every model handled by a helper is visible together.
+    let mut helper_rows: Vec<(String, String)> = Vec::new();
+    for key in HELPER_MODEL_KEYS {
+        if let Some(pos) = core_rows.iter().position(|(k, _)| k == key) {
+            helper_rows.push(core_rows.remove(pos));
+        }
+    }
+
     if !core_rows.is_empty() {
         lines.push(ConfigLine::Section("core".to_string()));
         for (k, v) in core_rows {
+            lines.push(ConfigLine::Row(k, v));
+        }
+    }
+
+    if !helper_rows.is_empty() {
+        lines.push(ConfigLine::Section("helper models".to_string()));
+        for (k, v) in helper_rows {
             lines.push(ConfigLine::Row(k, v));
         }
     }
@@ -1635,10 +1661,10 @@ pub(crate) fn editable_model_fields(lines: &[ConfigLine]) -> Vec<EditableModelFi
             ConfigLine::Section(name) => section.clone_from(name),
             ConfigLine::Row(key, _) => {
                 let mapped = match (section.as_str(), key.as_str()) {
-                    (
-                        "core",
-                        "model" | "title_model" | "tldr_model" | "handoff_model"
-                        | "read_thread_model",
+                    ("core", "model")
+                    | (
+                        "helper models",
+                        "title_model" | "tldr_model" | "handoff_model" | "read_thread_model",
                     ) => Some((key.clone(), ModelFieldKind::Chat)),
                     ("transcription", "model") => Some((
                         "transcription.model".to_string(),
@@ -2031,8 +2057,9 @@ mod transcript_tests {
         let lines = vec![
             ConfigLine::Section("core".into()),
             ConfigLine::Row("model".into(), "x".into()),
-            ConfigLine::Row("title_model".into(), "y".into()),
             ConfigLine::Row("verbose".into(), "true".into()),
+            ConfigLine::Section("helper models".into()),
+            ConfigLine::Row("title_model".into(), "y".into()),
             ConfigLine::Section("transcription".into()),
             ConfigLine::Row("model".into(), "z".into()),
             ConfigLine::Row("language".into(), "en".into()),
@@ -2050,6 +2077,44 @@ mod transcript_tests {
                 ("transcription.model", ModelFieldKind::Transcription),
                 ("speech.model", ModelFieldKind::Speech),
             ]
+        );
+    }
+
+    #[test]
+    fn build_config_lines_groups_helper_models() {
+        let config = config::Config::default();
+        let lines = build_config_lines(&config);
+
+        let mut section = String::new();
+        let mut helper_keys: Vec<String> = Vec::new();
+        let mut core_has_helper = false;
+        for cl in &lines {
+            match cl {
+                ConfigLine::Section(name) => section.clone_from(name),
+                ConfigLine::Row(key, _) => {
+                    let is_helper = HELPER_MODEL_KEYS.contains(&key.as_str());
+                    if section == "helper models" && is_helper {
+                        helper_keys.push(key.clone());
+                    }
+                    if section == "core" && is_helper {
+                        core_has_helper = true;
+                    }
+                }
+                ConfigLine::Separator => {}
+            }
+        }
+
+        assert!(!core_has_helper, "helper models must not remain in `core`");
+        assert_eq!(
+            helper_keys,
+            vec![
+                "title_model",
+                "tldr_model",
+                "handoff_model",
+                "prompt_builder_model",
+                "read_thread_model",
+            ],
+            "helpers section should list every helper model in display order"
         );
     }
 

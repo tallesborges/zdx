@@ -42,15 +42,29 @@ pub async fn generate_prompt_builder(
 
     let generation_prompt = build_prompt_builder_prompt(trimmed, &build_zdx_context(root));
 
+    // Honor an optional `@thinking` suffix on the model spec, mirroring the
+    // other helper subagents; default to Low when none is present.
+    let (model, thinking_level) = match model {
+        Some(spec) => {
+            let (model, thinking) = crate::models::split_model_thinking(&spec);
+            (
+                Some(model.to_string()),
+                thinking.unwrap_or(ThinkingLevel::Low),
+            )
+        }
+        None => (None, ThinkingLevel::Low),
+    };
+
     let options = ExecSubagentOptions {
         model,
         system_prompt: None,
-        thinking_level: Some(ThinkingLevel::Low),
+        thinking_level: Some(thinking_level),
         no_tools: true,
         no_system_prompt: true,
         tools_override: None,
         event_filter: Some(vec!["turn_finished".to_string()]),
         timeout: Some(Duration::from_secs(PROMPT_BUILDER_TIMEOUT_SECS)),
+        activity_kind: Some("helper:prompt_builder".to_string()),
         thread_origin_kind: Some("helper:prompt_builder".to_string()),
         ..Default::default()
     };

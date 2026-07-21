@@ -379,9 +379,13 @@ async fn run_prompt_builder_generation(
     let resolved_root = context.root_for_chat(incoming.chat_id);
     let root = thread_persistence::read_thread_root_path(thread_id)?
         .map_or(resolved_root.root, PathBuf::from);
-    let model = thread_persistence::read_thread_model_override(thread_id)?
-        .unwrap_or_else(|| config.model.clone());
-    generate_prompt_builder(input, Some(model), &root, None).await
+    generate_prompt_builder(
+        input,
+        Some(config.prompt_builder_model.clone()),
+        &root,
+        None,
+    )
+    .await
 }
 
 /// Handles `stg:{action}` callbacks: `a` accepts the staged suggestion, `d`
