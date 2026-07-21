@@ -36,6 +36,7 @@ pub async fn generate_prompt_builder(
     model: Option<String>,
     root: &Path,
     cancel: Option<CancellationToken>,
+    parent_thread_id: Option<String>,
 ) -> Result<String> {
     let trimmed = intent.trim();
     ensure!(!trimmed.is_empty(), "Prompt-builder intent cannot be empty");
@@ -65,6 +66,7 @@ pub async fn generate_prompt_builder(
         event_filter: Some(vec!["turn_finished".to_string()]),
         timeout: Some(Duration::from_secs(PROMPT_BUILDER_TIMEOUT_SECS)),
         activity_kind: Some("helper:prompt_builder".to_string()),
+        activity_parent_thread_id: parent_thread_id,
         thread_origin_kind: Some("helper:prompt_builder".to_string()),
         ..Default::default()
     };

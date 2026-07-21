@@ -18,7 +18,7 @@ pub async fn suggest_thread_title(
     title_model: String,
     root: PathBuf,
 ) -> UiEvent {
-    let title = title_generation::generate_title(&message, &title_model, &root)
+    let title = title_generation::generate_title(&message, &title_model, &root, Some(&thread_id))
         .await
         .ok();
 

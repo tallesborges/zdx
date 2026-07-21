@@ -21,12 +21,14 @@ pub(crate) fn spawn_topic_title_update(
     let root = context.root_for_chat(chat_id).root;
 
     tokio::spawn(async move {
-        match title_generation::generate_title(&message_text, &title_model, &root).await {
+        let thread_id = format!("telegram-{chat_id}-topic-{topic_id}");
+        match title_generation::generate_title(&message_text, &title_model, &root, Some(&thread_id))
+            .await
+        {
             Ok(title) => {
                 if let Err(err) = client.edit_forum_topic(chat_id, topic_id, &title).await {
                     tracing::error!(topic_id, %err, "Failed to rename topic");
                 } else {
-                    let thread_id = format!("telegram-{chat_id}-topic-{topic_id}");
                     if let Err(err) =
                         thread_persistence::set_thread_title(&thread_id, Some(title.clone()))
                     {

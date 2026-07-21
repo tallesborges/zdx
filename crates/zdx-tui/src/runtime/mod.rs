@@ -1096,11 +1096,24 @@ impl TuiRuntime {
             UiEffect::StartPromptBuilder { intent } => {
                 let root = self.state.tui.agent_opts.root.clone();
                 let model = Some(self.state.tui.config.prompt_builder_model.clone());
+                let parent_thread_id = self
+                    .state
+                    .tui
+                    .thread
+                    .thread_handle
+                    .as_ref()
+                    .map(|handle| handle.id.clone());
                 let meta = TaskMeta::PromptBuilder {
                     intent: intent.clone(),
                 };
                 self.spawn_task(TaskKind::PromptBuilder, meta, true, move |cancel| {
-                    prompt_builder::prompt_builder_generation(intent, model, root, cancel)
+                    prompt_builder::prompt_builder_generation(
+                        intent,
+                        model,
+                        root,
+                        cancel,
+                        parent_thread_id,
+                    )
                 });
             }
 

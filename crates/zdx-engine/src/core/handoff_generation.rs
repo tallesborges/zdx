@@ -148,6 +148,7 @@ pub async fn generate_handoff(
         event_filter: Some(vec!["turn_finished".to_string()]),
         timeout: Some(Duration::from_secs(HANDOFF_TIMEOUT_SECS)),
         activity_kind: Some("helper:handoff".to_string()),
+        activity_parent_thread_id: Some(thread_id.to_string()),
         thread_origin_kind: Some("helper:handoff".to_string()),
         ..Default::default()
     };
