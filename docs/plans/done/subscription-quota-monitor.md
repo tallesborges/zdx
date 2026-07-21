@@ -1,4 +1,4 @@
-> Stage: **active**. Keep this plan current while working: when a scope item is finished, check its box `[ ]`→`[x]`; when a phase's ✅ demo passes, mark the phase done (with date). The plan file is the source of truth, not memory.
+> Stage: **done**. Shipped across all four subscriptions (Claude, Codex, Antigravity, Grok) in both surfaces: the `zdx monitor` Usage-tab Subscriptions block and the `zdx quota` CLI (`--json`). Only optional Later/Deferred items remain (bot `/status` one-liner, extra per-provider limits, historical trends).
 
 # Subscription Quota Monitor
 
