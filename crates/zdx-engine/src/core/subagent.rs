@@ -39,18 +39,11 @@ pub struct ExecSubagentOptions {
     pub event_filter: Option<Vec<String>>,
     /// Optional timeout for the child process.
     pub timeout: Option<Duration>,
-    /// Whether the child run should register itself in the active-agents
-    /// registry. Defaults to `false` so internal helper subagents (title
-    /// generation, TLDR, handoff, prompt builder, `read_thread`) are not
-    /// counted as "active agents". Set to `true` for user-visible subagents
-    /// invoked via `invoke_subagent`.
-    pub track_activity: bool,
-    /// Logical role for the child run when `track_activity` is true
-    /// (e.g. `"subagent"`).
+    /// Logical role for the child run (e.g. `"subagent"`).
     pub activity_kind: Option<String>,
-    /// Parent thread id when `track_activity` is true.
+    /// Parent thread id for the child run.
     pub activity_parent_thread_id: Option<String>,
-    /// Named subagent (e.g. `"explorer"`) when `track_activity` is true.
+    /// Named subagent (e.g. `"explorer"`) for the child run.
     pub activity_subagent_name: Option<String>,
     /// Origin kind recorded in the child thread's meta (e.g. `"subagent"`,
     /// `"helper:title"`). When set, the child persists a tagged thread instead
@@ -456,21 +449,17 @@ fn build_exec_args(
         args.push(OsString::from(level.display_name()));
     }
 
-    if options.track_activity {
-        if let Some(kind) = normalize_optional(options.activity_kind.as_deref()) {
-            args.push(OsString::from("--activity-kind"));
-            args.push(OsString::from(kind));
-        }
-        if let Some(parent) = normalize_optional(options.activity_parent_thread_id.as_deref()) {
-            args.push(OsString::from("--activity-parent-thread-id"));
-            args.push(OsString::from(parent));
-        }
-        if let Some(name) = normalize_optional(options.activity_subagent_name.as_deref()) {
-            args.push(OsString::from("--activity-subagent-name"));
-            args.push(OsString::from(name));
-        }
-    } else {
-        args.push(OsString::from("--no-activity"));
+    if let Some(kind) = normalize_optional(options.activity_kind.as_deref()) {
+        args.push(OsString::from("--activity-kind"));
+        args.push(OsString::from(kind));
+    }
+    if let Some(parent) = normalize_optional(options.activity_parent_thread_id.as_deref()) {
+        args.push(OsString::from("--activity-parent-thread-id"));
+        args.push(OsString::from(parent));
+    }
+    if let Some(name) = normalize_optional(options.activity_subagent_name.as_deref()) {
+        args.push(OsString::from("--activity-subagent-name"));
+        args.push(OsString::from(name));
     }
 
     args
@@ -600,8 +589,7 @@ mod tests {
                 "/tmp/project",
                 "exec",
                 "--prompt-file",
-                "/tmp/subagent-prompt.md",
-                "--no-activity"
+                "/tmp/subagent-prompt.md"
             ]
         );
     }
@@ -622,7 +610,6 @@ mod tests {
                 tools_override: Some(vec!["read".to_string(), "glob".to_string()]),
                 event_filter: Some(vec!["turn_finished".to_string()]),
                 timeout: None,
-                track_activity: false,
                 activity_kind: None,
                 activity_parent_thread_id: None,
                 activity_subagent_name: None,
@@ -655,8 +642,7 @@ mod tests {
                 "--effective-system-prompt-file",
                 "/tmp/effective-system-prompt.md",
                 "-t",
-                "low",
-                "--no-activity"
+                "low"
             ]
         );
     }
@@ -692,8 +678,7 @@ mod tests {
                 "explorer",
                 "exec",
                 "--prompt-file",
-                "/tmp/subagent-prompt.md",
-                "--no-activity"
+                "/tmp/subagent-prompt.md"
             ]
         );
     }
@@ -704,7 +689,6 @@ mod tests {
             Path::new("/tmp/project"),
             Path::new("/tmp/subagent-prompt.md"),
             &ExecSubagentOptions {
-                track_activity: true,
                 activity_kind: Some("subagent".to_string()),
                 activity_parent_thread_id: Some("thread-parent".to_string()),
                 activity_subagent_name: Some("explorer".to_string()),

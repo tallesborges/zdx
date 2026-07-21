@@ -141,12 +141,6 @@ enum Commands {
         #[arg(long = "no-tools", conflicts_with = "tools")]
         no_tools: bool,
 
-        /// Internal: skip registering this run in the active-agents registry.
-        /// Used by helper subagents (title generation, TLDR, handoff, prompt
-        /// builder, `read_thread`) so they don't count as "active agents".
-        #[arg(long = "no-activity", hide = true)]
-        no_activity: bool,
-
         /// Internal: logical role for this run in the active-agents registry
         /// (e.g. `subagent`, `exec`).
         #[arg(long = "activity-kind", hide = true, value_name = "KIND")]
@@ -864,7 +858,6 @@ struct ExecCommandInput {
     tools: Option<String>,
     no_tools: bool,
     no_system_prompt: bool,
-    no_activity: bool,
     activity_kind: Option<String>,
     activity_parent_thread_id: Option<String>,
     activity_subagent_name: Option<String>,
@@ -928,7 +921,6 @@ async fn run_exec_command(context: &DispatchContext<'_>, input: ExecCommandInput
         tools_override: input.tools.as_deref(),
         no_tools: input.no_tools,
         no_system_prompt: input.no_system_prompt,
-        track_activity: !input.no_activity,
         activity_kind: input.activity_kind.as_deref(),
         activity_parent_thread_id: input.activity_parent_thread_id.as_deref(),
         activity_subagent_name: input.activity_subagent_name.as_deref(),
@@ -982,7 +974,6 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             thinking,
             tools,
             no_tools,
-            no_activity,
             activity_kind,
             activity_parent_thread_id,
             activity_subagent_name,
@@ -999,7 +990,6 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
                     tools,
                     no_tools,
                     no_system_prompt,
-                    no_activity,
                     activity_kind,
                     activity_parent_thread_id,
                     activity_subagent_name,

@@ -23,9 +23,6 @@ pub struct ExecRunOptions<'a> {
     pub tools_override: Option<&'a str>,
     pub no_tools: bool,
     pub no_system_prompt: bool,
-    /// Whether to register this run in the active-agents registry. Helper
-    /// subagents pass `false` so they don't count as "active agents".
-    pub track_activity: bool,
     pub activity_kind: Option<&'a str>,
     pub activity_parent_thread_id: Option<&'a str>,
     pub activity_subagent_name: Option<&'a str>,
@@ -77,7 +74,6 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
             .effective_system_prompt_override
             .map(std::string::ToString::to_string),
         no_system_prompt: options.no_system_prompt,
-        track_activity: options.track_activity,
         activity_kind: options.activity_kind.map(std::string::ToString::to_string),
         activity_parent_thread_id: options
             .activity_parent_thread_id

@@ -157,7 +157,6 @@ pub(crate) fn spawn_agent_turn(
         surface: Some("telegram".to_string()),
         text_verbosity: Some(TextVerbosity::Low),
         service_tier: None,
-        track_activity: true,
         activity_kind: Some("telegram".to_string()),
         activity_parent_thread_id: None,
         activity_subagent_name: None,
