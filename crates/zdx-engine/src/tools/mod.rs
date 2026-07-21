@@ -917,6 +917,7 @@ mod tests {
 
     #[test]
     fn test_read_bundled_skill_via_env_var_path() {
+        crate::test_support::temp_zdx_home();
         let bundled_root = crate::skills::ensure_bundled_skills_materialized().unwrap();
         unsafe {
             std::env::set_var("ZDX_HOME", bundled_root.parent().unwrap().as_os_str());
