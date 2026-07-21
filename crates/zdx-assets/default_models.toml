@@ -999,3 +999,88 @@ cache_write = 0.0
 reasoning = true
 input_images = true
 output_limit = 32000
+
+[[model]]
+id = "alibaba:qwen3-max"
+provider = "alibaba"
+display_name = "Qwen3 Max"
+context_limit = 262144
+
+[model.pricing]
+input = 1.2
+output = 6.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = false
+input_images = false
+output_limit = 65536
+
+[[model]]
+id = "alibaba:qwen-plus"
+provider = "alibaba"
+display_name = "Qwen Plus"
+context_limit = 1000000
+
+[model.pricing]
+input = 0.4
+output = 1.2
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = false
+output_limit = 32768
+
+[[model]]
+id = "alibaba:qwen-flash"
+provider = "alibaba"
+display_name = "Qwen Flash"
+context_limit = 1000000
+
+[model.pricing]
+input = 0.05
+output = 0.4
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = false
+output_limit = 32768
+
+[[model]]
+id = "qwen-code:qwen3-coder-plus"
+provider = "qwen-code"
+display_name = "Qwen3 Coder Plus"
+context_limit = 1000000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = false
+input_images = false
+output_limit = 65536
+
+[[model]]
+id = "qwen-code:qwen3-coder-next"
+provider = "qwen-code"
+display_name = "Qwen3 Coder Next"
+context_limit = 262144
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = false
+input_images = false
+output_limit = 65536

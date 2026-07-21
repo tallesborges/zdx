@@ -1396,6 +1396,10 @@ pub struct ProvidersConfig {
     pub meta: ProviderConfig,
     #[serde(default = "default_elevenlabs_provider")]
     pub elevenlabs: ProviderConfig,
+    #[serde(default = "default_alibaba_provider")]
+    pub alibaba: ProviderConfig,
+    #[serde(default = "default_qwen_code_provider")]
+    pub qwen_code: ProviderConfig,
     /// User-defined OpenAI-compatible providers, keyed by name. Used by
     /// prefixing the model with the name (e.g. `<name>:model-id`).
     #[serde(default)]
@@ -1431,6 +1435,8 @@ impl ProvidersConfig {
             id if id == ProviderKind::GrokBuild.id() => &self.grok_build,
             id if id == ProviderKind::Meta.id() => &self.meta,
             id if id == ProviderKind::ElevenLabs.id() => &self.elevenlabs,
+            id if id == ProviderKind::Alibaba.id() => &self.alibaba,
+            id if id == ProviderKind::QwenCode.id() => &self.qwen_code,
             _ => return true, // Unknown providers default to enabled
         };
         config.enabled.unwrap_or(true)
@@ -1462,6 +1468,8 @@ impl ProvidersConfig {
             ProviderKind::GrokBuild => &self.grok_build,
             ProviderKind::Meta => &self.meta,
             ProviderKind::ElevenLabs => &self.elevenlabs,
+            ProviderKind::Alibaba => &self.alibaba,
+            ProviderKind::QwenCode => &self.qwen_code,
         }
     }
 
@@ -1491,6 +1499,8 @@ impl ProvidersConfig {
             ProviderKind::GrokBuild => &mut self.grok_build,
             ProviderKind::Meta => &mut self.meta,
             ProviderKind::ElevenLabs => &mut self.elevenlabs,
+            ProviderKind::Alibaba => &mut self.alibaba,
+            ProviderKind::QwenCode => &mut self.qwen_code,
         }
     }
 
@@ -1548,6 +1558,8 @@ impl Default for ProvidersConfig {
             grok_build: default_grok_build_provider(),
             meta: default_meta_provider(),
             elevenlabs: default_elevenlabs_provider(),
+            alibaba: default_alibaba_provider(),
+            qwen_code: default_qwen_code_provider(),
             custom: std::collections::HashMap::new(),
         }
     }
@@ -1669,6 +1681,29 @@ fn default_xiaomi_plan_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(false),
         models: vec!["mimo-v2.5-pro".to_string(), "mimo-v2.5".to_string()],
+        ..Default::default()
+    }
+}
+
+fn default_alibaba_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec![
+            "qwen3-max".to_string(),
+            "qwen-plus".to_string(),
+            "qwen-flash".to_string(),
+        ],
+        ..Default::default()
+    }
+}
+
+fn default_qwen_code_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(false),
+        models: vec![
+            "qwen3-coder-plus".to_string(),
+            "qwen3-coder-next".to_string(),
+        ],
         ..Default::default()
     }
 }

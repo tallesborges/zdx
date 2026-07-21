@@ -4,6 +4,7 @@ mod debug_metrics;
 mod debug_trace;
 pub mod thinking_parser;
 
+pub mod alibaba;
 pub mod anthropic;
 pub mod deepseek;
 pub mod gemini;
@@ -77,6 +78,7 @@ macro_rules! impl_streaming_provider {
 impl_streaming_provider!(
     anthropic::api::AnthropicClient,
     anthropic::cli::ClaudeCliClient,
+    alibaba::AlibabaClient,
     openai::api::OpenAIClient,
     openai::codex::OpenAICodexClient,
     openai::chat_completions::OpenAIChatCompletionsClient,
@@ -172,6 +174,8 @@ pub enum ProviderKind {
     GrokBuild,
     Meta,
     ElevenLabs,
+    Alibaba,
+    QwenCode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -414,6 +418,26 @@ impl ProviderKind {
                 supports_oauth: false,
                 is_subscription: false,
             },
+            Self::Alibaba => ProviderMeta {
+                id: "alibaba",
+                aliases: &["qwen", "dashscope"],
+                label: "Alibaba",
+                api_key_env: Some("ALIBABA_API_KEY"),
+                base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                base_url_env: Some("ALIBABA_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: false,
+            },
+            Self::QwenCode => ProviderMeta {
+                id: "qwen-code",
+                aliases: &["alibaba-coding-plan"],
+                label: "Qwen Code",
+                api_key_env: Some("QWEN_CODE_API_KEY"),
+                base_url: "https://coding-intl.dashscope.aliyuncs.com/v1",
+                base_url_env: Some("QWEN_CODE_BASE_URL"),
+                supports_oauth: false,
+                is_subscription: true,
+            },
         }
     }
 
@@ -441,6 +465,8 @@ impl ProviderKind {
             ProviderKind::GrokBuild,
             ProviderKind::Meta,
             ProviderKind::ElevenLabs,
+            ProviderKind::Alibaba,
+            ProviderKind::QwenCode,
         ]
     }
 
@@ -556,6 +582,7 @@ impl ProviderKind {
             Self::Xai => xai::build(ctx),
             Self::GrokBuild => grok_build::build(ctx),
             Self::Meta => meta::build(ctx),
+            Self::Alibaba | Self::QwenCode => alibaba::build(ctx),
             // ElevenLabs is a speech-to-text-only provider (Scribe); it is used
             // by the transcription pipeline, not the chat/streaming path.
             Self::ElevenLabs => anyhow::bail!(
