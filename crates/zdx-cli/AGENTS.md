@@ -16,6 +16,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 - `src/cli/commands/memory.rs`: memory indexing/search commands (`zdx memory index`, `zdx memory search`)
 - `src/cli/commands/mcp.rs`: MCP helper commands (`servers`, `tools`, `schema`, `call`)
 - `src/cli/commands/stats.rs`: usage/cost summary command handler (`zdx stats`)
+- `src/cli/commands/quota.rs`: live subscription-quota command handler (`zdx quota`, `--json`); async, fetches `zdx_engine::providers::subscription_quota::FETCHERS`
 - `src/cli/commands/telegram.rs`: Telegram utility commands
 - `src/cli/commands/worktree.rs`: worktree command handler
 - `src/modes/exec.rs`: non-interactive streaming mode

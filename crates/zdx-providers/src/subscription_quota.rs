@@ -41,6 +41,18 @@ pub type QuotaFuture = Pin<Box<dyn Future<Output = Result<SubscriptionQuota, Quo
 /// A read-only quota fetcher for one provider.
 pub type QuotaFetcher = fn() -> QuotaFuture;
 
+/// Human-friendly display name for a subscription provider id.
+#[must_use]
+pub fn provider_display(provider: &str) -> &str {
+    match provider {
+        PROVIDER_CLAUDE => "Claude",
+        PROVIDER_CODEX => "Codex",
+        PROVIDER_ANTIGRAVITY => "Antigravity",
+        PROVIDER_GROK => "Grok",
+        other => other,
+    }
+}
+
 /// Registry of supported subscription-quota fetchers, keyed by provider id.
 /// The monitor iterates this (intersected with credential presence) — adding a
 /// provider is one new `fetch_*` + one entry here, no new render code.

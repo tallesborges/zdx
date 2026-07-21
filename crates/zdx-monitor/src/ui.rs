@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs, Wrap};
 use zdx_engine::core::usage_stats::{UsageRow, UsageStats, UsageTotals};
-use zdx_engine::providers::subscription_quota::QuotaWindow;
+use zdx_engine::providers::subscription_quota::{QuotaWindow, provider_display};
 
 use crate::app::{
     AgentOverlayState, CachedQuotas, CachedUsageStats, ConfigLine, ModelPickerState, MonitorApp,
@@ -388,17 +388,6 @@ fn build_usage_lines(
 
     push_usage_warnings(&mut lines, stats);
     lines
-}
-
-/// Human-friendly provider name for the subscription block.
-fn provider_display(provider: &str) -> &str {
-    match provider {
-        "claude-cli" => "Claude",
-        "openai-codex" => "Codex",
-        "google-antigravity" => "Antigravity",
-        "grok-build" => "Grok",
-        other => other,
-    }
 }
 
 /// Format a reset instant as a short "resets in …" string.

@@ -9,6 +9,7 @@ mod fixtures;
 mod cli_help;
 mod config_path;
 mod login_logout;
+mod quota;
 mod thread_schema;
 mod threads_export;
 mod threads_list_show;
