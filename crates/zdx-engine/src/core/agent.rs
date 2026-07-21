@@ -41,10 +41,6 @@ pub struct AgentOptions {
     pub text_verbosity: Option<TextVerbosity>,
     /// `OpenAI` Responses API service tier: `"priority"` for faster inference (2× cost).
     pub service_tier: Option<String>,
-    /// Whether to register this run in the active-agents registry.
-    /// Set `false` for utility/helper runs (title generation, TLDR, handoff,
-    /// prompt builder, `read_thread`) so they do not count as "active agents".
-    pub track_activity: bool,
     /// Logical role for this run, e.g. `"chat"`, `"exec"`, `"telegram"`,
     /// `"subagent"`. Surfaced in the active-agents registry alongside `surface`.
     pub activity_kind: Option<String>,
@@ -848,20 +844,16 @@ async fn run_turn_inner(
 ) -> RunTurnResult {
     let setup = build_run_turn_setup(config, options, thread_id)
         .map_err(|e| (TurnError::from_anyhow(e), messages.clone()))?;
-    let _run_guard = if options.track_activity {
-        crate::agent_activity::start(crate::agent_activity::StartParams {
-            thread_id,
-            surface: options.surface.as_deref(),
-            model: Some(setup.model.as_str()),
-            provider: Some(setup.provider.as_str()),
-            thinking: Some(setup.thinking_level.display_name()),
-            kind: options.activity_kind.as_deref(),
-            parent_thread_id: options.activity_parent_thread_id.as_deref(),
-            subagent_name: options.activity_subagent_name.as_deref(),
-        })
-    } else {
-        None
-    };
+    let _run_guard = crate::agent_activity::start(crate::agent_activity::StartParams {
+        thread_id,
+        surface: options.surface.as_deref(),
+        model: Some(setup.model.as_str()),
+        provider: Some(setup.provider.as_str()),
+        thinking: Some(setup.thinking_level.display_name()),
+        kind: options.activity_kind.as_deref(),
+        parent_thread_id: options.activity_parent_thread_id.as_deref(),
+        subagent_name: options.activity_subagent_name.as_deref(),
+    });
     let mut messages = messages;
     let initial_message_count = messages.len();
     let mut consecutive_malformed_tool_turns = 0usize;

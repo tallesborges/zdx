@@ -323,7 +323,6 @@ fn build_exec_options(
             "tool_completed".to_string(),
         ]),
         timeout: ctx.timeout,
-        track_activity: true,
         activity_kind: Some("subagent".to_string()),
         activity_parent_thread_id: ctx.current_thread_id.clone(),
         activity_subagent_name: Some(subagent_name.clone()),
