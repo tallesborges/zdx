@@ -58,9 +58,9 @@ Capabilities that already exist and must be reused, not rebuilt.
 # Prerequisite: monitor reads OAuth tokens read-only (decided)
 The monitor must **never refresh or write** OAuth tokens. Today `OAuthCache::save()` truncates + rewrites `oauth.json` with no lock/atomic rename (`crates/zdx-providers/src/oauth.rs:87-125`) and each provider does load→modify→save (`oauth.rs:403-406`, `671-674`), so a monitor refresh racing a live zdx session could clobber a rotated refresh token (**credential loss**). We sidestep that entirely instead of adding cross-process locking.
 - **Scope checklist**:
-  - [ ] Quota fetchers **load** creds only (read `oauth.json` for the provider's `access` token + `account_id`); they do **not** call the refreshing `resolve_credentials()` and never call `save`.
-  - [ ] If the loaded access token is expired (or missing), render `expired · re-login in zdx` (bounded `unavailable` reason) — do not attempt a refresh.
-  - [ ] A normal zdx run (TUI/exec/bot) still refreshes tokens as it does today; the monitor picks up the fresh token on its next read. Live quota returns automatically after the next real zdx call.
+  - [x] Quota fetchers **load** creds only (read `oauth.json` for the provider's `access` token + `account_id`); they do **not** call the refreshing `resolve_credentials()` and never call `save`.
+  - [x] If the loaded access token is expired (or missing), render `expired · re-login in zdx` (bounded `unavailable` reason) — do not attempt a refresh.
+  - [x] A normal zdx run (TUI/exec/bot) still refreshes tokens as it does today; the monitor picks up the fresh token on its next read. Live quota returns automatically after the next real zdx call.
 - **Non-goal (explicitly dropped)**: cross-process lock + atomic-rename persistence. Not needed while the monitor is read-only; revisit only if the monitor ever needs to refresh tokens itself.
 - ✅ Demo: with an expired token, the Subscriptions block shows `expired · re-login in zdx` and never mutates `oauth.json` (file mtime unchanged); after any normal zdx turn refreshes the token, the next monitor read shows a live quota.
 
@@ -141,8 +141,8 @@ The monitor must **never refresh or write** OAuth tokens. Today `OAuthCache::sav
 - Verification: `just ci-fast` during iteration; `cargo nextest run -p zdx-monitor` and `-p zdx-providers`; `just test` before wrapping up.
 
 # Polish rounds (after MVP)
-## Polish round 1: CLI + machine-readable
-- Add quota to a CLI surface (extend `zdx stats` or a small `zdx quota`) with `--json`.
+## Polish round 1: CLI + machine-readable — ✅ DONE (2026-07-20)
+- [x] `zdx quota` (+ `--json`) — `crates/zdx-cli/src/cli/commands/quota.rs`; async, iterates `subscription_quota::FETCHERS`, prints per-provider windows (text) or a `{ "providers": [...] }` JSON doc with `used_percent` + `resets_at` (RFC3339) + `scope`; per-provider fetch errors render as an `error` field, never a hard failure. Integration tests in `crates/zdx-cli/tests/integration/quota.rs`. Shared `provider_display` moved to `zdx-providers` and reused by the monitor.
 - ✅ Check-in demo: `zdx quota --json` returns per-provider windows with `used_percent` + `resets_at`.
 
 ## Polish round 2: Warnings + at-a-glance

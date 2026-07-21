@@ -239,6 +239,12 @@ enum Commands {
     },
     /// Show usage and cost totals per provider and model, across saved threads
     Stats,
+    /// Show live subscription quota (session/weekly limits) for OAuth providers
+    Quota {
+        /// Emit machine-readable JSON instead of a text summary
+        #[arg(long)]
+        json: bool,
+    },
     /// Search and index ZDX memory collections
     Memory {
         #[command(subcommand)]
@@ -999,6 +1005,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
         }
         Commands::Threads { command } => dispatch_threads(command, context).await,
         Commands::Stats => commands::stats::run(context.config),
+        Commands::Quota { json } => commands::quota::run(json).await,
         Commands::Imagine {
             prompt,
             out,
