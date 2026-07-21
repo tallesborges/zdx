@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use serde_json::json;
 use tempfile::TempDir;
@@ -29,14 +29,7 @@ fn extract_handoff_from_reads_meta_parent() {
 }
 
 fn setup_temp_zdx_home() -> &'static TempDir {
-    static ZDX_HOME: OnceLock<TempDir> = OnceLock::new();
-    ZDX_HOME.get_or_init(|| {
-        let temp = TempDir::new().unwrap();
-        unsafe {
-            std::env::set_var("ZDX_HOME", temp.path());
-        }
-        temp
-    })
+    crate::test_support::temp_zdx_home()
 }
 
 fn unique_thread_id(prefix: &str) -> String {

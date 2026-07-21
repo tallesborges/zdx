@@ -248,19 +248,9 @@ mod tests {
 
     #[test]
     fn test_execute_excludes_current_thread() {
-        use std::sync::OnceLock;
-
-        use tempfile::TempDir;
-
         use crate::core::thread_persistence::{Thread, ThreadEvent};
 
-        static ZDX_HOME: OnceLock<TempDir> = OnceLock::new();
-        let temp = ZDX_HOME.get_or_init(|| {
-            let t = TempDir::new().unwrap();
-            unsafe { std::env::set_var("ZDX_HOME", t.path()) };
-            t
-        });
-        let _ = temp;
+        let _temp = crate::test_support::temp_zdx_home();
 
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
