@@ -1,22 +1,44 @@
 {
-  "buckets": [
+  "groups": [
     {
-      "resetTime": "2026-07-20T15:46:40Z",
-      "tokenType": "REQUESTS",
-      "modelId": "gemini-3-pro-preview",
-      "remainingFraction": 0.4
+      "displayName": "Gemini Models",
+      "description": "Models within this group: Gemini Flash, Gemini Pro",
+      "buckets": [
+        {
+          "bucketId": "gemini-weekly",
+          "displayName": "Weekly Limit",
+          "window": "weekly",
+          "resetTime": "2026-07-26T15:46:32Z",
+          "remainingFraction": 0.9971372
+        },
+        {
+          "bucketId": "gemini-5h",
+          "displayName": "Five Hour Limit",
+          "window": "5h",
+          "resetTime": "2026-07-21T03:22:39Z",
+          "remainingFraction": 0.4
+        }
+      ]
     },
     {
-      "resetTime": "2026-07-20T15:46:40Z",
-      "tokenType": "REQUESTS",
-      "modelId": "gemini-3-flash-preview",
-      "remainingFraction": 1
-    },
-    {
-      "resetTime": "2026-07-20T15:46:40Z",
-      "tokenType": "REQUESTS",
-      "modelId": "gemini-2.5-flash",
-      "remainingFraction": 1
+      "displayName": "Claude and GPT models",
+      "description": "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
+      "buckets": [
+        {
+          "bucketId": "3p-weekly",
+          "displayName": "Weekly Limit",
+          "window": "weekly",
+          "resetTime": "2026-07-28T01:50:39Z",
+          "remainingFraction": 1
+        },
+        {
+          "bucketId": "3p-5h",
+          "displayName": "Five Hour Limit",
+          "window": "5h",
+          "resetTime": "2026-07-21T06:50:39Z",
+          "remainingFraction": 1
+        }
+      ]
     }
   ]
 }
