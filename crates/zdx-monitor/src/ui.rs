@@ -160,12 +160,14 @@ fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
                 role.to_string()
             };
             let prefix = format!(
-                " ● PID {} {} model:",
+                " {}● PID {} {} model:",
+                a.tree_prefix,
                 a.pid,
                 truncate_chars(&role_label, 18)
             );
             let suffix = format!(" thread:{} up {}", a.thread_id, a.uptime);
-            let model_width = inner_width.saturating_sub(prefix.len() + suffix.len());
+            let model_width =
+                inner_width.saturating_sub(prefix.chars().count() + suffix.chars().count());
             let model_desc = format!("{}:{}@{}", a.provider, a.model, a.thinking);
             let model = truncate_chars(&model_desc, model_width);
             let line = format!("{prefix}{model:<model_width$}{suffix}");

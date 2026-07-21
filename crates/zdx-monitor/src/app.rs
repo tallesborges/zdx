@@ -326,6 +326,12 @@ pub struct ActiveAgentInfo {
     /// Full (un-truncated) thread id used to locate the transcript file.
     /// `None` for tracked runs that don't persist a thread.
     pub full_thread_id: Option<String>,
+    /// Originating thread id when this run was spawned by another run. Used to
+    /// nest child runs under their parent in the Active Agents tree.
+    pub parent_thread_id: Option<String>,
+    /// Tree connector prefix (e.g. `"├─ "`) computed from the parent/child
+    /// layout; empty for top-level runs.
+    pub tree_prefix: String,
     pub model: String,
     pub provider: String,
     pub thinking: String,
@@ -1474,7 +1480,7 @@ fn format_duration(d: std::time::Duration) -> String {
 }
 
 fn load_active_agents() -> Vec<ActiveAgentInfo> {
-    agent_activity::list_active()
+    let flat: Vec<ActiveAgentInfo> = agent_activity::list_active()
         .into_iter()
         .map(|r| {
             let short_thread = r
@@ -1487,6 +1493,8 @@ fn load_active_agents() -> Vec<ActiveAgentInfo> {
                 surface: r.surface.unwrap_or_else(|| "-".to_string()),
                 thread_id: short_thread,
                 full_thread_id: r.thread_id.filter(|id| !id.is_empty()),
+                parent_thread_id: r.parent_thread_id.filter(|id| !id.is_empty()),
+                tree_prefix: String::new(),
                 model: r.model.unwrap_or_else(|| "-".to_string()),
                 provider: r.provider.unwrap_or_else(|| "-".to_string()),
                 thinking: r.thinking.unwrap_or_else(|| "-".to_string()),
@@ -1495,7 +1503,119 @@ fn load_active_agents() -> Vec<ActiveAgentInfo> {
                 subagent_name: r.subagent_name,
             }
         })
-        .collect()
+        .collect();
+    arrange_agent_tree(flat)
+}
+
+/// Reorders active-agent runs into a parent → child tree (depth-first,
+/// preserving the natural start order among siblings) and fills each row's
+/// `tree_prefix` with box-drawing connectors. A run nests under another when
+/// its `parent_thread_id` matches that run's `full_thread_id`; runs whose
+/// parent is absent become top-level roots.
+fn arrange_agent_tree(flat: Vec<ActiveAgentInfo>) -> Vec<ActiveAgentInfo> {
+    let n = flat.len();
+    if n == 0 {
+        return flat;
+    }
+
+    let mut id_to_idx: HashMap<&str, usize> = HashMap::new();
+    for (i, a) in flat.iter().enumerate() {
+        if let Some(id) = a.full_thread_id.as_deref() {
+            id_to_idx.entry(id).or_insert(i);
+        }
+    }
+
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut roots: Vec<usize> = Vec::new();
+    for (i, a) in flat.iter().enumerate() {
+        let parent = a
+            .parent_thread_id
+            .as_deref()
+            .and_then(|p| id_to_idx.get(p).copied())
+            .filter(|&p| p != i);
+        match parent {
+            Some(p) => children[p].push(i),
+            None => roots.push(i),
+        }
+    }
+
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    let mut prefixes: Vec<String> = vec![String::new(); n];
+    let mut visited = vec![false; n];
+    for (i, &root) in roots.iter().enumerate() {
+        dfs_agent_tree(
+            root,
+            &children,
+            "",
+            i + 1 == roots.len(),
+            0,
+            &mut order,
+            &mut prefixes,
+            &mut visited,
+        );
+    }
+
+    let mut slots: Vec<Option<ActiveAgentInfo>> = flat.into_iter().map(Some).collect();
+    let mut out = Vec::with_capacity(n);
+    for idx in order {
+        if let Some(mut a) = slots[idx].take() {
+            a.tree_prefix = std::mem::take(&mut prefixes[idx]);
+            out.push(a);
+        }
+    }
+    // Cycle safety: append any run not reached by the DFS in natural order.
+    for slot in &mut slots {
+        if let Some(a) = slot.take() {
+            out.push(a);
+        }
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dfs_agent_tree(
+    idx: usize,
+    children: &[Vec<usize>],
+    ancestor_prefix: &str,
+    is_last: bool,
+    depth: usize,
+    order: &mut Vec<usize>,
+    prefixes: &mut [String],
+    visited: &mut [bool],
+) {
+    if visited[idx] {
+        return;
+    }
+    visited[idx] = true;
+
+    let connector = if depth == 0 {
+        ""
+    } else if is_last {
+        "└─ "
+    } else {
+        "├─ "
+    };
+    prefixes[idx] = format!("{ancestor_prefix}{connector}");
+    order.push(idx);
+
+    let child_prefix = if depth == 0 {
+        String::new()
+    } else {
+        format!("{ancestor_prefix}{}", if is_last { "   " } else { "│  " })
+    };
+    let kids = &children[idx];
+    for (i, &kid) in kids.iter().enumerate() {
+        dfs_agent_tree(
+            kid,
+            children,
+            &child_prefix,
+            i + 1 == kids.len(),
+            depth + 1,
+            order,
+            prefixes,
+            visited,
+        );
+    }
 }
 
 /// Path to a thread's transcript JSONL.
@@ -2116,6 +2236,77 @@ mod transcript_tests {
             ],
             "helpers section should list every helper model in display order"
         );
+    }
+
+    #[test]
+    fn arrange_agent_tree_nests_children_with_connectors() {
+        fn agent(thread: &str, parent: Option<&str>) -> ActiveAgentInfo {
+            ActiveAgentInfo {
+                pid: 0,
+                surface: "exec".to_string(),
+                thread_id: thread.to_string(),
+                full_thread_id: Some(thread.to_string()),
+                parent_thread_id: parent.map(str::to_string),
+                tree_prefix: String::new(),
+                model: "-".to_string(),
+                provider: "-".to_string(),
+                thinking: "-".to_string(),
+                uptime: "0s".to_string(),
+                kind: None,
+                subagent_name: None,
+            }
+        }
+
+        let flat = vec![
+            agent("aaa", None),
+            agent("bbb", Some("aaa")),
+            agent("ccc", Some("aaa")),
+            agent("ddd", Some("bbb")),
+            agent("eee", None),
+        ];
+
+        let out = arrange_agent_tree(flat);
+        let got: Vec<(&str, &str)> = out
+            .iter()
+            .map(|a| (a.thread_id.as_str(), a.tree_prefix.as_str()))
+            .collect();
+
+        assert_eq!(
+            got,
+            vec![
+                ("aaa", ""),
+                ("bbb", "├─ "),
+                ("ddd", "│  └─ "),
+                ("ccc", "└─ "),
+                ("eee", ""),
+            ]
+        );
+    }
+
+    #[test]
+    fn arrange_agent_tree_orphan_parent_becomes_root() {
+        fn agent(thread: &str, parent: Option<&str>) -> ActiveAgentInfo {
+            ActiveAgentInfo {
+                pid: 0,
+                surface: "exec".to_string(),
+                thread_id: thread.to_string(),
+                full_thread_id: Some(thread.to_string()),
+                parent_thread_id: parent.map(str::to_string),
+                tree_prefix: String::new(),
+                model: "-".to_string(),
+                provider: "-".to_string(),
+                thinking: "-".to_string(),
+                uptime: "0s".to_string(),
+                kind: None,
+                subagent_name: None,
+            }
+        }
+
+        // Parent "zzz" is not present among the runs → child is a root.
+        let out = arrange_agent_tree(vec![agent("bbb", Some("zzz"))]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].thread_id, "bbb");
+        assert_eq!(out[0].tree_prefix, "");
     }
 
     #[test]
