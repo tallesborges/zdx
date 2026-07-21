@@ -118,10 +118,7 @@ fn normalized_relative_path(path: &Path) -> Option<String> {
 }
 
 fn bundled_skill_relative_path_from_path(path: &Path) -> Option<String> {
-    let bundled_root = MATERIALIZED_BUNDLED_SKILLS_DIR
-        .get()
-        .cloned()
-        .unwrap_or_else(bundled_skills_dir);
+    let bundled_root = bundled_skills_dir();
     path.strip_prefix(&bundled_root)
         .ok()
         .and_then(normalized_relative_path)
