@@ -1712,7 +1712,9 @@ fn default_gemini_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gemini-3.6-flash".to_string(),
             "gemini-3.5-flash".to_string(),
+            "gemini-3.5-flash-lite".to_string(),
             "gemini-3.1-pro-preview".to_string(),
             "gemini-3.1-flash-lite-preview".to_string(),
         ],
@@ -1724,6 +1726,10 @@ fn default_google_antigravity_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gemini-3.6-flash-tiered".to_string(),
+            "gemini-3.6-flash-low".to_string(),
+            "gemini-3.6-flash-medium".to_string(),
+            "gemini-3.6-flash-high".to_string(),
             "gemini-3.5-flash-low".to_string(),
             "gemini-3-flash-agent".to_string(),
             "gemini-3.1-pro-low".to_string(),
