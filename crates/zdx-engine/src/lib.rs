@@ -9,6 +9,7 @@ pub mod custom_commands;
 pub mod followups;
 pub mod images;
 pub mod mcp;
+pub mod media;
 pub mod models;
 pub mod pidfile;
 pub mod prompts;
