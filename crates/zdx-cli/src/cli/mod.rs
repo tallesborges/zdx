@@ -232,6 +232,24 @@ enum Commands {
         list_models: bool,
     },
 
+    /// Ask a Gemini model about a local audio/video/PDF/image file (one-shot)
+    AskMedia {
+        /// Path to the media file (PDF, image, audio, or video)
+        file: Option<String>,
+
+        /// The question/instruction to run against the file
+        #[arg(short, long)]
+        prompt: String,
+
+        /// Model: a Gemini `provider:model` id (default: `gemini:gemini-3.5-flash-lite`)
+        #[arg(short, long, value_name = "MODEL")]
+        model: Option<String>,
+
+        /// Emit JSON ({file, model, answer}) instead of plain text
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Manage saved conversation threads
     Threads {
         #[command(subcommand)]
@@ -1064,6 +1082,21 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
                 model: model.as_deref(),
                 language: language.as_deref(),
                 diarize,
+                json,
+                config: context.config,
+            })
+            .await
+        }
+        Commands::AskMedia {
+            file,
+            prompt,
+            model,
+            json,
+        } => {
+            commands::ask_media::run(commands::ask_media::AskMediaRunOptions {
+                file: file.as_deref(),
+                prompt: &prompt,
+                model: model.as_deref(),
                 json,
                 config: context.config,
             })

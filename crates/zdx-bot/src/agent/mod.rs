@@ -233,6 +233,10 @@ fn build_user_text(incoming: &IncomingMessage) -> String {
     for audio in &incoming.audios {
         if let Some(transcript) = &audio.transcript {
             parts.push(zdx_engine::providers::wrap_voice_transcript(transcript));
+            parts.push(format!(
+                "(Audio file saved at {} — use `zdx ask-media` on it if you need more than the transcript.)",
+                audio.local_path.display()
+            ));
         } else {
             parts.push(format!(
                 "Audio attachment saved at {} (transcription unavailable).",

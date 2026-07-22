@@ -193,6 +193,63 @@ impl GeminiClient {
             .with_context(|| format!("Failed to parse Gemini image response JSON: {body}"))?;
         parse_image_generation_response(&value)
     }
+
+    /// Send an inline media file (audio/video/PDF/image) plus a prompt to the
+    /// model and return its concatenated text answer.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails, the response cannot be parsed, or
+    /// the model returns no text.
+    pub async fn generate_text_from_media(
+        &self,
+        media_mime: &str,
+        media_data: &[u8],
+        prompt: &str,
+    ) -> Result<String> {
+        let request = build_media_text_request(media_mime, media_data, prompt);
+        let url = format!(
+            "{}/models/{}:generateContent",
+            self.config.base_url, self.config.model
+        );
+        let headers = build_json_headers(&self.config.api_key)?;
+
+        let response = self
+            .http
+            .post(url)
+            .headers(headers)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| classify_reqwest_error(&e))?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(ProviderError::http_status(status.as_u16(), &body).into());
+        }
+
+        let value: Value = serde_json::from_str(&body)
+            .with_context(|| format!("Failed to parse Gemini response JSON: {body}"))?;
+        let parsed = parse_image_generation_response(&value)?;
+        let text = parsed.text_parts.join("\n");
+        if text.trim().is_empty() {
+            anyhow::bail!("Gemini returned no text for the provided media");
+        }
+        Ok(text)
+    }
+}
+
+fn build_media_text_request(media_mime: &str, media_data: &[u8], prompt: &str) -> Value {
+    let b64 = base64::engine::general_purpose::STANDARD.encode(media_data);
+    json!({
+        "contents": [{
+            "role": "user",
+            "parts": [
+                {"inlineData": {"mimeType": media_mime, "data": b64}},
+                {"text": prompt}
+            ]
+        }]
+    })
 }
 
 fn build_image_generation_request(prompt: &str, options: &GeminiImageGenerationOptions) -> Value {

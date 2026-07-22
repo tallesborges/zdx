@@ -1,5 +1,6 @@
 //! CLI command handlers.
 
+pub mod ask_media;
 pub mod auth;
 pub mod automations;
 pub mod bot;
