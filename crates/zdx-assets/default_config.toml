@@ -176,7 +176,7 @@ websocket = false
 
 [providers.google_antigravity]
 enabled = true
-models = ["gemini-3.5-flash-low", "gemini-3-flash-agent", "gemini-3.1-pro-low", "gemini-3.1-pro-high", "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"]
+models = ["gemini-3.6-flash-tiered", "gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-high", "gemini-3.5-flash-low", "gemini-3-flash-agent", "gemini-3.1-pro-low", "gemini-3.1-pro-high", "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"]
 fast_mode = false
 websocket = false
 
@@ -259,7 +259,7 @@ websocket = false
 enabled = true
 # api_key = "..."  # Overrides GEMINI_API_KEY env var
 # base_url = "https://generativelanguage.googleapis.com/v1beta"
-models = ["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"]
+models = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"]
 fast_mode = false
 websocket = false
 
