@@ -1,0 +1,18 @@
+#!/bin/sh
+# Auto-format staged Rust files before committing so commits match CI's
+# `cargo +nightly fmt --check`. Uses nightly rustfmt to match the CI toolchain.
+#
+# Enable with: just install-hooks   (sets core.hooksPath to .githooks)
+# Skip once with: git commit --no-verify
+set -e
+
+staged=$(git diff --cached --name-only --diff-filter=ACM -- '*.rs')
+[ -z "$staged" ] && exit 0
+
+cargo +nightly fmt
+
+# Re-stage only the files that were already staged, so formatting fixes land in
+# this commit without sweeping in unrelated working-tree changes.
+echo "$staged" | while IFS= read -r file; do
+    [ -f "$file" ] && git add -- "$file"
+done
