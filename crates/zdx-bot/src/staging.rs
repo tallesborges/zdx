@@ -413,9 +413,31 @@ pub(crate) async fn handle_callback(
         map.remove(&thread_id)
     };
     let Some(session) = session else {
-        let _ = client
-            .answer_callback_query(&callback.id, Some("No active staged command here"))
-            .await;
+        // No in-memory session (common after a bot restart, since staging state
+        // is memory-only). Make the stale buttons self-clearing so they can't
+        // get stuck: Discard deletes its own message; Accept just drops the
+        // buttons and tells the user to re-run.
+        if data == "d" {
+            let _ = client.delete_message(chat_id, message.id).await;
+            let _ = client
+                .answer_callback_query(&callback.id, Some("Discarded ✓"))
+                .await;
+        } else {
+            let _ = client
+                .edit_message_text(
+                    chat_id,
+                    message.id,
+                    "⚠️ Session expired — re-run the command.",
+                    None,
+                )
+                .await;
+            let _ = client
+                .answer_callback_query(
+                    &callback.id,
+                    Some("Session expired after restart — re-run the command"),
+                )
+                .await;
+        }
         return;
     };
 
