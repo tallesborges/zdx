@@ -258,6 +258,8 @@ pub struct MonitorApp {
     pub usage_stats: Option<CachedUsageStats>,
     /// Vertical scroll offset for the Usage tab.
     pub usage_scroll: usize,
+    /// Active time window for the Usage tab (toggled with `t`).
+    pub usage_span: UsageSpan,
     /// Rendered line count of the cached usage view (for scroll clamping).
     pub usage_line_count: usize,
     /// Default model used to attribute legacy usage (mirrors `config.model`).
@@ -265,6 +267,9 @@ pub struct MonitorApp {
     /// Receiver for an in-flight background usage scan, if any. The scan runs
     /// off the UI thread so the dashboard never freezes during aggregation.
     pub usage_rx: Option<mpsc::Receiver<Result<UsageStats>>>,
+    /// Span the in-flight usage scan (`usage_rx`) was started for, so its
+    /// result can be tagged and a superseding span change can re-scan.
+    pub usage_scan_span: Option<UsageSpan>,
     /// Cached subscription-quota snapshot per provider (read-only OAuth).
     pub quotas: Option<CachedQuotas>,
     /// Receiver for an in-flight background quota fetch, if any.
@@ -283,6 +288,10 @@ type QuotaFetchResult = Vec<(
 pub struct CachedUsageStats {
     pub stats: UsageStats,
     pub computed_at: Instant,
+    /// Span the snapshot was aggregated for. The daily chart is rendered from
+    /// this (not the live selection) so a span change in flight never shows a
+    /// narrower series zero-filled into a wider window.
+    pub span: UsageSpan,
 }
 
 /// Cached per-provider subscription quota snapshot plus when it was fetched.
@@ -373,6 +382,48 @@ pub enum Section {
     Usage,
     Automations,
     Logs,
+}
+
+/// Time window applied to the Usage tab's aggregation. Cycled with `t`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum UsageSpan {
+    All,
+    Last7d,
+    Last30d,
+    Last90d,
+}
+
+impl UsageSpan {
+    /// Next window in the toggle cycle.
+    fn next(self) -> Self {
+        match self {
+            UsageSpan::All => UsageSpan::Last7d,
+            UsageSpan::Last7d => UsageSpan::Last30d,
+            UsageSpan::Last30d => UsageSpan::Last90d,
+            UsageSpan::Last90d => UsageSpan::All,
+        }
+    }
+
+    /// Human-readable label for the banner/footer.
+    pub fn label(self) -> &'static str {
+        match self {
+            UsageSpan::All => "all time",
+            UsageSpan::Last7d => "last 7 days",
+            UsageSpan::Last30d => "last 30 days",
+            UsageSpan::Last90d => "last 90 days",
+        }
+    }
+
+    /// Inclusive earliest UTC day number for this window (`None` = all time).
+    pub(crate) fn since_day(self) -> Option<i32> {
+        let days = match self {
+            UsageSpan::All => return None,
+            UsageSpan::Last7d => 6,
+            UsageSpan::Last30d => 29,
+            UsageSpan::Last90d => 89,
+        };
+        Some(usage_stats::today_utc() - days)
+    }
 }
 
 impl Section {
@@ -479,15 +530,20 @@ fn start_usage_scan(app: &mut MonitorApp) {
         return;
     }
     let model = app.default_model.clone();
+    let span = app.usage_span;
+    let since_day = span.since_day();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(usage_stats::aggregate_usage(&model));
+        let _ = tx.send(usage_stats::aggregate_usage(&model, since_day));
     });
     app.usage_rx = Some(rx);
+    app.usage_scan_span = Some(span);
 }
 
 /// Collect a finished background usage scan, if any, into the cache. Non-
-/// blocking: returns immediately when the scan is still running.
+/// blocking: returns immediately when the scan is still running. Tags the
+/// snapshot with the span it was computed for and, if the selection changed
+/// while the scan ran, kicks off a fresh scan so the view self-heals.
 fn poll_usage_result(app: &mut MonitorApp) {
     let Some(rx) = &app.usage_rx else {
         return;
@@ -495,15 +551,23 @@ fn poll_usage_result(app: &mut MonitorApp) {
     match rx.try_recv() {
         Ok(result) => {
             app.usage_rx = None;
+            let scan_span = app.usage_scan_span.take().unwrap_or(app.usage_span);
             match result {
                 Ok(stats) => {
                     let cached = CachedUsageStats {
                         stats,
                         computed_at: Instant::now(),
+                        span: scan_span,
                     };
-                    app.usage_line_count = ui::usage_line_count(&cached, app.quotas.as_ref());
+                    app.usage_line_count =
+                        ui::usage_line_count(&cached, app.quotas.as_ref(), app.usage_span);
                     app.usage_stats = Some(cached);
                     app.usage_scroll = app.usage_scroll.min(usage_max_scroll(app));
+                    // Selection moved on while this scan ran — re-scan now
+                    // rather than waiting for the staleness tick.
+                    if scan_span != app.usage_span {
+                        start_usage_scan(app);
+                    }
                 }
                 Err(err) => app.set_status(format!("Usage stats failed: {err}")),
             }
@@ -580,7 +644,7 @@ fn start_quota_fetch(app: &mut MonitorApp) {
 /// it). No-op when the usage cache is absent.
 fn recompute_usage_line_count(app: &mut MonitorApp) {
     let count = match &app.usage_stats {
-        Some(cached) => ui::usage_line_count(cached, app.quotas.as_ref()),
+        Some(cached) => ui::usage_line_count(cached, app.quotas.as_ref(), app.usage_span),
         None => return,
     };
     app.usage_line_count = count;
@@ -779,9 +843,11 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
         last_auto_restart: BTreeMap::new(),
         usage_stats: None,
         usage_scroll: 0,
+        usage_span: UsageSpan::All,
         usage_line_count: 0,
         default_model,
         usage_rx: None,
+        usage_scan_span: None,
         quotas: None,
         quota_rx: None,
         quota_backoff: HashMap::new(),
@@ -821,6 +887,9 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
         return;
     }
     if app.active_section == Section::Logs && handle_logs_key(app, key.code) {
+        return;
+    }
+    if app.active_section == Section::Usage && handle_usage_key(app, key.code) {
         return;
     }
     if key.code == KeyCode::Char('r')
@@ -879,20 +948,6 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
             let page = config_page_size(app);
             app.config_scroll = app.config_scroll.saturating_sub(page);
         }
-        KeyCode::PageDown if app.active_section == Section::Usage => {
-            let page = usage_page_size(app);
-            let max = usage_max_scroll(app);
-            app.usage_scroll = app.usage_scroll.saturating_add(page).min(max);
-        }
-        KeyCode::PageUp if app.active_section == Section::Usage => {
-            let page = usage_page_size(app);
-            app.usage_scroll = app.usage_scroll.saturating_sub(page);
-        }
-        KeyCode::Char('R') if app.active_section == Section::Usage => {
-            start_usage_scan(app);
-            start_quota_fetch(app);
-            app.set_status("Refreshing usage stats…");
-        }
         KeyCode::Char('y') => copy_selected_thread_id(app),
         KeyCode::Char('r') => restart_selected_service(app),
         KeyCode::Enter => {
@@ -905,6 +960,38 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
             }
         }
         _ => {}
+    }
+}
+
+/// Handle a key while the Usage section is active. Returns `true` if the key
+/// was consumed (so the generic dispatcher should not also act on it).
+fn handle_usage_key(app: &mut MonitorApp, key: KeyCode) -> bool {
+    match key {
+        KeyCode::PageDown => {
+            let page = usage_page_size(app);
+            let max = usage_max_scroll(app);
+            app.usage_scroll = app.usage_scroll.saturating_add(page).min(max);
+            true
+        }
+        KeyCode::PageUp => {
+            let page = usage_page_size(app);
+            app.usage_scroll = app.usage_scroll.saturating_sub(page);
+            true
+        }
+        KeyCode::Char('R') => {
+            start_usage_scan(app);
+            start_quota_fetch(app);
+            app.set_status("Refreshing usage stats…");
+            true
+        }
+        KeyCode::Char('t') => {
+            app.usage_span = app.usage_span.next();
+            app.usage_scroll = 0;
+            start_usage_scan(app);
+            app.set_status(format!("Usage span: {}", app.usage_span.label()));
+            true
+        }
+        _ => false,
     }
 }
 
