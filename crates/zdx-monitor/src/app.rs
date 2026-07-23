@@ -147,7 +147,7 @@ const HELPER_MODEL_KEYS: [&str; 5] = [
     "read_thread_model",
 ];
 
-pub fn build_config_lines(config: &config::Config) -> Vec<ConfigLine> {
+pub fn build_config_lines(config: &config::Config, root: &Path) -> Vec<ConfigLine> {
     let value = match serde_json::to_value(config) {
         Ok(v) => v,
         Err(e) => return vec![ConfigLine::Row("error".to_string(), e.to_string())],
@@ -160,6 +160,10 @@ pub fn build_config_lines(config: &config::Config) -> Vec<ConfigLine> {
     let mut sections: Vec<(String, Vec<ConfigLine>)> = Vec::new();
 
     for (key, val) in obj {
+        if key == "favorites" {
+            // Rendered as a dedicated group from `config.favorites` below.
+            continue;
+        }
         if let Value::Object(nested) = val {
             let section_lines = build_section_lines(nested);
             sections.push((key.clone(), section_lines));
@@ -212,12 +216,126 @@ pub fn build_config_lines(config: &config::Config) -> Vec<ConfigLine> {
         }
     }
 
+    // Favorites group: one row per preset (`alias → provider:model@thinking`)
+    // plus a trailing action row to add a new one.
+    let mut fav_lines: Vec<ConfigLine> = config
+        .favorites
+        .iter()
+        .map(|f| {
+            ConfigLine::Row(
+                f.alias.clone(),
+                zdx_engine::models::format_model_thinking(&f.model, f.thinking),
+            )
+        })
+        .collect();
+    fav_lines.push(ConfigLine::Row(
+        ADD_FAVORITE_LABEL.to_string(),
+        String::new(),
+    ));
+    sections.push(("favorites".to_string(), fav_lines));
+
+    // Subagents group: every discovered (non-reserved) subagent with its
+    // effective model. Config overrides (`[subagents.overrides.<name>]`) win
+    // over the live definition; unset rows read `(default)`.
+    let sub_lines = build_subagent_lines(config, root);
+    if !sub_lines.is_empty() {
+        sections.push(("subagents".to_string(), sub_lines));
+    }
+
+    // Order model-bearing sections first so every editable model is grouped at
+    // the top of the tab, and inline telegram's thinking level into its model
+    // row (like `core`) so it reads `model@thinking`.
+    for (name, section_lines) in &mut sections {
+        if name == "telegram" {
+            inline_thinking_level(section_lines);
+        }
+    }
+    reorder_model_sections(&mut sections);
+
     for (name, section_lines) in sections {
         lines.push(ConfigLine::Section(name));
         lines.extend(section_lines);
     }
 
     lines
+}
+
+/// Section names that carry models, in the order they should appear at the top
+/// of the Config tab (after `core`/`helper models`).
+const MODEL_SECTION_ORDER: [&str; 5] = [
+    "transcription",
+    "speech",
+    "telegram",
+    "favorites",
+    "subagents",
+];
+
+/// Action row appended to the `favorites` group to create a new favorite.
+const ADD_FAVORITE_LABEL: &str = "[+ add favorite]";
+
+/// Value shown for a subagent with no model override and no definition model
+/// (it inherits the parent/default model at runtime).
+const SUBAGENT_DEFAULT_LABEL: &str = "(default)";
+
+/// Builds the `subagents` group rows: one per discovered (non-reserved)
+/// subagent, showing its effective model (config override wins over the live
+/// definition), or `(default)` when neither sets a model.
+fn build_subagent_lines(config: &config::Config, root: &Path) -> Vec<ConfigLine> {
+    let Ok(defs) = zdx_engine::subagents::discover(root) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for def in defs {
+        if zdx_engine::subagents::is_reserved_runtime_alias(&def.name) {
+            continue;
+        }
+        let over = config.subagents.overrides.get(&def.name);
+        let model = over
+            .and_then(|o| o.model.clone())
+            .or_else(|| def.model.clone());
+        let display = match model {
+            Some(m) => {
+                let level = over
+                    .and_then(|o| o.thinking_level)
+                    .or(def.thinking_level)
+                    .unwrap_or(config::ThinkingLevel::Low);
+                zdx_engine::models::format_model_thinking(&m, level)
+            }
+            None => SUBAGENT_DEFAULT_LABEL.to_string(),
+        };
+        out.push(ConfigLine::Row(def.name, display));
+    }
+    out
+}
+
+/// Reorders sections so model-bearing sections come first (per
+/// `MODEL_SECTION_ORDER`), preserving the original order of the rest.
+fn reorder_model_sections(sections: &mut [(String, Vec<ConfigLine>)]) {
+    sections.sort_by_key(|(name, _)| {
+        MODEL_SECTION_ORDER
+            .iter()
+            .position(|s| *s == name.as_str())
+            .unwrap_or(MODEL_SECTION_ORDER.len())
+    });
+}
+
+/// Merges a section's `thinking_level` row into its `model` row as
+/// `model@thinking` and drops the standalone level row (mirrors `core`).
+fn inline_thinking_level(lines: &mut Vec<ConfigLine>) {
+    let Some(level) = lines.iter().find_map(|l| match l {
+        ConfigLine::Row(k, v) if k == "thinking_level" => Some(v.clone()),
+        _ => None,
+    }) else {
+        return;
+    };
+    for l in lines.iter_mut() {
+        if let ConfigLine::Row(k, v) = l
+            && k == "model"
+        {
+            *v = format!("{v}@{level}");
+        }
+    }
+    lines.retain(|l| !matches!(l, ConfigLine::Row(k, _) if k == "thinking_level"));
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -809,7 +927,7 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let config = config::Config::load().context("load config")?;
     let default_model = config.model.clone();
-    let config_lines = build_config_lines(&config);
+    let config_lines = build_config_lines(&config, &root);
     let config_line_count = rendered_line_count(&config_lines);
     let (log_file_name, log_lines) = load_logs(LOG_TAIL_LINES);
     let services = load_services();
@@ -947,6 +1065,9 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
         KeyCode::PageUp if app.active_section == Section::Config => {
             let page = config_page_size(app);
             app.config_scroll = app.config_scroll.saturating_sub(page);
+        }
+        KeyCode::Char('d') | KeyCode::Delete if app.active_section == Section::Config => {
+            delete_or_reset_selected(app);
         }
         KeyCode::Char('y') => copy_selected_thread_id(app),
         KeyCode::Char('r') => restart_selected_service(app),
@@ -1863,9 +1984,13 @@ pub struct EditableModelField {
 pub(crate) fn editable_model_fields(lines: &[ConfigLine]) -> Vec<EditableModelField> {
     let mut out = Vec::new();
     let mut section = String::new();
+    let mut fav_index = 0usize;
     for (i, cl) in lines.iter().enumerate() {
         match cl {
-            ConfigLine::Section(name) => section.clone_from(name),
+            ConfigLine::Section(name) => {
+                section.clone_from(name);
+                fav_index = 0;
+            }
             ConfigLine::Row(key, _) => {
                 let mapped = match (section.as_str(), key.as_str()) {
                     ("core", "model")
@@ -1879,6 +2004,20 @@ pub(crate) fn editable_model_fields(lines: &[ConfigLine]) -> Vec<EditableModelFi
                     )),
                     ("speech", "model") => {
                         Some(("speech.model".to_string(), ModelFieldKind::Speech))
+                    }
+                    ("telegram", "model") => {
+                        Some(("telegram.model".to_string(), ModelFieldKind::Chat))
+                    }
+                    ("favorites", k) if k == ADD_FAVORITE_LABEL => {
+                        Some(("favorites.add".to_string(), ModelFieldKind::Chat))
+                    }
+                    ("favorites", _) => {
+                        let path = format!("favorites.{fav_index}");
+                        fav_index += 1;
+                        Some((path, ModelFieldKind::Chat))
+                    }
+                    ("subagents", name) => {
+                        Some((format!("subagents.{name}"), ModelFieldKind::Chat))
                     }
                     _ => None,
                 };
@@ -1956,8 +2095,12 @@ fn open_model_picker(app: &mut MonitorApp) {
     };
     let (path, kind, line_index) = (field.path.clone(), field.kind, field.line_index);
     let current = match &app.config_lines[line_index] {
-        // Ignore the `(unset)`/`(empty)` display placeholders.
-        ConfigLine::Row(_, v) if matches!(v.as_str(), "(unset)" | "(empty)") => String::new(),
+        // Ignore the `(unset)`/`(empty)`/`(default)` display placeholders.
+        ConfigLine::Row(_, v)
+            if matches!(v.as_str(), "(unset)" | "(empty)" | SUBAGENT_DEFAULT_LABEL) =>
+        {
+            String::new()
+        }
         ConfigLine::Row(_, v) => v.clone(),
         _ => String::new(),
     };
@@ -1971,7 +2114,7 @@ fn reload_config_lines(app: &mut MonitorApp) {
         return;
     };
     app.default_model.clone_from(&cfg.model);
-    app.config_lines = build_config_lines(&cfg);
+    app.config_lines = build_config_lines(&cfg, &app.root);
     app.config_line_count = rendered_line_count(&app.config_lines);
     let count = editable_model_fields(&app.config_lines).len();
     if app.config_selected >= count {
@@ -2091,6 +2234,69 @@ impl ModelPickerState {
     }
 }
 
+/// Applies a favorites edit for a `favorites.<i>`/`favorites.add` field and
+/// persists the whole list. Appends a new preset for `add`, else updates index.
+fn save_favorite(field: &str, model: &str, level: config::ThinkingLevel) -> anyhow::Result<()> {
+    let mut cfg = config::Config::load()?;
+    let suffix = field.strip_prefix("favorites.").unwrap_or_default();
+    if suffix == "add" {
+        let alias = format!("fav{}", cfg.favorites.len() + 1);
+        cfg.favorites.push(config::ModelFavorite {
+            alias,
+            model: model.to_string(),
+            thinking: level,
+        });
+    } else if let Ok(idx) = suffix.parse::<usize>() {
+        let fav = cfg
+            .favorites
+            .get_mut(idx)
+            .ok_or_else(|| anyhow::anyhow!("favorite index out of range: {idx}"))?;
+        fav.model = model.to_string();
+        fav.thinking = level;
+    } else {
+        anyhow::bail!("invalid favorite field: {field}");
+    }
+    config::Config::save_favorites(&cfg.favorites)
+}
+
+/// Handles `d`/`Del` on the Config tab: removes the selected favorite, or
+/// resets the selected subagent to its default (clears the config override).
+fn delete_or_reset_selected(app: &mut MonitorApp) {
+    let fields = editable_model_fields(&app.config_lines);
+    let Some(path) = fields.get(app.config_selected).map(|f| f.path.clone()) else {
+        return;
+    };
+
+    if let Some(suffix) = path.strip_prefix("favorites.") {
+        let Ok(idx) = suffix.parse::<usize>() else {
+            return; // add-row or invalid: nothing to delete
+        };
+        let Ok(mut cfg) = config::Config::load() else {
+            app.set_status("Failed to load config");
+            return;
+        };
+        if idx >= cfg.favorites.len() {
+            return;
+        }
+        let removed = cfg.favorites.remove(idx);
+        match config::Config::save_favorites(&cfg.favorites) {
+            Ok(()) => {
+                reload_config_lines(app);
+                app.set_status(format!("Removed favorite {}", removed.alias));
+            }
+            Err(e) => app.set_status(format!("Failed to remove favorite: {e}")),
+        }
+    } else if let Some(name) = path.strip_prefix("subagents.") {
+        match config::Config::clear_subagent_override(name) {
+            Ok(()) => {
+                reload_config_lines(app);
+                app.set_status(format!("Reset {name} to default"));
+            }
+            Err(e) => app.set_status(format!("Failed to reset {name}: {e}")),
+        }
+    }
+}
+
 /// Persists the picker's chosen model (+ thinking for chat models).
 fn commit_model_picker(app: &mut MonitorApp) {
     let Some(picker) = app.model_picker.as_ref() else {
@@ -2107,6 +2313,26 @@ fn commit_model_picker(app: &mut MonitorApp) {
                 .and_then(|()| config::Config::save_thinking_level(level)),
             zdx_engine::models::format_model_thinking(&model, level),
         ),
+        // Telegram bot model: separate `telegram.model` + `telegram.thinking_level`.
+        ModelFieldKind::Chat if field == "telegram.model" => (
+            config::Config::save_telegram_model(&model)
+                .and_then(|()| config::Config::save_telegram_thinking_level(level)),
+            zdx_engine::models::format_model_thinking(&model, level),
+        ),
+        // Favorite preset: update the entry at `favorites.<i>` or append via
+        // `favorites.add`; thinking is stored on the favorite itself.
+        ModelFieldKind::Chat if field.starts_with("favorites.") => (
+            save_favorite(&field, &model, level),
+            zdx_engine::models::format_model_thinking(&model, level),
+        ),
+        // Subagent override: `[subagents.overrides.<name>]` model + thinking.
+        ModelFieldKind::Chat if field.starts_with("subagents.") => {
+            let name = field.strip_prefix("subagents.").unwrap_or_default();
+            (
+                config::Config::save_subagent_override(name, &model, level),
+                zdx_engine::models::format_model_thinking(&model, level),
+            )
+        }
         // Role chat models: thinking carried inline as `model@thinking`.
         ModelFieldKind::Chat => {
             let combined = zdx_engine::models::format_model_thinking(&model, level);
@@ -2272,6 +2498,9 @@ mod transcript_tests {
             ConfigLine::Row("language".into(), "en".into()),
             ConfigLine::Section("speech".into()),
             ConfigLine::Row("model".into(), "w".into()),
+            ConfigLine::Section("telegram".into()),
+            ConfigLine::Row("model".into(), "claude-cli:x@low".into()),
+            ConfigLine::Row("bot_token".into(), "***".into()),
         ];
         let fields = editable_model_fields(&lines);
         let got: Vec<(&str, ModelFieldKind)> =
@@ -2283,6 +2512,7 @@ mod transcript_tests {
                 ("title_model", ModelFieldKind::Chat),
                 ("transcription.model", ModelFieldKind::Transcription),
                 ("speech.model", ModelFieldKind::Speech),
+                ("telegram.model", ModelFieldKind::Chat),
             ]
         );
     }
@@ -2290,7 +2520,7 @@ mod transcript_tests {
     #[test]
     fn build_config_lines_groups_helper_models() {
         let config = config::Config::default();
-        let lines = build_config_lines(&config);
+        let lines = build_config_lines(&config, std::path::Path::new("/nonexistent-zdx-test-root"));
 
         let mut section = String::new();
         let mut helper_keys: Vec<String> = Vec::new();
@@ -2322,6 +2552,94 @@ mod transcript_tests {
                 "read_thread_model",
             ],
             "helpers section should list every helper model in display order"
+        );
+    }
+
+    #[test]
+    fn favorites_group_resolves_indices_and_add_row() {
+        let lines = vec![
+            ConfigLine::Section("favorites".into()),
+            ConfigLine::Row("fast".into(), "gemini:x@low".into()),
+            ConfigLine::Row("deep".into(), "claude:y@high".into()),
+            ConfigLine::Row(ADD_FAVORITE_LABEL.into(), String::new()),
+        ];
+        let fields = editable_model_fields(&lines);
+        let paths: Vec<&str> = fields.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["favorites.0", "favorites.1", "favorites.add"]);
+    }
+
+    #[test]
+    fn subagents_group_resolves_names_to_override_paths() {
+        let lines = vec![
+            ConfigLine::Section("subagents".into()),
+            ConfigLine::Row("explorer".into(), "gemini:x@low".into()),
+            ConfigLine::Row("oracle".into(), SUBAGENT_DEFAULT_LABEL.into()),
+        ];
+        let fields = editable_model_fields(&lines);
+        let got: Vec<(&str, ModelFieldKind)> =
+            fields.iter().map(|f| (f.path.as_str(), f.kind)).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("subagents.explorer", ModelFieldKind::Chat),
+                ("subagents.oracle", ModelFieldKind::Chat),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_config_lines_orders_model_sections_and_inlines_telegram_thinking() {
+        let config = config::Config::default();
+        let lines = build_config_lines(&config, std::path::Path::new("/nonexistent-zdx-test-root"));
+
+        // Collect section names in display order.
+        let sections: Vec<&str> = lines
+            .iter()
+            .filter_map(|cl| match cl {
+                ConfigLine::Section(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        let pos = |name: &str| sections.iter().position(|s| *s == name);
+        // Model sections lead: core, helper models, transcription, speech, telegram.
+        for pair in [
+            ("core", "helper models"),
+            ("helper models", "transcription"),
+            ("transcription", "speech"),
+            ("speech", "telegram"),
+        ] {
+            assert!(
+                pos(pair.0) < pos(pair.1),
+                "{} should come before {}",
+                pair.0,
+                pair.1
+            );
+        }
+
+        // Telegram model row carries thinking inline and drops the standalone row.
+        let mut in_telegram = false;
+        let mut telegram_model: Option<String> = None;
+        let mut telegram_has_thinking_row = false;
+        for cl in &lines {
+            match cl {
+                ConfigLine::Section(name) => in_telegram = name == "telegram",
+                ConfigLine::Row(k, v) if in_telegram && k == "model" => {
+                    telegram_model = Some(v.clone());
+                }
+                ConfigLine::Row(k, _) if in_telegram && k == "thinking_level" => {
+                    telegram_has_thinking_row = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            !telegram_has_thinking_row,
+            "telegram thinking_level must be inlined, not a standalone row"
+        );
+        assert_eq!(
+            telegram_model.as_deref(),
+            Some("claude-cli:claude-opus-4-6@low"),
+            "telegram model should read model@thinking"
         );
     }
 

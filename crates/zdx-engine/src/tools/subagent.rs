@@ -77,10 +77,23 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(err) => return err,
     };
     let config = ctx.config.clone().unwrap_or_default();
-    let selection = match resolve_subagent_selection(&ctx.root, input.subagent.clone()) {
+    let mut selection = match resolve_subagent_selection(&ctx.root, input.subagent.clone()) {
         Ok(selection) => selection,
         Err(err) => return err,
     };
+
+    // Apply any per-subagent config override on top of the (live) definition so
+    // built-in prompts stay current while only the model/thinking is overridden.
+    if let RuntimeSubagentSelection::Named(definition) = &mut selection
+        && let Some(over) = config.subagents.overrides.get(&definition.name)
+    {
+        if let Some(model) = &over.model {
+            definition.model = Some(model.clone());
+        }
+        if let Some(level) = over.thinking_level {
+            definition.thinking_level = Some(level);
+        }
+    }
 
     let definition = match &selection {
         RuntimeSubagentSelection::Default => None,

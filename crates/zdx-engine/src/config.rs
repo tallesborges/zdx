@@ -102,6 +102,12 @@ pub struct SubagentsConfig {
     /// registry (same source used by the TUI model picker).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub available_models: Vec<String>,
+    /// Per-subagent model overrides keyed by subagent name. Applied on top of
+    /// the (live) built-in or file definition, so built-in prompts stay current
+    /// while only the model/thinking is overridden. Written as
+    /// `[subagents.overrides.<name>]`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub overrides: BTreeMap<String, SubagentOverride>,
 }
 
 impl Default for SubagentsConfig {
@@ -109,8 +115,20 @@ impl Default for SubagentsConfig {
         Self {
             enabled: default_subagents_enabled(),
             available_models: Vec::new(),
+            overrides: BTreeMap::new(),
         }
     }
+}
+
+/// A per-subagent override layered on top of its live definition.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SubagentOverride {
+    /// Model id (`provider:id`) to use instead of the definition's model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Thinking level to use instead of the definition's thinking level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<ThinkingLevel>,
 }
 
 /// Telegram bot configuration.
@@ -970,6 +988,137 @@ impl Config {
             None => doc[field] = value(model),
         }
 
+        Self::write_config(path, &doc.to_string())
+    }
+
+    /// Saves the full favorites list, replacing any existing `[[favorites]]`
+    /// entries while preserving the rest of the document via `toml_edit`.
+    ///
+    /// # Errors
+    /// Returns an error if the write fails.
+    pub fn save_favorites(favorites: &[ModelFavorite]) -> Result<()> {
+        Self::save_favorites_to(&paths::config_path(), favorites)
+    }
+
+    /// Saves the favorites list to a specific config path.
+    ///
+    /// # Errors
+    /// Returns an error if the write fails.
+    pub fn save_favorites_to(path: &Path, favorites: &[ModelFavorite]) -> Result<()> {
+        use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
+
+        let contents = if path.exists() {
+            let user_config = fs::read_to_string(path)
+                .with_context(|| format!("Failed to read config from {}", path.display()))?;
+            merge_with_template(&user_config)?
+        } else {
+            default_config_template().to_string()
+        };
+
+        let mut doc: DocumentMut = contents
+            .parse()
+            .with_context(|| format!("Failed to parse config from {}", path.display()))?;
+
+        if favorites.is_empty() {
+            doc.remove("favorites");
+        } else {
+            let mut arr = ArrayOfTables::new();
+            for fav in favorites {
+                let mut table = Table::new();
+                table["alias"] = value(fav.alias.as_str());
+                table["model"] = value(fav.model.as_str());
+                table["thinking"] = value(fav.thinking.display_name());
+                arr.push(table);
+            }
+            doc["favorites"] = Item::ArrayOfTables(arr);
+        }
+
+        Self::write_config(path, &doc.to_string())
+    }
+
+    /// Saves a per-subagent model override (`[subagents.overrides.<name>]`),
+    /// preserving the rest of the document via `toml_edit`.
+    ///
+    /// # Errors
+    /// Returns an error if the write fails.
+    pub fn save_subagent_override(name: &str, model: &str, thinking: ThinkingLevel) -> Result<()> {
+        Self::save_subagent_override_to(&paths::config_path(), name, model, thinking)
+    }
+
+    /// Saves a per-subagent model override to a specific config path.
+    ///
+    /// # Errors
+    /// Returns an error if the write fails.
+    pub fn save_subagent_override_to(
+        path: &Path,
+        name: &str,
+        model: &str,
+        thinking: ThinkingLevel,
+    ) -> Result<()> {
+        use toml_edit::{DocumentMut, Item, Table, value};
+
+        let contents = if path.exists() {
+            let user_config = fs::read_to_string(path)
+                .with_context(|| format!("Failed to read config from {}", path.display()))?;
+            merge_with_template(&user_config)?
+        } else {
+            default_config_template().to_string()
+        };
+        let mut doc: DocumentMut = contents
+            .parse()
+            .with_context(|| format!("Failed to parse config from {}", path.display()))?;
+
+        if doc.get("subagents").and_then(Item::as_table).is_none() {
+            doc["subagents"] = Item::Table(Table::new());
+        }
+        if doc["subagents"]
+            .get("overrides")
+            .and_then(Item::as_table)
+            .is_none()
+        {
+            doc["subagents"]["overrides"] = Item::Table(Table::new());
+        }
+        doc["subagents"]["overrides"][name]["model"] = value(model);
+        doc["subagents"]["overrides"][name]["thinking_level"] = value(thinking.display_name());
+
+        Self::write_config(path, &doc.to_string())
+    }
+
+    /// Removes a per-subagent model override, reverting to the definition's
+    /// default. No-op if the override doesn't exist.
+    ///
+    /// # Errors
+    /// Returns an error if the write fails.
+    pub fn clear_subagent_override(name: &str) -> Result<()> {
+        Self::clear_subagent_override_to(&paths::config_path(), name)
+    }
+
+    /// Removes a per-subagent model override from a specific config path.
+    ///
+    /// # Errors
+    /// Returns an error if the write fails.
+    pub fn clear_subagent_override_to(path: &Path, name: &str) -> Result<()> {
+        use toml_edit::{DocumentMut, Item};
+
+        let contents = if path.exists() {
+            let user_config = fs::read_to_string(path)
+                .with_context(|| format!("Failed to read config from {}", path.display()))?;
+            merge_with_template(&user_config)?
+        } else {
+            default_config_template().to_string()
+        };
+        let mut doc: DocumentMut = contents
+            .parse()
+            .with_context(|| format!("Failed to parse config from {}", path.display()))?;
+
+        if let Some(overrides) = doc
+            .get_mut("subagents")
+            .and_then(Item::as_table_mut)
+            .and_then(|t| t.get_mut("overrides"))
+            .and_then(Item::as_table_mut)
+        {
+            overrides.remove(name);
+        }
         Self::write_config(path, &doc.to_string())
     }
 
@@ -2728,6 +2877,96 @@ thinking_level = "off"
         assert_eq!(config.thinking_level, ThinkingLevel::Medium);
         assert_eq!(config.model, "claude-sonnet-4"); // preserved
         assert_eq!(config.max_tokens, Some(4096)); // preserved
+    }
+
+    /// `save_subagent_override` / `clear_subagent_override`: set and reset
+    /// round-trip while preserving other config fields.
+    #[test]
+    fn test_subagent_override_set_and_clear_roundtrip() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        fs::write(
+            &config_path,
+            r#"model = "claude-sonnet-4"
+max_tokens = 4096
+"#,
+        )
+        .unwrap();
+
+        Config::save_subagent_override_to(
+            &config_path,
+            "explorer",
+            "gemini:gemini-2.5-flash",
+            ThinkingLevel::High,
+        )
+        .unwrap();
+
+        let cfg = Config::load_from(&config_path).unwrap();
+        assert_eq!(cfg.model, "claude-sonnet-4"); // preserved
+        assert_eq!(cfg.max_tokens, Some(4096)); // preserved
+        let over = cfg.subagents.overrides.get("explorer").unwrap();
+        assert_eq!(over.model.as_deref(), Some("gemini:gemini-2.5-flash"));
+        assert_eq!(over.thinking_level, Some(ThinkingLevel::High));
+
+        Config::clear_subagent_override_to(&config_path, "explorer").unwrap();
+        let cfg = Config::load_from(&config_path).unwrap();
+        assert!(!cfg.subagents.overrides.contains_key("explorer"));
+        assert_eq!(cfg.model, "claude-sonnet-4"); // still preserved
+    }
+
+    /// `save_favorites`: add, edit, and remove round-trip while preserving
+    /// other config fields.
+    #[test]
+    fn test_save_favorites_roundtrip_preserves_fields() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        fs::write(
+            &config_path,
+            r#"model = "claude-sonnet-4"
+max_tokens = 4096
+"#,
+        )
+        .unwrap();
+
+        // Add two favorites.
+        Config::save_favorites_to(
+            &config_path,
+            &[
+                ModelFavorite {
+                    alias: "fast".into(),
+                    model: "gemini:gemini-2.5-flash".into(),
+                    thinking: ThinkingLevel::Low,
+                },
+                ModelFavorite {
+                    alias: "deep".into(),
+                    model: "claude-cli:claude-opus-4-6".into(),
+                    thinking: ThinkingLevel::High,
+                },
+            ],
+        )
+        .unwrap();
+
+        let cfg = Config::load_from(&config_path).unwrap();
+        assert_eq!(cfg.model, "claude-sonnet-4"); // preserved
+        assert_eq!(cfg.max_tokens, Some(4096)); // preserved
+        assert_eq!(cfg.favorites.len(), 2);
+        assert_eq!(cfg.favorites[1].alias, "deep");
+        assert_eq!(cfg.favorites[1].thinking, ThinkingLevel::High);
+
+        // Edit first, drop second.
+        let mut favs = cfg.favorites.clone();
+        favs[0].model = "openai:gpt-5".into();
+        favs.pop();
+        Config::save_favorites_to(&config_path, &favs).unwrap();
+        let cfg = Config::load_from(&config_path).unwrap();
+        assert_eq!(cfg.favorites.len(), 1);
+        assert_eq!(cfg.favorites[0].model, "openai:gpt-5");
+
+        // Clear all removes the key entirely.
+        Config::save_favorites_to(&config_path, &[]).unwrap();
+        let cfg = Config::load_from(&config_path).unwrap();
+        assert!(cfg.favorites.is_empty());
+        assert_eq!(cfg.model, "claude-sonnet-4"); // still preserved
     }
 
     /// `save_thinking_level`: uses template structure but preserves user values.
