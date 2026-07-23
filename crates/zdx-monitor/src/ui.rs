@@ -3,12 +3,12 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs, Wrap};
-use zdx_engine::core::usage_stats::{UsageRow, UsageStats, UsageTotals};
+use zdx_engine::core::usage_stats::{self, DailyUsage, UsageRow, UsageStats, UsageTotals};
 use zdx_engine::providers::subscription_quota::{QuotaWindow, provider_display};
 
 use crate::app::{
     AgentOverlayState, CachedQuotas, CachedUsageStats, ConfigLine, ModelPickerState, MonitorApp,
-    QuotaEntry, Section,
+    QuotaEntry, Section, UsageSpan,
 };
 
 pub fn render(f: &mut Frame, app: &MonitorApp) {
@@ -127,7 +127,7 @@ fn footer_hint(section: Section) -> &'static str {
         Section::Automations => "↑↓ navigate • Tab switch • q quit",
         Section::Config => "↑↓ select model • Enter edit • PgUp/PgDn scroll • Tab switch • q quit",
         Section::Threads => "↑↓ navigate • y copy thread ID • Tab switch • q quit",
-        Section::Usage => "↑↓ scroll • PgUp/PgDn page • R refresh • Tab switch • q quit",
+        Section::Usage => "↑↓ scroll • PgUp/PgDn page • t span • R refresh • Tab switch • q quit",
         Section::Logs => {
             "↑↓ select • PgUp/PgDn page • Enter open • G/End follow • Tab switch • q quit"
         }
@@ -321,7 +321,7 @@ fn render_usage(f: &mut Frame, app: &MonitorApp, area: Rect) {
         return;
     };
 
-    let lines = build_usage_lines(cached, app.quotas.as_ref());
+    let lines = build_usage_lines(cached, app.quotas.as_ref(), app.usage_span);
     let total_lines = lines.len();
     let visible_lines = area.height.saturating_sub(2) as usize;
     let max_scroll = total_lines.saturating_sub(visible_lines);
@@ -339,7 +339,8 @@ fn render_usage(f: &mut Frame, app: &MonitorApp, area: Rect) {
         ""
     };
     let title = format!(
-        " Usage — {} thread(s) scanned{scroll_info}{refreshing} ",
+        " Usage ({}) — {} thread(s) scanned{scroll_info}{refreshing} ",
+        app.usage_span.label(),
         cached.stats.threads_scanned
     );
 
@@ -350,8 +351,12 @@ fn render_usage(f: &mut Frame, app: &MonitorApp, area: Rect) {
 }
 
 /// Rendered line count of the cached usage view, used for scroll clamping.
-pub(crate) fn usage_line_count(cached: &CachedUsageStats, quotas: Option<&CachedQuotas>) -> usize {
-    build_usage_lines(cached, quotas).len()
+pub(crate) fn usage_line_count(
+    cached: &CachedUsageStats,
+    quotas: Option<&CachedQuotas>,
+    span: UsageSpan,
+) -> usize {
+    build_usage_lines(cached, quotas, span).len()
 }
 
 /// Build the styled display lines for the Usage tab. Mirrors the `zdx stats`
@@ -360,10 +365,11 @@ pub(crate) fn usage_line_count(cached: &CachedUsageStats, quotas: Option<&Cached
 fn build_usage_lines(
     cached: &CachedUsageStats,
     quotas: Option<&CachedQuotas>,
+    span: UsageSpan,
 ) -> Vec<Line<'static>> {
     let stats = &cached.stats;
     let mut lines = subscription_lines(quotas);
-    lines.extend(usage_banner_lines(cached));
+    lines.extend(usage_banner_lines(cached, span.label()));
 
     if stats.threads_scanned == 0 || stats.totals.requests == 0 {
         lines.push(Line::from(format!(
@@ -375,6 +381,8 @@ fn build_usage_lines(
     }
 
     lines.extend(usage_totals_lines(&stats.totals));
+    lines.push(Line::from(""));
+    lines.extend(usage_chart_lines(&stats.daily, cached.span));
     lines.push(Line::from(""));
     lines.extend(usage_table("By provider:", None, &stats.by_provider));
     lines.push(Line::from(""));
@@ -528,17 +536,26 @@ fn subscription_lines(quotas: Option<&CachedQuotas>) -> Vec<Line<'static>> {
 }
 
 /// The banner/header block shown above the tables (title, scope, freshness).
-fn usage_banner_lines(cached: &CachedUsageStats) -> Vec<Line<'static>> {
+fn usage_banner_lines(cached: &CachedUsageStats, span_label: &str) -> Vec<Line<'static>> {
     let dim = Style::default().fg(Color::DarkGray);
     vec![
         Line::from(Span::styled(
             "zdx usage stats (estimated)",
             Style::default().add_modifier(Modifier::BOLD),
         )),
-        Line::from(Span::styled(
-            "Global across all ZDX threads under $ZDX_HOME/threads.",
-            dim,
-        )),
+        Line::from(vec![
+            Span::styled(
+                "Global across all ZDX threads under $ZDX_HOME/threads · span: ",
+                dim,
+            ),
+            Span::styled(
+                span_label.to_string(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" (press t to change)", dim),
+        ]),
         Line::from(Span::styled(
             "Estimated: old usage lacks per-request model/provider; includes saved \
              subagent/helper runs; image spend excluded; subscription providers shown as flat-rate.",
@@ -574,6 +591,208 @@ fn usage_totals_lines(t: &UsageTotals) -> Vec<Line<'static>> {
             t.unknown_pricing_rows,
         )),
     ]
+}
+
+/// Width (in cells) of a labelled daily bar.
+const DAILY_BAR_WIDTH: usize = 30;
+/// At or below this many days in the window, render labelled bars; above it,
+/// switch to a compact vertical bar chart so long windows stay readable.
+const DAILY_BAR_MAX_DAYS: usize = 30;
+/// Rows tall for the vertical daily bar chart (large windows).
+const DAILY_CHART_HEIGHT: usize = 8;
+/// Gutter width (chars) for the vertical chart's left value axis.
+const DAILY_AXIS_GUTTER: usize = 6;
+
+/// The daily-usage chart: one labelled token bar per day for a small window,
+/// or a compact sparkline for a large one. Honors the active span (fixed
+/// windows are zero-filled so gaps are visible; all-time uses observed days).
+fn usage_chart_lines(daily: &[DailyUsage], span: UsageSpan) -> Vec<Line<'static>> {
+    let dim = Style::default().fg(Color::DarkGray);
+    let header = Line::from(Span::styled(
+        format!("Daily tokens ({}):", span.label()),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ));
+    let series = daily_series_for_span(daily, span);
+    if series.is_empty() {
+        return vec![
+            header,
+            Line::from(Span::styled("  no dated usage in this window", dim)),
+        ];
+    }
+    let max = series.iter().map(|(_, t)| *t).max().unwrap_or(0).max(1);
+    let mut lines = vec![header];
+    if series.len() <= DAILY_BAR_MAX_DAYS {
+        for (day, tokens) in &series {
+            lines.push(daily_bar_line(*day, *tokens, max));
+        }
+    } else {
+        lines.extend(daily_sparkline_lines(&series, max));
+    }
+    lines
+}
+
+/// The `(day, tokens)` series to plot for the active span. Fixed windows are
+/// zero-filled across `since_day..=today` so missing days show as empty bars;
+/// all-time plots only the days that have usage.
+fn daily_series_for_span(daily: &[DailyUsage], span: UsageSpan) -> Vec<(i32, u64)> {
+    match span.since_day() {
+        Some(min) => {
+            let today = usage_stats::today_utc();
+            let map: std::collections::HashMap<i32, u64> =
+                daily.iter().map(|d| (d.day, d.tokens)).collect();
+            (min..=today)
+                .map(|day| (day, map.get(&day).copied().unwrap_or(0)))
+                .collect()
+        }
+        None => daily.iter().map(|d| (d.day, d.tokens)).collect(),
+    }
+}
+
+/// A single labelled day bar: `MM-DD ▕████░░░░▏  1.2M`.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+fn daily_bar_line(day: i32, tokens: u64, max: u64) -> Line<'static> {
+    let filled = (((tokens as f64) / (max as f64)) * DAILY_BAR_WIDTH as f64).round() as usize;
+    let filled = filled.min(DAILY_BAR_WIDTH);
+    let bar = format!(
+        "{}{}",
+        "█".repeat(filled),
+        "░".repeat(DAILY_BAR_WIDTH - filled)
+    );
+    Line::from(vec![
+        Span::styled(
+            format!("  {} ", day_label(day)),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(format!("▕{bar}▏"), Style::default().fg(Color::Cyan)),
+        Span::styled(
+            format!(" {:>8}", format_usage_tokens(tokens)),
+            Style::default().fg(Color::White),
+        ),
+    ])
+}
+
+/// A compact multi-row vertical bar chart with a value axis (left) and date
+/// ticks (below), used for windows too wide for one labelled bar per day.
+fn daily_sparkline_lines(series: &[(i32, u64)], max: u64) -> Vec<Line<'static>> {
+    let cyan = Style::default().fg(Color::Cyan);
+    let dim = Style::default().fg(Color::DarkGray);
+    let mid = DAILY_CHART_HEIGHT / 2;
+    let mut lines: Vec<Line<'static>> = vertical_bar_rows(series, max, DAILY_CHART_HEIGHT)
+        .into_iter()
+        .enumerate()
+        .map(|(i, row)| {
+            // Value axis: max at top, half at the midline, 0 at the baseline.
+            let label = if i == 0 {
+                format_usage_tokens(max)
+            } else if i == mid {
+                format_usage_tokens(max / 2)
+            } else if i == DAILY_CHART_HEIGHT - 1 {
+                "0".to_string()
+            } else {
+                String::new()
+            };
+            Line::from(vec![
+                Span::styled(format!("{label:>DAILY_AXIS_GUTTER$} │"), dim),
+                Span::styled(row, cyan),
+            ])
+        })
+        .collect();
+
+    // Date axis: a baseline rule plus `MM-DD` ticks aligned under their columns.
+    lines.push(Line::from(vec![
+        Span::styled(format!("{:>DAILY_AXIS_GUTTER$} └", ""), dim),
+        Span::styled(date_axis(series), dim),
+    ]));
+
+    let (peak_day, peak_tokens) = series
+        .iter()
+        .copied()
+        .max_by_key(|(_, tokens)| *tokens)
+        .unwrap_or((0, 0));
+    lines.push(Line::from(Span::styled(
+        format!(
+            "{:>DAILY_AXIS_GUTTER$}   peak {} on {}",
+            "",
+            format_usage_tokens(peak_tokens),
+            day_label(peak_day),
+        ),
+        dim,
+    )));
+    lines
+}
+
+/// Builds the date-axis row (length = `series.len()`): `MM-DD` labels placed at
+/// evenly spaced columns, with the final label right-anchored to the last day
+/// so the window's start and end dates are both readable.
+fn date_axis(series: &[(i32, u64)]) -> String {
+    let n = series.len();
+    if n == 0 {
+        return String::new();
+    }
+    let mut axis = vec![' '; n];
+    let put = |axis: &mut Vec<char>, start: usize, label: &str| {
+        for (k, ch) in label.chars().enumerate() {
+            if let Some(slot) = axis.get_mut(start + k) {
+                *slot = ch;
+            }
+        }
+    };
+    let last_label = day_label(series[n - 1].0);
+    let len = last_label.chars().count();
+    let final_start = n.saturating_sub(len);
+    let step = (n / 6).max(2 * len + 2);
+    for p in (0..n).step_by(step) {
+        // Keep the first tick; drop any that would collide with the final one.
+        if p == 0 || p + len < final_start {
+            put(&mut axis, p, &day_label(series[p].0));
+        }
+    }
+    put(&mut axis, final_start, &last_label);
+    axis.into_iter().collect()
+}
+
+/// Renders `height` rows (top-to-bottom) of a vertical bar chart, one column per
+/// value, using eighth-block glyphs so each column has sub-row resolution.
+/// Nonzero days render at least one eighth; zero days show a baseline `·`.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+fn vertical_bar_rows(series: &[(i32, u64)], max: u64, height: usize) -> Vec<String> {
+    const EIGHTHS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let total = (height * 8) as f64;
+    let mut rows = vec![String::with_capacity(series.len()); height];
+    for (_, tokens) in series {
+        let eighths = if *tokens == 0 {
+            0
+        } else {
+            (((*tokens as f64) / (max as f64)) * total).round().max(1.0) as usize
+        };
+        for r in 0..height {
+            // `r == 0` is the bottom row; fill from the bottom up.
+            let cell = eighths.saturating_sub(r * 8).min(8);
+            let ch = if cell == 0 {
+                if r == 0 && *tokens == 0 { '·' } else { ' ' }
+            } else {
+                EIGHTHS[cell - 1]
+            };
+            rows[height - 1 - r].push(ch);
+        }
+    }
+    rows
+}
+
+/// Formats a UTC day number (days since epoch) as `MM-DD`.
+fn day_label(day: i32) -> String {
+    DateTime::from_timestamp(i64::from(day) * 86_400, 0)
+        .map_or_else(|| day.to_string(), |dt| dt.format("%m-%d").to_string())
 }
 
 /// A titled table of usage rows. When `model_header` is set the rows include a

@@ -83,6 +83,15 @@ impl UsageTotals {
     }
 }
 
+/// Total tokens on a single UTC day, for the daily usage chart.
+#[derive(Debug, Clone)]
+pub struct DailyUsage {
+    /// UTC day number (days since the Unix epoch).
+    pub day: i32,
+    /// Total tokens across all classes on that day.
+    pub tokens: u64,
+}
+
 /// Aggregated usage statistics ready for display.
 #[derive(Debug, Clone)]
 pub struct UsageStats {
@@ -91,6 +100,9 @@ pub struct UsageStats {
     pub by_provider: Vec<UsageRow>,
     /// Per provider+model rows, sorted by total tokens (descending).
     pub by_model: Vec<UsageRow>,
+    /// Per-day token totals within the active window, ascending by day.
+    /// Excludes usage with no parseable timestamp (`UNKNOWN_DAY`).
+    pub daily: Vec<DailyUsage>,
     /// Number of thread files successfully scanned.
     pub threads_scanned: usize,
     /// Non-fatal issues (e.g. an unreadable thread file that was skipped).
@@ -153,9 +165,37 @@ impl RawBucket {
 /// # Errors
 /// Returns an error only if both the cache path and a full scan fail (e.g. the
 /// threads directory cannot be read).
-pub fn aggregate_usage(default_model: &str) -> Result<UsageStats> {
-    aggregate_usage_at(&paths::threads_dir(), &cache_path(), default_model)
+/// `since_day` restricts the aggregate to usage on or after that UTC day number
+/// (days since the Unix epoch); `None` aggregates all time. Usage events whose
+/// timestamp cannot be parsed are treated as unknown-day and only appear in the
+/// all-time view.
+pub fn aggregate_usage(default_model: &str, since_day: Option<i32>) -> Result<UsageStats> {
+    aggregate_usage_at(
+        &paths::threads_dir(),
+        &cache_path(),
+        default_model,
+        since_day,
+    )
 }
+
+/// UTC day number (days since the Unix epoch) for the current time.
+#[must_use]
+pub fn today_utc() -> i32 {
+    i32::try_from(chrono::Utc::now().timestamp().div_euclid(86_400)).unwrap_or(0)
+}
+
+/// UTC day number for an RFC3339 timestamp string. `None` when the timestamp is
+/// missing or unparseable; such events are bucketed under `UNKNOWN_DAY`.
+fn day_from_ts(ts: Option<&str>) -> i32 {
+    ts.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .and_then(|dt| i32::try_from(dt.timestamp().div_euclid(86_400)).ok())
+        .unwrap_or(UNKNOWN_DAY)
+}
+
+/// Sentinel day for usage events with no parseable timestamp. Sorts before any
+/// real day so a `day >= since_day` filter excludes it from bounded spans while
+/// the all-time view (no filter) still counts it.
+const UNKNOWN_DAY: i32 = i32::MIN;
 
 /// Aggregates usage/cost for a single thread by id, reusing the same lean
 /// scan, attribution, and costing path as the global aggregator.
@@ -176,29 +216,36 @@ fn thread_usage_stats_at(
 ) -> Result<UsageStats> {
     let path = threads_dir.join(format!("{thread_id}.jsonl"));
     let scan = scan_thread_file(&path)?;
-    let buckets = resolve_thread_buckets(&scan, default_model);
-    Ok(finalize(buckets, 1, Vec::new()))
+    let day_buckets = resolve_thread_buckets(&scan, default_model);
+    let daily = daily_from_buckets(&day_buckets, None);
+    let buckets = collapse_days(day_buckets, None);
+    Ok(finalize(buckets, daily, 1, Vec::new()))
 }
 
 fn aggregate_usage_at(
     threads_dir: &Path,
     cache_path: &Path,
     default_model: &str,
+    since_day: Option<i32>,
 ) -> Result<UsageStats> {
-    match aggregate_cached(threads_dir, cache_path, default_model) {
+    match aggregate_cached(threads_dir, cache_path, default_model, since_day) {
         Ok(stats) => Ok(stats),
         Err(err) => {
             tracing::debug!("usage cache unavailable ({err:#}); falling back to full scan");
-            aggregate_scan_all(threads_dir, default_model)
+            aggregate_scan_all(threads_dir, default_model, since_day)
         }
     }
 }
 
 /// Full (uncached) scan of every thread. Used as the fallback when the cache
 /// cannot be opened.
-fn aggregate_scan_all(threads_dir: &Path, default_model: &str) -> Result<UsageStats> {
+fn aggregate_scan_all(
+    threads_dir: &Path,
+    default_model: &str,
+    since_day: Option<i32>,
+) -> Result<UsageStats> {
     let files = thread_persistence::list_thread_files(threads_dir)?;
-    let mut raw: BTreeMap<(String, String), RawBucket> = BTreeMap::new();
+    let mut all_days: BTreeMap<(String, String, i32), RawBucket> = BTreeMap::new();
     let mut warnings = Vec::new();
     let mut threads_scanned = 0usize;
 
@@ -207,14 +254,16 @@ fn aggregate_scan_all(threads_dir: &Path, default_model: &str) -> Result<UsageSt
             Ok(scan) => {
                 threads_scanned += 1;
                 for (key, bucket) in resolve_thread_buckets(&scan, default_model) {
-                    raw.entry(key).or_default().merge(&bucket);
+                    all_days.entry(key).or_default().merge(&bucket);
                 }
             }
             Err(err) => warnings.push(format!("skipped thread {}: {err}", file.id)),
         }
     }
 
-    Ok(finalize(raw, threads_scanned, warnings))
+    let daily = daily_from_buckets(&all_days, since_day);
+    let raw = collapse_days(all_days, since_day);
+    Ok(finalize(raw, daily, threads_scanned, warnings))
 }
 
 /// Cache-backed aggregation: syncs only changed/new threads into the `SQLite`
@@ -223,6 +272,7 @@ fn aggregate_cached(
     threads_dir: &Path,
     cache_path: &Path,
     default_model: &str,
+    since_day: Option<i32>,
 ) -> Result<UsageStats> {
     let files = thread_persistence::list_thread_files(threads_dir)?;
     let conn = open_cache(cache_path)?;
@@ -267,17 +317,18 @@ fn aggregate_cached(
     }
     tx.commit()?;
 
-    let raw = load_all_buckets(&conn)?;
-    Ok(finalize(raw, threads_scanned, warnings))
+    let raw = load_all_buckets(&conn, since_day)?;
+    let daily = load_daily(&conn, since_day)?;
+    Ok(finalize(raw, daily, threads_scanned, warnings))
 }
 
-/// Resolves a thread's usage into per-`(provider, model)` buckets, applying the
-/// thread-level fallback (`model_override` or `default_model`) to usage that
+/// Resolves a thread's usage into per-`(provider, model, day)` buckets, applying
+/// the thread-level fallback (`model_override` or `default_model`) to usage that
 /// lacks a per-request provider/model.
 fn resolve_thread_buckets(
     scan: &ThreadUsageScan,
     default_model: &str,
-) -> BTreeMap<(String, String), RawBucket> {
+) -> BTreeMap<(String, String, i32), RawBucket> {
     let fallback_model = scan
         .model_override
         .clone()
@@ -288,22 +339,61 @@ fn resolve_thread_buckets(
         fallback_selection.model.clone(),
     );
 
-    let mut buckets: BTreeMap<(String, String), RawBucket> = BTreeMap::new();
+    let mut buckets: BTreeMap<(String, String, i32), RawBucket> = BTreeMap::new();
     for usage in &scan.usages {
-        let (key, estimated) = attribute_event(
+        let ((provider, model), estimated) = attribute_event(
             usage.provider.as_deref(),
             usage.model.as_deref(),
             &fallback_key,
         );
-        buckets.entry(key).or_default().add_event(
-            usage.input,
-            usage.output,
-            usage.cache_read,
-            usage.cache_write,
-            estimated,
-        );
+        buckets
+            .entry((provider, model, usage.day))
+            .or_default()
+            .add_event(
+                usage.input,
+                usage.output,
+                usage.cache_read,
+                usage.cache_write,
+                estimated,
+            );
     }
     buckets
+}
+
+/// Collapses day-keyed buckets into `(provider, model)` totals, keeping only
+/// days on or after `since_day` (all days when `None`).
+fn collapse_days(
+    day_buckets: BTreeMap<(String, String, i32), RawBucket>,
+    since_day: Option<i32>,
+) -> BTreeMap<(String, String), RawBucket> {
+    let mut out: BTreeMap<(String, String), RawBucket> = BTreeMap::new();
+    for ((provider, model, day), bucket) in day_buckets {
+        if since_day.is_some_and(|min| day < min) {
+            continue;
+        }
+        out.entry((provider, model)).or_default().merge(&bucket);
+    }
+    out
+}
+
+/// Builds the per-day token series from day-keyed buckets, keeping only days on
+/// or after `since_day` and excluding unknown-day (`UNKNOWN_DAY`) usage. Sorted
+/// ascending by day.
+fn daily_from_buckets(
+    day_buckets: &BTreeMap<(String, String, i32), RawBucket>,
+    since_day: Option<i32>,
+) -> Vec<DailyUsage> {
+    let mut by_day: BTreeMap<i32, u64> = BTreeMap::new();
+    for ((_, _, day), bucket) in day_buckets {
+        if *day == UNKNOWN_DAY || since_day.is_some_and(|min| *day < min) {
+            continue;
+        }
+        *by_day.entry(*day).or_default() += bucket.tokens();
+    }
+    by_day
+        .into_iter()
+        .map(|(day, tokens)| DailyUsage { day, tokens })
+        .collect()
 }
 
 /// Converts a file mtime to nanoseconds-since-epoch for the cache key.
@@ -317,7 +407,7 @@ fn mtime_nanos(modified: Option<SystemTime>) -> i64 {
 
 /// Bumped when the cache table layout changes; a mismatch drops and rebuilds
 /// the per-thread tables.
-const CACHE_SCHEMA_VERSION: &str = "1";
+const CACHE_SCHEMA_VERSION: &str = "2";
 
 const CREATE_META_SQL: &str =
     "CREATE TABLE IF NOT EXISTS cache_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);";
@@ -332,14 +422,16 @@ CREATE TABLE IF NOT EXISTS thread_usage (
     thread_id TEXT NOT NULL,
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
+    day INTEGER NOT NULL,
     requests INTEGER NOT NULL,
     input INTEGER NOT NULL,
     output INTEGER NOT NULL,
     cache_read INTEGER NOT NULL,
     cache_write INTEGER NOT NULL,
     estimated INTEGER NOT NULL,
-    PRIMARY KEY (thread_id, provider, model)
-);";
+    PRIMARY KEY (thread_id, provider, model, day)
+);
+CREATE INDEX IF NOT EXISTS idx_thread_usage_day ON thread_usage(day);";
 
 fn cache_path() -> PathBuf {
     paths::zdx_home().join("cache").join("usage.sqlite")
@@ -458,20 +550,21 @@ fn replace_thread_rows(
     id: &str,
     mtime_ns: i64,
     size: i64,
-    buckets: &BTreeMap<(String, String), RawBucket>,
+    buckets: &BTreeMap<(String, String, i32), RawBucket>,
 ) -> Result<()> {
     conn.execute("DELETE FROM thread_usage WHERE thread_id = ?1", [id])?;
     {
         let mut stmt = conn.prepare_cached(
             "INSERT INTO thread_usage \
-             (thread_id, provider, model, requests, input, output, cache_read, cache_write, estimated) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             (thread_id, provider, model, day, requests, input, output, cache_read, cache_write, estimated) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         )?;
-        for ((provider, model), bucket) in buckets {
+        for ((provider, model, day), bucket) in buckets {
             stmt.execute(rusqlite::params![
                 id,
                 provider.as_str(),
                 model.as_str(),
+                day,
                 i64_from(bucket.requests),
                 i64_from(bucket.input),
                 i64_from(bucket.output),
@@ -495,12 +588,18 @@ fn delete_thread_rows(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
-fn load_all_buckets(conn: &Connection) -> Result<BTreeMap<(String, String), RawBucket>> {
+/// Loads and collapses all cached rows into `(provider, model)` totals, keeping
+/// only days on or after `since_day` (all days when `None`).
+fn load_all_buckets(
+    conn: &Connection,
+    since_day: Option<i32>,
+) -> Result<BTreeMap<(String, String), RawBucket>> {
+    let min_day = since_day.unwrap_or(i32::MIN);
     let mut stmt = conn.prepare(
         "SELECT provider, model, requests, input, output, cache_read, cache_write, estimated \
-         FROM thread_usage",
+         FROM thread_usage WHERE day >= ?1",
     )?;
-    let rows = stmt.query_map([], |r| {
+    let rows = stmt.query_map([min_day], |r| {
         Ok((
             (r.get::<_, String>(0)?, r.get::<_, String>(1)?),
             RawBucket {
@@ -522,6 +621,24 @@ fn load_all_buckets(conn: &Connection) -> Result<BTreeMap<(String, String), RawB
     Ok(map)
 }
 
+/// Loads the per-day token series from the cache, keeping only days on or after
+/// `since_day` and excluding unknown-day usage. Sorted ascending by day.
+fn load_daily(conn: &Connection, since_day: Option<i32>) -> Result<Vec<DailyUsage>> {
+    let min_day = since_day.unwrap_or(i32::MIN);
+    let mut stmt = conn.prepare(
+        "SELECT day, SUM(input + output + cache_read + cache_write) \
+         FROM thread_usage WHERE day >= ?1 AND day > ?2 GROUP BY day ORDER BY day ASC",
+    )?;
+    let rows = stmt.query_map([min_day, UNKNOWN_DAY], |r| {
+        Ok(DailyUsage {
+            day: r.get::<_, i32>(0)?,
+            tokens: u64_from(r.get::<_, i64>(1)?),
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 fn i64_from(v: u64) -> i64 {
     i64::try_from(v).unwrap_or(i64::MAX)
 }
@@ -539,6 +656,9 @@ struct LeanUsage {
     cache_write: u64,
     model: Option<String>,
     provider: Option<String>,
+    /// UTC day number (days since the Unix epoch), or `UNKNOWN_DAY` when the
+    /// event carried no parseable timestamp.
+    day: i32,
 }
 
 /// Result of a lean per-thread scan: the thread's `model_override` (for
@@ -568,6 +688,8 @@ struct UsageLine {
     model: Option<String>,
     #[serde(default)]
     provider: Option<String>,
+    #[serde(default)]
+    ts: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -608,6 +730,7 @@ fn scan_usage_reader<R: BufRead>(reader: R) -> std::io::Result<ThreadUsageScan> 
                         cache_write: u.cache_write_tokens,
                         model: u.model,
                         provider: u.provider,
+                        day: day_from_ts(u.ts.as_deref()),
                     });
                 }
             }
@@ -651,6 +774,7 @@ fn attribute_event(
 
 fn finalize(
     raw: BTreeMap<(String, String), RawBucket>,
+    daily: Vec<DailyUsage>,
     threads_scanned: usize,
     warnings: Vec<String>,
 ) -> UsageStats {
@@ -756,6 +880,7 @@ fn finalize(
         totals,
         by_provider,
         by_model,
+        daily,
         threads_scanned,
         warnings,
     }
@@ -772,13 +897,29 @@ mod tests {
     }
 
     fn usage_line(input: u64, output: u64, model: Option<&str>, provider: Option<&str>) -> String {
+        usage_line_at(input, output, model, provider, "t")
+    }
+
+    fn usage_line_at(
+        input: u64,
+        output: u64,
+        model: Option<&str>,
+        provider: Option<&str>,
+        ts: &str,
+    ) -> String {
         let attribution = match (model, provider) {
             (Some(m), Some(p)) => format!(r#","model":"{m}","provider":"{p}""#),
             _ => String::new(),
         };
         format!(
-            r#"{{"type":"usage","input_tokens":{input},"output_tokens":{output},"cache_read_tokens":0,"cache_write_tokens":0{attribution},"ts":"t"}}"#
+            r#"{{"type":"usage","input_tokens":{input},"output_tokens":{output},"cache_read_tokens":0,"cache_write_tokens":0{attribution},"ts":"{ts}"}}"#
         )
+    }
+
+    /// RFC3339 timestamp `days` before now, for building day-scoped fixtures.
+    fn ts_days_ago(days: i64) -> String {
+        (chrono::Utc::now() - chrono::Duration::days(days))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     }
 
     #[test]
@@ -821,7 +962,7 @@ mod tests {
             "a",
             &[usage_line(100, 50, Some("gpt-5.5"), Some("openai-codex"))],
         );
-        let s1 = aggregate_usage_at(&threads, &cache, "claude-opus-4-8").unwrap();
+        let s1 = aggregate_usage_at(&threads, &cache, "claude-opus-4-8", None).unwrap();
         assert_eq!(s1.threads_scanned, 1);
         assert_eq!((s1.totals.input, s1.totals.output), (100, 50));
 
@@ -831,7 +972,7 @@ mod tests {
             "b",
             &[usage_line(7, 3, Some("gpt-5.5"), Some("openai-codex"))],
         );
-        let s2 = aggregate_usage_at(&threads, &cache, "claude-opus-4-8").unwrap();
+        let s2 = aggregate_usage_at(&threads, &cache, "claude-opus-4-8", None).unwrap();
         assert_eq!(s2.threads_scanned, 2);
         assert_eq!((s2.totals.input, s2.totals.output), (107, 53));
 
@@ -844,12 +985,12 @@ mod tests {
                 usage_line(200, 20, Some("gpt-5.5"), Some("openai-codex")),
             ],
         );
-        let s3 = aggregate_usage_at(&threads, &cache, "claude-opus-4-8").unwrap();
+        let s3 = aggregate_usage_at(&threads, &cache, "claude-opus-4-8", None).unwrap();
         assert_eq!((s3.totals.input, s3.totals.output), (307, 73));
 
         // A deleted thread drops out of the aggregate.
         std::fs::remove_file(threads.join("b.jsonl")).unwrap();
-        let s4 = aggregate_usage_at(&threads, &cache, "claude-opus-4-8").unwrap();
+        let s4 = aggregate_usage_at(&threads, &cache, "claude-opus-4-8", None).unwrap();
         assert_eq!(s4.threads_scanned, 1);
         assert_eq!((s4.totals.input, s4.totals.output), (300, 70));
     }
@@ -866,11 +1007,11 @@ mod tests {
             "a",
             &[usage_line(100, 50, Some("gpt-5.5"), Some("openai-codex"))],
         );
-        aggregate_usage_at(&threads, &cache, "claude-opus-4-8").unwrap();
+        aggregate_usage_at(&threads, &cache, "claude-opus-4-8", None).unwrap();
 
         // Corrupt the cache; the next run must rebuild it and still be correct.
         std::fs::write(&cache, b"definitely not a sqlite database").unwrap();
-        let s = aggregate_usage_at(&threads, &cache, "claude-opus-4-8").unwrap();
+        let s = aggregate_usage_at(&threads, &cache, "claude-opus-4-8", None).unwrap();
         assert_eq!(s.threads_scanned, 1);
         assert_eq!((s.totals.input, s.totals.output), (100, 50));
     }
@@ -887,8 +1028,8 @@ mod tests {
         write_thread(&threads, "legacy", &[usage_line(100, 50, None, None)]);
 
         let (m1, m2) = ("claude-opus-4-8", "gpt-5.5");
-        let s1 = aggregate_usage_at(&threads, &cache, m1).unwrap();
-        let s2 = aggregate_usage_at(&threads, &cache, m2).unwrap();
+        let s1 = aggregate_usage_at(&threads, &cache, m1, None).unwrap();
+        let s2 = aggregate_usage_at(&threads, &cache, m2, None).unwrap();
 
         let expect1 = providers::resolve_provider(m1).model;
         let expect2 = providers::resolve_provider(m2).model;
@@ -898,6 +1039,112 @@ mod tests {
             s2.by_model[0].model.as_deref(),
             Some(expect2.as_str()),
             "changing default_model must wipe the cache and re-attribute legacy usage"
+        );
+    }
+
+    #[test]
+    fn since_day_filters_usage_by_span() {
+        let dir = tempfile::tempdir().unwrap();
+        let threads = dir.path().join("threads");
+        std::fs::create_dir_all(&threads).unwrap();
+        let cache = dir.path().join("cache/usage.sqlite");
+
+        // One recent event (today) and one old event (60 days ago).
+        write_thread(
+            &threads,
+            "t",
+            &[
+                usage_line_at(
+                    100,
+                    50,
+                    Some("gpt-5.5"),
+                    Some("openai-codex"),
+                    &ts_days_ago(0),
+                ),
+                usage_line_at(
+                    999,
+                    999,
+                    Some("gpt-5.5"),
+                    Some("openai-codex"),
+                    &ts_days_ago(60),
+                ),
+            ],
+        );
+
+        // All-time counts both events.
+        let all = aggregate_usage_at(&threads, &cache, "claude-opus-4-8", None).unwrap();
+        assert_eq!(all.totals.requests, 2);
+        assert_eq!((all.totals.input, all.totals.output), (1099, 1049));
+
+        // Last 7 days keeps only the recent event.
+        let recent =
+            aggregate_usage_at(&threads, &cache, "claude-opus-4-8", Some(today_utc() - 6)).unwrap();
+        assert_eq!(recent.totals.requests, 1);
+        assert_eq!((recent.totals.input, recent.totals.output), (100, 50));
+
+        // Both spans read from the same synced cache without re-scanning.
+        assert_eq!(recent.threads_scanned, 1);
+
+        // Daily series: all-time has both days; last-7d keeps only today's.
+        assert_eq!(all.daily.len(), 2);
+        assert_eq!(all.daily.iter().map(|d| d.tokens).sum::<u64>(), 2148);
+        assert_eq!(recent.daily.len(), 1);
+        assert_eq!(recent.daily[0].day, today_utc());
+        assert_eq!(recent.daily[0].tokens, 150);
+    }
+
+    #[test]
+    fn daily_series_excludes_unknown_day_usage() {
+        let dir = tempfile::tempdir().unwrap();
+        let threads = dir.path().join("threads");
+        std::fs::create_dir_all(&threads).unwrap();
+        let cache = dir.path().join("cache/usage.sqlite");
+
+        // One dated event today plus one legacy event with no parseable ts.
+        write_thread(
+            &threads,
+            "t",
+            &[
+                usage_line_at(
+                    10,
+                    5,
+                    Some("gpt-5.5"),
+                    Some("openai-codex"),
+                    &ts_days_ago(0),
+                ),
+                usage_line(100, 50, Some("gpt-5.5"), Some("openai-codex")),
+            ],
+        );
+
+        let all = aggregate_usage_at(&threads, &cache, "claude-opus-4-8", None).unwrap();
+        // Totals count both, but the daily chart omits the undated event.
+        assert_eq!(all.totals.requests, 2);
+        assert_eq!(all.daily.len(), 1);
+        assert_eq!(all.daily[0].tokens, 15);
+    }
+
+    #[test]
+    fn unknown_day_usage_only_in_all_time_span() {
+        let dir = tempfile::tempdir().unwrap();
+        let threads = dir.path().join("threads");
+        std::fs::create_dir_all(&threads).unwrap();
+        let cache = dir.path().join("cache/usage.sqlite");
+
+        // Legacy event with an unparseable timestamp (`"ts":"t"`).
+        write_thread(
+            &threads,
+            "legacy",
+            &[usage_line(100, 50, Some("gpt-5.5"), Some("openai-codex"))],
+        );
+
+        let all = aggregate_usage_at(&threads, &cache, "claude-opus-4-8", None).unwrap();
+        assert_eq!(all.totals.requests, 1);
+
+        let bounded =
+            aggregate_usage_at(&threads, &cache, "claude-opus-4-8", Some(today_utc() - 6)).unwrap();
+        assert_eq!(
+            bounded.totals.requests, 0,
+            "unknown-day usage must not appear in a bounded span"
         );
     }
 
@@ -965,7 +1212,7 @@ mod tests {
             },
         );
 
-        let stats = finalize(raw, 1, Vec::new());
+        let stats = finalize(raw, Vec::new(), 1, Vec::new());
 
         assert_eq!(stats.by_model.len(), 1);
         let row = &stats.by_model[0];
@@ -1001,7 +1248,7 @@ mod tests {
             },
         );
 
-        let stats = finalize(raw, 1, Vec::new());
+        let stats = finalize(raw, Vec::new(), 1, Vec::new());
 
         let row = &stats.by_model[0];
         assert!(row.subscription);

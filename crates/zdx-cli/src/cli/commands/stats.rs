@@ -6,7 +6,8 @@ use zdx_engine::core::usage_stats::{self, UsageRow, UsageStats};
 
 /// Runs `zdx stats`, printing a usage/cost breakdown per provider and model.
 pub fn run(config: &config::Config) -> Result<()> {
-    let stats = usage_stats::aggregate_usage(&config.model).context("aggregate usage stats")?;
+    let stats =
+        usage_stats::aggregate_usage(&config.model, None).context("aggregate usage stats")?;
     print_stats(&stats);
     Ok(())
 }
