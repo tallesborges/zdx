@@ -609,7 +609,7 @@ cache_read = 0.0
 cache_write = 0.0
 
 [model.capabilities]
-reasoning = true
+reasoning = false
 input_images = true
 output_limit = 65536
 
@@ -626,7 +626,7 @@ cache_read = 0.0
 cache_write = 0.0
 
 [model.capabilities]
-reasoning = true
+reasoning = false
 input_images = true
 output_limit = 65536
 
@@ -643,7 +643,7 @@ cache_read = 0.0
 cache_write = 0.0
 
 [model.capabilities]
-reasoning = true
+reasoning = false
 input_images = true
 output_limit = 65536
 
@@ -660,7 +660,7 @@ cache_read = 0.0
 cache_write = 0.0
 
 [model.capabilities]
-reasoning = true
+reasoning = false
 input_images = true
 output_limit = 65536
 
@@ -677,7 +677,7 @@ cache_read = 0.0
 cache_write = 0.0
 
 [model.capabilities]
-reasoning = true
+reasoning = false
 input_images = true
 output_limit = 65536
 
@@ -694,7 +694,7 @@ cache_read = 0.0
 cache_write = 0.0
 
 [model.capabilities]
-reasoning = true
+reasoning = false
 input_images = true
 output_limit = 65536
 
@@ -711,7 +711,7 @@ cache_read = 0.0
 cache_write = 0.0
 
 [model.capabilities]
-reasoning = true
+reasoning = false
 input_images = true
 output_limit = 65536
 
