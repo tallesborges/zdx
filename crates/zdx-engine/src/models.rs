@@ -190,7 +190,6 @@ pub fn custom_provider_models(
     leaked
 }
 
-
 impl ModelOption {
     /// Finds a model by its ID.
     pub fn find_by_id(id: &str) -> Option<&'static ModelOption> {
