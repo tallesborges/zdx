@@ -46,3 +46,35 @@ output_limit = 64000
 [[override]]
 id = "claude-cli:claude-sonnet-5"
 output_limit = 64000
+
+# Antigravity fixed-tier models bake the reasoning effort into the model id
+# (-low/-medium/-high), so a separate user-selectable thinking level is redundant
+# and misleading in the UI. Flag them non-reasoning to hide the thinking picker/
+# indicator. The `-tiered` variant keeps reasoning=true (effort via thinking_level).
+[[override]]
+id = "google-antigravity:gemini-3.6-flash-low"
+reasoning = false
+
+[[override]]
+id = "google-antigravity:gemini-3.6-flash-medium"
+reasoning = false
+
+[[override]]
+id = "google-antigravity:gemini-3.6-flash-high"
+reasoning = false
+
+[[override]]
+id = "google-antigravity:gemini-3.5-flash-low"
+reasoning = false
+
+[[override]]
+id = "google-antigravity:gemini-3-flash-agent"
+reasoning = false
+
+[[override]]
+id = "google-antigravity:gemini-3.1-pro-low"
+reasoning = false
+
+[[override]]
+id = "google-antigravity:gemini-3.1-pro-high"
+reasoning = false
