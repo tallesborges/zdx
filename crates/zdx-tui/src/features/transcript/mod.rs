@@ -17,7 +17,7 @@ mod update;
 // Re-export render functions
 pub use render::{SPINNER_SPEED_DIVISOR, calculate_cell_line_counts, render_transcript};
 // Re-export selection types (only those used externally)
-pub use selection::{LineInteraction, LineMapping, SelectionState};
+pub use selection::{LineInteraction, LineMapping, PositionMap, SelectionState, VisualPosition};
 // Re-export scroll types
 pub use state::{ScrollMode, ScrollState};
 // Re-export state types
@@ -27,4 +27,5 @@ pub use update::{apply_pending_delta, handle_agent_event, handle_mouse};
 pub use zdx_transcript::{
     CellId, ChildToolEntry, ChildToolState, HistoryCell, Style, StyledLine, StyledSpan, ToolState,
     WrapCache, build_transcript_from_events, convert_styled_line, markdown, reasoning_display_text,
+    tool_command_text,
 };

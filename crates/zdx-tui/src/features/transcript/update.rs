@@ -601,10 +601,6 @@ pub fn screen_to_transcript_pos(
     screen_y: u16,
     transcript_area: Rect,
 ) -> Option<(usize, usize)> {
-    use unicode_segmentation::UnicodeSegmentation;
-
-    use crate::common::ratatui_width;
-
     if !contains_point(transcript_area, screen_x, screen_y) {
         return None; // Click is in input or status area, not transcript
     }
@@ -657,18 +653,7 @@ pub fn screen_to_transcript_pos(
     };
 
     // Convert display column (x position) to grapheme index
-    // We need to count graphemes until we've accumulated enough display width
-    let mut accumulated_width = 0usize;
-    let mut grapheme_idx = 0usize;
-
-    for grapheme in mapping.text.graphemes(true) {
-        let grapheme_width = ratatui_width(grapheme);
-        if accumulated_width + grapheme_width > content_x {
-            break;
-        }
-        accumulated_width += grapheme_width;
-        grapheme_idx += 1;
-    }
+    let grapheme_idx = crate::common::grapheme_col_at_width(&mapping.text, content_x);
 
     Some((absolute_line, grapheme_idx))
 }

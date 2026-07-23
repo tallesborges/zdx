@@ -122,6 +122,11 @@ impl PositionMap {
         self.lines.borrow().len()
     }
 
+    /// Returns true if the map has no lines.
+    pub fn is_empty(&self) -> bool {
+        self.lines.borrow().is_empty()
+    }
+
     /// Gets a clone of the mapping for a visual line.
     pub fn get(&self, line: usize) -> Option<LineMapping> {
         self.lines.borrow().get(line).cloned()
