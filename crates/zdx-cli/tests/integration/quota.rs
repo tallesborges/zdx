@@ -24,7 +24,10 @@ fn test_quota_json_reports_all_providers_not_logged_in() {
     assert_eq!(providers.len(), 4);
     for provider in providers {
         assert!(provider["provider"].is_string());
-        assert_eq!(provider["error"], Value::String("not logged in".to_string()));
+        assert_eq!(
+            provider["error"],
+            Value::String("not logged in".to_string())
+        );
     }
     let ids: Vec<&str> = providers
         .iter()
