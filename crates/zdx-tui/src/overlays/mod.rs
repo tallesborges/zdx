@@ -207,7 +207,16 @@ impl Overlay {
             Overlay::ImagePreview(p) => p.handle_key(tui, key),
             Overlay::Tldr(t) => t.handle_key(key),
             Overlay::Context(c) => c.handle_key(key),
-            Overlay::ToolDetail(t) => t.handle_key(key),
+            Overlay::ToolDetail(t) => {
+                let cell = tui.transcript.cells().iter().find(|c| {
+                    matches!(
+                        c,
+                        crate::transcript::HistoryCell::Tool { tool_use_id, .. }
+                            if *tool_use_id == t.tool_use_id
+                    )
+                });
+                t.handle_key(cell, key)
+            }
         }
     }
 

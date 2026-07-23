@@ -16,7 +16,7 @@ pub mod text;
 mod wrap;
 
 pub use build::build_transcript_from_events;
-pub use cell::{CellId, ChildToolEntry, ChildToolState, HistoryCell, ToolState};
+pub use cell::{CellId, ChildToolEntry, ChildToolState, HistoryCell, ToolState, tool_command_text};
 pub use convert::{cells_to_lines, convert_style, convert_styled_line};
 pub use reasoning::reasoning_display_text;
 pub use style::{Style, StyledLine, StyledSpan};

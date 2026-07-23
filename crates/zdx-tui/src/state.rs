@@ -157,6 +157,11 @@ impl AppState {
                 &self.overlay,
                 Some(Overlay::ThreadPicker(picker)) if picker.should_show_copied()
             )
+            || matches!(
+                &self.overlay,
+                Some(Overlay::ToolDetail(detail))
+                    if detail.has_pending_selection_clear() || detail.should_show_copied_flash()
+            )
     }
 
     /// Creates a new `AppState`.

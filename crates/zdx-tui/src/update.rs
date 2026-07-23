@@ -29,6 +29,9 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             app.tui.spinner_frame = app.tui.spinner_frame.wrapping_add(1);
             // Check if selection should be auto-cleared after copy
             app.tui.transcript.check_selection_timeout();
+            if let Some(overlays::Overlay::ToolDetail(state)) = &mut app.overlay {
+                state.check_selection_timeout();
+            }
             // Apply pending streaming deltas each tick so final chunks render without input
             transcript::apply_pending_delta(&mut app.tui.transcript, &mut app.tui.agent_state);
             // Also coalesce background tab deltas
@@ -1621,13 +1624,24 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
             }
 
             if let Some(overlays::Overlay::ToolDetail(state)) = &mut app.overlay {
-                // ToolDetail overlay consumes all mouse events while open
+                // ToolDetail overlay consumes all mouse events while open:
+                // wheel scrolls, click-drag selects and auto-copies on release.
+                use crossterm::event::{MouseButton, MouseEventKind};
                 match mouse.kind {
-                    crossterm::event::MouseEventKind::ScrollUp => {
+                    MouseEventKind::ScrollUp => {
                         state.scroll_up(3);
                     }
-                    crossterm::event::MouseEventKind::ScrollDown => {
+                    MouseEventKind::ScrollDown => {
                         state.scroll_down(3);
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        state.selection_mouse_down(mouse.column, mouse.row);
+                    }
+                    MouseEventKind::Drag(MouseButton::Left) => {
+                        state.selection_mouse_drag(mouse.column, mouse.row);
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        state.selection_mouse_up();
                     }
                     _ => {}
                 }
