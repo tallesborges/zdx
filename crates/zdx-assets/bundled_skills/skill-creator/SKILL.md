@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: Create or update a skill (a SKILL.md-format module that extends an agent's capabilities). Use when the user wants to make a new skill, refactor an existing one, capture a repeatable workflow as auto-invoked guidance, or says "create a skill for X", "turn this into a skill", or "update the X skill". Works for any SKILL.md target (zdx, Anthropic Claude apps, etc.) and covers skill-vs-alternatives choice, frontmatter rules, save locations, per-step structure, and the draft-then-confirm-then-write flow.
+description: Create, edit, or review any skill — a SKILL.md-format module that extends an agent's capabilities. Use whenever authoring a new skill OR touching an existing SKILL.md at all (even small edits): adding or changing a section/gotcha/example, refactoring, or editing the `name`/`description` frontmatter that controls when the skill auto-triggers. Also use when the user says "create a skill for X", "turn this into a skill", "update/edit the X skill", or wants to capture a repeatable workflow as auto-invoked guidance. Works for any SKILL.md target (zdx, Anthropic Claude apps, etc.) and covers skill-vs-alternatives choice, frontmatter rules, save locations, per-step structure, and the draft-then-confirm-then-write flow.
 license: Complete terms in LICENSE.txt
 ---
 
