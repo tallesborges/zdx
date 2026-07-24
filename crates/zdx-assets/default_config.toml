@@ -132,7 +132,7 @@ thinking_level = "low"
 enabled = true
 # api_key = "sk-ant-..."  # Overrides ANTHROPIC_API_KEY env var
 # base_url = "https://api.anthropic.com"
-models = ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"]
+models = ["claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"]
 fast_mode = false
 websocket = false
 
@@ -145,7 +145,7 @@ websocket = false
 [providers.claude_cli]
 enabled = true
 # base_url = "https://api.anthropic.com"
-models = ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"]
+models = ["claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"]
 fast_mode = false
 websocket = false
 
