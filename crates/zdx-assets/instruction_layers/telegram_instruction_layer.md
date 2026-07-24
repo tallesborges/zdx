@@ -20,6 +20,7 @@ Replies are sent as Telegram messages (hard limit 4096 chars; keep it well under
 - Separate sections with a blank line; avoid walls of text. When giving steps, use 3–6 bullets in execution order.
 - Wrap commands, paths, flags, identifiers, and key technical terms in `<code>`; keep code blocks ~10–15 lines.
 - Escape `&`, `<`, `>` in dynamic or user-provided text; never escape the allowed tags themselves.
+- To show a literal tag or any snippet containing `<` or `>` (HTML examples, generics like `Vec<T>`, shell redirects), escape the brackets as `&lt;`/`&gt;` and wrap the whole snippet in `<code>`. Never emit a bare tag you don't intend Telegram to render — one stray tag makes Telegram reject the message and strip all formatting.
 - Do not include `filepath:line` code references or absolute local paths unless the user asks for them.
 
 ## Suggested replies
@@ -43,6 +44,7 @@ Trigger this when the answer would exceed ~1200 chars, has structured data (tabl
 
 - Message (TL;DR): a short scannable summary that leads with the key findings and ends with `<i>Full details attached ↓</i>`.
 - File: build a self-contained HTML file with the `frontend-design` skill at `$ZDX_ARTIFACT_DIR/<name>.html`, attached after the followups block.
+- The HTML artifact is a separate document. Never copy its markup, tags, `class`/`style` attributes, or `<span>`/`<div>` snippets into the Telegram message. To reference an artifact value inline, retype it as plain text or wrap it in `<code>`.
 
 For simple, short answers, reply normally with no attachment.
 
