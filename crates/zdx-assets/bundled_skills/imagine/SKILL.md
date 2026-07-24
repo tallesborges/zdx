@@ -5,7 +5,7 @@ description: "Generate and edit images. Saves the image and prints the exact pat
 
 # Imagine – Image Generation & Editing via `zdx imagine`
 
-Generate images from text prompts or edit existing images using Gemini or OpenAI image models. Supports text-to-image generation, image editing (inpainting, outpainting, style transfer), and multi-image composition.
+Generate images from text prompts or edit existing images using Gemini, OpenAI, or Alibaba (Qwen-Image) image models. Supports text-to-image generation, image editing (inpainting, outpainting, style transfer), and multi-image composition.
 
 ## CLI reference
 
@@ -36,8 +36,10 @@ If no `--out` is given, images default to `$ZDX_HOME/artifacts/`.
 - **Default:** If you do not pass `--model`, `zdx imagine` uses `gemini:gemini-3.1-flash-image-preview`.
 - **OpenAI support:** `zdx imagine` also supports both `openai:gpt-image-2` and `openai-codex:gpt-image-2`.
 - **Preferred OpenAI path:** When using OpenAI, prefer `openai-codex:gpt-image-2` unless the user explicitly asks for plain `openai:gpt-image-2`.
-- **Gemini vs OpenAI:** `--aspect` currently works with Gemini, but OpenAI/OpenAI Codex require `--size` instead.
+- **Alibaba (Qwen-Image) support:** `zdx imagine` also supports `alibaba:qwen-image-2.0-pro` — a combined text-to-image + editing model on Alibaba DashScope. Requires `ALIBABA_API_KEY`. Use it when the user asks for Qwen/Alibaba image generation.
+- **Gemini vs OpenAI/Alibaba:** `--aspect` currently works with Gemini only; OpenAI, OpenAI Codex, and Alibaba require `--size` instead.
 - **OpenAI size support:** OpenAI/OpenAI Codex support `1K`, `2K`, and `4K`. `512px` is Gemini-only.
+- **Alibaba size support:** `alibaba:qwen-image-2.0-pro` supports `512px`, `1K`, and `2K` (not `4K`).
 
 ### Recommended model selection
 
@@ -60,6 +62,18 @@ zdx imagine -p "A cinematic photo of a red fox in falling snow" --model openai:g
 **OpenAI editing:**
 ```bash
 zdx imagine -p "Add a neon sign above the doorway, keep the rest unchanged" -s street.png --model openai-codex:gpt-image-2 --size 2K
+```
+
+### Alibaba (Qwen-Image) examples
+
+**Text-to-image:**
+```bash
+zdx imagine -p "A cinematic photo of a red fox in falling snow" --model alibaba:qwen-image-2.0-pro --size 1K
+```
+
+**Editing (same model, add source image):**
+```bash
+zdx imagine -p "Make the jacket bright red, keep everything else the same" -s person.png --model alibaba:qwen-image-2.0-pro --size 1K
 ```
 
 ### Modes
