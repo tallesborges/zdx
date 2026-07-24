@@ -47,6 +47,21 @@ output_limit = 64000
 id = "claude-cli:claude-sonnet-5"
 output_limit = 64000
 
+# qwen3.7-flash: released ~2026-07-15 and NOT yet in models.dev or Alibaba's public
+# pricing page (its "Qwen-Flash" alias still maps to qwen3.5-flash; qwen3.6-flash is
+# the newest priced flash). Values below are a PROXY from qwen3.6-flash pending official
+# qwen3.7-flash pricing. https://www.alibabacloud.com/help/en/model-studio/model-pricing
+# Flash tier = 1M context, thinking-capable. Re-verify when Alibaba publishes 3.7-flash.
+[[override]]
+id = "alibaba:qwen3.7-flash"
+input = 0.19
+output = 1.13
+cache_read = 0.038
+context_limit = 1000000
+output_limit = 65536
+reasoning = true
+input_images = false
+
 # Antigravity fixed-tier models bake the reasoning effort into the model id
 # (-low/-medium/-high), so a separate user-selectable thinking level is redundant
 # and misleading in the UI. Flag them non-reasoning to hide the thinking picker/
