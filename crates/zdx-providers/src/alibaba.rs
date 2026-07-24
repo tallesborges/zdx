@@ -22,6 +22,13 @@ use crate::openai::chat_completions::{OpenAIChatCompletionsClient, OpenAIChatCom
 use crate::shared::merge_system_prompt;
 use crate::{ProviderKind, ProviderStream};
 
+pub mod image;
+
+pub use image::{
+    AlibabaGenerateImageResponse, AlibabaGeneratedImage, AlibabaImageClient,
+    AlibabaImageGenerationOptions, AlibabaImageInput,
+};
+
 /// Alibaba API configuration (shared by International + Coding Plan).
 #[derive(Debug, Clone)]
 pub struct AlibabaConfig {

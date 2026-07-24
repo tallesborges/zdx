@@ -7,6 +7,9 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use zdx_engine::config;
 use zdx_engine::images::path_mime;
+use zdx_engine::providers::alibaba::{
+    AlibabaImageClient, AlibabaImageGenerationOptions, AlibabaImageInput,
+};
 use zdx_engine::providers::gemini::{
     GeminiClient, GeminiConfig, GeminiImageGenerationOptions, SourceImage,
 };
@@ -40,8 +43,11 @@ pub async fn run(options: ImagineRunOptions<'_>) -> Result<()> {
         ProviderKind::OpenAICodex => {
             generate_codex_images(&provider_selection.model, &options).await?
         }
+        ProviderKind::Alibaba => {
+            generate_alibaba_images(&provider_selection.model, &options).await?
+        }
         _ => bail!(
-            "zdx imagine supports Gemini, OpenAI, and OpenAI Codex image generation. Use 'gemini:', 'openai:gpt-image-2', or 'openai-codex:gpt-image-2'"
+            "zdx imagine supports Gemini, OpenAI, OpenAI Codex, and Alibaba (Qwen-Image) image generation. Use 'gemini:', 'openai:gpt-image-2', 'openai-codex:gpt-image-2', or 'alibaba:qwen-image-2.0-pro'"
         ),
     };
 
@@ -112,6 +118,69 @@ async fn generate_gemini_images(
             .collect(),
         text_parts: response.text_parts,
     })
+}
+
+async fn generate_alibaba_images(
+    model: &str,
+    options: &ImagineRunOptions<'_>,
+) -> Result<GenerateImageResponse> {
+    if options.aspect.is_some() {
+        bail!("Alibaba (Qwen-Image) does not support --aspect; use --size WIDTHxHEIGHT instead");
+    }
+
+    let source_images: Vec<AlibabaImageInput> = load_source_images(options.source)?
+        .into_iter()
+        .map(|image| AlibabaImageInput {
+            mime_type: image.mime_type,
+            data: image.data,
+        })
+        .collect();
+    if source_images.len() > 3 {
+        bail!("Alibaba image editing supports at most 3 source images");
+    }
+
+    let size = options.size.map(alibaba_image_size).transpose()?;
+
+    let client = AlibabaImageClient::from_env(
+        model.to_string(),
+        options.config.providers.alibaba.effective_api_key(),
+    )?;
+    let response = client
+        .generate_images(
+            options.prompt,
+            &AlibabaImageGenerationOptions {
+                size,
+                n: None,
+                source_images,
+                negative_prompt: None,
+                prompt_extend: None,
+            },
+        )
+        .await
+        .context("generate image with Alibaba (Qwen-Image)")?;
+
+    Ok(GenerateImageResponse {
+        images: response
+            .images
+            .into_iter()
+            .map(|image| GeneratedImage {
+                mime_type: image.mime_type,
+                data: image.data,
+            })
+            .collect(),
+        text_parts: response.text_parts,
+    })
+}
+
+fn alibaba_image_size(size: &str) -> Result<String> {
+    // The CLI validates `--size` to these tokens; map them to DashScope `W*H`.
+    match size {
+        "512px" => Ok("512*512".to_string()),
+        "1K" => Ok("1024*1024".to_string()),
+        "2K" => Ok("2048*2048".to_string()),
+        "4K" => bail!("Alibaba (Qwen-Image) does not support --size 4K; use 1K or 2K"),
+        _ => bail!("unsupported Alibaba image size: {size}"),
+    }
 }
 
 async fn generate_codex_images(
