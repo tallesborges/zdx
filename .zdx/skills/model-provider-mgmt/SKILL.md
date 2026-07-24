@@ -182,6 +182,7 @@ The override layer lives in `update()` (`crates/zdx-cli/src/cli/commands/models.
 - **`model_supports_reasoning` defaults to `true`** when the field is unknown (`crates/zdx-engine/src/models.rs:120-122`). Explicitly set `reasoning = false` for non-reasoning models.
 - **`default_models.toml` is generated** — manual edits get overwritten by `just update-models`. For corrections the updater fetches wrong, add a pin in `model_overrides.toml` instead (it survives regeneration); only fix the updater logic for structural problems an override can't express.
 - **`default_config.toml` is generated** from Rust defaults — edit `config.rs`, not the TOML file directly.
+- **Global runtime is separate**: default/`config.rs` changes only affect the embedded defaults, not an existing `$ZDX_HOME/config.toml`/`models.toml`. After a change, **ask the user** whether they also want it applied to their global runtime (edit `$ZDX_HOME/config.toml` + `zdx models update` with a current binary).
 
 ## Key files
 
