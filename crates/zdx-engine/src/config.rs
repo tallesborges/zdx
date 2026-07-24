@@ -1838,9 +1838,9 @@ fn default_alibaba_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
-            "qwen3-max".to_string(),
-            "qwen-plus".to_string(),
-            "qwen-flash".to_string(),
+            "qwen3.7-max".to_string(),
+            "qwen3.7-plus".to_string(),
+            "qwen3.7-flash".to_string(),
         ],
         ..Default::default()
     }

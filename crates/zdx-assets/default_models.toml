@@ -1103,55 +1103,55 @@ input_images = true
 output_limit = 32000
 
 [[model]]
-id = "alibaba:qwen3-max"
+id = "alibaba:qwen3.7-max"
 provider = "alibaba"
-display_name = "Qwen3 Max"
-context_limit = 262144
+display_name = "Qwen3.7 Max"
+context_limit = 1000000
 
 [model.pricing]
-input = 1.2
-output = 6.0
-cache_read = 0.0
-cache_write = 0.0
+input = 2.5
+output = 7.5
+cache_read = 0.5
+cache_write = 3.125
 
 [model.capabilities]
-reasoning = false
+reasoning = true
 input_images = false
 output_limit = 65536
 
 [[model]]
-id = "alibaba:qwen-plus"
+id = "alibaba:qwen3.7-plus"
 provider = "alibaba"
-display_name = "Qwen Plus"
+display_name = "Qwen3.7 Plus"
 context_limit = 1000000
 
 [model.pricing]
-input = 0.4
-output = 1.2
-cache_read = 0.0
-cache_write = 0.0
+input = 0.5
+output = 3.0
+cache_read = 0.05
+cache_write = 0.625
 
 [model.capabilities]
 reasoning = true
-input_images = false
-output_limit = 32768
+input_images = true
+output_limit = 65536
 
 [[model]]
-id = "alibaba:qwen-flash"
+id = "alibaba:qwen3.7-flash"
 provider = "alibaba"
-display_name = "Qwen Flash"
+display_name = "qwen3.7-flash (custom)"
 context_limit = 1000000
 
 [model.pricing]
-input = 0.05
-output = 0.4
-cache_read = 0.0
+input = 0.19
+output = 1.13
+cache_read = 0.038
 cache_write = 0.0
 
 [model.capabilities]
 reasoning = true
 input_images = false
-output_limit = 32768
+output_limit = 65536
 
 [[model]]
 id = "qwen-code:qwen3-coder-plus"
