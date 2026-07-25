@@ -61,6 +61,10 @@ pub fn definition() -> ToolDefinition {
                     "type": "integer",
                     "minimum": 0,
                     "description": "Optional timeout in seconds. Defaults to 120. Use 0 to disable for a known long-running command."
+                },
+                "background": {
+                    "type": "boolean",
+                    "description": "Run as a detached background process that OUTLIVES this turn (e.g. a dev server, watcher). Returns immediately with a bg_id instead of blocking. Output goes to log files; read it with background_output and stop it with background_kill. Do NOT use shell backgrounding (trailing &, nohup, setsid) for long-lived processes — use this flag instead."
                 }
             },
             "required": ["command"],
@@ -192,6 +196,77 @@ pub async fn run(
     }
 }
 
+/// Handle to a spawned background process.
+///
+/// The caller owns `child` and is responsible for `wait()`ing it (to reap the
+/// zombie) and recording its exit. The process is detached in its own session
+/// and is NOT killed when this handle is dropped.
+#[cfg(unix)]
+pub struct BackgroundSpawn {
+    pub child: tokio::process::Child,
+    pub pid: u32,
+}
+
+/// Spawns `command` as a detached background process in its own session
+/// (`setsid`), with stdout/stderr redirected to the given log files and stdin
+/// nulled. Does NOT wait for or kill the process — it survives this call and
+/// the zdx process. Unix-only.
+///
+/// # Errors
+/// Returns an error if the log files cannot be opened or the process cannot be
+/// spawned.
+#[cfg(unix)]
+pub fn spawn_background(
+    command: &str,
+    cwd: &std::path::Path,
+    stdout_log: &std::path::Path,
+    stderr_log: &std::path::Path,
+) -> std::io::Result<BackgroundSpawn> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let open_log = |path: &std::path::Path| {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(path)
+    };
+    let out = open_log(stdout_log)?;
+    let err = open_log(stderr_log)?;
+
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-c")
+        .arg(command)
+        .current_dir(cwd)
+        .env("TERM", "dumb")
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(out))
+        .stderr(Stdio::from(err))
+        // The process outlives this handle; never kill on drop.
+        .kill_on_drop(false);
+
+    // New session + process group; detaches from the controlling terminal so a
+    // hangup doesn't SIGHUP the process, and gives it a stable pgid to kill.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let child = cmd.spawn()?;
+    // A freshly spawned child always has a PID (it's only cleared after wait).
+    // Falling back to 0 would mean "current process group" in later killpg — a
+    // foot-gun — so surface the impossible case as an error instead.
+    let pid = child
+        .id()
+        .ok_or_else(|| std::io::Error::other("spawned background process has no PID"))?;
+    Ok(BackgroundSpawn { child, pid })
+}
+
 /// Kills all processes in the given process group.
 ///
 /// Sends SIGTERM first, waits briefly, then SIGKILL if processes remain.
@@ -239,6 +314,57 @@ impl Drop for ProcessGroupGuard {
         if !self.disarmed {
             kill_process_group(self.pgid);
         }
+    }
+}
+
+/// Whether the process group still has any members. Treats `EPERM` (members
+/// exist but we can't signal them) as present.
+#[cfg(unix)]
+fn group_exists(pgid: i32) -> bool {
+    if unsafe { libc::killpg(pgid, 0) } == 0 {
+        return true;
+    }
+    matches!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::EPERM)
+    )
+}
+
+/// Async TERM → short grace → KILL for a process group.
+///
+/// Used on the await-able completion/timeout paths so we never block a runtime
+/// worker with a synchronous sleep (the sync [`kill_process_group`] remains for
+/// `ProcessGroupGuard`'s `Drop`, which cannot be async).
+#[cfg(unix)]
+async fn kill_group_graceful(pgid: i32) {
+    unsafe {
+        libc::killpg(pgid, libc::SIGTERM);
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+    loop {
+        if !group_exists(pgid) {
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    unsafe {
+        libc::killpg(pgid, libc::SIGKILL);
+    }
+}
+
+/// After a foreground shell exits, terminate any process-group members it left
+/// behind (`cmd &`, `nohup cmd &`, `disown`). Returns `true` if leftovers were
+/// found — so `background: true` stays the only way to leave a process running.
+#[cfg(unix)]
+async fn cleanup_foreground_leftovers(pgid: i32) -> bool {
+    if group_exists(pgid) {
+        kill_group_graceful(pgid).await;
+        true
+    } else {
+        false
     }
 }
 
@@ -385,7 +511,7 @@ async fn run_command(
                 Err(_) => {
                     // Timeout: kill the process group / child.
                     #[cfg(unix)]
-                    kill_process_group(child_pid);
+                    kill_group_graceful(child_pid).await;
                     #[cfg(not(unix))]
                     let _ = child.kill().await;
 
@@ -404,6 +530,15 @@ async fn run_command(
     // Disarm the guard now that the child has exited (normal, timeout, or error).
     #[cfg(unix)]
     pg_guard.disarm();
+
+    // Foreground cleanup: kill any process-group members the shell left behind
+    // (e.g. `cmd &`, `nohup cmd &`) BEFORE draining the readers, so an orphan
+    // holding the pipes open can't stall us. `background: true` is the only
+    // sanctioned way to leave a process running.
+    #[cfg(unix)]
+    let left_leftovers = cleanup_foreground_leftovers(child_pid).await;
+    #[cfg(not(unix))]
+    let left_leftovers = false;
 
     // Finish readers with a bounded grace period and extract their buffers.
     // This applies on every exit path — even normal completion can leave pipes
@@ -456,9 +591,20 @@ async fn run_command(
         });
     }
 
+    let stderr = if left_leftovers {
+        let note = "note: this command left background descendants running; they were stopped. Use background: true to run a long-lived process (e.g. a dev server).";
+        if stderr_text.is_empty() {
+            note.to_string()
+        } else {
+            format!("{stderr_text}\n{note}")
+        }
+    } else {
+        stderr_text
+    };
+
     Ok(BashOutput {
         stdout,
-        stderr: stderr_text,
+        stderr,
         exit_code,
         timed_out: false,
         stdout_truncated,
@@ -475,6 +621,37 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn foreground_backgrounded_child_is_cleaned_up() {
+        // A foreground command that shell-backgrounds a long sleep and records
+        // its PID. After the command returns, the sleep must be gone — proving
+        // `cmd &` no longer silently survives (only `background: true` should).
+        let temp = TempDir::new().unwrap();
+        let pidfile = temp.path().join("child.pid");
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({
+            "command": format!("sleep 30 & echo $! > {}", pidfile.display()),
+        });
+
+        let result = execute(&input, &ctx, None, None).await;
+        assert!(result.is_ok());
+
+        let pid: i32 = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+
+        // Give the graceful TERM→KILL a moment to land.
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        let alive = unsafe { libc::kill(pid, 0) == 0 };
+        assert!(
+            !alive,
+            "backgrounded child (pid {pid}) should have been killed"
+        );
+    }
 
     #[test]
     fn test_bash_resolves_default_timeout() {

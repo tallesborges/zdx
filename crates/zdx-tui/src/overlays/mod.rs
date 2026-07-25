@@ -21,6 +21,7 @@
 //! `OverlayExt` provides convenience methods for `Option<Overlay>` to encapsulate
 //! the common patterns used in the reducer.
 
+pub mod background;
 pub mod command_palette;
 pub mod context;
 pub mod file_picker;
@@ -38,6 +39,7 @@ pub mod tldr;
 pub mod tool_detail;
 mod update;
 
+pub use background::BackgroundState;
 pub use command_palette::CommandPaletteState;
 pub use context::{ContextPhase, ContextState};
 use crossterm::event::KeyEvent;
@@ -84,6 +86,7 @@ pub enum OverlayRequest {
     Rename,
     Tldr,
     Context,
+    Background,
     ImagePreview {
         image_path: String,
         image_index: usize,
@@ -163,6 +166,7 @@ pub enum Overlay {
     ImagePreview(ImagePreviewState),
     ToolDetail(ToolDetailState),
     FollowupPicker(FollowupPickerState),
+    Background(BackgroundState),
 }
 
 impl Overlay {
@@ -178,6 +182,7 @@ impl Overlay {
             Overlay::Timeline(t) => t.render(frame, area, input_y),
             Overlay::Rename(r) => r.render(frame, area, input_y),
             Overlay::FollowupPicker(p) => p.render(frame, area, input_y),
+            Overlay::Background(b) => b.render(frame, area, input_y),
             Overlay::ImagePreview(p) => p.render(
                 frame,
                 area,
@@ -204,6 +209,7 @@ impl Overlay {
             Overlay::Timeline(t) => t.handle_key(tui, key),
             Overlay::Rename(r) => r.handle_key(tui, key),
             Overlay::FollowupPicker(p) => p.handle_key(tui, key),
+            Overlay::Background(b) => b.handle_key(tui, key),
             Overlay::ImagePreview(p) => p.handle_key(tui, key),
             Overlay::Tldr(t) => t.handle_key(key),
             Overlay::Context(c) => c.handle_key(key),

@@ -10,6 +10,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - `src/audio/speak.rs`: shared text-to-speech (TTS) synthesis helpers (OpenAI/Mistral); default OGG/Opus output via ffmpeg transcode with MP3 fallback
 - `src/audio/transcribe.rs`: shared audio transcription helpers (OpenAI/Mistral via `/audio/transcriptions`; xAI Grok STT via `/stt`; ElevenLabs Scribe via `/v1/speech-to-text` with `xi-api-key`)
 - `src/agent_activity.rs`: active-run registry (ephemeral marker files for agent turns)
+- `src/background_activity.rs`: background-process registry — durable marker files under `~/.zdx/run/background/` for long-lived processes started with the Bash tool's `background: true`; identity-guarded (`pid`+birth-time+`pgid`) kill defends against PID reuse; exited-tombstone + age prune
 - `src/automations.rs`: automation discovery + frontmatter parsing
 - `src/config.rs`: config loading + paths (embeds `zdx_assets::DEFAULT_CONFIG_TOML`)
 - `src/custom_commands.rs`: custom slash command discovery + frontmatter parsing (`<ZDX_HOME>/commands` + ancestor/current `.zdx/commands`, plus bundled commands from `zdx_assets::bundled_command_assets()`)
@@ -46,6 +47,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 ### Tools (`src/tools/`)
 
 - `tools/mod.rs`: ToolContext, ToolRegistry, ToolSet, handlers
+- `tools/background.rs`: `run_background` (spawn+register a background process, invoked by the Bash tool on `background: true`) + `background_output`/`background_kill` agent tools (thread-scoped)
 - `tools/memory_get.rs`: stable memory-ref reads from canonical ZDX storage
 - `tools/memory_search.rs`: qmd-backed memory search returning stable memory refs
 - `tools/read_thread.rs`: read saved thread transcript tool

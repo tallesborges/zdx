@@ -27,6 +27,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         UiEvent::Tick => {
             // Advance spinner animation
             app.tui.spinner_frame = app.tui.spinner_frame.wrapping_add(1);
+            app.tui.poll_background_count();
             // Check if selection should be auto-cleared after copy
             app.tui.transcript.check_selection_timeout();
             if let Some(overlays::Overlay::ToolDetail(state)) = &mut app.overlay {
@@ -1291,6 +1292,13 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
             apply_mutations(&mut app.tui, mutations);
             effects
         }
+        overlays::OverlayRequest::Background => {
+            let thread_id = app.tui.thread.thread_handle.as_ref().map(|h| h.id.clone());
+            app.overlay = Some(overlays::Overlay::Background(
+                overlays::BackgroundState::open(thread_id),
+            ));
+            vec![]
+        }
         overlays::OverlayRequest::Rename => {
             if let Some(thread_handle) = &app.tui.thread.thread_handle {
                 let (state, effects) = overlays::RenameState::open(
@@ -1449,6 +1457,8 @@ fn create_btw_tab(
         last_turn_outcome: None,
         unseen_completion: false,
         spinner_frame: 0,
+        background_count: 0,
+        last_bg_poll: std::time::Instant::now(),
         git_branch: parent.git_branch.clone(),
         display_path: parent.display_path.clone(),
         status_line: crate::statusline::StatusLineAccumulator::new(),
@@ -1554,6 +1564,8 @@ fn create_thread_tab(
         last_turn_outcome: None,
         unseen_completion: false,
         spinner_frame: 0,
+        background_count: 0,
+        last_bg_poll: std::time::Instant::now(),
         git_branch: parent.git_branch.clone(),
         display_path: parent.display_path.clone(),
         status_line: crate::statusline::StatusLineAccumulator::new(),

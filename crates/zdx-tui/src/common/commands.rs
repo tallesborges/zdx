@@ -239,6 +239,13 @@ pub const COMMANDS: &[Command] = &[
         shortcut: None,
     },
     Command {
+        name: "background",
+        aliases: &["bg", "jobs"],
+        description: "List and stop background processes for this thread",
+        category: "thread",
+        shortcut: None,
+    },
+    Command {
         name: "tldr",
         aliases: &["recap", "summary"],
         description: "Show a TLDR of recent activity in this thread",

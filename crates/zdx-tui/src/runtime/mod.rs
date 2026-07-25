@@ -997,6 +997,13 @@ impl TuiRuntime {
                     handlers::thread_remove_worktree(root)
                 });
             }
+            UiEffect::KillBackgroundProcess { bg_id } => {
+                // Fire-and-forget: the overlay optimistically drops the row and
+                // the tick-refreshed count reconciles once the kill lands.
+                tokio::spawn(async move {
+                    let _ = zdx_engine::background_activity::kill_background(&bg_id).await;
+                });
+            }
             UiEffect::EnsureWorktree => {
                 if let Some(thread_handle) = self.state.tui.thread.thread_handle.as_ref() {
                     let thread_id = thread_handle.id.clone();

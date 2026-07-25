@@ -26,6 +26,7 @@ pub fn render(f: &mut Frame, app: &MonitorApp) {
     match app.active_section {
         Section::Services => render_services(f, app, chunks[1]),
         Section::ActiveAgents => render_active_agents(f, app, chunks[1]),
+        Section::Background => render_background(f, app, chunks[1]),
         Section::Config => render_config(f, app, chunks[1]),
         Section::Threads => render_threads(f, app, chunks[1]),
         Section::Usage => render_usage(f, app, chunks[1]),
@@ -121,17 +122,20 @@ fn render_footer(f: &mut Frame, app: &MonitorApp, area: Rect) {
 fn footer_hint(section: Section) -> &'static str {
     match section {
         Section::Services => {
-            "↑↓ navigate • Enter toggle • r restart • ^R supervise • Tab switch • q quit"
+            "↑↓ navigate • Enter toggle • r restart • ^R supervise • Tab/⇧Tab switch • q quit"
         }
-        Section::ActiveAgents => "↑↓ navigate • Enter inspect • Tab switch • q quit",
-        Section::Automations => "↑↓ navigate • Tab switch • q quit",
+        Section::ActiveAgents => "↑↓ navigate • Enter inspect • Tab/⇧Tab switch • q quit",
+        Section::Background => "↑↓ navigate • x kill • Tab/⇧Tab switch • q quit",
+        Section::Automations => "↑↓ navigate • Tab/⇧Tab switch • q quit",
         Section::Config => {
-            "↑↓ select model • Enter edit • d delete favorite / reset subagent • PgUp/PgDn scroll • Tab switch • q quit"
+            "↑↓ select model • Enter edit • d delete favorite / reset subagent • PgUp/PgDn scroll • Tab/⇧Tab switch • q quit"
         }
-        Section::Threads => "↑↓ navigate • y copy thread ID • Tab switch • q quit",
-        Section::Usage => "↑↓ scroll • PgUp/PgDn page • t span • R refresh • Tab switch • q quit",
+        Section::Threads => "↑↓ navigate • y copy thread ID • Tab/⇧Tab switch • q quit",
+        Section::Usage => {
+            "↑↓ scroll • PgUp/PgDn page • t span • R refresh • Tab/⇧Tab switch • q quit"
+        }
         Section::Logs => {
-            "↑↓ select • PgUp/PgDn page • Enter open • G/End follow • Tab switch • q quit"
+            "↑↓ select • PgUp/PgDn page • Enter open • G/End follow • Tab/⇧Tab switch • q quit"
         }
     }
 }
@@ -185,6 +189,49 @@ fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
         .collect();
 
     let title = format!("Active Agents ({})", app.active_agents.len());
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
+    f.render_widget(list, area);
+}
+
+fn render_background(f: &mut Frame, app: &MonitorApp, area: Rect) {
+    if app.background.is_empty() {
+        let p = Paragraph::new(" No background processes")
+            .style(Style::default().fg(Color::DarkGray))
+            .block(Block::default().borders(Borders::ALL).title("Background"));
+        f.render_widget(p, area);
+        return;
+    }
+
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut last_thread: Option<&Option<String>> = None;
+    for (i, b) in app.background.iter().enumerate() {
+        if last_thread != Some(&b.thread_id) {
+            last_thread = Some(&b.thread_id);
+            let label = b.thread_id.as_deref().unwrap_or("(no thread)");
+            items.push(
+                ListItem::new(format!(" thread {label}")).style(
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            );
+        }
+        let prefix = format!("   ● pid {:<7} up {:<8} ", b.pid, b.uptime);
+        let cmd_width = inner_width.saturating_sub(prefix.chars().count());
+        let cmd = truncate_chars(&b.command, cmd_width);
+        let line = format!("{prefix}{cmd}");
+        let style = if i == app.selected_index {
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default().fg(Color::Green)
+        };
+        items.push(ListItem::new(line).style(style));
+    }
+
+    let title = format!("Background processes ({})", app.background.len());
     let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
     f.render_widget(list, area);
 }

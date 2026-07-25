@@ -257,6 +257,11 @@ enum Commands {
     },
     /// Show usage and cost totals per provider and model, across saved threads
     Stats,
+    /// List or stop background processes started by the agent (`background: true`)
+    Bg {
+        #[command(subcommand)]
+        command: BgCommands,
+    },
     /// Show live subscription quota (session/weekly limits) for OAuth providers
     Quota {
         /// Emit machine-readable JSON instead of a text summary
@@ -341,6 +346,22 @@ enum Commands {
     Worktree {
         #[command(subcommand)]
         command: WorktreeCommands,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum BgCommands {
+    /// List background processes (running + recently exited)
+    List {
+        /// Emit machine-readable JSON instead of a text summary
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop a background process by its `bg_id`
+    Kill {
+        /// The `bg_id` of the process to stop
+        #[arg(value_name = "BG_ID")]
+        bg_id: String,
     },
 }
 
@@ -1024,6 +1045,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
         Commands::Threads { command } => dispatch_threads(command, context).await,
         Commands::Stats => commands::stats::run(context.config),
         Commands::Quota { json } => commands::quota::run(json).await,
+        Commands::Bg { command } => dispatch_bg(command).await,
         Commands::Imagine {
             prompt,
             out,
@@ -1183,6 +1205,13 @@ async fn dispatch_bot(command: Option<BotCommands>, context: &DispatchContext<'_
                 commands::bot::add_profile(context.config, &name, chat_id, &cwd)
             }
         },
+    }
+}
+
+async fn dispatch_bg(command: BgCommands) -> Result<()> {
+    match command {
+        BgCommands::List { json } => commands::bg::list(json),
+        BgCommands::Kill { bg_id } => commands::bg::kill(&bg_id).await,
     }
 }
 

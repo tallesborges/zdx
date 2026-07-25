@@ -8,6 +8,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 - `build.rs`: compile-time CLI version/build metadata
 - `src/cli/`: argument structs + command dispatch
 - `src/cli/commands/automations.rs`: automations commands (`list`, `validate`, `run`)
+- `src/cli/commands/bg.rs`: background-process commands (`zdx bg list [--json]`, `zdx bg kill <bg_id>`); thin wrapper over `zdx_engine::background_activity`
 - `src/cli/commands/bot.rs`: Telegram bot setup/init command handler (`zdx bot init`)
 - `src/cli/commands/daemon.rs`: scheduled automations daemon loop
 - `src/cli/commands/imagine.rs`: image generation command handler (`zdx imagine`)

@@ -369,6 +369,9 @@ pub struct MonitorApp {
     pub automations: Vec<AutomationInfo>,
     pub services: Vec<ServiceInfo>,
     pub active_agents: Vec<ActiveAgentInfo>,
+    /// Running background processes (from `background_activity`), for the
+    /// Background tab. Sorted so same-thread processes are adjacent.
+    pub background: Vec<BackgroundInfo>,
     /// Open transcript overlay for a selected active agent, if any.
     pub agent_overlay: Option<AgentOverlayState>,
     pub log_file_name: Option<String>,
@@ -481,6 +484,16 @@ pub struct ActiveAgentInfo {
     pub subagent_name: Option<String>,
 }
 
+/// One running background process shown in the Background tab.
+pub struct BackgroundInfo {
+    pub bg_id: String,
+    pub pid: u32,
+    /// Full originating thread id (`None` for no-thread runs); used to group.
+    pub thread_id: Option<String>,
+    pub command: String,
+    pub uptime: String,
+}
+
 /// State for the Active Agents transcript overlay (drill-in on `Enter`).
 pub struct AgentOverlayState {
     /// Thread id captured when the overlay was opened (never re-derived from
@@ -509,6 +522,7 @@ pub struct AgentOverlayState {
 pub enum Section {
     Services,
     ActiveAgents,
+    Background,
     Config,
     Threads,
     Usage,
@@ -559,9 +573,10 @@ impl UsageSpan {
 }
 
 impl Section {
-    pub const ALL: [Section; 7] = [
+    pub const ALL: [Section; 8] = [
         Section::Services,
         Section::ActiveAgents,
+        Section::Background,
         Section::Config,
         Section::Threads,
         Section::Usage,
@@ -573,6 +588,7 @@ impl Section {
         match self {
             Section::Services => "Services",
             Section::ActiveAgents => "Active Agents",
+            Section::Background => "Background",
             Section::Config => "Config",
             Section::Threads => "Threads",
             Section::Usage => "Usage",
@@ -584,12 +600,26 @@ impl Section {
     fn next(self) -> Self {
         match self {
             Section::Services => Section::ActiveAgents,
-            Section::ActiveAgents => Section::Config,
+            Section::ActiveAgents => Section::Background,
+            Section::Background => Section::Config,
             Section::Config => Section::Threads,
             Section::Threads => Section::Usage,
             Section::Usage => Section::Automations,
             Section::Automations => Section::Logs,
             Section::Logs => Section::Services,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Section::Services => Section::Logs,
+            Section::ActiveAgents => Section::Services,
+            Section::Background => Section::ActiveAgents,
+            Section::Config => Section::Background,
+            Section::Threads => Section::Config,
+            Section::Usage => Section::Threads,
+            Section::Automations => Section::Usage,
+            Section::Logs => Section::Automations,
         }
     }
 }
@@ -600,6 +630,7 @@ impl MonitorApp {
             Section::Services => self.services.len(),
             Section::Config | Section::Logs | Section::Usage => 0,
             Section::ActiveAgents => self.active_agents.len(),
+            Section::Background => self.background.len(),
             Section::Threads => self.threads.len(),
             Section::Automations => self.automations.len(),
         }
@@ -875,6 +906,23 @@ fn log_page_size(app: &MonitorApp) -> usize {
     (app.terminal_height.saturating_sub(8) as usize).max(1)
 }
 
+/// Switch the active tab and reset per-section scroll/selection state.
+fn switch_section(app: &mut MonitorApp, section: Section) {
+    app.active_section = section;
+    app.selected_index = 0;
+    app.config_scroll = 0;
+    app.usage_scroll = 0;
+    if app.active_section == Section::Logs {
+        app.log_follow = true;
+        let total = app.log_lines.len();
+        if total > 0 {
+            app.log_selected = total - 1;
+            let page = log_page_size(app);
+            app.log_offset = total.saturating_sub(page);
+        }
+    }
+}
+
 /// Adjust `log_offset` so `log_selected` is in the visible window.
 fn ensure_log_selected_visible(app: &mut MonitorApp) {
     let page = log_page_size(app);
@@ -959,6 +1007,7 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
         automations: load_automations(&root),
         services,
         active_agents: load_active_agents(),
+        background: load_background(),
         agent_overlay: None,
         log_file_name,
         log_lines,
@@ -1035,19 +1084,10 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
     match key.code {
         KeyCode::Char('q') => app.should_quit = true,
         KeyCode::Tab => {
-            app.active_section = app.active_section.next();
-            app.selected_index = 0;
-            app.config_scroll = 0;
-            app.usage_scroll = 0;
-            if app.active_section == Section::Logs {
-                app.log_follow = true;
-                let total = app.log_lines.len();
-                if total > 0 {
-                    app.log_selected = total - 1;
-                    let page = log_page_size(app);
-                    app.log_offset = total.saturating_sub(page);
-                }
-            }
+            switch_section(app, app.active_section.next());
+        }
+        KeyCode::BackTab => {
+            switch_section(app, app.active_section.prev());
         }
         KeyCode::Char('j') | KeyCode::Down => {
             if app.active_section == Section::Config {
@@ -1084,6 +1124,9 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
             delete_or_reset_selected(app);
         }
         KeyCode::Char('y') => copy_selected_thread_id(app),
+        KeyCode::Char('x') if app.active_section == Section::Background => {
+            kill_selected_background(app);
+        }
         KeyCode::Char('r') => restart_selected_service(app),
         KeyCode::Enter => {
             if app.active_section == Section::ActiveAgents {
@@ -1400,6 +1443,7 @@ fn supervise_services(app: &mut MonitorApp) {
 fn refresh_app(app: &mut MonitorApp) {
     app.services = load_services();
     app.active_agents = load_active_agents();
+    app.background = load_background();
     let (log_file_name, log_lines) = load_logs(LOG_TAIL_LINES);
     app.log_file_name = log_file_name;
     app.log_lines = log_lines;
@@ -1699,6 +1743,51 @@ fn format_duration(d: std::time::Duration) -> String {
     } else {
         format!("{}d {}h", secs / 86400, (secs % 86400) / 3600)
     }
+}
+
+/// Loads running background processes for the Background tab, sorted so
+/// same-thread processes are adjacent (the render groups them under a header).
+fn load_background() -> Vec<BackgroundInfo> {
+    let mut v: Vec<BackgroundInfo> = zdx_engine::background_activity::list_background()
+        .into_iter()
+        .filter(zdx_engine::background_activity::BackgroundProcess::is_running)
+        .map(|p| {
+            let uptime = p.uptime();
+            BackgroundInfo {
+                bg_id: p.bg_id,
+                pid: p.pid,
+                thread_id: p.thread_id,
+                command: p.command,
+                uptime,
+            }
+        })
+        .collect();
+    v.sort_by(|a, b| a.thread_id.cmp(&b.thread_id).then(a.bg_id.cmp(&b.bg_id)));
+    v
+}
+
+/// Stops the selected background process. Optimistically removes the row; the
+/// on-tick refresh reconciles once the async kill lands. Runs the async kill on
+/// its own thread with a current-thread Tokio runtime (the monitor has no
+/// ambient runtime).
+fn kill_selected_background(app: &mut MonitorApp) {
+    let Some(info) = app.background.get(app.selected_index) else {
+        return;
+    };
+    let bg_id = info.bg_id.clone();
+    app.set_status(format!("Stopping {bg_id}…"));
+    app.background.remove(app.selected_index);
+    app.clamp_selection();
+    std::thread::spawn(move || {
+        if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            rt.block_on(async {
+                let _ = zdx_engine::background_activity::kill_background(&bg_id).await;
+            });
+        }
+    });
 }
 
 fn load_active_agents() -> Vec<ActiveAgentInfo> {
