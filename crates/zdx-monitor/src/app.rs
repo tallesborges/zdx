@@ -160,8 +160,9 @@ pub fn build_config_lines(config: &config::Config, root: &Path) -> Vec<ConfigLin
     let mut sections: Vec<(String, Vec<ConfigLine>)> = Vec::new();
 
     for (key, val) in obj {
-        if key == "favorites" {
-            // Rendered as a dedicated group from `config.favorites` below.
+        if key == "favorites" || key == "subagents" {
+            // Rendered as dedicated groups below (favorites from
+            // `config.favorites`, subagents from `discover` + overrides).
             continue;
         }
         if let Value::Object(nested) = val {
@@ -277,14 +278,27 @@ const ADD_FAVORITE_LABEL: &str = "[+ add favorite]";
 /// (it inherits the parent/default model at runtime).
 const SUBAGENT_DEFAULT_LABEL: &str = "(default)";
 
-/// Builds the `subagents` group rows: one per discovered (non-reserved)
-/// subagent, showing its effective model (config override wins over the live
-/// definition), or `(default)` when neither sets a model.
+/// Field path for the subagents-enabled toggle row (not a model field; toggled
+/// on `Enter` rather than opening the model picker). Kept dot-free so it never
+/// matches the `subagents.<name>` override prefix.
+const SUBAGENTS_ENABLED_PATH: &str = "subagents_enabled";
+
+/// Builds the `subagents` group rows: a leading on/off toggle, then one row per
+/// discovered (non-reserved) subagent showing its effective model (config
+/// override wins over the live definition), or `(default)` when neither sets a
+/// model.
 fn build_subagent_lines(config: &config::Config, root: &Path) -> Vec<ConfigLine> {
+    let mut out = vec![ConfigLine::Row(
+        "enabled".to_string(),
+        if config.subagents.enabled {
+            "on".to_string()
+        } else {
+            "off".to_string()
+        },
+    )];
     let Ok(defs) = zdx_engine::subagents::discover(root) else {
-        return Vec::new();
+        return out;
     };
-    let mut out = Vec::new();
     for def in defs {
         if zdx_engine::subagents::is_reserved_runtime_alias(&def.name) {
             continue;
@@ -1996,7 +2010,11 @@ pub(crate) fn editable_model_fields(lines: &[ConfigLine]) -> Vec<EditableModelFi
                     ("core", "model")
                     | (
                         "helper models",
-                        "title_model" | "tldr_model" | "handoff_model" | "read_thread_model",
+                        "title_model"
+                        | "tldr_model"
+                        | "handoff_model"
+                        | "prompt_builder_model"
+                        | "read_thread_model",
                     ) => Some((key.clone(), ModelFieldKind::Chat)),
                     ("transcription", "model") => Some((
                         "transcription.model".to_string(),
@@ -2015,6 +2033,9 @@ pub(crate) fn editable_model_fields(lines: &[ConfigLine]) -> Vec<EditableModelFi
                         let path = format!("favorites.{fav_index}");
                         fav_index += 1;
                         Some((path, ModelFieldKind::Chat))
+                    }
+                    ("subagents", "enabled") => {
+                        Some((SUBAGENTS_ENABLED_PATH.to_string(), ModelFieldKind::Chat))
                     }
                     ("subagents", name) => {
                         Some((format!("subagents.{name}"), ModelFieldKind::Chat))
@@ -2087,12 +2108,17 @@ fn move_config_selection(app: &mut MonitorApp, forward: bool) {
     ensure_config_selection_visible(app);
 }
 
-/// Opens the model picker for the currently selected Config model row.
+/// Opens the model picker for the currently selected Config model row, or
+/// toggles the subagents-enabled flag when that row is selected.
 fn open_model_picker(app: &mut MonitorApp) {
     let fields = editable_model_fields(&app.config_lines);
     let Some(field) = fields.get(app.config_selected) else {
         return;
     };
+    if field.path == SUBAGENTS_ENABLED_PATH {
+        toggle_subagents_enabled(app);
+        return;
+    }
     let (path, kind, line_index) = (field.path.clone(), field.kind, field.line_index);
     let current = match &app.config_lines[line_index] {
         // Ignore the `(unset)`/`(empty)`/`(default)` display placeholders.
@@ -2105,6 +2131,25 @@ fn open_model_picker(app: &mut MonitorApp) {
         _ => String::new(),
     };
     app.model_picker = Some(ModelPickerState::new(path, kind, &current));
+}
+
+/// Flips `subagents.enabled` in the config and reloads the Config tab.
+fn toggle_subagents_enabled(app: &mut MonitorApp) {
+    let Ok(cfg) = config::Config::load() else {
+        app.set_status("Failed to load config");
+        return;
+    };
+    let next = !cfg.subagents.enabled;
+    match config::Config::save_subagents_enabled(next) {
+        Ok(()) => {
+            reload_config_lines(app);
+            app.set_status(format!(
+                "Subagents {}",
+                if next { "enabled" } else { "disabled" }
+            ));
+        }
+        Err(e) => app.set_status(format!("Failed to toggle subagents: {e}")),
+    }
 }
 
 /// Reloads config lines from disk after an edit, clamping selection.
@@ -2493,6 +2538,7 @@ mod transcript_tests {
             ConfigLine::Row("verbose".into(), "true".into()),
             ConfigLine::Section("helper models".into()),
             ConfigLine::Row("title_model".into(), "y".into()),
+            ConfigLine::Row("prompt_builder_model".into(), "p".into()),
             ConfigLine::Section("transcription".into()),
             ConfigLine::Row("model".into(), "z".into()),
             ConfigLine::Row("language".into(), "en".into()),
@@ -2510,6 +2556,7 @@ mod transcript_tests {
             vec![
                 ("model", ModelFieldKind::Chat),
                 ("title_model", ModelFieldKind::Chat),
+                ("prompt_builder_model", ModelFieldKind::Chat),
                 ("transcription.model", ModelFieldKind::Transcription),
                 ("speech.model", ModelFieldKind::Speech),
                 ("telegram.model", ModelFieldKind::Chat),
@@ -2572,17 +2619,18 @@ mod transcript_tests {
     fn subagents_group_resolves_names_to_override_paths() {
         let lines = vec![
             ConfigLine::Section("subagents".into()),
+            ConfigLine::Row("enabled".into(), "on".into()),
             ConfigLine::Row("explorer".into(), "gemini:x@low".into()),
             ConfigLine::Row("oracle".into(), SUBAGENT_DEFAULT_LABEL.into()),
         ];
         let fields = editable_model_fields(&lines);
-        let got: Vec<(&str, ModelFieldKind)> =
-            fields.iter().map(|f| (f.path.as_str(), f.kind)).collect();
+        let got: Vec<&str> = fields.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(
             got,
             vec![
-                ("subagents.explorer", ModelFieldKind::Chat),
-                ("subagents.oracle", ModelFieldKind::Chat),
+                SUBAGENTS_ENABLED_PATH,
+                "subagents.explorer",
+                "subagents.oracle",
             ]
         );
     }

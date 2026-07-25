@@ -1036,6 +1036,40 @@ impl Config {
         Self::write_config(path, &doc.to_string())
     }
 
+    /// Saves the `subagents.enabled` flag, preserving the rest of the document.
+    ///
+    /// # Errors
+    /// Returns an error if the write fails.
+    pub fn save_subagents_enabled(enabled: bool) -> Result<()> {
+        Self::save_subagents_enabled_to(&paths::config_path(), enabled)
+    }
+
+    /// Saves the `subagents.enabled` flag to a specific config path.
+    ///
+    /// # Errors
+    /// Returns an error if the write fails.
+    pub fn save_subagents_enabled_to(path: &Path, enabled: bool) -> Result<()> {
+        use toml_edit::{DocumentMut, Item, Table, value};
+
+        let contents = if path.exists() {
+            let user_config = fs::read_to_string(path)
+                .with_context(|| format!("Failed to read config from {}", path.display()))?;
+            merge_with_template(&user_config)?
+        } else {
+            default_config_template().to_string()
+        };
+        let mut doc: DocumentMut = contents
+            .parse()
+            .with_context(|| format!("Failed to parse config from {}", path.display()))?;
+
+        if doc.get("subagents").and_then(Item::as_table).is_none() {
+            doc["subagents"] = Item::Table(Table::new());
+        }
+        doc["subagents"]["enabled"] = value(enabled);
+
+        Self::write_config(path, &doc.to_string())
+    }
+
     /// Saves a per-subagent model override (`[subagents.overrides.<name>]`),
     /// preserving the rest of the document via `toml_edit`.
     ///
