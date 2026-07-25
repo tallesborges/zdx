@@ -204,6 +204,9 @@ pub enum UiEffect {
     /// Ensure a git worktree for the active thread and switch root to it.
     EnsureWorktree,
 
+    /// Stop a background process (started with the Bash tool's `background: true`).
+    KillBackgroundProcess { bg_id: String },
+
     /// Open a new terminal window at the given path.
     OpenTerminal,
 

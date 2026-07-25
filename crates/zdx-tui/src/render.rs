@@ -443,6 +443,34 @@ fn render_status_line(state: &TuiState, frame: &mut Frame, area: Rect) {
     };
 
     let status = Paragraph::new(Line::from(spans)).alignment(Alignment::Left);
+    render_status_with_indicator(frame, area, status, state.background_count);
+}
+
+/// Renders the left-aligned status text plus, when there are running background
+/// processes for this thread, a dim `▸ N bg` indicator at the bottom-right.
+fn render_status_with_indicator(
+    frame: &mut Frame,
+    area: Rect,
+    status: Paragraph<'_>,
+    background_count: usize,
+) {
+    if background_count > 0 {
+        let label = format!("▸ {background_count} bg");
+        let ind_w = label.chars().count() as u16 + 1;
+        // Only show it when there's clear room beside the left content.
+        if area.width > ind_w + 12 {
+            let right = Rect::new(area.x + area.width - ind_w, area.y, ind_w, area.height);
+            let left = Rect::new(area.x, area.y, area.width - ind_w, area.height);
+            frame.render_widget(status, left);
+            let indicator = Paragraph::new(Line::from(Span::styled(
+                label,
+                Style::default().fg(Color::DarkGray),
+            )))
+            .alignment(Alignment::Right);
+            frame.render_widget(indicator, right);
+            return;
+        }
+    }
     frame.render_widget(status, area);
 }
 

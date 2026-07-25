@@ -389,6 +389,11 @@ pub struct TuiState {
     pub unseen_completion: bool,
     /// Spinner animation frame counter (for running tools).
     pub spinner_frame: usize,
+    /// Cached count of running background processes for the current thread
+    /// (shown in the status line). Refreshed on a timed cadence.
+    pub background_count: usize,
+    /// Last time `background_count` was recomputed (throttles disk reads).
+    pub last_bg_poll: std::time::Instant,
     /// Git branch name (cached at startup).
     pub git_branch: Option<String>,
     /// Shortened display path (cached at startup).
@@ -491,6 +496,8 @@ impl TuiState {
             last_turn_outcome: None,
             unseen_completion: false,
             spinner_frame: 0,
+            background_count: 0,
+            last_bg_poll: std::time::Instant::now(),
             git_branch,
             display_path,
             status_line: crate::statusline::StatusLineAccumulator::new(),
@@ -507,6 +514,20 @@ impl TuiState {
     pub fn mark_thread_running(&mut self, thread_id: String) {
         self.optimistic_active_threads
             .insert(thread_id, Instant::now());
+    }
+
+    /// Recomputes `background_count` for the current thread, throttled to at
+    /// most once per second to avoid disk reads at animation framerate.
+    pub fn poll_background_count(&mut self) {
+        if self.last_bg_poll.elapsed() < std::time::Duration::from_secs(1) {
+            return;
+        }
+        self.last_bg_poll = std::time::Instant::now();
+        let tid = self.thread.thread_handle.as_ref().map(|h| h.id.clone());
+        self.background_count = zdx_engine::background_activity::list_background()
+            .iter()
+            .filter(|p| p.is_running() && p.thread_id.as_deref() == tid.as_deref())
+            .count();
     }
 
     pub fn mark_thread_finished(&mut self, thread_id: &str) {

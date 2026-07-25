@@ -7,6 +7,7 @@
 pub use zdx_tools::{apply_patch, bash, edit, fetch_webpage, glob, grep, read, web_search, write};
 
 // Engine-backed tools (need full ToolContext with config, threads, etc.)
+pub mod background;
 pub mod memory_get;
 pub mod memory_search;
 pub mod read_thread;
@@ -145,6 +146,8 @@ impl ToolSet {
         match self {
             ToolSet::Default => &[
                 "bash",
+                "background_output",
+                "background_kill",
                 "edit",
                 "fetch_webpage",
                 "glob",
@@ -161,6 +164,8 @@ impl ToolSet {
             ],
             ToolSet::OpenAICodex => &[
                 "bash",
+                "background_output",
+                "background_kill",
                 "apply_patch",
                 "fetch_webpage",
                 "glob",
@@ -321,6 +326,8 @@ impl ToolRegistry {
 
     fn register_builtin_tools(&mut self) {
         self.register_tool(Bash);
+        self.register_tool(background::BackgroundOutput);
+        self.register_tool(background::BackgroundKill);
         self.register_tool(ApplyPatch);
         self.register_tool(Edit);
         self.register_tool(Read);
@@ -349,6 +356,16 @@ impl Tool for Bash {
         let input = input.clone();
         let ctx = ctx.clone();
         Box::pin(async move {
+            // Background mode: spawn a detached, tracked process and return a
+            // bg_id instead of blocking the turn.
+            if input
+                .get("background")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                return background::run_background(&input, &ctx).await;
+            }
+
             let event_sender = ctx.event_sender.clone();
             let tool_use_id = ctx.tool_use_id.clone();
 

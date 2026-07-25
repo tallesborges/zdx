@@ -3,6 +3,7 @@
 pub mod agent_activity;
 pub mod audio;
 pub mod automations;
+pub mod background_activity;
 pub mod config;
 pub mod core;
 pub mod custom_commands;

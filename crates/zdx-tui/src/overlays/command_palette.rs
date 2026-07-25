@@ -406,6 +406,7 @@ fn execute_command(
         }
         "thinking" => (Some(OverlayRequest::ThinkingPicker), vec![], vec![]),
         "timeline" => (Some(OverlayRequest::Timeline), vec![], vec![]),
+        "background" => (Some(OverlayRequest::Background), vec![], vec![]),
         "tldr" => (Some(OverlayRequest::Tldr), vec![], vec![]),
         "context" => (Some(OverlayRequest::Context), vec![], vec![]),
         "handoff" => {

@@ -3,6 +3,7 @@
 pub mod ask_media;
 pub mod auth;
 pub mod automations;
+pub mod bg;
 pub mod bot;
 pub mod chat;
 pub mod config;
