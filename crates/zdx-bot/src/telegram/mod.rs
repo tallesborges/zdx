@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use zdx_engine::config::{Config, ResolvedTelegramRuntime};
 
+mod html;
 mod types;
 
 #[allow(unused_imports)]
@@ -66,6 +67,13 @@ struct PreparedPhoto {
     bytes: Vec<u8>,
     file_name: String,
     mime_type: String,
+}
+
+/// Whether Telegram rejected the message because it could not parse the HTML
+/// markup (stray `<`, unknown entity, or an unclosed tag).
+fn is_html_parse_error(err: &anyhow::Error) -> bool {
+    let message = err.to_string();
+    message.contains("can't parse entities") || message.contains("Can't find end of")
 }
 
 fn prepare_photo_for_telegram(
@@ -530,7 +538,7 @@ impl TelegramClient {
         .map(|_| ())
     }
 
-    /// Inner send with HTML-fallback-to-plain logic.
+    /// Inner send with HTML-fallback logic.
     async fn send_message_inner(
         &self,
         chat_id: i64,
@@ -539,41 +547,19 @@ impl TelegramClient {
         message_thread_id: Option<i64>,
         reply_markup: Option<&InlineKeyboardMarkup>,
     ) -> Result<Message> {
-        // First try with HTML parse mode
-        let result = self
-            .send_message_raw(SendMessageRawArgs {
-                chat_id,
-                text,
-                reply_to_message_id,
-                message_thread_id,
-                parse_mode: Some(TELEGRAM_PARSE_MODE),
-                reply_markup,
-                reply_parameters: None,
-            })
-            .await;
-
-        // If HTML parsing failed, retry as plain text
-        if let Err(ref e) = result {
-            let err_msg = e.to_string();
-            if err_msg.contains("can't parse entities") || err_msg.contains("Can't find end of") {
-                return self
-                    .send_message_raw(SendMessageRawArgs {
-                        chat_id,
-                        text,
-                        reply_to_message_id,
-                        message_thread_id,
-                        parse_mode: None,
-                        reply_markup,
-                        reply_parameters: None,
-                    })
-                    .await;
-            }
-        }
-
-        result
+        self.send_message_with_html_fallback(SendMessageRawArgs {
+            chat_id,
+            text,
+            reply_to_message_id,
+            message_thread_id,
+            parse_mode: Some(TELEGRAM_PARSE_MODE),
+            reply_markup,
+            reply_parameters: None,
+        })
+        .await
     }
 
-    /// Inner send with `reply_parameters` and HTML-fallback-to-plain logic.
+    /// Inner send with `reply_parameters` and HTML-fallback logic.
     async fn send_message_inner_with_reply_params(
         &self,
         chat_id: i64,
@@ -582,36 +568,46 @@ impl TelegramClient {
         reply_markup: Option<&InlineKeyboardMarkup>,
         reply_parameters: Option<ReplyParameters>,
     ) -> Result<Message> {
-        let result = self
-            .send_message_raw(SendMessageRawArgs {
-                chat_id,
-                text,
-                reply_to_message_id: None,
-                message_thread_id,
-                parse_mode: Some(TELEGRAM_PARSE_MODE),
-                reply_markup,
-                reply_parameters: reply_parameters.clone(),
-            })
-            .await;
+        self.send_message_with_html_fallback(SendMessageRawArgs {
+            chat_id,
+            text,
+            reply_to_message_id: None,
+            message_thread_id,
+            parse_mode: Some(TELEGRAM_PARSE_MODE),
+            reply_markup,
+            reply_parameters,
+        })
+        .await
+    }
 
-        if let Err(ref e) = result {
-            let err_msg = e.to_string();
-            if err_msg.contains("can't parse entities") || err_msg.contains("Can't find end of") {
-                return self
-                    .send_message_raw(SendMessageRawArgs {
-                        chat_id,
-                        text,
-                        reply_to_message_id: None,
-                        message_thread_id,
-                        parse_mode: None,
-                        reply_markup,
-                        reply_parameters,
-                    })
-                    .await;
+    /// Sends `args` as HTML; on a Telegram parse rejection retries with the
+    /// text repaired by [`html::sanitize`], and only then drops formatting
+    /// entirely by resending the original as plain text.
+    async fn send_message_with_html_fallback(
+        &self,
+        args: SendMessageRawArgs<'_>,
+    ) -> Result<Message> {
+        let result = self.send_message_raw(args.clone()).await;
+        let Err(err) = result else {
+            return result;
+        };
+        if !is_html_parse_error(&err) {
+            return Err(err);
+        }
+
+        let sanitized = html::sanitize(args.text);
+        if sanitized != args.text {
+            let mut retry = args.clone();
+            retry.text = &sanitized;
+            match self.send_message_raw(retry).await {
+                Err(retry_err) if is_html_parse_error(&retry_err) => {}
+                outcome => return outcome,
             }
         }
 
-        result
+        let mut plain = args;
+        plain.parse_mode = None;
+        self.send_message_raw(plain).await
     }
 
     async fn send_message_raw(&self, args: SendMessageRawArgs<'_>) -> Result<Message> {
@@ -650,17 +646,33 @@ impl TelegramClient {
             )
             .await;
 
-        // Fallback to plain text on parse errors
-        if let Err(ref e) = result {
-            let err_msg = e.to_string();
-            if err_msg.contains("can't parse entities") || err_msg.contains("Can't find end of") {
-                return self
-                    .edit_message_text_raw(chat_id, message_id, text, None, reply_markup)
-                    .await;
+        // On a parse rejection, repair the HTML before giving up on formatting
+        let Err(err) = result else {
+            return result;
+        };
+        if !is_html_parse_error(&err) {
+            return Err(err);
+        }
+
+        let sanitized = html::sanitize(text);
+        if sanitized != text {
+            match self
+                .edit_message_text_raw(
+                    chat_id,
+                    message_id,
+                    &sanitized,
+                    Some(TELEGRAM_PARSE_MODE),
+                    reply_markup,
+                )
+                .await
+            {
+                Err(retry_err) if is_html_parse_error(&retry_err) => {}
+                outcome => return outcome,
             }
         }
 
-        result
+        self.edit_message_text_raw(chat_id, message_id, text, None, reply_markup)
+            .await
     }
 
     async fn edit_message_text_raw(
@@ -1090,6 +1102,7 @@ pub struct ReplyParameters {
     pub allow_sending_without_reply: Option<bool>,
 }
 
+#[derive(Clone)]
 struct SendMessageRawArgs<'a> {
     chat_id: i64,
     text: &'a str,
