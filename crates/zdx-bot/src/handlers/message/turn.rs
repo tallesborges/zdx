@@ -7,6 +7,7 @@ use super::status::{STATUS_DEBOUNCE, cleanup_turn_status, setup_turn_status, upd
 use super::{ReplyContext, SpawnRequest, TurnResult, TurnStatus, format_user_error_message};
 use crate::agent;
 use crate::bot::context::BotContext;
+use crate::telegram::InlineKeyboardMarkup;
 
 pub(super) async fn run_agent_turn(
     context: &BotContext,
@@ -221,7 +222,12 @@ async fn finalize_turn(
         if let Some(msg_id) = status.message_id {
             let _ = context
                 .client()
-                .edit_message_text(incoming.chat_id, msg_id, "Cancelled ✓", None)
+                .edit_message_text(
+                    incoming.chat_id,
+                    msg_id,
+                    "Cancelled ✓",
+                    Some(&InlineKeyboardMarkup::empty()),
+                )
                 .await;
         }
         return Ok(());

@@ -27,6 +27,16 @@ pub struct InlineKeyboardMarkup {
     pub inline_keyboard: Vec<Vec<InlineKeyboardButton>>,
 }
 
+impl InlineKeyboardMarkup {
+    /// Empty keyboard. `editMessageText` keeps the previous buttons when
+    /// `reply_markup` is omitted, so removing them requires sending this.
+    pub fn empty() -> Self {
+        Self {
+            inline_keyboard: Vec::new(),
+        }
+    }
+}
+
 /// A single button in an inline keyboard.
 #[derive(Debug, Clone, Serialize)]
 pub struct InlineKeyboardButton {

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use crate::bot::context::{BotContext, QueueCancelKey};
+use crate::bot::context::{BotContext, QueueCancelKey, QueuedCancel};
 use crate::commands::{BotCommand, bypasses_queue, is_topic_blocking_command, parse_command};
 use crate::handlers::message::handle_message;
 use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message};
@@ -262,7 +262,13 @@ async fn enqueue_message(queues: &ChatQueueMap, context: &Arc<BotContext>, messa
                 let queue_cancel_key: QueueCancelKey = (chat_id, user_message_id);
                 {
                     let mut map = context.queue_cancel_map().lock().await;
-                    map.insert(queue_cancel_key, cancel_token.clone());
+                    map.insert(
+                        queue_cancel_key,
+                        QueuedCancel {
+                            token: cancel_token.clone(),
+                            status_message_id: status_msg.id,
+                        },
+                    );
                 }
             }
             Err(err) => {
@@ -315,33 +321,22 @@ fn spawn_queue_worker(
                 queued_status,
             } = item;
 
-            // Clean up queue cancel map entry
-            if let Some(ref status) = queued_status {
-                let queue_cancel_key: QueueCancelKey = (status.chat, status.original);
+            // Take the cancel entry and read the flag under the same lock the
+            // cancel callback holds, so an in-flight cancel can't be missed.
+            let cancelled = {
                 let mut map = context.queue_cancel_map().lock().await;
-                map.remove(&queue_cancel_key);
-            }
-
-            if cancel_token.is_cancelled() {
-                // Item was cancelled while queued — update status and skip
-                tracing::debug!(?key, "Skipping cancelled queued message");
-                if let Some(status) = queued_status {
-                    if let Err(err) = context
-                        .client()
-                        .edit_message_text(status.chat, status.status, "Cancelled ✓", None)
-                        .await
-                    {
-                        tracing::warn!(status_id = status.status, %err, "Failed to edit cancelled queue status");
-                    }
-                    // Best-effort: delete user's original message
-                    if let Err(err) = context
-                        .client()
-                        .delete_message(status.chat, status.original)
-                        .await
-                    {
-                        tracing::warn!(message_id = status.original, %err, "Failed to delete user message on queue cancel");
-                    }
+                if let Some(ref status) = queued_status {
+                    let queue_cancel_key: QueueCancelKey = (status.chat, status.original);
+                    map.remove(&queue_cancel_key);
                 }
+                cancel_token.is_cancelled()
+            };
+
+            if cancelled {
+                // The cancel callback already edited the status message and
+                // deleted the user's message; just drop the item.
+                tracing::debug!(?key, "Skipping cancelled queued message");
+                release_slot(&queues, key).await;
                 continue;
             }
 
@@ -360,19 +355,23 @@ fn spawn_queue_worker(
                 tracing::error!(?key, %err, "Message handling error");
             }
 
-            let mut queues = queues.lock().await;
-            let drained = if let Some(state) = queues.get_mut(&key) {
-                state.pending = state.pending.saturating_sub(1);
-                state.pending == 0
-            } else {
-                false
-            };
-            if drained {
-                // No items left for this key: drop the entry so the channel
-                // closes and this worker exits instead of leaking a per-key
-                // queue + idle task forever.
-                queues.remove(&key);
-            }
+            release_slot(&queues, key).await;
         }
     });
+}
+
+/// Mark one queued item as done. When the last item drains, drop the queue
+/// entry so the channel closes and the worker exits instead of leaking a
+/// per-key queue + idle task forever.
+async fn release_slot(queues: &ChatQueueMap, key: QueueKey) {
+    let mut queues = queues.lock().await;
+    let drained = if let Some(state) = queues.get_mut(&key) {
+        state.pending = state.pending.saturating_sub(1);
+        state.pending == 0
+    } else {
+        false
+    };
+    if drained {
+        queues.remove(&key);
+    }
 }
