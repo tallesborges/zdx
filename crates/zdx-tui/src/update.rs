@@ -357,6 +357,7 @@ fn submit_after_voice(app: &mut AppState) -> Vec<UiEffect> {
         model_id: &app.tui.config.model,
         active_thread_ids: &active_thread_ids,
         root: app.tui.agent_opts.root.as_path(),
+        can_retry: false,
     };
     let (effects, mutations, _overlay) = input::submit_current_input(&mut app.tui.input, &ctx);
     apply_mutations(&mut app.tui, mutations);
@@ -1807,6 +1808,7 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         .as_ref()
         .map(|thread_handle| thread_handle.id.clone());
     let active_thread_ids = app.tui.snapshot_active_thread_ids();
+    let can_retry = app.tui.can_retry_last_turn();
     let ctx = input::InputContext {
         agent_state: &app.tui.agent_state,
         tasks: &app.tui.tasks,
@@ -1816,6 +1818,7 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         model_id: &app.tui.config.model,
         active_thread_ids: &active_thread_ids,
         root: app.tui.agent_opts.root.as_path(),
+        can_retry,
     };
     let (effects, mutations, overlay_request) =
         input::handle_main_key(&mut app.tui.input, &ctx, key);

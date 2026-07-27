@@ -28,7 +28,7 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 ### Feature slices (`src/features/`)
 
 - `features/auth/`: auth feature slice
-- `features/input/`: input feature slice (`text_buffer.rs` cursor editing)
+- `features/input/`: input feature slice (`text_buffer.rs` cursor editing). Empty Enter after a failed turn retries it: `TuiState::can_retry_last_turn` gates `InputContext.can_retry`, and `submit_input` emits a bare `StartAgentTurn` (re-runs `thread.messages` with no new user message).
 - `features/statusline/`: debug status line state/render
 - `features/thread/`: thread picker + thread tree view
 - `features/transcript/`: transcript feature + markdown rendering (`reasoning.rs` shared reasoning-display helper + `[redacted reasoning]` placeholder constant)
