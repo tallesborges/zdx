@@ -160,6 +160,7 @@ pub fn handle_agent_event(
                     }
                     transcript.mark_errored();
                     transcript.push_cell(HistoryCell::system(format!("Error: {message}")));
+                    transcript.push_cell(HistoryCell::system("↵ Press Enter to retry."));
                     *agent_state = AgentState::Idle;
                     vec![]
                 }

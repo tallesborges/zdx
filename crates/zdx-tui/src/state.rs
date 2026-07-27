@@ -516,6 +516,21 @@ impl TuiState {
             .insert(thread_id, Instant::now());
     }
 
+    /// Whether an empty Enter should retry the last turn.
+    ///
+    /// True when the previous turn failed, the agent is idle, and the
+    /// conversation still ends with an unanswered user message — so the turn
+    /// can be re-run from persisted state without appending a new message.
+    pub fn can_retry_last_turn(&self) -> bool {
+        matches!(self.last_turn_outcome, Some(TurnOutcome::Failed))
+            && !self.agent_state.is_running()
+            && self
+                .thread
+                .messages
+                .last()
+                .is_some_and(|m| m.role == "user")
+    }
+
     /// Recomputes `background_count` for the current thread, throttled to at
     /// most once per second to avoid disk reads at animation framerate.
     pub fn poll_background_count(&mut self) {

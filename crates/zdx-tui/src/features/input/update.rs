@@ -37,6 +37,8 @@ pub struct InputContext<'a> {
     pub model_id: &'a str,
     pub active_thread_ids: &'a std::collections::HashSet<String>,
     pub root: &'a std::path::Path,
+    /// True when an empty Enter should retry the last failed turn.
+    pub can_retry: bool,
 }
 
 const FAST_MODE_UNAVAILABLE_MSG: &str =
@@ -680,6 +682,7 @@ pub fn submit_current_input(input: &mut InputState, ctx: &InputContext<'_>) -> K
         ctx.active_thread_ids,
         ctx.config,
         ctx.model_id,
+        ctx.can_retry,
     )
 }
 
@@ -882,6 +885,7 @@ fn submit_input(
     active_thread_ids: &std::collections::HashSet<String>,
     config: &Config,
     model_id: &str,
+    can_retry: bool,
 ) -> KeyResult {
     // Block input during any modal generation. Each branch shows a hint
     // pointing at Esc as the cancel path and shares the early-return shape.
@@ -962,6 +966,12 @@ fn submit_input(
 
     // Normal message submission
     if trimmed.is_empty() {
+        // Empty Enter after a failed turn re-runs it from the persisted
+        // state — no new user message is appended (the unanswered one is
+        // still the last message in the thread).
+        if can_retry {
+            return (vec![UiEffect::StartAgentTurn], vec![], None);
+        }
         return (vec![], vec![], None);
     }
 
@@ -1602,6 +1612,7 @@ mod tests {
             model_id: &config.model,
             active_thread_ids: &active_thread_ids,
             root: std::path::Path::new("."),
+            can_retry: false,
         };
 
         let (effects, mutations, overlay) = handle_main_key(
@@ -1634,7 +1645,60 @@ mod tests {
             model_id: &config.model,
             active_thread_ids,
             root: std::path::Path::new("."),
+            can_retry: false,
         }
+    }
+
+    #[test]
+    fn empty_enter_retries_when_can_retry() {
+        let mut input = InputState::default();
+        let tasks = Tasks::default();
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config::default();
+        let mut ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
+        ctx.can_retry = true;
+
+        let (effects, mutations, overlay) = handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, UiEffect::StartAgentTurn)),
+            "expected StartAgentTurn on empty retry Enter; got {effects:?}"
+        );
+        // Retry must NOT append a new user message/cell or persist a turn event.
+        assert!(mutations.iter().all(|mutation| !matches!(
+            mutation,
+            StateMutation::Thread(ThreadMutation::AppendMessage(_))
+        )));
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, UiEffect::SaveThread { .. }))
+        );
+        assert!(overlay.is_none());
+    }
+
+    #[test]
+    fn empty_enter_does_nothing_without_can_retry() {
+        let mut input = InputState::default();
+        let tasks = Tasks::default();
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config::default();
+        let ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
+
+        let (effects, _mutations, overlay) = handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        assert!(effects.is_empty(), "idle empty Enter should be a no-op");
+        assert!(overlay.is_none());
     }
 
     fn fav(alias: &str, model: &str, thinking: ThinkingLevel) -> ModelFavorite {
