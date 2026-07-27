@@ -15,6 +15,7 @@ pub(super) async fn run_agent_turn(
     thread_id: &str,
     synthetic_topic_routed_from_general: bool,
     provisional_status: Option<TurnStatus>,
+    record_user: bool,
 ) -> Result<()> {
     let resolved_root = context.root_for_chat(incoming.chat_id);
     let worktree_root = thread_persistence::read_thread_root_path(thread_id)?
@@ -35,7 +36,9 @@ pub(super) async fn run_agent_turn(
     };
     let (mut thread, mut messages) = agent::load_thread_state(thread_id)?;
     let pending_topic_title = thread_persistence::read_thread_pending_topic_title(thread_id)?;
-    agent::record_user_message(&mut thread, &mut messages, &incoming)?;
+    if record_user {
+        agent::record_user_message(&mut thread, &mut messages, &incoming)?;
+    }
 
     // Async topic title: spawn LLM-based title generation + rename for new topics.
     // This runs only after the user message is persisted, so the thread file exists.
@@ -85,7 +88,16 @@ pub(super) async fn run_agent_turn(
     let result = stream_turn_events(context, &incoming, &mut handle, &mut status).await;
     drop(typing);
     cleanup_turn_status(context, &status).await;
-    finalize_turn(context, &incoming, &reply_ctx, &mut thread, &status, result).await
+    finalize_turn(
+        context,
+        &incoming,
+        &reply_ctx,
+        thread_id,
+        &mut thread,
+        &status,
+        result,
+    )
+    .await
 }
 
 async fn spawn_or_fail(
@@ -195,6 +207,7 @@ async fn finalize_turn(
     context: &BotContext,
     incoming: &crate::types::IncomingMessage,
     reply_ctx: &ReplyContext,
+    thread_id: &str,
     _thread: &mut zdx_engine::core::thread_persistence::Thread,
     status: &TurnStatus,
     result: TurnResult,
@@ -225,6 +238,17 @@ async fn finalize_turn(
                 .edit_message_text(incoming.chat_id, msg_id, &error_text, None)
                 .await;
         }
+        crate::retry::send_retry_buttons(
+            context,
+            incoming.chat_id,
+            crate::retry::RetryRequest {
+                thread_id: thread_id.to_string(),
+                topic_id: reply_ctx.topic_id,
+                reply_to_message_id: reply_ctx.reply_to_message_id,
+                user_message_id: incoming.message_id,
+            },
+        )
+        .await;
         return Ok(());
     }
 
