@@ -10,6 +10,7 @@ use zdx_engine::core::agent::ToolConfig;
 use crate::command_picker::CommandPickerMap;
 use crate::followups::FollowupMap;
 use crate::handlers::message::LauncherMap;
+use crate::retry::RetryMap;
 use crate::staging::StagingMap;
 use crate::telegram::TelegramClient;
 
@@ -47,6 +48,7 @@ pub(crate) struct BotContext {
     cancel_map: CancelMap,
     queue_cancel_map: QueueCancelMap,
     followup_map: FollowupMap,
+    retry_map: RetryMap,
     staging_map: StagingMap,
     command_picker_map: CommandPickerMap,
     launcher_map: LauncherMap,
@@ -67,6 +69,7 @@ pub(crate) struct BotContextDeps {
     pub cancel_map: CancelMap,
     pub queue_cancel_map: QueueCancelMap,
     pub followup_map: FollowupMap,
+    pub retry_map: RetryMap,
     pub staging_map: StagingMap,
     pub command_picker_map: CommandPickerMap,
     pub launcher_map: LauncherMap,
@@ -83,6 +86,7 @@ impl BotContext {
             cancel_map,
             queue_cancel_map,
             followup_map,
+            retry_map,
             staging_map,
             command_picker_map,
             launcher_map,
@@ -100,6 +104,7 @@ impl BotContext {
             cancel_map,
             queue_cancel_map,
             followup_map,
+            retry_map,
             staging_map,
             command_picker_map,
             launcher_map,
@@ -175,6 +180,10 @@ impl BotContext {
         &self.followup_map
     }
 
+    pub(crate) fn retry_map(&self) -> &RetryMap {
+        &self.retry_map
+    }
+
     pub(crate) fn staging_map(&self) -> &StagingMap {
         &self.staging_map
     }
@@ -247,6 +256,7 @@ mod tests {
                 cancel_map: new_cancel_map(),
                 queue_cancel_map: new_queue_cancel_map(),
                 followup_map: crate::followups::new_followup_map(),
+                retry_map: crate::retry::new_retry_map(),
                 staging_map: crate::staging::new_staging_map(),
                 command_picker_map: crate::command_picker::new_command_picker_map(),
                 launcher_map: crate::handlers::message::new_launcher_map(),

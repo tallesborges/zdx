@@ -108,8 +108,45 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         &thread_id,
         synthetic_topic_routed_from_general,
         provisional_status,
+        true,
     )
     .await
+}
+
+/// Re-runs a failed turn from the already-persisted thread state.
+///
+/// No new user message is recorded — the last persisted user message (whose
+/// turn failed) is retried verbatim. Builds a minimal synthetic incoming so
+/// the existing turn pipeline (status message, streaming, final send) can run.
+///
+/// # Errors
+/// Returns an error if the turn cannot be spawned or persisted.
+pub(crate) async fn retry_agent_turn(
+    context: &BotContext,
+    chat_id: i64,
+    user_message_id: i64,
+    thread_id: &str,
+    topic_id: Option<i64>,
+    reply_to_message_id: Option<i64>,
+) -> Result<()> {
+    let incoming = crate::types::IncomingMessage {
+        chat_id,
+        message_id: user_message_id,
+        user_id: 0,
+        text: None,
+        images: Vec::new(),
+        audios: Vec::new(),
+        documents: Vec::new(),
+        message_thread_id: topic_id,
+        is_forum: topic_id.is_some(),
+    };
+    let reply_ctx = ReplyContext {
+        reply_to_message_id,
+        topic_id,
+        cross_topic_reply_parameters: None,
+    };
+
+    run_agent_turn(context, incoming, reply_ctx, thread_id, false, None, false).await
 }
 
 async fn parse_message_with_status(

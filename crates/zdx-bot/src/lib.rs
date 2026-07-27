@@ -22,6 +22,7 @@ mod commands;
 mod followups;
 mod handlers;
 mod ingest;
+mod retry;
 mod staging;
 pub mod telegram;
 mod topic_title;
@@ -119,6 +120,7 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
             cancel_map,
             queue_cancel_map,
             followup_map: followups::new_followup_map(),
+            retry_map: retry::new_retry_map(),
             staging_map: staging::new_staging_map(),
             command_picker_map: command_picker::new_command_picker_map(),
             launcher_map: crate::handlers::message::new_launcher_map(),
@@ -234,6 +236,7 @@ fn media_group_key(message: &crate::telegram::Message) -> Option<MediaGroupKey> 
 /// Supports:
 /// - `cancel:{chat_id}:{user_message_id}` — cancel an active agent turn
 /// - `cancel_q:{chat_id}:{message_id}` — cancel a queued (not-yet-processing) item
+/// - `retry:{go|x}` — re-run a failed turn / dismiss the retry button
 async fn handle_callback_query(
     context: &Arc<BotContext>,
     client: &TelegramClient,
@@ -303,6 +306,8 @@ async fn handle_callback_query(
         }
     } else if let Some(rest) = data.strip_prefix("fu:") {
         followups::handle_callback(context, chat_queues, client, &callback, rest).await;
+    } else if let Some(rest) = data.strip_prefix("retry:") {
+        retry::handle_callback(context, client, &callback, rest).await;
     } else if let Some(rest) = data.strip_prefix("stg:") {
         staging::handle_callback(context, chat_queues, client, &callback, rest).await;
     } else if let Some(rest) = data.strip_prefix("cmd:") {
