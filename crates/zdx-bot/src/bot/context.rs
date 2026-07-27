@@ -25,8 +25,16 @@ pub(crate) type QueueCancelKey = (i64, i64);
 /// Shared map of active agent turns that can be cancelled via inline button.
 pub(crate) type CancelMap = Arc<Mutex<HashMap<CancelKey, CancellationToken>>>;
 
+/// Cancellation handle for a queued (not-yet-processing) item.
+#[derive(Clone)]
+pub(crate) struct QueuedCancel {
+    pub token: CancellationToken,
+    /// `message_id` of the "⏳ Queued" status message to update on cancel.
+    pub status_message_id: i64,
+}
+
 /// Shared map of queued (not-yet-processing) items that can be cancelled.
-pub(crate) type QueueCancelMap = Arc<Mutex<HashMap<QueueCancelKey, CancellationToken>>>;
+pub(crate) type QueueCancelMap = Arc<Mutex<HashMap<QueueCancelKey, QueuedCancel>>>;
 
 pub(crate) fn new_cancel_map() -> CancelMap {
     Arc::new(Mutex::new(HashMap::new()))

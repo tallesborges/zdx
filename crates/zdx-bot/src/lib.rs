@@ -13,7 +13,7 @@ use crate::bot::{
     new_chat_queues, new_queue_cancel_map,
 };
 use crate::handlers::message::ModelPickerScope;
-use crate::telegram::{CallbackQuery, TelegramClient, TelegramSettings};
+use crate::telegram::{CallbackQuery, InlineKeyboardMarkup, TelegramClient, TelegramSettings};
 
 mod agent;
 mod bot;
@@ -280,30 +280,7 @@ async fn handle_callback_query(
             tracing::warn!(%err, "Failed to answer callback");
         }
     } else if let Some(key) = parse_queue_cancel_callback(data) {
-        // Cancel a queued (not-yet-processing) item
-        let token = {
-            let map = context.queue_cancel_map().lock().await;
-            map.get(&key).cloned()
-        };
-
-        if let Some(token) = token {
-            token.cancel();
-            if let Err(err) = client
-                .answer_callback_query(&callback.id, Some("Removed from queue"))
-                .await
-            {
-                tracing::warn!(%err, "Failed to answer queue cancel callback");
-            }
-            tracing::info!(?key, "Cancelled queued item");
-        } else {
-            // Token gone — item may have already started processing
-            if let Err(err) = client
-                .answer_callback_query(&callback.id, Some("Already processing"))
-                .await
-            {
-                tracing::warn!(%err, "Failed to answer callback");
-            }
-        }
+        handle_queue_cancel(context, client, &callback, key).await;
     } else if let Some(rest) = data.strip_prefix("fu:") {
         followups::handle_callback(context, chat_queues, client, &callback, rest).await;
     } else if let Some(rest) = data.strip_prefix("retry:") {
@@ -337,6 +314,59 @@ async fn handle_callback_query(
         }
         tracing::warn!(user_id = callback.from.id, ?data, "Unknown callback");
     }
+}
+
+/// Cancel a queued (not-yet-processing) item. The visible work happens here
+/// instead of when the worker reaches the item, which can be minutes away
+/// while the current turn runs.
+async fn handle_queue_cancel(
+    context: &Arc<BotContext>,
+    client: &TelegramClient,
+    callback: &CallbackQuery,
+    key: QueueCancelKey,
+) {
+    let entry = {
+        let mut map = context.queue_cancel_map().lock().await;
+        let entry = map.remove(&key);
+        if let Some(entry) = entry.as_ref() {
+            entry.token.cancel();
+        }
+        entry
+    };
+
+    let Some(entry) = entry else {
+        // Token gone — item may have already started processing
+        if let Err(err) = client
+            .answer_callback_query(&callback.id, Some("Already processing"))
+            .await
+        {
+            tracing::warn!(%err, "Failed to answer callback");
+        }
+        return;
+    };
+
+    let (chat_id, user_message_id) = key;
+    if let Err(err) = client
+        .answer_callback_query(&callback.id, Some("Removed from queue"))
+        .await
+    {
+        tracing::warn!(%err, "Failed to answer queue cancel callback");
+    }
+    if let Err(err) = client
+        .edit_message_text(
+            chat_id,
+            entry.status_message_id,
+            "Cancelled ✓",
+            Some(&InlineKeyboardMarkup::empty()),
+        )
+        .await
+    {
+        tracing::warn!(status_id = entry.status_message_id, %err, "Failed to edit cancelled queue status");
+    }
+    if let Err(err) = client.delete_message(chat_id, user_message_id).await {
+        tracing::warn!(message_id = user_message_id, %err, "Failed to delete user message on queue cancel");
+    }
+    tracing::info!(?key, "Cancelled queued item");
 }
 
 /// Parse `cancel:{chat_id}:{user_message_id}` callback data into a `CancelKey`.

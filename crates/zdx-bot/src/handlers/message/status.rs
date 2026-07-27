@@ -172,7 +172,17 @@ pub(super) async fn finalize_preprocessing_cancelled(
     chat_id: i64,
     status: &TurnStatus,
 ) {
-    update_turn_status_text(context, chat_id, status, "Cancelled ✓").await;
+    if let Some(msg_id) = status.message_id {
+        let _ = context
+            .client()
+            .edit_message_text(
+                chat_id,
+                msg_id,
+                "Cancelled ✓",
+                Some(&InlineKeyboardMarkup::empty()),
+            )
+            .await;
+    }
     cleanup_turn_status(context, status).await;
 }
 
