@@ -347,6 +347,22 @@ impl ToolRegistry {
 
 // -- Builtin tool implementations --
 
+/// Reads the bash `background` flag, accepting a real JSON boolean or a
+/// boolean-like string. Models sometimes emit `"background": "true"`, which
+/// `Value::as_bool` rejects — that silently ran long-lived servers on the
+/// blocking path until the turn timed out. Vocabulary mirrors
+/// `zdx_tools::bool_or_string`.
+fn wants_background(input: &Value) -> bool {
+    match input.get("background") {
+        Some(Value::Bool(flag)) => *flag,
+        Some(Value::String(raw)) => matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "true" | "1" | "yes" | "y" | "on"
+        ),
+        _ => false,
+    }
+}
+
 struct Bash;
 impl Tool for Bash {
     fn definition(&self) -> ToolDefinition {
@@ -358,11 +374,7 @@ impl Tool for Bash {
         Box::pin(async move {
             // Background mode: spawn a detached, tracked process and return a
             // bg_id instead of blocking the turn.
-            if input
-                .get("background")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
+            if wants_background(&input) {
                 return background::run_background(&input, &ctx).await;
             }
 
@@ -764,6 +776,30 @@ mod tests {
     /// Helper to create `enabled_tools` set with all tools (canonical names)
     fn all_enabled_tools() -> std::collections::HashSet<String> {
         all_tools().into_iter().map(|t| t.name).collect()
+    }
+
+    /// `background` must be honored as a real bool *and* as a boolean-like
+    /// string; models emit `"true"`, which previously fell through to the
+    /// blocking path and timed out for long-lived servers.
+    #[test]
+    fn wants_background_accepts_bool_and_stringy_values() {
+        for truthy in [json!(true), json!("true"), json!("True"), json!(" yes ")] {
+            assert!(
+                wants_background(&json!({ "command": "x", "background": truthy })),
+                "expected truthy for {truthy:?}"
+            );
+        }
+        for falsy in [json!(false), json!("false"), json!("0"), json!("")] {
+            assert!(
+                !wants_background(&json!({ "command": "x", "background": falsy })),
+                "expected falsy for {falsy:?}"
+            );
+        }
+        // Absent or unparseable values stay on the blocking path.
+        assert!(!wants_background(&json!({ "command": "x" })));
+        assert!(!wants_background(
+            &json!({ "command": "x", "background": "maybe" })
+        ));
     }
 
     #[test]
