@@ -11,7 +11,7 @@ use zdx_engine::providers::alibaba::{
     AlibabaImageClient, AlibabaImageGenerationOptions, AlibabaImageInput,
 };
 use zdx_engine::providers::gemini::{
-    GeminiClient, GeminiConfig, GeminiImageGenerationOptions, SourceImage,
+    GeminiClient, GeminiConfig, GeminiImageGenerationOptions, ImageUsage, SourceImage,
 };
 use zdx_engine::providers::openai::{
     OpenAIClient, OpenAICodexClient, OpenAICodexConfig, OpenAIConfig, OpenAIImageGenerationOptions,
@@ -58,18 +58,29 @@ pub async fn run(options: ImagineRunOptions<'_>) -> Result<()> {
         bail!("Model returned no images");
     }
 
-    let default_dir = config::paths::artifact_root();
-    let output_paths =
-        resolve_output_paths(options.root, options.out, &default_dir, &response.images);
-    for (image, path) in response.images.iter().zip(output_paths.iter()) {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("create output directory '{}'", parent.display()))?;
-        }
-        fs::write(path, &image.data)
-            .with_context(|| format!("write image to '{}'", path.display()))?;
-        println!("{}", path.display());
+    // Thinking image models can emit many billable image parts in a single
+    // response. `zdx imagine` is a one-image command, so keep the first and say
+    // plainly that the extras were still charged.
+    if response.images.len() > 1 {
+        eprintln!(
+            "warning: model returned {} images for one request; keeping the first (all of them were billed)",
+            response.images.len()
+        );
     }
+    if let Some(usage) = &response.usage_note {
+        eprintln!("{usage}");
+    }
+
+    let image = &response.images[0];
+    let default_dir = config::paths::artifact_root();
+    let path = resolve_output_path(options.root, options.out, &default_dir, image);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create output directory '{}'", parent.display()))?;
+    }
+    fs::write(&path, &image.data)
+        .with_context(|| format!("write image to '{}'", path.display()))?;
+    println!("{}", path.display());
 
     Ok(())
 }
@@ -117,7 +128,21 @@ async fn generate_gemini_images(
             })
             .collect(),
         text_parts: response.text_parts,
+        usage_note: response.usage.as_ref().map(format_gemini_usage),
     })
+}
+
+/// Gemini bills IMAGE candidate tokens at a much higher rate than text output,
+/// so surface the split instead of a single opaque total.
+fn format_gemini_usage(usage: &ImageUsage) -> String {
+    format!(
+        "tokens: prompt {}, output {} (image {}, thinking {}), total {}",
+        usage.prompt_tokens,
+        usage.candidates_tokens,
+        usage.image_tokens,
+        usage.thoughts_tokens,
+        usage.total_tokens
+    )
 }
 
 async fn generate_alibaba_images(
@@ -169,6 +194,7 @@ async fn generate_alibaba_images(
             })
             .collect(),
         text_parts: response.text_parts,
+        usage_note: None,
     })
 }
 
@@ -221,6 +247,7 @@ async fn generate_codex_images(
             })
             .collect(),
         text_parts: response.text_parts,
+        usage_note: None,
     })
 }
 
@@ -261,6 +288,7 @@ async fn generate_openai_images(
             })
             .collect(),
         text_parts: response.text_parts,
+        usage_note: None,
     })
 }
 
@@ -334,63 +362,29 @@ struct GeneratedImage {
 struct GenerateImageResponse {
     images: Vec<GeneratedImage>,
     text_parts: Vec<String>,
+    /// Human-readable token accounting, when the provider reports it.
+    usage_note: Option<String>,
 }
 
-fn resolve_output_paths(
+fn resolve_output_path(
     root: &Path,
     out: Option<&str>,
     default_dir: &Path,
-    images: &[GeneratedImage],
-) -> Vec<PathBuf> {
-    let out_path = out
+    image: &GeneratedImage,
+) -> PathBuf {
+    if let Some(path) = out
         .map(str::trim)
-        .filter(|v| !v.is_empty())
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .map(|path| {
-            if path.is_absolute() {
-                path
-            } else {
-                root.join(path)
-            }
-        });
-
-    match out_path {
-        Some(path) if images.len() == 1 => vec![path],
-        Some(path) => {
-            let parent = path
-                .parent()
-                .map_or_else(|| root.to_path_buf(), Path::to_path_buf);
-            let stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .filter(|s| !s.is_empty())
-                .unwrap_or("image");
-
-            images
-                .iter()
-                .enumerate()
-                .map(|(idx, image)| {
-                    let ext = path_mime::extension_for_mime_type(&image.mime_type).unwrap_or("png");
-                    parent.join(format!("{stem}-{}.{}", idx + 1, ext))
-                })
-                .collect()
-        }
-        None => {
-            let ts = Utc::now().format("%Y%m%d-%H%M%S");
-            if images.len() == 1 {
-                let ext = path_mime::extension_for_mime_type(&images[0].mime_type).unwrap_or("png");
-                vec![default_dir.join(format!("image-{ts}.{ext}"))]
-            } else {
-                images
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, image)| {
-                        let ext =
-                            path_mime::extension_for_mime_type(&image.mime_type).unwrap_or("png");
-                        default_dir.join(format!("image-{ts}-{}.{}", idx + 1, ext))
-                    })
-                    .collect()
-            }
-        }
+    {
+        return if path.is_absolute() {
+            path
+        } else {
+            root.join(path)
+        };
     }
+
+    let ts = Utc::now().format("%Y%m%d-%H%M%S");
+    let ext = path_mime::extension_for_mime_type(&image.mime_type).unwrap_or("png");
+    default_dir.join(format!("image-{ts}.{ext}"))
 }

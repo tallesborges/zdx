@@ -8,6 +8,6 @@ pub mod sse;
 pub use antigravity::{AntigravityClient, AntigravityConfig};
 pub use api::{
     GeminiClient, GeminiConfig, GeminiImageGenerationOptions, GenerateImageResponse,
-    GeneratedImage, SourceImage,
+    GeneratedImage, ImageUsage, SourceImage,
 };
 pub use shared::GeminiThinkingConfig;
