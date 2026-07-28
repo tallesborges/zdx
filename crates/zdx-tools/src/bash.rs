@@ -29,6 +29,11 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_mins(2);
 /// are aborted so `bash_handler` isn't held hostage by orphan processes.
 const READER_GRACE: Duration = Duration::from_millis(500);
 
+/// Grace period between SIGTERM and SIGKILL for processes that escaped the
+/// call's process group.
+#[cfg(unix)]
+const ESCAPED_KILL_GRACE: Duration = Duration::from_millis(300);
+
 /// Writes full output to a temp file and returns the file path.
 ///
 /// Used when output is truncated so the AI can use the Read tool to access
@@ -368,6 +373,78 @@ async fn cleanup_foreground_leftovers(pgid: i32) -> bool {
     }
 }
 
+/// Env var stamped into every foreground shell so descendants stay attributable
+/// even after they leave the process group.
+const CALL_ID_ENV: &str = "ZDX_CALL_ID";
+
+/// Finds still-alive processes carrying this call's `ZDX_CALL_ID` in a process
+/// group other than the call's own.
+///
+/// `setsid`/double-fork daemonization moves a descendant into a fresh session
+/// and process group, so `killpg` misses it — but the environment is inherited
+/// through `fork` → `setsid` → `fork`, which makes the stamp a reliable way to
+/// attribute the escapee back to this call. Same-group survivors are excluded:
+/// those are `cleanup_foreground_leftovers`'s job.
+#[cfg(unix)]
+async fn find_escaped_processes(call_id: &str, own_pgid: i32) -> Vec<i32> {
+    let marker = format!("{CALL_ID_ENV}={call_id}");
+    // `-E` appends each process's launch environment to the command column.
+    // The stamp is removed from the scanner's own env so it cannot self-match.
+    let output = tokio::process::Command::new("ps")
+        .args(["-E", "-axww", "-o", "pid=,pgid=,command="])
+        .env_remove(CALL_ID_ENV)
+        .stdin(Stdio::null())
+        .output()
+        .await;
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+
+    let mut escaped = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if !line.contains(&marker) {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let (Some(pid_text), Some(group_text)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        let (Ok(pid), Ok(group)) = (pid_text.parse::<i32>(), group_text.parse::<i32>()) else {
+            continue;
+        };
+        if group == own_pgid || pid <= 1 {
+            continue;
+        }
+        escaped.push(pid);
+    }
+    escaped
+}
+
+/// Kills processes that escaped this call's process group. Returns how many
+/// were signalled.
+#[cfg(unix)]
+async fn cleanup_escaped_processes(call_id: &str, own_pgid: i32) -> usize {
+    let escaped = find_escaped_processes(call_id, own_pgid).await;
+    if escaped.is_empty() {
+        return 0;
+    }
+    for &pid in &escaped {
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+    }
+    tokio::time::sleep(ESCAPED_KILL_GRACE).await;
+    for &pid in &escaped {
+        // `kill(pid, 0)` probes liveness without signalling.
+        if unsafe { libc::kill(pid, 0) } == 0 {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+    }
+    escaped.len()
+}
+
 /// Shared buffer type for stream reader tasks.
 type StreamBuffer = Arc<Mutex<Vec<u8>>>;
 
@@ -441,6 +518,10 @@ async fn run_command(
     timeout: Option<Duration>,
     output_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
 ) -> Result<BashOutput, ToolOutput> {
+    // Stamp this call so descendants stay attributable even if they leave the
+    // process group (see `find_escaped_processes`).
+    let call_id = uuid::Uuid::new_v4().to_string();
+
     let mut cmd = tokio::process::Command::new("sh");
     cmd.arg("-c")
         .arg(command)
@@ -450,6 +531,7 @@ async fn run_command(
         // in most well-behaved CLI tools (e.g. gcloud, npm, pip).
         .env("TERM", "dumb")
         .env("NO_COLOR", "1")
+        .env(CALL_ID_ENV, &call_id)
         // Force non-interactive stdin so child processes do not block waiting
         // for user input or keep client/daemon sessions alive (for example,
         // `gradlew` under piped exec environments).
@@ -540,6 +622,13 @@ async fn run_command(
     #[cfg(not(unix))]
     let left_leftovers = false;
 
+    // Catch descendants that escaped the process group entirely (setsid /
+    // double-fork), which `killpg` above cannot see.
+    #[cfg(unix)]
+    let escaped_count = cleanup_escaped_processes(&call_id, child_pid).await;
+    #[cfg(not(unix))]
+    let escaped_count = 0usize;
+
     // Finish readers with a bounded grace period and extract their buffers.
     // This applies on every exit path — even normal completion can leave pipes
     // open if a descendant inherited stdout/stderr and escaped the process group.
@@ -566,7 +655,7 @@ async fn run_command(
 
     if timed_out {
         let timeout_msg = format!(
-            "Command timed out after {} seconds",
+            "Command timed out after {} seconds. If this is a long-lived process (dev server, watcher, tunnel), it will never exit on its own — re-run it with background: true instead of raising timeout_secs.",
             timeout.map_or(0, |d| d.as_secs())
         );
         if let Some(ref tx) = output_tx {
@@ -591,15 +680,24 @@ async fn run_command(
         });
     }
 
-    let stderr = if left_leftovers {
-        let note = "note: this command left background descendants running; they were stopped. Use background: true to run a long-lived process (e.g. a dev server).";
+    let mut notes: Vec<String> = Vec::new();
+    if left_leftovers {
+        notes.push("note: this command left background descendants running; they were stopped. Use background: true to run a long-lived process (e.g. a dev server).".to_string());
+    }
+    if escaped_count > 0 {
+        notes.push(format!(
+            "note: this command detached {escaped_count} process(es) from its process group (setsid/double-fork); they were stopped. Use background: true to run a long-lived process instead of daemonizing by hand."
+        ));
+    }
+    let stderr = if notes.is_empty() {
+        stderr_text
+    } else {
+        let note = notes.join("\n");
         if stderr_text.is_empty() {
-            note.to_string()
+            note
         } else {
             format!("{stderr_text}\n{note}")
         }
-    } else {
-        stderr_text
     };
 
     Ok(BashOutput {
@@ -672,6 +770,56 @@ mod tests {
         assert_eq!(
             resolve_timeout(Some(3600), Some(Duration::from_secs(30))),
             Some(Duration::from_hours(1))
+        );
+    }
+
+    /// A `setsid` + double-fork daemon escapes the call's process group, so
+    /// `killpg` cannot see it. The env stamp must still attribute it to this
+    /// call, stop it, and say so.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_bash_kills_setsid_escaped_descendant() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let marker = temp.path().join("escapee.pid");
+        // Double-fork + setsid, exactly like a hand-rolled daemonizer.
+        let command = format!(
+            "python3 -c \"
+import os, sys, time
+if os.fork() > 0: os._exit(0)
+os.setsid()
+if os.fork() > 0: os._exit(0)
+open('{marker}', 'w').write(str(os.getpid()))
+time.sleep(60)
+\"
+# Don't return until the daemon has recorded its pid, so cleanup can't race it.
+for _ in $(seq 1 200); do [ -s '{marker}' ] && break; sleep 0.05; done",
+            marker = marker.display()
+        );
+
+        let result = execute(&json!({ "command": command }), &ctx, None, None).await;
+        assert!(result.is_ok(), "command itself should succeed");
+
+        let pid: i32 = std::fs::read_to_string(&marker)
+            .expect("daemon should have written its pid")
+            .trim()
+            .parse()
+            .expect("pid should parse");
+
+        // It escaped the process group but must have been stopped anyway.
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        if alive {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        assert!(!alive, "escaped daemon {pid} should have been killed");
+
+        let stderr = result.data().expect("data")["stderr"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            stderr.contains("detached") && stderr.contains("background: true"),
+            "should report the escape, got: {stderr}"
         );
     }
 
