@@ -80,6 +80,15 @@ pub struct GeminiImageGenerationOptions {
     pub source_images: Vec<SourceImage>,
 }
 
+/// Output-token ceiling for image requests.
+///
+/// Gemini 3 image models are thinking models whose reasoning cannot be disabled,
+/// and they can keep emitting billable image parts until the model-level cap
+/// (32,768 tokens) is reached — a single 1K image is only ~1120 tokens, so an
+/// uncapped request can silently bill for dozens of images. This leaves ample
+/// room for compulsory thinking plus one 4K image while bounding the blast radius.
+const IMAGE_MAX_OUTPUT_TOKENS: u32 = 8192;
+
 /// A generated image from Gemini image models.
 #[derive(Debug, Clone)]
 pub struct GeneratedImage {
@@ -87,11 +96,24 @@ pub struct GeneratedImage {
     pub data: Vec<u8>,
 }
 
+/// Token accounting reported by Gemini for an image generation request.
+#[derive(Debug, Clone, Default)]
+pub struct ImageUsage {
+    pub prompt_tokens: u64,
+    pub candidates_tokens: u64,
+    pub thoughts_tokens: u64,
+    pub total_tokens: u64,
+    /// Candidate tokens attributed to the IMAGE modality, which Gemini bills at
+    /// the (much higher) per-image rate rather than the text output rate.
+    pub image_tokens: u64,
+}
+
 /// Parsed response from a Gemini image generation request.
 #[derive(Debug, Clone, Default)]
 pub struct GenerateImageResponse {
     pub images: Vec<GeneratedImage>,
     pub text_parts: Vec<String>,
+    pub usage: Option<ImageUsage>,
 }
 
 impl GeminiClient {
@@ -253,16 +275,9 @@ fn build_media_text_request(media_mime: &str, media_data: &[u8], prompt: &str) -
 }
 
 fn build_image_generation_request(prompt: &str, options: &GeminiImageGenerationOptions) -> Value {
-    let is_editing = !options.source_images.is_empty();
-
-    let modalities = if is_editing {
-        json!(["TEXT", "IMAGE"])
-    } else {
-        json!(["IMAGE"])
-    };
-
     let mut generation_config = json!({
-        "responseModalities": modalities
+        "responseModalities": ["IMAGE"],
+        "maxOutputTokens": IMAGE_MAX_OUTPUT_TOKENS,
     });
 
     let mut image_config = serde_json::Map::new();
@@ -348,7 +363,35 @@ fn parse_image_generation_response(value: &Value) -> Result<GenerateImageRespons
         }
     }
 
-    Ok(GenerateImageResponse { images, text_parts })
+    Ok(GenerateImageResponse {
+        images,
+        text_parts,
+        usage: parse_image_usage(payload),
+    })
+}
+
+fn parse_image_usage(payload: &Value) -> Option<ImageUsage> {
+    let metadata = payload.get("usageMetadata")?;
+    let count = |key: &str| metadata.get(key).and_then(Value::as_u64).unwrap_or(0);
+
+    let image_tokens = metadata
+        .get("candidatesTokensDetails")
+        .and_then(Value::as_array)
+        .map_or(0, |details| {
+            details
+                .iter()
+                .filter(|entry| entry.get("modality").and_then(Value::as_str) == Some("IMAGE"))
+                .filter_map(|entry| entry.get("tokenCount").and_then(Value::as_u64))
+                .sum()
+        });
+
+    Some(ImageUsage {
+        prompt_tokens: count("promptTokenCount"),
+        candidates_tokens: count("candidatesTokenCount"),
+        thoughts_tokens: count("thoughtsTokenCount"),
+        total_tokens: count("totalTokenCount"),
+        image_tokens,
+    })
 }
 
 fn build_headers(api_key: &str) -> anyhow::Result<HeaderMap> {
@@ -424,6 +467,34 @@ mod tests {
     }
 
     #[test]
+    fn parse_image_generation_response_extracts_usage_metadata() {
+        let value = json!({
+            "candidates": [{ "content": { "parts": [] } }],
+            "usageMetadata": {
+                "promptTokenCount": 601,
+                "candidatesTokenCount": 33975,
+                "thoughtsTokenCount": 812,
+                "totalTokenCount": 35388,
+                "candidatesTokensDetails": [
+                    { "modality": "TEXT", "tokenCount": 455 },
+                    { "modality": "IMAGE", "tokenCount": 33520 }
+                ]
+            }
+        });
+
+        let usage = parse_image_generation_response(&value)
+            .expect("parse should succeed")
+            .usage
+            .expect("usage metadata should be parsed");
+
+        assert_eq!(usage.prompt_tokens, 601);
+        assert_eq!(usage.candidates_tokens, 33975);
+        assert_eq!(usage.thoughts_tokens, 812);
+        assert_eq!(usage.total_tokens, 35388);
+        assert_eq!(usage.image_tokens, 33520);
+    }
+
+    #[test]
     fn build_image_generation_request_sets_image_config_when_present() {
         let request = build_image_generation_request(
             "A red fox",
@@ -437,6 +508,10 @@ mod tests {
         assert_eq!(
             request["generationConfig"]["responseModalities"],
             json!(["IMAGE"])
+        );
+        assert_eq!(
+            request["generationConfig"]["maxOutputTokens"],
+            json!(IMAGE_MAX_OUTPUT_TOKENS)
         );
         assert_eq!(
             request["generationConfig"]["imageConfig"]["aspectRatio"],
@@ -468,10 +543,11 @@ mod tests {
             },
         );
 
-        // Editing mode → TEXT + IMAGE
+        // Editing keeps IMAGE-only output: TEXT modality lets thinking image
+        // models emit interleaved commentary and extra billable image parts.
         assert_eq!(
             request["generationConfig"]["responseModalities"],
-            json!(["TEXT", "IMAGE"])
+            json!(["IMAGE"])
         );
 
         let parts = request["contents"][0]["parts"].as_array().unwrap();
