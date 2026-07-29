@@ -1948,7 +1948,7 @@ fn default_opencode_go_provider() -> ProviderConfig {
             "qwen3.7-plus".to_string(),
             "deepseek-v4-pro".to_string(),
             "deepseek-v4-flash".to_string(),
-            "hy3-preview".to_string(),
+            "hy3".to_string(),
         ],
         ..Default::default()
     }
