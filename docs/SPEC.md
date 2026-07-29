@@ -253,10 +253,13 @@ Providers are the bridge between the agent and LLM APIs. New providers can be ad
 
 - **API-key providers:** keys come from environment variables (`<PROVIDER>_API_KEY`), never stored in config.
 - **OAuth providers:** tokens are cached in `<base>/oauth.json` (0600 perms). Login via `zdx login --<provider-slug>`.
+- **Multiple OAuth accounts:** `zdx login|logout --<provider-slug> --account <name>` manages a named account stored under the `<provider>@<name>` key in `oauth.json`. Omitting `--account` targets the default account, stored under the bare `<provider>` key. Account names cannot contain `@`, `:` or `/`.
 
 ### Model routing
 
 - **Explicit prefix** (canonical): `<provider>:<model>` (e.g., `anthropic:claude-sonnet-4-5`). Always wins.
+- **Account-qualified prefix:** `<provider>@<account>:<model>` (e.g., `claude-cli@work:claude-fable-5`) routes the request through that named OAuth account.
+- **Account model expansion:** every named account in `oauth.json` automatically mirrors its provider's full model list as account-qualified entries, so a second subscription needs no `models.toml` edits and survives `zdx models update`. Explicit account rows in `models.toml` take precedence over the mirrored entry.
 - **Heuristic fallback:** when no prefix is given, the model name is matched against provider-specific patterns (e.g., `claude-*` → Anthropic). Heuristics are implementation details and may change.
 
 ### Provider-level config

@@ -48,6 +48,8 @@ pub struct OpenAICodexConfig {
     pub service_tier: Option<String>,
     /// Use the persistent WebSocket transport for the Codex Responses endpoint.
     pub websocket: bool,
+    /// Named OAuth account (`None` = default account).
+    pub account: Option<String>,
 }
 
 impl OpenAICodexConfig {
@@ -58,6 +60,7 @@ impl OpenAICodexConfig {
         prompt_cache_key: Option<String>,
         service_tier: Option<String>,
         websocket: bool,
+        account: Option<String>,
     ) -> Self {
         Self {
             model,
@@ -66,6 +69,7 @@ impl OpenAICodexConfig {
             prompt_cache_key,
             service_tier,
             websocket,
+            account,
         }
     }
 }
@@ -74,15 +78,17 @@ impl OpenAICodexConfig {
 ///
 /// # Errors
 /// Returns an error if the operation fails.
-pub async fn resolve_credentials() -> Result<oauth_codex::OpenAICodexCredentials> {
-    let mut creds = oauth_codex::load_credentials()?
+pub async fn resolve_credentials(
+    account: Option<&str>,
+) -> Result<oauth_codex::OpenAICodexCredentials> {
+    let mut creds = oauth_codex::load_credentials(account)?
         .ok_or_else(|| anyhow::anyhow!("No OpenAI Codex OAuth credentials found"))?;
 
     if creds.is_expired() {
         let refreshed = oauth_codex::refresh_token(&creds.refresh)
             .await
             .context("Failed to refresh OpenAI Codex OAuth token")?;
-        oauth_codex::save_credentials(&refreshed)?;
+        oauth_codex::save_credentials(account, &refreshed)?;
         creds = refreshed;
     }
 
@@ -92,7 +98,7 @@ pub async fn resolve_credentials() -> Result<oauth_codex::OpenAICodexCredentials
         let id = decode_account_id(&creds.access)
             .ok_or_else(|| anyhow::anyhow!("Failed to extract account_id from token"))?;
         creds.account_id = Some(id.clone());
-        oauth_codex::save_credentials(&creds)?;
+        oauth_codex::save_credentials(account, &creds)?;
         id
     };
 
@@ -129,7 +135,7 @@ impl OpenAICodexClient {
     pub fn new(config: OpenAICodexConfig) -> Self {
         let ws = config.websocket.then(|| {
             Box::new(OpenAIResponsesWsClient::new(
-                codex_ws_header_factory(config.prompt_cache_key.clone()),
+                codex_ws_header_factory(config.prompt_cache_key.clone(), config.account.clone()),
                 codex_responses_config(&config, effective_codex_instructions(None)),
                 true,
             ))
@@ -154,7 +160,7 @@ impl OpenAICodexClient {
             return ws.send_messages_stream(messages, tools, system).await;
         }
 
-        let creds = resolve_credentials().await?;
+        let creds = resolve_credentials(self.config.account.as_deref()).await?;
         let headers = build_headers(
             &creds.account_id,
             &creds.access,
@@ -180,7 +186,7 @@ impl OpenAICodexClient {
         prompt: &str,
         options: &OpenAIImageGenerationOptions,
     ) -> Result<OpenAIGenerateImageResponse> {
-        let creds = resolve_credentials().await?;
+        let creds = resolve_credentials(self.config.account.as_deref()).await?;
         let headers = build_headers(
             &creds.account_id,
             &creds.access,
@@ -253,11 +259,12 @@ fn codex_responses_config(
 /// Builds the async header factory for the Codex WebSocket handshake: OAuth
 /// bearer + account/originator/user-agent headers + the `responses_websockets`
 /// beta flag, resolving (and refreshing) credentials at connect time.
-fn codex_ws_header_factory(session_id: Option<String>) -> WsHeaderFactory {
+fn codex_ws_header_factory(session_id: Option<String>, account: Option<String>) -> WsHeaderFactory {
     Arc::new(move || {
         let session_id = session_id.clone();
+        let account = account.clone();
         Box::pin(async move {
-            let creds = resolve_credentials().await?;
+            let creds = resolve_credentials(account.as_deref()).await?;
             let mut headers = vec![
                 (
                     "Authorization".to_string(),
@@ -322,6 +329,7 @@ pub fn build(
         ctx.cache_key.clone(),
         ctx.service_tier.clone(),
         ctx.websocket,
+        ctx.account.map(ToString::to_string),
     ))))
 }
 
@@ -364,8 +372,15 @@ mod tests {
 
     #[test]
     fn codex_config_defaults_text_verbosity_to_medium_when_unset() {
-        let config =
-            super::OpenAICodexConfig::new("gpt-5.4".to_string(), None, None, None, None, false);
+        let config = super::OpenAICodexConfig::new(
+            "gpt-5.4".to_string(),
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        );
 
         assert_eq!(
             config.text_verbosity.unwrap_or_default().as_str(),

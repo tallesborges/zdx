@@ -29,8 +29,8 @@ fn reasoning_effort_from_thinking_level(level: ThinkingLevel) -> &'static str {
 ///
 /// # Errors
 /// Returns an error if no credentials are stored or the refresh fails.
-pub async fn resolve_access_token() -> Result<String> {
-    let mut creds = oauth_grok_build::load_credentials()?.ok_or_else(|| {
+pub async fn resolve_access_token(account: Option<&str>) -> Result<String> {
+    let mut creds = oauth_grok_build::load_credentials(account)?.ok_or_else(|| {
         anyhow::anyhow!("No Grok Build OAuth credentials found. Run `zdx login --grok-build`.")
     })?;
 
@@ -38,7 +38,7 @@ pub async fn resolve_access_token() -> Result<String> {
         let refreshed = oauth_grok_build::refresh_token(&creds.refresh)
             .await
             .context("Failed to refresh Grok Build OAuth token")?;
-        oauth_grok_build::save_credentials(&refreshed)?;
+        oauth_grok_build::save_credentials(account, &refreshed)?;
         creds = refreshed;
     }
 
@@ -63,6 +63,7 @@ fn build_headers(access_token: &str) -> Result<HeaderMap> {
 /// Grok Build client using the xAI Responses API with OAuth auth.
 pub struct GrokBuildClient {
     config: ResponsesConfig,
+    account: Option<String>,
     http: reqwest::Client,
 }
 
@@ -73,6 +74,7 @@ impl GrokBuildClient {
         max_tokens: Option<u32>,
         prompt_cache_key: Option<String>,
         reasoning_effort: String,
+        account: Option<String>,
     ) -> Self {
         Self {
             config: ResponsesConfig {
@@ -93,6 +95,7 @@ impl GrokBuildClient {
                 truncation: None,
                 service_tier: None,
             },
+            account,
             http: reqwest::Client::new(),
         }
     }
@@ -106,7 +109,7 @@ impl GrokBuildClient {
         tools: &[ToolDefinition],
         system: Option<&str>,
     ) -> Result<ProviderStream> {
-        let access_token = resolve_access_token().await?;
+        let access_token = resolve_access_token(self.account.as_deref()).await?;
         let system = merge_system_prompt(system);
         send_responses_stream(
             &self.http,
@@ -134,6 +137,7 @@ pub fn build(
         ctx.config_max_tokens,
         ctx.cache_key.clone(),
         reasoning_effort_from_thinking_level(ctx.thinking_level).to_string(),
+        ctx.account.map(ToString::to_string),
     )))
 }
 
@@ -151,6 +155,7 @@ mod tests {
             Some(1024),
             Some("thread-123".to_string()),
             "high".to_string(),
+            None,
         );
         assert_eq!(client.config.path, RESPONSES_PATH);
         assert_eq!(client.config.model, "grok-4.5");

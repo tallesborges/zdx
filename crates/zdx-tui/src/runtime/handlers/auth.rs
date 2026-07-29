@@ -27,9 +27,8 @@ pub async fn token_exchange(
                 };
             };
             match claude_cli::exchange_code(&code, &pkce, &redirect_uri).await {
-                Ok(creds) => {
-                    claude_cli::save_credentials(&creds).map_err(|e| format!("Failed to save: {e}"))
-                }
+                Ok(creds) => claude_cli::save_credentials(None, &creds)
+                    .map_err(|e| format!("Failed to save: {e}")),
                 Err(e) => Err(e.to_string()),
             }
         }
@@ -39,7 +38,7 @@ pub async fn token_exchange(
                 challenge: String::new(),
             };
             match openai_codex::exchange_code(&code, &pkce).await {
-                Ok(creds) => openai_codex::save_credentials(&creds)
+                Ok(creds) => openai_codex::save_credentials(None, &creds)
                     .map_err(|e| format!("Failed to save: {e}")),
                 Err(e) => Err(e.to_string()),
             }
@@ -53,7 +52,7 @@ pub async fn token_exchange(
                 Ok(mut creds) => match google_antigravity::discover_project(&creds.access).await {
                     Ok(project_id) => {
                         creds.account_id = Some(project_id);
-                        google_antigravity::save_credentials(&creds)
+                        google_antigravity::save_credentials(None, &creds)
                             .map_err(|e| format!("Failed to save: {e}"))
                     }
                     Err(e) => Err(format!("Failed to discover project: {e}")),
@@ -67,9 +66,8 @@ pub async fn token_exchange(
                 challenge: String::new(),
             };
             match grok_build::exchange_code(&code, &pkce).await {
-                Ok(creds) => {
-                    grok_build::save_credentials(&creds).map_err(|e| format!("Failed to save: {e}"))
-                }
+                Ok(creds) => grok_build::save_credentials(None, &creds)
+                    .map_err(|e| format!("Failed to save: {e}")),
                 Err(e) => Err(e.to_string()),
             }
         }

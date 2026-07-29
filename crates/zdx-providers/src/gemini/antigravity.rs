@@ -26,6 +26,7 @@ pub struct AntigravityConfig {
     pub max_tokens: Option<u32>,
     pub session_id: String,
     pub thinking_config: Option<GeminiThinkingConfig>,
+    pub account: Option<String>,
 }
 
 impl AntigravityConfig {
@@ -33,12 +34,14 @@ impl AntigravityConfig {
         model: String,
         max_tokens: Option<u32>,
         thinking_config: Option<GeminiThinkingConfig>,
+        account: Option<String>,
     ) -> Self {
         Self {
             model,
             max_tokens,
             session_id: uuid::Uuid::new_v4().to_string(),
             thinking_config,
+            account,
         }
     }
 }
@@ -46,8 +49,10 @@ impl AntigravityConfig {
 /// # Errors
 ///
 /// Returns an error if credentials cannot be loaded or refreshed.
-pub async fn resolve_credentials() -> Result<oauth_antigravity::AntigravityCredentials> {
-    let mut creds = oauth_antigravity::load_credentials()?.ok_or_else(|| {
+pub async fn resolve_credentials(
+    account: Option<&str>,
+) -> Result<oauth_antigravity::AntigravityCredentials> {
+    let mut creds = oauth_antigravity::load_credentials(account)?.ok_or_else(|| {
         anyhow::anyhow!(
             "No Google Antigravity OAuth credentials found. Run 'zdx login --antigravity' to authenticate."
         )
@@ -62,7 +67,7 @@ pub async fn resolve_credentials() -> Result<oauth_antigravity::AntigravityCrede
         let refreshed = oauth_antigravity::refresh_token(&creds.refresh, &project_id)
             .await
             .context("Failed to refresh Google Antigravity OAuth token")?;
-        oauth_antigravity::save_credentials(&refreshed)?;
+        oauth_antigravity::save_credentials(account, &refreshed)?;
         creds = refreshed;
     }
 
@@ -98,7 +103,7 @@ impl AntigravityClient {
         tools: &[ToolDefinition],
         system: Option<&str>,
     ) -> Result<ProviderStream> {
-        let creds = resolve_credentials().await?;
+        let creds = resolve_credentials(self.config.account.as_deref()).await?;
         let seq = self.prompt_seq.fetch_add(1, Ordering::Relaxed);
         let system_prompt = merge_system_prompt(system);
         let now_millis = SystemTime::now()
@@ -218,5 +223,6 @@ pub fn build(
             ctx.model,
             ctx.config_max_tokens,
         )),
+        ctx.account.map(ToString::to_string),
     ))))
 }

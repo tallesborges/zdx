@@ -405,17 +405,19 @@ pub struct MonitorApp {
     /// Span the in-flight usage scan (`usage_rx`) was started for, so its
     /// result can be tagged and a superseding span change can re-scan.
     pub usage_scan_span: Option<UsageSpan>,
-    /// Cached subscription-quota snapshot per provider (read-only OAuth).
+    /// Cached subscription-quota snapshot per provider account (read-only OAuth).
     pub quotas: Option<CachedQuotas>,
     /// Receiver for an in-flight background quota fetch, if any.
     pub quota_rx: Option<mpsc::Receiver<QuotaFetchResult>>,
-    /// Per-provider rate-limit cooldown: don't refetch before this instant.
-    pub quota_backoff: HashMap<&'static str, Instant>,
+    /// Per-account rate-limit cooldown keyed by `provider`/`provider@account`:
+    /// don't refetch before this instant.
+    pub quota_backoff: HashMap<String, Instant>,
 }
 
-/// Result payload from a background quota fetch: one entry per provider.
+/// Result payload from a background quota fetch: one entry per provider account.
 type QuotaFetchResult = Vec<(
     &'static str,
+    Option<String>,
     std::result::Result<SubscriptionQuota, QuotaError>,
 )>;
 
@@ -439,6 +441,7 @@ pub struct CachedQuotas {
 /// when `error` is set alongside a `quota`, the value is stale.
 pub struct QuotaEntry {
     pub provider: &'static str,
+    pub account: Option<String>,
     pub quota: Option<SubscriptionQuota>,
     pub error: Option<String>,
 }
@@ -771,14 +774,19 @@ fn start_quota_fetch(app: &mut MonitorApp) {
     // Skip providers still inside a rate-limit cooldown so `R` and the on-tick
     // refresh cannot hammer a 429'd endpoint.
     let now = Instant::now();
-    let ready: Vec<(&'static str, subscription_quota::QuotaFetcher)> = subscription_quota::FETCHERS
-        .iter()
-        .filter(|(provider, _)| {
+    let ready: Vec<(
+        &'static str,
+        Option<String>,
+        subscription_quota::QuotaFetcher,
+    )> = subscription_quota::stored_accounts()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(provider, account, _)| {
+            let key = subscription_quota::account_cache_key(provider, account.as_deref());
             app.quota_backoff
-                .get(*provider)
+                .get(&key)
                 .is_none_or(|until| *until <= now)
         })
-        .copied()
         .collect();
     if ready.is_empty() {
         return;
@@ -791,8 +799,9 @@ fn start_quota_fetch(app: &mut MonitorApp) {
             .map(|rt| {
                 rt.block_on(async {
                     let mut out: QuotaFetchResult = Vec::with_capacity(ready.len());
-                    for (provider, fetch) in ready {
-                        out.push((provider, fetch().await));
+                    for (provider, account, fetch) in ready {
+                        let quota = fetch(account.clone()).await;
+                        out.push((provider, account, quota));
                     }
                     out
                 })
@@ -835,14 +844,18 @@ fn poll_quota_result(app: &mut MonitorApp) {
     app.quota_rx = None;
 
     let mut entries: Vec<QuotaEntry> = app.quotas.take().map(|c| c.entries).unwrap_or_default();
-    for (provider, res) in results {
-        let idx = entries.iter().position(|e| e.provider == provider);
+    for (provider, account, res) in results {
+        let key = subscription_quota::account_cache_key(provider, account.as_deref());
+        let idx = entries
+            .iter()
+            .position(|e| e.provider == provider && e.account == account);
         let prev_quota = idx.and_then(|i| entries[i].quota.clone());
         let new_entry = match res {
             Ok(quota) => {
-                app.quota_backoff.remove(provider);
+                app.quota_backoff.remove(&key);
                 Some(QuotaEntry {
                     provider,
+                    account: account.clone(),
                     quota: Some(quota),
                     error: None,
                 })
@@ -850,6 +863,7 @@ fn poll_quota_result(app: &mut MonitorApp) {
             // Not logged in: drop the row unless we already had a value.
             Err(QuotaError::NotAuthenticated) => prev_quota.map(|quota| QuotaEntry {
                 provider,
+                account: account.clone(),
                 quota: Some(quota),
                 error: Some(QuotaError::NotAuthenticated.reason()),
             }),
@@ -857,11 +871,11 @@ fn poll_quota_result(app: &mut MonitorApp) {
                 if let QuotaError::RateLimited { retry_after_secs } = err {
                     let cooldown =
                         retry_after_secs.map_or(QUOTA_BACKOFF_DEFAULT, Duration::from_secs);
-                    app.quota_backoff
-                        .insert(provider, Instant::now() + cooldown);
+                    app.quota_backoff.insert(key, Instant::now() + cooldown);
                 }
                 Some(QuotaEntry {
                     provider,
+                    account: account.clone(),
                     quota: prev_quota,
                     error: Some(err.reason()),
                 })
@@ -2300,7 +2314,7 @@ impl ModelPickerState {
         let mut items: Vec<String> = match kind {
             ModelFieldKind::Chat => available_models()
                 .iter()
-                .map(|m| format!("{}:{}", m.provider, m.id))
+                .map(zdx_engine::models::ModelOption::qualified_id)
                 .collect(),
             ModelFieldKind::Transcription => {
                 zdx_engine::audio::transcribe::transcription_model_options()

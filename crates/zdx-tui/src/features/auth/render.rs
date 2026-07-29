@@ -11,7 +11,8 @@ use zdx_engine::providers::oauth::{claude_cli, google_antigravity, grok_build, o
 
 use crate::overlays::LoginState;
 
-type LoadFn = fn() -> anyhow::Result<Option<zdx_engine::providers::oauth::OAuthCredentials>>;
+type LoadFn =
+    fn(Option<&str>) -> anyhow::Result<Option<zdx_engine::providers::oauth::OAuthCredentials>>;
 
 /// Renders the login overlay.
 pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: Rect) {
@@ -192,23 +193,52 @@ fn render_cli_provider_entries(width: u16, selected: usize) -> Vec<Line<'static>
     let status_on = Style::default().fg(Color::Green);
     let pad = " ".repeat(2);
 
-    let providers: [(&str, LoadFn); 4] = [
-        ("Claude CLI", claude_cli::load_credentials),
-        ("OpenAI Codex", openai_codex::load_credentials),
-        ("Google Antigravity", google_antigravity::load_credentials),
-        ("Grok Build", grok_build::load_credentials),
+    let providers: [(&str, &str, LoadFn); 4] = [
+        (
+            "Claude CLI",
+            claude_cli::PROVIDER_KEY,
+            claude_cli::load_credentials,
+        ),
+        (
+            "OpenAI Codex",
+            openai_codex::PROVIDER_KEY,
+            openai_codex::load_credentials,
+        ),
+        (
+            "Google Antigravity",
+            google_antigravity::PROVIDER_KEY,
+            google_antigravity::load_credentials,
+        ),
+        (
+            "Grok Build",
+            grok_build::PROVIDER_KEY,
+            grok_build::load_credentials,
+        ),
     ];
+    let cache = zdx_engine::providers::oauth::OAuthCache::load().unwrap_or_default();
 
     providers
         .iter()
         .enumerate()
-        .map(|(idx, (label, load_fn))| {
-            let logged_in = load_fn()
+        .map(|(idx, (label, provider_key, load_fn))| {
+            let logged_in = load_fn(None)
                 .ok()
                 .flatten()
                 .as_ref()
                 .is_some_and(|creds| !creds.is_expired());
-            let status = if logged_in { "✓ logged in" } else { "" };
+            let named = cache
+                .accounts(provider_key)
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            let status = if named.is_empty() {
+                if logged_in { "✓ logged in" } else { "" }.to_string()
+            } else if logged_in {
+                format!("✓ logged in · +{}", named.join(", "))
+            } else {
+                format!("✓ {}", named.join(", "))
+            };
+            let logged_in = logged_in || !named.is_empty();
             let status_style = if logged_in { status_on } else { label_style };
             let pointer = if idx == selected { ">" } else { " " };
             let name_style = if idx == selected {
@@ -227,7 +257,7 @@ fn render_cli_provider_entries(width: u16, selected: usize) -> Vec<Line<'static>
                 Span::styled(" ".repeat(spacing), label_style),
             ];
             if !status.is_empty() {
-                spans.push(Span::styled(status, status_style));
+                spans.push(Span::styled(status.clone(), status_style));
             }
             Line::from(spans)
         })

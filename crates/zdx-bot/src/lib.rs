@@ -564,7 +564,10 @@ async fn handle_model_callback(
             return;
         };
         let keyboard = crate::handlers::message::build_models_keyboard(context, provider, scope);
-        let header = format!("Select a <b>{provider}</b> model:");
+        let header = format!(
+            "Select a <b>{}</b> model:",
+            zdx_engine::providers::provider_key_label(provider)
+        );
         if let Err(err) = client
             .edit_message_text(chat_id, message_id, &header, Some(&keyboard))
             .await

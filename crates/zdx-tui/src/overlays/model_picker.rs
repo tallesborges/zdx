@@ -102,8 +102,9 @@ impl ModelPickerState {
                     return OverlayUpdate::close();
                 };
 
-                // Include provider prefix so we don't rely on auto-detection
-                let model_id = format!("{}:{}", model.provider, model.id);
+                // Include provider (and OAuth account) prefix so we don't rely
+                // on auto-detection
+                let model_id = model.qualified_id();
                 let display_name = model_label(model);
 
                 let root = tui.agent_opts.root.clone();
@@ -298,7 +299,7 @@ pub fn render_model_picker(
 }
 
 fn model_label(model: &ModelOption) -> String {
-    let label = provider_label(model.provider);
+    let label = zdx_engine::providers::provider_account_label(model.provider, model.account);
     let name = cleaned_display_name(model, model.provider);
     format!("{label} · {name}")
 }
@@ -318,7 +319,7 @@ fn cleaned_display_name(model: &ModelOption, provider: &str) -> String {
 }
 
 fn model_line(model: &ModelOption, width: u16) -> Line<'static> {
-    let label = provider_label(model.provider);
+    let label = zdx_engine::providers::provider_account_label(model.provider, model.account);
     let name = cleaned_display_name(model, model.provider);
     let context = format_context(model.context_limit);
     let pricing = format_pricing(model.pricing.input, model.pricing.output);
@@ -527,4 +528,52 @@ fn model_passes_provider_filter(
     };
     let bare = bare_model_id(model.provider, model.id);
     model_id_matches_patterns(bare, patterns)
+}
+
+#[cfg(test)]
+mod tests {
+    use zdx_engine::models::{ModelCapabilities, ModelOption, ModelPricing};
+
+    use super::model_line;
+
+    fn subscription_model(account: Option<&'static str>) -> ModelOption {
+        ModelOption {
+            id: "claude-fable-5",
+            provider: "claude-cli",
+            account,
+            display_name: "Claude Fable 5",
+            pricing: ModelPricing {
+                input: 0.0,
+                output: 0.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            context_limit: 1_000_000,
+            capabilities: ModelCapabilities::default(),
+        }
+    }
+
+    fn rendered(model: &ModelOption) -> String {
+        model_line(model, 80)
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    #[test]
+    fn row_tags_the_named_account_on_the_provider_label() {
+        let line = rendered(&subscription_model(Some("parity")));
+
+        assert!(line.contains("Claude CLI @parity · "), "got: {line}");
+        assert!(line.contains("(subs)"), "got: {line}");
+    }
+
+    #[test]
+    fn default_account_row_shows_a_plain_provider_label() {
+        let line = rendered(&subscription_model(None));
+
+        assert!(line.contains("Claude CLI · "), "got: {line}");
+        assert!(!line.contains('@'), "got: {line}");
+    }
 }

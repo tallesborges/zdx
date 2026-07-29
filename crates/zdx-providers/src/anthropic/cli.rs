@@ -28,6 +28,8 @@ pub struct ClaudeCliConfig {
     pub thinking_budget_tokens: u32,
     /// Optional effort level for supported models
     pub thinking_effort: Option<EffortLevel>,
+    /// Named OAuth account (`None` = default account).
+    pub account: Option<String>,
 }
 
 impl ClaudeCliConfig {
@@ -38,6 +40,7 @@ impl ClaudeCliConfig {
         thinking_enabled: bool,
         thinking_budget_tokens: u32,
         thinking_effort: Option<EffortLevel>,
+        account: Option<String>,
     ) -> Self {
         let base_url = base_url
             .unwrap_or(crate::ProviderKind::Anthropic.default_base_url())
@@ -49,26 +52,31 @@ impl ClaudeCliConfig {
             thinking_enabled,
             thinking_budget_tokens,
             thinking_effort,
+            account,
         }
     }
 }
 
-/// Resolves OAuth credentials, refreshing if expired.
+/// Resolves OAuth credentials for an account, refreshing if expired.
 ///
 /// # Errors
 /// Returns an error if the operation fails.
-pub async fn resolve_credentials() -> Result<oauth_claude_cli::ClaudeCliCredentials> {
-    let mut creds = oauth_claude_cli::load_credentials()?.ok_or_else(|| {
-        anyhow::anyhow!(
-            "No Claude CLI OAuth credentials found. Run 'zdx login --claude-cli' to authenticate."
-        )
+pub async fn resolve_credentials(
+    account: Option<&str>,
+) -> Result<oauth_claude_cli::ClaudeCliCredentials> {
+    let mut creds = oauth_claude_cli::load_credentials(account)?.ok_or_else(|| {
+        let hint = account.map_or_else(
+            || "zdx login --claude-cli".to_string(),
+            |name| format!("zdx login --claude-cli --account {name}"),
+        );
+        anyhow::anyhow!("No Claude CLI OAuth credentials found. Run '{hint}' to authenticate.")
     })?;
 
     if creds.is_expired() {
         let refreshed = oauth_claude_cli::refresh_token(&creds.refresh)
             .await
             .context("Failed to refresh Claude CLI OAuth token")?;
-        oauth_claude_cli::save_credentials(&refreshed)?;
+        oauth_claude_cli::save_credentials(account, &refreshed)?;
         creds = refreshed;
     }
 
@@ -104,7 +112,7 @@ impl ClaudeCliClient {
         tools: &[ToolDefinition],
         system: Option<&str>,
     ) -> Result<ProviderStream> {
-        let creds = resolve_credentials().await?;
+        let creds = resolve_credentials(self.config.account.as_deref()).await?;
 
         let request = self.build_streaming_request(messages, tools, system)?;
         let include_interleaved_beta = should_enable_interleaved_thinking_beta(
@@ -181,6 +189,7 @@ pub fn build(
         ctx.thinking_level.is_enabled(),
         thinking_budget_tokens,
         EffortLevel::from_thinking_level(ctx.thinking_level, ctx.model),
+        ctx.account.map(ToString::to_string),
     ))))
 }
 
@@ -199,6 +208,7 @@ mod tests {
             true,
             2048,
             Some(EffortLevel::High),
+            None,
         );
         let client = ClaudeCliClient::new(config);
 
@@ -223,6 +233,7 @@ mod tests {
             true,
             1024,
             Some(EffortLevel::Low),
+            None,
         );
         let client = ClaudeCliClient::new(config);
 

@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs, Wrap};
 use zdx_engine::core::usage_stats::{self, DailyUsage, UsageRow, UsageStats, UsageTotals};
-use zdx_engine::providers::subscription_quota::{QuotaWindow, provider_display};
+use zdx_engine::providers::subscription_quota::{QuotaWindow, account_display};
 
 use crate::app::{
     AgentOverlayState, CachedQuotas, CachedUsageStats, ConfigLine, ModelPickerState, MonitorApp,
@@ -527,7 +527,7 @@ fn quota_window_line(w: &QuotaWindow) -> Line<'static> {
 /// bar line per window, or a single dim `unavailable` line.
 fn subscription_entry_lines(entry: &QuotaEntry) -> Vec<Line<'static>> {
     let dim = Style::default().fg(Color::DarkGray);
-    let name = provider_display(entry.provider);
+    let name = account_display(entry.provider, entry.account.as_deref());
     let Some(quota) = &entry.quota else {
         let reason = entry.error.as_deref().unwrap_or("unavailable");
         return vec![Line::from(Span::styled(
@@ -1385,6 +1385,7 @@ mod tests {
     fn near_limit_window_renders_red_span() {
         let entry = QuotaEntry {
             provider: "claude-cli",
+            account: None,
             quota: Some(SubscriptionQuota {
                 plan: None,
                 windows: vec![
@@ -1423,6 +1424,7 @@ mod tests {
     fn unavailable_entry_renders_dim_reason() {
         let entry = QuotaEntry {
             provider: "openai-codex",
+            account: None,
             quota: None,
             error: Some("rate limited".to_string()),
         };

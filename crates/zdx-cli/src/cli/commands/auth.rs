@@ -7,8 +7,13 @@ use std::time::Duration;
 use anyhow::Result;
 use zdx_engine::providers::oauth::{
     OAuthCache, claude_cli as oauth_claude_cli, google_antigravity as oauth_antigravity,
-    grok_build as oauth_grok_build, openai_codex as oauth_codex,
+    grok_build as oauth_grok_build, normalize_account, openai_codex as oauth_codex,
 };
+
+/// Renders ` (account: work)` for a named account, or nothing for the default.
+fn account_suffix(account: Option<&str>) -> String {
+    account.map_or_else(String::new, |name| format!(" (account: {name})"))
+}
 
 pub async fn login_anthropic() -> Result<()> {
     tokio::task::yield_now().await;
@@ -17,11 +22,14 @@ pub async fn login_anthropic() -> Result<()> {
     Ok(())
 }
 
-pub async fn login_claude_cli() -> Result<()> {
+pub async fn login_claude_cli(account: Option<&str>) -> Result<()> {
+    let account = normalize_account(account)?;
+    let account = account.as_deref();
+    let suffix = account_suffix(account);
     // Check if already logged in
-    if let Some(existing) = oauth_claude_cli::load_credentials()? {
+    if let Some(existing) = oauth_claude_cli::load_credentials(account)? {
         println!(
-            "Already logged in to Claude CLI (token: {})",
+            "Already logged in to Claude CLI{suffix} (token: {})",
             oauth_claude_cli::mask_token(&existing.access)
         );
         print!("Do you want to replace the existing credentials? [y/N] ");
@@ -89,12 +97,12 @@ pub async fn login_claude_cli() -> Result<()> {
     let credentials = oauth_claude_cli::exchange_code(&auth_code, &pkce, &redirect_uri).await?;
 
     // Save credentials
-    oauth_claude_cli::save_credentials(&credentials)?;
+    oauth_claude_cli::save_credentials(account, &credentials)?;
 
     let cache_path = OAuthCache::cache_path();
     println!();
     println!(
-        "✓ Logged in to Claude CLI (token: {})",
+        "✓ Logged in to Claude CLI{suffix} (token: {})",
         oauth_claude_cli::mask_token(&credentials.access)
     );
     println!("  Credentials saved to: {}", cache_path.display());
@@ -107,24 +115,30 @@ pub fn logout_anthropic() {
     println!("Unset ANTHROPIC_API_KEY to remove authentication.");
 }
 
-pub fn logout_claude_cli() -> Result<()> {
-    let had_creds = oauth_claude_cli::clear_credentials()?;
+pub fn logout_claude_cli(account: Option<&str>) -> Result<()> {
+    let account = normalize_account(account)?;
+    let account = account.as_deref();
+    let suffix = account_suffix(account);
+    let had_creds = oauth_claude_cli::clear_credentials(account)?;
 
     if had_creds {
         let cache_path = OAuthCache::cache_path();
-        println!("✓ Logged out from Claude CLI");
+        println!("✓ Logged out from Claude CLI{suffix}");
         println!("  Credentials removed from: {}", cache_path.display());
     } else {
-        println!("Not logged in to Claude CLI (no credentials found).");
+        println!("Not logged in to Claude CLI{suffix} (no credentials found).");
     }
 
     Ok(())
 }
 
-pub async fn login_openai_codex() -> Result<()> {
-    if let Some(existing) = oauth_codex::load_credentials()? {
+pub async fn login_openai_codex(account: Option<&str>) -> Result<()> {
+    let account = normalize_account(account)?;
+    let account = account.as_deref();
+    let suffix = account_suffix(account);
+    if let Some(existing) = oauth_codex::load_credentials(account)? {
         println!(
-            "Already logged in to OpenAI Codex (token: {})",
+            "Already logged in to OpenAI Codex{suffix} (token: {})",
             oauth_claude_cli::mask_token(&existing.access)
         );
         print!("Do you want to replace the existing credentials? [y/N] ");
@@ -175,12 +189,12 @@ pub async fn login_openai_codex() -> Result<()> {
 
     println!("Exchanging code for tokens...");
     let credentials = oauth_codex::exchange_code(&code, &pkce).await?;
-    oauth_codex::save_credentials(&credentials)?;
+    oauth_codex::save_credentials(account, &credentials)?;
 
     let cache_path = OAuthCache::cache_path();
     println!();
     println!(
-        "✓ Logged in to OpenAI Codex (token: {})",
+        "✓ Logged in to OpenAI Codex{suffix} (token: {})",
         oauth_claude_cli::mask_token(&credentials.access)
     );
     println!("  Credentials saved to: {}", cache_path.display());
@@ -188,24 +202,30 @@ pub async fn login_openai_codex() -> Result<()> {
     Ok(())
 }
 
-pub fn logout_openai_codex() -> Result<()> {
-    let had_creds = oauth_codex::clear_credentials()?;
+pub fn logout_openai_codex(account: Option<&str>) -> Result<()> {
+    let account = normalize_account(account)?;
+    let account = account.as_deref();
+    let suffix = account_suffix(account);
+    let had_creds = oauth_codex::clear_credentials(account)?;
 
     if had_creds {
         let cache_path = OAuthCache::cache_path();
-        println!("✓ Logged out from OpenAI Codex");
+        println!("✓ Logged out from OpenAI Codex{suffix}");
         println!("  Credentials removed from: {}", cache_path.display());
     } else {
-        println!("Not logged in to OpenAI Codex (no credentials found).");
+        println!("Not logged in to OpenAI Codex{suffix} (no credentials found).");
     }
 
     Ok(())
 }
 
-pub async fn login_antigravity() -> Result<()> {
-    if let Some(existing) = oauth_antigravity::load_credentials()? {
+pub async fn login_antigravity(account: Option<&str>) -> Result<()> {
+    let account = normalize_account(account)?;
+    let account = account.as_deref();
+    let suffix = account_suffix(account);
+    if let Some(existing) = oauth_antigravity::load_credentials(account)? {
         println!(
-            "Already logged in to Google Antigravity (token: {})",
+            "Already logged in to Google Antigravity{suffix} (token: {})",
             oauth_claude_cli::mask_token(&existing.access)
         );
         print!("Do you want to replace the existing credentials? [y/N] ");
@@ -261,34 +281,40 @@ pub async fn login_antigravity() -> Result<()> {
     let project_id = oauth_antigravity::discover_project(&credentials.access).await?;
     credentials.account_id = Some(project_id.clone());
 
-    oauth_antigravity::save_credentials(&credentials)?;
+    oauth_antigravity::save_credentials(account, &credentials)?;
 
     let cache_path = OAuthCache::cache_path();
     println!();
-    println!("✓ Logged in to Google Antigravity (project: {project_id})");
+    println!("✓ Logged in to Google Antigravity{suffix} (project: {project_id})");
     println!("  Credentials saved to: {}", cache_path.display());
 
     Ok(())
 }
 
-pub fn logout_antigravity() -> Result<()> {
-    let had_creds = oauth_antigravity::clear_credentials()?;
+pub fn logout_antigravity(account: Option<&str>) -> Result<()> {
+    let account = normalize_account(account)?;
+    let account = account.as_deref();
+    let suffix = account_suffix(account);
+    let had_creds = oauth_antigravity::clear_credentials(account)?;
 
     if had_creds {
         let cache_path = OAuthCache::cache_path();
-        println!("✓ Logged out from Google Antigravity");
+        println!("✓ Logged out from Google Antigravity{suffix}");
         println!("  Credentials removed from: {}", cache_path.display());
     } else {
-        println!("Not logged in to Google Antigravity (no credentials found).");
+        println!("Not logged in to Google Antigravity{suffix} (no credentials found).");
     }
 
     Ok(())
 }
 
-pub async fn login_grok_build() -> Result<()> {
-    if let Some(existing) = oauth_grok_build::load_credentials()? {
+pub async fn login_grok_build(account: Option<&str>) -> Result<()> {
+    let account = normalize_account(account)?;
+    let account = account.as_deref();
+    let suffix = account_suffix(account);
+    if let Some(existing) = oauth_grok_build::load_credentials(account)? {
         println!(
-            "Already logged in to Grok Build (token: {})",
+            "Already logged in to Grok Build{suffix} (token: {})",
             oauth_claude_cli::mask_token(&existing.access)
         );
         print!("Do you want to replace the existing credentials? [y/N] ");
@@ -339,12 +365,12 @@ pub async fn login_grok_build() -> Result<()> {
 
     println!("Exchanging code for tokens...");
     let credentials = oauth_grok_build::exchange_code(&code, &pkce).await?;
-    oauth_grok_build::save_credentials(&credentials)?;
+    oauth_grok_build::save_credentials(account, &credentials)?;
 
     let cache_path = OAuthCache::cache_path();
     println!();
     println!(
-        "✓ Logged in to Grok Build (token: {})",
+        "✓ Logged in to Grok Build{suffix} (token: {})",
         oauth_claude_cli::mask_token(&credentials.access)
     );
     println!("  Credentials saved to: {}", cache_path.display());
@@ -352,15 +378,18 @@ pub async fn login_grok_build() -> Result<()> {
     Ok(())
 }
 
-pub fn logout_grok_build() -> Result<()> {
-    let had_creds = oauth_grok_build::clear_credentials()?;
+pub fn logout_grok_build(account: Option<&str>) -> Result<()> {
+    let account = normalize_account(account)?;
+    let account = account.as_deref();
+    let suffix = account_suffix(account);
+    let had_creds = oauth_grok_build::clear_credentials(account)?;
 
     if had_creds {
         let cache_path = OAuthCache::cache_path();
-        println!("✓ Logged out from Grok Build");
+        println!("✓ Logged out from Grok Build{suffix}");
         println!("  Credentials removed from: {}", cache_path.display());
     } else {
-        println!("Not logged in to Grok Build (no credentials found).");
+        println!("Not logged in to Grok Build{suffix} (no credentials found).");
     }
 
     Ok(())

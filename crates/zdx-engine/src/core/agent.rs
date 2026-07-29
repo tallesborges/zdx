@@ -1116,6 +1116,7 @@ fn build_run_turn_setup(
         } else {
             None
         },
+        account: selection.account.as_deref(),
     };
     let client = provider.build_client(&provider_ctx)?;
     let tool_ctx = ToolContext::new(
