@@ -11,13 +11,45 @@ use crate::config::ThinkingLevel;
 use crate::core::subagent::{ExecSubagentOptions, run_exec_subagent};
 use crate::prompts::THREAD_TITLE_PROMPT_TEMPLATE;
 
+/// Model used when the configured title model fails.
+const FALLBACK_TITLE_MODEL: &str = "openai-codex:gpt-5.6-luna";
+
 /// Generate a title from a message using the LLM subagent.
+///
+/// Falls back to [`FALLBACK_TITLE_MODEL`] if the configured model fails.
 ///
 /// Returns `Ok(sanitized_title)` or an error describing the failure.
 ///
 /// # Errors
-/// Returns an error if the subagent fails, times out, or produces an empty/invalid title.
+/// Returns an error if both the configured and fallback models fail, time out,
+/// or produce an empty/invalid title.
 pub async fn generate_title(
+    message: &str,
+    title_model: &str,
+    root: &Path,
+    parent_thread_id: Option<&str>,
+) -> Result<String> {
+    let primary = generate_with_model(message, title_model, root, parent_thread_id).await;
+
+    let Err(err) = primary else {
+        return primary;
+    };
+
+    if title_model == FALLBACK_TITLE_MODEL {
+        return Err(err);
+    }
+
+    tracing::warn!(
+        model = title_model,
+        fallback = FALLBACK_TITLE_MODEL,
+        error = %err,
+        "title generation failed; retrying with fallback model"
+    );
+
+    generate_with_model(message, FALLBACK_TITLE_MODEL, root, parent_thread_id).await
+}
+
+async fn generate_with_model(
     message: &str,
     title_model: &str,
     root: &Path,
