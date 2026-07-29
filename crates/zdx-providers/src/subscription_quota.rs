@@ -70,11 +70,15 @@ pub const FETCHERS: &[(&str, QuotaFetcher)] = &[
     (PROVIDER_GROK, |account| Box::pin(fetch_grok_quota(account))),
 ];
 
-/// Display label for a provider account (`provider` or `provider@account`).
+/// Display label for a provider account (`Claude` or `Claude @parity`).
+///
+/// Uses the short subscription names rather than full provider labels, matching
+/// the compact quota block; the ` @account` suffix matches
+/// [`crate::provider_account_label`].
 #[must_use]
 pub fn account_display(provider: &str, account: Option<&str>) -> String {
     match account {
-        Some(name) => format!("{}@{name}", provider_display(provider)),
+        Some(name) => format!("{} @{name}", provider_display(provider)),
         None => provider_display(provider).to_string(),
     }
 }
