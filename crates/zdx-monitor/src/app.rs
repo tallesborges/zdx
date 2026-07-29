@@ -506,6 +506,14 @@ pub struct AgentOverlayState {
     pub title: String,
     /// Rendered transcript lines (formatted markdown via `zdx-transcript`).
     pub lines: Vec<Line<'static>>,
+    /// Cells backing `lines`, kept so the tool pane can render a tool's detail.
+    pub cells: Vec<zdx_transcript::HistoryCell>,
+    /// Tool calls in display order, with the line each one's header sits on.
+    pub tools: Vec<ToolRef>,
+    /// Currently highlighted tool call (`tool_use_id`), for drill-in.
+    pub tool_selected: Option<String>,
+    /// Open tool detail pane, if any.
+    pub tool_pane: Option<ToolPaneState>,
     /// Manual top-line scroll offset. `None` follows the newest content.
     pub scroll: Option<usize>,
     /// The captured run is no longer active (marker gone). Presentation only —
@@ -519,6 +527,38 @@ pub struct AgentOverlayState {
     pub file_mtime: Option<SystemTime>,
     /// Width the transcript was last rendered at (re-render on resize).
     pub width: usize,
+}
+
+impl AgentOverlayState {
+    /// Index into `tools` of the highlighted tool, if it is still present.
+    pub fn selected_tool_index(&self) -> Option<usize> {
+        let id = self.tool_selected.as_deref()?;
+        self.tools.iter().position(|t| t.tool_use_id == id)
+    }
+
+    /// The cell for a `tool_use_id`, looked up live so a running tool's pane
+    /// picks up new output on each refresh.
+    pub fn tool_cell(&self, tool_use_id: &str) -> Option<&zdx_transcript::HistoryCell> {
+        self.cells.iter().find(|cell| {
+            matches!(cell, zdx_transcript::HistoryCell::Tool { tool_use_id: id, .. } if id == tool_use_id)
+        })
+    }
+}
+
+/// A tool call in the rendered transcript.
+pub struct ToolRef {
+    pub tool_use_id: String,
+    /// Index in `AgentOverlayState::lines` of this tool's header row.
+    pub line: usize,
+}
+
+/// State for the tool detail pane opened from the transcript overlay.
+pub struct ToolPaneState {
+    /// Tool identity, not a cell index: cells are rebuilt on every refresh, and
+    /// the pane re-reads the live cell so running tools keep updating.
+    pub tool_use_id: String,
+    /// Top-line offset; clamped at render time against the wrapped body.
+    pub scroll: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1289,6 +1329,14 @@ fn handle_mouse_event(app: &mut MonitorApp, kind: MouseEventKind) {
     }
     let overlay_page = agent_overlay_page_size(app);
     if let Some(state) = app.agent_overlay.as_mut() {
+        if let Some(pane) = state.tool_pane.as_mut() {
+            match kind {
+                MouseEventKind::ScrollDown => pane.scroll = pane.scroll.saturating_add(1),
+                MouseEventKind::ScrollUp => pane.scroll = pane.scroll.saturating_sub(1),
+                _ => {}
+            }
+            return;
+        }
         let max_offset = state.lines.len().saturating_sub(overlay_page);
         let cur = state.scroll.unwrap_or(max_offset);
         match kind {
@@ -1954,12 +2002,34 @@ const TRANSCRIPT_MAX_CELLS: usize = 200;
 
 /// Reads a thread transcript and renders it to formatted ratatui lines using
 /// the shared `zdx-transcript` renderer (markdown, wrapping, tool pairing).
+/// Also returns the cells and the tool rows found in them, so the overlay can
+/// drill into a tool call.
 /// Best-effort; a missing file yields no lines.
-fn read_thread_transcript(id: &str, width: usize) -> Vec<Line<'static>> {
+fn read_thread_transcript(
+    id: &str,
+    width: usize,
+) -> (
+    Vec<zdx_transcript::HistoryCell>,
+    Vec<Line<'static>>,
+    Vec<ToolRef>,
+) {
     let events = thread_persistence::load_thread_events(id).unwrap_or_default();
-    let cells = zdx_transcript::build_transcript_from_events(&events);
-    let start = cells.len().saturating_sub(TRANSCRIPT_MAX_CELLS);
-    zdx_transcript::cells_to_lines(&cells[start..], width.max(1))
+    let all_cells = zdx_transcript::build_transcript_from_events(&events);
+    let start = all_cells.len().saturating_sub(TRANSCRIPT_MAX_CELLS);
+    let cells = all_cells[start..].to_vec();
+    let (lines, offsets) = zdx_transcript::cells_to_lines_with_offsets(&cells, width.max(1));
+    let tools = cells
+        .iter()
+        .zip(&offsets)
+        .filter_map(|(cell, &line)| match cell {
+            zdx_transcript::HistoryCell::Tool { tool_use_id, .. } => Some(ToolRef {
+                tool_use_id: tool_use_id.clone(),
+                line,
+            }),
+            _ => None,
+        })
+        .collect();
+    (cells, lines, tools)
 }
 
 /// Number of visible transcript rows in the full-screen overlay.
@@ -1980,6 +2050,10 @@ fn open_agent_overlay(app: &mut MonitorApp) {
                 thread_id: id,
                 title,
                 lines: Vec::new(),
+                cells: Vec::new(),
+                tools: Vec::new(),
+                tool_selected: None,
+                tool_pane: None,
                 scroll: None,
                 ended: false,
                 unavailable: false,
@@ -1995,6 +2069,10 @@ fn open_agent_overlay(app: &mut MonitorApp) {
                 thread_id: String::new(),
                 title,
                 lines: vec![Line::from("transcript unavailable (no thread id)")],
+                cells: Vec::new(),
+                tools: Vec::new(),
+                tool_selected: None,
+                tool_pane: None,
                 scroll: None,
                 ended: false,
                 unavailable: true,
@@ -2018,7 +2096,19 @@ fn load_transcript_into(state: &mut AgentOverlayState) {
     let (len, mtime) = transcript_file_fingerprint(&path);
     state.file_len = len;
     state.file_mtime = mtime;
-    state.lines = read_thread_transcript(&state.thread_id, state.width);
+    let (cells, lines, tools) = read_thread_transcript(&state.thread_id, state.width);
+    state.cells = cells;
+    state.lines = lines;
+    state.tools = tools;
+    // A tool trimmed out of the window can no longer be highlighted or shown.
+    if state.selected_tool_index().is_none() {
+        state.tool_selected = None;
+    }
+    if let Some(pane) = &state.tool_pane
+        && state.tool_cell(&pane.tool_use_id).is_none()
+    {
+        state.tool_pane = None;
+    }
 }
 
 /// Timed-tick refresh for the open transcript overlay. Skips reparsing when the
@@ -2046,7 +2136,61 @@ fn refresh_agent_overlay(app: &mut MonitorApp) {
     state.file_len = len;
     state.file_mtime = mtime;
     state.width = width;
-    state.lines = read_thread_transcript(&state.thread_id, width);
+    load_transcript_into(state);
+}
+
+/// Highlights the tool `step` positions away from the current one and scrolls it
+/// into view. With nothing highlighted yet, starts at the newest tool.
+fn move_agent_overlay_tool(state: &mut AgentOverlayState, step: isize, page: usize) {
+    if state.tools.is_empty() {
+        return;
+    }
+    let last = state.tools.len() - 1;
+    let next = match state.selected_tool_index() {
+        Some(cur) => {
+            let cur = cur as isize;
+            (cur + step).clamp(0, last as isize) as usize
+        }
+        None => last,
+    };
+    let tool = &state.tools[next];
+    state.tool_selected = Some(tool.tool_use_id.clone());
+
+    // Keep the highlighted header comfortably inside the viewport.
+    let max_offset = state.lines.len().saturating_sub(page);
+    let target = tool.line.saturating_sub(page / 3);
+    state.scroll = Some(target.min(max_offset));
+}
+
+/// Opens the tool detail pane for the highlighted tool, selecting the newest
+/// tool first when nothing is highlighted yet.
+fn open_agent_overlay_tool_pane(state: &mut AgentOverlayState, page: usize) {
+    if state.selected_tool_index().is_none() {
+        move_agent_overlay_tool(state, 0, page);
+    }
+    let Some(idx) = state.selected_tool_index() else {
+        return;
+    };
+    state.tool_pane = Some(ToolPaneState {
+        tool_use_id: state.tools[idx].tool_use_id.clone(),
+        scroll: 0,
+    });
+}
+
+/// Handles a key while the tool detail pane is open. Scroll offsets are clamped
+/// at render time, where the wrapped body height is known.
+fn handle_tool_pane_key(pane: &mut ToolPaneState, key: KeyCode, page_size: usize) -> bool {
+    match key {
+        KeyCode::Esc | KeyCode::Char('q') => return false,
+        KeyCode::Char('j') | KeyCode::Down => pane.scroll = pane.scroll.saturating_add(1),
+        KeyCode::Char('k') | KeyCode::Up => pane.scroll = pane.scroll.saturating_sub(1),
+        KeyCode::PageDown => pane.scroll = pane.scroll.saturating_add(page_size),
+        KeyCode::PageUp => pane.scroll = pane.scroll.saturating_sub(page_size),
+        KeyCode::Char('g') | KeyCode::Home => pane.scroll = 0,
+        KeyCode::Char('G') | KeyCode::End => pane.scroll = usize::MAX,
+        _ => {}
+    }
+    true
 }
 
 /// Handles a key while the transcript overlay is open.
@@ -2055,11 +2199,20 @@ fn handle_agent_overlay_key(app: &mut MonitorApp, key: KeyCode) {
     let Some(state) = app.agent_overlay.as_mut() else {
         return;
     };
+    if let Some(pane) = state.tool_pane.as_mut() {
+        if !handle_tool_pane_key(pane, key, page) {
+            state.tool_pane = None;
+        }
+        return;
+    }
     let max_offset = state.lines.len().saturating_sub(page);
     // `None` means following the newest content; step from the bottom.
     let cur = state.scroll.unwrap_or(max_offset);
     match key {
         KeyCode::Esc | KeyCode::Char('q') => app.agent_overlay = None,
+        KeyCode::Tab | KeyCode::Char('n') => move_agent_overlay_tool(state, 1, page),
+        KeyCode::BackTab | KeyCode::Char('p') => move_agent_overlay_tool(state, -1, page),
+        KeyCode::Enter => open_agent_overlay_tool_pane(state, page),
         KeyCode::Char('j') | KeyCode::Down => state.scroll = Some((cur + 1).min(max_offset)),
         KeyCode::Char('k') | KeyCode::Up => state.scroll = Some(cur.saturating_sub(1)),
         KeyCode::PageDown => state.scroll = Some((cur + page).min(max_offset)),
@@ -2569,12 +2722,13 @@ mod transcript_tests {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
     }
 
+    fn lines_for(cells: &[zdx_transcript::HistoryCell], width: usize) -> Vec<Line<'static>> {
+        zdx_transcript::cells_to_lines_with_offsets(cells, width).0
+    }
+
     fn render(events: &[ThreadEvent], width: usize) -> Vec<String> {
         let cells = zdx_transcript::build_transcript_from_events(events);
-        zdx_transcript::cells_to_lines(&cells, width)
-            .iter()
-            .map(line_text)
-            .collect()
+        lines_for(&cells, width).iter().map(line_text).collect()
     }
 
     #[test]
@@ -2613,12 +2767,51 @@ mod transcript_tests {
             r#"{"type":"message","role":"assistant","text":"two","ts":"t"}"#,
         ]);
         let cells = zdx_transcript::build_transcript_from_events(&events);
-        let lines = zdx_transcript::cells_to_lines(&cells, 80);
+        let lines = lines_for(&cells, 80);
         let blanks = lines.iter().filter(|l| line_text(l).is_empty()).count();
         assert!(
             blanks >= cells.len(),
             "one blank separator per cell: blanks={blanks} cells={}",
             cells.len()
+        );
+    }
+
+    /// Tool rows must map to the exact line their header renders on, since the
+    /// overlay highlights that line and drills in from it.
+    #[test]
+    fn tool_rows_map_to_their_header_lines_and_body_shows_args_and_output() {
+        let events = parse(&[
+            r#"{"type":"message","role":"user","text":"hi","ts":"t"}"#,
+            r#"{"type":"tool_use","id":"t1","name":"grep","input":{"pattern":"needle"},"ts":"t"}"#,
+            r#"{"type":"tool_result","tool_use_id":"t1","output":"a match","ok":true,"ts":"t"}"#,
+        ]);
+        let cells = zdx_transcript::build_transcript_from_events(&events);
+        let (lines, offsets) = zdx_transcript::cells_to_lines_with_offsets(&cells, 80);
+
+        let (tool_idx, tool_cell) = cells
+            .iter()
+            .enumerate()
+            .find(|(_, c)| matches!(c, zdx_transcript::HistoryCell::Tool { .. }))
+            .expect("tool cell");
+        let header = line_text(&lines[offsets[tool_idx]]);
+        assert!(
+            header.contains("grep"),
+            "header line is the tool row: {header}"
+        );
+
+        let body = zdx_transcript::tool_detail_body(tool_cell);
+        let text: String = body
+            .lines
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("needle"), "args shown: {text}");
+        assert!(text.contains("a match"), "output shown: {text}");
+        assert!(
+            body.output_start > 0 && body.output_start <= body.lines.len(),
+            "output_start points into the body: {}",
+            body.output_start
         );
     }
 
@@ -2628,8 +2821,8 @@ mod transcript_tests {
             r#"{"type":"message","role":"assistant","text":"the quick brown fox jumps over the lazy dog again and again","ts":"t"}"#,
         ]);
         let cells = zdx_transcript::build_transcript_from_events(&events);
-        let wide = zdx_transcript::cells_to_lines(&cells, 100).len();
-        let narrow = zdx_transcript::cells_to_lines(&cells, 20).len();
+        let wide = lines_for(&cells, 100).len();
+        let narrow = lines_for(&cells, 20).len();
         assert!(narrow > wide, "narrow={narrow} wide={wide}");
     }
 

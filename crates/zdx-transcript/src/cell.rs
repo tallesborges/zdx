@@ -297,7 +297,7 @@ pub enum ToolState {
 /// Spinner frames for animated tool running indicator.
 /// Spinner frames using circle characters for better terminal compatibility.
 /// Braille dots (⠋⠙⠹) may not render correctly in all terminals/fonts.
-const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
+pub(crate) const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 
 /// A logical unit in the transcript.
 ///
