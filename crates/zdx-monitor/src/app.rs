@@ -9,7 +9,7 @@ use std::{fs, io};
 use anyhow::{Context, Result};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-    MouseEventKind,
+    MouseButton, MouseEvent, MouseEventKind,
 };
 use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
@@ -530,6 +530,21 @@ pub struct AgentOverlayState {
 }
 
 impl AgentOverlayState {
+    /// Largest top-line offset that still fills a `page`-row viewport.
+    pub fn max_scroll(&self, page: usize) -> usize {
+        self.lines.len().saturating_sub(page)
+    }
+
+    /// First transcript line shown in a `page`-row viewport. `scroll == None`
+    /// follows the newest content, so it resolves to the bottom.
+    ///
+    /// Rendering and row→line hit-testing must agree on this, or clicks land on
+    /// the wrong line; both go through here.
+    pub fn top_line(&self, page: usize) -> usize {
+        let max = self.max_scroll(page);
+        self.scroll.unwrap_or(max).min(max)
+    }
+
     /// Index into `tools` of the highlighted tool, if it is still present.
     pub fn selected_tool_index(&self) -> Option<usize> {
         let id = self.tool_selected.as_deref()?;
@@ -550,6 +565,9 @@ pub struct ToolRef {
     pub tool_use_id: String,
     /// Index in `AgentOverlayState::lines` of this tool's header row.
     pub line: usize,
+    /// One past this tool's last rendered row, excluding the blank separator.
+    /// Clicks anywhere in `line..end` target this tool.
+    pub end: usize,
 }
 
 /// State for the tool detail pane opened from the transcript overlay.
@@ -1313,7 +1331,8 @@ fn copy_selected_log_entry(app: &mut MonitorApp) {
     }
 }
 
-fn handle_mouse_event(app: &mut MonitorApp, kind: MouseEventKind) {
+fn handle_mouse_event(app: &mut MonitorApp, mouse: MouseEvent) {
+    let kind = mouse.kind;
     if app.model_picker.is_some() {
         if let Some(picker) = app.model_picker.as_mut() {
             match kind {
@@ -1337,11 +1356,14 @@ fn handle_mouse_event(app: &mut MonitorApp, kind: MouseEventKind) {
             }
             return;
         }
-        let max_offset = state.lines.len().saturating_sub(overlay_page);
-        let cur = state.scroll.unwrap_or(max_offset);
+        let max_offset = state.max_scroll(overlay_page);
+        let cur = state.top_line(overlay_page);
         match kind {
             MouseEventKind::ScrollDown => state.scroll = Some((cur + 1).min(max_offset)),
             MouseEventKind::ScrollUp => state.scroll = Some(cur.saturating_sub(1)),
+            MouseEventKind::Down(MouseButton::Left) => {
+                open_tool_pane_at_row(state, mouse.row, overlay_page);
+            }
             _ => {}
         }
         return;
@@ -1560,7 +1582,7 @@ pub fn run(root: &Path) -> Result<()> {
                         refresh_app(&mut app);
                     }
                     Event::Mouse(mouse) => {
-                        handle_mouse_event(&mut app, mouse.kind);
+                        handle_mouse_event(&mut app, mouse);
                     }
                     _ => {}
                 }
@@ -2020,11 +2042,15 @@ fn read_thread_transcript(
     let (lines, offsets) = zdx_transcript::cells_to_lines_with_offsets(&cells, width.max(1));
     let tools = cells
         .iter()
-        .zip(&offsets)
-        .filter_map(|(cell, &line)| match cell {
+        .enumerate()
+        .filter_map(|(idx, cell)| match cell {
             zdx_transcript::HistoryCell::Tool { tool_use_id, .. } => Some(ToolRef {
                 tool_use_id: tool_use_id.clone(),
-                line,
+                line: offsets[idx],
+                // Each cell is followed by a blank separator line; exclude it.
+                end: offsets
+                    .get(idx + 1)
+                    .map_or(lines.len(), |next| next.saturating_sub(1)),
             }),
             _ => None,
         })
@@ -2157,9 +2183,17 @@ fn move_agent_overlay_tool(state: &mut AgentOverlayState, step: isize, page: usi
     state.tool_selected = Some(tool.tool_use_id.clone());
 
     // Keep the highlighted header comfortably inside the viewport.
-    let max_offset = state.lines.len().saturating_sub(page);
     let target = tool.line.saturating_sub(page / 3);
-    state.scroll = Some(target.min(max_offset));
+    state.scroll = Some(target.min(state.max_scroll(page)));
+}
+
+/// Highlights a tool and opens its detail pane.
+fn open_tool_pane(state: &mut AgentOverlayState, tool_use_id: String) {
+    state.tool_selected = Some(tool_use_id.clone());
+    state.tool_pane = Some(ToolPaneState {
+        tool_use_id,
+        scroll: 0,
+    });
 }
 
 /// Opens the tool detail pane for the highlighted tool, selecting the newest
@@ -2171,10 +2205,25 @@ fn open_agent_overlay_tool_pane(state: &mut AgentOverlayState, page: usize) {
     let Some(idx) = state.selected_tool_index() else {
         return;
     };
-    state.tool_pane = Some(ToolPaneState {
-        tool_use_id: state.tools[idx].tool_use_id.clone(),
-        scroll: 0,
-    });
+    let tool_use_id = state.tools[idx].tool_use_id.clone();
+    open_tool_pane(state, tool_use_id);
+}
+
+/// Opens the tool detail pane for the tool under a click row in the
+/// full-screen transcript overlay. No-op when the row isn't over a tool.
+///
+/// The overlay covers the whole frame, so row 0 is its top border and content
+/// row `n` is at screen row `n + 1`.
+fn open_tool_pane_at_row(state: &mut AgentOverlayState, row: u16, page: usize) {
+    let Some(content_row) = row.checked_sub(1).map(usize::from).filter(|r| *r < page) else {
+        return;
+    };
+    let line = state.top_line(page) + content_row;
+    let Some(tool) = state.tools.iter().find(|t| (t.line..t.end).contains(&line)) else {
+        return;
+    };
+    let tool_use_id = tool.tool_use_id.clone();
+    open_tool_pane(state, tool_use_id);
 }
 
 /// Handles a key while the tool detail pane is open. Scroll offsets are clamped
@@ -2205,9 +2254,9 @@ fn handle_agent_overlay_key(app: &mut MonitorApp, key: KeyCode) {
         }
         return;
     }
-    let max_offset = state.lines.len().saturating_sub(page);
+    let max_offset = state.max_scroll(page);
     // `None` means following the newest content; step from the bottom.
-    let cur = state.scroll.unwrap_or(max_offset);
+    let cur = state.top_line(page);
     match key {
         KeyCode::Esc | KeyCode::Char('q') => app.agent_overlay = None,
         KeyCode::Tab | KeyCode::Char('n') => move_agent_overlay_tool(state, 1, page),
@@ -2812,6 +2861,62 @@ mod transcript_tests {
             body.output_start > 0 && body.output_start <= body.lines.len(),
             "output_start points into the body: {}",
             body.output_start
+        );
+    }
+
+    /// Clicking a tool's rows opens its pane; the overlay's top border must not
+    /// be counted as content, and non-tool rows must be ignored.
+    #[test]
+    fn click_row_opens_the_tool_under_the_cursor() {
+        let events = parse(&[
+            r#"{"type":"message","role":"user","text":"hi","ts":"t"}"#,
+            r#"{"type":"tool_use","id":"t1","name":"grep","input":{"pattern":"needle"},"ts":"t"}"#,
+            r#"{"type":"tool_result","tool_use_id":"t1","output":"a match","ok":true,"ts":"t"}"#,
+        ]);
+        let cells = zdx_transcript::build_transcript_from_events(&events);
+        let (lines, offsets) = zdx_transcript::cells_to_lines_with_offsets(&cells, 80);
+        let tool_idx = cells
+            .iter()
+            .position(|c| matches!(c, zdx_transcript::HistoryCell::Tool { .. }))
+            .expect("tool cell");
+        let tool_line = offsets[tool_idx];
+
+        let mut state = AgentOverlayState {
+            thread_id: "t".into(),
+            title: String::new(),
+            lines,
+            cells,
+            tools: vec![ToolRef {
+                tool_use_id: "t1".into(),
+                line: tool_line,
+                end: tool_line + 1,
+            }],
+            tool_selected: None,
+            tool_pane: None,
+            scroll: Some(0),
+            ended: false,
+            unavailable: false,
+            file_len: 0,
+            file_mtime: None,
+            width: 80,
+        };
+        let page = 40;
+
+        // Screen row 0 is the border, so the tool's row is `tool_line + 1`.
+        open_tool_pane_at_row(&mut state, u16::try_from(tool_line + 1).unwrap(), page);
+        assert_eq!(
+            state.tool_pane.as_ref().map(|p| p.tool_use_id.as_str()),
+            Some("t1"),
+            "click on the tool row opens its pane"
+        );
+        assert_eq!(state.tool_selected.as_deref(), Some("t1"));
+
+        // A row that is not part of any tool must not open anything.
+        state.tool_pane = None;
+        open_tool_pane_at_row(&mut state, 0, page);
+        assert!(
+            state.tool_pane.is_none(),
+            "clicking the border opens nothing"
         );
     }
 
