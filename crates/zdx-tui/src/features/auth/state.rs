@@ -18,16 +18,10 @@ pub enum AuthStatus {
 impl AuthStatus {
     /// Detects the current authentication type.
     pub fn detect() -> Self {
-        use zdx_engine::providers::oauth::{claude_cli, grok_build, openai_codex};
+        use zdx_engine::providers::oauth::OAuthCache;
 
-        // Check for OAuth credentials first
-        if let Ok(Some(_creds)) = claude_cli::load_credentials() {
-            return AuthStatus::OAuth;
-        }
-        if let Ok(Some(_creds)) = openai_codex::load_credentials() {
-            return AuthStatus::OAuth;
-        }
-        if let Ok(Some(_creds)) = grok_build::load_credentials() {
+        // Any stored OAuth credential (any provider, any account) counts.
+        if OAuthCache::load().is_ok_and(|cache| !cache.providers.is_empty()) {
             return AuthStatus::OAuth;
         }
 

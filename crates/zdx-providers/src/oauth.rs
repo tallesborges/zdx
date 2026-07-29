@@ -62,6 +62,47 @@ impl OAuthCredentials {
     }
 }
 
+/// Separator between a provider key and a named account in the cache key.
+pub const ACCOUNT_SEPARATOR: char = '@';
+
+/// Builds the OAuth cache key for a provider + optional named account.
+///
+/// The default (unnamed) account uses the bare provider key, so existing
+/// single-account caches keep working untouched.
+pub fn account_cache_key(provider_key: &str, account: Option<&str>) -> String {
+    match account {
+        Some(name) => format!("{provider_key}{ACCOUNT_SEPARATOR}{name}"),
+        None => provider_key.to_string(),
+    }
+}
+
+/// Splits a cache key into its provider key and optional account name.
+pub fn split_cache_key(key: &str) -> (&str, Option<&str>) {
+    match key.split_once(ACCOUNT_SEPARATOR) {
+        Some((provider, account)) if !account.is_empty() => (provider, Some(account)),
+        _ => (key, None),
+    }
+}
+
+/// Validates and normalizes an account name.
+///
+/// `None` and empty names both mean the default account.
+///
+/// # Errors
+/// Returns an error if the name contains characters reserved by the model
+/// grammar (`@`, `:`, `/`) or surrounding whitespace only.
+pub fn normalize_account(account: Option<&str>) -> Result<Option<String>> {
+    let Some(name) = account.map(str::trim).filter(|name| !name.is_empty()) else {
+        return Ok(None);
+    };
+
+    if name.contains([ACCOUNT_SEPARATOR, ':', '/']) {
+        anyhow::bail!("Account name '{name}' cannot contain '@', ':' or '/'");
+    }
+
+    Ok(Some(name.to_string()))
+}
+
 /// OAuth token cache structure.
 /// Maps provider names to their credentials.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -148,6 +189,22 @@ impl OAuthCache {
     /// Removes the credentials for a provider.
     pub fn remove(&mut self, provider: &str) -> Option<OAuthCredentials> {
         self.providers.remove(provider)
+    }
+
+    /// Lists the accounts stored for a provider key, default account first.
+    ///
+    /// `None` represents the default (unnamed) account.
+    pub fn accounts(&self, provider_key: &str) -> Vec<Option<String>> {
+        let mut accounts: Vec<Option<String>> = self
+            .providers
+            .keys()
+            .filter_map(|key| {
+                let (provider, account) = split_cache_key(key);
+                (provider == provider_key).then(|| account.map(ToString::to_string))
+            })
+            .collect();
+        accounts.sort();
+        accounts
     }
 }
 
@@ -387,33 +444,42 @@ pub mod claude_cli {
         expires_in: u64,
     }
 
-    /// Loads the Claude CLI OAuth credentials from cache.
+    /// Loads the Claude CLI OAuth credentials for an account from cache.
+    ///
+    /// `None` selects the default account.
     ///
     /// # Errors
     /// Returns an error if the operation fails.
-    pub fn load_credentials() -> Result<Option<OAuthCredentials>> {
+    pub fn load_credentials(account: Option<&str>) -> Result<Option<OAuthCredentials>> {
         let cache = OAuthCache::load()?;
-        Ok(cache.get(PROVIDER_KEY).cloned())
+        Ok(cache
+            .get(&super::account_cache_key(PROVIDER_KEY, account))
+            .cloned())
     }
 
-    /// Saves Claude CLI OAuth credentials to cache.
+    /// Saves Claude CLI OAuth credentials for an account to cache.
     ///
     /// # Errors
     /// Returns an error if the operation fails.
-    pub fn save_credentials(creds: &OAuthCredentials) -> Result<()> {
+    pub fn save_credentials(account: Option<&str>, creds: &OAuthCredentials) -> Result<()> {
         let mut cache = OAuthCache::load()?;
-        cache.set(PROVIDER_KEY, creds.clone());
+        cache.set(
+            &super::account_cache_key(PROVIDER_KEY, account),
+            creds.clone(),
+        );
         cache.save()?;
         Ok(())
     }
 
-    /// Removes the Claude CLI OAuth credentials from cache.
+    /// Removes the Claude CLI OAuth credentials for an account from cache.
     ///
     /// # Errors
     /// Returns an error if the operation fails.
-    pub fn clear_credentials() -> Result<bool> {
+    pub fn clear_credentials(account: Option<&str>) -> Result<bool> {
         let mut cache = OAuthCache::load()?;
-        let had_creds = cache.remove(PROVIDER_KEY).is_some();
+        let had_creds = cache
+            .remove(&super::account_cache_key(PROVIDER_KEY, account))
+            .is_some();
         cache.save()?;
         Ok(had_creds)
     }
@@ -655,33 +721,40 @@ pub mod openai_codex {
             .map(std::string::ToString::to_string)
     }
 
-    /// Loads the `OpenAI` Codex OAuth credentials from cache.
+    /// Loads the `OpenAI` Codex OAuth credentials for an account from cache.
     ///
     /// # Errors
     /// Returns an error if the operation fails.
-    pub fn load_credentials() -> Result<Option<OAuthCredentials>> {
+    pub fn load_credentials(account: Option<&str>) -> Result<Option<OAuthCredentials>> {
         let cache = OAuthCache::load()?;
-        Ok(cache.get(PROVIDER_KEY).cloned())
+        Ok(cache
+            .get(&super::account_cache_key(PROVIDER_KEY, account))
+            .cloned())
     }
 
-    /// Saves `OpenAI` Codex OAuth credentials to cache.
+    /// Saves `OpenAI` Codex OAuth credentials for an account to cache.
     ///
     /// # Errors
     /// Returns an error if the operation fails.
-    pub fn save_credentials(creds: &OAuthCredentials) -> Result<()> {
+    pub fn save_credentials(account: Option<&str>, creds: &OAuthCredentials) -> Result<()> {
         let mut cache = OAuthCache::load()?;
-        cache.set(PROVIDER_KEY, creds.clone());
+        cache.set(
+            &super::account_cache_key(PROVIDER_KEY, account),
+            creds.clone(),
+        );
         cache.save()?;
         Ok(())
     }
 
-    /// Removes the `OpenAI` Codex OAuth credentials from cache.
+    /// Removes the `OpenAI` Codex OAuth credentials for an account from cache.
     ///
     /// # Errors
     /// Returns an error if the operation fails.
-    pub fn clear_credentials() -> Result<bool> {
+    pub fn clear_credentials(account: Option<&str>) -> Result<bool> {
         let mut cache = OAuthCache::load()?;
-        let had_creds = cache.remove(PROVIDER_KEY).is_some();
+        let had_creds = cache
+            .remove(&super::account_cache_key(PROVIDER_KEY, account))
+            .is_some();
         cache.save()?;
         Ok(had_creds)
     }
@@ -947,17 +1020,22 @@ pub mod google_antigravity {
     ///
     /// # Errors
     /// Returns an error if the operation fails.
-    pub fn load_credentials() -> Result<Option<OAuthCredentials>> {
+    pub fn load_credentials(account: Option<&str>) -> Result<Option<OAuthCredentials>> {
         let cache = OAuthCache::load()?;
-        Ok(cache.get(PROVIDER_KEY).cloned())
+        Ok(cache
+            .get(&super::account_cache_key(PROVIDER_KEY, account))
+            .cloned())
     }
 
     ///
     /// # Errors
     /// Returns an error if the operation fails.
-    pub fn save_credentials(creds: &OAuthCredentials) -> Result<()> {
+    pub fn save_credentials(account: Option<&str>, creds: &OAuthCredentials) -> Result<()> {
         let mut cache = OAuthCache::load()?;
-        cache.set(PROVIDER_KEY, creds.clone());
+        cache.set(
+            &super::account_cache_key(PROVIDER_KEY, account),
+            creds.clone(),
+        );
         cache.save()?;
         Ok(())
     }
@@ -965,9 +1043,11 @@ pub mod google_antigravity {
     ///
     /// # Errors
     /// Returns an error if the operation fails.
-    pub fn clear_credentials() -> Result<bool> {
+    pub fn clear_credentials(account: Option<&str>) -> Result<bool> {
         let mut cache = OAuthCache::load()?;
-        let had_creds = cache.remove(PROVIDER_KEY).is_some();
+        let had_creds = cache
+            .remove(&super::account_cache_key(PROVIDER_KEY, account))
+            .is_some();
         cache.save()?;
         Ok(had_creds)
     }
@@ -1186,33 +1266,40 @@ pub mod grok_build {
         now + (expires_in * 1000).saturating_sub(5 * 60 * 1000)
     }
 
-    /// Loads the Grok Build OAuth credentials from cache.
+    /// Loads the Grok Build OAuth credentials for an account from cache.
     ///
     /// # Errors
     /// Returns an error if the operation fails.
-    pub fn load_credentials() -> Result<Option<OAuthCredentials>> {
+    pub fn load_credentials(account: Option<&str>) -> Result<Option<OAuthCredentials>> {
         let cache = OAuthCache::load()?;
-        Ok(cache.get(PROVIDER_KEY).cloned())
+        Ok(cache
+            .get(&super::account_cache_key(PROVIDER_KEY, account))
+            .cloned())
     }
 
-    /// Saves Grok Build OAuth credentials to cache.
+    /// Saves Grok Build OAuth credentials for an account to cache.
     ///
     /// # Errors
     /// Returns an error if the operation fails.
-    pub fn save_credentials(creds: &OAuthCredentials) -> Result<()> {
+    pub fn save_credentials(account: Option<&str>, creds: &OAuthCredentials) -> Result<()> {
         let mut cache = OAuthCache::load()?;
-        cache.set(PROVIDER_KEY, creds.clone());
+        cache.set(
+            &super::account_cache_key(PROVIDER_KEY, account),
+            creds.clone(),
+        );
         cache.save()?;
         Ok(())
     }
 
-    /// Removes the Grok Build OAuth credentials from cache.
+    /// Removes the Grok Build OAuth credentials for an account from cache.
     ///
     /// # Errors
     /// Returns an error if the operation fails.
-    pub fn clear_credentials() -> Result<bool> {
+    pub fn clear_credentials(account: Option<&str>) -> Result<bool> {
         let mut cache = OAuthCache::load()?;
-        let had_creds = cache.remove(PROVIDER_KEY).is_some();
+        let had_creds = cache
+            .remove(&super::account_cache_key(PROVIDER_KEY, account))
+            .is_some();
         cache.save()?;
         Ok(had_creds)
     }
@@ -1221,6 +1308,54 @@ pub mod grok_build {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_cache_keys_round_trip() {
+        assert_eq!(account_cache_key("claude-cli", None), "claude-cli");
+        assert_eq!(
+            account_cache_key("claude-cli", Some("work")),
+            "claude-cli@work"
+        );
+        assert_eq!(split_cache_key("claude-cli"), ("claude-cli", None));
+        assert_eq!(
+            split_cache_key("claude-cli@work"),
+            ("claude-cli", Some("work"))
+        );
+    }
+
+    #[test]
+    fn cache_lists_default_account_first() {
+        let mut cache = OAuthCache::default();
+        for key in ["claude-cli@work", "claude-cli", "openai-codex"] {
+            cache.set(
+                key,
+                OAuthCredentials {
+                    cred_type: "oauth".to_string(),
+                    refresh: "r".to_string(),
+                    access: "a".to_string(),
+                    expires: 0,
+                    account_id: None,
+                },
+            );
+        }
+
+        assert_eq!(
+            cache.accounts("claude-cli"),
+            vec![None, Some("work".to_string())]
+        );
+    }
+
+    #[test]
+    fn normalize_account_rejects_reserved_characters() {
+        assert!(normalize_account(None).unwrap().is_none());
+        assert!(normalize_account(Some("  ")).unwrap().is_none());
+        assert_eq!(
+            normalize_account(Some(" work ")).unwrap(),
+            Some("work".to_string())
+        );
+        assert!(normalize_account(Some("we:ird")).is_err());
+        assert!(normalize_account(Some("we@ird")).is_err());
+    }
 
     /// Test: `OAuthCredentials` expiry check.
     #[test]

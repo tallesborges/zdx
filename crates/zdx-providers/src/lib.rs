@@ -148,6 +148,8 @@ pub struct ProviderBuildContext<'a> {
     pub websocket: bool,
     /// API routing hint for the `opencode-go` meta-provider.
     pub api_hint: Option<String>,
+    /// Named OAuth account for multi-account providers (`None` = default).
+    pub account: Option<&'a str>,
 }
 
 /// Provider selection based on model naming.
@@ -189,6 +191,9 @@ pub enum ProviderAuthMode {
 pub struct ProviderSelection {
     pub kind: ProviderKind,
     pub model: String,
+    /// Named OAuth account for multi-account providers (`provider@account:model`).
+    /// `None` means the default account.
+    pub account: Option<String>,
 }
 
 /// Static metadata for a single provider kind.
@@ -594,18 +599,20 @@ impl ProviderKind {
 
 /// Resolves provider and model from a model identifier.
 ///
-/// Supports explicit prefix format: `provider:model` or `provider/model`
-/// Without prefix, defaults to Anthropic.
+/// Supports explicit prefix format: `provider:model` or `provider/model`.
+/// The provider segment may carry a named OAuth account:
+/// `claude-cli@work:sonnet-4`. Without prefix, defaults to Anthropic.
 pub fn resolve_provider(model: &str) -> ProviderSelection {
     let trimmed = model.trim();
 
     // Check for explicit provider prefix (e.g., "mistral:devstral-2512")
-    if let Some((kind, rest)) = parse_provider_prefix(trimmed)
+    if let Some((kind, account, rest)) = parse_provider_prefix(trimmed)
         && !rest.is_empty()
     {
         return ProviderSelection {
             kind,
             model: rest.to_string(),
+            account: account.map(ToString::to_string),
         };
     }
 
@@ -613,6 +620,7 @@ pub fn resolve_provider(model: &str) -> ProviderSelection {
     ProviderSelection {
         kind: ProviderKind::Anthropic,
         model: trimmed.to_string(),
+        account: None,
     }
 }
 
@@ -626,15 +634,72 @@ pub fn provider_kind_from_id(id: &str) -> Option<ProviderKind> {
     ProviderKind::from_id(id)
 }
 
-fn parse_provider_prefix(model: &str) -> Option<(ProviderKind, &str)> {
+/// Human-readable provider label carrying an optional named OAuth account,
+/// e.g. `Claude CLI @parity` (or just `Claude CLI` for the default account).
+///
+/// Shared by every surface that displays a provider — the TUI model picker and
+/// the Telegram bot keyboards — so account naming stays consistent.
+pub fn provider_account_label(provider_id: &str, account: Option<&str>) -> String {
+    let label = ProviderKind::from_id(provider_id)
+        .map_or_else(|| provider_id.to_string(), |kind| kind.label().to_string());
+    match account {
+        Some(account) => format!("{label} @{account}"),
+        None => label,
+    }
+}
+
+/// Same as [`provider_account_label`], for a composed provider key such as
+/// `claude-cli` or `claude-cli@parity` (the form used in model-id prefixes).
+pub fn provider_key_label(key: &str) -> String {
+    let (provider_id, account) = oauth::split_cache_key(key);
+    provider_account_label(provider_id, account)
+}
+
+fn parse_provider_prefix(model: &str) -> Option<(ProviderKind, Option<&str>, &str)> {
     for sep in [':', '/'] {
         if let Some((prefix, rest)) = model.split_once(sep) {
             let prefix = prefix.trim();
             let rest = rest.trim();
-            if let Some(kind) = ProviderKind::from_id(prefix) {
-                return Some((kind, rest));
+            let (id, account) = match prefix.split_once(oauth::ACCOUNT_SEPARATOR) {
+                Some((id, account)) if !account.is_empty() => (id, Some(account)),
+                Some(_) => continue,
+                None => (prefix, None),
+            };
+            if let Some(kind) = ProviderKind::from_id(id) {
+                return Some((kind, account, rest));
             }
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProviderKind, resolve_provider};
+
+    #[test]
+    fn resolve_provider_parses_named_oauth_account() {
+        let selection = resolve_provider("claude-cli@work:claude-fable-5");
+
+        assert_eq!(selection.kind, ProviderKind::ClaudeCli);
+        assert_eq!(selection.model, "claude-fable-5");
+        assert_eq!(selection.account.as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn resolve_provider_without_account_stays_default() {
+        let selection = resolve_provider("claude-cli:claude-fable-5");
+
+        assert_eq!(selection.kind, ProviderKind::ClaudeCli);
+        assert_eq!(selection.model, "claude-fable-5");
+        assert!(selection.account.is_none());
+    }
+
+    #[test]
+    fn resolve_provider_ignores_unknown_provider_with_account() {
+        let selection = resolve_provider("nope@work:some-model");
+
+        assert_eq!(selection.kind, ProviderKind::Anthropic);
+        assert_eq!(selection.model, "nope@work:some-model");
+    }
 }

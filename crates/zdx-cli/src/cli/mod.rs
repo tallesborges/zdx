@@ -306,6 +306,9 @@ enum Commands {
         /// Provider to log in to (Grok Build / xAI subscription OAuth)
         #[arg(long = "grok-build")]
         grok_build: bool,
+        /// Named OAuth account to log in as (omit for the default account)
+        #[arg(long)]
+        account: Option<String>,
     },
 
     /// Log out from a provider (clear cached token)
@@ -325,6 +328,9 @@ enum Commands {
         /// Provider to log out from (Grok Build / xAI subscription OAuth)
         #[arg(long = "grok-build")]
         grok_build: bool,
+        /// Named OAuth account to log out from (omit for the default account)
+        #[arg(long)]
+        account: Option<String>,
     },
 
     /// Manage model registry
@@ -1134,14 +1140,25 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             openai_codex,
             antigravity,
             grok_build,
-        } => dispatch_login((anthropic, claude_cli, openai_codex, antigravity, grok_build)).await,
+            account,
+        } => {
+            dispatch_login(
+                (anthropic, claude_cli, openai_codex, antigravity, grok_build),
+                account.as_deref(),
+            )
+            .await
+        }
         Commands::Logout {
             anthropic,
             claude_cli,
             openai_codex,
             antigravity,
             grok_build,
-        } => dispatch_logout((anthropic, claude_cli, openai_codex, antigravity, grok_build)),
+            account,
+        } => dispatch_logout(
+            (anthropic, claude_cli, openai_codex, antigravity, grok_build),
+            account.as_deref(),
+        ),
         Commands::Models { command } => dispatch_models(command, context).await,
         Commands::Monitor => dispatch_monitor(context),
         Commands::Telegram { command } => dispatch_telegram(command, context).await,
@@ -1352,14 +1369,17 @@ fn dispatch_config(command: &ConfigCommands) -> Result<()> {
     }
 }
 
-async fn dispatch_login(flags: (bool, bool, bool, bool, bool)) -> Result<()> {
+async fn dispatch_login(
+    flags: (bool, bool, bool, bool, bool),
+    account: Option<&str>,
+) -> Result<()> {
     let provider = select_auth_provider(flags)?;
-    login_provider(provider).await
+    login_provider(provider, account).await
 }
 
-fn dispatch_logout(flags: (bool, bool, bool, bool, bool)) -> Result<()> {
+fn dispatch_logout(flags: (bool, bool, bool, bool, bool), account: Option<&str>) -> Result<()> {
     let provider = select_auth_provider(flags)?;
-    logout_provider(provider)
+    logout_provider(provider, account)
 }
 
 async fn dispatch_models(command: ModelsCommands, context: &DispatchContext<'_>) -> Result<()> {
@@ -1451,26 +1471,26 @@ fn select_auth_provider(flags: (bool, bool, bool, bool, bool)) -> Result<AuthPro
     }
 }
 
-async fn login_provider(provider: AuthProvider) -> Result<()> {
+async fn login_provider(provider: AuthProvider, account: Option<&str>) -> Result<()> {
     match provider {
         AuthProvider::Anthropic => commands::auth::login_anthropic().await,
-        AuthProvider::ClaudeCli => commands::auth::login_claude_cli().await,
-        AuthProvider::OpenaiCodex => commands::auth::login_openai_codex().await,
-        AuthProvider::Antigravity => commands::auth::login_antigravity().await,
-        AuthProvider::GrokBuild => commands::auth::login_grok_build().await,
+        AuthProvider::ClaudeCli => commands::auth::login_claude_cli(account).await,
+        AuthProvider::OpenaiCodex => commands::auth::login_openai_codex(account).await,
+        AuthProvider::Antigravity => commands::auth::login_antigravity(account).await,
+        AuthProvider::GrokBuild => commands::auth::login_grok_build(account).await,
     }
 }
 
-fn logout_provider(provider: AuthProvider) -> Result<()> {
+fn logout_provider(provider: AuthProvider, account: Option<&str>) -> Result<()> {
     match provider {
         AuthProvider::Anthropic => {
             commands::auth::logout_anthropic();
             Ok(())
         }
-        AuthProvider::ClaudeCli => commands::auth::logout_claude_cli(),
-        AuthProvider::OpenaiCodex => commands::auth::logout_openai_codex(),
-        AuthProvider::Antigravity => commands::auth::logout_antigravity(),
-        AuthProvider::GrokBuild => commands::auth::logout_grok_build(),
+        AuthProvider::ClaudeCli => commands::auth::logout_claude_cli(account),
+        AuthProvider::OpenaiCodex => commands::auth::logout_openai_codex(account),
+        AuthProvider::Antigravity => commands::auth::logout_antigravity(account),
+        AuthProvider::GrokBuild => commands::auth::logout_grok_build(account),
     }
 }
 

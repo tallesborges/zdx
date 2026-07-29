@@ -429,19 +429,21 @@ fn execute_command(
 
 fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
     use zdx_engine::providers::oauth::{claude_cli, grok_build, openai_codex};
-    use zdx_engine::providers::provider_for_model;
+    use zdx_engine::providers::resolve_provider;
 
     let mut mutations = Vec::new();
-    let provider = provider_for_model(&tui.config.model);
+    let selection = resolve_provider(&tui.config.model);
+    let provider = selection.kind;
+    let account = selection.account.as_deref();
     let result = match provider {
         zdx_engine::providers::ProviderKind::ClaudeCli => {
-            claude_cli::clear_credentials().map(|had| (had, "Claude CLI"))
+            claude_cli::clear_credentials(account).map(|had| (had, "Claude CLI"))
         }
         zdx_engine::providers::ProviderKind::OpenAICodex => {
-            openai_codex::clear_credentials().map(|had| (had, "OpenAI Codex"))
+            openai_codex::clear_credentials(account).map(|had| (had, "OpenAI Codex"))
         }
         zdx_engine::providers::ProviderKind::GrokBuild => {
-            grok_build::clear_credentials().map(|had| (had, "Grok Build"))
+            grok_build::clear_credentials(account).map(|had| (had, "Grok Build"))
         }
         _ => {
             let message = provider.api_key_env_var().map_or_else(
@@ -457,9 +459,12 @@ fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
 
     match result {
         Ok((true, label)) => {
+            let scope = account.map_or_else(String::new, |name| format!(" ({name})"));
             mutations.push(StateMutation::Auth(AuthMutation::RefreshStatus));
             mutations.push(StateMutation::Transcript(
-                TranscriptMutation::AppendSystemMessage(format!("Logged out from {label} OAuth.")),
+                TranscriptMutation::AppendSystemMessage(format!(
+                    "Logged out from {label}{scope} OAuth."
+                )),
             ));
         }
         Ok((false, _)) => {

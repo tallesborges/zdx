@@ -16,6 +16,7 @@ use std::time::Duration;
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
 
+pub use crate::oauth::account_cache_key;
 use crate::oauth::{OAuthCredentials, claude_cli, google_antigravity, grok_build, openai_codex};
 
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
@@ -38,8 +39,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A boxed quota-fetch future.
 pub type QuotaFuture = Pin<Box<dyn Future<Output = Result<SubscriptionQuota, QuotaError>> + Send>>;
-/// A read-only quota fetcher for one provider.
-pub type QuotaFetcher = fn() -> QuotaFuture;
+/// A read-only quota fetcher for one provider account (`None` = default account).
+pub type QuotaFetcher = fn(Option<String>) -> QuotaFuture;
 
 /// Human-friendly display name for a subscription provider id.
 #[must_use]
@@ -57,11 +58,51 @@ pub fn provider_display(provider: &str) -> &str {
 /// The monitor iterates this (intersected with credential presence) — adding a
 /// provider is one new `fetch_*` + one entry here, no new render code.
 pub const FETCHERS: &[(&str, QuotaFetcher)] = &[
-    (PROVIDER_CLAUDE, || Box::pin(fetch_claude_quota())),
-    (PROVIDER_CODEX, || Box::pin(fetch_codex_quota())),
-    (PROVIDER_ANTIGRAVITY, || Box::pin(fetch_antigravity_quota())),
-    (PROVIDER_GROK, || Box::pin(fetch_grok_quota())),
+    (PROVIDER_CLAUDE, |account| {
+        Box::pin(fetch_claude_quota(account))
+    }),
+    (PROVIDER_CODEX, |account| {
+        Box::pin(fetch_codex_quota(account))
+    }),
+    (PROVIDER_ANTIGRAVITY, |account| {
+        Box::pin(fetch_antigravity_quota(account))
+    }),
+    (PROVIDER_GROK, |account| Box::pin(fetch_grok_quota(account))),
 ];
+
+/// Display label for a provider account (`provider` or `provider@account`).
+#[must_use]
+pub fn account_display(provider: &str, account: Option<&str>) -> String {
+    match account {
+        Some(name) => format!("{}@{name}", provider_display(provider)),
+        None => provider_display(provider).to_string(),
+    }
+}
+
+/// Lists every stored `(provider, account, fetcher)` triple.
+///
+/// Providers with no stored credentials still yield their default account so
+/// callers can render a "not logged in" row.
+///
+/// # Errors
+/// Returns an error if the OAuth cache cannot be read.
+pub fn stored_accounts() -> anyhow::Result<Vec<(&'static str, Option<String>, QuotaFetcher)>> {
+    let cache = crate::oauth::OAuthCache::load()?;
+    Ok(FETCHERS
+        .iter()
+        .flat_map(|(provider, fetch)| {
+            let accounts = cache.accounts(provider);
+            if accounts.is_empty() {
+                vec![(*provider, None, *fetch)]
+            } else {
+                accounts
+                    .into_iter()
+                    .map(|account| (*provider, account, *fetch))
+                    .collect()
+            }
+        })
+        .collect())
+}
 
 /// A single rate-limit window (e.g. the ~5h session window or the weekly window).
 #[derive(Debug, Clone, PartialEq)]
@@ -184,8 +225,8 @@ fn error_for_status(
 ///
 /// # Errors
 /// Returns a bounded [`QuotaError`] on missing/expired creds or endpoint failure.
-pub async fn fetch_claude_quota() -> Result<SubscriptionQuota, QuotaError> {
-    let creds = require_creds(claude_cli::load_credentials())?;
+pub async fn fetch_claude_quota(account: Option<String>) -> Result<SubscriptionQuota, QuotaError> {
+    let creds = require_creds(claude_cli::load_credentials(account.as_deref()))?;
     if creds.is_expired() {
         return Err(QuotaError::Expired);
     }
@@ -217,8 +258,8 @@ pub async fn fetch_claude_quota() -> Result<SubscriptionQuota, QuotaError> {
 ///
 /// # Errors
 /// Returns a bounded [`QuotaError`] on missing/expired creds or endpoint failure.
-pub async fn fetch_codex_quota() -> Result<SubscriptionQuota, QuotaError> {
-    let creds = require_creds(openai_codex::load_credentials())?;
+pub async fn fetch_codex_quota(account: Option<String>) -> Result<SubscriptionQuota, QuotaError> {
+    let creds = require_creds(openai_codex::load_credentials(account.as_deref()))?;
     if creds.is_expired() {
         return Err(QuotaError::Expired);
     }
@@ -252,8 +293,10 @@ pub async fn fetch_codex_quota() -> Result<SubscriptionQuota, QuotaError> {
 ///
 /// # Errors
 /// Returns a bounded [`QuotaError`] on missing/expired creds or endpoint failure.
-pub async fn fetch_antigravity_quota() -> Result<SubscriptionQuota, QuotaError> {
-    let creds = require_creds(google_antigravity::load_credentials())?;
+pub async fn fetch_antigravity_quota(
+    account: Option<String>,
+) -> Result<SubscriptionQuota, QuotaError> {
+    let creds = require_creds(google_antigravity::load_credentials(account.as_deref()))?;
     if creds.is_expired() {
         return Err(QuotaError::Expired);
     }
@@ -285,8 +328,8 @@ pub async fn fetch_antigravity_quota() -> Result<SubscriptionQuota, QuotaError> 
 ///
 /// # Errors
 /// Returns a bounded [`QuotaError`] on missing/expired creds or endpoint failure.
-pub async fn fetch_grok_quota() -> Result<SubscriptionQuota, QuotaError> {
-    let creds = require_creds(grok_build::load_credentials())?;
+pub async fn fetch_grok_quota(account: Option<String>) -> Result<SubscriptionQuota, QuotaError> {
+    let creds = require_creds(grok_build::load_credentials(account.as_deref()))?;
     if creds.is_expired() {
         return Err(QuotaError::Expired);
     }

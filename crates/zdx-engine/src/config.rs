@@ -1353,20 +1353,20 @@ impl Config {
         self.subagent_available_models_from(
             crate::models::available_models()
                 .iter()
-                .map(|model| (model.provider, model.id)),
+                .map(|model| (model.provider, model.qualified_id())),
         )
     }
 
-    /// Filters candidate `(provider, model_id)` pairs down to the ones whose
-    /// provider is enabled in this config, returning deduplicated
-    /// `provider:id` strings.
+    /// Filters candidate `(provider, qualified_model_id)` pairs down to the
+    /// ones whose provider is enabled in this config, returning deduplicated
+    /// qualified model ids (`provider:id` or `provider@account:id`).
     ///
     /// Pure over its inputs: used by [`Self::subagent_available_models`] with
     /// the global model registry, and directly by tests with a fixed list so
     /// the filter can be exercised without reading `$ZDX_HOME/models.toml`.
     fn subagent_available_models_from<'a>(
         &self,
-        models: impl IntoIterator<Item = (&'a str, &'a str)>,
+        models: impl IntoIterator<Item = (&'a str, String)>,
     ) -> Vec<String> {
         use std::collections::HashSet;
 
@@ -1379,11 +1379,8 @@ impl Config {
         let mut seen = HashSet::new();
         models
             .into_iter()
-            .filter(|&(provider, _)| enabled_providers.contains(provider))
-            .filter_map(|(provider, id)| {
-                let full = format!("{provider}:{id}");
-                seen.insert(full.to_ascii_lowercase()).then_some(full)
-            })
+            .filter(|(provider, _)| enabled_providers.contains(provider))
+            .filter_map(|(_, full)| seen.insert(full.to_ascii_lowercase()).then_some(full))
             .collect()
     }
 
@@ -3526,10 +3523,10 @@ available_models = ["codex:gpt-5.3-codex"]
         // Inject a fixed candidate list so the assertion is hermetic — it no
         // longer depends on the global registry ($ZDX_HOME/models.toml).
         let models = config.subagent_available_models_from([
-            ("openai", "gpt-5.2"),
-            ("openai", "gpt-5.2-mini"),
-            ("anthropic", "claude-sonnet-4-5"),
-            ("gemini", "gemini-3.1-flash"),
+            ("openai", "openai:gpt-5.2".to_string()),
+            ("openai", "openai:gpt-5.2-mini".to_string()),
+            ("anthropic", "anthropic:claude-sonnet-4-5".to_string()),
+            ("gemini", "gemini:gemini-3.1-flash".to_string()),
         ]);
         assert_eq!(models.len(), 2);
         assert!(models.iter().all(|id| id.starts_with("openai:")));

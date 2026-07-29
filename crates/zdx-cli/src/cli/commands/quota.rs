@@ -2,12 +2,13 @@
 
 use anyhow::Result;
 use zdx_engine::providers::subscription_quota::{
-    self, QuotaError, QuotaWindow, SubscriptionQuota, provider_display,
+    self, QuotaError, QuotaWindow, SubscriptionQuota, account_display,
 };
 
-/// One provider's fetched result.
+/// One provider account's fetched result.
 struct ProviderResult {
     id: &'static str,
+    account: Option<String>,
     quota: std::result::Result<SubscriptionQuota, QuotaError>,
 }
 
@@ -18,10 +19,11 @@ struct ProviderResult {
 /// are reported per-provider, not as a hard error.
 pub async fn run(json: bool) -> Result<()> {
     let mut results = Vec::new();
-    for (id, fetch) in subscription_quota::FETCHERS {
+    for (id, account, fetch) in subscription_quota::stored_accounts()? {
         results.push(ProviderResult {
+            quota: fetch(account.clone()).await,
             id,
-            quota: fetch().await,
+            account,
         });
     }
 
@@ -39,11 +41,13 @@ fn print_json(results: &[ProviderResult]) -> Result<()> {
         .map(|r| match &r.quota {
             Ok(quota) => serde_json::json!({
                 "provider": r.id,
+                "account": r.account,
                 "plan": quota.plan,
                 "windows": quota.windows.iter().map(window_json).collect::<Vec<_>>(),
             }),
             Err(err) => serde_json::json!({
                 "provider": r.id,
+                "account": r.account,
                 "error": err.reason(),
             }),
         })
@@ -65,7 +69,7 @@ fn window_json(w: &QuotaWindow) -> serde_json::Value {
 fn print_text(results: &[ProviderResult]) {
     println!("Subscriptions (live quota)");
     for r in results {
-        let name = provider_display(r.id);
+        let name = account_display(r.id, r.account.as_deref());
         match &r.quota {
             Ok(quota) => {
                 let plan = quota

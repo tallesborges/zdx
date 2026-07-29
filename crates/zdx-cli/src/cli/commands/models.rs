@@ -216,7 +216,7 @@ pub fn list(config: &config::Config, provider: Option<&str>, all: bool, json: bo
             .iter()
             .map(|m| {
                 serde_json::json!({
-                    "id": format!("{}:{}", m.provider, m.id),
+                    "id": m.qualified_id(),
                     "provider": m.provider,
                     "model": m.id,
                     "display_name": m.display_name,
@@ -243,7 +243,7 @@ pub fn list(config: &config::Config, provider: Option<&str>, all: bool, json: bo
         .unwrap_or(0);
 
     for m in &models {
-        let full_id = format!("{}:{}", m.provider, m.id);
+        let full_id = m.qualified_id();
         println!("{full_id:<width$}  {}", m.display_name);
     }
 

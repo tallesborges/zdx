@@ -231,6 +231,7 @@ async fn generate_codex_images(
         None,
         service_tier,
         false,
+        None,
     );
     let response = OpenAICodexClient::new(codex_config)
         .generate_images(options.prompt, &image_options)

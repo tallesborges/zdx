@@ -752,7 +752,7 @@ pub(crate) fn build_provider_keyboard(
             chunk
                 .iter()
                 .map(|p| InlineKeyboardButton {
-                    text: p.clone(),
+                    text: zdx_engine::providers::provider_key_label(p),
                     callback_data: Some(format!("model_provider:{p}:{scope}")),
                     url: None,
                 })

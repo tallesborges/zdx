@@ -81,6 +81,8 @@ pub struct ModelOption {
     pub id: &'static str,
     /// Provider identifier
     pub provider: &'static str,
+    /// Named OAuth account for multi-account providers (`None` = default).
+    pub account: Option<&'static str>,
     /// Display name for the picker
     pub display_name: &'static str,
     /// Pricing information
@@ -106,16 +108,71 @@ pub fn available_models() -> &'static [ModelOption] {
             let mut combined = Vec::new();
 
             for model in models.drain(..) {
-                // Deduplicate by (provider, id) since id no longer has provider prefix
-                if seen.insert((model.provider, model.id)) {
+                // Deduplicate by (provider, account, id) since id no longer
+                // has the provider prefix
+                if seen.insert((model.provider, model.account, model.id)) {
                     combined.push(model);
                 }
             }
+            combined.extend(account_variants(&combined, &mut seen));
             combined
         })
         .as_slice()
 }
 
+/// Mirrors every OAuth-provider model into one variant per additional named
+/// account stored in `oauth.json`, so logging in a second subscription makes
+/// that provider's whole model list available without editing `models.toml`.
+fn account_variants(
+    models: &[ModelOption],
+    seen: &mut HashSet<(&'static str, Option<&'static str>, &'static str)>,
+) -> Vec<ModelOption> {
+    let Ok(cache) = crate::providers::oauth::OAuthCache::load() else {
+        return Vec::new();
+    };
+
+    let mut accounts_by_provider: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
+    for kind in crate::providers::ProviderKind::all() {
+        if !kind.supports_oauth() {
+            continue;
+        }
+        let named: Vec<&'static str> = cache
+            .accounts(kind.id())
+            .into_iter()
+            .flatten()
+            .map(leak_string)
+            .collect();
+        if !named.is_empty() {
+            accounts_by_provider.insert(kind.id(), named);
+        }
+    }
+
+    expand_accounts(models, &accounts_by_provider, seen)
+}
+
+/// Pure expansion step of [`account_variants`]: one variant per model per named
+/// account of that model's provider, skipping pairs already in `seen`.
+fn expand_accounts(
+    models: &[ModelOption],
+    accounts_by_provider: &HashMap<&'static str, Vec<&'static str>>,
+    seen: &mut HashSet<(&'static str, Option<&'static str>, &'static str)>,
+) -> Vec<ModelOption> {
+    let mut out = Vec::new();
+    for model in models {
+        let Some(accounts) = accounts_by_provider.get(model.provider) else {
+            continue;
+        };
+        for account in accounts {
+            if seen.insert((model.provider, Some(account), model.id)) {
+                out.push(ModelOption {
+                    account: Some(account),
+                    ..*model
+                });
+            }
+        }
+    }
+    out
+}
 static CUSTOM_MODELS: OnceLock<Mutex<HashMap<String, &'static [ModelOption]>>> = OnceLock::new();
 
 /// Synthesizes picker entries for custom providers (`[providers.custom.<name>]`)
@@ -167,6 +224,7 @@ pub fn custom_provider_models(
             out.push(ModelOption {
                 id: leak_string(id.to_string()),
                 provider: leak_string((*provider).to_string()),
+                account: None,
                 display_name: leak_string(id.to_string()),
                 pricing: ModelPricing {
                     input: 0.0,
@@ -191,6 +249,16 @@ pub fn custom_provider_models(
 }
 
 impl ModelOption {
+    /// Returns the fully qualified model id used in config and model strings
+    /// (`provider:id`, or `provider@account:id` for a named OAuth account).
+    #[must_use]
+    pub fn qualified_id(&self) -> String {
+        match self.account {
+            Some(account) => format!("{}@{account}:{}", self.provider, self.id),
+            None => format!("{}:{}", self.provider, self.id),
+        }
+    }
+
     /// Finds a model by its ID.
     pub fn find_by_id(id: &str) -> Option<&'static ModelOption> {
         // Try exact match on id first
@@ -203,7 +271,9 @@ impl ModelOption {
         available_models().iter().find(|m| {
             // Use stored provider instead of resolving from id
             let provider_kind = crate::providers::provider_kind_from_id(m.provider);
-            provider_kind == Some(target.kind) && m.id == target.model
+            provider_kind == Some(target.kind)
+                && m.id == target.model
+                && m.account.map(str::to_string) == target.account
         })
     }
 
@@ -316,9 +386,11 @@ pub fn wildcard_match(pattern: &str, text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet};
+
     use super::{
-        bare_model_id, custom_provider_models, model_id_matches_patterns, split_model_thinking,
-        wildcard_match,
+        ModelCapabilities, ModelOption, ModelPricing, bare_model_id, custom_provider_models,
+        expand_accounts, model_id_matches_patterns, split_model_thinking, wildcard_match,
     };
     use crate::config::{CustomProviderConfig, ProvidersConfig, ThinkingLevel};
 
@@ -497,6 +569,7 @@ fn model_record_to_option(record: ModelRecord) -> Option<ModelOption> {
     // Strip provider prefix from id if present (e.g., "claude-cli:claude-opus-4-6" -> "claude-opus-4-6")
     let resolved = crate::providers::resolve_provider(raw_id);
     let id = resolved.model;
+    let account = resolved.account.map(leak_string);
 
     let provider = record
         .provider
@@ -517,6 +590,7 @@ fn model_record_to_option(record: ModelRecord) -> Option<ModelOption> {
     Some(ModelOption {
         id: leak_string(id),
         provider: leak_string(provider),
+        account,
         display_name: leak_string(display_name),
         pricing: ModelPricing {
             input: pricing.input,
@@ -536,4 +610,66 @@ fn model_record_to_option(record: ModelRecord) -> Option<ModelOption> {
 
 fn leak_string(value: String) -> &'static str {
     Box::leak(value.into_boxed_str())
+}
+
+#[cfg(test)]
+mod account_tests {
+    use std::collections::{HashMap, HashSet};
+
+    use super::{ModelCapabilities, ModelOption, ModelPricing, expand_accounts};
+
+    fn model(provider: &'static str, id: &'static str) -> ModelOption {
+        ModelOption {
+            id,
+            provider,
+            account: None,
+            display_name: id,
+            pricing: ModelPricing {
+                input: 0.0,
+                output: 0.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            context_limit: 0,
+            capabilities: ModelCapabilities::default(),
+        }
+    }
+
+    #[test]
+    fn expands_every_model_of_a_provider_with_named_accounts() {
+        let models = vec![
+            model("claude-cli", "opus-5"),
+            model("claude-cli", "sonnet-5"),
+            model("openai", "gpt-5.2"),
+        ];
+        let accounts = HashMap::from([("claude-cli", vec!["parity"])]);
+        let mut seen: HashSet<_> = models
+            .iter()
+            .map(|m| (m.provider, m.account, m.id))
+            .collect();
+
+        let variants = expand_accounts(&models, &accounts, &mut seen);
+
+        assert_eq!(variants.len(), 2, "only claude-cli models are mirrored");
+        assert!(
+            variants
+                .iter()
+                .all(|m| m.account == Some("parity") && m.provider == "claude-cli")
+        );
+        assert_eq!(variants[0].qualified_id(), "claude-cli@parity:opus-5");
+    }
+
+    #[test]
+    fn does_not_duplicate_an_explicit_models_toml_account_row() {
+        let mut explicit = model("claude-cli", "opus-5");
+        explicit.account = Some("parity");
+        let models = vec![model("claude-cli", "opus-5"), explicit];
+        let accounts = HashMap::from([("claude-cli", vec!["parity"])]);
+        let mut seen: HashSet<_> = models
+            .iter()
+            .map(|m| (m.provider, m.account, m.id))
+            .collect();
+
+        assert!(expand_accounts(&models, &accounts, &mut seen).is_empty());
+    }
 }

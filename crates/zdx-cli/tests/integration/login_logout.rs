@@ -163,3 +163,78 @@ fn test_oauth_file_permissions_on_logout() {
         "oauth.json should have 0600 permissions"
     );
 }
+
+#[test]
+fn test_logout_account_only_clears_that_account() {
+    let temp = tempdir().unwrap();
+    let oauth_path = temp.path().join("oauth.json");
+
+    fs::write(
+        &oauth_path,
+        r#"{
+            "claude-cli": {"type": "oauth", "refresh": "r-default", "access": "access-default", "expires": 9999999999999},
+            "claude-cli@work": {"type": "oauth", "refresh": "r-work", "access": "access-work", "expires": 9999999999999}
+        }"#,
+    )
+    .unwrap();
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp.path())
+        .args(["logout", "--claude-cli", "--account", "work"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Logged out from Claude CLI (account: work)",
+        ));
+
+    let contents = fs::read_to_string(&oauth_path).unwrap();
+    assert!(
+        !contents.contains("access-work"),
+        "named account token should be removed"
+    );
+    assert!(
+        contents.contains("access-default"),
+        "default account token should be preserved"
+    );
+}
+
+#[test]
+fn test_login_account_ignores_default_credentials() {
+    let temp = tempdir().unwrap();
+
+    fs::write(
+        temp.path().join("oauth.json"),
+        r#"{"claude-cli": {"type": "oauth", "refresh": "r", "access": "access-default", "expires": 9999999999999}}"#,
+    )
+    .unwrap();
+
+    let output = cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp.path())
+        .env("ZDX_NO_BROWSER", "1")
+        .args(["login", "--claude-cli", "--account", "work"])
+        .output()
+        .expect("Failed to run command");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("Already logged in"),
+        "a named account must not see the default account's credentials"
+    );
+    assert!(
+        stdout.contains("claude.ai"),
+        "Should show authorization URL"
+    );
+}
+
+#[test]
+fn test_login_rejects_invalid_account_name() {
+    let temp = tempdir().unwrap();
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp.path())
+        .env("ZDX_NO_BROWSER", "1")
+        .args(["login", "--claude-cli", "--account", "we:ird"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot contain"));
+}
