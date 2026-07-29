@@ -174,7 +174,12 @@ fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
             let suffix = format!(" thread:{} up {}", a.thread_id, a.uptime);
             let model_width =
                 inner_width.saturating_sub(prefix.chars().count() + suffix.chars().count());
-            let model_desc = format!("{}:{}@{}", a.provider, a.model, a.thinking);
+            let model_desc = format!(
+                "{}:{}@{}",
+                zdx_engine::providers::oauth::account_cache_key(&a.provider, a.account.as_deref()),
+                a.model,
+                a.thinking
+            );
             let model = truncate_chars(&model_desc, model_width);
             let line = format!("{prefix}{model:<model_width$}{suffix}");
             let style = if i == app.selected_index {
@@ -1063,7 +1068,7 @@ fn render_agent_overlay(f: &mut Frame, state: &AgentOverlayState, area: Rect) {
     let hints = if state.tools.is_empty() {
         " · Esc close "
     } else {
-        " · Tab/n·p tool · Enter detail · Esc close "
+        " · click/Tab tool · Enter detail · Esc close "
     };
     let title = format!(" {}{status}{hints}", state.title);
     let block = Block::default()
@@ -1081,8 +1086,7 @@ fn render_agent_overlay(f: &mut Frame, state: &AgentOverlayState, area: Rect) {
     }
 
     let visible_rows = area.height.saturating_sub(2) as usize;
-    let max_offset = total.saturating_sub(visible_rows);
-    let offset = state.scroll.unwrap_or(max_offset).min(max_offset);
+    let offset = state.top_line(visible_rows);
     let end = (offset + visible_rows).min(total);
 
     let selected_line = state.selected_tool_index().map(|idx| state.tools[idx].line);
