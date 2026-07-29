@@ -27,5 +27,5 @@ pub use update::{apply_pending_delta, handle_agent_event, handle_mouse};
 pub use zdx_transcript::{
     CellId, ChildToolEntry, ChildToolState, HistoryCell, Style, StyledLine, StyledSpan, ToolState,
     WrapCache, build_transcript_from_events, convert_styled_line, markdown, reasoning_display_text,
-    tool_command_text,
+    tool_command_text, tool_detail_body, tool_state_color, tool_state_glyph, wrap_line_to_width,
 };

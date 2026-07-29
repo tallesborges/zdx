@@ -4,9 +4,12 @@
 //! args (pretty JSON), output, status, and error details.
 //! Opens on click from compact tool header in transcript.
 //! Supports live updates for running tools via render-time cell lookup.
+//!
+//! The body content itself is built by `zdx_transcript::tool_detail_body` so
+//! the monitor's tool detail pane renders identical text; this module owns the
+//! popup chrome, scrolling, selection, and clipboard.
 
 use std::cell::Cell;
-use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent};
@@ -20,85 +23,15 @@ use unicode_segmentation::UnicodeSegmentation;
 use super::OverlayUpdate;
 use super::render_utils::centered_rect;
 use crate::common::clipboard::Clipboard;
-use crate::common::{grapheme_col_at_width, ratatui_width};
+use crate::common::grapheme_col_at_width;
 use crate::transcript::{
-    ChildToolState, HistoryCell, LineMapping, PositionMap, SPINNER_SPEED_DIVISOR, SelectionState,
-    ToolState, VisualPosition, tool_command_text,
+    HistoryCell, LineMapping, PositionMap, SPINNER_SPEED_DIVISOR, SelectionState, ToolState,
+    VisualPosition, tool_command_text, tool_detail_body, tool_state_color, tool_state_glyph,
+    wrap_line_to_width,
 };
-
-/// Spinner frames for popup title animation.
-const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 
 /// How long the "✓ copied" flash stays visible after a keyboard copy.
 const COPIED_FLASH_WINDOW: Duration = Duration::from_millis(1200);
-
-fn format_byte_truncation(stream: &str, total_bytes: u64) -> String {
-    let size_str = if total_bytes >= 1024 * 1024 {
-        format!("{:.1} MB", total_bytes as f64 / (1024.0 * 1024.0))
-    } else if total_bytes >= 1024 {
-        format!("{:.1} KB", total_bytes as f64 / 1024.0)
-    } else {
-        format!("{total_bytes} bytes")
-    };
-    format!("{stream} truncated: {size_str} total")
-}
-
-/// Builds human-readable output text for the popup.
-fn build_popup_output_text(name: &str, data: &serde_json::Value) -> String {
-    // Try stdout/stderr extraction (bash and other tools that produce it)
-    let stdout = data.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
-    let stderr = data.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
-    if !stdout.is_empty() || !stderr.is_empty() {
-        let mut text = String::new();
-        if !stdout.is_empty() {
-            text.push_str(stdout);
-        }
-        if !stderr.is_empty() {
-            if !text.is_empty() && !text.ends_with('\n') {
-                text.push('\n');
-            }
-            text.push_str(stderr);
-        }
-        // Append metadata fields when present
-        let metadata_keys = [
-            "exit_code",
-            "timed_out",
-            "stdout_file",
-            "stderr_file",
-            "stdout_truncated",
-            "stderr_truncated",
-        ];
-        let mut has_meta = false;
-        for key in metadata_keys {
-            if let Some(val) = data.get(key) {
-                if !has_meta {
-                    if !text.ends_with('\n') {
-                        text.push('\n');
-                    }
-                    text.push_str("───\n");
-                    has_meta = true;
-                }
-                let _ = writeln!(text, "{key}: {val}");
-            }
-        }
-        return text;
-    }
-
-    // For read tool: show file content directly
-    if name == "read"
-        && let Some(content) = data.get("content").and_then(serde_json::Value::as_str)
-    {
-        return content.to_string();
-    }
-
-    // For string results
-    if let Some(text) = data.as_str() {
-        return text.to_string();
-    }
-
-    // Fallback: pretty JSON
-    serde_json::to_string_pretty(data).unwrap_or_else(|_| data.to_string())
-}
 
 /// Which part of a tool cell a keyboard copy key targets.
 #[derive(Debug, Clone, Copy)]
@@ -238,10 +171,10 @@ impl ToolDetailState {
                 _ => String::new(),
             },
             CopySection::Output => {
-                let (lines, output_start) = build_content_lines(cell);
-                plain_text(&lines[output_start.min(lines.len())..])
+                let body = tool_detail_body(cell);
+                plain_text(&body.lines[body.output_start.min(body.lines.len())..])
             }
-            CopySection::Full => plain_text(&build_content_lines(cell).0),
+            CopySection::Full => plain_text(&tool_detail_body(cell).lines),
         };
         if !text.is_empty() && Clipboard::copy(&text).is_ok() {
             self.copied_flash.set(Some(Instant::now()));
@@ -330,20 +263,12 @@ impl ToolDetailState {
         };
 
         // Build title with icon (animated spinner for running tools)
-        let icon = match state {
-            ToolState::Running => {
-                let idx = (spinner_frame / SPINNER_SPEED_DIVISOR) % SPINNER_FRAMES.len();
-                SPINNER_FRAMES[idx]
-            }
-            ToolState::Done => "✓",
-            ToolState::Error => "✗",
-            ToolState::Cancelled => "⊘",
-        };
+        let icon = tool_state_glyph(state, spinner_frame / SPINNER_SPEED_DIVISOR);
         let title = format!(" {icon} {name} ");
-        let border_color = state_color(state);
+        let border_color = tool_state_color(state);
 
         // Build body lines (shared with keyboard copy on `y`/`Y`).
-        let (lines, _output_start) = build_content_lines(cell);
+        let lines = tool_detail_body(cell).lines;
 
         // Compute inner content rect (borders consume one cell per side).
         let inner = Block::default().borders(Borders::ALL).inner(popup_area);
@@ -358,15 +283,16 @@ impl ToolDetailState {
         // Pre-wrap into visual rows so selection maps 1:1 to rendered lines.
         // We render these directly (no Paragraph::wrap) so screen coordinates
         // line up with the position map used for copy.
-        let mut visual: Vec<(Vec<Span<'static>>, String)> = Vec::new();
-        for line in &lines {
-            visual.extend(wrap_line(line, width));
-        }
+        let visual: Vec<Line<'static>> = lines
+            .iter()
+            .flat_map(|line| wrap_line_to_width(line, width))
+            .collect();
 
         // Rebuild the position map from visual-line texts for selection copy.
         self.position_map.clear();
-        for (_, text) in &visual {
-            self.position_map.push(LineMapping::new(text.clone(), None));
+        for row in &visual {
+            self.position_map
+                .push(LineMapping::new(line_text(row), None));
         }
         self.content_area.set(inner);
 
@@ -387,10 +313,10 @@ impl ToolDetailState {
         let rendered: Vec<Line<'static>> = visual
             .into_iter()
             .enumerate()
-            .map(|(idx, (spans, text))| {
-                let grapheme_count = text.graphemes(true).count();
+            .map(|(idx, row)| {
+                let grapheme_count = line_text(&row).graphemes(true).count();
                 let sel = self.selection.line_selection(idx, grapheme_count);
-                Line::from(highlight_spans(&spans, sel))
+                Line::from(highlight_spans(&row.spans, sel))
             })
             .collect();
 
@@ -424,246 +350,17 @@ impl ToolDetailState {
     }
 }
 
-/// Border/status color for a tool state.
-fn state_color(state: &ToolState) -> Color {
-    match state {
-        ToolState::Running => Color::Cyan,
-        ToolState::Done => Color::Green,
-        ToolState::Error => Color::Red,
-        ToolState::Cancelled => Color::Yellow,
-    }
+/// Plain text of a single styled line.
+fn line_text(line: &Line<'static>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
 }
 
 /// Joins the plain text of styled lines with newlines (for clipboard copy).
 fn plain_text(lines: &[Line<'static>]) -> String {
-    lines
-        .iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Builds the popup body lines (status, args, child tools, output) for a tool.
-///
-/// Returns the styled lines plus the index of the first output-body line (right
-/// after the "─── Output ───" header) so keyboard copy can slice the output
-/// section. Shared by `render` and `handle_key` so display and copy never drift.
-#[allow(clippy::too_many_lines)]
-fn build_content_lines(cell: &HistoryCell) -> (Vec<Line<'static>>, usize) {
-    let HistoryCell::Tool {
-        name,
-        state,
-        input,
-        result,
-        started_at,
-        completed_at,
-        input_delta,
-        output_delta,
-        child_tools,
-        ..
-    } = cell
-    else {
-        return (Vec::new(), 0);
-    };
-
-    let border_color = state_color(state);
-    let mut lines: Vec<Line<'static>> = Vec::new();
-
-    // --- Status section ---
-    let status_text = match state {
-        ToolState::Running => "Running…".to_string(),
-        ToolState::Done => {
-            if let Some(completed) = completed_at {
-                let elapsed = completed.signed_duration_since(*started_at);
-                format!("Done ({:.1}s)", elapsed.num_milliseconds() as f64 / 1000.0)
-            } else {
-                "Done".to_string()
-            }
-        }
-        ToolState::Error => "Error".to_string(),
-        ToolState::Cancelled => "Cancelled".to_string(),
-    };
-    lines.push(Line::from(vec![
-        Span::styled(
-            "Status: ",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(status_text, Style::default().fg(border_color)),
-    ]));
-    lines.push(Line::from(""));
-
-    // --- Args section ---
-    lines.push(Line::from(Span::styled(
-        "─── Args ───",
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-    )));
-    let pretty_args = serde_json::to_string_pretty(input).unwrap_or_else(|_| input.to_string());
-    for line in pretty_args.lines() {
-        lines.push(Line::from(Span::styled(
-            line.to_string(),
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-    lines.push(Line::from(""));
-
-    // --- Child tools section (relayed subagent activity) ---
-    if !child_tools.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "─── Child tools ───",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )));
-        for entry in child_tools {
-            let (glyph, color) = match entry.state {
-                ChildToolState::Running => ("⟳", Color::Cyan),
-                ChildToolState::Done => ("✓", Color::Green),
-                ChildToolState::Error => ("✗", Color::Red),
-            };
-            let mut text = format!("{glyph} {}", entry.name);
-            if let Some(arg) = entry.key_arg.as_deref().filter(|arg| !arg.is_empty()) {
-                let _ = write!(text, "  {arg}");
-            }
-            lines.push(Line::from(Span::styled(text, Style::default().fg(color))));
-        }
-        lines.push(Line::from(""));
-    }
-
-    // --- Output section ---
-    lines.push(Line::from(Span::styled(
-        "─── Output ───",
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-    )));
-    let output_start = lines.len();
-
-    if let Some(res) = result {
-        if let Some(data) = res.data() {
-            let output_text = build_popup_output_text(name, data);
-            for line in output_text.lines() {
-                lines.push(Line::from(Span::styled(
-                    line.to_string(),
-                    Style::default().fg(Color::White),
-                )));
-            }
-
-            // Truncation warnings
-            if data
-                .get("stdout_truncated")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-            {
-                let total = data
-                    .get("stdout_total_bytes")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0);
-                let warning = format_byte_truncation("stdout", total);
-                lines.push(Line::from(Span::styled(
-                    format!("⚠ {warning}"),
-                    Style::default().fg(Color::Yellow),
-                )));
-            }
-            if data
-                .get("stderr_truncated")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-            {
-                let total = data
-                    .get("stderr_total_bytes")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0);
-                let warning = format_byte_truncation("stderr", total);
-                lines.push(Line::from(Span::styled(
-                    format!("⚠ {warning}"),
-                    Style::default().fg(Color::Yellow),
-                )));
-            }
-            if data
-                .get("truncated")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-            {
-                let total_lines_val = data
-                    .get("total_lines")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0);
-                let lines_shown = data
-                    .get("lines_shown")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0);
-                lines.push(Line::from(Span::styled(
-                    format!("⚠ file truncated: showing {lines_shown} of {total_lines_val} lines"),
-                    Style::default().fg(Color::Yellow),
-                )));
-            }
-        }
-
-        // Error info
-        if let Some((code, message, details)) = res.error_info() {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                format!("Error [{code}]: {message}"),
-                Style::default().fg(Color::Red),
-            )));
-            if let Some(detail_text) = details {
-                for detail_line in detail_text.lines() {
-                    lines.push(Line::from(Span::styled(
-                        format!("  {detail_line}"),
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                }
-            }
-        }
-    } else if *state == ToolState::Running {
-        // Show streaming output_delta first, then input_delta, then placeholder
-        if let Some(delta) = output_delta.as_deref().filter(|d| !d.is_empty()) {
-            for line in delta.lines() {
-                lines.push(Line::from(Span::styled(
-                    line.to_string(),
-                    Style::default().fg(Color::White),
-                )));
-            }
-        } else if let Some(delta) = input_delta.as_deref().filter(|d| !d.is_empty()) {
-            for line in delta.lines() {
-                lines.push(Line::from(Span::styled(
-                    line.to_string(),
-                    Style::default().fg(Color::Cyan),
-                )));
-            }
-        } else {
-            lines.push(Line::from(Span::styled(
-                "Waiting for output…",
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::ITALIC),
-            )));
-        }
-    } else if let Some(delta) = output_delta.as_deref().filter(|d| !d.is_empty()) {
-        // Show preserved partial output for cancelled/errored tools
-        for line in delta.lines() {
-            lines.push(Line::from(Span::styled(
-                line.to_string(),
-                Style::default().fg(Color::DarkGray),
-            )));
-        }
-    } else {
-        lines.push(Line::from(Span::styled(
-            "(no output)",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-
-    (lines, output_start)
+    lines.iter().map(line_text).collect::<Vec<_>>().join("\n")
 }
 
 /// Builds the bottom-border hint spans for the popup.
@@ -703,54 +400,6 @@ fn footer_spans(scroll_indicator: &str, copied: bool) -> Vec<Span<'static>> {
         Style::default().fg(Color::Cyan),
     ));
     spans
-}
-
-/// Hard-wraps a styled line to `width` display columns, preserving span styles.
-///
-/// Returns visual rows as `(spans, plain_text)`; the plain text feeds the
-/// selection position map so copy matches exactly what is rendered.
-fn wrap_line(line: &Line<'static>, width: usize) -> Vec<(Vec<Span<'static>>, String)> {
-    if width == 0 {
-        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        return vec![(line.spans.clone(), text)];
-    }
-
-    let mut rows: Vec<(Vec<Span<'static>>, String)> = Vec::new();
-    let mut row_spans: Vec<Span<'static>> = Vec::new();
-    let mut row_text = String::new();
-    let mut row_width = 0usize;
-    let mut seg_text = String::new();
-    let mut seg_style = Style::default();
-
-    for span in &line.spans {
-        let style = span.style;
-        for grapheme in span.content.graphemes(true) {
-            let grapheme_width = ratatui_width(grapheme);
-            if row_width + grapheme_width > width && row_width > 0 {
-                if !seg_text.is_empty() {
-                    row_spans.push(Span::styled(std::mem::take(&mut seg_text), seg_style));
-                }
-                rows.push((
-                    std::mem::take(&mut row_spans),
-                    std::mem::take(&mut row_text),
-                ));
-                row_width = 0;
-            }
-            if seg_style != style && !seg_text.is_empty() {
-                row_spans.push(Span::styled(std::mem::take(&mut seg_text), seg_style));
-            }
-            seg_style = style;
-            seg_text.push_str(grapheme);
-            row_text.push_str(grapheme);
-            row_width += grapheme_width;
-        }
-    }
-
-    if !seg_text.is_empty() {
-        row_spans.push(Span::styled(seg_text, seg_style));
-    }
-    rows.push((row_spans, row_text));
-    rows
 }
 
 /// Rebuilds spans with the selected grapheme range rendered reversed.
@@ -800,33 +449,6 @@ fn highlight_spans(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn row_texts(rows: &[(Vec<Span<'static>>, String)]) -> Vec<String> {
-        rows.iter().map(|(_, t)| t.clone()).collect()
-    }
-
-    #[test]
-    fn wrap_line_hard_wraps_by_display_width() {
-        let line = Line::from("abcdef");
-        let rows = wrap_line(&line, 3);
-        assert_eq!(row_texts(&rows), vec!["abc", "def"]);
-    }
-
-    #[test]
-    fn wrap_line_preserves_empty_line() {
-        let line = Line::from("");
-        let rows = wrap_line(&line, 10);
-        assert_eq!(row_texts(&rows), vec![String::new()]);
-    }
-
-    #[test]
-    fn wrap_line_keeps_full_text_across_rows() {
-        // Wide graphemes count as their display width; text must round-trip.
-        let line = Line::from("a你b好c");
-        let rows = wrap_line(&line, 3);
-        let joined: String = rows.iter().map(|(_, t)| t.as_str()).collect();
-        assert_eq!(joined, "a你b好c");
-    }
 
     #[test]
     fn highlight_spans_reverses_only_selected_range() {

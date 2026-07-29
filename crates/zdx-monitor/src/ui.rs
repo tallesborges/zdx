@@ -8,7 +8,7 @@ use zdx_engine::providers::subscription_quota::{QuotaWindow, account_display};
 
 use crate::app::{
     AgentOverlayState, CachedQuotas, CachedUsageStats, ConfigLine, ModelPickerState, MonitorApp,
-    QuotaEntry, Section, UsageSpan,
+    QuotaEntry, Section, ToolPaneState, UsageSpan,
 };
 
 pub fn render(f: &mut Frame, app: &MonitorApp) {
@@ -1060,7 +1060,12 @@ fn render_agent_overlay(f: &mut Frame, state: &AgentOverlayState, area: Rect) {
     } else {
         ""
     };
-    let title = format!(" {}{status} · Esc close ", state.title);
+    let hints = if state.tools.is_empty() {
+        " · Esc close "
+    } else {
+        " · Tab/n·p tool · Enter detail · Esc close "
+    };
+    let title = format!(" {}{status}{hints}", state.title);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
@@ -1080,13 +1085,79 @@ fn render_agent_overlay(f: &mut Frame, state: &AgentOverlayState, area: Rect) {
     let offset = state.scroll.unwrap_or(max_offset).min(max_offset);
     let end = (offset + visible_rows).min(total);
 
+    let selected_line = state.selected_tool_index().map(|idx| state.tools[idx].line);
+
     let items: Vec<ListItem> = state.lines[offset..end]
         .iter()
-        .map(|line| ListItem::new(line.clone()))
+        .enumerate()
+        .map(|(row, line)| {
+            let item = ListItem::new(line.clone());
+            if selected_line == Some(offset + row) {
+                item.style(Style::default().add_modifier(Modifier::REVERSED))
+            } else {
+                item
+            }
+        })
         .collect();
 
     let list = List::new(items).block(block);
     f.render_widget(list, area);
+
+    if let Some(pane) = &state.tool_pane {
+        render_tool_pane(f, state, pane, area);
+    }
+}
+
+/// Tool detail pane: the same body the chat TUI's tool popup shows, rendered
+/// read-only over the transcript overlay.
+fn render_tool_pane(f: &mut Frame, state: &AgentOverlayState, pane: &ToolPaneState, area: Rect) {
+    let popup = centered_rect(88, 88, area);
+    f.render_widget(Clear, popup);
+
+    let Some(cell) = state.tool_cell(&pane.tool_use_id) else {
+        // Panes for vanished tools are dropped on refresh, so a miss here only
+        // means the transcript window moved mid-frame; nothing useful to draw.
+        return;
+    };
+    let (name, glyph, color) = match cell {
+        zdx_transcript::HistoryCell::Tool { name, state, .. } => (
+            name.as_str(),
+            zdx_transcript::tool_state_glyph(state, 0),
+            zdx_transcript::tool_state_color(state),
+        ),
+        _ => return,
+    };
+    let body = zdx_transcript::tool_detail_body(cell).lines;
+
+    let visible_rows = popup.height.saturating_sub(2) as usize;
+    let inner_width = popup.width.saturating_sub(2) as usize;
+    // Pre-wrap so the scroll offset counts rendered rows, not logical lines.
+    let wrapped: Vec<Line<'static>> = body
+        .iter()
+        .flat_map(|line| zdx_transcript::wrap_line_to_width(line, inner_width.max(1)))
+        .collect();
+    let max_offset = wrapped.len().saturating_sub(visible_rows);
+    let offset = pane.scroll.min(max_offset);
+    let end = (offset + visible_rows).min(wrapped.len());
+
+    let position = if wrapped.len() > visible_rows {
+        format!(" [{}/{}]", offset + 1, wrapped.len())
+    } else {
+        String::new()
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(color))
+        .title(format!(" {glyph} {name} "))
+        .title_bottom(format!(
+            " j/k scroll · g/G top/bottom · Esc back{position} "
+        ));
+
+    let items: Vec<ListItem> = wrapped[offset..end]
+        .iter()
+        .map(|line| ListItem::new(line.clone()))
+        .collect();
+    f.render_widget(List::new(items).block(block), popup);
 }
 
 /// Build a centered Rect using `percent_x` × `percent_y` of `area`.

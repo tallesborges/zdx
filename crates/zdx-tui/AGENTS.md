@@ -39,7 +39,7 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 - `src/overlays/`: command palette, skill picker, rename overlays
 - `src/overlays/background.rs`: background-process overlay (`/background`) — lists the current thread's running background processes (from `zdx_engine::background_activity`) with a kill key; bottom-right `▸ N bg` status indicator lives in `render.rs` (count cached on `TuiState.background_count`, refreshed via `TuiState::poll_background_count` on tick)
 - `src/overlays/tldr.rs`: thread TLDR/recap overlay (Ctrl+R)
-- `src/overlays/tool_detail.rs`: tool detail popup overlay (full args/output/status on click)
+- `src/overlays/tool_detail.rs`: tool detail popup overlay (full args/output/status on click; body built by `zdx_transcript::tool_detail_body`, shared with the monitor's tool pane)
 - `src/overlays/followup_picker.rs`: end-of-turn follow-up suggestion picker (Ctrl+F; sends selection as next message)
 
 ## Conventions
