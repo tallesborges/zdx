@@ -463,8 +463,13 @@ async fn run_command(
     unsafe {
         cmd.pre_exec(|| {
             // Create a new process group with this process as the leader.
-            // All child processes inherit this group.
-            libc::setpgid(0, 0);
+            // All child processes inherit this group. Fail the spawn if this
+            // doesn't take: every cleanup path below assumes the child's pid
+            // is also its pgid, so a silent failure would make `killpg` signal
+            // the wrong group (or none) and leave descendants running.
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
             Ok(())
         });
     }
