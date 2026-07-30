@@ -510,6 +510,8 @@ mod tests {
     // live process (macOS birth-time via proc_pidinfo).
     #[cfg(target_os = "macos")]
     #[tokio::test]
+    // `pgid` reads as too close to `pid`, but both are the real domain names here.
+    #[allow(clippy::similar_names)]
     async fn real_process_identity_guard_and_kill() {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("o.log");
