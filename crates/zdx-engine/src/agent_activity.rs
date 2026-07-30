@@ -27,6 +27,10 @@ pub struct RunRecord {
     /// custom provider name).
     #[serde(default)]
     pub provider: Option<String>,
+    /// Named OAuth account serving the request (e.g. `parity`), when the run
+    /// targets a non-default account of a multi-account provider.
+    #[serde(default)]
+    pub account: Option<String>,
     /// Thinking/reasoning level for this run (e.g. `off`, `high`, `max`).
     #[serde(default)]
     pub thinking: Option<String>,
@@ -51,6 +55,7 @@ pub struct StartParams<'a> {
     pub surface: Option<&'a str>,
     pub model: Option<&'a str>,
     pub provider: Option<&'a str>,
+    pub account: Option<&'a str>,
     pub thinking: Option<&'a str>,
     pub kind: Option<&'a str>,
     pub parent_thread_id: Option<&'a str>,
@@ -88,6 +93,7 @@ pub fn start(params: StartParams<'_>) -> Option<RunGuard> {
         surface: params.surface.map(String::from),
         model: params.model.map(String::from),
         provider: params.provider.map(String::from),
+        account: params.account.map(String::from),
         thinking: params.thinking.map(String::from),
         kind: params.kind.map(String::from),
         parent_thread_id: params.parent_thread_id.map(String::from),
