@@ -17,11 +17,11 @@ Two things, both committed to this repo:
 which vhs ffmpeg || brew install vhs   # vhs pulls in ttyd; ffmpeg needed for gif/mp4
 ```
 
-Build a zdx binary to record against. The repo uses a **shared target dir** (`.cargo/config.toml` → `target-dir = "../.zdx/cargo-target"`), so the binary is **not** under `target/`:
+Build a zdx binary to record against:
 
 ```sh
 cargo build -p zdx --bin zdx                 # debug; or: just build-release
-BIN_DIR="$(cd ../.zdx/cargo-target/debug && pwd)"   # release/ for build-release
+BIN_DIR="$(cd target/debug && pwd)"          # release/ for build-release
 "$BIN_DIR/zdx" --version                     # sanity check
 ```
 

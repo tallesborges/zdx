@@ -37,8 +37,6 @@ jobs:
     timeout-minutes: 20
     needs: [changed]
     if: needs.changed.outputs.code_changed == 'true'
-    env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/../.zdx/cargo-target
     steps:
       - name: Checkout
         uses: actions/checkout@v5
