@@ -2508,7 +2508,7 @@ mod tests {
             "These are user-defined base instructions. Treat them as baseline instructions for this run unless higher-priority guidance in this prompt overrides them."
         ));
         assert!(prompt.contains(
-            "For tasks spanning 3+ files or involving dependent steps, create a short plan and execute it without waiting unless approval is required."
+            "For requested execution spanning 3+ files or involving dependent steps, create a short plan and execute it without waiting once no unresolved user-owned decision remains."
         ));
         assert!(prompt.contains(
             "Use `bash` only for commands that dedicated tools cannot perform, such as builds, tests, git, or CLIs."

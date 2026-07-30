@@ -51,7 +51,7 @@ struct PreparedAutomationRun {
 }
 
 fn automation_instruction_layers() -> [&'static str; 1] {
-    [prompts::AUTOMATION_HARNESS_INSTRUCTION_LAYER]
+    [prompts::AUTOMATION_INSTRUCTION_LAYER]
 }
 
 fn automation_prompt_context() -> PromptContextInclusion {
