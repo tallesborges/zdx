@@ -71,10 +71,6 @@ pub const FETCHERS: &[(&str, QuotaFetcher)] = &[
 ];
 
 /// Display label for a provider account (`Claude` or `Claude @parity`).
-///
-/// Uses the short subscription names rather than full provider labels, matching
-/// the compact quota block; the ` @account` suffix matches
-/// [`crate::provider_account_label`].
 #[must_use]
 pub fn account_display(provider: &str, account: Option<&str>) -> String {
     match account {

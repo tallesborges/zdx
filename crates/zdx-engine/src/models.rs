@@ -127,8 +127,12 @@ fn account_variants(
     models: &[ModelOption],
     seen: &mut HashSet<(&'static str, Option<&'static str>, &'static str)>,
 ) -> Vec<ModelOption> {
-    let Ok(cache) = crate::providers::oauth::OAuthCache::load() else {
-        return Vec::new();
+    let cache = match crate::providers::oauth::OAuthCache::load() {
+        Ok(cache) => cache,
+        Err(err) => {
+            tracing::warn!(%err, "Failed to load OAuth cache; skipping account models");
+            return Vec::new();
+        }
     };
 
     let mut accounts_by_provider: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
@@ -253,10 +257,8 @@ impl ModelOption {
     /// (`provider:id`, or `provider@account:id` for a named OAuth account).
     #[must_use]
     pub fn qualified_id(&self) -> String {
-        match self.account {
-            Some(account) => format!("{}@{account}:{}", self.provider, self.id),
-            None => format!("{}:{}", self.provider, self.id),
-        }
+        let provider = crate::providers::oauth::account_cache_key(self.provider, self.account);
+        format!("{provider}:{}", self.id)
     }
 
     /// Finds a model by its ID.
@@ -386,11 +388,9 @@ pub fn wildcard_match(pattern: &str, text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
-
     use super::{
-        ModelCapabilities, ModelOption, ModelPricing, bare_model_id, custom_provider_models,
-        expand_accounts, model_id_matches_patterns, split_model_thinking, wildcard_match,
+        bare_model_id, custom_provider_models, model_id_matches_patterns, split_model_thinking,
+        wildcard_match,
     };
     use crate::config::{CustomProviderConfig, ProvidersConfig, ThinkingLevel};
 

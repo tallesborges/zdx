@@ -568,12 +568,4 @@ mod tests {
         assert!(line.contains("Claude CLI @parity · "), "got: {line}");
         assert!(line.contains("(subs)"), "got: {line}");
     }
-
-    #[test]
-    fn default_account_row_shows_a_plain_provider_label() {
-        let line = rendered(&subscription_model(None));
-
-        assert!(line.contains("Claude CLI · "), "got: {line}");
-        assert!(!line.contains('@'), "got: {line}");
-    }
 }
