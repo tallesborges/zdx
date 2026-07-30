@@ -849,6 +849,7 @@ async fn run_turn_inner(
         surface: options.surface.as_deref(),
         model: Some(setup.model.as_str()),
         provider: Some(setup.provider.as_str()),
+        account: setup.account.as_deref(),
         thinking: Some(setup.thinking_level.display_name()),
         kind: options.activity_kind.as_deref(),
         parent_thread_id: options.activity_parent_thread_id.as_deref(),
@@ -1044,8 +1045,13 @@ async fn run_turn_inner(
 struct RunTurnSetup {
     model: String,
     /// Provider id serving the request (e.g. `anthropic`, `claude-cli`, or a
-    /// custom provider name). Attached to emitted usage events for attribution.
+    /// custom provider name). Attached to emitted usage events for attribution,
+    /// so it stays account-free — pricing and usage aggregate per provider.
     provider: String,
+    /// Named OAuth account serving the request, when the model targets a
+    /// non-default account (`provider@account:model`). Kept out of `provider`
+    /// so usage attribution and pricing lookups stay keyed by provider kind.
+    account: Option<String>,
     /// Thinking/reasoning level effectively used for this run.
     thinking_level: ThinkingLevel,
     client: Box<dyn StreamingProvider>,
@@ -1141,6 +1147,7 @@ fn build_run_turn_setup(
     Ok(RunTurnSetup {
         model: selection.model,
         provider: provider.id().to_string(),
+        account: selection.account,
         thinking_level,
         client,
         tools,
@@ -1195,6 +1202,7 @@ fn build_custom_run_turn_setup(
     Ok(RunTurnSetup {
         model: bare_model,
         provider: provider_name,
+        account: None,
         thinking_level,
         client,
         tools,
@@ -4627,6 +4635,7 @@ mod tests {
         let setup = RunTurnSetup {
             model: "gemini-3-pro-preview".to_string(),
             provider: "gemini".to_string(),
+            account: None,
             thinking_level: ThinkingLevel::Off,
             client: Box::new(GeminiClient::new(GeminiConfig {
                 api_key: "x".to_string(),
