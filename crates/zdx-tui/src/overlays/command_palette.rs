@@ -13,7 +13,7 @@ use crate::common::TaskKind;
 use crate::common::clipboard::Clipboard;
 use crate::common::commands::{COMMANDS, Command, command_available};
 use crate::effects::UiEffect;
-use crate::input::{HandoffState, PromptBuilderState, build_fast_mode_toggle_actions};
+use crate::input::{HandoffState, PromptBuilderState};
 use crate::mutations::{
     AuthMutation, InputMutation, StateMutation, ThreadMutation, TranscriptMutation,
 };
@@ -293,16 +293,6 @@ fn execute_command(
         "commands-refresh" => (None, vec![UiEffect::ReloadCustomCommands], vec![]),
         "config" => (None, vec![UiEffect::OpenConfig], vec![]),
         "debug" => (None, vec![], vec![StateMutation::ToggleDebugStatus]),
-        "fast" => match build_fast_mode_toggle_actions(&tui.config, &tui.config.model) {
-            Ok((effects, mutations)) => (None, effects, mutations),
-            Err(message) => (
-                None,
-                vec![],
-                vec![StateMutation::Transcript(
-                    TranscriptMutation::AppendSystemMessage(message.to_string()),
-                )],
-            ),
-        },
         "models" => (None, vec![UiEffect::OpenModelsConfig], vec![]),
         "copy-id" => {
             let (effects, mutations) = execute_copy_id(tui);
@@ -845,8 +835,6 @@ mod tests {
     fn test_palette_state_filtered_commands_empty_filter() {
         let state = CommandPaletteState::open("claude-haiku-4-5".to_string(), Vec::new());
         let filtered = state.filtered_entries();
-        // fast is hidden for non-OpenAI providers
-        assert!(!filtered.iter().any(|e| e.name() == "fast"));
         let names: Vec<&str> = filtered.iter().map(PaletteEntry::name).collect();
         assert!(names.contains(&"thinking"));
     }

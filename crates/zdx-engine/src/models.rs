@@ -292,27 +292,30 @@ pub fn model_supports_reasoning(id: &str) -> bool {
     ModelOption::find_by_id(id).is_none_or(|model| model.capabilities.reasoning)
 }
 
-/// Splits a `model@thinking` spec into the bare model id and an optional
-/// thinking level.
-///
-/// `"gemini:x@high"` → `("gemini:x", Some(High))`. When there is no `@` suffix,
-/// or the suffix isn't a known level, returns `(spec, None)` so the caller can
-/// apply its own default.
-pub fn split_model_thinking(spec: &str) -> (&str, Option<crate::config::ThinkingLevel>) {
-    if let Some((model, suffix)) = spec.rsplit_once('@')
-        && let Some(level) = crate::config::ThinkingLevel::from_name(suffix)
-    {
-        (model, Some(level))
-    } else {
-        (spec, None)
-    }
-}
+/// Model spec parsing/formatting (`provider:model[@thinking][@fast]`) lives in
+/// `zdx-types` so providers and engine share one grammar.
+pub use zdx_types::config::ModelSpec;
 
-/// Formats a `model@thinking` spec — the inverse of [`split_model_thinking`].
-/// Kept adjacent so the persisted syntax has one source of truth.
+/// Formats a model spec with an explicit thinking level, preserving any other
+/// modifier already present in the spec (e.g. `@fast`).
 #[must_use]
 pub fn format_model_thinking(model: &str, level: crate::config::ThinkingLevel) -> String {
-    format!("{model}@{}", level.display_name())
+    ModelSpec::parse(model).with_thinking(level).to_string()
+}
+
+/// Returns the `@fast` variant of a model spec when its provider supports the
+/// priority service tier (`OpenAI` and `OpenAI` Codex), otherwise `None`.
+#[must_use]
+pub fn fast_variant(model: &str) -> Option<String> {
+    let spec = ModelSpec::parse(model);
+    if spec.fast
+        || !crate::providers::resolve_provider(spec.base)
+            .kind
+            .supports_priority_tier()
+    {
+        return None;
+    }
+    Some(spec.with_fast(true).to_string())
 }
 
 /// Returns the bare model id (with any leading `provider:` prefix stripped).
@@ -389,8 +392,8 @@ pub fn wildcard_match(pattern: &str, text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        bare_model_id, custom_provider_models, model_id_matches_patterns, split_model_thinking,
-        wildcard_match,
+        bare_model_id, custom_provider_models, fast_variant, format_model_thinking,
+        model_id_matches_patterns, wildcard_match,
     };
     use crate::config::{CustomProviderConfig, ProvidersConfig, ThinkingLevel};
 
@@ -423,16 +426,28 @@ mod tests {
     }
 
     #[test]
-    fn split_model_thinking_parses_suffix_and_defaults() {
+    fn fast_variant_offered_only_for_priority_tier_providers() {
         assert_eq!(
-            split_model_thinking("gemini:x@high"),
-            ("gemini:x", Some(ThinkingLevel::High))
+            fast_variant("openai:gpt-5.2").as_deref(),
+            Some("openai:gpt-5.2@fast")
         );
-        assert_eq!(split_model_thinking("gemini:x"), ("gemini:x", None));
-        // Unknown suffix is not treated as a level.
         assert_eq!(
-            split_model_thinking("gemini:x@bogus"),
-            ("gemini:x@bogus", None)
+            fast_variant("openai-codex:gpt-5.2").as_deref(),
+            Some("openai-codex:gpt-5.2@fast")
+        );
+        assert_eq!(fast_variant("openai:gpt-5.2@fast"), None);
+        assert_eq!(fast_variant("claude-haiku-4-5"), None);
+    }
+
+    #[test]
+    fn format_model_thinking_keeps_fast_and_replaces_thinking() {
+        assert_eq!(
+            format_model_thinking("openai:gpt-5.2@fast", ThinkingLevel::High),
+            "openai:gpt-5.2@high@fast"
+        );
+        assert_eq!(
+            format_model_thinking("openai:gpt-5.2@low", ThinkingLevel::High),
+            "openai:gpt-5.2@high"
         );
     }
 

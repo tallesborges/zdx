@@ -39,7 +39,7 @@ pub use shared::{
     wrap_voice_transcript,
 };
 use zdx_types::ToolDefinition;
-use zdx_types::config::{TextVerbosity, ThinkingLevel};
+use zdx_types::config::{ModelSpec, TextVerbosity, ThinkingLevel};
 
 /// Object-safe trait for streaming LLM providers.
 ///
@@ -194,6 +194,8 @@ pub struct ProviderSelection {
     /// Named OAuth account for multi-account providers (`provider@account:model`).
     /// `None` means the default account.
     pub account: Option<String>,
+    /// Whether the spec carried the `@fast` modifier (priority service tier).
+    pub fast: bool,
 }
 
 /// Static metadata for a single provider kind.
@@ -506,6 +508,12 @@ impl ProviderKind {
         self.meta().is_subscription
     }
 
+    /// Returns true if this provider accepts the `priority` service tier
+    /// (selected with the `@fast` model-spec modifier).
+    pub fn supports_priority_tier(self) -> bool {
+        matches!(self, Self::OpenAI | Self::OpenAICodex)
+    }
+
     pub fn api_key_env_var(self) -> Option<&'static str> {
         self.meta().api_key_env
     }
@@ -602,8 +610,12 @@ impl ProviderKind {
 /// Supports explicit prefix format: `provider:model` or `provider/model`.
 /// The provider segment may carry a named OAuth account:
 /// `claude-cli@work:sonnet-4`. Without prefix, defaults to Anthropic.
+///
+/// Trailing modifiers (`@fast`, `@<thinking>`) are stripped from the returned
+/// model id; `@fast` is surfaced as [`ProviderSelection::fast`].
 pub fn resolve_provider(model: &str) -> ProviderSelection {
-    let trimmed = model.trim();
+    let spec = ModelSpec::parse(model);
+    let trimmed = spec.base;
 
     // Check for explicit provider prefix (e.g., "mistral:devstral-2512")
     if let Some((kind, account, rest)) = parse_provider_prefix(trimmed)
@@ -613,6 +625,7 @@ pub fn resolve_provider(model: &str) -> ProviderSelection {
             kind,
             model: rest.to_string(),
             account: account.map(ToString::to_string),
+            fast: spec.fast,
         };
     }
 
@@ -621,6 +634,7 @@ pub fn resolve_provider(model: &str) -> ProviderSelection {
         kind: ProviderKind::Anthropic,
         model: trimmed.to_string(),
         account: None,
+        fast: spec.fast,
     }
 }
 
@@ -693,5 +707,15 @@ mod tests {
         assert_eq!(selection.kind, ProviderKind::ClaudeCli);
         assert_eq!(selection.model, "claude-fable-5");
         assert!(selection.account.is_none());
+        assert!(!selection.fast);
+    }
+
+    #[test]
+    fn resolve_provider_strips_modifiers_from_model_id() {
+        let selection = resolve_provider("openai:gpt-5.2@high@fast");
+
+        assert_eq!(selection.kind, ProviderKind::OpenAI);
+        assert_eq!(selection.model, "gpt-5.2");
+        assert!(selection.fast);
     }
 }

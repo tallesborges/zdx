@@ -304,7 +304,11 @@ async fn handle_model_command(
         }
         ModelSubcommand::Set(model_id) => {
             let available = bot_config.subagent_available_models();
-            let msg = if !available.iter().any(|m| m == &model_id) {
+            // Compare the bare spec so `@fast` / `@<thinking>` modifiers are accepted.
+            let base = zdx_engine::models::ModelSpec::parse(&model_id)
+                .base
+                .to_string();
+            let msg = if !available.iter().any(|m| m == &base) {
                 format!(
                     "Unknown model: <code>{model_id}</code>\n\nUse /model list to see available models."
                 )
