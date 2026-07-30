@@ -381,22 +381,24 @@ fn collect_zdx_project_skill_dirs(cwd: &Path, home_dir: Option<&Path>) -> Vec<Pa
     let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
     let canonical_home = home_dir.and_then(|h| h.canonicalize().ok());
 
-    let mut dirs = vec![canonical_cwd.join(".zdx").join("skills")];
+    let mut dirs = vec![canonical_cwd.clone()];
 
     if let Some(home) = canonical_home.as_deref()
-        && canonical_cwd.strip_prefix(home).is_ok()
+        && canonical_cwd.starts_with(home)
+        && canonical_cwd != home
     {
-        let mut current = canonical_cwd.as_path();
-        while let Some(parent) = current.parent() {
-            if parent == home {
-                break;
-            }
-            dirs.push(parent.join(".zdx").join("skills"));
-            current = parent;
-        }
+        dirs.extend(
+            canonical_cwd
+                .ancestors()
+                .skip(1)
+                .take_while(|ancestor| *ancestor != home)
+                .map(Path::to_path_buf),
+        );
     }
 
-    dirs
+    dirs.into_iter()
+        .map(|dir| dir.join(".zdx").join("skills"))
+        .collect()
 }
 
 fn build_skill_sources(
@@ -892,6 +894,18 @@ mod tests {
             format!("---\nname: {name}\ndescription: {description}\n---\n# Instructions\n");
         fs::write(skill_dir.join("SKILL.md"), content).unwrap();
         skill_dir
+    }
+
+    /// Discovery must never walk above the home directory, even when cwd *is*
+    /// home.
+    #[test]
+    fn test_project_skill_dirs_stop_at_home() {
+        let home = tempdir().unwrap();
+        let canonical_home = home.path().canonicalize().unwrap();
+
+        let dirs = collect_zdx_project_skill_dirs(home.path(), Some(home.path()));
+
+        assert_eq!(dirs, vec![canonical_home.join(".zdx/skills")]);
     }
 
     #[test]
