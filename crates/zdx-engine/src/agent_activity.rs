@@ -14,6 +14,7 @@ use tempfile::NamedTempFile;
 use uuid::Uuid;
 
 use crate::config::paths;
+use crate::proc_liveness::is_alive;
 
 /// Record stored in each marker file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,14 +173,4 @@ fn format_duration(d: std::time::Duration) -> String {
     } else {
         format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
     }
-}
-
-#[cfg(unix)]
-fn is_alive(pid: u32) -> bool {
-    unsafe { libc::kill(pid as i32, 0) == 0 }
-}
-
-#[cfg(not(unix))]
-fn is_alive(_pid: u32) -> bool {
-    true
 }

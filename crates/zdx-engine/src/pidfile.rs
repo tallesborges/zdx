@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 use crate::config::paths;
+use crate::proc_liveness::is_alive;
 
 /// Ensure no other instance of the named service is already running.
 ///
@@ -168,12 +169,6 @@ pub fn is_supervised(name: &str) -> bool {
 }
 
 #[cfg(unix)]
-fn is_alive(pid: u32) -> bool {
-    // kill(pid, 0) checks if process exists without sending a signal
-    unsafe { libc::kill(pid as i32, 0) == 0 }
-}
-
-#[cfg(unix)]
 fn terminate_pid(pid: u32) -> Result<()> {
     let rc = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
     if rc == 0 {
@@ -181,11 +176,6 @@ fn terminate_pid(pid: u32) -> Result<()> {
     } else {
         anyhow::bail!("failed to send SIGTERM")
     }
-}
-
-#[cfg(not(unix))]
-fn is_alive(_pid: u32) -> bool {
-    true
 }
 
 #[cfg(not(unix))]
