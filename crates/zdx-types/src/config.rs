@@ -131,14 +131,146 @@ impl TextVerbosity {
     }
 }
 
+/// Suffix marking the priority service tier (faster inference, 2× cost).
+pub const FAST_MODIFIER: &str = "fast";
+
+/// A parsed model spec: `provider:model` plus optional `@` modifiers.
+///
+/// Modifiers are order-independent trailing `@` segments, each either a
+/// [`ThinkingLevel`] name or the literal `fast`. The canonical rendering is
+/// `base[@thinking][@fast]`, e.g. `openai:gpt-5.2@high@fast`. Parsing stops at
+/// the first unrecognized segment so a provider account prefix
+/// (`claude-cli@work:sonnet-4`) is never consumed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModelSpec<'a> {
+    /// Model id without modifiers, including any `provider:` prefix.
+    pub base: &'a str,
+    /// Explicit thinking level from an `@<level>` suffix.
+    pub thinking: Option<ThinkingLevel>,
+    /// Whether the `@fast` modifier is present.
+    pub fast: bool,
+}
+
+impl<'a> ModelSpec<'a> {
+    #[must_use]
+    pub fn parse(spec: &'a str) -> Self {
+        let mut base = spec.trim();
+        let mut thinking = None;
+        let mut fast = false;
+
+        while let Some((head, suffix)) = base.rsplit_once('@') {
+            if !fast && suffix.eq_ignore_ascii_case(FAST_MODIFIER) {
+                fast = true;
+            } else if thinking.is_none()
+                && let Some(level) = ThinkingLevel::from_name(suffix)
+            {
+                thinking = Some(level);
+            } else {
+                break;
+            }
+            base = head;
+        }
+
+        Self {
+            base,
+            thinking,
+            fast,
+        }
+    }
+
+    /// Renders the spec without the thinking modifier, for callers that carry
+    /// the thinking level in a separate field but must not drop `@fast`.
+    #[must_use]
+    pub fn without_thinking(&self) -> String {
+        Self {
+            base: self.base,
+            thinking: None,
+            fast: self.fast,
+        }
+        .to_string()
+    }
+
+    /// Returns the spec with `fast` set to the given value.
+    #[must_use]
+    pub fn with_fast(&self, fast: bool) -> Self {
+        Self { fast, ..*self }
+    }
+
+    /// Returns the spec with an explicit thinking level, keeping `fast`.
+    #[must_use]
+    pub fn with_thinking(&self, thinking: ThinkingLevel) -> Self {
+        Self {
+            thinking: Some(thinking),
+            ..*self
+        }
+    }
+}
+
+impl std::fmt::Display for ModelSpec<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.base)?;
+        if let Some(level) = self.thinking {
+            write!(f, "@{}", level.display_name())?;
+        }
+        if self.fast {
+            write!(f, "@{FAST_MODIFIER}")?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ThinkingLevel;
+    use super::{ModelSpec, ThinkingLevel};
 
     #[test]
     fn legacy_minimal_deserializes_as_low() {
         let level: ThinkingLevel = serde_json::from_str("\"minimal\"").unwrap();
         assert_eq!(level, ThinkingLevel::Low);
         assert_eq!(serde_json::to_string(&level).unwrap(), "\"low\"");
+    }
+
+    #[test]
+    fn model_spec_parses_modifiers_in_any_order() {
+        let plain = ModelSpec::parse("gemini:x");
+        assert_eq!(plain.base, "gemini:x");
+        assert_eq!(plain.thinking, None);
+        assert!(!plain.fast);
+
+        let thinking = ModelSpec::parse("gemini:x@high");
+        assert_eq!(thinking.base, "gemini:x");
+        assert_eq!(thinking.thinking, Some(ThinkingLevel::High));
+        assert!(!thinking.fast);
+
+        for spec in ["openai:gpt-5@high@fast", "openai:gpt-5@fast@high"] {
+            let parsed = ModelSpec::parse(spec);
+            assert_eq!(parsed.base, "openai:gpt-5");
+            assert_eq!(parsed.thinking, Some(ThinkingLevel::High));
+            assert!(parsed.fast);
+            assert_eq!(parsed.to_string(), "openai:gpt-5@high@fast");
+        }
+    }
+
+    #[test]
+    fn model_spec_leaves_unknown_suffix_and_account_alone() {
+        let unknown = ModelSpec::parse("gemini:x@bogus");
+        assert_eq!(unknown.base, "gemini:x@bogus");
+        assert_eq!(unknown.thinking, None);
+        assert!(!unknown.fast);
+
+        let account = ModelSpec::parse("claude-cli@work:sonnet-4");
+        assert_eq!(account.base, "claude-cli@work:sonnet-4");
+        assert!(!account.fast);
+
+        let account_fast = ModelSpec::parse("claude-cli@work:sonnet-4@fast");
+        assert_eq!(account_fast.base, "claude-cli@work:sonnet-4");
+        assert!(account_fast.fast);
+    }
+
+    #[test]
+    fn model_spec_without_thinking_keeps_fast() {
+        let spec = ModelSpec::parse("openai:gpt-5@max@fast");
+        assert_eq!(spec.without_thinking(), "openai:gpt-5@fast");
+        assert_eq!(spec.with_fast(false).to_string(), "openai:gpt-5@max");
     }
 }

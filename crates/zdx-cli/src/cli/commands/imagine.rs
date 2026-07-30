@@ -39,9 +39,13 @@ pub async fn run(options: ImagineRunOptions<'_>) -> Result<()> {
 
     let response = match provider_selection.kind {
         ProviderKind::Gemini => generate_gemini_images(&provider_selection.model, &options).await?,
-        ProviderKind::OpenAI => generate_openai_images(&provider_selection.model, &options).await?,
+        ProviderKind::OpenAI => {
+            generate_openai_images(&provider_selection.model, provider_selection.fast, &options)
+                .await?
+        }
         ProviderKind::OpenAICodex => {
-            generate_codex_images(&provider_selection.model, &options).await?
+            generate_codex_images(&provider_selection.model, provider_selection.fast, &options)
+                .await?
         }
         ProviderKind::Alibaba => {
             generate_alibaba_images(&provider_selection.model, &options).await?
@@ -211,15 +215,11 @@ fn alibaba_image_size(size: &str) -> Result<String> {
 
 async fn generate_codex_images(
     model: &str,
+    fast: bool,
     options: &ImagineRunOptions<'_>,
 ) -> Result<GenerateImageResponse> {
     let image_options = openai_family_image_options("OpenAI Codex", options)?;
-    let service_tier = options
-        .config
-        .providers
-        .openai_codex
-        .fast_mode
-        .then(|| "priority".to_string());
+    let service_tier = fast.then(|| "priority".to_string());
     let codex_config = OpenAICodexConfig::new(
         model.to_string(),
         None,
@@ -254,15 +254,11 @@ async fn generate_codex_images(
 
 async fn generate_openai_images(
     model: &str,
+    fast: bool,
     options: &ImagineRunOptions<'_>,
 ) -> Result<GenerateImageResponse> {
     let image_options = openai_family_image_options("OpenAI", options)?;
-    let service_tier = options
-        .config
-        .providers
-        .openai
-        .fast_mode
-        .then(|| "priority".to_string());
+    let service_tier = fast.then(|| "priority".to_string());
     let openai_config = OpenAIConfig::from_env(
         model.to_string(),
         None,

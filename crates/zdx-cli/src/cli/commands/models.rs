@@ -217,6 +217,7 @@ pub fn list(config: &config::Config, provider: Option<&str>, all: bool, json: bo
             .map(|m| {
                 serde_json::json!({
                     "id": m.qualified_id(),
+                    "fast_id": zdx_engine::models::fast_variant(&m.qualified_id()),
                     "provider": m.provider,
                     "model": m.id,
                     "display_name": m.display_name,
@@ -238,13 +239,22 @@ pub fn list(config: &config::Config, provider: Option<&str>, all: bool, json: bo
 
     let width = models
         .iter()
-        .map(|m| m.provider.len() + 1 + m.id.len())
+        .map(|m| {
+            let id = m.qualified_id();
+            zdx_engine::models::fast_variant(&id).map_or(id.len(), |fast| fast.len())
+        })
         .max()
         .unwrap_or(0);
 
     for m in &models {
         let full_id = m.qualified_id();
         println!("{full_id:<width$}  {}", m.display_name);
+        if let Some(fast_id) = zdx_engine::models::fast_variant(&full_id) {
+            println!(
+                "{fast_id:<width$}  {} (priority tier, 2× cost)",
+                m.display_name
+            );
+        }
     }
 
     Ok(())

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use zdx_engine::config::ThinkingLevel;
 use zdx_engine::core::thread_persistence::{Thread, Usage};
-use zdx_engine::providers::{ChatMessage, ProviderKind};
+use zdx_engine::providers::ChatMessage;
 
 use crate::input::{HandoffState, PromptBuilderState};
 use crate::transcript::{HistoryCell, ScrollMode};
@@ -126,8 +126,4 @@ pub enum AuthMutation {
 pub enum ConfigMutation {
     SetModel(String),
     SetThinkingLevel(ThinkingLevel),
-    SetFastMode {
-        provider: ProviderKind,
-        enabled: bool,
-    },
 }

@@ -18,7 +18,7 @@ use crate::common::{TaskKind, Tasks, sanitize_for_display};
 use crate::effects::UiEffect;
 use crate::mutations::{ConfigMutation, StateMutation, ThreadMutation, TranscriptMutation};
 use crate::overlays::OverlayRequest;
-use crate::state::{AgentState, TabId, fast_mode_enabled_for_model, fast_mode_provider_for_model};
+use crate::state::{AgentState, TabId};
 use crate::transcript::HistoryCell;
 
 /// Result type for key handlers.
@@ -39,40 +39,6 @@ pub struct InputContext<'a> {
     pub root: &'a std::path::Path,
     /// True when an empty Enter should retry the last failed turn.
     pub can_retry: bool,
-}
-
-const FAST_MODE_UNAVAILABLE_MSG: &str =
-    "Fast mode is only available for OpenAI and OpenAI Codex models.";
-
-/// Builds the shared fast-mode toggle effects and mutations for the active model.
-///
-/// # Errors
-/// Returns an error message when the current model does not support fast mode.
-pub fn build_fast_mode_toggle_actions(
-    config: &Config,
-    model_id: &str,
-) -> Result<(Vec<UiEffect>, Vec<StateMutation>), &'static str> {
-    let Some(provider) = fast_mode_provider_for_model(model_id) else {
-        return Err(FAST_MODE_UNAVAILABLE_MSG);
-    };
-
-    let enabled = !fast_mode_enabled_for_model(config, model_id);
-    let label = if enabled { "on" } else { "off" };
-    let suffix = if enabled {
-        " (service_tier: priority, 2× cost)"
-    } else {
-        ""
-    };
-
-    Ok((
-        vec![UiEffect::PersistFastMode { enabled, provider }],
-        vec![
-            StateMutation::Config(ConfigMutation::SetFastMode { provider, enabled }),
-            StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(format!(
-                "Fast mode {label}{suffix}"
-            ))),
-        ],
-    ))
 }
 
 fn is_image_path(text: &str) -> bool {
@@ -680,8 +646,6 @@ pub fn submit_current_input(input: &mut InputState, ctx: &InputContext<'_>) -> K
         ctx.thread_id.clone(),
         ctx.thread_title,
         ctx.active_thread_ids,
-        ctx.config,
-        ctx.model_id,
         ctx.can_retry,
     )
 }
@@ -883,8 +847,6 @@ fn submit_input(
     thread_id: Option<String>,
     thread_title: Option<&str>,
     active_thread_ids: &std::collections::HashSet<String>,
-    config: &Config,
-    model_id: &str,
     can_retry: bool,
 ) -> KeyResult {
     // Block input during any modal generation. Each branch shows a hint
@@ -937,19 +899,14 @@ fn submit_input(
     }
 
     // Modal flows that own the composer (handoff, prompt-builder) must
-    // claim the submission before slash/bash parsing. Otherwise an intent
-    // that happens to start with `/fast` or `$cmd` would short-circuit the
-    // modal flow and execute as a normal slash/bash command.
+    // claim the submission before bash parsing. Otherwise an intent
+    // that happens to start with `$cmd` would short-circuit the
+    // modal flow and execute as a normal bash command.
     if let Some(result) = handle_handoff_submission(input, trimmed, &text, thread_id.as_deref()) {
         return result;
     }
 
     if let Some(result) = handle_prompt_builder_submission(input, trimmed, &text) {
-        return result;
-    }
-
-    // Try slash commands (/fast, etc.)
-    if let Some(result) = handle_slash_commands(input, trimmed, config, model_id) {
         return result;
     }
 
@@ -1060,43 +1017,6 @@ fn handle_submit_while_agent_running(
     input.enqueue_prompt(text.to_string(), images);
     input.clear();
     (vec![], vec![], None)
-}
-
-fn handle_slash_commands(
-    input: &mut InputState,
-    trimmed: &str,
-    config: &Config,
-    model_id: &str,
-) -> Option<KeyResult> {
-    let rest = trimmed.strip_prefix("/fast")?;
-    let arg = rest.trim();
-
-    input.clear();
-
-    if !arg.is_empty() {
-        return Some((
-            vec![],
-            vec![StateMutation::Transcript(
-                TranscriptMutation::AppendSystemMessage("Usage: /fast".to_string()),
-            )],
-            None,
-        ));
-    }
-
-    let (effects, mutations) = match build_fast_mode_toggle_actions(config, model_id) {
-        Ok(actions) => actions,
-        Err(message) => {
-            return Some((
-                vec![],
-                vec![StateMutation::Transcript(
-                    TranscriptMutation::AppendSystemMessage(message.to_string()),
-                )],
-                None,
-            ));
-        }
-    };
-
-    Some((effects, mutations, None))
 }
 
 fn handle_bash_commands(input: &mut InputState, trimmed: &str, text: &str) -> Option<KeyResult> {
@@ -1883,13 +1803,13 @@ mod tests {
     }
 
     #[test]
-    fn prompt_builder_pending_intent_starting_with_slash_is_not_treated_as_slash_command() {
+    fn prompt_builder_pending_intent_starting_with_bash_prefix_is_not_treated_as_command() {
         // Modal flows must claim Enter even when the typed intent happens to
-        // collide with normal slash/bash syntax — otherwise `/fast` typed as
-        // an intent would silently toggle fast mode.
+        // collide with normal bash syntax — otherwise `$echo hi` typed as
+        // an intent would silently run a shell command.
         let mut input = InputState::default();
         input.prompt_builder = PromptBuilderState::Pending;
-        input.set_text("/fast");
+        input.set_text("$echo hi");
         let tasks = Tasks::default();
         let active_thread_ids = std::collections::HashSet::new();
         let config = Config::default();
@@ -1904,8 +1824,8 @@ mod tests {
         assert!(overlay.is_none());
         assert_eq!(effects.len(), 1);
         assert!(
-            matches!(&effects[0], UiEffect::StartPromptBuilder { intent } if intent == "/fast"),
-            "modal submission must take precedence over slash command parsing"
+            matches!(&effects[0], UiEffect::StartPromptBuilder { intent } if intent == "$echo hi"),
+            "modal submission must take precedence over bash command parsing"
         );
     }
 

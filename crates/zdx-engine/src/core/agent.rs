@@ -1066,13 +1066,12 @@ fn build_run_turn_setup(
     options: &AgentOptions,
     thread_id: Option<&str>,
 ) -> Result<RunTurnSetup> {
-    if let Some((custom_cfg, bare_model)) =
-        config.providers.custom_provider_for_model(&config.model)
-    {
-        let provider_name = config
-            .model
+    let spec = crate::models::ModelSpec::parse(&config.model);
+    if let Some((custom_cfg, bare_model)) = config.providers.custom_provider_for_model(spec.base) {
+        let provider_name = spec
+            .base
             .split_once(':')
-            .or_else(|| config.model.split_once('/'))
+            .or_else(|| spec.base.split_once('/'))
             .map(|(prefix, _)| prefix.trim().to_string())
             .unwrap_or_default();
         return build_custom_run_turn_setup(
@@ -1087,8 +1086,8 @@ fn build_run_turn_setup(
 
     let selection = resolve_provider(&config.model);
     let provider = selection.kind;
-    let max_tokens = config.effective_max_tokens_for(&config.model);
-    let thinking_level = if crate::models::model_supports_reasoning(&config.model) {
+    let max_tokens = config.effective_max_tokens_for(spec.base);
+    let thinking_level = if crate::models::model_supports_reasoning(spec.base) {
         config.thinking_level
     } else {
         ThinkingLevel::Off
@@ -1105,7 +1104,7 @@ fn build_run_turn_setup(
         service_tier: options
             .service_tier
             .as_deref()
-            .or(if provider_config.fast_mode {
+            .or(if selection.fast {
                 Some("priority")
             } else {
                 None

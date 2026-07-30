@@ -57,11 +57,11 @@ async fn generate_with_model(
 ) -> Result<String> {
     let prompt = THREAD_TITLE_PROMPT_TEMPLATE.replace("{{MESSAGE}}", message);
 
-    let (model, thinking) = crate::models::split_model_thinking(title_model);
+    let spec = crate::models::ModelSpec::parse(title_model);
     let options = ExecSubagentOptions {
-        model: Some(model.to_string()),
+        model: Some(spec.without_thinking()),
         system_prompt: None,
-        thinking_level: Some(thinking.unwrap_or(ThinkingLevel::Low)),
+        thinking_level: Some(spec.thinking.unwrap_or(ThinkingLevel::Low)),
         no_tools: true,
         no_system_prompt: true,
         tools_override: None,

@@ -99,7 +99,6 @@ agents_project = true
 [providers.deepseek]
 enabled = true
 models = ["deepseek-v4-pro", "deepseek-v4-flash"]
-fast_mode = false
 websocket = false
 # GitHub repositories containing skills (owner/repo/path)
 # ignored_skills = ["test-*", "wip-*"]
@@ -133,20 +132,17 @@ enabled = true
 # api_key = "sk-ant-..."  # Overrides ANTHROPIC_API_KEY env var
 # base_url = "https://api.anthropic.com"
 models = ["claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"]
-fast_mode = false
 websocket = false
 
 [providers.lmstudio]
 enabled = true
 models = ["google/gemma-4-e4b"]
-fast_mode = false
 websocket = false
 
 [providers.claude_cli]
 enabled = true
 # base_url = "https://api.anthropic.com"
 models = ["claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"]
-fast_mode = false
 websocket = false
 
 [providers.openai]
@@ -155,14 +151,12 @@ enabled = true
 # base_url = "https://api.openai.com/v1"
 # text_verbosity = "medium"  # Options: low, medium, high
 models = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4-nano"]
-fast_mode = false
 websocket = false
 
 [providers.openai_codex]
 enabled = true
 # text_verbosity = "medium"  # Options: low, medium, high
 models = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"]
-fast_mode = false
 websocket = false
 # Codex models have built-in apply_patch instructions
 
@@ -171,13 +165,11 @@ enabled = true
 # api_key = "sk-or-..."  # Overrides OPENROUTER_API_KEY env var
 # base_url = "https://openrouter.ai/api/v1"
 models = ["*:exacto"]
-fast_mode = false
 websocket = false
 
 [providers.google_antigravity]
 enabled = true
 models = ["gemini-3.6-flash-tiered", "gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-high", "gemini-3.5-flash-low", "gemini-3-flash-agent", "gemini-3.1-pro-low", "gemini-3.1-pro-high", "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"]
-fast_mode = false
 websocket = false
 
 [providers.moonshot]
@@ -185,7 +177,6 @@ enabled = true
 # api_key = "sk-..."  # Overrides MOONSHOT_API_KEY env var
 # base_url = "https://api.moonshot.ai/v1"
 models = ["kimi-k3", "kimi-k2.6"]
-fast_mode = false
 websocket = false
 
 [providers.opencode_go]
@@ -193,7 +184,6 @@ enabled = true
 # api_key = "..."  # Overrides OPENCODE_API_KEY env var
 # base_url = "https://opencode.ai/zen/go"
 models = ["grok-4.5", "glm-5.2", "kimi-k3", "kimi-k2.6", "kimi-k2.7-code", "mimo-v2.5-pro", "mimo-v2.5", "minimax-m3", "qwen3.7-max", "qwen3.7-plus", "deepseek-v4-pro", "deepseek-v4-flash", "hy3"]
-fast_mode = false
 websocket = false
 
 [providers.stepfun]
@@ -201,7 +191,6 @@ enabled = true
 # api_key = "sk-..."  # Overrides STEPFUN_API_KEY env var
 # base_url = "https://api.stepfun.ai/v1"
 models = ["step-3.7-flash", "step-3.5-flash"]
-fast_mode = false
 websocket = false
 
 [providers.xiaomi]
@@ -209,37 +198,31 @@ enabled = true
 # api_key = "sk-..."  # Overrides XIAOMI_API_KEY env var
 # base_url = "https://api.xiaomimimo.com/v1"
 models = ["mimo-v2.5-pro", "mimo-v2.5"]
-fast_mode = false
 websocket = false
 
 [providers.grok_build]
 enabled = true
 models = ["grok-4.5"]
-fast_mode = false
 websocket = false
 
 [providers.elevenlabs]
 enabled = true
 models = []
-fast_mode = false
 websocket = false
 
 [providers.alibaba]
 enabled = true
 models = ["qwen3.7-max", "qwen3.7-plus", "qwen3.7-flash"]
-fast_mode = false
 websocket = false
 
 [providers.qwen_code]
 enabled = false
 models = ["qwen3-coder-plus", "qwen3-coder-next"]
-fast_mode = false
 websocket = false
 
 [providers.meta]
 enabled = true
 models = ["muse-spark-1.1"]
-fast_mode = false
 websocket = false
 
 [providers.custom]
@@ -252,7 +235,6 @@ enabled = false
 # api_key = "tp-..."  # Overrides XIAOMI_PLAN_API_KEY env var
 # base_url = "https://token-plan-sgp.xiaomimimo.com/v1"
 models = ["mimo-v2.5-pro", "mimo-v2.5"]
-fast_mode = false
 websocket = false
 
 [providers.gemini]
@@ -260,7 +242,6 @@ enabled = true
 # api_key = "..."  # Overrides GEMINI_API_KEY env var
 # base_url = "https://generativelanguage.googleapis.com/v1beta"
 models = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"]
-fast_mode = false
 websocket = false
 
 [providers.minimax]
@@ -268,7 +249,6 @@ enabled = true
 # api_key = "..."  # Overrides MINIMAX_API_KEY env var
 # base_url = "https://api.minimax.io/v1"
 models = ["MiniMax-M3"]
-fast_mode = false
 websocket = false
 
 [providers.zai]
@@ -276,7 +256,6 @@ enabled = true
 # api_key = "..."  # Overrides ZAI_API_KEY env var
 # base_url = "https://api.z.ai/api/paas/v4"
 models = ["glm-5.2", "glm-4.7-flash"]
-fast_mode = false
 websocket = false
 
 [providers.xai]
@@ -284,7 +263,6 @@ enabled = true
 # api_key = "..."  # Overrides XAI_API_KEY env var
 # base_url = "https://api.x.ai/v1"
 models = ["grok-4.5"]
-fast_mode = false
 websocket = false
 
 [providers.mistral]
@@ -292,7 +270,6 @@ enabled = true
 # api_key = "..."  # Overrides MISTRAL_API_KEY env var
 # base_url = "https://api.mistral.ai/v1"
 models = ["voxtral-mini-latest"]
-fast_mode = false
 websocket = false
 
 [qmd]

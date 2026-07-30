@@ -188,8 +188,10 @@ pub fn build_config_lines(config: &config::Config, root: &Path) -> Vec<ConfigLin
         .find(|(k, _)| k == "thinking_level")
         .map(|(_, v)| v.clone())
     {
-        if let Some(model_row) = core_rows.iter_mut().find(|(k, _)| k == "model") {
-            model_row.1 = format!("{}@{level}", model_row.1);
+        if let Some(model_row) = core_rows.iter_mut().find(|(k, _)| k == "model")
+            && let Some(parsed) = config::ThinkingLevel::from_name(&level)
+        {
+            model_row.1 = zdx_engine::models::format_model_thinking(&model_row.1, parsed);
         }
         core_rows.retain(|(k, _)| k != "thinking_level");
     }
@@ -2509,8 +2511,9 @@ pub struct ModelPickerState {
 
 impl ModelPickerState {
     fn new(field: String, kind: ModelFieldKind, current: &str) -> Self {
-        let (model_part, thinking_part) = zdx_engine::models::split_model_thinking(current);
-        let thinking_current = thinking_part.unwrap_or(config::ThinkingLevel::Low);
+        let spec = zdx_engine::models::ModelSpec::parse(current);
+        let model_part = spec.without_thinking();
+        let thinking_current = spec.thinking.unwrap_or(config::ThinkingLevel::Low);
         let thinking_selected = config::ThinkingLevel::all()
             .iter()
             .position(|l| *l == thinking_current)
@@ -2519,7 +2522,11 @@ impl ModelPickerState {
         let mut items: Vec<String> = match kind {
             ModelFieldKind::Chat => available_models()
                 .iter()
-                .map(zdx_engine::models::ModelOption::qualified_id)
+                .flat_map(|m| {
+                    let id = m.qualified_id();
+                    let fast = zdx_engine::models::fast_variant(&id);
+                    std::iter::once(id).chain(fast)
+                })
                 .collect(),
             ModelFieldKind::Transcription => {
                 zdx_engine::audio::transcribe::transcription_model_options()
@@ -2537,7 +2544,7 @@ impl ModelPickerState {
             items,
             matches: Vec::new(),
             selected: 0,
-            chosen_model: model_part.to_string(),
+            chosen_model: model_part.clone(),
             thinking_current,
             thinking_selected,
         };
@@ -2545,7 +2552,7 @@ impl ModelPickerState {
         // Preselect the current value (exact `provider:id` or bare `id`).
         if let Some(pos) = state.matches.iter().position(|&i| {
             let item = &state.items[i];
-            item.as_str() == model_part || item.rsplit(':').next() == Some(model_part)
+            item.as_str() == model_part || item.rsplit(':').next() == Some(model_part.as_str())
         }) {
             state.selected = pos;
         }

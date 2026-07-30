@@ -261,6 +261,8 @@ Providers are the bridge between the agent and LLM APIs. New providers can be ad
 - **Account-qualified prefix:** `<provider>@<account>:<model>` (e.g., `claude-cli@work:claude-fable-5`) routes the request through that named OAuth account.
 - **Account model expansion:** every named account in `oauth.json` automatically mirrors its provider's full model list as account-qualified entries, so a second subscription needs no `models.toml` edits and survives `zdx models update`. Explicit account rows in `models.toml` take precedence over the mirrored entry.
 - **Heuristic fallback:** when no prefix is given, the model name is matched against provider-specific patterns (e.g., `claude-*` → Anthropic). Heuristics are implementation details and may change.
+- **Spec modifiers:** a model spec may carry trailing `@` modifiers — a thinking level (`@high`) and/or `@fast`. They are order-independent and render canonically as `model[@thinking][@fast]`. Modifiers are stripped before the model id reaches a provider, and an unknown segment ends modifier parsing (so `provider@account:model` is never consumed).
+- **`@fast`:** selects the priority service tier (`service_tier: "priority"`, ~2× cost) and is offered only for providers that support it (OpenAI, OpenAI Codex). A spec without `@fast` sends no service tier. `@fast` is selected from the model picker (or typed into any model field: config `model`, favorites, thread overrides, subagents, automations) and stays visible wherever the model name is shown.
 
 ### Provider-level config
 

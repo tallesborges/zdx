@@ -8,7 +8,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use zdx_engine::config::ProvidersConfig;
 use zdx_engine::models::{
-    ModelOption, available_models, bare_model_id, custom_provider_models, model_id_matches_patterns,
+    ModelOption, available_models, bare_model_id, custom_provider_models, fast_variant,
+    model_id_matches_patterns,
 };
 use zdx_engine::providers::{ProviderKind, resolve_provider};
 
@@ -16,6 +17,24 @@ use super::OverlayUpdate;
 use crate::effects::UiEffect;
 use crate::mutations::{ConfigMutation, StateMutation, TranscriptMutation};
 use crate::state::TuiState;
+
+/// One selectable row: a registry model, optionally as its `@fast` variant.
+#[derive(Debug, Clone, Copy)]
+struct ModelRow {
+    model: &'static ModelOption,
+    fast: bool,
+}
+
+impl ModelRow {
+    /// Fully qualified spec persisted when this row is selected.
+    fn spec(&self) -> String {
+        let id = self.model.qualified_id();
+        if self.fast {
+            return fast_variant(&id).unwrap_or(id);
+        }
+        id
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ModelPickerState {
@@ -26,9 +45,10 @@ pub struct ModelPickerState {
     /// the provider's `[providers.X].models` list (may be empty, which means
     /// "no filter — show every registered model for this provider").
     enabled_providers: HashMap<String, Vec<String>>,
-    /// Candidate models captured at open time: the static registry plus
-    /// synthesized custom-provider entries.
-    models: Vec<&'static ModelOption>,
+    /// Candidate rows captured at open time: the static registry plus
+    /// synthesized custom-provider entries, each followed by its `@fast`
+    /// variant when the provider supports the priority service tier.
+    models: Vec<ModelRow>,
 }
 
 impl ModelPickerState {
@@ -36,28 +56,35 @@ impl ModelPickerState {
         // Collect enabled providers (with their configured model patterns)
         let enabled_providers = collect_enabled_providers(providers);
 
-        // Registry models plus synthesized custom-provider models.
-        let models: Vec<&'static ModelOption> = available_models()
+        // Registry models plus synthesized custom-provider models, each with
+        // an extra `@fast` row when the provider supports the priority tier.
+        let models: Vec<ModelRow> = available_models()
             .iter()
             .chain(custom_provider_models(providers).iter())
+            .flat_map(|model| {
+                let base = ModelRow { model, fast: false };
+                let fast = fast_variant(&model.qualified_id())
+                    .is_some()
+                    .then_some(ModelRow { model, fast: true });
+                std::iter::once(base).chain(fast)
+            })
             .collect();
 
         // Filter available models by enabled providers + their pattern lists
         let enabled_models: Vec<_> = models
             .iter()
             .copied()
-            .filter(|m| model_passes_provider_filter(m, &enabled_providers))
+            .filter(|row| model_passes_provider_filter(row.model, &enabled_providers))
             .collect();
 
+        let target = resolve_provider(current_model);
         let selected = enabled_models
             .iter()
-            .position(|m| m.id == current_model)
-            .or_else(|| {
-                let target = resolve_provider(current_model);
-                enabled_models.iter().position(|m| {
-                    let candidate = resolve_provider(m.id);
-                    candidate.kind == target.kind && candidate.model == target.model
-                })
+            .position(|row| {
+                let candidate = resolve_provider(row.model.id);
+                row.fast == target.fast
+                    && candidate.kind == target.kind
+                    && candidate.model == target.model
             })
             .unwrap_or(0);
         (
@@ -98,14 +125,14 @@ impl ModelPickerState {
                 OverlayUpdate::stay()
             }
             KeyCode::Enter => {
-                let Some(model) = self.filtered_models().get(self.selected).copied() else {
+                let Some(row) = self.filtered_models().get(self.selected).copied() else {
                     return OverlayUpdate::close();
                 };
 
                 // Include provider (and OAuth account) prefix so we don't rely
                 // on auto-detection
-                let model_id = model.qualified_id();
-                let display_name = model_label(model);
+                let model_id = row.spec();
+                let display_name = row_label(row);
 
                 let root = tui.agent_opts.root.clone();
                 let use_thread_override = tui.thread.thread_handle.is_some()
@@ -178,12 +205,12 @@ impl ModelPickerState {
         }
     }
 
-    fn filtered_models(&self) -> Vec<&'static ModelOption> {
+    fn filtered_models(&self) -> Vec<ModelRow> {
         self.models
             .iter()
             .copied()
-            .filter(|model| model_passes_provider_filter(model, &self.enabled_providers))
-            .filter(|model| self.filter.is_empty() || model_matches_filter(model, &self.filter))
+            .filter(|row| model_passes_provider_filter(row.model, &self.enabled_providers))
+            .filter(|row| self.filter.is_empty() || row_matches_filter(*row, &self.filter))
             .collect()
     }
 
@@ -210,7 +237,7 @@ pub fn render_model_picker(
     let filtered = picker.filtered_models();
     let max_label_len = filtered
         .iter()
-        .map(|model| model_label(model).len() as u16)
+        .map(|row| row_label(*row).len() as u16)
         .max()
         .unwrap_or(0);
     let max_width = area.width.saturating_sub(4);
@@ -274,7 +301,7 @@ pub fn render_model_picker(
         let line_width = list_area.width.saturating_sub(2);
         filtered
             .iter()
-            .map(|model| ListItem::new(model_line(model, line_width)))
+            .map(|row| ListItem::new(row_line(*row, line_width)))
             .collect()
     };
 
@@ -294,7 +321,7 @@ pub fn render_model_picker(
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
     render_separator(frame, layout.body, 2 + list_height);
-    let selected_model = filtered.get(picker.selected).copied();
+    let selected_model = filtered.get(picker.selected).map(|row| row.model);
     render_capabilities_line(frame, layout.body, 3 + list_height, selected_model);
 }
 
@@ -302,6 +329,16 @@ fn model_label(model: &ModelOption) -> String {
     let label = zdx_engine::providers::provider_account_label(model.provider, model.account);
     let name = cleaned_display_name(model, model.provider);
     format!("{label} · {name}")
+}
+
+/// Row label, tagging the `@fast` variant so it is distinguishable in the list.
+fn row_label(row: ModelRow) -> String {
+    let label = model_label(row.model);
+    if row.fast {
+        format!("{label} @fast")
+    } else {
+        label
+    }
 }
 
 fn cleaned_display_name(model: &ModelOption, provider: &str) -> String {
@@ -316,6 +353,43 @@ fn cleaned_display_name(model: &ModelOption, provider: &str) -> String {
     }
 
     name
+}
+
+/// Renders one picker row; `@fast` rows carry the priority-tier cost hint.
+fn row_line(row: ModelRow, width: u16) -> Line<'static> {
+    if row.fast {
+        return fast_row_line(row.model, width);
+    }
+    model_line(row.model, width)
+}
+
+/// `@fast` row: same left label plus the suffix, and a right side that states
+/// the 2× priority-tier cost instead of the base pricing.
+fn fast_row_line(model: &ModelOption, width: u16) -> Line<'static> {
+    let label = zdx_engine::providers::provider_account_label(model.provider, model.account);
+    let name = cleaned_display_name(model, model.provider);
+    let right_text = "priority tier · 2× cost".to_string();
+
+    let left_width = (label.len() + 3 + name.len() + 6) as u16;
+    let right_width = right_text.len() as u16;
+    let spacing = if width <= left_width + right_width {
+        1
+    } else {
+        width - left_width - right_width
+    } as usize;
+
+    Line::from(vec![
+        Span::styled(format!("{label} · "), Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            name,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" @fast", Style::default().fg(Color::Yellow)),
+        Span::raw(" ".repeat(spacing)),
+        Span::styled(right_text, Style::default().fg(Color::Yellow)),
+    ])
 }
 
 fn model_line(model: &ModelOption, width: u16) -> Line<'static> {
@@ -482,14 +556,14 @@ fn trim_price(value: f64) -> String {
     text
 }
 
-fn model_matches_filter(model: &ModelOption, filter: &str) -> bool {
+fn row_matches_filter(row: ModelRow, filter: &str) -> bool {
     let filter = filter.to_lowercase();
     if filter.is_empty() {
         return true;
     }
 
-    let label = model_label(model).to_lowercase();
-    let id = model.id.to_lowercase();
+    let label = row_label(row).to_lowercase();
+    let id = row.model.id.to_lowercase();
     label.contains(&filter) || id.contains(&filter)
 }
 
@@ -534,7 +608,7 @@ fn model_passes_provider_filter(
 mod tests {
     use zdx_engine::models::{ModelCapabilities, ModelOption, ModelPricing};
 
-    use super::model_line;
+    use super::{ModelRow, model_line, row_line};
 
     fn subscription_model(account: Option<&'static str>) -> ModelOption {
         ModelOption {
@@ -559,6 +633,35 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect()
+    }
+
+    #[test]
+    fn fast_row_carries_the_suffix_spec_and_cost_hint() {
+        let model: &'static ModelOption = Box::leak(Box::new(ModelOption {
+            id: "gpt-5.2",
+            provider: "openai",
+            account: None,
+            display_name: "GPT-5.2",
+            pricing: ModelPricing {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            context_limit: 400_000,
+            capabilities: ModelCapabilities::default(),
+        }));
+        let row = ModelRow { model, fast: true };
+
+        assert_eq!(row.spec(), "openai:gpt-5.2@fast");
+
+        let line: String = row_line(row, 80)
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(line.contains("@fast"), "got: {line}");
+        assert!(line.contains("2× cost"), "got: {line}");
     }
 
     #[test]

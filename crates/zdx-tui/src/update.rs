@@ -1143,9 +1143,6 @@ fn apply_config_mutation(tui: &mut TuiState, mutation: ConfigMutation) {
             tui.base_thinking_level = level;
             tui.config.thinking_level = level;
         }
-        ConfigMutation::SetFastMode { provider, enabled } => {
-            tui.config.set_fast_mode_for_provider(provider, enabled);
-        }
     }
 }
 

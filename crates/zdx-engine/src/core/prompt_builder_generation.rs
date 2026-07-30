@@ -47,10 +47,10 @@ pub async fn generate_prompt_builder(
     // other helper subagents; default to Low when none is present.
     let (model, thinking_level) = match model {
         Some(spec) => {
-            let (model, thinking) = crate::models::split_model_thinking(&spec);
+            let parsed = crate::models::ModelSpec::parse(&spec);
             (
-                Some(model.to_string()),
-                thinking.unwrap_or(ThinkingLevel::Low),
+                Some(parsed.without_thinking()),
+                parsed.thinking.unwrap_or(ThinkingLevel::Low),
             )
         }
         None => (None, ThinkingLevel::Low),

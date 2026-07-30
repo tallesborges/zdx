@@ -22,7 +22,7 @@ pub use render::{calculate_input_height, render_input, render_input_with_cursor}
 pub use state::{HandoffState, InputState, PromptBuilderState};
 pub use text_buffer::{CursorMove, TextBuffer};
 pub use update::{
-    InputContext, TabContext, build_fast_mode_toggle_actions, build_send_effects,
-    build_send_effects_for_tab, handle_handoff_result, handle_main_key, handle_mouse, handle_paste,
+    InputContext, TabContext, build_send_effects, build_send_effects_for_tab,
+    handle_handoff_result, handle_main_key, handle_mouse, handle_paste,
     handle_prompt_builder_result, submit_current_input,
 };

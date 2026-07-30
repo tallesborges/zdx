@@ -112,12 +112,12 @@ async fn run_subagent(prompt: String, ctx: &ToolContext) -> Result<String, Strin
         .read_thread_model
         .clone()
         .unwrap_or_else(|| "gemini:gemini-3.1-flash-lite-preview".to_string());
-    let (model, thinking) = crate::models::split_model_thinking(&model_spec);
+    let spec = crate::models::ModelSpec::parse(&model_spec);
     let options = ExecSubagentOptions {
-        model: Some(model.to_string()),
+        model: Some(spec.without_thinking()),
         system_prompt: None,
         // An explicit `@thinking` suffix wins; otherwise inherit the caller's level.
-        thinking_level: thinking.or(ctx.thinking_level),
+        thinking_level: spec.thinking.or(ctx.thinking_level),
         no_tools: true,
         no_system_prompt: true,
         tools_override: None,

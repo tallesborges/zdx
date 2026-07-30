@@ -64,7 +64,7 @@ Just the ones I use — but that turns out to be a lot.
 - **Aggregators** — OpenRouter, opencode-go
 - **Local** — LM Studio
 - **Custom** — any OpenAI-compatible provider defined straight from config
-- **OpenAI Responses transport** (opt-in) + **priority fast mode** (`/fast`)
+- **OpenAI Responses transport** (opt-in) + **priority tier** via the `@fast` model suffix (`openai:gpt-5.5@fast`)
 - Model registry with pricing, context limits, and reasoning detection
 
 ### Built-in tools
