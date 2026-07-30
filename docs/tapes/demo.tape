@@ -14,7 +14,7 @@ Set BorderRadius 12
 Set TypingSpeed 45ms
 
 Hide
-Type "unset NO_COLOR; export PATH=$PWD/../.zdx/cargo-target/release:$PWD/../.zdx/cargo-target/debug:$PATH; clear"
+Type "unset NO_COLOR; export PATH=$PWD/target/release:$PWD/target/debug:$PATH; clear"
 Enter
 Show
 
