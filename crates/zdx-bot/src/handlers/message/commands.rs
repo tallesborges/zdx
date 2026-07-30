@@ -260,7 +260,7 @@ async fn handle_model_command(
     let Some(subcmd) = crate::commands::parse_model_command(text) else {
         return Ok(false);
     };
-    let bot_config = context.config();
+    let bot_config = context.config_for_chat(incoming.chat_id);
 
     // General context = forum chat but NOT inside a topic thread
     let is_general = incoming.is_forum && incoming.message_thread_id.is_none();
@@ -285,6 +285,7 @@ async fn handle_model_command(
 
             let keyboard = build_provider_keyboard(
                 context,
+                incoming.chat_id,
                 if is_general {
                     ModelPickerScope::General
                 } else {
@@ -375,7 +376,7 @@ async fn handle_thinking_command(
     };
 
     let is_general = incoming.is_forum && incoming.message_thread_id.is_none();
-    let default_level = context.config().thinking_level;
+    let default_level = context.config_for_chat(incoming.chat_id).thinking_level;
 
     let msg = match subcmd {
         ThinkingSubcommand::Show | ThinkingSubcommand::List => {
@@ -486,7 +487,7 @@ async fn handle_status_command(
         return Ok(false);
     }
 
-    let config = context.config();
+    let config = context.config_for_chat(incoming.chat_id);
     let resolved_root = context.root_for_chat(incoming.chat_id);
     let root_path = thread_persistence::read_thread_root_path(thread_id)?
         .map_or_else(|| resolved_root.root.clone(), PathBuf::from);
@@ -620,7 +621,7 @@ async fn handle_tldr_command(
         )
         .await?;
 
-    let config = context.config();
+    let config = context.config_for_chat(incoming.chat_id);
     let root = crate::command_picker::command_root(context, incoming.chat_id, thread_id)?;
     let text = match zdx_engine::core::tldr_generation::generate_tldr(
         thread_id,
@@ -729,9 +730,10 @@ impl ModelPickerScope {
 /// Callback data format: `model_provider:{provider}:{scope}`.
 pub(crate) fn build_provider_keyboard(
     context: &BotContext,
+    chat_id: i64,
     scope: ModelPickerScope,
 ) -> InlineKeyboardMarkup {
-    let models = context.config().subagent_available_models();
+    let models = context.config_for_chat(chat_id).subagent_available_models();
     // The launcher's Custom flow returns to the launcher menu, so label its
     // exit "← Back"; the standalone `/model` flow keeps "✖ Cancel".
     let exit_label = if scope == ModelPickerScope::NewThread {
@@ -775,9 +777,13 @@ pub(crate) fn build_provider_keyboard(
     }
 }
 
-pub(crate) fn models_for_provider(context: &BotContext, provider: &str) -> Vec<String> {
+pub(crate) fn models_for_provider(
+    context: &BotContext,
+    chat_id: i64,
+    provider: &str,
+) -> Vec<String> {
     context
-        .config()
+        .config_for_chat(chat_id)
         .subagent_available_models()
         .into_iter()
         .filter(|m| m.starts_with(&format!("{provider}:")))
@@ -788,11 +794,12 @@ pub(crate) fn models_for_provider(context: &BotContext, provider: &str) -> Vec<S
 /// Callback data format: `model_pick:{provider}:{index}:{scope}`.
 pub(crate) fn build_models_keyboard(
     context: &BotContext,
+    chat_id: i64,
     provider: &str,
     scope: ModelPickerScope,
 ) -> InlineKeyboardMarkup {
     let scope = scope.as_str();
-    let filtered = models_for_provider(context, provider);
+    let filtered = models_for_provider(context, chat_id, provider);
 
     let indexed: Vec<(usize, &String)> = filtered.iter().enumerate().collect();
 

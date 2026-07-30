@@ -24,7 +24,7 @@ pub(super) async fn run_agent_turn(
     let model_override = thread_persistence::read_thread_model_override(thread_id)?;
     let thinking_override = thread_persistence::read_thread_thinking_override(thread_id)?;
     let config = if model_override.is_some() || thinking_override.is_some() {
-        let mut cfg = context.config();
+        let mut cfg = context.config_for_chat(incoming.chat_id);
         if let Some(ref model_id) = model_override {
             cfg.model.clone_from(model_id);
         }
@@ -33,7 +33,7 @@ pub(super) async fn run_agent_turn(
         }
         cfg
     } else {
-        context.config()
+        context.config_for_chat(incoming.chat_id)
     };
     let (mut thread, mut messages) = agent::load_thread_state(thread_id)?;
     let pending_topic_title = thread_persistence::read_thread_pending_topic_title(thread_id)?;

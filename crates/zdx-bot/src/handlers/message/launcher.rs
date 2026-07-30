@@ -37,8 +37,8 @@ pub(crate) fn new_launcher_map() -> LauncherMap {
 /// `[[favorites]]` minus any whose model isn't available (provider disabled).
 /// Skipped favorites are logged. An empty result means the launcher shows only
 /// the `🎛 Custom` button.
-pub(crate) fn bot_visible_favorites(context: &BotContext) -> Vec<ModelFavorite> {
-    let config = context.config();
+pub(crate) fn bot_visible_favorites(context: &BotContext, chat_id: i64) -> Vec<ModelFavorite> {
+    let config = context.config_for_chat(chat_id);
     filter_available_favorites(&config.favorites, &config.subagent_available_models())
 }
 
@@ -317,7 +317,7 @@ async fn send_launcher(
     chat_id: i64,
     reply_to_message_id: Option<i64>,
 ) -> Result<i64> {
-    let favorites = bot_visible_favorites(context);
+    let favorites = bot_visible_favorites(context, chat_id);
     let keyboard = build_launcher_keyboard(&favorites);
     let msg = context
         .client()
@@ -340,7 +340,7 @@ pub(crate) async fn render_launcher(
     chat_id: i64,
     message_id: i64,
 ) -> Result<()> {
-    let favorites = bot_visible_favorites(context);
+    let favorites = bot_visible_favorites(context, chat_id);
     let keyboard = build_launcher_keyboard(&favorites);
     context
         .client()
@@ -443,7 +443,7 @@ pub(crate) async fn handle_callback(
     if let Some(alias) = rest.strip_prefix("p:") {
         // Resolve the preset from current config at click time so stale buttons
         // (e.g. after a restart or config edit) fail gracefully.
-        let favorite = bot_visible_favorites(context)
+        let favorite = bot_visible_favorites(context, chat_id)
             .into_iter()
             .find(|fav| fav.alias == alias);
         let Some(favorite) = favorite else {
@@ -470,7 +470,8 @@ pub(crate) async fn handle_callback(
         }
     } else if rest == "custom" {
         // Open the provider → model picker targeting a brand-new thread.
-        let keyboard = super::build_provider_keyboard(context, super::ModelPickerScope::NewThread);
+        let keyboard =
+            super::build_provider_keyboard(context, chat_id, super::ModelPickerScope::NewThread);
         if let Err(err) = client
             .edit_message_text(
                 chat_id,

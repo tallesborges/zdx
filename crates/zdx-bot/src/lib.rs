@@ -9,10 +9,12 @@ use zdx_engine::core::agent::ToolConfig;
 
 use crate::bot::queue::ChatQueueMap;
 use crate::bot::{
-    BotContext, BotContextDeps, CancelKey, QueueCancelKey, dispatch_message, new_cancel_map,
-    new_chat_queues, new_queue_cancel_map,
+    BotContext, BotContextDeps, CancelKey, QueueCancelKey, apply_telegram_overrides,
+    dispatch_message, new_cancel_map, new_chat_queues, new_queue_cancel_map,
 };
-use crate::handlers::message::ModelPickerScope;
+use crate::handlers::message::{
+    ModelPickerScope, build_models_keyboard, build_provider_keyboard, models_for_provider,
+};
 use crate::telegram::{CallbackQuery, InlineKeyboardMarkup, TelegramClient, TelegramSettings};
 
 mod agent;
@@ -70,9 +72,7 @@ pub async fn run_named_with_config_and_root(
     mut config: Config,
     root: PathBuf,
 ) -> Result<()> {
-    // Apply telegram-specific model + thinking_level
-    config.model.clone_from(&config.telegram.model);
-    config.thinking_level = config.telegram.thinking_level;
+    apply_telegram_overrides(&mut config);
     let settings = TelegramSettings::from_config(&config)?;
     zdx_engine::pidfile::ensure_unique(service_name)
         .with_context(|| format!("ensure unique PID for {service_name}"))?;
@@ -399,7 +399,7 @@ fn telegram_thread_id(chat_id: i64, thread_id: Option<i64>) -> String {
 }
 
 fn current_topic_model(context: &BotContext, chat_id: i64, thread_id: Option<i64>) -> String {
-    let config = context.config();
+    let config = context.config_for_chat(chat_id);
     zdx_engine::core::thread_persistence::read_thread_model_override(&telegram_thread_id(
         chat_id, thread_id,
     ))
@@ -413,7 +413,7 @@ fn current_topic_thinking(
     chat_id: i64,
     thread_id: Option<i64>,
 ) -> zdx_engine::config::ThinkingLevel {
-    let config = context.config();
+    let config = context.config_for_chat(chat_id);
     zdx_engine::core::thread_persistence::read_thread_thinking_override(&telegram_thread_id(
         chat_id, thread_id,
     ))
@@ -454,7 +454,7 @@ fn set_topic_thinking(
 }
 
 fn reset_topic_thinking(context: &BotContext, chat_id: i64, thread_id: Option<i64>) -> String {
-    let config = context.config();
+    let config = context.config_for_chat(chat_id);
     match zdx_engine::core::thread_persistence::Thread::with_id(telegram_thread_id(
         chat_id, thread_id,
     )) {
@@ -475,7 +475,7 @@ fn model_picker_header(
     thread_id: Option<i64>,
     scope: ModelPickerScope,
 ) -> String {
-    let config = context.config();
+    let config = context.config_for_chat(chat_id);
     match scope {
         ModelPickerScope::General => format!("Current model: <code>{}</code>", config.model),
         ModelPickerScope::NewThread => {
@@ -563,7 +563,7 @@ async fn handle_model_callback(
         let Some(scope) = ModelPickerScope::from_data(scope) else {
             return;
         };
-        let keyboard = crate::handlers::message::build_models_keyboard(context, provider, scope);
+        let keyboard = build_models_keyboard(context, chat_id, provider, scope);
         let header = format!(
             "Select a <b>{}</b> model:",
             zdx_engine::providers::provider_key_label(provider)
@@ -594,7 +594,7 @@ async fn handle_model_callback(
                 .await;
             return;
         };
-        let models = crate::handlers::message::models_for_provider(context, provider);
+        let models = models_for_provider(context, chat_id, provider);
         let Some(model_id) = models.get(index) else {
             let _ = client
                 .answer_callback_query(&callback.id, Some("Model no longer available"))
@@ -614,7 +614,7 @@ async fn handle_model_callback(
         let Some(scope) = ModelPickerScope::from_data(scope) else {
             return;
         };
-        let keyboard = crate::handlers::message::build_provider_keyboard(context, scope);
+        let keyboard = build_provider_keyboard(context, chat_id, scope);
         let header = model_picker_header(context, chat_id, msg.thread_id, scope);
 
         if let Err(err) = client
@@ -636,7 +636,7 @@ async fn handle_model_callback(
             }
         } else {
             let current = if scope == ModelPickerScope::General {
-                context.config().model
+                context.config_for_chat(chat_id).model
             } else {
                 current_topic_model(context, chat_id, msg.thread_id)
             };
@@ -717,7 +717,7 @@ async fn handle_thinking_callback(
     } else if let Some(scope) = data.strip_prefix("thinking_reset:") {
         let is_general = scope == "general";
         let reply = if is_general {
-            let config = context.config();
+            let config = context.config_for_chat(chat_id);
             format!(
                 "Default thinking: <code>{}</code>",
                 config.thinking_level.display_name()
@@ -735,7 +735,7 @@ async fn handle_thinking_callback(
     } else if let Some(scope) = data.strip_prefix("thinking_cancel:") {
         let is_general = scope == "general";
         let current = if is_general {
-            context.config().thinking_level
+            context.config_for_chat(chat_id).thinking_level
         } else {
             current_topic_thinking(context, chat_id, msg.thread_id)
         };

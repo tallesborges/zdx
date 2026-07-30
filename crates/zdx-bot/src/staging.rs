@@ -362,7 +362,7 @@ async fn run_handoff_generation(
     thread_id: &str,
     input: &str,
 ) -> Result<String> {
-    let config = context.config();
+    let config = context.config_for_chat(incoming.chat_id);
     let resolved_root = context.root_for_chat(incoming.chat_id);
     let root = thread_persistence::read_thread_root_path(thread_id)?
         .map_or(resolved_root.root, PathBuf::from);
@@ -375,7 +375,7 @@ async fn run_prompt_builder_generation(
     thread_id: &str,
     input: &str,
 ) -> Result<String> {
-    let config = context.config();
+    let config = context.config_for_chat(incoming.chat_id);
     let resolved_root = context.root_for_chat(incoming.chat_id);
     let root = thread_persistence::read_thread_root_path(thread_id)?
         .map_or(resolved_root.root, PathBuf::from);

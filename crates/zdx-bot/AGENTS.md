@@ -11,7 +11,7 @@ Scope: Telegram bot runtime, ingest/handler flow, queueing, and Telegram API int
 - `src/command_picker.rs`: `/commands` picker — project/context `.md` commands only (picker-only; built-ins live in the native `/` menu)
 - `src/commands.rs`: centralized slash-command parsing and matching
 - `src/bot/mod.rs`: bot module exports
-- `src/bot/context.rs`: shared bot context
+- `src/bot/context.rs`: shared bot context; also owns per-profile layered configs (`config_for_chat`)
 - `src/bot/queue.rs`: per-chat queueing helpers
 - `src/handlers/mod.rs`: handler module exports
 - `src/handlers/message/mod.rs`: message intake orchestration + shared turn types (`ReplyContext`, `TurnStatus`, `TurnResult`, `SpawnRequest`, `StatusSnapshot`); re-exports the keyboard builders
