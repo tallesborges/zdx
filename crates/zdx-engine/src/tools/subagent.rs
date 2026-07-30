@@ -427,7 +427,11 @@ fn validate_model_supported(model: &str, ctx: &ToolContext) -> Option<ToolOutput
 
 fn canonical_model_id(model: &str) -> String {
     let selection = resolve_provider(model);
-    format!("{}:{}", selection.kind.id(), selection.model)
+    let provider = crate::providers::oauth::account_cache_key(
+        selection.kind.id(),
+        selection.account.as_deref(),
+    );
+    format!("{provider}:{}", selection.model)
 }
 
 #[cfg(test)]
