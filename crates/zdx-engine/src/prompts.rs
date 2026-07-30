@@ -1,7 +1,7 @@
 //! Prompt file helpers (re-exports from `zdx-assets`).
 
 /// Built-in instruction layer for headless automation behavior.
-pub use zdx_assets::AUTOMATION_HARNESS_INSTRUCTION_LAYER;
+pub use zdx_assets::AUTOMATION_INSTRUCTION_LAYER;
 /// Instruction layer for interactive TUI chat.
 pub use zdx_assets::CHAT_INSTRUCTION_LAYER;
 /// Instruction layer for non-interactive exec mode.

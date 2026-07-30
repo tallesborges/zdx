@@ -28,8 +28,8 @@ pub const THREAD_TLDR_PROMPT_TEMPLATE: &str = include_str!("../prompts/thread_tl
 pub const SYSTEM_PROMPT_TEMPLATE: &str = include_str!("../prompts/system_prompt_template.md");
 
 /// Built-in instruction layer for headless automation behavior.
-pub const AUTOMATION_HARNESS_INSTRUCTION_LAYER: &str =
-    include_str!("../instruction_layers/automation_harness.md");
+pub const AUTOMATION_INSTRUCTION_LAYER: &str =
+    include_str!("../instruction_layers/automation_instruction_layer.md");
 
 /// Instruction layer for non-interactive exec mode.
 pub const EXEC_INSTRUCTION_LAYER: &str =
