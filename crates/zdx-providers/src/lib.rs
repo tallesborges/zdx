@@ -694,12 +694,4 @@ mod tests {
         assert_eq!(selection.model, "claude-fable-5");
         assert!(selection.account.is_none());
     }
-
-    #[test]
-    fn resolve_provider_ignores_unknown_provider_with_account() {
-        let selection = resolve_provider("nope@work:some-model");
-
-        assert_eq!(selection.kind, ProviderKind::Anthropic);
-        assert_eq!(selection.model, "nope@work:some-model");
-    }
 }

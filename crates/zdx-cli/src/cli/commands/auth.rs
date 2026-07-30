@@ -10,7 +10,6 @@ use zdx_engine::providers::oauth::{
     grok_build as oauth_grok_build, normalize_account, openai_codex as oauth_codex,
 };
 
-/// Renders ` (account: work)` for a named account, or nothing for the default.
 fn account_suffix(account: Option<&str>) -> String {
     account.map_or_else(String::new, |name| format!(" (account: {name})"))
 }
