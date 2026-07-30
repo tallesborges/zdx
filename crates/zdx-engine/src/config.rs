@@ -1,6 +1,9 @@
 //! Configuration management for ZDX.
 //!
-//! Loads configuration from ${`ZDX_HOME}/config.toml` with sensible defaults.
+//! Loads configuration by deep-merging `${ZDX_HOME}/config.toml` with any
+//! workspace-local `.zdx/config.toml` files found between the user's home
+//! directory and the current working directory, closest directory winning.
+//! Missing fields fall back to Serde/Rust defaults.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -294,29 +297,6 @@ fn merge_items(target: &mut toml_edit::Table, source: &toml_edit::Table) {
     }
 }
 
-fn merge_generated_items(target: &mut toml_edit::Table, source: &toml_edit::Table) {
-    use toml_edit::Item;
-
-    for (key, value) in source {
-        match value {
-            Item::Value(v) => {
-                target[key] = Item::Value(v.clone());
-            }
-            Item::Table(src_table) => {
-                if let Some(Item::Table(target_table)) = target.get_mut(key) {
-                    merge_generated_items(target_table, src_table);
-                } else {
-                    target[key] = Item::Table(src_table.clone());
-                }
-            }
-            Item::ArrayOfTables(arr) => {
-                target[key] = Item::ArrayOfTables(arr.clone());
-            }
-            Item::None => {}
-        }
-    }
-}
-
 pub mod paths {
     //! Path resolution for ZDX configuration and data directories.
     //!
@@ -324,7 +304,7 @@ pub mod paths {
     //! 1. `ZDX_HOME` environment variable (if set)
     //! 2. ~/.zdx (default)
 
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     /// Returns the current user's home directory, if available.
     pub fn home_dir() -> Option<PathBuf> {
@@ -364,6 +344,66 @@ pub mod paths {
     /// Returns the path to the config.toml file.
     pub fn config_path() -> PathBuf {
         zdx_home().join("config.toml")
+    }
+
+    /// Returns the workspace `.zdx/config.toml` layer paths, ordered from
+    /// lowest to highest precedence (outermost ancestor first, `cwd` last).
+    ///
+    /// Mirrors `AGENTS.md` and skills discovery: when `cwd` is under the user's
+    /// home directory, every ancestor between home (exclusive) and `cwd`
+    /// (inclusive) is included so a project root's `.zdx/config.toml` still
+    /// applies from a subdirectory. When `cwd` is outside home, only
+    /// `cwd/.zdx/config.toml` is included.
+    #[must_use]
+    pub fn collect_project_config_paths(cwd: &Path, home_dir: Option<&Path>) -> Vec<PathBuf> {
+        let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+        let canonical_home = home_dir.and_then(|h| h.canonicalize().ok());
+
+        let mut dirs = vec![canonical_cwd.clone()];
+
+        if let Some(home) = canonical_home.as_deref()
+            && canonical_cwd.starts_with(home)
+            && canonical_cwd != home
+        {
+            dirs.extend(
+                canonical_cwd
+                    .ancestors()
+                    .skip(1)
+                    .take_while(|ancestor| *ancestor != home)
+                    .map(Path::to_path_buf),
+            );
+        }
+
+        dirs.reverse();
+        dirs.into_iter()
+            .map(|dir| dir.join(".zdx").join("config.toml"))
+            .collect()
+    }
+
+    /// Returns every config layer to merge, ordered from lowest to highest
+    /// precedence: the global `$ZDX_HOME/config.toml` first, then workspace
+    /// layers from [`collect_project_config_paths`].
+    #[must_use]
+    pub fn config_layer_paths_for(cwd: &Path) -> Vec<PathBuf> {
+        let mut layers = vec![config_path()];
+
+        for path in collect_project_config_paths(cwd, home_dir().as_deref()) {
+            if !layers.contains(&path) {
+                layers.push(path);
+            }
+        }
+
+        layers
+    }
+
+    /// Same as [`config_layer_paths_for`], anchored at the current working
+    /// directory.
+    #[must_use]
+    pub fn config_layer_paths() -> Vec<PathBuf> {
+        match std::env::current_dir() {
+            Ok(cwd) => config_layer_paths_for(&cwd),
+            Err(_) => vec![config_path()],
+        }
     }
 
     /// Returns the path to the threads directory.
@@ -682,12 +722,13 @@ impl Config {
     const DEFAULT_TLDR_MODEL: &str = "gemini:gemini-3.1-flash-lite-preview";
     const DEFAULT_PROMPT_BUILDER_MODEL: &str = "openai:gpt-5.6-terra@low";
 
-    /// Loads configuration from the default config path.
+    /// Loads configuration by merging every layer from
+    /// [`paths::config_layer_paths`].
     ///
     /// # Errors
     /// Returns an error if the operation fails.
     pub fn load() -> Result<Self> {
-        Self::load_from(&paths::config_path())
+        Self::load_layered(&paths::config_layer_paths())
     }
 
     /// Alias of the favorite matching the active model + thinking, if any.
@@ -908,6 +949,39 @@ impl Config {
         } else {
             Ok(Config::default())
         }
+    }
+
+    /// Loads configuration by deep-merging `layers` in order, where later
+    /// layers override earlier ones. Missing layers are skipped; if no layer
+    /// exists, defaults are returned.
+    ///
+    /// Merge semantics match [`merge_items`]: tables merge recursively, scalars
+    /// and arrays (including arrays of tables) are replaced wholesale by the
+    /// higher-precedence layer.
+    ///
+    /// # Errors
+    /// Returns an error if a layer cannot be read or parsed, or if the merged
+    /// document does not deserialize into a valid config.
+    pub fn load_layered(layers: &[PathBuf]) -> Result<Self> {
+        use toml_edit::DocumentMut;
+
+        let mut merged = DocumentMut::new();
+
+        for path in layers {
+            if !path.exists() {
+                continue;
+            }
+
+            let contents = fs::read_to_string(path)
+                .with_context(|| format!("Failed to read config from {}", path.display()))?;
+            let layer: DocumentMut = contents
+                .parse()
+                .with_context(|| format!("Failed to parse config from {}", path.display()))?;
+
+            merge_items(merged.as_table_mut(), layer.as_table());
+        }
+
+        toml::from_str(&merged.to_string()).context("Failed to parse merged config")
     }
 
     /// Saves only the model field to the config file.
@@ -1423,7 +1497,7 @@ impl Config {
             .context("Failed to parse generated config")?;
 
         // Merge generated values into template (overwrites values, keeps comments)
-        merge_generated_items(doc.as_table_mut(), generated_doc.as_table());
+        merge_items(doc.as_table_mut(), generated_doc.as_table());
 
         Ok(doc.to_string())
     }
@@ -2106,6 +2180,118 @@ mod tests {
     }
 
     /// Custom providers: base URL trims trailing slash; empty errors.
+    /// Workspace config layers walk from home down to cwd, cwd last (highest
+    /// precedence).
+    #[test]
+    fn test_collect_project_config_paths_walks_home_to_cwd() {
+        let home = tempdir().unwrap();
+        let cwd = home.path().join("projects").join("personal").join("zdx");
+        fs::create_dir_all(&cwd).unwrap();
+
+        let paths = paths::collect_project_config_paths(&cwd, Some(home.path()));
+        let canonical_home = home.path().canonicalize().unwrap();
+
+        assert_eq!(
+            paths,
+            vec![
+                canonical_home.join("projects/.zdx/config.toml"),
+                canonical_home.join("projects/personal/.zdx/config.toml"),
+                canonical_home.join("projects/personal/zdx/.zdx/config.toml"),
+            ]
+        );
+    }
+
+    /// Layering must never walk above the home directory, even when cwd *is*
+    /// home.
+    #[test]
+    fn test_collect_project_config_paths_stops_at_home() {
+        let home = tempdir().unwrap();
+        let canonical_home = home.path().canonicalize().unwrap();
+
+        let paths = paths::collect_project_config_paths(home.path(), Some(home.path()));
+
+        assert_eq!(paths, vec![canonical_home.join(".zdx/config.toml")]);
+    }
+
+    /// Outside the home directory only cwd is layered.
+    #[test]
+    fn test_collect_project_config_paths_outside_home() {
+        let home = tempdir().unwrap();
+        let elsewhere = tempdir().unwrap();
+
+        let paths = paths::collect_project_config_paths(elsewhere.path(), Some(home.path()));
+
+        assert_eq!(
+            paths,
+            vec![
+                elsewhere
+                    .path()
+                    .canonicalize()
+                    .unwrap()
+                    .join(".zdx/config.toml")
+            ]
+        );
+    }
+
+    /// Later layers override earlier ones; tables merge, untouched keys survive.
+    #[test]
+    fn test_load_layered_merges_and_overrides() {
+        let dir = tempdir().unwrap();
+        let global = dir.path().join("global.toml");
+        let workspace = dir.path().join("workspace.toml");
+
+        fs::write(
+            &global,
+            r#"model = "claude-sonnet-4-5"
+max_tokens = 4096
+
+[providers.custom.globalproxy]
+base_url = "https://global.example.com/v1"
+api_key = "sk-global"
+models = ["g-1"]
+
+[skills]
+ignored_skills = ["noisy"]
+"#,
+        )
+        .unwrap();
+
+        fs::write(
+            &workspace,
+            r#"model = "gemini:gemini-3-flash-preview"
+
+[providers.custom.wsproxy]
+base_url = "https://ws.example.com/v1"
+api_key = "sk-ws"
+models = ["w-1"]
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load_layered(&[global, workspace]).unwrap();
+
+        assert_eq!(config.model, "gemini:gemini-3-flash-preview");
+        assert_eq!(config.max_tokens, Some(4096));
+        assert_eq!(config.skills.ignored_skills, vec!["noisy"]);
+        assert!(config.providers.custom.contains_key("globalproxy"));
+        assert!(config.providers.custom.contains_key("wsproxy"));
+    }
+
+    /// Missing layers are skipped; no layers at all yields defaults.
+    #[test]
+    fn test_load_layered_skips_missing_layers() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("missing.toml");
+        let present = dir.path().join("present.toml");
+        fs::write(&present, "model = \"claude-3-opus\"\n").unwrap();
+
+        let config = Config::load_layered(&[missing.clone(), present]).unwrap();
+        assert_eq!(config.model, "claude-3-opus");
+
+        let defaults = Config::load_layered(&[missing]).unwrap();
+        assert_eq!(defaults.model, Config::default().model);
+    }
+
     #[test]
     fn test_custom_provider_base_url_and_api_key() {
         let cfg = CustomProviderConfig {

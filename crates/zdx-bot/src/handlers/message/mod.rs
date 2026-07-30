@@ -38,7 +38,7 @@ struct ReplyContext {
 /// # Errors
 /// Returns an error if the operation fails.
 pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Result<()> {
-    let bot_config = context.config();
+    let bot_config = context.config_for_chat(message.chat.id);
     let synthetic_topic_routed_from_general = message.synthetic_topic_routed_from_general;
     let provisional_status = if message_has_audio(&message) {
         Some(

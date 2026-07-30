@@ -141,6 +141,7 @@ Threads are append-only **JSONL** event logs (thread events are never modified o
 - MCP OAuth cache: `<base>/mcp_oauth.json` (0600 perms)
 - `zdx bot` resolves Telegram credentials/settings from `[telegram]` in `config.toml`
 - Telegram bot chat profiles live under `telegram.profiles.<name>` in `config.toml` with `chat_id` and `cwd`; matching chats run agent turns from the profile cwd, and unprofiled allowed chats keep using the bot root fallback.
+- Each Telegram profile gets its own layered config anchored at the profile `cwd`, so a workspace `.zdx/config.toml` applies to chats bound to that profile. Profile configs are built once at startup; unprofiled chats use the bot-level config. Runtime `/model` and `/thinking` changes apply to the bot-level config and every profile config.
 
 ### Format
 
@@ -299,6 +300,15 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 
 - Location: `<base>/config.toml`
 - Format: TOML
+
+### Layering
+
+- Config is layered: `$ZDX_HOME/config.toml` is the base, then every `.zdx/config.toml` from the user's home directory down to the current working directory is merged over it. The directory closest to cwd wins.
+- When cwd is outside the user's home directory, only `<cwd>/.zdx/config.toml` is layered.
+- Merge is a deep merge: tables merge recursively; scalars and arrays (including arrays of tables) are replaced wholesale by the higher-precedence layer.
+- Any key may be overridden by a workspace layer; there is no restricted subset.
+- Missing layers are skipped. If no layer exists, defaults apply.
+- Writes (`zdx config`, model/thinking/favorite/Telegram saves, monitor edits) always target `$ZDX_HOME/config.toml`; workspace layers are read-only and hand-edited.
 
 ### MCP configuration
 

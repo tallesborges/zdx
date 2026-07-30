@@ -47,6 +47,9 @@ pub(crate) fn new_queue_cancel_map() -> QueueCancelMap {
 pub(crate) struct BotContext {
     client: TelegramClient,
     config: RwLock<Config>,
+    /// Per-profile config, keyed by `chat_id`, layered from the profile's cwd.
+    /// Built once at startup because profiles are static in `config.toml`.
+    profile_configs: RwLock<HashMap<i64, Config>>,
     allowlist_user_ids: HashSet<i64>,
     allowlist_chat_ids: HashSet<i64>,
     root: PathBuf,
@@ -100,9 +103,11 @@ impl BotContext {
             launcher_map,
         } = deps;
         let root = root.canonicalize().unwrap_or(root);
+        let profile_configs = load_profile_configs(&config);
         Self {
             client,
             config: RwLock::new(config),
+            profile_configs: RwLock::new(profile_configs),
             allowlist_user_ids,
             allowlist_chat_ids,
             root,
@@ -130,9 +135,34 @@ impl BotContext {
             .clone()
     }
 
-    pub(crate) fn update_config(&self, f: impl FnOnce(&mut Config)) {
+    /// Config for `chat_id`: the profile's layered config when the chat is
+    /// bound to a profile, otherwise the bot-level config.
+    pub(crate) fn config_for_chat(&self, chat_id: i64) -> Config {
+        if let Some(config) = self
+            .profile_configs
+            .read()
+            .expect("bot profile config lock poisoned")
+            .get(&chat_id)
+        {
+            return config.clone();
+        }
+
+        self.config()
+    }
+
+    /// Applies `f` to the bot-level config and every profile config, so runtime
+    /// changes (`/model`, `/thinking`) stay in effect for all chats.
+    pub(crate) fn update_config(&self, f: impl Fn(&mut Config)) {
         let mut config = self.config.write().expect("bot config lock poisoned");
         f(&mut config);
+
+        let mut profiles = self
+            .profile_configs
+            .write()
+            .expect("bot profile config lock poisoned");
+        for profile_config in profiles.values_mut() {
+            f(profile_config);
+        }
     }
 
     pub(crate) fn allowlist_user_ids(&self) -> &HashSet<i64> {
@@ -210,6 +240,52 @@ fn profile_root_path(profile: &TelegramProfileConfig) -> PathBuf {
     root.canonicalize().unwrap_or(root)
 }
 
+/// Projects `[telegram]` model/thinking onto the top-level fields the agent
+/// actually reads. Applied to the bot-level config at startup and to every
+/// per-profile config, which must stay in sync.
+pub(crate) fn apply_telegram_overrides(config: &mut Config) {
+    config.model.clone_from(&config.telegram.model);
+    config.thinking_level = config.telegram.thinking_level;
+}
+
+/// Loads one layered [`Config`] per Telegram profile, anchored at the profile's
+/// cwd so a workspace `.zdx/config.toml` applies to chats bound to it.
+///
+/// Profiles are static in `config.toml`, so this runs once at startup. A profile
+/// whose layers fail to load is skipped and falls back to the bot-level config,
+/// so one broken workspace file cannot take the whole bot down.
+fn load_profile_configs(base: &Config) -> HashMap<i64, Config> {
+    let mut configs = HashMap::new();
+
+    for (name, profile) in &base.telegram.profiles {
+        let root = profile_root_path(profile);
+        let layers = zdx_engine::config::paths::config_layer_paths_for(&root);
+
+        match Config::load_layered(&layers) {
+            Ok(mut config) => {
+                apply_telegram_overrides(&mut config);
+                tracing::info!(
+                    profile = %name,
+                    chat_id = profile.chat_id,
+                    model = %config.model,
+                    "Loaded profile config",
+                );
+                configs.insert(profile.chat_id, config);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    profile = %name,
+                    root = %root.display(),
+                    %err,
+                    "Failed to load profile config layers; falling back to bot config",
+                );
+            }
+        }
+    }
+
+    configs
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, HashSet};
@@ -249,6 +325,83 @@ mod tests {
         let fallback = context.root_for_chat(-100_999);
         assert_eq!(fallback.profile_name, None);
         assert_eq!(fallback.root, temp_root.canonicalize().unwrap());
+    }
+
+    /// A profile's workspace `.zdx/config.toml` overrides the global layer for
+    /// chats bound to that profile, without affecting the bot-level config.
+    ///
+    /// The workspace layer is always the highest-precedence layer, so this
+    /// assertion holds regardless of the developer's real global config.
+    #[test]
+    fn test_profile_config_applies_workspace_layer() {
+        let fallback_root = unique_temp_dir("layer-fallback");
+        let profile_root = unique_temp_dir("layer-profile");
+        fs::create_dir_all(&fallback_root).unwrap();
+        fs::create_dir_all(profile_root.join(".zdx")).unwrap();
+        fs::write(
+            profile_root.join(".zdx").join("config.toml"),
+            "[telegram]\nmodel = \"sentinel:workspace-model\"\n",
+        )
+        .unwrap();
+
+        let config = Config {
+            telegram: TelegramConfig {
+                model: "sentinel:global-model".to_string(),
+                profiles: BTreeMap::from([(
+                    "zdx".to_string(),
+                    TelegramProfileConfig {
+                        chat_id: -100_123,
+                        cwd: profile_root.display().to_string(),
+                    },
+                )]),
+                ..Default::default()
+            },
+            model: "sentinel:global-model".to_string(),
+            ..Default::default()
+        };
+        let context = test_context(config, fallback_root);
+
+        assert_eq!(
+            context.config_for_chat(-100_123).model,
+            "sentinel:workspace-model"
+        );
+        assert_eq!(
+            context.config_for_chat(-100_999).model,
+            "sentinel:global-model"
+        );
+        assert_eq!(context.config().model, "sentinel:global-model");
+    }
+
+    /// Runtime `/model` changes must reach profile configs too, otherwise a
+    /// bound chat would keep serving the pre-change model.
+    #[test]
+    fn test_update_config_reaches_profile_configs() {
+        let fallback_root = unique_temp_dir("update-fallback");
+        let profile_root = unique_temp_dir("update-profile");
+        fs::create_dir_all(&fallback_root).unwrap();
+        fs::create_dir_all(&profile_root).unwrap();
+
+        let config = Config {
+            telegram: TelegramConfig {
+                profiles: BTreeMap::from([(
+                    "zdx".to_string(),
+                    TelegramProfileConfig {
+                        chat_id: -100_123,
+                        cwd: profile_root.display().to_string(),
+                    },
+                )]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let context = test_context(config, fallback_root);
+
+        context.update_config(|cfg| {
+            cfg.model = "sentinel:picked".to_string();
+        });
+
+        assert_eq!(context.config().model, "sentinel:picked");
+        assert_eq!(context.config_for_chat(-100_123).model, "sentinel:picked");
     }
 
     fn test_context(config: Config, root: PathBuf) -> BotContext {
