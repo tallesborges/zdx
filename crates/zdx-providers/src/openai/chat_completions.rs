@@ -609,10 +609,29 @@ impl<S> ChatCompletionsSseParser<S> {
         });
     }
 
-    fn process_reasoning_details_from(&mut self, value: &Value) {
-        if let Some(details) = value.get("reasoning_details").and_then(|v| v.as_array()) {
-            self.process_reasoning_details(details);
+    /// Normalizes a `reasoning_details` array into the text not yet seen, advancing
+    /// the snapshot. Providers send either incremental deltas or cumulative
+    /// snapshots there; both collapse to incremental text here.
+    fn normalize_reasoning_details(&mut self, value: &Value) -> String {
+        let Some(details) = value.get("reasoning_details").and_then(|v| v.as_array()) else {
+            return String::new();
+        };
+
+        let mut incremental = String::new();
+        for detail in details {
+            if let Some(text) = detail.get("text").and_then(|v| v.as_str())
+                && !text.is_empty()
+            {
+                if let Some(delta) = text.strip_prefix(&self.reasoning_details_snapshot) {
+                    self.reasoning_details_snapshot = text.to_string();
+                    incremental.push_str(delta);
+                } else {
+                    self.reasoning_details_snapshot.push_str(text);
+                    incremental.push_str(text);
+                }
+            }
         }
+        incremental
     }
 
     /// Emit completion events. Called either when we have both `finish_reason` + usage,
@@ -730,11 +749,13 @@ impl<S> ChatCompletionsSseParser<S> {
             }
 
             // MiniMax may send reasoning_details directly on choice (not only delta).
-            self.process_reasoning_details_from(choice);
+            let choice_details = self.normalize_reasoning_details(choice);
+            self.emit_reasoning_delta(&choice_details);
 
             // Also check message level (some providers send final chunk with message instead of delta)
             if let Some(message) = choice.get("message") {
-                self.process_reasoning_details_from(message);
+                let message_details = self.normalize_reasoning_details(message);
+                self.emit_reasoning_delta(&message_details);
             }
         }
 
@@ -782,19 +803,22 @@ impl<S> ChatCompletionsSseParser<S> {
             }
         }
 
-        // Handle reasoning content (Moonshot/Kimi, StepFun and other OpenAI-compatible providers)
-        // MiniMax can alternatively stream reasoning via reasoning_details.
-        match delta
-            .get("reasoning_content")
-            .or_else(|| delta.get("reasoning"))
-            .and_then(|v| v.as_str())
-        {
-            Some(reasoning) if !reasoning.is_empty() => self.emit_reasoning_delta(reasoning),
-            _ => (),
-        }
+        // Handle reasoning content (Moonshot/Kimi, StepFun and other OpenAI-compatible
+        // providers). Reasoning arrives as a scalar field, as `reasoning_details`
+        // (MiniMax), or, on OpenRouter-backed proxies, as both carrying the same text,
+        // so each distinct representation is emitted once.
+        let scalar_reasoning = ["reasoning_content", "reasoning"]
+            .into_iter()
+            .filter_map(|key| delta.get(key).and_then(|v| v.as_str()))
+            .find(|text| !text.is_empty())
+            .unwrap_or_default()
+            .to_string();
+        let detail_reasoning = self.normalize_reasoning_details(delta);
 
-        // Handle MiniMax reasoning_details (array with type/text fields)
-        self.process_reasoning_details_from(delta);
+        self.emit_reasoning_delta(&scalar_reasoning);
+        if detail_reasoning != scalar_reasoning {
+            self.emit_reasoning_delta(&detail_reasoning);
+        }
 
         // Handle tool calls
         if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
@@ -846,23 +870,6 @@ impl<S> ChatCompletionsSseParser<S> {
                         index: entry.stream_index,
                         partial_json: args.to_string(),
                     });
-                }
-            }
-        }
-    }
-
-    /// Process `MiniMax` `reasoning_details` array (may be at delta or choice level).
-    fn process_reasoning_details(&mut self, details: &[Value]) {
-        for detail in details {
-            if let Some(text) = detail.get("text").and_then(|v| v.as_str())
-                && !text.is_empty()
-            {
-                if let Some(delta) = text.strip_prefix(&self.reasoning_details_snapshot) {
-                    self.reasoning_details_snapshot = text.to_string();
-                    self.emit_reasoning_delta(delta);
-                } else {
-                    self.reasoning_details_snapshot.push_str(text);
-                    self.emit_reasoning_delta(text);
                 }
             }
         }
@@ -1268,6 +1275,71 @@ data: [DONE]
             })
             .count();
         assert_eq!(reasoning_starts, 1);
+    }
+
+    /// OpenRouter-backed proxies (e.g. opencode-go) repeat the same reasoning delta
+    /// in both `reasoning` and `reasoning_details`, which must not double the text.
+    #[tokio::test]
+    async fn test_duplicate_scalar_and_details_reasoning_emitted_once() {
+        let sse = r#"data: {"choices":[{"delta":{"content":"","reasoning":"We","reasoning_details":[{"type":"reasoning.text","text":"We","index":0}]}}]}
+
+data: {"choices":[{"delta":{"content":"","reasoning":" need","reasoning_details":[{"type":"reasoning.text","text":" need","index":0}]}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}
+
+data: [DONE]
+"#;
+
+        let events = parse_sse(sse, "hy3").await;
+        assert_eq!(extract_reasoning_deltas(&events), vec!["We", " need"]);
+    }
+
+    /// A chunk carrying genuinely different text in each field must keep both.
+    #[tokio::test]
+    async fn test_complementary_scalar_and_details_reasoning_both_emitted() {
+        let sse = r#"data: {"choices":[{"delta":{"reasoning":"summary","reasoning_details":[{"text":" supporting detail"}]}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}
+
+data: [DONE]
+"#;
+
+        let events = parse_sse(sse, "test-model").await;
+        assert_eq!(
+            extract_reasoning_deltas(&events),
+            vec!["summary", " supporting detail"]
+        );
+    }
+
+    /// The details snapshot must advance even when a duplicate scalar suppressed its
+    /// emission, so a later cumulative details-only chunk stays incremental.
+    #[tokio::test]
+    async fn test_scalar_to_cumulative_details_transition_stays_incremental() {
+        let sse = r#"data: {"choices":[{"delta":{"reasoning":"Think","reasoning_details":[{"text":"Think"}]}}]}
+
+data: {"choices":[{"delta":{"reasoning_details":[{"text":"Thinking"}]}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}
+
+data: [DONE]
+"#;
+
+        let events = parse_sse(sse, "test-model").await;
+        assert_eq!(extract_reasoning_deltas(&events), vec!["Think", "ing"]);
+    }
+
+    /// An empty `reasoning_content` must not mask a non-empty `reasoning`.
+    #[tokio::test]
+    async fn test_empty_reasoning_content_falls_back_to_reasoning() {
+        let sse = r#"data: {"choices":[{"delta":{"reasoning_content":"","reasoning":"actual"}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}
+
+data: [DONE]
+"#;
+
+        let events = parse_sse(sse, "test-model").await;
+        assert_eq!(extract_reasoning_deltas(&events), vec!["actual"]);
     }
 
     #[tokio::test]
