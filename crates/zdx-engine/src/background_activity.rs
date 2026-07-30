@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 
 use crate::config::paths;
+use crate::proc_liveness::{Liveness, current_birth, current_pgid, liveness};
 
 /// How long an exited process's tombstone (and its logs) are retained so
 /// output / exit-code reads still work after the process ends.
@@ -285,10 +286,11 @@ enum Ownership {
     Unknown,
 }
 
-enum Liveness {
-    Alive,
-    Dead,
-    Unverifiable,
+/// Captures the process's OS start-time identity + pgid at spawn time. Callers
+/// store `birth_id` in the record so kills can defend against PID reuse.
+#[must_use]
+pub fn capture_identity(pid: u32) -> (Option<u64>, Option<i32>) {
+    (current_birth(pid), current_pgid(pid))
 }
 
 fn ownership(rec: &BackgroundProcess) -> Ownership {
@@ -309,81 +311,6 @@ fn ownership(rec: &BackgroundProcess) -> Ownership {
             }
         }
     }
-}
-
-#[cfg(unix)]
-fn liveness(pid: u32) -> Liveness {
-    let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    if r == 0 {
-        return Liveness::Alive;
-    }
-    match io::Error::last_os_error().raw_os_error() {
-        Some(libc::EPERM) => Liveness::Unverifiable,
-        // ESRCH (no such process) or anything else → treat as dead.
-        _ => Liveness::Dead,
-    }
-}
-
-#[cfg(not(unix))]
-fn liveness(_pid: u32) -> Liveness {
-    Liveness::Unverifiable
-}
-
-#[cfg(unix)]
-fn current_pgid(pid: u32) -> Option<i32> {
-    let r = unsafe { libc::getpgid(pid as libc::pid_t) };
-    if r < 0 { None } else { Some(r) }
-}
-
-#[cfg(not(unix))]
-fn current_pgid(_pid: u32) -> Option<i32> {
-    None
-}
-
-/// Captures the process's OS start-time identity + pgid at spawn time. Callers
-/// store `birth_id` in the record so kills can defend against PID reuse.
-#[must_use]
-pub fn capture_identity(pid: u32) -> (Option<u64>, Option<i32>) {
-    (current_birth(pid), current_pgid(pid))
-}
-
-#[cfg(target_os = "macos")]
-fn current_birth(pid: u32) -> Option<u64> {
-    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    let n = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::c_int,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            std::ptr::from_mut(&mut info).cast::<libc::c_void>(),
-            size,
-        )
-    };
-    if n == size {
-        Some(info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
-    } else {
-        None
-    }
-}
-
-#[cfg(all(unix, target_os = "linux"))]
-fn current_birth(pid: u32) -> Option<u64> {
-    // Field 22 of /proc/<pid>/stat is starttime (clock ticks since boot).
-    // The command (field 2) may contain spaces/parens, so split after ')'.
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let rest = stat.rsplit_once(')')?.1;
-    rest.split_whitespace().nth(19)?.parse::<u64>().ok()
-}
-
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "linux")))]
-fn current_birth(_pid: u32) -> Option<u64> {
-    None
-}
-
-#[cfg(not(unix))]
-fn current_birth(_pid: u32) -> Option<u64> {
-    None
 }
 
 enum Signal {

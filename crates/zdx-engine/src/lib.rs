@@ -13,6 +13,7 @@ pub mod mcp;
 pub mod media;
 pub mod models;
 pub mod pidfile;
+pub mod proc_liveness;
 pub mod prompts;
 pub mod providers;
 pub mod skills;
