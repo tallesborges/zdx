@@ -156,6 +156,7 @@ pub(super) async fn handle_general_forum_commands(
         BotCommand::New
             | BotCommand::WorktreeCreate
             | BotCommand::Handoff
+            | BotCommand::Btw
             | BotCommand::Commands
             | BotCommand::PromptBuilder
             | BotCommand::Launcher
@@ -187,6 +188,7 @@ pub(super) async fn handle_general_forum_commands(
         }
         BotCommand::WorktreeCreate => "/worktree must be used inside a topic, not General.",
         BotCommand::Handoff => "/handoff must be used inside a topic, not General.",
+        BotCommand::Btw => "/btw must be used inside a topic, not General.",
         BotCommand::Commands => "/commands must be used inside a topic, not General.",
         BotCommand::PromptBuilder => "/prompt_builder must be used inside a topic, not General.",
         BotCommand::Exit => unreachable!("exit is handled by handle_exit_command"),
@@ -929,12 +931,13 @@ async fn handle_thread_commands(
                 .await?;
             return Ok(true);
         }
-        // Handoff/PromptBuilder run via the staging flow; Commands via the
+        // Handoff/Btw/PromptBuilder run via the staging flow; Commands via the
         // picker handler; Tldr via handle_tldr_command.
         BotCommand::Exit
         | BotCommand::Status
         | BotCommand::WhereAmI
         | BotCommand::Handoff
+        | BotCommand::Btw
         | BotCommand::Commands
         | BotCommand::Tldr
         | BotCommand::ThreadId
