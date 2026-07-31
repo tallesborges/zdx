@@ -15,8 +15,8 @@ use base64::engine::general_purpose::STANDARD;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 
+use crate::ProviderKind;
 use crate::shared::{USER_AGENT, classify_reqwest_error, header_value};
-use crate::{ProviderError, ProviderKind};
 
 /// Default `DashScope` native API base (international).
 const DEFAULT_IMAGE_BASE_URL: &str = "https://dashscope-intl.aliyuncs.com/api/v1";
@@ -100,6 +100,7 @@ impl AlibabaImageClient {
             self.base_url
         );
         let headers = build_headers(&self.api_key)?;
+        crate::shared::log_request("alibaba-image", &url);
 
         let response = self
             .http
@@ -110,11 +111,11 @@ impl AlibabaImageClient {
             .await
             .map_err(|e| classify_reqwest_error(&e))?;
 
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(ProviderError::http_status(status.as_u16(), &body).into());
-        }
+        let body = crate::shared::check_response_status("alibaba-image", response)
+            .await?
+            .text()
+            .await
+            .unwrap_or_default();
 
         let value: Value = serde_json::from_str(&body)
             .with_context(|| format!("Failed to parse DashScope image response JSON: {body}"))?;

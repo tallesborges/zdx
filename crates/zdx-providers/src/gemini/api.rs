@@ -10,7 +10,7 @@ use super::shared::{GeminiThinkingConfig, build_gemini_request};
 use super::sse::GeminiSseParser;
 use crate::debug_metrics::maybe_wrap_with_metrics;
 use crate::shared::{classify_reqwest_error, merge_system_prompt};
-use crate::{ChatMessage, DebugTrace, ProviderError, ProviderKind, ProviderStream, wrap_stream};
+use crate::{ChatMessage, DebugTrace, ProviderKind, ProviderStream, wrap_stream};
 
 /// Gemini API configuration.
 #[derive(Debug, Clone)]
@@ -148,6 +148,7 @@ impl GeminiClient {
             self.config.base_url, self.config.model
         );
         let headers = build_headers(&self.config.api_key)?;
+        crate::shared::log_request("gemini", &url);
 
         let response = if let Some(trace) = &trace {
             let body = serde_json::to_vec(&request)?;
@@ -169,11 +170,7 @@ impl GeminiClient {
                 .map_err(|e| classify_reqwest_error(&e))?
         };
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_body = response.text().await.unwrap_or_default();
-            return Err(ProviderError::http_status(status.as_u16(), &error_body).into());
-        }
+        let response = crate::shared::check_response_status("gemini", response).await?;
 
         let byte_stream = wrap_stream(trace, response.bytes_stream());
         let event_stream = GeminiSseParser::new(byte_stream, self.config.model.clone(), "gemini");
@@ -195,6 +192,7 @@ impl GeminiClient {
             self.config.base_url, self.config.model
         );
         let headers = build_json_headers(&self.config.api_key)?;
+        crate::shared::log_request("gemini-image", &url);
 
         let response = self
             .http
@@ -205,11 +203,11 @@ impl GeminiClient {
             .await
             .map_err(|e| classify_reqwest_error(&e))?;
 
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(ProviderError::http_status(status.as_u16(), &body).into());
-        }
+        let body = crate::shared::check_response_status("gemini-image", response)
+            .await?
+            .text()
+            .await
+            .unwrap_or_default();
 
         let value: Value = serde_json::from_str(&body)
             .with_context(|| format!("Failed to parse Gemini image response JSON: {body}"))?;
@@ -234,6 +232,7 @@ impl GeminiClient {
             self.config.base_url, self.config.model
         );
         let headers = build_json_headers(&self.config.api_key)?;
+        crate::shared::log_request("gemini-media", &url);
 
         let response = self
             .http
@@ -244,11 +243,11 @@ impl GeminiClient {
             .await
             .map_err(|e| classify_reqwest_error(&e))?;
 
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(ProviderError::http_status(status.as_u16(), &body).into());
-        }
+        let body = crate::shared::check_response_status("gemini-media", response)
+            .await?
+            .text()
+            .await
+            .unwrap_or_default();
 
         let value: Value = serde_json::from_str(&body)
             .with_context(|| format!("Failed to parse Gemini response JSON: {body}"))?;

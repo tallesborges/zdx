@@ -123,7 +123,7 @@ impl ClaudeCliClient {
 
         let url = format!("{}/v1/messages?beta=true", self.config.base_url);
 
-        send_streaming_request(&self.http, &url, &request, |builder| {
+        send_streaming_request("claude-cli", &self.http, &url, &request, |builder| {
             builder
                 .header("anthropic-version", API_VERSION)
                 .header("Authorization", format!("Bearer {}", creds.access))

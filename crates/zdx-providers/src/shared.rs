@@ -164,6 +164,59 @@ pub fn classify_reqwest_error(err: &reqwest::Error) -> ProviderError {
     }
 }
 
+// ============================================================================
+// Request logging
+// ============================================================================
+
+/// Host + path of a URL, for logging. Deliberately drops the scheme, any
+/// userinfo, and the query string so a credential in a configured base URL
+/// (or an API key passed as a query parameter) can never reach the log.
+fn endpoint_label(url: &str) -> String {
+    reqwest::Url::parse(url).map_or_else(
+        |_| "-".to_string(),
+        |parsed| format!("{}{}", parsed.host_str().unwrap_or("-"), parsed.path()),
+    )
+}
+
+/// Log an outbound provider request. Records only the client label and
+/// host+path — never headers, bodies, or credentials.
+///
+/// `client` is the request implementation (`anthropic`, `claude-cli`,
+/// `chat-completions`, …), which the engine's `turn` span does not express.
+/// The model is deliberately omitted: the engine span already carries it, and
+/// repeating it on every line makes the monitor's Logs tab harder to read.
+pub(crate) fn log_request(client: &str, url: &str) {
+    tracing::debug!(client, endpoint = %endpoint_label(url), "Provider request sent");
+}
+
+/// Validate a provider response status, logging the outcome and converting a
+/// non-success into a `ProviderError` carrying the (untruncated) body.
+///
+/// # Errors
+/// Returns a `ProviderError` when the response status is not a success.
+pub(crate) async fn check_response_status(
+    client: &str,
+    response: reqwest::Response,
+) -> Result<reqwest::Response> {
+    let status = response.status();
+    if status.is_success() {
+        tracing::debug!(
+            client,
+            status = status.as_u16(),
+            "Provider accepted request"
+        );
+        return Ok(response);
+    }
+    let error_body = response.text().await.unwrap_or_default();
+    tracing::warn!(
+        client,
+        status = status.as_u16(),
+        error = %zdx_types::log_field(&error_body, 300),
+        "Provider request failed"
+    );
+    Err(ProviderError::http_status(status.as_u16(), &error_body).into())
+}
+
 /// Extracts text and an optional image from tool result content.
 ///
 /// Returns the text output and `Some((mime_type, base64_data))` when the
@@ -191,6 +244,31 @@ pub(crate) fn extract_tool_result_with_image(
 
             (text, image)
         }
+    }
+}
+
+#[cfg(test)]
+mod request_log_tests {
+    use super::endpoint_label;
+
+    #[test]
+    fn endpoint_label_drops_credentials_and_query() {
+        assert_eq!(
+            endpoint_label("https://api.openai.com/v1/responses"),
+            "api.openai.com/v1/responses"
+        );
+        // Query strings can carry API keys; userinfo can carry passwords.
+        assert_eq!(
+            endpoint_label(
+                "https://generativelanguage.googleapis.com/v1beta/models/x:stream?key=SECRET"
+            ),
+            "generativelanguage.googleapis.com/v1beta/models/x:stream"
+        );
+        assert_eq!(
+            endpoint_label("https://user:pass@proxy.internal/v1/chat/completions"),
+            "proxy.internal/v1/chat/completions"
+        );
+        assert_eq!(endpoint_label("not a url"), "-");
     }
 }
 
