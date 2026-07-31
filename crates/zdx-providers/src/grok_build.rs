@@ -112,6 +112,7 @@ impl GrokBuildClient {
         let access_token = resolve_access_token(self.account.as_deref()).await?;
         let system = merge_system_prompt(system);
         send_responses_stream(
+            "grok-build",
             &self.http,
             &self.config,
             build_headers(&access_token)?,

@@ -12,7 +12,7 @@ use super::types::{
     OutputConfig, StreamingMessagesRequest, SystemBlock, ThinkingConfig,
 };
 use crate::debug_metrics::maybe_wrap_with_metrics;
-use crate::shared::{ChatMessage, ProviderError, ProviderStream, classify_reqwest_error};
+use crate::shared::{ChatMessage, ProviderStream, classify_reqwest_error};
 use crate::{DebugTrace, wrap_stream};
 
 pub(crate) const INTERLEAVED_THINKING_BETA_HEADER: &str = "interleaved-thinking-2025-05-14";
@@ -173,6 +173,7 @@ pub(crate) fn build_system_blocks(
 /// # Errors
 /// Returns an error if the operation fails.
 pub(crate) async fn send_streaming_request(
+    provider: &str,
     client: &reqwest::Client,
     url: &str,
     request: &StreamingMessagesRequest<'_>,
@@ -181,6 +182,7 @@ pub(crate) async fn send_streaming_request(
     use crate::shared::USER_AGENT;
 
     let trace = DebugTrace::from_env(request.model, None);
+    crate::shared::log_request(provider, url);
     let builder = client
         .post(url)
         .header("content-type", "application/json")
@@ -201,11 +203,7 @@ pub(crate) async fn send_streaming_request(
             .map_err(|e| classify_reqwest_error(&e))?
     };
 
-    let status = response.status();
-    if !status.is_success() {
-        let error_body = response.text().await.unwrap_or_default();
-        return Err(ProviderError::http_status(status.as_u16(), &error_body).into());
-    }
+    let response = crate::shared::check_response_status(provider, response).await?;
 
     let byte_stream = wrap_stream(trace, response.bytes_stream());
     let event_stream = SseParser::new(byte_stream);

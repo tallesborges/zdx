@@ -170,7 +170,7 @@ impl OpenAICodexClient {
 
         // For Codex, send the system prompt through top-level `instructions`.
         // Keep `system` input empty here to avoid duplication in `input`.
-        send_responses_stream(&self.http, &config, headers, messages, tools, None).await
+        send_responses_stream("codex", &self.http, &config, headers, messages, tools, None).await
     }
 
     /// Generate image content using the hosted Responses API `image_generation` tool.
@@ -199,6 +199,7 @@ impl OpenAICodexClient {
             ProviderKind::OpenAICodex.default_base_url(),
             RESPONSES_PATH
         );
+        crate::shared::log_request("codex-image", &url);
         let response = self
             .http
             .post(url)
@@ -208,11 +209,11 @@ impl OpenAICodexClient {
             .await
             .map_err(|e| classify_reqwest_error(&e))?;
 
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(crate::ProviderError::http_status(status.as_u16(), &body).into());
-        }
+        let body = crate::shared::check_response_status("codex-image", response)
+            .await?
+            .text()
+            .await
+            .unwrap_or_default();
 
         parse_image_generation_sse_response(&body)
     }

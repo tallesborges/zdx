@@ -124,6 +124,7 @@ impl XaiClient {
     ) -> Result<ProviderStream> {
         let system = merge_system_prompt(system);
         send_responses_stream(
+            "xai",
             &self.http,
             &self.config,
             build_headers(&self.api_key)?,

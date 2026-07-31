@@ -140,7 +140,7 @@ impl AnthropicClient {
 
         let url = format!("{}/v1/messages", self.config.base_url);
 
-        send_streaming_request(&self.http, &url, &request, |builder| {
+        send_streaming_request("anthropic", &self.http, &url, &request, |builder| {
             let builder = builder
                 .header("anthropic-version", API_VERSION)
                 .header("x-api-key", &self.config.api_key);

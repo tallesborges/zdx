@@ -76,6 +76,7 @@ impl OpenAIChatCompletionsClient {
 
         let url = format!("{}{}", self.config.base_url, CHAT_COMPLETIONS_PATH);
         let headers = build_headers(&self.config.api_key, &self.config.extra_headers)?;
+        crate::shared::log_request("chat-completions", &url);
 
         let response = if let Some(trace) = &trace {
             let body = serde_json::to_vec(&request)?;
@@ -97,11 +98,7 @@ impl OpenAIChatCompletionsClient {
                 .map_err(|e| classify_reqwest_error(&e))?
         };
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_body = response.text().await.unwrap_or_default();
-            return Err(ProviderError::http_status(status.as_u16(), &error_body).into());
-        }
+        let response = crate::shared::check_response_status("chat-completions", response).await?;
 
         let byte_stream = wrap_stream(trace, response.bytes_stream());
         let event_stream = ChatCompletionsSseParser::new(byte_stream, self.config.model.clone());

@@ -12,8 +12,8 @@ pub use super::responses_types::{
 use crate::debug_metrics::maybe_wrap_with_metrics;
 use crate::shared::classify_reqwest_error;
 use crate::{
-    ChatContentBlock, ChatMessage, DebugTrace, ProviderError, ProviderStream, ReasoningBlock,
-    ReplayToken, wrap_stream,
+    ChatContentBlock, ChatMessage, DebugTrace, ProviderStream, ReasoningBlock, ReplayToken,
+    wrap_stream,
 };
 
 /// Shared configuration for Responses API requests.
@@ -46,6 +46,7 @@ pub struct ResponsesConfig {
 /// # Errors
 /// Returns an error if the operation fails.
 pub async fn send_responses_stream(
+    provider: &str,
     http: &reqwest::Client,
     config: &ResponsesConfig,
     headers: HeaderMap,
@@ -58,6 +59,7 @@ pub async fn send_responses_stream(
     let url = format!("{}{}", config.base_url, config.path);
 
     let trace = DebugTrace::from_env(&config.model, config.prompt_cache_key.as_deref());
+    crate::shared::log_request(provider, &url);
 
     let response = if let Some(trace) = &trace {
         let body = serde_json::to_vec(&request)?;
@@ -77,11 +79,7 @@ pub async fn send_responses_stream(
             .map_err(|e| classify_reqwest_error(&e))?
     };
 
-    let status = response.status();
-    if !status.is_success() {
-        let error_body = response.text().await.unwrap_or_default();
-        return Err(ProviderError::http_status(status.as_u16(), &error_body).into());
-    }
+    let response = crate::shared::check_response_status(provider, response).await?;
 
     let byte_stream = wrap_stream(trace, response.bytes_stream());
     let event_stream = ResponsesSseParser::new(byte_stream, config.model.clone());

@@ -15,7 +15,7 @@ use super::sse::GeminiSseParser;
 use crate::debug_metrics::maybe_wrap_with_metrics;
 use crate::oauth::google_antigravity as oauth_antigravity;
 use crate::shared::{classify_reqwest_error, merge_system_prompt};
-use crate::{ChatMessage, ProviderError, ProviderStream};
+use crate::{ChatMessage, ProviderStream};
 
 const API_ENDPOINT: &str = "https://daily-cloudcode-pa.googleapis.com";
 const STREAM_PATH: &str = "/v1internal:streamGenerateContent";
@@ -132,6 +132,7 @@ impl AntigravityClient {
 
         let url = format!("{API_ENDPOINT}{STREAM_PATH}?alt=sse");
         let headers = build_headers(&creds.access)?;
+        crate::shared::log_request("google-antigravity", &url);
 
         let response = self
             .http
@@ -142,11 +143,7 @@ impl AntigravityClient {
             .await
             .map_err(|e| classify_reqwest_error(&e))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_body = response.text().await.unwrap_or_default();
-            return Err(ProviderError::http_status(status.as_u16(), &error_body).into());
-        }
+        let response = crate::shared::check_response_status("google-antigravity", response).await?;
 
         let byte_stream = response.bytes_stream();
         let event_stream =

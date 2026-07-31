@@ -108,7 +108,10 @@ impl OpenAIClient {
         }
         let headers = build_headers(&self.config.api_key)?;
         let config = responses_config(&self.config);
-        send_responses_stream(&self.http, &config, headers, messages, tools, system).await
+        send_responses_stream(
+            "openai", &self.http, &config, headers, messages, tools, system,
+        )
+        .await
     }
 
     /// Generate image content using the hosted Responses API `image_generation` tool.
@@ -123,6 +126,7 @@ impl OpenAIClient {
         let headers = build_headers(&self.config.api_key)?;
         let request = build_image_generation_request(&self.config.model, prompt, options);
         let url = format!("{}{}", self.config.base_url, RESPONSES_PATH);
+        crate::shared::log_request("openai-image", &url);
         let response = self
             .http
             .post(url)
@@ -132,11 +136,11 @@ impl OpenAIClient {
             .await
             .map_err(|e| classify_reqwest_error(&e))?;
 
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(crate::ProviderError::http_status(status.as_u16(), &body).into());
-        }
+        let body = crate::shared::check_response_status("openai-image", response)
+            .await?
+            .text()
+            .await
+            .unwrap_or_default();
 
         parse_image_generation_sse_response(&body)
     }
