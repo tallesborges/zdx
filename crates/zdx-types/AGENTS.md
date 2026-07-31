@@ -10,6 +10,7 @@ Scope: pure shared value types, enums, and associated pure helper logic used acr
 - `src/providers.rs`: `ProviderErrorKind`, `ProviderError`, `ProviderResult`, `Usage`, `StreamEvent`, `ProviderStream` — provider error/retry classification and streaming types
 - `src/events.rs`: `AgentEvent`, `ErrorKind`, `TurnStatus`, `ToolOutput`, `ToolError`, `ImageContent` — agent event and tool output types with serialization logic
 - `src/tools.rs`: `ToolDefinition`, `ToolResult`, `ToolResultBlock`, `ToolResultContent`
+- `src/logging.rs`: `log_field(value, max_bytes)` — collapses whitespace and truncates a value for use as a `tracing` field, so one event stays one log line and stays bounded. Used by providers (HTTP error bodies), engine tools (tool errors), agent turn errors, and subagent stderr.
 
 ## Conventions
 

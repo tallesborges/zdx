@@ -6,6 +6,7 @@
 //! runtime service wiring.
 
 pub mod events;
+pub mod logging;
 pub mod messages;
 pub mod providers;
 pub mod tools;
@@ -23,3 +24,4 @@ pub use providers::{
 pub use tools::{ToolDefinition, ToolResult, ToolResultBlock, ToolResultContent};
 pub mod config;
 pub use config::{TextVerbosity, ThinkingLevel};
+pub use logging::log_field;
