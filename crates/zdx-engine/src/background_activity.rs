@@ -129,6 +129,17 @@ pub fn write_marker(rec: &BackgroundProcess) -> io::Result<()> {
     write_marker_in(&background_run_dir(), rec)
 }
 
+/// Log a newly registered background process. Called by the spawn path so a
+/// detached process is traceable after the fact.
+pub fn log_spawned(rec: &BackgroundProcess) {
+    tracing::debug!(
+        bg_id = %rec.bg_id,
+        pid = rec.pid,
+        thread = rec.thread_id.as_deref().unwrap_or("-"),
+        "Background process started"
+    );
+}
+
 /// Atomic marker write into an explicit registry dir (real dir or a test temp
 /// dir). All of `list_in`'s reap writes go through here so a dir-scoped scan
 /// never touches the global registry.
@@ -224,6 +235,7 @@ pub fn mark_exited(bg_id: &str, code: Option<i32>) {
 /// `pid + birth_id + pgid`. Sends `SIGTERM`, waits a short grace, then
 /// `SIGKILL`, and tombstones the record on confirmed exit.
 pub async fn kill_background(bg_id: &str) -> KillOutcome {
+    tracing::debug!(bg_id, "Background kill requested");
     let Some(mut rec) = get(bg_id) else {
         return KillOutcome::NotFound;
     };

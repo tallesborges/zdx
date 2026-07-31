@@ -966,6 +966,7 @@ impl Config {
         use toml_edit::DocumentMut;
 
         let mut merged = DocumentMut::new();
+        let mut applied: Vec<String> = Vec::new();
 
         for path in layers {
             if !path.exists() {
@@ -979,7 +980,10 @@ impl Config {
                 .with_context(|| format!("Failed to parse config from {}", path.display()))?;
 
             merge_items(merged.as_table_mut(), layer.as_table());
+            applied.push(path.display().to_string());
         }
+
+        tracing::debug!(layers = %applied.join(", "), "Loaded config layers");
 
         toml::from_str(&merged.to_string()).context("Failed to parse merged config")
     }
