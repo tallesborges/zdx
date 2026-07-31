@@ -16,6 +16,7 @@ use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Duration, timeout};
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument as _;
 
 use crate::config::{Config, TextVerbosity, ThinkingLevel};
 use crate::core::events::{AgentEvent, ErrorKind, NoticeKind, ToolOutput, TurnStatus};
@@ -577,6 +578,17 @@ pub(crate) enum TurnDiagnostic {
 }
 
 impl TurnError {
+    /// Short, bounded description for logging (never the full payload).
+    fn log_summary(&self) -> String {
+        let raw = match self {
+            Self::Interrupted { .. } => "interrupted".to_string(),
+            Self::Provider(p) => format!("provider: {}", p.message),
+            Self::Parse { message, .. } => format!("parse: {message}"),
+            Self::Internal(err) => format!("internal: {err}"),
+        };
+        zdx_types::log_field(&raw, 200)
+    }
+
     fn interrupted(partial_content: Option<String>) -> Self {
         Self::Interrupted {
             partial_content,
@@ -814,6 +826,15 @@ pub async fn run_turn_with_cancel(
     {
         Ok(result) => Ok(result),
         Err((err, committed_messages)) => {
+            if matches!(err, TurnError::Interrupted { .. }) {
+                tracing::debug!(thread = thread_id.unwrap_or("-"), "Turn interrupted");
+            } else {
+                tracing::warn!(
+                    thread = thread_id.unwrap_or("-"),
+                    error = %err.log_summary(),
+                    "Turn failed"
+                );
+            }
             if committed_messages.is_empty() {
                 emit_turn_error(&err, &sender, initial_message_count);
             } else {
@@ -833,6 +854,15 @@ pub async fn run_turn_with_cancel(
 type RunTurnResult = std::result::Result<(String, Vec<ChatMessage>), (TurnError, Vec<ChatMessage>)>;
 
 #[allow(clippy::too_many_lines)]
+#[tracing::instrument(
+    name = "turn",
+    skip_all,
+    fields(
+        thread = thread_id.unwrap_or("-"),
+        model = tracing::field::Empty,
+        provider = tracing::field::Empty,
+    )
+)]
 async fn run_turn_inner(
     messages: Vec<ChatMessage>,
     config: &Config,
@@ -844,6 +874,16 @@ async fn run_turn_inner(
 ) -> RunTurnResult {
     let setup = build_run_turn_setup(config, options, thread_id)
         .map_err(|e| (TurnError::from_anyhow(e), messages.clone()))?;
+    let span = tracing::Span::current();
+    span.record("model", setup.model.as_str());
+    span.record("provider", setup.provider.as_str());
+    tracing::info!(
+        thinking = setup.thinking_level.display_name(),
+        tools = setup.tools.len(),
+        kind = options.activity_kind.as_deref().unwrap_or("main"),
+        subagent = options.activity_subagent_name.as_deref().unwrap_or("-"),
+        "Turn started"
+    );
     let _run_guard = crate::agent_activity::start(crate::agent_activity::StartParams {
         thread_id,
         surface: options.surface.as_deref(),
@@ -858,9 +898,13 @@ async fn run_turn_inner(
     let mut messages = messages;
     let initial_message_count = messages.len();
     let mut consecutive_malformed_tool_turns = 0usize;
+    // One iteration of the outer loop = one model completion (plus any tool
+    // round it requests). Tracked only for logging; nothing else needs it.
+    let mut model_turn: u32 = 0;
 
     loop {
         ensure_not_interrupted(None, cancel).map_err(|e| (e, messages.clone()))?;
+        model_turn += 1;
 
         // Unified retry loop for transient provider errors.
         //
@@ -880,6 +924,7 @@ async fn run_turn_inner(
                     (TurnError, bool, Option<StreamState>),
                 > = {
                     let request_started_at = Instant::now();
+                    tracing::debug!(model_turn, attempt, "Provider request attempt");
                     match request_stream(
                         &setup.client,
                         &messages,
@@ -1016,6 +1061,12 @@ async fn run_turn_inner(
             if stats.executable == 0 && stats.malformed > 0 {
                 consecutive_malformed_tool_turns += 1;
                 if consecutive_malformed_tool_turns >= MAX_CONSECUTIVE_MALFORMED_TOOL_TURNS {
+                    tracing::warn!(
+                        model_turn,
+                        malformed = stats.malformed,
+                        consecutive = consecutive_malformed_tool_turns,
+                        "Aborting turn: provider kept requesting tools with invalid arguments"
+                    );
                     return Err((
                         TurnError::Parse {
                             message: MALFORMED_TOOL_LOOP_ABORT_MESSAGE.to_string(),
@@ -1033,6 +1084,7 @@ async fn run_turn_inner(
             continue;
         }
 
+        tracing::info!(model_turns = model_turn, "Turn finished");
         return Ok(finalize_non_tool_turn(
             &mut messages,
             stream_state.turn,
@@ -1428,6 +1480,7 @@ fn ensure_not_interrupted(
     Ok(())
 }
 
+#[tracing::instrument(name = "provider_request", skip_all)]
 async fn request_stream(
     client: &dyn StreamingProvider,
     messages: &[ChatMessage],
@@ -1489,7 +1542,14 @@ async fn consume_stream(
         }
         let event = match timeout(STREAM_POLL_TIMEOUT, stream.next()).await {
             Ok(Some(Ok(event))) => event,
-            Ok(Some(Err(err))) => return Err((TurnError::Provider(err), state)),
+            Ok(Some(Err(err))) => {
+                tracing::warn!(
+                    elapsed_ms = request_started_at.elapsed().as_millis(),
+                    error = %zdx_types::log_field(&err.message, 200),
+                    "Provider stream failed"
+                );
+                return Err((TurnError::Provider(err), state));
+            }
             Ok(None) => {
                 // EOF without an explicit `MessageCompleted`: defensive
                 // flush so any buffered usage from a `MessageStart` /
@@ -1498,6 +1558,11 @@ async fn consume_stream(
                 // request's terminal usage event, so it carries per-request
                 // latency.
                 state.flush_final_usage(sender);
+                tracing::debug!(
+                    elapsed_ms = request_started_at.elapsed().as_millis(),
+                    stop_reason = state.stop_reason.as_deref().unwrap_or("-"),
+                    "Provider stream finished"
+                );
                 return Ok(state);
             }
             Err(_) => continue,
@@ -1883,6 +1948,7 @@ struct ToolTurnStats {
     malformed: usize,
 }
 
+#[tracing::instrument(name = "tool_turn", skip_all)]
 async fn process_tool_turn(
     messages: &mut Vec<ChatMessage>,
     turn: &mut AssistantTurnBuilder,
@@ -1894,6 +1960,17 @@ async fn process_tool_turn(
     let finalized = std::mem::take(turn).finalize();
     let executable_count = finalized.executable.len();
     let malformed_count = finalized.malformed_results.len();
+    tracing::debug!(
+        executable = executable_count,
+        malformed = malformed_count,
+        tools = %finalized
+            .executable
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>()
+            .join(","),
+        "Executing tool calls"
+    );
     emit_assistant_completed_if_present(sender, &finalized.final_text);
     emit_turn_diagnostics(&finalized.diagnostics, sender);
     emit_malformed_tool_events(sender, finalized.malformed_tools);
@@ -2182,12 +2259,18 @@ async fn execute_tools_async(
         let enabled_tools = enabled_tools.clone();
         let tool_registry = tool_registry.clone();
 
-        join_set.spawn(async move {
-            let (output, result) = tool_registry
-                .execute_tool(&tu.name, &tu.id, &tu.input, &ctx, &enabled_tools)
-                .await;
-            (i, tu.id.clone(), output, result)
-        });
+        // Tokio tasks do not inherit the current span, so attach it explicitly
+        // or every tool log line loses its turn/thread context.
+        let tool_span = tracing::Span::current();
+        join_set.spawn(
+            async move {
+                let (output, result) = tool_registry
+                    .execute_tool(&tu.name, &tu.id, &tu.input, &ctx, &enabled_tools)
+                    .await;
+                (i, tu.id.clone(), output, result)
+            }
+            .instrument(tool_span),
+        );
     }
 
     // Collect results with interrupt handling

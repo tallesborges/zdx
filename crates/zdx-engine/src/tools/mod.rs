@@ -289,6 +289,11 @@ impl ToolRegistry {
 
     /// # Errors
     /// Returns an error if the operation fails.
+    #[tracing::instrument(
+        name = "tool",
+        skip_all,
+        fields(tool = %name, tool_use_id = %tool_use_id)
+    )]
     pub async fn execute_tool<S>(
         &self,
         name: &str,
@@ -300,25 +305,44 @@ impl ToolRegistry {
     where
         S: std::hash::BuildHasher,
     {
+        let started_at = std::time::Instant::now();
         let name_lower = name.to_ascii_lowercase();
         let is_enabled = enabled_tools
             .iter()
             .any(|t| t.to_ascii_lowercase() == name_lower);
 
         if !is_enabled {
+            tracing::warn!("Tool call rejected: not enabled for this run");
             let output = unknown_tool_output(name, enabled_tools);
             let result = ToolResult::from_output(tool_use_id.to_string(), &output);
             return (output, result);
         }
 
-        let output = match self
+        let output = if let Some(tool) = self
             .tools
             .iter()
             .find(|t| t.definition().name.eq_ignore_ascii_case(&name_lower))
         {
-            Some(tool) => tool.execute(input, ctx).await,
-            None => unknown_tool_output(name, enabled_tools),
+            tool.execute(input, ctx).await
+        } else {
+            tracing::warn!("Tool call rejected: unknown tool");
+            unknown_tool_output(name, enabled_tools)
         };
+
+        let duration_ms = started_at.elapsed().as_millis();
+        match &output {
+            ToolOutput::Failure { .. } => {
+                let (code, message, _) = output.error_info().unwrap_or(("unknown", "", None));
+                tracing::warn!(
+                    duration_ms,
+                    code,
+                    error = %zdx_types::log_field(message, 300),
+                    "Tool failed"
+                );
+            }
+            ToolOutput::Canceled { .. } => tracing::debug!(duration_ms, "Tool canceled"),
+            ToolOutput::Success { .. } => tracing::debug!(duration_ms, "Tool completed"),
+        }
 
         let result = ToolResult::from_output(tool_use_id.to_string(), &output);
         (output, result)
@@ -733,7 +757,14 @@ async fn execute_blocking<F>(timeout: Option<Duration>, f: F) -> ToolOutput
 where
     F: FnOnce() -> ToolOutput + Send + 'static,
 {
-    let mut handle = tokio::task::spawn_blocking(f);
+    // `spawn_blocking` does not inherit the current span, so enter it inside
+    // the blocking closure or the tool's own log lines lose their turn/thread
+    // context (same hazard as `spawn` in the concurrent tool path).
+    let span = tracing::Span::current();
+    let mut handle = tokio::task::spawn_blocking(move || {
+        let _entered = span.enter();
+        f()
+    });
 
     match timeout {
         Some(timeout) => match tokio::time::timeout(timeout, &mut handle).await {
