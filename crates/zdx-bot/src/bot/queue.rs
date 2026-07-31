@@ -61,7 +61,7 @@ pub(crate) async fn dispatch_message(
     if let Some(text) = message.text.as_deref()
         && bypasses_queue(text)
     {
-        spawn_standalone(Arc::clone(context), message);
+        spawn_standalone(Arc::clone(context), Arc::clone(queues), message);
         return;
     }
 
@@ -71,7 +71,7 @@ pub(crate) async fn dispatch_message(
             && is_topic_blocking_command(text)
         {
             // Handle directly without creating a topic
-            spawn_standalone(Arc::clone(context), message);
+            spawn_standalone(Arc::clone(context), Arc::clone(queues), message);
             return;
         }
 
@@ -191,9 +191,9 @@ fn generate_topic_name(text: Option<&str>) -> String {
 
 /// Spawn a standalone task for a message (no queuing, fully concurrent).
 /// Used only for commands that intentionally bypass topic auto-creation.
-fn spawn_standalone(context: Arc<BotContext>, message: Message) {
+fn spawn_standalone(context: Arc<BotContext>, queues: ChatQueueMap, message: Message) {
     tokio::spawn(async move {
-        if let Err(err) = handle_message(context.as_ref(), message).await {
+        if let Err(err) = handle_message(&context, &queues, message).await {
             tracing::error!(%err, "Standalone message handling error");
         }
     });
@@ -351,7 +351,7 @@ fn spawn_queue_worker(
                 tracing::warn!(status_id = status.status, %err, "Failed to delete queued status message");
             }
 
-            if let Err(err) = handle_message(context.as_ref(), message).await {
+            if let Err(err) = handle_message(&context, &queues, message).await {
                 tracing::error!(?key, %err, "Message handling error");
             }
 

@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use serde_json::json;
-use zdx_engine::core::handoff_generation::generate_handoff;
+use zdx_engine::core::handoff_generation::{build_side_thread_seed, generate_handoff};
 use zdx_engine::core::prompt_builder_generation::generate_prompt_builder;
 use zdx_engine::core::thread_persistence;
 
@@ -38,7 +38,16 @@ const SUGGESTION_PREVIEW_MAX_CHARS: usize = 3000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StagingCommand {
     Handoff,
+    Btw,
     PromptBuilder,
+}
+
+impl StagingCommand {
+    /// Whether accepting this command opens a brand-new forum topic (and so
+    /// requires being run inside one).
+    fn opens_new_topic(self) -> bool {
+        matches!(self, StagingCommand::Handoff | StagingCommand::Btw)
+    }
 }
 
 pub(crate) struct StagingSession {
@@ -71,7 +80,8 @@ pub(crate) fn new_staging_map() -> StagingMap {
 /// message was consumed (command start or staged input) and MUST NOT run a
 /// normal agent turn.
 pub(crate) async fn handle_staging_flow(
-    context: &BotContext,
+    context: &Arc<BotContext>,
+    queues: &ChatQueueMap,
     incoming: &IncomingMessage,
     reply_to_message_id: Option<i64>,
     topic_id: Option<i64>,
@@ -120,7 +130,7 @@ pub(crate) async fn handle_staging_flow(
         return Ok(true);
     }
 
-    process_staged_input(context, incoming, topic_id, thread_id).await?;
+    process_staged_input(context, queues, incoming, topic_id, thread_id).await?;
     Ok(true)
 }
 
@@ -130,6 +140,7 @@ fn staged_command_request(incoming: &IncomingMessage) -> Option<StagingCommand> 
     }
     match incoming.text.as_deref().and_then(parse_command)? {
         BotCommand::Handoff => Some(StagingCommand::Handoff),
+        BotCommand::Btw => Some(StagingCommand::Btw),
         BotCommand::PromptBuilder => Some(StagingCommand::PromptBuilder),
         _ => None,
     }
@@ -153,14 +164,19 @@ async fn start_staging(
     thread_id: &str,
     command: StagingCommand,
 ) -> Result<()> {
-    // Handoff needs a forum topic to create the new topic in; prompt-builder
-    // works anywhere (the accepted prompt runs in the current chat).
-    if matches!(command, StagingCommand::Handoff) && (!incoming.is_forum || topic_id.is_none()) {
+    // Handoff and btw both seed a brand-new topic, so they need a forum topic
+    // to create it in; prompt-builder works anywhere (the accepted prompt runs
+    // in the current chat).
+    if command.opens_new_topic() && (!incoming.is_forum || topic_id.is_none()) {
+        let name = match command {
+            StagingCommand::Btw => "/btw",
+            _ => "/handoff",
+        };
         context
             .client()
             .send_message(
                 incoming.chat_id,
-                "/handoff needs a forum topic (a group with topics enabled).",
+                &format!("{name} needs a forum topic (a group with topics enabled)."),
                 reply_to_message_id,
                 topic_id,
             )
@@ -180,6 +196,9 @@ async fn start_staging(
     let ask_text = match command {
         StagingCommand::Handoff => {
             "🔀 <b>Handoff</b>\nSend the message (text or voice) to start the new topic with — I'll show a preview to accept or discard. Send /cancel to abort."
+        }
+        StagingCommand::Btw => {
+            "💬 <b>Side question</b>\nSend your question (text or voice) — I'll answer it in a new topic that reads this thread, leaving this one untouched. Send /cancel to abort."
         }
         StagingCommand::PromptBuilder => {
             "🛠 <b>Prompt builder</b>\nSend your intent (text or voice) — I'll draft a prompt you can accept to run here, or discard. Send /cancel to abort."
@@ -210,7 +229,8 @@ async fn start_staging(
 }
 
 async fn process_staged_input(
-    context: &BotContext,
+    context: &Arc<BotContext>,
+    queues: &ChatQueueMap,
     incoming: &IncomingMessage,
     topic_id: Option<i64>,
     thread_id: &str,
@@ -239,6 +259,9 @@ async fn process_staged_input(
             StagingCommand::Handoff => {
                 "Send text or a voice note to use as the handoff message, or /cancel to abort."
             }
+            StagingCommand::Btw => {
+                "Send text or a voice note with your side question, or /cancel to abort."
+            }
             StagingCommand::PromptBuilder => {
                 "Send text or a voice note describing the prompt you want, or /cancel to abort."
             }
@@ -257,8 +280,15 @@ async fn process_staged_input(
         return Ok(());
     };
 
+    // btw needs no LLM call, so there is nothing to preview or accept: open the
+    // side topic straight away.
+    if command == StagingCommand::Btw {
+        return start_btw_topic(context, queues, incoming, topic_id, thread_id, input).await;
+    }
+
     let generating_text = match command {
         StagingCommand::Handoff => "⏳ Generating handoff…",
+        StagingCommand::Btw => unreachable!("btw returns above without generating"),
         StagingCommand::PromptBuilder => "⏳ Building prompt…",
     };
     let generating = context
@@ -278,6 +308,7 @@ async fn process_staged_input(
         StagingCommand::Handoff => {
             run_handoff_generation(context, incoming, thread_id, input).await
         }
+        StagingCommand::Btw => unreachable!("btw returns above without generating"),
         StagingCommand::PromptBuilder => {
             run_prompt_builder_generation(context, incoming, thread_id, input).await
         }
@@ -458,6 +489,13 @@ pub(crate) async fn handle_callback(
             StagingCommand::PromptBuilder => {
                 accept_prompt_builder(context, queues, client, callback, &thread_id, session).await;
             }
+            // btw opens its topic on input, so it never stages an Accept button.
+            // Telegram can still redeliver a stale callback, so answer politely.
+            StagingCommand::Btw => {
+                let _ = client
+                    .answer_callback_query(&callback.id, Some("Nothing to accept"))
+                    .await;
+            }
         },
         _ => {
             let _ = client.answer_callback_query(&callback.id, None).await;
@@ -466,45 +504,92 @@ pub(crate) async fn handle_callback(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn accept_handoff(
+/// Opens the side topic for `/btw` immediately — no preview, no Accept tap.
+///
+/// The seed is the user's question plus a pointer at the current thread, which
+/// the new topic's agent resolves with `Read_Thread`. On failure the staging
+/// session is kept so the next message retries.
+async fn start_btw_topic(
     context: &Arc<BotContext>,
     queues: &ChatQueueMap,
-    client: &TelegramClient,
-    callback: &CallbackQuery,
-    chat_id: i64,
-    source_thread_id: &str,
-    session: StagingSession,
-) {
-    let Some(suggestion) = session.suggestion_text.clone() else {
-        let _ = client
-            .answer_callback_query(&callback.id, Some("Nothing staged to accept yet"))
-            .await;
+    incoming: &IncomingMessage,
+    topic_id: Option<i64>,
+    thread_id: &str,
+    input: &str,
+) -> Result<()> {
+    let seed = build_side_thread_seed(thread_id, input);
+
+    // btw completes in one step, so the session is done either way.
+    let session = {
         let mut map = context.staging_map().lock().expect("staging lock poisoned");
-        map.insert(source_thread_id.to_string(), session);
-        return;
+        map.remove(thread_id)
     };
 
-    let topic_name = chrono::Utc::now()
-        .format("Handoff %Y-%m-%d %H:%M")
-        .to_string();
-    let new_topic_id = match client.create_forum_topic(chat_id, &topic_name).await {
-        Ok(topic_id) => topic_id,
-        Err(err) => {
-            tracing::error!(chat_id, %err, "Failed to create handoff topic");
-            let _ = client
-                .answer_callback_query(&callback.id, Some("Failed to create the new topic"))
-                .await;
-            let mut map = context.staging_map().lock().expect("staging lock poisoned");
-            map.insert(source_thread_id.to_string(), session);
-            return;
+    match seed_new_topic(
+        context,
+        queues,
+        incoming.chat_id,
+        incoming.user_id,
+        thread_id,
+        "Btw",
+        seed,
+    )
+    .await
+    {
+        Ok(()) => {
+            if let Some(session) = session {
+                cleanup_session_messages(context, incoming.chat_id, &session).await;
+            }
         }
-    };
+        Err(err) => {
+            if let Some(session) = session {
+                let mut map = context.staging_map().lock().expect("staging lock poisoned");
+                map.insert(thread_id.to_string(), session);
+            }
+            let text = format!(
+                "⚠️ Couldn't open the side topic:\n<blockquote><code>{}</code></blockquote>\nSend another message to retry, or /cancel.",
+                escape_html(&format!("{err:#}"))
+            );
+            let sent = context
+                .client()
+                .send_message_with_markup(
+                    incoming.chat_id,
+                    &text,
+                    Some(incoming.message_id),
+                    topic_id,
+                    &discard_only_keyboard(),
+                )
+                .await?;
+            track_bot_message(context, thread_id, sent.id);
+        }
+    }
+    Ok(())
+}
 
-    // Pre-create the new thread so its meta records the handoff lineage and
-    // a pending auto-title before the first turn opens it. Inherit the source
-    // thread's model/thinking overrides so the handoff continues with the same
-    // effective model and thinking level.
+/// Creates a forum topic seeded with `seed_text` and dispatches that text as
+/// the new topic's first message.
+///
+/// The new thread is pre-created so its meta records the `handoff_from` lineage
+/// and a pending auto-title before the first turn opens it, and it inherits the
+/// source thread's model/thinking overrides so it continues with the same
+/// effective model and thinking level. Shared by `/handoff` Accept and `/btw`.
+async fn seed_new_topic(
+    context: &Arc<BotContext>,
+    queues: &ChatQueueMap,
+    chat_id: i64,
+    from_user_id: i64,
+    source_thread_id: &str,
+    topic_prefix: &str,
+    seed_text: String,
+) -> Result<()> {
+    let topic_name = chrono::Utc::now()
+        .format(&format!("{topic_prefix} %Y-%m-%d %H:%M"))
+        .to_string();
+    let new_topic_id = context
+        .client()
+        .create_forum_topic(chat_id, &topic_name)
+        .await?;
+
     let inherited_model = thread_persistence::read_thread_model_override(source_thread_id)
         .ok()
         .flatten();
@@ -523,27 +608,64 @@ async fn accept_handoff(
         thread.set_pending_topic_title(true)
     });
     if let Err(err) = created {
-        tracing::warn!(chat_id, new_topic_id, %err, "Failed to record handoff lineage on new thread");
+        tracing::warn!(chat_id, new_topic_id, %err, "Failed to record lineage on new thread");
+    }
+
+    let synthetic: crate::telegram::Message = serde_json::from_value(json!({
+        "message_id": new_topic_id,
+        "chat": { "id": chat_id, "type": "supergroup", "is_forum": true },
+        "from": { "id": from_user_id, "is_bot": false },
+        "text": seed_text,
+        "message_thread_id": new_topic_id,
+    }))?;
+    dispatch_message(queues, context, synthetic).await;
+    Ok(())
+}
+
+/// Accepts a staged handoff: creates the new topic and seeds it with the
+/// generated context block.
+async fn accept_handoff(
+    context: &Arc<BotContext>,
+    queues: &ChatQueueMap,
+    client: &TelegramClient,
+    callback: &CallbackQuery,
+    chat_id: i64,
+    source_thread_id: &str,
+    session: StagingSession,
+) {
+    let Some(suggestion) = session.suggestion_text.clone() else {
+        let _ = client
+            .answer_callback_query(&callback.id, Some("Nothing staged to accept yet"))
+            .await;
+        let mut map = context.staging_map().lock().expect("staging lock poisoned");
+        map.insert(source_thread_id.to_string(), session);
+        return;
+    };
+
+    if let Err(err) = seed_new_topic(
+        context,
+        queues,
+        chat_id,
+        callback.from.id,
+        source_thread_id,
+        "Handoff",
+        suggestion,
+    )
+    .await
+    {
+        tracing::error!(chat_id, %err, "Failed to open handoff topic");
+        let _ = client
+            .answer_callback_query(&callback.id, Some("Failed to create the new topic"))
+            .await;
+        let mut map = context.staging_map().lock().expect("staging lock poisoned");
+        map.insert(source_thread_id.to_string(), session);
+        return;
     }
 
     cleanup_session_messages(context, chat_id, &session).await;
     let _ = client
         .answer_callback_query(&callback.id, Some("Handoff topic created ✓"))
         .await;
-
-    let synthetic: Result<crate::telegram::Message, _> = serde_json::from_value(json!({
-        "message_id": new_topic_id,
-        "chat": { "id": chat_id, "type": "supergroup", "is_forum": true },
-        "from": { "id": callback.from.id, "is_bot": false },
-        "text": suggestion,
-        "message_thread_id": new_topic_id,
-    }));
-    match synthetic {
-        Ok(synthetic) => dispatch_message(queues, context, synthetic).await,
-        Err(err) => {
-            tracing::error!(chat_id, %err, "Failed to synthesize handoff message");
-        }
-    }
 }
 
 /// Accepts a staged prompt-builder suggestion: the generated prompt becomes
@@ -638,6 +760,7 @@ fn suggestion_preview(command: StagingCommand, suggestion: &str) -> String {
             "Handoff preview",
             "Accept opens a new topic seeded with this context. Send another message to regenerate.",
         ),
+        StagingCommand::Btw => unreachable!("btw never stages a preview"),
         StagingCommand::PromptBuilder => (
             "🛠",
             "Prompt preview",
@@ -730,6 +853,15 @@ mod tests {
         assert!(preview.contains("Prompt preview"));
         assert!(preview.contains("runs this prompt here"));
         assert!(preview.contains("regenerate"));
+    }
+
+    /// Handoff and btw both seed a fresh topic, so both require running inside
+    /// one; prompt-builder runs in place and works anywhere.
+    #[test]
+    fn only_topic_seeding_commands_require_a_forum_topic() {
+        assert!(StagingCommand::Handoff.opens_new_topic());
+        assert!(StagingCommand::Btw.opens_new_topic());
+        assert!(!StagingCommand::PromptBuilder.opens_new_topic());
     }
 
     #[test]

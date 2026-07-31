@@ -6,6 +6,7 @@ pub(crate) enum BotCommand {
     WhereAmI,
     WorktreeCreate,
     Handoff,
+    Btw,
     Commands,
     Tldr,
     PromptBuilder,
@@ -80,6 +81,15 @@ const COMMAND_DEFS: &[CommandDef] = &[
         telegram_spec: TelegramCommandSpec {
             command: "handoff",
             description: "Hand off this topic's context into a new topic",
+        },
+    },
+    CommandDef {
+        command: BotCommand::Btw,
+        patterns: &["/btw"],
+        blocks_topic_autocreate: true,
+        telegram_spec: TelegramCommandSpec {
+            command: "btw",
+            description: "Ask a side question in a new topic",
         },
     },
     CommandDef {
@@ -298,6 +308,18 @@ mod tests {
             Some(BotCommand::Handoff)
         );
         assert_eq!(parse_command("/handoff please"), None);
+    }
+
+    #[test]
+    fn parse_btw_command() {
+        assert_eq!(parse_command("/btw"), Some(BotCommand::Btw));
+        assert_eq!(parse_command("/btw@zdx_bot"), Some(BotCommand::Btw));
+        // Like /handoff, the question is sent as a follow-up message, not inline.
+        assert_eq!(parse_command("/btw what files did we touch"), None);
+        // Must not auto-create a topic when sent from General.
+        assert!(is_topic_blocking_command("/btw"));
+        // Staging consumes the next message, so it cannot bypass the queue.
+        assert!(!bypasses_queue("/btw"));
     }
 
     #[test]

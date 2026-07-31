@@ -37,23 +37,25 @@ struct ReplyContext {
 ///
 /// # Errors
 /// Returns an error if the operation fails.
-pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Result<()> {
+pub(crate) async fn handle_message(
+    context: &std::sync::Arc<BotContext>,
+    queues: &crate::bot::queue::ChatQueueMap,
+    message: Message,
+) -> Result<()> {
+    let ctx = context.as_ref();
     let bot_config = context.config_for_chat(message.chat.id);
     let synthetic_topic_routed_from_general = message.synthetic_topic_routed_from_general;
     let provisional_status = if message_has_audio(&message) {
-        Some(
-            setup_preprocessing_status(context, &message, synthetic_topic_routed_from_general)
-                .await,
-        )
+        Some(setup_preprocessing_status(ctx, &message, synthetic_topic_routed_from_general).await)
     } else {
         None
     };
     let allowlist = AllowlistConfig {
-        user_ids: context.allowlist_user_ids(),
-        chat_ids: context.allowlist_chat_ids(),
+        user_ids: ctx.allowlist_user_ids(),
+        chat_ids: ctx.allowlist_chat_ids(),
     };
     let Some(incoming) = parse_message_with_status(
-        context,
+        ctx,
         allowlist,
         &bot_config,
         message,
@@ -61,14 +63,14 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     )
     .await?
     else {
-        cleanup_provisional_status(context, None, provisional_status).await;
+        cleanup_provisional_status(ctx, None, provisional_status).await;
         return Ok(());
     };
 
     let reply_ctx = build_reply_context(&incoming, synthetic_topic_routed_from_general);
 
-    if handle_pre_agent_commands(context, &incoming, &reply_ctx).await? {
-        cleanup_provisional_status(context, Some(incoming.chat_id), provisional_status).await;
+    if handle_pre_agent_commands(ctx, &incoming, &reply_ctx).await? {
+        cleanup_provisional_status(ctx, Some(incoming.chat_id), provisional_status).await;
         return Ok(());
     }
 
@@ -83,13 +85,14 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     // Resumed topics alias to a source thread; resolve so history load + writes
     // (and model/thinking/root overrides) target the source thread.
     let thread_id = resolve_effective_thread_id(&thread_id);
-    if handle_thread_setup_commands(context, &incoming, &reply_ctx, &thread_id).await? {
-        cleanup_provisional_status(context, Some(incoming.chat_id), provisional_status).await;
+    if handle_thread_setup_commands(ctx, &incoming, &reply_ctx, &thread_id).await? {
+        cleanup_provisional_status(ctx, Some(incoming.chat_id), provisional_status).await;
         return Ok(());
     }
 
     if crate::staging::handle_staging_flow(
         context,
+        queues,
         &incoming,
         reply_ctx.reply_to_message_id,
         reply_ctx.topic_id,
@@ -97,12 +100,12 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     )
     .await?
     {
-        cleanup_provisional_status(context, Some(incoming.chat_id), provisional_status).await;
+        cleanup_provisional_status(ctx, Some(incoming.chat_id), provisional_status).await;
         return Ok(());
     }
 
     run_agent_turn(
-        context,
+        ctx,
         incoming,
         reply_ctx,
         &thread_id,
