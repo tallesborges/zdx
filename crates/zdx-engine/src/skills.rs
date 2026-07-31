@@ -488,6 +488,15 @@ fn load_skills_from_sources_with_filters(
 
     load_bundled_skills(&mut state);
 
+    for warning in &state.warnings {
+        tracing::warn!(warning = %warning.message, "Skill skipped");
+    }
+    tracing::info!(
+        count = state.skills.len(),
+        warnings = state.warnings.len(),
+        "Loaded skills"
+    );
+
     LoadSkillsResult {
         skills: state.skills,
         warnings: state.warnings,

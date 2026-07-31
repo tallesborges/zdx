@@ -125,6 +125,11 @@ pub fn search_threads(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchR
         .filter(|q| !q.is_empty())
         .map(String::from);
     let limit = options.limit.max(1);
+    tracing::debug!(
+        has_query = normalized_query.is_some(),
+        limit,
+        "Thread search started"
+    );
 
     // Build a grep matcher once for the whole search. Used to pre-filter raw
     // files before expensive JSON deserialisation.

@@ -95,6 +95,7 @@ pub async fn run_background(input: &Value, ctx: &ToolContext) -> ToolOutput {
             None,
         );
     }
+    background_activity::log_spawned(&rec);
 
     // Detached waiter: own the child, reap it on exit, and record the code.
     let waiter_id = bg_id.clone();

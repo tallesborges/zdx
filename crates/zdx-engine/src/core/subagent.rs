@@ -81,11 +81,29 @@ pub async fn run_exec_subagent(
     run_exec_subagent_with_cancel(root, prompt, options, None, None).await
 }
 
+/// Log a child subagent that exited non-zero. Shared by the buffered and
+/// streaming paths so both report the same fields.
+fn log_nonzero_exit(status: std::process::ExitStatus, stderr: &str) {
+    tracing::warn!(
+        status = status.code().unwrap_or(-1),
+        stderr = %zdx_types::log_field(stderr, 300),
+        "Subagent exited non-zero"
+    );
+}
+
 /// Runs an isolated child `zdx exec` process with optional cancellation support.
 ///
 /// # Errors
 /// Returns an error if the child process fails, times out, is canceled, or
 /// produces invalid/empty output.
+#[tracing::instrument(
+    name = "subagent",
+    skip_all,
+    fields(
+        subagent = options.activity_subagent_name.as_deref().unwrap_or("task"),
+        model = options.model.as_deref().unwrap_or("-"),
+    )
+)]
 pub async fn run_exec_subagent_with_cancel(
     root: &Path,
     prompt: &str,
@@ -95,6 +113,12 @@ pub async fn run_exec_subagent_with_cancel(
 ) -> Result<String> {
     let prompt = prompt.trim();
     ensure!(!prompt.is_empty(), "Subagent prompt cannot be empty");
+    tracing::info!(
+        prompt_bytes = prompt.len(),
+        streaming = stream.is_some(),
+        timeout = ?options.timeout,
+        "Subagent started"
+    );
 
     let exe = std::env::current_exe().context("Failed to get executable path")?;
     let prompt_file = write_prompt_file(prompt)?;
@@ -154,6 +178,12 @@ pub async fn run_exec_subagent_with_cancel(
             .context("Failed to get subagent output")?,
         (None, None) => wait_future.await.context("Failed to get subagent output")?,
     };
+
+    if output.status.success() {
+        tracing::info!(stdout_bytes = output.stdout.len(), "Subagent finished");
+    } else {
+        log_nonzero_exit(output.status, &String::from_utf8_lossy(&output.stderr));
+    }
 
     process_subagent_output(&output)
 }
@@ -251,12 +281,14 @@ async fn run_child_streaming(
     let stderr_buf = stderr_handle.await.unwrap_or_default();
 
     if let Some(message) = outcome.turn_failed {
+        tracing::warn!(error = %zdx_types::log_field(&message, 200), "Subagent turn failed");
         bail!("Subagent turn failed: {message}");
     }
 
     if !status.success() {
         let stderr = String::from_utf8_lossy(&stderr_buf);
         let stderr = stderr.trim();
+        log_nonzero_exit(status, stderr);
         if stderr.is_empty() {
             let code = status.code().unwrap_or(-1);
             bail!("Subagent failed with exit code {code}");
@@ -265,8 +297,14 @@ async fn run_child_streaming(
     }
 
     match outcome.final_text {
-        Some(text) if !text.trim().is_empty() => Ok(text),
-        _ => bail!("Subagent returned empty output"),
+        Some(text) if !text.trim().is_empty() => {
+            tracing::info!(output_bytes = text.len(), "Subagent finished");
+            Ok(text)
+        }
+        _ => {
+            tracing::warn!("Subagent returned empty output");
+            bail!("Subagent returned empty output")
+        }
     }
 }
 

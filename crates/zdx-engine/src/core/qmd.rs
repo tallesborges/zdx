@@ -153,6 +153,16 @@ impl QmdMemorySearchStrategy {
             Self::Hybrid => "query",
         }
     }
+
+    /// User-facing strategy name (as accepted by the `Memory_Search` tool).
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Keyword => "keyword",
+            Self::Vector => "vector",
+            Self::Hybrid => "hybrid",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -511,9 +521,16 @@ fn search_memory_collections_with_binary(
         args.push(OsString::from(collection_name));
     }
 
+    let started_at = std::time::Instant::now();
     let output = run_qmd_command_allow_failure(binary, args)?;
 
     if !output.status.success() {
+        tracing::warn!(
+            strategy = options.strategy.label(),
+            qmd_command = command,
+            status = output.status.code().unwrap_or(-1),
+            "Memory search failed"
+        );
         return bail_qmd_failure(binary, [command, query, "--json"], &output);
     }
 
@@ -522,6 +539,13 @@ fn search_memory_collections_with_binary(
         &collections,
         options.exclude_thread_id.as_deref(),
     )?;
+    tracing::debug!(
+        strategy = options.strategy.label(),
+        source = options.source.map_or("all", |s| s.label()),
+        results = parsed.results.len(),
+        duration_ms = started_at.elapsed().as_millis(),
+        "Memory search completed"
+    );
     warnings.append(&mut parsed.warnings);
     parsed.warnings = warnings;
     Ok(parsed)
