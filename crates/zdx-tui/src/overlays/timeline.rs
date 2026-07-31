@@ -154,35 +154,11 @@ impl TimelineState {
                 }
             }
             KeyCode::Char('f') => {
-                if tui.agent_state.is_running() {
-                    return OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
-                        TranscriptMutation::AppendSystemMessage(
-                            "Stop the current task first.".to_string(),
-                        ),
-                    )]);
-                }
-
                 if tui.tasks.state(TaskKind::ThreadFork).is_running() {
                     return OverlayUpdate::stay();
                 }
 
                 match self.fork_effect(tui) {
-                    Some(effect) => OverlayUpdate::close()
-                        .with_ui_effects(vec![effect])
-                        .with_mutations(vec![]),
-                    None => OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
-                        TranscriptMutation::AppendSystemMessage(
-                            "No timeline entry selected.".to_string(),
-                        ),
-                    )]),
-                }
-            }
-            KeyCode::Char('t') => {
-                if tui.tasks.state(TaskKind::ThreadFork).is_running() {
-                    return OverlayUpdate::stay();
-                }
-
-                match self.fork_as_tab_effect(tui) {
                     Some(effect) => OverlayUpdate::close()
                         .with_ui_effects(vec![effect])
                         .with_mutations(vec![]),
@@ -248,6 +224,10 @@ impl TimelineState {
         })
     }
 
+    /// Builds the fork effect for the selected timeline entry.
+    ///
+    /// Forking always opens a new tab, so the tab this was invoked from (and any
+    /// turn still streaming into it) is left untouched.
     fn fork_effect(&self, tui: &TuiState) -> Option<UiEffect> {
         let entry = self.selected_entry()?;
         let cells = tui.transcript.cells();
@@ -264,28 +244,6 @@ impl TimelineState {
         }
 
         Some(UiEffect::ForkThread {
-            events,
-            user_input,
-            turn_number: self.selected + 1,
-        })
-    }
-
-    fn fork_as_tab_effect(&self, tui: &TuiState) -> Option<UiEffect> {
-        let entry = self.selected_entry()?;
-        let cells = tui.transcript.cells();
-        let selected_cell = cells.get(entry.cell_index)?;
-        let (events, user_input) = match selected_cell {
-            HistoryCell::User { content, .. } => (
-                cells_to_events(&cells[..entry.cell_index]),
-                Some(content.clone()),
-            ),
-            _ => (cells_to_events(&cells[..=entry.cell_index]), None),
-        };
-        if events.is_empty() && user_input.is_none() {
-            return None;
-        }
-
-        Some(UiEffect::ForkThreadAsTab {
             events,
             user_input,
             turn_number: self.selected + 1,
@@ -443,8 +401,7 @@ fn render_timeline(frame: &mut Frame, state: &TimelineState, area: Rect, input_y
         &[
             InputHint::new("↑↓", "navigate"),
             InputHint::new("Enter", "jump"),
-            InputHint::new("f", "fork"),
-            InputHint::new("t", "fork as tab"),
+            InputHint::new("f", "fork to new tab"),
             InputHint::new("Esc", "close"),
         ],
         Color::Green,

@@ -380,7 +380,7 @@ pub async fn thread_create(
     })
 }
 
-/// Forks a thread at a specific point.
+/// Forks a thread at a specific point into a new thread, opened as a new tab.
 ///
 /// Pure async function - runtime spawns and sends result to inbox.
 pub async fn thread_fork(
@@ -422,8 +422,7 @@ fn fork_thread_sync(
     }
 
     let usage = tp::extract_usage_from_thread_events(&events);
-    let cells = build_transcript_from_events(&events);
-    let messages = tp::thread_events_to_messages(events);
+    let mut cells = build_transcript_from_events(&events);
     let history: Vec<String> = cells
         .iter()
         .filter_map(|cell| {
@@ -434,16 +433,21 @@ fn fork_thread_sync(
             }
         })
         .collect();
+    cells.push(HistoryCell::system(format!(
+        "Forked from turn {turn_number}."
+    )));
+    let messages = tp::thread_events_to_messages(events);
 
-    UiEvent::Thread(ThreadUiEvent::ForkedLoaded {
-        thread_id: thread_handle.id.clone(),
+    UiEvent::Thread(ThreadUiEvent::OpenAsTab {
         cells,
         messages,
         history,
         thread_handle,
+        title: None,
+        model_override: None,
+        thinking_override: None,
         usage,
         user_input,
-        turn_number,
     })
 }
 

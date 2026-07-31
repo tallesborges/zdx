@@ -96,19 +96,6 @@ pub enum ThreadUiEvent {
         thinking_override: Option<zdx_engine::config::ThinkingLevel>,
     },
 
-    /// Forked thread created successfully.
-    ForkedLoaded {
-        thread_id: String,
-        cells: Vec<HistoryCell>,
-        messages: Vec<ChatMessage>,
-        history: Vec<String>,
-        thread_handle: Thread,
-        /// Restored token usage: (cumulative, latest)
-        usage: (Usage, Usage),
-        user_input: Option<String>,
-        turn_number: usize,
-    },
-
     /// New thread creation failed.
     CreateFailed { error: String },
 
