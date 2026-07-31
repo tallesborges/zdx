@@ -61,6 +61,16 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - No direct terminal UI logic here; terminal behavior belongs in `zdx-tui`.
 - Prefer `anyhow::Result` + `Context` at I/O boundaries.
 
+### Logging / tracing
+
+- Spans carry identity, events stay short. Existing spans: `turn` (`run_turn_inner`: `thread`/`model`/`provider`), `provider_request` (`request_stream`), `tool_turn` (`process_tool_turn`), `tool` (`ToolRegistry::execute_tool`: `tool`/`tool_use_id`). Log lines therefore read `turn:tool_turn:tool: … Tool failed`.
+- Levels: lifecycle at `info`, per-request/per-tool detail at `debug`, failures at `warn`/`error`. Interruptions/cancellations are `debug`, not `warn`.
+- Use structured fields with a stable literal message: `tracing::warn!(duration_ms, code, error = %msg, "Tool failed")`. Use `%` for display, `?` for debug.
+- MUST NOT log inside per-token / per-SSE-event / per-bash-chunk paths (`consume_stream`'s event loop, `handle_stream_event`, the `ToolOutputDelta` path). Log stream *ends*, not stream items.
+- MUST NOT put prompts, full messages, tool inputs, error bodies, or secrets in fields; use `skip_all` on `#[instrument]` and truncate messages (`truncate_for_error`, `truncate_tool_error`).
+- Tokio tasks do not inherit spans. When spawning (e.g. concurrent tool execution), attach the parent explicitly with `.instrument(tracing::Span::current())` or the context is lost.
+- `tracing_init` pins noisy dependencies (`h2`, `hyper`, `reqwest`, `rustls`, `ignore`, …) to `warn` so `ZDX_LOG=debug` shows ZDX events instead of HTTP/2 frame dumps. Naming a crate in `ZDX_LOG` opts back in (`ZDX_LOG=debug,h2=debug`).
+
 ## Checks
 
 - Default final verification after code changes: `just ci` from repo root
