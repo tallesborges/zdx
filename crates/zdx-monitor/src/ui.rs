@@ -8,8 +8,9 @@ use zdx_engine::providers::subscription_quota::{QuotaWindow, account_display};
 
 use crate::app::{
     AgentOverlayState, CachedQuotas, CachedUsageStats, ConfigLine, ModelPickerState, MonitorApp,
-    QuotaEntry, Section, ToolPaneState, UsageSpan,
+    QuotaEntry, Section, TargetPickerState, ToolPaneState, UsageSpan,
 };
+use crate::log_line::parse_log_line;
 
 pub fn render(f: &mut Frame, app: &MonitorApp) {
     let chunks = Layout::default()
@@ -38,6 +39,12 @@ pub fn render(f: &mut Frame, app: &MonitorApp) {
 
     if app.log_overlay_open && app.active_section == Section::Logs {
         render_log_overlay(f, app, f.area());
+    }
+
+    if app.active_section == Section::Logs
+        && let Some(picker) = &app.log_target_picker
+    {
+        render_log_target_picker(f, picker, f.area());
     }
 
     if let Some(state) = &app.agent_overlay {
@@ -108,7 +115,12 @@ fn render_services(f: &mut Frame, app: &MonitorApp, area: Rect) {
 }
 
 fn render_footer(f: &mut Frame, app: &MonitorApp, area: Rect) {
-    let text = if !app.status_message.is_empty() && app.status_section == app.active_section {
+    let text = if app.active_section == Section::Logs && app.log_query_editing {
+        format!(
+            "search: {}\u{2588}  (Enter accept · Esc clear)",
+            app.log_query
+        )
+    } else if !app.status_message.is_empty() && app.status_section == app.active_section {
         app.status_message.clone()
     } else {
         footer_hint(app.active_section).to_string()
@@ -135,7 +147,7 @@ fn footer_hint(section: Section) -> &'static str {
             "↑↓ scroll • PgUp/PgDn page • t span • R refresh • Tab/⇧Tab switch • q quit"
         }
         Section::Logs => {
-            "↑↓ select • PgUp/PgDn page • Enter open • G/End follow • Tab/⇧Tab switch • q quit"
+            "↑↓ select • / search • l level • f target • [ ] file • L tail • Esc clear • Enter open • G follow • Tab switch • q quit"
         }
     }
 }
@@ -987,29 +999,46 @@ fn render_logs(f: &mut Frame, app: &MonitorApp, area: Rect) {
         return;
     }
 
+    let total = app.log_visible.len();
+    if total == 0 {
+        // The active filters are already spelled out in the block title.
+        let msg = format!(
+            " No lines match · {} tailed lines · Esc clear · l level",
+            app.log_lines.len(),
+        );
+        let p = Paragraph::new(msg)
+            .style(Style::default().fg(Color::DarkGray))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(log_title(app, 0, 0)),
+            );
+        f.render_widget(p, area);
+        return;
+    }
+
     let inner_width = area.width.saturating_sub(2) as usize;
     let visible_rows = area.height.saturating_sub(2) as usize;
-    let total = app.log_lines.len();
-    let selected = app.log_selected.min(total - 1);
-
-    // Re-clamp the offset against the *actual* rendered area (terminal_height
-    // is updated post-draw and may lag by one frame).
-    let mut offset = app.log_offset;
-    if offset > selected {
-        offset = selected;
-    } else if visible_rows > 0 && selected >= offset + visible_rows {
-        offset = selected + 1 - visible_rows;
-    }
+    // Re-clamp against the *actual* rendered area: `terminal_height` is updated
+    // post-draw, so the stored offset may lag by one frame.
+    let (selected, offset) = crate::app::clamp_log_view(
+        total,
+        app.log_follow,
+        visible_rows,
+        app.log_selected,
+        app.log_offset,
+    );
     let end = (offset + visible_rows).min(total);
 
-    let items: Vec<ListItem> = app.log_lines[offset..end]
+    let items: Vec<ListItem> = app.log_visible[offset..end]
         .iter()
         .enumerate()
-        .map(|(i, raw)| {
-            let global_index = offset + i;
+        .map(|(i, &raw_index)| {
+            let visible_index = offset + i;
+            let raw = &app.log_lines[raw_index];
             let spans = truncate_spans(log_line_spans(raw), inner_width);
             let item = ListItem::new(Line::from(spans));
-            if global_index == selected {
+            if visible_index == selected {
                 item.style(Style::default().bg(Color::DarkGray))
             } else {
                 item
@@ -1017,19 +1046,109 @@ fn render_logs(f: &mut Frame, app: &MonitorApp, area: Rect) {
         })
         .collect();
 
-    let file_label = app.log_file_name.as_deref().unwrap_or("(no file)");
-    let follow_tag = if app.log_follow { " · FOLLOW" } else { "" };
-    let title = format!(
-        " Logs ({file_label} · {pos}/{total}{follow_tag}) ",
-        pos = selected + 1,
-    );
-
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(log_title(
+        app,
+        selected + 1,
+        total,
+    )));
     f.render_widget(list, area);
 }
 
+fn log_title(app: &MonitorApp, pos: usize, total: usize) -> String {
+    use std::fmt::Write as _;
+
+    let file_label = app.log_file_name.as_deref().unwrap_or("(no file)");
+    let mut title = format!(" Logs ({file_label}");
+    if app.log_files.len() > 1 {
+        let _ = write!(
+            title,
+            " [{}/{}]",
+            app.log_file_index + 1,
+            app.log_files.len()
+        );
+    }
+    let _ = write!(title, " · {pos}/{total}");
+    if app.log_level_filter != crate::log_line::LevelFilter::All {
+        let _ = write!(title, " · lvl={}", app.log_level_filter.label());
+    }
+    if let Some(target) = &app.log_target_filter {
+        let _ = write!(title, " · @{target}");
+    }
+    if app.log_query_editing {
+        let _ = write!(title, " · /{}\u{2588}", app.log_query);
+    } else if !app.log_query.is_empty() {
+        let _ = write!(title, " · /{}", app.log_query);
+    }
+    if app.log_tail_lines != 500 {
+        let _ = write!(title, " · tail={}", app.log_tail_lines);
+    }
+    if app.log_follow {
+        title.push_str(" · FOLLOW");
+    }
+    title.push_str(") ");
+    title
+}
+
+fn render_log_target_picker(f: &mut Frame, picker: &TargetPickerState, area: Rect) {
+    let popup = centered_rect(60, 60, area);
+    f.render_widget(Clear, popup);
+
+    let title = format!(
+        " pick target · {} match · Enter apply · Esc cancel ",
+        picker.matches.len(),
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(title);
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(inner);
+
+    let filter_line = Line::from(vec![
+        Span::styled("filter: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            if picker.filter.is_empty() {
+                "(type to filter)".to_string()
+            } else {
+                picker.filter.clone()
+            },
+            Style::default().fg(Color::Yellow),
+        ),
+    ]);
+    f.render_widget(Paragraph::new(filter_line), rows[0]);
+
+    let visible = rows[1].height as usize;
+    let offset = picker.selected.saturating_sub(visible.saturating_sub(1));
+    let end = (offset + visible).min(picker.matches.len());
+
+    let items: Vec<ListItem> = picker.matches[offset..end]
+        .iter()
+        .enumerate()
+        .map(|(i, &item_index)| {
+            let global = offset + i;
+            let (target, count) = &picker.items[item_index];
+            let row = Line::from(vec![
+                Span::styled(target.clone(), Style::default().fg(Color::Cyan)),
+                Span::styled(format!("  ({count})"), Style::default().fg(Color::DarkGray)),
+            ]);
+            let item = ListItem::new(row);
+            if global == picker.selected {
+                item.style(Style::default().add_modifier(Modifier::REVERSED))
+            } else {
+                item
+            }
+        })
+        .collect();
+    f.render_widget(List::new(items), rows[1]);
+}
+
 fn render_log_overlay(f: &mut Frame, app: &MonitorApp, area: Rect) {
-    let Some(line) = app.log_lines.get(app.log_selected) else {
+    let Some(line) = app.selected_log_line() else {
         return;
     };
 
@@ -1039,7 +1158,7 @@ fn render_log_overlay(f: &mut Frame, app: &MonitorApp, area: Rect) {
     let title = format!(
         " Log entry [{pos}/{total}] · Esc close · y copy ",
         pos = app.log_selected + 1,
-        total = app.log_lines.len(),
+        total = app.log_visible.len(),
     );
 
     let body = Paragraph::new(Line::from(log_line_spans(line)))
@@ -1293,72 +1412,12 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     }
 }
 
-/// Components of a tracing compact-format log line.
-struct LogParts<'a> {
-    timestamp: &'a str,
-    level: &'a str,
-    target: &'a str,
-    message: &'a str,
-    structured: bool,
-}
-
-/// Split a log line into `<timestamp> <LEVEL> <target> <message>`. Falls back
-/// to `structured = false` when the line doesn't match that shape.
-fn parse_log_line(line: &str) -> LogParts<'_> {
-    let bytes = line.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-
-    while i < len && bytes[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    let timestamp_start = i;
-    while i < len && !bytes[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    let timestamp_end = i;
-    while i < len && bytes[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    let level_start = i;
-    while i < len && !bytes[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    let level_end = i;
-    while i < len && bytes[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    let target_start = i;
-    while i < len && !bytes[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    let target_end = i;
-    while i < len && bytes[i].is_ascii_whitespace() {
-        i += 1;
-    }
-
-    let timestamp = &line[timestamp_start..timestamp_end];
-    let level = &line[level_start..level_end];
-    let target = &line[target_start..target_end];
-    let message = &line[i..];
-
-    let structured =
-        matches!(level, "ERROR" | "WARN" | "INFO" | "DEBUG" | "TRACE") && target.ends_with(':');
-
-    LogParts {
-        timestamp,
-        level,
-        target,
-        message,
-        structured,
-    }
-}
-
 /// Build colored spans for a single log line.
 ///
 /// Coloring:
 /// - timestamp: dark gray
 /// - level: ERROR=red+bold, WARN=yellow+bold, INFO=green+bold, DEBUG=cyan, TRACE=magenta
+/// - span scope (`run_turn:execute_tool:`): blue
 /// - target (`module::path:`): cyan
 /// - message: red for ERROR, dark gray for DEBUG/TRACE, default otherwise
 fn log_line_spans(line: &str) -> Vec<Span<'static>> {
@@ -1391,7 +1450,7 @@ fn log_line_spans(line: &str) -> Vec<Span<'static>> {
         _ => Style::default(),
     };
 
-    vec![
+    let mut out = vec![
         Span::styled(
             parts.timestamp.to_string(),
             Style::default().fg(Color::DarkGray),
@@ -1399,10 +1458,21 @@ fn log_line_spans(line: &str) -> Vec<Span<'static>> {
         Span::raw(" "),
         Span::styled(parts.level.to_string(), level_style),
         Span::raw(" "),
-        Span::styled(parts.target.to_string(), Style::default().fg(Color::Cyan)),
-        Span::raw(" "),
-        Span::styled(parts.message.to_string(), message_style),
-    ]
+    ];
+    if !parts.spans.is_empty() {
+        out.push(Span::styled(
+            parts.spans.to_string(),
+            Style::default().fg(Color::Blue),
+        ));
+        out.push(Span::raw(" "));
+    }
+    out.push(Span::styled(
+        parts.target.to_string(),
+        Style::default().fg(Color::Cyan),
+    ));
+    out.push(Span::raw(" "));
+    out.push(Span::styled(parts.message.to_string(), message_style));
+    out
 }
 
 /// Truncate a span sequence to `max_chars` total characters, replacing the
