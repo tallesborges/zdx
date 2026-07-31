@@ -238,15 +238,11 @@ pub enum UiEffect {
         text: String,
     },
 
-    /// Create a new thread from a truncated set of events.
-    ForkThread {
-        events: Vec<ThreadEvent>,
-        user_input: Option<String>,
-        turn_number: usize,
-    },
-
     /// Fork a thread at a specific point and open it in a new tab.
-    ForkThreadAsTab {
+    ///
+    /// Forking never replaces the current tab, so it is safe while a turn is
+    /// still streaming into it.
+    ForkThread {
         events: Vec<ThreadEvent>,
         user_input: Option<String>,
         turn_number: usize,

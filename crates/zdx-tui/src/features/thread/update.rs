@@ -130,30 +130,6 @@ pub fn handle_thread_event(
             );
             vec![]
         }
-        ThreadUiEvent::ForkedLoaded {
-            thread_id: _,
-            cells,
-            messages,
-            history,
-            thread_handle,
-            usage,
-            user_input,
-            turn_number,
-        } => {
-            handle_thread_forked(
-                ThreadForked {
-                    thread_handle,
-                    cells,
-                    messages,
-                    history,
-                    usage,
-                    user_input,
-                    turn_number,
-                },
-                &mut mutations,
-            );
-            vec![]
-        }
         ThreadUiEvent::CreateFailed { error } => {
             mutations.push(StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(error),
@@ -347,47 +323,6 @@ fn handle_thread_created(
         ));
     }
 }
-fn handle_thread_forked(forked: ThreadForked, mutations: &mut Vec<StateMutation>) {
-    let ThreadForked {
-        thread_handle,
-        cells,
-        messages,
-        history,
-        usage,
-        user_input,
-        turn_number,
-    } = forked;
-    let (cumulative, latest) = usage;
-    mutations.push(StateMutation::Transcript(TranscriptMutation::ReplaceCells(
-        cells,
-    )));
-    mutations.push(StateMutation::Transcript(TranscriptMutation::ResetScroll));
-    mutations.push(StateMutation::Transcript(
-        TranscriptMutation::ClearWrapCache,
-    ));
-    mutations.push(StateMutation::Thread(ThreadMutation::SetMessages(messages)));
-    mutations.push(StateMutation::Thread(ThreadMutation::SetThread(Some(
-        thread_handle,
-    ))));
-    mutations.push(StateMutation::Thread(ThreadMutation::SetOverrides {
-        model_override: None,
-        thinking_override: None,
-    }));
-    mutations.push(StateMutation::Thread(ThreadMutation::SetTitle(None)));
-    mutations.push(StateMutation::Thread(ThreadMutation::SetUsage {
-        cumulative,
-        latest,
-    }));
-    mutations.push(StateMutation::Input(InputMutation::SetHistory(history)));
-    mutations.push(StateMutation::Input(InputMutation::ClearQueue));
-    mutations.push(StateMutation::Input(InputMutation::Clear));
-    if let Some(text) = user_input {
-        mutations.push(StateMutation::Input(InputMutation::SetText(text)));
-    }
-    mutations.push(StateMutation::Transcript(
-        TranscriptMutation::AppendSystemMessage(format!("Forked from turn {turn_number}.")),
-    ));
-}
 
 struct ThreadLoaded {
     thread_handle: Option<Thread>,
@@ -399,16 +334,6 @@ struct ThreadLoaded {
     model_override: Option<String>,
     thinking_override: Option<ThinkingLevel>,
     usage: (Usage, Usage),
-}
-
-struct ThreadForked {
-    thread_handle: Thread,
-    cells: Vec<HistoryCell>,
-    messages: Vec<ChatMessage>,
-    history: Vec<String>,
-    usage: (Usage, Usage),
-    user_input: Option<String>,
-    turn_number: usize,
 }
 
 /// Handles thread rename success.
