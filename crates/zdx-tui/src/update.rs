@@ -1263,9 +1263,14 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
             vec![UiEffect::CreateNewThread]
         }
         overlays::OverlayRequest::Btw => {
-            let base_messages = build_btw_base_messages(&app.tui);
+            let parent_thread_id = app
+                .tui
+                .thread
+                .thread_handle
+                .as_ref()
+                .map(|handle| handle.id.clone());
             let tab_id = app.next_tab_id();
-            let btw_tab = create_btw_tab(tab_id, base_messages, &app.tui);
+            let btw_tab = create_btw_tab(tab_id, parent_thread_id, &app.tui);
             app.overlay = None; // Close command palette before switching tabs
             app.push_tab(btw_tab);
             vec![]
@@ -1378,19 +1383,6 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
     }
 }
 
-fn build_btw_base_messages(tui: &TuiState) -> Vec<zdx_engine::providers::ChatMessage> {
-    let mut messages = tui.thread.messages.clone();
-    let has_in_flight_turn = tui.agent_state.is_running() || tui.transcript.has_pending_user_cell();
-    if has_in_flight_turn
-        && messages
-            .last()
-            .is_some_and(|message| message.role == "user")
-    {
-        messages.pop();
-    }
-    messages
-}
-
 /// Cycles to the next or previous tab.
 ///
 /// `direction` is +1 for next, -1 for previous. Wraps around.
@@ -1417,29 +1409,24 @@ pub fn cycle_tab(app: &mut AppState, direction: i32) {
     }
 }
 
-/// Creates a new btw tab forked from the current tab's conversation.
-fn create_btw_tab(
-    tab_id: TabId,
-    base_messages: Vec<zdx_engine::providers::ChatMessage>,
-    parent: &TuiState,
-) -> TuiState {
+/// Creates a new btw side-chat tab.
+///
+/// The tab starts empty: no transcript is copied from the parent. The agent is
+/// pointed at `parent_thread_id` on first send and pulls context on demand via
+/// `Read_Thread`.
+fn create_btw_tab(tab_id: TabId, parent_thread_id: Option<String>, parent: &TuiState) -> TuiState {
     use crate::input::InputState;
     use crate::thread::ThreadState;
     use crate::transcript::TranscriptState;
-
-    // Build transcript cells from the forked context so the user can see
-    // the conversation they branched from.
-    let cells = TuiState::build_transcript_from_history(&base_messages);
-    let transcript = TranscriptState::with_cells(cells);
 
     let agent_opts = parent.agent_opts.clone();
 
     TuiState {
         tab_id,
-        tab_kind: TabKind::Btw { base_messages },
+        tab_kind: TabKind::Btw { parent_thread_id },
         should_quit: false,
         input: InputState::new(),
-        transcript,
+        transcript: TranscriptState::with_cells(Vec::new()),
         thread: ThreadState::new(),
         task_seq: crate::common::TaskSeq::default(),
         tasks: crate::common::Tasks::default(),
@@ -1864,6 +1851,52 @@ mod tests {
             .unwrap()
             .as_nanos();
         format!("{prefix}-{nanos}")
+    }
+
+    /// btw tabs answer by reference, so they must not copy the parent's
+    /// transcript or messages — context comes from `Read_Thread` against the
+    /// recorded parent thread id instead.
+    #[test]
+    fn btw_tab_copies_no_parent_transcript_or_messages() {
+        let config = zdx_engine::config::Config::default();
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
+
+        app.tui.transcript.push_cell(HistoryCell::user("parent q"));
+        app.tui.thread.messages = vec![zdx_engine::providers::ChatMessage::user("parent q")];
+
+        let tab_id = app.next_tab_id();
+        let btw = create_btw_tab(tab_id, Some("thread-parent".to_string()), &app.tui);
+
+        assert!(
+            btw.transcript.cells().is_empty(),
+            "btw tab must start with an empty transcript"
+        );
+        assert!(
+            btw.thread.messages.is_empty(),
+            "btw tab must not inherit parent messages"
+        );
+        match btw.tab_kind {
+            TabKind::Btw { parent_thread_id } => {
+                assert_eq!(parent_thread_id.as_deref(), Some("thread-parent"));
+            }
+            other => panic!("expected a btw tab, got {other:?}"),
+        }
+    }
+
+    /// Without a persisted parent thread there is nothing to point at, so the
+    /// btw tab behaves like a plain new thread.
+    #[test]
+    fn btw_tab_without_parent_thread_carries_no_pointer() {
+        let config = zdx_engine::config::Config::default();
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
+
+        let tab_id = app.next_tab_id();
+        let btw = create_btw_tab(tab_id, None, &app.tui);
+
+        match btw.tab_kind {
+            TabKind::Btw { parent_thread_id } => assert!(parent_thread_id.is_none()),
+            other => panic!("expected a btw tab, got {other:?}"),
+        }
     }
 
     #[test]

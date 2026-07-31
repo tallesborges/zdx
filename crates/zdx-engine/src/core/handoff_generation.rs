@@ -61,13 +61,17 @@ fn format_lineage_entry(entry: &LineageEntry) -> String {
 ///
 /// With no ancestors it keeps the original short wording; with ancestors it
 /// renders the full chain so the new assistant can `read_thread` any of them.
-fn build_lineage_note(lineage: &[LineageEntry], message_empty: bool) -> String {
+///
+/// `full_context` selects the wording: `true` points at the thread for the whole
+/// context (nothing else follows it), `false` points at it for whatever is
+/// missing from the content that follows.
+fn build_lineage_note(lineage: &[LineageEntry], full_context: bool) -> String {
     let Some(source) = lineage.first() else {
         return String::new();
     };
     if lineage.len() <= 1 {
         let id = &source.0;
-        if message_empty {
+        if full_context {
             format!("(Continuing from thread {id} — call read_thread for full context.)")
         } else {
             format!(
@@ -87,6 +91,16 @@ fn build_lineage_note(lineage: &[LineageEntry], message_empty: bool) -> String {
     }
 }
 
+/// Joins the user's verbatim message with a lineage note, message first.
+fn join_message_and_note(message: &str, note: String) -> String {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        note
+    } else {
+        format!("{trimmed}\n\n{note}")
+    }
+}
+
 /// Prefix shown at the beginning of generated handoff output.
 ///
 /// The user's literal next-chat message leads (so the new assistant sees the
@@ -94,13 +108,19 @@ fn build_lineage_note(lineage: &[LineageEntry], message_empty: bool) -> String {
 /// pointing at the source thread and its full ancestor lineage. The
 /// LLM-generated context block is appended after this prefix.
 fn build_handoff_prefix(lineage: &[LineageEntry], next_message: &str) -> String {
-    let trimmed = next_message.trim();
-    let note = build_lineage_note(lineage, trimmed.is_empty());
-    if trimmed.is_empty() {
-        note
-    } else {
-        format!("{trimmed}\n\n{note}")
-    }
+    let note = build_lineage_note(lineage, next_message.trim().is_empty());
+    join_message_and_note(next_message, note)
+}
+
+/// Builds the seed message for a side thread (`/btw`).
+///
+/// The user's message leads verbatim, followed by a note pointing at
+/// `source_thread_id` and its ancestor lineage. Unlike `/handoff`, no generated
+/// context block follows, so the assistant is told to call `read_thread` for the
+/// full context rather than for gaps.
+pub fn build_side_thread_seed(source_thread_id: &str, message: &str) -> String {
+    let note = build_lineage_note(&collect_lineage(source_thread_id), true);
+    join_message_and_note(message, note)
 }
 
 /// Builds the prompt for handoff generation.
@@ -160,10 +180,32 @@ pub async fn generate_handoff(
 
 #[cfg(test)]
 mod tests {
-    use super::{LineageEntry, build_handoff_prefix};
+    use super::{LineageEntry, build_handoff_prefix, build_lineage_note, join_message_and_note};
 
     fn entry(id: &str, title: &str) -> LineageEntry {
         (id.to_string(), title.to_string())
+    }
+
+    /// `/btw` has no generated context block after the seed, so the note must
+    /// point at the thread for the *full* context, not for gaps "below".
+    #[test]
+    fn side_thread_note_asks_for_full_context() {
+        let note = build_lineage_note(&[entry("thread-side", "Parent work")], true);
+        assert!(note.contains("thread-side"));
+        assert!(note.contains("read_thread"));
+        assert!(note.contains("full context"));
+        assert!(
+            !note.contains("below"),
+            "btw has no context block below the seed"
+        );
+    }
+
+    #[test]
+    fn side_thread_seed_leads_with_the_user_message() {
+        let note = build_lineage_note(&[entry("thread-side", "Parent work")], true);
+        let seed = join_message_and_note("what files did we touch?", note);
+        assert!(seed.starts_with("what files did we touch?"));
+        assert!(seed.contains("thread-side"));
     }
 
     #[test]
