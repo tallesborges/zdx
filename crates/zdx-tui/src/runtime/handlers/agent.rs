@@ -1,5 +1,6 @@
 use anyhow::Context;
 use tokio_util::sync::CancellationToken;
+use zdx_engine::core::handoff_generation;
 use zdx_engine::core::thread_persistence::{self, ThreadEvent};
 use zdx_engine::providers::ChatMessage;
 
@@ -15,12 +16,15 @@ pub fn interrupt_agent(tui: &TuiState) {
 
 /// Spawns an agent turn for the active tab.
 ///
-/// For btw tabs, this prepends the forked base messages and creates a
-/// persistent thread on the first send.
+/// For btw tabs, this seeds a parent-thread pointer and creates a persistent
+/// thread on the first send.
 pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
-    // For btw tabs, handle thread creation and message merging
-    if let TabKind::Btw { ref base_messages } = tui.tab_kind {
-        return spawn_btw_tab_turn(tui, base_messages);
+    // For btw tabs, handle thread creation and pointer seeding
+    if let TabKind::Btw {
+        ref parent_thread_id,
+    } = tui.tab_kind
+    {
+        return spawn_btw_tab_turn(tui, parent_thread_id.as_deref());
     }
 
     let (agent_tx, agent_rx) = zdx_engine::core::agent::create_event_channel();
@@ -68,13 +72,13 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
 
 /// Spawns an agent turn for a btw tab.
 ///
-/// On the first send, creates a persistent thread and writes the forked
-/// base-message context to it. On subsequent sends, reuses the existing
-/// thread. The agent always sees `base_messages + btw_messages` as the
-/// conversation, but only btw-specific turns are persisted incrementally.
-fn spawn_btw_tab_turn(tui: &TuiState, base_messages: &[ChatMessage]) -> UiEvent {
+/// On the first send, creates a persistent thread and seeds it with the user's
+/// message plus a pointer at `parent_thread_id`, so the agent can pull context
+/// on demand via `Read_Thread` instead of receiving a copied transcript. On
+/// subsequent sends, reuses the existing thread.
+fn spawn_btw_tab_turn(tui: &TuiState, parent_thread_id: Option<&str>) -> UiEvent {
     // Prepare thread and messages (create thread on first send)
-    let prepared = match prepare_btw_tab_thread(tui, base_messages) {
+    let prepared = match prepare_btw_tab_thread(tui, parent_thread_id) {
         Ok(result) => result,
         Err(e) => {
             return UiEvent::Thread(crate::events::ThreadUiEvent::ForkFailed {
@@ -132,10 +136,10 @@ struct BtwTabPrepared {
 /// Prepares the btw tab's thread and messages for an agent turn.
 fn prepare_btw_tab_thread(
     tui: &TuiState,
-    base_messages: &[ChatMessage],
+    parent_thread_id: Option<&str>,
 ) -> anyhow::Result<BtwTabPrepared> {
     if let Some(thread_handle) = tui.thread.thread_handle.clone() {
-        // Subsequent turn — thread already exists, messages already contain base context
+        // Subsequent turn — thread already exists, messages already seeded
         let run_messages = tui.thread.messages.clone();
         Ok(BtwTabPrepared {
             thread_handle,
@@ -144,17 +148,10 @@ fn prepare_btw_tab_thread(
             messages_update: None,
         })
     } else {
-        // First turn — create thread, persist base context
+        // First turn — create the thread. No parent transcript is copied; the
+        // seed below points the agent at the parent thread instead.
         let mut thread_handle = thread_persistence::Thread::new_with_root(&tui.agent_opts.root)
             .context("Failed to create btw thread")?;
-
-        // Write base messages as thread events
-        let events = thread_persistence::messages_to_events(base_messages);
-        for event in &events {
-            thread_handle
-                .append(event)
-                .context("Failed to persist btw thread context")?;
-        }
 
         // Persist model/thinking overrides
         thread_handle
@@ -177,13 +174,19 @@ fn prepare_btw_tab_thread(
             }
         });
 
-        // Build the full message list: base_messages + the user's new prompt
-        let mut full_messages: Vec<ChatMessage> = base_messages.to_vec();
-        if let Some(ref prompt) = user_prompt {
+        // Seed the thread with the user's prompt plus a parent-thread pointer.
+        // Without a persisted parent there is nothing to point at, so the tab
+        // behaves like a plain new thread.
+        let mut full_messages: Vec<ChatMessage> = Vec::new();
+        if let Some(prompt) = user_prompt {
+            let seed = match parent_thread_id {
+                Some(parent) => handoff_generation::build_side_thread_seed(parent, &prompt),
+                None => prompt,
+            };
             thread_handle
-                .append(&ThreadEvent::user_message(prompt))
+                .append(&ThreadEvent::user_message(&seed))
                 .context("Failed to persist btw user message")?;
-            full_messages.push(ChatMessage::user(prompt));
+            full_messages.push(ChatMessage::user(seed));
         }
 
         Ok(BtwTabPrepared {

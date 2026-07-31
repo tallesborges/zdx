@@ -83,10 +83,12 @@ pub enum TabKind {
         /// Thread id fallback when title is missing.
         thread_id: String,
     },
-    /// A "by the way" side-chat tab forked from another tab's context.
+    /// A "by the way" side-chat tab that answers from another thread by
+    /// reference instead of copying its transcript.
     Btw {
-        /// Messages from the parent tab at fork time, used as context.
-        base_messages: Vec<ChatMessage>,
+        /// Parent thread the agent is pointed at via `Read_Thread`. `None` when
+        /// the parent tab had no persisted thread yet.
+        parent_thread_id: Option<String>,
     },
 }
 
