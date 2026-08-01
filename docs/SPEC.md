@@ -81,7 +81,7 @@ ZDX solves this with a boring, reliable core:
 - `zdx bot` — run the global Telegram bot from `[telegram]` in `$ZDX_HOME/config.toml`
 - `zdx bot init` — create/update global Telegram bot settings in `$ZDX_HOME/config.toml`
 - `zdx bot profile add <NAME> <CHAT_ID> <CWD>` — map a Telegram chat to a project cwd via `telegram.profiles.<NAME>`
-- `zdx exec -p, --prompt <PROMPT> [--no-system-prompt]` — run one prompt non-interactively
+- `zdx exec -p, --prompt <PROMPT> [--no-system-prompt] [--subagent NAME]` — run one prompt non-interactively
 - `zdx imagine -p, --prompt <PROMPT> [--out PATH] [--model MODEL] [--aspect RATIO] [--size SIZE]` — generate images with Gemini image models
 - `zdx mcp servers|auth <SERVER>|logout <SERVER>|tools <SERVER>|schema <SERVER> <TOOL>|call <SERVER> <TOOL> --json '{...}'` — inspect, authenticate, and call configured MCP servers through the helper CLI
 - `zdx automations list|validate|daemon|runs [NAME] [--date*] [--json]|run <NAME>`
@@ -99,6 +99,7 @@ ZDX solves this with a boring, reliable core:
 - **stdout:** assistant text only (or JSON if/when `--format json` ships).
 - **stderr:** diagnostics, warnings, tool status, errors.
 - `--no-system-prompt` disables all system/context composition for that run (config system prompt, `AGENTS.md`/`CLAUDE.md`, memory, skills).
+- `--subagent <NAME>` runs the prompt under a named subagent (`explorer`, `oracle`, or any discovered subagent): the subagent's rendered prompt becomes the run's system prompt, and its `model`, `thinking_level`, and `tools` apply as defaults. Explicit `-m`/`-t`/`--tools`/`--no-tools` still win. The reserved `task` name resolves to default exec behavior. Conflicts with `--no-system-prompt`; unknown names fail the run.
 
 ### `zdx imagine` (non-interactive, scriptable)
 

@@ -245,6 +245,7 @@ pub async fn run_definition(
             tools_override: prepared.tools_override.as_deref(),
             no_tools: false,
             no_system_prompt: false,
+            subagent: None,
             activity_kind: Some("automation"),
             activity_parent_thread_id: None,
             activity_subagent_name: None,
