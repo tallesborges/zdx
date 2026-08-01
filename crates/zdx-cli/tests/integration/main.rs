@@ -8,6 +8,7 @@ mod fixtures;
 
 mod cli_help;
 mod config_path;
+mod exec_subagent;
 mod login_logout;
 mod quota;
 mod thread_schema;

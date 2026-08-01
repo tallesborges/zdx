@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use zdx_engine::config::{self, ThinkingLevel};
 use zdx_engine::core::agent::{ToolConfig, ToolSelection};
+use zdx_engine::core::context::PromptContextInclusion;
 use zdx_engine::core::thread_persistence::ThreadPersistenceOptions;
+use zdx_engine::subagents::{self, RuntimeSubagentSelection, SubagentDefinition};
 use zdx_engine::tools::ToolRegistry;
 
 use crate::modes;
@@ -23,6 +25,7 @@ pub struct ExecRunOptions<'a> {
     pub tools_override: Option<&'a str>,
     pub no_tools: bool,
     pub no_system_prompt: bool,
+    pub subagent: Option<&'a str>,
     pub activity_kind: Option<&'a str>,
     pub activity_parent_thread_id: Option<&'a str>,
     pub activity_subagent_name: Option<&'a str>,
@@ -35,20 +38,48 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
         .resolve(&root_path)
         .context("resolve thread")?;
 
+    let subagent = resolve_subagent(&root_path, options.subagent)?;
+
     // Apply overrides if provided
     let config = {
         let mut c = options.config.clone();
         if let Some(model) = options.model_override {
             c.model = model.to_string();
+        } else if let Some(model) = subagent.as_ref().and_then(|d| d.model.clone()) {
+            c.model = model;
         }
         if let Some(timeout_secs) = options.tool_timeout_override {
             c.tool_timeout_secs = timeout_secs;
         }
         if let Some(thinking) = options.thinking_override {
             c.thinking_level = parse_thinking_level(thinking)?;
+        } else if let Some(level) = subagent.as_ref().and_then(|d| d.thinking_level) {
+            c.thinking_level = level;
         }
         c
     };
+
+    let effective_system_prompt = match subagent.as_ref() {
+        Some(definition) => Some(
+            subagents::render_prompt(
+                &config,
+                &root_path,
+                definition,
+                &config.model,
+                PromptContextInclusion::default(),
+            )
+            .with_context(|| format!("render subagent '{}'", definition.name))?,
+        ),
+        None => options
+            .effective_system_prompt_override
+            .map(std::string::ToString::to_string),
+    };
+
+    let subagent_tools = subagent
+        .as_ref()
+        .and_then(|definition| definition.tools.clone())
+        .map(|tools| tools.join(","));
+    let tools_override = options.tools_override.or(subagent_tools.as_deref());
 
     let tool_registry = ToolRegistry::builtins();
     let available_tool_names = tool_registry.tool_names();
@@ -59,7 +90,7 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
             tool_registry,
             if options.no_tools {
                 ToolSelection::Explicit(Vec::new())
-            } else if let Some(raw) = options.tools_override {
+            } else if let Some(raw) = tools_override {
                 ToolSelection::Explicit(parse_tools_override(raw, &available_tool_names)?)
             } else {
                 ToolSelection::default()
@@ -70,9 +101,7 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
             .map(parse_event_filter)
             .transpose()?
             .unwrap_or_default(),
-        effective_system_prompt: options
-            .effective_system_prompt_override
-            .map(std::string::ToString::to_string),
+        effective_system_prompt,
         no_system_prompt: options.no_system_prompt,
         activity_kind: options.activity_kind.map(std::string::ToString::to_string),
         activity_parent_thread_id: options
@@ -80,6 +109,7 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
             .map(std::string::ToString::to_string),
         activity_subagent_name: options
             .activity_subagent_name
+            .or(subagent.as_ref().map(|definition| definition.name.as_str()))
             .map(std::string::ToString::to_string),
     };
 
@@ -89,6 +119,26 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
         .context("execute prompt")?;
 
     Ok(())
+}
+
+/// Resolves an explicit `--subagent` name into a definition.
+///
+/// The reserved `task` alias resolves to default exec behavior, so it yields
+/// `None` and leaves prompt/model/tool composition untouched.
+fn resolve_subagent(
+    root: &std::path::Path,
+    requested: Option<&str>,
+) -> Result<Option<SubagentDefinition>> {
+    let Some(name) = requested else {
+        return Ok(None);
+    };
+
+    match subagents::resolve_runtime_selection(root, Some(name))
+        .with_context(|| format!("load subagent '{name}'"))?
+    {
+        RuntimeSubagentSelection::Default => Ok(None),
+        RuntimeSubagentSelection::Named(definition) => Ok(Some(definition)),
+    }
 }
 
 pub(super) fn parse_thinking_level(s: &str) -> Result<ThinkingLevel> {

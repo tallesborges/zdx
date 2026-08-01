@@ -141,6 +141,15 @@ enum Commands {
         #[arg(long = "no-tools", conflicts_with = "tools")]
         no_tools: bool,
 
+        /// Run with a named subagent's prompt, model, thinking level, and tools
+        /// (e.g. `explorer`, `oracle`); explicit flags still win
+        #[arg(
+            long = "subagent",
+            value_name = "NAME",
+            conflicts_with_all = ["no_system_prompt", "effective_system_prompt_file"]
+        )]
+        subagent: Option<String>,
+
         /// Internal: logical role for this run in the active-agents registry
         /// (e.g. `subagent`, `exec`).
         #[arg(long = "activity-kind", hide = true, value_name = "KIND")]
@@ -909,6 +918,7 @@ struct ExecCommandInput {
     tools: Option<String>,
     no_tools: bool,
     no_system_prompt: bool,
+    subagent: Option<String>,
     activity_kind: Option<String>,
     activity_parent_thread_id: Option<String>,
     activity_subagent_name: Option<String>,
@@ -972,6 +982,7 @@ async fn run_exec_command(context: &DispatchContext<'_>, input: ExecCommandInput
         tools_override: input.tools.as_deref(),
         no_tools: input.no_tools,
         no_system_prompt: input.no_system_prompt,
+        subagent: input.subagent.as_deref(),
         activity_kind: input.activity_kind.as_deref(),
         activity_parent_thread_id: input.activity_parent_thread_id.as_deref(),
         activity_subagent_name: input.activity_subagent_name.as_deref(),
@@ -1025,6 +1036,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             thinking,
             tools,
             no_tools,
+            subagent,
             activity_kind,
             activity_parent_thread_id,
             activity_subagent_name,
@@ -1041,6 +1053,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
                     tools,
                     no_tools,
                     no_system_prompt,
+                    subagent,
                     activity_kind,
                     activity_parent_thread_id,
                     activity_subagent_name,

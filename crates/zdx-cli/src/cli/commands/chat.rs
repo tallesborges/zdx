@@ -38,6 +38,7 @@ pub async fn run(
             tools_override: None,
             no_tools: false,
             no_system_prompt: false,
+            subagent: None,
             activity_kind: Some("exec"),
             activity_parent_thread_id: None,
             activity_subagent_name: None,
