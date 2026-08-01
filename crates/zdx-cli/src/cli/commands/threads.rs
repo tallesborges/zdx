@@ -311,6 +311,9 @@ pub fn tools(options: ToolsCommandOptions) -> Result<()> {
         if let Some(error_message) = &result.error_message {
             let error_code = result.error_code.as_deref().unwrap_or("error");
             println!("  Error: {error_code} - {error_message}");
+            if let Some(details) = &result.error_details {
+                println!("  Details: {details}");
+            }
         }
         println!();
     }

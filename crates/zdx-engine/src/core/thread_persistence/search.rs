@@ -89,6 +89,7 @@ pub struct ThreadToolMatch {
     pub args_summary: String,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
+    pub error_details: Option<String>,
 }
 
 impl ThreadToolMatch {
@@ -266,7 +267,7 @@ pub fn search_thread_tools(options: &ThreadToolSearchOptions) -> Result<Vec<Thre
                         continue;
                     }
 
-                    let (error_code, error_message) = extract_tool_error(&output);
+                    let (error_code, error_message, error_details) = extract_tool_error(&output);
                     matches.push(ThreadToolMatch {
                         thread_id: summary.id.clone(),
                         title: summary.title.clone(),
@@ -281,6 +282,7 @@ pub fn search_thread_tools(options: &ThreadToolSearchOptions) -> Result<Vec<Thre
                         args_summary: tool_use.args_summary,
                         error_code,
                         error_message,
+                        error_details,
                     });
                 }
                 _ => {}
@@ -299,6 +301,7 @@ pub fn search_thread_tools(options: &ThreadToolSearchOptions) -> Result<Vec<Thre
                     args_summary: tool_use.args_summary,
                     error_code: None,
                     error_message: None,
+                    error_details: None,
                 });
             }
         }
@@ -378,17 +381,15 @@ fn truncate_with_ellipsis(value: &str, max_bytes: usize) -> String {
     }
 }
 
-fn extract_tool_error(output: &Value) -> (Option<String>, Option<String>) {
+fn extract_tool_error(output: &Value) -> (Option<String>, Option<String>, Option<String>) {
     let error = output.get("error");
-    let code = error
-        .and_then(|err| err.get("code"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let message = error
-        .and_then(|err| err.get("message"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    (code, message)
+    let field = |name: &str| {
+        error
+            .and_then(|err| err.get(name))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    };
+    (field("code"), field("message"), field("details"))
 }
 
 /// Returns the latest RFC-3339 timestamp found across all events in a thread.
