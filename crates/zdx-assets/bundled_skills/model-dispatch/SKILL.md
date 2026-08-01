@@ -12,17 +12,19 @@ Dispatch one prompt to one or more explicit models through `zdx exec`. This skil
 - Fan out one prompt to several models and show every answer.
 - Compare the same model at multiple thinking levels.
 - Compare exact model/thinking pairs, such as Opus at `low` versus GPT at `high`.
+- Compare models inside one specialist role, such as three models answering as `oracle`.
 
 The phrase "fan out" must continue to trigger this skill.
 
 ## 1. Define the runs
 
-Each run is an explicit `MODEL@LEVEL` pair passed with `--run`. The level is optional and defaults to `medium`.
+Each run is an explicit `MODEL[@LEVEL][+SUBAGENT]` spec passed with `--run`. The level is optional and defaults to `medium`; the subagent role is optional and defaults to none.
 
 ```text
 --run claude-cli:claude-opus-4-8
 --run claude-cli:claude-opus-4-8@low
 --run openai:gpt-5.5@high
+--run openai:gpt-5.5@high+oracle
 ```
 
 Supported levels are `off`, `low`, `medium`, `high`, `xhigh`, and `max`. Providers may map or clamp levels their models do not support exactly; mention this caveat when benchmarking reasoning levels.
@@ -35,6 +37,13 @@ By default every run receives the full ZDX system prompt and project context. St
 
 Use `--no-system-prompt` only for an intentionally isolated comparison. Use `--no-tools` for clean one-shot answers. For prompts with quotes or newlines, write the prompt under `$ZDX_ARTIFACT_DIR/tmp/` and pass it with `--prompt-file`.
 
+To run the comparison in a specialist role instead of the default one, name a subagent (for example `oracle` or `explorer`). The role supplies its prompt, tools, and defaults, while the dispatched model and thinking level still win. Two ways to set it:
+
+- `+SUBAGENT` on a run — per-run, so one dispatch can vary the role: `--run openai:gpt-5.5+oracle --run openai:gpt-5.5+explorer`.
+- `--subagent NAME` — the default role for every run that has no `+` suffix.
+
+Roles cannot be combined with `--no-system-prompt`.
+
 ## 3. Dispatch
 
 Use the bundled script rather than reconstructing parallel calls:
@@ -42,25 +51,26 @@ Use the bundled script rather than reconstructing parallel calls:
 ```text
 python3 scripts/dispatch.py --prompt-file "$ZDX_ARTIFACT_DIR/tmp/dispatch-prompt.txt" \
   --run claude-cli:claude-opus-4-8@low \
-  --run openai:gpt-5.5@high
+  --run openai:gpt-5.5@high+oracle
 ```
 
 Options:
-- `--run PROVIDER:MODEL[@LEVEL]` — repeat for each exact run; level defaults to `medium`.
+- `--run PROVIDER:MODEL[@LEVEL][+SUBAGENT]` — repeat for each exact run; level defaults to `medium`.
 - `-p "..."` or `--prompt-file FILE` — the self-contained prompt.
+- `--subagent NAME` — default role for runs without a `+SUBAGENT` suffix.
 - `--no-tools` — disable tools; tools are enabled by default.
 - `--no-system-prompt` — omit ZDX system and project context.
 - `--prefix` — customize the generated thread ID prefix.
 
-The script runs all requested pairs concurrently, gives each a resumable thread ID containing its model and thinking level, and reports individual errors without failing the whole dispatch.
+The script runs all requested specs concurrently, gives each a resumable thread ID containing its model, thinking level, and role, and reports individual errors without failing the whole dispatch.
 
 ## 4. Return results
 
-For a single run, return the answer and identify the model and thinking level. For comparisons, keep the script's index first, followed by every answer. Do not silently select a winner unless the user asks for evaluation.
+For a single run, return the answer and identify the model and thinking level. For comparisons, keep the script's index first, followed by every answer. Do not silently select a winner unless the user asks for evaluation. When `--subagent` was used, name the role alongside the models.
 
-Every result is resumable. Continue it with the same thread ID, model, and thinking level:
+Every result is resumable. Continue it with the same thread ID, model, thinking level, and subagent:
 
 ```text
-zdx --thread <id> exec -m <model> -t <level> \
+zdx --thread <id> exec -m <model> -t <level> [--subagent <name>] \
   --filter assistant_completed -p "<follow-up question>"
 ```
