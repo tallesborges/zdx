@@ -9,7 +9,6 @@ use serde_json::{Value, json};
 use super::{ToolContext, ToolDefinition, ToolOutput};
 
 const PARALLEL_EXTRACT_URL: &str = "https://api.parallel.ai/v1beta/extract";
-const PARALLEL_BETA_HEADER: &str = "search-extract-2025-10-10";
 
 fn normalize_objective(objective: Option<&str>) -> Option<&str> {
     objective.map(str::trim).filter(|value| !value.is_empty())
@@ -176,22 +175,14 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
     };
 
     // Make HTTP request
-    let client = reqwest::Client::new();
-    let response = match client
-        .post(PARALLEL_EXTRACT_URL)
-        .header("Content-Type", "application/json")
-        .header("x-api-key", &api_key)
-        .header("parallel-beta", PARALLEL_BETA_HEADER)
-        .json(&request)
-        .send()
-        .await
+    let response = match crate::parallel::post_json(PARALLEL_EXTRACT_URL, &api_key, &request).await
     {
         Ok(r) => r,
         Err(e) => {
             return ToolOutput::failure(
                 "request_error",
                 "Failed to send extract request",
-                Some(format!("HTTP error: {e}")),
+                Some(crate::parallel::describe_request_error(&e)),
             );
         }
     };

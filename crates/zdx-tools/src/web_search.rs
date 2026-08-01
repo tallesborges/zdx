@@ -9,7 +9,6 @@ use serde_json::{Value, json};
 use super::{ToolContext, ToolDefinition, ToolOutput};
 
 const PARALLEL_SEARCH_URL: &str = "https://api.parallel.ai/v1beta/search";
-const PARALLEL_BETA_HEADER: &str = "search-extract-2025-10-10";
 
 /// Returns the tool definition for the `web_search` tool.
 pub fn definition() -> ToolDefinition {
@@ -170,20 +169,13 @@ async fn send_search_request(
     request: &SearchRequest,
     api_key: &str,
 ) -> Result<reqwest::Response, ToolOutput> {
-    let client = reqwest::Client::new();
-    client
-        .post(PARALLEL_SEARCH_URL)
-        .header("Content-Type", "application/json")
-        .header("x-api-key", api_key)
-        .header("parallel-beta", PARALLEL_BETA_HEADER)
-        .json(request)
-        .send()
+    crate::parallel::post_json(PARALLEL_SEARCH_URL, api_key, request)
         .await
         .map_err(|e| {
             ToolOutput::failure(
                 "request_error",
                 "Failed to send search request",
-                Some(format!("HTTP error: {e}")),
+                Some(crate::parallel::describe_request_error(&e)),
             )
         })
 }
