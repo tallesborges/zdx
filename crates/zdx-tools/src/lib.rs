@@ -9,6 +9,7 @@ pub mod edit;
 pub mod fetch_webpage;
 pub mod glob;
 pub mod grep;
+mod parallel;
 pub mod read;
 pub mod web_search;
 pub mod write;
