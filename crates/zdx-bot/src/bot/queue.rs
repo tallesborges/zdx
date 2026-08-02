@@ -6,7 +6,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::bot::context::{BotContext, QueueCancelKey, QueuedCancel};
 use crate::commands::{BotCommand, bypasses_queue, is_topic_blocking_command, parse_command};
-use crate::handlers::message::handle_message;
+use crate::handlers::message::{handle_message, resolve_effective_thread_id, thread_id_for_chat};
+use crate::staging;
 use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message};
 
 /// Queue key: (`chat_id`, `topic_id`). Different topics run concurrently.
@@ -65,6 +66,15 @@ pub(crate) async fn dispatch_message(
         return;
     }
 
+    // The question staged by `/btw` seeds a brand-new topic, so it skips the
+    // queue too — otherwise it would wait behind the very turn it asks about.
+    if awaiting_btw_input(context, &message) {
+        let mut message = message;
+        message.routed_as_btw_input = true;
+        spawn_standalone(Arc::clone(context), Arc::clone(queues), message);
+        return;
+    }
+
     if is_forum_general {
         // Check for commands that shouldn't create a topic
         if let Some(text) = message.text.as_deref()
@@ -116,6 +126,16 @@ pub(crate) async fn dispatch_message(
     } else {
         enqueue_message(queues, context, message).await;
     }
+}
+
+/// Whether this message is the question a live `/btw` session is waiting for.
+fn awaiting_btw_input(context: &BotContext, message: &Message) -> bool {
+    let topic_id = message.effective_thread_id();
+    if topic_id.is_none() {
+        return false;
+    }
+    let thread_id = resolve_effective_thread_id(&thread_id_for_chat(message.chat.id, topic_id));
+    staging::awaiting_btw_input(context, &thread_id)
 }
 
 /// Quick check if message should be processed (allowlist + bot filter).

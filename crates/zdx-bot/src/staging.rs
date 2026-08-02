@@ -52,6 +52,9 @@ impl StagingCommand {
 
 pub(crate) struct StagingSession {
     command: StagingCommand,
+    /// `message_id` of the slash command that opened the session. Messages that
+    /// predate it (e.g. one already sitting in the queue) are not its input.
+    command_message_id: i64,
     /// Full generated suggestion (the preview message may be truncated).
     suggestion_text: Option<String>,
     /// The bot's current suggestion message (deleted/replaced on regenerate).
@@ -74,6 +77,15 @@ pub(crate) type StagingMap = Arc<Mutex<HashMap<String, StagingSession>>>;
 
 pub(crate) fn new_staging_map() -> StagingMap {
     Arc::new(Mutex::new(HashMap::new()))
+}
+
+/// Whether a live `/btw` staging session is waiting for its question on this
+/// thread. That input opens a side topic instead of touching the current
+/// thread, so it must not wait behind a running turn in the queue.
+pub(crate) fn awaiting_btw_input(context: &BotContext, thread_id: &str) -> bool {
+    let map = context.staging_map().lock().expect("staging lock poisoned");
+    map.get(thread_id)
+        .is_some_and(|session| session.command == StagingCommand::Btw && !session.is_expired())
 }
 
 /// Handles the staging flow for one incoming message. Returns `true` when the
@@ -105,6 +117,11 @@ pub(crate) async fn handle_staging_flow(
         let mut map = context.staging_map().lock().expect("staging lock poisoned");
         match map.get(thread_id) {
             Some(session) if session.is_expired() => map.remove(thread_id),
+            // A message that predates the command was already in flight when
+            // the session opened, so it is a normal turn, not staged input.
+            Some(session) if incoming.message_id <= session.command_message_id => {
+                return Ok(false);
+            }
             Some(_) => None,
             None => return Ok(false),
         }
@@ -217,6 +234,7 @@ async fn start_staging(
 
     let session = StagingSession {
         command,
+        command_message_id: incoming.message_id,
         suggestion_text: None,
         suggestion_message_id: None,
         bot_message_ids: vec![ask.id],
@@ -818,6 +836,7 @@ mod tests {
     fn session_created_at(created_at: Instant) -> StagingSession {
         StagingSession {
             command: StagingCommand::Handoff,
+            command_message_id: 1,
             suggestion_text: None,
             suggestion_message_id: None,
             bot_message_ids: vec![],

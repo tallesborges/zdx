@@ -191,7 +191,13 @@ pub(crate) fn is_topic_blocking_command(text: &str) -> bool {
 pub(crate) fn bypasses_queue(text: &str) -> bool {
     matches!(
         parse_command(text),
-        Some(BotCommand::Status | BotCommand::WhereAmI | BotCommand::Tldr | BotCommand::ThreadId)
+        Some(
+            BotCommand::Status
+                | BotCommand::WhereAmI
+                | BotCommand::Tldr
+                | BotCommand::ThreadId
+                | BotCommand::Btw
+        )
     )
 }
 
@@ -318,8 +324,9 @@ mod tests {
         assert_eq!(parse_command("/btw what files did we touch"), None);
         // Must not auto-create a topic when sent from General.
         assert!(is_topic_blocking_command("/btw"));
-        // Staging consumes the next message, so it cannot bypass the queue.
-        assert!(!bypasses_queue("/btw"));
+        // Opens a side topic without touching the running thread, so it never
+        // waits behind the queue (matches the TUI's `/btw` tab).
+        assert!(bypasses_queue("/btw"));
     }
 
     #[test]

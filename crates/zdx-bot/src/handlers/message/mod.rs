@@ -45,6 +45,7 @@ pub(crate) async fn handle_message(
     let ctx = context.as_ref();
     let bot_config = context.config_for_chat(message.chat.id);
     let synthetic_topic_routed_from_general = message.synthetic_topic_routed_from_general;
+    let routed_as_btw_input = message.routed_as_btw_input;
     let provisional_status = if message_has_audio(&message) {
         Some(setup_preprocessing_status(ctx, &message, synthetic_topic_routed_from_general).await)
     } else {
@@ -101,6 +102,27 @@ pub(crate) async fn handle_message(
     .await?
     {
         cleanup_provisional_status(ctx, Some(incoming.chat_id), provisional_status).await;
+        return Ok(());
+    }
+
+    // A `/btw` input skipped this topic's queue, so it must never fall through
+    // into a normal turn — that would run concurrently with the turn holding
+    // the queue slot and write to the same thread. The session can be gone by
+    // now (cancelled, or already used by an earlier input).
+    if routed_as_btw_input {
+        cleanup_provisional_status(ctx, Some(incoming.chat_id), provisional_status).await;
+        if let Err(err) = ctx
+            .client()
+            .send_message(
+                incoming.chat_id,
+                "💬 No side question is pending anymore — send /btw again to ask one.",
+                Some(incoming.message_id),
+                reply_ctx.topic_id,
+            )
+            .await
+        {
+            tracing::warn!(%err, "Failed to notify stale btw input");
+        }
         return Ok(());
     }
 
