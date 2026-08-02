@@ -1310,23 +1310,15 @@ async fn dispatch_bg(command: BgCommands) -> Result<()> {
 }
 
 fn dispatch_service(command: ServiceCommands, context: &DispatchContext<'_>) -> Result<()> {
-    use commands::service::ServiceAction;
-
     match command {
         ServiceCommands::Install { target, program } => {
             let root = resolve_root(context.root, context.worktree_id)?;
             commands::service::install(&target, &root, program)
         }
         ServiceCommands::Uninstall { target } => commands::service::uninstall(&target),
-        ServiceCommands::Start { target } => {
-            commands::service::control(ServiceAction::Start, &target)
-        }
-        ServiceCommands::Stop { target } => {
-            commands::service::control(ServiceAction::Stop, &target)
-        }
-        ServiceCommands::Restart { target } => {
-            commands::service::control(ServiceAction::Restart, &target)
-        }
+        ServiceCommands::Start { target } => commands::service::start(&target),
+        ServiceCommands::Stop { target } => commands::service::stop(&target),
+        ServiceCommands::Restart { target } => commands::service::restart(&target),
         ServiceCommands::Status { json } => commands::service::status(json),
         ServiceCommands::Logs { target, lines, err } => {
             commands::service::logs(&target, lines, err)

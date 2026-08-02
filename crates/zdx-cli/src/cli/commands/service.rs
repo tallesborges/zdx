@@ -30,28 +30,37 @@ pub fn uninstall(target: &str) -> Result<()> {
     Ok(())
 }
 
-/// `zdx service start|stop|restart <target>`.
+/// `zdx service start <target>`.
 ///
 /// # Errors
 /// Returns an error if the target is unknown or launchd control fails.
-pub fn control(action: ServiceAction, target: &str) -> Result<()> {
+pub fn start(target: &str) -> Result<()> {
     for svc in Service::parse_target(target)? {
-        let message = match action {
-            ServiceAction::Start => service::start(svc)?,
-            ServiceAction::Stop => service::stop(svc)?,
-            ServiceAction::Restart => service::restart(svc)?,
-        };
-        println!("{message}");
+        println!("{}", service::start(svc)?);
     }
     Ok(())
 }
 
-/// Which lifecycle operation [`control`] should perform.
-#[derive(Clone, Copy)]
-pub enum ServiceAction {
-    Start,
-    Stop,
-    Restart,
+/// `zdx service stop <target>`.
+///
+/// # Errors
+/// Returns an error if the target is unknown or launchd control fails.
+pub fn stop(target: &str) -> Result<()> {
+    for svc in Service::parse_target(target)? {
+        println!("{}", service::stop(svc)?);
+    }
+    Ok(())
+}
+
+/// `zdx service restart <target>`.
+///
+/// # Errors
+/// Returns an error if the target is unknown or launchd control fails.
+pub fn restart(target: &str) -> Result<()> {
+    for svc in Service::parse_target(target)? {
+        println!("{}", service::restart(svc)?);
+    }
+    Ok(())
 }
 
 /// `zdx service status [--json]`.
@@ -90,7 +99,9 @@ pub fn status(json: bool) -> Result<()> {
             "not installed"
         };
         let detail = match (s.pid, s.uptime) {
-            (Some(pid), Some(up)) => format!("running · PID {pid} · up {}", format_duration(up)),
+            (Some(pid), Some(up)) => {
+                format!("running · PID {pid} · up {}", service::format_uptime(up))
+            }
             (Some(pid), None) => format!("running · PID {pid}"),
             (None, _) => "stopped".to_string(),
         };
@@ -119,17 +130,4 @@ pub fn logs(target: &str, lines: usize, err: bool) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn format_duration(d: std::time::Duration) -> String {
-    let secs = d.as_secs();
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86400 {
-        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
-    } else {
-        format!("{}d {}h", secs / 86400, (secs % 86400) / 3600)
-    }
 }

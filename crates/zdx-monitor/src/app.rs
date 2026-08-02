@@ -1846,7 +1846,7 @@ fn restart_selected_service(app: &mut MonitorApp) {
     if app.active_section == Section::Services
         && let Some(service) = app.services.get(app.selected_index)
     {
-        match restart_service(service) {
+        match service::restart(service.service) {
             Ok(message) => app.set_status(message),
             Err(err) => {
                 app.set_status(format!("Failed to restart {}: {err}", service.name));
@@ -2040,7 +2040,7 @@ fn load_services() -> Vec<ServiceInfo> {
             };
             let (status, details) = match (state.pid, state.uptime) {
                 (Some(pid), uptime) => {
-                    let uptime = uptime.map(format_duration).unwrap_or_default();
+                    let uptime = uptime.map(service::format_uptime).unwrap_or_default();
                     (
                         "running".to_string(),
                         format!("PID {pid} | up {uptime} | {launchd}"),
@@ -2058,36 +2058,11 @@ fn load_services() -> Vec<ServiceInfo> {
         .collect()
 }
 
-fn start_service(service: &ServiceInfo) -> Result<String> {
-    service::start(service.service)
-}
-
-fn stop_service(service: &ServiceInfo) -> Result<String> {
-    service::stop(service.service)
-}
-
-fn toggle_service(service: &ServiceInfo) -> Result<String> {
-    if service.status == "running" {
-        stop_service(service)
+fn toggle_service(info: &ServiceInfo) -> Result<String> {
+    if info.status == "running" {
+        service::stop(info.service)
     } else {
-        start_service(service)
-    }
-}
-
-fn restart_service(service: &ServiceInfo) -> Result<String> {
-    service::restart(service.service)
-}
-
-fn format_duration(d: std::time::Duration) -> String {
-    let secs = d.as_secs();
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86400 {
-        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
-    } else {
-        format!("{}d {}h", secs / 86400, (secs % 86400) / 3600)
+        service::start(info.service)
     }
 }
 
