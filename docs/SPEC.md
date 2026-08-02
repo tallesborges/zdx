@@ -153,9 +153,9 @@ Threads are append-only **JSONL** event logs (thread events are never modified o
 - Threads dir: `<base>/threads/`
 - OAuth cache: `<base>/oauth.json` (0600 perms)
 - MCP OAuth cache: `<base>/mcp_oauth.json` (0600 perms)
-- `zdx bot` resolves Telegram credentials/settings from `[telegram]` in `config.toml`
+- `zdx bot` resolves Telegram credentials/settings from `[telegram]` in `config.toml`. `[telegram]` carries identity and routing only (`bot_token`, allowlists, `profiles`); the bot's model and thinking level come from the layered config like every other surface.
 - Telegram bot chat profiles live under `telegram.profiles.<name>` in `config.toml` with `chat_id` and `cwd`; matching chats run agent turns from the profile cwd, and unprofiled allowed chats keep using the bot root fallback.
-- Each Telegram profile gets its own layered config anchored at the profile `cwd`, so a workspace `.zdx/config.toml` applies to chats bound to that profile. Profile configs are built once at startup; unprofiled chats use the bot-level config. Runtime `/model` and `/thinking` changes apply to the bot-level config and every profile config.
+- Each Telegram profile gets its own layered config anchored at the profile `cwd`, so a workspace `.zdx/config.toml` applies to chats bound to that profile. Profile configs are built once at startup; unprofiled chats use the bot-level config. Runtime `/model` and `/thinking` changes in a General topic are workspace-scoped: they write the chat root's overlay and update only that chat's config.
 
 ### Format
 
@@ -322,7 +322,9 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 - Merge is a deep merge: tables merge recursively; scalars and arrays (including arrays of tables) are replaced wholesale by the higher-precedence layer.
 - Any key may be overridden by a workspace layer; there is no restricted subset.
 - Missing layers are skipped. If no layer exists, defaults apply.
-- Writes (`zdx config`, model/thinking/favorite/Telegram saves, monitor edits) always target `$ZDX_HOME/config.toml`; workspace layers are read-only and hand-edited.
+- Writes (`zdx config`, favorite/Telegram saves, monitor edits) target `$ZDX_HOME/config.toml`.
+- Exception: interactive model/thinking selections (TUI `/model`, `/thinking`, and the Telegram bot's General-topic equivalents) are workspace-scoped. They are written to `<project root>/.zdx/config.toml`, where the project root is the nearest layered directory (cwd first, never above home) that already contains a `.zdx` directory. `.zdx` is an opt-in marker: a directory with only `.git` is not a project root. Outside any project they fall back to `$ZDX_HOME/config.toml`.
+- Workspace writes are minimal: only the changed key is written, and a missing overlay file is created empty rather than seeded from the default template.
 
 ### MCP configuration
 

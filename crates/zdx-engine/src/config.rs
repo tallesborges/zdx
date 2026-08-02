@@ -135,7 +135,10 @@ pub struct SubagentOverride {
 }
 
 /// Telegram bot configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Identity and routing only — the bot's model/thinking come from the layered
+/// config resolved at the chat's working directory.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TelegramConfig {
     /// Bot token for Telegram API.
@@ -146,10 +149,6 @@ pub struct TelegramConfig {
     /// Allowlist of numeric Telegram chat IDs (for groups/supergroups).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowlist_chat_ids: Vec<i64>,
-    /// Model for the Telegram bot.
-    pub model: String,
-    /// Thinking level for the Telegram bot.
-    pub thinking_level: ThinkingLevel,
     /// Per-chat project profiles keyed by profile name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub profiles: BTreeMap<String, TelegramProfileConfig>,
@@ -162,19 +161,6 @@ pub struct TelegramProfileConfig {
     pub chat_id: i64,
     /// Working directory for agent turns in this chat.
     pub cwd: String,
-}
-
-impl Default for TelegramConfig {
-    fn default() -> Self {
-        Self {
-            bot_token: None,
-            allowlist_user_ids: Vec::new(),
-            allowlist_chat_ids: Vec::new(),
-            model: "claude-cli:claude-opus-4-6".to_string(),
-            thinking_level: ThinkingLevel::Low,
-            profiles: BTreeMap::new(),
-        }
-    }
 }
 
 impl TelegramProfileConfig {
@@ -394,6 +380,33 @@ pub mod paths {
         }
 
         layers
+    }
+
+    /// Returns the project root for `cwd`, or `None` when `cwd` is not inside
+    /// a project.
+    ///
+    /// Candidates are exactly the directories whose `.zdx/config.toml`
+    /// participates in config layering (see [`collect_project_config_paths`]),
+    /// searched nearest-first, so anything written to the returned root is
+    /// guaranteed to be read back. A directory counts as a project root only
+    /// when it already contains a `.zdx` directory — an opt-in marker, so
+    /// visiting an unrelated git repo never turns it into a write target.
+    #[must_use]
+    pub fn project_root_for(cwd: &Path, home_dir: Option<&Path>) -> Option<PathBuf> {
+        collect_project_config_paths(cwd, home_dir)
+            .into_iter()
+            .rev()
+            .filter_map(|layer| layer.parent().and_then(Path::parent).map(Path::to_path_buf))
+            .find(|dir| dir.join(".zdx").is_dir())
+    }
+
+    /// Returns the workspace config overlay that interactive model/thinking
+    /// selections should be written to for `cwd`, or `None` when `cwd` is not
+    /// inside a project (in which case the global config is the target).
+    #[must_use]
+    pub fn workspace_config_path_for(cwd: &Path) -> Option<PathBuf> {
+        project_root_for(cwd, home_dir().as_deref())
+            .map(|root| root.join(".zdx").join("config.toml"))
     }
 
     /// Same as [`config_layer_paths_for`], anchored at the current working
@@ -883,19 +896,8 @@ impl Config {
     ///
     /// # Errors
     /// Returns an error if the config cannot be read, parsed, or written.
-    pub fn save_telegram_bot_settings(
-        bot_token: &str,
-        allowlist_user_ids: &[i64],
-        model: &str,
-        thinking_level: ThinkingLevel,
-    ) -> Result<()> {
-        Self::save_telegram_bot_settings_to(
-            &paths::config_path(),
-            bot_token,
-            allowlist_user_ids,
-            model,
-            thinking_level,
-        )
+    pub fn save_telegram_bot_settings(bot_token: &str, allowlist_user_ids: &[i64]) -> Result<()> {
+        Self::save_telegram_bot_settings_to(&paths::config_path(), bot_token, allowlist_user_ids)
     }
 
     /// Saves the global Telegram bot identity/settings to a specific config file path.
@@ -906,8 +908,6 @@ impl Config {
         path: &Path,
         bot_token: &str,
         allowlist_user_ids: &[i64],
-        model: &str,
-        thinking_level: ThinkingLevel,
     ) -> Result<()> {
         use toml_edit::{Array, DocumentMut, value};
 
@@ -929,8 +929,6 @@ impl Config {
 
         doc["telegram"]["bot_token"] = value(bot_token.trim());
         doc["telegram"]["allowlist_user_ids"] = value(users);
-        doc["telegram"]["model"] = value(model.trim());
-        doc["telegram"]["thinking_level"] = value(thinking_level.display_name());
 
         Self::write_config(path, &doc.to_string())
     }
@@ -997,6 +995,44 @@ impl Config {
     /// Returns an error if the operation fails.
     pub fn save_model(model: &str) -> Result<()> {
         Self::save_model_to(&paths::config_path(), model)
+    }
+
+    /// Persists the chat model for `cwd`.
+    ///
+    /// Inside a project the selection is written to that project's
+    /// `.zdx/config.toml` overlay so it stays scoped to the workspace; outside
+    /// any project it falls back to the global config.
+    ///
+    /// # Errors
+    /// Returns an error if the write fails.
+    pub fn save_model_for_cwd(cwd: &Path, model: &str) -> Result<()> {
+        match paths::workspace_config_path_for(cwd) {
+            Some(path) => Self::save_overlay_field(&path, "model", model),
+            None => Self::save_model(model),
+        }
+    }
+
+    /// Writes a single top-level key to a workspace `.zdx/config.toml` overlay.
+    ///
+    /// Overlays merge on top of the global config, so they must stay minimal:
+    /// a missing file starts empty instead of being seeded from the default
+    /// template, which would freeze every default as a workspace override.
+    fn save_overlay_field(path: &Path, field: &str, field_value: &str) -> Result<()> {
+        use toml_edit::{DocumentMut, value};
+
+        let contents = if path.exists() {
+            fs::read_to_string(path)
+                .with_context(|| format!("Failed to read config from {}", path.display()))?
+        } else {
+            String::new()
+        };
+
+        let mut doc: DocumentMut = contents
+            .parse()
+            .with_context(|| format!("Failed to parse config from {}", path.display()))?;
+        doc[field] = value(field_value);
+
+        Self::write_config(path, &doc.to_string())
     }
 
     /// Saves only the model field to a specific config file path.
@@ -1234,70 +1270,6 @@ impl Config {
         Self::write_config(path, &doc.to_string())
     }
 
-    /// Saves only the `telegram.model` field to the config file.
-    ///
-    /// # Errors
-    /// Returns an error if the operation fails.
-    pub fn save_telegram_model(model: &str) -> Result<()> {
-        Self::save_telegram_model_to(&paths::config_path(), model)
-    }
-
-    /// Saves only the `telegram.model` field to a specific config file path.
-    ///
-    /// # Errors
-    /// Returns an error if the operation fails.
-    pub fn save_telegram_model_to(path: &Path, model: &str) -> Result<()> {
-        use toml_edit::{DocumentMut, value};
-
-        let contents = if path.exists() {
-            let user_config = fs::read_to_string(path)
-                .with_context(|| format!("Failed to read config from {}", path.display()))?;
-            merge_with_template(&user_config)?
-        } else {
-            default_config_template().to_string()
-        };
-
-        let mut doc: DocumentMut = contents
-            .parse()
-            .with_context(|| format!("Failed to parse config from {}", path.display()))?;
-
-        doc["telegram"]["model"] = value(model);
-
-        Self::write_config(path, &doc.to_string())
-    }
-
-    /// Saves only the `telegram.thinking_level` field to the config file.
-    ///
-    /// # Errors
-    /// Returns an error if the operation fails.
-    pub fn save_telegram_thinking_level(level: ThinkingLevel) -> Result<()> {
-        Self::save_telegram_thinking_level_to(&paths::config_path(), level)
-    }
-
-    /// Saves only the `telegram.thinking_level` field to a specific config file path.
-    ///
-    /// # Errors
-    /// Returns an error if the operation fails.
-    pub fn save_telegram_thinking_level_to(path: &Path, level: ThinkingLevel) -> Result<()> {
-        use toml_edit::{DocumentMut, value};
-
-        let contents = if path.exists() {
-            let user_config = fs::read_to_string(path)
-                .with_context(|| format!("Failed to read config from {}", path.display()))?;
-            merge_with_template(&user_config)?
-        } else {
-            default_config_template().to_string()
-        };
-
-        let mut doc: DocumentMut = contents
-            .parse()
-            .with_context(|| format!("Failed to parse config from {}", path.display()))?;
-
-        doc["telegram"]["thinking_level"] = value(level.display_name());
-
-        Self::write_config(path, &doc.to_string())
-    }
-
     /// Saves only the `thinking_level` field to the config file.
     ///
     /// Creates the file if it doesn't exist.
@@ -1307,6 +1279,18 @@ impl Config {
     /// Returns an error if the operation fails.
     pub fn save_thinking_level(level: ThinkingLevel) -> Result<()> {
         Self::save_thinking_level_to(&paths::config_path(), level)
+    }
+
+    /// Persists the thinking level for `cwd`, workspace-scoped when `cwd` is
+    /// inside a project. See [`Config::save_model_for_cwd`].
+    ///
+    /// # Errors
+    /// Returns an error if the write fails.
+    pub fn save_thinking_level_for_cwd(cwd: &Path, level: ThinkingLevel) -> Result<()> {
+        match paths::workspace_config_path_for(cwd) {
+            Some(path) => Self::save_overlay_field(&path, "thinking_level", level.display_name()),
+            None => Self::save_thinking_level(level),
+        }
     }
 
     /// Saves only the `thinking_level` field to a specific config file path.
@@ -2235,6 +2219,65 @@ mod tests {
                     .join(".zdx/config.toml")
             ]
         );
+    }
+
+    /// The nearest ancestor with a `.zdx` directory is the project root that
+    /// interactive model writes target.
+    #[test]
+    fn test_project_root_for_picks_nearest_marker() {
+        let home = tempdir().unwrap();
+        let project = home.path().join("projects").join("parity");
+        let nested = project.join("crates").join("api");
+        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir_all(project.join(".zdx")).unwrap();
+        fs::create_dir_all(home.path().join("projects").join(".zdx")).unwrap();
+
+        let root = paths::project_root_for(&nested, Some(home.path())).unwrap();
+
+        assert_eq!(root, project.canonicalize().unwrap());
+    }
+
+    /// `.git` alone is not a project marker: an unrelated repo must never become
+    /// a write target just because it was visited.
+    #[test]
+    fn test_project_root_for_ignores_git_only_dirs() {
+        let home = tempdir().unwrap();
+        let clone = home.path().join("scratch").join("some-clone");
+        fs::create_dir_all(clone.join(".git")).unwrap();
+
+        assert!(paths::project_root_for(&clone, Some(home.path())).is_none());
+    }
+
+    /// Without a `.zdx` directory there is no project root, so writes stay global.
+    #[test]
+    fn test_project_root_for_none_without_marker() {
+        let home = tempdir().unwrap();
+        let cwd = home.path().join("scratch");
+        fs::create_dir_all(&cwd).unwrap();
+
+        assert!(paths::project_root_for(&cwd, Some(home.path())).is_none());
+    }
+
+    /// Workspace overlay writes stay minimal (no default template dump) and
+    /// override the global layer for that workspace only.
+    #[test]
+    fn test_save_overlay_field_is_minimal_and_layers_over_global() {
+        let dir = tempdir().unwrap();
+        let global = dir.path().join("global.toml");
+        let overlay = dir.path().join("project/.zdx/config.toml");
+        fs::write(&global, "model = \"global-model\"\nmax_tokens = 4096\n").unwrap();
+
+        Config::save_overlay_field(&overlay, "model", "parity:some-model").unwrap();
+
+        let contents = fs::read_to_string(&overlay).unwrap();
+        assert_eq!(contents.trim(), "model = \"parity:some-model\"");
+
+        let layered = Config::load_layered(&[global.clone(), overlay]).unwrap();
+        assert_eq!(layered.model, "parity:some-model");
+        assert_eq!(layered.max_tokens, Some(4096));
+
+        let global_only = Config::load_layered(&[global]).unwrap();
+        assert_eq!(global_only.model, "global-model");
     }
 
     /// Later layers override earlier ones; tables merge, untouched keys survive.
@@ -3349,8 +3392,8 @@ max_tokens = 4096
     #[test]
     fn test_telegram_config_defaults() {
         let config = TelegramConfig::default();
-        assert_eq!(config.model, "claude-cli:claude-opus-4-6");
-        assert_eq!(config.thinking_level, ThinkingLevel::Low);
+        assert!(config.bot_token.is_none());
+        assert!(config.allowlist_user_ids.is_empty());
         assert!(config.profiles.is_empty());
     }
 

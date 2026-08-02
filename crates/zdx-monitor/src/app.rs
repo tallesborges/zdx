@@ -247,13 +247,7 @@ pub fn build_config_lines(config: &config::Config, root: &Path) -> Vec<ConfigLin
     }
 
     // Order model-bearing sections first so every editable model is grouped at
-    // the top of the tab, and inline telegram's thinking level into its model
-    // row (like `core`) so it reads `model@thinking`.
-    for (name, section_lines) in &mut sections {
-        if name == "telegram" {
-            inline_thinking_level(section_lines);
-        }
-    }
+    // the top of the tab.
     reorder_model_sections(&mut sections);
 
     for (name, section_lines) in sections {
@@ -266,13 +260,7 @@ pub fn build_config_lines(config: &config::Config, root: &Path) -> Vec<ConfigLin
 
 /// Section names that carry models, in the order they should appear at the top
 /// of the Config tab (after `core`/`helper models`).
-const MODEL_SECTION_ORDER: [&str; 5] = [
-    "transcription",
-    "speech",
-    "telegram",
-    "favorites",
-    "subagents",
-];
+const MODEL_SECTION_ORDER: [&str; 4] = ["transcription", "speech", "favorites", "subagents"];
 
 /// Action row appended to the `favorites` group to create a new favorite.
 const ADD_FAVORITE_LABEL: &str = "[+ add favorite]";
@@ -334,25 +322,6 @@ fn reorder_model_sections(sections: &mut [(String, Vec<ConfigLine>)]) {
             .position(|s| *s == name.as_str())
             .unwrap_or(MODEL_SECTION_ORDER.len())
     });
-}
-
-/// Merges a section's `thinking_level` row into its `model` row as
-/// `model@thinking` and drops the standalone level row (mirrors `core`).
-fn inline_thinking_level(lines: &mut Vec<ConfigLine>) {
-    let Some(level) = lines.iter().find_map(|l| match l {
-        ConfigLine::Row(k, v) if k == "thinking_level" => Some(v.clone()),
-        _ => None,
-    }) else {
-        return;
-    };
-    for l in lines.iter_mut() {
-        if let ConfigLine::Row(k, v) = l
-            && k == "model"
-        {
-            *v = format!("{v}@{level}");
-        }
-    }
-    lines.retain(|l| !matches!(l, ConfigLine::Row(k, _) if k == "thinking_level"));
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -2566,9 +2535,6 @@ pub(crate) fn editable_model_fields(lines: &[ConfigLine]) -> Vec<EditableModelFi
                     ("speech", "model") => {
                         Some(("speech.model".to_string(), ModelFieldKind::Speech))
                     }
-                    ("telegram", "model") => {
-                        Some(("telegram.model".to_string(), ModelFieldKind::Chat))
-                    }
                     ("favorites", k) if k == ADD_FAVORITE_LABEL => {
                         Some(("favorites.add".to_string(), ModelFieldKind::Chat))
                     }
@@ -2904,12 +2870,6 @@ fn commit_model_picker(app: &mut MonitorApp) {
         ModelFieldKind::Chat if field == "model" => (
             config::Config::save_model_field("model", &model)
                 .and_then(|()| config::Config::save_thinking_level(level)),
-            zdx_engine::models::format_model_thinking(&model, level),
-        ),
-        // Telegram bot model: separate `telegram.model` + `telegram.thinking_level`.
-        ModelFieldKind::Chat if field == "telegram.model" => (
-            config::Config::save_telegram_model(&model)
-                .and_then(|()| config::Config::save_telegram_thinking_level(level)),
             zdx_engine::models::format_model_thinking(&model, level),
         ),
         // Favorite preset: update the entry at `favorites.<i>` or append via
@@ -3352,7 +3312,6 @@ mod transcript_tests {
             ConfigLine::Section("speech".into()),
             ConfigLine::Row("model".into(), "w".into()),
             ConfigLine::Section("telegram".into()),
-            ConfigLine::Row("model".into(), "claude-cli:x@low".into()),
             ConfigLine::Row("bot_token".into(), "***".into()),
         ];
         let fields = editable_model_fields(&lines);
@@ -3366,7 +3325,6 @@ mod transcript_tests {
                 ("prompt_builder_model", ModelFieldKind::Chat),
                 ("transcription.model", ModelFieldKind::Transcription),
                 ("speech.model", ModelFieldKind::Speech),
-                ("telegram.model", ModelFieldKind::Chat),
             ]
         );
     }
@@ -3443,7 +3401,7 @@ mod transcript_tests {
     }
 
     #[test]
-    fn build_config_lines_orders_model_sections_and_inlines_telegram_thinking() {
+    fn build_config_lines_orders_model_sections_first() {
         let config = config::Config::default();
         let lines = build_config_lines(&config, std::path::Path::new("/nonexistent-zdx-test-root"));
 
@@ -3456,7 +3414,7 @@ mod transcript_tests {
             })
             .collect();
         let pos = |name: &str| sections.iter().position(|s| *s == name);
-        // Model sections lead: core, helper models, transcription, speech, telegram.
+        // Model sections lead: core, helper models, transcription, speech.
         for pair in [
             ("core", "helper models"),
             ("helper models", "transcription"),
@@ -3471,31 +3429,18 @@ mod transcript_tests {
             );
         }
 
-        // Telegram model row carries thinking inline and drops the standalone row.
+        // The telegram section carries no model rows anymore.
         let mut in_telegram = false;
-        let mut telegram_model: Option<String> = None;
-        let mut telegram_has_thinking_row = false;
         for cl in &lines {
             match cl {
                 ConfigLine::Section(name) => in_telegram = name == "telegram",
-                ConfigLine::Row(k, v) if in_telegram && k == "model" => {
-                    telegram_model = Some(v.clone());
-                }
-                ConfigLine::Row(k, _) if in_telegram && k == "thinking_level" => {
-                    telegram_has_thinking_row = true;
-                }
+                ConfigLine::Row(k, _) if in_telegram => assert!(
+                    k != "model" && k != "thinking_level",
+                    "telegram must not carry a {k} row"
+                ),
                 _ => {}
             }
         }
-        assert!(
-            !telegram_has_thinking_row,
-            "telegram thinking_level must be inlined, not a standalone row"
-        );
-        assert_eq!(
-            telegram_model.as_deref(),
-            Some("claude-cli:claude-opus-4-6@low"),
-            "telegram model should read model@thinking"
-        );
     }
 
     #[test]

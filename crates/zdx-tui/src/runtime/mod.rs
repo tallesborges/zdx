@@ -804,7 +804,10 @@ impl TuiRuntime {
                 // Could add an event for error reporting if needed
             }
             UiEffect::PersistModel { model } => {
-                let _ = zdx_engine::config::Config::save_model(&model);
+                let _ = zdx_engine::config::Config::save_model_for_cwd(
+                    &self.state.tui.agent_opts.root,
+                    &model,
+                );
                 // Errors are silently ignored - model is already set in state
             }
             UiEffect::PersistThreadModelOverride { model } => {
@@ -817,7 +820,10 @@ impl TuiRuntime {
                 }
             }
             UiEffect::PersistThinking { level } => {
-                let _ = zdx_engine::config::Config::save_thinking_level(level);
+                let _ = zdx_engine::config::Config::save_thinking_level_for_cwd(
+                    &self.state.tui.agent_opts.root,
+                    level,
+                );
                 // Errors are silently ignored - level is already set in state
             }
             UiEffect::PersistThreadThinkingOverride { level } => {

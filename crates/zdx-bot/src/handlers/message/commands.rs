@@ -316,11 +316,7 @@ async fn handle_model_command(
                     "Unknown model: <code>{model_id}</code>\n\nUse /model list to see available models."
                 )
             } else if is_general {
-                zdx_engine::config::Config::save_telegram_model(&model_id)?;
-                context.update_config(|cfg| {
-                    cfg.telegram.model.clone_from(&model_id);
-                    cfg.model.clone_from(&model_id);
-                });
+                context.set_chat_model(incoming.chat_id, &model_id)?;
                 format!("✅ Default model set to <code>{model_id}</code>.")
             } else {
                 let mut thread =
@@ -424,11 +420,7 @@ async fn handle_thinking_command(
         }
         ThinkingSubcommand::Set(level) => {
             if is_general {
-                zdx_engine::config::Config::save_telegram_thinking_level(level)?;
-                context.update_config(|cfg| {
-                    cfg.telegram.thinking_level = level;
-                    cfg.thinking_level = level;
-                });
+                context.set_chat_thinking_level(incoming.chat_id, level)?;
                 format!(
                     "✅ Default thinking set to <code>{}</code>.",
                     level.display_name()

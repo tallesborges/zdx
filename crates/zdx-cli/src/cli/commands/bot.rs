@@ -4,13 +4,11 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use zdx_engine::config::{Config, TelegramProfileConfig, ThinkingLevel};
+use zdx_engine::config::{Config, TelegramProfileConfig};
 
 pub struct BotInitOptions {
     pub bot_token: Option<String>,
     pub user_id: Option<i64>,
-    pub model: Option<String>,
-    pub thinking: Option<String>,
 }
 
 pub fn init(config: &Config, options: BotInitOptions) -> Result<()> {
@@ -25,19 +23,7 @@ pub fn init(config: &Config, options: BotInitOptions) -> Result<()> {
         None => prompt_i64_with_default("Allowlisted user ID", default_user_id)?,
     };
 
-    let default_model = config.telegram.model.trim();
-    let model = match options.model {
-        Some(model) => require_non_empty("model", &model)?,
-        None => prompt_with_default("Model", default_model)?,
-    };
-
-    let default_thinking = config.telegram.thinking_level.display_name();
-    let thinking_level = match options.thinking {
-        Some(level) => parse_thinking_level(&level)?,
-        None => parse_thinking_level(&prompt_with_default("Thinking level", default_thinking)?)?,
-    };
-
-    Config::save_telegram_bot_settings(&bot_token, &[user_id], &model, thinking_level)
+    Config::save_telegram_bot_settings(&bot_token, &[user_id])
         .context("save telegram bot settings")?;
 
     println!(
@@ -102,16 +88,6 @@ fn prompt_i64_with_default(label: &str, default: Option<i64>) -> Result<i64> {
     }
 }
 
-fn prompt_with_default(label: &str, default: &str) -> Result<String> {
-    let value = prompt(label, Some(default))?;
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        Ok(default.to_string())
-    } else {
-        Ok(trimmed.to_string())
-    }
-}
-
 fn prompt(label: &str, default: Option<&str>) -> Result<String> {
     let mut stdout = io::stdout();
     match default {
@@ -133,18 +109,4 @@ fn require_non_empty(label: &str, value: &str) -> Result<String> {
         bail!("{label} must not be empty");
     }
     Ok(trimmed.to_string())
-}
-
-fn parse_thinking_level(value: &str) -> Result<ThinkingLevel> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "off" => Ok(ThinkingLevel::Off),
-        "minimal" | "low" => Ok(ThinkingLevel::Low),
-        "medium" => Ok(ThinkingLevel::Medium),
-        "high" => Ok(ThinkingLevel::High),
-        "xhigh" => Ok(ThinkingLevel::XHigh),
-        "max" => Ok(ThinkingLevel::Max),
-        other => bail!(
-            "invalid thinking level: {other} (expected off, low, medium, high, xhigh, or max)"
-        ),
-    }
 }

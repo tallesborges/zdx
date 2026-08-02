@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
-use zdx_engine::config::{Config, TelegramProfileConfig};
+use zdx_engine::config::{Config, TelegramProfileConfig, ThinkingLevel};
 use zdx_engine::core::agent::ToolConfig;
 
 use crate::command_picker::CommandPickerMap;
@@ -150,19 +150,43 @@ impl BotContext {
         self.config()
     }
 
-    /// Applies `f` to the bot-level config and every profile config, so runtime
-    /// changes (`/model`, `/thinking`) stay in effect for all chats.
-    pub(crate) fn update_config(&self, f: impl Fn(&mut Config)) {
-        let mut config = self.config.write().expect("bot config lock poisoned");
-        f(&mut config);
+    /// Persists a runtime model change for `chat_id`.
+    ///
+    /// The selection is written to the chat root's workspace overlay (the
+    /// profile cwd, else the bot's own cwd) and applied to that chat's config
+    /// only, so bound projects keep independent defaults.
+    pub(crate) fn set_chat_model(&self, chat_id: i64, model_id: &str) -> anyhow::Result<()> {
+        Config::save_model_for_cwd(&self.root_for_chat(chat_id).root, model_id)?;
+        self.update_config_for_chat(chat_id, |cfg| cfg.model = model_id.to_string());
+        Ok(())
+    }
 
+    /// Persists a runtime thinking-level change for `chat_id`.
+    /// See [`BotContext::set_chat_model`].
+    pub(crate) fn set_chat_thinking_level(
+        &self,
+        chat_id: i64,
+        level: ThinkingLevel,
+    ) -> anyhow::Result<()> {
+        Config::save_thinking_level_for_cwd(&self.root_for_chat(chat_id).root, level)?;
+        self.update_config_for_chat(chat_id, |cfg| cfg.thinking_level = level);
+        Ok(())
+    }
+
+    /// Applies `f` to the config that `chat_id` resolves to: its profile config
+    /// when bound to one, otherwise the bot-level config.
+    fn update_config_for_chat(&self, chat_id: i64, f: impl Fn(&mut Config)) {
         let mut profiles = self
             .profile_configs
             .write()
             .expect("bot profile config lock poisoned");
-        for profile_config in profiles.values_mut() {
+        if let Some(profile_config) = profiles.get_mut(&chat_id) {
             f(profile_config);
+            return;
         }
+        drop(profiles);
+
+        f(&mut self.config.write().expect("bot config lock poisoned"));
     }
 
     pub(crate) fn allowlist_user_ids(&self) -> &HashSet<i64> {
@@ -240,14 +264,6 @@ fn profile_root_path(profile: &TelegramProfileConfig) -> PathBuf {
     root.canonicalize().unwrap_or(root)
 }
 
-/// Projects `[telegram]` model/thinking onto the top-level fields the agent
-/// actually reads. Applied to the bot-level config at startup and to every
-/// per-profile config, which must stay in sync.
-pub(crate) fn apply_telegram_overrides(config: &mut Config) {
-    config.model.clone_from(&config.telegram.model);
-    config.thinking_level = config.telegram.thinking_level;
-}
-
 /// Loads one layered [`Config`] per Telegram profile, anchored at the profile's
 /// cwd so a workspace `.zdx/config.toml` applies to chats bound to it.
 ///
@@ -262,8 +278,7 @@ fn load_profile_configs(base: &Config) -> HashMap<i64, Config> {
         let layers = zdx_engine::config::paths::config_layer_paths_for(&root);
 
         match Config::load_layered(&layers) {
-            Ok(mut config) => {
-                apply_telegram_overrides(&mut config);
+            Ok(config) => {
                 tracing::info!(
                     profile = %name,
                     chat_id = profile.chat_id,
@@ -340,13 +355,12 @@ mod tests {
         fs::create_dir_all(profile_root.join(".zdx")).unwrap();
         fs::write(
             profile_root.join(".zdx").join("config.toml"),
-            "[telegram]\nmodel = \"sentinel:workspace-model\"\n",
+            "model = \"sentinel:workspace-model\"\n",
         )
         .unwrap();
 
         let config = Config {
             telegram: TelegramConfig {
-                model: "sentinel:global-model".to_string(),
                 profiles: BTreeMap::from([(
                     "zdx".to_string(),
                     TelegramProfileConfig {
@@ -372,14 +386,14 @@ mod tests {
         assert_eq!(context.config().model, "sentinel:global-model");
     }
 
-    /// Runtime `/model` changes must reach profile configs too, otherwise a
-    /// bound chat would keep serving the pre-change model.
+    /// `/model` in a profiled chat writes that profile's workspace overlay and
+    /// leaves every other chat (and the bot-level config) alone.
     #[test]
-    fn test_update_config_reaches_profile_configs() {
-        let fallback_root = unique_temp_dir("update-fallback");
-        let profile_root = unique_temp_dir("update-profile");
+    fn test_set_chat_model_is_scoped_to_the_profile() {
+        let fallback_root = unique_temp_dir("set-model-fallback");
+        let profile_root = unique_temp_dir("set-model-profile");
         fs::create_dir_all(&fallback_root).unwrap();
-        fs::create_dir_all(&profile_root).unwrap();
+        fs::create_dir_all(profile_root.join(".zdx")).unwrap();
 
         let config = Config {
             telegram: TelegramConfig {
@@ -392,16 +406,22 @@ mod tests {
                 )]),
                 ..Default::default()
             },
+            model: "sentinel:global-model".to_string(),
             ..Default::default()
         };
         let context = test_context(config, fallback_root);
 
-        context.update_config(|cfg| {
-            cfg.model = "sentinel:picked".to_string();
-        });
+        context.set_chat_model(-100_123, "sentinel:picked").unwrap();
 
-        assert_eq!(context.config().model, "sentinel:picked");
         assert_eq!(context.config_for_chat(-100_123).model, "sentinel:picked");
+        assert_eq!(
+            context.config_for_chat(-100_999).model,
+            "sentinel:global-model"
+        );
+        assert_eq!(context.config().model, "sentinel:global-model");
+
+        let overlay = fs::read_to_string(profile_root.join(".zdx").join("config.toml")).unwrap();
+        assert_eq!(overlay.trim(), "model = \"sentinel:picked\"");
     }
 
     fn test_context(config: Config, root: PathBuf) -> BotContext {

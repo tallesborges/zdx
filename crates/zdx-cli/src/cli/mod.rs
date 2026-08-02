@@ -702,14 +702,6 @@ enum BotCommands {
         /// Allowlisted Telegram user ID
         #[arg(long, value_name = "USER_ID")]
         user_id: Option<i64>,
-
-        /// Model for the Telegram bot
-        #[arg(long, value_name = "MODEL")]
-        model: Option<String>,
-
-        /// Thinking level for this project's bot (off, low, medium, high, xhigh, max)
-        #[arg(long, value_name = "LEVEL")]
-        thinking: Option<String>,
     },
     /// Manage per-chat project profiles for the Telegram bot
     Profile {
@@ -1280,19 +1272,9 @@ async fn dispatch_bot(command: Option<BotCommands>, context: &DispatchContext<'_
             ))
             .await
         }
-        Some(BotCommands::Init {
-            bot_token,
-            user_id,
-            model,
-            thinking,
-        }) => commands::bot::init(
+        Some(BotCommands::Init { bot_token, user_id }) => commands::bot::init(
             context.config,
-            commands::bot::BotInitOptions {
-                bot_token,
-                user_id,
-                model,
-                thinking,
-            },
+            commands::bot::BotInitOptions { bot_token, user_id },
         ),
         Some(BotCommands::Profile { command }) => match command {
             BotProfileCommands::Add { name, chat_id, cwd } => {
