@@ -129,9 +129,19 @@ pub fn default_program() -> PathBuf {
 }
 
 /// Renders the launchd plist for `service`.
+///
+/// The agent runs through `zsh -c` rather than executing the binary directly:
+/// launchd sources no shell startup files, and `~/.zshenv` is where the
+/// provider API keys live. `exec` keeps launchd tracking the real process, so
+/// `KeepAlive` still works.
 pub fn render_plist(service: Service, program: &Path, root: &Path) -> String {
-    let mut args = vec![program.to_string_lossy().to_string()];
-    args.extend(service.cli_args(root));
+    let mut command = vec![shell_quote(&program.to_string_lossy())];
+    command.extend(service.cli_args(root).iter().map(|a| shell_quote(a)));
+    let args = [
+        "/bin/zsh".to_string(),
+        "-c".to_string(),
+        format!("exec {}", command.join(" ")),
+    ];
     let mut program_args = String::new();
     for arg in &args {
         use std::fmt::Write;
@@ -193,6 +203,12 @@ pub fn install(service: Service, program: &Path, root: &Path) -> Result<String> 
     if !program.is_file() {
         bail!("{} not found — run `just install` first", program.display());
     }
+    // launchd has no useful notion of the caller's cwd, so a relative root
+    // (the CLI's default `.`) has to be resolved before it reaches the plist.
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("resolve root {}", root.display()))?;
+    let root = root.as_path();
     if let ServiceStatus::Running { pid, .. } = pidfile::status(service.name())
         && !service.plist_path().is_file()
     {
@@ -211,6 +227,7 @@ pub fn install(service: Service, program: &Path, root: &Path) -> Result<String> 
     // Re-installing over a loaded agent leaves launchd holding the old plist.
     if plist.is_file() {
         let _ = launchctl(&["bootout".into(), service_target(service)]);
+        wait_until_unloaded(service);
     }
     fs::write(&plist, render_plist(service, program, root))
         .with_context(|| format!("write {}", plist.display()))?;
@@ -266,27 +283,25 @@ pub fn stop(service: Service) -> Result<String> {
 pub fn restart(service: Service) -> Result<String> {
     require_installed(service)?;
     let old_pid = match pidfile::status(service.name()) {
-        ServiceStatus::Running { pid, .. } => Some(pid),
-        ServiceStatus::Stopped => None,
+        ServiceStatus::Running { pid, .. } => pid,
+        ServiceStatus::Stopped => {
+            // `kickstart -k` on a booted-out agent fails; bootstrap it instead.
+            launchctl(&["bootstrap".into(), domain_target(), plist_arg(service)])?;
+            return Ok(format!("Started {service}"));
+        }
     };
-    if old_pid.is_none() {
-        // `kickstart -k` on a booted-out agent fails; bootstrap it instead.
-        launchctl(&["bootstrap".into(), domain_target(), plist_arg(service)])?;
-        return Ok(format!("Started {service}"));
-    }
     launchctl(&["kickstart".into(), "-k".into(), service_target(service)])?;
-    let new_pid = wait_for_new_pid(service, old_pid);
-    Ok(match (old_pid, new_pid) {
-        (Some(old), Some(new)) => format!("Restarted {service} (PID {old} → {new})"),
-        _ => format!("Restarted {service}"),
+    Ok(match wait_for_new_pid(service, old_pid) {
+        Some(new_pid) => format!("Restarted {service} (PID {old_pid} → {new_pid})"),
+        None => format!("Restarted {service}"),
     })
 }
 
 /// Polls the PID file briefly so restart can report the replacement PID.
-fn wait_for_new_pid(service: Service, old_pid: Option<u32>) -> Option<u32> {
+fn wait_for_new_pid(service: Service, old_pid: u32) -> Option<u32> {
     for _ in 0..40 {
         if let ServiceStatus::Running { pid, .. } = pidfile::status(service.name())
-            && Some(pid) != old_pid
+            && pid != old_pid
         {
             return Some(pid);
         }
@@ -295,11 +310,46 @@ fn wait_for_new_pid(service: Service, old_pid: Option<u32>) -> Option<u32> {
     None
 }
 
+/// Waits for a booted-out job to leave the domain.
+///
+/// `bootout` returns before launchd finishes tearing the job down, and
+/// bootstrapping into a domain that still holds the old job fails with
+/// `Bootstrap failed: 5: Input/output error`.
+fn wait_until_unloaded(service: Service) {
+    for _ in 0..40 {
+        if !is_loaded(service) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+}
+
+fn is_loaded(service: Service) -> bool {
+    Command::new("launchctl")
+        .args(["print", &service_target(service)])
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
 fn require_installed(service: Service) -> Result<()> {
     if service.plist_path().is_file() {
         Ok(())
     } else {
         bail!("{service} is not installed — run `zdx service install` first")
+    }
+}
+
+/// Formats a service uptime for display (shared by the CLI and the monitor).
+pub fn format_uptime(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+    } else {
+        format!("{}d {}h", secs / 86400, (secs % 86400) / 3600)
     }
 }
 
@@ -329,14 +379,8 @@ fn agent_path_env() -> String {
     )
 }
 
-#[cfg(unix)]
 fn uid() -> u32 {
     unsafe { libc::getuid() }
-}
-
-#[cfg(not(unix))]
-fn uid() -> u32 {
-    0
 }
 
 #[cfg(target_os = "macos")]
@@ -369,6 +413,11 @@ fn xml_escape(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// Wraps a value in single quotes for the `zsh -c` command string.
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,10 +448,11 @@ mod tests {
         );
         assert!(plist.contains("<key>Label</key>"));
         assert!(plist.contains("<string>dev.zdx.bot</string>"));
-        assert!(plist.contains("<string>/Users/x/.local/bin/zdx</string>"));
-        assert!(plist.contains("<string>--root</string>"));
-        assert!(plist.contains("<string>/Users/x/projects/zdx</string>"));
-        assert!(plist.contains("<string>bot</string>"));
+        assert!(plist.contains("<string>/bin/zsh</string>"));
+        assert!(plist.contains("<string>-c</string>"));
+        assert!(plist.contains(
+            "<string>exec '/Users/x/.local/bin/zdx' '--root' '/Users/x/projects/zdx' 'bot'</string>"
+        ));
         assert!(plist.contains("<key>KeepAlive</key>"));
         assert!(plist.contains("<key>ThrottleInterval</key>"));
         assert!(plist.contains("<string>launchd</string>"));
@@ -418,9 +468,15 @@ mod tests {
             Path::new("/Users/x/projects/zdx"),
         );
         assert!(plist.contains("<string>dev.zdx.daemon</string>"));
-        assert!(plist.contains("<string>automations</string>"));
-        assert!(plist.contains("<string>daemon</string>"));
+        assert!(plist.contains(
+            "<string>exec '/Users/x/.local/bin/zdx' '--root' '/Users/x/projects/zdx' 'automations' 'daemon'</string>"
+        ));
         assert!(plist.contains("daemon.err"));
+    }
+
+    #[test]
+    fn shell_quotes_embedded_single_quote() {
+        assert_eq!(shell_quote("/tmp/it's"), r"'/tmp/it'\''s'");
     }
 
     #[test]

@@ -24,7 +24,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - `src/images/decode.rs`: generic image decode/resize/PNG encode helpers
 - `src/images/path_mime.rs`: path normalization + extension MIME helpers
 - `src/pidfile.rs`: PID file management
-- `src/service.rs`: launchd-backed control for the long-lived `bot`/`daemon` services — plist rendering, `install`/`uninstall`/`start`/`stop`/`restart`, and combined launchd+PID-file `state()`. Agents run `~/.local/bin/zdx` (never `current_exe()`) so restart picks up the installed binary; plists set `ZDX_SERVICE_SUPERVISOR=launchd` and capture output to `~/.zdx/run/logs/{name}.{out,err}`. macOS-only.
+- `src/service.rs`: launchd-backed control for the long-lived `bot`/`daemon` services — plist rendering, `install`/`uninstall`/`start`/`stop`/`restart`, and combined launchd+PID-file `state()`. Agents run `~/.local/bin/zdx` (never `current_exe()`) so restart picks up the installed binary, launched via `zsh -c 'exec …'` so `~/.zshenv` (provider API keys, PATH) is sourced. Plists set `ZDX_SERVICE_SUPERVISOR=launchd` and capture output to `~/.zdx/run/logs/{name}.{out,err}`. macOS-only.
 - `src/tracing_init.rs`: tracing setup
 
 ### Core runtime (`src/core/`)
