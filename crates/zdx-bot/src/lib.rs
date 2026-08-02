@@ -78,6 +78,17 @@ pub async fn run_named_with_config_and_root(
         .with_context(|| format!("ensure unique PID for {service_name}"))?;
     let _pid_guard = zdx_engine::pidfile::write(service_name)
         .with_context(|| format!("write {service_name} PID file"))?;
+    // Under launchd there is no monitor to write the supervision marker, so the
+    // bot vouches for itself — otherwise `/exit` would refuse to restart.
+    if std::env::var(zdx_engine::service::SUPERVISOR_ENV).as_deref() == Ok("launchd")
+        && let Err(err) = zdx_engine::pidfile::mark_supervised(service_name)
+    {
+        tracing::warn!(
+            service = service_name,
+            %err,
+            "Failed to mark service as launchd-supervised"
+        );
+    }
     let config_path = zdx_engine::config::paths::config_path();
     if config_path.exists() {
         tracing::info!(path = %config_path.display(), "Config file");
