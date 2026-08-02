@@ -44,7 +44,7 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `just monitor` (service dashboard for config, threads, automations)
 - `just bot` (Telegram bot; runs the global `[telegram]` config)
 - `just automations` (automation subcommands; e.g. `just automations list`)
-- `just deploy` (build release → install to `~/.local/bin/zdx` → `zdx service restart all`; the standard way to ship a change to the running bot/daemon)
+- `just deploy` (build release → install to `~/.local/bin/zdx` → `zdx service restart all`; the standard way to ship a change to the running bot/daemon). Set `ZDX_CODESIGN_ID` in your shell env to a code-signing identity so `install` signs the binary with a stable identifier and macOS TCC grants survive rebuilds; unset, the binary stays ad-hoc signed and macOS re-prompts after every build.
 - `just ci` (full local CI: lint + test; matches what GHA runs on push/PR — optional pre-push gate)
 - `just ci-fast` (fast inner-loop check: fmt + clippy on default features, lib+bins only — single cargo mode, avoids mode-switching tax)
 - `just lint` (format + clippy)
