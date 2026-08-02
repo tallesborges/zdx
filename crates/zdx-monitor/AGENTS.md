@@ -8,6 +8,10 @@ Compact TUI dashboard for inspecting ZDX services, threads, automations, and con
 - `src/log_line.rs`: `tracing` compact log-line parsing (`LogParts`: timestamp/level/span-scope/target/message) plus the Logs-tab filter primitives (`LevelFilter`, `line_matches`). Shared by `app.rs` (filtering) and `ui.rs` (coloring).
 - `src/ui.rs`: ratatui rendering (`render_background` groups rows under per-thread headers; `render_tool_pane` renders `zdx_transcript::tool_detail_body`, the same body the chat TUI's tool popup shows)
 
+## Services tab
+
+The **Services** tab is a control panel over launchd, not a supervisor. `load_services()` maps `zdx_engine::service::Service::ALL` through `service::state()`, and `Enter`/`r` delegate to `zdx_engine::service::{start,stop,restart}`. Monitor never spawns service processes itself, so restart always picks up `~/.local/bin/zdx` rather than the binary the monitor was launched from. Lifetime (login start, crash restart, `/exit` restart) belongs to launchd; install the agents with `zdx service install`.
+
 ## Checks
 - Default final verification after code changes: `just ci` from repo root
 - Intermediate iteration for this crate: `cargo nextest run -p zdx-monitor`

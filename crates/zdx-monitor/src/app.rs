@@ -1,7 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime};
 use std::{fs, io};
@@ -20,7 +19,8 @@ use zdx_engine::core::thread_persistence;
 use zdx_engine::core::usage_stats::{self, UsageStats};
 use zdx_engine::models::available_models;
 use zdx_engine::providers::subscription_quota::{self, QuotaError, SubscriptionQuota};
-use zdx_engine::{agent_activity, automations, pidfile};
+use zdx_engine::service::{self, Service};
+use zdx_engine::{agent_activity, automations};
 
 use crate::log_line::{LevelFilter, line_matches, line_target};
 use crate::ui;
@@ -417,10 +417,6 @@ pub struct MonitorApp {
     /// forever after one action.
     pub status_set_at: Option<Instant>,
     pub should_quit: bool,
-    /// Services that should be kept running by the supervisor (toggled with Ctrl+R).
-    pub supervised_services: BTreeSet<String>,
-    /// Per-service cooldown for automatic restart attempts.
-    pub last_auto_restart: BTreeMap<String, Instant>,
     /// Cached usage/cost aggregation for the Usage tab (computed lazily).
     pub usage_stats: Option<CachedUsageStats>,
     /// Vertical scroll offset for the Usage tab.
@@ -492,7 +488,7 @@ pub struct AutomationInfo {
 
 #[derive(Clone)]
 pub struct ServiceInfo {
-    pub key: String,
+    pub service: Service,
     pub name: String,
     pub status: String,
     pub details: String,
@@ -1344,8 +1340,6 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
         status_message: String::new(),
         status_set_at: None,
         should_quit: false,
-        supervised_services: BTreeSet::new(),
-        last_auto_restart: BTreeMap::new(),
         usage_stats: None,
         usage_scroll: 0,
         usage_span: UsageSpan::All,
@@ -1406,14 +1400,6 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
         return;
     }
     if app.active_section == Section::Usage && handle_usage_key(app, key.code) {
-        return;
-    }
-    if key.code == KeyCode::Char('r')
-        && key
-            .modifiers
-            .contains(crossterm::event::KeyModifiers::CONTROL)
-    {
-        toggle_supervision(app);
         return;
     }
     match key.code {
@@ -1847,7 +1833,7 @@ fn toggle_selected_service(app: &mut MonitorApp) {
     if app.active_section == Section::Services
         && let Some(service) = app.services.get(app.selected_index)
     {
-        match toggle_service(service, &app.root) {
+        match toggle_service(service) {
             Ok(message) => app.set_status(message),
             Err(err) => {
                 app.set_status(format!("Failed to toggle {}: {err}", service.name));
@@ -1860,77 +1846,11 @@ fn restart_selected_service(app: &mut MonitorApp) {
     if app.active_section == Section::Services
         && let Some(service) = app.services.get(app.selected_index)
     {
-        match restart_service(service, &app.root) {
+        match restart_service(service) {
             Ok(message) => app.set_status(message),
             Err(err) => {
                 app.set_status(format!("Failed to restart {}: {err}", service.name));
             }
-        }
-    }
-}
-
-fn toggle_supervision(app: &mut MonitorApp) {
-    if app.active_section != Section::Services {
-        return;
-    }
-    let Some(service) = app.services.get(app.selected_index) else {
-        return;
-    };
-    let key = service.key.clone();
-    let name = service.name.clone();
-    if app.supervised_services.remove(&key) {
-        pidfile::unmark_supervised(&key);
-        app.last_auto_restart.remove(&key);
-        app.set_status(format!("{name}: supervision off"));
-    } else {
-        match pidfile::mark_supervised(&key) {
-            Ok(()) => {
-                app.supervised_services.insert(key);
-                app.set_status(format!("{name}: supervision on"));
-            }
-            Err(err) => {
-                app.set_status(format!("{name}: supervision failed: {err}"));
-            }
-        }
-    }
-}
-
-/// Minimum interval between automatic service restart attempts.
-const SERVICE_RESTART_COOLDOWN: Duration = Duration::from_secs(5);
-
-/// After service refresh, auto-restart any supervised service that should be running but isn't.
-fn supervise_services(app: &mut MonitorApp) {
-    if app.supervised_services.is_empty() {
-        return;
-    }
-
-    let now = Instant::now();
-
-    let stalled: Vec<usize> = app
-        .services
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| app.supervised_services.contains(&s.key) && s.status != "running")
-        .map(|(i, _)| i)
-        .collect();
-
-    for idx in stalled {
-        let key = app.services[idx].key.clone();
-
-        let last = app
-            .last_auto_restart
-            .get(&key)
-            .copied()
-            .unwrap_or_else(|| now.checked_sub(SERVICE_RESTART_COOLDOWN).unwrap_or(now));
-        if now.duration_since(last) < SERVICE_RESTART_COOLDOWN {
-            continue;
-        }
-
-        let service = app.services[idx].clone();
-        app.last_auto_restart.insert(key, now);
-        match start_service(&service, &app.root) {
-            Ok(msg) => app.set_status(format!("Auto-restart: {msg}")),
-            Err(err) => app.set_status(format!("Auto-restart failed: {err}")),
         }
     }
 }
@@ -1951,7 +1871,6 @@ fn refresh_app(app: &mut MonitorApp) {
     app.background = load_background();
     load_active_log(app);
     app.clamp_selection();
-    supervise_services(app);
     poll_usage_result(app);
     refresh_usage(app);
     poll_quota_result(app);
@@ -2007,10 +1926,6 @@ pub fn run(root: &Path) -> Result<()> {
         if app.should_quit {
             break;
         }
-    }
-
-    for key in &app.supervised_services {
-        pidfile::unmark_supervised(key);
     }
 
     restore_terminal(&mut terminal)
@@ -2114,112 +2029,53 @@ fn load_automations(root: &Path) -> Vec<AutomationInfo> {
 }
 
 fn load_services() -> Vec<ServiceInfo> {
-    let mut service_names: BTreeSet<String> =
-        BTreeSet::from(["daemon".to_string(), "bot".to_string()]);
-    let run_dir = paths::zdx_home().join("run");
-    if let Ok(entries) = fs::read_dir(&run_dir) {
-        for entry in entries.filter_map(Result::ok) {
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("pid") {
-                continue;
-            }
-            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            if stem == "bot" {
-                service_names.insert(stem.to_string());
-            }
-        }
-    }
-
-    service_names
+    Service::ALL
         .into_iter()
-        .filter_map(|service_name| {
-            let display_name = service_name.clone();
-
-            match pidfile::status(&service_name) {
-                pidfile::ServiceStatus::Running { pid, started } => {
-                    let uptime = started
-                        .and_then(|s| s.elapsed().ok())
-                        .map(format_duration)
-                        .unwrap_or_default();
-                    Some(ServiceInfo {
-                        key: service_name.clone(),
-                        name: display_name,
-                        status: "running".to_string(),
-                        details: format!("PID {pid} | up {uptime}"),
-                    })
+        .map(|svc| {
+            let state = service::state(svc);
+            let launchd = if state.installed {
+                "launchd"
+            } else {
+                "not installed"
+            };
+            let (status, details) = match (state.pid, state.uptime) {
+                (Some(pid), uptime) => {
+                    let uptime = uptime.map(format_duration).unwrap_or_default();
+                    (
+                        "running".to_string(),
+                        format!("PID {pid} | up {uptime} | {launchd}"),
+                    )
                 }
-                pidfile::ServiceStatus::Stopped if service_name == "daemon" => Some(ServiceInfo {
-                    key: service_name.clone(),
-                    name: display_name,
-                    status: "stopped".to_string(),
-                    details: String::new(),
-                }),
-                pidfile::ServiceStatus::Stopped if service_name == "bot" => Some(ServiceInfo {
-                    key: service_name.clone(),
-                    name: display_name,
-                    status: "stopped".to_string(),
-                    details: String::new(),
-                }),
-                pidfile::ServiceStatus::Stopped => None,
+                (None, _) => ("stopped".to_string(), launchd.to_string()),
+            };
+            ServiceInfo {
+                service: svc,
+                name: svc.name().to_string(),
+                status,
+                details,
             }
         })
         .collect()
 }
 
-fn start_service(service: &ServiceInfo, root: &Path) -> Result<String> {
-    if service.status == "running" {
-        return Ok(format!("{} is already running", service.name));
-    }
-
-    let exe = std::env::current_exe().context("resolve current executable")?;
-    let mut command = Command::new(exe);
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-
-    match service.key.as_str() {
-        "daemon" => {
-            command
-                .arg("--root")
-                .arg(root)
-                .arg("automations")
-                .arg("daemon");
-        }
-        "bot" => {
-            command.arg("--root").arg(root).arg("bot");
-        }
-        _ => anyhow::bail!("unsupported service '{}'", service.name),
-    }
-
-    let child = command
-        .spawn()
-        .with_context(|| format!("spawn {}", service.name))?;
-    Ok(format!("Started {} (PID {})", service.name, child.id()))
+fn start_service(service: &ServiceInfo) -> Result<String> {
+    service::start(service.service)
 }
 
 fn stop_service(service: &ServiceInfo) -> Result<String> {
-    match pidfile::terminate(&service.key)? {
-        Some(pid) => Ok(format!("Stopping {} (PID {})…", service.name, pid)),
-        None => Ok(format!("{} is already stopped", service.name)),
-    }
+    service::stop(service.service)
 }
 
-fn toggle_service(service: &ServiceInfo, root: &Path) -> Result<String> {
+fn toggle_service(service: &ServiceInfo) -> Result<String> {
     if service.status == "running" {
         stop_service(service)
     } else {
-        start_service(service, root)
+        start_service(service)
     }
 }
 
-fn restart_service(service: &ServiceInfo, root: &Path) -> Result<String> {
-    if service.status == "running" {
-        let _ = stop_service(service)?;
-    }
-    start_service(service, root).map(|message| format!("Restarted {} • {message}", service.name))
+fn restart_service(service: &ServiceInfo) -> Result<String> {
+    service::restart(service.service)
 }
 
 fn format_duration(d: std::time::Duration) -> String {

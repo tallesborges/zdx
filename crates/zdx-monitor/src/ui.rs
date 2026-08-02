@@ -81,14 +81,7 @@ fn render_services(f: &mut Frame, app: &MonitorApp, area: Rect) {
                 ("○", Style::default().fg(Color::DarkGray))
             };
             let line = {
-                let mut display_details = s.details.clone();
-                if app.supervised_services.contains(&s.key) {
-                    if display_details.is_empty() {
-                        display_details = "supervised".to_string();
-                    } else {
-                        display_details = format!("{display_details} · supervised");
-                    }
-                }
+                let display_details = &s.details;
                 if display_details.is_empty() {
                     format!(" {:<10} {icon} {}", s.name, s.status)
                 } else {
@@ -109,7 +102,7 @@ fn render_services(f: &mut Frame, app: &MonitorApp, area: Rect) {
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title("Services (Enter=toggle, r=restart, ^R=supervise)"),
+            .title("Services (Enter=toggle, r=restart)"),
     );
     f.render_widget(list, area);
 }
@@ -133,9 +126,7 @@ fn render_footer(f: &mut Frame, app: &MonitorApp, area: Rect) {
 
 fn footer_hint(section: Section) -> &'static str {
     match section {
-        Section::Services => {
-            "↑↓ navigate • Enter toggle • r restart • ^R supervise • Tab/⇧Tab switch • q quit"
-        }
+        Section::Services => "↑↓ navigate • Enter toggle • r restart • Tab/⇧Tab switch • q quit",
         Section::ActiveAgents => "↑↓ navigate • Enter inspect • Tab/⇧Tab switch • q quit",
         Section::Background => "↑↓ navigate • x kill • Tab/⇧Tab switch • q quit",
         Section::Automations => "↑↓ navigate • Tab/⇧Tab switch • q quit",
