@@ -120,6 +120,7 @@ ZDX solves this with a boring, reliable core:
 
 - launchd owns the lifetime of the `bot` and `daemon` services: start at login, restart on crash, restart after the bot's `/exit`.
 - Agents run `~/.local/bin/zdx` (the `just install` target), never the calling binary, so `restart` always picks up the currently installed build.
+- Agents are launched via `zsh -c 'exec …'` so `~/.zshenv` is sourced; launchd sources no shell startup files, and provider API keys live there.
 - `install` refuses when the service is already running outside launchd; PID-file uniqueness continues to prevent duplicate instances.
 - `stop` is durable: the service stays stopped until an explicit `start`, across reboots.
 - `restart` waits for the old process to exit before the replacement starts, and reports `PID old → new`.
