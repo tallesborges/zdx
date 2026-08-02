@@ -81,6 +81,10 @@ install: build-release
     install -m 0755 target/release/zdx ~/.local/bin/zdx
     @echo "Installed $(~/.local/bin/zdx --version 2>/dev/null || echo zdx) to ~/.local/bin/zdx"
 
+# Build, install, and restart the launchd services with the new binary
+deploy: install
+    ~/.local/bin/zdx service restart all
+
 # (Re)create ~/.local/bin/zdxd as a symlink to the debug build
 install-debug:
     cargo build -p zdx

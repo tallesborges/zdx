@@ -85,6 +85,7 @@ ZDX solves this with a boring, reliable core:
 - `zdx imagine -p, --prompt <PROMPT> [--out PATH] [--model MODEL] [--aspect RATIO] [--size SIZE]` — generate images with Gemini image models
 - `zdx mcp servers|auth <SERVER>|logout <SERVER>|tools <SERVER>|schema <SERVER> <TOOL>|call <SERVER> <TOOL> --json '{...}'` — inspect, authenticate, and call configured MCP servers through the helper CLI
 - `zdx automations list|validate|daemon|runs [NAME] [--date*] [--json]|run <NAME>`
+- `zdx service install|uninstall|start|stop|restart [bot|daemon|all]`, `zdx service status [--json]`, `zdx service logs [bot|daemon|all] [--lines N] [--err]` — manage the long-lived `bot`/`daemon` services under launchd (macOS)
 - `zdx threads list [--all]|show <ID>|resume [ID]|search [QUERY] [--date*] [--limit N] [--json]|tools [TOOL] [--failed] [--date*] [--limit N] [--json]`
 - `zdx config init|path`
 
@@ -114,6 +115,17 @@ ZDX solves this with a boring, reliable core:
   - `auth` and `logout` print human-readable status/instructions.
 - `servers` may report MCP server states such as `loaded`, `auth_required`, or `failed`.
 - **stderr:** CLI usage/runtime errors.
+
+### `zdx service ...` (macOS/launchd)
+
+- launchd owns the lifetime of the `bot` and `daemon` services: start at login, restart on crash, restart after the bot's `/exit`.
+- Agents run `~/.local/bin/zdx` (the `just install` target), never the calling binary, so `restart` always picks up the currently installed build.
+- `install` refuses when the service is already running outside launchd; PID-file uniqueness continues to prevent duplicate instances.
+- `stop` is durable: the service stays stopped until an explicit `start`, across reboots.
+- `restart` waits for the old process to exit before the replacement starts, and reports `PID old → new`.
+- Service stdout/stderr are captured to `$ZDX_HOME/run/logs/{bot,daemon}.{out,err}`.
+- Plists set `ZDX_SERVICE_SUPERVISOR=launchd`; the bot uses this to self-mark as supervised so `/exit` is honored with no monitor running.
+- `zdx monitor` is a control panel over the same operations, not an independent supervisor; it never spawns service processes itself.
 
 ### `zdx` (interactive)
 
