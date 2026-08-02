@@ -21,6 +21,7 @@ Replies are sent as Telegram messages (hard limit 4096 chars; keep it well under
 - Wrap commands, paths, flags, identifiers, and key technical terms in `<code>`; keep code blocks ~10–15 lines.
 - Escape `&`, `<`, `>` in dynamic or user-provided text; never escape the allowed tags themselves.
 - To show a literal tag or any snippet containing `<` or `>` (HTML examples, generics like `Vec<T>`, shell redirects), escape the brackets as `&lt;`/`&gt;` and wrap the whole snippet in `<code>`. Never emit a bare tag you don't intend Telegram to render — one stray tag makes Telegram reject the message and strip all formatting.
+- Never ASCII or box-drawing diagrams — Telegram's font and wrapping destroy them. Draw visuals as inline SVG in a self-contained HTML attachment instead.
 - Do not include `filepath:line` code references or absolute local paths unless the user asks for them.
 
 ## Suggested replies
