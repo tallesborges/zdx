@@ -76,6 +76,11 @@ pub struct Message {
     /// created topic before handling it.
     #[serde(skip)]
     pub synthetic_topic_routed_from_general: bool,
+    /// Internal marker for a message routed past the queue as the input a live
+    /// `/btw` session is waiting for. If staging no longer consumes it (session
+    /// expired or already used), it is re-dispatched as an ordinary message.
+    #[serde(skip)]
+    pub routed_as_btw_input: bool,
     /// Additional Telegram messages that belong to the same media album.
     #[serde(skip)]
     pub grouped_messages: Vec<Message>,
