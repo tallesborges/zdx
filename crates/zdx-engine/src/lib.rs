@@ -16,6 +16,7 @@ pub mod pidfile;
 pub mod proc_liveness;
 pub mod prompts;
 pub mod providers;
+pub mod service;
 pub mod skills;
 pub mod subagents;
 #[cfg(test)]
