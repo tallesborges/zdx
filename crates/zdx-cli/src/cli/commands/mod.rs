@@ -14,6 +14,7 @@ pub mod mcp;
 pub mod memory;
 pub mod models;
 pub mod quota;
+pub mod service;
 pub mod speak;
 pub mod stats;
 pub mod telegram;

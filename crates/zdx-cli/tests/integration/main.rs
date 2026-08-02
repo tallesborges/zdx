@@ -11,6 +11,7 @@ mod config_path;
 mod exec_subagent;
 mod login_logout;
 mod quota;
+mod service;
 mod thread_schema;
 mod threads_export;
 mod threads_list_show;

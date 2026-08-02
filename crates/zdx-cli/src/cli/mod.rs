@@ -271,6 +271,11 @@ enum Commands {
         #[command(subcommand)]
         command: BgCommands,
     },
+    /// Manage the long-lived `bot` and `daemon` services under launchd (macOS)
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommands,
+    },
     /// Show live subscription quota (session/weekly limits) for OAuth providers
     Quota {
         /// Emit machine-readable JSON instead of a text summary
@@ -377,6 +382,64 @@ enum BgCommands {
         /// The `bg_id` of the process to stop
         #[arg(value_name = "BG_ID")]
         bg_id: String,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum ServiceCommands {
+    /// Write the launchd plists and start the services
+    Install {
+        /// Service to install: bot, daemon, or all
+        #[arg(value_name = "SERVICE", default_value = "all")]
+        target: String,
+
+        /// Binary launchd should run (default: ~/.local/bin/zdx)
+        #[arg(long, value_name = "PATH")]
+        program: Option<std::path::PathBuf>,
+    },
+    /// Stop the services and remove their launchd plists
+    Uninstall {
+        /// Service to uninstall: bot, daemon, or all
+        #[arg(value_name = "SERVICE", default_value = "all")]
+        target: String,
+    },
+    /// Start a stopped service
+    Start {
+        /// Service to start: bot, daemon, or all
+        #[arg(value_name = "SERVICE", default_value = "all")]
+        target: String,
+    },
+    /// Stop a service until it is explicitly started again
+    Stop {
+        /// Service to stop: bot, daemon, or all
+        #[arg(value_name = "SERVICE", default_value = "all")]
+        target: String,
+    },
+    /// Restart a service, picking up the currently installed binary
+    Restart {
+        /// Service to restart: bot, daemon, or all
+        #[arg(value_name = "SERVICE", default_value = "all")]
+        target: String,
+    },
+    /// Show launchd registration and live process status
+    Status {
+        /// Emit machine-readable JSON instead of a text summary
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the tail of a service's captured output
+    Logs {
+        /// Service to inspect: bot, daemon, or all
+        #[arg(value_name = "SERVICE", default_value = "all")]
+        target: String,
+
+        /// Number of trailing lines to show
+        #[arg(long, default_value_t = 40)]
+        lines: usize,
+
+        /// Show stderr instead of stdout
+        #[arg(long)]
+        err: bool,
     },
 }
 
@@ -1065,6 +1128,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
         Commands::Stats => commands::stats::run(context.config),
         Commands::Quota { json } => commands::quota::run(json).await,
         Commands::Bg { command } => dispatch_bg(command).await,
+        Commands::Service { command } => dispatch_service(command, context),
         Commands::Imagine {
             prompt,
             out,
@@ -1242,6 +1306,31 @@ async fn dispatch_bg(command: BgCommands) -> Result<()> {
     match command {
         BgCommands::List { json } => commands::bg::list(json),
         BgCommands::Kill { bg_id } => commands::bg::kill(&bg_id).await,
+    }
+}
+
+fn dispatch_service(command: ServiceCommands, context: &DispatchContext<'_>) -> Result<()> {
+    use commands::service::ServiceAction;
+
+    match command {
+        ServiceCommands::Install { target, program } => {
+            let root = resolve_root(context.root, context.worktree_id)?;
+            commands::service::install(&target, &root, program)
+        }
+        ServiceCommands::Uninstall { target } => commands::service::uninstall(&target),
+        ServiceCommands::Start { target } => {
+            commands::service::control(ServiceAction::Start, &target)
+        }
+        ServiceCommands::Stop { target } => {
+            commands::service::control(ServiceAction::Stop, &target)
+        }
+        ServiceCommands::Restart { target } => {
+            commands::service::control(ServiceAction::Restart, &target)
+        }
+        ServiceCommands::Status { json } => commands::service::status(json),
+        ServiceCommands::Logs { target, lines, err } => {
+            commands::service::logs(&target, lines, err)
+        }
     }
 }
 
