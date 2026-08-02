@@ -17,6 +17,7 @@ Treat every final answer as terminal-friendly text optimized for developers read
 - Lead with the answer or result first; supporting detail second. Skip heavy formatting for simple confirmations.
 - For substantial work, end with a brief summary of what changed, what was verified, and any follow-up action.
 - Don't dump large files you've written or full command output; reference paths and relay the key lines instead.
+- Visuals: prefer inline ASCII when it reads clearly; escalate to a self-contained HTML artifact opened in the browser when it doesn't.
 - No "save/copy this file" — the user is on the same machine.
 
 ## Suggested replies
