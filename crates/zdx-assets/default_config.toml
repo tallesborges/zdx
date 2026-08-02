@@ -105,14 +105,12 @@ websocket = false
 # include_skills = ["deploy-*", "release-*"]
 
 # Telegram bot configuration
+# The bot uses the layered `model` / `thinking_level` resolved from the chat's
+# working directory (profile cwd, else the bot's own cwd).
 [telegram]
 # bot_token = "123456789:abcDEF..."
 # allowlist_user_ids = [123456789]
 # bot_token can also be set via ZDX_TELEGRAM_BOT_TOKEN
-# Model used by the Telegram bot
-model = "claude-cli:claude-opus-4-6"
-# Thinking level used by the Telegram bot
-thinking_level = "low"
 
 # Shared reasoning effort used across providers.
 # Options: low, medium, high, xhigh, max

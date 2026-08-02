@@ -9,8 +9,8 @@ use zdx_engine::core::agent::ToolConfig;
 
 use crate::bot::queue::ChatQueueMap;
 use crate::bot::{
-    BotContext, BotContextDeps, CancelKey, QueueCancelKey, apply_telegram_overrides,
-    dispatch_message, new_cancel_map, new_chat_queues, new_queue_cancel_map,
+    BotContext, BotContextDeps, CancelKey, QueueCancelKey, dispatch_message, new_cancel_map,
+    new_chat_queues, new_queue_cancel_map,
 };
 use crate::handlers::message::{
     ModelPickerScope, build_models_keyboard, build_provider_keyboard, models_for_provider,
@@ -69,10 +69,9 @@ pub async fn run_with_config_and_root(config: Config, root: PathBuf) -> Result<(
 /// Returns an error if the operation fails.
 pub async fn run_named_with_config_and_root(
     service_name: &str,
-    mut config: Config,
+    config: Config,
     root: PathBuf,
 ) -> Result<()> {
-    apply_telegram_overrides(&mut config);
     let settings = TelegramSettings::from_config(&config)?;
     zdx_engine::pidfile::ensure_unique(service_name)
         .with_context(|| format!("ensure unique PID for {service_name}"))?;
@@ -521,14 +520,8 @@ async fn resolve_model_pick(
     model_id: &str,
 ) -> String {
     match scope {
-        ModelPickerScope::General => match Config::save_telegram_model(model_id) {
-            Ok(()) => {
-                context.update_config(|cfg| {
-                    cfg.telegram.model = model_id.to_string();
-                    cfg.model = model_id.to_string();
-                });
-                format!("✅ Default model set to <code>{model_id}</code>.")
-            }
+        ModelPickerScope::General => match context.set_chat_model(chat_id, model_id) {
+            Ok(()) => format!("✅ Default model set to <code>{model_id}</code>."),
             Err(err) => format!("❌ Failed to save model: {err}"),
         },
         ModelPickerScope::Topic => set_topic_model(chat_id, thread_id, model_id),
@@ -702,17 +695,11 @@ async fn handle_thinking_callback(
         };
 
         let reply = if is_general {
-            match Config::save_telegram_thinking_level(level) {
-                Ok(()) => {
-                    context.update_config(|cfg| {
-                        cfg.telegram.thinking_level = level;
-                        cfg.thinking_level = level;
-                    });
-                    format!(
-                        "✅ Default thinking set to <code>{}</code>.",
-                        level.display_name()
-                    )
-                }
+            match context.set_chat_thinking_level(chat_id, level) {
+                Ok(()) => format!(
+                    "✅ Default thinking set to <code>{}</code>.",
+                    level.display_name()
+                ),
                 Err(err) => format!("❌ Failed to save thinking level: {err}"),
             }
         } else {

@@ -77,10 +77,6 @@ fn test_bot_init_updates_global_telegram_config() {
             "123456:abc",
             "--user-id",
             "42",
-            "--model",
-            "claude-cli:claude-sonnet-4-6",
-            "--thinking",
-            "high",
         ])
         .assert()
         .success()
@@ -91,7 +87,6 @@ fn test_bot_init_updates_global_telegram_config() {
     assert!(contents.contains("[telegram]"));
     assert!(contents.contains("bot_token = \"123456:abc\""));
     assert!(contents.contains("allowlist_user_ids = [42]"));
-    assert!(contents.contains("thinking_level = \"high\""));
 }
 
 #[test]
