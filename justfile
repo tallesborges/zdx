@@ -1,5 +1,10 @@
 # zdx justfile — run `just` to see all recipes
 
+# Code-signing identity for `install`. Set ZDX_CODESIGN_ID in your shell env
+# (e.g. "Apple Development: Name (TEAMID)") so macOS TCC grants survive
+# rebuilds. Unset means the binary stays ad-hoc signed.
+codesign_id := env_var_or_default("ZDX_CODESIGN_ID", "")
+
 # Default: list available recipes
 default:
     @just --list
@@ -79,6 +84,11 @@ build-release:
 install: build-release
     @mkdir -p ~/.local/bin
     install -m 0755 target/release/zdx ~/.local/bin/zdx
+    @if [ -n "{{ codesign_id }}" ]; then \
+        codesign --force --sign "{{ codesign_id }}" --identifier dev.zdx.cli ~/.local/bin/zdx; \
+    else \
+        echo "ZDX_CODESIGN_ID unset — skipping codesign; macOS will re-prompt for permissions after each rebuild"; \
+    fi
     @echo "Installed $(~/.local/bin/zdx --version 2>/dev/null || echo zdx) to ~/.local/bin/zdx"
 
 # Build, install, and restart the launchd services with the new binary
