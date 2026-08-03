@@ -262,7 +262,11 @@ pub fn start(service: Service) -> Result<String> {
     if let ServiceStatus::Running { pid, .. } = pidfile::status(service.name()) {
         return Ok(format!("{service} is already running (PID {pid})"));
     }
-    launchctl(&["bootstrap".into(), domain_target(), plist_arg(service)])?;
+    if is_loaded(service) {
+        launchctl(&["kickstart".into(), service_target(service)])?;
+    } else {
+        launchctl(&["bootstrap".into(), domain_target(), plist_arg(service)])?;
+    }
     Ok(format!("Started {service}"))
 }
 
@@ -282,15 +286,20 @@ pub fn stop(service: Service) -> Result<String> {
 /// Returns an error if the agent is not installed or `launchctl` fails.
 pub fn restart(service: Service) -> Result<String> {
     require_installed(service)?;
+    // A stale/missing PID file does not mean launchd dropped the job, and
+    // bootstrapping a job the domain still holds fails with `5: Input/output error`.
+    if !is_loaded(service) {
+        launchctl(&["bootstrap".into(), domain_target(), plist_arg(service)])?;
+        return Ok(format!("Started {service}"));
+    }
     let old_pid = match pidfile::status(service.name()) {
-        ServiceStatus::Running { pid, .. } => pid,
-        ServiceStatus::Stopped => {
-            // `kickstart -k` on a booted-out agent fails; bootstrap it instead.
-            launchctl(&["bootstrap".into(), domain_target(), plist_arg(service)])?;
-            return Ok(format!("Started {service}"));
-        }
+        ServiceStatus::Running { pid, .. } => Some(pid),
+        ServiceStatus::Stopped => None,
     };
     launchctl(&["kickstart".into(), "-k".into(), service_target(service)])?;
+    let Some(old_pid) = old_pid else {
+        return Ok(format!("Started {service}"));
+    };
     Ok(match wait_for_new_pid(service, old_pid) {
         Some(new_pid) => format!("Restarted {service} (PID {old_pid} → {new_pid})"),
         None => format!("Restarted {service}"),
