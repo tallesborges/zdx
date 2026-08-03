@@ -275,4 +275,3 @@ command = "qmd"
 
 [notifications]
 osc = true
-cmux_status = false

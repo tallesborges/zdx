@@ -90,21 +90,6 @@ pub enum UiEffect {
     /// animated spinner prefix while a turn runs (e.g. `◐ Fix auth bug`).
     SetTermTitle { value: String },
 
-    /// Set this instance's cmux sidebar status pill (e.g. `◐ · fix auth bug`
-    /// while running, `fix auth bug` when complete, `✗ · fix auth bug` on
-    /// failure).
-    CmuxStatus { value: String },
-
-    /// Clear this instance's cmux sidebar status pill (active tab idle with
-    /// nothing to show, e.g. a fresh tab with no title yet).
-    CmuxStatusClear,
-
-    /// Set the cmux sidebar progress bar from `todo_write` completion.
-    CmuxProgress { value: f64, label: String },
-
-    /// Clear the cmux sidebar progress bar.
-    CmuxProgressClear,
-
     /// Append an event to the thread log.
     SaveThread { event: ThreadEvent },
 

@@ -133,9 +133,6 @@ pub struct AppState {
     /// Last terminal window/tab title written via OSC, used to dedupe the
     /// per-tick title refresh so it only emits when the value changes.
     pub last_term_title: Option<String>,
-    /// Last cmux status-pill value written, used to dedupe the per-tick spinner
-    /// animation so it only spawns a `cmux` process when the frame changes.
-    pub last_cmux_status: Option<String>,
     /// Whether the terminal window is currently focused.
     /// Used to throttle rendering when backgrounded.
     pub is_focused: bool,
@@ -202,7 +199,6 @@ impl AppState {
             next_tab_id: 1, // 0 is used for the initial tab
             custom_commands: Vec::new(),
             last_term_title: None,
-            last_cmux_status: None,
             is_focused: true,
         }
     }
@@ -327,8 +323,7 @@ impl AgentState {
     }
 }
 
-/// Outcome of the most recent finished turn, used to render the idle cmux
-/// status pill. `None` before the first turn finishes.
+/// Outcome of the most recent finished turn. `None` before the first turn finishes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnOutcome {
     /// Completed or interrupted — the pill settles to the bare thread title.
@@ -383,7 +378,7 @@ pub struct TuiState {
     pub system_prompt: Option<String>,
     /// Current agent state.
     pub agent_state: AgentState,
-    /// Outcome of the most recent finished turn, for the idle cmux status pill.
+    /// Outcome of the most recent finished turn.
     pub last_turn_outcome: Option<TurnOutcome>,
     /// True when this tab finished a turn while in the background and the user
     /// hasn't opened it since. Drives the "unseen completion" tab-bar marker;
