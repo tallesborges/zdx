@@ -7,6 +7,7 @@
 //! - [`BackgroundOutput`] and [`BackgroundKill`] are agent tools that read a
 //!   background process's output / stop it, scoped to the caller's thread.
 
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{Tool, ToolContext, ToolDefinition, ToolFuture};
@@ -16,22 +17,45 @@ use crate::core::events::ToolOutput;
 /// Max bytes returned per stream by `background_output`.
 const OUTPUT_TAIL_BYTES: usize = 8 * 1024;
 
+/// Background-mode subset of the `Bash` tool input.
+///
+/// `timeout_secs` reuses the Bash tool's coercion so `0` and `"0"` mean the
+/// same thing here: no timeout, which is what a background process already is.
+#[derive(Debug, Deserialize)]
+struct BackgroundInput {
+    #[serde(default)]
+    command: String,
+    #[serde(
+        default,
+        deserialize_with = "zdx_tools::u64_or_string::deserialize_optional"
+    )]
+    timeout_secs: Option<u64>,
+}
+
 /// Spawns + registers a background process. Called by `Bash` on `background: true`.
 #[allow(clippy::similar_names)] // pid / pgid are the natural names here
 pub async fn run_background(input: &Value, ctx: &ToolContext) -> ToolOutput {
-    let command = input
-        .get("command")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
+    let input: BackgroundInput = match serde_json::from_value(input.clone()) {
+        Ok(i) => i,
+        Err(e) => {
+            return ToolOutput::failure(
+                "invalid_input",
+                format!("Invalid input for bash tool: {e}"),
+                None,
+            );
+        }
+    };
+
+    let command = input.command.trim();
     if command.is_empty() {
         return ToolOutput::failure("invalid_input", "command cannot be empty", None);
     }
-    // Background processes never time out; a timeout makes no sense here.
-    if input.get("timeout_secs").is_some() {
+    // A background process is never awaited, so only "no timeout" is coherent.
+    if input.timeout_secs.is_some_and(|secs| secs > 0) {
         return ToolOutput::failure(
             "invalid_input",
-            "timeout_secs is not allowed with background: true (a background process is not awaited)",
+            "timeout_secs must be omitted or 0 with background: true (a background process is \
+             not awaited and never times out)",
             None,
         );
     }
@@ -273,5 +297,47 @@ impl Tool for BackgroundKill {
             };
             ToolOutput::success(json!({ "bg_id": bg_id, "status": status, "message": message }))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::BackgroundInput;
+
+    fn timeout_of(value: &serde_json::Value) -> Option<u64> {
+        serde_json::from_value::<BackgroundInput>(
+            json!({ "command": "x", "background": true, "timeout_secs": value }),
+        )
+        .expect("input should parse")
+        .timeout_secs
+    }
+
+    /// `background: true` with a zero timeout must not be rejected: models send
+    /// `0` (or `"0"`) to mean "no timeout", which is what background already is.
+    #[test]
+    fn zero_timeout_is_accepted_with_background() {
+        for zero in [json!(0), json!("0"), json!(" 0 "), json!(""), json!(null)] {
+            let secs = timeout_of(&zero);
+            assert!(
+                !secs.is_some_and(|secs| secs > 0),
+                "expected {zero:?} to be treated as no timeout, got {secs:?}"
+            );
+        }
+        let absent: BackgroundInput =
+            serde_json::from_value(json!({ "command": "x", "background": true })).unwrap();
+        assert_eq!(absent.timeout_secs, None);
+    }
+
+    #[test]
+    fn positive_timeout_still_conflicts_with_background() {
+        for value in [json!(120), json!("120")] {
+            let secs = timeout_of(&value);
+            assert!(
+                secs.is_some_and(|secs| secs > 0),
+                "expected {value:?} to conflict with background, got {secs:?}"
+            );
+        }
     }
 }
