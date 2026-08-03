@@ -252,13 +252,6 @@ impl TuiRuntime {
         // Disable mouse capture and bracketed paste
         let _ = terminal::disable_input_features();
 
-        // Clear this instance's cmux status pill so it doesn't linger in the
-        // sidebar after exit. Detached + synchronous so it survives runtime
-        // teardown; gated on config to avoid spawning `cmux` when unused.
-        if self.state.tui.config.notifications.cmux_status {
-            crate::common::notify::cmux_clear_status_on_exit();
-        }
-
         result
     }
 
@@ -582,18 +575,6 @@ impl TuiRuntime {
             }
             UiEffect::SetTermTitle { value } => {
                 crate::common::notify::set_term_title(&value);
-            }
-            UiEffect::CmuxStatus { value } => {
-                crate::common::notify::cmux_set_status(value);
-            }
-            UiEffect::CmuxStatusClear => {
-                crate::common::notify::cmux_clear_status();
-            }
-            UiEffect::CmuxProgress { value, label } => {
-                crate::common::notify::cmux_set_progress(value, label);
-            }
-            UiEffect::CmuxProgressClear => {
-                crate::common::notify::cmux_clear_progress();
             }
 
             // Agent effects (still returns event for now - streaming is special)

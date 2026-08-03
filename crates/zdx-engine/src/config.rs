@@ -497,22 +497,14 @@ pub struct SpeechConfig {
 pub struct NotificationsConfig {
     /// Emit OSC escape sequences for turn state: an OSC 9 desktop notification
     /// when a turn finishes, plus a window/tab title showing the thread title
-    /// with an animated spinner while a turn runs. cmux, Ghostty, kitty, and
+    /// with an animated spinner while a turn runs. `Ghostty`, `kitty`, and
     /// `WezTerm` surface these; other terminals ignore them.
     pub osc: bool,
-    /// Also drive cmux sidebar integration via the `cmux` CLI: a per-instance
-    /// status pill showing an animated spinner with the thread title while a
-    /// turn runs (settling to the bare title when complete, or `✗` on failure)
-    /// plus a `todo_write` progress bar. No-op when `cmux` is not on `PATH`.
-    pub cmux_status: bool,
 }
 
 impl Default for NotificationsConfig {
     fn default() -> Self {
-        Self {
-            osc: true,
-            cmux_status: false,
-        }
+        Self { osc: true }
     }
 }
 
