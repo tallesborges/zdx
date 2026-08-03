@@ -48,7 +48,7 @@ fn write_temp_file(bytes: &[u8], stream_name: &str) -> Option<String> {
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Bash".to_string(),
-        description: "Execute a shell command when no dedicated tool exists. Use Bash for builds, tests, git, gh, and other CLI workflows with no first-class tool. NEVER use grep, rg, cat, head, tail, less, find, or ls through Bash for file operations — use the dedicated Read, Grep, and Glob tools instead, which return structured output with pagination and .gitignore awareness. Chain dependent shell steps in one command, but prefer parallel tool calls for independent work. Do not use Bash to communicate with the user. Defaults to a 120 second timeout; set timeout_secs for commands expected to run longer, or 0 to disable the timeout. Returns stdout, stderr, and exit code. When stdout or stderr is truncated, use Read on the returned temp file to inspect the full output."
+        description: "Execute a shell command when no dedicated tool exists. Use Bash for builds, tests, git, gh, and other CLI workflows with no first-class tool. NEVER use grep, rg, cat, head, tail, less, find, or ls through Bash for file operations — use the dedicated Read, Grep, and Glob tools instead, which return structured output with pagination and .gitignore awareness. Chain dependent shell steps in one command, but prefer parallel tool calls for independent work. Do not use Bash to communicate with the user. Defaults to a 120 second timeout; raise timeout_secs for slower commands, or 0 to disable it for a command that still exits on its own. Returns stdout, stderr, and exit code. When stdout or stderr is truncated, use Read on the returned temp file to inspect the full output."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -60,7 +60,7 @@ pub fn definition() -> ToolDefinition {
                 "timeout_secs": {
                     "type": "integer",
                     "minimum": 0,
-                    "description": "Optional timeout in seconds. Defaults to 120. Use 0 to disable for a known long-running command."
+                    "description": "Optional timeout in seconds. Defaults to 120. Use 0 to disable it for a slow command that still exits on its own; for one that never exits, use background: true instead."
                 },
                 "background": {
                     "type": "boolean",
