@@ -78,7 +78,7 @@ pub async fn run_named_with_config_and_root(
     let _pid_guard = zdx_engine::pidfile::write(service_name)
         .with_context(|| format!("write {service_name} PID file"))?;
     // Under launchd there is no monitor to write the supervision marker, so the
-    // bot vouches for itself — otherwise `/exit` would refuse to restart.
+    // bot vouches for itself — otherwise `/restart` would refuse to restart.
     if std::env::var(zdx_engine::service::SUPERVISOR_ENV).as_deref() == Ok("launchd")
         && let Err(err) = zdx_engine::pidfile::mark_supervised(service_name)
     {
@@ -159,7 +159,7 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
                 break;
             }
             () = context.exit_notified() => {
-                tracing::info!("Exit requested via /exit command");
+                tracing::info!("Restart requested via /restart command");
                 zdx_engine::pidfile::remove("bot");
                 std::process::exit(EXIT_REQUESTED);
             }

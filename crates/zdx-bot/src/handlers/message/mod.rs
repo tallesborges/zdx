@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use anyhow::Result;
-use commands::{handle_exit_command, handle_general_forum_commands, handle_thread_setup_commands};
+use commands::{
+    handle_general_forum_commands, handle_restart_command, handle_thread_setup_commands,
+};
 use status::{discard_turn_status, finalize_preprocessing_cancelled, setup_preprocessing_status};
 use tokio_util::sync::CancellationToken;
 use turn::run_agent_turn;
@@ -238,7 +240,7 @@ async fn handle_pre_agent_commands(
 ) -> Result<bool> {
     Ok(
         handle_general_forum_commands(context, incoming, reply_ctx.reply_to_message_id).await?
-            || handle_exit_command(context, incoming, reply_ctx.reply_to_message_id).await?,
+            || handle_restart_command(context, incoming, reply_ctx.reply_to_message_id).await?,
     )
 }
 
