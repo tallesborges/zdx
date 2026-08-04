@@ -3058,20 +3058,23 @@ mod log_view_tests {
 
     #[test]
     fn tail_window_scales_with_the_requested_line_count() {
+        use std::fmt::Write as _;
+
         // ~195 B/line × 3000 lines ≈ 570 KiB. The default tail's window is
         // 256 KiB (~1340 of these lines), so asking for 2000 lines can only
         // succeed if the window itself widened.
         let dir = std::env::temp_dir().join(format!("zdx-monitor-tail-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("zdx.log.2026-07-31");
-        let body: String = (0..3000)
-            .map(|i| {
-                format!(
-                    "2026-07-31T10:00:00Z  INFO zdx_engine::core::agent: line {i} {}\n",
-                    "x".repeat(130)
-                )
-            })
-            .collect();
+        let mut body = String::new();
+        for i in 0..3000 {
+            writeln!(
+                &mut body,
+                "2026-07-31T10:00:00Z  INFO zdx_engine::core::agent: line {i} {}",
+                "x".repeat(130)
+            )
+            .unwrap();
+        }
         fs::write(&path, &body).unwrap();
         assert!(body.len() > 2 * 256 * 1024, "fixture must exceed the floor");
 
