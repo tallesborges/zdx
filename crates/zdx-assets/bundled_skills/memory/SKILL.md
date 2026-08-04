@@ -5,7 +5,7 @@ description: "Use for memory-related tasks: saved notes, factual questions that 
 
 # Memory
 
-Use ZDX's qmd-backed memory tools and the user's markdown notes under `$ZDX_MEMORY_ROOT`.
+Use ZDX's native memory tools and the user's markdown notes under `$ZDX_MEMORY_ROOT`.
 
 This skill is about routing, note-saving, and filing conventions. It is not the search implementation and does not replace `Memory_Search` / `Memory_Get`.
 
@@ -18,7 +18,7 @@ Follow the existing note structure you find in memory.
 - Calendar: `$ZDX_MEMORY_ROOT/Calendar`
 - Memory index: `$ZDX_MEMORY_ROOT/Notes/MEMORY.md`
 
-Memory discovery is qmd-backed. Prefer memory tools before raw file searches.
+Memory discovery is backed by ZDX's native SQLite index. Prefer memory tools before raw file searches.
 
 - Use `$ZDX_MEMORY_ROOT` directly in tool arguments.
 - Treat `$ZDX_MEMORY_ROOT` as a container directory, not a note location.
@@ -30,7 +30,7 @@ Memory discovery is qmd-backed. Prefer memory tools before raw file searches.
 
 1. Check the embedded `<memory_index>` block to find likely notes.
 2. Use `Memory_Search` for discovery across exported threads, notes, and calendar files.
-3. Use `Memory_Get` on returned qmd `docid` values when you need full indexed content.
+3. Use `Memory_Get` on returned native `zdxmem:v1:*` docid values when you need full indexed content.
 4. Answer directly, or edit the relevant note with `apply_patch`.
 5. When saving memory, write full detail to a note first, then decide whether `MEMORY.md` needs a concise pointer.
 
@@ -38,29 +38,29 @@ Memory discovery is qmd-backed. Prefer memory tools before raw file searches.
 
 ### Search memory
 
-Use `Memory_Search` for open-ended memory discovery. It searches qmd-backed collections for:
+Use `Memory_Search` for open-ended memory discovery. It searches the native memory index for:
 
 - exported conversation threads
 - canonical notes under `$ZDX_MEMORY_ROOT/Notes`
 - canonical calendar files under `$ZDX_MEMORY_ROOT/Calendar`
 
-Search by meaning, names, project terms, decisions, URLs, or distinctive phrases. Do not manually slug note paths or guess filesystem names; qmd owns indexed paths and doc IDs.
+Search by names, project terms, decisions, URLs, paths, commands, errors, or distinctive phrases. Do not manually slug note paths or guess filesystem names; the native index owns docids.
 
 Start with a focused natural-language query and a small limit. Prefer `limit:5-10`, then read the best 1-3 docids with `Memory_Get`. If results are weak, run a second search with synonyms, aliases, acronyms, or the likely project/person name.
 
 Use `strategy` deliberately:
 
-- `hybrid` (default): strongest qmd query recall with BM25 probe, query expansion, keyword + vector retrieval, fusion, chunk selection, and reranking. Use for normal memory recall, broad questions, and “what did we decide/discuss/learn?”
-- `keyword`: fastest BM25/full-text search. Use for exact names, URLs, error messages, commands, file names, quoted phrases, or known distinctive terms.
-- `vector`: semantic vector search without reranking. Use when wording may differ and latency matters more than reranking precision.
+- omitted strategy: native lexical search default.
+- `keyword`: native lexical search. Use for exact names, URLs, error messages, commands, file names, quoted phrases, or known distinctive terms.
+- `vector` / `hybrid`: only when status shows a complete configured embedding profile. These can send query text to the embedding provider and may incur hosted cost; agent searches never trigger corpus embedding.
 
-Use `intent` only with `hybrid` or `vector` when the query is short or ambiguous and the conversation gives context. Keep it brief, around 3-12 words. It disambiguates meaning for qmd expansion/reranking/chunk selection; it is not a filter.
+Use `intent` only with configured `hybrid` or `vector` when the query is short or ambiguous and the conversation gives context. Keep it brief, around 3-12 words. It disambiguates meaning; it is not a filter. It is ignored for native keyword search.
 
 Good search patterns:
 
 ```text
-Memory_Search query:"architecture decision cache invalidation" strategy:"hybrid" limit:8
-Memory_Search query:"renewal deadline reference" strategy:"hybrid" limit:8
+Memory_Search query:"architecture decision cache invalidation" limit:8
+Memory_Search query:"renewal deadline reference" limit:8
 Memory_Search query:"TypeError Cannot read properties" strategy:"keyword" limit:5
 Memory_Search query:"performance" strategy:"hybrid" intent:"web app Core Web Vitals" limit:8
 ```
@@ -68,21 +68,21 @@ Memory_Search query:"performance" strategy:"hybrid" intent:"web app Core Web Vit
 Avoid weak searches:
 
 - very broad terms like `work`, `notes`, or `project`
-- raw regex syntax; `Memory_Search` is semantic/qmd-backed, not grep
+- raw regex syntax; `Memory_Search` is indexed search, not grep
 - path-only guesses unless the user gave the path or folder name
-- searching first when the user already provided an exact qmd `docid`
+- searching first when the user already provided an exact native `docid`
 - using `intent` as a source/date filter instead of writing a focused query
 
-`Memory_Search` returns qmd-native results such as:
+`Memory_Search` returns native results such as:
 
-- `docid`: the canonical qmd handle for `Memory_Get`, such as `#962e2b`
+- `docid`: the canonical native handle for `Memory_Get`, such as `zdxmem:v1:note:0123abcd4567ef89`
 - `source`: the memory source label (`thread`, `note`, or `calendar`)
-- `file`: the qmd file identifier/path for display and debugging
+- `file`: the indexed file identifier/path for display and debugging
 - `snippet`, `title`, and `score`: ranking context
 
-Treat `docid` as the only handle for follow-up memory reads. Treat `file`, title, score, and snippets as display/debug metadata. Do not pass `qmd://...` values to `read`.
+Treat `docid` as the only handle for follow-up memory reads. Treat `file`, title, score, and snippets as display/debug metadata. Do not pass indexed file identifiers such as `note://...` to `read`.
 
-Treat search snippets as leads, not source-of-truth evidence. Before answering factual questions, call `Memory_Get` for the most relevant doc IDs and answer from indexed qmd content.
+Treat search snippets as leads, not source-of-truth evidence. Before answering factual questions, call `Memory_Get` for the most relevant doc IDs and answer from indexed native content.
 
 ```text
 Memory_Search query:"service integration credentials reference" limit:10
@@ -92,12 +92,12 @@ If `Memory_Search` warns that exported threads changed or results may be stale, 
 
 ### Read memory doc IDs
 
-Use `Memory_Get` after `Memory_Search` when you need full indexed qmd content.
+Use `Memory_Get` after `Memory_Search` when you need bounded indexed native content.
 
 Always pass the exact `docid` returned by `Memory_Search`; do not reconstruct doc IDs from snippets or paths.
 
 ```text
-Memory_Get docid:"#962e2b"
+Memory_Get docid:"zdxmem:v1:note:0123abcd4567ef89"
 ```
 
 Read multiple doc IDs when the question depends on comparing sources or when the first result is only a weak match. Keep the number of deep reads small and targeted.

@@ -378,7 +378,7 @@ fn plist_arg(service: Service) -> String {
     service.plist_path().to_string_lossy().to_string()
 }
 
-/// launchd agents inherit a minimal PATH, so spawned helpers (`cargo`, `qmd`,
+/// launchd agents inherit a minimal PATH, so spawned helpers (`cargo`,
 /// `ffmpeg`, `git`) would not be found without this.
 fn agent_path_env() -> String {
     let home = paths::home_dir().unwrap_or_else(|| PathBuf::from("."));

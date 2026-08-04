@@ -708,12 +708,7 @@ async fn execute_thread_search(input: &Value, ctx: &ToolContext) -> ToolOutput {
 }
 
 async fn execute_memory_search(input: &Value, ctx: &ToolContext) -> ToolOutput {
-    execute_blocking(ctx.timeout, {
-        let input = input.clone();
-        let ctx = ctx.clone();
-        move || memory_search::execute(&input, &ctx)
-    })
-    .await
+    memory_search::execute(input, ctx).await
 }
 
 async fn execute_memory_get(input: &Value, ctx: &ToolContext) -> ToolOutput {

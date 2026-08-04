@@ -554,11 +554,35 @@ enum ThreadCommands {
 
 #[derive(clap::Subcommand)]
 enum MemoryCommands {
-    /// Export saved threads and index ZDX memory collections with qmd
-    Index,
-    /// Show qmd binary, collection, export, and last index state
-    Status,
-    /// Search ZDX memory collections with qmd
+    /// Export saved threads and build the native memory index
+    Index {
+        /// Regenerate thread exports and re-index unchanged documents
+        #[arg(long)]
+        force: bool,
+
+        /// Drop and rebuild the derived native memory database
+        #[arg(long)]
+        rebuild: bool,
+
+        /// Show what would be indexed without writing exports or databases
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+
+        /// Preflight hosted corpus embeddings; never runs from agent searches
+        #[arg(long)]
+        embed: bool,
+
+        /// Output as JSON for automation/script usage
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show native memory index, export, and embedding state
+    Status {
+        /// Output as JSON for automation/script usage
+        #[arg(long)]
+        json: bool,
+    },
+    /// Search native ZDX memory collections
     Search {
         /// Query text to match in indexed memory content
         #[arg(value_name = "QUERY")]
@@ -568,9 +592,9 @@ enum MemoryCommands {
         #[arg(long, default_value_t = 10)]
         limit: usize,
 
-        /// qmd retrieval strategy: keyword, vector, or hybrid
-        #[arg(long, default_value = "hybrid", value_parser = ["keyword", "vector", "hybrid"])]
-        strategy: String,
+        /// Retrieval strategy: keyword, vector, or hybrid. Omit for native lexical default.
+        #[arg(long, value_parser = ["keyword", "vector", "hybrid"])]
+        strategy: Option<String>,
 
         /// Search only one memory source: thread, note, or calendar
         #[arg(long, value_parser = ["thread", "note", "calendar"])]
@@ -580,9 +604,24 @@ enum MemoryCommands {
         #[arg(long)]
         intent: Option<String>,
 
-        /// Maximum hybrid candidates qmd reranks (lower is faster)
+        /// Maximum hybrid candidates to fuse (ignored by native keyword)
         #[arg(long = "candidate-limit")]
         candidate_limit: Option<usize>,
+
+        /// Output as JSON for automation/script usage
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read a bounded native memory document by docid
+    Get {
+        /// Native docid returned by `zdx memory search`
+        #[arg(value_name = "DOCID")]
+        docid: String,
+
+        /// Byte offset to continue a truncated snapshot from (use the
+        /// previous response's `next_start_byte`)
+        #[arg(long, default_value_t = 0)]
+        start_byte: usize,
 
         /// Output as JSON for automation/script usage
         #[arg(long)]
@@ -1199,7 +1238,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             })
             .await
         }
-        Commands::Memory { command } => dispatch_memory(command, context),
+        Commands::Memory { command } => dispatch_memory(command, context).await,
         Commands::Automations { command } => Box::pin(dispatch_automations(command, context)).await,
         Commands::Mcp { command } => dispatch_mcp(command, context).await,
         Commands::Config { command } => dispatch_config(&command),
@@ -1351,10 +1390,28 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
     }
 }
 
-fn dispatch_memory(command: MemoryCommands, context: &DispatchContext<'_>) -> Result<()> {
+async fn dispatch_memory(command: MemoryCommands, context: &DispatchContext<'_>) -> Result<()> {
     match command {
-        MemoryCommands::Index => commands::memory::index(context.config),
-        MemoryCommands::Status => commands::memory::status(context.config),
+        MemoryCommands::Index {
+            force,
+            rebuild,
+            dry_run,
+            embed,
+            json,
+        } => {
+            commands::memory::index(
+                context.config,
+                commands::memory::IndexCommandOptions {
+                    force,
+                    rebuild,
+                    dry_run,
+                    embed,
+                    json,
+                },
+            )
+            .await
+        }
+        MemoryCommands::Status { json } => commands::memory::status(context.config, json),
         MemoryCommands::Search {
             query,
             limit,
@@ -1363,18 +1420,26 @@ fn dispatch_memory(command: MemoryCommands, context: &DispatchContext<'_>) -> Re
             intent,
             candidate_limit,
             json,
-        } => commands::memory::search(
-            &commands::memory::SearchCommandOptions {
-                query,
-                limit,
-                strategy,
-                source,
-                intent,
-                candidate_limit,
-                json,
-            },
-            context.config,
-        ),
+        } => {
+            commands::memory::search(
+                &commands::memory::SearchCommandOptions {
+                    query,
+                    limit,
+                    strategy,
+                    source,
+                    intent,
+                    candidate_limit,
+                    json,
+                },
+                context.config,
+            )
+            .await
+        }
+        MemoryCommands::Get {
+            docid,
+            start_byte,
+            json,
+        } => commands::memory::get(&docid, start_byte, json),
     }
 }
 

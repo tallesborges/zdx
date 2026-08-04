@@ -10,9 +10,14 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 
 use crate::config::paths::thread_exports_dir;
 use crate::core::thread_persistence::{self, ThreadEvent};
+
+/// Version tag for the Markdown transcript export format. Bumping it makes the
+/// thread index re-export every transcript without `--force`.
+pub(crate) const EXPORT_FORMAT_VERSION: &str = "thread-md-v1";
 
 /// Options for batch thread transcript export.
 #[derive(Debug, Clone, Copy, Default)]
@@ -24,7 +29,7 @@ pub struct ThreadExportOptions {
 }
 
 /// Counts from a batch thread transcript export.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct ThreadExportSummary {
     pub exported: usize,
     pub skipped: usize,
@@ -49,8 +54,9 @@ pub struct ThreadExportStatus {
 /// # Errors
 /// Returns an error if thread/export directory discovery fails.
 pub fn export_threads_incremental(options: ThreadExportOptions) -> Result<ThreadExportSummary> {
-    let threads = thread_persistence::list_threads().context("list threads for export")?;
-    let export_dir = thread_exports_dir();
+    // Full-reconcile path: raw file scan, never writes the thread cache (so
+    // dry runs stay write-free).
+    let threads = thread_persistence::list_threads_scan().context("list threads for export")?;
     let mut summary = ThreadExportSummary::default();
     let mut thread_ids = HashSet::with_capacity(threads.len());
 
@@ -63,33 +69,45 @@ pub fn export_threads_incremental(options: ThreadExportOptions) -> Result<Thread
         }
     }
 
-    if export_dir.exists() {
-        for entry in fs::read_dir(&export_dir).context("read thread exports directory")? {
-            let entry = entry.context("read thread export entry")?;
-            let path = entry.path();
-            if path.extension().is_none_or(|ext| ext != "md") {
-                continue;
-            }
-
-            let Some(thread_id) = path
-                .file_stem()
-                .map(|stem| stem.to_string_lossy().to_string())
-            else {
-                continue;
-            };
-            if thread_ids.contains(&thread_id) {
-                continue;
-            }
-
-            if !options.dry_run && fs::remove_file(&path).is_err() {
-                summary.failed += 1;
-                continue;
-            }
-            summary.removed += 1;
-        }
-    }
+    remove_orphan_exports(&thread_ids, options.dry_run, &mut summary)?;
 
     Ok(summary)
+}
+
+/// Removes exports whose thread id is not in `thread_ids`, updating `summary`.
+pub(crate) fn remove_orphan_exports(
+    thread_ids: &HashSet<String>,
+    dry_run: bool,
+    summary: &mut ThreadExportSummary,
+) -> Result<()> {
+    let export_dir = thread_exports_dir();
+    if !export_dir.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(&export_dir).context("read thread exports directory")? {
+        let entry = entry.context("read thread export entry")?;
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "md") {
+            continue;
+        }
+
+        let Some(thread_id) = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().to_string())
+        else {
+            continue;
+        };
+        if thread_ids.contains(&thread_id) {
+            continue;
+        }
+
+        if !dry_run && fs::remove_file(&path).is_err() {
+            summary.failed += 1;
+            continue;
+        }
+        summary.removed += 1;
+    }
+    Ok(())
 }
 
 /// Reports freshness of exported thread transcripts without writing files.
@@ -97,7 +115,23 @@ pub fn export_threads_incremental(options: ThreadExportOptions) -> Result<Thread
 /// # Errors
 /// Returns an error if thread/export directory discovery fails.
 pub fn thread_export_status() -> Result<ThreadExportStatus> {
-    let threads = thread_persistence::list_threads().context("list threads for export status")?;
+    let threads =
+        thread_persistence::list_threads_scan().context("list threads for export status")?;
+    let sources: Vec<(String, Option<SystemTime>)> = threads
+        .into_iter()
+        .map(|thread| (thread.id, thread.modified))
+        .collect();
+    thread_export_status_for(&sources)
+}
+
+/// Reports export freshness for a pre-computed `(thread_id, source_modified)`
+/// list, without reading canonical thread files.
+///
+/// # Errors
+/// Returns an error if the export directory cannot be read.
+pub fn thread_export_status_for(
+    threads: &[(String, Option<SystemTime>)],
+) -> Result<ThreadExportStatus> {
     let export_dir = thread_exports_dir();
     let mut status = ThreadExportStatus {
         source_threads: threads.len(),
@@ -105,11 +139,11 @@ pub fn thread_export_status() -> Result<ThreadExportStatus> {
     };
     let mut thread_ids = HashSet::with_capacity(threads.len());
 
-    for thread in threads {
-        thread_ids.insert(thread.id.clone());
-        status.latest_source_modified = max_time(status.latest_source_modified, thread.modified);
+    for (thread_id, source_modified) in threads {
+        thread_ids.insert(thread_id.clone());
+        status.latest_source_modified = max_time(status.latest_source_modified, *source_modified);
 
-        let export_path = export_dir.join(format!("{}.md", thread.id));
+        let export_path = export_dir.join(format!("{thread_id}.md"));
         let Ok(metadata) = fs::metadata(&export_path) else {
             status.missing_exports += 1;
             continue;
@@ -117,8 +151,8 @@ pub fn thread_export_status() -> Result<ThreadExportStatus> {
         status.exported_threads += 1;
         let export_modified = metadata.modified().ok();
         status.latest_export_modified = max_time(status.latest_export_modified, export_modified);
-        if let (Some(source_modified), Some(export_modified)) = (thread.modified, export_modified)
-            && export_modified < source_modified
+        if let (Some(source_modified), Some(export_modified)) = (source_modified, export_modified)
+            && export_modified < *source_modified
         {
             status.stale_exports += 1;
         }

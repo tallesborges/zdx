@@ -1,155 +1,239 @@
 //! Memory command handlers.
 
-use std::time::SystemTime;
-
 use anyhow::{Context, Result};
-use chrono::{DateTime, SecondsFormat, Utc};
 use zdx_engine::config;
-use zdx_engine::core::qmd::{self, QmdMemoryCollectionState};
-use zdx_engine::core::thread_export::{self, ThreadExportOptions};
+use zdx_engine::core::native_memory::{
+    self, MemorySearchStrategy, MemorySource, MemoryState, NativeMemoryIndexOptions,
+    NativeMemorySearchOptions,
+};
+
+/// Input options for `zdx memory index`.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy)]
+pub struct IndexCommandOptions {
+    pub force: bool,
+    pub rebuild: bool,
+    pub dry_run: bool,
+    pub embed: bool,
+    pub json: bool,
+}
 
 /// Input options for `zdx memory search`.
 #[derive(Debug, Clone)]
 pub struct SearchCommandOptions {
     pub query: String,
     pub limit: usize,
-    pub strategy: String,
+    pub strategy: Option<String>,
     pub source: Option<String>,
     pub intent: Option<String>,
     pub candidate_limit: Option<usize>,
     pub json: bool,
 }
 
-pub fn index(config: &config::Config) -> Result<()> {
-    let export_summary = thread_export::export_threads_incremental(ThreadExportOptions::default())
-        .context("export threads before qmd indexing")?;
+pub async fn index(config: &config::Config, options: IndexCommandOptions) -> Result<()> {
+    let mut summary = native_memory::index_memory(
+        &config.memory,
+        NativeMemoryIndexOptions {
+            force: options.force,
+            rebuild: options.rebuild,
+            dry_run: options.dry_run,
+            embed: options.embed,
+        },
+    )
+    .context("build native memory index")?;
 
+    if options.embed {
+        if options.dry_run {
+            // Keep the config-aware preflight summary when the dry-run probe
+            // cannot run (e.g. embeddings unconfigured or lexical index absent).
+            if let Ok(embeddings) = native_memory::embed_memory(&config.memory, true).await {
+                summary.embeddings = embeddings;
+            }
+        } else {
+            summary.embeddings = native_memory::embed_memory(&config.memory, false)
+                .await
+                .context("embed native memory corpus")?;
+        }
+    }
+
+    if options.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&summary)
+                .context("serialize native memory index summary")?
+        );
+        return Ok(());
+    }
+
+    println!(
+        "Thread cache: files={}, metas_read={}, upserted={}, removed={}",
+        summary.thread_cache.files_enumerated,
+        summary.thread_cache.metas_read,
+        summary.thread_cache.rows_upserted,
+        summary.thread_cache.rows_removed
+    );
     println!(
         "Thread exports: exported={}, skipped={}, removed={}, failed={}",
-        export_summary.exported,
-        export_summary.skipped,
-        export_summary.removed,
-        export_summary.failed
+        summary.thread_exports.exported,
+        summary.thread_exports.skipped,
+        summary.thread_exports.removed,
+        summary.thread_exports.failed
     );
-
-    let index_summary = qmd::index_memory_collections(&config.qmd, &config.memory)
-        .context("index memory with qmd")?;
-    let installed = if index_summary.installed {
-        " (installed)"
-    } else {
-        ""
-    };
     println!(
-        "qmd binary: {}{}",
-        index_summary.binary_path.display(),
-        installed
+        "Native memory: documents={}, removed={}, chunks={}, generation={}",
+        summary.documents_indexed,
+        summary.documents_removed,
+        summary.chunks_indexed,
+        summary.generation.map_or_else(
+            || "dry-run".to_string(),
+            |generation| generation.to_string()
+        )
     );
-    for collection in &index_summary.collections {
-        let collection_action = if collection.collection_added {
-            "created"
-        } else {
-            "updated"
-        };
+    if options.embed || options.dry_run {
         println!(
-            "qmd collection: {} {} at {}",
-            collection_action,
-            collection.name,
-            collection.root_dir.display()
+            "Embeddings: state={}, chunks={}, pending={}, cached={}, estimated_tokens={}{}{}",
+            state_label(&summary.embeddings.state),
+            summary.embeddings.chunks,
+            summary.embeddings.pending_inputs,
+            summary.embeddings.cached_inputs,
+            summary.embeddings.estimated_tokens,
+            summary
+                .embeddings
+                .estimated_usd
+                .map_or_else(String::new, |usd| format!(", estimated_usd={usd:.4}")),
+            summary
+                .embeddings
+                .actual_tokens
+                .map_or_else(String::new, |tokens| format!(", actual_tokens={tokens}")),
         );
+        if let Some(detail) = &summary.embeddings.detail {
+            println!("Embeddings detail: {detail}");
+        }
     }
-    println!("qmd index: updated and embedded ZDX memory collections");
-    let last_successful_index_at =
-        qmd::record_memory_index_success().context("record successful memory index run")?;
-    println!("Last successful index: {last_successful_index_at}");
-
+    for warning in &summary.warnings {
+        println!("Warning: {warning}");
+    }
     Ok(())
 }
 
-pub fn status(config: &config::Config) -> Result<()> {
-    let qmd_status =
-        qmd::memory_status(&config.qmd, &config.memory).context("inspect qmd memory status")?;
-    let export_status =
-        thread_export::thread_export_status().context("inspect thread export status")?;
+pub fn status(config: &config::Config, json: bool) -> Result<()> {
+    let status =
+        native_memory::memory_status(&config.memory).context("inspect native memory status")?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&status).context("serialize native memory status")?
+        );
+        return Ok(());
+    }
 
     println!(
         "Memory search readiness: {}",
-        readiness(&qmd_status, &export_status)
+        state_label(&status.readiness)
     );
-
-    println!("\nqmd binary:");
-    if let Some(binary) = &qmd_status.binary {
-        println!("  Found: yes");
-        println!("  Command: {}", binary.command);
-        println!("  Path: {}", binary.path.display());
-        match (&binary.version, &binary.version_error) {
-            (Some(version), _) => println!("  Version: {version}"),
-            (None, Some(error)) => println!("  Version: unavailable ({error})"),
-            (None, None) => println!("  Version: unavailable"),
-        }
-    } else {
-        println!("  Found: no");
-        println!("  Command: {}", config.qmd.command);
-        println!("  Install: run `zdx memory index` or install qmd on PATH");
-    }
+    println!("Backend: {}", status.backend);
 
     println!("\nThread exports:");
-    println!("  Source threads: {}", export_status.source_threads);
-    println!("  Exported transcripts: {}", export_status.exported_threads);
-    println!("  Missing exports: {}", export_status.missing_exports);
-    println!("  Stale exports: {}", export_status.stale_exports);
-    println!("  Orphaned exports: {}", export_status.orphaned_exports);
+    println!("  State: {}", state_label(&status.thread_exports.state));
+    println!("  Path: {}", status.thread_exports.path);
+    println!("  Source threads: {}", status.thread_exports.source_threads);
+    println!(
+        "  Exported transcripts: {}",
+        status.thread_exports.exported_threads
+    );
+    println!(
+        "  Missing exports: {}",
+        status.thread_exports.missing_exports
+    );
+    println!("  Stale exports: {}", status.thread_exports.stale_exports);
+    println!(
+        "  Orphaned exports: {}",
+        status.thread_exports.orphaned_exports
+    );
     println!(
         "  Latest source update: {}",
-        format_system_time(export_status.latest_source_modified)
+        status
+            .thread_exports
+            .latest_source_modified
+            .as_deref()
+            .unwrap_or("unknown")
     );
     println!(
         "  Latest export update: {}",
-        format_system_time(export_status.latest_export_modified)
+        status
+            .thread_exports
+            .latest_export_modified
+            .as_deref()
+            .unwrap_or("unknown")
     );
 
-    println!("\nqmd collections:");
-    for collection in &qmd_status.collections {
-        println!(
-            "  {} ({}) — {}",
-            collection.name,
-            collection.source,
-            collection_state_label(collection.state)
-        );
-        println!("    Path: {}", collection.expected_root_dir.display());
-        println!("    Pattern: {}", collection.expected_pattern);
-        if let Some(detail) = &collection.detail {
-            println!("    Detail: {detail}");
-        }
+    println!("\nthreads.sqlite:");
+    println!("  State: {}", state_label(&status.threads_sqlite.state));
+    println!("  Path: {}", status.threads_sqlite.path);
+    if let Some(detail) = &status.threads_sqlite.detail {
+        println!("  Detail: {detail}");
     }
 
-    println!("\nLast successful index:");
-    match &qmd_status.last_successful_index_at {
-        Some(timestamp) => println!("  {timestamp}"),
-        None => println!(
-            "  Not recorded yet (run `zdx memory index`; status file: {})",
-            qmd_status.status_path.display()
-        ),
+    println!("\nmemory.sqlite:");
+    println!("  State: {}", state_label(&status.memory_sqlite.state));
+    println!("  Path: {}", status.memory_sqlite.path);
+    println!(
+        "  Schema version: {}",
+        status
+            .memory_sqlite
+            .schema_version
+            .as_deref()
+            .unwrap_or("unknown")
+    );
+    println!(
+        "  Generation: {}",
+        status
+            .memory_sqlite
+            .generation
+            .map_or_else(|| "unknown".to_string(), |value| value.to_string())
+    );
+    println!("  Documents: {}", status.memory_sqlite.documents);
+    println!("  Chunks: {}", status.memory_sqlite.chunks);
+    println!(
+        "  Last indexed: {}",
+        status
+            .memory_sqlite
+            .last_indexed_at
+            .as_deref()
+            .unwrap_or("never")
+    );
+    if let Some(detail) = &status.memory_sqlite.detail {
+        println!("  Detail: {detail}");
+    }
+
+    println!("\nEmbeddings:");
+    println!("  State: {}", state_label(&status.embeddings.state));
+    if let Some(detail) = &status.embeddings.detail {
+        println!("  Detail: {detail}");
+    }
+    for warning in &status.warnings {
+        println!("Warning: {warning}");
     }
 
     Ok(())
 }
 
-pub fn search(options: &SearchCommandOptions, config: &config::Config) -> Result<()> {
+pub async fn search(options: &SearchCommandOptions, config: &config::Config) -> Result<()> {
     let query = options.query.trim().to_string();
     if query.is_empty() {
         anyhow::bail!("query is required");
     }
 
-    let export_summary = thread_export::export_threads_incremental(ThreadExportOptions::default())
-        .context("export threads before qmd search")?;
-
-    let mut output = qmd::search_memory_collections(
-        &config.qmd,
+    let output = native_memory::search_memory_with_config(
         &config.memory,
-        &qmd::QmdMemorySearchOptions {
+        &NativeMemorySearchOptions {
             query,
             limit: options.limit.max(1),
-            strategy: parse_search_strategy(&options.strategy)?,
+            strategy: options
+                .strategy
+                .as_deref()
+                .map(parse_search_strategy)
+                .transpose()?,
             source: options
                 .source
                 .as_deref()
@@ -164,22 +248,14 @@ pub fn search(options: &SearchCommandOptions, config: &config::Config) -> Result
             exclude_thread_id: None,
         },
     )
-    .context("search memory with qmd")?;
-
-    if export_summary.exported > 0 || export_summary.removed > 0 || export_summary.failed > 0 {
-        output.warnings.insert(
-            0,
-            format!(
-                "thread exports changed before search (exported={}, removed={}, failed={}); run `zdx memory index` to refresh qmd if results look stale",
-                export_summary.exported, export_summary.removed, export_summary.failed
-            ),
-        );
-    }
+    .await
+    .context("search native memory")?;
 
     if options.json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&output).context("serialize qmd memory search results")?
+            serde_json::to_string_pretty(&output)
+                .context("serialize native memory search results")?
         );
         return Ok(());
     }
@@ -211,66 +287,65 @@ pub fn search(options: &SearchCommandOptions, config: &config::Config) -> Result
     Ok(())
 }
 
-fn parse_search_strategy(value: &str) -> Result<qmd::QmdMemorySearchStrategy> {
+pub fn get(docid: &str, start_byte: usize, json: bool) -> Result<()> {
+    let output =
+        native_memory::get_memory_doc(docid, start_byte).context("read native memory document")?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&output).context("serialize native memory get result")?
+        );
+        return Ok(());
+    }
+
+    println!("Docid: {}", output.docid);
+    println!("Source: {}", output.source);
+    println!("File: {}", output.file);
+    if let Some(title) = &output.title {
+        println!("Title: {title}");
+    }
+    println!(
+        "Range: {}..{} of {}{}",
+        output.byte_range.start,
+        output.byte_range.end,
+        output.byte_range.total,
+        if output.truncated { " (truncated)" } else { "" }
+    );
+    if let Some(next) = output.next_start_byte {
+        println!("Next start byte: {next}");
+    }
+    println!("\n{}", output.content);
+    Ok(())
+}
+
+fn parse_search_strategy(value: &str) -> Result<MemorySearchStrategy> {
     match value {
-        "keyword" => Ok(qmd::QmdMemorySearchStrategy::Keyword),
-        "vector" => Ok(qmd::QmdMemorySearchStrategy::Vector),
-        "hybrid" => Ok(qmd::QmdMemorySearchStrategy::Hybrid),
+        "keyword" => Ok(MemorySearchStrategy::Keyword),
+        "vector" => Ok(MemorySearchStrategy::Vector),
+        "hybrid" => Ok(MemorySearchStrategy::Hybrid),
         _ => anyhow::bail!("invalid memory search strategy '{value}'"),
     }
 }
 
-fn parse_search_source(value: &str) -> Result<qmd::QmdMemorySearchSource> {
+fn parse_search_source(value: &str) -> Result<MemorySource> {
     match value {
-        "thread" => Ok(qmd::QmdMemorySearchSource::Thread),
-        "note" => Ok(qmd::QmdMemorySearchSource::Note),
-        "calendar" => Ok(qmd::QmdMemorySearchSource::Calendar),
+        "thread" => Ok(MemorySource::Thread),
+        "note" => Ok(MemorySource::Note),
+        "calendar" => Ok(MemorySource::Calendar),
         _ => anyhow::bail!("invalid memory search source '{value}'"),
     }
 }
 
-fn readiness(
-    qmd_status: &qmd::QmdMemoryStatus,
-    export_status: &thread_export::ThreadExportStatus,
-) -> &'static str {
-    if qmd_status.binary.is_none() {
-        return "unavailable (qmd binary not found)";
-    }
-    if qmd_status.last_successful_index_at.is_none() {
-        return "needs `zdx memory index` (no successful index recorded)";
-    }
-    if qmd_status
-        .collections
-        .iter()
-        .any(|collection| collection.state != QmdMemoryCollectionState::Ready)
-    {
-        return "needs `zdx memory index` (collection issue)";
-    }
-    if export_status.missing_exports > 0
-        || export_status.stale_exports > 0
-        || export_status.orphaned_exports > 0
-    {
-        return "needs `zdx memory index` (thread exports changed)";
-    }
-    "ready"
-}
-
-fn collection_state_label(state: QmdMemoryCollectionState) -> &'static str {
+fn state_label(state: &MemoryState) -> &'static str {
     match state {
-        QmdMemoryCollectionState::Ready => "ready",
-        QmdMemoryCollectionState::Missing => "missing",
-        QmdMemoryCollectionState::Mismatch => "mismatch",
-        QmdMemoryCollectionState::Unavailable => "unavailable",
-        QmdMemoryCollectionState::Error => "error",
-    }
-}
-
-fn format_system_time(time: Option<SystemTime>) -> String {
-    match time {
-        Some(time) => {
-            let datetime: DateTime<Utc> = time.into();
-            datetime.to_rfc3339_opts(SecondsFormat::Secs, true)
-        }
-        None => "unknown".to_string(),
+        MemoryState::NotConfigured => "not_configured",
+        MemoryState::Unprobed => "unprobed",
+        MemoryState::Missing => "missing",
+        MemoryState::Building => "building",
+        MemoryState::Ready => "ready",
+        MemoryState::Stale => "stale",
+        MemoryState::Partial => "partial",
+        MemoryState::Incompatible => "incompatible",
+        MemoryState::Error => "error",
     }
 }
