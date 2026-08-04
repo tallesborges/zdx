@@ -321,7 +321,7 @@ mod tests {
         for zero in [json!(0), json!("0"), json!(" 0 "), json!(""), json!(null)] {
             let secs = timeout_of(&zero);
             assert!(
-                !secs.is_some_and(|secs| secs > 0),
+                secs.is_none_or(|secs| secs == 0),
                 "expected {zero:?} to be treated as no timeout, got {secs:?}"
             );
         }
