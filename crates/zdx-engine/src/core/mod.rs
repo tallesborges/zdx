@@ -7,9 +7,10 @@
 //! - `agent`: Agent loop and event channels
 //! - `handoff_generation`: LLM-based handoff context generation
 //! - `prompt_builder_generation`: LLM-based prompt-builder generation
-//! - `qmd`: qmd binary discovery and setup
+//! - `native_memory`: native SQLite-backed memory index/search
 //! - `subagent`: Child `zdx exec` subagent runner
 //! - `thread_export`: Thread transcript exports
+//! - `thread_index`: derived `threads.sqlite` cache (metadata, FTS, tool rows, export dirty state)
 //! - `thread_persistence`: Thread persistence
 //! - `title_generation`: LLM-based title generation
 //! - `tldr_generation`: LLM-based thread TLDR/recap generation
@@ -21,10 +22,11 @@ pub mod context;
 pub mod events;
 pub mod handoff_generation;
 pub mod interrupt;
+pub mod native_memory;
 pub mod prompt_builder_generation;
-pub mod qmd;
 pub mod subagent;
 pub mod thread_export;
+pub mod thread_index;
 pub mod thread_persistence;
 pub mod title_generation;
 pub mod tldr_generation;

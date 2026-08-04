@@ -13,6 +13,7 @@ LLM provider implementations extracted from `zdx-core`.
 - `src/openrouter.rs`, `src/deepseek.rs`, `src/mistral.rs`, `src/moonshot.rs`, `src/stepfun.rs`, `src/xiaomi.rs`, `src/minimax.rs`, `src/zai.rs`, `src/xai.rs` — thin OpenAI-compatible providers
 - `src/grok_build.rs` — Grok Build provider: xAI Grok subscription OAuth over the xAI Responses API (bearer from `oauth::grok_build`, refreshed on demand)
 - `src/openai_compatible.rs` — generic OpenAI-compatible chat-completions client for user-defined "custom" providers (`[providers.custom.<name>]`); carries no `ProviderKind`, built directly by the engine from a resolved base URL + API key
+- `src/embeddings.rs` — hosted text-embeddings client (OpenAI-compatible `/embeddings`); explicit opt-in corpus/query embedding for native memory — batching, budgets, and persistence live in `zdx-engine`
 - `src/opencode_go.rs` — meta-provider that routes to inner clients based on model registry hints
 - `src/debug_metrics.rs`, `src/debug_trace.rs` — debug/tracing wrappers for provider streams
 - `src/thinking_parser.rs` — SSE stream content parser

@@ -7,6 +7,7 @@ pub mod thinking_parser;
 pub mod alibaba;
 pub mod anthropic;
 pub mod deepseek;
+pub mod embeddings;
 pub mod gemini;
 pub mod grok_build;
 pub mod lmstudio;

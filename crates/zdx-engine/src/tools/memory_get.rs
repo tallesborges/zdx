@@ -1,26 +1,31 @@
 //! Memory get tool.
 //!
-//! Reads indexed qmd memory documents by docid.
+//! Reads bounded native memory document snapshots by docid.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{ToolContext, ToolDefinition};
 use crate::core::events::ToolOutput;
-use crate::core::qmd;
+use crate::core::native_memory;
 
 /// Returns the tool definition for the `memory_get` tool.
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Memory_Get".to_string(),
-        description: "Read an indexed qmd memory document by `docid` returned by Memory_Search, such as `#962e2b`. This reads qmd's indexed document content, not a canonical source file. Use this after Memory_Search when you need the full indexed document behind a search hit. If you already have a thread_id and need a focused answer from the canonical thread JSONL, prefer Read_Thread instead. For editing known local notes, use Read on the exact canonical file path."
+        description: "Read a bounded indexed native memory document snapshot by `docid` returned by Memory_Search, such as `zdxmem:v1:note:0123abcd4567ef89`. This reads the derived native index, not a canonical source file. The response includes source metadata, truncation status, byte range, and `next_start_byte` when the snapshot is truncated; pass that value back as `start_byte` to continue reading. Use this after Memory_Search when you need the indexed document behind a search hit. If you already have a thread_id and need a focused answer from canonical thread JSONL, prefer Read_Thread instead. For editing known local notes, use Read on the exact canonical file path. Old qmd `#...` docids are unsupported after the native cutover."
             .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "docid": {
                     "type": "string",
-                    "description": "qmd document ID returned by Memory_Search, such as `#962e2b`"
+                    "description": "Native memory docid returned by Memory_Search, such as `zdxmem:v1:note:0123abcd4567ef89`"
+                },
+                "start_byte": {
+                    "type": "integer",
+                    "description": "Byte offset to continue a truncated snapshot from; pass the previous response's `next_start_byte` (default: 0).",
+                    "minimum": 0
                 }
             },
             "required": ["docid"],
@@ -32,10 +37,12 @@ pub fn definition() -> ToolDefinition {
 #[derive(Debug, Deserialize)]
 struct MemoryGetInput {
     docid: String,
+    #[serde(default)]
+    start_byte: Option<u64>,
 }
 
-/// Executes the memory get tool and returns indexed qmd memory content.
-pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
+/// Executes the memory get tool and returns indexed native memory content.
+pub fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
     let input: MemoryGetInput = match serde_json::from_value(input.clone()) {
         Ok(i) => i,
         Err(e) => {
@@ -51,16 +58,13 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     if docid.is_empty() {
         return ToolOutput::failure("invalid_input", "docid cannot be empty", None);
     }
-    if !docid.starts_with('#') {
-        return ToolOutput::failure("invalid_input", "docid must start with '#'", None);
-    }
 
-    let config = ctx.config.clone().unwrap_or_default();
-    match qmd::get_memory_doc(&config.qmd, docid) {
+    let start_byte = usize::try_from(input.start_byte.unwrap_or(0)).unwrap_or(usize::MAX);
+    match native_memory::get_memory_doc(docid, start_byte) {
         Ok(output) => ToolOutput::success(json!(output)),
         Err(err) => ToolOutput::failure(
             "get_failed",
-            "Failed to read indexed memory document with qmd",
+            "Failed to read indexed native memory document",
             Some(err.to_string()),
         ),
     }
@@ -68,14 +72,11 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
     use std::path::PathBuf;
 
     use serde_json::json;
-    use tempfile::TempDir;
 
     use super::*;
-    use crate::config::Config;
 
     fn test_ctx() -> ToolContext {
         ToolContext::new(PathBuf::from("."), None)
@@ -85,8 +86,8 @@ mod tests {
     fn test_definition_schema() {
         let def = definition();
         assert_eq!(def.name, "Memory_Get");
-        assert!(def.description.contains("docid"));
-        assert!(def.description.contains("qmd's indexed document content"));
+        assert!(def.description.contains("zdxmem:v1"));
+        assert!(def.description.contains("bounded"));
         assert!(def.description.contains("prefer Read_Thread"));
         assert_eq!(def.input_schema["required"], json!(["docid"]));
     }
@@ -102,45 +103,17 @@ mod tests {
     }
 
     #[test]
-    fn test_rejects_non_docid() {
-        let output = execute(&json!({ "docid": "note:path.md" }), &test_ctx());
+    fn test_rejects_qmd_docid() {
+        let output = execute(&json!({ "docid": "#doc123" }), &test_ctx());
 
         assert!(!output.is_ok());
         let payload = serde_json::to_value(output).unwrap();
-        assert_eq!(payload["error"]["code"], "invalid_input");
-        assert_eq!(payload["error"]["message"], "docid must start with '#'");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_docid_reads_indexed_qmd_content() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp = TempDir::new().unwrap();
-        let qmd_path = temp.path().join("qmd");
-        fs::write(
-            &qmd_path,
-            "#!/bin/sh\nif [ \"$1\" = get ] && [ \"$2\" = '#doc123' ]; then\n  printf '# Indexed Doc\\n\\nIndexed content\\n'\n  exit 0\nfi\necho unexpected qmd args >&2\nexit 1\n",
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&qmd_path).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&qmd_path, permissions).unwrap();
-
-        let mut config = Config::default();
-        config.qmd.command = qmd_path.display().to_string();
-        let ctx = test_ctx().with_config(&config);
-
-        let output = execute(&json!({ "docid": "#doc123" }), &ctx);
-
-        assert!(output.is_ok());
-        let data = output.data().unwrap();
-        assert_eq!(data["docid"], "#doc123");
+        assert_eq!(payload["error"]["code"], "get_failed");
         assert!(
-            data["content"]
+            payload["error"]["details"]
                 .as_str()
                 .unwrap()
-                .contains("Indexed content")
+                .contains("qmd docids")
         );
     }
 }

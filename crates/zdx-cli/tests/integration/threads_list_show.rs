@@ -663,3 +663,75 @@ fn test_threads_tools_filters_by_date() {
     assert!(output_str.contains("feb-thread"));
     assert!(!output_str.contains("jan-thread"));
 }
+
+/// Phase 3 demo: after a warm thread-index sync, content appended to a thread
+/// is picked up by search/tool queries via incremental re-indexing.
+#[test]
+fn test_threads_search_reindexes_changed_thread_after_warmup() {
+    let temp_dir = TempDir::new().unwrap();
+    create_thread_with_meta(
+        &temp_dir,
+        "warm-thread",
+        Some("Warmup thread"),
+        &[(
+            "user".to_string(),
+            "alpha-marker question".to_string(),
+            "2026-03-01T10:00:00Z".to_string(),
+        )],
+    );
+
+    // Warm the thread index.
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["threads", "search", "alpha-marker"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("warm-thread"));
+
+    // Append a new message and a completed tool call after the warm sync.
+    let thread_path = temp_dir.path().join("threads").join("warm-thread.jsonl");
+    let mut content = fs::read_to_string(&thread_path).unwrap();
+    for event in [
+        json!({
+            "type": "message",
+            "role": "assistant",
+            "text": "beta-marker answer",
+            "ts": "2026-03-01T10:05:00Z"
+        }),
+        json!({
+            "type": "tool_use",
+            "id": "tool-warm-1",
+            "name": "grep",
+            "input": {"pattern": "beta"},
+            "ts": "2026-03-01T10:05:01Z"
+        }),
+        json!({
+            "type": "tool_result",
+            "tool_use_id": "tool-warm-1",
+            "output": {"ok": true},
+            "ok": true,
+            "ts": "2026-03-01T10:05:02Z"
+        }),
+    ] {
+        content.push_str(&serde_json::to_string(&event).unwrap());
+        content.push('\n');
+    }
+    fs::write(&thread_path, content).unwrap();
+
+    // The appended message is found without --force or manual reindexing.
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["threads", "search", "beta-marker", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("warm-thread"));
+
+    // The appended tool call is found through indexed tool rows.
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["threads", "tools", "grep", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tool-warm-1"))
+        .stdout(predicate::str::contains(r#""status": "ok""#));
+}

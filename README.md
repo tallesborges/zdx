@@ -90,7 +90,7 @@ Delegate scoped work to isolated child agents:
 
 ### Memory & threads
 
-- **qmd-backed memory** — hybrid/vector/keyword search across notes, calendar, and past threads
+- **Native memory** — SQLite-backed lexical search across notes, calendar, and exported past-thread transcripts, with native `zdxmem:v1:*` docids
 - **Threads** — resume, rename, append, export, search, and tool-call inspection; open as tabs and forks
 
 ### TUI niceties

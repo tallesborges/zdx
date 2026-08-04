@@ -1,16 +1,15 @@
 //! Memory search tool.
 //!
-//! Exposes qmd-backed memory discovery through qmd docids.
+//! Exposes native SQLite-backed memory discovery through native docids.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{ToolContext, ToolDefinition};
 use crate::core::events::ToolOutput;
-use crate::core::qmd::{
-    self, QmdMemorySearchOptions, QmdMemorySearchSource, QmdMemorySearchStrategy,
+use crate::core::native_memory::{
+    self, MemorySearchStrategy, MemorySource, NativeMemorySearchOptions,
 };
-use crate::core::thread_export::{self, ThreadExportOptions};
 
 const DEFAULT_LIMIT: usize = 10;
 
@@ -18,7 +17,7 @@ const DEFAULT_LIMIT: usize = 10;
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Memory_Search".to_string(),
-        description: "Search saved ZDX memory in qmd-backed collections for exported conversation threads, canonical Notes, and canonical Calendar files. Returns qmd `docid` handles such as `#962e2b`, source labels, qmd file identifiers, snippets, and scores. Use Memory_Get with returned docids to read indexed qmd documents; do not treat snippets as the source of truth. Use `source` to target one collection: `note` for the user's Notes/Second Brain, `calendar` for calendar/daily notes, or `thread` for saved conversation transcripts. When the user says to search/find in their notes, set `source` to `note`; do not rely on `intent` for this because intent is not a filter. `strategy` controls qmd retrieval: `keyword` is fastest BM25/full-text search for exact names, URLs, errors, commands, files, or quoted phrases; `vector` is semantic vector search without reranking for wording-mismatch searches when latency matters; `hybrid` is the strongest qmd query path using BM25 probe, query expansion, keyword+vector retrieval, fusion, chunk selection, and reranking, best for memory recall such as what was decided, discussed, or learned. Default to `hybrid` for memory recall unless the user asks for an exact string/URL/error lookup. Use `intent` only with `vector` or `hybrid` when the query is ambiguous and conversation context can disambiguate it; it is not a filter. Prefer limit 5-10 and read only the best 1-3 docids with Memory_Get. If the thread_id is already known and you need a focused answer from canonical thread JSONL, skip search and call Read_Thread directly."
+        description: "Search saved ZDX memory in the native SQLite index for exported conversation threads, canonical Notes, and canonical Calendar files. Returns native `zdxmem:v1:<source>:<id>` docids, source labels, file identifiers, snippets, scores, and warnings. Use Memory_Get with returned docids to read bounded indexed document snapshots; do not treat snippets as the source of truth. Use `source` to target one source: `note` for the user's Notes/Second Brain, `calendar` for calendar/daily notes, or `thread` for saved conversation transcript exports. When the user says to search/find in their notes, set `source` to `note`; do not rely on `intent` for this because intent is not a filter. Omitted `strategy` uses native lexical search. Explicit `keyword` is lexical-only for exact names, URLs, errors, commands, paths, and quoted phrases. Explicit `vector` or `hybrid` requires a complete configured embedding profile and fails clearly when embeddings are unavailable; agent searches never trigger corpus embedding. Use `intent` only with vector/hybrid when configured; it is ignored for keyword. Prefer limit 5-10 and read only the best 1-3 docids with Memory_Get. If the thread_id is already known and you need a focused answer from canonical thread JSONL, skip search and call Read_Thread directly."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -35,9 +34,8 @@ pub fn definition() -> ToolDefinition {
                 },
                 "strategy": {
                     "type": "string",
-                    "description": "Retrieval strategy: `keyword` for fastest BM25 exact-term search, `vector` for semantic vector search without reranking, or `hybrid` for strongest qmd query recall with expansion, fusion, chunk selection, and reranking (default).",
-                    "enum": ["keyword", "vector", "hybrid"],
-                    "default": "hybrid"
+                    "description": "Retrieval strategy. Omit for native default lexical search; `keyword` is lexical-only. `vector` and `hybrid` require configured complete embeddings and fail clearly when unavailable.",
+                    "enum": ["keyword", "vector", "hybrid"]
                 },
                 "source": {
                     "type": "string",
@@ -46,11 +44,11 @@ pub fn definition() -> ToolDefinition {
                 },
                 "intent": {
                     "type": "string",
-                    "description": "Optional brief disambiguating context for `vector`/`hybrid` searches, such as `ZDX qmd memory integration`. Not a filter."
+                    "description": "Optional brief disambiguating context for configured `vector`/`hybrid` searches, such as `ZDX native memory integration`. Not a filter. Ignored for keyword."
                 },
                 "candidate_limit": {
                     "type": "integer",
-                    "description": "For `hybrid`, maximum candidates qmd reranks (lower is faster; qmd default is 40). Ignored by other strategies.",
+                    "description": "For configured `hybrid`, maximum candidates to fuse. Ignored by keyword/vector.",
                     "minimum": 1
                 }
             },
@@ -69,9 +67,9 @@ struct MemorySearchInput {
     )]
     limit: Option<usize>,
     #[serde(default)]
-    strategy: QmdMemorySearchStrategy,
+    strategy: Option<MemorySearchStrategy>,
     #[serde(default)]
-    source: Option<QmdMemorySearchSource>,
+    source: Option<MemorySource>,
     #[serde(default)]
     intent: Option<String>,
     #[serde(
@@ -81,8 +79,12 @@ struct MemorySearchInput {
     candidate_limit: Option<usize>,
 }
 
-/// Executes the memory search tool and returns qmd-backed memory results.
-pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
+/// Executes the memory search tool and returns native memory results.
+///
+/// Keyword searches stay fully local. Vector/hybrid searches load the layered
+/// config for the embedding profile and embed only the query text — agent
+/// calls can never trigger corpus embedding.
+pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     let input: MemorySearchInput = match serde_json::from_value(input.clone()) {
         Ok(i) => i,
         Err(e) => {
@@ -99,29 +101,11 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         return ToolOutput::failure("invalid_input", "query cannot be empty", None);
     }
 
-    let mut warnings = Vec::new();
-    match thread_export::export_threads_incremental(ThreadExportOptions::default()) {
-        Ok(summary) => {
-            if summary.exported > 0 || summary.removed > 0 || summary.failed > 0 {
-                warnings.push(format!(
-                    "thread exports changed before search (exported={}, removed={}, failed={}); run `zdx memory index` to refresh qmd if results look stale",
-                    summary.exported, summary.removed, summary.failed
-                ));
-            }
-        }
-        Err(err) => {
-            warnings.push(format!(
-                "could not refresh thread exports before search: {err}"
-            ));
-        }
-    }
-
-    let config = ctx.config.clone().unwrap_or_default();
     let intent = input
         .intent
         .map(|intent| intent.trim().to_string())
         .filter(|intent| !intent.is_empty());
-    let options = QmdMemorySearchOptions {
+    let options = NativeMemorySearchOptions {
         query,
         limit: input.limit.unwrap_or(DEFAULT_LIMIT).max(1),
         strategy: input.strategy,
@@ -131,15 +115,28 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         exclude_thread_id: ctx.current_thread_id.clone(),
     };
 
-    match qmd::search_memory_collections(&config.qmd, &config.memory, &options) {
-        Ok(mut output) => {
-            warnings.append(&mut output.warnings);
-            output.warnings = warnings;
-            ToolOutput::success(json!(output))
+    let result = match options.strategy {
+        Some(MemorySearchStrategy::Vector | MemorySearchStrategy::Hybrid) => {
+            let memory_config = match crate::config::Config::load() {
+                Ok(config) => config.memory,
+                Err(err) => {
+                    return ToolOutput::failure(
+                        "search_failed",
+                        "Failed to load config for semantic memory search",
+                        Some(err.to_string()),
+                    );
+                }
+            };
+            native_memory::search_memory_with_config(&memory_config, &options).await
         }
+        _ => native_memory::search_memory(&options),
+    };
+
+    match result {
+        Ok(output) => ToolOutput::success(json!(output)),
         Err(err) => ToolOutput::failure(
             "search_failed",
-            "Failed to search memory with qmd",
+            "Failed to search native memory",
             Some(err.to_string()),
         ),
     }
@@ -155,8 +152,8 @@ mod tests {
     fn test_definition_schema() {
         let def = definition();
         assert_eq!(def.name, "Memory_Search");
-        assert!(def.description.contains("qmd-backed collections"));
-        assert!(def.description.contains("docid"));
+        assert!(def.description.contains("native SQLite index"));
+        assert!(def.description.contains("docids"));
         assert!(def.description.contains("strategy"));
         assert!(def.description.contains("source"));
         assert!(def.description.contains("hybrid"));
@@ -165,10 +162,10 @@ mod tests {
         assert!(def.description.contains("Read_Thread directly"));
     }
 
-    #[test]
-    fn test_rejects_empty_query() {
+    #[tokio::test]
+    async fn test_rejects_empty_query() {
         let ctx = ToolContext::new(std::path::PathBuf::from("."), None);
-        let output = execute(&json!({ "query": "  " }), &ctx);
+        let output = execute(&json!({ "query": "  " }), &ctx).await;
 
         assert!(!output.is_ok());
         let payload = serde_json::to_value(output).unwrap();

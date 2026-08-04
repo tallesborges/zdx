@@ -214,18 +214,6 @@ where
     Ok(value)
 }
 
-fn default_qmd_command() -> String {
-    "qmd".to_string()
-}
-
-fn deserialize_qmd_command<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?;
-    normalize_non_empty(&value).ok_or_else(|| serde::de::Error::custom("value must not be blank"))
-}
-
 /// Returns the default config template with comments.
 ///
 /// This is embedded from `default_config.toml` at compile time.
@@ -508,28 +496,6 @@ impl Default for NotificationsConfig {
     }
 }
 
-/// qmd search backend configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct QmdConfig {
-    /// qmd command path or binary name.
-    ///
-    /// Defaults to `qmd` on `PATH`.
-    #[serde(
-        default = "default_qmd_command",
-        deserialize_with = "deserialize_qmd_command"
-    )]
-    pub command: String,
-}
-
-impl Default for QmdConfig {
-    fn default() -> Self {
-        Self {
-            command: default_qmd_command(),
-        }
-    }
-}
-
 /// Memory system configuration.
 ///
 /// Configures the root directory for memory storage.
@@ -545,6 +511,48 @@ pub struct MemoryConfig {
     /// Default: `$ZDX_HOME/memory`
     #[serde(default, deserialize_with = "deserialize_memory_root")]
     pub root: Option<String>,
+
+    /// Opt-in hosted embedding profile for native memory vector/hybrid search.
+    ///
+    /// Absent means embeddings are not configured: `zdx memory index --embed`
+    /// refuses to upload anything and vector/hybrid search fails clearly.
+    #[serde(default)]
+    pub embeddings: Option<MemoryEmbeddingsConfig>,
+}
+
+/// Explicit hosted-embedding profile.
+///
+/// Every field that controls what gets uploaded, where, and at what cost is
+/// required: configuring this section is the user's approval to send the
+/// allowlisted memory sources (and, at query time, vector/hybrid query text)
+/// to the configured provider. Chat-provider API keys alone never imply that
+/// consent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryEmbeddingsConfig {
+    /// Embedding provider id (e.g. `openai`). Must be a known provider id so
+    /// the API key env and default endpoint can be resolved.
+    pub provider: String,
+    /// Embedding model id (e.g. `text-embedding-3-small`).
+    pub model: String,
+    /// Optional endpoint override, including any `/v1` suffix. Defaults to the
+    /// provider's standard base URL.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Optional output dimension override (models like `text-embedding-3-*`
+    /// support shortened vectors).
+    #[serde(default)]
+    pub dimensions: Option<u32>,
+    /// Source allowlist: which memory sources may be uploaded for corpus
+    /// embedding. Valid values: `thread`, `note`, `calendar`. Must be
+    /// non-empty.
+    pub sources: Vec<String>,
+    /// Pricing used for cost estimates, in USD per million input tokens.
+    /// This config value is the pricing source of record for cost reporting.
+    pub usd_per_million_tokens: f64,
+    /// Hard per-run token budget; an index run refuses to start a corpus
+    /// upload whose conservative estimate exceeds this.
+    pub max_run_tokens: u64,
 }
 
 impl MemoryConfig {
@@ -702,10 +710,6 @@ pub struct Config {
     /// Shared text-to-speech configuration for the `zdx speak` CLI and bot audio replies.
     #[serde(default)]
     pub speech: SpeechConfig,
-
-    /// qmd search backend configuration.
-    #[serde(default)]
-    pub qmd: QmdConfig,
 
     /// Turn-completion notification configuration for the interactive TUI.
     #[serde(default)]
@@ -1527,7 +1531,6 @@ impl Default for Config {
             memory: MemoryConfig::default(),
             transcription: TranscriptionConfig::default(),
             speech: SpeechConfig::default(),
-            qmd: QmdConfig::default(),
             notifications: NotificationsConfig::default(),
             telegram: TelegramConfig::default(),
         }
@@ -2403,7 +2406,6 @@ models = ["model-a", "model-b"]
         assert_eq!(config.max_tokens, None);
         assert!(config.transcription.model.is_none());
         assert!(config.transcription.language.is_none());
-        assert_eq!(config.qmd.command, "qmd");
     }
 
     #[test]
@@ -2426,35 +2428,6 @@ language = "pt"
             Some("elevenlabs:scribe_v2")
         );
         assert_eq!(config.transcription.language.as_deref(), Some("pt"));
-    }
-
-    #[test]
-    fn test_qmd_command_loads_from_file() {
-        let dir = tempdir().unwrap();
-        let config_path = dir.path().join("config.toml");
-
-        fs::write(&config_path, "[qmd]\ncommand = \"/opt/bin/qmd\"\n").unwrap();
-
-        let config = Config::load_from(&config_path).unwrap();
-        assert_eq!(config.qmd.command, "/opt/bin/qmd");
-    }
-
-    #[test]
-    fn test_blank_qmd_command_is_rejected() {
-        let dir = tempdir().unwrap();
-        let config_path = dir.path().join("config.toml");
-
-        fs::write(&config_path, "[qmd]\ncommand = \"   \"\n").unwrap();
-
-        let error = Config::load_from(&config_path).unwrap_err();
-        let chain = error.chain().map(ToString::to_string).collect::<Vec<_>>();
-
-        assert!(
-            chain
-                .iter()
-                .any(|message| message.contains("must not be blank")),
-            "expected blank-value error in chain, got: {chain:?}"
-        );
     }
 
     #[test]
@@ -3432,7 +3405,6 @@ cwd = "~/work"
                         cwd: "/tmp/work".to_string(),
                     },
                 )]),
-                ..Default::default()
             },
             ..Default::default()
         };

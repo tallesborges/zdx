@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::event::ThreadEvent;
 use super::format::display_title_or_short_id;
-use super::storage::{ThreadSummary, list_threads, load_thread_events, truncate_str};
+use super::storage::{ThreadSummary, list_threads_scan, load_thread_events, truncate_str};
 use crate::config::paths::threads_dir;
 
 /// Options for thread search.
@@ -112,13 +112,28 @@ const TOOL_ARGS_SUMMARY_MAX_BYTES: usize = 160;
 
 /// Searches threads by optional query and/or date filters.
 ///
-/// Results are ordered by recency (`list_threads()` already returns
-/// newest-first). When a query is provided the grep pre-filter narrows
-/// candidates; we collect up to `limit` matches (early termination).
+/// Served from the derived thread index (FTS over title + user/assistant
+/// text) when available, falling back to the raw file scan. See
+/// `core::thread_index` for the documented semantic differences.
 ///
 /// # Errors
 /// Returns an error if thread listing fails.
 pub fn search_threads(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchResult>> {
+    match crate::core::thread_index::search_threads_indexed(options) {
+        Ok(results) => Ok(results),
+        Err(err) => {
+            tracing::debug!(error = %err, "thread index unavailable; using file-scan search");
+            search_threads_scan(options)
+        }
+    }
+}
+
+/// Raw file-scan thread search (cache-free fallback path).
+///
+/// Results are ordered by recency (`list_threads_scan()` already returns
+/// newest-first). When a query is provided the grep pre-filter narrows
+/// candidates; we collect up to `limit` matches (early termination).
+fn search_threads_scan(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchResult>> {
     let normalized_query = options
         .query
         .as_deref()
@@ -139,8 +154,8 @@ pub fn search_threads(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchR
 
     let mut results: Vec<ThreadSearchResult> = Vec::new();
 
-    // list_threads() is already sorted by modified time (newest first).
-    for summary in list_threads()? {
+    // list_threads_scan() is already sorted by modified time (newest first).
+    for summary in list_threads_scan()? {
         // Skip the current active thread if one is specified.
         if let Some(ref excluded) = options.exclude_thread_id
             && &summary.id == excluded
@@ -209,11 +224,25 @@ pub fn search_threads(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchR
 
 /// Searches tool calls across saved threads.
 ///
-/// Results are ordered by tool-call timestamp descending.
+/// Served from indexed tool rows (limit applied in SQL) when available,
+/// falling back to the raw event scan.
 ///
 /// # Errors
 /// Returns an error if thread listing fails.
 pub fn search_thread_tools(options: &ThreadToolSearchOptions) -> Result<Vec<ThreadToolMatch>> {
+    match crate::core::thread_index::search_thread_tools_indexed(options) {
+        Ok(matches) => Ok(matches),
+        Err(err) => {
+            tracing::debug!(error = %err, "thread index unavailable; using file-scan tool search");
+            search_thread_tools_scan(options)
+        }
+    }
+}
+
+/// Raw event-scan tool search (cache-free fallback path).
+///
+/// Results are ordered by tool-call timestamp descending.
+fn search_thread_tools_scan(options: &ThreadToolSearchOptions) -> Result<Vec<ThreadToolMatch>> {
     let limit = options.limit.max(1);
     let normalized_tool = options
         .tool_name
@@ -224,7 +253,7 @@ pub fn search_thread_tools(options: &ThreadToolSearchOptions) -> Result<Vec<Thre
 
     let mut matches = Vec::new();
 
-    for summary in list_threads()? {
+    for summary in list_threads_scan()? {
         let events = load_thread_events(&summary.id).unwrap_or_default();
         let mut pending: HashMap<String, PendingToolUse> = HashMap::new();
 
@@ -360,7 +389,7 @@ fn matches_tool_date_filters(raw_ts: Option<&str>, options: &ThreadToolSearchOpt
     true
 }
 
-fn summarize_tool_args(input: &Value) -> String {
+pub(crate) fn summarize_tool_args(input: &Value) -> String {
     if let Some(command) = input.get("command").and_then(Value::as_str) {
         return truncate_with_ellipsis(command, TOOL_ARGS_SUMMARY_MAX_BYTES);
     }
@@ -381,7 +410,9 @@ fn truncate_with_ellipsis(value: &str, max_bytes: usize) -> String {
     }
 }
 
-fn extract_tool_error(output: &Value) -> (Option<String>, Option<String>, Option<String>) {
+pub(crate) fn extract_tool_error(
+    output: &Value,
+) -> (Option<String>, Option<String>, Option<String>) {
     let error = output.get("error");
     let field = |name: &str| {
         error
@@ -393,7 +424,7 @@ fn extract_tool_error(output: &Value) -> (Option<String>, Option<String>, Option
 }
 
 /// Returns the latest RFC-3339 timestamp found across all events in a thread.
-fn latest_event_timestamp(events: &[ThreadEvent]) -> Option<DateTime<Utc>> {
+pub(crate) fn latest_event_timestamp(events: &[ThreadEvent]) -> Option<DateTime<Utc>> {
     events
         .iter()
         .filter_map(|event| {
@@ -508,7 +539,7 @@ fn build_thread_preview_simple(summary: &ThreadSummary) -> String {
         .unwrap_or_default()
 }
 
-fn truncate_preview(value: &str) -> String {
+pub(crate) fn truncate_preview(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return String::new();

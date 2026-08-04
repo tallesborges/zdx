@@ -48,6 +48,20 @@ prompt_builder_model = "openai:gpt-5.6-terra@low"
 [memory]
 # root = "~/SecondBrain"  # default: $ZDX_HOME/memory
 
+# Opt-in hosted embeddings for native memory vector/hybrid search.
+# Configuring this section approves uploading the allowlisted sources (and
+# vector/hybrid query text) to the provider. All fields below are required
+# except base_url/dimensions; incomplete profiles fail clearly and keyword
+# search stays fully local.
+# [memory.embeddings]
+# provider = "openai"                # provider id (resolves API key env + endpoint)
+# model = "text-embedding-3-small"
+# sources = ["note", "calendar"]     # allowlist: thread, note, calendar
+# usd_per_million_tokens = 0.02      # pricing source for cost estimates
+# max_run_tokens = 2000000           # hard per-run token budget
+# base_url = "https://api.openai.com/v1"  # optional endpoint override
+# dimensions = 1536                  # optional output dimension override
+
 # Shared audio transcription configuration
 # Used by TUI/CLI voice transcription and as the default for integrations.
 # model: provider:model id (e.g. "elevenlabs:scribe_v2", "mistral:voxtral-mini-latest")
@@ -269,9 +283,6 @@ enabled = true
 # base_url = "https://api.mistral.ai/v1"
 models = ["voxtral-mini-latest"]
 websocket = false
-
-[qmd]
-command = "qmd"
 
 [notifications]
 osc = true

@@ -1,7 +1,6 @@
 //! Integration tests for `zdx threads export`.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
 use assert_cmd::cargo::cargo_bin_cmd;
@@ -47,47 +46,6 @@ fn create_thread(temp_dir: &TempDir, thread_id: &str) {
         .join("\n")
         + "\n";
     fs::write(threads_dir.join(format!("{thread_id}.jsonl")), content).unwrap();
-}
-
-fn write_fake_qmd(temp_dir: &TempDir) -> std::path::PathBuf {
-    let qmd_path = temp_dir.path().join("qmd-fake");
-    let log_path = temp_dir.path().join("qmd.log");
-    let script = format!(
-        "#!/bin/sh\n\
-         set -eu\n\
-         printf 'ARGS:%s\\n' \"$*\" >> {log:?}\n\
-         printf 'XDG_CACHE_HOME:%s\\n' \"${{XDG_CACHE_HOME:-}}\" >> {log:?}\n\
-         printf 'XDG_CONFIG_HOME:%s\\n' \"${{XDG_CONFIG_HOME:-}}\" >> {log:?}\n\
-         printf 'XDG_DATA_HOME:%s\\n' \"${{XDG_DATA_HOME:-}}\" >> {log:?}\n\
-         if [ \"${{1:-}}\" = collection ] && [ \"${{2:-}}\" = show ]; then\n\
-           if [ \"${{3:-}}\" = zdx-threads ] && [ \"${{QMD_FAKE_SHOW_THREADS:-}}\" = 1 ]; then\n\
-             printf 'Collection: zdx-threads\\n  Path:     %s/exports/threads\\n  Pattern:  **/*.md\\n' \"$ZDX_HOME\"\n\
-             exit 0\n\
-           fi\n\
-           echo 'Collection not found: zdx-threads' >&2\n\
-           exit 1\n\
-         fi\n\
-         if [ \"${{1:-}}\" = search ] || [ \"${{1:-}}\" = query ] || [ \"${{1:-}}\" = vsearch ]; then\n\
-           printf '%s\\n' '[{{\"docid\":\"#threadqmd\",\"file\":\"qmd://zdx-threads/thread-qmd.md\",\"title\":\"Thread thread-qmd\",\"snippet\":\"User: qmd memory\",\"score\":0.9}}]'\n\
-           exit 0\n\
-         fi\n\
-         exit 0\n",
-        log = log_path.display().to_string()
-    );
-    fs::write(&qmd_path, script).unwrap();
-    let mut permissions = fs::metadata(&qmd_path).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&qmd_path, permissions).unwrap();
-    qmd_path
-}
-
-fn write_qmd_config(temp_dir: &TempDir, qmd_path: &std::path::Path) {
-    let command = qmd_path.to_string_lossy().replace('\\', "\\\\");
-    fs::write(
-        temp_dir.path().join("config.toml"),
-        format!("[qmd]\ncommand = \"{command}\"\n"),
-    )
-    .unwrap();
 }
 
 #[test]
@@ -207,36 +165,19 @@ fn test_threads_export_removes_stale_exports() {
 }
 
 #[test]
-fn test_memory_index_exports_and_invokes_qmd() {
+fn test_memory_index_exports_and_builds_native_sqlite() {
     let temp_dir = TempDir::new().unwrap();
     create_thread(&temp_dir, "thread-index");
-    let qmd_path = write_fake_qmd(&temp_dir);
-    write_qmd_config(&temp_dir, &qmd_path);
 
     cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
-        .env("QMD_CONFIG_DIR", temp_dir.path().join("qmd-config"))
-        .env_remove("XDG_CACHE_HOME")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
         .args(["memory", "index"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
             "exported=1, skipped=0, removed=0, failed=0",
         ))
-        .stdout(predicate::str::contains(
-            "qmd collection: created zdx-threads",
-        ))
-        .stdout(predicate::str::contains(
-            "qmd collection: created zdx-notes",
-        ))
-        .stdout(predicate::str::contains(
-            "qmd collection: created zdx-calendar",
-        ))
-        .stdout(predicate::str::contains(
-            "qmd index: updated and embedded ZDX memory collections",
-        ));
+        .stdout(predicate::str::contains("Native memory: documents=1"));
 
     assert!(
         temp_dir
@@ -247,43 +188,111 @@ fn test_memory_index_exports_and_invokes_qmd() {
             .exists()
     );
 
-    let log = fs::read_to_string(temp_dir.path().join("qmd.log")).unwrap();
-    assert!(log.contains("ARGS:collection show zdx-threads"));
-    assert!(log.contains("ARGS:collection show zdx-notes"));
-    assert!(log.contains("ARGS:collection show zdx-calendar"));
-    assert!(log.contains("ARGS:collection add"));
-    assert!(log.contains("--name zdx-threads --mask **/*.md"));
-    assert!(log.contains("--name zdx-notes --mask **/*.md"));
-    assert!(log.contains("--name zdx-calendar --mask **/*.md"));
-    assert!(log.contains("ARGS:update"));
-    assert!(log.contains("ARGS:embed -c zdx-threads"));
-    assert!(log.contains("ARGS:embed -c zdx-notes"));
-    assert!(log.contains("ARGS:embed -c zdx-calendar"));
-    assert!(log.contains("XDG_CACHE_HOME:\n"));
-    assert!(log.contains("XDG_CONFIG_HOME:\n"));
-    assert!(log.contains("XDG_DATA_HOME:\n"));
+    assert!(temp_dir.path().join("cache").join("memory.sqlite").exists());
 }
 
 #[test]
-fn test_memory_search_returns_qmd_docids() {
+fn test_memory_index_second_run_reads_no_unchanged_thread_files() {
     let temp_dir = TempDir::new().unwrap();
-    create_thread(&temp_dir, "thread-qmd");
-    let qmd_path = write_fake_qmd(&temp_dir);
-    write_qmd_config(&temp_dir, &qmd_path);
+    create_thread(&temp_dir, "thread-incremental");
+
+    let first = cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["memory", "index", "--json"])
+        .assert()
+        .success();
+    let first: serde_json::Value = serde_json::from_slice(&first.get_output().stdout).unwrap();
+    assert_eq!(first["thread_cache"]["metas_read"], 1);
+    assert_eq!(first["thread_exports"]["exported"], 1);
+
+    let second = cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["memory", "index", "--json"])
+        .assert()
+        .success();
+    let second: serde_json::Value = serde_json::from_slice(&second.get_output().stdout).unwrap();
+    assert_eq!(second["thread_cache"]["files_enumerated"], 1);
+    assert_eq!(second["thread_cache"]["metas_read"], 0);
+    assert_eq!(second["thread_exports"]["exported"], 0);
+    assert_eq!(second["thread_exports"]["skipped"], 1);
+
+    // Deleting the derived cache rebuilds it and re-exports without data loss.
+    fs::remove_file(temp_dir.path().join("cache").join("threads.sqlite")).unwrap();
+    let rebuilt = cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["memory", "index", "--json"])
+        .assert()
+        .success();
+    let rebuilt: serde_json::Value = serde_json::from_slice(&rebuilt.get_output().stdout).unwrap();
+    assert_eq!(rebuilt["thread_cache"]["metas_read"], 1);
+    assert_eq!(rebuilt["thread_exports"]["exported"], 1);
 
     cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
-        .env("QMD_FAKE_SHOW_THREADS", "1")
-        .args(["memory", "search", "qmd memory", "--json"])
+        .args(["memory", "search", "hello", "--source", "thread", "--json"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(r##""docid": "#threadqmd""##))
+        .stdout(predicate::str::contains(r#""docid": "zdxmem:v1:thread:"#));
+}
+
+#[test]
+fn test_memory_index_reexports_changed_thread_only() {
+    let temp_dir = TempDir::new().unwrap();
+    create_thread(&temp_dir, "thread-a");
+    create_thread(&temp_dir, "thread-b");
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["memory", "index"])
+        .assert()
+        .success();
+
+    std::thread::sleep(Duration::from_millis(20));
+    let thread_a = temp_dir.path().join("threads").join("thread-a.jsonl");
+    let mut content = fs::read_to_string(&thread_a).unwrap();
+    content.push_str(
+        &serde_json::to_string(&json!({
+            "type": "message",
+            "role": "user",
+            "text": "a brand new message",
+            "ts": "2026-05-10T00:00:04Z"
+        }))
+        .unwrap(),
+    );
+    content.push('\n');
+    fs::write(&thread_a, content).unwrap();
+
+    let summary = cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["memory", "index", "--json"])
+        .assert()
+        .success();
+    let summary: serde_json::Value = serde_json::from_slice(&summary.get_output().stdout).unwrap();
+    assert_eq!(summary["thread_cache"]["files_enumerated"], 2);
+    assert_eq!(summary["thread_cache"]["metas_read"], 1);
+    assert_eq!(summary["thread_exports"]["exported"], 1);
+    assert_eq!(summary["thread_exports"]["skipped"], 1);
+}
+
+#[test]
+fn test_memory_search_returns_native_docids() {
+    let temp_dir = TempDir::new().unwrap();
+    create_thread(&temp_dir, "thread-native");
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["memory", "index"])
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["memory", "search", "hello", "--source", "thread", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r#""docid": "zdxmem:v1:thread:"#))
         .stdout(predicate::str::contains(r#""source": "thread""#))
         .stdout(predicate::str::contains(
-            r#""file": "qmd://zdx-threads/thread-qmd.md""#,
-        ))
-        .stdout(predicate::str::contains("run `zdx memory index`"));
-
-    let log = fs::read_to_string(temp_dir.path().join("qmd.log")).unwrap();
-    assert!(log.contains("ARGS:query qmd memory --json -n 10 -c zdx-threads"));
+            r#""file": "thread://thread-native.md""#,
+        ));
 }

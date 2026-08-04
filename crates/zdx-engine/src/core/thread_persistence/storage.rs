@@ -755,13 +755,47 @@ pub(crate) fn list_thread_files(dir: &Path) -> Result<Vec<ThreadFileMeta>> {
 /// Use [`list_all_threads`] to include them. Usage stats are computed from a
 /// separate raw file scan (`list_thread_files`) and still count child runs.
 ///
+/// Served from the derived `threads.sqlite` cache when possible (unchanged
+/// threads answered without opening their JSONL files), falling back to the
+/// raw file scan when the cache is unavailable.
+///
 /// # Errors
 /// Returns an error if the threads directory cannot be read.
 pub fn list_threads() -> Result<Vec<ThreadSummary>> {
+    match crate::core::thread_index::list_threads_cached() {
+        Ok(threads) => Ok(threads),
+        Err(err) => {
+            tracing::debug!(error = %err, "thread index unavailable; using file scan");
+            list_threads_scan()
+        }
+    }
+}
+
+/// Lists top-level saved threads via the raw file scan, bypassing the derived
+/// thread cache (used by cache-free paths and as the cache fallback).
+///
+/// # Errors
+/// Returns an error if the threads directory cannot be read.
+pub fn list_threads_scan() -> Result<Vec<ThreadSummary>> {
     Ok(list_all_threads()?
         .into_iter()
         .filter(|thread| !thread.is_child_run())
         .collect())
+}
+
+/// Builds a [`ThreadSummary`] for one thread file by reading only its meta line.
+pub(crate) fn thread_summary_from_file(file: &ThreadFileMeta) -> ThreadSummary {
+    let meta = read_meta(&file.path).unwrap_or(None);
+    ThreadSummary {
+        id: file.id.clone(),
+        title: meta.as_ref().and_then(|m| m.title.clone()),
+        root_path: meta.as_ref().and_then(|m| m.root_path.clone()),
+        modified: file.modified,
+        handoff_from: meta.as_ref().and_then(|m| m.handoff_from.clone()),
+        origin_kind: meta.as_ref().and_then(|m| m.origin_kind.clone()),
+        parent_thread_id: meta.as_ref().and_then(|m| m.parent_thread_id.clone()),
+        subagent_name: meta.and_then(|m| m.subagent_name),
+    }
 }
 
 /// Lists all saved threads including child runs (subagents/helpers), sorted by
@@ -771,20 +805,8 @@ pub fn list_threads() -> Result<Vec<ThreadSummary>> {
 /// Returns an error if the threads directory cannot be read.
 pub fn list_all_threads() -> Result<Vec<ThreadSummary>> {
     let mut threads: Vec<ThreadSummary> = list_thread_files(&threads_dir())?
-        .into_iter()
-        .map(|file| {
-            let meta = read_meta(&file.path).unwrap_or(None);
-            ThreadSummary {
-                id: file.id,
-                title: meta.as_ref().and_then(|m| m.title.clone()),
-                root_path: meta.as_ref().and_then(|m| m.root_path.clone()),
-                modified: file.modified,
-                handoff_from: meta.as_ref().and_then(|m| m.handoff_from.clone()),
-                origin_kind: meta.as_ref().and_then(|m| m.origin_kind.clone()),
-                parent_thread_id: meta.as_ref().and_then(|m| m.parent_thread_id.clone()),
-                subagent_name: meta.and_then(|m| m.subagent_name),
-            }
-        })
+        .iter()
+        .map(thread_summary_from_file)
         .collect();
 
     // Sort by modification time (newest first)

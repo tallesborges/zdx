@@ -10,6 +10,8 @@ mod cli_help;
 mod config_path;
 mod exec_subagent;
 mod login_logout;
+mod memory_embed;
+mod memory_relevance;
 mod quota;
 mod service;
 mod thread_schema;
