@@ -1,7 +1,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BotCommand {
     New,
-    Exit,
+    Restart,
     Status,
     WhereAmI,
     WorktreeCreate,
@@ -39,12 +39,12 @@ const COMMAND_DEFS: &[CommandDef] = &[
         },
     },
     CommandDef {
-        command: BotCommand::Exit,
-        patterns: &["/exit"],
+        command: BotCommand::Restart,
+        patterns: &["/restart"],
         blocks_topic_autocreate: true,
         telegram_spec: TelegramCommandSpec {
-            command: "exit",
-            description: "Exit the bot (supervisor will restart it)",
+            command: "restart",
+            description: "Restart the bot and daemon",
         },
     },
     CommandDef {
@@ -296,10 +296,10 @@ mod tests {
     fn parse_basic_commands() {
         assert_eq!(parse_command("/new"), Some(BotCommand::New));
         assert_eq!(parse_command(" /new@zdx_bot "), Some(BotCommand::New));
-        assert_eq!(parse_command("/exit"), Some(BotCommand::Exit));
+        assert_eq!(parse_command("/restart"), Some(BotCommand::Restart));
         assert_eq!(
-            parse_command("/exit@zdx_bot please"),
-            Some(BotCommand::Exit)
+            parse_command("/restart@zdx_bot please"),
+            Some(BotCommand::Restart)
         );
         assert_eq!(parse_command("/status"), Some(BotCommand::Status));
         assert_eq!(parse_command(" /status@zdx_bot "), Some(BotCommand::Status));
@@ -397,14 +397,15 @@ mod tests {
     fn rejects_non_commands() {
         assert_eq!(parse_command("hello"), None);
         assert_eq!(parse_command("/new please"), None);
-        assert_eq!(parse_command("/exit please"), None);
+        assert_eq!(parse_command("/exit"), None);
+        assert_eq!(parse_command("/restart please"), None);
         assert_eq!(parse_command("/worktree please"), None);
     }
 
     #[test]
     fn blocking_topic_creation_uses_same_parser() {
         assert!(is_topic_blocking_command("/new"));
-        assert!(is_topic_blocking_command("/exit@zdx_bot"));
+        assert!(is_topic_blocking_command("/restart@zdx_bot"));
         assert!(is_topic_blocking_command("/status"));
         assert!(is_topic_blocking_command("/whereami"));
         assert!(is_topic_blocking_command("/whereami@zdx_bot"));

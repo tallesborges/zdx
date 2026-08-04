@@ -118,14 +118,14 @@ ZDX solves this with a boring, reliable core:
 
 ### `zdx service ...` (macOS/launchd)
 
-- launchd owns the lifetime of the `bot` and `daemon` services: start at login, restart on crash, restart after the bot's `/exit`.
+- launchd owns the lifetime of the `bot` and `daemon` services: start at login, restart on crash. Telegram `/restart` restarts the daemon first, then exits the bot so launchd restarts it.
 - Agents run `~/.local/bin/zdx` (the `just install` target), never the calling binary, so `restart` always picks up the currently installed build.
 - Agents are launched via `zsh -c 'exec …'` so `~/.zshenv` is sourced; launchd sources no shell startup files, and provider API keys live there.
 - `install` refuses when the service is already running outside launchd; PID-file uniqueness continues to prevent duplicate instances.
 - `stop` is durable: the service stays stopped until an explicit `start`, across reboots.
 - `restart` waits for the old process to exit before the replacement starts, and reports `PID old → new`.
 - Service stdout/stderr are captured to `$ZDX_HOME/run/logs/{bot,daemon}.{out,err}`.
-- Plists set `ZDX_SERVICE_SUPERVISOR=launchd`; the bot uses this to self-mark as supervised so `/exit` is honored with no monitor running.
+- Plists set `ZDX_SERVICE_SUPERVISOR=launchd`; the bot uses this to self-mark as supervised so `/restart` is honored with no monitor running.
 - `zdx monitor` is a control panel over the same operations, not an independent supervisor; it never spawns service processes itself.
 
 ### `zdx` (interactive)

@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use tokio::process::Command;
 use zdx_engine::config::ThinkingLevel;
 use zdx_engine::core::{thread_persistence, worktree};
+use zdx_engine::service::{self, Service};
 
 use super::status::format_status_message;
 use super::{ReplyContext, StatusSnapshot, escape_html, thread_id_for_chat};
@@ -191,7 +192,7 @@ pub(super) async fn handle_general_forum_commands(
         BotCommand::Btw => "/btw must be used inside a topic, not General.",
         BotCommand::Commands => "/commands must be used inside a topic, not General.",
         BotCommand::PromptBuilder => "/prompt_builder must be used inside a topic, not General.",
-        BotCommand::Exit => unreachable!("exit is handled by handle_exit_command"),
+        BotCommand::Restart => unreachable!("restart is handled by handle_restart_command"),
         BotCommand::Status => unreachable!("status is handled by handle_status_command"),
         BotCommand::WhereAmI => unreachable!("whereami is handled by handle_whereami_command"),
         BotCommand::Tldr => unreachable!("tldr is handled by handle_tldr_command"),
@@ -204,7 +205,7 @@ pub(super) async fn handle_general_forum_commands(
     Ok(true)
 }
 
-pub(super) async fn handle_exit_command(
+pub(super) async fn handle_restart_command(
     context: &BotContext,
     incoming: &crate::types::IncomingMessage,
     reply_to_message_id: Option<i64>,
@@ -215,7 +216,7 @@ pub(super) async fn handle_exit_command(
     if !incoming
         .text
         .as_deref()
-        .is_some_and(|text| matches!(parse_command(text), Some(BotCommand::Exit)))
+        .is_some_and(|text| matches!(parse_command(text), Some(BotCommand::Restart)))
     {
         return Ok(false);
     }
@@ -233,11 +234,34 @@ pub(super) async fn handle_exit_command(
         return Ok(true);
     }
 
+    let daemon_restart = tokio::task::spawn_blocking(|| service::restart(Service::Daemon))
+        .await
+        .context("join daemon restart task")?;
+    let daemon_status = match daemon_restart {
+        Ok(status) => status,
+        Err(err) => {
+            let error = escape_html(&format!("{err:#}"));
+            context
+                .client()
+                .send_message(
+                    incoming.chat_id,
+                    &format!(
+                        "⚠️ Daemon restart failed, so I left the bot running.\n<code>{error}</code>"
+                    ),
+                    reply_to_message_id,
+                    incoming.message_thread_id,
+                )
+                .await?;
+            return Ok(true);
+        }
+    };
+
+    let daemon_status = escape_html(&daemon_status);
     context
         .client()
         .send_message(
             incoming.chat_id,
-            "👋 Exiting… supervisor will restart shortly.",
+            &format!("🔄 {daemon_status}.\n👋 Exiting bot… launchd will restart it shortly."),
             reply_to_message_id,
             incoming.message_thread_id,
         )
@@ -925,7 +949,7 @@ async fn handle_thread_commands(
         }
         // Handoff/Btw/PromptBuilder run via the staging flow; Commands via the
         // picker handler; Tldr via handle_tldr_command.
-        BotCommand::Exit
+        BotCommand::Restart
         | BotCommand::Status
         | BotCommand::WhereAmI
         | BotCommand::Handoff

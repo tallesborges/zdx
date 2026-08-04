@@ -1,7 +1,7 @@
 //! launchd-backed control for the long-lived `bot` and `daemon` services.
 //!
 //! launchd owns process lifetime (start at login, restart on crash, restart
-//! after the bot's `/exit`); this module owns the ergonomics. Status still comes
+//! after the bot's `/restart`); this module owns the ergonomics. Status still comes
 //! from [`crate::pidfile`], which is the source of truth for "is it running".
 
 use std::path::{Path, PathBuf};
@@ -14,7 +14,7 @@ use crate::config::paths;
 use crate::pidfile::{self, ServiceStatus};
 
 /// Environment variable set in the generated plists so a launchd-started
-/// service knows it is supervised (see the bot's `/exit` gate).
+/// service knows it is supervised (see the bot's `/restart` gate).
 pub const SUPERVISOR_ENV: &str = "ZDX_SERVICE_SUPERVISOR";
 
 /// A ZDX service that can run under launchd.
