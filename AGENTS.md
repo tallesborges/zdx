@@ -74,6 +74,18 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
   - Do not add backward-compatibility shims, defensive fallback logic, or keep dead code paths unless explicitly requested or required by a documented contract in `docs/SPEC.md`.
   - Remove deprecated code immediately rather than marking it deprecated.
 
+## Derived caches and hot paths
+
+For any disposable store rebuilt from files on disk (SQLite caches, search indexes, generated artifacts):
+
+- Never put corpus-sized work on a per-call path. Whole-store checks, full-table counts, and directory re-scans belong on index/maintenance commands, on write paths, or behind a freshness window.
+- Don't scan to prove a store is healthy. Let the next real operation fail.
+- Anything a user waits on is hot, even when it runs async.
+- Filter, order, and limit in the store, not in memory. Add the index that query needs.
+- Never bump a schema version for an additive change. The rebuild costs more than the index.
+- Reuse expensive handles only when you have measured the saving.
+- Test against real data volume. Fixtures are too small to show scaling bugs.
+
 ## Tests (keep it light)
 
 - Add tests only to protect a user-visible contract or a real regression.
