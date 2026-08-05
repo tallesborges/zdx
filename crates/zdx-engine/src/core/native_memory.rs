@@ -78,7 +78,8 @@ CREATE TABLE IF NOT EXISTS chunk_vector (
     chunk_id TEXT PRIMARY KEY,
     input_hash TEXT NOT NULL,
     profile_fingerprint TEXT NOT NULL
-);";
+);
+CREATE INDEX IF NOT EXISTS idx_chunk_vector_hash ON chunk_vector(input_hash, profile_fingerprint);";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2146,7 +2147,11 @@ fn finalize_embedding_run(
         [],
     )?;
     tx.execute(
-        "DELETE FROM embedding_vector WHERE input_hash NOT IN (SELECT input_hash FROM chunk_vector WHERE profile_fingerprint = embedding_vector.profile_fingerprint)",
+        "DELETE FROM embedding_vector WHERE NOT EXISTS (
+             SELECT 1 FROM chunk_vector cv
+             WHERE cv.input_hash = embedding_vector.input_hash
+               AND cv.profile_fingerprint = embedding_vector.profile_fingerprint
+         )",
         [],
     )?;
     let covered: i64 = tx.query_row(
