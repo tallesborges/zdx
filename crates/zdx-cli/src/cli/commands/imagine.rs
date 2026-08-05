@@ -15,9 +15,9 @@ use zdx_engine::providers::gemini::{
 };
 use zdx_engine::providers::openai::{
     OpenAIClient, OpenAICodexClient, OpenAICodexConfig, OpenAIConfig, OpenAIImageGenerationOptions,
-    OpenAIImageInput,
+    OpenAIImageInput, responses_reasoning_effort,
 };
-use zdx_engine::providers::{ProviderKind, resolve_provider};
+use zdx_engine::providers::{ProviderKind, ProviderSelection, resolve_provider};
 
 const DEFAULT_IMAGINE_MODEL: &str = "gemini:gemini-3.1-flash-image-preview";
 const DEFAULT_OPENAI_RESPONSES_IMAGE_SIZE: &str = "1024x1024";
@@ -39,19 +39,13 @@ pub async fn run(options: ImagineRunOptions<'_>) -> Result<()> {
 
     let response = match provider_selection.kind {
         ProviderKind::Gemini => generate_gemini_images(&provider_selection.model, &options).await?,
-        ProviderKind::OpenAI => {
-            generate_openai_images(&provider_selection.model, provider_selection.fast, &options)
-                .await?
-        }
-        ProviderKind::OpenAICodex => {
-            generate_codex_images(&provider_selection.model, provider_selection.fast, &options)
-                .await?
-        }
+        ProviderKind::OpenAI => generate_openai_images(&provider_selection, &options).await?,
+        ProviderKind::OpenAICodex => generate_codex_images(&provider_selection, &options).await?,
         ProviderKind::Alibaba => {
             generate_alibaba_images(&provider_selection.model, &options).await?
         }
         _ => bail!(
-            "zdx imagine supports Gemini, OpenAI, OpenAI Codex, and Alibaba (Qwen-Image) image generation. Use 'gemini:', 'openai:gpt-image-2', 'openai-codex:gpt-image-2', or 'alibaba:qwen-image-2.0-pro'"
+            "zdx imagine supports Gemini, OpenAI, OpenAI Codex, and Alibaba (Qwen-Image) image generation. Use 'gemini:', 'openai:gpt-image-2', 'openai-codex:gpt-image-2', or 'alibaba:qwen-image-3.0-pro'"
         ),
     };
 
@@ -214,24 +208,22 @@ fn alibaba_image_size(size: &str) -> Result<String> {
 }
 
 async fn generate_codex_images(
-    model: &str,
-    fast: bool,
+    selection: &ProviderSelection,
     options: &ImagineRunOptions<'_>,
 ) -> Result<GenerateImageResponse> {
     let image_options = openai_family_image_options("OpenAI Codex", options)?;
-    let service_tier = fast.then(|| "priority".to_string());
     let codex_config = OpenAICodexConfig::new(
-        model.to_string(),
-        None,
+        selection.model.clone(),
+        image_reasoning_effort(selection),
         options
             .config
             .providers
             .openai_codex
             .effective_text_verbosity(),
         None,
-        service_tier,
+        selection.fast.then(|| "priority".to_string()),
         false,
-        None,
+        selection.account.clone(),
     );
     let response = OpenAICodexClient::new(codex_config)
         .generate_images(options.prompt, &image_options)
@@ -253,21 +245,19 @@ async fn generate_codex_images(
 }
 
 async fn generate_openai_images(
-    model: &str,
-    fast: bool,
+    selection: &ProviderSelection,
     options: &ImagineRunOptions<'_>,
 ) -> Result<GenerateImageResponse> {
     let image_options = openai_family_image_options("OpenAI", options)?;
-    let service_tier = fast.then(|| "priority".to_string());
     let openai_config = OpenAIConfig::from_env(
-        model.to_string(),
+        selection.model.clone(),
         None,
         options.config.providers.openai.effective_base_url(),
         options.config.providers.openai.effective_api_key(),
-        None,
+        image_reasoning_effort(selection),
         options.config.providers.openai.effective_text_verbosity(),
         None,
-        service_tier,
+        selection.fast.then(|| "priority".to_string()),
         false,
     )?;
     let response = OpenAIClient::new(openai_config)
@@ -287,6 +277,14 @@ async fn generate_openai_images(
         text_parts: response.text_parts,
         usage_note: None,
     })
+}
+
+// Omit reasoning without an explicit `@<level>` so the API applies its default.
+fn image_reasoning_effort(selection: &ProviderSelection) -> Option<String> {
+    selection
+        .thinking
+        .and_then(|level| responses_reasoning_effort(level, &selection.model))
+        .map(str::to_owned)
 }
 
 fn openai_family_image_options(
