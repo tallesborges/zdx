@@ -21,9 +21,10 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant, SystemTime};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
@@ -82,7 +83,42 @@ CREATE TABLE IF NOT EXISTS thread_tool (
     error_details TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_thread_tool_thread ON thread_tool(thread_id);
-CREATE INDEX IF NOT EXISTS idx_thread_tool_ts ON thread_tool(tool_ts);";
+CREATE INDEX IF NOT EXISTS idx_thread_tool_ts ON thread_tool(tool_ts);
+CREATE INDEX IF NOT EXISTS idx_thread_meta_list
+    ON thread_meta(origin_kind, mtime_ns DESC, thread_id);";
+
+/// Process-wide `threads.sqlite` handle.
+///
+/// Opening runs pragmas plus schema setup, so every entry point shares one
+/// connection instead of paying that per call.
+static CONNECTION: Mutex<Option<Connection>> = Mutex::new(None);
+
+/// Last completed incremental sync, used to keep read paths off the
+/// filesystem walk when they are called repeatedly.
+static LAST_SYNC: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// How long a completed sync keeps read paths from walking the threads
+/// directory again.
+const SYNC_INTERVAL: Duration = Duration::from_secs(2);
+
+fn with_conn<T>(f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+    let mut guard = CONNECTION.lock().unwrap_or_else(PoisonError::into_inner);
+    if guard.is_none() {
+        *guard = Some(open(&db_path())?);
+    }
+    f(guard.as_ref().expect("connection opened above"))
+}
+
+/// Runs the incremental sync unless one finished within [`SYNC_INTERVAL`].
+fn sync_if_stale(conn: &Connection) -> Result<()> {
+    let mut last = LAST_SYNC.lock().unwrap_or_else(PoisonError::into_inner);
+    if last.is_some_and(|at| at.elapsed() < SYNC_INTERVAL) {
+        return Ok(());
+    }
+    sync(conn)?;
+    *last = Some(Instant::now());
+    Ok(())
+}
 
 /// Counters from one incremental `threads.sqlite` sync.
 ///
@@ -113,11 +149,13 @@ pub fn db_path() -> PathBuf {
 pub fn sync_and_export(
     force: bool,
 ) -> Result<(ThreadCacheSyncSummary, thread_export::ThreadExportSummary)> {
-    let conn = open(&db_path())?;
-    let sync = sync(&conn).context("sync native thread metadata cache")?;
-    let export =
-        export_threads_from_cache(&conn, force).context("export changed thread transcripts")?;
-    Ok((sync, export))
+    with_conn(|conn| {
+        let sync = sync(conn).context("sync native thread metadata cache")?;
+        *LAST_SYNC.lock().unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
+        let export =
+            export_threads_from_cache(conn, force).context("export changed thread transcripts")?;
+        Ok((sync, export))
+    })
 }
 
 /// Returns top-level thread summaries from the cache, newest first.
@@ -128,28 +166,29 @@ pub fn sync_and_export(
 /// # Errors
 /// Returns an error when the cache cannot be opened, synced, or read.
 pub fn list_threads_cached() -> Result<Vec<ThreadSummary>> {
-    let conn = open(&db_path())?;
-    sync(&conn)?;
-    let mut stmt = conn.prepare_cached(
-        "SELECT thread_id, mtime_ns, title, root_path, handoff_from,
+    with_conn(|conn| {
+        sync_if_stale(conn)?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT thread_id, mtime_ns, title, root_path, handoff_from,
                 parent_thread_id, subagent_name
          FROM thread_meta WHERE origin_kind IS NULL
          ORDER BY mtime_ns DESC, thread_id ASC",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(ThreadSummary {
-            id: row.get(0)?,
-            modified: system_time_from_nanos(row.get(1)?),
-            title: row.get(2)?,
-            root_path: row.get(3)?,
-            handoff_from: row.get(4)?,
-            origin_kind: None,
-            parent_thread_id: row.get(5)?,
-            subagent_name: row.get(6)?,
-        })
-    })?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ThreadSummary {
+                id: row.get(0)?,
+                modified: system_time_from_nanos(row.get(1)?),
+                title: row.get(2)?,
+                root_path: row.get(3)?,
+                handoff_from: row.get(4)?,
+                origin_kind: None,
+                parent_thread_id: row.get(5)?,
+                subagent_name: row.get(6)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    })
 }
 
 /// Searches threads via the FTS index, preserving the scan path's contract:
@@ -159,9 +198,16 @@ pub fn list_threads_cached() -> Result<Vec<ThreadSummary>> {
 /// # Errors
 /// Returns an error when the cache cannot be opened, synced, or queried.
 pub fn search_threads_indexed(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchResult>> {
-    let conn = open(&db_path())?;
-    sync(&conn)?;
+    with_conn(|conn| {
+        sync_if_stale(conn)?;
+        search_threads_with(conn, options)
+    })
+}
 
+fn search_threads_with(
+    conn: &Connection,
+    options: &ThreadSearchOptions,
+) -> Result<Vec<ThreadSearchResult>> {
     let normalized_query = options
         .query
         .as_deref()
@@ -170,7 +216,7 @@ pub fn search_threads_indexed(options: &ThreadSearchOptions) -> Result<Vec<Threa
     let limit = options.limit.max(1);
 
     let matching_ids: Option<HashSet<String>> = match normalized_query {
-        Some(query) => Some(matching_thread_ids(&conn, query)?),
+        Some(query) => Some(matching_thread_ids(conn, query)?),
         None => None,
     };
     if matching_ids.as_ref().is_some_and(HashSet::is_empty) {
@@ -237,9 +283,16 @@ pub fn search_threads_indexed(options: &ThreadSearchOptions) -> Result<Vec<Threa
 pub fn search_thread_tools_indexed(
     options: &ThreadToolSearchOptions,
 ) -> Result<Vec<ThreadToolMatch>> {
-    let conn = open(&db_path())?;
-    sync(&conn)?;
+    with_conn(|conn| {
+        sync_if_stale(conn)?;
+        search_thread_tools_with(conn, options)
+    })
+}
 
+fn search_thread_tools_with(
+    conn: &Connection,
+    options: &ThreadToolSearchOptions,
+) -> Result<Vec<ThreadToolMatch>> {
     let mut sql = String::from(
         "SELECT t.thread_id, m.title, t.tool_use_id, t.tool_name, t.tool_ts, t.status,
                 t.args_summary, t.error_code, t.error_message, t.error_details
@@ -835,10 +888,10 @@ fn try_open(path: &Path) -> Result<Connection> {
     conn.execute_batch(
         "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
     )?;
-    let integrity: String = conn.query_row("PRAGMA integrity_check(1)", [], |r| r.get(0))?;
-    if integrity != "ok" {
-        bail!("integrity check failed: {integrity}");
-    }
+    // No `integrity_check`/`quick_check` here: both scan every page, which
+    // costs tens of seconds once the cache reaches a few hundred MB. The
+    // schema reads below fail with a corruption code on a broken file, which
+    // is what `is_corruption` recovers from.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS cache_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     )?;
@@ -855,12 +908,6 @@ fn try_open(path: &Path) -> Result<Connection> {
 }
 
 fn is_corruption(err: &anyhow::Error) -> bool {
-    if err
-        .chain()
-        .any(|cause| cause.to_string().contains("integrity check failed"))
-    {
-        return true;
-    }
     err.downcast_ref::<rusqlite::Error>().is_some_and(|e| {
         matches!(
             e,

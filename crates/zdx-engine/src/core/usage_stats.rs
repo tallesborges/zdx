@@ -458,15 +458,9 @@ fn open_cache(path: &Path) -> Result<Connection> {
 }
 
 /// True only for errors that mean the file isn't a usable `SQLite` database
-/// (our integrity-check bail, or a not-a-database / corruption code). Lock,
-/// permission, and other transient errors return false.
+/// (a not-a-database / corruption code). Lock, permission, and other
+/// transient errors return false.
 fn is_cache_corruption(err: &anyhow::Error) -> bool {
-    if err
-        .chain()
-        .any(|cause| cause.to_string().contains("integrity check failed"))
-    {
-        return true;
-    }
     err.downcast_ref::<rusqlite::Error>().is_some_and(|e| {
         matches!(
             e,
@@ -484,10 +478,10 @@ fn try_open_cache(path: &Path) -> Result<Connection> {
     conn.execute_batch(
         "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
     )?;
-    let integrity: String = conn.query_row("PRAGMA integrity_check(1)", [], |r| r.get(0))?;
-    if integrity != "ok" {
-        anyhow::bail!("integrity check failed: {integrity}");
-    }
+    // No `integrity_check` here: it scans every page, so the cost grows with
+    // the cache and every open pays it. The schema statement below fails with
+    // a corruption code on a broken file, which is what `is_cache_corruption`
+    // recovers from.
     conn.execute_batch(CREATE_META_SQL)?;
     Ok(conn)
 }

@@ -1544,21 +1544,15 @@ fn open_existing_cache(path: &Path) -> Result<Connection> {
 fn try_open_cache(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
     conn.execute_batch("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")?;
-    let integrity: String = conn.query_row("PRAGMA integrity_check(1)", [], |r| r.get(0))?;
-    if integrity != "ok" {
-        bail!("integrity check failed: {integrity}");
-    }
+    // No `integrity_check` here: it scans every page, which costs seconds
+    // once the index reaches a few hundred MB and every search pays it. The
+    // schema statement below fails with a corruption code on a broken file,
+    // which is what `is_cache_corruption` recovers from.
     conn.execute_batch(CREATE_META_SQL)?;
     Ok(conn)
 }
 
 fn is_cache_corruption(err: &anyhow::Error) -> bool {
-    if err
-        .chain()
-        .any(|cause| cause.to_string().contains("integrity check failed"))
-    {
-        return true;
-    }
     err.downcast_ref::<rusqlite::Error>().is_some_and(|e| {
         matches!(
             e,
