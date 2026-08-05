@@ -42,6 +42,9 @@ pub(super) fn build_image_generation_request(
     model: &str,
     prompt: &str,
     options: &OpenAIImageGenerationOptions,
+    reasoning_effort: Option<&str>,
+    text_verbosity: &str,
+    service_tier: Option<&str>,
 ) -> Value {
     let mut tool = serde_json::Map::from_iter([("type".to_string(), json!("image_generation"))]);
     if !options.source_images.is_empty() {
@@ -67,7 +70,7 @@ pub(super) fn build_image_generation_request(
         }));
     }
 
-    json!({
+    let mut request = json!({
         "model": responses_model_for_image_generation(model),
         "stream": true,
         "store": false,
@@ -79,12 +82,22 @@ pub(super) fn build_image_generation_request(
         }],
         "tools": [Value::Object(tool)],
         "tool_choice": { "type": "image_generation" },
-    })
+    });
+
+    if let Some(effort) = reasoning_effort {
+        request["reasoning"] = json!({ "effort": effort });
+    }
+    request["text"] = json!({ "verbosity": text_verbosity });
+    if let Some(service_tier) = service_tier {
+        request["service_tier"] = json!(service_tier);
+    }
+
+    request
 }
 
 fn responses_model_for_image_generation(model: &str) -> &str {
     if model.eq_ignore_ascii_case("gpt-image-2") {
-        "gpt-5.4"
+        "gpt-5.6-sol"
     } else {
         model
     }
@@ -347,9 +360,12 @@ mod tests {
                 size: Some("1024x1024".to_string()),
                 source_images: Vec::new(),
             },
+            None,
+            "medium",
+            None,
         );
 
-        assert_eq!(request["model"], serde_json::json!("gpt-5.4"));
+        assert_eq!(request["model"], serde_json::json!("gpt-5.6-sol"));
         assert_eq!(request["stream"], serde_json::json!(true));
         assert_eq!(
             request["instructions"],
@@ -370,6 +386,25 @@ mod tests {
             request["tool_choice"]["type"],
             serde_json::json!("image_generation")
         );
+        assert!(request.get("reasoning").is_none());
+        assert!(request.get("service_tier").is_none());
+        assert_eq!(request["text"]["verbosity"], serde_json::json!("medium"));
+    }
+
+    #[test]
+    fn image_generation_request_carries_model_settings() {
+        let request = build_image_generation_request(
+            "gpt-image-2",
+            "A red fox",
+            &OpenAIImageGenerationOptions::default(),
+            Some("high"),
+            "low",
+            Some("priority"),
+        );
+
+        assert_eq!(request["reasoning"]["effort"], serde_json::json!("high"));
+        assert_eq!(request["text"]["verbosity"], serde_json::json!("low"));
+        assert_eq!(request["service_tier"], serde_json::json!("priority"));
     }
 
     #[test]
@@ -384,6 +419,9 @@ mod tests {
                     data: vec![1, 2, 3],
                 }],
             },
+            None,
+            "medium",
+            None,
         );
 
         assert_eq!(
@@ -414,7 +452,7 @@ mod tests {
     fn image_generation_model_alias_uses_responses_model() {
         assert_eq!(
             responses_model_for_image_generation("gpt-image-2"),
-            "gpt-5.4"
+            "gpt-5.6-sol"
         );
         assert_eq!(responses_model_for_image_generation("gpt-5.4"), "gpt-5.4");
     }

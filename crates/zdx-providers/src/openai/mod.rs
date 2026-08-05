@@ -35,10 +35,8 @@ pub(crate) fn reasoning_effort_from_thinking_level(level: ThinkingLevel) -> Opti
 /// Codex paths). Unlike the shared mapping, `Off` sends an explicit `"none"`:
 /// omitting the field makes GPT-5.5/5.6 fall back to their `medium` default
 /// instead of disabling reasoning.
-pub(crate) fn responses_reasoning_effort(
-    level: ThinkingLevel,
-    model: &str,
-) -> Option<&'static str> {
+#[must_use]
+pub fn responses_reasoning_effort(level: ThinkingLevel, model: &str) -> Option<&'static str> {
     match level {
         ThinkingLevel::Off => Some("none"),
         ThinkingLevel::Max

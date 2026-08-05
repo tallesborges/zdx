@@ -193,7 +193,14 @@ impl OpenAICodexClient {
             self.config.prompt_cache_key.as_deref(),
         )?;
 
-        let request = build_image_generation_request(&self.config.model, prompt, options);
+        let request = build_image_generation_request(
+            &self.config.model,
+            prompt,
+            options,
+            self.config.reasoning_effort.as_deref(),
+            self.config.text_verbosity.unwrap_or_default().as_str(),
+            self.config.service_tier.as_deref(),
+        );
         let url = format!(
             "{}{}",
             ProviderKind::OpenAICodex.default_base_url(),

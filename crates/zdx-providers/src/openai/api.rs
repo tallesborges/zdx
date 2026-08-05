@@ -124,7 +124,14 @@ impl OpenAIClient {
         options: &OpenAIImageGenerationOptions,
     ) -> Result<OpenAIGenerateImageResponse> {
         let headers = build_headers(&self.config.api_key)?;
-        let request = build_image_generation_request(&self.config.model, prompt, options);
+        let request = build_image_generation_request(
+            &self.config.model,
+            prompt,
+            options,
+            self.config.reasoning_effort.as_deref(),
+            self.config.text_verbosity.unwrap_or_default().as_str(),
+            self.config.service_tier.as_deref(),
+        );
         let url = format!("{}{}", self.config.base_url, RESPONSES_PATH);
         crate::shared::log_request("openai-image", &url);
         let response = self

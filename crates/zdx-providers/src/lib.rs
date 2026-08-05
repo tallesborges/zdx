@@ -197,6 +197,8 @@ pub struct ProviderSelection {
     pub account: Option<String>,
     /// Whether the spec carried the `@fast` modifier (priority service tier).
     pub fast: bool,
+    /// Explicit thinking level from an `@<level>` modifier (`None` = unset).
+    pub thinking: Option<ThinkingLevel>,
 }
 
 /// Static metadata for a single provider kind.
@@ -613,7 +615,8 @@ impl ProviderKind {
 /// `claude-cli@work:sonnet-4`. Without prefix, defaults to Anthropic.
 ///
 /// Trailing modifiers (`@fast`, `@<thinking>`) are stripped from the returned
-/// model id; `@fast` is surfaced as [`ProviderSelection::fast`].
+/// model id and surfaced as [`ProviderSelection::fast`] /
+/// [`ProviderSelection::thinking`].
 pub fn resolve_provider(model: &str) -> ProviderSelection {
     let spec = ModelSpec::parse(model);
     let trimmed = spec.base;
@@ -627,6 +630,7 @@ pub fn resolve_provider(model: &str) -> ProviderSelection {
             model: rest.to_string(),
             account: account.map(ToString::to_string),
             fast: spec.fast,
+            thinking: spec.thinking,
         };
     }
 
@@ -636,6 +640,7 @@ pub fn resolve_provider(model: &str) -> ProviderSelection {
         model: trimmed.to_string(),
         account: None,
         fast: spec.fast,
+        thinking: spec.thinking,
     }
 }
 
@@ -718,5 +723,11 @@ mod tests {
         assert_eq!(selection.kind, ProviderKind::OpenAI);
         assert_eq!(selection.model, "gpt-5.2");
         assert!(selection.fast);
+        assert_eq!(selection.thinking, Some(zdx_types::ThinkingLevel::High));
+    }
+
+    #[test]
+    fn resolve_provider_leaves_thinking_unset_without_modifier() {
+        assert!(resolve_provider("openai:gpt-5.2").thinking.is_none());
     }
 }
