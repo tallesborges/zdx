@@ -801,6 +801,24 @@ input_images = false
 output_limit = 65536
 
 [[model]]
+id = "opencode-go:gpt-5.6-luna"
+provider = "opencode-go"
+display_name = "GPT-5.6 Luna (2x usage)"
+context_limit = 1050000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+api = "openai-completions"
+
+[[model]]
 id = "opencode-go:grok-4.5"
 provider = "opencode-go"
 display_name = "Grok 4.5"
@@ -930,6 +948,24 @@ api = "openai-completions"
 id = "opencode-go:minimax-m3"
 provider = "opencode-go"
 display_name = "MiniMax-M3"
+context_limit = 1000000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 131072
+api = "anthropic-messages"
+
+[[model]]
+id = "opencode-go:qwen3.8-max"
+provider = "opencode-go"
+display_name = "Qwen3.8 Max"
 context_limit = 1000000
 
 [model.pricing]
