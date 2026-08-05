@@ -36,10 +36,11 @@ If no `--out` is given, images default to `$ZDX_HOME/artifacts/`.
 - **Default:** If you do not pass `--model`, `zdx imagine` uses `gemini:gemini-3.1-flash-image-preview`.
 - **OpenAI support:** `zdx imagine` also supports both `openai:gpt-image-2` and `openai-codex:gpt-image-2`.
 - **Preferred OpenAI path:** When using OpenAI, prefer `openai-codex:gpt-image-2` unless the user explicitly asks for plain `openai:gpt-image-2`.
-- **Alibaba (Qwen-Image) support:** `zdx imagine` also supports `alibaba:qwen-image-2.0-pro` — a combined text-to-image + editing model on Alibaba DashScope. Requires `ALIBABA_API_KEY`. Use it when the user asks for Qwen/Alibaba image generation.
+- **Alibaba (Qwen-Image) support:** `zdx imagine` supports `alibaba:qwen-image-3.0-pro`, `alibaba:qwen-image-3.0`, and `alibaba:qwen-image-2.0-pro` — combined text-to-image + editing models on Alibaba DashScope. Requires `ALIBABA_API_KEY`. Use them when the user asks for Qwen/Alibaba image generation.
+- **Preferred Alibaba path:** Use `alibaba:qwen-image-3.0-pro`. It is the strongest of the three at dense layouts, small text (~10px), and multilingual typography. Fall back to `alibaba:qwen-image-3.0` for cheaper/faster runs, and to `alibaba:qwen-image-2.0-pro` only when explicitly asked.
 - **Gemini vs OpenAI/Alibaba:** `--aspect` currently works with Gemini only; OpenAI, OpenAI Codex, and Alibaba require `--size` instead.
 - **OpenAI size support:** OpenAI/OpenAI Codex support `1K`, `2K`, and `4K`. `512px` is Gemini-only.
-- **Alibaba size support:** `alibaba:qwen-image-2.0-pro` supports `512px`, `1K`, and `2K` (not `4K`).
+- **Alibaba size support:** All Alibaba Qwen-Image models support `512px`, `1K`, and `2K` (not `4K`).
 
 ### Recommended model selection
 
@@ -68,12 +69,12 @@ zdx imagine -p "Add a neon sign above the doorway, keep the rest unchanged" -s s
 
 **Text-to-image:**
 ```bash
-zdx imagine -p "A cinematic photo of a red fox in falling snow" --model alibaba:qwen-image-2.0-pro --size 1K
+zdx imagine -p "A cinematic photo of a red fox in falling snow" --model alibaba:qwen-image-3.0-pro --size 1K
 ```
 
 **Editing (same model, add source image):**
 ```bash
-zdx imagine -p "Make the jacket bright red, keep everything else the same" -s person.png --model alibaba:qwen-image-2.0-pro --size 1K
+zdx imagine -p "Make the jacket bright red, keep everything else the same" -s person.png --model alibaba:qwen-image-3.0-pro --size 1K
 ```
 
 ### Modes
