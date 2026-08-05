@@ -2,9 +2,9 @@
 
 > **Status 2026-07-21:** Phase 1 implemented + verified live. New `crates/zdx-providers/src/alibaba/image.rs` (`AlibabaImageClient`), re-exported via `alibaba.rs`; `imagine.rs` has a `ProviderKind::Alibaba` branch; `--size` maps CLI tokens (512px/1K/2K → `W*H`). `just ci-fast` + tests pass.
 >
-> **3.0 model id (confirmed via live probe):** `qwen-image-3.0-pro` is the real DashScope id (returns HTTP 403 Access denied, NOT "Model not exist") — it is on the sync `multimodal-generation` endpoint, so it works with this client once the account is granted access. The account currently lacks 3.0 access (403); needs activation in the Model Studio console / preview allowlist. Live end-to-end verified with `alibaba:qwen-image-2.0-pro` (generated a valid 1024×1024 PNG). Other guesses (`qwen-image-3.0`, `qwen-image3`, `qwen-image-edit-3.0`, ...) return "Model not exist". Edit model `qwen-image-edit-plus` is valid (requires 1–3 images).
+> **3.0 access unblocked 2026-08-05:** `qwen-image-3.0-pro` and `qwen-image-3.0` are now both listed for the account and generate successfully on the sync `multimodal-generation` endpoint (`dashscope-intl`). Verified end-to-end through `zdx imagine` for text-to-image and editing at `--size 1K`; `512px`/`1K`/`2K` all confirmed for both ids. No client changes were needed — the model string passes through, so this was docs + defaults only. (Prior state: 403 Access denied while the model was in invitation-only preview.) Edit model `qwen-image-edit-plus` is valid (requires 1–3 images).
 >
-> **Phase 2 (partial):** The `imagine` skill (`crates/zdx-assets/bundled_skills/imagine/SKILL.md`) now documents `alibaba:qwen-image-2.0-pro` (generate + edit, `--size` 512px/1K/2K). Registry image-capability flag + `zdx models` image filter NOT added (still no programmatic image-model listing).
+> **Phase 2 (partial):** The `imagine` skill (`crates/zdx-assets/bundled_skills/imagine/SKILL.md`) now documents `alibaba:qwen-image-3.0-pro` (preferred), `alibaba:qwen-image-3.0`, and `alibaba:qwen-image-2.0-pro` (generate + edit, `--size` 512px/1K/2K). Registry image-capability flag + `zdx models` image filter NOT added (still no programmatic image-model listing).
 
 # Goals
 - Support **Qwen-Image** (Alibaba DashScope, targeting Qwen-Image-3.0) in `zdx imagine` for BOTH:
