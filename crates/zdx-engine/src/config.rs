@@ -1936,6 +1936,7 @@ fn default_opencode_go_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gpt-5.6-luna".to_string(),
             "grok-4.5".to_string(),
             "glm-5.2".to_string(),
             "kimi-k3".to_string(),
@@ -1944,6 +1945,7 @@ fn default_opencode_go_provider() -> ProviderConfig {
             "mimo-v2.5-pro".to_string(),
             "mimo-v2.5".to_string(),
             "minimax-m3".to_string(),
+            "qwen3.8-max".to_string(),
             "qwen3.7-max".to_string(),
             "qwen3.7-plus".to_string(),
             "deepseek-v4-pro".to_string(),
