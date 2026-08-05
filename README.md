@@ -83,7 +83,7 @@ Delegate scoped work to isolated child agents:
 
 ### Skills & commands
 
-- **Bundled skills** — `brainstorm`, `define-goal`, `deep-research`, `imagine` (image gen/edit), `memory`, `ship-first-plan`, `skill-creator`
+- **Bundled skills** — `deep-research`, `imagine` (image gen/edit), `memory`, `ship-first-plan`, `skill-creator`
 - **Your own skills** — project and user `SKILL.md` files, auto-discovered per scope
 - **Bundled commands** — `plan`, `execute-plan`, `investigate`, `review-loop`, `simplify`, `skillify`, `commandify`, `skillpack`, `self-improve`, `init-agents-md`, `onboarding`
 - **Custom Markdown slash commands**, fuzzy-matched in the command palette
