@@ -735,3 +735,56 @@ fn test_threads_search_reindexes_changed_thread_after_warmup() {
         .stdout(predicate::str::contains("tool-warm-1"))
         .stdout(predicate::str::contains(r#""status": "ok""#));
 }
+
+/// Rewriting a thread drops its old text from the index, and deleting the file
+/// drops the thread entirely. Both rely on FTS rows staying keyed to the
+/// thread's `doc_id`.
+#[test]
+fn test_threads_search_drops_stale_text_and_deleted_threads() {
+    let temp_dir = TempDir::new().unwrap();
+    let event = |text: &str| {
+        (
+            "user".to_string(),
+            text.to_string(),
+            "2026-03-01T10:00:00Z".to_string(),
+        )
+    };
+    create_thread_with_meta(
+        &temp_dir,
+        "rewrite-thread",
+        Some("Rewrite thread"),
+        &[event("zebra-marker")],
+    );
+    create_thread_with_meta(
+        &temp_dir,
+        "doomed-thread",
+        Some("Doomed thread"),
+        &[event("walrus-marker")],
+    );
+
+    let search = |query: &str| {
+        cargo_bin_cmd!("zdx")
+            .env("ZDX_HOME", temp_dir.path())
+            .args(["threads", "search", query])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone()
+    };
+
+    assert!(String::from_utf8_lossy(&search("zebra-marker")).contains("rewrite-thread"));
+    assert!(String::from_utf8_lossy(&search("walrus-marker")).contains("doomed-thread"));
+
+    create_thread_with_meta(
+        &temp_dir,
+        "rewrite-thread",
+        Some("Rewrite thread"),
+        &[event("penguin-marker")],
+    );
+    fs::remove_file(temp_dir.path().join("threads").join("doomed-thread.jsonl")).unwrap();
+
+    assert!(String::from_utf8_lossy(&search("penguin-marker")).contains("rewrite-thread"));
+    assert!(!String::from_utf8_lossy(&search("zebra-marker")).contains("rewrite-thread"));
+    assert!(!String::from_utf8_lossy(&search("walrus-marker")).contains("doomed-thread"));
+}

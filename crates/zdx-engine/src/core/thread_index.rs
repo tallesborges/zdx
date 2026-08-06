@@ -12,7 +12,10 @@
 //!   are no longer searched (tool discovery uses the dedicated tool rows).
 //! - Query words match as OR of case-insensitive token-prefix phrases via
 //!   FTS5 (`unicode61`); mid-word substring matches come from a LIKE fallback
-//!   that only runs when FTS finds nothing.
+//!   over titles only, which runs when FTS finds nothing. `thread_fts` is
+//!   contentless (`content=''`), so it stores no transcript copy and hits
+//!   resolve through `thread_meta.doc_id = thread_fts.rowid`; reading a
+//!   stored FTS column would load a document's full text per hit.
 //! - `activity_at` always derives from indexed event timestamps (the file
 //!   scan only did this when date filters were active).
 //! - Tool matches use a deterministic `tool_ts DESC, thread_id, tool_use_id`
@@ -37,12 +40,13 @@ use crate::core::thread_persistence::{
     ThreadToolSearchOptions,
 };
 
-const SCHEMA_VERSION: &str = "3";
+const SCHEMA_VERSION: &str = "4";
 
 const CREATE_SQL: &str = "\
 CREATE TABLE IF NOT EXISTS cache_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS thread_meta (
-    thread_id TEXT PRIMARY KEY,
+    doc_id INTEGER PRIMARY KEY,
+    thread_id TEXT NOT NULL UNIQUE,
     mtime_ns INTEGER NOT NULL,
     size INTEGER NOT NULL,
     title TEXT,
@@ -65,9 +69,10 @@ CREATE TABLE IF NOT EXISTS thread_export_state (
     dirty INTEGER NOT NULL DEFAULT 1
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS thread_fts USING fts5(
-    thread_id UNINDEXED,
     title,
     text,
+    content = '',
+    contentless_delete = 1,
     tokenize = 'unicode61'
 );
 CREATE TABLE IF NOT EXISTS thread_tool (
@@ -85,7 +90,9 @@ CREATE TABLE IF NOT EXISTS thread_tool (
 CREATE INDEX IF NOT EXISTS idx_thread_tool_thread ON thread_tool(thread_id);
 CREATE INDEX IF NOT EXISTS idx_thread_tool_ts ON thread_tool(tool_ts);
 CREATE INDEX IF NOT EXISTS idx_thread_meta_list
-    ON thread_meta(origin_kind, mtime_ns DESC, thread_id);";
+    ON thread_meta(origin_kind, mtime_ns DESC, thread_id);
+CREATE INDEX IF NOT EXISTS idx_thread_meta_project
+    ON thread_meta(root_path, mtime_ns DESC, thread_id);";
 
 /// Process-wide `threads.sqlite` handle.
 ///
@@ -99,7 +106,11 @@ static LAST_SYNC: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// How long a completed sync keeps read paths from walking the threads
 /// directory again.
-const SYNC_INTERVAL: Duration = Duration::from_secs(2);
+///
+/// The walk stats every thread file (~140ms at 9.5k threads), so it must not
+/// ride along with every read. Reads tolerate a result set that is up to this
+/// old; explicit indexing (`zdx memory index`) calls [`sync`] directly.
+const SYNC_INTERVAL: Duration = Duration::from_secs(10);
 
 fn with_conn<T>(f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
     let mut guard = CONNECTION.lock().unwrap_or_else(PoisonError::into_inner);
@@ -191,8 +202,174 @@ pub fn list_threads_cached() -> Result<Vec<ThreadSummary>> {
     })
 }
 
-/// Searches threads via the FTS index, preserving the scan path's contract:
-/// newest-first ordering, active-thread exclusion before limiting, date
+/// Which run kinds a thread browse query returns.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ThreadKindFilter {
+    /// Every thread, including subagent and helper runs.
+    #[default]
+    All,
+    /// Threads started directly by a user (`origin_kind IS NULL`).
+    TopLevel,
+    /// Delegated subagent runs.
+    Subagent,
+    /// Internal helper runs (title, tldr, handoff, `read_thread`, ...).
+    Helper,
+}
+
+impl ThreadKindFilter {
+    /// Next filter in the cycle, for UI toggles.
+    #[must_use]
+    pub fn next(self) -> Self {
+        match self {
+            Self::All => Self::TopLevel,
+            Self::TopLevel => Self::Subagent,
+            Self::Subagent => Self::Helper,
+            Self::Helper => Self::All,
+        }
+    }
+
+    /// Short display label.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::TopLevel => "top-level",
+            Self::Subagent => "subagents",
+            Self::Helper => "helpers",
+        }
+    }
+}
+
+/// Filters for [`browse_threads`], applied in SQL.#[derive(Debug, Clone)]
+pub struct ThreadBrowseOptions {
+    pub kind: ThreadKindFilter,
+    /// Exact `root_path` match, as returned by [`browse_projects`].
+    pub project: Option<String>,
+    /// Free-text query over title plus user/assistant text.
+    pub query: Option<String>,
+    pub limit: usize,
+}
+
+impl Default for ThreadBrowseOptions {
+    fn default() -> Self {
+        Self {
+            kind: ThreadKindFilter::default(),
+            project: None,
+            query: None,
+            limit: 500,
+        }
+    }
+}
+
+/// One row of a thread browse query.
+#[derive(Debug, Clone, Default)]
+pub struct ThreadBrowseRow {
+    pub id: String,
+    pub title: Option<String>,
+    pub root_path: Option<String>,
+    pub origin_kind: Option<String>,
+    pub subagent_name: Option<String>,
+    pub parent_thread_id: Option<String>,
+    pub modified: Option<SystemTime>,
+    pub activity_at: Option<String>,
+    pub preview: Option<String>,
+}
+
+/// Returns thread rows matching `options`, newest first.
+///
+/// Unlike [`list_threads_cached`] this can include child runs, so callers that
+/// browse every persisted run (monitor) use it instead of the resume-oriented
+/// top-level list.
+///
+/// # Errors
+/// Returns an error when the cache cannot be opened, synced, or queried.
+pub fn browse_threads(options: &ThreadBrowseOptions) -> Result<Vec<ThreadBrowseRow>> {
+    with_conn(|conn| {
+        sync_if_stale(conn)?;
+
+        let mut sql = String::from(
+            "SELECT thread_id, mtime_ns, title, root_path, origin_kind,
+                    subagent_name, parent_thread_id, activity_at, preview
+             FROM thread_meta WHERE 1=1",
+        );
+        let mut sql_params: Vec<SqlValue> = Vec::new();
+
+        match options.kind {
+            ThreadKindFilter::All => {}
+            ThreadKindFilter::TopLevel => sql.push_str(" AND origin_kind IS NULL"),
+            ThreadKindFilter::Subagent => sql.push_str(" AND origin_kind = 'subagent'"),
+            ThreadKindFilter::Helper => sql.push_str(" AND origin_kind LIKE 'helper:%'"),
+        }
+        if let Some(project) = options
+            .project
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+        {
+            sql.push_str(" AND root_path = ?");
+            sql_params.push(SqlValue::Text(project.to_string()));
+        }
+        if let Some(query) = options
+            .query
+            .as_deref()
+            .map(str::trim)
+            .filter(|q| !q.is_empty())
+        {
+            let Some(fts_query) = fts_match_query(query) else {
+                return Ok(Vec::new());
+            };
+            sql.push_str(" AND doc_id IN (SELECT rowid FROM thread_fts WHERE thread_fts MATCH ?)");
+            sql_params.push(SqlValue::Text(fts_query));
+        }
+        sql.push_str(" ORDER BY mtime_ns DESC, thread_id ASC LIMIT ?");
+        sql_params.push(SqlValue::Integer(
+            i64::try_from(options.limit.max(1)).unwrap_or(i64::MAX),
+        ));
+
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(sql_params), |row| {
+            Ok(ThreadBrowseRow {
+                id: row.get(0)?,
+                modified: system_time_from_nanos(row.get(1)?),
+                title: row.get(2)?,
+                root_path: row.get(3)?,
+                origin_kind: row.get(4)?,
+                subagent_name: row.get(5)?,
+                parent_thread_id: row.get(6)?,
+                activity_at: row.get(7)?,
+                preview: row.get(8)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    })
+}
+
+/// Returns the distinct `root_path` values present in the cache with their
+/// thread counts, most recently active first, for project filter pickers.
+///
+/// # Errors
+/// Returns an error when the cache cannot be opened, synced, or queried.
+pub fn browse_projects() -> Result<Vec<(String, usize)>> {
+    with_conn(|conn| {
+        sync_if_stale(conn)?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT root_path, COUNT(*) FROM thread_meta
+             WHERE root_path IS NOT NULL AND root_path <> ''
+             GROUP BY root_path ORDER BY MAX(mtime_ns) DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                usize::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    })
+}
+
+/// Searches threads via the FTS index, preserving the scan path's contract:/// newest-first ordering, active-thread exclusion before limiting, date
 /// filters on event-derived activity, and stored previews.
 ///
 /// # Errors
@@ -441,13 +618,17 @@ fn sync(conn: &Connection) -> Result<ThreadCacheSyncSummary> {
         ..ThreadCacheSyncSummary::default()
     };
 
-    let mut cached: HashMap<String, (i64, i64)> = HashMap::new();
+    let mut cached: HashMap<String, CachedThread> = HashMap::new();
     {
-        let mut stmt = conn.prepare("SELECT thread_id, mtime_ns, size FROM thread_meta")?;
+        let mut stmt = conn.prepare("SELECT thread_id, doc_id, mtime_ns, size FROM thread_meta")?;
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                (row.get::<_, i64>(1)?, row.get::<_, i64>(2)?),
+                CachedThread {
+                    doc_id: row.get::<_, i64>(1)?,
+                    mtime_ns: row.get::<_, i64>(2)?,
+                    size: row.get::<_, i64>(3)?,
+                },
             ))
         })?;
         for row in rows {
@@ -462,19 +643,16 @@ fn sync(conn: &Connection) -> Result<ThreadCacheSyncSummary> {
         seen.insert(file.id.clone());
         let mtime_ns = mtime_nanos(file.modified);
         let size = i64::try_from(file.size).unwrap_or(i64::MAX);
-        if cached.get(&file.id) == Some(&(mtime_ns, size)) {
+        let previous = cached.get(&file.id);
+        if previous.is_some_and(|c| c.mtime_ns == mtime_ns && c.size == size) {
             continue;
         }
         summary.metas_read += 1;
-        // Skip per-row DELETEs for brand-new threads: `thread_fts` deletes by
-        // an UNINDEXED column are full-table scans, which made first builds
-        // O(N²) over the corpus.
-        let existed = cached.contains_key(&file.id);
-        index_one_thread(&tx, file, mtime_ns, size, existed)?;
+        index_one_thread(&tx, file, mtime_ns, size, previous.map(|c| c.doc_id))?;
         summary.rows_upserted += 1;
     }
-    for thread_id in cached.keys().filter(|id| !seen.contains(*id)) {
-        delete_thread_rows(&tx, thread_id)?;
+    for (thread_id, entry) in cached.iter().filter(|(id, _)| !seen.contains(*id)) {
+        delete_thread_rows(&tx, thread_id, entry.doc_id)?;
         summary.rows_removed += 1;
     }
     write_meta(&tx, "schema_version", SCHEMA_VERSION)?;
@@ -482,16 +660,25 @@ fn sync(conn: &Connection) -> Result<ThreadCacheSyncSummary> {
     Ok(summary)
 }
 
+/// Cached identity + change token for one indexed thread.
+struct CachedThread {
+    doc_id: i64,
+    mtime_ns: i64,
+    size: i64,
+}
+
 /// Indexes one new/changed thread: metadata, FTS text, tool rows, dirty mark.
 ///
-/// `existed` skips the per-row DELETE statements for threads that have no
-/// prior rows (the FTS delete is a full-table scan).
+/// `previous_doc_id` is the thread's existing FTS/document key when it was
+/// already indexed; reusing it keeps `thread_meta.doc_id` and `thread_fts`
+/// rowids aligned across re-indexes, and `None` skips the delete statements
+/// for threads that have no prior rows.
 fn index_one_thread(
     conn: &Connection,
     file: &thread_persistence::ThreadFileMeta,
     mtime_ns: i64,
     size: i64,
-    existed: bool,
+    previous_doc_id: Option<i64>,
 ) -> Result<()> {
     let thread = thread_persistence::thread_summary_from_file(file);
     let events = thread_persistence::load_thread_events(&thread.id).unwrap_or_default();
@@ -503,7 +690,7 @@ fn index_one_thread(
     let preview = preview_from_events(&events, thread.title.as_deref());
     let text = searchable_text(&events);
 
-    conn.execute(
+    let doc_id: i64 = conn.query_row(
         "INSERT INTO thread_meta(
             thread_id, mtime_ns, size, title, root_path, handoff_from, origin_kind,
             parent_thread_id, subagent_name, activity_at, modified_at, preview
@@ -513,7 +700,8 @@ fn index_one_thread(
            root_path=excluded.root_path, handoff_from=excluded.handoff_from,
            origin_kind=excluded.origin_kind, parent_thread_id=excluded.parent_thread_id,
            subagent_name=excluded.subagent_name, activity_at=excluded.activity_at,
-           modified_at=excluded.modified_at, preview=excluded.preview",
+           modified_at=excluded.modified_at, preview=excluded.preview
+         RETURNING doc_id",
         params![
             thread.id,
             mtime_ns,
@@ -528,19 +716,18 @@ fn index_one_thread(
             modified_at,
             preview,
         ],
+        |row| row.get(0),
     )?;
 
-    if existed {
-        conn.execute("DELETE FROM thread_fts WHERE thread_id = ?1", [&thread.id])?;
-    }
-    conn.execute(
-        "INSERT INTO thread_fts(thread_id, title, text) VALUES(?1, ?2, ?3)",
-        params![thread.id, thread.title.as_deref().unwrap_or(""), text],
-    )?;
-
-    if existed {
+    if previous_doc_id.is_some() {
+        conn.execute("DELETE FROM thread_fts WHERE rowid = ?1", [doc_id])?;
         conn.execute("DELETE FROM thread_tool WHERE thread_id = ?1", [&thread.id])?;
     }
+    conn.execute(
+        "INSERT INTO thread_fts(rowid, title, text) VALUES(?1, ?2, ?3)",
+        params![doc_id, thread.title.as_deref().unwrap_or(""), text],
+    )?;
+
     {
         let mut insert_tool = conn.prepare_cached(
             "INSERT INTO thread_tool(
@@ -576,13 +763,13 @@ fn index_one_thread(
     Ok(())
 }
 
-fn delete_thread_rows(conn: &Connection, thread_id: &str) -> Result<()> {
-    conn.execute("DELETE FROM thread_meta WHERE thread_id = ?1", [thread_id])?;
+fn delete_thread_rows(conn: &Connection, thread_id: &str, doc_id: i64) -> Result<()> {
+    conn.execute("DELETE FROM thread_meta WHERE doc_id = ?1", [doc_id])?;
+    conn.execute("DELETE FROM thread_fts WHERE rowid = ?1", [doc_id])?;
     conn.execute(
         "DELETE FROM thread_export_state WHERE thread_id = ?1",
         [thread_id],
     )?;
-    conn.execute("DELETE FROM thread_fts WHERE thread_id = ?1", [thread_id])?;
     conn.execute("DELETE FROM thread_tool WHERE thread_id = ?1", [thread_id])?;
     Ok(())
 }
@@ -684,6 +871,22 @@ fn export_threads_from_cache(
     Ok(summary)
 }
 
+/// Builds the FTS5 MATCH string for a user query: an OR of quoted
+/// token-prefix phrases. `None` when the query has no usable words.
+fn fts_match_query(query: &str) -> Option<String> {
+    let words: Vec<&str> = query.split_whitespace().filter(|w| !w.is_empty()).collect();
+    if words.is_empty() {
+        return None;
+    }
+    Some(
+        words
+            .iter()
+            .map(|word| format!("\"{}\"*", word.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(" OR "),
+    )
+}
+
 /// Returns thread ids whose title or user/assistant text matches the query:
 /// OR of FTS token-prefix phrases, with a LIKE substring fallback when FTS
 /// finds nothing.
@@ -693,14 +896,15 @@ fn matching_thread_ids(conn: &Connection, query: &str) -> Result<HashSet<String>
         return Ok(HashSet::new());
     }
 
-    let fts_query = words
-        .iter()
-        .map(|word| format!("\"{}\"*", word.replace('"', "\"\"")))
-        .collect::<Vec<_>>()
-        .join(" OR ");
+    let Some(fts_query) = fts_match_query(query) else {
+        return Ok(HashSet::new());
+    };
     let mut ids: HashSet<String> = {
-        let mut stmt =
-            conn.prepare_cached("SELECT thread_id FROM thread_fts WHERE thread_fts MATCH ?1")?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT m.thread_id FROM thread_fts
+             JOIN thread_meta AS m ON m.doc_id = thread_fts.rowid
+             WHERE thread_fts MATCH ?1",
+        )?;
         let rows = stmt.query_map([&fts_query], |row| row.get::<_, String>(0));
         match rows {
             Ok(rows) => rows.collect::<rusqlite::Result<HashSet<_>>>()?,
@@ -710,10 +914,8 @@ fn matching_thread_ids(conn: &Connection, query: &str) -> Result<HashSet<String>
     };
 
     if ids.is_empty() {
-        let mut stmt = conn.prepare_cached(
-            "SELECT thread_id FROM thread_fts
-             WHERE title LIKE ?1 ESCAPE '\\' OR text LIKE ?1 ESCAPE '\\'",
-        )?;
+        let mut stmt = conn
+            .prepare_cached("SELECT thread_id FROM thread_meta WHERE title LIKE ?1 ESCAPE '\\'")?;
         for word in &words {
             let pattern = format!("%{}%", escape_like(word));
             let rows = stmt.query_map([&pattern], |row| row.get::<_, String>(0))?;
@@ -874,9 +1076,7 @@ fn open(path: &Path) -> Result<Connection> {
     match try_open(path) {
         Ok(conn) => Ok(conn),
         Err(err) if is_corruption(&err) => {
-            let _ = fs::remove_file(path);
-            let _ = fs::remove_file(path.with_extension("sqlite-wal"));
-            let _ = fs::remove_file(path.with_extension("sqlite-shm"));
+            remove_db_files(path);
             try_open(path).context("recreate native thread cache")
         }
         Err(err) => Err(err),
@@ -884,10 +1084,7 @@ fn open(path: &Path) -> Result<Connection> {
 }
 
 fn try_open(path: &Path) -> Result<Connection> {
-    let conn = Connection::open(path)?;
-    conn.execute_batch(
-        "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
-    )?;
+    let conn = open_configured(path)?;
     // No `integrity_check`/`quick_check` here: both scan every page, which
     // costs tens of seconds once the cache reaches a few hundred MB. The
     // schema reads below fail with a corruption code on a broken file, which
@@ -895,16 +1092,32 @@ fn try_open(path: &Path) -> Result<Connection> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS cache_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     )?;
-    if read_meta(&conn, "schema_version")?.as_deref() != Some(SCHEMA_VERSION) {
-        conn.execute_batch(
-            "DROP TABLE IF EXISTS thread_meta;
-             DROP TABLE IF EXISTS thread_export_state;
-             DROP TABLE IF EXISTS thread_fts;
-             DROP TABLE IF EXISTS thread_tool;",
-        )?;
-    }
+    let conn = if read_meta(&conn, "schema_version")?.as_deref() == Some(SCHEMA_VERSION) {
+        conn
+    } else {
+        // Replace the file rather than dropping tables: a dropped 700MB FTS
+        // table leaves its pages on the freelist, so the rebuilt cache would
+        // keep the old file size forever.
+        drop(conn);
+        remove_db_files(path);
+        open_configured(path)?
+    };
     conn.execute_batch(CREATE_SQL)?;
     Ok(conn)
+}
+
+fn open_configured(path: &Path) -> Result<Connection> {
+    let conn = Connection::open(path)?;
+    conn.execute_batch(
+        "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+    )?;
+    Ok(conn)
+}
+
+fn remove_db_files(path: &Path) {
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_file(path.with_extension("sqlite-wal"));
+    let _ = fs::remove_file(path.with_extension("sqlite-shm"));
 }
 
 fn is_corruption(err: &anyhow::Error) -> bool {
