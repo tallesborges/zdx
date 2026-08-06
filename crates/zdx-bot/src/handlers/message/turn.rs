@@ -19,7 +19,9 @@ pub(super) async fn run_agent_turn(
     record_user: bool,
 ) -> Result<()> {
     let resolved_root = context.root_for_chat(incoming.chat_id);
-    let worktree_root = thread_persistence::read_thread_root_path(thread_id)?
+    let stored_root = thread_persistence::read_thread_root_path(thread_id)?;
+    let worktree_root = stored_root
+        .clone()
         .map_or_else(|| resolved_root.root.clone(), std::path::PathBuf::from);
     let model_override = thread_persistence::read_thread_model_override(thread_id)?;
     let thinking_override = thread_persistence::read_thread_thinking_override(thread_id)?;
@@ -36,6 +38,11 @@ pub(super) async fn run_agent_turn(
         context.config_for_chat(incoming.chat_id)
     };
     let (mut thread, mut messages) = agent::load_thread_state(thread_id)?;
+    // Bot threads are opened by id, so their meta has no root until now. Record
+    // the chat's project root so they group by project like CLI/TUI threads.
+    if stored_root.is_none() {
+        thread.set_root_path(&worktree_root)?;
+    }
     let pending_topic_title = thread_persistence::read_thread_pending_topic_title(thread_id)?;
     if record_user {
         agent::record_user_message(&mut thread, &mut messages, &incoming)?;
