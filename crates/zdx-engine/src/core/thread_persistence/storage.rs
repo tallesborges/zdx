@@ -965,7 +965,14 @@ impl ThreadPersistenceOptions {
         }
 
         if let Some(ref id) = self.thread_id {
-            return Ok(Some(Thread::with_id(id.clone())?));
+            let mut thread = Thread::with_id(id.clone())?;
+            // Threads opened by id (bot topics, `--thread-id` runs) never got a
+            // root from `new_with_root`, so backfill it once. An existing root
+            // (e.g. a worktree) is left alone.
+            if read_thread_root_path(id)?.is_none() {
+                thread.set_root_path(root)?;
+            }
+            return Ok(Some(thread));
         }
 
         let mut thread = Thread::new_with_root(root)?;
