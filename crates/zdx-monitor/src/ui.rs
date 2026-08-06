@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -44,7 +45,13 @@ pub fn render(f: &mut Frame, app: &MonitorApp) {
     if app.active_section == Section::Logs
         && let Some(picker) = &app.log_target_picker
     {
-        render_log_target_picker(f, picker, f.area());
+        render_picker(f, picker, f.area(), "target");
+    }
+
+    if app.active_section == Section::Threads
+        && let Some(picker) = &app.thread_project_picker
+    {
+        render_picker(f, picker, f.area(), "project");
     }
 
     if let Some(state) = &app.agent_overlay {
@@ -92,7 +99,7 @@ fn render_services(f: &mut Frame, app: &MonitorApp, area: Rect) {
                 }
             };
             let style = if i == app.selected_index && app.active_section == Section::Services {
-                style.add_modifier(Modifier::REVERSED)
+                style.bg(SELECTED_BG)
             } else {
                 style
             };
@@ -133,7 +140,9 @@ fn footer_hint(section: Section) -> &'static str {
         Section::Config => {
             "↑↓ select model • Enter edit • d delete favorite / reset subagent • PgUp/PgDn scroll • Tab/⇧Tab switch • q quit"
         }
-        Section::Threads => "↑↓ navigate • y copy thread ID • Tab/⇧Tab switch • q quit",
+        Section::Threads => {
+            "↑↓ navigate • Enter preview • t kind • p project • / search • Esc clear • y copy ID"
+        }
         Section::Usage => {
             "↑↓ scroll • PgUp/PgDn page • t span • R refresh • Tab/⇧Tab switch • q quit"
         }
@@ -186,9 +195,7 @@ fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
             let model = truncate_chars(&model_desc, model_width);
             let line = format!("{prefix}{model:<model_width$}{suffix}");
             let style = if i == app.selected_index {
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::REVERSED)
+                Style::default().fg(Color::Green).bg(SELECTED_BG)
             } else {
                 Style::default().fg(Color::Green)
             };
@@ -230,9 +237,7 @@ fn render_background(f: &mut Frame, app: &MonitorApp, area: Rect) {
         let cmd = truncate_chars(&b.command, cmd_width);
         let line = format!("{prefix}{cmd}");
         let style = if i == app.selected_index {
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::REVERSED)
+            Style::default().fg(Color::Green).bg(SELECTED_BG)
         } else {
             Style::default().fg(Color::Green)
         };
@@ -343,29 +348,95 @@ fn render_config(f: &mut Frame, app: &MonitorApp, area: Rect) {
     f.render_widget(p, area);
 }
 
+/// Highlight for the selected row: a subtle background instead of a full
+/// reverse-video block, which reads as a white bar on dark terminals.
+const SELECTED_BG: Color = Color::Indexed(238);
+
 fn render_threads(f: &mut Frame, app: &MonitorApp, area: Rect) {
-    let items: Vec<ListItem> = app
-        .threads
+    let rows = (area.height.saturating_sub(2) as usize).max(1);
+    let offset = app.selected_index.saturating_sub(rows.saturating_sub(1));
+    let end = (offset + rows).min(app.threads.len());
+    let width = area.width.saturating_sub(2) as usize;
+
+    let items: Vec<ListItem> = app.threads[offset..end]
         .iter()
         .enumerate()
         .map(|(i, t)| {
-            let short_id = if t.id.len() > 8 { &t.id[..8] } else { &t.id };
-            let surface = t.surface.as_deref().unwrap_or("-");
-            let title = t.title.as_deref().unwrap_or("(untitled)");
-            let line = format!(" [{short_id}] {} | {surface:<9} | {title}", t.modified);
-            let style = if i == app.selected_index {
-                Style::default().add_modifier(Modifier::REVERSED)
+            let selected = offset + i == app.selected_index;
+            let marker = if selected { "▌" } else { " " };
+            let mut spans = vec![
+                Span::styled(marker, Style::default().fg(Color::Cyan)),
+                Span::styled(format!("{} ", t.modified), Style::default().fg(Color::Gray)),
+                Span::styled(
+                    format!(
+                        "{:<20} ",
+                        truncate_chars(t.project.as_deref().unwrap_or("-"), 20)
+                    ),
+                    Style::default().fg(Color::Blue),
+                ),
+            ];
+            if let Some(badge) = &t.badge {
+                spans.push(Span::styled(
+                    format!("[{badge}] "),
+                    Style::default().fg(Color::Magenta),
+                ));
+            }
+            // Child runs have no title, so their stored preview is the only
+            // thing that identifies them on a one-line row.
+            let label = t.title.as_deref().map_or_else(
+                || {
+                    t.preview.as_deref().map_or_else(
+                        || "(untitled)".to_string(),
+                        |preview| {
+                            preview
+                                .lines()
+                                .find(|l| !l.trim().is_empty())
+                                .unwrap_or("(untitled)")
+                                .trim()
+                                .to_string()
+                        },
+                    )
+                },
+                str::to_string,
+            );
+            let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+            spans.push(Span::raw(truncate_chars(
+                &label,
+                width.saturating_sub(used + 11),
+            )));
+            spans.push(Span::styled(
+                format!("  {}", t.id.get(..8).unwrap_or(&t.id)),
+                Style::default().fg(Color::DarkGray),
+            ));
+
+            let item = ListItem::new(Line::from(spans));
+            if selected {
+                item.style(Style::default().bg(SELECTED_BG))
             } else {
-                Style::default()
-            };
-            ListItem::new(line).style(style)
+                item
+            }
         })
         .collect();
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Threads (y=copy ID)"),
-    );
+
+    let mut parts = vec![
+        format!("Threads ({})", app.threads.len()),
+        app.thread_kind_filter.label().to_string(),
+    ];
+    if let Some(project) = &app.thread_project_filter {
+        parts.push(
+            Path::new(project)
+                .file_name()
+                .map_or_else(|| project.clone(), |n| n.to_string_lossy().to_string()),
+        );
+    }
+    if app.thread_query_editing {
+        parts.push(format!("/{}_", app.thread_query));
+    } else if !app.thread_query.is_empty() {
+        parts.push(format!("/{}", app.thread_query));
+    }
+    let title = format!(" {} ", parts.join(" · "));
+
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
     f.render_widget(list, area);
 }
 
@@ -966,7 +1037,7 @@ fn render_automations(f: &mut Frame, app: &MonitorApp, area: Rect) {
             let sched = a.schedule.as_deref().unwrap_or("-");
             let line = format!(" {:<20} | {sched}", a.name);
             let style = if i == app.selected_index {
-                Style::default().add_modifier(Modifier::REVERSED)
+                Style::default().bg(SELECTED_BG)
             } else {
                 Style::default()
             };
@@ -1080,12 +1151,14 @@ fn log_title(app: &MonitorApp, pos: usize, total: usize) -> String {
     title
 }
 
-fn render_log_target_picker(f: &mut Frame, picker: &TargetPickerState, area: Rect) {
+/// Filter-and-pick popup shared by the Logs target filter and the Threads
+/// project filter.
+fn render_picker(f: &mut Frame, picker: &TargetPickerState, area: Rect, noun: &str) {
     let popup = centered_rect(60, 60, area);
     f.render_widget(Clear, popup);
 
     let title = format!(
-        " pick target · {} match · Enter apply · Esc cancel ",
+        " pick {noun} · {} match · Enter apply · Esc cancel ",
         picker.matches.len(),
     );
     let block = Block::default()
@@ -1129,7 +1202,7 @@ fn render_log_target_picker(f: &mut Frame, picker: &TargetPickerState, area: Rec
             ]);
             let item = ListItem::new(row);
             if global == picker.selected {
-                item.style(Style::default().add_modifier(Modifier::REVERSED))
+                item.style(Style::default().bg(SELECTED_BG))
             } else {
                 item
             }
@@ -1207,7 +1280,7 @@ fn render_agent_overlay(f: &mut Frame, state: &AgentOverlayState, area: Rect) {
         .map(|(row, line)| {
             let item = ListItem::new(line.clone());
             if selected_line == Some(offset + row) {
-                item.style(Style::default().add_modifier(Modifier::REVERSED))
+                item.style(Style::default().bg(SELECTED_BG))
             } else {
                 item
             }
@@ -1340,7 +1413,7 @@ fn render_picker_models(f: &mut Frame, picker: &ModelPickerState, popup: Rect) {
             let marker = if is_current { "● " } else { "  " };
             let mut style = Style::default();
             if global == picker.selected {
-                style = style.fg(Color::Green).add_modifier(Modifier::REVERSED);
+                style = style.fg(Color::Green).bg(SELECTED_BG);
             } else if is_current {
                 style = style.fg(Color::Green);
             }
@@ -1373,7 +1446,7 @@ fn render_picker_thinking(f: &mut Frame, picker: &ModelPickerState, popup: Rect)
             let marker = if is_current { "● " } else { "  " };
             let mut style = Style::default();
             if i == picker.thinking_selected {
-                style = style.fg(Color::Green).add_modifier(Modifier::REVERSED);
+                style = style.fg(Color::Green).bg(SELECTED_BG);
             } else if is_current {
                 style = style.fg(Color::Green);
             }

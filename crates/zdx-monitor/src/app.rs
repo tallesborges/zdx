@@ -15,6 +15,7 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::prelude::*;
 use serde_json::Value;
 use zdx_engine::config::{self, paths};
+use zdx_engine::core::thread_index::{self, ThreadKindFilter};
 use zdx_engine::core::thread_persistence;
 use zdx_engine::core::usage_stats::{self, UsageStats};
 use zdx_engine::models::available_models;
@@ -37,6 +38,12 @@ pub enum ConfigLine {
 }
 
 const SENSITIVE_PATTERNS: &[&str] = &["api_key", "token", "secret", "password", "webhook"];
+
+/// Max rows the Threads tab asks the index for (applied in SQL).
+const THREAD_LIST_LIMIT: usize = 500;
+
+/// How long a loaded Threads result stays fresh before the tick reloads it.
+const THREAD_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 
 fn is_sensitive(key: &str) -> bool {
     let lower = key.to_lowercase();
@@ -338,6 +345,18 @@ pub struct MonitorApp {
     pub terminal_width: u16,
     pub root: PathBuf,
     pub threads: Vec<ThreadInfo>,
+    /// Run-kind filter for the Threads tab, cycled with `t`.
+    pub thread_kind_filter: ThreadKindFilter,
+    /// Active project filter (an exact thread `root_path`), chosen with `p`.
+    pub thread_project_filter: Option<String>,
+    /// Open project-picker overlay for the Threads tab, if any.
+    pub thread_project_picker: Option<TargetPickerState>,
+    /// Full-text query over titles and user/assistant text, edited with `/`.
+    pub thread_query: String,
+    /// Whether keystrokes are currently being captured into `thread_query`.
+    pub thread_query_editing: bool,
+    /// When the Threads result set was last loaded (drives the slow refresh).
+    pub threads_loaded_at: Option<Instant>,
     pub automations: Vec<AutomationInfo>,
     pub services: Vec<ServiceInfo>,
     pub active_agents: Vec<ActiveAgentInfo>,
@@ -446,8 +465,13 @@ pub struct QuotaEntry {
 pub struct ThreadInfo {
     pub id: String,
     pub title: Option<String>,
-    pub surface: Option<String>,
+    /// Last component of the thread's root path, to identify the project.
+    pub project: Option<String>,
+    /// Run-kind badge (`explorer`, `tldr`, …); `None` for top-level threads.
+    pub badge: Option<String>,
     pub modified: String,
+    /// First user message, as stored in the thread index.
+    pub preview: Option<String>,
 }
 
 pub struct AutomationInfo {
@@ -1015,6 +1039,19 @@ impl TargetPickerState {
         state
     }
 
+    /// Picker over pre-counted items (e.g. project roots from the thread index),
+    /// keeping the caller's ordering.
+    fn from_items(items: Vec<(String, usize)>) -> Self {
+        let mut state = Self {
+            filter: String::new(),
+            items,
+            matches: Vec::new(),
+            selected: 0,
+        };
+        state.recompute();
+        state
+    }
+
     fn recompute(&mut self) {
         let filter = self.filter.to_lowercase();
         self.matches = self
@@ -1122,6 +1159,12 @@ fn switch_section(app: &mut MonitorApp, section: Section) {
         recompute_log_visible(app);
     } else {
         app.log_query_editing = false;
+    }
+    if app.active_section == Section::Threads {
+        reload_threads(app);
+    } else {
+        app.thread_query_editing = false;
+        app.thread_project_picker = None;
     }
 }
 
@@ -1281,7 +1324,13 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
         terminal_height: 24,
         terminal_width: 80,
         root: root.clone(),
-        threads: load_threads(),
+        threads: Vec::new(),
+        thread_kind_filter: ThreadKindFilter::All,
+        thread_project_filter: None,
+        thread_project_picker: None,
+        thread_query: String::new(),
+        thread_query_editing: false,
+        threads_loaded_at: None,
         automations: load_automations(&root),
         services,
         active_agents: load_active_agents(),
@@ -1368,6 +1417,17 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
     if app.active_section == Section::Logs && handle_logs_key(app, key.code) {
         return;
     }
+    if app.active_section == Section::Threads && app.thread_project_picker.is_some() {
+        handle_thread_project_picker_key(app, key.code);
+        return;
+    }
+    if app.active_section == Section::Threads && app.thread_query_editing {
+        handle_thread_query_key(app, key.code);
+        return;
+    }
+    if app.active_section == Section::Threads && handle_threads_key(app, key.code) {
+        return;
+    }
     if app.active_section == Section::Usage && handle_usage_key(app, key.code) {
         return;
     }
@@ -1429,6 +1489,148 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
         }
         _ => {}
     }
+}
+
+/// Handle a key while the Threads section is active. Returns `true` if the key
+/// was consumed (so the generic dispatcher should not also act on it).
+fn handle_threads_key(app: &mut MonitorApp, key: KeyCode) -> bool {
+    match key {
+        KeyCode::Char('t') => {
+            app.thread_kind_filter = app.thread_kind_filter.next();
+            reload_threads(app);
+            app.set_status(format!(
+                "Kind filter: {} ({} threads)",
+                app.thread_kind_filter.label(),
+                app.threads.len(),
+            ));
+            true
+        }
+        KeyCode::Char('p') => {
+            app.thread_project_picker = Some(TargetPickerState::from_items(thread_project_items()));
+            true
+        }
+        KeyCode::Char('/') => {
+            app.thread_query_editing = true;
+            true
+        }
+        KeyCode::Enter => {
+            open_thread_overlay(app);
+            true
+        }
+        KeyCode::Esc => {
+            let had_filter = app.thread_kind_filter != ThreadKindFilter::All
+                || app.thread_project_filter.is_some()
+                || !app.thread_query.is_empty();
+            if had_filter {
+                app.thread_kind_filter = ThreadKindFilter::All;
+                app.thread_project_filter = None;
+                app.thread_query.clear();
+                reload_threads(app);
+                app.set_status("Filters cleared");
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Handle a key while the Threads project picker is open. Consumes every key.
+fn handle_thread_project_picker_key(app: &mut MonitorApp, key: KeyCode) {
+    let Some(picker) = app.thread_project_picker.as_mut() else {
+        return;
+    };
+    match key {
+        KeyCode::Esc => app.thread_project_picker = None,
+        KeyCode::Down => {
+            let last = picker.matches.len().saturating_sub(1);
+            picker.selected = (picker.selected + 1).min(last);
+        }
+        KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
+        KeyCode::Backspace => {
+            picker.filter.pop();
+            picker.recompute();
+        }
+        KeyCode::Char(c) => {
+            picker.filter.push(c);
+            picker.recompute();
+        }
+        KeyCode::Enter => {
+            let chosen = picker.selected_target().map(str::to_string);
+            app.thread_project_picker = None;
+            if let Some(root_path) = chosen {
+                app.thread_project_filter = Some(root_path.clone());
+                reload_threads(app);
+                app.set_status(format!(
+                    "Project filter: {root_path} ({} threads)",
+                    app.threads.len()
+                ));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Handle a key while the Threads query is being edited. Consumes every key so
+/// a typed `q` can't quit the monitor mid-search. The query runs on `Enter`,
+/// not per keystroke: a one-letter prefix matches most of the FTS corpus and
+/// would stall the UI on every character.
+fn handle_thread_query_key(app: &mut MonitorApp, key: KeyCode) {
+    match key {
+        KeyCode::Char(c) => app.thread_query.push(c),
+        KeyCode::Backspace => {
+            app.thread_query.pop();
+        }
+        KeyCode::Enter => {
+            app.thread_query_editing = false;
+            reload_threads(app);
+            let status = if app.thread_query.is_empty() {
+                "Search cleared".to_string()
+            } else {
+                format!(
+                    "Search: /{} ({} threads)",
+                    app.thread_query,
+                    app.threads.len()
+                )
+            };
+            app.set_status(status);
+        }
+        KeyCode::Esc => {
+            app.thread_query_editing = false;
+            app.thread_query.clear();
+            reload_threads(app);
+            app.set_status("Search cleared");
+        }
+        _ => {}
+    }
+}
+
+/// Re-runs the Threads query after a filter change and keeps the selection in
+/// range of the new result set.
+fn reload_threads(app: &mut MonitorApp) {
+    app.threads = load_threads(app);
+    app.threads_loaded_at = Some(Instant::now());
+    app.clamp_selection();
+}
+
+/// Timed refresh for the Threads tab. The query indexes thousands of threads,
+/// so it runs on its own slow cadence instead of on every tick and keypress;
+/// filter changes reload immediately via [`reload_threads`].
+fn refresh_threads_if_stale(app: &mut MonitorApp) {
+    if app.active_section != Section::Threads {
+        return;
+    }
+    if app
+        .threads_loaded_at
+        .is_some_and(|at| at.elapsed() < THREAD_REFRESH_INTERVAL)
+    {
+        return;
+    }
+    reload_threads(app);
+}
+
+/// Distinct project roots with thread counts, for the project picker.
+fn thread_project_items() -> Vec<(String, usize)> {
+    thread_index::browse_projects().unwrap_or_default()
 }
 
 /// Handle a key while the Usage section is active. Returns `true` if the key
@@ -1889,6 +2091,7 @@ pub fn run(root: &Path) -> Result<()> {
         if last_tick.elapsed() >= tick_rate {
             refresh_app(&mut app);
             refresh_agent_overlay(&mut app);
+            refresh_threads_if_stale(&mut app);
             last_tick = Instant::now();
         }
 
@@ -1900,88 +2103,50 @@ pub fn run(root: &Path) -> Result<()> {
     restore_terminal(&mut terminal)
 }
 
-fn load_threads() -> Vec<ThreadInfo> {
-    let dir = paths::threads_dir();
-    let mut entries: Vec<_> = match fs::read_dir(&dir) {
-        Ok(rd) => rd
-            .filter_map(Result::ok)
-            .filter(|e| e.path().extension().is_some_and(|ext| ext == "jsonl"))
-            .collect(),
-        Err(_) => return Vec::new(),
+/// Rows shown in the Threads tab. Filtering, ordering, and the cap all happen
+/// in `threads.sqlite`; a cache error yields an empty list rather than a
+/// directory walk.
+fn load_threads(app: &MonitorApp) -> Vec<ThreadInfo> {
+    let options = thread_index::ThreadBrowseOptions {
+        kind: app.thread_kind_filter,
+        project: app.thread_project_filter.clone(),
+        query: Some(app.thread_query.clone()).filter(|q| !q.trim().is_empty()),
+        limit: THREAD_LIST_LIMIT,
+    };
+    let Ok(rows) = thread_index::browse_threads(&options) else {
+        return Vec::new();
     };
 
-    // Sort by mtime descending
-    entries.sort_by(|a, b| {
-        let ma = a
-            .metadata()
-            .and_then(|m| m.modified())
-            .unwrap_or(std::time::UNIX_EPOCH);
-        let mb = b
-            .metadata()
-            .and_then(|m| m.modified())
-            .unwrap_or(std::time::UNIX_EPOCH);
-        mb.cmp(&ma)
-    });
-
-    entries.truncate(50);
-
-    entries
-        .into_iter()
-        .filter_map(|entry| {
-            let path = entry.path();
-            let id = path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-
-            let modified = entry
-                .metadata()
-                .and_then(|m| m.modified())
-                .ok()
+    rows.into_iter()
+        .map(|row| ThreadInfo {
+            id: row.id,
+            title: row.title,
+            project: row
+                .root_path
+                .as_deref()
+                .map(Path::new)
+                .and_then(Path::file_name)
+                .map(|name| name.to_string_lossy().to_string()),
+            badge: thread_badge(row.origin_kind.as_deref(), row.subagent_name.as_deref()),
+            modified: row
+                .modified
                 .map(|t| {
                     let dt: chrono::DateTime<chrono::Local> = t.into();
                     dt.format("%Y-%m-%d %H:%M").to_string()
                 })
-                .unwrap_or_default();
-
-            let (title, surface, origin_kind) = read_thread_meta(&path);
-            // Hide child runs (subagents/helpers) from the dashboard list.
-            if origin_kind.is_some() {
-                return None;
-            }
-
-            Some(ThreadInfo {
-                id,
-                title,
-                surface,
-                modified,
-            })
+                .unwrap_or_default(),
+            preview: row.preview.filter(|p| !p.trim().is_empty()),
         })
         .collect()
 }
 
-fn read_thread_meta(path: &Path) -> (Option<String>, Option<String>, Option<String>) {
-    use std::io::BufRead;
-    let Ok(file) = fs::File::open(path) else {
-        return (None, None, None);
-    };
-    let reader = io::BufReader::new(file);
-    let Some(Ok(line)) = reader.lines().next() else {
-        return (None, None, None);
-    };
-    let first_line = line;
-    let v: Value = match serde_json::from_str(&first_line) {
-        Ok(v) => v,
-        Err(_) => return (None, None, None),
-    };
-    let title = v.get("title").and_then(Value::as_str).map(String::from);
-    let surface = v.get("surface").and_then(Value::as_str).map(String::from);
-    let origin_kind = v
-        .get("origin_kind")
-        .and_then(Value::as_str)
-        .map(String::from);
-    (title, surface, origin_kind)
+/// Short label for a thread's run kind: the named subagent for `subagent`
+/// runs, the suffix for `helper:*` runs, `None` for top-level threads.
+fn thread_badge(origin_kind: Option<&str>, subagent_name: Option<&str>) -> Option<String> {
+    match origin_kind? {
+        "subagent" => Some(subagent_name.unwrap_or("subagent").to_string()),
+        kind => Some(kind.strip_prefix("helper:").unwrap_or(kind).to_string()),
+    }
 }
 
 fn load_automations(root: &Path) -> Vec<AutomationInfo> {
@@ -2315,6 +2480,43 @@ fn open_agent_overlay(app: &mut MonitorApp) {
             });
         }
     }
+}
+
+/// Opens the transcript overlay for the currently selected saved thread.
+/// Reuses the Active Agents overlay: a saved thread is simply a run that is
+/// no longer active, and the file is still re-read while the overlay is open.
+fn open_thread_overlay(app: &mut MonitorApp) {
+    let Some(t) = app.threads.get(app.selected_index) else {
+        return;
+    };
+    let short_id = t.id.get(..8).unwrap_or(&t.id);
+    let label = t.title.clone().unwrap_or_else(|| {
+        t.preview
+            .as_deref()
+            .and_then(|p| p.lines().find(|l| !l.trim().is_empty()))
+            .map_or_else(|| "(untitled)".to_string(), |l| l.trim().to_string())
+    });
+    let title = format!(
+        "{} {short_id} {label}",
+        t.badge.as_deref().unwrap_or("thread"),
+    );
+    let mut state = AgentOverlayState {
+        thread_id: t.id.clone(),
+        title,
+        lines: Vec::new(),
+        cells: Vec::new(),
+        tools: Vec::new(),
+        tool_selected: None,
+        tool_pane: None,
+        scroll: None,
+        ended: true,
+        unavailable: false,
+        file_len: 0,
+        file_mtime: None,
+        width: app.terminal_width.saturating_sub(2) as usize,
+    };
+    load_transcript_into(&mut state);
+    app.agent_overlay = Some(state);
 }
 
 /// File length + mtime used to detect transcript changes between ticks.
