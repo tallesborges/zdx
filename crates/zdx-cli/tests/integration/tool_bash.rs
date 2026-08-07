@@ -13,7 +13,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request};
 
 use crate::fixtures;
-use crate::fixtures::{sse_response, tool_use_sse};
+use crate::fixtures::{MOCK_MODEL, sse_response, tool_use_sse};
 
 /// Creates a temp `ZDX_HOME` directory for test isolation.
 fn temp_zdx_home() -> TempDir {
@@ -71,6 +71,8 @@ async fn test_bash_executes_command() {
             temp_dir.path().to_str().unwrap(),
             "--no-thread",
             "exec",
+            "-m",
+            MOCK_MODEL,
             "-p",
             "Run echo hello",
         ])
@@ -139,6 +141,8 @@ async fn test_bash_runs_in_root_directory() {
             temp_dir.path().to_str().unwrap(),
             "--no-thread",
             "exec",
+            "-m",
+            MOCK_MODEL,
             "-p",
             "List files",
         ])
@@ -201,6 +205,8 @@ async fn test_bash_times_out_when_configured() {
             temp_dir.path().to_str().unwrap(),
             "--no-thread",
             "exec",
+            "-m",
+            MOCK_MODEL,
             "-p",
             "Run a slow command",
         ])
@@ -264,6 +270,8 @@ async fn test_bash_does_not_inherit_open_stdin() {
             temp_dir.path().to_str().unwrap(),
             "--no-thread",
             "exec",
+            "-m",
+            MOCK_MODEL,
             "-p",
             "Check stdin handling",
         ])

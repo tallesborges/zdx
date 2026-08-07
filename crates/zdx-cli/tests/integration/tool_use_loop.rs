@@ -17,7 +17,7 @@ use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, Request};
 
 use crate::fixtures;
-use crate::fixtures::{sse_response, text_and_tool_use_sse, text_sse, tool_use_sse};
+use crate::fixtures::{MOCK_MODEL, sse_response, text_and_tool_use_sse, text_sse, tool_use_sse};
 
 /// Creates a temp `ZDX_HOME` directory for test isolation.
 fn temp_zdx_home() -> TempDir {
@@ -75,6 +75,8 @@ async fn test_tool_use_loop_reads_file() {
             temp_dir.path().to_str().unwrap(),
             "--no-thread",
             "exec",
+            "-m",
+            MOCK_MODEL,
             "-p",
             "Read test.txt",
         ])
@@ -132,6 +134,8 @@ async fn test_tool_use_loop_second_request_has_tool_result() {
             temp_dir.path().to_str().unwrap(),
             "--no-thread",
             "exec",
+            "-m",
+            MOCK_MODEL,
             "-p",
             "Read data.txt",
         ])
@@ -201,6 +205,8 @@ async fn test_tool_read_outside_root_allowed() {
             root_dir.path().to_str().unwrap(),
             "--no-thread",
             "exec",
+            "-m",
+            MOCK_MODEL,
             "-p",
             "Read outside file",
         ])
@@ -255,7 +261,14 @@ async fn test_tool_shows_activity_indicator() {
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["--no-thread", "exec", "-p", "Show indicator"])
+        .args([
+            "--no-thread",
+            "exec",
+            "-m",
+            MOCK_MODEL,
+            "-p",
+            "Show indicator",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -287,7 +300,7 @@ async fn test_exec_omits_assistant_deltas_from_stdout() {
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["--no-thread", "exec", "-p", "Say hello"])
+        .args(["--no-thread", "exec", "-m", MOCK_MODEL, "-p", "Say hello"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -317,7 +330,7 @@ async fn test_exec_omits_empty_reasoning_completed_from_stdout() {
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["--no-thread", "exec", "-p", "Say hello"])
+        .args(["--no-thread", "exec", "-m", MOCK_MODEL, "-p", "Say hello"])
         .assert()
         .success()
         .stdout(predicate::str::contains("\"type\":\"reasoning_completed\"").not());
@@ -344,7 +357,7 @@ async fn test_exec_keeps_reasoning_text_without_replay_in_stdout() {
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["--no-thread", "exec", "-p", "Say hello"])
+        .args(["--no-thread", "exec", "-m", MOCK_MODEL, "-p", "Say hello"])
         .assert()
         .success()
         .stdout(predicate::str::contains("\"replay\":").not());
@@ -374,6 +387,8 @@ async fn test_exec_filter_turn_finished_only_emits_turn_finished() {
         .args([
             "--no-thread",
             "exec",
+            "-m",
+            MOCK_MODEL,
             "--filter",
             "turn_finished",
             "-p",
@@ -435,6 +450,8 @@ async fn test_tool_use_loop_writes_file() {
             temp_dir.path().to_str().unwrap(),
             "--no-thread",
             "exec",
+            "-m",
+            MOCK_MODEL,
             "-p",
             "Write output.txt with greeting",
         ])
@@ -516,6 +533,8 @@ async fn test_tool_use_loop_edits_file() {
             temp_dir.path().to_str().unwrap(),
             "--no-thread",
             "exec",
+            "-m",
+            MOCK_MODEL,
             "-p",
             "Edit target.txt: replace world with Rust",
         ])
@@ -582,7 +601,9 @@ async fn test_bash_tool_shows_debug_lines() {
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["--no-thread", "exec", "-p", "Run bash"])
+        .args(["--no-thread", "exec",
+            "-m",
+            MOCK_MODEL, "-p", "Run bash"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -648,6 +669,8 @@ fn run_exec_turn(
             "--thread",
             thread_id,
             "exec",
+            "-m",
+            MOCK_MODEL,
             "-p",
             prompt,
         ])
@@ -837,9 +860,6 @@ async fn exec_persists_the_assistant_answer_once() {
         .mount(&mock_server)
         .await;
 
-    // The model is pinned to an Anthropic-provider id rather than left to the
-    // default, which resolves to the `claude-cli` provider and would bypass the
-    // mock endpoint entirely.
     cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
@@ -851,7 +871,7 @@ async fn exec_persists_the_assistant_answer_once() {
             thread_id,
             "exec",
             "-m",
-            "anthropic:claude-sonnet-5",
+            MOCK_MODEL,
             "-p",
             "say pong",
         ])

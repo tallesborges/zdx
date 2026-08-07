@@ -5,6 +5,17 @@
 use wiremock::ResponseTemplate;
 
 // Load fixture templates at compile time
+/// Model id used by tests that answer requests with a mock `/v1/messages`
+/// endpoint via `ANTHROPIC_BASE_URL`.
+///
+/// Pinning it matters: the model otherwise comes from config, and a
+/// workspace-local `.zdx/config.toml` between the home directory and the test's
+/// working directory outranks `$ZDX_HOME`. A developer whose checkout carries
+/// its own config would otherwise route these turns to a real provider, which
+/// ignores the mock and fails on missing credentials. An explicit `-m` beats
+/// every config layer.
+pub const MOCK_MODEL: &str = "anthropic:claude-sonnet-5";
+
 pub const SSE_TEXT: &str = include_str!("fixtures/sse_text_response.sse");
 pub const SSE_TOOL_USE: &str = include_str!("fixtures/sse_tool_use_response.sse");
 pub const SSE_TEXT_WITH_TOOL_USE: &str = include_str!("fixtures/sse_text_with_tool_use.sse");
