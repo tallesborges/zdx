@@ -613,21 +613,21 @@ fn prompt_template_memory_collections() -> Vec<PromptTemplateMemoryCollection> {
             source: "saved ZDX threads".to_string(),
             contains: "exported user/assistant chat transcripts from saved ZDX conversation threads; each search result includes a native `zdxmem:v1:thread:*` docid".to_string(),
             search_tool: "Thread_Search".to_string(),
-            read_after: "Discover these with `Thread_Search`, not `Memory_Search`. When a thread_id is already known, skip search entirely and use `Read_Thread` with a specific goal. `Memory_Search` with `source: \"thread\"` is for searching threads alongside notes/calendar in one pass.".to_string(),
+            read_after: "Discover these with `Thread_Search`, not `Memory_Search`. Every thread hit carries a `thread_id`; pass it to `Read_Thread` with a specific goal. `Memory_Search` with `source: \"thread\"` is for searching threads alongside notes/calendar in one pass.".to_string(),
         },
         PromptTemplateMemoryCollection {
             name: "native-notes".to_string(),
             source: "Second Brain notes".to_string(),
             contains: "canonical Markdown notes under `$ZDX_MEMORY_ROOT/Notes`; each search result includes a native `zdxmem:v1:note:*` docid".to_string(),
             search_tool: "Memory_Search".to_string(),
-            read_after: "After `Memory_Search`, use `Memory_Get` with a returned `docid` before relying on a result. If editing a known note path, edit the canonical file instead.".to_string(),
+            read_after: "Each hit returns the canonical `path`; open or edit that file with `Read`/`Edit` rather than trusting the snippet.".to_string(),
         },
         PromptTemplateMemoryCollection {
             name: "native-calendar".to_string(),
             source: "calendar notes".to_string(),
             contains: "canonical Markdown calendar and daily notes under `$ZDX_MEMORY_ROOT/Calendar`; each search result includes a native `zdxmem:v1:calendar:*` docid".to_string(),
             search_tool: "Memory_Search".to_string(),
-            read_after: "After `Memory_Search`, use `Memory_Get` with a returned `docid` before relying on a result. If editing a known calendar note path, edit the canonical file instead.".to_string(),
+            read_after: "Each hit returns the canonical `path`; open or edit that file with `Read`/`Edit` rather than trusting the snippet.".to_string(),
         },
     ]
 }
@@ -2330,9 +2330,9 @@ mod tests {
         assert!(rendered.contains("exported user/assistant chat transcripts"));
         assert!(rendered.contains("canonical Markdown notes"));
         assert!(rendered.contains("calendar and daily notes"));
-        assert!(rendered.contains("`Memory_Get`"));
+        assert!(rendered.contains("canonical `path`"));
         assert!(rendered.contains("`Read_Thread`"));
-        assert!(rendered.contains("skip search"));
+        assert!(rendered.contains("`thread_id`"));
 
         // Thread discovery must route to Thread_Search: pointing it at
         // Memory_Search made the agent alternate between two tools that claim

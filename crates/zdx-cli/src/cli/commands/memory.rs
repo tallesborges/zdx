@@ -270,13 +270,14 @@ pub async fn search(options: &SearchCommandOptions, config: &config::Config) -> 
     }
 
     for result in output.results {
-        let title = result.title.as_deref().unwrap_or(&result.file);
+        let title = result.title.as_deref().unwrap_or(&result.path);
         match result.score {
-            Some(score) => println!("[{}] {}  score={score:.3}", result.docid, title),
-            None => println!("[{}] {}", result.docid, title),
+            Some(score) => println!("[{}] {}  score={score:.3}", result.source, title),
+            None => println!("[{}] {}", result.source, title),
         }
-        if result.title.is_some() {
-            println!("  File: {}", result.file);
+        println!("  Path: {}", result.path);
+        if let Some(thread_id) = &result.thread_id {
+            println!("  Thread: {thread_id}");
         }
         if !result.snippet.is_empty() {
             println!("  Snippet: {}", result.snippet);
@@ -284,37 +285,6 @@ pub async fn search(options: &SearchCommandOptions, config: &config::Config) -> 
         println!();
     }
 
-    Ok(())
-}
-
-pub fn get(docid: &str, start_byte: usize, json: bool) -> Result<()> {
-    let output =
-        native_memory::get_memory_doc(docid, start_byte).context("read native memory document")?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&output).context("serialize native memory get result")?
-        );
-        return Ok(());
-    }
-
-    println!("Docid: {}", output.docid);
-    println!("Source: {}", output.source);
-    println!("File: {}", output.file);
-    if let Some(title) = &output.title {
-        println!("Title: {title}");
-    }
-    println!(
-        "Range: {}..{} of {}{}",
-        output.byte_range.start,
-        output.byte_range.end,
-        output.byte_range.total,
-        if output.truncated { " (truncated)" } else { "" }
-    );
-    if let Some(next) = output.next_start_byte {
-        println!("Next start byte: {next}");
-    }
-    println!("\n{}", output.content);
     Ok(())
 }
 

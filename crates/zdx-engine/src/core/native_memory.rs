@@ -24,8 +24,6 @@ const DOCID_VERSION: &str = "v1";
 const CHUNKER_VERSION: &str = "md-lines-v1";
 const EXPORT_FORMAT_VERSION: &str = "thread-md-v1";
 const MAX_CHUNK_BYTES: usize = 3_500;
-const MEMORY_GET_MAX_BYTES: usize = 40_000;
-const MEMORY_GET_MAX_LINES: usize = 1_200;
 const LOCK_STALE_AFTER: Duration = Duration::from_mins(30);
 
 const CREATE_META_SQL: &str =
@@ -246,37 +244,22 @@ pub struct NativeMemorySearchOutput {
     pub warnings: Vec<String>,
 }
 
+/// A search hit, carrying identifiers the caller can act on directly.
+///
+/// `path` is the canonical source file, not the indexed snapshot: the index
+/// lags its sources between runs, so every hit points at something that can be
+/// re-read fresh. Thread hits also carry `thread_id` for `Read_Thread`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct NativeMemorySearchResult {
-    pub docid: String,
     pub source: String,
-    pub file: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub snippet: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct NativeMemoryGetOutput {
-    pub docid: String,
-    pub source: String,
-    pub file: String,
-    pub title: Option<String>,
-    pub content: String,
-    pub truncated: bool,
-    pub next_start_byte: Option<usize>,
-    pub byte_range: MemoryByteRange,
-    pub content_hash: String,
-    pub indexed_at: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct MemoryByteRange {
-    pub start: usize,
-    pub end: usize,
-    pub total: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -289,17 +272,6 @@ struct SourceDocument {
     mtime_ns: i64,
     size: i64,
     root_id: String,
-}
-
-#[derive(Debug, Clone)]
-struct DocumentRow {
-    docid: String,
-    source: String,
-    file: String,
-    title: Option<String>,
-    content: String,
-    content_hash: String,
-    indexed_at: String,
 }
 
 #[derive(Debug, Clone)]
@@ -542,17 +514,13 @@ pub fn search_memory(options: &NativeMemorySearchOptions) -> Result<NativeMemory
     rank_by_decayed_score(&mut ranked);
     ranked.truncate(options.limit.max(1));
 
+    let memory_config = config::Config::load()
+        .context("loading config to resolve canonical memory paths")?
+        .memory;
     Ok(NativeMemorySearchOutput {
         results: ranked
             .into_iter()
-            .map(|hit| NativeMemorySearchResult {
-                docid: hit.docid,
-                source: hit.source,
-                file: hit.file,
-                title: hit.title,
-                snippet: snippet(&hit.text, query),
-                score: Some(hit.score),
-            })
+            .map(|hit| search_result(hit, query, &memory_config))
             .collect(),
         warnings,
     })
@@ -656,14 +624,7 @@ async fn semantic_search(
 
     let mut results: Vec<NativeMemorySearchResult> = ranked
         .into_iter()
-        .map(|hit| NativeMemorySearchResult {
-            docid: hit.docid,
-            source: hit.source,
-            file: hit.file,
-            title: hit.title,
-            snippet: snippet(&hit.text, query),
-            score: Some(hit.score),
-        })
+        .map(|hit| search_result(hit, query, memory_config))
         .collect();
     results.truncate(limit);
     Ok(NativeMemorySearchOutput { results, warnings })
@@ -812,37 +773,6 @@ fn fuse_rrf(lexical: Vec<ChunkHit>, vector: Vec<ChunkHit>) -> Vec<ChunkHit> {
             .then(a.file.cmp(&b.file))
     });
     ranked
-}
-
-/// Reads a bounded indexed document snapshot by native docid, starting at
-/// `start_byte` (clamped to a UTF-8 boundary) for continuation reads.
-///
-/// # Errors
-/// Returns an error when the docid is unsupported/missing or `SQLite` fails.
-pub fn get_memory_doc(docid: &str, start_byte: usize) -> Result<NativeMemoryGetOutput> {
-    let docid = docid.trim();
-    validate_native_docid(docid)?;
-    let conn = open_existing_cache(&memory_db_path())?;
-    let row = load_document(&conn, docid)?
-        .with_context(|| format!("native memory docid not found in active index: {docid}"))?;
-    let start = safe_boundary_floor(&row.content, start_byte.min(row.content.len()));
-    let (content, end, truncated) = bounded_content(&row.content, start);
-    Ok(NativeMemoryGetOutput {
-        docid: row.docid,
-        source: row.source,
-        file: row.file,
-        title: row.title,
-        content,
-        truncated,
-        next_start_byte: truncated.then_some(end),
-        byte_range: MemoryByteRange {
-            start,
-            end,
-            total: row.content.len(),
-        },
-        content_hash: row.content_hash,
-        indexed_at: row.indexed_at,
-    })
 }
 
 fn readiness(
@@ -1128,6 +1058,47 @@ fn display_file(source: MemorySource, relative_path: &str) -> String {
     }
 }
 
+/// Root directory holding a source's canonical files.
+fn source_root(source: MemorySource, memory_config: &MemoryConfig) -> PathBuf {
+    match source {
+        MemorySource::Thread => config::paths::thread_exports_dir(),
+        MemorySource::Note => memory_config.effective_notes_path(),
+        MemorySource::Calendar => memory_config.effective_daily_path(),
+    }
+}
+
+/// Turns an indexed hit into a caller-usable result: an absolute canonical
+/// path, plus the thread id for thread hits.
+fn search_result(
+    hit: ChunkHit,
+    query: &str,
+    memory_config: &MemoryConfig,
+) -> NativeMemorySearchResult {
+    let thread_id = thread_id_from_export_file(&hit.file);
+    let relative_path = hit
+        .file
+        .split_once("://")
+        .map_or(hit.file.as_str(), |(_scheme, rest)| rest);
+    let path = MemorySource::from_label(&hit.source).map_or_else(
+        || relative_path.to_string(),
+        |source| {
+            source_root(source, memory_config)
+                .join(relative_path)
+                .to_string_lossy()
+                .into_owned()
+        },
+    );
+
+    NativeMemorySearchResult {
+        source: hit.source,
+        path,
+        thread_id,
+        title: hit.title,
+        snippet: snippet(&hit.text, query),
+        score: Some(hit.score),
+    }
+}
+
 fn normalized_relative_path(root: &Path, path: &Path) -> Result<String> {
     let relative = path
         .strip_prefix(root)
@@ -1366,23 +1337,6 @@ fn safe_boundary_floor(text: &str, mut idx: usize) -> usize {
     idx
 }
 
-fn bounded_content(content: &str, start: usize) -> (String, usize, bool) {
-    let start = safe_boundary_floor(content, start.min(content.len()));
-    let mut end = (start + MEMORY_GET_MAX_BYTES).min(content.len());
-    end = safe_boundary_floor(content, end);
-    let mut lines = 0usize;
-    for (idx, ch) in content[start..end].char_indices() {
-        if ch == '\n' {
-            lines += 1;
-            if lines >= MEMORY_GET_MAX_LINES {
-                end = start + idx + ch.len_utf8();
-                break;
-            }
-        }
-    }
-    (content[start..end].to_string(), end, end < content.len())
-}
-
 fn native_docid(source: MemorySource, root_id: &str, relative_path: &str) -> String {
     let digest = sha256_hex(format!("{root_id}:{}:{relative_path}", source.label()).as_bytes());
     format!(
@@ -1390,25 +1344,6 @@ fn native_docid(source: MemorySource, root_id: &str, relative_path: &str) -> Str
         source.label(),
         &digest[..16]
     )
-}
-
-fn validate_native_docid(docid: &str) -> Result<()> {
-    if docid.starts_with('#') {
-        bail!(
-            "qmd docids are not supported by native memory; run `zdx memory search` to get a zdxmem:v1 docid"
-        );
-    }
-    let parts: Vec<_> = docid.split(':').collect();
-    if parts.len() != 4
-        || parts[0] != "zdxmem"
-        || parts[1] != DOCID_VERSION
-        || MemorySource::from_label(parts[2]).is_none()
-        || parts[3].len() != 16
-        || !parts[3].chars().all(|ch| ch.is_ascii_hexdigit())
-    {
-        bail!("unsupported native memory docid; expected zdxmem:v1:<source>:<hex16>");
-    }
-    Ok(())
 }
 
 fn thread_id_from_export_file(file: &str) -> Option<String> {
@@ -1497,26 +1432,6 @@ fn delete_document(conn: &Connection, docid: &str) -> Result<()> {
     conn.execute("DELETE FROM chunk WHERE docid = ?1", [docid])?;
     conn.execute("DELETE FROM document WHERE docid = ?1", [docid])?;
     Ok(())
-}
-
-fn load_document(conn: &Connection, docid: &str) -> Result<Option<DocumentRow>> {
-    conn.query_row(
-        "SELECT docid, source, file, title, content, content_hash, indexed_at FROM document WHERE docid = ?1",
-        [docid],
-        |row| {
-            Ok(DocumentRow {
-                docid: row.get(0)?,
-                source: row.get(1)?,
-                file: row.get(2)?,
-                title: row.get(3)?,
-                content: row.get(4)?,
-                content_hash: row.get(5)?,
-                indexed_at: row.get(6)?,
-            })
-        },
-    )
-    .optional()
-    .map_err(Into::into)
 }
 
 fn open_cache(path: &Path) -> Result<Connection> {
@@ -2234,38 +2149,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn native_docids_are_versioned_and_disjoint() {
-        let docid = native_docid(MemorySource::Note, "root", "Folder/Note.md");
-        assert!(docid.starts_with("zdxmem:v1:note:"));
-        validate_native_docid(&docid).unwrap();
-        assert!(
-            validate_native_docid("#abc123")
-                .unwrap_err()
-                .to_string()
-                .contains("qmd docids")
-        );
-    }
-
-    #[test]
     fn chunking_bounds_long_text() {
         let content = "a".repeat(MAX_CHUNK_BYTES * 2 + 10);
         let chunks = chunk_markdown(&content);
         assert!(chunks.len() >= 2);
         assert!(chunks.iter().all(|chunk| chunk.len() <= MAX_CHUNK_BYTES));
-    }
-
-    #[test]
-    fn memory_get_bounds_lines_and_bytes() {
-        use std::fmt::Write as _;
-
-        let mut content = String::new();
-        for idx in 0..2_000 {
-            writeln!(&mut content, "line {idx}").unwrap();
-        }
-        let (bounded, end, truncated) = bounded_content(&content, 0);
-        assert!(truncated);
-        assert!(end < content.len());
-        assert!(bounded.lines().count() <= MEMORY_GET_MAX_LINES);
     }
 
     #[test]

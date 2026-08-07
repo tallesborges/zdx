@@ -36,6 +36,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - `core/agent.rs`: agent loop + event channels
 - `core/handoff_generation.rs`: LLM-based handoff context generation (shared by TUI + bot)
 - `core/prompt_builder_generation.rs`: LLM-based prompt-builder generation (shared by TUI + bot)
+- `core/recency.rs`: shared recency decay applied to search relevance scores (`thread_index` and `native_memory`)
 - `core/native_memory.rs`: native SQLite-backed memory index/search over exported thread Markdown, Notes, and Calendar; owns `$ZDX_HOME/cache/memory.sqlite` and native `zdxmem:v1:*` docids. Includes the opt-in hosted embedding layer (`[memory.embeddings]` profile, budgets, `(input_hash, profile_fingerprint)` vector storage, vector/hybrid retrieval with RRF fusion); agent searches never trigger corpus embedding.
 - `core/thread_index.rs`: derived thread cache — owns `$ZDX_HOME/cache/threads.sqlite` (thread metadata, export dirty state, FTS over title + user/assistant text, tool-call rows). Incremental `(mtime,size)` sync; serves `list_threads()`, `search_threads()`, and `search_thread_tools()` with raw file-scan fallback. Documents its intentional semantic differences from the old raw-JSONL scan in the module docs.
 - `core/subagent.rs`: child `zdx exec` subagent runner. Child runs persist their own thread JSONL tagged via `ExecSubagentOptions::thread_origin_kind`/`thread_parent_id`/`thread_subagent_name` (so their usage is captured by `usage_stats`); tagged threads are hidden from default listings.
@@ -50,7 +51,6 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 
 - `tools/mod.rs`: ToolContext, ToolRegistry, ToolSet, handlers
 - `tools/background.rs`: `run_background` (spawn+register a background process, invoked by the Bash tool on `background: true`) + `background_output`/`background_kill` agent tools (thread-scoped)
-- `tools/memory_get.rs`: bounded native memory document reads by `zdxmem:v1:*` docid
 - `tools/memory_search.rs`: native memory search returning stable memory refs
 - `tools/read_thread.rs`: read saved thread transcript tool
 - `tools/subagent.rs`: invoke_subagent tool

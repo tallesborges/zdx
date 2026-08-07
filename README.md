@@ -71,7 +71,7 @@ Just the ones I use — but that turns out to be a lot.
 
 - **Filesystem & shell** — `read`, `write`, `edit`, `apply_patch`, `bash`, `glob`, `grep`
 - **Web** — `web_search`, `fetch_webpage`
-- **Agent** — `todo_write` (task tracking), `invoke_subagent`, `memory_search`, `memory_get`, `thread_search`, `read_thread`
+- **Agent** — `todo_write` (task tracking), `invoke_subagent`, `memory_search`, `thread_search`, `read_thread`
 
 ### Subagents
 
@@ -90,7 +90,7 @@ Delegate scoped work to isolated child agents:
 
 ### Memory & threads
 
-- **Native memory** — SQLite-backed lexical search across notes, calendar, and exported past-thread transcripts, with native `zdxmem:v1:*` docids
+- **Native memory** — SQLite-backed lexical search across notes, calendar, and exported past-thread transcripts; hits carry the canonical source path
 - **Threads** — resume, rename, append, export, search, and tool-call inspection; open as tabs and forks
 
 ### TUI niceties

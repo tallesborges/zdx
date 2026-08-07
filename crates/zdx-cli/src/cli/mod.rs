@@ -612,21 +612,6 @@ enum MemoryCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Read a bounded native memory document by docid
-    Get {
-        /// Native docid returned by `zdx memory search`
-        #[arg(value_name = "DOCID")]
-        docid: String,
-
-        /// Byte offset to continue a truncated snapshot from (use the
-        /// previous response's `next_start_byte`)
-        #[arg(long, default_value_t = 0)]
-        start_byte: usize,
-
-        /// Output as JSON for automation/script usage
-        #[arg(long)]
-        json: bool,
-    },
 }
 
 #[derive(clap::Subcommand)]
@@ -1435,11 +1420,6 @@ async fn dispatch_memory(command: MemoryCommands, context: &DispatchContext<'_>)
             )
             .await
         }
-        MemoryCommands::Get {
-            docid,
-            start_byte,
-            json,
-        } => commands::memory::get(&docid, start_byte, json),
     }
 }
 

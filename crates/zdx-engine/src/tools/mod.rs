@@ -8,7 +8,6 @@ pub use zdx_tools::{apply_patch, bash, edit, fetch_webpage, glob, grep, read, we
 
 // Engine-backed tools (need full ToolContext with config, threads, etc.)
 pub mod background;
-pub mod memory_get;
 pub mod memory_search;
 pub mod read_thread;
 pub mod subagent;
@@ -153,7 +152,6 @@ impl ToolSet {
                 "glob",
                 "grep",
                 "invoke_subagent",
-                "memory_get",
                 "memory_search",
                 "read",
                 "read_thread",
@@ -171,7 +169,6 @@ impl ToolSet {
                 "glob",
                 "grep",
                 "invoke_subagent",
-                "memory_get",
                 "memory_search",
                 "read",
                 "read_thread",
@@ -355,7 +352,6 @@ impl ToolRegistry {
         self.register_tool(ApplyPatch);
         self.register_tool(Edit);
         self.register_tool(Read);
-        self.register_tool(MemoryGet);
         self.register_tool(MemorySearch);
         self.register_tool(ReadThread);
         self.register_tool(TodoWrite);
@@ -550,18 +546,6 @@ impl Tool for MemorySearch {
     }
 }
 
-struct MemoryGet;
-impl Tool for MemoryGet {
-    fn definition(&self) -> ToolDefinition {
-        memory_get::definition()
-    }
-    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
-        let input = input.clone();
-        let ctx = ctx.clone();
-        Box::pin(async move { execute_memory_get(&input, &ctx).await })
-    }
-}
-
 struct TodoWrite;
 impl Tool for TodoWrite {
     fn definition(&self) -> ToolDefinition {
@@ -709,15 +693,6 @@ async fn execute_thread_search(input: &Value, ctx: &ToolContext) -> ToolOutput {
 
 async fn execute_memory_search(input: &Value, ctx: &ToolContext) -> ToolOutput {
     memory_search::execute(input, ctx).await
-}
-
-async fn execute_memory_get(input: &Value, ctx: &ToolContext) -> ToolOutput {
-    execute_blocking(ctx.timeout, {
-        let input = input.clone();
-        let ctx = ctx.clone();
-        move || memory_get::execute(&input, &ctx)
-    })
-    .await
 }
 
 async fn execute_todo_write(input: &Value, ctx: &ToolContext) -> ToolOutput {
@@ -948,7 +923,6 @@ mod tests {
         assert!(names.contains(&"edit".to_string()));
         assert!(names.contains(&"fetch_webpage".to_string()));
         assert!(names.contains(&"invoke_subagent".to_string()));
-        assert!(names.contains(&"memory_get".to_string()));
         assert!(names.contains(&"memory_search".to_string()));
         assert!(names.contains(&"read".to_string()));
         assert!(names.contains(&"read_thread".to_string()));
@@ -969,7 +943,6 @@ mod tests {
         assert!(names.contains(&"edit".to_string()));
         assert!(names.contains(&"fetch_webpage".to_string()));
         assert!(names.contains(&"invoke_subagent".to_string()));
-        assert!(names.contains(&"memory_get".to_string()));
         assert!(names.contains(&"memory_search".to_string()));
         assert!(names.contains(&"read".to_string()));
         assert!(names.contains(&"read_thread".to_string()));
