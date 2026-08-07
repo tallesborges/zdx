@@ -803,3 +803,87 @@ async fn redacted_thinking_data_round_trips_through_thread_persistence() {
         "second request raw body should contain the opaque blob verbatim; body={body}",
     );
 }
+
+/// Regression: a completed `zdx exec --thread` turn must persist the
+/// assistant's answer exactly once.
+///
+/// The turn's own persistence task already writes the assistant message when
+/// it handles `TurnFinished`. `run_exec` used to append the same text a second
+/// time tagged `phase: "final_answer"`, so every exec-created thread stored
+/// the answer twice while interactive threads stored it once.
+///
+/// The duplicate was not cosmetic. Replay accumulates adjacent assistant
+/// events into a single message, so resuming an affected thread re-sent two
+/// identical content blocks to the provider, and every consumer that walks
+/// message events — monitor, markdown export, thread and memory indexing —
+/// counted the answer twice.
+#[tokio::test]
+async fn exec_persists_the_assistant_answer_once() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
+    let zdx_home = temp_zdx_home();
+    let temp_dir = TempDir::new().unwrap();
+    let thread_id = "assistant-message-cardinality";
+    let answer = "PONG";
+
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(header("x-api-key", "test-api-key"))
+        .respond_with(sse_response(&text_sse(answer)))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    // The model is pinned to an Anthropic-provider id rather than left to the
+    // default, which resolves to the `claude-cli` provider and would bypass the
+    // mock endpoint entirely.
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args([
+            "--root",
+            temp_dir.path().to_str().unwrap(),
+            "--thread",
+            thread_id,
+            "exec",
+            "-m",
+            "anthropic:claude-sonnet-5",
+            "-p",
+            "say pong",
+        ])
+        .assert()
+        .success();
+
+    let thread_path = zdx_home
+        .path()
+        .join("threads")
+        .join(format!("{thread_id}.jsonl"));
+    let jsonl =
+        fs::read_to_string(&thread_path).expect("thread JSONL should exist after the exec run");
+
+    let assistant_messages: Vec<serde_json::Value> = jsonl
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|event| {
+            event.get("type").and_then(serde_json::Value::as_str) == Some("message")
+                && event.get("role").and_then(serde_json::Value::as_str) == Some("assistant")
+        })
+        .collect();
+
+    assert_eq!(
+        assistant_messages.len(),
+        1,
+        "exec should persist the assistant answer exactly once; got:\n{jsonl}"
+    );
+    assert_eq!(
+        assistant_messages[0]
+            .get("text")
+            .and_then(serde_json::Value::as_str),
+        Some(answer),
+        "the persisted assistant message should carry the answer text; got:\n{jsonl}"
+    );
+}
