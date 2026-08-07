@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::{self, MemoryConfig};
 use crate::core::thread_export::{self, ThreadExportOptions};
-use crate::core::{recency, thread_index};
+use crate::core::{fts_query, recency, thread_index};
 
 const SCHEMA_VERSION: &str = "2";
 const DOCID_VERSION: &str = "v1";
@@ -246,9 +246,10 @@ pub struct NativeMemorySearchOutput {
 
 /// A search hit, carrying identifiers the caller can act on directly.
 ///
-/// `path` is the canonical source file, not the indexed snapshot: the index
-/// lags its sources between runs, so every hit points at something that can be
-/// re-read fresh. Thread hits also carry `thread_id` for `Read_Thread`.
+/// `path` is the indexed source file. For notes and calendar that file is
+/// canonical, so reading it gives current content. For threads it is the
+/// Markdown export, which is only as fresh as the last index run — the
+/// canonical read there is `Read_Thread` with the hit's `thread_id`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct NativeMemorySearchResult {
     pub source: String,
@@ -1214,7 +1215,9 @@ fn fts_hits(
     source: Option<MemorySource>,
     limit: usize,
 ) -> Result<Vec<ChunkHit>> {
-    let fts_query = fts_query(query);
+    let Some(fts_query) = fts_query::or_prefix_match(query) else {
+        return Ok(Vec::new());
+    };
     let source_filter = source.map(MemorySource::label);
     let sql = if source_filter.is_some() {
         "SELECT f.docid, d.source, d.file, d.title, f.text, -bm25(chunk_fts) AS score, c.ordinal, d.source_mtime_ns \
@@ -1288,15 +1291,6 @@ fn chunk_hit_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChunkHit> {
         ordinal: row.get(6)?,
         mtime_ns: row.get(7)?,
     })
-}
-
-fn fts_query(query: &str) -> String {
-    query
-        .split_whitespace()
-        .filter(|term| !term.is_empty())
-        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
-        .collect::<Vec<_>>()
-        .join(" AND ")
 }
 
 fn escape_like(value: &str) -> String {

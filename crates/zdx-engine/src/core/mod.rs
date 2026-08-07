@@ -2,6 +2,7 @@
 //!
 //! This module contains:
 //! - `events`: Agent event types for streaming
+//! - `fts_query`: shared FTS5 MATCH expression builder for the search indexes
 //! - `context`: Project context loading (AGENTS.md files)
 //! - `interrupt`: Signal handling for graceful interruption
 //! - `agent`: Agent loop and event channels
@@ -21,6 +22,7 @@
 pub mod agent;
 pub mod context;
 pub mod events;
+pub mod fts_query;
 pub mod handoff_generation;
 pub mod interrupt;
 pub mod native_memory;

@@ -30,7 +30,7 @@ Memory discovery is backed by ZDX's native SQLite index. Prefer memory tools bef
 
 1. Check the embedded `<memory_index>` block to find likely notes.
 2. Use `Memory_Search` for discovery across exported threads, notes, and calendar files.
-3. Open the canonical `path` from the hits you care about with `read`, or pass a hit's `thread_id` to `Read_Thread`.
+3. Open the hits you care about: `read` the `path` for notes and calendar, `Read_Thread` the `thread_id` for threads.
 4. Answer directly, or edit the relevant note with `apply_patch`.
 5. When saving memory, write full detail to a note first, then decide whether `MEMORY.md` needs a concise pointer.
 
@@ -76,11 +76,11 @@ Avoid weak searches:
 `Memory_Search` returns native results such as:
 
 - `source`: the memory source label (`thread`, `note`, or `calendar`)
-- `path`: the absolute canonical file the hit came from — pass it straight to `read`
+- `path`: the absolute file the hit was indexed from — canonical for notes/calendar, an export for threads
 - `thread_id`: present on thread hits — pass it to `Read_Thread`
 - `snippet`, `title`, and `score`: ranking context
 
-Treat search snippets as leads, not source-of-truth evidence. The index is rebuilt periodically, so a snippet can lag its source. Before answering factual questions, open the canonical `path` (or `Read_Thread` the `thread_id`) and answer from that.
+Treat search snippets as leads, not source-of-truth evidence. The index is rebuilt periodically, so snippets and thread export paths can lag their sources. Before answering factual questions, open the note/calendar `path` or `Read_Thread` the `thread_id`, and answer from that.
 
 ```text
 Memory_Search query:"service integration credentials reference" limit:10

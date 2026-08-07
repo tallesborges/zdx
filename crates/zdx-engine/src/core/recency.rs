@@ -2,8 +2,13 @@
 //!
 //! Relevance-ranked search over a long-lived corpus surfaces the strongest
 //! textual match regardless of age, which buries recent work behind years of
-//! archives. Multiplying a relevance score by [`decay`] biases ties toward
-//! fresh documents while leaving strong old matches reachable.
+//! archives. Multiplying a relevance score by [`decay`] corrects for that.
+//!
+//! The half-life and floor below are unvalidated product parameters, tuned for
+//! conversation retrieval where recent work is usually the subject. They apply
+//! uniformly to threads, notes, and calendar today, even though an evergreen
+//! note's mtime means something different from a thread's. Revisit them with
+//! ranking evidence rather than intuition.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -12,9 +17,11 @@ const HALF_LIFE_DAYS: f64 = 30.0;
 
 /// Weight retained by an arbitrarily old document.
 ///
-/// Recency is a tiebreaker, not a veto: without a floor an old-but-exact match
-/// loses to a recent-but-weak one, which is the failure mode in the opposite
-/// direction.
+/// With this floor the worst age penalty is `1 / FLOOR` ≈ 2.86x, so an old
+/// document needs roughly triple the relevance of a fresh one to stay ahead.
+/// That is a real ranking policy, not a tiebreak: it is deliberately strong
+/// enough to reorder comparable matches, and deliberately bounded so age
+/// alone can never bury an exact old match.
 const FLOOR: f64 = 0.35;
 
 const NANOS_PER_DAY: f64 = 86_400_000_000_000.0;
@@ -91,6 +98,8 @@ mod tests {
         assert!((decay(now + DAY, now) - 1.0).abs() < 1e-9);
     }
 
+    /// The floor bounds the age penalty at `1 / FLOOR`; a decisively stronger
+    /// old match must survive it.
     #[test]
     fn recency_cannot_outweigh_a_large_relevance_gap() {
         let now = 1_000 * DAY;
