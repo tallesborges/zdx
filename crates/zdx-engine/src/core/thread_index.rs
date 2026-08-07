@@ -12,10 +12,14 @@
 //!   are no longer searched (tool discovery uses the dedicated tool rows).
 //! - Query words match as OR of case-insensitive token-prefix phrases via
 //!   FTS5 (`unicode61`); mid-word substring matches come from a LIKE fallback
-//!   over titles only, which runs when FTS finds nothing. `thread_fts` is
-//!   contentless (`content=''`), so it stores no transcript copy and hits
-//!   resolve through `thread_meta.doc_id = thread_fts.rowid`; reading a
-//!   stored FTS column would load a document's full text per hit.
+//!   over titles only, which runs when FTS finds nothing. Because the match
+//!   is an OR, results are ranked by `bm25` scaled by a recency decay rather
+//!   than by mtime alone — an OR over common words otherwise matches nearly
+//!   the whole corpus and degrades the search into "newest threads". Queryless
+//!   listing stays newest-first. `thread_fts` is contentless (`content=''`),
+//!   so it stores no transcript copy and hits resolve through
+//!   `thread_meta.doc_id = thread_fts.rowid`; reading a stored FTS column
+//!   would load a document's full text per hit.
 //! - `activity_at` always derives from indexed event timestamps (the file
 //!   scan only did this when date filters were active).
 //! - Tool matches use a deterministic `tool_ts DESC, thread_id, tool_use_id`
@@ -34,6 +38,7 @@ use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde::Serialize;
 
 use crate::config;
+use crate::core::recency;
 use crate::core::thread_export::{self, EXPORT_FORMAT_VERSION};
 use crate::core::thread_persistence::{
     self, ThreadEvent, ThreadSearchOptions, ThreadSearchResult, ThreadSummary, ThreadToolMatch,
@@ -369,8 +374,10 @@ pub fn browse_projects() -> Result<Vec<(String, usize)>> {
     })
 }
 
-/// Searches threads via the FTS index, preserving the scan path's contract:/// newest-first ordering, active-thread exclusion before limiting, date
-/// filters on event-derived activity, and stored previews.
+/// Searches threads via the FTS index: relevance-ranked when a query is
+/// given, newest-first otherwise. Active-thread exclusion happens before
+/// limiting, date filters apply to event-derived activity, and previews come
+/// from stored metadata.
 ///
 /// # Errors
 /// Returns an error when the cache cannot be opened, synced, or queried.
@@ -392,16 +399,16 @@ fn search_threads_with(
         .filter(|q| !q.is_empty());
     let limit = options.limit.max(1);
 
-    let matching_ids: Option<HashSet<String>> = match normalized_query {
-        Some(query) => Some(matching_thread_ids(conn, query)?),
+    let matching: Option<HashMap<String, f64>> = match normalized_query {
+        Some(query) => Some(matching_thread_scores(conn, query)?),
         None => None,
     };
-    if matching_ids.as_ref().is_some_and(HashSet::is_empty) {
+    if matching.as_ref().is_some_and(HashMap::is_empty) {
         return Ok(Vec::new());
     }
 
     let mut stmt = conn.prepare_cached(
-        "SELECT thread_id, title, root_path, activity_at, preview
+        "SELECT thread_id, title, root_path, activity_at, preview, mtime_ns
          FROM thread_meta WHERE origin_kind IS NULL
          ORDER BY mtime_ns DESC, thread_id ASC",
     )?;
@@ -412,12 +419,14 @@ fn search_threads_with(
             row.get::<_, Option<String>>(2)?,
             row.get::<_, Option<String>>(3)?,
             row.get::<_, Option<String>>(4)?,
+            row.get::<_, i64>(5)?,
         ))
     })?;
 
-    let mut results = Vec::new();
+    let now_ns = recency::now_unix_nanos();
+    let mut results: Vec<(f64, ThreadSearchResult)> = Vec::new();
     for row in rows {
-        let (thread_id, title, root_path, activity_at, preview) = row?;
+        let (thread_id, title, root_path, activity_at, preview, mtime_ns) = row?;
         if options
             .exclude_thread_id
             .as_ref()
@@ -425,11 +434,15 @@ fn search_threads_with(
         {
             continue;
         }
-        if let Some(ids) = &matching_ids
-            && !ids.contains(&thread_id)
-        {
-            continue;
-        }
+        let rank = match &matching {
+            Some(scores) => match scores.get(&thread_id) {
+                Some(relevance) => relevance * recency::decay(mtime_ns, now_ns),
+                None => continue,
+            },
+            // Unfiltered listing stays newest-first; the scan order already
+            // encodes that, so every row carries the same rank.
+            None => 0.0,
+        };
         if !matches_date_filters(
             activity_at.as_deref(),
             options.date,
@@ -438,18 +451,23 @@ fn search_threads_with(
         ) {
             continue;
         }
-        results.push(ThreadSearchResult {
-            thread_id,
-            title,
-            root_path,
-            activity_at,
-            preview: preview.unwrap_or_default(),
-        });
-        if results.len() >= limit {
-            break;
-        }
+        results.push((
+            rank,
+            ThreadSearchResult {
+                thread_id,
+                title,
+                root_path,
+                activity_at,
+                preview: preview.unwrap_or_default(),
+            },
+        ));
     }
-    Ok(results)
+
+    // Stable sort over the mtime-ordered scan keeps recency as the tiebreaker
+    // for equal relevance, including the unfiltered listing.
+    results.sort_by(|a, b| b.0.total_cmp(&a.0));
+    results.truncate(limit);
+    Ok(results.into_iter().map(|(_, result)| result).collect())
 }
 
 /// Searches tool calls via indexed tool rows, honoring `limit` in SQL before
@@ -887,44 +905,52 @@ fn fts_match_query(query: &str) -> Option<String> {
     )
 }
 
-/// Returns thread ids whose title or user/assistant text matches the query:
-/// OR of FTS token-prefix phrases, with a LIKE substring fallback when FTS
-/// finds nothing.
-fn matching_thread_ids(conn: &Connection, query: &str) -> Result<HashSet<String>> {
+/// Returns thread ids whose title or user/assistant text matches the query,
+/// mapped to a positive relevance score (higher is better).
+///
+/// Matching is an OR of FTS token-prefix phrases, so a multi-word query
+/// typically matches most of the corpus; `bm25` is what separates a thread
+/// that is actually about the query from one that merely contains a common
+/// word. A LIKE substring fallback over titles runs when FTS finds nothing.
+fn matching_thread_scores(conn: &Connection, query: &str) -> Result<HashMap<String, f64>> {
     let words: Vec<&str> = query.split_whitespace().filter(|w| !w.is_empty()).collect();
     if words.is_empty() {
-        return Ok(HashSet::new());
+        return Ok(HashMap::new());
     }
 
     let Some(fts_query) = fts_match_query(query) else {
-        return Ok(HashSet::new());
+        return Ok(HashMap::new());
     };
-    let mut ids: HashSet<String> = {
+    let mut scores: HashMap<String, f64> = {
         let mut stmt = conn.prepare_cached(
-            "SELECT m.thread_id FROM thread_fts
+            "SELECT m.thread_id, -bm25(thread_fts) FROM thread_fts
              JOIN thread_meta AS m ON m.doc_id = thread_fts.rowid
              WHERE thread_fts MATCH ?1",
         )?;
-        let rows = stmt.query_map([&fts_query], |row| row.get::<_, String>(0));
+        let rows = stmt.query_map([&fts_query], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        });
         match rows {
-            Ok(rows) => rows.collect::<rusqlite::Result<HashSet<_>>>()?,
+            Ok(rows) => rows.collect::<rusqlite::Result<HashMap<_, _>>>()?,
             // Malformed FTS queries fall through to the LIKE path.
-            Err(_) => HashSet::new(),
+            Err(_) => HashMap::new(),
         }
     };
 
-    if ids.is_empty() {
+    if scores.is_empty() {
         let mut stmt = conn
             .prepare_cached("SELECT thread_id FROM thread_meta WHERE title LIKE ?1 ESCAPE '\\'")?;
         for word in &words {
             let pattern = format!("%{}%", escape_like(word));
             let rows = stmt.query_map([&pattern], |row| row.get::<_, String>(0))?;
             for row in rows {
-                ids.insert(row?);
+                // Title substring hits carry no relevance signal; score by how
+                // many query words a title matched.
+                *scores.entry(row?).or_insert(0.0) += 1.0;
             }
         }
     }
-    Ok(ids)
+    Ok(scores)
 }
 
 #[derive(Debug)]

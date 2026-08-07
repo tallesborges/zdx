@@ -7,6 +7,7 @@
 //! - `agent`: Agent loop and event channels
 //! - `handoff_generation`: LLM-based handoff context generation
 //! - `prompt_builder_generation`: LLM-based prompt-builder generation
+//! - `recency`: shared recency decay applied to search relevance scores
 //! - `native_memory`: native SQLite-backed memory index/search
 //! - `subagent`: Child `zdx exec` subagent runner
 //! - `thread_export`: Thread transcript exports
@@ -24,6 +25,7 @@ pub mod handoff_generation;
 pub mod interrupt;
 pub mod native_memory;
 pub mod prompt_builder_generation;
+pub mod recency;
 pub mod subagent;
 pub mod thread_export;
 pub mod thread_index;
