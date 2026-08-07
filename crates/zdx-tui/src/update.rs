@@ -1702,7 +1702,6 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     use zdx_engine::core::events::AgentEvent;
     use zdx_engine::core::thread_persistence::Thread;
@@ -1712,11 +1711,7 @@ mod tests {
     use crate::transcript::{HistoryCell, ScrollMode};
 
     fn unique_thread_id(prefix: &str) -> String {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        format!("{prefix}-{nanos}")
+        format!("{prefix}-{}", uuid::Uuid::new_v4())
     }
 
     /// btw tabs answer by reference, so they must not copy the parent's
@@ -1965,11 +1960,6 @@ mod tests {
     fn test_thread_created_matches_startup_messages_and_prefills_initial_input() {
         let config = zdx_engine::config::Config::default();
         let mut app = AppState::new(config, PathBuf::new(), None, None);
-        let zdx_home = std::env::temp_dir().join(unique_thread_id("zdx-tui-update-tests"));
-        std::fs::create_dir_all(&zdx_home).unwrap();
-        unsafe {
-            std::env::set_var("ZDX_HOME", &zdx_home);
-        }
         let thread_handle = Thread::with_id(unique_thread_id("handoff-created")).unwrap();
         let thread_path = thread_handle.path().display().to_string();
         let prompt = "Continue the work from the previous thread.".to_string();
@@ -2051,12 +2041,6 @@ mod tests {
 
         let config = zdx_engine::config::Config::default();
         let mut app = AppState::new(config, PathBuf::new(), None, None);
-
-        let zdx_home = std::env::temp_dir().join(unique_thread_id("zdx-tui-handoff-tab-tests"));
-        std::fs::create_dir_all(&zdx_home).unwrap();
-        unsafe {
-            std::env::set_var("ZDX_HOME", &zdx_home);
-        }
 
         // Seed the active (source) tab: thread handle, transcript, history,
         // and a generated handoff prompt sitting in the textarea in `Ready`

@@ -92,6 +92,11 @@ For any disposable store rebuilt from files on disk (SQLite caches, search index
 - Prefer integration tests in `crates/zdx-cli/tests/` over unit tests for CLI/output/persistence behavior.
 - Avoid mutating process-global env vars in-process; set env on spawned CLI commands instead.
 - When a unit test seems to need an `env_lock`/`EnvVarGuard` pattern, prefer refactoring the code under test to accept explicit inputs or expose a pure helper instead of serializing env mutation in tests. Only test process-global env mutation directly when that behavior is itself the thing being verified.
+- **Process-global test isolation**:
+  - Assume Rust unit tests run concurrently in one process under `cargo test`. Environment variables, current directory, and static handles are shared between test threads.
+  - Never cache a value derived from `ZDX_HOME`, another environment variable, or the current directory in an unkeyed `OnceLock`/`LazyLock`/`static`. Prefer instance-owned state or caches keyed by the explicit path.
+  - Never call `std::env::set_var`/`remove_var` directly in unit tests without an RAII guard that restores previous environment state and clears dependent caches on `Drop`.
+  - Use UUIDs (`uuid::Uuid::new_v4()`) or atomic counters for test IDs and temporary markers; do not use system clock nanoseconds or sleeps for uniqueness.
 
 ## Docs
 

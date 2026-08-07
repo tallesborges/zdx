@@ -20,7 +20,7 @@ pub mod service;
 pub mod skills;
 pub mod subagents;
 #[cfg(test)]
-pub(crate) mod test_support;
+pub mod test_support;
 pub mod tools;
 pub mod tracing_init;
 pub mod zdx_context;

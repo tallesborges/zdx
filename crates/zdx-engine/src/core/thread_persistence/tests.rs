@@ -3,7 +3,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use serde_json::json;
-use tempfile::TempDir;
 
 use super::*;
 use crate::config::paths::threads_dir;
@@ -28,17 +27,12 @@ fn extract_handoff_from_reads_meta_parent() {
     assert_eq!(extract_handoff_from_from_events(&[]), None);
 }
 
-fn setup_temp_zdx_home() -> &'static TempDir {
+fn setup_temp_zdx_home() -> crate::test_support::TestZdxHomeGuard {
     crate::test_support::temp_zdx_home()
 }
 
 fn unique_thread_id(prefix: &str) -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .subsec_nanos();
-    format!("{prefix}-{nanos}")
+    format!("{prefix}-{}", uuid::Uuid::new_v4())
 }
 
 #[test]

@@ -117,6 +117,16 @@ static LAST_SYNC: Mutex<Option<Instant>> = Mutex::new(None);
 /// old; explicit indexing (`zdx memory index`) calls [`sync`] directly.
 const SYNC_INTERVAL: Duration = Duration::from_secs(10);
 
+/// Resets the process-wide thread index cache and timestamp.
+///
+/// Intended for tests to reset state when running in isolation.
+pub fn reset_cache_for_test() {
+    let mut conn = CONNECTION.lock().unwrap_or_else(PoisonError::into_inner);
+    *conn = None;
+    let mut last = LAST_SYNC.lock().unwrap_or_else(PoisonError::into_inner);
+    *last = None;
+}
+
 fn with_conn<T>(f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
     let mut guard = CONNECTION.lock().unwrap_or_else(PoisonError::into_inner);
     if guard.is_none() {
