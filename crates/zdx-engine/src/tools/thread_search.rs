@@ -16,7 +16,7 @@ const DEFAULT_LIMIT: usize = 20;
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Thread_Search".to_string(),
-        description: "Primary tool for finding saved ZDX conversation threads by content, keywords, file references, dates, or thread titles. Use this whenever the user asks about prior conversations, past discussions, or earlier work and the thread_id is unknown; prefer it over Memory_Search for thread discovery. If the caller already provided a thread_id, skip this tool and call Read_Thread directly, and never guess a thread_id. Results are relevance-ranked best-first, with recent threads favored among comparable matches. After searching, read the most promising 1-3 results with Read_Thread before rephrasing the query or trying another search tool — re-running a reworded search instead of reading the top hits rarely improves the answer. Narrow with date/date_start/date_end when the user gives a timeframe. Returns structured thread matches including thread IDs, titles, and activity dates.".to_string(),
+        description: "Primary tool for discovering saved ZDX conversation threads by content, title, or date. Use it when the thread_id is unknown; when it is known, call Read_Thread directly instead and never guess one. Results are relevance-ranked best-first — read the top matches before rephrasing the query or trying another search tool.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
