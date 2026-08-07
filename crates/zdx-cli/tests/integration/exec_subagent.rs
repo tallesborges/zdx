@@ -9,7 +9,7 @@ use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request};
 
-use crate::fixtures::{sse_response, text_sse};
+use crate::fixtures::{MOCK_MODEL, sse_response, text_sse};
 
 fn can_bind_localhost() -> bool {
     std::net::TcpListener::bind("127.0.0.1:0").is_ok()
@@ -59,6 +59,8 @@ async fn test_exec_subagent_applies_prompt_and_tools() {
             root.path().to_str().unwrap(),
             "--no-thread",
             "exec",
+            "-m",
+            MOCK_MODEL,
             "--subagent",
             "tester",
             "-p",
@@ -96,6 +98,8 @@ async fn test_exec_unknown_subagent_fails() {
             root.path().to_str().unwrap(),
             "--no-thread",
             "exec",
+            "-m",
+            MOCK_MODEL,
             "--subagent",
             "nope",
             "-p",
