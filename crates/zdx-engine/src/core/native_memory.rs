@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::{self, MemoryConfig};
 use crate::core::thread_export::{self, ThreadExportOptions};
-use crate::core::thread_index;
+use crate::core::{recency, thread_index};
 
 const SCHEMA_VERSION: &str = "2";
 const DOCID_VERSION: &str = "v1";
@@ -311,6 +311,7 @@ struct ChunkHit {
     text: String,
     score: f64,
     ordinal: i64,
+    mtime_ns: i64,
 }
 
 /// Builds/refreshes the native memory index.
@@ -538,12 +539,7 @@ pub fn search_memory(options: &NativeMemorySearchOptions) -> Result<NativeMemory
     }
 
     let mut ranked: Vec<_> = best.into_values().collect();
-    ranked.sort_by(|a, b| {
-        b.score
-            .total_cmp(&a.score)
-            .then(a.source.cmp(&b.source))
-            .then(a.file.cmp(&b.file))
-    });
+    rank_by_decayed_score(&mut ranked);
     ranked.truncate(options.limit.max(1));
 
     Ok(NativeMemorySearchOutput {
@@ -684,14 +680,14 @@ fn vector_doc_hits(
 ) -> Result<Vec<ChunkHit>> {
     let source_filter = source.map(MemorySource::label);
     let sql = if source_filter.is_some() {
-        "SELECT c.docid, d.source, d.file, d.title, c.text, c.ordinal, v.vector
+        "SELECT c.docid, d.source, d.file, d.title, c.text, c.ordinal, v.vector, d.source_mtime_ns
          FROM chunk_vector cv
          JOIN embedding_vector v ON v.input_hash = cv.input_hash AND v.profile_fingerprint = ?1
          JOIN chunk c ON c.chunk_id = cv.chunk_id
          JOIN document d ON d.docid = c.docid
          WHERE cv.profile_fingerprint = ?1 AND d.source = ?2"
     } else {
-        "SELECT c.docid, d.source, d.file, d.title, c.text, c.ordinal, v.vector
+        "SELECT c.docid, d.source, d.file, d.title, c.text, c.ordinal, v.vector, d.source_mtime_ns
          FROM chunk_vector cv
          JOIN embedding_vector v ON v.input_hash = cv.input_hash AND v.profile_fingerprint = ?1
          JOIN chunk c ON c.chunk_id = cv.chunk_id
@@ -709,6 +705,7 @@ fn vector_doc_hits(
                 text: row.get(4)?,
                 score: 0.0,
                 ordinal: row.get(5)?,
+                mtime_ns: row.get(7)?,
             },
             row.get::<_, Vec<u8>>(6)?,
         ))
@@ -732,12 +729,7 @@ fn vector_doc_hits(
     }
 
     let mut ranked: Vec<_> = best.into_values().collect();
-    ranked.sort_by(|a, b| {
-        b.score
-            .total_cmp(&a.score)
-            .then(a.source.cmp(&b.source))
-            .then(a.file.cmp(&b.file))
-    });
+    rank_by_decayed_score(&mut ranked);
     ranked.truncate(take);
     Ok(ranked)
 }
@@ -766,12 +758,7 @@ fn keyword_doc_hits(
             .or_insert(hit);
     }
     let mut ranked: Vec<_> = best.into_values().collect();
-    ranked.sort_by(|a, b| {
-        b.score
-            .total_cmp(&a.score)
-            .then(a.source.cmp(&b.source))
-            .then(a.file.cmp(&b.file))
-    });
+    rank_by_decayed_score(&mut ranked);
     ranked.truncate(take);
     Ok(ranked)
 }
@@ -781,6 +768,24 @@ fn excluded_thread_hit(hit: &ChunkHit, exclude_thread_id: Option<&str>) -> bool 
         hit.source == MemorySource::Thread.label()
             && thread_id_from_export_file(&hit.file).as_deref() == Some(excluded)
     })
+}
+
+/// Scales each hit's relevance by document freshness, then orders descending.
+///
+/// Relevance alone lets a years-old note outrank the thread the user was just
+/// working in; the decay floor keeps a decisively stronger old match ahead of
+/// a weak recent one.
+fn rank_by_decayed_score(hits: &mut Vec<ChunkHit>) {
+    let now_ns = recency::now_unix_nanos();
+    for hit in &mut *hits {
+        hit.score *= recency::decay(hit.mtime_ns, now_ns);
+    }
+    hits.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then(a.source.cmp(&b.source))
+            .then(a.file.cmp(&b.file))
+    });
 }
 
 /// Deterministic reciprocal-rank fusion of two ranked document lists.
@@ -1241,11 +1246,11 @@ fn fts_hits(
     let fts_query = fts_query(query);
     let source_filter = source.map(MemorySource::label);
     let sql = if source_filter.is_some() {
-        "SELECT f.docid, d.source, d.file, d.title, f.text, -bm25(chunk_fts) AS score, c.ordinal \
+        "SELECT f.docid, d.source, d.file, d.title, f.text, -bm25(chunk_fts) AS score, c.ordinal, d.source_mtime_ns \
          FROM chunk_fts f JOIN document d ON d.docid = f.docid JOIN chunk c ON c.chunk_id = f.chunk_id \
          WHERE chunk_fts MATCH ?1 AND d.source = ?2 ORDER BY bm25(chunk_fts) ASC LIMIT ?3"
     } else {
-        "SELECT f.docid, d.source, d.file, d.title, f.text, -bm25(chunk_fts) AS score, c.ordinal \
+        "SELECT f.docid, d.source, d.file, d.title, f.text, -bm25(chunk_fts) AS score, c.ordinal, d.source_mtime_ns \
          FROM chunk_fts f JOIN document d ON d.docid = f.docid JOIN chunk c ON c.chunk_id = f.chunk_id \
          WHERE chunk_fts MATCH ?1 ORDER BY bm25(chunk_fts) ASC LIMIT ?3"
     };
@@ -1276,12 +1281,12 @@ fn like_hits(
     let source_filter = source.map(MemorySource::label);
     let like = format!("%{}%", escape_like(query));
     let sql = if source_filter.is_some() {
-        "SELECT c.docid, d.source, d.file, d.title, c.text, 0.1 AS score, c.ordinal \
+        "SELECT c.docid, d.source, d.file, d.title, c.text, 0.1 AS score, c.ordinal, d.source_mtime_ns \
          FROM chunk c JOIN document d ON d.docid = c.docid \
          WHERE d.source = ?1 AND (c.text LIKE ?2 ESCAPE '\\' OR d.file LIKE ?2 ESCAPE '\\' OR d.title LIKE ?2 ESCAPE '\\') \
          ORDER BY d.file ASC, c.ordinal ASC LIMIT ?3"
     } else {
-        "SELECT c.docid, d.source, d.file, d.title, c.text, 0.1 AS score, c.ordinal \
+        "SELECT c.docid, d.source, d.file, d.title, c.text, 0.1 AS score, c.ordinal, d.source_mtime_ns \
          FROM chunk c JOIN document d ON d.docid = c.docid \
          WHERE c.text LIKE ?2 ESCAPE '\\' OR d.file LIKE ?2 ESCAPE '\\' OR d.title LIKE ?2 ESCAPE '\\' \
          ORDER BY d.file ASC, c.ordinal ASC LIMIT ?3"
@@ -1310,6 +1315,7 @@ fn chunk_hit_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChunkHit> {
         text: row.get(4)?,
         score: row.get(5)?,
         ordinal: row.get(6)?,
+        mtime_ns: row.get(7)?,
     })
 }
 
