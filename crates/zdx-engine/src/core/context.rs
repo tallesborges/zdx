@@ -612,8 +612,8 @@ fn prompt_template_memory_collections() -> Vec<PromptTemplateMemoryCollection> {
             name: "native-threads".to_string(),
             source: "saved ZDX threads".to_string(),
             contains: "exported user/assistant chat transcripts from saved ZDX conversation threads; each search result includes a native `zdxmem:v1:thread:*` docid".to_string(),
-            search_tool: "Memory_Search".to_string(),
-            read_after: "After `Memory_Search`, use `Memory_Get` with a returned `docid` before relying on a result. If a thread_id is already known and you need a focused answer to a specific goal, skip search and use `Read_Thread` directly.".to_string(),
+            search_tool: "Thread_Search".to_string(),
+            read_after: "Discover these with `Thread_Search`, not `Memory_Search`. When a thread_id is already known, skip search entirely and use `Read_Thread` with a specific goal. `Memory_Search` with `source: \"thread\"` is for searching threads alongside notes/calendar in one pass.".to_string(),
         },
         PromptTemplateMemoryCollection {
             name: "native-notes".to_string(),
@@ -2330,11 +2330,18 @@ mod tests {
         assert!(rendered.contains("exported user/assistant chat transcripts"));
         assert!(rendered.contains("canonical Markdown notes"));
         assert!(rendered.contains("calendar and daily notes"));
-        assert!(rendered.contains("Use `Memory_Search` explicitly for memory discovery"));
-        assert!(rendered.contains("saved threads, notes, and calendar files"));
         assert!(rendered.contains("`Memory_Get`"));
         assert!(rendered.contains("`Read_Thread`"));
         assert!(rendered.contains("skip search"));
+
+        // Thread discovery must route to Thread_Search: pointing it at
+        // Memory_Search made the agent alternate between two tools that claim
+        // the same job.
+        assert!(rendered.contains("MUST use `Thread_Search`"));
+        assert!(rendered.contains("Search with `Thread_Search`"));
+        assert!(rendered.contains("Search with `Memory_Search`"));
+        // Stop rule: read the top hits instead of rewording the query.
+        assert!(rendered.contains("MUST read the most promising 1-3 results"));
     }
 
     #[test]
