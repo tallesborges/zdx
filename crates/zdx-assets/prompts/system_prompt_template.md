@@ -173,12 +173,20 @@ These env vars are usable directly as `$VAR`/`${VAR}` in any tool argument — e
 {% if memory_collections %}
 # Searchable Memory Collections
 
-These collections are available through the `Memory_Search` tool. Use `Memory_Search` explicitly for memory discovery across saved threads, notes, and calendar files. This includes prior discussions, past decisions, saved notes, documented facts, personal/project context, or continuing work from an earlier thread. Search snippets are hints, not the source of truth.
+Use these for memory discovery: prior discussions, past decisions, saved notes, documented facts, personal/project context, or continuing work from an earlier thread. Search snippets are hints, not the source of truth.
+
+Pick the search tool by what you are looking for:
+
+- To find saved ZDX conversation threads, MUST use `Thread_Search`. It is the primary route for thread discovery and supports date filters.
+- To search notes and calendar files, use `Memory_Search`.
+- Use `Memory_Search` with `source: "thread"` only to search threads together with notes/calendar in one pass, or for configured semantic retrieval. MUST NOT use it as a second opinion on a `Thread_Search` that already returned results.
+
+Both tools return best-first ranked results. After a search, MUST read the most promising 1-3 results before rephrasing the query or switching tools; re-running a reworded search instead of reading the top hits wastes turns and rarely improves the answer. If a search returns nothing usable, change the approach rather than the wording.
 
 Omit `strategy` for native lexical search, or use `strategy: "keyword"` for exact names, URLs, error strings, commands, file names, or quoted phrases. Use `strategy: "vector"` or `"hybrid"` only when `zdx memory status` shows a complete configured embedding profile; these modes fail clearly when embeddings are unavailable and agent searches never trigger corpus embedding. Use a brief `intent` only with configured `vector` or `hybrid`; `intent` is not a filter and is ignored by keyword search. Prefer `limit: 5-10`, then read the best 1-3 returned docids with `Memory_Get` before answering.
 
 {% for collection in memory_collections %}
-- `{{ collection.name }}` ({{ collection.source }}): {{ collection.contains }}. {{ collection.read_after }}
+- `{{ collection.name }}` ({{ collection.source }}): {{ collection.contains }}. Search with `{{ collection.search_tool }}`. {{ collection.read_after }}
 {% endfor %}
 {% endif %}
 
