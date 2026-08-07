@@ -38,12 +38,12 @@ use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde::Serialize;
 
 use crate::config;
-use crate::core::recency;
 use crate::core::thread_export::{self, EXPORT_FORMAT_VERSION};
 use crate::core::thread_persistence::{
     self, ThreadEvent, ThreadSearchOptions, ThreadSearchResult, ThreadSummary, ThreadToolMatch,
     ThreadToolSearchOptions,
 };
+use crate::core::{fts_query, recency};
 
 const SCHEMA_VERSION: &str = "4";
 
@@ -320,7 +320,7 @@ pub fn browse_threads(options: &ThreadBrowseOptions) -> Result<Vec<ThreadBrowseR
             .map(str::trim)
             .filter(|q| !q.is_empty())
         {
-            let Some(fts_query) = fts_match_query(query) else {
+            let Some(fts_query) = fts_query::or_prefix_match(query) else {
                 return Ok(Vec::new());
             };
             sql.push_str(" AND doc_id IN (SELECT rowid FROM thread_fts WHERE thread_fts MATCH ?)");
@@ -889,22 +889,6 @@ fn export_threads_from_cache(
     Ok(summary)
 }
 
-/// Builds the FTS5 MATCH string for a user query: an OR of quoted
-/// token-prefix phrases. `None` when the query has no usable words.
-fn fts_match_query(query: &str) -> Option<String> {
-    let words: Vec<&str> = query.split_whitespace().filter(|w| !w.is_empty()).collect();
-    if words.is_empty() {
-        return None;
-    }
-    Some(
-        words
-            .iter()
-            .map(|word| format!("\"{}\"*", word.replace('"', "\"\"")))
-            .collect::<Vec<_>>()
-            .join(" OR "),
-    )
-}
-
 /// Returns thread ids whose title or user/assistant text matches the query,
 /// mapped to a positive relevance score (higher is better).
 ///
@@ -918,7 +902,7 @@ fn matching_thread_scores(conn: &Connection, query: &str) -> Result<HashMap<Stri
         return Ok(HashMap::new());
     }
 
-    let Some(fts_query) = fts_match_query(query) else {
+    let Some(fts_query) = fts_query::or_prefix_match(query) else {
         return Ok(HashMap::new());
     };
     let mut scores: HashMap<String, f64> = {
