@@ -1,6 +1,6 @@
 ---
 name: model-dispatch
-description: "Use when the user wants another named model to perform a task, or wants to fan out one prompt across models or reasoning levels. Trigger on phrases such as 'ask Opus to review this', 'fan this out', 'compare GPT and Gemini', or 'test this model on low and max'. Supports single-model dispatch, parallel model panels, and paired model/reasoning benchmarks."
+description: "Use when the user names specific models to do the work, or wants one prompt answered by several models or reasoning levels for comparison. Covers single-model dispatch, multi-model panels (including models answering in a subagent role such as oracle), and model/thinking-level benchmarks. Prefer this over invoke_subagent whenever the user names the models."
 ---
 
 # Model Dispatch
@@ -13,8 +13,6 @@ Dispatch one prompt to one or more explicit models through `zdx exec`. This skil
 - Compare the same model at multiple thinking levels.
 - Compare exact model/thinking pairs, such as Opus at `low` versus GPT at `high`.
 - Compare models inside one specialist role, such as three models answering as `oracle`.
-
-The phrase "fan out" must continue to trigger this skill.
 
 ## 1. Define the runs
 
