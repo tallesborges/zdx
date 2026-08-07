@@ -17,7 +17,7 @@ const DEFAULT_LIMIT: usize = 10;
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Memory_Search".to_string(),
-        description: "Search saved ZDX memory in the native SQLite index across Notes, Calendar, and exported conversation threads. Returns ranked docids with snippets; read the best few with Memory_Get before relying on them or rephrasing the query, and do not treat snippets as the source of truth. Set `source` to target one collection — use `note` for the user's Notes/Second Brain. To find a past conversation prefer Thread_Search; use `source: \"thread\"` here only to search threads alongside the other collections. Omit `strategy` for lexical search; `vector` and `hybrid` require a configured embedding profile and fail clearly without one. `intent` is not a filter and applies only to vector/hybrid. When the thread_id is known, call Read_Thread directly."
+        description: "Search saved ZDX memory in the native SQLite index across Notes, Calendar, and exported conversation threads. Each hit returns the canonical `path` of its source file, plus `thread_id` for threads — open those with Read or Read_Thread rather than trusting the snippet, and read the best few before rephrasing the query. Set `source` to target one collection — use `note` for the user's Notes/Second Brain. To find a past conversation prefer Thread_Search; use `source: \"thread\"` here only to search threads alongside the other collections. Omit `strategy` for lexical search; `vector` and `hybrid` require a configured embedding profile and fail clearly without one. `intent` is not a filter and applies only to vector/hybrid. When the thread_id is known, call Read_Thread directly."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -153,12 +153,12 @@ mod tests {
         let def = definition();
         assert_eq!(def.name, "Memory_Search");
         assert!(def.description.contains("native SQLite index"));
-        assert!(def.description.contains("docids"));
+        assert!(def.description.contains("`path`"));
         assert!(def.description.contains("strategy"));
         assert!(def.description.contains("source"));
         assert!(def.description.contains("hybrid"));
         assert!(def.description.contains("intent"));
-        assert!(def.description.contains("Memory_Get"));
+        assert!(def.description.contains("thread_id"));
         assert!(def.description.contains("Read_Thread directly"));
     }
 

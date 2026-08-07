@@ -232,7 +232,9 @@ fn test_memory_index_second_run_reads_no_unchanged_thread_files() {
         .args(["memory", "search", "hello", "--source", "thread", "--json"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""docid": "zdxmem:v1:thread:"#));
+        .stdout(predicate::str::contains(
+            r#""thread_id": "thread-incremental""#,
+        ));
 }
 
 #[test]
@@ -275,7 +277,7 @@ fn test_memory_index_reexports_changed_thread_only() {
 }
 
 #[test]
-fn test_memory_search_returns_native_docids() {
+fn test_memory_search_returns_canonical_paths_and_thread_ids() {
     let temp_dir = TempDir::new().unwrap();
     create_thread(&temp_dir, "thread-native");
 
@@ -290,9 +292,9 @@ fn test_memory_search_returns_native_docids() {
         .args(["memory", "search", "hello", "--source", "thread", "--json"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""docid": "zdxmem:v1:thread:"#))
         .stdout(predicate::str::contains(r#""source": "thread""#))
+        .stdout(predicate::str::contains(r#""thread_id": "thread-native""#))
         .stdout(predicate::str::contains(
-            r#""file": "thread://thread-native.md""#,
+            r#"exports/threads/thread-native.md""#,
         ));
 }

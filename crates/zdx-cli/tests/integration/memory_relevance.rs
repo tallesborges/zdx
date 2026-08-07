@@ -9,7 +9,6 @@
 //!   search is expected well under 300ms);
 //! - fixture index size < 5 MB for the ~100 KB corpus;
 //! - a missing index fails with actionable stale-index guidance;
-//! - `Memory_Get` stays byte/line bounded and continues via `--start-byte`.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -50,7 +49,7 @@ fn build_corpus(temp_dir: &TempDir) {
     )
     .unwrap();
 
-    // Large note exceeding the 40 KB Memory_Get byte bound.
+    // Large note, kept to exercise chunking of oversized sources.
     let mut big = String::from("# Big Doc\n\nbigdoc-marker anchor paragraph.\n\n");
     for index in 0..900 {
         writeln!(
@@ -159,70 +158,70 @@ fn judged_queries() -> &'static [(
             "exact-name",
             "Robert Manship",
             Some("note"),
-            "note://People/Robert Manship.md",
+            "People/Robert Manship.md",
             1,
         ),
         (
             "path",
             "crates/zdx-engine/src/core/native_memory.rs",
             None,
-            "note://Errors.md",
+            "Errors.md",
             1,
         ),
         (
             "url",
             "https://manpage.paseo.li/trinity",
             None,
-            "note://Parity Links.md",
+            "Parity Links.md",
             1,
         ),
         (
             "error-string",
             "error[E0433]: cannot find type",
             None,
-            "note://Errors.md",
+            "Errors.md",
             1,
         ),
         (
             "command",
             "gh issue create --repo paritytech/man",
             None,
-            "note://Parity Links.md",
+            "Parity Links.md",
             1,
         ),
         (
             "broad-recall",
             "solar panel sizing roof",
             None,
-            "note://Solar.md",
+            "Solar.md",
             3,
         ),
         (
             "accent-insensitive",
             "chacara inverter budget",
             None,
-            "note://Solar.md",
+            "Solar.md",
             3,
         ),
         (
             "long-thread",
             "quantum-flamingo deployment key",
             None,
-            "thread://long-thread.md",
+            "long-thread.md",
             1,
         ),
         (
             "calendar",
             "IPA pronunciation practice",
             Some("calendar"),
-            "calendar://2026-08-01.md",
+            "2026-08-01.md",
             1,
         ),
         (
             "thread-scoped",
             "agent-bench proxy sweep",
             Some("thread"),
-            "thread://alpha-thread.md",
+            "alpha-thread.md",
             1,
         ),
     ]
@@ -251,16 +250,16 @@ fn test_lexical_relevance_fixture_set() {
             "{label}: query took {elapsed:?}, budget {QUERY_TIME_BUDGET:?}"
         );
 
-        let files: Vec<&str> = output["results"]
+        let paths: Vec<&str> = output["results"]
             .as_array()
             .unwrap()
             .iter()
             .take(*k)
-            .filter_map(|result| result["file"].as_str())
+            .filter_map(|result| result["path"].as_str())
             .collect();
-        if !files.contains(expected_file) {
+        if !paths.iter().any(|path| path.ends_with(expected_file)) {
             failures.push(format!(
-                "{label}: expected {expected_file} in top-{k}, got {files:?}"
+                "{label}: expected {expected_file} in top-{k}, got {paths:?}"
             ));
         }
     }
@@ -292,49 +291,4 @@ fn test_search_without_index_reports_stale_index_guidance() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("run `zdx memory index`"));
-}
-
-/// `Memory_Get` stays bounded and continues from `next_start_byte`.
-#[test]
-fn test_memory_get_is_bounded_and_continues() {
-    let temp_dir = TempDir::new().unwrap();
-    build_corpus(&temp_dir);
-
-    cargo_bin_cmd!("zdx")
-        .env("ZDX_HOME", temp_dir.path())
-        .args(["memory", "index"])
-        .assert()
-        .success();
-
-    let search = search_json(&temp_dir, "bigdoc-marker", Some("note"));
-    let docid = search["results"][0]["docid"].as_str().unwrap().to_string();
-
-    let first = cargo_bin_cmd!("zdx")
-        .env("ZDX_HOME", temp_dir.path())
-        .args(["memory", "get", &docid, "--json"])
-        .assert()
-        .success();
-    let first: serde_json::Value = serde_json::from_slice(&first.get_output().stdout).unwrap();
-    assert_eq!(first["truncated"], true);
-    assert!(first["content"].as_str().unwrap().len() <= 40_000);
-    let next = first["next_start_byte"].as_u64().unwrap();
-    let total = first["byte_range"]["total"].as_u64().unwrap();
-    assert!(next > 0 && next < total);
-
-    let second = cargo_bin_cmd!("zdx")
-        .env("ZDX_HOME", temp_dir.path())
-        .args([
-            "memory",
-            "get",
-            &docid,
-            "--start-byte",
-            &next.to_string(),
-            "--json",
-        ])
-        .assert()
-        .success();
-    let second: serde_json::Value = serde_json::from_slice(&second.get_output().stdout).unwrap();
-    assert_eq!(second["byte_range"]["start"].as_u64().unwrap(), next);
-    assert!(second["byte_range"]["end"].as_u64().unwrap() > next);
-    assert!(!second["content"].as_str().unwrap().is_empty());
 }

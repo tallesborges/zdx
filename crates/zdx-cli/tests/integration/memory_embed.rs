@@ -142,7 +142,12 @@ async fn test_memory_embed_flow_incremental_and_semantic_search() {
         .success();
     let vector: serde_json::Value = serde_json::from_slice(&vector.get_output().stdout).unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), first_calls + 1);
-    assert_eq!(vector["results"][0]["file"], "note://Solar.md");
+    assert!(
+        vector["results"][0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("Notes/Solar.md")
+    );
     assert!(
         vector["warnings"][0]
             .as_str()
@@ -165,7 +170,12 @@ async fn test_memory_embed_flow_incremental_and_semantic_search() {
         .assert()
         .success();
     let hybrid: serde_json::Value = serde_json::from_slice(&hybrid.get_output().stdout).unwrap();
-    assert_eq!(hybrid["results"][0]["file"], "note://Solar.md");
+    assert!(
+        hybrid["results"][0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("Notes/Solar.md")
+    );
 }
 
 #[tokio::test]

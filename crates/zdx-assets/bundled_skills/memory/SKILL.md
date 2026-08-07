@@ -1,13 +1,13 @@
 ---
 name: memory
-description: "Use for memory-related tasks: saved notes, factual questions that may already be documented, and saving durable information. Prefer Memory_Search and Memory_Get for discovery; use this skill for routing, note-saving, and filing conventions."
+description: "Use for memory-related tasks: saved notes, factual questions that may already be documented, and saving durable information. Prefer Memory_Search and Thread_Search for discovery; use this skill for routing, note-saving, and filing conventions."
 ---
 
 # Memory
 
 Use ZDX's native memory tools and the user's markdown notes under `$ZDX_MEMORY_ROOT`.
 
-This skill is about routing, note-saving, and filing conventions. It is not the search implementation and does not replace `Memory_Search` / `Memory_Get`.
+This skill is about routing, note-saving, and filing conventions. It is not the search implementation and does not replace `Memory_Search` / `Thread_Search`.
 
 Follow the existing note structure you find in memory.
 
@@ -30,7 +30,7 @@ Memory discovery is backed by ZDX's native SQLite index. Prefer memory tools bef
 
 1. Check the embedded `<memory_index>` block to find likely notes.
 2. Use `Memory_Search` for discovery across exported threads, notes, and calendar files.
-3. Use `Memory_Get` on returned native `zdxmem:v1:*` docid values when you need full indexed content.
+3. Open the canonical `path` from the hits you care about with `read`, or pass a hit's `thread_id` to `Read_Thread`.
 4. Answer directly, or edit the relevant note with `apply_patch`.
 5. When saving memory, write full detail to a note first, then decide whether `MEMORY.md` needs a concise pointer.
 
@@ -44,9 +44,9 @@ Use `Memory_Search` for open-ended memory discovery. It searches the native memo
 - canonical notes under `$ZDX_MEMORY_ROOT/Notes`
 - canonical calendar files under `$ZDX_MEMORY_ROOT/Calendar`
 
-Search by names, project terms, decisions, URLs, paths, commands, errors, or distinctive phrases. Do not manually slug note paths or guess filesystem names; the native index owns docids.
+Search by names, project terms, decisions, URLs, paths, commands, errors, or distinctive phrases. Do not manually slug note paths or guess filesystem names; let search return the path.
 
-Start with a focused natural-language query and a small limit. Prefer `limit:5-10`, then read the best 1-3 docids with `Memory_Get`. If results are weak, run a second search with synonyms, aliases, acronyms, or the likely project/person name.
+Start with a focused natural-language query and a small limit. Prefer `limit:5-10`, then open the best 1-3 hits. If results are weak, run a second search with synonyms, aliases, acronyms, or the likely project/person name.
 
 Use `strategy` deliberately:
 
@@ -70,39 +70,39 @@ Avoid weak searches:
 - very broad terms like `work`, `notes`, or `project`
 - raw regex syntax; `Memory_Search` is indexed search, not grep
 - path-only guesses unless the user gave the path or folder name
-- searching first when the user already provided an exact native `docid`
+- searching first when the user already provided an exact path or thread ID
 - using `intent` as a source/date filter instead of writing a focused query
 
 `Memory_Search` returns native results such as:
 
-- `docid`: the canonical native handle for `Memory_Get`, such as `zdxmem:v1:note:0123abcd4567ef89`
 - `source`: the memory source label (`thread`, `note`, or `calendar`)
-- `file`: the indexed file identifier/path for display and debugging
+- `path`: the absolute canonical file the hit came from — pass it straight to `read`
+- `thread_id`: present on thread hits — pass it to `Read_Thread`
 - `snippet`, `title`, and `score`: ranking context
 
-Treat `docid` as the only handle for follow-up memory reads. Treat `file`, title, score, and snippets as display/debug metadata. Do not pass indexed file identifiers such as `note://...` to `read`.
-
-Treat search snippets as leads, not source-of-truth evidence. Before answering factual questions, call `Memory_Get` for the most relevant doc IDs and answer from indexed native content.
+Treat search snippets as leads, not source-of-truth evidence. The index is rebuilt periodically, so a snippet can lag its source. Before answering factual questions, open the canonical `path` (or `Read_Thread` the `thread_id`) and answer from that.
 
 ```text
 Memory_Search query:"service integration credentials reference" limit:10
 ```
 
-If `Memory_Search` warns that exported threads changed or results may be stale, continue with the best returned doc IDs when they work. If `Memory_Get` fails for a returned doc ID or results clearly miss recent notes, run `zdx memory index` when command execution is allowed, then retry the search.
+If `Memory_Search` warns that exported threads changed or results may be stale, continue with the best returned hits when they work. If results clearly miss recent notes, run `zdx memory index` when command execution is allowed, then retry the search.
 
-### Read memory doc IDs
+### Open what search found
 
-Use `Memory_Get` after `Memory_Search` when you need bounded indexed native content.
+Search returns pointers, not content. Open the canonical source before relying on it:
 
-Always pass the exact `docid` returned by `Memory_Search`; do not reconstruct doc IDs from snippets or paths.
+- notes and calendar hits: `read` the absolute `path`
+- thread hits: `Read_Thread` with the hit's `thread_id` and a specific goal
 
 ```text
-Memory_Get docid:"zdxmem:v1:note:0123abcd4567ef89"
+Memory_Search query:"service integration credentials reference" limit:10
+read file_path:"<path from the best hit>"
 ```
 
-Read multiple doc IDs when the question depends on comparing sources or when the first result is only a weak match. Keep the number of deep reads small and targeted.
+Open several hits when the question depends on comparing sources or when the first result is a weak match. Keep the number of deep reads small and targeted.
 
-If the user already provides a thread ID and wants an answer from that thread, use `Read_Thread` directly instead of searching. If you need to edit a known local note, use `read` / `apply_patch` on the exact canonical file path rather than `Memory_Get`.
+If the user already provides a thread ID, use `Read_Thread` directly instead of searching. To edit a known note, use `read` / `apply_patch` on its canonical path.
 
 ### Read the memory index
 
