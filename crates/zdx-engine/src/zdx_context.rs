@@ -129,20 +129,9 @@ mod tests {
 
     #[test]
     fn returns_empty_when_no_context_available() {
+        let _env = crate::test_support::temp_zdx_home();
         let tmp = tempfile::tempdir().expect("tempdir");
-        let prev_memory = std::env::var("ZDX_MEMORY_ROOT").ok();
-        // SAFETY: tests in this module do not run concurrently with code
-        // reading ZDX_MEMORY_ROOT; the previous value is restored below.
-        unsafe {
-            std::env::set_var("ZDX_MEMORY_ROOT", tmp.path());
-        }
         let result = build_zdx_context(tmp.path());
-        unsafe {
-            match prev_memory {
-                Some(v) => std::env::set_var("ZDX_MEMORY_ROOT", v),
-                None => std::env::remove_var("ZDX_MEMORY_ROOT"),
-            }
-        }
         // Built-in subagents always exist, so the manifest section is
         // present even when memory + AGENTS.md sources are empty.
         assert!(result.contains("## Project context"));

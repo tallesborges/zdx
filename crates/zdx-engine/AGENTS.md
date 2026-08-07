@@ -5,6 +5,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 ## Where things are
 
 - `src/lib.rs`: engine crate exports
+- `src/test_support.rs`: shared test environment RAII helper (`TestZdxHomeGuard`) for unit tests needing isolated `ZDX_HOME` state
 - `src/providers.rs`: re-export of `zdx_providers::*`
 - `src/audio/mod.rs`: shared audio module exports
 - `src/audio/speak.rs`: shared text-to-speech (TTS) synthesis helpers (OpenAI/Mistral); default OGG/Opus output via ffmpeg transcode with MP3 fallback
@@ -62,6 +63,13 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - Keep `zdx-engine` UI-agnostic.
 - No direct terminal UI logic here; terminal behavior belongs in `zdx-tui`.
 - Prefer `anyhow::Result` + `Context` at I/O boundaries.
+
+### Test isolation and storage state
+
+- Tests touching thread persistence/indexing or `$ZDX_HOME`-backed storage must hold `crate::test_support::temp_zdx_home()` for the duration of the test.
+- Do not call `std::env::set_var`/`remove_var` directly in tests; use `temp_zdx_home()` or pure helpers.
+- `temp_zdx_home()` returns an RAII guard (`TestZdxHomeGuard`) that acquires the engine test mutex, creates a `TempDir`, sets `ZDX_HOME`, resets `thread_index` caches, and restores original environment state on `Drop`.
+- Do not introduce process-global `OnceLock<PathBuf>` or `LazyLock<PathBuf>` cached paths derived from `ZDX_HOME` or environment state.
 
 ### Logging / tracing
 

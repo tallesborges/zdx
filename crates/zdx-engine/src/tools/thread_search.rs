@@ -252,14 +252,10 @@ mod tests {
 
         let _temp = crate::test_support::temp_zdx_home();
 
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos();
-        let current_id = format!("tool-current-{nanos}");
-        let other_id = format!("tool-other-{nanos}");
+        let current_id = format!("tool-current-{}", uuid::Uuid::new_v4());
+        let other_id = format!("tool-other-{}", uuid::Uuid::new_v4());
         // Unique marker scoped to this test run so other threads don't match.
-        let marker = format!("tool-excl-marker-{nanos}");
+        let marker = format!("tool-excl-marker-{}", uuid::Uuid::new_v4());
 
         // Create other first so current_id is newest (first candidate).
         let mut other = Thread::with_id(other_id.clone()).unwrap();

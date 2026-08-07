@@ -15,7 +15,6 @@ use crate::config::{SkillSourceToggles, paths};
 const BUNDLED_SKILLS_DIR_NAME: &str = "bundled-skills";
 const BUNDLED_SKILLS_STAMP_FILE: &str = ".bundled-skills.sha256";
 
-static MATERIALIZED_BUNDLED_SKILLS_DIR: OnceLock<PathBuf> = OnceLock::new();
 static MATERIALIZED_BUNDLED_SKILLS_LOCK: Mutex<()> = Mutex::new(());
 static BUNDLED_SKILLS_MANIFEST_HASH: OnceLock<String> = OnceLock::new();
 
@@ -72,13 +71,8 @@ pub fn ensure_bundled_skills_materialized() -> Result<PathBuf, std::io::Error> {
     let _guard = MATERIALIZED_BUNDLED_SKILLS_LOCK
         .lock()
         .expect("bundled skill materialization lock poisoned");
-    if let Some(path) = MATERIALIZED_BUNDLED_SKILLS_DIR.get() {
-        return Ok(path.clone());
-    }
 
-    let root = materialize_bundled_skills_into(&paths::zdx_home(), bundled_skills_manifest_hash())?;
-    let _ = MATERIALIZED_BUNDLED_SKILLS_DIR.set(root.clone());
-    Ok(root)
+    materialize_bundled_skills_into(&paths::zdx_home(), bundled_skills_manifest_hash())
 }
 
 #[must_use]
@@ -1488,5 +1482,18 @@ mod tests {
         let names: Vec<&str> = result.skills.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"child-skill"), "got: {names:?}");
         assert!(!names.contains(&"parent-skill"), "got: {names:?}");
+    }
+
+    #[test]
+    fn test_ensure_bundled_skills_materialized_respects_changed_zdx_home() {
+        let env1 = crate::test_support::temp_zdx_home();
+        let path1 = ensure_bundled_skills_materialized().unwrap();
+        assert!(path1.starts_with(env1.path()));
+        drop(env1);
+
+        let env2 = crate::test_support::temp_zdx_home();
+        let path2 = ensure_bundled_skills_materialized().unwrap();
+        assert!(path2.starts_with(env2.path()));
+        assert_ne!(path1, path2);
     }
 }

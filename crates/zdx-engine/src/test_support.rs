@@ -1,25 +1,53 @@
-use std::sync::OnceLock;
+use std::ffi::OsString;
+use std::sync::{Mutex, MutexGuard};
 
 use tempfile::TempDir;
 
-/// Returns a single process-wide isolated `ZDX_HOME` for tests.
+static TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+/// RAII guard providing isolated `ZDX_HOME` and thread index state for unit tests.
 ///
-/// Sets `ZDX_HOME` to one temp dir exactly once for the whole test binary and
-/// leaks it for the process lifetime. Every test that depends on
-/// `ZDX_HOME`-derived paths must funnel through this helper so the value stays
-/// stable and never touches the real `~/.zdx`. Sharing one home is what keeps
-/// tests from order-dependent divergence: independent setters that each pointed
-/// `ZDX_HOME` at their own temp dir would flip the live value depending on
-/// scheduling.
-pub(crate) fn temp_zdx_home() -> &'static TempDir {
-    static ZDX_HOME: OnceLock<TempDir> = OnceLock::new();
-    ZDX_HOME.get_or_init(|| {
-        let temp = TempDir::new().unwrap();
-        // SAFETY: tests are single-process; funneling every `ZDX_HOME`-dependent
-        // test through this one setter keeps the value stable for the binary.
+/// Acquires a process-wide mutex, creates a `TempDir`, sets `ZDX_HOME`, and resets
+/// `thread_index` caches. On `Drop`, it resets the cache again and restores the
+/// previous `ZDX_HOME` environment variable before releasing the lock and deleting `temp`.
+pub(crate) struct TestZdxHomeGuard {
+    temp: TempDir,
+    prev_zdx_home: Option<OsString>,
+    _lock_guard: MutexGuard<'static, ()>,
+}
+
+impl TestZdxHomeGuard {
+    #[must_use]
+    pub fn path(&self) -> &std::path::Path {
+        self.temp.path()
+    }
+}
+
+impl Drop for TestZdxHomeGuard {
+    fn drop(&mut self) {
+        crate::core::thread_index::reset_cache_for_test();
         unsafe {
-            std::env::set_var("ZDX_HOME", temp.path());
+            if let Some(ref prev) = self.prev_zdx_home {
+                std::env::set_var("ZDX_HOME", prev);
+            } else {
+                std::env::remove_var("ZDX_HOME");
+            }
         }
-        temp
-    })
+    }
+}
+
+/// Returns an isolated RAII test environment.
+pub(crate) fn temp_zdx_home() -> TestZdxHomeGuard {
+    let guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let prev_zdx_home = std::env::var_os("ZDX_HOME");
+    let temp = TempDir::new().unwrap();
+    unsafe {
+        std::env::set_var("ZDX_HOME", temp.path());
+    }
+    crate::core::thread_index::reset_cache_for_test();
+    TestZdxHomeGuard {
+        temp,
+        prev_zdx_home,
+        _lock_guard: guard,
+    }
 }
