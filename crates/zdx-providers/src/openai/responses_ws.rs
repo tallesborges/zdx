@@ -159,7 +159,8 @@ impl OpenAIResponsesWsClient {
 
         let turn = TurnState {
             guard,
-            mapper: ResponsesEventMapper::new(self.config.model.clone()),
+            mapper: ResponsesEventMapper::new(self.config.model.clone())
+                .with_requested_service_tier(self.config.service_tier.clone()),
             pending_snapshot: snapshot,
             completed: false,
         };

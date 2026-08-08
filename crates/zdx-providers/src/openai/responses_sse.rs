@@ -135,6 +135,7 @@ pub struct ResponsesEventMapper {
     pending: VecDeque<StreamEvent>,
     last_response_id: Option<String>,
     terminal_outcome: Option<TerminalOutcome>,
+    requested_service_tier: Option<String>,
 }
 
 impl ResponsesEventMapper {
@@ -145,7 +146,15 @@ impl ResponsesEventMapper {
             pending: VecDeque::new(),
             last_response_id: None,
             terminal_outcome: None,
+            requested_service_tier: None,
         }
+    }
+
+    /// Records the `service_tier` asked for, so a silent downgrade is logged.
+    #[must_use]
+    pub fn with_requested_service_tier(mut self, tier: Option<String>) -> Self {
+        self.requested_service_tier = tier;
+        self
     }
 
     /// Parses one JSON event payload and queues the resulting `StreamEvent`(s).
@@ -185,6 +194,23 @@ impl ResponsesEventMapper {
     /// Most recent server `response.id` (used for WebSocket continuation).
     pub fn last_response_id(&self) -> Option<&str> {
         self.last_response_id.as_deref()
+    }
+
+    /// Logs when the provider served a different tier than the one requested,
+    /// so `@fast` can never silently cost more without being faster.
+    fn warn_on_service_tier_downgrade(&self, response: &Value) {
+        let Some(requested) = self.requested_service_tier.as_deref() else {
+            return;
+        };
+        let granted = response.get_str("service_tier");
+        if !granted.is_empty() && granted != requested {
+            tracing::warn!(
+                model = %self.model,
+                requested,
+                granted,
+                "provider downgraded the requested service tier"
+            );
+        }
     }
 
     pub(crate) fn terminal_outcome(&self) -> Option<TerminalOutcome> {
@@ -480,6 +506,7 @@ impl ResponsesEventMapper {
                 if !response_id.is_empty() {
                     self.last_response_id = Some(response_id.to_string());
                 }
+                self.warn_on_service_tier_downgrade(response);
                 self.terminal_outcome = Some(TerminalOutcome::Completed);
                 let usage = usage_from_response(response);
 
@@ -580,6 +607,13 @@ impl<S> ResponsesSseParser<S> {
             mapper: ResponsesEventMapper::new(model),
             finished: false,
         }
+    }
+
+    /// Records the `service_tier` asked for, so a silent downgrade is logged.
+    #[must_use]
+    pub fn with_requested_service_tier(mut self, tier: Option<String>) -> Self {
+        self.mapper = self.mapper.with_requested_service_tier(tier);
+        self
     }
 }
 
