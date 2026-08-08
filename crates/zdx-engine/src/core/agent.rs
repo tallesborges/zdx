@@ -1156,7 +1156,7 @@ fn build_run_turn_setup(
         service_tier: options
             .service_tier
             .as_deref()
-            .or(if selection.fast {
+            .or(if selection.fast && provider.supports_priority_tier() {
                 Some("priority")
             } else {
                 None

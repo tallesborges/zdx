@@ -513,6 +513,9 @@ impl ProviderKind {
 
     /// Returns true if this provider accepts the `priority` service tier
     /// (selected with the `@fast` model-spec modifier).
+    ///
+    /// Acceptance is not a grant: the `ChatGPT` Codex backend takes the field
+    /// and may still complete on `default`, which the Responses stream logs.
     pub fn supports_priority_tier(self) -> bool {
         matches!(self, Self::OpenAI | Self::OpenAICodex)
     }

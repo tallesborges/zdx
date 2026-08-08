@@ -82,7 +82,8 @@ pub async fn send_responses_stream(
     let response = crate::shared::check_response_status(provider, response).await?;
 
     let byte_stream = wrap_stream(trace, response.bytes_stream());
-    let event_stream = ResponsesSseParser::new(byte_stream, config.model.clone());
+    let event_stream = ResponsesSseParser::new(byte_stream, config.model.clone())
+        .with_requested_service_tier(config.service_tier.clone());
 
     Ok(maybe_wrap_with_metrics(event_stream))
 }
