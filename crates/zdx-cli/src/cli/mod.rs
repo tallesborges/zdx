@@ -117,9 +117,17 @@ enum Commands {
         #[arg(long, value_name = "EVENTS")]
         filter: Option<String>,
 
+        /// Emit incremental `assistant_delta` events as text is generated
+        #[arg(long)]
+        stream: bool,
+
         /// Disable all system prompt/context composition (system prompt, AGENTS.md/CLAUDE.md, memory, skills)
         #[arg(long = "no-system-prompt")]
         no_system_prompt: bool,
+
+        /// Skip skill discovery, keeping the rest of the system prompt (memory, project context, tools)
+        #[arg(long = "no-skills")]
+        no_skills: bool,
 
         /// Internal: read this already-rendered system prompt file and use it as the final prompt for the run.
         #[arg(long = "effective-system-prompt-file", hide = true)]
@@ -987,16 +995,19 @@ struct DispatchContext<'a> {
     config: &'a config::Config,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct ExecCommandInput {
     prompt: Option<String>,
     prompt_file: Option<PathBuf>,
     filter: Option<String>,
+    stream: bool,
     effective_system_prompt_file: Option<PathBuf>,
     model: Option<String>,
     thinking: Option<String>,
     tools: Option<String>,
     no_tools: bool,
     no_system_prompt: bool,
+    no_skills: bool,
     subagent: Option<String>,
     activity_kind: Option<String>,
     activity_parent_thread_id: Option<String>,
@@ -1058,9 +1069,11 @@ async fn run_exec_command(context: &DispatchContext<'_>, input: ExecCommandInput
         tool_timeout_override: None,
         thinking_override: input.thinking.as_deref(),
         event_filter_override: input.filter.as_deref(),
+        stream: input.stream,
         tools_override: input.tools.as_deref(),
         no_tools: input.no_tools,
         no_system_prompt: input.no_system_prompt,
+        no_skills: input.no_skills,
         subagent: input.subagent.as_deref(),
         activity_kind: input.activity_kind.as_deref(),
         activity_parent_thread_id: input.activity_parent_thread_id.as_deref(),
@@ -1109,7 +1122,9 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             prompt,
             prompt_file,
             filter,
+            stream,
             no_system_prompt,
+            no_skills,
             effective_system_prompt_file,
             model,
             thinking,
@@ -1126,12 +1141,14 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
                     prompt,
                     prompt_file,
                     filter,
+                    stream,
                     effective_system_prompt_file,
                     model,
                     thinking,
                     tools,
                     no_tools,
                     no_system_prompt,
+                    no_skills,
                     subagent,
                     activity_kind,
                     activity_parent_thread_id,

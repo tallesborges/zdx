@@ -12,6 +12,9 @@ use zdx_engine::tools::ToolRegistry;
 
 use crate::modes;
 
+// Mirrors the `exec` clap flags one-to-one; grouping them into enums would
+// only add indirection over what the CLI already exposes as separate switches.
+#[allow(clippy::struct_excessive_bools)]
 pub struct ExecRunOptions<'a> {
     pub root: &'a str,
     pub thread_opts: &'a ThreadPersistenceOptions,
@@ -22,9 +25,11 @@ pub struct ExecRunOptions<'a> {
     pub tool_timeout_override: Option<u32>,
     pub thinking_override: Option<&'a str>,
     pub event_filter_override: Option<&'a str>,
+    pub stream: bool,
     pub tools_override: Option<&'a str>,
     pub no_tools: bool,
     pub no_system_prompt: bool,
+    pub no_skills: bool,
     pub subagent: Option<&'a str>,
     pub activity_kind: Option<&'a str>,
     pub activity_parent_thread_id: Option<&'a str>,
@@ -55,6 +60,9 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
             c.thinking_level = parse_thinking_level(thinking)?;
         } else if let Some(level) = subagent.as_ref().and_then(|d| d.thinking_level) {
             c.thinking_level = level;
+        }
+        if options.no_skills {
+            c.skills.enabled = false;
         }
         c
     };
@@ -101,6 +109,7 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
             .map(parse_event_filter)
             .transpose()?
             .unwrap_or_default(),
+        stream: options.stream,
         effective_system_prompt,
         no_system_prompt: options.no_system_prompt,
         activity_kind: options.activity_kind.map(std::string::ToString::to_string),

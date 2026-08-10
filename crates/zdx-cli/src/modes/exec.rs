@@ -35,6 +35,8 @@ pub struct ExecOptions {
     pub tool_config: ToolConfig,
     /// Optional event type filters to emit.
     pub event_filter: Vec<String>,
+    /// Emit incremental `assistant_delta` events instead of only the completed text.
+    pub stream: bool,
     /// Optional fully-rendered system prompt override.
     pub effective_system_prompt: Option<String>,
     /// Disable all system prompt/context composition.
@@ -162,8 +164,11 @@ pub async fn run_exec(
     let (render_tx, render_rx) = zdx_engine::core::agent::create_event_channel();
 
     // Spawn renderer task
-    let renderer_handle =
-        spawn_exec_renderer_task_with_filter(render_rx, options.event_filter.clone());
+    let renderer_handle = spawn_exec_renderer_task_with_filter(
+        render_rx,
+        options.event_filter.clone(),
+        options.stream,
+    );
 
     // Spawn persist task if thread exists
     let thread_id = thread.as_ref().map(|t| t.id.clone());
@@ -209,26 +214,28 @@ pub async fn run_exec(
 pub struct ExecRenderer {
     stdout: Stdout,
     event_filter: Vec<String>,
+    stream: bool,
 }
 
 impl Default for ExecRenderer {
     fn default() -> Self {
-        Self::new(Vec::new())
+        Self::new(Vec::new(), false)
     }
 }
 
 impl ExecRenderer {
     /// Creates a new CLI renderer.
-    pub fn new(event_filter: Vec<String>) -> Self {
+    pub fn new(event_filter: Vec<String>, stream: bool) -> Self {
         Self {
             stdout: stdout(),
             event_filter,
+            stream,
         }
     }
 
     /// Handles a single agent event by writing a compact JSON object per line.
     pub fn handle_event(&mut self, event: &AgentEvent) {
-        let Some(event) = sanitize_exec_event(event) else {
+        let Some(event) = sanitize_exec_event(event, self.stream) else {
             return;
         };
 
@@ -257,9 +264,10 @@ impl ExecRenderer {
 pub fn spawn_exec_renderer_task_with_filter(
     mut rx: zdx_engine::core::agent::AgentEventRx,
     event_filter: Vec<String>,
+    stream: bool,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut renderer = ExecRenderer::new(event_filter);
+        let mut renderer = ExecRenderer::new(event_filter, stream);
 
         while let Some(event) = rx.recv().await {
             renderer.handle_event(&event);
@@ -282,11 +290,13 @@ fn event_type_name(event: &AgentEvent) -> &'static str {
         AgentEvent::Notice { .. } => "notice",
         AgentEvent::ProviderRetry { .. } => "provider_retry",
         AgentEvent::UsageUpdate { .. } => "usage_update",
+        // Only emitted under `--stream`; addressable via `--filter` so a
+        // streaming caller can narrow to deltas plus the final text.
+        AgentEvent::AssistantDelta { .. } => "assistant_delta",
         // These variants are filtered out earlier by `sanitize_exec_event`,
         // so they are not addressable via `--filter`. If the sanitization
         // policy changes, give them concrete names here.
-        AgentEvent::AssistantDelta { .. }
-        | AgentEvent::ReasoningDelta { .. }
+        AgentEvent::ReasoningDelta { .. }
         | AgentEvent::ToolInputDelta { .. }
         | AgentEvent::ToolOutputDelta { .. }
         | AgentEvent::TurnCheckpoint { .. }
@@ -296,10 +306,10 @@ fn event_type_name(event: &AgentEvent) -> &'static str {
     }
 }
 
-fn sanitize_exec_event(event: &AgentEvent) -> Option<AgentEvent> {
+fn sanitize_exec_event(event: &AgentEvent, stream: bool) -> Option<AgentEvent> {
     match event {
-        AgentEvent::AssistantDelta { .. }
-        | AgentEvent::ReasoningDelta { .. }
+        AgentEvent::AssistantDelta { .. } => stream.then(|| event.clone()),
+        AgentEvent::ReasoningDelta { .. }
         | AgentEvent::ToolOutputDelta { .. }
         | AgentEvent::ToolInputDelta { .. }
         | AgentEvent::TurnCheckpoint { .. }
@@ -357,7 +367,17 @@ mod tests {
             },
         };
 
-        assert!(sanitize_exec_event(&event).is_none());
+        assert!(sanitize_exec_event(&event, false).is_none());
+    }
+
+    #[test]
+    fn sanitize_exec_event_gates_assistant_delta_on_stream() {
+        let event = AgentEvent::AssistantDelta {
+            text: "chunk".to_string(),
+        };
+
+        assert!(sanitize_exec_event(&event, false).is_none());
+        assert_eq!(sanitize_exec_event(&event, true), Some(event));
     }
 
     #[test]
@@ -372,7 +392,7 @@ mod tests {
             },
         };
 
-        let sanitized = sanitize_exec_event(&event).expect("event should remain");
+        let sanitized = sanitize_exec_event(&event, false).expect("event should remain");
         match sanitized {
             AgentEvent::ReasoningCompleted { block } => {
                 assert_eq!(block.text.as_deref(), Some("thinking"));
