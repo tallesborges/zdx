@@ -1129,6 +1129,10 @@ fn load_prompt_context_sections(root: &Path, config: &Config) -> PromptContextSe
 }
 
 fn load_skills_with_config(config: &Config, root: &Path) -> LoadSkillsResult {
+    if !config.skills.enabled {
+        return LoadSkillsResult::default();
+    }
+
     let mut skill_options = LoadSkillsOptions::new(root);
     skill_options.sources = config.skills.sources.clone();
     skill_options

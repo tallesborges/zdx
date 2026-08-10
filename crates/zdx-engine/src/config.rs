@@ -47,6 +47,10 @@ fn default_subagents_enabled() -> bool {
     true
 }
 
+fn default_skills_enabled() -> bool {
+    true
+}
+
 /// Prompt template rendering configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -61,6 +65,9 @@ pub struct PromptTemplateConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SkillsConfig {
+    /// Master switch. Off skips discovery entirely, bundled skills included.
+    #[serde(default = "default_skills_enabled")]
+    pub enabled: bool,
     pub sources: SkillSourceToggles,
     #[serde(
         default = "default_skill_repositories",
@@ -76,6 +83,7 @@ pub struct SkillsConfig {
 impl Default for SkillsConfig {
     fn default() -> Self {
         Self {
+            enabled: default_skills_enabled(),
             sources: SkillSourceToggles {
                 zdx_user: true,
                 zdx_project: true,
