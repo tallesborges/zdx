@@ -92,7 +92,9 @@ impl MetaClient {
                     extra_headers: HeaderMap::new(),
                     include_usage: true,
                     include_reasoning_content: config.thinking_enabled,
-                    thinking: Some(config.thinking_enabled.into()),
+                    // Meta rejects the top-level `thinking` parameter; reasoning is
+                    // controlled solely by `reasoning_effort`.
+                    thinking: None,
                 },
                 extra_body,
             ),
