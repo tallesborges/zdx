@@ -101,6 +101,7 @@ enabled = true
 # Enable/disable skill sources (all enabled by default)
 [skills]
 skill_repositories = ["openai/skills/skills/.curated", "openai/skills/skills/.system", "anthropics/skills/skills"]
+enabled = true
 [skills.sources]
 zdx_user = true
 zdx_project = true
@@ -234,7 +235,7 @@ websocket = false
 
 [providers.meta]
 enabled = true
-models = ["muse-spark-1.1"]
+models = ["muse-spark-1.2", "muse-spark-1.1"]
 websocket = false
 
 [providers.custom]

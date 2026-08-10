@@ -1037,7 +1037,7 @@ api = "openai-completions"
 [[model]]
 id = "opencode-go:deepseek-v4-flash"
 provider = "opencode-go"
-display_name = "DeepSeek V4 Flash (New)"
+display_name = "DeepSeek V4 Flash (2x usage)"
 context_limit = 1000000
 
 [model.pricing]
@@ -1154,6 +1154,23 @@ cache_write = 0.0
 reasoning = true
 input_images = true
 output_limit = 500000
+
+[[model]]
+id = "meta:muse-spark-1.2"
+provider = "meta"
+display_name = "Muse Spark 1.2"
+context_limit = 1048576
+
+[model.pricing]
+input = 1.25
+output = 4.25
+cache_read = 0.15
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 131072
 
 [[model]]
 id = "meta:muse-spark-1.1"

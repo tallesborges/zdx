@@ -1837,7 +1837,7 @@ fn default_moonshot_provider() -> ProviderConfig {
 fn default_meta_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["muse-spark-1.1".to_string()],
+        models: vec!["muse-spark-1.2".to_string(), "muse-spark-1.1".to_string()],
         ..Default::default()
     }
 }
