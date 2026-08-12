@@ -279,8 +279,7 @@ struct Renderer {
     inline_state: OpenState,
     blockquote_depth: usize,
     blockquote_state: OpenState,
-    blockquote_suspensions: usize,
-    link_suspended_quote: Vec<bool>,
+    plain_link_urls: Vec<Option<String>>,
     code_lang: Option<String>,
     code_buf: String,
     in_code_block: bool,
@@ -378,15 +377,14 @@ impl Renderer {
                 self.open_inline("<s>".to_string(), "</s>");
             }
             Tag::Link { dest_url, .. } => {
-                let suspended = self.blockquote_depth > 0;
-                if suspended {
-                    self.suspend_blockquote();
-                    self.open_all_inline();
-                    self.blockquote_suspensions += 1;
+                if self.blockquote_depth > 0 {
+                    self.ensure_blockquote_open();
+                    self.plain_link_urls.push(Some(dest_url.to_string()));
+                } else {
+                    let open = format!("<a href=\"{}\">", escape_attr(&dest_url));
+                    self.open_inline(open, "</a>");
+                    self.plain_link_urls.push(None);
                 }
-                let open = format!("<a href=\"{}\">", escape_attr(&dest_url));
-                self.open_inline(open, "</a>");
-                self.link_suspended_quote.push(suspended);
             }
             Tag::Table(_) | Tag::HtmlBlock => self.block_break(2),
             Tag::TableHead | Tag::TableRow => {
@@ -457,13 +455,14 @@ impl Renderer {
                     self.pending_newlines = 2;
                 }
             }
-            TagEnd::Link => {
-                self.close_inline();
-                if self.link_suspended_quote.pop().unwrap_or(false) {
-                    self.blockquote_suspensions = self.blockquote_suspensions.saturating_sub(1);
-                    self.close_all_inline();
+            TagEnd::Link => match self.plain_link_urls.pop().flatten() {
+                Some(url) => {
+                    self.push_raw(" (");
+                    self.push_escaped(&url);
+                    self.push_raw(")");
                 }
-            }
+                None => self.close_inline(),
+            },
             TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough => {
                 self.close_inline();
             }
@@ -476,8 +475,12 @@ impl Renderer {
     /// Inline code cannot contain or sit inside another entity, so any open
     /// formatting is closed before it and reopened after.
     fn push_inline_code(&mut self, code: &str) {
+        if self.blockquote_depth > 0 {
+            self.ensure_blockquote_open();
+            self.push_escaped(code);
+            return;
+        }
         self.close_all_inline();
-        self.close_blockquote();
         self.push_raw("<code>");
         self.push_escaped(code);
         self.push_raw("</code>");
@@ -535,10 +538,6 @@ impl Renderer {
     }
 
     fn ensure_blockquote_open(&mut self) {
-        if self.blockquote_suspensions > 0 {
-            self.open_all_inline();
-            return;
-        }
         if self.blockquote_depth == 0 || self.blockquote_state == OpenState::Open {
             self.open_all_inline();
             return;
@@ -721,33 +720,38 @@ mod tests {
     }
 
     #[test]
-    fn suspends_blockquote_around_inline_code() {
+    fn renders_inline_code_as_plain_text_inside_blockquote() {
         assert_eq!(
             to_telegram_html("> before `code` after"),
-            "<blockquote>before </blockquote><code>code</code><blockquote> after</blockquote>"
+            "<blockquote>before code after</blockquote>"
         );
     }
 
     #[test]
-    fn reopens_blockquote_formatting_after_inline_code() {
+    fn keeps_blockquote_formatting_continuous_around_inline_code() {
         assert_eq!(
             to_telegram_html("> **before `code` after**"),
-            concat!(
-                "<blockquote><b>before </b></blockquote>",
-                "<code>code</code>",
-                "<blockquote><b> after</b></blockquote>"
-            )
+            "<blockquote><b>before code after</b></blockquote>"
         );
     }
 
     #[test]
-    fn suspends_blockquote_around_link() {
+    fn renders_link_label_and_url_as_plain_text_inside_blockquote() {
         assert_eq!(
             to_telegram_html("> before [link](https://example.com) after"),
+            "<blockquote>before link (https://example.com) after</blockquote>"
+        );
+    }
+
+    #[test]
+    fn keeps_many_inline_code_spans_in_one_blockquote() {
+        assert_eq!(
+            to_telegram_html(
+                "> `account.createAccountProof` takes `productAccountId` with `dotNsIdentifier`."
+            ),
             concat!(
-                "<blockquote>before </blockquote>",
-                "<a href=\"https://example.com\">link</a>",
-                "<blockquote> after</blockquote>"
+                "<blockquote>account.createAccountProof takes productAccountId with ",
+                "dotNsIdentifier.</blockquote>"
             )
         );
     }
