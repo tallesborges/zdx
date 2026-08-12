@@ -24,6 +24,7 @@ use crate::bot::context::BotContext;
 use crate::bot::queue::{ChatQueueMap, dispatch_message};
 use crate::commands::{BotCommand, parse_command};
 use crate::handlers::message::{escape_html, thread_id_for_chat};
+use crate::telegram::markdown::{to_telegram_html, truncate_telegram_html};
 use crate::telegram::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, TelegramClient};
 use crate::types::IncomingMessage;
 
@@ -390,7 +391,7 @@ async fn present_generation_result(
         }
         Err(err) => {
             let message = format!(
-                "⚠️ Generation failed:\n<blockquote><code>{}</code></blockquote>\nSend another message to retry, or /cancel.",
+                "⚠️ Generation failed:\n<pre>{}</pre>\nSend another message to retry, or /cancel.",
                 escape_html(&format!("{err:#}"))
             );
             if let Err(edit_err) = context
@@ -565,7 +566,7 @@ async fn start_btw_topic(
                 map.insert(thread_id.to_string(), session);
             }
             let text = format!(
-                "⚠️ Couldn't open the side topic:\n<blockquote><code>{}</code></blockquote>\nSend another message to retry, or /cancel.",
+                "⚠️ Couldn't open the side topic:\n<pre>{}</pre>\nSend another message to retry, or /cancel.",
                 escape_html(&format!("{err:#}"))
             );
             let sent = context
@@ -785,11 +786,9 @@ fn suggestion_preview(command: StagingCommand, suggestion: &str) -> String {
             "Accept runs this prompt here. Send another message to regenerate.",
         ),
     };
-    let truncated = truncate_chars(suggestion, SUGGESTION_PREVIEW_MAX_CHARS);
-    format!(
-        "{icon} <b>{title}</b>\n<blockquote>{}</blockquote>\n<i>{hint}</i>",
-        escape_html(&truncated)
-    )
+    let html = to_telegram_html(suggestion);
+    let truncated = truncate_telegram_html(&html, SUGGESTION_PREVIEW_MAX_CHARS);
+    format!("{icon} <b>{title}</b>\n\n{truncated}\n\n<i>{hint}</i>")
 }
 
 fn accept_discard_keyboard() -> InlineKeyboardMarkup {
@@ -819,19 +818,11 @@ fn discard_only_keyboard() -> InlineKeyboardMarkup {
     }
 }
 
-fn truncate_chars(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-    let truncated: String = text.chars().take(max_chars.saturating_sub(1)).collect();
-    format!("{truncated}…")
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{STAGING_TTL, StagingCommand, StagingSession, suggestion_preview, truncate_chars};
+    use super::{STAGING_TTL, StagingCommand, StagingSession, suggestion_preview};
 
     fn session_created_at(created_at: Instant) -> StagingSession {
         StagingSession {
@@ -859,10 +850,15 @@ mod tests {
     }
 
     #[test]
-    fn suggestion_preview_escapes_html_and_keeps_actions_hint() {
-        let preview = suggestion_preview(StagingCommand::Handoff, "fix <script> & stuff");
+    fn suggestion_preview_converts_markdown_and_keeps_actions_hint() {
+        let preview = suggestion_preview(
+            StagingCommand::Handoff,
+            "**Fix** `<script>` & stuff\n\n> Check first",
+        );
         assert!(preview.contains("Handoff preview"));
-        assert!(preview.contains("fix &lt;script&gt; &amp; stuff"));
+        assert!(preview.contains("<b>Fix</b> <code>&lt;script&gt;</code> &amp; stuff"));
+        assert!(preview.contains("<blockquote>Check first</blockquote>"));
+        assert!(!preview.contains("<blockquote><b>Fix"));
         assert!(preview.contains("regenerate"));
     }
 
@@ -889,10 +885,5 @@ mod tests {
         let preview = suggestion_preview(StagingCommand::Handoff, &long);
         assert!(preview.chars().count() < 3_500);
         assert!(preview.contains('…'));
-    }
-
-    #[test]
-    fn truncate_keeps_short_text_verbatim() {
-        assert_eq!(truncate_chars("short", 10), "short");
     }
 }

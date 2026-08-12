@@ -13,6 +13,7 @@ use serde_json::Value;
 use zdx_engine::config::{Config, ResolvedTelegramRuntime};
 
 mod html;
+pub(crate) mod markdown;
 mod types;
 
 #[allow(unused_imports)]

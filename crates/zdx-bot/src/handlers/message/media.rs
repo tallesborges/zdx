@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use super::ReplyContext;
-use super::response::normalize_reply_text;
 use crate::bot::context::BotContext;
+use crate::telegram::markdown::to_telegram_html;
 
 const MEDIA_BLOCK_OPEN: &str = "<medias>";
 
@@ -143,7 +143,7 @@ pub(super) fn parse_final_response(final_text: &str) -> ParsedFinalResponse {
     }
 
     ParsedFinalResponse {
-        text: normalize_reply_text(&text_without_media_tags),
+        text: to_telegram_html(&text_without_media_tags),
         media_paths,
         followups,
     }

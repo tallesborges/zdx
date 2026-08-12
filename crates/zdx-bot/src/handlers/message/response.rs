@@ -145,23 +145,3 @@ async fn send_text_response(
 
     Ok(())
 }
-
-pub(super) fn normalize_reply_text(text: &str) -> String {
-    let mut out = String::new();
-    let mut prev_blank = false;
-
-    for line in text.lines() {
-        let is_blank = line.trim().is_empty();
-        if is_blank && prev_blank {
-            continue;
-        }
-
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(line);
-        prev_blank = is_blank;
-    }
-
-    out.trim().to_string()
-}
