@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -253,11 +254,15 @@ async fn handle_callback_query(
     chat_queues: &ChatQueueMap,
     callback: CallbackQuery,
 ) {
-    // Enforce allowlist: only authorized users can trigger cancel actions
-    if !context.allowlist_user_ids().contains(&callback.from.id) {
+    if !callback_is_allowed(
+        context.allowlist_user_ids(),
+        context.allowlist_chat_ids(),
+        &callback,
+    ) {
         tracing::warn!(
             user_id = callback.from.id,
-            "Denied callback from non-allowlisted user"
+            chat_id = callback.message.as_ref().map(|message| message.chat.id),
+            "Denied callback outside allowlist"
         );
         let _ = client
             .answer_callback_query(&callback.id, Some("Access denied"))
@@ -324,6 +329,21 @@ async fn handle_callback_query(
         }
         tracing::warn!(user_id = callback.from.id, ?data, "Unknown callback");
     }
+}
+
+fn callback_is_allowed(
+    user_ids: &HashSet<i64>,
+    chat_ids: &HashSet<i64>,
+    callback: &CallbackQuery,
+) -> bool {
+    if !user_ids.contains(&callback.from.id) {
+        return false;
+    }
+
+    callback.message.as_ref().is_some_and(|message| {
+        message.chat.is_private()
+            || (message.chat.is_group() && chat_ids.contains(&message.chat.id))
+    })
 }
 
 /// Cancel a queued (not-yet-processing) item. The visible work happens here
@@ -755,10 +775,14 @@ async fn handle_thinking_callback(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use serde_json::json;
 
-    use super::{media_group_key, parse_cancel_callback, parse_queue_cancel_callback};
-    use crate::telegram::Message;
+    use super::{
+        callback_is_allowed, media_group_key, parse_cancel_callback, parse_queue_cancel_callback,
+    };
+    use crate::telegram::{CallbackQuery, Message};
 
     fn test_message(id: i64, media_group_id: Option<&str>, text: Option<&str>) -> Message {
         serde_json::from_value(json!({
@@ -769,6 +793,21 @@ mod tests {
             "text": text,
         }))
         .expect("valid test message")
+    }
+
+    fn test_callback(user_id: i64, chat_id: i64, chat_type: &str) -> CallbackQuery {
+        serde_json::from_value(json!({
+            "id": "callback-1",
+            "from": { "id": user_id, "is_bot": false },
+            "message": {
+                "message_id": 100,
+                "chat": { "id": chat_id, "type": chat_type },
+                "from": { "id": 99, "is_bot": true },
+                "text": "button",
+            },
+            "data": "retry:go",
+        }))
+        .expect("valid test callback")
     }
 
     #[test]
@@ -787,5 +826,48 @@ mod tests {
         assert_eq!(parse_cancel_callback("cancel:1:2"), Some((1, 2)));
         assert_eq!(parse_cancel_callback("cancel_q:1:2"), None);
         assert_eq!(parse_queue_cancel_callback("cancel_q:3:4"), Some((3, 4)));
+    }
+
+    #[test]
+    fn callback_requires_allowed_user_and_group() {
+        let users = HashSet::from([7]);
+        let chats = HashSet::from([-100]);
+
+        assert!(callback_is_allowed(
+            &users,
+            &chats,
+            &test_callback(7, 7, "private")
+        ));
+        assert!(callback_is_allowed(
+            &users,
+            &chats,
+            &test_callback(7, -100, "supergroup")
+        ));
+        assert!(!callback_is_allowed(
+            &users,
+            &chats,
+            &test_callback(8, -100, "supergroup")
+        ));
+        assert!(!callback_is_allowed(
+            &users,
+            &chats,
+            &test_callback(7, -200, "supergroup")
+        ));
+    }
+
+    #[test]
+    fn callback_without_bot_message_is_rejected() {
+        let callback: CallbackQuery = serde_json::from_value(json!({
+            "id": "inline-callback",
+            "from": { "id": 7, "is_bot": false },
+            "data": "retry:go",
+        }))
+        .expect("valid inline callback");
+
+        assert!(!callback_is_allowed(
+            &HashSet::from([7]),
+            &HashSet::new(),
+            &callback
+        ));
     }
 }
