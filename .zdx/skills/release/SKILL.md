@@ -41,17 +41,17 @@ Rule of thumb: one `feat` or `!` anywhere in the range forces a minor; an all-fi
 
 ### 3. Bump the version and commit
 
-Edit `crates/zdx-cli/Cargo.toml`, then keep the lockfile in sync and verify:
+Edit the root `Cargo.toml` → `[workspace.package] version`. Every crate inherits it via `version.workspace = true`, so this is the only file to touch. Then keep the lockfile in sync and verify:
 
 ```sh
-cargo update -p zdx --precise <new-version>   # refresh Cargo.lock entry
+cargo update -p zdx --precise <new-version>   # refreshes all workspace members in Cargo.lock
 just ci-fast
 ```
 
 Commit only the version bump:
 
 ```sh
-git add crates/zdx-cli/Cargo.toml Cargo.lock
+git add Cargo.toml Cargo.lock
 git commit -m "release: v<new-version>"
 ```
 
