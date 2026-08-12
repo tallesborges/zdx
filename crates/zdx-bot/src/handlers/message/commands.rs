@@ -11,6 +11,7 @@ use super::{ReplyContext, StatusSnapshot, escape_html, thread_id_for_chat};
 use crate::agent;
 use crate::bot::context::BotContext;
 use crate::commands::{BotCommand, ModelSubcommand, ThinkingSubcommand, parse_command};
+use crate::telegram::markdown::{to_telegram_html, truncate_telegram_html};
 use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 pub(super) async fn handle_thread_setup_commands(
@@ -648,12 +649,12 @@ async fn handle_tldr_command(
     )
     .await
     {
-        Ok(recap) => format!(
-            "📝 <b>TLDR</b>\n{}",
-            escape_html(&truncate_recap(&recap, 3900))
-        ),
+        Ok(recap) => {
+            let html = to_telegram_html(&recap);
+            format!("📝 <b>TLDR</b>\n{}", truncate_telegram_html(&html, 3900))
+        }
         Err(err) => format!(
-            "⚠️ TLDR failed:\n<blockquote><code>{}</code></blockquote>",
+            "⚠️ TLDR failed:\n<pre>{}</pre>",
             escape_html(&format!("{err:#}"))
         ),
     };
@@ -662,14 +663,6 @@ async fn handle_tldr_command(
         .edit_message_text(incoming.chat_id, placeholder.id, &text, None)
         .await?;
     Ok(true)
-}
-
-fn truncate_recap(recap: &str, max_chars: usize) -> String {
-    if recap.chars().count() <= max_chars {
-        return recap.to_string();
-    }
-    let truncated: String = recap.chars().take(max_chars.saturating_sub(1)).collect();
-    format!("{truncated}…")
 }
 
 pub(super) fn format_whereami_message(

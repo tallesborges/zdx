@@ -312,10 +312,7 @@ fn format_user_error_message(message: &str) -> String {
     } else {
         trimmed.to_string()
     };
-    format!(
-        "❌ Request failed.\n\n<blockquote><code>{}</code></blockquote>",
-        escape_html(&compact)
-    )
+    format!("❌ Request failed.\n\n<pre>{}</pre>", escape_html(&compact))
 }
 
 pub(crate) fn thread_id_for_chat(chat_id: i64, message_thread_id: Option<i64>) -> String {
@@ -363,6 +360,18 @@ mod tests {
     fn parse_final_response_extracts_media_wrapper_format() {
         let parsed = parse_final_response("Done.\n<medias><media>/tmp/out.png</media></medias>");
         assert_eq!(parsed.text, "Done.");
+        assert_eq!(parsed.media_paths, vec![PathBuf::from("/tmp/out.png")]);
+    }
+
+    #[test]
+    fn parse_final_response_converts_markdown_text_to_telegram_html() {
+        let parsed = parse_final_response(
+            "**Answer:** use `git rebase`.\n\n- one\n- two\n\n<media>/tmp/out.png</media>",
+        );
+        assert_eq!(
+            parsed.text,
+            "<b>Answer:</b> use <code>git rebase</code>.\n\n- one\n- two"
+        );
         assert_eq!(parsed.media_paths, vec![PathBuf::from("/tmp/out.png")]);
     }
 

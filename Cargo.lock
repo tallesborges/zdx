@@ -4632,6 +4632,7 @@ dependencies = [
  "chrono",
  "image",
  "infer",
+ "pulldown-cmark",
  "reqwest",
  "serde",
  "serde_json",

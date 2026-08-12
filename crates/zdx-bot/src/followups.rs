@@ -42,7 +42,7 @@ pub(crate) async fn send_followups(
         .enumerate()
         .map(|(idx, item)| {
             vec![InlineKeyboardButton {
-                text: truncate_chars(item, MAX_BUTTON_CHARS),
+                text: truncate_chars(&strip_markdown_markers(item), MAX_BUTTON_CHARS),
                 callback_data: Some(format!("fu:{idx}")),
                 url: None,
             }]
@@ -136,7 +136,10 @@ pub(crate) async fn handle_callback(
         .edit_message_text(
             chat_id,
             message.id,
-            &format!("▶️ {}", crate::handlers::message::escape_html(&item)),
+            &format!(
+                "▶️ {}",
+                crate::handlers::message::escape_html(&strip_markdown_markers(&item))
+            ),
             None,
         )
         .await;
@@ -174,6 +177,15 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     format!("{truncated}…")
 }
 
+/// Button labels are plain text, so Markdown markers from the reply would show
+/// up literally. Underscores are left alone because identifiers use them.
+fn strip_markdown_markers(text: &str) -> String {
+    text.replace("__", "")
+        .replace(['`', '*'], "")
+        .trim()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +196,13 @@ mod tests {
         let label = truncate_chars(&long, 64);
         assert_eq!(label.chars().count(), 64);
         assert!(label.ends_with('…'));
+    }
+
+    #[test]
+    fn strips_markdown_markers_from_button_labels() {
+        assert_eq!(
+            strip_markdown_markers("Run `just ci-fast` on **zdx_bot**"),
+            "Run just ci-fast on zdx_bot"
+        );
     }
 }

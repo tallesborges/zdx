@@ -26,6 +26,7 @@ Scope: Telegram bot runtime, ingest/handler flow, queueing, and Telegram API int
 - `src/agent/mod.rs`: thread log + agent turn helpers
 - `src/telegram/mod.rs`: Telegram API client + tool wiring (HTML send/edit fallback ladder: HTML → `html::sanitize` retry → plain text)
 - `src/telegram/html.rs`: Telegram HTML repair pass — escapes stray `<`/`&`, drops unsupported tags/entities, balances unclosed or crossed tags
+- `src/telegram/markdown.rs`: model-text Markdown → Telegram HTML edge converter + entity-safe visible-character truncation
 - `src/telegram/types.rs`: Telegram API DTOs
 - `src/topic_title.rs`: async LLM-based topic title generation
 - `src/transcribe.rs`: audio transcription helper
