@@ -72,6 +72,15 @@ fn capabilities_for_model(model: &str) -> GeminiCapabilities {
         };
     }
 
+    // Gemini 3.7 Flash / 3.7 variants: "low", "medium", "high" — Google dropped "minimal".
+    if model.contains("gemini-3.7-flash") || model.contains("gemini-3.7") {
+        return GeminiCapabilities {
+            supports_minimal: false,
+            supports_low: true,
+            supports_medium: true,
+        };
+    }
+
     // Pro (text) variants: "low", "medium", "high" — no "minimal".
     if model.contains("gemini-3-pro") || model.contains("gemini-3.1-pro") {
         return GeminiCapabilities {

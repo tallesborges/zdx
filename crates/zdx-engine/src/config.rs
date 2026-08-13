@@ -1916,6 +1916,9 @@ fn default_google_antigravity_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gemini-3.7-flash-low".to_string(),
+            "gemini-3.7-flash-medium".to_string(),
+            "gemini-3.7-flash-high".to_string(),
             "gemini-3.6-flash-tiered".to_string(),
             "gemini-3.6-flash-low".to_string(),
             "gemini-3.6-flash-medium".to_string(),
@@ -1983,7 +1986,7 @@ fn default_zai_provider() -> ProviderConfig {
 fn default_xai_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["grok-4.5".to_string()],
+        models: vec!["grok-4.6".to_string(), "grok-4.5".to_string()],
         ..Default::default()
     }
 }
@@ -1991,7 +1994,7 @@ fn default_xai_provider() -> ProviderConfig {
 fn default_grok_build_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["grok-4.5".to_string()],
+        models: vec!["grok-4.6".to_string(), "grok-4.5".to_string()],
         ..Default::default()
     }
 }

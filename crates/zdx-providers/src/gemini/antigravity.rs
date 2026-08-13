@@ -163,7 +163,9 @@ fn build_headers(access_token: &str) -> anyhow::Result<HeaderMap> {
     );
     headers.insert(
         "User-Agent",
-        HeaderValue::from_static("antigravity/2.0.6 darwin/arm64"),
+        // The backend gates the served model catalog on this client version:
+        // versions below 2.5.4 404 on gemini-3.7-flash-*.
+        HeaderValue::from_static("antigravity/2.5.4 darwin/arm64"),
     );
     headers.insert(
         "X-Goog-Api-Client",
@@ -203,6 +205,39 @@ fn antigravity_thinking_config(
         .and_then(|tokens| i32::try_from(tokens.saturating_sub(1)).ok())
         .map_or(budget, |limit| budget.min(limit));
     GeminiThinkingConfig::Budget(capped_budget.max(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gemini_3_7_fixed_tiers_clamp_minimal_up_to_low() {
+        for model in [
+            "gemini-3.7-flash",
+            "gemini-3.7-flash-low",
+            "gemini-3.7-flash-medium",
+            "gemini-3.7-flash-high",
+        ] {
+            // Off and Low (alias minimal) should both clamp to "low" because 3.7 has no minimal
+            assert!(matches!(
+                antigravity_thinking_config(ThinkingLevel::Off, model, Some(65_536)),
+                GeminiThinkingConfig::Level(ref l) if l == "low"
+            ));
+            assert!(matches!(
+                antigravity_thinking_config(ThinkingLevel::Low, model, Some(65_536)),
+                GeminiThinkingConfig::Level(ref l) if l == "low"
+            ));
+            assert!(matches!(
+                antigravity_thinking_config(ThinkingLevel::Medium, model, Some(65_536)),
+                GeminiThinkingConfig::Level(ref l) if l == "medium"
+            ));
+            assert!(matches!(
+                antigravity_thinking_config(ThinkingLevel::High, model, Some(65_536)),
+                GeminiThinkingConfig::Level(ref l) if l == "high"
+            ));
+        }
+    }
 }
 
 /// Constructs the Google Antigravity client from the given context.

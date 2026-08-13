@@ -67,6 +67,18 @@ input_images = false
 # and misleading in the UI. Flag them non-reasoning to hide the thinking picker/
 # indicator. The `-tiered` variant keeps reasoning=true (effort via thinking_level).
 [[override]]
+id = "google-antigravity:gemini-3.7-flash-low"
+reasoning = false
+
+[[override]]
+id = "google-antigravity:gemini-3.7-flash-medium"
+reasoning = false
+
+[[override]]
+id = "google-antigravity:gemini-3.7-flash-high"
+reasoning = false
+
+[[override]]
 id = "google-antigravity:gemini-3.6-flash-low"
 reasoning = false
 

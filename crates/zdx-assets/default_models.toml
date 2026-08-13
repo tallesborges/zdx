@@ -614,6 +614,57 @@ input_images = true
 output_limit = 65536
 
 [[model]]
+id = "google-antigravity:gemini-3.7-flash-low"
+provider = "google-antigravity"
+display_name = "Gemini 3.7 Flash Low"
+context_limit = 1048576
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = false
+input_images = true
+output_limit = 65536
+
+[[model]]
+id = "google-antigravity:gemini-3.7-flash-medium"
+provider = "google-antigravity"
+display_name = "Gemini 3.7 Flash Medium"
+context_limit = 1048576
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = false
+input_images = true
+output_limit = 65536
+
+[[model]]
+id = "google-antigravity:gemini-3.7-flash-high"
+provider = "google-antigravity"
+display_name = "Gemini 3.7 Flash High"
+context_limit = 1048576
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = false
+input_images = true
+output_limit = 65536
+
+[[model]]
 id = "google-antigravity:gemini-3.6-flash-tiered"
 provider = "google-antigravity"
 display_name = "Gemini 3.6 Flash"
@@ -1019,7 +1070,7 @@ api = "anthropic-messages"
 [[model]]
 id = "opencode-go:deepseek-v4-pro"
 provider = "opencode-go"
-display_name = "DeepSeek V4 Pro"
+display_name = "DeepSeek V4 Pro (New)"
 context_limit = 1000000
 
 [model.pricing]
@@ -1122,6 +1173,23 @@ input_images = false
 output_limit = 131072
 
 [[model]]
+id = "xai:grok-4.6"
+provider = "xai"
+display_name = "Grok 4.6"
+context_limit = 500000
+
+[model.pricing]
+input = 2.0
+output = 6.0
+cache_read = 0.5
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 500000
+
+[[model]]
 id = "xai:grok-4.5"
 provider = "xai"
 display_name = "Grok 4.5"
@@ -1131,6 +1199,23 @@ context_limit = 500000
 input = 2.0
 output = 6.0
 cache_read = 0.3
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 500000
+
+[[model]]
+id = "grok-build:grok-4.6"
+provider = "grok-build"
+display_name = "Grok 4.6"
+context_limit = 500000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
 cache_write = 0.0
 
 [model.capabilities]
