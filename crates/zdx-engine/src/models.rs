@@ -1,7 +1,8 @@
 //! Model registry for the TUI model picker.
 //!
 //! Loads models from `<base>/models.toml` when present, otherwise falls back to
-//! `default_models.toml`.
+//! `default_models.toml`, then applies persistent user metadata from
+//! `<base>/model_overrides.toml`.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -103,6 +104,8 @@ pub fn available_models() -> &'static [ModelOption] {
                 load_models_from_path(&crate::config::paths::zdx_home().join("models.toml"))
                     .or_else(|| load_models_from_str(DEFAULT_MODELS_TOML))
                     .unwrap_or_default();
+            let (overrides, _) = load_user_model_overrides();
+            apply_user_model_overrides(&mut models, &overrides);
 
             let mut seen = HashSet::new();
             let mut combined = Vec::new();
@@ -193,6 +196,7 @@ static CUSTOM_MODELS: OnceLock<Mutex<HashMap<String, &'static [ModelOption]>>> =
 pub fn custom_provider_models(
     providers: &crate::config::ProvidersConfig,
 ) -> &'static [ModelOption] {
+    let (overrides, overrides_key) = load_user_model_overrides();
     let mut entries: Vec<(&str, &[String])> = providers
         .custom
         .iter()
@@ -211,6 +215,7 @@ pub fn custom_provider_models(
         }
         key.push('\u{1d}');
     }
+    key.push_str(&overrides_key);
 
     let cache = CUSTOM_MODELS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = cache.lock().expect("custom models cache poisoned");
@@ -225,7 +230,11 @@ pub fn custom_provider_models(
             if id.is_empty() {
                 continue;
             }
-            out.push(ModelOption {
+            let qualified_id = format!("{provider}:{id}");
+            if overrides.iter().any(|entry| entry.id == qualified_id) {
+                continue;
+            }
+            let mut model = ModelOption {
                 id: leak_string(id.to_string()),
                 provider: leak_string((*provider).to_string()),
                 account: None,
@@ -243,7 +252,9 @@ pub fn custom_provider_models(
                     output_limit: 0,
                     api: Some("openai-completions"),
                 },
-            });
+            };
+            apply_overrides_to_model(&mut model, &overrides);
+            out.push(model);
         }
     }
 
@@ -265,6 +276,9 @@ impl ModelOption {
     pub fn find_by_id(id: &str) -> Option<&'static ModelOption> {
         // Try exact match on id first
         if let Some(model) = available_models().iter().find(|m| m.id == id) {
+            return Some(model);
+        }
+        if let Some(model) = available_models().iter().find(|m| m.qualified_id() == id) {
             return Some(model);
         }
 
@@ -392,8 +406,9 @@ pub fn wildcard_match(pattern: &str, text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        bare_model_id, custom_provider_models, fast_variant, format_model_thinking,
-        model_id_matches_patterns, wildcard_match,
+        ModelCapabilities, ModelOption, ModelPricing, UserModelOverride,
+        apply_user_model_overrides, bare_model_id, custom_provider_models, fast_variant,
+        format_model_thinking, model_id_matches_patterns, wildcard_match,
     };
     use crate::config::{CustomProviderConfig, ProvidersConfig, ThinkingLevel};
 
@@ -411,6 +426,7 @@ mod tests {
 
     #[test]
     fn custom_provider_models_honors_distinct_configs() {
+        let _home = crate::test_support::temp_zdx_home();
         let a = custom_provider_models(&providers_with("prov-a", &["m1", "m2"]));
         let b = custom_provider_models(&providers_with("prov-b", &["m3"]));
 
@@ -423,6 +439,60 @@ mod tests {
         // Same config returns the identical cached slice (no re-leak per call).
         let a_again = custom_provider_models(&providers_with("prov-a", &["m1", "m2"]));
         assert_eq!(a.as_ptr(), a_again.as_ptr());
+    }
+
+    #[test]
+    fn user_override_updates_existing_model_metadata() {
+        let mut models = vec![ModelOption {
+            id: "model-a",
+            provider: "provider-a",
+            account: None,
+            display_name: "Model A",
+            pricing: ModelPricing {
+                input: 1.0,
+                output: 2.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            context_limit: 100,
+            capabilities: ModelCapabilities::default(),
+        }];
+        let overrides = vec![override_for("provider-a:model-a", 200)];
+
+        apply_user_model_overrides(&mut models, &overrides);
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].context_limit, 200);
+        assert_eq!(models[0].capabilities.output_limit, 50);
+    }
+
+    #[test]
+    fn user_override_adds_custom_provider_model_metadata() {
+        let mut models = Vec::new();
+        let overrides = vec![override_for("parity:deepseek-flash-parity", 1_000_000)];
+
+        apply_user_model_overrides(&mut models, &overrides);
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].qualified_id(), "parity:deepseek-flash-parity");
+        assert_eq!(models[0].context_limit, 1_000_000);
+        assert_eq!(models[0].capabilities.output_limit, 50);
+    }
+
+    fn override_for(id: &str, context_limit: u64) -> UserModelOverride {
+        UserModelOverride {
+            id: id.to_string(),
+            display_name: None,
+            input: None,
+            output: None,
+            cache_read: None,
+            cache_write: None,
+            context_limit: Some(context_limit),
+            output_limit: Some(50),
+            reasoning: None,
+            input_images: None,
+            api: None,
+        }
     }
 
     #[test]
@@ -550,6 +620,143 @@ struct ModelCapabilitiesRecord {
     output_limit: u64,
     #[serde(default)]
     api: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct UserModelOverridesFile {
+    #[serde(rename = "override", default)]
+    overrides: Vec<UserModelOverride>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UserModelOverride {
+    id: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    input: Option<f64>,
+    #[serde(default)]
+    output: Option<f64>,
+    #[serde(default)]
+    cache_read: Option<f64>,
+    #[serde(default)]
+    cache_write: Option<f64>,
+    #[serde(default)]
+    context_limit: Option<u64>,
+    #[serde(default)]
+    output_limit: Option<u64>,
+    #[serde(default)]
+    reasoning: Option<bool>,
+    #[serde(default)]
+    input_images: Option<bool>,
+    #[serde(default)]
+    api: Option<String>,
+}
+
+fn load_user_model_overrides() -> (Vec<UserModelOverride>, String) {
+    let path = crate::config::paths::zdx_home().join("model_overrides.toml");
+    let Ok(contents) = fs::read_to_string(&path) else {
+        return (Vec::new(), String::new());
+    };
+    let file = match toml::from_str::<UserModelOverridesFile>(&contents) {
+        Ok(file) => file,
+        Err(err) => {
+            tracing::warn!(%err, path = %path.display(), "Failed to parse user model overrides");
+            return (Vec::new(), contents);
+        }
+    };
+    (file.overrides, contents)
+}
+
+fn apply_user_model_overrides(models: &mut Vec<ModelOption>, overrides: &[UserModelOverride]) {
+    for entry in overrides {
+        let mut matched = false;
+        for model in &mut *models {
+            if override_matches(model, &entry.id) {
+                apply_override(model, entry);
+                matched = true;
+            }
+        }
+        if !matched && let Some(mut model) = model_from_override(entry) {
+            apply_override(&mut model, entry);
+            models.push(model);
+        }
+    }
+}
+
+fn apply_overrides_to_model(model: &mut ModelOption, overrides: &[UserModelOverride]) {
+    for entry in overrides {
+        if override_matches(model, &entry.id) {
+            apply_override(model, entry);
+        }
+    }
+}
+
+fn override_matches(model: &ModelOption, id: &str) -> bool {
+    let id = id.trim();
+    model.qualified_id().eq_ignore_ascii_case(id)
+        || (!id.contains(':') && model.id.eq_ignore_ascii_case(id))
+}
+
+fn model_from_override(entry: &UserModelOverride) -> Option<ModelOption> {
+    let (provider, id) = entry.id.trim().split_once(':')?;
+    let provider = provider.trim().to_lowercase();
+    let id = id.trim();
+    if provider.is_empty() || id.is_empty() {
+        return None;
+    }
+    Some(ModelOption {
+        id: leak_string(id.to_string()),
+        provider: leak_string(provider),
+        account: None,
+        display_name: leak_string(id.to_string()),
+        pricing: ModelPricing {
+            input: 0.0,
+            output: 0.0,
+            cache_read: 0.0,
+            cache_write: 0.0,
+        },
+        context_limit: 0,
+        capabilities: ModelCapabilities {
+            reasoning: true,
+            input_images: false,
+            output_limit: 0,
+            api: Some("openai-completions"),
+        },
+    })
+}
+
+fn apply_override(model: &mut ModelOption, entry: &UserModelOverride) {
+    if let Some(value) = entry.display_name.as_deref() {
+        model.display_name = leak_string(value.trim().to_string());
+    }
+    if let Some(value) = entry.input {
+        model.pricing.input = value;
+    }
+    if let Some(value) = entry.output {
+        model.pricing.output = value;
+    }
+    if let Some(value) = entry.cache_read {
+        model.pricing.cache_read = value;
+    }
+    if let Some(value) = entry.cache_write {
+        model.pricing.cache_write = value;
+    }
+    if let Some(value) = entry.context_limit {
+        model.context_limit = value;
+    }
+    if let Some(value) = entry.output_limit {
+        model.capabilities.output_limit = value;
+    }
+    if let Some(value) = entry.reasoning {
+        model.capabilities.reasoning = value;
+    }
+    if let Some(value) = entry.input_images {
+        model.capabilities.input_images = value;
+    }
+    if let Some(value) = entry.api.as_deref() {
+        model.capabilities.api = Some(leak_string(value.trim().to_string()));
+    }
 }
 
 fn load_models_from_path(path: &Path) -> Option<Vec<ModelOption>> {
