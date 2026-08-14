@@ -3,7 +3,7 @@ use predicates::prelude::*;
 use serde_json::Value;
 use tempfile::tempdir;
 
-/// With no stored OAuth creds, `zdx quota --json` returns a well-formed
+/// With no stored subscription creds, `zdx quota --json` returns a well-formed
 /// `providers` array where every provider is reported as not-authenticated
 /// (no network calls are made — missing creds short-circuit before fetch).
 #[test]
@@ -12,6 +12,7 @@ fn test_quota_json_reports_all_providers_not_logged_in() {
 
     let output = cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", dir.path())
+        .env_remove("OPENCODE_API_KEY")
         .args(["quota", "--json"])
         .assert()
         .success()
@@ -21,7 +22,7 @@ fn test_quota_json_reports_all_providers_not_logged_in() {
 
     let parsed: Value = serde_json::from_slice(&output).unwrap();
     let providers = parsed["providers"].as_array().expect("providers array");
-    assert_eq!(providers.len(), 4);
+    assert_eq!(providers.len(), 5);
     for provider in providers {
         assert!(provider["provider"].is_string());
         assert_eq!(
@@ -37,6 +38,7 @@ fn test_quota_json_reports_all_providers_not_logged_in() {
     assert!(ids.contains(&"openai-codex"));
     assert!(ids.contains(&"google-antigravity"));
     assert!(ids.contains(&"grok-build"));
+    assert!(ids.contains(&"opencode-go"));
 }
 
 #[test]

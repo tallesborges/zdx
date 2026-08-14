@@ -1,9 +1,9 @@
-//! Live subscription-quota readers for flat-rate OAuth providers.
+//! Live subscription-quota readers for flat-rate providers.
 //!
 //! Reads the (mostly undocumented) usage/quota endpoints that Claude Code,
-//! Codex CLI, Google Antigravity, and Grok Build expose, using zdx's own
-//! stored OAuth tokens **read-only** (never refreshed or written from here —
-//! see the subscription-quota-monitor plan).
+//! Codex CLI, Google Antigravity, Grok Build, and `OpenCode` Go expose, using
+//! zdx's configured credentials **read-only** (OAuth tokens are never refreshed
+//! or written from here — see the subscription-quota-monitor plan).
 //!
 //! These endpoints are undocumented and may change; parsing is permissive and
 //! failures degrade to a bounded [`QuotaError`] rather than propagating raw
@@ -16,6 +16,7 @@ use std::time::Duration;
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
 
+use crate::ProviderKind;
 pub use crate::oauth::account_cache_key;
 use crate::oauth::{OAuthCredentials, claude_cli, google_antigravity, grok_build, openai_codex};
 
@@ -24,6 +25,7 @@ const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const ANTIGRAVITY_QUOTA_URL: &str =
     "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
 const GROK_BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
+const OPENCODE_GO_USAGE_URL: &str = "https://opencode.ai/zen/go/v1/usage";
 
 /// Provider id for the Claude (claude-cli) subscription.
 pub const PROVIDER_CLAUDE: &str = claude_cli::PROVIDER_KEY;
@@ -33,6 +35,8 @@ pub const PROVIDER_CODEX: &str = openai_codex::PROVIDER_KEY;
 pub const PROVIDER_ANTIGRAVITY: &str = google_antigravity::PROVIDER_KEY;
 /// Provider id for the Grok Build (xAI) subscription.
 pub const PROVIDER_GROK: &str = grok_build::PROVIDER_KEY;
+/// Provider id for the `OpenCode` Go subscription.
+pub const PROVIDER_OPENCODE_GO: &str = "opencode-go";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -50,6 +54,7 @@ pub fn provider_display(provider: &str) -> &str {
         PROVIDER_CODEX => "Codex",
         PROVIDER_ANTIGRAVITY => "Antigravity",
         PROVIDER_GROK => "Grok",
+        PROVIDER_OPENCODE_GO => "OpenCode Go",
         other => other,
     }
 }
@@ -68,6 +73,9 @@ pub const FETCHERS: &[(&str, QuotaFetcher)] = &[
         Box::pin(fetch_antigravity_quota(account))
     }),
     (PROVIDER_GROK, |account| Box::pin(fetch_grok_quota(account))),
+    (PROVIDER_OPENCODE_GO, |account| {
+        Box::pin(fetch_opencode_go_quota(account))
+    }),
 ];
 
 /// Display label for a provider account (`Claude` or `Claude @parity`).
@@ -355,6 +363,39 @@ pub async fn fetch_grok_quota(account: Option<String>) -> Result<SubscriptionQuo
     parse_grok(&wire).ok_or(QuotaError::Incompatible)
 }
 
+/// Fetches the `OpenCode` Go subscription quota using its configured API key.
+///
+/// # Errors
+/// Returns a bounded [`QuotaError`] on a missing API key or endpoint failure.
+pub async fn fetch_opencode_go_quota(
+    _account: Option<String>,
+) -> Result<SubscriptionQuota, QuotaError> {
+    let api_key = ProviderKind::OpencodeGo
+        .resolve_api_key(None)
+        .map_err(|err| {
+            tracing::debug!(provider = "opencode-go", error = %err, "Quota: failed to resolve API key");
+            QuotaError::NotAuthenticated
+        })?;
+
+    let resp = quota_client()?
+        .get(OPENCODE_GO_USAGE_URL)
+        .bearer_auth(api_key)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| classify_send(&e))?;
+
+    if !resp.status().is_success() {
+        return Err(error_for_status(resp.status(), resp.headers()));
+    }
+
+    let wire: OpenCodeGoUsageWire = resp.json().await.map_err(|err| {
+        tracing::debug!(provider = "opencode-go", error = %err, "Quota: response decode failed");
+        QuotaError::Incompatible
+    })?;
+    parse_opencode_go(&wire).ok_or(QuotaError::Incompatible)
+}
+
 // --- Claude wire shape ---
 
 #[derive(Debug, Deserialize)]
@@ -627,6 +668,64 @@ fn parse_grok(wire: &GrokBillingWire) -> Option<SubscriptionQuota> {
     })
 }
 
+// --- OpenCode Go wire shape ---
+
+#[derive(Debug, Deserialize)]
+struct OpenCodeGoUsageWire {
+    usage: Option<OpenCodeGoWindows>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenCodeGoWindows {
+    rolling: Option<OpenCodeGoWindow>,
+    weekly: Option<OpenCodeGoWindow>,
+    monthly: Option<OpenCodeGoWindow>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenCodeGoWindow {
+    status: Option<String>,
+    percent: Option<f64>,
+    resets_at: Option<String>,
+}
+
+fn opencode_go_window(window: Option<&OpenCodeGoWindow>, label: &str) -> Option<QuotaWindow> {
+    let window = window?;
+    if window.status.as_deref() != Some("ok") {
+        return None;
+    }
+    let used_percent = window.percent?;
+    if !used_percent.is_finite() || !(0.0..=100.0).contains(&used_percent) {
+        return None;
+    }
+    Some(QuotaWindow {
+        label: label.to_string(),
+        used_percent,
+        resets_at: parse_rfc3339(window.resets_at.as_deref()),
+        scope: None,
+    })
+}
+
+fn parse_opencode_go(wire: &OpenCodeGoUsageWire) -> Option<SubscriptionQuota> {
+    let usage = wire.usage.as_ref()?;
+    let windows = [
+        opencode_go_window(usage.rolling.as_ref(), "5h"),
+        opencode_go_window(usage.weekly.as_ref(), "weekly"),
+        opencode_go_window(usage.monthly.as_ref(), "monthly"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    if windows.is_empty() {
+        return None;
+    }
+    Some(SubscriptionQuota {
+        plan: None,
+        windows,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -759,6 +858,32 @@ mod tests {
         let quota = parse_grok(&wire).expect("grok quota");
         assert!((quota.windows[0].used_percent - 0.0).abs() < f64::EPSILON);
         assert!(parse_grok(&GrokBillingWire { config: None }).is_none());
+    }
+
+    #[test]
+    fn parses_opencode_go_windows() {
+        let wire: OpenCodeGoUsageWire = serde_json::from_str(
+            r#"{
+                "usage": {
+                    "rolling": { "status": "ok", "percent": 12.5, "resetsAt": "2026-08-14T15:10:54.202Z" },
+                    "weekly": { "status": "ok", "percent": 34, "resetsAt": "2026-08-17T00:00:00.202Z" },
+                    "monthly": { "status": "ok", "percent": 56, "resetsAt": "2026-08-24T12:32:08.202Z" }
+                }
+            }"#,
+        )
+        .unwrap();
+        let quota = parse_opencode_go(&wire).expect("OpenCode Go quota");
+        assert_eq!(quota.windows.len(), 3);
+        assert_eq!(quota.windows[0].label, "5h");
+        assert!((quota.windows[0].used_percent - 12.5).abs() < f64::EPSILON);
+        assert_eq!(quota.windows[1].label, "weekly");
+        assert_eq!(quota.windows[2].label, "monthly");
+        assert!(
+            quota
+                .windows
+                .iter()
+                .all(|window| window.resets_at.is_some())
+        );
     }
 
     #[test]
