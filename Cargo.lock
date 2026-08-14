@@ -4690,6 +4690,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "crossterm",
+ "open",
  "ratatui",
  "serde",
  "serde_json",
