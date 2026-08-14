@@ -33,10 +33,12 @@ pub struct ToolTiming {
 pub fn inspect_thread_timings(events: &[ThreadEvent]) -> ThreadTimingReport {
     let mut turns = Vec::new();
     let mut pending: HashMap<String, VecDeque<usize>> = HashMap::new();
-    let mut has_unavailable = false;
+    let mut pending_request = None;
+    let mut unmatched_result = false;
 
     for event in events {
         if matches!(event, ThreadEvent::Message { role, .. } if role == "user") {
+            flush_pending_request(&mut turns, &mut pending_request);
             turns.push(TurnTiming {
                 requests: Vec::new(),
                 tools: Vec::new(),
@@ -50,22 +52,39 @@ pub fn inspect_thread_timings(events: &[ThreadEvent]) -> ThreadTimingReport {
         };
         match event {
             ThreadEvent::Usage {
+                input_tokens,
                 output_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
                 model,
                 provider,
                 duration_ms,
                 ttft_ms,
                 ..
-            } if *output_tokens > 0 || duration_ms.is_some() || ttft_ms.is_some() => {
-                has_unavailable |= duration_ms.is_none() || ttft_ms.is_none();
-                turn.requests.push(RequestTiming {
+            } if *input_tokens > 0
+                || *output_tokens > 0
+                || *cache_read_tokens > 0
+                || *cache_write_tokens > 0
+                || duration_ms.is_some()
+                || ttft_ms.is_some() =>
+            {
+                let request = RequestTiming {
                     model: model.clone(),
                     provider: provider.clone(),
                     duration_ms: *duration_ms,
                     ttft_ms: *ttft_ms,
-                });
+                };
+                if duration_ms.is_some() || ttft_ms.is_some() {
+                    pending_request = None;
+                    turn.requests.push(request);
+                } else {
+                    merge_pending_request(&mut pending_request, request);
+                }
             }
             ThreadEvent::ToolUse { id, name, .. } => {
+                if let Some(request) = pending_request.take() {
+                    turn.requests.push(request);
+                }
                 let index = turn.tools.len();
                 turn.tools.push(ToolTiming {
                     name: name.clone(),
@@ -85,22 +104,50 @@ pub fn inspect_thread_timings(events: &[ThreadEvent]) -> ThreadTimingReport {
                     let tool = &mut turn.tools[index];
                     tool.ok = Some(*ok);
                     tool.duration_ms = *duration_ms;
-                    has_unavailable |= duration_ms.is_none();
                 } else {
-                    has_unavailable = true;
+                    unmatched_result = true;
                 }
             }
             _ => {}
         }
     }
+    flush_pending_request(&mut turns, &mut pending_request);
 
-    for turn in &turns {
-        has_unavailable |= turn.tools.iter().any(|tool| tool.ok.is_none());
-    }
+    let has_unavailable = unmatched_result
+        || turns.iter().any(|turn| {
+            turn.requests
+                .iter()
+                .any(|request| request.duration_ms.is_none() || request.ttft_ms.is_none())
+                || turn
+                    .tools
+                    .iter()
+                    .any(|tool| tool.ok.is_none() || tool.duration_ms.is_none())
+        });
 
     ThreadTimingReport {
         turns,
         has_unavailable,
+    }
+}
+
+fn merge_pending_request(pending: &mut Option<RequestTiming>, fragment: RequestTiming) {
+    if let Some(request) = pending {
+        if request.model.is_none() {
+            request.model = fragment.model;
+        }
+        if request.provider.is_none() {
+            request.provider = fragment.provider;
+        }
+    } else {
+        *pending = Some(fragment);
+    }
+}
+
+fn flush_pending_request(turns: &mut [TurnTiming], pending: &mut Option<RequestTiming>) {
+    if let Some(request) = pending.take()
+        && let Some(turn) = turns.last_mut()
+    {
+        turn.requests.push(request);
     }
 }
 
@@ -267,5 +314,31 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("Tool work") && line.contains("0/1 measured"))
         );
+    }
+
+    #[test]
+    fn folds_untimed_usage_fragment_into_terminal_request() {
+        let events = vec![
+            ThreadEvent::user_message("hello"),
+            ThreadEvent::usage(
+                super::super::thread_persistence::Usage::new(2, 2, 0, 34_308),
+                Some("claude-sonnet-5".to_string()),
+                Some("claude-cli".to_string()),
+                None,
+                None,
+            ),
+            ThreadEvent::usage(
+                super::super::thread_persistence::Usage::new(0, 322, 0, 0),
+                Some("claude-sonnet-5".to_string()),
+                Some("claude-cli".to_string()),
+                Some(5_166),
+                Some(4_417),
+            ),
+        ];
+
+        let report = inspect_thread_timings(&events);
+        assert_eq!(report.turns[0].requests.len(), 1);
+        assert_eq!(report.turns[0].requests[0].duration_ms, Some(5_166));
+        assert!(!report.has_unavailable);
     }
 }
