@@ -298,7 +298,7 @@ impl ToolRegistry {
         input: &Value,
         ctx: &ToolContext,
         enabled_tools: &std::collections::HashSet<String, S>,
-    ) -> (ToolOutput, ToolResult)
+    ) -> (ToolOutput, ToolResult, Option<u64>)
     where
         S: std::hash::BuildHasher,
     {
@@ -312,7 +312,7 @@ impl ToolRegistry {
             tracing::warn!("Tool call rejected: not enabled for this run");
             let output = unknown_tool_output(name, enabled_tools);
             let result = ToolResult::from_output(tool_use_id.to_string(), &output);
-            return (output, result);
+            return (output, result, None);
         }
 
         let output = if let Some(tool) = self
@@ -326,7 +326,7 @@ impl ToolRegistry {
             unknown_tool_output(name, enabled_tools)
         };
 
-        let duration_ms = started_at.elapsed().as_millis();
+        let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         match &output {
             ToolOutput::Failure { .. } => {
                 let (code, message, _) = output.error_info().unwrap_or(("unknown", "", None));
@@ -342,7 +342,7 @@ impl ToolRegistry {
         }
 
         let result = ToolResult::from_output(tool_use_id.to_string(), &output);
-        (output, result)
+        (output, result, Some(duration_ms))
     }
 
     fn register_builtin_tools(&mut self) {
@@ -637,9 +637,10 @@ pub async fn execute_tool<S>(
 where
     S: std::hash::BuildHasher,
 {
-    ToolRegistry::builtins()
+    let (output, result, _) = ToolRegistry::builtins()
         .execute_tool(name, tool_use_id, input, ctx, enabled_tools)
-        .await
+        .await;
+    (output, result)
 }
 
 // -- Blocking wrappers for leaf tools --

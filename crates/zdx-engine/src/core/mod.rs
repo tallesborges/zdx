@@ -14,6 +14,7 @@
 //! - `thread_export`: Thread transcript exports
 //! - `thread_index`: derived `threads.sqlite` cache (metadata, FTS, tool rows, export dirty state)
 //! - `thread_persistence`: Thread persistence
+//! - `thread_timing`: Per-thread client-observed timing reduction and formatting
 //! - `title_generation`: LLM-based title generation
 //! - `tldr_generation`: LLM-based thread TLDR/recap generation
 //! - `usage_stats`: Usage/cost aggregation over saved threads
@@ -32,6 +33,7 @@ pub mod subagent;
 pub mod thread_export;
 pub mod thread_index;
 pub mod thread_persistence;
+pub mod thread_timing;
 pub mod title_generation;
 pub mod tldr_generation;
 pub mod usage_stats;

@@ -1,3 +1,5 @@
+use std::collections::{HashMap, VecDeque};
+
 use tokio::task::JoinHandle;
 
 use super::event::{ThreadEvent, Usage};
@@ -59,6 +61,9 @@ pub(crate) struct UsagePersistor {
     /// every `TurnCheckpoint`/`TurnFinished`), this makes flushes idempotent
     /// across repeated checkpoints — `start = max(prior_count, last_persisted)`.
     last_persisted_index: usize,
+    /// Completion metadata arrives before checkpoint snapshots. Keep it keyed
+    /// by tool id until the canonical, request-ordered result is flushed.
+    tool_durations: HashMap<String, VecDeque<Option<u64>>>,
 }
 
 impl UsagePersistor {
@@ -111,6 +116,14 @@ impl UsagePersistor {
                     }
                 }
             }
+            AgentEvent::ToolCompleted {
+                id, duration_ms, ..
+            } => {
+                self.tool_durations
+                    .entry(id.clone())
+                    .or_default()
+                    .push_back(*duration_ms);
+            }
             AgentEvent::TurnCheckpoint {
                 messages,
                 prior_message_count,
@@ -157,7 +170,22 @@ impl UsagePersistor {
         }
 
         for msg in &full[start..] {
+            let event_start = events.len();
             emit_message_events(msg, events);
+            for event in &mut events[event_start..] {
+                if let ThreadEvent::ToolResult {
+                    tool_use_id,
+                    duration_ms,
+                    ..
+                } = event
+                    && let Some(queue) = self.tool_durations.get_mut(tool_use_id)
+                {
+                    *duration_ms = queue.pop_front().flatten();
+                    if queue.is_empty() {
+                        self.tool_durations.remove(tool_use_id);
+                    }
+                }
+            }
         }
 
         self.last_persisted_index = full.len();

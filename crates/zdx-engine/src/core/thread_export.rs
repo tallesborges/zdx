@@ -301,6 +301,7 @@ mod tests {
                 tool_use_id: "tool-1".to_string(),
                 output: json!({ "content": "noise" }),
                 ok: true,
+                duration_ms: None,
                 ts: "2026-05-10T00:00:00Z".to_string(),
             },
             ThreadEvent::assistant_message("answer   with\nspaces"),

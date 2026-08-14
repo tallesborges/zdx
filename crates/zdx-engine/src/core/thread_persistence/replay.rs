@@ -93,6 +93,7 @@ pub(crate) fn emit_message_events(
                             tool_use_id: tr.tool_use_id.clone(),
                             output,
                             ok: !tr.is_error,
+                            duration_ms: None,
                             ts: chrono_timestamp(),
                         });
                     }

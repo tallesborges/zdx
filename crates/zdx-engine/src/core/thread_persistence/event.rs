@@ -163,6 +163,10 @@ pub enum ThreadEvent {
         tool_use_id: String,
         output: Value,
         ok: bool,
+        /// Client-observed execution duration. Absent on older threads and
+        /// synthetic results that did not execute a real tool.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
         ts: String,
     },
 
@@ -332,6 +336,7 @@ impl ThreadEvent {
             tool_use_id: tool_use_id.into(),
             output,
             ok,
+            duration_ms: None,
             ts: chrono_timestamp(),
         }
     }

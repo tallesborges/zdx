@@ -109,7 +109,7 @@ pub fn handle_agent_event(
             vec![]
         }
         AgentEvent::ToolStarted { .. } => vec![],
-        AgentEvent::ToolCompleted { id, result } => {
+        AgentEvent::ToolCompleted { id, result, .. } => {
             transcript.set_tool_result_for(id, result.clone());
             vec![]
         }
@@ -851,6 +851,7 @@ mod tests {
             &AgentEvent::ToolCompleted {
                 id: "tool-1".to_string(),
                 result: expected_result.clone(),
+                duration_ms: Some(1),
             },
         );
         handle_agent_event(

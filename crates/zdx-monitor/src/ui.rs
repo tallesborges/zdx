@@ -9,7 +9,7 @@ use zdx_engine::providers::subscription_quota::{QuotaWindow, account_display};
 
 use crate::app::{
     AgentOverlayState, CachedQuotas, CachedUsageStats, ConfigLine, ModelPickerState, MonitorApp,
-    QuotaEntry, Section, TargetPickerState, ToolPaneState, UsageSpan,
+    QuotaEntry, Section, TargetPickerState, TimingOverlayState, ToolPaneState, UsageSpan,
 };
 use crate::log_line::parse_log_line;
 
@@ -56,6 +56,10 @@ pub fn render(f: &mut Frame, app: &MonitorApp) {
 
     if let Some(state) = &app.agent_overlay {
         render_agent_overlay(f, state, f.area());
+    }
+
+    if let Some(state) = &app.timing_overlay {
+        render_timing_overlay(f, state, f.area());
     }
 
     if let Some(picker) = &app.model_picker {
@@ -141,7 +145,7 @@ fn footer_hint(section: Section) -> &'static str {
             "↑↓ select model • Enter edit • d delete favorite / reset subagent • PgUp/PgDn scroll • Tab/⇧Tab switch • q quit"
         }
         Section::Threads => {
-            "↑↓ navigate • Enter preview • t kind • p project • / search • Esc clear • y copy ID"
+            "↑↓ navigate • Enter preview • i timings • t kind • p project • / search • Esc clear • y copy ID"
         }
         Section::Usage => {
             "↑↓ scroll • PgUp/PgDn page • t span • R refresh • Tab/⇧Tab switch • q quit"
@@ -1295,6 +1299,24 @@ fn render_agent_overlay(f: &mut Frame, state: &AgentOverlayState, area: Rect) {
     }
 }
 
+fn render_timing_overlay(f: &mut Frame, state: &TimingOverlayState, area: Rect) {
+    f.render_widget(Clear, area);
+    let visible_rows = area.height.saturating_sub(2) as usize;
+    let max = state.lines.len().saturating_sub(visible_rows);
+    let offset = state.scroll.min(max);
+    let end = (offset + visible_rows).min(state.lines.len());
+    let items: Vec<ListItem> = state.lines[offset..end]
+        .iter()
+        .map(|line| ListItem::new(line.as_str()))
+        .collect();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(format!(" Timings · {} ", state.title))
+        .title_bottom(" j/k scroll · g/G top/bottom · Esc close ");
+    f.render_widget(List::new(items).block(block), area);
+}
+
 /// Tool detail pane: the same body the chat TUI's tool popup shows, rendered
 /// read-only over the transcript overlay.
 fn render_tool_pane(f: &mut Frame, state: &AgentOverlayState, pane: &ToolPaneState, area: Rect) {
@@ -1575,6 +1597,7 @@ fn truncate_spans(spans: Vec<Span<'static>>, max_chars: usize) -> Vec<Span<'stat
 
 #[cfg(test)]
 mod tests {
+    use ratatui::backend::TestBackend;
     use zdx_engine::providers::subscription_quota::SubscriptionQuota;
 
     use super::*;
@@ -1663,5 +1686,33 @@ mod tests {
             quota_bar(150.0).chars().filter(|c| *c == '█').count(),
             QUOTA_BAR_WIDTH
         );
+    }
+
+    #[test]
+    fn timing_overlay_renders_title_and_unavailable_state() {
+        let backend = TestBackend::new(80, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let state = TimingOverlayState {
+            title: "thread-1 · Demo".to_string(),
+            lines: vec![
+                "Turn 1".to_string(),
+                "  Tool work (sum, not wall time): unavailable (0/1 measured)".to_string(),
+            ],
+            scroll: 0,
+        };
+        terminal
+            .draw(|frame| render_timing_overlay(frame, &state, frame.area()))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push_str(buffer.cell((x, y)).unwrap().symbol());
+            }
+            text.push('\n');
+        }
+        assert!(text.contains("Timings · thread-1 · Demo"));
+        assert!(text.contains("unavailable (0/1 measured)"));
     }
 }

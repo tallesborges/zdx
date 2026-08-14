@@ -333,6 +333,7 @@ mod tests {
             event_to_status(&AgentEvent::ToolCompleted {
                 id: "1".to_string(),
                 result: ToolOutput::success(json!({ "ok": true })),
+                duration_ms: Some(1),
             }),
             Some(STATUS_WAITING.to_string())
         );

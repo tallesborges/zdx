@@ -98,6 +98,83 @@ fn create_thread_with_raw_events(
 }
 
 #[test]
+fn test_threads_inspect_reports_request_and_tool_timings() {
+    let temp_dir = TempDir::new().unwrap();
+    create_thread_with_raw_events(
+        &temp_dir,
+        "timed-thread",
+        Some("Timing demo"),
+        &[
+            json!({"type":"message","role":"user","text":"inspect","ts":"2026-01-01T00:00:00Z"}),
+            json!({"type":"usage","input_tokens":10,"output_tokens":2,"cache_read_tokens":0,"cache_write_tokens":0,"model":"m","provider":"p","duration_ms":1200,"ttft_ms":80,"ts":"2026-01-01T00:00:01Z"}),
+            json!({"type":"usage","input_tokens":5,"output_tokens":1,"cache_read_tokens":0,"cache_write_tokens":0,"model":"m","provider":"p","duration_ms":300,"ttft_ms":20,"ts":"2026-01-01T00:00:01Z"}),
+            json!({"type":"tool_use","id":"t1","name":"read","input":{},"ts":"2026-01-01T00:00:01Z"}),
+            json!({"type":"tool_use","id":"t2","name":"glob","input":{},"ts":"2026-01-01T00:00:01Z"}),
+            json!({"type":"tool_result","tool_use_id":"t1","output":{},"ok":true,"duration_ms":30,"ts":"2026-01-01T00:00:02Z"}),
+            json!({"type":"tool_result","tool_use_id":"t2","output":{},"ok":true,"duration_ms":40,"ts":"2026-01-01T00:00:02Z"}),
+        ],
+    );
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["threads", "inspect", "timed-thread"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Thread: timed-thread · Timing demo",
+        ))
+        .stdout(predicate::str::contains("p:m · duration 1.20s · TTFT 80ms"))
+        .stdout(predicate::str::contains(
+            "2. p:m · duration 300ms · TTFT 20ms",
+        ))
+        .stdout(predicate::str::contains("read · ok · duration 30ms"))
+        .stdout(predicate::str::contains("glob · ok · duration 40ms"))
+        .stdout(predicate::str::contains(
+            "Recorded successful request time: 1.50s",
+        ))
+        .stdout(predicate::str::contains(
+            "Tool work (sum, not wall time): 70ms",
+        ));
+}
+
+#[test]
+fn test_threads_inspect_marks_legacy_timings_unavailable() {
+    let temp_dir = TempDir::new().unwrap();
+    create_thread_with_raw_events(
+        &temp_dir,
+        "legacy-timing",
+        None,
+        &[
+            json!({"type":"message","role":"user","text":"inspect","ts":"2026-01-01T00:00:00Z"}),
+            json!({"type":"tool_use","id":"t1","name":"read","input":{},"ts":"2026-01-01T00:00:01Z"}),
+            json!({"type":"tool_result","tool_use_id":"t1","output":{},"ok":true,"ts":"2026-01-01T00:00:02Z"}),
+            json!({"type":"tool_use","id":"t2","name":"bash","input":{},"ts":"2026-01-01T00:00:02Z"}),
+        ],
+    );
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["threads", "inspect", "legacy-timing"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("duration —"))
+        .stdout(predicate::str::contains("bash · incomplete"))
+        .stdout(predicate::str::contains("unavailable (0/2 measured)"))
+        .stdout(predicate::str::contains("no estimates are shown"));
+}
+
+#[test]
+fn test_threads_inspect_nonexistent_is_clear() {
+    let temp_dir = TempDir::new().unwrap();
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["threads", "inspect", "missing"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("empty or not found"));
+}
+
+#[test]
 fn test_threads_list_empty() {
     let temp_dir = TempDir::new().unwrap();
 

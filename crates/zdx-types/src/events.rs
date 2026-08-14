@@ -58,7 +58,14 @@ pub enum AgentEvent {
     ToolOutputDelta { id: String, chunk: String },
 
     /// A tool invocation has completed.
-    ToolCompleted { id: String, result: ToolOutput },
+    ToolCompleted {
+        id: String,
+        result: ToolOutput,
+        /// Client-observed execution duration. Absent for synthetic results
+        /// that did not execute a real tool.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+    },
 
     /// An error occurred during execution.
     Error {
