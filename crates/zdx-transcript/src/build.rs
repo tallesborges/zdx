@@ -86,6 +86,7 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
             ThreadEvent::ToolResult {
                 tool_use_id,
                 output,
+                duration_ms,
                 ..
             } => {
                 flush_pending_assistant(&mut pending_assistant, &mut cells);
@@ -104,6 +105,19 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
                             )
                         });
                     cell.set_tool_result(tool_output);
+                    if let Some(duration_ms) = duration_ms
+                        && let HistoryCell::Tool {
+                            started_at,
+                            completed_at,
+                            ..
+                        } = cell
+                        && let Ok(duration_ms) = i64::try_from(*duration_ms)
+                        && let Some(completed_at) = *completed_at
+                    {
+                        *started_at = completed_at
+                            .checked_sub_signed(chrono::Duration::milliseconds(duration_ms))
+                            .unwrap_or(*started_at);
+                    }
                 }
                 // If no matching tool cell found, skip (incomplete pair)
             }
@@ -201,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_transcript_from_events_tool_use() {
+    fn test_build_transcript_from_events_restores_tool_duration() {
         let events = vec![
             ThreadEvent::ToolUse {
                 id: "tool-1".to_string(),
@@ -216,7 +230,7 @@ mod tests {
                 // output is a serialized ToolOutput (from ThreadEvent::from_agent)
                 output: json!({"ok": true, "data": {"content": "file data"}}),
                 ok: true,
-                duration_ms: None,
+                duration_ms: Some(2_500),
                 ts: "2024-01-01T00:00:02Z".to_string(),
             },
         ];
@@ -238,6 +252,13 @@ mod tests {
             }
             _ => panic!("Expected Tool cell"),
         }
+
+        let status: String = crate::tool_detail_body(&cells[0]).lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(status, "Status: Done (2.5s)");
     }
 
     #[test]
