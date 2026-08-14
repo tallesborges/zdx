@@ -207,6 +207,25 @@ fn antigravity_thinking_config(
     GeminiThinkingConfig::Budget(capped_budget.max(0))
 }
 
+/// Constructs the Google Antigravity client from the given context.
+///
+/// # Errors
+/// Never returns an error; construction is infallible.
+pub fn build(
+    ctx: &crate::ProviderBuildContext<'_>,
+) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
+    Ok(Box::new(AntigravityClient::new(AntigravityConfig::new(
+        ctx.model.to_string(),
+        ctx.config_max_tokens,
+        Some(antigravity_thinking_config(
+            ctx.thinking_level,
+            ctx.model,
+            ctx.config_max_tokens,
+        )),
+        ctx.account.map(ToString::to_string),
+    ))))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,23 +257,4 @@ mod tests {
             ));
         }
     }
-}
-
-/// Constructs the Google Antigravity client from the given context.
-///
-/// # Errors
-/// Never returns an error; construction is infallible.
-pub fn build(
-    ctx: &crate::ProviderBuildContext<'_>,
-) -> anyhow::Result<Box<dyn crate::StreamingProvider>> {
-    Ok(Box::new(AntigravityClient::new(AntigravityConfig::new(
-        ctx.model.to_string(),
-        ctx.config_max_tokens,
-        Some(antigravity_thinking_config(
-            ctx.thinking_level,
-            ctx.model,
-            ctx.config_max_tokens,
-        )),
-        ctx.account.map(ToString::to_string),
-    ))))
 }

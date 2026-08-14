@@ -38,7 +38,9 @@ impl Drop for TestZdxHomeGuard {
 
 /// Returns an isolated RAII test environment.
 pub(crate) fn temp_zdx_home() -> TestZdxHomeGuard {
-    let guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = TEST_MUTEX
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let prev_zdx_home = std::env::var_os("ZDX_HOME");
     let temp = TempDir::new().unwrap();
     unsafe {
