@@ -516,6 +516,9 @@ pub(crate) async fn handle_callback(
                     .await;
             }
         }
+        if let Err(err) = render_launcher(context, chat_id, msg.id).await {
+            tracing::warn!(chat_id, %err, "launcher: failed to restore launcher after resume");
+        }
     } else if rest == "back" {
         if let Err(err) = render_launcher(context, chat_id, msg.id).await {
             tracing::warn!(chat_id, %err, "launcher: failed to restore launcher");

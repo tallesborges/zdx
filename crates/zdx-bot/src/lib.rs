@@ -532,7 +532,7 @@ fn model_picker_header(
 }
 
 /// Apply a picked model according to the picker scope, returning the reply text.
-async fn resolve_model_pick(
+fn resolve_model_pick(
     context: &BotContext,
     scope: ModelPickerScope,
     chat_id: i64,
@@ -546,21 +546,83 @@ async fn resolve_model_pick(
         },
         ModelPickerScope::Topic => set_topic_model(chat_id, thread_id, model_id),
         ModelPickerScope::NewThread => {
-            match crate::handlers::message::create_topic_with_model(
-                context, chat_id, model_id, None,
-            )
-            .await
-            {
-                Ok(_) => format!(
-                    "🆕 New thread created with model <code>{model_id}</code>. Open it to continue."
-                ),
-                Err(err) => {
-                    tracing::error!(chat_id, %err, "launcher: failed to create custom topic");
-                    "❌ Couldn't create the new thread.".to_string()
-                }
-            }
+            // Handled directly in handle_model_callback to keep the launcher interactive.
+            String::new()
         }
     }
+}
+
+/// Handle picking a specific model from the model list.
+async fn handle_model_pick(
+    context: &BotContext,
+    client: &TelegramClient,
+    callback: &CallbackQuery,
+    msg: &crate::telegram::Message,
+    rest: &str,
+) {
+    let chat_id = msg.chat.id;
+    let message_id = msg.id;
+
+    let mut parts = rest.rsplitn(2, ':');
+    let Some(scope) = parts.next() else {
+        return;
+    };
+    let Some(provider_and_index) = parts.next() else {
+        return;
+    };
+    let Some((provider, index_str)) = provider_and_index.rsplit_once(':') else {
+        return;
+    };
+    let Some(scope) = ModelPickerScope::from_data(scope) else {
+        return;
+    };
+    let Some(index) = index_str.parse::<usize>().ok() else {
+        let _ = client
+            .answer_callback_query(&callback.id, Some("Invalid model selection"))
+            .await;
+        return;
+    };
+    let models = models_for_provider(context, chat_id, provider);
+    let Some(model_id) = models.get(index) else {
+        let _ = client
+            .answer_callback_query(&callback.id, Some("Model no longer available"))
+            .await;
+        return;
+    };
+
+    if scope == ModelPickerScope::NewThread {
+        match crate::handlers::message::create_topic_with_model(context, chat_id, model_id, None)
+            .await
+        {
+            Ok(_) => {
+                let _ = client
+                    .answer_callback_query(&callback.id, Some("New thread ready ✓"))
+                    .await;
+            }
+            Err(err) => {
+                tracing::error!(chat_id, %err, "launcher: failed to create custom topic");
+                let _ = client
+                    .answer_callback_query(&callback.id, Some("Couldn't create the new thread"))
+                    .await;
+            }
+        }
+        if let Err(err) =
+            crate::handlers::message::render_launcher(context, chat_id, message_id).await
+        {
+            tracing::warn!(chat_id, %err, "failed to restore launcher after custom pick");
+        }
+        return;
+    }
+
+    let reply = resolve_model_pick(context, scope, chat_id, msg.thread_id, model_id);
+
+    if let Err(err) = client
+        .edit_message_text(chat_id, message_id, &reply, None)
+        .await
+    {
+        eprintln!("Failed to edit message for model set: {err}");
+    }
+    let _ = client.answer_callback_query(&callback.id, None).await;
 }
 
 /// Handle model-selection inline keyboard callbacks.
@@ -599,41 +661,8 @@ async fn handle_model_callback(
             eprintln!("Failed to edit message for model provider: {err}");
         }
     } else if let Some(rest) = data.strip_prefix("model_pick:") {
-        let mut parts = rest.rsplitn(2, ':');
-        let Some(scope) = parts.next() else {
-            return;
-        };
-        let Some(provider_and_index) = parts.next() else {
-            return;
-        };
-        let Some((provider, index_str)) = provider_and_index.rsplit_once(':') else {
-            return;
-        };
-        let Some(scope) = ModelPickerScope::from_data(scope) else {
-            return;
-        };
-        let Some(index) = index_str.parse::<usize>().ok() else {
-            let _ = client
-                .answer_callback_query(&callback.id, Some("Invalid model selection"))
-                .await;
-            return;
-        };
-        let models = models_for_provider(context, chat_id, provider);
-        let Some(model_id) = models.get(index) else {
-            let _ = client
-                .answer_callback_query(&callback.id, Some("Model no longer available"))
-                .await;
-            return;
-        };
-
-        let reply = resolve_model_pick(context, scope, chat_id, msg.thread_id, model_id).await;
-
-        if let Err(err) = client
-            .edit_message_text(chat_id, message_id, &reply, None)
-            .await
-        {
-            eprintln!("Failed to edit message for model set: {err}");
-        }
+        handle_model_pick(context, client, callback, msg, rest).await;
+        return;
     } else if let Some(scope) = data.strip_prefix("model_back:") {
         let Some(scope) = ModelPickerScope::from_data(scope) else {
             return;
