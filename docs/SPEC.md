@@ -373,6 +373,7 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 ### Models registry
 
 - Path: `<base>/models.toml` (falls back to `default_models.toml` when missing).
+- Persistent user metadata overrides live at `<base>/model_overrides.toml`. `[[override]]` entries use a provider-qualified `id` and may override display name, pricing, context/output limits, reasoning, image input, and API routing metadata. An override may also define metadata for a custom-provider model absent from `models.toml`; it survives `zdx models update` because the generated registry and user overrides are separate files.
 - Tracks available models per provider. Entries support `*` wildcards for `zdx models update`.
 - `zdx models list` prints models from enabled providers as `provider:model` ids (the exact value accepted by `-m`), with `--all` to include disabled providers, `--provider <id>` to filter by provider, and `--json` for machine-readable output.
 
