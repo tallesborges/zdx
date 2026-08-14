@@ -647,26 +647,15 @@ impl<S> ChatCompletionsSseParser<S> {
 
         self.emitted_done = true;
 
-        if let Some(index) = self.text_index.take() {
-            self.pending.push_back(StreamEvent::ContentBlockCompleted {
-                index,
-                signature: None,
-            });
-        }
-
-        if let Some(index) = self.reasoning_index.take() {
-            self.pending.push_back(StreamEvent::ContentBlockCompleted {
-                index,
-                signature: None,
-            });
-        }
-
-        let tool_indices: Vec<usize> = self
+        let mut open_indices: Vec<usize> = self
             .tool_calls
             .values()
             .map(|state| state.stream_index)
             .collect();
-        for index in tool_indices {
+        open_indices.extend(self.text_index.take());
+        open_indices.extend(self.reasoning_index.take());
+        open_indices.sort_unstable();
+        for index in open_indices {
             self.pending.push_back(StreamEvent::ContentBlockCompleted {
                 index,
                 signature: None,
@@ -740,9 +729,8 @@ impl<S> ChatCompletionsSseParser<S> {
                 self.final_finish_reason = Some(finish_reason.to_string());
             }
 
-            // Process delta content
             if let Some(delta) = choice.get("delta") {
-                self.process_delta(delta);
+                self.process_delta_reasoning(delta);
             }
 
             // MiniMax may send reasoning_details directly on choice (not only delta).
@@ -753,6 +741,10 @@ impl<S> ChatCompletionsSseParser<S> {
             if let Some(message) = choice.get("message") {
                 let message_details = self.normalize_reasoning_details(message);
                 self.emit_reasoning_delta(&message_details);
+            }
+
+            if let Some(delta) = choice.get("delta") {
+                self.process_delta_content(delta);
             }
         }
 
@@ -776,30 +768,7 @@ impl<S> ChatCompletionsSseParser<S> {
         }
     }
 
-    fn process_delta(&mut self, delta: &Value) {
-        // Handle text content
-        if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
-            if self.text_index.is_none() {
-                let index = self.next_index;
-                self.next_index += 1;
-                self.text_index = Some(index);
-                self.pending.push_back(StreamEvent::ContentBlockStart {
-                    index,
-                    block_type: ContentBlockType::Text,
-                    id: None,
-                    name: None,
-                    data: None,
-                    id_origin: None,
-                });
-            }
-            if !text.is_empty() {
-                self.pending.push_back(StreamEvent::TextDelta {
-                    index: self.text_index.unwrap_or(0),
-                    text: text.to_string(),
-                });
-            }
-        }
-
+    fn process_delta_reasoning(&mut self, delta: &Value) {
         // Handle reasoning content (Moonshot/Kimi, StepFun and other OpenAI-compatible
         // providers). Reasoning arrives as a scalar field, as `reasoning_details`
         // (MiniMax), or, on OpenRouter-backed proxies, as both carrying the same text,
@@ -815,6 +784,32 @@ impl<S> ChatCompletionsSseParser<S> {
         self.emit_reasoning_delta(&scalar_reasoning);
         if detail_reasoning != scalar_reasoning {
             self.emit_reasoning_delta(&detail_reasoning);
+        }
+    }
+
+    fn process_delta_content(&mut self, delta: &Value) {
+        if let Some(text) = delta
+            .get("content")
+            .and_then(|v| v.as_str())
+            .filter(|text| !text.is_empty())
+        {
+            if self.text_index.is_none() {
+                let index = self.next_index;
+                self.next_index += 1;
+                self.text_index = Some(index);
+                self.pending.push_back(StreamEvent::ContentBlockStart {
+                    index,
+                    block_type: ContentBlockType::Text,
+                    id: None,
+                    name: None,
+                    data: None,
+                    id_origin: None,
+                });
+            }
+            self.pending.push_back(StreamEvent::TextDelta {
+                index: self.text_index.unwrap_or(0),
+                text: text.to_string(),
+            });
         }
 
         // Handle tool calls
@@ -1243,6 +1238,109 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    fn extract_block_starts(events: &[StreamEvent]) -> Vec<(usize, ContentBlockType)> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::ContentBlockStart {
+                    index, block_type, ..
+                } => Some((*index, *block_type)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn extract_block_completions(events: &[StreamEvent]) -> Vec<usize> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::ContentBlockCompleted { index, .. } => Some(*index),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_empty_content_placeholder_does_not_precede_reasoning() {
+        let sse = r#"data: {"choices":[{"delta":{"content":"","reasoning_content":"thinking"}}]}
+
+data: {"choices":[{"delta":{"content":"answer"}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}
+
+data: [DONE]
+"#;
+
+        let events = parse_sse(sse, "test-model").await;
+        assert_eq!(
+            extract_block_starts(&events),
+            vec![
+                (0, ContentBlockType::Reasoning),
+                (1, ContentBlockType::Text)
+            ]
+        );
+        assert_eq!(extract_block_completions(&events), vec![0, 1]);
+    }
+
+    #[tokio::test]
+    async fn test_same_delta_reasoning_precedes_content() {
+        let sse = r#"data: {"choices":[{"delta":{"content":"answer","reasoning_content":"thinking"}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}
+
+data: [DONE]
+"#;
+
+        let events = parse_sse(sse, "test-model").await;
+        assert_eq!(
+            extract_block_starts(&events),
+            vec![
+                (0, ContentBlockType::Reasoning),
+                (1, ContentBlockType::Text)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_late_reasoning_preserves_stream_order() {
+        let sse = r#"data: {"choices":[{"delta":{"content":"answer"}}]}
+
+data: {"choices":[{"delta":{"reasoning_content":"late thinking"}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}
+
+data: [DONE]
+"#;
+
+        let events = parse_sse(sse, "test-model").await;
+        assert_eq!(
+            extract_block_starts(&events),
+            vec![
+                (0, ContentBlockType::Text),
+                (1, ContentBlockType::Reasoning)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_choice_reasoning_details_precede_delta_content() {
+        let sse = r#"data: {"choices":[{"delta":{"content":"answer"},"reasoning_details":[{"text":"thinking"}]}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}
+
+data: [DONE]
+"#;
+
+        let events = parse_sse(sse, "test-model").await;
+        assert_eq!(
+            extract_block_starts(&events),
+            vec![
+                (0, ContentBlockType::Reasoning),
+                (1, ContentBlockType::Text)
+            ]
+        );
     }
 
     #[tokio::test]
