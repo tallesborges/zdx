@@ -106,6 +106,7 @@ fn test_threads_inspect_reports_request_and_tool_timings() {
         Some("Timing demo"),
         &[
             json!({"type":"message","role":"user","text":"inspect","ts":"2026-01-01T00:00:00Z"}),
+            json!({"type":"usage","input_tokens":2,"output_tokens":2,"cache_read_tokens":0,"cache_write_tokens":100,"model":"m","provider":"p","ts":"2026-01-01T00:00:01Z"}),
             json!({"type":"usage","input_tokens":10,"output_tokens":2,"cache_read_tokens":0,"cache_write_tokens":0,"model":"m","provider":"p","duration_ms":1200,"ttft_ms":80,"ts":"2026-01-01T00:00:01Z"}),
             json!({"type":"usage","input_tokens":5,"output_tokens":1,"cache_read_tokens":0,"cache_write_tokens":0,"model":"m","provider":"p","duration_ms":300,"ttft_ms":20,"ts":"2026-01-01T00:00:01Z"}),
             json!({"type":"tool_use","id":"t1","name":"read","input":{},"ts":"2026-01-01T00:00:01Z"}),
@@ -134,7 +135,8 @@ fn test_threads_inspect_reports_request_and_tool_timings() {
         ))
         .stdout(predicate::str::contains(
             "Tool work (sum, not wall time): 70ms",
-        ));
+        ))
+        .stdout(predicate::str::contains("Unavailable timings").not());
 }
 
 #[test]
