@@ -216,6 +216,7 @@ mod tests {
                 // output is a serialized ToolOutput (from ThreadEvent::from_agent)
                 output: json!({"ok": true, "data": {"content": "file data"}}),
                 ok: true,
+                duration_ms: None,
                 ts: "2024-01-01T00:00:02Z".to_string(),
             },
         ];
@@ -339,6 +340,7 @@ mod tests {
                 // output is a serialized ToolOutput (from ThreadEvent::from_agent)
                 output: json!({"ok": true, "data": {"content": "data"}}),
                 ok: true,
+                duration_ms: None,
                 ts: "2024-01-01T00:00:04Z".to_string(),
             },
             ThreadEvent::Message {
@@ -595,6 +597,7 @@ mod tests {
                 tool_use_id: "t1".to_string(),
                 output: json!({"ok": true, "data": {"content": "x"}}),
                 ok: true,
+                duration_ms: None,
                 ts: "2026-05-15T00:00:02Z".to_string(),
             },
             ThreadEvent::Message {
