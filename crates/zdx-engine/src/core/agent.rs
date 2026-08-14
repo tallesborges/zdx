@@ -2165,6 +2165,7 @@ fn emit_malformed_tool_events(
         sender.send(AgentEvent::ToolCompleted {
             id,
             result: error_output,
+            duration_ms: None,
         });
     }
 }
@@ -2194,6 +2195,14 @@ fn emit_stop_reason_notice(stop_reason: Option<&str>, sender: &EventSender) {
     });
 }
 
+struct CompletedTool {
+    idx: usize,
+    id: String,
+    output: ToolOutput,
+    result: ToolResult,
+    duration_ms: Option<u64>,
+}
+
 /// Executes all tool uses in parallel and emits events via async channel.
 ///
 /// Tools are spawned concurrently using `tokio::JoinSet`. `ToolStarted` events
@@ -2211,7 +2220,7 @@ async fn execute_tools_async(
     tool_registry: &ToolRegistry,
     cancel: Option<&CancellationToken>,
 ) -> Vec<ToolResult> {
-    let mut join_set: JoinSet<(usize, String, ToolOutput, ToolResult)> = JoinSet::new();
+    let mut join_set: JoinSet<CompletedTool> = JoinSet::new();
     let mut results: Vec<Option<(ToolOutput, ToolResult)>> = vec![None; tool_uses.len()];
     let mut completed: HashSet<usize> = HashSet::new();
     let mut current_todo_state: Option<todo_write::TodoState> = None;
@@ -2230,6 +2239,7 @@ async fn execute_tools_async(
     // else concurrently as before.
     for (i, tu) in tool_uses.iter().enumerate() {
         if todo_write::is_todo_tool_name(&tu.name) && is_enabled_tool(&tu.name) {
+            let started_at = std::time::Instant::now();
             let output = todo_write::execute_with_state(
                 &tu.input,
                 current_todo_state.as_ref(),
@@ -2239,14 +2249,18 @@ async fn execute_tools_async(
                 current_todo_state = Some(state);
             }
             let result = ToolResult::from_output(tu.id.clone(), &output);
+            let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
             record_tool_completion(
                 sender,
                 &mut completed,
                 &mut results,
-                i,
-                tu.id.clone(),
-                output,
-                result,
+                CompletedTool {
+                    idx: i,
+                    id: tu.id.clone(),
+                    output,
+                    result,
+                    duration_ms: Some(duration_ms),
+                },
             );
             continue;
         }
@@ -2264,10 +2278,16 @@ async fn execute_tools_async(
         let tool_span = tracing::Span::current();
         join_set.spawn(
             async move {
-                let (output, result) = tool_registry
+                let (output, result, duration_ms) = tool_registry
                     .execute_tool(&tu.name, &tu.id, &tu.input, &ctx, &enabled_tools)
                     .await;
-                (i, tu.id.clone(), output, result)
+                CompletedTool {
+                    idx: i,
+                    id: tu.id.clone(),
+                    output,
+                    result,
+                    duration_ms,
+                }
             }
             .instrument(tool_span),
         );
@@ -2299,16 +2319,8 @@ async fn execute_tools_async(
             }
             task_result = join_set.join_next() => {
                 match task_result {
-                    Some(Ok((idx, id, output, result))) => {
-                        record_tool_completion(
-                            sender,
-                            &mut completed,
-                            &mut results,
-                            idx,
-                            id,
-                            output,
-                            result,
-                        );
+                    Some(Ok(tool)) => {
+                        record_tool_completion(sender, &mut completed, &mut results, tool);
                     }
                     Some(Err(e)) => {
                         // JoinError: panic or cancellation
@@ -2323,10 +2335,13 @@ async fn execute_tools_async(
         }
     }
 
-    // Convert to Vec<ToolResult>, unwrapping Options
+    ordered_tool_results(results)
+}
+
+fn ordered_tool_results(results: Vec<Option<(ToolOutput, ToolResult)>>) -> Vec<ToolResult> {
     results
         .into_iter()
-        .map(|opt| opt.expect("all slots should be filled").1)
+        .map(|result| result.expect("all slots should be filled").1)
         .collect()
 }
 
@@ -2351,21 +2366,19 @@ fn record_tool_completion(
     sender: &EventSender,
     completed: &mut HashSet<usize>,
     results: &mut [Option<(ToolOutput, ToolResult)>],
-    idx: usize,
-    id: String,
-    output: ToolOutput,
-    result: ToolResult,
+    tool: CompletedTool,
 ) {
-    completed.insert(idx);
+    completed.insert(tool.idx);
     sender.send(AgentEvent::ToolCompleted {
-        id,
-        result: output.clone(),
+        id: tool.id,
+        result: tool.output.clone(),
+        duration_ms: tool.duration_ms,
     });
-    results[idx] = Some((output, result));
+    results[tool.idx] = Some((tool.output, tool.result));
 }
 
 fn handle_tool_interrupt(
-    join_set: &mut JoinSet<(usize, String, ToolOutput, ToolResult)>,
+    join_set: &mut JoinSet<CompletedTool>,
     completed: &mut HashSet<usize>,
     results: &mut [Option<(ToolOutput, ToolResult)>],
     tool_uses: &[ToolUse],
@@ -2374,10 +2387,10 @@ fn handle_tool_interrupt(
     join_set.abort_all();
 
     while let Some(task_result) = join_set.try_join_next() {
-        if let Ok((idx, id, output, result)) = task_result
-            && !completed.contains(&idx)
+        if let Ok(tool) = task_result
+            && !completed.contains(&tool.idx)
         {
-            record_tool_completion(sender, completed, results, idx, id, output, result);
+            record_tool_completion(sender, completed, results, tool);
         }
     }
 
@@ -2389,10 +2402,13 @@ fn handle_tool_interrupt(
                 sender,
                 completed,
                 results,
-                i,
-                tu.id.clone(),
-                abort_output,
-                abort_result,
+                CompletedTool {
+                    idx: i,
+                    id: tu.id.clone(),
+                    output: abort_output,
+                    result: abort_result,
+                    duration_ms: None,
+                },
             );
         }
     }
@@ -2842,7 +2858,7 @@ mod tests {
         assert!(matches!(&received[0], AgentEvent::ToolStarted { id, name }
             if id == "tool1" && name == "read"));
         assert!(
-            matches!(&received[1], AgentEvent::ToolCompleted { id, result }
+            matches!(&received[1], AgentEvent::ToolCompleted { id, result, .. }
             if id == "tool1" && result.is_ok())
         );
     }
@@ -2877,7 +2893,7 @@ mod tests {
             },
         ];
 
-        let (tx, _rx) = create_event_channel();
+        let (tx, mut rx) = create_event_channel();
         let sender = EventSender::new(tx);
         let tool_registry = ToolRegistry::builtins();
 
@@ -2894,6 +2910,23 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert!(!results[0].is_error);
         assert!(!results[1].is_error);
+
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|event| (*event).clone())
+            .collect();
+        let measured_completions = events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    AgentEvent::ToolCompleted {
+                        duration_ms: Some(_),
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(measured_completions, 2);
 
         let second = results[1]
             .content

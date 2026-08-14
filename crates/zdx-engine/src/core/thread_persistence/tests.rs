@@ -1003,6 +1003,73 @@ async fn test_persist_task_records_latency_on_terminal_usage() {
 }
 
 #[tokio::test]
+async fn test_persist_task_attaches_tool_durations_in_request_order() {
+    use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
+
+    let _temp = setup_temp_zdx_home();
+    let thread = Thread::with_id(unique_thread_id("tool-duration")).unwrap();
+    let (tx, rx) = create_event_channel();
+    let persist_handle = spawn_thread_persist_task(thread.clone(), rx);
+
+    for (id, duration_ms) in [("t2", 20), ("t1", 10)] {
+        tx.send(Arc::new(AgentEvent::ToolCompleted {
+            id: id.to_string(),
+            result: crate::core::events::ToolOutput::success(json!({"id": id})),
+            duration_ms: Some(duration_ms),
+        }))
+        .unwrap();
+    }
+
+    let assistant = ChatMessage {
+        role: "assistant".to_string(),
+        phase: None,
+        content: MessageContent::Blocks(vec![
+            ChatContentBlock::tool_use("t1", "read", json!({"file_path": "a"})),
+            ChatContentBlock::tool_use("t2", "read", json!({"file_path": "b"})),
+        ]),
+    };
+    let results = ChatMessage {
+        role: "user".to_string(),
+        phase: None,
+        content: MessageContent::Blocks(vec![
+            ChatContentBlock::ToolResult(crate::tools::ToolResult::from_output(
+                "t1".to_string(),
+                &crate::core::events::ToolOutput::success(json!("a")),
+            )),
+            ChatContentBlock::ToolResult(crate::tools::ToolResult::from_output(
+                "t2".to_string(),
+                &crate::core::events::ToolOutput::success(json!("b")),
+            )),
+        ]),
+    };
+    tx.send(Arc::new(AgentEvent::TurnCheckpoint {
+        messages: vec![assistant, results],
+        prior_message_count: 0,
+    }))
+    .unwrap();
+    drop(tx);
+    persist_handle.await.unwrap();
+
+    let persisted: Vec<_> = thread
+        .read_events()
+        .unwrap()
+        .into_iter()
+        .filter_map(|event| match event {
+            ThreadEvent::ToolResult {
+                tool_use_id,
+                duration_ms,
+                ..
+            } => Some((tool_use_id, duration_ms)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        persisted,
+        vec![("t1".to_string(), Some(10)), ("t2".to_string(), Some(20))]
+    );
+}
+
+#[tokio::test]
 async fn test_persist_task_saves_completed_usage_from_agent_events() {
     let _temp = setup_temp_zdx_home();
 
@@ -1348,6 +1415,19 @@ fn test_old_transcript_loads_with_synthesized_default() {
         }
         other => panic!("expected ToolUse, got {other:?}"),
     }
+}
+
+#[test]
+fn test_old_tool_result_loads_without_duration() {
+    let line = r#"{"type":"tool_result","tool_use_id":"abc","output":{},"ok":true,"ts":"2024-01-01T00:00:01Z"}"#;
+    let event: ThreadEvent = serde_json::from_str(line).unwrap();
+    assert!(matches!(
+        event,
+        ThreadEvent::ToolResult {
+            duration_ms: None,
+            ..
+        }
+    ));
 }
 
 /// Streaming `ToolInputCompleted` followed by `TurnFinished` produces

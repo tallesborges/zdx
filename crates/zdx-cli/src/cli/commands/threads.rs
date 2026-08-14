@@ -7,6 +7,7 @@ use chrono::NaiveDate;
 use zdx_engine::config;
 use zdx_engine::core::thread_export::{self, ThreadExportOptions};
 use zdx_engine::core::thread_persistence::{self, ThreadSummary};
+use zdx_engine::core::thread_timing::{format_thread_timing_report, inspect_thread_timings};
 use zdx_engine::core::usage_stats::{self, UsageTotals};
 
 use super::stats::{format_cost, format_tokens};
@@ -116,6 +117,23 @@ pub fn show(id: &str, config: &config::Config) -> Result<()> {
     println!("{}", thread_persistence::format_transcript(&events));
 
     print_child_runs(id, &all, config);
+    Ok(())
+}
+
+pub fn inspect(id: &str) -> Result<()> {
+    let events = thread_persistence::load_thread_events(id)
+        .with_context(|| format!("load thread '{id}'"))?;
+    if events.is_empty() {
+        println!("Thread '{id}' is empty or not found.");
+        return Ok(());
+    }
+
+    let title = thread_persistence::extract_title_from_events(&events)
+        .map_or_else(String::new, |title| format!(" · {title}"));
+    println!("Thread: {id}{title}");
+    for line in format_thread_timing_report(&inspect_thread_timings(&events)) {
+        println!("{line}");
+    }
     Ok(())
 }
 

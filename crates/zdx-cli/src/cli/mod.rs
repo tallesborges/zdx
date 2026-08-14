@@ -465,6 +465,12 @@ enum ThreadCommands {
         #[arg(value_name = "THREAD_ID")]
         id: String,
     },
+    /// Inspect client-observed request and tool timings for a thread
+    Inspect {
+        /// The ID of the thread to inspect
+        #[arg(value_name = "THREAD_ID")]
+        id: String,
+    },
     /// Resume a previous thread
     Resume {
         /// The ID of the thread to resume (uses latest if not provided)
@@ -1353,6 +1359,7 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
     match command {
         ThreadCommands::List { all } => commands::threads::list(all),
         ThreadCommands::Show { id } => commands::threads::show(&id, context.config),
+        ThreadCommands::Inspect { id } => commands::threads::inspect(&id),
         ThreadCommands::Resume { id } => commands::threads::resume(id, context.config).await,
         ThreadCommands::Rename { id, title } => commands::threads::rename(&id, &title),
         ThreadCommands::Append { id, role, text } => commands::threads::append(&id, &role, &text),

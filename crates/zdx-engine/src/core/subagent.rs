@@ -344,7 +344,7 @@ async fn read_stdout_events<R: AsyncRead + Unpin>(
             AgentEvent::ToolStarted { id, name } if seen_ids.insert(id.clone()) => {
                 sink.emit_start(&id, &name.to_ascii_lowercase());
             }
-            AgentEvent::ToolCompleted { id, result } => {
+            AgentEvent::ToolCompleted { id, result, .. } => {
                 if result.is_ok() {
                     sink.emit_done(&id);
                 } else {
@@ -903,6 +903,7 @@ mod tests {
             AgentEvent::ToolCompleted {
                 id: "tu1".to_string(),
                 result: crate::core::events::ToolOutput::success(serde_json::json!("ok")),
+                duration_ms: Some(1),
             },
             AgentEvent::TurnFinished {
                 status: crate::core::events::TurnStatus::Completed,

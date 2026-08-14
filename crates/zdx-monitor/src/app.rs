@@ -17,6 +17,7 @@ use serde_json::Value;
 use zdx_engine::config::{self, paths};
 use zdx_engine::core::thread_index::{self, ThreadKindFilter};
 use zdx_engine::core::thread_persistence;
+use zdx_engine::core::thread_timing::{format_thread_timing_report, inspect_thread_timings};
 use zdx_engine::core::usage_stats::{self, UsageStats};
 use zdx_engine::models::available_models;
 use zdx_engine::providers::subscription_quota::{self, QuotaError, SubscriptionQuota};
@@ -365,6 +366,8 @@ pub struct MonitorApp {
     pub background: Vec<BackgroundInfo>,
     /// Open transcript overlay for a selected active agent, if any.
     pub agent_overlay: Option<AgentOverlayState>,
+    /// Open timing overlay for a selected saved thread, if any.
+    pub timing_overlay: Option<TimingOverlayState>,
     pub log_file_name: Option<String>,
     /// Log files in `~/.zdx/logs` matching `zdx.log*`, newest first.
     pub log_files: Vec<PathBuf>,
@@ -600,6 +603,31 @@ pub struct ToolPaneState {
     pub tool_use_id: String,
     /// Top-line offset; clamped at render time against the wrapped body.
     pub scroll: usize,
+}
+
+pub struct TimingOverlayState {
+    pub title: String,
+    pub lines: Vec<String>,
+    pub scroll: usize,
+}
+
+impl TimingOverlayState {
+    fn handle_key(&mut self, key: KeyCode, page: usize) -> bool {
+        let max = self.lines.len().saturating_sub(page.max(1));
+        match key {
+            KeyCode::Esc | KeyCode::Char('q') => return true,
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.scroll = self.scroll.saturating_add(1).min(max);
+            }
+            KeyCode::Up | KeyCode::Char('k') => self.scroll = self.scroll.saturating_sub(1),
+            KeyCode::PageDown => self.scroll = self.scroll.saturating_add(page).min(max),
+            KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(page),
+            KeyCode::Char('g') => self.scroll = 0,
+            KeyCode::Char('G') => self.scroll = max,
+            _ => {}
+        }
+        false
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1336,6 +1364,7 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
         active_agents: load_active_agents(),
         background: load_background(),
         agent_overlay: None,
+        timing_overlay: None,
         log_file_name: None,
         log_files: Vec::new(),
         log_file_index: 0,
@@ -1396,6 +1425,10 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
 fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
     if app.model_picker.is_some() {
         handle_model_picker_key(app, key.code);
+        return;
+    }
+    if app.timing_overlay.is_some() {
+        handle_timing_overlay_key(app, key.code);
         return;
     }
     if app.agent_overlay.is_some() {
@@ -1515,6 +1548,10 @@ fn handle_threads_key(app: &mut MonitorApp, key: KeyCode) -> bool {
         }
         KeyCode::Enter => {
             open_thread_overlay(app);
+            true
+        }
+        KeyCode::Char('i') => {
+            open_thread_timing_overlay(app);
             true
         }
         KeyCode::Esc => {
@@ -2517,6 +2554,44 @@ fn open_thread_overlay(app: &mut MonitorApp) {
     };
     load_transcript_into(&mut state);
     app.agent_overlay = Some(state);
+}
+
+fn open_thread_timing_overlay(app: &mut MonitorApp) {
+    let Some(thread) = app.threads.get(app.selected_index) else {
+        return;
+    };
+    let events = thread_persistence::load_thread_events(&thread.id).unwrap_or_default();
+    app.timing_overlay = Some(timing_overlay_from_events(
+        &thread.id,
+        thread.title.as_deref(),
+        &events,
+    ));
+}
+
+fn handle_timing_overlay_key(app: &mut MonitorApp, key: KeyCode) {
+    let page = (app.terminal_height.saturating_sub(2) as usize).max(1);
+    let Some(state) = app.timing_overlay.as_mut() else {
+        return;
+    };
+    if state.handle_key(key, page) {
+        app.timing_overlay = None;
+    }
+}
+
+fn timing_overlay_from_events(
+    thread_id: &str,
+    title: Option<&str>,
+    events: &[thread_persistence::ThreadEvent],
+) -> TimingOverlayState {
+    let title = title.map_or_else(
+        || thread_id.to_string(),
+        |title| format!("{thread_id} · {title}"),
+    );
+    TimingOverlayState {
+        title,
+        lines: format_thread_timing_report(&inspect_thread_timings(events)),
+        scroll: 0,
+    }
 }
 
 /// File length + mtime used to detect transcript changes between ticks.
@@ -3768,5 +3843,40 @@ mod transcript_tests {
             "gemini:some-model",
         );
         assert_eq!(p2.thinking_current, config::ThinkingLevel::Low);
+    }
+
+    #[test]
+    fn timing_overlay_uses_shared_report_and_legacy_state() {
+        let events = vec![
+            thread_persistence::ThreadEvent::user_message("hello"),
+            thread_persistence::ThreadEvent::tool_use("t1", "read", serde_json::json!({})),
+            thread_persistence::ThreadEvent::tool_result("t1", serde_json::json!({}), true),
+        ];
+        let state = timing_overlay_from_events("thread-1", Some("Demo"), &events);
+
+        assert_eq!(state.title, "thread-1 · Demo");
+        assert!(state.lines.iter().any(|line| line.contains("read · ok")));
+        assert!(
+            state
+                .lines
+                .iter()
+                .any(|line| line.contains("unavailable (0/1 measured)"))
+        );
+    }
+
+    #[test]
+    fn timing_overlay_navigation_clamps_and_closes() {
+        let mut state = TimingOverlayState {
+            title: "thread".to_string(),
+            lines: (0..20).map(|n| n.to_string()).collect(),
+            scroll: 0,
+        };
+        assert!(!state.handle_key(KeyCode::Char('G'), 5));
+        assert_eq!(state.scroll, 15);
+        assert!(!state.handle_key(KeyCode::PageUp, 5));
+        assert_eq!(state.scroll, 10);
+        assert!(!state.handle_key(KeyCode::Char('g'), 5));
+        assert_eq!(state.scroll, 0);
+        assert!(state.handle_key(KeyCode::Esc, 5));
     }
 }

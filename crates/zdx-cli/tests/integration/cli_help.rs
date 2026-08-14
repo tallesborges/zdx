@@ -118,10 +118,20 @@ fn test_threads_help_shows_subcommands() {
         .success()
         .stdout(predicate::str::contains("list"))
         .stdout(predicate::str::contains("show"))
+        .stdout(predicate::str::contains("inspect"))
         .stdout(predicate::str::contains("resume"))
         .stdout(predicate::str::contains("export"))
         .stdout(predicate::str::contains("search"))
         .stdout(predicate::str::contains("tools"));
+}
+
+#[test]
+fn test_threads_inspect_help_shows_thread_id() {
+    cargo_bin_cmd!("zdx")
+        .args(["threads", "inspect", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("THREAD_ID"));
 }
 
 #[test]
