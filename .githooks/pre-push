@@ -1,0 +1,30 @@
+#!/bin/sh
+set -e
+
+zero_sha=0000000000000000000000000000000000000000
+changed_files=$(mktemp)
+trap 'rm -f "$changed_files"' EXIT
+
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+    [ "$local_sha" = "$zero_sha" ] && continue
+
+    if [ "$remote_sha" = "$zero_sha" ]; then
+        git rev-list "$local_sha" --not --remotes | while read -r commit; do
+            git diff-tree --root --no-commit-id --name-only -r "$commit"
+        done >> "$changed_files"
+    else
+        git diff --name-only "$remote_sha..$local_sha" >> "$changed_files"
+    fi
+done
+
+while IFS= read -r path; do
+    case "$path" in
+        *.rs | Cargo.toml | */Cargo.toml | Cargo.lock | */Cargo.lock | rust-toolchain.toml | */rust-toolchain.toml | clippy.toml | */clippy.toml | .cargo/config.toml | */.cargo/config.toml)
+            echo "Rust-related changes detected; running Clippy before push..."
+            just clippy
+            exit 0
+            ;;
+    esac
+done < "$changed_files"
+
+echo "No Rust-related changes detected; skipping Clippy."

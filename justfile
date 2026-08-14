@@ -43,10 +43,10 @@ lint: fmt clippy
 fmt:
     cargo +nightly fmt
 
-# Install git hooks (pre-commit auto-formats staged Rust files)
+# Install git hooks (pre-commit formats Rust; pre-push lints Rust-related changes)
 install-hooks:
     git config core.hooksPath .githooks
-    @echo "Installed: core.hooksPath -> .githooks (pre-commit runs cargo +nightly fmt)"
+    @echo "Installed: pre-commit formatting and change-aware pre-push Clippy"
 
 # Lint
 clippy:

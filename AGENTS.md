@@ -51,6 +51,7 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `just fmt` (nightly rustfmt)
 - `just clippy` (lint only)
 - `just test` (fast path via `cargo nextest`; skips doc tests — requires `cargo-nextest`)
+- `just install-hooks` (enable pre-commit formatting and change-aware pre-push Clippy)
 - `just update-defaults` (maintainer: refresh both default_models.toml + default_config.toml)
 - `just update-models` (maintainer: refresh default_models.toml)
 - `just update-config` (maintainer: refresh default_config.toml)
