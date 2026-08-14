@@ -10,7 +10,7 @@ Compact TUI dashboard for inspecting ZDX services, threads, automations, and con
 
 ## Threads tab
 
-Rows come from `zdx_engine::core::thread_index::browse_threads()` (`threads.sqlite`), never a directory scan: kind, project, text filter, ordering, and the 500-row cap are all applied in SQL. Child runs are included and labelled with a badge (`subagent_name` for `subagent`, the suffix for `helper:*`). `t` cycles `ThreadKindFilter`, `p` opens the project picker fed by `browse_projects()`, `/` edits the query, `Esc` clears all, `Enter` opens the transcript overlay. The query runs on `Enter` rather than per keystroke — a one-letter FTS prefix matches most of the corpus and would stall the UI. The preview reuses `AgentOverlayState` (a saved thread is an ended run), so tool navigation and the tool pane come for free.
+Rows come from `zdx_engine::core::thread_index::browse_threads()` (`threads.sqlite`), never a directory scan: kind, project, text filter, ordering, and the 500-row cap are all applied in SQL. Child runs are included and labelled with a badge (`subagent_name` for `subagent`, the suffix for `helper:*`). `t` cycles `ThreadKindFilter`, `p` opens the project picker fed by `browse_projects()`, `/` edits the query, `Esc` clears all, `Enter` opens the transcript overlay, and `o` temporarily restores the terminal to open the raw JSONL in `$VISUAL`/`$EDITOR` (or the system default) before resuming Monitor. The query runs on `Enter` rather than per keystroke — a one-letter FTS prefix matches most of the corpus and would stall the UI. The preview reuses `AgentOverlayState` (a saved thread is an ended run), so tool navigation and the tool pane come for free.
 
 ## Services tab
 

@@ -358,6 +358,8 @@ pub struct MonitorApp {
     pub thread_query_editing: bool,
     /// When the Threads result set was last loaded (drives the slow refresh).
     pub threads_loaded_at: Option<Instant>,
+    /// Raw thread JSONL queued to open after the current key event.
+    pending_open_path: Option<PathBuf>,
     pub automations: Vec<AutomationInfo>,
     pub services: Vec<ServiceInfo>,
     pub active_agents: Vec<ActiveAgentInfo>,
@@ -1359,6 +1361,7 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
         thread_query: String::new(),
         thread_query_editing: false,
         threads_loaded_at: None,
+        pending_open_path: None,
         automations: load_automations(&root),
         services,
         active_agents: load_active_agents(),
@@ -1552,6 +1555,10 @@ fn handle_threads_key(app: &mut MonitorApp, key: KeyCode) -> bool {
         }
         KeyCode::Char('i') => {
             open_thread_timing_overlay(app);
+            true
+        }
+        KeyCode::Char('o') => {
+            open_raw_thread(app);
             true
         }
         KeyCode::Esc => {
@@ -2037,6 +2044,18 @@ fn copy_selected_thread_id(app: &mut MonitorApp) {
     }
 }
 
+fn open_raw_thread(app: &mut MonitorApp) {
+    let Some(thread) = app.threads.get(app.selected_index) else {
+        return;
+    };
+    let path = transcript_path(&thread.id);
+    if path.exists() {
+        app.pending_open_path = Some(path);
+    } else {
+        app.set_status(format!("Raw thread file not found: {}", thread.id));
+    }
+}
+
 fn toggle_selected_service(app: &mut MonitorApp) {
     if app.active_section == Section::Services
         && let Some(service) = app.services.get(app.selected_index)
@@ -2112,6 +2131,19 @@ pub fn run(root: &Path) -> Result<()> {
                 match event::read().context("read event")? {
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         handle_key_event(&mut app, key);
+                        if let Some(path) = app.pending_open_path.take() {
+                            match open_path_in_editor(&mut terminal, &path) {
+                                Ok(()) => {
+                                    app.set_status(format!(
+                                        "Opened raw thread {}",
+                                        path.file_stem().unwrap_or_default().to_string_lossy()
+                                    ));
+                                }
+                                Err(err) => {
+                                    app.set_status(format!("Failed to open raw thread: {err}"));
+                                }
+                            }
+                        }
                         refresh_app(&mut app);
                     }
                     Event::Mouse(mouse) => {
@@ -2138,6 +2170,40 @@ pub fn run(root: &Path) -> Result<()> {
     }
 
     restore_terminal(&mut terminal)
+}
+
+fn open_path_in_editor(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    path: &Path,
+) -> Result<()> {
+    restore_terminal(terminal)?;
+    let open_result = open_in_editor(path);
+    *terminal = setup_terminal()?;
+    open_result.context(format!("open {} in editor", path.display()))
+}
+
+fn open_in_editor(path: &Path) -> io::Result<()> {
+    let editor = std::env::var("VISUAL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("EDITOR")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        });
+
+    let Some(editor) = editor else {
+        return open::that(path);
+    };
+    let mut parts = editor.split_whitespace();
+    let Some(program) = parts.next() else {
+        return open::that(path);
+    };
+    std::process::Command::new(program)
+        .args(parts)
+        .arg(path)
+        .status()
+        .map(|_| ())
 }
 
 /// Rows shown in the Threads tab. Filtering, ordering, and the cap all happen
