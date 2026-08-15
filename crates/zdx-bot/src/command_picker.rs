@@ -309,6 +309,6 @@ mod tests {
     #[test]
     fn truncates_long_picker_bodies() {
         let long = "y".repeat(10_000);
-        assert!(truncate_chars(&long, 3500).chars().count() == 3500);
+        assert_eq!(truncate_chars(&long, 3500).chars().count(), 3500);
     }
 }
