@@ -178,7 +178,7 @@ fn search_threads_scan(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearch
             });
 
             if !title_contains_any_word {
-                let thread_path = threads_dir().join(format!("{}.jsonl", &summary.id));
+                let thread_path = threads_dir().join(format!("{}.jsonl", summary.id));
                 if !grep_file_has_match(&mut grep_searcher, matcher, &thread_path) {
                     continue;
                 }
