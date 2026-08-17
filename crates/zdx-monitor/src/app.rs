@@ -19,7 +19,9 @@ use zdx_engine::core::thread_index::{self, ThreadKindFilter};
 use zdx_engine::core::thread_persistence;
 use zdx_engine::core::thread_timing::{format_thread_timing_report, inspect_thread_timings};
 use zdx_engine::core::usage_stats::{self, UsageStats};
-use zdx_engine::models::available_models;
+use zdx_engine::models::{
+    available_models, bare_model_id, custom_provider_models, model_id_matches_patterns,
+};
 use zdx_engine::providers::subscription_quota::{self, QuotaError, SubscriptionQuota};
 use zdx_engine::service::{self, Service};
 use zdx_engine::{agent_activity, automations};
@@ -2982,7 +2984,11 @@ fn open_model_picker(app: &mut MonitorApp) {
         ConfigLine::Row(_, v) => v.clone(),
         _ => String::new(),
     };
-    app.model_picker = Some(ModelPickerState::new(path, kind, &current));
+    let Ok(cfg) = config::Config::load() else {
+        app.set_status("Failed to load config");
+        return;
+    };
+    app.model_picker = Some(ModelPickerState::new(path, kind, &current, &cfg.providers));
 }
 
 /// Flips `subagents.enabled` in the config and reloads the Config tab.
@@ -3052,7 +3058,12 @@ pub struct ModelPickerState {
 }
 
 impl ModelPickerState {
-    fn new(field: String, kind: ModelFieldKind, current: &str) -> Self {
+    fn new(
+        field: String,
+        kind: ModelFieldKind,
+        current: &str,
+        providers: &config::ProvidersConfig,
+    ) -> Self {
         let spec = zdx_engine::models::ModelSpec::parse(current);
         let model_part = spec.without_thinking();
         let thinking_current = spec.thinking.unwrap_or(config::ThinkingLevel::Low);
@@ -3064,6 +3075,23 @@ impl ModelPickerState {
         let mut items: Vec<String> = match kind {
             ModelFieldKind::Chat => available_models()
                 .iter()
+                .chain(custom_provider_models(providers))
+                .filter(|model| {
+                    let patterns = if let Some(custom) = providers.custom.get(model.provider) {
+                        custom.models.as_slice()
+                    } else {
+                        let Some(kind) =
+                            zdx_engine::providers::provider_kind_from_id(model.provider)
+                        else {
+                            return false;
+                        };
+                        if !providers.is_enabled(model.provider) {
+                            return false;
+                        }
+                        providers.get(kind).models.as_slice()
+                    };
+                    model_id_matches_patterns(bare_model_id(model.provider, model.id), patterns)
+                })
                 .flat_map(|m| {
                     let id = m.qualified_id();
                     let fast = zdx_engine::models::fast_variant(&id);
@@ -3864,10 +3892,12 @@ mod transcript_tests {
 
     #[test]
     fn model_picker_filters_and_reports_selection() {
+        let providers = config::ProvidersConfig::default();
         let mut p = ModelPickerState::new(
             "title_model".to_string(),
             ModelFieldKind::Chat,
             "no-such-model",
+            &providers,
         );
         assert!(!p.items.is_empty(), "registry should list models");
         let before = p.matches.len();
@@ -3885,8 +3915,35 @@ mod transcript_tests {
     }
 
     #[test]
+    fn model_picker_excludes_disabled_providers() {
+        let model = available_models()
+            .first()
+            .expect("registry should list models");
+        let kind = zdx_engine::providers::provider_kind_from_id(model.provider)
+            .expect("registry provider should be built in");
+        let mut providers = config::ProvidersConfig::default();
+        let provider = providers.get_mut(kind);
+        provider.enabled = Some(true);
+        provider.models.clear();
+
+        let enabled =
+            ModelPickerState::new("model".to_string(), ModelFieldKind::Chat, "", &providers);
+        assert!(enabled.items.contains(&model.qualified_id()));
+
+        providers.get_mut(kind).enabled = Some(false);
+        let disabled =
+            ModelPickerState::new("model".to_string(), ModelFieldKind::Chat, "", &providers);
+        assert!(!disabled.items.contains(&model.qualified_id()));
+    }
+
+    #[test]
     fn speech_picker_lists_curated_options_without_thinking() {
-        let p = ModelPickerState::new("speech.model".to_string(), ModelFieldKind::Speech, "");
+        let p = ModelPickerState::new(
+            "speech.model".to_string(),
+            ModelFieldKind::Speech,
+            "",
+            &config::ProvidersConfig::default(),
+        );
         assert!(!p.has_thinking());
         assert!(p.items.iter().all(|o| o.contains(':')));
         assert!(p.items.iter().any(|o| o.starts_with("mistral:")));
@@ -3894,10 +3951,12 @@ mod transcript_tests {
 
     #[test]
     fn model_picker_parses_inline_thinking_suffix() {
+        let providers = config::ProvidersConfig::default();
         let p = ModelPickerState::new(
             "title_model".to_string(),
             ModelFieldKind::Chat,
             "gemini:some-model@high",
+            &providers,
         );
         assert_eq!(p.thinking_current, config::ThinkingLevel::High);
         assert_eq!(p.chosen_model, "gemini:some-model");
@@ -3907,6 +3966,7 @@ mod transcript_tests {
             "tldr_model".to_string(),
             ModelFieldKind::Chat,
             "gemini:some-model",
+            &providers,
         );
         assert_eq!(p2.thinking_current, config::ThinkingLevel::Low);
     }
