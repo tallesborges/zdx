@@ -1369,6 +1369,7 @@ impl Config {
         self.subagent_available_models_from(
             crate::models::available_models()
                 .iter()
+                .chain(crate::models::custom_provider_models(&self.providers).iter())
                 .map(|model| (model.provider, model.qualified_id())),
         )
     }
@@ -1386,16 +1387,10 @@ impl Config {
     ) -> Vec<String> {
         use std::collections::HashSet;
 
-        let enabled_providers: HashSet<&str> = crate::providers::ProviderKind::all()
-            .iter()
-            .filter(|kind| self.providers.is_enabled(kind.id()))
-            .map(|kind| crate::providers::ProviderKind::id(*kind))
-            .collect();
-
         let mut seen = HashSet::new();
         models
             .into_iter()
-            .filter(|(provider, _)| enabled_providers.contains(provider))
+            .filter(|(provider, _)| self.providers.is_enabled(provider))
             .filter_map(|(_, full)| seen.insert(full.to_ascii_lowercase()).then_some(full))
             .collect()
     }
@@ -3684,6 +3679,26 @@ available_models = ["codex:gpt-5.3-codex"]
             !models
                 .iter()
                 .any(|id| id.starts_with("anthropic:") || id.starts_with("gemini:"))
+        );
+    }
+
+    #[test]
+    fn test_subagent_available_models_includes_custom_providers() {
+        let _home = crate::test_support::temp_zdx_home();
+        let mut config = Config::default();
+        config.providers.custom.insert(
+            "parity".to_string(),
+            CustomProviderConfig {
+                base_url: "https://llm.example.com/v1".to_string(),
+                models: vec!["deepseek-flash-parity".to_string()],
+                ..Default::default()
+            },
+        );
+
+        assert!(
+            config
+                .subagent_available_models()
+                .contains(&"parity:deepseek-flash-parity".to_string())
         );
     }
 }
