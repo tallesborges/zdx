@@ -306,6 +306,27 @@ pub fn model_supports_reasoning(id: &str) -> bool {
     ModelOption::find_by_id(id).is_none_or(|model| model.capabilities.reasoning)
 }
 
+/// Returns true if the model accepts image input, defaulting to true when
+/// unknown.
+///
+/// Custom-provider models (`[providers.custom.<name>]`) are not part of
+/// `available_models()`, so their synthesized entries are consulted too — they
+/// default to no image input until a `model_overrides.toml` entry says
+/// otherwise.
+pub fn model_reads_images(
+    providers: &crate::config::ProvidersConfig,
+    provider: &str,
+    model: &str,
+) -> bool {
+    ModelOption::find_by_provider_and_id(provider, model)
+        .or_else(|| {
+            custom_provider_models(providers)
+                .iter()
+                .find(|entry| entry.provider.eq_ignore_ascii_case(provider) && entry.id == model)
+        })
+        .is_none_or(|entry| entry.capabilities.input_images)
+}
+
 /// Model spec parsing/formatting (`provider:model[@thinking][@fast]`) lives in
 /// `zdx-types` so providers and engine share one grammar.
 pub use zdx_types::config::ModelSpec;
@@ -408,7 +429,7 @@ mod tests {
     use super::{
         ModelCapabilities, ModelOption, ModelPricing, UserModelOverride,
         apply_user_model_overrides, bare_model_id, custom_provider_models, fast_variant,
-        format_model_thinking, model_id_matches_patterns, wildcard_match,
+        format_model_thinking, model_id_matches_patterns, model_reads_images, wildcard_match,
     };
     use crate::config::{CustomProviderConfig, ProvidersConfig, ThinkingLevel};
 
@@ -477,6 +498,36 @@ mod tests {
         assert_eq!(models[0].qualified_id(), "parity:deepseek-flash-parity");
         assert_eq!(models[0].context_limit, 1_000_000);
         assert_eq!(models[0].capabilities.output_limit, 50);
+    }
+
+    #[test]
+    fn image_capability_covers_registry_and_custom_provider_models() {
+        assert!(model_reads_images(
+            &ProvidersConfig::default(),
+            "gemini",
+            "gemini-3.6-flash"
+        ));
+        assert!(!model_reads_images(
+            &ProvidersConfig::default(),
+            "deepseek",
+            "deepseek-v4-flash"
+        ));
+
+        // Custom-provider models live outside `available_models()`; they must
+        // still resolve, and default to no image input.
+        let providers = providers_with("parity", &["openrouter/deepseek/deepseek-v4-flash"]);
+        assert!(!model_reads_images(
+            &providers,
+            "parity",
+            "openrouter/deepseek/deepseek-v4-flash"
+        ));
+
+        // Unknown models stay permissive.
+        assert!(model_reads_images(
+            &ProvidersConfig::default(),
+            "parity",
+            "not-configured"
+        ));
     }
 
     fn override_for(id: &str, context_limit: u64) -> UserModelOverride {

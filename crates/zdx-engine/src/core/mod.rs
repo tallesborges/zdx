@@ -9,6 +9,7 @@
 //! - `handoff_generation`: LLM-based handoff context generation
 //! - `prompt_builder_generation`: LLM-based prompt-builder generation
 //! - `recency`: shared recency decay applied to search relevance scores
+//! - `media_fallback`: image-to-`ask-media` fallback for models without image input
 //! - `native_memory`: native SQLite-backed memory index/search
 //! - `subagent`: Child `zdx exec` subagent runner
 //! - `thread_export`: Thread transcript exports
@@ -26,6 +27,7 @@ pub mod events;
 pub mod fts_query;
 pub mod handoff_generation;
 pub mod interrupt;
+pub mod media_fallback;
 pub mod native_memory;
 pub mod prompt_builder_generation;
 pub mod recency;

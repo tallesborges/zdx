@@ -901,10 +901,22 @@ async fn run_turn_inner(
     // One iteration of the outer loop = one model completion (plus any tool
     // round it requests). Tracked only for logging; nothing else needs it.
     let mut model_turn: u32 = 0;
+    let model_reads_images =
+        crate::models::model_reads_images(&config.providers, &setup.provider, &setup.model);
 
     loop {
         ensure_not_interrupted(None, cancel).map_err(|e| (e, messages.clone()))?;
         model_turn += 1;
+
+        // Runs every model turn so images arriving mid-turn (e.g. a `Read` on a
+        // screenshot) are swapped too, not just the ones already in history.
+        if !model_reads_images {
+            let replaced =
+                crate::core::media_fallback::replace_images_with_ask_media_notes(&mut messages);
+            if replaced > 0 {
+                tracing::debug!(replaced, "Replaced images with ask-media notes");
+            }
+        }
 
         // Unified retry loop for transient provider errors.
         //
