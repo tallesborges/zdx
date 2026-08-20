@@ -157,6 +157,33 @@ context_limit = 1000000
 
 The override layer lives in `update()` (`crates/zdx-cli/src/cli/commands/models.rs`, `apply_overrides()`), so it covers both the runtime `$ZDX_HOME/models.toml` and the regenerated repo `default_models.toml`.
 
+## Custom providers (`[providers.custom.<name>]`)
+
+Custom-provider models never enter the registry. `custom_provider_models()` (`crates/zdx-engine/src/models.rs`) synthesizes picker entries at runtime from the configured `models` list, with zeroed pricing, `reasoning = true`, and **`input_images = false`**.
+
+That default is load-bearing: a model with no image support gets its images replaced by an `ask-media` note instead of being sent bytes the provider rejects. So:
+
+- **Text-only model** → nothing to do.
+- **Vision-capable model** → add an override or it will never see images.
+
+```toml
+[[override]]
+id = "<provider>:<model-as-configured>"   # e.g. parity:openrouter/anthropic/claude-sonnet-4.6
+input_images = true
+```
+
+- The `id` must match the configured model string exactly, prefix included.
+- Overrides are additive — set only the fields you're correcting.
+- Put it in `$ZDX_HOME/model_overrides.toml` for the local runtime, or `crates/zdx-assets/model_overrides.toml` to ship it. An override also promotes the model into `available_models()`, so pricing/context become real too.
+
+Verify with the same source the runtime reads:
+
+```sh
+zdx models list --all --provider <name> --json
+```
+
+The printed `input_images` is exactly what `model_reads_images()` uses to decide whether images reach the model, so the picker's ✓/✗ and the routing can't disagree.
+
 ## TUI / UI impact
 
 **New model on existing provider — no TUI changes needed.** The model picker, pricing display, and thinking picker are all registry/config-driven:
@@ -179,7 +206,8 @@ The override layer lives in `update()` (`crates/zdx-cli/src/cli/commands/models.
 - **Ordering**: always run `update-config` before `update-models` (or just `just update-defaults` which enforces this).
 - **Subscription providers**: pricing is zeroed automatically — don't add pricing to their model entries. Check `ProviderKind::is_subscription()` for the current list.
 - **Meta providers** (zen, apiyi): proxy models need separate entries with `capabilities.api` set (usually `"openai-completions"`).
-- **`model_supports_reasoning` defaults to `true`** when the field is unknown (`crates/zdx-engine/src/models.rs:120-122`). Explicitly set `reasoning = false` for non-reasoning models.
+- **`model_supports_reasoning` defaults to `true`** when the field is unknown (`crates/zdx-engine/src/models.rs`). Explicitly set `reasoning = false` for non-reasoning models.
+- **`input_images` gates real behavior, not just the picker icon.** When it's false the engine swaps image blocks (user attachments *and* tool results like `Read` on a screenshot) for a note telling the model to use `zdx ask-media` — see `model_reads_images()` and `core/media_fallback.rs`. A wrong `false` costs an extra Gemini round-trip; a wrong `true` sends bytes the provider rejects or silently drops.
 - **`default_models.toml` is generated** — manual edits get overwritten by `just update-models`. For corrections the updater fetches wrong, add a pin in `model_overrides.toml` instead (it survives regeneration); only fix the updater logic for structural problems an override can't express.
 - **`default_config.toml` is generated** from Rust defaults — edit `config.rs`, not the TOML file directly.
 - **Global runtime is separate**: default/`config.rs` changes only affect the embedded defaults, not an existing `$ZDX_HOME/config.toml`/`models.toml`. After a change, **ask the user** whether they also want it applied to their global runtime (edit `$ZDX_HOME/config.toml` + `zdx models update` with a current binary).
@@ -192,7 +220,7 @@ The override layer lives in `update()` (`crates/zdx-cli/src/cli/commands/models.
 | `crates/zdx-providers/src/lib.rs` | `ProviderKind` enum, provider metadata |
 | `crates/zdx-providers/src/<provider>.rs` | Provider client implementation |
 | `crates/zdx-engine/src/core/agent.rs` | `ProviderClient` dispatch, client builders |
-| `crates/zdx-engine/src/models.rs` | Model registry load/parse |
+| `crates/zdx-engine/src/models.rs` | Model registry load/parse, `custom_provider_models()`, `model_reads_images()` |
 | `crates/zdx-assets/default_models.toml` | Generated model registry (don't edit directly for new models) |
 | `crates/zdx-assets/model_overrides.toml` | Pinned post-fetch overrides applied by `zdx models update` (durable price/metadata corrections) |
 | `crates/zdx-assets/default_config.toml` | Generated config defaults (don't edit directly) |
