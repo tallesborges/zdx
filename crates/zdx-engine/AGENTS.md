@@ -36,6 +36,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - `core/interrupt.rs`: signal handling
 - `core/agent.rs`: agent loop + event channels
 - `core/handoff_generation.rs`: LLM-based handoff context generation (shared by TUI + bot)
+- `core/media_fallback.rs`: image fallback for models with `input_images = false` — swaps user/tool-result image blocks for a note pointing at `zdx ask-media`, applied per model turn in `core/agent.rs`
 - `core/prompt_builder_generation.rs`: LLM-based prompt-builder generation (shared by TUI + bot)
 - `core/recency.rs`: shared recency decay applied to search relevance scores (`thread_index` and `native_memory`)
 - `core/native_memory.rs`: native SQLite-backed memory index/search over exported thread Markdown, Notes, and Calendar; owns `$ZDX_HOME/cache/memory.sqlite` and native `zdxmem:v1:*` docids. Includes the opt-in hosted embedding layer (`[memory.embeddings]` profile, budgets, `(input_hash, profile_fingerprint)` vector storage, vector/hybrid retrieval with RRF fusion); agent searches never trigger corpus embedding.

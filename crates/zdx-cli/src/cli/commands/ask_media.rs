@@ -1,4 +1,4 @@
-//! Ask-media command handler: one-shot audio/video/PDF understanding via Gemini.
+//! Ask-media command handler: one-shot image/audio/video/PDF understanding via Gemini.
 
 use std::path::Path;
 
