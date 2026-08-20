@@ -1473,6 +1473,18 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
     match event {
         Event::Key(key) => handle_key(app, key),
         Event::Mouse(mouse) => {
+            if app.tab_count() > 1
+                && mouse.row == 0
+                && matches!(
+                    mouse.kind,
+                    crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
+                )
+                && let Some(tab_id) = render::tab_at_column(app, mouse.column)
+            {
+                app.switch_to_tab(tab_id);
+                return vec![];
+            }
+
             if let Some(overlays::Overlay::Context(state)) = &mut app.overlay {
                 match mouse.kind {
                     crossterm::event::MouseEventKind::ScrollUp => {
@@ -1790,6 +1802,33 @@ mod tests {
             term_title_value(true, true, Some("   "), 0),
             Some("◐ zdx".to_string())
         );
+    }
+
+    #[test]
+    fn clicking_tab_bar_switches_to_clicked_tab() {
+        use crossterm::event::{
+            Event as CrosstermEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        };
+
+        let config = zdx_engine::config::Config::default();
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
+        let first_tab_id = app.tui.tab_id;
+        let second_tab_id = app.next_tab_id();
+        let second_tab = create_main_tab(second_tab_id, &app.tui);
+        app.push_tab(second_tab);
+
+        let effects = update(
+            &mut app,
+            UiEvent::Terminal(CrosstermEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 1,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            })),
+        );
+
+        assert!(effects.is_empty());
+        assert_eq!(app.tui.tab_id, first_tab_id);
     }
 
     #[test]

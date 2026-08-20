@@ -13,9 +13,10 @@ use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
 use crate::common::{Scrollbar, TaskKind, truncate_with_ellipsis};
-use crate::state::{AgentState, AppState, TuiState, TurnOutcome};
+use crate::state::{AgentState, AppState, TabId, TuiState, TurnOutcome};
 use crate::statusline::render_debug_status_line;
 use crate::{input, transcript};
 
@@ -273,8 +274,7 @@ fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
     // position; the highlight moves to whichever tab is active. Running tabs
     // share the active tab's spinner clock — only that counter advances each
     // tick, so it drives the animation.
-    let mut tabs: Vec<&TuiState> = app.all_tabs().collect();
-    tabs.sort_by_key(|tab| tab.tab_id.0);
+    let tabs = ordered_tabs(app);
     let spinner = SPINNER_FRAMES
         [(app.tui.spinner_frame / transcript::SPINNER_SPEED_DIVISOR) % SPINNER_FRAMES.len()];
     let active_id = app.tui.tab_id;
@@ -283,7 +283,7 @@ fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
         if i > 0 {
             spans.push(Span::raw(" "));
         }
-        let label = format!("tab {}", tab.tab_id.0 + 1);
+        let label = tab_label(tab.tab_id);
         if tab.tab_id == active_id {
             spans.push(Span::styled(
                 format!(" {label} "),
@@ -305,6 +305,43 @@ fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
 
     let tab_bar = Paragraph::new(Line::from(spans)).alignment(Alignment::Left);
     frame.render_widget(tab_bar, area);
+}
+
+/// Returns the tab under a terminal column in the one-line tab bar.
+pub(crate) fn tab_at_column(app: &AppState, column: u16) -> Option<TabId> {
+    let active_id = app.tui.tab_id;
+    let mut cursor = 0usize;
+    let column = usize::from(column);
+
+    for (index, tab) in ordered_tabs(app).into_iter().enumerate() {
+        if index > 0 {
+            cursor += 1;
+        }
+
+        let start = cursor;
+        cursor += tab_label(tab.tab_id).width() + 2;
+        if tab.tab_id != active_id
+            && let Some((glyph, _)) = background_tab_marker(tab, SPINNER_FRAMES[0])
+        {
+            cursor += glyph.width() + 1;
+        }
+
+        if (start..cursor).contains(&column) {
+            return Some(tab.tab_id);
+        }
+    }
+
+    None
+}
+
+fn ordered_tabs(app: &AppState) -> Vec<&TuiState> {
+    let mut tabs: Vec<&TuiState> = app.all_tabs().collect();
+    tabs.sort_by_key(|tab| tab.tab_id.0);
+    tabs
+}
+
+fn tab_label(tab_id: TabId) -> String {
+    format!("tab {}", tab_id.0 + 1)
 }
 
 /// Activity marker (glyph + color) shown after a background tab's label:
