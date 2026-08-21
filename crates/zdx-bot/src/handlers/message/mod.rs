@@ -19,6 +19,7 @@ mod launcher;
 mod media;
 mod response;
 mod status;
+mod thread_header;
 mod turn;
 
 pub(crate) use commands::{
@@ -27,6 +28,9 @@ pub(crate) use commands::{
 pub(crate) use launcher::{
     LauncherMap, create_topic_with_model, handle_callback as handle_launcher_callback,
     new_launcher_map, render_launcher, schedule_repost as schedule_launcher_repost,
+};
+pub(crate) use thread_header::{
+    handle_callback as handle_thread_header_callback, post_thread_header,
 };
 
 /// Groups the reply-targeting fields that travel together through the turn pipeline.

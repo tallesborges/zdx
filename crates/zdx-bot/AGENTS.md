@@ -7,6 +7,7 @@ Scope: Telegram bot runtime, ingest/handler flow, queueing, and Telegram API int
 - `src/lib.rs`: bot crate entrypoint
 - `src/followups.rs`: end-of-turn follow-up suggestion buttons (`<followups>` tag → tap dispatches new turn)
 - `src/retry.rs`: post-failure "Try again" button — on a turn that fails without a reply, offers a button that re-runs the same turn from persisted thread state (no new user message); `retry:go`/`retry:x` callbacks
+- `src/server.rs`: embedded HTTP web server for the Threads Mini App (`/threads` UI and bot-token-signed, allowlisted `/api/threads` JSON API endpoints)
 - `src/staging.rs`: staged (memory-only) slash-command flow — `/handoff`, `/btw` + `/prompt_builder` input capture, Accept/Discard/regenerate; `/handoff` Accept and `/btw` both seed a new topic with `handoff_from` via the shared `seed_new_topic`, prompt-builder Accept runs the prompt in place. `/btw` makes no LLM call and needs no Accept tap: its seed is the question plus a parent-thread pointer the new topic's agent resolves with `Read_Thread`. `/btw` also bypasses the per-topic queue (both the command and the staged question, via `staging::awaiting_btw_input`), so a side question never waits behind the running turn. Bypassed inputs are marked `Message::routed_as_btw_input`, so if the session is gone by the time they land they are answered with a hint instead of falling through to a normal (concurrent) turn; messages older than the command's `message_id` are never taken as staged input.
 - `src/command_picker.rs`: `/commands` picker — project/context `.md` commands only (picker-only; built-ins live in the native `/` menu)
 - `src/commands.rs`: centralized slash-command parsing and matching
@@ -20,6 +21,7 @@ Scope: Telegram bot runtime, ingest/handler flow, queueing, and Telegram API int
 - `src/handlers/message/mod.rs`: message intake orchestration + shared turn types; `thread_id_for_chat` + `resolve_effective_thread_id` (follows one `alias_to` hop so resumed topics load/persist to the source thread); re-exports the keyboard builders
 - `src/handlers/message/turn.rs`: agent turn lifecycle (`run_agent_turn`, spawn/stream/finalize)
 - `src/handlers/message/status.rs`: turn status setup/update/cleanup + status-message formatting (usage, pricing, context)
+- `src/handlers/message/thread_header.rs`: first-message topic status card, Mini App/refresh keyboard, and silent pinning
 - `src/handlers/message/response.rs`: final response sending (text send/edit/fallback)
 - `src/handlers/message/media.rs`: `<media>` routing parse + path classification (image→`sendPhoto`, `.ogg/.oga/.opus`→`sendVoice`, `.mp3/.m4a/.wav`→`sendAudio`, else `sendDocument`)
 - `src/ingest/mod.rs`: Telegram message parsing + attachment loading

@@ -157,9 +157,34 @@ pub struct TelegramConfig {
     /// Allowlist of numeric Telegram chat IDs (for groups/supergroups).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowlist_chat_ids: Vec<i64>,
+    /// Embedded Mini App web server configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<TelegramServerConfig>,
     /// Per-chat project profiles keyed by profile name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub profiles: BTreeMap<String, TelegramProfileConfig>,
+}
+
+/// Embedded web server configuration for Telegram Mini Apps.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TelegramServerConfig {
+    /// Whether the embedded Mini App server is enabled.
+    pub enabled: bool,
+    /// Port to listen on. Defaults to 4141.
+    pub port: u16,
+    /// Named Telegram Mini App URL used by `/threads` buttons.
+    pub mini_app_url: Option<String>,
+}
+
+impl Default for TelegramServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 4141,
+            mini_app_url: None,
+        }
+    }
 }
 
 /// Per-chat Telegram project profile.
@@ -3407,6 +3432,7 @@ cwd = "~/work"
                 bot_token: Some("token".to_string()),
                 allowlist_user_ids: vec![42],
                 allowlist_chat_ids: vec![-100_123],
+                server: None,
                 profiles: BTreeMap::from([(
                     "work".to_string(),
                     TelegramProfileConfig {

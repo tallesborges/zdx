@@ -23,7 +23,7 @@ use zdx_engine::core::thread_persistence;
 use crate::bot::context::BotContext;
 use crate::bot::queue::{ChatQueueMap, dispatch_message};
 use crate::commands::{BotCommand, parse_command};
-use crate::handlers::message::{escape_html, thread_id_for_chat};
+use crate::handlers::message::{escape_html, post_thread_header, thread_id_for_chat};
 use crate::telegram::markdown::{to_telegram_html, truncate_telegram_html};
 use crate::telegram::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, TelegramClient};
 use crate::types::IncomingMessage;
@@ -616,18 +616,29 @@ async fn seed_new_topic(
         .ok()
         .flatten();
     let new_thread_id = thread_id_for_chat(chat_id, Some(new_topic_id));
-    let created = thread_persistence::Thread::with_id(new_thread_id).and_then(|mut thread| {
-        thread.set_handoff_from(Some(source_thread_id.to_string()));
-        if let Some(model) = inherited_model {
-            thread.set_model_override(Some(model))?;
-        }
-        if let Some(level) = inherited_thinking {
-            thread.set_thinking_override(Some(level))?;
-        }
-        thread.set_pending_topic_title(true)
-    });
+    let created =
+        thread_persistence::Thread::with_id(new_thread_id.clone()).and_then(|mut thread| {
+            thread.set_handoff_from(Some(source_thread_id.to_string()));
+            if let Some(model) = inherited_model {
+                thread.set_model_override(Some(model))?;
+            }
+            if let Some(level) = inherited_thinking {
+                thread.set_thinking_override(Some(level))?;
+            }
+            thread.set_pending_topic_title(true)
+        });
     if let Err(err) = created {
         tracing::warn!(chat_id, new_topic_id, %err, "Failed to record lineage on new thread");
+    }
+
+    if let Err(err) = post_thread_header(context, chat_id, new_topic_id, &new_thread_id).await {
+        tracing::warn!(
+            chat_id,
+            topic_id = new_topic_id,
+            thread_id = %new_thread_id,
+            %err,
+            "Created seeded topic but failed to post thread header"
+        );
     }
 
     let synthetic: crate::telegram::Message = serde_json::from_value(json!({
@@ -794,27 +805,15 @@ fn suggestion_preview(command: StagingCommand, suggestion: &str) -> String {
 fn accept_discard_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup {
         inline_keyboard: vec![vec![
-            InlineKeyboardButton {
-                text: "✅ Accept".to_string(),
-                callback_data: Some("stg:a".to_string()),
-                url: None,
-            },
-            InlineKeyboardButton {
-                text: "🗑 Discard".to_string(),
-                callback_data: Some("stg:d".to_string()),
-                url: None,
-            },
+            InlineKeyboardButton::callback("✅ Accept", "stg:a"),
+            InlineKeyboardButton::callback("🗑 Discard", "stg:d"),
         ]],
     }
 }
 
 fn discard_only_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup {
-        inline_keyboard: vec![vec![InlineKeyboardButton {
-            text: "🗑 Discard".to_string(),
-            callback_data: Some("stg:d".to_string()),
-            url: None,
-        }]],
+        inline_keyboard: vec![vec![InlineKeyboardButton::callback("🗑 Discard", "stg:d")]],
     }
 }
 

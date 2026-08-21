@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Thread Transcript</title>
+  <!-- Telegram Web App SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <!-- Marked for Markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- Highlight.js for code blocks -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
+  <style>
+    :root {
+      --bg: var(--tg-theme-bg-color, #f4f6f8);
+      --card-bg: #ffffff;
+      --text: var(--tg-theme-text-color, #1a1f2c);
+      --secondary-text: var(--tg-theme-hint-color, #64748b);
+      --accent: var(--tg-theme-button-color, #0284c7);
+      --accent-text: var(--tg-theme-button-text-color, #ffffff);
+      --user-border: #3b82f6;
+      --assistant-border: #10b981;
+      --code-bg: #1e293b;
+      --code-text: #e2e8f0;
+      --inline-code-bg: #f1f5f9;
+      --inline-code-text: #0f172a;
+      --border: rgba(0, 0, 0, 0.08);
+      --header-bg: rgba(255, 255, 255, 0.85);
+      --search-bg: #e2e8f0;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: var(--tg-theme-bg-color, #090d16);
+        --card-bg: #111827;
+        --text: var(--tg-theme-text-color, #f8fafc);
+        --secondary-text: var(--tg-theme-hint-color, #94a3b8);
+        --inline-code-bg: #1e293b;
+        --inline-code-text: #f8fafc;
+        --border: rgba(255, 255, 255, 0.08);
+        --header-bg: rgba(9, 13, 22, 0.85);
+        --search-bg: #1e293b;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding-bottom: 40px;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: var(--header-bg);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 16px 10px;
+    }
+
+    .top-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .thread-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 70%;
+    }
+
+    .meta-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .refresh-btn {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      color: var(--secondary-text);
+      border-radius: 8px;
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .turn-badge {
+      font-size: 11px;
+      color: var(--secondary-text);
+      background: var(--search-bg);
+      padding: 4px 8px;
+      border-radius: 8px;
+      font-weight: 600;
+    }
+
+    .search-box {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      background: var(--search-bg);
+      border-radius: 10px;
+      padding: 8px 12px;
+    }
+
+    .search-box svg {
+      width: 15px;
+      height: 15px;
+      fill: var(--secondary-text);
+      flex-shrink: 0;
+    }
+
+    .search-box input {
+      background: transparent;
+      border: none;
+      color: var(--text);
+      width: 100%;
+      font-size: 14px;
+      outline: none;
+    }
+
+    .search-box input::placeholder {
+      color: var(--secondary-text);
+    }
+
+    .clear-btn {
+      background: none;
+      border: none;
+      color: var(--secondary-text);
+      font-size: 14px;
+      cursor: pointer;
+      display: none;
+      padding: 0 4px;
+    }
+
+    .speaker-pills {
+      display: flex;
+      gap: 6px;
+      padding-top: 8px;
+    }
+
+    .pill {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 12px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--card-bg);
+      color: var(--secondary-text);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .pill.active {
+      background: var(--accent);
+      color: var(--accent-text);
+      border-color: var(--accent);
+    }
+
+    .transcript-container {
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .utterance-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px 16px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    }
+
+    .utterance-card.user {
+      border-left: 4px solid var(--user-border);
+    }
+
+    .utterance-card.assistant {
+      border-left: 4px solid var(--assistant-border);
+    }
+
+    .utterance-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .speaker-tag {
+      font-size: 13px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .speaker-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .user .speaker-dot { background: var(--user-border); }
+    .user .speaker-name { color: var(--user-border); }
+
+    .assistant .speaker-dot { background: var(--assistant-border); }
+    .assistant .speaker-name { color: var(--assistant-border); }
+
+    .timestamp {
+      font-size: 11px;
+      color: var(--secondary-text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .utterance-body {
+      font-size: 14.5px;
+      line-height: 1.6;
+      color: var(--text);
+      word-break: break-word;
+    }
+
+    .utterance-body p {
+      margin-bottom: 10px;
+    }
+
+    .utterance-body p:last-child {
+      margin-bottom: 0;
+    }
+
+    .utterance-body h1, .utterance-body h2, .utterance-body h3, .utterance-body h4 {
+      font-size: 15px;
+      font-weight: 700;
+      margin: 14px 0 6px 0;
+      color: var(--text);
+    }
+
+    .utterance-body ul, .utterance-body ol {
+      margin-left: 20px;
+      margin-bottom: 10px;
+    }
+
+    .utterance-body li {
+      margin-bottom: 4px;
+    }
+
+    .utterance-body a {
+      color: var(--accent);
+      text-decoration: underline;
+    }
+
+    .utterance-body :not(pre) > code {
+      background: var(--inline-code-bg) !important;
+      color: var(--inline-code-text) !important;
+      padding: 3px 6px;
+      border-radius: 5px;
+      font-size: 13px;
+      font-weight: 600;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      border: 1px solid var(--border);
+    }
+
+    .code-wrapper {
+      position: relative;
+      margin: 10px 0;
+      background: var(--code-bg);
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid rgba(0, 0, 0, 0.2);
+    }
+
+    .code-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 12px;
+      background: rgba(0, 0, 0, 0.25);
+      font-size: 11px;
+      font-family: monospace;
+      color: #94a3b8;
+    }
+
+    .copy-code-btn {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #cbd5e1;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .utterance-body pre {
+      margin: 0;
+      padding: 12px 14px;
+      overflow-x: auto;
+      background: var(--code-bg) !important;
+    }
+
+    .utterance-body pre code {
+      background: transparent !important;
+      color: var(--code-text) !important;
+      padding: 0 !important;
+      border: none !important;
+      font-size: 13px;
+      line-height: 1.5;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    .utterance-body blockquote {
+      border-left: 3px solid var(--secondary-text);
+      padding-left: 10px;
+      color: var(--secondary-text);
+      margin: 10px 0;
+    }
+
+    .utterance-body hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 14px 0;
+    }
+
+    .highlight {
+      background: rgba(250, 204, 21, 0.4);
+      color: inherit;
+      border-radius: 2px;
+      padding: 0 2px;
+    }
+
+    .empty-state, .loading-spinner {
+      text-align: center;
+      padding: 48px 16px;
+      color: var(--secondary-text);
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Sticky Header -->
+  <header>
+    <div class="top-row">
+      <div class="thread-title" id="threadTitle">Active Thread</div>
+      <div class="meta-actions">
+        <button class="refresh-btn" onclick="loadActiveThread()">🔄 Sync</button>
+        <div class="turn-badge" id="countBadge">0 turns</div>
+      </div>
+    </div>
+
+    <!-- Search Input -->
+    <div class="search-box">
+      <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+      <input type="text" id="searchInput" placeholder="Search this conversation..." oninput="onSearchChange()" />
+      <button class="clear-btn" id="clearBtn" onclick="clearSearch()">✕</button>
+    </div>
+
+    <!-- Speaker Filter Pills -->
+    <div class="speaker-pills" id="speakerPills">
+      <button class="pill active" onclick="setSpeakerFilter('all', this)">All</button>
+      <button class="pill" onclick="setSpeakerFilter('You', this)">You</button>
+      <button class="pill" onclick="setSpeakerFilter('Z', this)">Z</button>
+    </div>
+  </header>
+
+  <!-- Transcript Feed -->
+  <div class="transcript-container" id="transcriptContainer">
+    <div class="loading-spinner">Loading active conversation...</div>
+  </div>
+
+  <script>
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+    }
+
+    const renderer = new marked.Renderer();
+    renderer.code = function({ text, lang }) {
+      const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+      const highlighted = hljs.highlight(text, { language }).value;
+      const displayLang = lang || 'code';
+
+      return `
+        <div class="code-wrapper">
+          <div class="code-header">
+            <span>${displayLang}</span>
+            <button class="copy-code-btn" onclick="copyCode(this)">Copy</button>
+          </div>
+          <pre><code class="hljs ${language}">${highlighted}</code></pre>
+        </div>
+      `;
+    };
+
+    marked.setOptions({
+      gfm: true,
+      breaks: true,
+      renderer: renderer
+    });
+
+    let transcriptData = [];
+    let activeSpeaker = "all";
+    let searchQuery = "";
+
+    function copyCode(btn) {
+      const pre = btn.closest(".code-wrapper").querySelector("pre code");
+      navigator.clipboard.writeText(pre.innerText).then(() => {
+        btn.textContent = "Copied!";
+        setTimeout(() => { btn.textContent = "Copy"; }, 2000);
+      });
+    }
+
+    async function telegramFetch(url) {
+      const initData = tg?.initData;
+      if (!initData) {
+        throw new Error("Open Threads from its Telegram Mini App link.");
+      }
+
+      const response = await fetch(url, {
+        headers: { Authorization: `tma ${initData}` }
+      });
+      if (response.status === 401 || response.status === 403) {
+        throw new Error("Telegram authorization failed. Close and reopen Threads.");
+      }
+      if (!response.ok) {
+        throw new Error("The thread could not be loaded.");
+      }
+      return response;
+    }
+
+    function showLoadError(message) {
+      const container = document.getElementById("transcriptContainer");
+      container.innerHTML = "";
+      const error = document.createElement("div");
+      error.className = "empty-state";
+      error.textContent = message;
+      container.appendChild(error);
+    }
+
+    async function loadActiveThread() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const threadId = tg?.initDataUnsafe?.start_param || urlParams.get("id") || "active";
+
+      try {
+        const res = await telegramFetch(`/api/threads/${encodeURIComponent(threadId)}?t=${Date.now()}`);
+        const data = await res.json();
+
+        document.getElementById("threadTitle").textContent = data.title || "Active Thread";
+        transcriptData = data.dialogue || [];
+        renderFeed();
+      } catch (err) {
+        showLoadError(err instanceof Error ? err.message : "Error loading the thread.");
+      }
+    }
+
+    function setSpeakerFilter(speaker, elem) {
+      activeSpeaker = speaker;
+      document.querySelectorAll(".pill").forEach(p => p.classList.remove("active"));
+      elem.classList.add("active");
+      renderFeed();
+    }
+
+    function onSearchChange() {
+      const input = document.getElementById("searchInput");
+      searchQuery = input.value.trim().toLowerCase();
+      document.getElementById("clearBtn").style.display = searchQuery ? "block" : "none";
+      renderFeed();
+    }
+
+    function clearSearch() {
+      document.getElementById("searchInput").value = "";
+      onSearchChange();
+    }
+
+    function renderFeed() {
+      const container = document.getElementById("transcriptContainer");
+      container.innerHTML = "";
+
+      const filtered = transcriptData.filter(item => {
+        const matchesSpeaker = activeSpeaker === "all" || item.speaker === activeSpeaker;
+        const matchesText = !searchQuery || item.text.toLowerCase().includes(searchQuery);
+        return matchesSpeaker && matchesText;
+      });
+
+      document.getElementById("countBadge").textContent = `${filtered.length} turns`;
+
+      if (filtered.length === 0) {
+        container.innerHTML = `<div class="empty-state">No messages matching your search.</div>`;
+        return;
+      }
+
+      filtered.forEach(item => {
+        const isUser = item.speaker === "You";
+        let parsedHtml = marked.parse(item.text);
+
+        const card = document.createElement("div");
+        card.className = `utterance-card ${isUser ? "user" : "assistant"}`;
+        card.innerHTML = `
+          <div class="utterance-header">
+            <div class="speaker-tag">
+              <div class="speaker-dot"></div>
+              <span class="speaker-name">${item.speaker}</span>
+            </div>
+            <span class="timestamp">${item.time}</span>
+          </div>
+          <div class="utterance-body">${parsedHtml}</div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    loadActiveThread();
+  </script>
+</body>
+</html>

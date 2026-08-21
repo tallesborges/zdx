@@ -41,18 +41,13 @@ pub(crate) async fn send_followups(
         .iter()
         .enumerate()
         .map(|(idx, item)| {
-            vec![InlineKeyboardButton {
-                text: truncate_chars(&strip_markdown_markers(item), MAX_BUTTON_CHARS),
-                callback_data: Some(format!("fu:{idx}")),
-                url: None,
-            }]
+            vec![InlineKeyboardButton::callback(
+                truncate_chars(&strip_markdown_markers(item), MAX_BUTTON_CHARS),
+                format!("fu:{idx}"),
+            )]
         })
         .collect();
-    rows.push(vec![InlineKeyboardButton {
-        text: "✕ Dismiss".to_string(),
-        callback_data: Some("fu:x".to_string()),
-        url: None,
-    }]);
+    rows.push(vec![InlineKeyboardButton::callback("✕ Dismiss", "fu:x")]);
     let markup = InlineKeyboardMarkup {
         inline_keyboard: rows,
     };

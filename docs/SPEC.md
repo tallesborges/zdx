@@ -153,9 +153,10 @@ Threads are append-only **JSONL** event logs (thread events are never modified o
 - Threads dir: `<base>/threads/`
 - OAuth cache: `<base>/oauth.json` (0600 perms)
 - MCP OAuth cache: `<base>/mcp_oauth.json` (0600 perms)
-- `zdx bot` resolves Telegram credentials/settings from `[telegram]` in `config.toml`. `[telegram]` carries identity and routing only (`bot_token`, allowlists, `profiles`); the bot's model and thinking level come from the layered config like every other surface.
+- `zdx bot` resolves Telegram credentials/settings from `[telegram]` in `config.toml`. `[telegram]` carries identity, routing, and the optional Mini App server (`bot_token`, allowlists, `profiles`, `server`); the bot's model and thinking level come from the layered config like every other surface.
 - Telegram bot chat profiles live under `telegram.profiles.<name>` in `config.toml` with `chat_id` and `cwd`; matching chats run agent turns from the profile cwd, and unprofiled allowed chats keep using the bot root fallback.
 - Each Telegram profile gets its own layered config anchored at the profile `cwd`, so a workspace `.zdx/config.toml` applies to chats bound to that profile. Profile configs are built once at startup; unprofiled chats use the bot-level config. Runtime `/model` and `/thinking` changes in a General topic are workspace-scoped: they write the chat root's overlay and update only that chat's config.
+- Every bot-created Telegram forum topic starts with a status-style thread header. The bot pins it silently when it has `can_pin_messages`, keeps the topic usable if pinning fails, and provides a refresh action plus an Open Thread button when the Threads Mini App is configured. Resumed topics display and open their effective source thread.
 
 ### Format
 
@@ -514,6 +515,8 @@ When the Telegram bot is used in a forum-enabled supergroup:
   - tapping a custom command dispatches its prompt content as a normal agent turn in the current topic
   - the picker is one-shot: a tap consumes it; Dismiss deletes it
 - `/tldr` (typed, native menu) posts a recap of the current thread (read-only, `tldr_model`); like `/status` it bypasses the queue and does not auto-create topics from `General`
+- `/threads` (with `/thread` accepted) posts a named Mini App link for the current thread when `[telegram.server]` is enabled and `mini_app_url` is configured.
+- The embedded Mini App server is opt-in. It serves the reader at `/threads` and thread JSON under `/api/threads`; API routes require fresh, bot-token-signed `Telegram.WebApp.initData` from an allowlisted Telegram user.
 - `/prompt_builder` (typed, native menu; `/prompt-builder` also accepted) starts the same staged flow as `/handoff` with the intent as input:
   - works inside topics and DMs (not `General`); the generated prompt is previewed with Accept / Discard buttons and regenerates on a new message
   - Accept runs the generated prompt as the user's real message in the current topic (a normal agent turn); the preview message is kept (edited) as the turn's reply anchor

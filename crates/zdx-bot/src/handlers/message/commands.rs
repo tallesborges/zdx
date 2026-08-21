@@ -1,13 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
-use tokio::process::Command;
 use zdx_engine::config::ThinkingLevel;
 use zdx_engine::core::{thread_persistence, worktree};
 use zdx_engine::service::{self, Service};
 
-use super::status::format_status_message;
-use super::{ReplyContext, StatusSnapshot, escape_html, thread_id_for_chat};
+use super::status::current_status_message;
+use super::{ReplyContext, escape_html, post_thread_header, thread_id_for_chat};
 use crate::agent;
 use crate::bot::context::BotContext;
 use crate::commands::{BotCommand, ModelSubcommand, ThinkingSubcommand, parse_command};
@@ -67,6 +66,14 @@ pub(super) async fn handle_thread_setup_commands(
             reply_ctx.topic_id,
         )
         .await?
+        || handle_threads_command(
+            context,
+            incoming,
+            thread_id,
+            reply_ctx.reply_to_message_id,
+            reply_ctx.topic_id,
+        )
+        .await?
         || handle_thread_commands(
             context,
             incoming,
@@ -109,6 +116,15 @@ async fn create_empty_topic_from_new(
                     thread_id = %thread_id,
                     %err,
                     "Created empty topic but failed to mark pending auto-title"
+                );
+            }
+            if let Err(err) = post_thread_header(context, chat_id, topic_id, &thread_id).await {
+                tracing::warn!(
+                    chat_id,
+                    topic_id,
+                    thread_id = %thread_id,
+                    %err,
+                    "Created empty topic but failed to post thread header"
                 );
             }
             tracing::info!(
@@ -198,6 +214,7 @@ pub(super) async fn handle_general_forum_commands(
         BotCommand::WhereAmI => unreachable!("whereami is handled by handle_whereami_command"),
         BotCommand::Tldr => unreachable!("tldr is handled by handle_tldr_command"),
         BotCommand::ThreadId => unreachable!("threadid is handled by handle_threadid_command"),
+        BotCommand::Threads => unreachable!("threads is handled by handle_threads_command"),
     };
     context
         .client()
@@ -506,30 +523,7 @@ async fn handle_status_command(
         return Ok(false);
     }
 
-    let config = context.config_for_chat(incoming.chat_id);
-    let resolved_root = context.root_for_chat(incoming.chat_id);
-    let root_path = thread_persistence::read_thread_root_path(thread_id)?
-        .map_or_else(|| resolved_root.root.clone(), PathBuf::from);
-    let model_override = thread_persistence::read_thread_model_override(thread_id)?;
-    let thinking_override = thread_persistence::read_thread_thinking_override(thread_id)?;
-    let effective_model = model_override.as_deref().unwrap_or(&config.model);
-    let effective_thinking = thinking_override.unwrap_or(config.thinking_level);
-    let branch = git_branch_name(&root_path).await;
-    let events = thread_persistence::load_thread_events(thread_id)?;
-    let (cumulative_usage, latest_usage) =
-        thread_persistence::extract_usage_from_thread_events(&events);
-    let message = format_status_message(&StatusSnapshot {
-        model_id: effective_model,
-        model_override: model_override.as_deref(),
-        thinking: effective_thinking,
-        thinking_override,
-        profile_name: resolved_root.profile_name.as_deref(),
-        thread_id,
-        root_path: &root_path,
-        branch: branch.as_deref(),
-        cumulative_usage,
-        latest_usage,
-    });
+    let message = current_status_message(context, incoming.chat_id, thread_id).await?;
 
     context
         .client()
@@ -609,6 +603,67 @@ async fn handle_threadid_command(
     Ok(true)
 }
 
+async fn handle_threads_command(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    thread_id: &str,
+    reply_to_message_id: Option<i64>,
+    topic_id: Option<i64>,
+) -> Result<bool> {
+    if !incoming.images.is_empty() || !incoming.audios.is_empty() {
+        return Ok(false);
+    }
+    if !incoming
+        .text
+        .as_deref()
+        .is_some_and(|text| matches!(parse_command(text), Some(BotCommand::Threads)))
+    {
+        return Ok(false);
+    }
+
+    let config = context.config_for_chat(incoming.chat_id);
+    let Some(mini_app_url) = config
+        .telegram
+        .server
+        .as_ref()
+        .filter(|server| server.enabled)
+        .and_then(|server| server.mini_app_url.as_deref())
+    else {
+        context
+            .client()
+            .send_message(
+                incoming.chat_id,
+                "The Threads Mini App is not configured.",
+                reply_to_message_id,
+                topic_id,
+            )
+            .await?;
+        return Ok(true);
+    };
+
+    let web_app_url = format!("{mini_app_url}?startapp={thread_id}");
+
+    let keyboard = InlineKeyboardMarkup {
+        inline_keyboard: vec![vec![crate::telegram::InlineKeyboardButton::url(
+            "💬 Open Thread in Mini App",
+            web_app_url,
+        )]],
+    };
+
+    context
+        .client()
+        .send_message_with_markup(
+            incoming.chat_id,
+            "📑 <b>Thread Viewer</b>\nTap below to open the interactive transcript:",
+            reply_to_message_id,
+            topic_id,
+            &keyboard,
+        )
+        .await?;
+
+    Ok(true)
+}
+
 async fn handle_tldr_command(
     context: &BotContext,
     incoming: &crate::types::IncomingMessage,
@@ -664,7 +719,6 @@ async fn handle_tldr_command(
         .await?;
     Ok(true)
 }
-
 pub(super) fn format_whereami_message(
     chat_id: i64,
     topic_id: Option<i64>,
@@ -768,20 +822,20 @@ pub(crate) fn build_provider_keyboard(
         .map(|chunk| {
             chunk
                 .iter()
-                .map(|p| InlineKeyboardButton {
-                    text: zdx_engine::providers::provider_key_label(p),
-                    callback_data: Some(format!("model_provider:{p}:{scope}")),
-                    url: None,
+                .map(|p| {
+                    InlineKeyboardButton::callback(
+                        zdx_engine::providers::provider_key_label(p),
+                        format!("model_provider:{p}:{scope}"),
+                    )
                 })
                 .collect()
         })
         .collect();
 
-    rows.push(vec![InlineKeyboardButton {
-        text: exit_label.to_string(),
-        callback_data: Some(format!("model_cancel:{scope}")),
-        url: None,
-    }]);
+    rows.push(vec![InlineKeyboardButton::callback(
+        exit_label,
+        format!("model_cancel:{scope}"),
+    )]);
 
     InlineKeyboardMarkup {
         inline_keyboard: rows,
@@ -822,28 +876,25 @@ pub(crate) fn build_models_keyboard(
                 .map(|(index, m)| {
                     // Display just the model part (after provider:)
                     let display = m.split(':').nth(1).unwrap_or(m);
-                    InlineKeyboardButton {
-                        text: display.to_string(),
-                        callback_data: Some(format!("model_pick:{provider}:{index}:{scope}")),
-                        url: None,
-                    }
+                    InlineKeyboardButton::callback(
+                        display,
+                        format!("model_pick:{provider}:{index}:{scope}"),
+                    )
                 })
                 .collect()
         })
         .collect();
 
     // Add a "← Back" button
-    rows.push(vec![InlineKeyboardButton {
-        text: "← Back".to_string(),
-        callback_data: Some(format!("model_back:{scope}")),
-        url: None,
-    }]);
+    rows.push(vec![InlineKeyboardButton::callback(
+        "← Back",
+        format!("model_back:{scope}"),
+    )]);
 
-    rows.push(vec![InlineKeyboardButton {
-        text: "✖ Cancel".to_string(),
-        callback_data: Some(format!("model_cancel:{scope}")),
-        url: None,
-    }]);
+    rows.push(vec![InlineKeyboardButton::callback(
+        "✖ Cancel",
+        format!("model_cancel:{scope}"),
+    )]);
 
     InlineKeyboardMarkup {
         inline_keyboard: rows,
@@ -865,38 +916,33 @@ pub(crate) fn build_thinking_keyboard(
                 .iter()
                 .map(|level| {
                     let prefix = if *level == current { "✅ " } else { "" };
-                    InlineKeyboardButton {
-                        text: format!("{prefix}{}", level.display_name()),
-                        callback_data: Some(format!(
-                            "thinking_set:{}:{scope}",
-                            level.display_name()
-                        )),
-                        url: None,
-                    }
+                    InlineKeyboardButton::callback(
+                        format!("{prefix}{}", level.display_name()),
+                        format!("thinking_set:{}:{scope}", level.display_name()),
+                    )
                 })
                 .collect()
         })
         .collect();
 
     if !is_general {
-        rows.push(vec![InlineKeyboardButton {
-            text: "↺ Use default".to_string(),
-            callback_data: Some("thinking_reset:topic".to_string()),
-            url: None,
-        }]);
+        rows.push(vec![InlineKeyboardButton::callback(
+            "↺ Use default",
+            "thinking_reset:topic",
+        )]);
     }
 
-    rows.push(vec![InlineKeyboardButton {
-        text: "✖ Cancel".to_string(),
-        callback_data: Some(format!("thinking_cancel:{scope}")),
-        url: None,
-    }]);
+    rows.push(vec![InlineKeyboardButton::callback(
+        "✖ Cancel",
+        format!("thinking_cancel:{scope}"),
+    )]);
 
     InlineKeyboardMarkup {
         inline_keyboard: rows,
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn handle_thread_commands(
     context: &BotContext,
     incoming: &crate::types::IncomingMessage,
@@ -950,6 +996,7 @@ async fn handle_thread_commands(
         | BotCommand::Commands
         | BotCommand::Tldr
         | BotCommand::ThreadId
+        | BotCommand::Threads
         | BotCommand::PromptBuilder => {
             return Ok(false);
         }
@@ -1008,21 +1055,4 @@ async fn handle_thread_commands(
         )
         .await?;
     Ok(true)
-}
-
-async fn git_branch_name(root: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .arg("branch")
-        .arg("--show-current")
-        .output()
-        .await
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!branch.is_empty()).then_some(branch)
 }

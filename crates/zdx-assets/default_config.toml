@@ -126,6 +126,11 @@ websocket = false
 # bot_token = "123456789:abcDEF..."
 # allowlist_user_ids = [123456789]
 # bot_token can also be set via ZDX_TELEGRAM_BOT_TOKEN
+#
+# [telegram.server]
+# enabled = false
+# port = 4141
+# mini_app_url = "https://t.me/your_bot/threads"
 
 # Shared reasoning effort used across providers.
 # Options: low, medium, high, xhigh, max

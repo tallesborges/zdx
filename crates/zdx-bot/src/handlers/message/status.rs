@@ -1,5 +1,8 @@
 use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 
+use anyhow::Result;
+use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 use zdx_engine::core::events::AgentEvent;
 use zdx_engine::core::thread_persistence;
@@ -28,11 +31,10 @@ pub(super) async fn setup_turn_status(
 
     let key = (incoming.chat_id, incoming.message_id);
     let cancel_markup = InlineKeyboardMarkup {
-        inline_keyboard: vec![vec![InlineKeyboardButton {
-            text: "⏹ Cancel".to_string(),
-            callback_data: Some(format!("cancel:{}:{}", key.0, key.1)),
-            url: None,
-        }]],
+        inline_keyboard: vec![vec![InlineKeyboardButton::callback(
+            "⏹ Cancel",
+            format!("cancel:{}:{}", key.0, key.1),
+        )]],
     };
 
     let token = CancellationToken::new();
@@ -85,11 +87,10 @@ pub(super) async fn setup_preprocessing_status(
 ) -> TurnStatus {
     let key = (message.chat.id, message.id);
     let cancel_markup = InlineKeyboardMarkup {
-        inline_keyboard: vec![vec![InlineKeyboardButton {
-            text: "⏹ Cancel".to_string(),
-            callback_data: Some(format!("cancel:{}:{}", key.0, key.1)),
-            url: None,
-        }]],
+        inline_keyboard: vec![vec![InlineKeyboardButton::callback(
+            "⏹ Cancel",
+            format!("cancel:{}:{}", key.0, key.1),
+        )]],
     };
     let token = CancellationToken::new();
     {
@@ -218,10 +219,61 @@ pub(super) async fn cleanup_turn_status(context: &BotContext, status: &TurnStatu
     map.remove(&status.key);
 }
 
-pub(super) fn format_status_message(snapshot: &StatusSnapshot<'_>) -> String {
+pub(super) async fn current_status_message(
+    context: &BotContext,
+    chat_id: i64,
+    thread_id: &str,
+) -> Result<String> {
+    current_status_message_with_heading(context, chat_id, thread_id, "<b>Status</b>").await
+}
+
+pub(super) async fn current_thread_header_message(
+    context: &BotContext,
+    chat_id: i64,
+    thread_id: &str,
+) -> Result<String> {
+    current_status_message_with_heading(context, chat_id, thread_id, "🧵 <b>Thread</b>").await
+}
+
+async fn current_status_message_with_heading(
+    context: &BotContext,
+    chat_id: i64,
+    thread_id: &str,
+    heading: &str,
+) -> Result<String> {
+    let config = context.config_for_chat(chat_id);
+    let resolved_root = context.root_for_chat(chat_id);
+    let root_path = thread_persistence::read_thread_root_path(thread_id)?
+        .map_or_else(|| resolved_root.root.clone(), PathBuf::from);
+    let model_override = thread_persistence::read_thread_model_override(thread_id)?;
+    let thinking_override = thread_persistence::read_thread_thinking_override(thread_id)?;
+    let effective_model = model_override.as_deref().unwrap_or(&config.model);
+    let effective_thinking = thinking_override.unwrap_or(config.thinking_level);
+    let branch = git_branch_name(&root_path).await;
+    let events = thread_persistence::load_thread_events(thread_id)?;
+    let (cumulative_usage, latest_usage) =
+        thread_persistence::extract_usage_from_thread_events(&events);
+    Ok(format_status_message_with_heading(
+        &StatusSnapshot {
+            model_id: effective_model,
+            model_override: model_override.as_deref(),
+            thinking: effective_thinking,
+            thinking_override,
+            profile_name: resolved_root.profile_name.as_deref(),
+            thread_id,
+            root_path: &root_path,
+            branch: branch.as_deref(),
+            cumulative_usage,
+            latest_usage,
+        },
+        heading,
+    ))
+}
+
+fn format_status_message_with_heading(snapshot: &StatusSnapshot<'_>, heading: &str) -> String {
     let model_meta = ModelOption::find_by_id(snapshot.model_id);
     let provider = provider_for_model(snapshot.model_id);
-    let mut lines = vec!["<b>Status</b>".to_string()];
+    let mut lines = vec![heading.to_string()];
 
     lines.push(format!(
         "Model: <code>{}</code> ({})",
@@ -273,6 +325,23 @@ pub(super) fn format_status_message(snapshot: &StatusSnapshot<'_>) -> String {
     ));
 
     lines.join("\n")
+}
+
+async fn git_branch_name(root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("branch")
+        .arg("--show-current")
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!branch.is_empty()).then_some(branch)
 }
 
 fn format_context_usage_line(

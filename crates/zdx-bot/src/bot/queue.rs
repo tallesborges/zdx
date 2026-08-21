@@ -6,7 +6,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::bot::context::{BotContext, QueueCancelKey, QueuedCancel};
 use crate::commands::{BotCommand, bypasses_queue, is_topic_blocking_command, parse_command};
-use crate::handlers::message::{handle_message, resolve_effective_thread_id, thread_id_for_chat};
+use crate::handlers::message::{
+    handle_message, post_thread_header, resolve_effective_thread_id, thread_id_for_chat,
+};
 use crate::staging;
 use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message};
 
@@ -99,6 +101,18 @@ pub(crate) async fn dispatch_message(
                     tracing::info!(topic_name = %topic_name, topic_id, chat_id = message.chat.id, "Created topic");
                     // Enqueue with the new topic ID so handler knows to use it
                     let chat_id = message.chat.id;
+                    let thread_id = thread_id_for_chat(chat_id, Some(topic_id));
+                    if let Err(err) =
+                        post_thread_header(&context, chat_id, topic_id, &thread_id).await
+                    {
+                        tracing::warn!(
+                            chat_id,
+                            topic_id,
+                            thread_id = %thread_id,
+                            %err,
+                            "Created routed topic but failed to post thread header"
+                        );
+                    }
                     let mut message = message;
                     message.thread_id = Some(topic_id);
                     message.synthetic_topic_routed_from_general = true;
@@ -252,11 +266,10 @@ async fn enqueue_message(queues: &ChatQueueMap, context: &Arc<BotContext>, messa
         let user_message_id = message.id;
         let cancel_data = format!("cancel_q:{chat_id}:{user_message_id}");
         let cancel_markup = InlineKeyboardMarkup {
-            inline_keyboard: vec![vec![InlineKeyboardButton {
-                text: "✖ Cancel".to_string(),
-                callback_data: Some(cancel_data),
-                url: None,
-            }]],
+            inline_keyboard: vec![vec![InlineKeyboardButton::callback(
+                "✖ Cancel",
+                cancel_data,
+            )]],
         };
 
         match context

@@ -226,19 +226,16 @@ fn picker_keyboard(entries: &[PickerEntry]) -> InlineKeyboardMarkup {
             chunk
                 .iter()
                 .enumerate()
-                .map(|(col_idx, entry)| InlineKeyboardButton {
-                    text: format!("/{}", entry.name),
-                    callback_data: Some(format!("cmd:{}", row_idx * 2 + col_idx)),
-                    url: None,
+                .map(|(col_idx, entry)| {
+                    InlineKeyboardButton::callback(
+                        format!("/{}", entry.name),
+                        format!("cmd:{}", row_idx * 2 + col_idx),
+                    )
                 })
                 .collect()
         })
         .collect();
-    rows.push(vec![InlineKeyboardButton {
-        text: "✕ Dismiss".to_string(),
-        callback_data: Some("cmd:x".to_string()),
-        url: None,
-    }]);
+    rows.push(vec![InlineKeyboardButton::callback("✕ Dismiss", "cmd:x")]);
     InlineKeyboardMarkup {
         inline_keyboard: rows,
     }

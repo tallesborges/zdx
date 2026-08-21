@@ -11,6 +11,7 @@ pub(crate) enum BotCommand {
     Tldr,
     PromptBuilder,
     ThreadId,
+    Threads,
     Launcher,
 }
 
@@ -126,6 +127,15 @@ const COMMAND_DEFS: &[CommandDef] = &[
         telegram_spec: TelegramCommandSpec {
             command: "threadid",
             description: "Show only the thread ID",
+        },
+    },
+    CommandDef {
+        command: BotCommand::Threads,
+        patterns: &["/threads", "/thread"],
+        blocks_topic_autocreate: true,
+        telegram_spec: TelegramCommandSpec {
+            command: "threads",
+            description: "Open the Mini App thread viewer",
         },
     },
     CommandDef {

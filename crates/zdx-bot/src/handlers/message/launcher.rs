@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 use zdx_engine::config::{ModelFavorite, ThinkingLevel};
 use zdx_engine::core::thread_persistence;
 
-use super::{escape_html, thread_id_for_chat};
+use super::{escape_html, post_thread_header, thread_id_for_chat};
 use crate::bot::context::BotContext;
 use crate::telegram::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, TelegramClient};
 
@@ -66,8 +66,8 @@ fn filter_available_favorites(
 }
 
 /// Create a new forum topic pre-set to `model` (and optional `thinking`), mark
-/// it for auto-titling on the first real message, and post a "ready" prompt
-/// into it. Returns the new topic id.
+/// it for auto-titling on the first real message, and post its pinned thread
+/// header. Returns the new topic id.
 ///
 /// Model/thinking overrides are best-effort: a failure to persist them is
 /// logged but does not fail topic creation (the topic still works on defaults).
@@ -104,11 +104,15 @@ pub(crate) async fn create_topic_with_model(
         );
     }
 
-    context
-        .client()
-        .send_message(chat_id, &ready_message(model), None, Some(topic_id))
-        .await
-        .context("post launcher ready message")?;
+    if let Err(err) = post_thread_header(context, chat_id, topic_id, &thread_id).await {
+        tracing::warn!(
+            chat_id,
+            topic_id,
+            thread_id = %thread_id,
+            %err,
+            "launcher: created topic but failed to post thread header"
+        );
+    }
 
     tracing::info!(
         chat_id,
@@ -162,15 +166,15 @@ pub(crate) async fn create_topic_resuming(
         .and_then(|mut thread| thread.set_alias(Some(source_thread_id.to_string())))
         .context("set alias on resumed topic")?;
 
-    let heading = title.as_deref().map_or_else(
-        || "🔄 Resumed thread — continue here.".to_string(),
-        |t| format!("🔄 Resumed <b>{}</b> — continue here.", escape_html(t)),
-    );
-    context
-        .client()
-        .send_message(chat_id, &heading, None, Some(topic_id))
-        .await
-        .context("post resume ready message")?;
+    if let Err(err) = post_thread_header(context, chat_id, topic_id, source_thread_id).await {
+        tracing::warn!(
+            chat_id,
+            topic_id,
+            source_thread_id,
+            %err,
+            "launcher: created resumed topic but failed to post thread header"
+        );
+    }
 
     tracing::info!(
         chat_id,
@@ -179,14 +183,6 @@ pub(crate) async fn create_topic_resuming(
         "launcher: created resuming topic"
     );
     Ok(topic_id)
-}
-
-/// The "ready" prompt posted into a freshly launched topic.
-fn ready_message(model: &str) -> String {
-    format!(
-        "🆕 New thread — model <code>{}</code>.\nSend your message here.",
-        escape_html(model)
-    )
 }
 
 /// Header text shown above the launcher keyboard. Lists each preset and the
@@ -222,26 +218,16 @@ fn build_launcher_keyboard(favorites: &[ModelFavorite]) -> InlineKeyboardMarkup 
         .map(|chunk| {
             chunk
                 .iter()
-                .map(|fav| InlineKeyboardButton {
-                    text: fav.alias.clone(),
-                    callback_data: Some(format!("nt:p:{}", fav.alias)),
-                    url: None,
+                .map(|fav| {
+                    InlineKeyboardButton::callback(fav.alias.clone(), format!("nt:p:{}", fav.alias))
                 })
                 .collect()
         })
         .collect();
 
     rows.push(vec![
-        InlineKeyboardButton {
-            text: "🎛 Custom".to_string(),
-            callback_data: Some("nt:custom".to_string()),
-            url: None,
-        },
-        InlineKeyboardButton {
-            text: "🔄 Continue".to_string(),
-            callback_data: Some("nt:resume".to_string()),
-            url: None,
-        },
+        InlineKeyboardButton::callback("🎛 Custom", "nt:custom"),
+        InlineKeyboardButton::callback("🔄 Continue", "nt:resume"),
     ]);
 
     InlineKeyboardMarkup {
@@ -292,19 +278,14 @@ fn build_resume_keyboard(
         .map(|t| {
             let title = t.display_title();
             let title: String = title.chars().take(40).collect();
-            vec![InlineKeyboardButton {
-                text: format!("{title} · {}", relative_time(t.modified)),
-                callback_data: Some(format!("nt:r:{}", t.id)),
-                url: None,
-            }]
+            vec![InlineKeyboardButton::callback(
+                format!("{title} · {}", relative_time(t.modified)),
+                format!("nt:r:{}", t.id),
+            )]
         })
         .collect();
 
-    rows.push(vec![InlineKeyboardButton {
-        text: "← Back".to_string(),
-        callback_data: Some("nt:back".to_string()),
-        url: None,
-    }]);
+    rows.push(vec![InlineKeyboardButton::callback("← Back", "nt:back")]);
 
     InlineKeyboardMarkup {
         inline_keyboard: rows,
@@ -571,17 +552,6 @@ mod tests {
         let favorites = vec![fav("Gone", "openai:gpt-5.5")];
 
         assert!(filter_available_favorites(&favorites, &available).is_empty());
-    }
-
-    #[test]
-    fn ready_message_wraps_model_in_code_and_escapes() {
-        let msg = ready_message("openai:gpt-5.5");
-        assert!(msg.contains("<code>openai:gpt-5.5</code>"));
-        assert!(msg.contains("Send your message here."));
-
-        // Any HTML-significant characters in a model id must be escaped.
-        let escaped = ready_message("a<b>&c");
-        assert!(escaped.contains("a&lt;b&gt;&amp;c"));
     }
 
     #[test]

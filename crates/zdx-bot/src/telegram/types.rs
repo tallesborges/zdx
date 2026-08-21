@@ -45,6 +45,42 @@ pub struct InlineKeyboardButton {
     pub callback_data: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web_app: Option<WebAppInfo>,
+}
+
+impl InlineKeyboardButton {
+    pub fn callback(text: impl Into<String>, callback_data: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            callback_data: Some(callback_data.into()),
+            url: None,
+            web_app: None,
+        }
+    }
+
+    pub fn url(text: impl Into<String>, url: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            callback_data: None,
+            url: Some(url.into()),
+            web_app: None,
+        }
+    }
+
+    pub fn web_app(text: impl Into<String>, url: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            callback_data: None,
+            url: None,
+            web_app: Some(WebAppInfo { url: url.into() }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WebAppInfo {
+    pub url: String,
 }
 
 #[derive(Debug, Deserialize)]

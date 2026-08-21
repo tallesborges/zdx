@@ -34,16 +34,8 @@ pub(crate) fn new_retry_map() -> RetryMap {
 pub(crate) async fn send_retry_buttons(context: &BotContext, chat_id: i64, request: RetryRequest) {
     let markup = InlineKeyboardMarkup {
         inline_keyboard: vec![
-            vec![InlineKeyboardButton {
-                text: "🔄 Try again".to_string(),
-                callback_data: Some("retry:go".to_string()),
-                url: None,
-            }],
-            vec![InlineKeyboardButton {
-                text: "✕ Dismiss".to_string(),
-                callback_data: Some("retry:x".to_string()),
-                url: None,
-            }],
+            vec![InlineKeyboardButton::callback("🔄 Try again", "retry:go")],
+            vec![InlineKeyboardButton::callback("✕ Dismiss", "retry:x")],
         ],
     };
 

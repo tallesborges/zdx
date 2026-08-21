@@ -19,7 +19,7 @@ mod types;
 #[allow(unused_imports)]
 pub use types::{
     Audio, CallbackQuery, Document, InlineKeyboardButton, InlineKeyboardMarkup, Message, PhotoSize,
-    TelegramFile, Update, Voice,
+    TelegramFile, Update, Voice, WebAppInfo,
 };
 
 pub struct TelegramSettings {
@@ -709,6 +709,25 @@ impl TelegramClient {
         Ok(())
     }
 
+    /// Pin a message in its chat.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub async fn pin_message(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+        disable_notification: bool,
+    ) -> Result<()> {
+        let request = PinChatMessageRequest {
+            chat_id,
+            message_id,
+            disable_notification,
+        };
+        let _: bool = self.post("pinChatMessage", &request).await?;
+        Ok(())
+    }
+
     /// Acknowledge a callback query (dismisses the loading spinner on the
     /// button). Optionally show a notification to the user.
     ///
@@ -1178,6 +1197,13 @@ struct EditMessageTextRequest<'a> {
 struct DeleteMessageRequest {
     chat_id: i64,
     message_id: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct PinChatMessageRequest {
+    chat_id: i64,
+    message_id: i64,
+    disable_notification: bool,
 }
 
 #[derive(Debug, Serialize)]

@@ -26,6 +26,7 @@ mod followups;
 mod handlers;
 mod ingest;
 mod retry;
+pub(crate) mod server;
 mod staging;
 pub mod telegram;
 mod topic_title;
@@ -100,10 +101,11 @@ pub async fn run_named_with_config_and_root(
         chats = ?config.telegram.allowlist_chat_ids,
         "Bot config",
     );
-    run_bot(config, settings, root).await
+    Box::pin(run_bot(config, settings, root)).await
 }
 
 async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> Result<()> {
+    let miniapp_server = miniapp_server_settings(&config, &settings);
     let client = TelegramClient::new(settings.bot_token);
     let command_specs = crate::commands::telegram_command_specs();
     match client.set_my_commands(&command_specs).await {
@@ -140,6 +142,11 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
     let chat_queues = new_chat_queues();
     let pending_media_groups: PendingMediaGroups =
         Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+    // Start embedded Mini App web server if enabled
+    if let Some((bot_token, allowlist_user_ids, port)) = miniapp_server {
+        crate::server::spawn_server(bot_token, allowlist_user_ids, port);
+    }
 
     let mut offset: Option<i64> = None;
     let poll_timeout = Duration::from_secs(30);
@@ -312,6 +319,13 @@ async fn handle_callback_query(
             rest,
         )
         .await;
+    } else if data == "thread_header:refresh" {
+        crate::handlers::message::handle_thread_header_callback(
+            context.as_ref(),
+            client,
+            &callback,
+        )
+        .await;
     } else if data.starts_with("model_provider:")
         || data.starts_with("model_pick:")
         || data.starts_with("model_back:")
@@ -329,6 +343,24 @@ async fn handle_callback_query(
         }
         tracing::warn!(user_id = callback.from.id, ?data, "Unknown callback");
     }
+}
+
+fn miniapp_server_settings(
+    config: &Config,
+    settings: &TelegramSettings,
+) -> Option<(String, HashSet<i64>, u16)> {
+    config
+        .telegram
+        .server
+        .as_ref()
+        .filter(|server| server.enabled)
+        .map(|server| {
+            (
+                settings.bot_token.clone(),
+                settings.allowlist_user_ids.clone(),
+                server.port,
+            )
+        })
 }
 
 fn callback_is_allowed(
