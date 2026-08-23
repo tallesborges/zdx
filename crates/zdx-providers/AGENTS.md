@@ -7,6 +7,7 @@ LLM provider implementations extracted from `zdx-core`.
 - `src/lib.rs` — crate root: module declarations, `ProviderKind`, `ProviderSelection`, `resolve_provider()`, `ProviderBuildContext`
 - `src/shared.rs` — provider-agnostic helpers (`resolve_api_key`, `resolve_base_url`, `merge_system_prompt`, `USER_AGENT`); re-exports value types from `zdx-types`
 - `src/oauth.rs` — OAuth token storage/retrieval (Claude CLI, OpenAI Codex, Google Antigravity, Grok Build)
+- `src/subscription_quota.rs` — read-only live quota fetchers plus the shared concurrent snapshot consumed by CLI and UI surfaces
 - `src/anthropic/` — Anthropic Messages API + Claude CLI OAuth provider
 - `src/openai/` — OpenAI Responses/Chat Completions/image generation API + Codex OAuth provider
 - `src/gemini/` — Google Gemini API + Antigravity OAuth providers

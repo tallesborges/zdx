@@ -14,7 +14,11 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
+use futures_util::future::join_all;
 use serde::Deserialize;
+pub use zdx_types::{
+    QuotaError, QuotaWindow, SubscriptionQuota, SubscriptionQuotaResult, SubscriptionQuotaSnapshot,
+};
 
 use crate::ProviderKind;
 pub use crate::oauth::account_cache_key;
@@ -112,66 +116,26 @@ pub fn stored_accounts() -> anyhow::Result<Vec<(&'static str, Option<String>, Qu
         .collect())
 }
 
-/// A single rate-limit window (e.g. the ~5h session window or the weekly window).
-#[derive(Debug, Clone, PartialEq)]
-pub struct QuotaWindow {
-    /// Human label derived from provider data (e.g. `"5h"`, `"weekly"`).
-    pub label: String,
-    /// Percent of the window consumed, 0..=100.
-    pub used_percent: f64,
-    /// When the window resets, if the provider reported it.
-    pub resets_at: Option<DateTime<Utc>>,
-    /// Model this window is scoped to, when the limit is model-specific
-    /// (e.g. Claude's per-model weekly limit like `"Fable"`).
-    pub scope: Option<String>,
-}
-
-/// A provider's subscription quota snapshot.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SubscriptionQuota {
-    /// Plan label when the provider reports one (e.g. Codex `plan_type`).
-    pub plan: Option<String>,
-    /// Windows in display order.
-    pub windows: Vec<QuotaWindow>,
-}
-
-/// Bounded failure categories. Raw response bodies are intentionally not carried.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuotaError {
-    /// No stored OAuth credentials for the provider.
-    NotAuthenticated,
-    /// Stored access token is expired (a normal zdx run refreshes it).
-    Expired,
-    /// Endpoint rejected the token (401/403).
-    Unauthorized,
-    /// Endpoint rate-limited the request (429). Carries `Retry-After` seconds
-    /// when the endpoint provided a numeric value.
-    RateLimited { retry_after_secs: Option<u64> },
-    /// Request timed out.
-    Timeout,
-    /// Other non-success HTTP status.
-    Http(u16),
-    /// Response did not match a known shape.
-    Incompatible,
-    /// Network/transport error.
-    Transport,
-}
-
-impl QuotaError {
-    /// A short, user-facing reason with no sensitive content.
-    #[must_use]
-    pub fn reason(&self) -> String {
-        match self {
-            Self::NotAuthenticated => "not logged in".to_string(),
-            Self::Expired => "expired · re-login in zdx".to_string(),
-            Self::Unauthorized => "unauthorized".to_string(),
-            Self::RateLimited { .. } => "rate limited".to_string(),
-            Self::Timeout => "timed out".to_string(),
-            Self::Http(code) => format!("HTTP {code}"),
-            Self::Incompatible => "unexpected response".to_string(),
-            Self::Transport => "network error".to_string(),
-        }
-    }
+/// Fetches every supported stored account concurrently into one shared snapshot.
+///
+/// Provider failures stay attached to their account instead of failing the
+/// snapshot. Credentials are read-only: fetchers never refresh or write tokens.
+///
+/// # Errors
+/// Returns an error only when the OAuth account store cannot be read.
+pub async fn fetch_snapshot() -> anyhow::Result<SubscriptionQuotaSnapshot> {
+    let pending = stored_accounts()?
+        .into_iter()
+        .map(|(provider, account, fetch)| async move {
+            SubscriptionQuotaResult {
+                quota: fetch(account.clone()).await,
+                provider,
+                account,
+            }
+        });
+    Ok(SubscriptionQuotaSnapshot {
+        providers: join_all(pending).await,
+    })
 }
 
 /// Loads stored OAuth credentials **read-only** (no refresh, no write); maps a

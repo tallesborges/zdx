@@ -106,6 +106,7 @@ pub async fn run_named_with_config_and_root(
 
 async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> Result<()> {
     let miniapp_server = miniapp_server_settings(&config, &settings);
+    let miniapp_root = root.clone();
     let client = TelegramClient::new(settings.bot_token);
     let command_specs = crate::commands::telegram_command_specs();
     match client.set_my_commands(&command_specs).await {
@@ -145,7 +146,7 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
 
     // Start embedded Mini App web server if enabled
     if let Some((bot_token, allowlist_user_ids, port)) = miniapp_server {
-        crate::server::spawn_server(bot_token, allowlist_user_ids, port);
+        crate::server::spawn_server(bot_token, allowlist_user_ids, port, miniapp_root);
     }
 
     let mut offset: Option<i64> = None;

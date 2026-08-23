@@ -2,51 +2,37 @@
 
 use anyhow::Result;
 use zdx_engine::providers::subscription_quota::{
-    self, QuotaError, QuotaWindow, SubscriptionQuota, account_display,
+    self, QuotaWindow, SubscriptionQuotaResult, account_display,
 };
-
-/// One provider account's fetched result.
-struct ProviderResult {
-    id: &'static str,
-    account: Option<String>,
-    quota: std::result::Result<SubscriptionQuota, QuotaError>,
-}
 
 /// Runs `zdx quota`, fetching each configured subscription's live quota.
 ///
 /// # Errors
-/// Returns an error only if output serialization fails; provider fetch failures
-/// are reported per-provider, not as a hard error.
+/// Returns an error if account discovery or output serialization fails;
+/// provider fetch failures are reported per-provider, not as a hard error.
 pub async fn run(json: bool) -> Result<()> {
-    let mut results = Vec::new();
-    for (id, account, fetch) in subscription_quota::stored_accounts()? {
-        results.push(ProviderResult {
-            quota: fetch(account.clone()).await,
-            id,
-            account,
-        });
-    }
+    let snapshot = subscription_quota::fetch_snapshot().await?;
 
     if json {
-        print_json(&results)?;
+        print_json(&snapshot.providers)?;
     } else {
-        print_text(&results);
+        print_text(&snapshot.providers);
     }
     Ok(())
 }
 
-fn print_json(results: &[ProviderResult]) -> Result<()> {
+fn print_json(results: &[SubscriptionQuotaResult]) -> Result<()> {
     let providers: Vec<serde_json::Value> = results
         .iter()
         .map(|r| match &r.quota {
             Ok(quota) => serde_json::json!({
-                "provider": r.id,
+                "provider": r.provider,
                 "account": r.account,
                 "plan": quota.plan,
                 "windows": quota.windows.iter().map(window_json).collect::<Vec<_>>(),
             }),
             Err(err) => serde_json::json!({
-                "provider": r.id,
+                "provider": r.provider,
                 "account": r.account,
                 "error": err.reason(),
             }),
@@ -66,10 +52,10 @@ fn window_json(w: &QuotaWindow) -> serde_json::Value {
     })
 }
 
-fn print_text(results: &[ProviderResult]) {
+fn print_text(results: &[SubscriptionQuotaResult]) {
     println!("Subscriptions (live quota)");
     for r in results {
-        let name = account_display(r.id, r.account.as_deref());
+        let name = account_display(r.provider, r.account.as_deref());
         match &r.quota {
             Ok(quota) => {
                 let plan = quota

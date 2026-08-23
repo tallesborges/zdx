@@ -9,6 +9,7 @@ pub mod events;
 pub mod logging;
 pub mod messages;
 pub mod providers;
+pub mod subscription_quota;
 pub mod tools;
 
 pub use events::{
@@ -20,6 +21,9 @@ pub use messages::{
 };
 pub use providers::{
     ProviderError, ProviderErrorKind, ProviderResult, ProviderStream, StreamEvent, Usage,
+};
+pub use subscription_quota::{
+    QuotaError, QuotaWindow, SubscriptionQuota, SubscriptionQuotaResult, SubscriptionQuotaSnapshot,
 };
 pub use tools::{ToolDefinition, ToolResult, ToolResultBlock, ToolResultContent};
 pub mod config;
