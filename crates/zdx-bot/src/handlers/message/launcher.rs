@@ -185,13 +185,32 @@ pub(crate) async fn create_topic_resuming(
     Ok(topic_id)
 }
 
-/// Header text shown above the launcher keyboard. Lists each preset and the
-/// model (+ thinking) it maps to, so the buttons can stay short (alias only).
-fn launcher_header(favorites: &[ModelFavorite]) -> String {
+/// Header text shown above the launcher keyboard. Leads with the chat's
+/// current default model, then lists each preset and the model (+ thinking) it
+/// maps to, so the buttons can stay short (alias only).
+fn launcher_header(
+    favorites: &[ModelFavorite],
+    current_model: &str,
+    current_thinking: ThinkingLevel,
+) -> String {
+    let model = current_model.rsplit(':').next().unwrap_or(current_model);
+    let thinking = if current_thinking == ThinkingLevel::Off {
+        String::new()
+    } else {
+        format!(" · {}", current_thinking.display_name())
+    };
+    let active_line = format!("Active: <code>{}</code>{thinking}", escape_html(model));
+
     if favorites.is_empty() {
-        return "🚀 <b>Thread launcher</b>\nNo favorites configured yet — use 🎛 Custom, or add <code>[[favorites]]</code> to your config.".to_string();
+        return format!(
+            "🚀 <b>Thread launcher</b>\n{active_line}\nNo favorites configured yet — use 🎛 Custom, or add <code>[[favorites]]</code> to your config."
+        );
     }
-    let mut lines = vec!["🚀 <b>Thread launcher</b>".to_string(), String::new()];
+    let mut lines = vec![
+        "🚀 <b>Thread launcher</b>".to_string(),
+        active_line,
+        String::new(),
+    ];
     for fav in favorites {
         let model = fav.model.rsplit(':').next().unwrap_or(&fav.model);
         let thinking = if fav.thinking == ThinkingLevel::Off {
@@ -300,15 +319,11 @@ async fn send_launcher(
 ) -> Result<i64> {
     let favorites = bot_visible_favorites(context, chat_id);
     let keyboard = build_launcher_keyboard(&favorites);
+    let config = context.config_for_chat(chat_id);
+    let header = launcher_header(&favorites, &config.model, config.thinking_level);
     let msg = context
         .client()
-        .send_message_with_markup(
-            chat_id,
-            &launcher_header(&favorites),
-            reply_to_message_id,
-            None,
-            &keyboard,
-        )
+        .send_message_with_markup(chat_id, &header, reply_to_message_id, None, &keyboard)
         .await
         .context("post launcher keyboard")?;
     Ok(msg.id)
@@ -323,14 +338,11 @@ pub(crate) async fn render_launcher(
 ) -> Result<()> {
     let favorites = bot_visible_favorites(context, chat_id);
     let keyboard = build_launcher_keyboard(&favorites);
+    let config = context.config_for_chat(chat_id);
+    let header = launcher_header(&favorites, &config.model, config.thinking_level);
     context
         .client()
-        .edit_message_text(
-            chat_id,
-            message_id,
-            &launcher_header(&favorites),
-            Some(&keyboard),
-        )
+        .edit_message_text(chat_id, message_id, &header, Some(&keyboard))
         .await
         .context("restore launcher")?;
     Ok(())
