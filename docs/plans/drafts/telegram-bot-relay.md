@@ -13,8 +13,8 @@
 - Exposing native commands such as `/restart`, `/model`, or `/worktree` to peer bots.
 
 # Current state
-- Telegram Bot-to-Bot Communication Mode is enabled for `@zdx_2026_bot` and `@zdx_p2_bot`.
-- Each bot runs in its own group. The original bot was removed from the P2 group after both bots responded to the same human messages.
+- Telegram Bot-to-Bot Communication Mode is enabled for both configured peer bots.
+- Each bot runs in its own group. The original bot was removed from the other bot's group after both bots responded to the same human messages.
 - ZDX currently rejects bot senders in both the early queue gate and ingest authorization.
 - `zdx telegram send-message` already provides the outbound transport, and normal bot responses already reply to the incoming Telegram message.
 
@@ -30,7 +30,7 @@
 - [ ] Add focused tests for exact peer acceptance, wrong peer/chat/target, ignored humans, generic mentions, direct replies, native-command payloads, concurrent requests, unchanged normal-group behavior, and no response loop.
 - [ ] Update `docs/SPEC.md` and regenerate the default config template through the existing config workflow.
 
-✅ **Demo**: In the source bot's normal group, ask it to delegate a directory-inspection task to P2. Exactly one `/delegate@zdx_p2_bot ...` request appears in `ZDX Relay`; P2 runs once and replies there; the source bot ignores that reply. A human message typed directly in the relay produces no bot response, and a second delegation while P2 is busy receives a bounded busy result.
+✅ **Demo**: In the source bot's normal group, ask it to delegate a directory-inspection task to the target bot. Exactly one `/delegate@TargetBot ...` request appears in `ZDX Relay`; the target bot runs once and replies there; the source bot ignores that reply. A human message typed directly in the relay produces no bot response, and a second delegation while the target bot is busy receives a bounded busy result.
 
 # Later
 - Inject correlated target results back into the source turn after relay-only dogfooding proves one-way delegation useful.
