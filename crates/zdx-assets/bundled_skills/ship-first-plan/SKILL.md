@@ -1,6 +1,6 @@
 ---
 name: ship-first-plan
-description: Create a ship-first (ship-shaped) implementation plan with demoable MVP phases. Use when a user asks for an implementation plan, MVP plan, shipping plan, or wants to break down a feature into incremental, demoable phases. Emphasizes user journey order and daily-usable increments over polished completeness.
+description: Create a ship-first (ship-shaped) implementation plan with demoable MVP phases. Use ONLY when the user explicitly asks for a ship-first plan (e.g. "make a ship-first plan", "ship-first implementation plan", "ship first plan for this").
 metadata:
   short-description: Create a ship-shaped MVP plan
 ---
