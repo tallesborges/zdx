@@ -434,13 +434,7 @@ fn user_blocks_messages(blocks: &[ChatContentBlock]) -> Vec<ChatCompletionMessag
         }
     }
 
-    if !content_parts.is_empty() {
-        messages.push(simple_message(
-            "user",
-            collapse_user_content_parts(content_parts),
-        ));
-    }
-
+    let mut tool_images = Vec::new();
     for result in tool_results {
         let (text, image) = crate::shared::extract_tool_result_with_image(&result.content);
         messages.push(ChatCompletionMessage {
@@ -453,13 +447,19 @@ fn user_blocks_messages(blocks: &[ChatContentBlock]) -> Vec<ChatCompletionMessag
 
         if let Some((mime_type, data)) = image {
             let url = format!("data:{mime_type};base64,{data}");
-            messages.push(simple_message(
-                "user",
-                ChatMessageContent::Parts(vec![ChatContentPart::ImageUrl {
-                    image_url: ImageUrlData { url },
-                }]),
-            ));
+            tool_images.push(ChatContentPart::ImageUrl {
+                image_url: ImageUrlData { url },
+            });
         }
+    }
+
+    content_parts.extend(tool_images);
+
+    if !content_parts.is_empty() {
+        messages.push(simple_message(
+            "user",
+            collapse_user_content_parts(content_parts),
+        ));
     }
 
     messages
@@ -1174,6 +1174,200 @@ mod tests {
             "text-only assistant message must not emit empty reasoning_content"
         );
         assert_eq!(assistant.get("content"), Some(&json!("hello")));
+    }
+
+    /// Regression test for parallel tool calls where one returns an image and one returns text.
+    ///
+    /// The API requires all `tool` messages responding to the assistant's `tool_calls`
+    /// to immediately follow the assistant message. Any tool-result images (or mixed user content)
+    /// must be placed in a user message *after* all `tool` messages, never interleaved between them.
+    #[test]
+    fn test_parallel_tool_results_with_image_maintains_tool_message_adjacency() {
+        use zdx_types::{ToolResult, ToolResultBlock, ToolResultContent};
+
+        use crate::{ChatContentBlock, ChatMessage};
+
+        let config = test_config(false);
+        let messages = vec![
+            ChatMessage::user("digest this image and pr"),
+            ChatMessage::assistant_blocks(vec![
+                ChatContentBlock::ToolUse {
+                    id: "call_read_img".to_string(),
+                    name: "read".to_string(),
+                    input: json!({"file_path": "photo.jpg"}),
+                    id_origin: zdx_types::IdOrigin::Synthesized,
+                    replay: None,
+                },
+                ChatContentBlock::ToolUse {
+                    id: "call_bash_pr".to_string(),
+                    name: "bash".to_string(),
+                    input: json!({"command": "gh pr view 77"}),
+                    id_origin: zdx_types::IdOrigin::Synthesized,
+                    replay: None,
+                },
+            ]),
+            ChatMessage::tool_results(vec![
+                ToolResult {
+                    tool_use_id: "call_read_img".to_string(),
+                    content: ToolResultContent::Blocks(vec![
+                        ToolResultBlock::Text {
+                            text: "Image loaded".to_string(),
+                        },
+                        ToolResultBlock::Image {
+                            mime_type: "image/jpeg".to_string(),
+                            data: "base64data".to_string(),
+                        },
+                    ]),
+                    is_error: false,
+                },
+                ToolResult {
+                    tool_use_id: "call_bash_pr".to_string(),
+                    content: ToolResultContent::Text("PR details".to_string()),
+                    is_error: false,
+                },
+            ]),
+        ];
+
+        let request = ChatCompletionRequest::new(&config, &HashMap::new(), &messages, &[], None);
+        let value = serde_json::to_value(&request).expect("request should serialize");
+        let serialized_messages = value
+            .get("messages")
+            .and_then(|m| m.as_array())
+            .expect("should have messages array");
+
+        let roles: Vec<&str> = serialized_messages
+            .iter()
+            .map(|m| m.get("role").and_then(|r| r.as_str()).unwrap_or(""))
+            .collect();
+
+        // Must be: user -> assistant -> tool (call_read_img) -> tool (call_bash_pr) -> user (with image)
+        assert_eq!(
+            roles,
+            vec!["user", "assistant", "tool", "tool", "user"],
+            "tool messages must be consecutive with no user message interleaved"
+        );
+
+        assert_eq!(
+            serialized_messages[2].get("tool_call_id"),
+            Some(&json!("call_read_img"))
+        );
+        assert_eq!(
+            serialized_messages[3].get("tool_call_id"),
+            Some(&json!("call_bash_pr"))
+        );
+
+        // Trailing user message carries the image
+        let trailing_user_content = serialized_messages[4].get("content").unwrap();
+        assert!(
+            trailing_user_content
+                .to_string()
+                .contains("data:image/jpeg;base64,base64data")
+        );
+    }
+
+    /// Tests that multiple image-bearing tool results have all tool messages first,
+    /// followed by a single user message containing all images.
+    #[test]
+    fn test_multiple_image_tool_results_order() {
+        use zdx_types::{ToolResult, ToolResultBlock, ToolResultContent};
+
+        use crate::{ChatContentBlock, ChatMessage};
+
+        let config = test_config(false);
+        let messages = vec![
+            ChatMessage::user("read two images"),
+            ChatMessage::assistant_blocks(vec![
+                ChatContentBlock::ToolUse {
+                    id: "call_img1".to_string(),
+                    name: "read".to_string(),
+                    input: json!({"file_path": "a.png"}),
+                    id_origin: zdx_types::IdOrigin::Synthesized,
+                    replay: None,
+                },
+                ChatContentBlock::ToolUse {
+                    id: "call_img2".to_string(),
+                    name: "read".to_string(),
+                    input: json!({"file_path": "b.png"}),
+                    id_origin: zdx_types::IdOrigin::Synthesized,
+                    replay: None,
+                },
+            ]),
+            ChatMessage::tool_results(vec![
+                ToolResult {
+                    tool_use_id: "call_img1".to_string(),
+                    content: ToolResultContent::Blocks(vec![ToolResultBlock::Image {
+                        mime_type: "image/png".to_string(),
+                        data: "img1data".to_string(),
+                    }]),
+                    is_error: false,
+                },
+                ToolResult {
+                    tool_use_id: "call_img2".to_string(),
+                    content: ToolResultContent::Blocks(vec![ToolResultBlock::Image {
+                        mime_type: "image/png".to_string(),
+                        data: "img2data".to_string(),
+                    }]),
+                    is_error: false,
+                },
+            ]),
+        ];
+
+        let request = ChatCompletionRequest::new(&config, &HashMap::new(), &messages, &[], None);
+        let value = serde_json::to_value(&request).expect("request should serialize");
+        let serialized_messages = value
+            .get("messages")
+            .and_then(|m| m.as_array())
+            .expect("should have messages array");
+
+        let roles: Vec<&str> = serialized_messages
+            .iter()
+            .map(|m| m.get("role").and_then(|r| r.as_str()).unwrap_or(""))
+            .collect();
+
+        assert_eq!(
+            roles,
+            vec!["user", "assistant", "tool", "tool", "user"],
+            "both tool messages must precede the user image message"
+        );
+    }
+
+    /// Tests that text-only tool results produce no trailing user message.
+    #[test]
+    fn test_text_only_tool_results_no_trailing_user_message() {
+        use zdx_types::{ToolResult, ToolResultContent};
+
+        use crate::{ChatContentBlock, ChatMessage};
+
+        let config = test_config(false);
+        let messages = vec![
+            ChatMessage::user("run command"),
+            ChatMessage::assistant_blocks(vec![ChatContentBlock::ToolUse {
+                id: "call_bash".to_string(),
+                name: "bash".to_string(),
+                input: json!({"command": "ls"}),
+                id_origin: zdx_types::IdOrigin::Synthesized,
+                replay: None,
+            }]),
+            ChatMessage::tool_results(vec![ToolResult {
+                tool_use_id: "call_bash".to_string(),
+                content: ToolResultContent::Text("file.txt".to_string()),
+                is_error: false,
+            }]),
+        ];
+
+        let request = ChatCompletionRequest::new(&config, &HashMap::new(), &messages, &[], None);
+        let value = serde_json::to_value(&request).expect("request should serialize");
+        let serialized_messages = value
+            .get("messages")
+            .and_then(|m| m.as_array())
+            .expect("should have messages array");
+
+        let roles: Vec<&str> = serialized_messages
+            .iter()
+            .map(|m| m.get("role").and_then(|r| r.as_str()).unwrap_or(""))
+            .collect();
+
+        assert_eq!(roles, vec!["user", "assistant", "tool"]);
     }
 
     #[test]
