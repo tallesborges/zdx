@@ -1,11 +1,13 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::path::{Path as FilePath, PathBuf};
+use std::path::{Component, Path as FilePath, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use anyhow::Context as _;
 use axum::Router;
-use axum::extract::{Path, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
@@ -13,40 +15,103 @@ use axum::response::{Html, IntoResponse, Json, Response};
 use axum::routing::get;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::Sha256;
+use tokio::io::AsyncReadExt as _;
+use tokio::process::Command;
 use tokio::sync::{Mutex, RwLock};
 use zdx_engine::config::{Config, paths};
-use zdx_engine::core::thread_persistence::{ThreadEvent, load_thread_events};
+use zdx_engine::core::events::NoticeKind;
+use zdx_engine::core::thread_persistence::{self, ThreadEvent, load_thread_events};
 use zdx_engine::core::usage_stats::{self, UsageStats};
+use zdx_engine::providers::ReplayToken;
 use zdx_engine::providers::subscription_quota::{self, QuotaError, SubscriptionQuota};
 use zdx_engine::service::{self, Service};
 use zdx_engine::{agent_activity, automations, background_activity};
 
-const MINIAPP_HTML: &str = include_str!("miniapp.html");
-const MONITOR_HTML: &str = include_str!("monitor.html");
+const APP_HTML: &str = include_str!("app.html");
 const INIT_DATA_MAX_AGE_SECS: u64 = 60 * 60;
 const INIT_DATA_FUTURE_SKEW_SECS: u64 = 30;
 const MONITOR_CACHE_TTL: Duration = Duration::from_secs(30);
 const SUBSCRIPTION_CACHE_TTL: Duration = Duration::from_mins(5);
+const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
+const GIT_DIFF_LIMIT_BYTES: usize = 256 * 1024;
+const GIT_COMMIT_LIMIT: usize = 24;
 
 type HmacSha256 = Hmac<Sha256>;
 type ApiError = (StatusCode, &'static str);
 
 #[derive(Serialize)]
-pub struct DialogueLine {
-    pub id: usize,
-    pub time: String,
-    pub speaker: String,
-    pub speaker_key: String,
-    pub text: String,
-}
-
-#[derive(Serialize)]
 pub struct ThreadResponse {
     pub id: String,
     pub title: String,
-    pub total_lines: usize,
-    pub dialogue: Vec<DialogueLine>,
+    pub total_messages: usize,
+    pub total_events: usize,
+    pub activity: Vec<ThreadActivity>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ThreadActivity {
+    Message {
+        sequence: usize,
+        time: String,
+        role: String,
+        speaker: &'static str,
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        phase: Option<String>,
+    },
+    Reasoning {
+        sequence: usize,
+        time: String,
+        text: String,
+        redacted: bool,
+    },
+    ToolUse {
+        sequence: usize,
+        time: String,
+        id: String,
+        name: String,
+        input: Value,
+    },
+    ToolResult {
+        sequence: usize,
+        time: String,
+        tool_use_id: String,
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+        output: Value,
+    },
+    Usage {
+        sequence: usize,
+        time: String,
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: u64,
+        cache_write_tokens: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ttft_ms: Option<u64>,
+    },
+    Notice {
+        sequence: usize,
+        time: String,
+        kind: &'static str,
+        message: String,
+    },
+    Interrupted {
+        sequence: usize,
+        time: String,
+        role: String,
+        text: String,
+    },
 }
 
 #[derive(Serialize)]
@@ -60,6 +125,87 @@ pub struct ThreadListItem {
 pub struct ThreadListResponse {
     pub count: usize,
     pub threads: Vec<ThreadListItem>,
+}
+
+#[derive(Deserialize)]
+struct GitQuery {
+    thread_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GitDiffQuery {
+    thread_id: Option<String>,
+    path: String,
+    kind: String,
+}
+
+#[derive(Serialize)]
+struct GitResponse {
+    repository: GitRepository,
+    worktrees: Vec<GitWorktree>,
+    files: GitFiles,
+    commits: Vec<GitCommit>,
+}
+
+#[derive(Serialize)]
+struct GitRepository {
+    name: String,
+    root: String,
+    source: &'static str,
+    thread_id: Option<String>,
+    branch: String,
+    head: Option<String>,
+    upstream: Option<String>,
+    ahead: u64,
+    behind: u64,
+    detached: bool,
+    clean: bool,
+}
+
+#[derive(Default, Serialize)]
+struct GitFiles {
+    staged: Vec<GitFile>,
+    unstaged: Vec<GitFile>,
+    untracked: Vec<GitFile>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct GitFile {
+    path: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    original_path: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+struct GitWorktree {
+    path: String,
+    head: Option<String>,
+    branch: Option<String>,
+    current: bool,
+    flags: Vec<&'static str>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+struct GitCommit {
+    hash: String,
+    short_hash: String,
+    author: String,
+    authored_at: String,
+    relative_time: String,
+    refs: String,
+    subject: String,
+}
+
+#[derive(Serialize)]
+struct GitDiffResponse {
+    path: String,
+    kind: &'static str,
+    content: String,
+    bytes: usize,
+    lines: usize,
+    truncated: bool,
+    limit_bytes: usize,
 }
 
 #[derive(Clone, Serialize)]
@@ -224,24 +370,23 @@ pub(crate) fn create_router(state: Arc<ServerState>) -> Router {
         .route("/threads", get(list_threads))
         .route("/threads/{id}", get(get_thread))
         .route("/monitor", get(get_monitor))
+        .route("/git", get(get_git))
+        .route("/git/diff", get(get_git_diff))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             authorize_api,
         ));
 
     Router::new()
-        .route("/threads", get(serve_miniapp))
-        .route("/monitor", get(serve_monitor))
+        .route("/app", get(serve_app))
+        .route("/threads", get(serve_app))
+        .route("/monitor", get(serve_app))
         .nest("/api", api)
         .with_state(state)
 }
 
-async fn serve_miniapp() -> impl IntoResponse {
-    Html(MINIAPP_HTML)
-}
-
-async fn serve_monitor() -> impl IntoResponse {
-    Html(MONITOR_HTML)
+async fn serve_app() -> impl IntoResponse {
+    Html(APP_HTML)
 }
 
 async fn authorize_api(
@@ -300,57 +445,154 @@ async fn get_thread(Path(id): Path<String>) -> Result<Json<ThreadResponse>, ApiE
     } else {
         id
     };
+    if !valid_thread_id(&target_id) {
+        return Err((StatusCode::BAD_REQUEST, "Invalid thread ID"));
+    }
 
     let events = load_thread_events(&target_id).map_err(|error| {
         tracing::warn!(thread_id = target_id, %error, "Failed to load Mini App thread");
         (StatusCode::NOT_FOUND, "Thread not found")
     })?;
 
-    let mut title = "Thread Transcript".to_string();
-    let mut dialogue = Vec::new();
-    let mut line_id = 1;
+    Ok(Json(project_thread(target_id, events)))
+}
 
-    for event in events {
+#[allow(clippy::too_many_lines)]
+fn project_thread(target_id: String, events: Vec<ThreadEvent>) -> ThreadResponse {
+    let mut title = "Thread Transcript".to_string();
+    let mut activity = Vec::new();
+    let mut total_messages = 0;
+
+    for (sequence, event) in events.into_iter().enumerate() {
         match event {
             ThreadEvent::Meta { title: Some(t), .. } => {
                 title = t;
             }
-            ThreadEvent::Message { role, text, ts, .. } => {
+            ThreadEvent::Message {
+                role,
+                text,
+                phase,
+                ts,
+                ..
+            } => {
                 let speaker = if role == "user" { "You" } else { "Z" };
-                let speaker_key = if role == "user" {
-                    "speaker-user"
-                } else {
-                    "speaker-assistant"
-                };
-
-                let time = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&ts) {
-                    dt.format("%I:%M %p").to_string()
-                } else {
-                    "--:--".to_string()
-                };
-
                 let clean_text = clean_message_text(&text);
                 if !clean_text.is_empty() {
-                    dialogue.push(DialogueLine {
-                        id: line_id,
-                        time,
-                        speaker: speaker.to_string(),
-                        speaker_key: speaker_key.to_string(),
+                    activity.push(ThreadActivity::Message {
+                        sequence,
+                        time: event_time(&ts),
+                        role,
+                        speaker,
                         text: clean_text,
+                        phase,
                     });
-                    line_id += 1;
+                    total_messages += 1;
                 }
             }
-            _ => {}
+            ThreadEvent::Reasoning { text, replay, ts } => {
+                let visible = text.filter(|text| !text.trim().is_empty());
+                let redacted = visible.is_none()
+                    && matches!(replay, Some(ReplayToken::AnthropicRedacted { .. }));
+                if visible.is_some() || redacted {
+                    activity.push(ThreadActivity::Reasoning {
+                        sequence,
+                        time: event_time(&ts),
+                        text: visible.unwrap_or_default(),
+                        redacted,
+                    });
+                }
+            }
+            ThreadEvent::ToolUse {
+                id,
+                name,
+                input,
+                ts,
+                ..
+            } => activity.push(ThreadActivity::ToolUse {
+                sequence,
+                time: event_time(&ts),
+                id,
+                name,
+                input,
+            }),
+            ThreadEvent::ToolResult {
+                tool_use_id,
+                output,
+                ok,
+                duration_ms,
+                ts,
+            } => activity.push(ThreadActivity::ToolResult {
+                sequence,
+                time: event_time(&ts),
+                tool_use_id,
+                ok,
+                duration_ms,
+                output,
+            }),
+            ThreadEvent::Usage {
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                model,
+                provider,
+                duration_ms,
+                ttft_ms,
+                ts,
+            } => activity.push(ThreadActivity::Usage {
+                sequence,
+                time: event_time(&ts),
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                model,
+                provider,
+                duration_ms,
+                ttft_ms,
+            }),
+            ThreadEvent::Notice { kind, message, ts } => {
+                let kind = match kind {
+                    NoticeKind::Refusal => "refusal",
+                    NoticeKind::ContextWindowExceeded => "context_window_exceeded",
+                };
+                activity.push(ThreadActivity::Notice {
+                    sequence,
+                    time: event_time(&ts),
+                    kind,
+                    message,
+                });
+            }
+            ThreadEvent::Interrupted { role, text, ts } => {
+                activity.push(ThreadActivity::Interrupted {
+                    sequence,
+                    time: event_time(&ts),
+                    role,
+                    text,
+                });
+            }
+            ThreadEvent::Meta { .. } => {}
         }
     }
 
-    Ok(Json(ThreadResponse {
+    ThreadResponse {
         id: target_id,
         title,
-        total_lines: dialogue.len(),
-        dialogue,
-    }))
+        total_messages,
+        total_events: activity.len(),
+        activity,
+    }
+}
+
+fn event_time(ts: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(ts).map_or_else(
+        |_error| "--:--".to_string(),
+        |date_time| date_time.format("%I:%M %p").to_string(),
+    )
+}
+
+fn valid_thread_id(id: &str) -> bool {
+    !id.is_empty() && id != "." && id != ".." && !id.contains(['/', '\\', '\0'])
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -535,6 +777,542 @@ fn find_latest_telegram_thread() -> Option<String> {
 
 fn urlencoding_encode(s: &str) -> String {
     url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
+}
+
+struct GitSelection {
+    thread_id: Option<String>,
+    thread_root: Option<PathBuf>,
+}
+
+struct ResolvedGitRepository {
+    root: PathBuf,
+    source: &'static str,
+    thread_id: Option<String>,
+}
+
+#[derive(Default)]
+struct ParsedGitStatus {
+    oid: Option<String>,
+    branch: Option<String>,
+    upstream: Option<String>,
+    ahead: u64,
+    behind: u64,
+    files: GitFiles,
+}
+
+#[derive(Default)]
+struct GitWorktreeBuilder {
+    path: Option<String>,
+    head: Option<String>,
+    branch: Option<String>,
+    flags: Vec<&'static str>,
+}
+
+#[derive(Clone, Copy)]
+enum GitDiffKind {
+    Staged,
+    Unstaged,
+    Untracked,
+}
+
+impl GitDiffKind {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "staged" => Some(Self::Staged),
+            "unstaged" => Some(Self::Unstaged),
+            "untracked" => Some(Self::Untracked),
+            _ => None,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Staged => "staged",
+            Self::Unstaged => "unstaged",
+            Self::Untracked => "untracked",
+        }
+    }
+}
+
+async fn get_git(
+    State(state): State<Arc<ServerState>>,
+    Query(query): Query<GitQuery>,
+) -> Result<Json<GitResponse>, ApiError> {
+    let repository = resolve_git_repository(&state, query.thread_id).await?;
+    let status = load_git_status(&repository.root).await.map_err(|error| {
+        tracing::warn!(root = %repository.root.display(), %error, "Failed to read Mini App Git state");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Git state unavailable")
+    })?;
+    let commits = async {
+        if status.oid.is_some() {
+            load_git_commits(&repository.root).await
+        } else {
+            Ok(Vec::new())
+        }
+    };
+    let (mut worktrees, commits) =
+        tokio::try_join!(load_git_worktrees(&repository.root), commits).map_err(|error| {
+            tracing::warn!(root = %repository.root.display(), %error, "Failed to read Mini App Git state");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Git state unavailable")
+        })?;
+
+    for worktree in &mut worktrees {
+        worktree.current = FilePath::new(&worktree.path) == repository.root;
+    }
+
+    let detached = status.branch.as_deref() == Some("(detached)");
+    let branch = if detached {
+        "detached".to_string()
+    } else {
+        status.branch.clone().unwrap_or_else(|| "HEAD".to_string())
+    };
+    let clean = status.files.staged.is_empty()
+        && status.files.unstaged.is_empty()
+        && status.files.untracked.is_empty();
+    let name = repository
+        .root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("repository")
+        .to_string();
+    let head = status.oid.as_deref().map(short_hash);
+
+    Ok(Json(GitResponse {
+        repository: GitRepository {
+            name,
+            root: repository.root.to_string_lossy().into_owned(),
+            source: repository.source,
+            thread_id: repository.thread_id,
+            branch,
+            head,
+            upstream: status.upstream,
+            ahead: status.ahead,
+            behind: status.behind,
+            detached,
+            clean,
+        },
+        worktrees,
+        files: status.files,
+        commits,
+    }))
+}
+
+async fn get_git_diff(
+    State(state): State<Arc<ServerState>>,
+    Query(query): Query<GitDiffQuery>,
+) -> Result<Json<GitDiffResponse>, ApiError> {
+    let kind = GitDiffKind::parse(&query.kind)
+        .ok_or((StatusCode::BAD_REQUEST, "Invalid Git file category"))?;
+    if !valid_git_path(&query.path) {
+        return Err((StatusCode::BAD_REQUEST, "Invalid Git file path"));
+    }
+
+    let repository = resolve_git_repository(&state, query.thread_id).await?;
+    let status = load_git_status(&repository.root).await.map_err(|error| {
+        tracing::warn!(root = %repository.root.display(), %error, "Failed to validate Mini App Git diff");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Git state unavailable")
+    })?;
+    let files = match kind {
+        GitDiffKind::Staged => &status.files.staged,
+        GitDiffKind::Unstaged => &status.files.unstaged,
+        GitDiffKind::Untracked => &status.files.untracked,
+    };
+    if !files.iter().any(|file| file.path == query.path) {
+        return Err((
+            StatusCode::NOT_FOUND,
+            "Git file is no longer in that category",
+        ));
+    }
+
+    let (bytes, truncated) = load_git_diff(&repository.root, &query.path, kind)
+        .await
+        .map_err(|error| {
+            tracing::warn!(root = %repository.root.display(), path = query.path, %error, "Failed to read Mini App Git diff");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Git diff unavailable")
+        })?;
+    let byte_count = bytes.len().min(GIT_DIFF_LIMIT_BYTES);
+    let content = String::from_utf8_lossy(&bytes[..byte_count]).into_owned();
+    let lines = content.lines().count();
+
+    Ok(Json(GitDiffResponse {
+        path: query.path,
+        kind: kind.as_str(),
+        content,
+        bytes: byte_count,
+        lines,
+        truncated,
+        limit_bytes: GIT_DIFF_LIMIT_BYTES,
+    }))
+}
+
+async fn resolve_git_repository(
+    state: &ServerState,
+    thread_id: Option<String>,
+) -> Result<ResolvedGitRepository, ApiError> {
+    let requested_id = thread_id
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| "active".to_string());
+    if requested_id != "active" && !valid_thread_id(&requested_id) {
+        return Err((StatusCode::BAD_REQUEST, "Invalid thread ID"));
+    }
+
+    let bot_root = state.root.clone();
+    let selection = tokio::task::spawn_blocking(move || {
+        let thread_id = if requested_id == "active" {
+            find_latest_telegram_thread()
+        } else {
+            Some(requested_id)
+        };
+        let effective_id = thread_id.as_deref().map(|id| {
+            thread_persistence::read_thread_alias(id)
+                .ok()
+                .flatten()
+                .filter(|alias| valid_thread_id(alias))
+                .unwrap_or_else(|| id.to_string())
+        });
+        let thread_root = effective_id.as_deref().and_then(|id| {
+            thread_persistence::read_thread_root_path(id)
+                .ok()
+                .flatten()
+                .map(PathBuf::from)
+        });
+        GitSelection {
+            thread_id,
+            thread_root,
+        }
+    })
+    .await
+    .map_err(|error| {
+        tracing::warn!(%error, "Mini App Git thread resolution task failed");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Git repository resolution failed",
+        )
+    })?;
+
+    let mut candidates = Vec::with_capacity(2);
+    if let Some(root) = selection.thread_root {
+        candidates.push(("thread", root));
+    }
+    if candidates
+        .first()
+        .is_none_or(|(_, candidate)| candidate != &bot_root)
+    {
+        candidates.push(("bot_root", bot_root));
+    }
+
+    for (source, candidate) in candidates {
+        if let Ok(output) = git_output(&candidate, &["rev-parse", "--show-toplevel"]).await {
+            let Ok(output) = String::from_utf8(output) else {
+                continue;
+            };
+            let root = output.trim_end_matches(['\n', '\r']).to_string();
+            if !root.is_empty() {
+                return Ok(ResolvedGitRepository {
+                    root: PathBuf::from(root),
+                    source,
+                    thread_id: selection.thread_id,
+                });
+            }
+        }
+    }
+
+    Err((StatusCode::NOT_FOUND, "Git repository not found"))
+}
+
+async fn git_output(root: &FilePath, args: &[&str]) -> anyhow::Result<Vec<u8>> {
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(GIT_COMMAND_TIMEOUT, command.output())
+        .await
+        .context("Git command timed out")?
+        .context("Failed to run Git")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Git exited with {}: {}", output.status, stderr.trim());
+    }
+    Ok(output.stdout)
+}
+
+async fn load_git_status(root: &FilePath) -> anyhow::Result<ParsedGitStatus> {
+    let output = git_output(
+        root,
+        &[
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "-z",
+            "--untracked-files=all",
+        ],
+    )
+    .await?;
+    let output = String::from_utf8(output).context("Git status contains non-UTF-8 paths")?;
+    Ok(parse_git_status(&output))
+}
+
+fn parse_git_status(output: &str) -> ParsedGitStatus {
+    let mut records = output.split('\0');
+    let mut status = ParsedGitStatus::default();
+
+    while let Some(record) = records.next() {
+        if let Some(oid) = record.strip_prefix("# branch.oid ") {
+            if oid != "(initial)" {
+                status.oid = Some(oid.to_string());
+            }
+        } else if let Some(branch) = record.strip_prefix("# branch.head ") {
+            status.branch = Some(branch.to_string());
+        } else if let Some(upstream) = record.strip_prefix("# branch.upstream ") {
+            status.upstream = Some(upstream.to_string());
+        } else if let Some(counts) = record.strip_prefix("# branch.ab ") {
+            for count in counts.split_whitespace() {
+                if let Some(ahead) = count.strip_prefix('+') {
+                    status.ahead = ahead.parse().unwrap_or_default();
+                } else if let Some(behind) = count.strip_prefix('-') {
+                    status.behind = behind.parse().unwrap_or_default();
+                }
+            }
+        } else if let Some(path) = record.strip_prefix("? ") {
+            status.files.untracked.push(GitFile {
+                path: path.to_string(),
+                status: "?".to_string(),
+                original_path: None,
+            });
+        } else if record.starts_with("1 ") {
+            if let Some((xy, path)) = parse_status_path(record, 9) {
+                push_changed_file(&mut status.files, xy, path, None);
+            }
+        } else if record.starts_with("2 ") {
+            if let Some((xy, path)) = parse_status_path(record, 10) {
+                let original_path = records.next().map(str::to_string);
+                push_changed_file(&mut status.files, xy, path, original_path);
+            }
+        } else if record.starts_with("u ")
+            && let Some((xy, path)) = parse_status_path(record, 11)
+        {
+            push_changed_file(&mut status.files, xy, path, None);
+        }
+    }
+
+    status
+}
+
+fn parse_status_path(record: &str, field_count: usize) -> Option<(&str, &str)> {
+    let fields: Vec<&str> = record.splitn(field_count, ' ').collect();
+    (fields.len() == field_count).then(|| (fields[1], fields[field_count - 1]))
+}
+
+fn push_changed_file(files: &mut GitFiles, xy: &str, path: &str, original_path: Option<String>) {
+    let mut status = xy.chars();
+    if let Some(index) = status.next()
+        && index != '.'
+    {
+        files.staged.push(GitFile {
+            path: path.to_string(),
+            status: index.to_string(),
+            original_path: original_path.clone(),
+        });
+    }
+    if let Some(worktree) = status.next()
+        && worktree != '.'
+    {
+        files.unstaged.push(GitFile {
+            path: path.to_string(),
+            status: worktree.to_string(),
+            original_path,
+        });
+    }
+}
+
+async fn load_git_worktrees(root: &FilePath) -> anyhow::Result<Vec<GitWorktree>> {
+    let output = git_output(root, &["worktree", "list", "--porcelain", "-z"]).await?;
+    let output = String::from_utf8(output).context("Git worktrees contain non-UTF-8 paths")?;
+    Ok(parse_git_worktrees(&output))
+}
+
+fn parse_git_worktrees(output: &str) -> Vec<GitWorktree> {
+    let mut worktrees = Vec::new();
+    let mut current = GitWorktreeBuilder::default();
+
+    for field in output.split('\0') {
+        if field.is_empty() {
+            finish_worktree(&mut worktrees, &mut current);
+        } else if let Some(path) = field.strip_prefix("worktree ") {
+            finish_worktree(&mut worktrees, &mut current);
+            current.path = Some(path.to_string());
+        } else if let Some(head) = field.strip_prefix("HEAD ") {
+            current.head = Some(short_hash(head));
+        } else if let Some(branch) = field.strip_prefix("branch ") {
+            current.branch = Some(
+                branch
+                    .strip_prefix("refs/heads/")
+                    .unwrap_or(branch)
+                    .to_string(),
+            );
+        } else if field == "detached" {
+            current.flags.push("detached");
+        } else if field == "bare" {
+            current.flags.push("bare");
+        } else if field == "locked" || field.starts_with("locked ") {
+            current.flags.push("locked");
+        } else if field == "prunable" || field.starts_with("prunable ") {
+            current.flags.push("prunable");
+        }
+    }
+    finish_worktree(&mut worktrees, &mut current);
+    worktrees
+}
+
+fn finish_worktree(worktrees: &mut Vec<GitWorktree>, builder: &mut GitWorktreeBuilder) {
+    if let Some(path) = builder.path.take() {
+        worktrees.push(GitWorktree {
+            path,
+            head: builder.head.take(),
+            branch: builder.branch.take(),
+            current: false,
+            flags: std::mem::take(&mut builder.flags),
+        });
+    }
+}
+
+async fn load_git_commits(root: &FilePath) -> anyhow::Result<Vec<GitCommit>> {
+    let limit = format!("-n{GIT_COMMIT_LIMIT}");
+    let output = git_output(
+        root,
+        &[
+            "log",
+            &limit,
+            "--date=iso-strict",
+            "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%ar%x1f%D%x1f%s%x1e",
+        ],
+    )
+    .await?;
+    let output = String::from_utf8(output).context("Git log contains non-UTF-8 text")?;
+    Ok(parse_git_commits(&output))
+}
+
+fn parse_git_commits(output: &str) -> Vec<GitCommit> {
+    output
+        .split('\x1e')
+        .filter_map(|record| {
+            let record = record.trim_matches(['\n', '\r']);
+            if record.is_empty() {
+                return None;
+            }
+            let fields: Vec<&str> = record.splitn(7, '\x1f').collect();
+            (fields.len() == 7).then(|| GitCommit {
+                hash: fields[0].to_string(),
+                short_hash: fields[1].to_string(),
+                author: fields[2].to_string(),
+                authored_at: fields[3].to_string(),
+                relative_time: fields[4].to_string(),
+                refs: fields[5].to_string(),
+                subject: fields[6].to_string(),
+            })
+        })
+        .collect()
+}
+
+async fn load_git_diff(
+    root: &FilePath,
+    path: &str,
+    kind: GitDiffKind,
+) -> anyhow::Result<(Vec<u8>, bool)> {
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(root)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    match kind {
+        GitDiffKind::Staged => {
+            command.args([
+                "diff",
+                "--cached",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--",
+                path,
+            ]);
+        }
+        GitDiffKind::Unstaged => {
+            command.args([
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--",
+                path,
+            ]);
+        }
+        GitDiffKind::Untracked => {
+            command.args([
+                "diff",
+                "--no-index",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--",
+                "/dev/null",
+                path,
+            ]);
+        }
+    }
+
+    let mut child = command.spawn().context("Failed to start Git diff")?;
+    let mut stdout = child.stdout.take().context("Git diff stdout unavailable")?;
+    let mut bytes = Vec::with_capacity(GIT_DIFF_LIMIT_BYTES + 1);
+    let result = tokio::time::timeout(GIT_COMMAND_TIMEOUT, async {
+        (&mut stdout)
+            .take((GIT_DIFF_LIMIT_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .await
+            .context("Failed to read Git diff")?;
+        if bytes.len() > GIT_DIFF_LIMIT_BYTES {
+            bytes.truncate(GIT_DIFF_LIMIT_BYTES);
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Ok::<_, anyhow::Error>((true, None));
+        }
+        let status = child.wait().await.context("Failed to wait for Git diff")?;
+        Ok((false, Some(status)))
+    })
+    .await;
+
+    let (truncated, exit_status) = match result {
+        Ok(result) => result?,
+        Err(_elapsed) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            anyhow::bail!("Git diff timed out");
+        }
+    };
+    if let Some(exit_status) = exit_status
+        && !exit_status.success()
+        && !(matches!(kind, GitDiffKind::Untracked) && exit_status.code() == Some(1))
+    {
+        anyhow::bail!("Git diff exited with {exit_status}");
+    }
+    Ok((bytes, truncated))
+}
+
+fn valid_git_path(path: &str) -> bool {
+    !path.is_empty()
+        && FilePath::new(path)
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
+fn short_hash(hash: &str) -> String {
+    hash.chars().take(8).collect()
 }
 
 async fn get_monitor(
@@ -855,7 +1633,13 @@ mod tests {
         });
         let client = reqwest::Client::new();
 
-        for path in ["/api/threads", "/api/threads/active", "/api/monitor"] {
+        for path in [
+            "/api/threads",
+            "/api/threads/active",
+            "/api/monitor",
+            "/api/git?thread_id=active",
+            "/api/git/diff?thread_id=active&kind=unstaged&path=README.md",
+        ] {
             let response = client
                 .get(format!("http://{addr}{path}"))
                 .send()
@@ -864,7 +1648,7 @@ mod tests {
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         }
 
-        for path in ["/threads", "/monitor"] {
+        for path in ["/app", "/threads", "/monitor"] {
             let response = client
                 .get(format!("http://{addr}{path}"))
                 .send()
@@ -874,6 +1658,236 @@ mod tests {
         }
 
         server.abort();
+    }
+
+    #[test]
+    fn projects_thread_activity_without_private_replay_data() {
+        let events = vec![
+            ThreadEvent::Meta {
+                schema_version: 1,
+                title: Some("Inspect the agent".to_string()),
+                root_path: Some("/private/project".to_string()),
+                handoff_from: None,
+                origin_kind: None,
+                parent_thread_id: None,
+                subagent_name: None,
+                model_override: None,
+                thinking_override: None,
+                pending_topic_title: false,
+                alias_to: None,
+                ts: "2026-08-24T10:00:00Z".to_string(),
+            },
+            ThreadEvent::Reasoning {
+                text: None,
+                replay: Some(ReplayToken::AnthropicRedacted {
+                    data: "private-replay-blob".to_string(),
+                }),
+                ts: "2026-08-24T10:00:01Z".to_string(),
+            },
+            ThreadEvent::ToolUse {
+                id: "call-1".to_string(),
+                name: "read".to_string(),
+                input: serde_json::json!({"file_path": "src/main.rs"}),
+                id_origin: zdx_engine::providers::IdOrigin::Real,
+                replay: Some(ReplayToken::Anthropic {
+                    signature: "private-tool-signature".to_string(),
+                }),
+                ts: "2026-08-24T10:00:02Z".to_string(),
+            },
+            ThreadEvent::ToolResult {
+                tool_use_id: "call-1".to_string(),
+                output: serde_json::json!({"ok": true, "data": "fn main() {}"}),
+                ok: true,
+                duration_ms: Some(12),
+                ts: "2026-08-24T10:00:03Z".to_string(),
+            },
+            ThreadEvent::Usage {
+                input_tokens: 120,
+                output_tokens: 30,
+                cache_read_tokens: 10,
+                cache_write_tokens: 0,
+                model: Some("test-model".to_string()),
+                provider: Some("test-provider".to_string()),
+                duration_ms: Some(500),
+                ttft_ms: Some(100),
+                ts: "2026-08-24T10:00:04Z".to_string(),
+            },
+            ThreadEvent::Message {
+                role: "assistant".to_string(),
+                text: "Done".to_string(),
+                phase: Some("final_answer".to_string()),
+                replay: None,
+                ts: "2026-08-24T10:00:05Z".to_string(),
+            },
+        ];
+
+        let response = project_thread("thread-1".to_string(), events);
+        let json = serde_json::to_string(&response).expect("serialize thread activity");
+
+        assert_eq!(response.title, "Inspect the agent");
+        assert_eq!(response.total_messages, 1);
+        assert_eq!(response.total_events, 5);
+        assert!(json.contains("\"type\":\"reasoning\""));
+        assert!(json.contains("\"redacted\":true"));
+        assert!(json.contains("\"type\":\"tool_use\""));
+        assert!(json.contains("\"type\":\"tool_result\""));
+        assert!(json.contains("\"type\":\"usage\""));
+        assert!(!json.contains("/private/project"));
+        assert!(!json.contains("private-replay-blob"));
+        assert!(!json.contains("private-tool-signature"));
+    }
+
+    #[test]
+    fn rejects_thread_ids_that_can_escape_the_threads_directory() {
+        assert!(valid_thread_id("telegram--100-topic-42"));
+        assert!(valid_thread_id("3d6f20e3-78d4-4d1f-9f8e-4d442f3bba31"));
+        assert!(!valid_thread_id(""));
+        assert!(!valid_thread_id(".."));
+        assert!(!valid_thread_id("../config"));
+        assert!(!valid_thread_id("folder/thread"));
+        assert!(!valid_thread_id("folder\\thread"));
+    }
+
+    #[test]
+    fn parses_branch_state_and_changed_file_categories() {
+        let output = concat!(
+            "# branch.oid 0123456789abcdef\0",
+            "# branch.head main\0",
+            "# branch.upstream origin/main\0",
+            "# branch.ab +2 -1\0",
+            "1 .M N... 100644 100644 100644 aaaaaaa bbbbbbb src/lib.rs\0",
+            "1 M. N... 100644 100644 100644 aaaaaaa bbbbbbb Cargo.toml\0",
+            "2 R. N... 100644 100644 100644 aaaaaaa bbbbbbb R100 src/new name.rs\0",
+            "src/old name.rs\0",
+            "? notes/todo.txt\0",
+        );
+
+        let status = parse_git_status(output);
+
+        assert_eq!(status.branch.as_deref(), Some("main"));
+        assert_eq!(status.upstream.as_deref(), Some("origin/main"));
+        assert_eq!(status.ahead, 2);
+        assert_eq!(status.behind, 1);
+        assert_eq!(status.files.unstaged[0].path, "src/lib.rs");
+        assert_eq!(status.files.staged[0].path, "Cargo.toml");
+        assert_eq!(status.files.staged[1].status, "R");
+        assert_eq!(
+            status.files.staged[1].original_path.as_deref(),
+            Some("src/old name.rs")
+        );
+        assert_eq!(status.files.untracked[0].path, "notes/todo.txt");
+    }
+
+    #[test]
+    fn parses_worktree_flags_and_commit_rows() {
+        let worktrees = parse_git_worktrees(concat!(
+            "worktree /repo\0",
+            "HEAD 0123456789abcdef\0",
+            "branch refs/heads/main\0\0",
+            "worktree /repo-review\0",
+            "HEAD fedcba9876543210\0",
+            "detached\0",
+            "locked review\0\0",
+        ));
+        let commits = parse_git_commits(
+            "0123456789abcdef\x1f01234567\x1fAlice\x1f2026-08-24T10:00:00Z\x1f2 hours ago\x1fHEAD -> main\x1fBuild Git view\x1e",
+        );
+
+        assert_eq!(worktrees.len(), 2);
+        assert_eq!(worktrees[0].branch.as_deref(), Some("main"));
+        assert_eq!(worktrees[0].head.as_deref(), Some("01234567"));
+        assert!(worktrees[1].flags.contains(&"detached"));
+        assert!(worktrees[1].flags.contains(&"locked"));
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].short_hash, "01234567");
+        assert_eq!(commits[0].subject, "Build Git view");
+    }
+
+    #[test]
+    fn accepts_only_repository_relative_git_paths() {
+        assert!(valid_git_path("src/main.rs"));
+        assert!(valid_git_path("notes/file with spaces.md"));
+        assert!(!valid_git_path(""));
+        assert!(!valid_git_path("../outside"));
+        assert!(!valid_git_path("/absolute/path"));
+    }
+
+    #[tokio::test]
+    async fn caps_lazy_untracked_diffs() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "zdx-bot-git-diff-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&root).expect("create temporary Git repository");
+        let init = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&root)
+            .status()
+            .expect("initialize temporary Git repository");
+        assert!(init.success());
+        std::fs::write(root.join("large.txt"), vec![b'x'; GIT_DIFF_LIMIT_BYTES * 2])
+            .expect("write oversized untracked file");
+
+        let (diff, truncated) = load_git_diff(&root, "large.txt", GitDiffKind::Untracked)
+            .await
+            .expect("read bounded Git diff");
+
+        assert!(truncated);
+        assert_eq!(diff.len(), GIT_DIFF_LIMIT_BYTES);
+        std::fs::remove_dir_all(root).expect("remove temporary Git repository");
+    }
+
+    #[tokio::test]
+    async fn treats_diff_file_names_as_literal_paths() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "zdx-bot-git-literal-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&root).expect("create temporary Git repository");
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .status()
+                .expect("run Git fixture command")
+        };
+        assert!(git(&["init", "--quiet"]).success());
+        std::fs::write(root.join("literal*.txt"), "initial\n").expect("write literal path");
+        std::fs::write(root.join("literal-match.txt"), "initial\n").expect("write matching path");
+        assert!(git(&["add", "."]).success());
+        assert!(
+            git(&[
+                "-c",
+                "user.name=ZDX Test",
+                "-c",
+                "user.email=zdx@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "initial",
+            ])
+            .success()
+        );
+        std::fs::write(root.join("literal*.txt"), "selected\n").expect("modify literal path");
+        std::fs::write(root.join("literal-match.txt"), "other\n").expect("modify matching path");
+
+        let (diff, truncated) = load_git_diff(&root, "literal*.txt", GitDiffKind::Unstaged)
+            .await
+            .expect("read literal Git diff");
+        let diff = String::from_utf8(diff).expect("UTF-8 fixture diff");
+
+        assert!(!truncated);
+        assert!(diff.contains("literal*.txt"));
+        assert!(!diff.contains("literal-match.txt"));
+        std::fs::remove_dir_all(root).expect("remove temporary Git repository");
     }
 
     #[test]

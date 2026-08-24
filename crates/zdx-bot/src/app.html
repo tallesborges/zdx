@@ -1,0 +1,1872 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <title>ZDX</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;600;700&family=Geist:wght@400;500;600&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: var(--tg-theme-bg-color, #0b0d0c);
+      --panel: var(--tg-theme-secondary-bg-color, #141715);
+      --panel-strong: #1a1e1b;
+      --text: var(--tg-theme-text-color, #f2f5ef);
+      --muted: var(--tg-theme-hint-color, #8e978f);
+      --line: color-mix(in srgb, var(--text) 12%, transparent);
+      --accent: #b8f34a;
+      --cyan: #6ee7e0;
+      --amber: #f6c85f;
+      --red: #ff756d;
+      --blue: #78a9ff;
+      --code-bg: #090b0a;
+      --code-text: #e8eee9;
+      --code-muted: #a5afa7;
+      --code-line: rgba(255, 255, 255, 0.14);
+      --sans: "Manrope", sans-serif;
+      --message: "Geist", "Manrope", sans-serif;
+      --mono: "Azeret Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { background: var(--bg); }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        linear-gradient(rgba(184, 243, 74, 0.028) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(184, 243, 74, 0.028) 1px, transparent 1px),
+        radial-gradient(circle at 85% -5%, rgba(110, 231, 224, 0.11), transparent 35%),
+        var(--bg);
+      background-size: 28px 28px, 28px 28px, auto, auto;
+      font-family: var(--sans);
+      padding: env(safe-area-inset-top) 0 calc(86px + env(safe-area-inset-bottom));
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, input, a { font: inherit; -webkit-tap-highlight-color: transparent; }
+    button, a { touch-action: manipulation; }
+    [hidden] { display: none !important; }
+
+    :focus-visible {
+      outline: 2px solid var(--cyan);
+      outline-offset: 3px;
+    }
+
+    .shell {
+      width: min(760px, 100%);
+      margin: 0 auto;
+      padding: 18px 16px 36px;
+    }
+
+    .masthead {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: start;
+      gap: 14px;
+      margin-bottom: 18px;
+      animation: rise 420ms ease-out both;
+    }
+
+    .overline, .section-kicker, .metric-label, .row-meta, .stamp,
+    .status-chip, .config-key, .nav-item, .thread-meta, .filter-pill,
+    .event-time, .event-summary, .system-banner {
+      font-family: var(--mono);
+      letter-spacing: 0.055em;
+    }
+
+    .overline {
+      margin: 0 0 5px;
+      color: var(--accent);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      overflow-wrap: anywhere;
+      margin: 0;
+      font-size: clamp(29px, 8vw, 44px);
+      line-height: 0.95;
+      letter-spacing: -0.055em;
+      font-weight: 800;
+    }
+
+    .icon-button {
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--panel) 88%, transparent);
+      color: var(--text);
+      cursor: pointer;
+      transition: border-color 160ms ease, transform 160ms ease;
+    }
+
+    .icon-button:active { transform: scale(0.92); }
+    .icon-button.loading svg { animation: spin 700ms linear infinite; }
+    .icon-button:disabled { cursor: wait; opacity: 0.65; }
+
+    .icon-button svg, .search-box svg, .bottom-nav svg {
+      width: 18px;
+      height: 18px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .system-card {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 20px;
+      background: linear-gradient(135deg, color-mix(in srgb, var(--panel-strong) 96%, transparent), color-mix(in srgb, var(--panel) 88%, transparent));
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.22);
+      animation: rise 460ms 40ms ease-out both;
+    }
+
+    .system-card::after {
+      content: "";
+      position: absolute;
+      width: 180px;
+      height: 180px;
+      right: -92px;
+      top: -108px;
+      border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+      border-radius: 50%;
+      box-shadow: 0 0 0 22px rgba(184, 243, 74, 0.025), 0 0 0 44px rgba(184, 243, 74, 0.018);
+    }
+
+    .system-top, .subscription-head, .quota-head, .quota-foot,
+    .message-head, .thread-stats {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .system-state { display: flex; align-items: center; gap: 11px; min-width: 0; }
+
+    .pulse {
+      position: relative;
+      width: 12px;
+      height: 12px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 5px rgba(184, 243, 74, 0.1);
+    }
+
+    .pulse::after {
+      content: "";
+      position: absolute;
+      inset: -6px;
+      border: 1px solid var(--accent);
+      border-radius: inherit;
+      animation: pulse 2.2s ease-out infinite;
+    }
+
+    .system-card.attention .pulse { background: var(--amber); box-shadow: 0 0 0 5px rgba(246, 200, 95, 0.1); }
+    .system-card.attention .pulse::after { border-color: var(--amber); }
+
+    .system-title { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -0.025em; }
+    .stamp { color: var(--muted); font-size: 9px; white-space: nowrap; }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1px;
+      margin-top: 20px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--line);
+    }
+
+    .metric { min-width: 0; padding: 14px; background: color-mix(in srgb, var(--panel) 94%, transparent); }
+    .metric-value {
+      display: block;
+      overflow: hidden;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.06em;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .metric-label { display: block; margin-top: 5px; color: var(--muted); font-size: 9px; text-transform: uppercase; }
+
+    .section { margin-top: 28px; animation: rise 500ms ease-out both; }
+    .section:nth-of-type(2) { animation-delay: 80ms; }
+    .section:nth-of-type(3) { animation-delay: 120ms; }
+    .section:nth-of-type(4) { animation-delay: 160ms; }
+    .section:nth-of-type(5) { animation-delay: 200ms; }
+
+    .section-head { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 11px; padding: 0 2px; }
+    .section-kicker { margin: 0 0 4px; color: var(--accent); font-size: 9px; font-weight: 700; text-transform: uppercase; }
+    h2 { margin: 0; font-size: 20px; letter-spacing: -0.035em; }
+    .section-count { color: var(--muted); font-family: var(--mono); font-size: 10px; }
+
+    .panel {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: color-mix(in srgb, var(--panel) 94%, transparent);
+    }
+
+    .list-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+      min-height: 62px;
+      width: 100%;
+      padding: 12px 14px;
+      color: inherit;
+      text-align: left;
+      text-decoration: none;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      background: transparent;
+    }
+
+    .list-row:last-child { border-bottom: 0; }
+    button.list-row { cursor: pointer; }
+    button.list-row:hover { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .status-dot.running { background: var(--accent); box-shadow: 0 0 12px rgba(184, 243, 74, 0.55); }
+    .status-dot.active { background: var(--cyan); box-shadow: 0 0 12px rgba(110, 231, 224, 0.5); }
+    .status-dot.stopped { background: var(--red); }
+
+    .row-main { min-width: 0; }
+    .row-title { overflow: hidden; font-size: 13px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+    .row-detail { overflow: hidden; margin-top: 4px; color: var(--muted); font-family: var(--mono); font-size: 9px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+    .row-meta { color: var(--muted); font-size: 9px; text-align: right; white-space: pre-line; }
+
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 5px 7px;
+      color: var(--muted);
+      font-size: 8px;
+      text-transform: uppercase;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+    .status-chip.good { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 28%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+
+    .empty { padding: 28px 16px; color: var(--muted); font-family: var(--mono); font-size: 10px; line-height: 1.6; text-align: center; }
+    .subscription-card { padding: 16px; border-bottom: 1px solid var(--line); }
+    .subscription-card:last-child { border-bottom: 0; }
+    .subscription-name { overflow: hidden; font-size: 14px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+    .plan-chip { flex: 0 0 auto; padding: 4px 7px; color: var(--cyan); font-family: var(--mono); font-size: 8px; text-transform: uppercase; border: 1px solid color-mix(in srgb, var(--cyan) 28%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--cyan) 7%, transparent); }
+    .quota-window { margin-top: 15px; }
+    .quota-label, .quota-value, .quota-foot { font-family: var(--mono); font-size: 9px; }
+    .quota-label { min-width: 0; font-weight: 600; text-transform: uppercase; }
+    .quota-scope { color: var(--muted); font-weight: 400; text-transform: none; }
+    .quota-value { flex: 0 0 auto; color: var(--accent); font-weight: 700; }
+    .quota-value.warning { color: var(--amber); }
+    .quota-value.danger { color: var(--red); }
+    .quota-track { height: 7px; overflow: hidden; margin-top: 8px; border-radius: 999px; background: var(--line); }
+    .quota-fill { height: 100%; border-radius: inherit; background: var(--accent); transition: width 420ms ease-out; }
+    .quota-fill.warning { background: var(--amber); }
+    .quota-fill.danger { background: var(--red); }
+    .quota-foot { margin-top: 7px; color: var(--muted); }
+    .subscription-error { margin-top: 12px; color: var(--amber); font-family: var(--mono); font-size: 9px; }
+
+    .usage-panel { padding: 16px; }
+    .chart { height: 112px; display: flex; align-items: flex-end; gap: 3px; padding: 8px 2px 0; border-bottom: 1px solid var(--line); }
+    .bar { min-width: 2px; flex: 1 1 0; border-radius: 2px 2px 0 0; background: linear-gradient(to top, color-mix(in srgb, var(--cyan) 55%, transparent), var(--cyan)); opacity: 0.85; transform-origin: bottom; animation: grow 520ms ease-out both; }
+    .usage-breakdown { display: grid; gap: 13px; margin-top: 18px; }
+    .usage-line-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 6px; font-family: var(--mono); font-size: 9px; }
+    .usage-line-head span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .usage-line-head span:last-child { color: var(--muted); white-space: nowrap; }
+    .track { height: 3px; overflow: hidden; border-radius: 999px; background: var(--line); }
+    .track-fill { height: 100%; border-radius: inherit; background: var(--accent); }
+
+    .config-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .config-cell { min-width: 0; padding: 14px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .config-cell:nth-child(2n) { border-right: 0; }
+    .config-cell:nth-last-child(-n + 2) { border-bottom: 0; }
+    .config-key { color: var(--muted); font-size: 8px; text-transform: uppercase; }
+    .config-value { overflow: hidden; margin-top: 6px; font-family: var(--mono); font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+    .helper-list { border-top: 1px solid var(--line); }
+    .read-only { margin: 22px 0 0; color: var(--muted); font-family: var(--mono); font-size: 9px; line-height: 1.6; text-align: center; }
+
+    .error-panel {
+      margin-top: 22vh;
+      padding: 28px 20px;
+      text-align: center;
+      border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+      border-radius: 18px;
+      background: color-mix(in srgb, var(--red) 5%, var(--panel));
+    }
+    .error-panel h2 { color: var(--red); }
+    .error-panel p { color: var(--muted); font-size: 13px; line-height: 1.55; }
+
+    .thread-toolbar {
+      position: sticky;
+      z-index: 10;
+      top: env(safe-area-inset-top);
+      margin: -18px -16px 18px;
+      padding: 18px 16px 13px;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--bg) 87%, transparent);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+
+    .thread-toolbar .masthead { margin-bottom: 15px; animation: none; }
+    .thread-title { font-size: clamp(25px, 7vw, 37px); }
+    .thread-meta { overflow: hidden; margin: 7px 0 0; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+
+    .search-box {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 9px;
+      min-height: 42px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: color-mix(in srgb, var(--panel) 94%, transparent);
+    }
+    .search-box svg { width: 16px; height: 16px; color: var(--muted); }
+    .search-box input { min-width: 0; padding: 10px 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 13px; }
+    .search-box input::placeholder { color: var(--muted); }
+    .clear-search { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+    .clear-search svg { width: 14px; height: 14px; }
+
+    .filters { display: flex; gap: 6px; margin-top: 9px; overflow-x: auto; scrollbar-width: none; }
+    .filters::-webkit-scrollbar { display: none; }
+    .filter-pill { flex: 0 0 auto; padding: 7px 10px; color: var(--muted); font-size: 8px; font-weight: 700; text-transform: uppercase; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--panel) 90%, transparent); cursor: pointer; }
+    .filter-pill.active { color: #10130e; border-color: var(--accent); background: var(--accent); }
+
+    .thread-stats { margin: 2px 2px 14px; color: var(--muted); font-family: var(--mono); font-size: 9px; }
+    .transcript { display: flex; flex-direction: column; gap: 11px; }
+
+    .message-card {
+      padding: 14px 15px 15px;
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--cyan);
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--panel) 95%, transparent);
+    }
+    .message-card.assistant { border-left-color: var(--accent); }
+    .message-speaker { font-size: 12px; font-weight: 800; }
+    .message-card.user .message-speaker { color: var(--cyan); }
+    .message-card.assistant .message-speaker { color: var(--accent); }
+    .message-phase { margin-left: 7px; color: var(--muted); font-family: var(--mono); font-size: 8px; font-weight: 500; text-transform: uppercase; }
+    .event-time { flex: 0 0 auto; color: var(--muted); font-size: 8px; }
+
+    .message-body { margin-top: 10px; font-family: var(--message); font-size: 15px; font-feature-settings: "kern" 1, "liga" 1; letter-spacing: -0.008em; line-height: 1.68; overflow-wrap: anywhere; }
+    .message-body > :first-child { margin-top: 0; }
+    .message-body > :last-child { margin-bottom: 0; }
+    .message-body p, .message-body ul, .message-body ol, .message-body blockquote, .message-body pre, .message-body table { margin: 0 0 11px; }
+    .message-body ul, .message-body ol { padding-left: 21px; }
+    .message-body li + li { margin-top: 4px; }
+    .message-body h1, .message-body h2, .message-body h3, .message-body h4, .message-body h5, .message-body h6 { margin: 16px 0 7px; font-size: 1em; letter-spacing: -0.015em; }
+    .message-body a { color: var(--cyan); text-underline-offset: 2px; }
+    .message-body blockquote { padding-left: 11px; color: var(--muted); border-left: 2px solid var(--line); }
+    .message-body hr { margin: 15px 0; border: 0; border-top: 1px solid var(--line); }
+    .message-body table { display: block; overflow-x: auto; border-collapse: collapse; }
+    .message-body th, .message-body td { padding: 6px 8px; text-align: left; border: 1px solid var(--line); }
+    .message-body :not(pre) > code { padding: 2px 5px; color: var(--code-text); font-family: var(--mono); font-size: 0.88em; border: 1px solid var(--code-line); border-radius: 4px; background: var(--code-bg); }
+
+    .code-wrapper { overflow: hidden; margin: 12px 0; border: 1px solid var(--code-line); border-radius: 10px; background: var(--code-bg); }
+    .code-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; color: var(--code-muted); font-family: var(--mono); font-size: 8px; text-transform: uppercase; border-bottom: 1px solid var(--code-line); }
+    .copy-code { padding: 4px 7px; color: var(--code-muted); font-family: var(--mono); font-size: 8px; border: 1px solid var(--code-line); border-radius: 5px; background: transparent; cursor: pointer; }
+    .code-wrapper pre { overflow-x: auto; margin: 0; padding: 13px; background: transparent; }
+    .code-wrapper code { color: var(--code-text); font-family: var(--mono); font-size: 12px; line-height: 1.55; }
+
+    .activity-detail {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--panel) 86%, transparent);
+    }
+    .activity-detail summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 42px; padding: 9px 12px; cursor: pointer; list-style: none; }
+    .activity-detail summary::-webkit-details-marker { display: none; }
+    .activity-detail summary::before { content: "+"; color: var(--muted); font-family: var(--mono); font-size: 13px; }
+    .activity-detail[open] summary::before { content: "−"; }
+    .event-summary { overflow: hidden; color: var(--muted); font-size: 8px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; text-transform: uppercase; }
+    .event-summary strong { color: var(--text); font-weight: 700; }
+    .event-summary .success { color: var(--accent); }
+    .event-summary .failure { color: var(--red); }
+    .event-summary .pending { color: var(--amber); }
+    .detail-body { padding: 2px 12px 12px 33px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .detail-label { margin: 10px 0 5px; color: var(--text); font-family: var(--mono); font-size: 8px; text-transform: uppercase; }
+    .detail-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .detail-code { overflow-x: auto; margin: 0; padding: 10px; color: var(--code-text); font-family: var(--mono); font-size: 10px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--code-line); border-radius: 7px; background: var(--code-bg); }
+
+    .system-banner { padding: 9px 12px; color: var(--muted); font-size: 8px; line-height: 1.55; border-left: 2px solid var(--amber); background: color-mix(in srgb, var(--amber) 5%, var(--panel)); }
+    .system-banner.interrupted { color: var(--text); border-left-color: var(--red); background: color-mix(in srgb, var(--red) 5%, var(--panel)); }
+    .system-banner strong { color: inherit; text-transform: uppercase; }
+
+    .loading-state, .thread-empty {
+      padding: 54px 16px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+      line-height: 1.7;
+      text-align: center;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--panel) 88%, transparent);
+    }
+
+    .git-toolbar {
+      position: sticky;
+      z-index: 10;
+      top: env(safe-area-inset-top);
+      margin: -18px -16px 16px;
+      padding: 18px 16px 13px;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--bg) 87%, transparent);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+
+    .git-toolbar .masthead { margin-bottom: 0; animation: none; }
+    .git-title { font-size: clamp(27px, 7vw, 39px); }
+    .git-context { overflow: hidden; margin: 7px 0 0; color: var(--muted); font-family: var(--mono); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+
+    .repo-card {
+      position: relative;
+      overflow: hidden;
+      padding: 18px;
+      border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+      border-radius: 17px;
+      background:
+        linear-gradient(130deg, color-mix(in srgb, var(--accent) 7%, var(--panel-strong)), color-mix(in srgb, var(--panel) 94%, transparent) 68%),
+        var(--panel);
+      box-shadow: 0 22px 58px rgba(0, 0, 0, 0.2);
+      animation: rise 420ms ease-out both;
+    }
+
+    .repo-card::after {
+      content: "GIT";
+      position: absolute;
+      right: -5px;
+      top: 0;
+      color: color-mix(in srgb, var(--accent) 5%, transparent);
+      font-family: var(--mono);
+      font-size: 74px;
+      font-weight: 800;
+      letter-spacing: -0.12em;
+      line-height: 0.8;
+      pointer-events: none;
+    }
+
+    .repo-head, .branch-line, .git-section-head, .diff-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .repo-head { position: relative; z-index: 1; align-items: flex-start; }
+    .repo-source { padding: 5px 7px; color: var(--cyan); font-family: var(--mono); font-size: 8px; font-weight: 700; text-transform: uppercase; border: 1px solid color-mix(in srgb, var(--cyan) 25%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--cyan) 6%, transparent); }
+    .branch-line { position: relative; z-index: 1; justify-content: flex-start; margin-top: 16px; }
+    .branch-mark { width: 10px; height: 10px; flex: 0 0 auto; border: 2px solid var(--accent); border-radius: 50%; box-shadow: 0 0 14px rgba(184, 243, 74, 0.42); }
+    .branch-name { overflow: hidden; font-family: var(--mono); font-size: 18px; font-weight: 700; letter-spacing: -0.035em; text-overflow: ellipsis; white-space: nowrap; }
+    .head-hash { flex: 0 0 auto; color: var(--muted); font-family: var(--mono); font-size: 9px; }
+    .upstream { position: relative; z-index: 1; overflow: hidden; margin: 7px 0 0 22px; color: var(--muted); font-family: var(--mono); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+
+    .sync-row { position: relative; z-index: 1; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 15px; }
+    .sync-chip { padding: 5px 7px; color: var(--muted); font-family: var(--mono); font-size: 8px; border: 1px solid var(--line); border-radius: 6px; }
+    .sync-chip.ahead { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
+    .sync-chip.behind { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 25%, transparent); }
+    .sync-chip.clean { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 25%, transparent); }
+
+    .git-metrics { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin-top: 16px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--line); }
+    .git-metric { min-width: 0; padding: 10px; background: color-mix(in srgb, var(--panel) 92%, transparent); }
+    .git-metric-value { display: block; font-family: var(--mono); font-size: 17px; font-weight: 700; }
+    .git-metric-label { display: block; margin-top: 3px; color: var(--muted); font-family: var(--mono); font-size: 7px; text-transform: uppercase; }
+    .git-metric.staged .git-metric-value { color: var(--accent); }
+    .git-metric.unstaged .git-metric-value { color: var(--amber); }
+    .git-metric.untracked .git-metric-value { color: var(--cyan); }
+
+    .git-section { margin-top: 24px; animation: rise 470ms ease-out both; }
+    .git-section:nth-child(2) { animation-delay: 50ms; }
+    .git-section:nth-child(3) { animation-delay: 90ms; }
+    .git-section:nth-child(4) { animation-delay: 130ms; }
+    .git-section-head { align-items: end; margin: 0 2px 10px; }
+    .git-section-head h2 { font-size: 18px; }
+
+    .worktree-strip { display: flex; gap: 9px; margin: 0 -16px; padding: 0 16px 5px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; }
+    .worktree-strip::-webkit-scrollbar { display: none; }
+    .worktree-card { width: min(76vw, 285px); flex: 0 0 auto; min-width: 0; padding: 13px 14px; scroll-snap-align: start; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--panel) 94%, transparent); }
+    .worktree-card.current { border-color: color-mix(in srgb, var(--cyan) 34%, transparent); background: color-mix(in srgb, var(--cyan) 5%, var(--panel)); }
+    .worktree-top { display: flex; align-items: center; gap: 8px; }
+    .worktree-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }
+    .worktree-card.current .worktree-dot { background: var(--cyan); box-shadow: 0 0 10px rgba(110, 231, 224, 0.5); }
+    .worktree-branch { overflow: hidden; font-family: var(--mono); font-size: 11px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+    .worktree-path { overflow: hidden; margin-top: 8px; color: var(--muted); font-family: var(--mono); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+    .worktree-flags { margin-top: 7px; color: var(--muted); font-family: var(--mono); font-size: 7px; text-transform: uppercase; }
+
+    .file-stack { overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--panel) 94%, transparent); }
+    .file-group + .file-group { border-top: 1px solid var(--line); }
+    .file-group-title { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; color: var(--muted); font-family: var(--mono); font-size: 8px; font-weight: 700; text-transform: uppercase; background: color-mix(in srgb, var(--panel-strong) 84%, transparent); }
+    .file-group.staged .file-group-title { color: var(--accent); }
+    .file-group.unstaged .file-group-title { color: var(--amber); }
+    .file-group.untracked .file-group-title { color: var(--cyan); }
+    .git-file-row { display: grid; grid-template-columns: 27px minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 55px; padding: 9px 12px; color: inherit; text-align: left; border: 0; border-top: 1px solid var(--line); background: transparent; cursor: pointer; }
+    .git-file-row:active { background: color-mix(in srgb, var(--text) 4%, transparent); }
+    .file-status { display: grid; place-items: center; width: 27px; height: 27px; color: var(--text); font-family: var(--mono); font-size: 10px; font-weight: 700; border: 1px solid var(--line); border-radius: 7px; }
+    .staged .file-status { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 26%, transparent); }
+    .unstaged .file-status { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 26%, transparent); }
+    .untracked .file-status { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 26%, transparent); }
+    .file-copy { min-width: 0; }
+    .file-name { overflow: hidden; font-family: var(--mono); font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+    .file-dir { overflow: hidden; margin-top: 4px; color: var(--muted); font-family: var(--mono); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+    .file-open { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+
+    .commit-list { overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--panel) 94%, transparent); }
+    .commit-row { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; min-height: 65px; padding: 11px 13px; border-bottom: 1px solid var(--line); }
+    .commit-row:last-child { border-bottom: 0; }
+    .commit-rail { position: relative; }
+    .commit-rail::before { content: ""; position: absolute; left: 8px; top: 0; bottom: -12px; width: 1px; background: color-mix(in srgb, var(--cyan) 28%, var(--line)); }
+    .commit-row:last-child .commit-rail::before { bottom: 50%; }
+    .commit-dot { position: absolute; z-index: 1; left: 4px; top: 8px; width: 9px; height: 9px; border: 2px solid var(--cyan); border-radius: 50%; background: var(--panel); }
+    .commit-subject { overflow: hidden; font-size: 11px; font-weight: 700; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+    .commit-info { display: flex; align-items: center; gap: 7px; min-width: 0; margin-top: 7px; color: var(--muted); font-family: var(--mono); font-size: 8px; }
+    .commit-hash { color: var(--cyan); }
+    .commit-author { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .commit-time { flex: 0 0 auto; margin-left: auto; }
+    .commit-ref { display: inline-block; max-width: 100%; overflow: hidden; margin-top: 7px; padding: 3px 5px; color: var(--accent); font-family: var(--mono); font-size: 7px; text-overflow: ellipsis; white-space: nowrap; border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent); border-radius: 4px; }
+
+    .diff-sheet { position: fixed; z-index: 60; inset: 0; display: grid; align-items: end; }
+    .diff-scrim { position: absolute; inset: 0; border: 0; background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); }
+    .diff-panel { position: relative; display: flex; flex-direction: column; width: min(760px, 100%); height: min(88vh, 900px); margin: 0 auto; overflow: hidden; border: 1px solid var(--code-line); border-bottom: 0; border-radius: 18px 18px 0 0; background: var(--code-bg); box-shadow: 0 -24px 80px rgba(0, 0, 0, 0.55); animation: sheet-up 220ms ease-out both; }
+    .diff-head { flex: 0 0 auto; padding: 14px 14px 12px; border-bottom: 1px solid var(--code-line); background: #0e110f; }
+    .diff-title-row { align-items: flex-start; }
+    .diff-kind { margin: 0 0 5px; color: var(--accent); font-family: var(--mono); font-size: 8px; font-weight: 700; text-transform: uppercase; }
+    .diff-path { overflow: hidden; margin: 0; color: var(--code-text); font-family: var(--mono); font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+    .diff-close { width: 34px; height: 34px; flex: 0 0 auto; padding: 0; color: var(--code-muted); font-size: 20px; border: 1px solid var(--code-line); border-radius: 50%; background: transparent; cursor: pointer; }
+    .diff-meta { margin-top: 9px; color: var(--code-muted); font-family: var(--mono); font-size: 8px; }
+    .diff-warning { padding: 8px 14px; color: #171205; font-family: var(--mono); font-size: 8px; font-weight: 700; text-align: center; background: var(--amber); }
+    .diff-body { flex: 1 1 auto; overflow: auto; overscroll-behavior: contain; }
+    .diff-code { min-width: max-content; margin: 0; padding: 12px 0 calc(24px + env(safe-area-inset-bottom)); color: var(--code-text); font-family: var(--mono); font-size: 10px; line-height: 1.55; }
+    .diff-line { display: block; min-height: 1.55em; padding: 0 13px; white-space: pre; }
+    .diff-line.add { color: #c5f79b; background: rgba(88, 166, 79, 0.14); }
+    .diff-line.delete { color: #ffaaa5; background: rgba(248, 81, 73, 0.14); }
+    .diff-line.hunk { color: #9bc8ff; background: rgba(56, 139, 253, 0.1); }
+    .diff-line.meta { color: var(--code-muted); }
+    .diff-state { display: grid; min-height: 55vh; place-items: center; padding: 30px; color: var(--code-muted); font-family: var(--mono); font-size: 10px; text-align: center; }
+    body.diff-open { overflow: hidden; }
+
+    .bottom-nav {
+      position: fixed;
+      z-index: 20;
+      left: 50%;
+      bottom: max(12px, env(safe-area-inset-bottom));
+      width: min(360px, calc(100% - 32px));
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      padding: 5px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--panel-strong) 90%, transparent);
+      box-shadow: 0 16px 50px rgba(0, 0, 0, 0.38);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      transform: translateX(-50%);
+    }
+
+    .nav-item { display: flex; align-items: center; justify-content: center; gap: 7px; padding: 10px 12px; color: var(--muted); font-size: 9px; font-weight: 700; text-align: center; text-decoration: none; text-transform: uppercase; border-radius: 9px; }
+    .nav-item svg { width: 15px; height: 15px; }
+    .nav-item.active { color: #10130e; background: var(--accent); }
+
+    @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes pulse { from { opacity: 0.65; transform: scale(0.55); } to { opacity: 0; transform: scale(1.45); } }
+    @keyframes grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+    @keyframes sheet-up { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
+
+    @media (min-width: 560px) {
+      .metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .config-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .config-cell:nth-child(2n) { border-right: 1px solid var(--line); }
+      .config-cell:nth-child(4n) { border-right: 0; }
+      .config-cell { border-bottom: 0; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell" id="monitorView" aria-label="Monitor">
+    <header class="masthead">
+      <div>
+        <p class="overline">Local operations</p>
+        <h1>ZDX Monitor</h1>
+      </div>
+      <button class="icon-button" id="monitorRefresh" type="button" aria-label="Refresh monitor">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.6-2.6L20 9M4 15l2.3 2.6A7 7 0 0 0 17.9 15" /></svg>
+      </button>
+    </header>
+
+    <section class="system-card" id="systemCard">
+      <div class="system-top">
+        <div class="system-state">
+          <span class="pulse"></span>
+          <p class="system-title" id="systemTitle">Reading local state…</p>
+        </div>
+        <span class="stamp" id="updatedAt">SYNCING</span>
+      </div>
+      <div class="metrics" id="metrics"></div>
+    </section>
+
+    <div id="monitorContent"></div>
+    <p class="read-only">READ ONLY · SERVICE CONTROL AND RESTARTS STAY MANUAL</p>
+  </main>
+
+  <main class="shell" id="threadsView" aria-label="Threads" hidden>
+    <header class="thread-toolbar">
+      <div class="masthead">
+        <div>
+          <p class="overline">Thread transcript</p>
+          <h1 class="thread-title" id="threadTitle">Thread</h1>
+          <p class="thread-meta" id="threadMeta">Waiting for thread data</p>
+        </div>
+        <button class="icon-button" id="threadRefresh" type="button" aria-label="Sync thread">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.6-2.6L20 9M4 15l2.3 2.6A7 7 0 0 0 17.9 15" /></svg>
+        </button>
+      </div>
+
+      <div class="search-box" role="search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>
+        <input id="threadSearch" type="search" autocomplete="off" aria-label="Search messages and activity" placeholder="Search messages and activity">
+        <button class="clear-search" id="clearSearch" type="button" aria-label="Clear search" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17" /></svg>
+        </button>
+      </div>
+
+      <div class="filters" id="threadFilters" role="group" aria-label="Filter thread activity">
+        <button class="filter-pill active" type="button" data-filter="all" aria-pressed="true">All</button>
+        <button class="filter-pill" type="button" data-filter="user" aria-pressed="false">You</button>
+        <button class="filter-pill" type="button" data-filter="assistant" aria-pressed="false">Z</button>
+        <button class="filter-pill" type="button" data-filter="activity" aria-pressed="false">Activity</button>
+      </div>
+    </header>
+
+    <div class="thread-stats" id="threadStats">
+      <span>0 messages · 0 activity</span>
+      <span>0 events</span>
+    </div>
+    <section class="transcript" id="transcript" aria-live="polite">
+      <div class="loading-state">OPENING THREAD</div>
+    </section>
+  </main>
+
+  <main class="shell" id="gitView" aria-label="Git" hidden>
+    <header class="git-toolbar">
+      <div class="masthead">
+        <div>
+          <p class="overline">Repository inspector</p>
+          <h1 class="git-title" id="gitTitle">Git</h1>
+          <p class="git-context" id="gitContext">Resolving the selected thread project</p>
+        </div>
+        <button class="icon-button" id="gitRefresh" type="button" aria-label="Refresh Git state">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.6-2.6L20 9M4 15l2.3 2.6A7 7 0 0 0 17.9 15" /></svg>
+        </button>
+      </div>
+    </header>
+    <div id="gitContent" aria-live="polite">
+      <div class="loading-state">READING REPOSITORY</div>
+    </div>
+    <p class="read-only">READ ONLY · DIFFS LOAD ON DEMAND · GIT WRITES ARE DISABLED</p>
+  </main>
+
+  <nav class="bottom-nav" aria-label="Mini App sections">
+    <a class="nav-item" id="monitorNav" href="/app?view=monitor" data-nav="monitor">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18V9m5 9V5m6 13v-7m5 7V3" /></svg>
+      <span>Monitor</span>
+    </a>
+    <a class="nav-item" id="threadsNav" href="/app?view=threads&amp;id=active" data-nav="threads">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v10H9l-4 4V5Z" /></svg>
+      <span>Threads</span>
+    </a>
+    <a class="nav-item" id="gitNav" href="/app?view=git&amp;id=active" data-nav="git">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2" /><circle cx="6" cy="19" r="2" /><circle cx="18" cy="8" r="2" /><path d="M6 7v10M8 15c5 0 8-2 8-5" /></svg>
+      <span>Git</span>
+    </a>
+  </nav>
+
+  <section class="diff-sheet" id="diffSheet" role="dialog" aria-modal="true" aria-labelledby="diffPath" hidden>
+    <button class="diff-scrim" id="diffScrim" type="button" aria-label="Close diff"></button>
+    <div class="diff-panel">
+      <header class="diff-head">
+        <div class="diff-title-row">
+          <div class="row-main">
+            <p class="diff-kind" id="diffKind">Diff</p>
+            <h2 class="diff-path" id="diffPath">File</h2>
+          </div>
+          <button class="diff-close" id="diffClose" type="button" aria-label="Close diff">×</button>
+        </div>
+        <div class="diff-meta" id="diffMeta">Loading diff</div>
+      </header>
+      <div id="diffWarning" class="diff-warning" hidden>DIFF TRUNCATED</div>
+      <div class="diff-body" id="diffBody">
+        <div class="diff-state">LOADING DIFF</div>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+      tg.setHeaderColor?.("secondary_bg_color");
+      tg.setBackgroundColor?.("bg_color");
+    }
+
+    const monitorView = document.getElementById("monitorView");
+    const threadsView = document.getElementById("threadsView");
+    const gitView = document.getElementById("gitView");
+    const monitorContent = document.getElementById("monitorContent");
+    const gitContent = document.getElementById("gitContent");
+    const monitorRefresh = document.getElementById("monitorRefresh");
+    const threadRefresh = document.getElementById("threadRefresh");
+    const gitRefresh = document.getElementById("gitRefresh");
+    const transcript = document.getElementById("transcript");
+    const initialStartParam = String(tg?.initDataUnsafe?.start_param || "").trim();
+
+    let currentView = "";
+    let currentThreadId = "active";
+    let lastThreadId = "";
+    let routeVersion = 0;
+    let monitorInterval = null;
+    let monitorController = null;
+    let threadController = null;
+    let gitController = null;
+    let diffController = null;
+    let lastMonitorLoadedAt = 0;
+    let threadLibrariesPromise = null;
+    let threadData = null;
+    let threadFilter = "all";
+    let threadSearch = "";
+    let currentGitThreadId = "active";
+    let diffTrigger = null;
+
+    function element(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    function compact(value) {
+      const number = Number(value || 0);
+      if (number >= 1e9) return `${(number / 1e9).toFixed(1)}B`;
+      if (number >= 1e6) return `${(number / 1e6).toFixed(1)}M`;
+      if (number >= 1e3) return `${(number / 1e3).toFixed(1)}k`;
+      return number.toLocaleString();
+    }
+
+    function money(value) { return `$${Number(value || 0).toFixed(2)}`; }
+
+    function shortId(value) {
+      if (!value) return "no thread";
+      return value.length > 14 ? `${value.slice(0, 8)}…${value.slice(-4)}` : value;
+    }
+
+    async function telegramFetch(url, options = {}) {
+      const initData = tg?.initData;
+      if (!initData) throw new Error("Open this app from Telegram.");
+      const response = await fetch(url, {
+        ...options,
+        headers: { ...options.headers, Authorization: `tma ${initData}` },
+      });
+      if (response.status === 401 || response.status === 403) {
+        throw new Error("Telegram authorization expired. Close and reopen the Mini App.");
+      }
+      if (!response.ok) {
+        const message = (await response.text()).trim();
+        throw new Error(message || "The requested data could not be loaded.");
+      }
+      return response.json();
+    }
+
+    function routeFromLocation(useStartParam) {
+      const params = new URLSearchParams(window.location.search);
+      const id = String(params.get("id") || "").trim();
+      const view = params.get("view");
+      if (view === "git") return { view: "git", id: id || "active" };
+      if (id) return { view: "threads", id };
+      if (view === "monitor") return { view: "monitor" };
+      if (view === "threads") return { view: "threads", id: "active" };
+      if (useStartParam && initialStartParam) return { view: "threads", id: initialStartParam, fromStartParam: true };
+      if (window.location.pathname.replace(/\/+$/, "").endsWith("/threads")) return { view: "threads", id: "active" };
+      return { view: "monitor" };
+    }
+
+    function routeUrl(view, id) {
+      if (view === "threads") return `/app?view=threads&id=${encodeURIComponent(id || "active")}`;
+      if (view === "git") return `/app?view=git&id=${encodeURIComponent(id || "active")}`;
+      return "/app?view=monitor";
+    }
+
+    function navigate(view, id) {
+      const selectedId = view === "threads" || view === "git" ? (id || lastThreadId || "active") : "";
+      history.pushState({}, "", routeUrl(view, selectedId));
+      activateRoute({ view, id: selectedId });
+    }
+
+    function activateRoute(route) {
+      routeVersion += 1;
+      currentView = route.view;
+      monitorView.hidden = currentView !== "monitor";
+      threadsView.hidden = currentView !== "threads";
+      gitView.hidden = currentView !== "git";
+      const monitorNav = document.getElementById("monitorNav");
+      const threadsNav = document.getElementById("threadsNav");
+      const gitNav = document.getElementById("gitNav");
+      monitorNav.classList.toggle("active", currentView === "monitor");
+      threadsNav.classList.toggle("active", currentView === "threads");
+      gitNav.classList.toggle("active", currentView === "git");
+      if (currentView === "monitor") monitorNav.setAttribute("aria-current", "page");
+      else monitorNav.removeAttribute("aria-current");
+      if (currentView === "threads") threadsNav.setAttribute("aria-current", "page");
+      else threadsNav.removeAttribute("aria-current");
+      if (currentView === "git") gitNav.setAttribute("aria-current", "page");
+      else gitNav.removeAttribute("aria-current");
+      closeDiff();
+
+      if (currentView === "monitor") {
+        document.title = "ZDX Monitor";
+        stopThreadRequest();
+        stopGitRequest();
+        startMonitorPolling();
+      } else if (currentView === "threads") {
+        document.title = "ZDX Threads";
+        stopMonitorPolling();
+        stopGitRequest();
+        currentThreadId = route.id || "active";
+        lastThreadId = currentThreadId;
+        document.getElementById("threadsNav").href = routeUrl("threads", lastThreadId);
+        document.getElementById("gitNav").href = routeUrl("git", lastThreadId);
+        loadThread();
+      } else {
+        document.title = "ZDX Git";
+        stopMonitorPolling();
+        stopThreadRequest();
+        currentGitThreadId = route.id || lastThreadId || "active";
+        lastThreadId = currentGitThreadId;
+        document.getElementById("threadsNav").href = routeUrl("threads", lastThreadId);
+        document.getElementById("gitNav").href = routeUrl("git", lastThreadId);
+        loadGit();
+      }
+      window.scrollTo({ top: 0, behavior: "auto" });
+    }
+
+    function startMonitorPolling() {
+      stopMonitorPolling();
+      loadMonitor(false);
+      monitorInterval = window.setInterval(() => {
+        if (currentView === "monitor" && !document.hidden) loadMonitor(false);
+      }, 30000);
+    }
+
+    function stopMonitorPolling() {
+      if (monitorInterval !== null) {
+        clearInterval(monitorInterval);
+        monitorInterval = null;
+      }
+      if (monitorController) {
+        monitorController.abort();
+        monitorController = null;
+      }
+    }
+
+    function stopThreadRequest() {
+      if (threadController) {
+        threadController.abort();
+        threadController = null;
+      }
+    }
+
+    function stopGitRequest() {
+      if (gitController) {
+        gitController.abort();
+        gitController = null;
+      }
+      if (diffController) {
+        diffController.abort();
+        diffController = null;
+      }
+    }
+
+    function section(kicker, title, count) {
+      const wrapper = element("section", "section");
+      const head = element("div", "section-head");
+      const titles = element("div");
+      titles.append(element("p", "section-kicker", kicker), element("h2", "", title));
+      head.append(titles, element("span", "section-count", count));
+      wrapper.append(head);
+      return wrapper;
+    }
+
+    function emptyPanel(message) {
+      const panel = element("div", "panel");
+      panel.append(element("div", "empty", message));
+      return panel;
+    }
+
+    function listRow({ tone = "", title, detail, meta, onClick }) {
+      const row = element(onClick ? "button" : "div", "list-row");
+      if (onClick) {
+        row.type = "button";
+        row.addEventListener("click", onClick);
+      }
+      const main = element("div", "row-main");
+      main.append(element("div", "row-title", title), element("div", "row-detail", detail));
+      row.append(element("span", `status-dot ${tone}`), main, element("div", "row-meta", meta));
+      return row;
+    }
+
+    function renderMetrics(data) {
+      const usage = data.usage;
+      const quotaWindows = (data.subscriptions || []).flatMap(subscription => subscription.windows || []);
+      const highestQuota = quotaWindows.length ? Math.max(...quotaWindows.map(window => Number(window.used_percent || 0))) : null;
+      const values = [
+        [data.services.filter(service => service.running).length, "services online"],
+        [data.active_agents.length, "active agents"],
+        [highestQuota === null ? "—" : `${Math.round(highestQuota)}%`, "highest quota"],
+        [usage ? compact(usage.tokens) : "—", "tokens · 30d"],
+      ];
+      document.getElementById("metrics").replaceChildren(...values.map(([value, label]) => {
+        const metric = element("div", "metric");
+        metric.append(element("span", "metric-value", String(value)), element("span", "metric-label", label));
+        return metric;
+      }));
+    }
+
+    function renderServices(data) {
+      const wrapper = section("01 / Runtime", "Services", `${data.services.length} managed`);
+      const panel = element("div", "panel");
+      for (const service of data.services) {
+        const detail = service.running ? `PID ${service.pid ?? "—"} · UP ${service.uptime || "—"}` : service.installed ? "LAUNCHD · STOPPED" : "NOT INSTALLED";
+        const chip = element("span", `status-chip ${service.running ? "good" : ""}`, service.running ? "online" : "offline");
+        const row = element("div", "list-row");
+        row.append(element("span", `status-dot ${service.running ? "running" : "stopped"}`));
+        const main = element("div", "row-main");
+        main.append(element("div", "row-title", service.name), element("div", "row-detail", detail));
+        row.append(main, chip);
+        panel.append(row);
+      }
+      wrapper.append(panel);
+      return wrapper;
+    }
+
+    function renderAgents(data) {
+      const wrapper = section("02 / Activity", "Agent runs", `${data.active_agents.length} live`);
+      if (!data.active_agents.length) {
+        wrapper.append(emptyPanel("NO ACTIVE AGENT RUNS"));
+        return wrapper;
+      }
+      const panel = element("div", "panel");
+      for (const agent of data.active_agents) {
+        const provider = [agent.provider, agent.account].filter(Boolean).join("@");
+        const model = [provider, agent.model].filter(Boolean).join(":") || "model unavailable";
+        const role = agent.role || agent.surface || "agent";
+        const detail = `${model}${agent.thinking ? ` @${agent.thinking}` : ""} · ${shortId(agent.thread_id)}`;
+        const open = agent.thread_id ? () => navigate("threads", agent.thread_id) : undefined;
+        panel.append(listRow({ tone: "active", title: role, detail, meta: `PID ${agent.pid}\n${agent.uptime || "—"}`, onClick: open }));
+      }
+      wrapper.append(panel);
+      return wrapper;
+    }
+
+    function renderBackground(data) {
+      const wrapper = section("03 / Detached", "Background", `${data.background_processes.length} running`);
+      if (!data.background_processes.length) {
+        wrapper.append(emptyPanel("NO BACKGROUND PROCESSES"));
+        return wrapper;
+      }
+      const panel = element("div", "panel");
+      for (const process of data.background_processes) {
+        const row = listRow({ tone: "active", title: process.command, detail: `${process.id} · ${shortId(process.thread_id)}`, meta: `PID ${process.pid}\n${process.uptime || "—"}` });
+        row.title = process.command;
+        panel.append(row);
+      }
+      wrapper.append(panel);
+      return wrapper;
+    }
+
+    function quotaTone(percent) {
+      if (percent >= 90) return "danger";
+      if (percent >= 75) return "warning";
+      return "";
+    }
+
+    function resetLabel(value) {
+      if (!value) return "reset unknown";
+      const seconds = Math.floor((new Date(value).getTime() - Date.now()) / 1000);
+      if (!Number.isFinite(seconds) || seconds <= 0) return "reset due";
+      const days = Math.floor(seconds / 86400);
+      const hours = Math.floor((seconds % 86400) / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      if (days > 0) return `resets in ${days}d ${hours}h`;
+      if (hours > 0) return `resets in ${hours}h ${minutes}m`;
+      return `resets in ${minutes}m`;
+    }
+
+    function renderSubscriptions(data) {
+      const subscriptions = data.subscriptions || [];
+      const wrapper = section("04 / Live limits", "Subscriptions", `${subscriptions.length} account${subscriptions.length === 1 ? "" : "s"}`);
+      if (!subscriptions.length) {
+        wrapper.append(emptyPanel("NO SUPPORTED SUBSCRIPTIONS LOGGED IN"));
+        return wrapper;
+      }
+      const panel = element("div", "panel");
+      for (const subscription of subscriptions) {
+        const card = element("div", "subscription-card");
+        const head = element("div", "subscription-head");
+        head.append(element("div", "subscription-name", subscription.name));
+        if (subscription.plan) head.append(element("span", "plan-chip", subscription.plan));
+        card.append(head);
+        if (subscription.error) card.append(element("div", "subscription-error", subscription.error.toUpperCase()));
+        else if (!subscription.windows.length) card.append(element("div", "subscription-error", "QUOTA WINDOWS UNAVAILABLE"));
+        for (const window of subscription.windows) {
+          const percent = Math.max(0, Math.min(100, Number(window.used_percent || 0)));
+          const tone = quotaTone(percent);
+          const quota = element("div", "quota-window");
+          const quotaHead = element("div", "quota-head");
+          const label = element("span", "quota-label", window.label);
+          if (window.scope) label.append(element("span", "quota-scope", ` · ${window.scope}`));
+          quotaHead.append(label, element("span", `quota-value ${tone}`, `${Math.round(percent)}% used`));
+          const track = element("div", "quota-track");
+          const fill = element("div", `quota-fill ${tone}`);
+          fill.style.width = `${percent}%`;
+          track.append(fill);
+          const foot = element("div", "quota-foot");
+          foot.append(element("span", "", `${Math.round(100 - percent)}% remaining`), element("span", "", resetLabel(window.resets_at)));
+          quota.append(quotaHead, track, foot);
+          card.append(quota);
+        }
+        panel.append(card);
+      }
+      wrapper.append(panel);
+      return wrapper;
+    }
+
+    function renderUsage(data) {
+      const usage = data.usage;
+      const wrapper = section("05 / Consumption", "Usage", usage ? `${usage.threads_scanned} threads · ${usage.span}` : "unavailable");
+      if (!usage) {
+        wrapper.append(emptyPanel("USAGE AGGREGATION UNAVAILABLE"));
+        return wrapper;
+      }
+      const panel = element("div", "panel usage-panel");
+      const chart = element("div", "chart");
+      const peak = Math.max(1, ...usage.daily.map(day => day.tokens));
+      for (const day of usage.daily) {
+        const bar = element("div", "bar");
+        bar.style.height = `${Math.max(2, (day.tokens / peak) * 100)}%`;
+        bar.title = `${new Date(day.day * 86400000).toLocaleDateString()} · ${compact(day.tokens)} tokens`;
+        chart.append(bar);
+      }
+      if (!usage.daily.length) chart.append(element("div", "empty", "NO DATED USAGE"));
+      panel.append(chart);
+      const breakdown = element("div", "usage-breakdown");
+      const providerPeak = Math.max(1, ...usage.by_provider.map(row => row.tokens));
+      for (const row of usage.by_provider.slice(0, 6)) {
+        const item = element("div");
+        const head = element("div", "usage-line-head");
+        head.append(element("span", "", row.provider + (row.estimated ? " *" : "")), element("span", "", `${compact(row.tokens)} · ${row.subscription ? "subscription" : money(row.cost_usd)}`));
+        const track = element("div", "track");
+        const fill = element("div", "track-fill");
+        fill.style.width = `${(row.tokens / providerPeak) * 100}%`;
+        track.append(fill);
+        item.append(head, track);
+        breakdown.append(item);
+      }
+      panel.append(breakdown);
+      wrapper.append(panel);
+      return wrapper;
+    }
+
+    function renderConfig(data) {
+      const config = data.config;
+      const wrapper = section("06 / Effective", "Configuration", "safe summary");
+      const panel = element("div", "panel");
+      const grid = element("div", "config-grid");
+      const entries = [
+        ["Model", config.model], ["Thinking", config.thinking], ["Max tokens", config.max_tokens ?? "provider default"],
+        ["Subagents", config.subagents_enabled ? "enabled" : "disabled"], ["Tool timeout", config.tool_timeout_secs ? `${config.tool_timeout_secs}s` : "disabled"],
+        ["Favorites", config.favorite_count], ["Mini App", config.server_enabled ? "enabled" : "disabled"], ["Server port", config.server_port],
+      ];
+      for (const [key, value] of entries) {
+        const cell = element("div", "config-cell");
+        cell.append(element("div", "config-key", key), element("div", "config-value", String(value)));
+        cell.title = String(value);
+        grid.append(cell);
+      }
+      panel.append(grid);
+      const helpers = element("div", "helper-list");
+      for (const helper of config.helper_models) helpers.append(listRow({ title: helper.role, detail: helper.model, meta: "helper" }));
+      panel.append(helpers);
+      wrapper.append(panel);
+      return wrapper;
+    }
+
+    function renderAutomations(data) {
+      const wrapper = section("07 / Schedule", "Automations", `${data.automations.length} defined`);
+      if (!data.automations.length) {
+        wrapper.append(emptyPanel("NO AUTOMATIONS DEFINED"));
+        return wrapper;
+      }
+      const panel = element("div", "panel");
+      for (const automation of data.automations) {
+        panel.append(listRow({ tone: automation.schedule ? "running" : "", title: automation.name, detail: automation.schedule || "manual only", meta: automation.schedule ? "scheduled" : "manual" }));
+      }
+      wrapper.append(panel);
+      return wrapper;
+    }
+
+    function renderMonitor(data) {
+      const stopped = data.services.filter(service => !service.running);
+      document.getElementById("systemCard").classList.toggle("attention", stopped.length > 0);
+      document.getElementById("systemTitle").textContent = stopped.length ? `${stopped.length} service${stopped.length === 1 ? "" : "s"} offline` : "All managed services online";
+      document.getElementById("updatedAt").textContent = `SYNC ${new Date(data.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+      renderMetrics(data);
+      monitorContent.replaceChildren(renderServices(data), renderAgents(data), renderBackground(data), renderSubscriptions(data), renderUsage(data), renderConfig(data), renderAutomations(data));
+    }
+
+    function showMonitorError(message) {
+      const panel = element("div", "error-panel");
+      panel.append(element("h2", "", "Monitor unavailable"), element("p", "", message));
+      monitorContent.replaceChildren(panel);
+      document.getElementById("systemTitle").textContent = "Could not read local state";
+      document.getElementById("systemCard").classList.add("attention");
+    }
+
+    async function loadMonitor(haptic) {
+      if (currentView !== "monitor") return;
+      if (monitorController) monitorController.abort();
+      const controller = new AbortController();
+      const version = routeVersion;
+      monitorController = controller;
+      monitorRefresh.classList.add("loading");
+      monitorRefresh.disabled = true;
+      if (haptic) tg?.HapticFeedback?.impactOccurred?.("light");
+      try {
+        const data = await telegramFetch(`/api/monitor?t=${Date.now()}`, { signal: controller.signal });
+        if (controller.signal.aborted || monitorController !== controller || currentView !== "monitor" || routeVersion !== version) return;
+        renderMonitor(data);
+        lastMonitorLoadedAt = Date.now();
+      } catch (error) {
+        if (error?.name !== "AbortError" && monitorController === controller && currentView === "monitor" && routeVersion === version) {
+          showMonitorError(error instanceof Error ? error.message : "Unknown error.");
+        }
+      } finally {
+        if (monitorController === controller) {
+          monitorController = null;
+          monitorRefresh.classList.remove("loading");
+          monitorRefresh.disabled = false;
+        }
+      }
+    }
+
+    function loadScript(url) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = url;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error("Thread rendering libraries could not be loaded."));
+        document.head.append(script);
+      });
+    }
+
+    function ensureThreadLibraries() {
+      if (threadLibrariesPromise) return threadLibrariesPromise;
+      const highlightStyles = document.createElement("link");
+      highlightStyles.rel = "stylesheet";
+      highlightStyles.href = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css";
+      document.head.append(highlightStyles);
+      threadLibrariesPromise = Promise.all([
+        loadScript("https://cdn.jsdelivr.net/npm/marked/marked.min.js"),
+        loadScript("https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"),
+      ]).then(() => {
+        window.marked.setOptions({ gfm: true, breaks: true });
+      });
+      return threadLibrariesPromise;
+    }
+
+    const allowedMarkdownTags = new Set([
+      "P", "BR", "STRONG", "EM", "DEL", "CODE", "PRE", "BLOCKQUOTE", "UL", "OL", "LI",
+      "H1", "H2", "H3", "H4", "H5", "H6", "A", "HR", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD",
+    ]);
+    const discardedMarkdownTags = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "SVG", "MATH", "FORM", "INPUT", "BUTTON"]);
+
+    function safeHref(value) {
+      try {
+        const url = new URL(value, window.location.href);
+        return ["http:", "https:", "mailto:", "tg:"].includes(url.protocol) ? url.href : "";
+      } catch (_) {
+        return "";
+      }
+    }
+
+    function sanitizeMarkdown(html) {
+      const template = document.createElement("template");
+      template.innerHTML = html;
+      const sanitizeNode = node => {
+        for (const child of [...node.childNodes]) {
+          if (child.nodeType === Node.COMMENT_NODE) {
+            child.remove();
+            continue;
+          }
+          if (child.nodeType !== Node.ELEMENT_NODE) continue;
+          if (discardedMarkdownTags.has(child.tagName)) {
+            child.remove();
+            continue;
+          }
+          if (!allowedMarkdownTags.has(child.tagName)) {
+            child.replaceWith(...child.childNodes);
+            sanitizeNode(node);
+            continue;
+          }
+          const languageClass = child.tagName === "CODE"
+            ? [...child.classList].find(name => /^language-[a-z0-9_+-]+$/i.test(name))
+            : "";
+          const href = child.tagName === "A" ? safeHref(child.getAttribute("href") || "") : "";
+          const title = child.tagName === "A" ? child.getAttribute("title") : "";
+          for (const attribute of [...child.attributes]) child.removeAttribute(attribute.name);
+          if (languageClass) child.className = languageClass;
+          if (href) {
+            child.setAttribute("href", href);
+            child.setAttribute("target", "_blank");
+            child.setAttribute("rel", "noopener noreferrer");
+            if (title) child.setAttribute("title", title);
+          } else if (child.tagName === "A") {
+            child.removeAttribute("href");
+          }
+          sanitizeNode(child);
+        }
+      };
+      sanitizeNode(template.content);
+      return template.content;
+    }
+
+    function appendMarkdown(container, text) {
+      const parsed = window.marked.parse(String(text || ""));
+      container.append(sanitizeMarkdown(parsed));
+      for (const code of container.querySelectorAll("pre > code")) {
+        window.hljs.highlightElement(code);
+        const pre = code.parentElement;
+        const wrapper = element("div", "code-wrapper");
+        const header = element("div", "code-header");
+        const language = [...code.classList].find(name => name.startsWith("language-"))?.slice(9) || "code";
+        const copy = element("button", "copy-code", "Copy");
+        copy.type = "button";
+        copy.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(code.textContent || "");
+            copy.textContent = "Copied";
+            setTimeout(() => { copy.textContent = "Copy"; }, 1600);
+          } catch (_) {
+            copy.textContent = "Unavailable";
+          }
+        });
+        header.append(element("span", "", language), copy);
+        pre.replaceWith(wrapper);
+        wrapper.append(header, pre);
+      }
+    }
+
+    function searchText(record, pairedResult) {
+      const values = [
+        record.type, record.role, record.speaker, record.text, record.phase, record.name,
+        record.kind, record.message, record.model, record.provider, record.input_tokens,
+        record.output_tokens, record.cache_read_tokens, record.cache_write_tokens,
+        prettyValue(record.output),
+      ];
+      if (record.input !== undefined) values.push(typeof record.input === "string" ? record.input : JSON.stringify(record.input));
+      if (pairedResult) values.push(prettyValue(pairedResult.output), pairedResult.ok ? "success" : "error", pairedResult.duration_ms);
+      return values.filter(value => value !== undefined && value !== null).join(" ").toLowerCase();
+    }
+
+    function keyArgument(input) {
+      if (input === undefined || input === null) return "";
+      if (typeof input === "string") return input.replace(/\s+/g, " ").slice(0, 72);
+      if (typeof input !== "object" || Array.isArray(input)) return String(input).slice(0, 72);
+      const preferred = ["file_path", "path", "command", "query", "url", "pattern", "prompt", "description"];
+      const key = preferred.find(name => input[name] !== undefined) || Object.keys(input)[0];
+      if (!key) return "";
+      const raw = typeof input[key] === "string" ? input[key] : JSON.stringify(input[key]);
+      return `${key}: ${String(raw).replace(/\s+/g, " ").slice(0, 64)}`;
+    }
+
+    function prettyValue(value) {
+      if (value === undefined) return "";
+      if (typeof value === "string") return value;
+      try { return JSON.stringify(value, null, 2); }
+      catch (_) { return String(value); }
+    }
+
+    function renderMessage(record) {
+      const role = String(record.role || "").toLowerCase();
+      const type = role === "user" ? "user" : "assistant";
+      const speaker = record.speaker || (type === "user" ? "You" : "Z");
+      const card = element("article", `message-card ${type}`);
+      const head = element("header", "message-head");
+      const label = element("div");
+      label.append(element("span", "message-speaker", speaker));
+      if (record.phase) label.append(element("span", "message-phase", record.phase));
+      head.append(label, element("time", "event-time", record.time || ""));
+      const body = element("div", "message-body");
+      appendMarkdown(body, record.text);
+      card.append(head, body);
+      return card;
+    }
+
+    function renderReasoning(record) {
+      const details = element("details", "activity-detail");
+      const summary = element("summary");
+      const label = element("span", "event-summary");
+      label.append(element("strong", "", "Thinking"), document.createTextNode(record.redacted ? " · redacted" : ""));
+      summary.append(label, element("span", "event-time", record.time || ""));
+      let populated = false;
+      details.addEventListener("toggle", () => {
+        if (!details.open || populated) return;
+        populated = true;
+        const body = element("div", "detail-body");
+        body.append(element("p", "detail-text", record.redacted ? "This thinking content was redacted by the provider." : (record.text || "No thinking text was recorded.")));
+        details.append(body);
+      });
+      details.append(summary);
+      return details;
+    }
+
+    function renderTool(record, result) {
+      const details = element("details", "activity-detail");
+      const summary = element("summary");
+      const label = element("span", "event-summary");
+      const status = result ? (result.ok ? "success" : "error") : "pending";
+      const duration = result?.duration_ms !== undefined ? ` · ${result.duration_ms}ms` : "";
+      const argument = keyArgument(record.input);
+      label.append(
+        element("strong", "", record.name || "Tool"),
+        document.createTextNode(" · "),
+        element("span", status === "success" ? "success" : status === "error" ? "failure" : "pending", status),
+        document.createTextNode(`${duration}${argument ? ` · ${argument}` : ""}`),
+      );
+      summary.append(label, element("span", "event-time", record.time || result?.time || ""));
+      let populated = false;
+      details.addEventListener("toggle", () => {
+        if (!details.open || populated) return;
+        populated = true;
+        const body = element("div", "detail-body");
+        body.append(element("p", "detail-label", "Arguments"), element("pre", "detail-code", prettyValue(record.input) || "No arguments"));
+        body.append(element("p", "detail-label", "Result"), element("pre", "detail-code", result ? prettyValue(result.output) : "Pending"));
+        details.append(body);
+      });
+      details.append(summary);
+      return details;
+    }
+
+    function renderUsageActivity(record) {
+      const details = element("details", "activity-detail");
+      const summary = element("summary");
+      const label = element("span", "event-summary");
+      const model = [record.provider, record.model].filter(Boolean).join(":") || "model unavailable";
+      const tokens = Number(record.input_tokens || 0) + Number(record.output_tokens || 0);
+      label.append(element("strong", "", "Usage"), document.createTextNode(` · ${model} · ${compact(tokens)} tokens`));
+      summary.append(label, element("span", "event-time", record.time || ""));
+      let populated = false;
+      details.addEventListener("toggle", () => {
+        if (!details.open || populated) return;
+        populated = true;
+        const body = element("div", "detail-body");
+        const values = [
+          ["Input", compact(record.input_tokens)],
+          ["Output", compact(record.output_tokens)],
+          ["Cache read", compact(record.cache_read_tokens)],
+          ["Cache write", compact(record.cache_write_tokens)],
+          ["Duration", record.duration_ms == null ? "Unavailable" : `${record.duration_ms}ms`],
+          ["First token", record.ttft_ms == null ? "Unavailable" : `${record.ttft_ms}ms`],
+        ];
+        body.append(element("pre", "detail-code", values.map(([key, value]) => `${key}: ${value}`).join("\n")));
+        details.append(body);
+      });
+      details.append(summary);
+      return details;
+    }
+
+    function renderOrphanToolResult(record) {
+      return renderTool({ name: "Tool result", input: { tool_use_id: record.tool_use_id }, time: record.time }, record);
+    }
+
+    function renderBanner(record) {
+      const interrupted = record.type === "interrupted";
+      const banner = element("div", `system-banner ${interrupted ? "interrupted" : ""}`);
+      banner.append(element("strong", "", interrupted ? "Interrupted" : (record.kind || "Notice")), document.createTextNode(` · ${record.message || record.text || ""}`));
+      return banner;
+    }
+
+    function renderThreadFeed() {
+      if (!threadData) return;
+      const activity = Array.isArray(threadData.activity) ? threadData.activity : [];
+      const results = new Map();
+      for (const record of activity) {
+        if (record.type === "tool_result" && record.tool_use_id) results.set(record.tool_use_id, record);
+      }
+      const pairedResultIds = new Set();
+      const visible = [];
+      for (const record of activity) {
+        const paired = record.type === "tool_use" && record.id ? results.get(record.id) : undefined;
+        if (paired) pairedResultIds.add(record.id);
+        if (record.type === "tool_result" && record.tool_use_id && pairedResultIds.has(record.tool_use_id)) continue;
+        const role = String(record.role || "").toLowerCase();
+        const matchesFilter = threadFilter === "all"
+          || (threadFilter === "user" && record.type === "message" && role === "user")
+          || (threadFilter === "assistant" && record.type === "message" && role === "assistant")
+          || (threadFilter === "activity" && record.type !== "message");
+        const matchesSearch = !threadSearch || searchText(record, paired).includes(threadSearch);
+        if (matchesFilter && matchesSearch) visible.push({ record, paired });
+      }
+
+      const visibleMessages = visible.filter(item => item.record.type === "message").length;
+      const visibleActivity = visible.length - visibleMessages;
+      const stats = document.getElementById("threadStats");
+      stats.firstElementChild.textContent = `${visibleMessages} message${visibleMessages === 1 ? "" : "s"} · ${visibleActivity} activit${visibleActivity === 1 ? "y" : "ies"}`;
+
+      if (!visible.length) {
+        transcript.replaceChildren(element("div", "thread-empty", activity.length ? "NO MATCHING THREAD ACTIVITY" : "THIS THREAD HAS NO ACTIVITY"));
+        return;
+      }
+
+      const nodes = visible.map(({ record, paired }) => {
+        if (record.type === "message") return renderMessage(record);
+        if (record.type === "reasoning") return renderReasoning(record);
+        if (record.type === "tool_use") return renderTool(record, paired);
+        if (record.type === "tool_result") return renderOrphanToolResult(record);
+        if (record.type === "usage") return renderUsageActivity(record);
+        if (record.type === "notice" || record.type === "interrupted") return renderBanner(record);
+        return renderBanner({ type: "notice", kind: record.type || "Activity", message: searchText(record) });
+      });
+      transcript.replaceChildren(...nodes);
+    }
+
+    function renderThread(data) {
+      threadData = data;
+      const activity = Array.isArray(data.activity) ? data.activity : [];
+      const messageCount = data.total_messages ?? activity.filter(record => record.type === "message").length;
+      currentThreadId = data.id || currentThreadId;
+      lastThreadId = currentThreadId;
+      history.replaceState({}, "", routeUrl("threads", currentThreadId));
+      document.getElementById("threadsNav").href = routeUrl("threads", currentThreadId);
+      document.getElementById("gitNav").href = routeUrl("git", currentThreadId);
+      document.getElementById("threadTitle").textContent = data.title || "Active Thread";
+      document.getElementById("threadMeta").textContent = `${data.id || currentThreadId} · ${messageCount} messages · ${data.total_events ?? activity.length} events`;
+      document.getElementById("threadStats").lastElementChild.textContent = `${data.total_events ?? activity.length} events`;
+      renderThreadFeed();
+    }
+
+    function showThreadError(message) {
+      threadData = null;
+      const panel = element("div", "error-panel");
+      panel.style.marginTop = "10vh";
+      panel.append(element("h2", "", "Thread unavailable"), element("p", "", message));
+      transcript.replaceChildren(panel);
+      document.getElementById("threadMeta").textContent = currentThreadId;
+      document.getElementById("threadStats").firstElementChild.textContent = "0 messages · 0 activity";
+      document.getElementById("threadStats").lastElementChild.textContent = "0 events";
+    }
+
+    async function loadThread(haptic = false) {
+      if (currentView !== "threads") return;
+      stopThreadRequest();
+      const version = routeVersion;
+      const requestedId = currentThreadId;
+      const controller = new AbortController();
+      threadController = controller;
+      threadRefresh.classList.add("loading");
+      threadRefresh.disabled = true;
+      transcript.replaceChildren(element("div", "loading-state", "LOADING THREAD ACTIVITY"));
+      if (haptic) tg?.HapticFeedback?.impactOccurred?.("light");
+      try {
+        await ensureThreadLibraries();
+        if (controller.signal.aborted || threadController !== controller || currentView !== "threads" || routeVersion !== version || currentThreadId !== requestedId) return;
+        const data = await telegramFetch(`/api/threads/${encodeURIComponent(requestedId)}?t=${Date.now()}`, { signal: controller.signal });
+        if (controller.signal.aborted || threadController !== controller || currentView !== "threads" || routeVersion !== version || currentThreadId !== requestedId) return;
+        renderThread(data);
+      } catch (error) {
+        if (error?.name !== "AbortError" && threadController === controller && currentView === "threads" && routeVersion === version && currentThreadId === requestedId) {
+          showThreadError(error instanceof Error ? error.message : "Unknown error.");
+        }
+      } finally {
+        if (threadController === controller) {
+          threadController = null;
+          threadRefresh.classList.remove("loading");
+          threadRefresh.disabled = false;
+        }
+      }
+    }
+
+    function gitSection(kicker, title, count) {
+      const wrapper = element("section", "git-section");
+      const head = element("div", "git-section-head");
+      const titles = element("div");
+      titles.append(element("p", "section-kicker", kicker), element("h2", "", title));
+      head.append(titles, element("span", "section-count", count));
+      wrapper.append(head);
+      return wrapper;
+    }
+
+    function pathParts(path) {
+      const parts = String(path || "").split("/");
+      const name = parts.pop() || path || "file";
+      return { name, directory: parts.join("/") || "." };
+    }
+
+    function renderRepositoryCard(data) {
+      const repository = data.repository;
+      const files = data.files || {};
+      const staged = Array.isArray(files.staged) ? files.staged.length : 0;
+      const unstaged = Array.isArray(files.unstaged) ? files.unstaged.length : 0;
+      const untracked = Array.isArray(files.untracked) ? files.untracked.length : 0;
+      const changed = staged + unstaged + untracked;
+      const card = element("section", "repo-card");
+      const head = element("div", "repo-head");
+      const identity = element("div", "row-main");
+      identity.append(element("p", "section-kicker", "Current checkout"), element("div", "row-title", repository.name || "Repository"));
+      const source = repository.source === "thread" ? "thread project" : "bot root";
+      head.append(identity, element("span", "repo-source", source));
+
+      const branchLine = element("div", "branch-line");
+      branchLine.append(
+        element("span", "branch-mark"),
+        element("span", "branch-name", repository.branch || "HEAD"),
+        element("span", "head-hash", repository.head || "unborn"),
+      );
+      const upstream = element("p", "upstream", repository.upstream ? `TRACKS ${repository.upstream}` : "NO UPSTREAM CONFIGURED");
+      const sync = element("div", "sync-row");
+      if (repository.detached) sync.append(element("span", "sync-chip behind", "DETACHED HEAD"));
+      if (repository.ahead) sync.append(element("span", "sync-chip ahead", `↑ ${repository.ahead} AHEAD`));
+      if (repository.behind) sync.append(element("span", "sync-chip behind", `↓ ${repository.behind} BEHIND`));
+      if (!repository.ahead && !repository.behind && repository.upstream) sync.append(element("span", "sync-chip clean", "IN SYNC"));
+      sync.append(element("span", `sync-chip ${repository.clean ? "clean" : ""}`, repository.clean ? "WORKTREE CLEAN" : `${changed} CHANGE${changed === 1 ? "" : "S"}`));
+
+      const metrics = element("div", "git-metrics");
+      for (const [value, label, tone] of [[staged, "staged", "staged"], [unstaged, "unstaged", "unstaged"], [untracked, "untracked", "untracked"]]) {
+        const metric = element("div", `git-metric ${tone}`);
+        metric.append(element("span", "git-metric-value", String(value)), element("span", "git-metric-label", label));
+        metrics.append(metric);
+      }
+      card.append(head, branchLine, upstream, sync, metrics);
+      return card;
+    }
+
+    function renderWorktrees(data) {
+      const worktrees = Array.isArray(data.worktrees) ? data.worktrees : [];
+      const wrapper = gitSection("01 / Checkouts", "Worktrees", `${worktrees.length} total`);
+      if (!worktrees.length) {
+        wrapper.append(emptyPanel("NO WORKTREES REPORTED"));
+        return wrapper;
+      }
+      const strip = element("div", "worktree-strip");
+      for (const worktree of worktrees) {
+        const worktreeFlags = Array.isArray(worktree.flags) ? worktree.flags : [];
+        const card = element("article", `worktree-card ${worktree.current ? "current" : ""}`);
+        const top = element("div", "worktree-top");
+        top.append(
+          element("span", "worktree-dot"),
+          element("span", "worktree-branch", worktree.branch || (worktreeFlags.includes("detached") ? `detached @ ${worktree.head || "HEAD"}` : "no branch")),
+        );
+        const path = element("div", "worktree-path", worktree.path || "unknown path");
+        path.title = worktree.path || "";
+        const flags = [worktree.current && "current", ...worktreeFlags].filter(Boolean);
+        card.append(top, path, element("div", "worktree-flags", flags.join(" · ") || `HEAD ${worktree.head || "unborn"}`));
+        strip.append(card);
+      }
+      wrapper.append(strip);
+      return wrapper;
+    }
+
+    function fileStatusLabel(code) {
+      return ({ M: "modified", A: "added", D: "deleted", R: "renamed", C: "copied", U: "conflict", T: "type changed", "?": "untracked" })[code] || "changed";
+    }
+
+    function renderFileGroup(kind, title, files) {
+      const group = element("div", `file-group ${kind}`);
+      const header = element("div", "file-group-title");
+      header.append(element("span", "", title), element("span", "", String(files.length)));
+      group.append(header);
+      for (const file of files) {
+        const row = element("button", "git-file-row");
+        row.type = "button";
+        row.setAttribute("aria-label", `Open ${kind} diff for ${file.path}`);
+        const parts = pathParts(file.path);
+        const copy = element("div", "file-copy");
+        copy.append(
+          element("div", "file-name", parts.name),
+          element("div", "file-dir", file.original_path ? `${fileStatusLabel(file.status)} · from ${file.original_path}` : `${fileStatusLabel(file.status)} · ${parts.directory}`),
+        );
+        row.append(element("span", "file-status", file.status || "?"), copy, element("span", "file-open", "›"));
+        row.addEventListener("click", () => openDiff(kind, file.path, row));
+        group.append(row);
+      }
+      return group;
+    }
+
+    function renderChangedFiles(data) {
+      const files = data.files || {};
+      const groups = [
+        ["staged", "Index · staged", Array.isArray(files.staged) ? files.staged : []],
+        ["unstaged", "Working tree · unstaged", Array.isArray(files.unstaged) ? files.unstaged : []],
+        ["untracked", "New · untracked", Array.isArray(files.untracked) ? files.untracked : []],
+      ];
+      const count = groups.reduce((total, group) => total + group[2].length, 0);
+      const wrapper = gitSection("02 / Changes", "Files", count ? `${count} entries` : "clean");
+      if (!count) {
+        wrapper.append(emptyPanel("NOTHING TO COMMIT · WORKTREE CLEAN"));
+        return wrapper;
+      }
+      const stack = element("div", "file-stack");
+      for (const [kind, title, entries] of groups) {
+        if (entries.length) stack.append(renderFileGroup(kind, title, entries));
+      }
+      wrapper.append(stack);
+      return wrapper;
+    }
+
+    function renderCommits(data) {
+      const commits = Array.isArray(data.commits) ? data.commits : [];
+      const wrapper = gitSection("03 / History", "Recent commits", `${commits.length} shown`);
+      if (!commits.length) {
+        wrapper.append(emptyPanel("NO COMMITS ON THIS BRANCH"));
+        return wrapper;
+      }
+      const list = element("div", "commit-list");
+      for (const commit of commits) {
+        const row = element("article", "commit-row");
+        const rail = element("div", "commit-rail");
+        rail.append(element("span", "commit-dot"));
+        const copy = element("div", "row-main");
+        const subject = element("div", "commit-subject", commit.subject || "Untitled commit");
+        subject.title = commit.subject || "";
+        const info = element("div", "commit-info");
+        info.append(
+          element("span", "commit-hash", commit.short_hash || "--------"),
+          element("span", "commit-author", commit.author || "unknown"),
+          element("time", "commit-time", commit.relative_time || ""),
+        );
+        copy.append(subject, info);
+        if (commit.refs) copy.append(element("span", "commit-ref", commit.refs));
+        row.title = commit.authored_at || "";
+        row.append(rail, copy);
+        list.append(row);
+      }
+      wrapper.append(list);
+      return wrapper;
+    }
+
+    function renderGit(data) {
+      const repository = data.repository || {};
+      if (repository.thread_id) {
+        currentGitThreadId = repository.thread_id;
+        lastThreadId = currentGitThreadId;
+        history.replaceState({}, "", routeUrl("git", currentGitThreadId));
+        document.getElementById("threadsNav").href = routeUrl("threads", currentGitThreadId);
+        document.getElementById("gitNav").href = routeUrl("git", currentGitThreadId);
+      }
+      document.getElementById("gitTitle").textContent = repository.name || "Git";
+      const source = repository.source === "thread" ? "THREAD PROJECT" : "BOT ROOT";
+      document.getElementById("gitContext").textContent = `${source} · ${repository.root || "repository"}`;
+      document.getElementById("gitContext").title = repository.root || "";
+      gitContent.replaceChildren(renderRepositoryCard(data), renderWorktrees(data), renderChangedFiles(data), renderCommits(data));
+    }
+
+    function showGitError(message) {
+      const panel = element("div", "error-panel");
+      panel.style.marginTop = "10vh";
+      panel.append(element("h2", "", "Git unavailable"), element("p", "", message));
+      gitContent.replaceChildren(panel);
+      document.getElementById("gitTitle").textContent = "Git";
+      document.getElementById("gitContext").textContent = currentGitThreadId;
+    }
+
+    async function loadGit(haptic = false) {
+      if (currentView !== "git") return;
+      if (gitController) gitController.abort();
+      const controller = new AbortController();
+      const version = routeVersion;
+      const requestedId = currentGitThreadId;
+      gitController = controller;
+      gitRefresh.classList.add("loading");
+      gitRefresh.disabled = true;
+      gitContent.replaceChildren(element("div", "loading-state", "READING REPOSITORY"));
+      if (haptic) tg?.HapticFeedback?.impactOccurred?.("light");
+      try {
+        const params = new URLSearchParams({ thread_id: requestedId, t: String(Date.now()) });
+        const data = await telegramFetch(`/api/git?${params}`, { signal: controller.signal });
+        if (controller.signal.aborted || gitController !== controller || currentView !== "git" || routeVersion !== version || currentGitThreadId !== requestedId) return;
+        renderGit(data);
+      } catch (error) {
+        if (error?.name !== "AbortError" && gitController === controller && currentView === "git" && routeVersion === version && currentGitThreadId === requestedId) {
+          showGitError(error instanceof Error ? error.message : "Unknown error.");
+        }
+      } finally {
+        if (gitController === controller) {
+          gitController = null;
+          gitRefresh.classList.remove("loading");
+          gitRefresh.disabled = false;
+        }
+      }
+    }
+
+    function setDiffBackgroundInert(inert) {
+      monitorView.inert = inert;
+      threadsView.inert = inert;
+      gitView.inert = inert;
+      document.querySelector(".bottom-nav").inert = inert;
+    }
+
+    function closeDiff() {
+      const trigger = diffTrigger;
+      diffTrigger = null;
+      if (diffController) {
+        diffController.abort();
+        diffController = null;
+      }
+      document.getElementById("diffSheet").hidden = true;
+      document.body.classList.remove("diff-open");
+      setDiffBackgroundInert(false);
+      if (trigger?.isConnected && currentView === "git") trigger.focus({ preventScroll: true });
+    }
+
+    function renderDiff(data) {
+      document.getElementById("diffMeta").textContent = `${data.lines || 0} LINES · ${compact(data.bytes || 0)} BYTES · LIMIT ${compact(data.limit_bytes || 0)}`;
+      document.getElementById("diffWarning").hidden = !data.truncated;
+      const body = document.getElementById("diffBody");
+      if (!data.content) {
+        body.replaceChildren(element("div", "diff-state", "NO TEXTUAL DIFF · THE FILE MAY BE EMPTY OR BINARY"));
+        return;
+      }
+      const code = element("pre", "diff-code");
+      for (const line of data.content.split("\n")) {
+        let tone = "";
+        if (line.startsWith("+") && !line.startsWith("+++")) tone = "add";
+        else if (line.startsWith("-") && !line.startsWith("---")) tone = "delete";
+        else if (line.startsWith("@@")) tone = "hunk";
+        else if (/^(diff |index |--- |\+\+\+ |new file|deleted file|similarity|rename )/.test(line)) tone = "meta";
+        code.append(element("span", `diff-line ${tone}`, line || " "));
+      }
+      body.replaceChildren(code);
+      body.scrollTop = 0;
+      body.scrollLeft = 0;
+    }
+
+    async function openDiff(kind, path, trigger) {
+      if (diffController) diffController.abort();
+      const controller = new AbortController();
+      const version = routeVersion;
+      diffController = controller;
+      diffTrigger = trigger;
+      document.getElementById("diffKind").textContent = `${kind} diff`;
+      document.getElementById("diffPath").textContent = path;
+      document.getElementById("diffPath").title = path;
+      document.getElementById("diffMeta").textContent = "LOADING SIZE-LIMITED DIFF";
+      document.getElementById("diffWarning").hidden = true;
+      document.getElementById("diffBody").replaceChildren(element("div", "diff-state", "LOADING DIFF"));
+      document.getElementById("diffSheet").hidden = false;
+      document.body.classList.add("diff-open");
+      setDiffBackgroundInert(true);
+      requestAnimationFrame(() => document.getElementById("diffClose").focus({ preventScroll: true }));
+      tg?.HapticFeedback?.selectionChanged?.();
+      try {
+        const params = new URLSearchParams({ thread_id: currentGitThreadId, kind, path, t: String(Date.now()) });
+        const data = await telegramFetch(`/api/git/diff?${params}`, { signal: controller.signal });
+        if (controller.signal.aborted || diffController !== controller || currentView !== "git" || routeVersion !== version) return;
+        renderDiff(data);
+      } catch (error) {
+        if (error?.name !== "AbortError" && diffController === controller) {
+          document.getElementById("diffMeta").textContent = "DIFF UNAVAILABLE";
+          document.getElementById("diffBody").replaceChildren(element("div", "diff-state", error instanceof Error ? error.message : "Unknown error."));
+        }
+      } finally {
+        if (diffController === controller) diffController = null;
+      }
+    }
+
+    monitorRefresh.addEventListener("click", () => loadMonitor(true));
+    threadRefresh.addEventListener("click", () => loadThread(true));
+    gitRefresh.addEventListener("click", () => loadGit(true));
+    document.getElementById("diffClose").addEventListener("click", closeDiff);
+    document.getElementById("diffScrim").addEventListener("click", closeDiff);
+
+    document.getElementById("threadSearch").addEventListener("input", event => {
+      threadSearch = event.target.value.trim().toLowerCase();
+      document.getElementById("clearSearch").hidden = !threadSearch;
+      renderThreadFeed();
+    });
+
+    document.getElementById("clearSearch").addEventListener("click", () => {
+      const input = document.getElementById("threadSearch");
+      input.value = "";
+      input.dispatchEvent(new Event("input"));
+      input.focus();
+    });
+
+    document.getElementById("threadFilters").addEventListener("click", event => {
+      const button = event.target.closest("[data-filter]");
+      if (!button) return;
+      threadFilter = button.dataset.filter;
+      for (const pill of document.querySelectorAll("[data-filter]")) {
+        const active = pill === button;
+        pill.classList.toggle("active", active);
+        pill.setAttribute("aria-pressed", String(active));
+      }
+      renderThreadFeed();
+    });
+
+    document.querySelector(".bottom-nav").addEventListener("click", event => {
+      const link = event.target.closest("[data-nav]");
+      if (!link) return;
+      event.preventDefault();
+      if (link.dataset.nav === "threads") navigate("threads", lastThreadId || "active");
+      else if (link.dataset.nav === "git") navigate("git", lastThreadId || "active");
+      else navigate("monitor");
+    });
+
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape" && !document.getElementById("diffSheet").hidden) closeDiff();
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && currentView === "monitor" && Date.now() - lastMonitorLoadedAt >= 30000) loadMonitor(false);
+    });
+
+    window.addEventListener("focus", () => {
+      if (currentView === "monitor" && Date.now() - lastMonitorLoadedAt >= 30000) loadMonitor(false);
+    });
+
+    window.addEventListener("popstate", () => activateRoute(routeFromLocation(false)));
+
+    const initialRoute = routeFromLocation(true);
+    history.replaceState({}, "", routeUrl(initialRoute.view, initialRoute.id));
+    activateRoute(initialRoute);
+  </script>
+</body>
+</html>
