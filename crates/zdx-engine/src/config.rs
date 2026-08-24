@@ -1841,6 +1841,7 @@ fn default_deepseek_provider() -> ProviderConfig {
         models: vec![
             "deepseek-v4-pro".to_string(),
             "deepseek-v4-flash".to_string(),
+            "deepseek-v4-flash-vision-exp".to_string(),
         ],
         ..Default::default()
     }
@@ -1969,6 +1970,7 @@ fn default_opencode_go_provider() -> ProviderConfig {
         models: vec![
             "gpt-5.6-luna".to_string(),
             "grok-4.5".to_string(),
+            "glm-5.3".to_string(),
             "glm-5.2".to_string(),
             "kimi-k3".to_string(),
             "kimi-k2.6".to_string(),
@@ -1998,7 +2000,11 @@ fn default_minimax_provider() -> ProviderConfig {
 fn default_zai_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["glm-5.2".to_string(), "glm-4.7-flash".to_string()],
+        models: vec![
+            "glm-5.3".to_string(),
+            "glm-5.2".to_string(),
+            "glm-4.7-flash".to_string(),
+        ],
         ..Default::default()
     }
 }
