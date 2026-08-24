@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::{ToolContext, ToolDefinition, ToolOutput};
 
-const PARALLEL_SEARCH_URL: &str = "https://api.parallel.ai/v1beta/search";
+const PARALLEL_SEARCH_URL: &str = "https://api.parallel.ai/v1/search";
 
 /// Returns the tool definition for the `web_search` tool.
 pub fn definition() -> ToolDefinition {
@@ -263,7 +263,7 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
         objective: objective.map(str::to_string),
         search_queries,
         max_results,
-        mode: "agentic",
+        mode: "advanced",
     };
 
     let response = match send_search_request(&request, &api_key).await {
