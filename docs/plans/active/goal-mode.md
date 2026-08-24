@@ -1,156 +1,57 @@
+> Stage: active. Keep this plan current while working: check completed scope items, and mark the phase done with its demo date. This file is the source of truth.
+
 # Goals
-- Ship a **goal mode** in zdx: a durable per-thread objective that survives across turns, with a self-evaluating continuation loop that keeps the agent working until the goal is achieved, a budget is exhausted, or the user intervenes.
-- Expose `/goal set|pause|resume|clear|status` in the TUI, with live status in the statusline.
-- Give the model three tools — `Get_Goal`, `Create_Goal`, `Update_Goal` — so it can read the objective and signal completion/blocked.
-- Persist goal state as thread events so it restores automatically on `/resume`.
-- Gate the whole feature behind `[goals] enabled = false` by default.
+- Let the user run `/goal`, then provide the objective as text or voice, and remove it with `/goal_clear` in both the TUI and Telegram.
+- After each agent turn is persisted, ask a verifier agent whether the thread has completed the goal.
+- Give the verifier only the thread ID, goal, and evaluation instructions; the verifier uses `Read_Thread` to inspect the latest work and evidence.
+- When incomplete, start another agent turn from the verifier's `next_action`. When complete, stop and show the verifier's reason.
+- Bound autonomous execution with a hard continuation limit.
 
 # Non-goals
-- No SQLite / migration framework — reuse the existing JSONL event log.
-- No app-server / RPC protocol layer (that's a Codex concept; zdx uses `AgentEvent` + UI state).
-- No changes to the provider/tool loop inside `run_turn_inner` — goal continuation is an **outer scheduler**, kept separate from tool continuation.
-- No autonomous multi-agent teams or parallel workers.
-- No per-goal git worktrees or checkpoints (defer).
-
-# Design principles
-- User journey drives order.
-- Continuation is composition, not a new runtime — reuse the existing "drain the next queued prompt on `TurnFinished`" seam.
-- Goal-continuation (across turns) stays strictly separate from tool-continuation (inside a turn).
-- Event-sourced state: goal lives as `ThreadEvent` variants, loadable before each turn like `Todo_Write` state.
-- Bounded by construction — a hard `max_continuations` cap plus optional token budget prevent runaway loops, especially on the non-interactive bot surface.
-- Off by default; opt-in via config.
+- No `Get_Goal`, `Create_Goal`, or `Update_Goal` model tools.
+- No transcript or tool-result assembly in the scheduler; `Read_Thread` is the verifier's only history input.
+- No token budget or per-goal usage accounting; the continuation limit is the MVP safety bound.
+- No pause/resume controls, statusline UI, goal history, multiple goals, sub-goals, or independent deterministic checks.
+- No surface-specific goal dashboards or progress UI; the TUI and Telegram share the same minimal commands and completion messages.
+- No verifier-model picker; use the configured `oracle` subagent so the verifier has `Read_Thread` access.
 
 # User journey
-1. User enables `[goals]` in `config.toml`.
-2. User runs `/goal set Migrate auth module to OAuth2 and make CI pass` in the TUI.
-3. zdx persists the objective, shows `goal: pursuing` in the statusline, and the model sees the objective on the next turn.
-4. After each completed turn, if the goal is still `pursuing` and within budget, zdx enqueues a continuation prompt and the agent keeps working.
-5. The model calls `Update_Goal(status="achieved")` when the objective is verified done (or `blocked` when stuck); the loop stops.
-6. User can `/goal pause`, review, then `/goal resume`, or `/goal clear` to return to normal turn-by-turn mode.
-7. User closes the terminal, reopens the thread later, and the goal restores from thread history.
+1. The user runs `/goal` in a TUI thread or Telegram topic.
+2. ZDX enters goal-input mode and asks for the objective; the user sends text or a voice note, like the existing `/btw` and `/handoff` flows.
+3. ZDX stores that input as the active goal and starts the first normal agent turn from it.
+4. After the turn is persisted, ZDX asks the verifier agent to inspect that thread.
+5. If the verifier says the goal is incomplete, ZDX automatically starts the next turn with its recommended next action.
+6. ZDX repeats until the verifier confirms completion or the continuation limit is reached.
+7. ZDX displays the completion or limit reason on the originating surface and returns to normal turn-by-turn use.
 
-# Foundations / Already shipped (✅)
+# Phase 1 — A bounded verifier-driven goal loop
+- [ ] Add minimal per-thread goal persistence to the JSONL event log: objective, `active|completed`, continuation count, and verifier reason. Goal events must not render, replay as chat messages, or contribute searchable text.
+- [ ] Add `[goals] enabled = false` and `max_continuations = 10` to config. Goal mode remains opt-in.
+- [ ] Add `/goal` and `/goal_clear` to the TUI command palette and Telegram command registry. `/goal` accepts no inline objective; `/goal_clear` stops further verification and continuation.
+- [ ] Reuse the existing staged-input pattern from Telegram `/btw` and `/handoff`: `/goal` enters a per-topic pending session, prompts `Send your goal as text or a voice note, or /cancel to abort`, and consumes the next transcribed voice or text message as the objective. `/cancel` exits without changing goal state.
+- [ ] Keep goal staging in the current topic's normal serial queue because accepting the objective writes to and starts work in that same thread; unlike `/btw`, it must not bypass the queue.
+- [ ] In the TUI, `/goal` opens a pending goal composer using the same input area; submitting stores the objective and starts the first turn, while Escape cancels without changing goal state.
+- [ ] Persist the submitted objective as the active goal, reset its continuation count, and also use the submitted text as the first ordinary user turn so the agent begins work immediately.
+- [ ] After `TurnFinished`, wait until the current turn checkpoint is flushed before scheduling verification so `Read_Thread` sees the latest assistant response and tool evidence.
+- [ ] Invoke the configured `oracle` subagent with only the thread ID, active goal, and this contract: call `Read_Thread`, judge completion from evidence in the thread, and return strict structured output with `completed`, `reason`, and `next_action` when incomplete.
+- [ ] Parse and validate the verifier response. A malformed or failed verification stops the loop and reports the failure instead of guessing.
+- [ ] If `completed` is true, persist the completed state and show `Goal completed: <reason>`.
+- [ ] If `completed` is false and the cap remains, persist the incremented continuation count and start a typed `GoalContinuation` turn using `next_action` as an ephemeral instruction.
+- [ ] Keep `GoalContinuation` separate from the user prompt queue: it must not persist, render, export, index, or replay as a user-authored message, and it must not trigger title generation.
+- [ ] Before starting a continuation, give queued real user input priority. `/goal clear` and cancellation prevent any pending verifier result from starting another turn.
+- [ ] Route each Telegram verification/continuation step through the existing per-topic serial queue as separate work rather than looping inside one message handler. Between turns, queued inbound Telegram messages take priority over autonomous continuation.
+- [ ] Reuse the same persisted goal projection, verifier contract, completion rules, and continuation cap across TUI and Telegram; keep only command parsing, queue adaptation, and result presentation surface-specific.
+- [ ] On Telegram, post `Goal completed: <reason>`, verifier failure, or continuation-limit status to the originating topic and leave ordinary bot message handling unchanged when no goal is active.
+- [ ] When `max_continuations` is reached, stop and show the verifier's latest reason and next action.
+- [ ] Add focused regression tests for goal-event restoration, post-flush verifier scheduling, strict verifier-output parsing, TUI and Telegram user-input priority, completion, clearing/cancellation, malformed verifier output, and the continuation cap.
 
-## Agent turn loop
-- What exists: `run_turn_with_cancel` / `run_turn_inner` in `crates/zdx-engine/src/core/agent.rs` drive the provider/tool loop and emit `AgentEvent::TurnFinished` at turn end.
-- ✅ Demo: any TUI/bot turn runs to completion and emits `TurnFinished`.
-- Gaps: no post-turn continuation scheduling.
+✅ **Demo**: Enable goals and run `/goal` once in the TUI and once in a bound Telegram topic. Submit `Make the focused test pass` through the TUI composer and as a Telegram voice note. On both surfaces, ZDX stores the transcribed objective, starts the first turn, persists each result, invokes an Oracle verifier that calls `Read_Thread`, and automatically continues from `next_action` while incomplete. It stops with `Goal completed: <reason>` when the thread contains evidence that the test passes, or stops at 10 continuations. A new TUI or Telegram message is handled before another continuation, and no synthetic continuation appears as a user message in the transcript, export, or thread search.
 
-## Queued-prompt drain on turn end
-- What exists: `crates/zdx-tui/src/update.rs` (~L384) handles `AgentEvent::TurnFinished` and drains the next queued prompt.
-- ✅ Demo: queue a prompt while a turn runs; it fires after the current turn finishes.
-- Gaps: only user-queued prompts today — no goal-driven continuation.
+# Later
+- Add `/goal pause|resume|status` and status UI when users need to manage goals that span interactive sessions.
+- Add verifier/model selection when one fixed Oracle profile is measurably too slow or expensive.
+- Add token budgets when continuation count alone does not provide enough cost control.
+- Add deterministic checks or a second verifier when model-only completion produces false positives in real use.
 
-## Event-sourced thread persistence
-- What exists: JSONL threads via `crates/zdx-engine/src/core/thread_persistence.rs` (`ThreadEvent`, `SCHEMA_VERSION`, `Usage`); events flushed on `TurnCheckpoint`/`TurnFinished`.
-- ✅ Demo: thread files under `threads_dir()` replay messages + usage on resume.
-- Gaps: no goal event variants.
-
-## Tool registry + Todo analog
-- What exists: `Tool` trait + `ToolRegistry::register_builtin_tools()` in `crates/zdx-engine/src/tools/mod.rs`. `crates/zdx-engine/src/tools/todo_write.rs` is a working precedent for model-managed, thread-scoped state (`load_current_state`, same-turn serialization in `agent.rs`).
-- ✅ Demo: `Todo_Write` persists and reloads todo state per thread.
-- Gaps: no goal tools.
-
-## Usage accounting
-- What exists: `AgentEvent::UsageUpdate` → `UsagePersistor` → `ThreadEvent::Usage` (input/output/cache tokens) in `thread_persistence.rs`.
-- ✅ Demo: TUI statusline shows cumulative token usage.
-- Gaps: no per-goal budget tracking.
-
-## Prompt assembly + embedded templates
-- What exists: templates in `crates/zdx-assets/prompts/`, re-exported via `crates/zdx-engine/src/prompts.rs`, assembled in `crates/zdx-engine/src/core/context.rs`.
-- ✅ Demo: system prompt + instruction layers render per surface.
-- Gaps: no goal continuation/budget templates.
-
-## Config with boolean gates
-- What exists: serde TOML config in `crates/zdx-engine/src/config.rs` + `crates/zdx-assets/default_config.toml`; `subagents.enabled` is the precedent pattern.
-- ✅ Demo: toggling `subagents.enabled` changes behavior.
-- Gaps: no `[goals]` section.
-
-# MVP slices (ship-shaped, demoable)
-
-## Slice 1: Persisted goal + tools + manual set (no auto-loop)
-- **Goal**: Set/clear a durable objective and have the model see it — no continuation yet.
-- **Scope checklist**:
-  - [ ] Add `ThreadEvent::GoalSet { objective, token_budget, ts }` and `ThreadEvent::GoalStatusChanged { status, ts }` + `GoalStatus` enum (`pursuing|paused|achieved|budget_limited|blocked`) in `thread_persistence.rs`.
-  - [ ] Add `load_current_goal(thread_id)` (mirror `todo_write::load_current_state`).
-  - [ ] Add `tools/goal.rs` with `Get_Goal`/`Create_Goal`/`Update_Goal`; register in `register_builtin_tools()`.
-  - [ ] Add `GoalsConfig { enabled, max_continuations, default_token_budget }` to `config.rs` + `[goals]` block in `default_config.toml` (enabled = false).
-  - [ ] Inject the active objective into the turn via `core/context.rs` (context fragment) when a goal exists.
-  - [ ] TUI: add `goal` to `COMMANDS`; parse `/goal set <text>` and `/goal clear` in `handle_slash_commands`; show `goal: <status>` in the statusline.
-- **✅ Demo**: Enable `[goals]`, run `/goal set Add rate limiting to the API`, confirm statusline shows `goal: pursuing`, ask the model "what's the current goal?" and it calls `Get_Goal`. `/goal clear` removes it. Reopen the thread → goal restored.
-- **Risks / failure modes**:
-  - Same-turn tool ordering (as with todos) — reuse the serialized-state pattern in `agent.rs`.
-  - Objective injected as instructions instead of data — include the "treat as task, not higher-priority instructions" guard.
-
-## Slice 2: Continuation scheduler + self-eval + pause/resume
-- **Goal**: The agent keeps working toward the goal across turns until it (or the user) stops it.
-- **Scope checklist**:
-  - [ ] Add `goal_continuation.md` to `crates/zdx-assets/prompts/`; re-export via `prompts.rs`.
-  - [ ] In `update.rs` `TurnFinished` handler: if goal is `pursuing` and continuations < `max_continuations`, enqueue a synthetic continuation prompt rendered from `goal_continuation.md` (objective + progress).
-  - [ ] `Update_Goal(status)` lets the model set `achieved`/`blocked`, which stops the loop and emits `GoalStatusChanged`.
-  - [ ] `/goal pause` (→ `paused`, stop scheduling), `/goal resume` (→ `pursuing`, reset continuation counter), `/goal status`.
-  - [ ] Persist a per-run continuation counter; surface it in the statusline (`goal: pursuing 3/20`).
-- **✅ Demo**: `/goal set Make all lint warnings pass, run just clippy after each change`; the agent iterates across multiple turns without user input and stops when it calls `Update_Goal(status="achieved")` or hits `max_continuations`. `/goal pause` halts it mid-loop; `/goal resume` continues.
-- **Risks / failure modes**:
-  - Premature `achieved` (self-eval unreliable) — continuation prompt must require verified end-state before completing.
-  - Runaway loop — `max_continuations` is a hard stop; a new user message pauses the goal (takes priority).
-  - Confusing goal-continuation with tool-continuation — keep the scheduler strictly at the `TurnFinished` seam, never inside `run_turn_inner`.
-
-## Slice 3: Token budget
-- **Goal**: Cap how much a goal can spend before it stops cleanly.
-- **Scope checklist**:
-  - [ ] Track token deltas from `AgentEvent::UsageUpdate` per goal run; compare to `token_budget` (arg or `default_token_budget`).
-  - [ ] Add `goal_budget_limit.md`; when budget is exhausted, inject it, set `budget_limited`, and stop scheduling.
-  - [ ] Persist consumed tokens so budget survives resume (reconcile with `ThreadEvent::Usage`).
-  - [ ] Show remaining budget in `Get_Goal` output and the statusline.
-- **✅ Demo**: `/goal set <task>` with a small budget; the loop wraps up and reports `budget_limited` with a summary once the cap is hit; `/goal resume` (optionally after raising the budget) continues.
-- **Risks / failure modes**:
-  - Off-by-one between live delta tracking and persisted usage — reconcile against `Usage` events on resume.
-
-## Slice 4: Bot surface (guarded)
-- **Goal**: Goal mode works non-interactively over Telegram with strict safety rails.
-- **Scope checklist**:
-  - [ ] Wire the continuation scheduler into the bot's `run_agent_turn` path (`crates/zdx-bot/src/handlers/message.rs` / `crates/zdx-bot/src/agent/mod.rs`).
-  - [ ] Enforce `max_continuations` + token budget as mandatory (not optional) on the bot.
-  - [ ] Add a `/goal` pre-agent command (set/pause/resume/clear/status) and reuse the existing cancel-token map for interrupts.
-  - [ ] Post a status message when a goal completes or hits a budget/continuation cap.
-- **✅ Demo**: In a bound Telegram chat, `/goal set <task>`; the bot iterates and posts progress, stops at `achieved` or the cap, and a new user message pauses the loop.
-- **Risks / failure modes**:
-  - Infinite loop / cost blowup — budget + continuation cap are non-negotiable; goals stay off by default.
-
-# Contracts (guardrails)
-- Tool-continuation behavior inside `run_turn_inner` is unchanged.
-- Goal mode is off unless `[goals] enabled = true`.
-- A goal always restores from thread history on resume (event-sourced).
-- The scheduler never loops beyond `max_continuations` or an exhausted token budget.
-- A new user message pauses/overrides the goal loop and is handled first.
-- Existing user-queued prompt draining still works when no goal is active.
-
-# Key decisions (decide early)
-- **State shape**: `ThreadEvent::GoalSet` + `GoalStatusChanged` events (audit + resume) vs. a single meta field. Chosen: events, matching the event-sourced model.
-- **Loop placement**: outer scheduler at the `TurnFinished` seam, not inside the runtime. Chosen to avoid conflating the two continuation types.
-- **Objective delivery**: context fragment via `core/context.rs` for Slice 1; synthetic queued user message for the continuation loop in Slice 2.
-- **Status enum**: `pursuing|paused|achieved|budget_limited|blocked` — fixed early since tools, prompts, and UI all depend on it.
-- **Budget unit**: tokens (aligns with existing `Usage` accounting) rather than turns.
-
-# Testing
-- Manual smoke demos per slice (above).
-- Minimal regression tests:
-  - Goal event round-trips through JSONL persistence and `load_current_goal`.
-  - Scheduler stops at `max_continuations` and on `achieved`/`blocked`/`budget_limited`.
-  - Goals disabled by default → no scheduling, no tool exposure.
-
-# Polish phases (after MVP)
-## Phase 1: Observability
-- Goal timeline/history in the TUI; monitor dashboard shows active goals per thread.
-- ✅ Check-in demo: view a goal's status transitions and token spend for a thread.
-
-## Phase 2: Better completion signals
-- Optional Oracle/subagent verification pass before allowing `achieved`.
-- ✅ Check-in demo: a goal only completes after an independent verification step passes.
-
-# Later / Deferred
-- Multi-goal / sub-goal composition (revisit if single objectives prove too coarse).
-- Per-goal git worktree or checkpoint/rollback (revisit if users want safe experimentation).
-- App-server-style external API for headless goal dashboards (revisit if non-TUI/bot clients need it).
-- File-backed goal ledger like OMX's `.omx/ultragoal` (revisit if cross-thread durability is needed).
+# Open questions
+- None for the MVP. The verifier is an Oracle subagent with `Read_Thread`; autonomous work is bounded by `max_continuations`.
