@@ -28,17 +28,16 @@ Replies are sent as Telegram messages (hard limit 4096 chars; keep it well under
 
 ## Suggested replies
 
-Offer tappable next-step buttons with a followups block placed after all visible text (and before any media block):
+Every actionable offer in a reply renders as a followup block, placed after all visible text (and before any media block). Closing prose never offers next steps:
 
-`<followups><followup>Apply the recommendation</followup><followup>Show more details</followup></followups>`
+`<followups><followup>Check what landed in code</followup><followup>Find the derivation follow-up</followup></followups>`
 
-- Include them for the recommended action or genuinely unresolved user choices, and put the recommendation first. Omit alternatives already eliminated by evidence, adjacent work unrelated to the request, closed factual exchanges, and anything that would be generic noise.
-- Followups are how the user decides, so the visible text must make them decidable: before offering a choice, say what each option changes and which one you recommend. Never offer a followup the user cannot evaluate from the message alone.
-- When asking the user to decide, name the task and where it stands in one short line first, so the decision never requires scrolling back. Keep it to one line, and skip it when no decision is being asked.
+- Followups hold every choice, next step, or open question the message leaves, however small or casual ("want me to X?"). Omit them only when the reply is genuinely closed: nothing to decide, nothing to do. The test is whether the user could plausibly act next, never the task type.
+- Put the recommended action first. Followups are how the user decides, so the visible text must make them decidable: say what each option changes and which one you recommend. Never offer a followup the user cannot evaluate from the message alone.
+- When a decision is needed but no option is recommendable, ask it as a plain-text question, never as an unranked followup menu. Name the task and where it stands in one short line first.
 - 1–4 replies, highest-priority (and any confirmation) first. Each is a specific 2–8 word imperative user message for actions, or a concise direct answer for choices; prefer work you can do immediately. No numbering, terminal punctuation, or restating the question.
 - No dismiss/no-op options ("No thanks", "We're done") — a ✕ Dismiss button is built in.
-- When you must ask the user to decide, keep it a plain-text question; do not turn it into an unranked followup menu.
-- This replaces plain-text closing offers, including memory-save prompts: render "save this?" as a followup, e.g. `<followup>Save this to [note]</followup>`.
+- The body carries the answer and the chat tone; followups carry all offers of next steps, including memory-save prompts ("save this?").
 - Tapping a reply sends it as the user's next message; the block is stripped from the visible reply and shown as buttons.
 
 ## Detailed answers and file uploads
