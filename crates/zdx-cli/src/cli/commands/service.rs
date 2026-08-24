@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use zdx_engine::service::{self, Service};
 
 /// `zdx service install [--program PATH]` — write and bootstrap the launchd agents.
@@ -52,13 +52,22 @@ pub fn stop(target: &str) -> Result<()> {
     Ok(())
 }
 
-/// `zdx service restart <target>`.
+/// `zdx service restart <target> [--force]`.
 ///
 /// # Errors
-/// Returns an error if the target is unknown or launchd control fails.
-pub fn restart(target: &str) -> Result<()> {
-    for svc in Service::parse_target(target)? {
-        println!("{}", service::restart(svc)?);
+/// Returns an error if the target is unknown, active agent work blocks the
+/// restart, or launchd control fails.
+pub fn restart(target: &str, force: bool) -> Result<()> {
+    let services = Service::parse_target(target)?;
+    let statuses = service::restart_many(&services, force).map_err(|err| {
+        if err.downcast_ref::<service::RestartBlocked>().is_some() {
+            anyhow!("{err}; wait for active work to finish or retry with `--force` to interrupt it")
+        } else {
+            err
+        }
+    })?;
+    for status in statuses {
+        println!("{status}");
     }
     Ok(())
 }

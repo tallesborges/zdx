@@ -113,7 +113,7 @@ fn render_services(f: &mut Frame, app: &MonitorApp, area: Rect) {
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title("Services (Enter=toggle, r=restart)"),
+            .title("Services (Enter=toggle, r=restart, R=force)"),
     );
     f.render_widget(list, area);
 }
@@ -137,7 +137,9 @@ fn render_footer(f: &mut Frame, app: &MonitorApp, area: Rect) {
 
 fn footer_hint(section: Section) -> &'static str {
     match section {
-        Section::Services => "↑↓ navigate • Enter toggle • r restart • Tab/⇧Tab switch • q quit",
+        Section::Services => {
+            "↑↓ navigate • Enter toggle • r restart • R force • Tab/⇧Tab switch • q quit"
+        }
         Section::ActiveAgents => "↑↓ navigate • Enter inspect • Tab/⇧Tab switch • q quit",
         Section::Background => "↑↓ navigate • x kill • Tab/⇧Tab switch • q quit",
         Section::Automations => "↑↓ navigate • Tab/⇧Tab switch • q quit",

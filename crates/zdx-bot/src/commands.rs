@@ -45,7 +45,7 @@ const COMMAND_DEFS: &[CommandDef] = &[
         blocks_topic_autocreate: true,
         telegram_spec: TelegramCommandSpec {
             command: "restart",
-            description: "Restart the bot and daemon",
+            description: "Restart bot and daemon (--force overrides active agents)",
         },
     },
     CommandDef {
@@ -177,12 +177,42 @@ pub(crate) fn native_command_names() -> Vec<&'static str> {
 pub(crate) fn parse_command(text: &str) -> Option<BotCommand> {
     let trimmed = text.trim();
 
-    COMMAND_DEFS.iter().find_map(|def| {
-        def.patterns
-            .iter()
-            .any(|pattern| command_matches(trimmed, pattern))
-            .then_some(def.command)
-    })
+    if parse_restart_command(trimmed).is_some() {
+        return Some(BotCommand::Restart);
+    }
+
+    COMMAND_DEFS
+        .iter()
+        .filter(|def| def.command != BotCommand::Restart)
+        .find_map(|def| {
+            def.patterns
+                .iter()
+                .any(|pattern| command_matches(trimmed, pattern))
+                .then_some(def.command)
+        })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RestartCommand {
+    pub force: bool,
+}
+
+pub(crate) fn parse_restart_command(text: &str) -> Option<RestartCommand> {
+    let mut parts = text.split_whitespace();
+    let command = parts.next()?;
+    let is_restart = command == "/restart"
+        || command
+            .strip_prefix("/restart@")
+            .is_some_and(|username| !username.is_empty());
+    if !is_restart {
+        return None;
+    }
+
+    match (parts.next(), parts.next()) {
+        (None, None) => Some(RestartCommand { force: false }),
+        (Some("--force"), None) => Some(RestartCommand { force: true }),
+        _ => None,
+    }
 }
 
 pub(crate) fn blocks_topic_autocreate(command: BotCommand) -> bool {
@@ -299,7 +329,7 @@ mod tests {
 
     use super::{
         BotCommand, bypasses_queue, command_matches, is_topic_blocking_command, parse_command,
-        parse_model_command, parse_thinking_command, telegram_command_specs,
+        parse_model_command, parse_restart_command, parse_thinking_command, telegram_command_specs,
     };
 
     #[test]
@@ -307,10 +337,7 @@ mod tests {
         assert_eq!(parse_command("/new"), Some(BotCommand::New));
         assert_eq!(parse_command(" /new@zdx_bot "), Some(BotCommand::New));
         assert_eq!(parse_command("/restart"), Some(BotCommand::Restart));
-        assert_eq!(
-            parse_command("/restart@zdx_bot please"),
-            Some(BotCommand::Restart)
-        );
+        assert_eq!(parse_command("/restart@zdx_bot please"), None);
         assert_eq!(parse_command("/status"), Some(BotCommand::Status));
         assert_eq!(parse_command(" /status@zdx_bot "), Some(BotCommand::Status));
         assert_eq!(parse_command("/whereami"), Some(BotCommand::WhereAmI));
@@ -324,6 +351,23 @@ mod tests {
             Some(BotCommand::Handoff)
         );
         assert_eq!(parse_command("/handoff please"), None);
+    }
+
+    #[test]
+    fn parses_restart_force_strictly() {
+        assert!(!parse_restart_command("/restart").unwrap().force);
+        assert!(parse_restart_command("/restart --force").unwrap().force);
+        assert!(
+            parse_restart_command(" /restart@zdx_bot --force ")
+                .unwrap()
+                .force
+        );
+        assert_eq!(
+            parse_command("/restart@zdx_bot --force"),
+            Some(BotCommand::Restart)
+        );
+        assert!(parse_restart_command("/restart force").is_none());
+        assert!(parse_restart_command("/restart --force now").is_none());
     }
 
     #[test]

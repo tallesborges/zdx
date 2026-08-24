@@ -428,6 +428,10 @@ enum ServiceCommands {
         /// Service to restart: bot, daemon, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
+
+        /// Restart even when agent runs are active
+        #[arg(long)]
+        force: bool,
     },
     /// Show launchd registration and live process status
     Status {
@@ -1347,7 +1351,7 @@ fn dispatch_service(command: ServiceCommands, context: &DispatchContext<'_>) -> 
         ServiceCommands::Uninstall { target } => commands::service::uninstall(&target),
         ServiceCommands::Start { target } => commands::service::start(&target),
         ServiceCommands::Stop { target } => commands::service::stop(&target),
-        ServiceCommands::Restart { target } => commands::service::restart(&target),
+        ServiceCommands::Restart { target, force } => commands::service::restart(&target, force),
         ServiceCommands::Status { json } => commands::service::status(json),
         ServiceCommands::Logs { target, lines, err } => {
             commands::service::logs(&target, lines, err)

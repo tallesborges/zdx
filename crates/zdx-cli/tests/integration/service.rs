@@ -1,4 +1,5 @@
 use assert_cmd::cargo::cargo_bin_cmd;
+use predicates::prelude::*;
 use serde_json::Value;
 use tempfile::tempdir;
 
@@ -62,4 +63,49 @@ fn test_service_restart_requires_install() {
         .args(["service", "restart", "bot"])
         .assert()
         .failure();
+}
+
+#[test]
+fn test_service_restart_help_lists_force_flag() {
+    cargo_bin_cmd!("zdx")
+        .args(["service", "restart", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--force"));
+}
+
+#[test]
+fn test_service_restart_blocks_active_agent_unless_forced() {
+    let dir = tempdir().unwrap();
+    let agents_dir = dir.path().join("run/agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+    std::fs::write(
+        agents_dir.join("active.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "pid": std::process::id(),
+            "started_at": "2026-01-01T00:00:00Z",
+            "thread_id": "test-thread",
+            "surface": "test",
+            "model": "test-model"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", dir.path())
+        .env("HOME", dir.path())
+        .args(["service", "restart", "bot"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("restart blocked"))
+        .stderr(predicate::str::contains("--force"));
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", dir.path())
+        .env("HOME", dir.path())
+        .args(["service", "restart", "bot", "--force"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not installed"));
 }

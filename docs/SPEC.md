@@ -85,7 +85,7 @@ ZDX solves this with a boring, reliable core:
 - `zdx imagine -p, --prompt <PROMPT> [--out PATH] [--model MODEL] [--aspect RATIO] [--size SIZE]` — generate images with Gemini image models
 - `zdx mcp servers|auth <SERVER>|logout <SERVER>|tools <SERVER>|schema <SERVER> <TOOL>|call <SERVER> <TOOL> --json '{...}'` — inspect, authenticate, and call configured MCP servers through the helper CLI
 - `zdx automations list|validate|daemon|runs [NAME] [--date*] [--json]|run <NAME>`
-- `zdx service install|uninstall|start|stop|restart [bot|daemon|all]`, `zdx service status [--json]`, `zdx service logs [bot|daemon|all] [--lines N] [--err]` — manage the long-lived `bot`/`daemon` services under launchd (macOS)
+- `zdx service install|uninstall|start|stop [bot|daemon|all]`, `zdx service restart [bot|daemon|all] [--force]`, `zdx service status [--json]`, `zdx service logs [bot|daemon|all] [--lines N] [--err]` — manage the long-lived `bot`/`daemon` services under launchd (macOS)
 - `zdx threads list [--all]|show <ID>|resume [ID]|search [QUERY] [--date*] [--limit N] [--json]|tools [TOOL] [--failed] [--date*] [--limit N] [--json]`
 - `zdx config init|path`
 
@@ -118,12 +118,13 @@ ZDX solves this with a boring, reliable core:
 
 ### `zdx service ...` (macOS/launchd)
 
-- launchd owns the lifetime of the `bot` and `daemon` services: start at login, restart on crash. Telegram `/restart` restarts the daemon first, then exits the bot so launchd restarts it.
+- launchd owns the lifetime of the `bot` and `daemon` services: start at login, restart on crash. Telegram `/restart` restarts the daemon first, then exits the bot so launchd restarts it; `/restart --force` explicitly allows interrupting active runs.
 - Agents run `~/.local/bin/zdx` (the `just install` target), never the calling binary, so `restart` always picks up the currently installed build.
 - Agents are launched via `zsh -c 'exec …'` so `~/.zshenv` is sourced; launchd sources no shell startup files, and provider API keys live there.
 - `install` refuses when the service is already running outside launchd; PID-file uniqueness continues to prevent duplicate instances.
 - `stop` is durable: the service stays stopped until an explicit `start`, across reboots.
 - `restart` waits for the old process to exit before the replacement starts, and reports `PID old → new`.
+- `restart` refuses while any agent run is active across ZDX surfaces. A multi-service restart checks once before changing either service. CLI `--force`, Telegram `/restart --force`, and Monitor `R` bypass the guard and may interrupt those runs; Monitor `r` remains guarded.
 - Service stdout/stderr are captured to `$ZDX_HOME/run/logs/{bot,daemon}.{out,err}`.
 - Plists set `ZDX_SERVICE_SUPERVISOR=launchd`; the bot uses this to self-mark as supervised so `/restart` is honored with no monitor running.
 - `zdx monitor` is a control panel over the same operations, not an independent supervisor; it never spawns service processes itself.

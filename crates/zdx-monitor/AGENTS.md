@@ -14,7 +14,7 @@ Rows come from `zdx_engine::core::thread_index::browse_threads()` (`threads.sqli
 
 ## Services tab
 
-The **Services** tab is a control panel over launchd, not a supervisor. `load_services()` maps `zdx_engine::service::Service::ALL` through `service::state()`, and `Enter`/`r` delegate to `zdx_engine::service::{start,stop,restart}`. Monitor never spawns service processes itself, so restart always picks up `~/.local/bin/zdx` rather than the binary the monitor was launched from. Lifetime (login start, crash restart, `/exit` restart) belongs to launchd; install the agents with `zdx service install`.
+The **Services** tab is a control panel over launchd, not a supervisor. `load_services()` maps `zdx_engine::service::Service::ALL` through `service::state()`. `Enter` delegates to `start`/`stop`, `r` requests a guarded restart, and `R` explicitly forces restart through active agent work. Monitor never spawns service processes itself, so restart always picks up `~/.local/bin/zdx` rather than the binary the monitor was launched from. Lifetime (login start, crash restart, `/restart` exit) belongs to launchd; install the agents with `zdx service install`.
 
 ## Checks
 - Default final verification after code changes: `just ci` from repo root

@@ -1427,6 +1427,10 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
     terminal.show_cursor().context("show cursor")
 }
 
+fn restart_force_for_key(key: KeyCode) -> bool {
+    key == KeyCode::Char('R')
+}
+
 fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
     if app.model_picker.is_some() {
         handle_model_picker_key(app, key.code);
@@ -1515,7 +1519,7 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
         KeyCode::Char('x') if app.active_section == Section::Background => {
             kill_selected_background(app);
         }
-        KeyCode::Char('r') => restart_selected_service(app),
+        KeyCode::Char('r' | 'R') => restart_selected_service(app, restart_force_for_key(key.code)),
         KeyCode::Enter => {
             if app.active_section == Section::ActiveAgents {
                 open_agent_overlay(app);
@@ -2071,14 +2075,22 @@ fn toggle_selected_service(app: &mut MonitorApp) {
     }
 }
 
-fn restart_selected_service(app: &mut MonitorApp) {
+fn restart_selected_service(app: &mut MonitorApp, force: bool) {
     if app.active_section == Section::Services
         && let Some(service) = app.services.get(app.selected_index)
     {
-        match service::restart(service.service) {
+        match service::restart(service.service, force) {
             Ok(message) => app.set_status(message),
             Err(err) => {
-                app.set_status(format!("Failed to restart {}: {err}", service.name));
+                if let Some(blocked) = err.downcast_ref::<service::RestartBlocked>() {
+                    let active_runs = blocked.active_runs();
+                    let suffix = if active_runs == 1 { "" } else { "s" };
+                    app.set_status(format!(
+                        "Restart blocked: {active_runs} active agent run{suffix}; wait or press R to force"
+                    ));
+                } else {
+                    app.set_status(format!("Failed to restart {}: {err}", service.name));
+                }
             }
         }
     }
@@ -3342,6 +3354,12 @@ mod log_view_tests {
         .iter()
         .map(|s| (*s).to_string())
         .collect()
+    }
+
+    #[test]
+    fn restart_keys_distinguish_guarded_and_forced_modes() {
+        assert!(!restart_force_for_key(KeyCode::Char('r')));
+        assert!(restart_force_for_key(KeyCode::Char('R')));
     }
 
     #[test]

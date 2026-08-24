@@ -9,7 +9,9 @@ use super::status::current_status_message;
 use super::{ReplyContext, escape_html, post_thread_header, thread_id_for_chat};
 use crate::agent;
 use crate::bot::context::BotContext;
-use crate::commands::{BotCommand, ModelSubcommand, ThinkingSubcommand, parse_command};
+use crate::commands::{
+    BotCommand, ModelSubcommand, ThinkingSubcommand, parse_command, parse_restart_command,
+};
 use crate::telegram::markdown::{to_telegram_html, truncate_telegram_html};
 use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup};
 
@@ -231,13 +233,9 @@ pub(super) async fn handle_restart_command(
     if !incoming.images.is_empty() || !incoming.audios.is_empty() {
         return Ok(false);
     }
-    if !incoming
-        .text
-        .as_deref()
-        .is_some_and(|text| matches!(parse_command(text), Some(BotCommand::Restart)))
-    {
+    let Some(restart) = incoming.text.as_deref().and_then(parse_restart_command) else {
         return Ok(false);
-    }
+    };
 
     if !zdx_engine::pidfile::is_supervised("bot") {
         context
@@ -252,12 +250,29 @@ pub(super) async fn handle_restart_command(
         return Ok(true);
     }
 
-    let daemon_restart = tokio::task::spawn_blocking(|| service::restart(Service::Daemon))
-        .await
-        .context("join daemon restart task")?;
+    let daemon_restart =
+        tokio::task::spawn_blocking(move || service::restart(Service::Daemon, restart.force))
+            .await
+            .context("join daemon restart task")?;
     let daemon_status = match daemon_restart {
         Ok(status) => status,
         Err(err) => {
+            if let Some(blocked) = err.downcast_ref::<service::RestartBlocked>() {
+                let active_runs = blocked.active_runs();
+                let suffix = if active_runs == 1 { "" } else { "s" };
+                context
+                    .client()
+                    .send_message(
+                        incoming.chat_id,
+                        &format!(
+                            "⚠️ Restart blocked: <b>{active_runs}</b> active agent run{suffix}.\n\nWait for active work to finish, or use <code>/restart --force</code> to interrupt active work."
+                        ),
+                        reply_to_message_id,
+                        incoming.message_thread_id,
+                    )
+                    .await?;
+                return Ok(true);
+            }
             let error = escape_html(&format!("{err:#}"));
             context
                 .client()

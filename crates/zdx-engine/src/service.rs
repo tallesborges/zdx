@@ -10,6 +10,7 @@ use std::{fmt, fs};
 
 use anyhow::{Context, Result, bail};
 
+use crate::agent_activity;
 use crate::config::paths;
 use crate::pidfile::{self, ServiceStatus};
 
@@ -85,6 +86,36 @@ impl fmt::Display for Service {
         f.write_str(self.name())
     }
 }
+
+/// Restart refusal caused by active agent work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RestartBlocked {
+    active_runs: usize,
+}
+
+impl RestartBlocked {
+    #[must_use]
+    pub fn active_runs(&self) -> usize {
+        self.active_runs
+    }
+}
+
+impl fmt::Display for RestartBlocked {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (noun, verb) = if self.active_runs == 1 {
+            ("run", "is")
+        } else {
+            ("runs", "are")
+        };
+        write!(
+            f,
+            "restart blocked: {} active agent {noun} {verb} still running",
+            self.active_runs
+        )
+    }
+}
+
+impl std::error::Error for RestartBlocked {}
 
 /// Observable state of a service: launchd registration plus live process status.
 pub struct ServiceState {
@@ -280,11 +311,39 @@ pub fn stop(service: Service) -> Result<String> {
     Ok(format!("Stopped {service}"))
 }
 
-/// Restarts the agent, waiting for the old process to exit first.
+/// Restarts one agent, waiting for the old process to exit first.
 ///
 /// # Errors
-/// Returns an error if the agent is not installed or `launchctl` fails.
-pub fn restart(service: Service) -> Result<String> {
+/// Returns an error if active agent work exists and `force` is false, the
+/// agent is not installed, or `launchctl` fails.
+pub fn restart(service: Service, force: bool) -> Result<String> {
+    let mut messages = restart_many(&[service], force)?;
+    Ok(messages.remove(0))
+}
+
+/// Restarts multiple agents after one shared active-work preflight.
+///
+/// # Errors
+/// Returns an error before changing any service if active agent work exists
+/// and `force` is false. Also returns an error if an agent is not installed or
+/// `launchctl` fails.
+pub fn restart_many(services: &[Service], force: bool) -> Result<Vec<String>> {
+    ensure_restart_allowed(force)?;
+    services.iter().copied().map(restart_unchecked).collect()
+}
+
+fn ensure_restart_allowed(force: bool) -> Result<()> {
+    if force {
+        return Ok(());
+    }
+    let active_runs = agent_activity::list_active().len();
+    if active_runs > 0 {
+        return Err(RestartBlocked { active_runs }.into());
+    }
+    Ok(())
+}
+
+fn restart_unchecked(service: Service) -> Result<String> {
     require_installed(service)?;
     // A stale/missing PID file does not mean launchd dropped the job, and
     // bootstrapping a job the domain still holds fails with `5: Input/output error`.
@@ -508,5 +567,25 @@ mod tests {
         );
         assert!(plist.contains("/tmp/a&amp;b/zdx"));
         assert!(plist.contains("/tmp/&lt;root&gt;"));
+    }
+
+    #[test]
+    fn restart_guard_blocks_active_agent_unless_forced() {
+        let _home = crate::test_support::temp_zdx_home();
+        let run = crate::agent_activity::start(crate::agent_activity::StartParams {
+            kind: Some("test"),
+            ..Default::default()
+        })
+        .expect("active run marker");
+
+        let err = ensure_restart_allowed(false).expect_err("restart must be blocked");
+        let blocked = err
+            .downcast_ref::<RestartBlocked>()
+            .expect("typed restart refusal");
+        assert_eq!(blocked.active_runs(), 1);
+        assert!(ensure_restart_allowed(true).is_ok());
+
+        drop(run);
+        assert!(ensure_restart_allowed(false).is_ok());
     }
 }
