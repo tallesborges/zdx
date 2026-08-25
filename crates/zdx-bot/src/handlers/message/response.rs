@@ -14,34 +14,23 @@ pub(super) async fn send_final_response(
     let parsed = parse_final_response(final_text);
     let has_text = !parsed.text.trim().is_empty();
 
-    if !has_text && parsed.media_paths.is_empty() && parsed.followups.is_empty() {
-        if let Some(msg_id) = status_message_id
-            && let Err(err) = context
-                .client()
-                .delete_message(incoming.chat_id, msg_id)
-                .await
-        {
-            tracing::warn!(msg_id, %err, "Failed to delete empty status message");
-        }
-        return Ok(());
-    }
-
-    if has_text {
-        send_text_response(
-            context,
-            incoming,
-            reply_ctx,
-            status_message_id,
-            parsed.text.as_str(),
-        )
-        .await?;
-    } else if let Some(msg_id) = status_message_id
+    // The reply is always a fresh message so its Telegram timestamp marks when
+    // the turn actually ended and completion raises a notification (edits do not).
+    if let Some(msg_id) = status_message_id
         && let Err(err) = context
             .client()
             .delete_message(incoming.chat_id, msg_id)
             .await
     {
-        tracing::warn!(msg_id, %err, "Failed to delete empty status message");
+        tracing::warn!(msg_id, %err, "Failed to delete status message");
+    }
+
+    if !has_text && parsed.media_paths.is_empty() && parsed.followups.is_empty() {
+        return Ok(());
+    }
+
+    if has_text {
+        send_text_response(context, incoming, reply_ctx, parsed.text.as_str()).await?;
     }
 
     send_media_responses(context, incoming, reply_ctx, &parsed.media_paths, has_text).await?;
@@ -60,21 +49,11 @@ async fn send_text_response(
     context: &BotContext,
     incoming: &crate::types::IncomingMessage,
     reply_ctx: &ReplyContext,
-    status_message_id: Option<i64>,
     text: &str,
 ) -> Result<()> {
     tracing::info!(chat_id = incoming.chat_id, "Sending reply");
 
     if let Some(ref reply_parameters) = reply_ctx.cross_topic_reply_parameters {
-        if let Some(msg_id) = status_message_id
-            && let Err(err) = context
-                .client()
-                .delete_message(incoming.chat_id, msg_id)
-                .await
-        {
-            tracing::warn!(msg_id, %err, "Failed to delete status message");
-        }
-
         context
             .client()
             .send_message_with_reply_params(
@@ -87,59 +66,23 @@ async fn send_text_response(
         return Ok(());
     }
 
-    if let Some(msg_id) = status_message_id {
-        let edit_result = context
-            .client()
-            .edit_message_text(incoming.chat_id, msg_id, text, None)
-            .await;
-        if let Err(ref err) = edit_result {
-            tracing::warn!(msg_id, chat_id = incoming.chat_id, %err, "Failed to edit status message");
-            if let Err(del_err) = context
+    let send_result = context
+        .client()
+        .send_message(
+            incoming.chat_id,
+            text,
+            reply_ctx.reply_to_message_id,
+            reply_ctx.topic_id,
+        )
+        .await;
+    if let Err(ref e) = send_result {
+        if e.to_string().contains("REPLY_MESSAGE_ID_INVALID") {
+            context
                 .client()
-                .delete_message(incoming.chat_id, msg_id)
-                .await
-            {
-                tracing::warn!(msg_id, err = %del_err, "Failed to delete stale status message");
-            }
-            let send_result = context
-                .client()
-                .send_message(
-                    incoming.chat_id,
-                    text,
-                    reply_ctx.reply_to_message_id,
-                    reply_ctx.topic_id,
-                )
-                .await;
-            if let Err(ref e) = send_result {
-                if e.to_string().contains("REPLY_MESSAGE_ID_INVALID") {
-                    context
-                        .client()
-                        .send_message(incoming.chat_id, text, None, reply_ctx.topic_id)
-                        .await?;
-                } else {
-                    send_result?;
-                }
-            }
-        }
-    } else {
-        let send_result = context
-            .client()
-            .send_message(
-                incoming.chat_id,
-                text,
-                reply_ctx.reply_to_message_id,
-                reply_ctx.topic_id,
-            )
-            .await;
-        if let Err(ref e) = send_result {
-            if e.to_string().contains("REPLY_MESSAGE_ID_INVALID") {
-                context
-                    .client()
-                    .send_message(incoming.chat_id, text, None, reply_ctx.topic_id)
-                    .await?;
-            } else {
-                send_result?;
-            }
+                .send_message(incoming.chat_id, text, None, reply_ctx.topic_id)
+                .await?;
+        } else {
+            send_result?;
         }
     }
 

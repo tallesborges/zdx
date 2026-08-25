@@ -522,3 +522,13 @@ When the Telegram bot is used in a forum-enabled supergroup:
   - works inside topics and DMs (not `General`); the generated prompt is previewed with Accept / Discard buttons and regenerates on a new message
   - Accept runs the generated prompt as the user's real message in the current topic (a normal agent turn); the preview message is kept (edited) as the turn's reply anchor
   - Discard / `/cancel` delete the staging messages and leave the thread untouched
+
+---
+
+## 17) Telegram turn status and final reply (`zdx-bot`)
+
+- While a turn runs, the bot keeps one live status message carrying the current activity and the Cancel button, edited in place with a debounce.
+- When the turn completes, the status message is deleted and the assistant reply is sent as a new message. The reply's Telegram timestamp is the turn's end time, it carries no `edited` marker, and it raises a normal message notification (Telegram does not notify on edits).
+- The new reply keeps the same reply target the status message used; an invalid reply target falls back to sending without one.
+- A turn that produces no text, media, or follow-ups deletes the status message and posts nothing.
+- Cancelled and failed turns still resolve in place: the status message is edited to `Cancelled ✓` or to the error text (failures then post the retry buttons as a separate message).
