@@ -23,10 +23,10 @@ pub fn convert_styled_line(styled_line: &StyledLine) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Renders a slice of transcript cells into ratatui lines, inserting one blank
-/// line between cells, and returns the starting line index of each cell
-/// (parallel to `cells`). Intended for static/persisted transcripts, so any
-/// in-progress cell renders at spinner frame 0.
+/// Renders a slice of transcript cells into ratatui lines, separated by
+/// `gap_after`, and returns the starting line index of each cell (parallel to
+/// `cells`). Intended for static/persisted transcripts, so any in-progress cell
+/// renders at spinner frame 0.
 ///
 /// Consumers that need to map a rendered line back to its cell — e.g. drilling
 /// into a tool call — use the offsets.
@@ -36,12 +36,20 @@ pub fn cells_to_lines_with_offsets(
 ) -> (Vec<Line<'static>>, Vec<usize>) {
     let mut lines = Vec::new();
     let mut offsets = Vec::with_capacity(cells.len());
-    for cell in cells {
+    for (index, cell) in cells.iter().enumerate() {
         offsets.push(lines.len());
-        for styled in cell.display_lines(width, 0) {
+        let styled_lines = cell.display_lines(width, 0);
+        let gap = if styled_lines.is_empty() {
+            0
+        } else {
+            crate::cell::gap_after(cell, cells.get(index + 1))
+        };
+        for styled in styled_lines {
             lines.push(convert_styled_line(&styled));
         }
-        lines.push(Line::default());
+        for _ in 0..gap {
+            lines.push(Line::default());
+        }
     }
     (lines, offsets)
 }

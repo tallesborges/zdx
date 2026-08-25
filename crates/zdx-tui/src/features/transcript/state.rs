@@ -383,8 +383,9 @@ impl TranscriptState {
     pub fn remove_cell_by_id(&mut self, id: super::CellId) -> bool {
         if let Some(index) = self.cells.iter().position(|c| c.id() == id) {
             self.cells.remove(index);
-            // Everything from the removed slot shifts up.
-            self.mark_line_info_dirty_from(index);
+            // Everything from the removed slot shifts up, and the preceding
+            // cell's gap depends on what now follows it.
+            self.mark_line_info_dirty_from(index.saturating_sub(1));
             true
         } else {
             false
@@ -397,7 +398,9 @@ impl TranscriptState {
             self.pending_user_cell_id = Some(*id);
         }
         self.cells.push(cell);
-        self.mark_line_info_dirty_from(self.cells.len() - 1);
+        // The previous cell is included: its trailing gap depends on the kind
+        // of cell that now follows it.
+        self.mark_line_info_dirty_from(self.cells.len().saturating_sub(2));
     }
 
     /// Activates the pending user cell for the current turn.
@@ -440,6 +443,20 @@ impl TranscriptState {
     // ========================================================================
     // Cell Mutation Methods (auto-invalidate line info)
     // ========================================================================
+
+    /// Toggles the collapsed state of the thinking cell at `index`.
+    ///
+    /// Returns `true` when a thinking cell was toggled.
+    pub fn toggle_thinking_collapsed(&mut self, index: usize) -> bool {
+        let toggled = self
+            .cells
+            .get_mut(index)
+            .is_some_and(super::HistoryCell::toggle_thinking_collapsed);
+        if toggled {
+            self.mark_line_info_dirty_from(index);
+        }
+        toggled
+    }
 
     /// Sets tool result for a cell by `tool_use_id`.
     pub fn set_tool_result_for(

@@ -9,7 +9,7 @@
 
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
-use zdx_transcript::{convert_style, convert_styled_line};
+use zdx_transcript::{HistoryCell, convert_style, convert_styled_line, gap_after};
 
 use crate::common::ratatui_text;
 use crate::state::TuiState;
@@ -60,7 +60,8 @@ fn render_transcript_full(state: &TuiState, width: usize) -> Vec<Line<'static>> 
     // Clear and rebuild the position map
     state.transcript.position_map.clear();
 
-    for cell in state.transcript.cells() {
+    let cells = state.transcript.cells();
+    for (index, cell) in cells.iter().enumerate() {
         let styled_lines = cell.display_lines_cached(
             width,
             state.spinner_frame / SPINNER_SPEED_DIVISOR,
@@ -93,12 +94,14 @@ fn render_transcript_full(state: &TuiState, width: usize) -> Vec<Line<'static>> 
             lines.push(converted);
         }
 
-        // Add blank line between cells (also tracked in position map)
-        state
-            .transcript
-            .position_map
-            .push(LineMapping::new(String::new(), None));
-        lines.push(Line::default());
+        // Separate cells with the shared gap rule (also tracked in position map)
+        for _ in 0..cell_gap(&styled_lines, cell, cells.get(index + 1)) {
+            state
+                .transcript
+                .position_map
+                .push(LineMapping::new(String::new(), None));
+            lines.push(Line::default());
+        }
     }
 
     lines
@@ -138,10 +141,10 @@ fn render_transcript_lazy(
     // (including those below the viewport) instead of just the visible slice.
     let max_lines = state.transcript.viewport_height;
 
-    'cells: for (cell_idx, cell) in state.transcript.cells()[visible.cell_range.clone()]
-        .iter()
-        .enumerate()
-    {
+    let cells = state.transcript.cells();
+    let first_visible = visible.cell_range.start;
+
+    'cells: for (cell_idx, cell) in cells[visible.cell_range.clone()].iter().enumerate() {
         let styled_lines = cell.display_lines_cached(
             width,
             state.spinner_frame / SPINNER_SPEED_DIVISOR,
@@ -187,17 +190,20 @@ fn render_transcript_lazy(
             }
         }
 
-        // Add blank line after each cell (matching full render behavior)
-        // This keeps line counts consistent between full and lazy render
-        state
-            .transcript
-            .position_map
-            .push(LineMapping::new(String::new(), None));
-        lines.push(Line::default());
-        global_line_idx += 1;
+        // Separate cells with the same gap rule as the full render, so line
+        // counts stay consistent between the two paths.
+        let gap = cell_gap(&styled_lines, cell, cells.get(first_visible + cell_idx + 1));
+        for _ in 0..gap {
+            state
+                .transcript
+                .position_map
+                .push(LineMapping::new(String::new(), None));
+            lines.push(Line::default());
+            global_line_idx += 1;
 
-        if lines.len() >= max_lines {
-            break 'cells;
+            if lines.len() >= max_lines {
+                break 'cells;
+            }
         }
     }
 
@@ -226,16 +232,28 @@ pub fn calculate_cell_line_counts(
 
     cells[from_index..]
         .iter()
-        .map(|cell| {
+        .enumerate()
+        .map(|(offset, cell)| {
             let lines = cell.display_lines_cached(
                 effective_width,
                 state.spinner_frame / SPINNER_SPEED_DIVISOR,
                 &state.transcript.wrap_cache,
             );
-            // +1 for blank line between cells
-            lines.len() + 1
+            lines.len() + cell_gap(&lines, cell, cells.get(from_index + offset + 1))
         })
         .collect()
+}
+
+/// Blank lines rendered after `cell`, or `0` when the cell renders nothing.
+///
+/// Wraps `zdx_transcript::gap_after` so an invisible cell (e.g. an empty
+/// reasoning placeholder) does not leave a stray blank line behind.
+fn cell_gap(styled_lines: &[StyledLine], cell: &HistoryCell, next: Option<&HistoryCell>) -> usize {
+    if styled_lines.is_empty() {
+        0
+    } else {
+        gap_after(cell, next)
+    }
 }
 
 // ============================================================================
@@ -263,6 +281,16 @@ fn detect_line_interaction(styled_line: &StyledLine) -> Option<LineInteraction> 
 
     if has_tool_icon && has_tool_name {
         return Some(LineInteraction::OpenToolDetail);
+    }
+
+    // Only the thinking header line carries the prefix style; its body lines
+    // are plain `Thinking` spans.
+    if styled_line
+        .spans
+        .iter()
+        .any(|span| !span.text.is_empty() && span.style == TranscriptStyle::ThinkingPrefix)
+    {
+        return Some(LineInteraction::ToggleThinking);
     }
 
     let has_image_placeholder = styled_line

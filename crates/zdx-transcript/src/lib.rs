@@ -17,7 +17,9 @@ mod tool_detail;
 mod wrap;
 
 pub use build::build_transcript_from_events;
-pub use cell::{CellId, ChildToolEntry, ChildToolState, HistoryCell, ToolState, tool_command_text};
+pub use cell::{
+    CellId, ChildToolEntry, ChildToolState, HistoryCell, ToolState, gap_after, tool_command_text,
+};
 pub use convert::{
     cells_to_lines_with_offsets, convert_style, convert_styled_line, wrap_line_to_width,
 };

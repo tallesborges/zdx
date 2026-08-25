@@ -426,6 +426,20 @@ pub fn handle_mouse(
                     });
                 }
 
+                // Clicking a thinking header expands/collapses that block.
+                let toggles_thinking = transcript
+                    .position_map
+                    .get_by_global_line(line)
+                    .is_some_and(|mapping| {
+                        matches!(mapping.interaction, Some(LineInteraction::ToggleThinking))
+                    });
+                if toggles_thinking
+                    && let Some(cell_idx) = transcript.scroll.cell_index_for_line(line)
+                    && transcript.toggle_thinking_collapsed(cell_idx)
+                {
+                    return None;
+                }
+
                 if transcript.register_click(line, col) {
                     if !transcript.select_word_at(line, col) {
                         transcript.start_selection(line, col);

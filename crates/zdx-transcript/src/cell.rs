@@ -18,6 +18,17 @@ use crate::style::{Style, StyledLine, StyledSpan};
 use crate::text::{ratatui_width, truncate_with_ellipsis};
 use crate::wrap::{WrapCache, render_prefixed_content};
 
+/// Label on the thinking cell header line.
+const THINKING_LABEL: &str = "Thinking";
+/// Disclosure markers for the thinking header. Both are single-width geometric
+/// shapes with no emoji presentation, so terminals render them as text.
+const THINKING_COLLAPSED_MARKER: &str = "▶";
+const THINKING_EXPANDED_MARKER: &str = "▼";
+/// Columns of hanging indent under the thinking header.
+const THINKING_INDENT: usize = 2;
+/// Lines of live reasoning kept visible while a thinking block streams.
+const THINKING_STREAM_TAIL_LINES: usize = 3;
+
 fn value_as_trimmed_str<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
     let value = input.get(key)?.as_str()?.trim();
     (!value.is_empty()).then_some(value)
@@ -396,6 +407,9 @@ pub enum HistoryCell {
         replay: Option<ReplayToken>,
         is_streaming: bool,
         is_interrupted: bool,
+        /// Whether the finalized block renders as a single summary line.
+        /// Ignored while streaming, which always shows the live tail.
+        is_collapsed: bool,
     },
 
     /// Timing/duration cell (shows tool execution time).
@@ -508,6 +522,7 @@ impl HistoryCell {
             replay: None,
             is_streaming: true,
             is_interrupted: false,
+            is_collapsed: true,
         }
     }
 
@@ -590,6 +605,20 @@ impl HistoryCell {
                 *replay_slot = replay;
             }
             _ => panic!("finalize_thinking called on non-thinking cell"),
+        }
+    }
+
+    /// Toggles whether a thinking cell renders collapsed.
+    ///
+    /// Returns `true` when this was a thinking cell (and the state flipped),
+    /// `false` for every other cell kind.
+    pub fn toggle_thinking_collapsed(&mut self) -> bool {
+        match self {
+            HistoryCell::Thinking { is_collapsed, .. } => {
+                *is_collapsed = !*is_collapsed;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -1108,18 +1137,10 @@ impl HistoryCell {
                 content,
                 is_streaming,
                 is_interrupted,
+                is_collapsed,
                 ..
             } => {
-                let prefix = "Thinking: ";
-                // Trim trailing whitespace for finalized thinking blocks to avoid extra vertical space.
-                // Keep raw content for streaming to preserve cursor position on newlines.
-                let display_content = if *is_streaming {
-                    content.as_str()
-                } else {
-                    content.trim_end()
-                };
-
-                let mut lines = render_thinking_markdown(prefix, display_content, width);
+                let mut lines = render_thinking(content, *is_streaming, *is_collapsed, width);
 
                 // Add streaming indicator if still streaming
                 if *is_streaming
@@ -1252,9 +1273,10 @@ impl HistoryCell {
                 content,
                 is_streaming,
                 is_interrupted,
+                is_collapsed,
                 ..
             } => {
-                if *is_streaming {
+                let base = if *is_streaming {
                     // Reasoning is plain word-wrap (no markdown commit points), and
                     // we keep showing the live tail. Re-wrap at a coarse byte
                     // granularity instead of every delta so fast streams reuse the
@@ -1269,7 +1291,8 @@ impl HistoryCell {
                     streaming_discriminator(len_bucket, true, *is_interrupted)
                 } else {
                     streaming_discriminator(content.len(), false, *is_interrupted)
-                }
+                };
+                (base << 1) | usize::from(*is_collapsed)
             }
             HistoryCell::Timing { duration, .. } => {
                 // Duration doesn't change, use millis as discriminator
@@ -1307,40 +1330,159 @@ impl HistoryCell {
     }
 }
 
-fn render_thinking_markdown(prefix: &str, content: &str, width: usize) -> Vec<StyledLine> {
+/// Blank lines rendered after `cell`, given the cell that follows it.
+///
+/// Tool and thinking cells form one continuous activity run and pack tight;
+/// everything else (user, assistant, system, timing) keeps a blank line of air
+/// after it. The last cell always keeps its trailing blank so the transcript
+/// does not touch the input box.
+///
+/// Every consumer that lays out cells must use this — the chat transcript's
+/// full and lazy render paths, its line-count bookkeeping, and
+/// `cells_to_lines_with_offsets` — or scroll math and selection drift apart.
+pub fn gap_after(cell: &HistoryCell, next: Option<&HistoryCell>) -> usize {
+    fn is_activity(cell: &HistoryCell) -> bool {
+        matches!(
+            cell,
+            HistoryCell::Tool { .. } | HistoryCell::Thinking { .. }
+        )
+    }
+
+    match next {
+        Some(next) if is_activity(cell) && is_activity(next) => 0,
+        _ => 1,
+    }
+}
+
+fn render_thinking(
+    content: &str,
+    is_streaming: bool,
+    is_collapsed: bool,
+    width: usize,
+) -> Vec<StyledLine> {
     if content.trim() == "<!-- -->" {
         return Vec::new();
     }
 
-    let prefix_width = ratatui_width(prefix);
-    let effective_width = width.max(prefix_width + 10);
-    let content_width = effective_width.saturating_sub(prefix_width);
-    let mut lines = crate::markdown::render_markdown_preserving_soft_breaks(content, content_width);
-    let trailing_newlines = content.chars().rev().take_while(|ch| *ch == '\n').count();
-    lines.extend((0..trailing_newlines).map(|_| StyledLine::empty()));
-
-    for (index, line) in lines.iter_mut().enumerate() {
+    let body_width = width.saturating_sub(THINKING_INDENT).max(10);
+    let mut body =
+        crate::markdown::render_markdown_preserving_soft_breaks(content.trim_end(), body_width);
+    for line in &mut body {
         for span in &mut line.spans {
             span.style = Style::Thinking;
         }
+    }
+    // Reasoning deltas routinely land on a paragraph break, so the rendered
+    // body often ends in blank lines. Drop them, otherwise the live tail below
+    // is spent on whitespace instead of the text being written.
+    while body.last().is_some_and(is_blank_line) {
+        body.pop();
+    }
+
+    if !is_streaming {
+        if body.is_empty() {
+            return Vec::new();
+        }
+        if is_collapsed {
+            return vec![collapsed_thinking_line(&body, width)];
+        }
+    }
+
+    // While streaming, only the tail is shown so a long reasoning block does
+    // not push the rest of the transcript off screen.
+    let truncated = is_streaming && body.len() > THINKING_STREAM_TAIL_LINES;
+    if truncated {
+        body.drain(..body.len() - THINKING_STREAM_TAIL_LINES);
+    }
+
+    let mut header_spans = vec![StyledSpan {
+        text: format!("{THINKING_EXPANDED_MARKER} {THINKING_LABEL}"),
+        style: Style::ThinkingPrefix,
+    }];
+    if truncated {
+        header_spans.push(StyledSpan {
+            text: "  …".to_string(),
+            style: Style::Thinking,
+        });
+    }
+
+    let mut lines = Vec::with_capacity(body.len() + 1);
+    lines.push(StyledLine {
+        spans: header_spans,
+    });
+    for mut line in body {
         line.spans.insert(
             0,
             StyledSpan {
-                text: if index == 0 {
-                    prefix.to_string()
-                } else {
-                    " ".repeat(prefix_width)
-                },
-                style: if index == 0 {
-                    Style::ThinkingPrefix
-                } else {
-                    Style::Plain
-                },
+                text: " ".repeat(THINKING_INDENT),
+                style: Style::Plain,
             },
         );
+        lines.push(line);
+    }
+    lines
+}
+
+fn is_blank_line(line: &StyledLine) -> bool {
+    line.spans.iter().all(|span| span.text.trim().is_empty())
+}
+
+/// Builds the single-line collapsed form: `▶ Thinking  <summary>  +N lines`.
+fn collapsed_thinking_line(body: &[StyledLine], width: usize) -> StyledLine {
+    let head = format!("{THINKING_COLLAPSED_MARKER} {THINKING_LABEL}");
+
+    let texts: Vec<String> = body
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.text.as_str())
+                .collect::<String>()
+        })
+        .collect();
+
+    // Blank lines are markdown spacing, not content: they belong in neither the
+    // summary nor the hidden-line count.
+    let summary_index = texts.iter().position(|text| !text.trim().is_empty());
+    let summary = summary_index.map_or("", |index| texts[index].trim());
+    let hidden = summary_index.map_or(0, |index| {
+        texts[index + 1..]
+            .iter()
+            .filter(|text| !text.trim().is_empty())
+            .count()
+    });
+
+    let suffix = match hidden {
+        0 => String::new(),
+        1 => "  +1 line".to_string(),
+        n => format!("  +{n} lines"),
+    };
+
+    let mut spans = vec![StyledSpan {
+        text: head.clone(),
+        style: Style::ThinkingPrefix,
+    }];
+
+    let used = ratatui_width(&head) + 2 + ratatui_width(&suffix);
+    let available = width.saturating_sub(used);
+    if !summary.is_empty() && available >= 8 {
+        spans.push(StyledSpan {
+            text: "  ".to_string(),
+            style: Style::Plain,
+        });
+        spans.push(StyledSpan {
+            text: truncate_with_ellipsis(summary, available),
+            style: Style::Thinking,
+        });
+    }
+    if !suffix.is_empty() {
+        spans.push(StyledSpan {
+            text: suffix,
+            style: Style::Thinking,
+        });
     }
 
-    lines
+    StyledLine { spans }
 }
 
 #[cfg(test)]
@@ -1370,6 +1512,27 @@ mod tests {
             "TODO src"
         );
         assert!(tool_command_text("todo_write", &serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn gap_after_packs_activity_runs_and_airs_out_prose() {
+        let tool = HistoryCell::tool_running("1", "read", serde_json::json!({}));
+        let thinking = HistoryCell::thinking_streaming("x");
+        let assistant = HistoryCell::assistant("hi");
+        let user = HistoryCell::user("hi");
+
+        // Tool/thinking runs pack tight.
+        assert_eq!(gap_after(&tool, Some(&tool)), 0);
+        assert_eq!(gap_after(&tool, Some(&thinking)), 0);
+        assert_eq!(gap_after(&thinking, Some(&tool)), 0);
+
+        // Prose keeps its blank line on both sides.
+        assert_eq!(gap_after(&tool, Some(&assistant)), 1);
+        assert_eq!(gap_after(&assistant, Some(&tool)), 1);
+        assert_eq!(gap_after(&user, Some(&thinking)), 1);
+
+        // The last cell keeps a trailing blank above the input box.
+        assert_eq!(gap_after(&tool, None), 1);
     }
 
     #[test]
@@ -1715,9 +1878,9 @@ mod tests {
         let cell = HistoryCell::thinking_streaming("Analyzing...");
         let lines = cell.display_lines(80, 0);
 
-        // Should have thinking prefix
+        // Should have the expanded thinking header
         assert!(!lines.is_empty());
-        assert_eq!(lines[0].spans[0].text, "Thinking: ");
+        assert_eq!(lines[0].spans[0].text, "▼ Thinking");
         assert_eq!(lines[0].spans[0].style, Style::ThinkingPrefix);
 
         // Should have streaming cursor
@@ -1782,9 +1945,9 @@ mod tests {
         let cell = HistoryCell::thinking_streaming("Deep analysis");
         let lines = cell.display_lines(80, 0);
 
-        // Content should use Thinking style (dim/italic)
-        assert!(lines[0].spans.len() >= 2);
-        assert_eq!(lines[0].spans[1].style, Style::Thinking);
+        // Content sits below the header and uses Thinking style (dim/italic)
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[1].spans[1].style, Style::Thinking);
     }
 
     #[test]
@@ -1799,26 +1962,51 @@ mod tests {
             .flat_map(|line| line.spans.iter().map(|span| span.text.as_str()))
             .collect();
 
-        assert_eq!(text, "Thinking: Planning skill usage for task");
+        assert_eq!(text, "▶ Thinking  Planning skill usage for task");
         assert!(!text.contains("**"));
         assert!(!text.contains("<!--"));
     }
 
     #[test]
-    fn thinking_preserves_codex_summary_body() {
+    fn finalized_thinking_collapses_and_expands_on_toggle() {
         let mut cell = HistoryCell::thinking_streaming(
             "**Planning skill usage for task**\n\nInspect the plan before editing.",
         );
         cell.finalize_thinking(None);
-        let lines = cell.display_lines(80, 0);
-        let text: Vec<String> = lines
+
+        let collapsed = cell.display_lines(80, 0);
+        assert_eq!(collapsed.len(), 1, "Finalized thinking starts collapsed");
+        let summary: String = collapsed[0]
+            .spans
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect();
+        assert_eq!(
+            summary,
+            "▶ Thinking  Planning skill usage for task  +1 line"
+        );
+
+        assert!(cell.toggle_thinking_collapsed());
+        let expanded = cell.display_lines(80, 0);
+        let text: Vec<String> = expanded
             .iter()
             .map(|line| line.spans.iter().map(|span| span.text.as_str()).collect())
             .collect();
 
-        assert_eq!(text[0], "Thinking: Planning skill usage for task");
-        assert_eq!(text[1], "          ");
-        assert_eq!(text[2], "          Inspect the plan before editing.");
+        assert_eq!(text[0], "▼ Thinking");
+        assert_eq!(text[1], "  Planning skill usage for task");
+        assert_eq!(text[2], "  ");
+        assert_eq!(text[3], "  Inspect the plan before editing.");
+    }
+
+    #[test]
+    fn toggling_collapse_changes_the_cache_key() {
+        let mut cell = HistoryCell::thinking_streaming("Line 1\nLine 2");
+        cell.finalize_thinking(None);
+
+        let collapsed_key = cell.cache_discriminator();
+        cell.toggle_thinking_collapsed();
+        assert_ne!(collapsed_key, cell.cache_discriminator());
     }
 
     #[test]
@@ -1841,7 +2029,8 @@ mod tests {
             .flat_map(|line| line.spans.iter().map(|span| span.text.as_str()))
             .collect();
 
-        assert!(text.contains("Thinking: Planning skill usage"));
+        assert!(text.contains("Planning skill usage"));
+        assert!(text.starts_with("▼ Thinking"));
         assert!(!text.contains("**"));
         assert!(!text.contains("<!--"));
         assert_eq!(lines.last().unwrap().spans.last().unwrap().text, "▌");
@@ -1849,14 +2038,11 @@ mod tests {
 
     #[test]
     fn test_thinking_prefix_width() {
-        // The thinking prefix "Thinking: " is 10 characters
-        // This test ensures the prefix width is calculated correctly
         let cell = HistoryCell::thinking_streaming("x");
         let lines = cell.display_lines(20, 0);
 
-        // Should have prefix + content on first line
-        assert!(!lines.is_empty());
-        assert_eq!(lines[0].spans[0].text, "Thinking: ");
+        assert_eq!(lines[0].spans[0].text, "▼ Thinking");
+        assert_eq!(lines[1].spans[0].text, "  ");
     }
 
     #[test]
@@ -2035,81 +2221,61 @@ mod tests {
         let cell = HistoryCell::thinking_streaming("Line 1\nLine 2\nLine 3");
         let lines = cell.display_lines(80, 0);
 
-        // Should have 3 content lines
-        assert_eq!(lines.len(), 3, "Expected 3 lines");
+        // Header line + 3 content lines
+        assert_eq!(lines.len(), 4, "Expected header + 3 lines");
+        assert_eq!(lines[0].spans[0].text, "▼ Thinking");
+        assert_eq!(lines[0].spans[0].style, Style::ThinkingPrefix);
 
-        // Debug: print what we actually get
-        for (i, line) in lines.iter().enumerate() {
-            let texts: Vec<&str> = line.spans.iter().map(|s| s.text.as_str()).collect();
-            eprintln!("Line {i}: {texts:?}");
+        // Content lines carry a short hanging indent, not the header.
+        for line in &lines[1..] {
+            assert_eq!(line.spans[0].text, "  ");
         }
-
-        // First line should have "Thinking:" prefix
-        assert_eq!(lines[0].spans[0].text, "Thinking: ");
-
-        // Second and third lines should have spaces (indentation), NOT the prefix
-        // "Thinking: " is 10 characters
-        assert_eq!(
-            lines[1].spans[0].text, "          ",
-            "Second line should be indented, not prefixed"
-        );
-        assert_eq!(
-            lines[2].spans[0].text, "          ",
-            "Third line should be indented, not prefixed"
-        );
     }
 
     #[test]
     fn test_thinking_trailing_newlines() {
-        // Streaming: should preserve trailing newlines (cursor positioning)
+        // Streaming: a delta landing on a paragraph break must not spend the
+        // visible tail on blank lines.
         let cell_streaming = HistoryCell::thinking_streaming("Text\n\n");
         let lines_streaming = cell_streaming.display_lines(80, 0);
 
-        // 3 lines: "Thinking: Text", "", ""
         assert_eq!(
             lines_streaming.len(),
-            3,
-            "Streaming should preserve trailing newlines"
+            2,
+            "Streaming shows the header plus the last written line"
         );
+        let last: String = lines_streaming[1]
+            .spans
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect();
+        assert_eq!(last, "  Text▌", "Cursor stays on the text being written");
 
-        // Finalized: should trim trailing newlines
+        // Finalized: collapses to a single summary line
         let mut cell_final = HistoryCell::thinking_streaming("Text\n\n");
         cell_final.finalize_thinking(None);
         let lines_final = cell_final.display_lines(80, 0);
 
-        // 1 line: "Thinking: Text"
         assert_eq!(
             lines_final.len(),
             1,
-            "Finalized should trim trailing newlines"
+            "Finalized thinking collapses to one line"
         );
     }
 
     #[test]
-    fn test_thinking_with_blank_lines() {
-        // Test thinking with blank lines between paragraphs
+    fn streaming_thinking_shows_only_the_tail() {
         let cell = HistoryCell::thinking_streaming("Para 1\n\nPara 2\n\nPara 3");
         let lines = cell.display_lines(80, 0);
 
-        eprintln!("\n=== Thinking with blank lines ===");
-        for (i, line) in lines.iter().enumerate() {
-            let texts: Vec<&str> = line.spans.iter().map(|s| s.text.as_str()).collect();
-            eprintln!("Line {i}: {texts:?}");
-        }
+        // 5 body lines are capped to the last 3, plus the header.
+        assert_eq!(lines.len(), 4, "Expected header + 3 tail lines");
 
-        // Should have 5 lines: Para1, blank, Para2, blank, Para3
-        assert_eq!(lines.len(), 5, "Expected 5 lines");
+        let header: String = lines[0].spans.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(header, "▼ Thinking  …", "Header marks the hidden lines");
 
-        // Only first line should have "Thinking:" prefix
-        assert_eq!(lines[0].spans[0].text, "Thinking: ");
-
-        // All other lines (including blank lines) should have indentation
-        for (i, _) in lines.iter().enumerate().skip(1) {
-            assert_eq!(
-                lines[i].spans[0].text, "          ",
-                "Line {i} should be indented, not prefixed"
-            );
-        }
+        let last: String = lines[3].spans.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(last.trim(), "Para 3▌");
     }
 
     #[test]
