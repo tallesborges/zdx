@@ -32,6 +32,9 @@ const MAX_FILE_SIZE: u64 = 4 * 1024 * 1024; // 4MB
 /// Maximum bytes of match/context text to return per line.
 const MAX_SNIPPET_BYTES: usize = 500;
 
+/// Maximum number of skipped-file paths listed in the output.
+const MAX_SKIPPED_FILES_LISTED: usize = 20;
+
 /// Maximum total bytes of textual grep payload to return.
 const MAX_OUTPUT_TEXT_BYTES: usize = 40 * 1024; // 40KB
 
@@ -42,7 +45,7 @@ const MAX_CONTEXT_LINES: usize = 5;
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Grep".to_string(),
-        description: "Search file contents for text matching a regex pattern. ALWAYS use this tool instead of running grep or rg through Bash — it returns structured JSON with file paths, line numbers, and context, respects .gitignore, supports pagination, and never floods the context window. NEVER invoke grep or rg as a Bash command. This is not the ripgrep CLI: do not pass CLI-style flags or unsupported fields such as `output_mode`, `head_limit`, or `-i`; use `case_insensitive`, `max_count`/`offset`, `extract_unique`, `glob`, `type`, and `path` instead. Use `glob`, `type`, or `path` to narrow the search, and use `extract_unique` for discovery queries such as listing tags or symbol names. Returns structured JSON results with file paths, line numbers, matched text, and optional context. Large files are skipped above 4MB, long match/context lines are truncated to safe snippets, and oversized result sets include a warning so the model can narrow the search or paginate with offset/max_count. Respects .gitignore by default: gitignored files are skipped during directory searches; pass an exact file path in `path` to search a known ignored file."
+        description: "Search file contents for text matching a regex pattern. ALWAYS use this tool instead of running grep or rg through Bash — it returns structured JSON with file paths, line numbers, and context, respects .gitignore, supports pagination, and never floods the context window. NEVER invoke grep or rg as a Bash command. This is not the ripgrep CLI: do not pass CLI-style flags or unsupported fields such as `output_mode`, `head_limit`, or `-i`; use `case_insensitive`, `max_count`/`offset`, `extract_unique`, `glob`, `type`, and `path` instead. Use `glob`, `type`, or `path` to narrow the search, and use `extract_unique` for discovery queries such as listing tags or symbol names. Returns structured JSON results with file paths, line numbers, matched text, and optional context. Large files are skipped above 4MB and listed in `skipped_files` — those files were never searched, so treat a missing match there as unknown rather than absent and `read` them directly. Long match/context lines are truncated to safe snippets, and oversized result sets include a warning so the model can narrow the search or paginate with offset/max_count. Respects .gitignore by default: gitignored files are skipped during directory searches; pass an exact file path in `path` to search a known ignored file."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -170,11 +173,21 @@ struct Match {
     context_after: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct GrepOutputStats {
     text_truncated: bool,
     payload_truncated: bool,
-    skipped_large_files: usize,
+    /// Display paths of files skipped for exceeding `MAX_FILE_SIZE`. Reported so
+    /// callers can tell "no match" apart from "never searched".
+    skipped_large_files: Vec<String>,
+}
+
+/// Renders a path for output, relative to `root` when possible.
+fn display_path(path: &Path, root: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .to_string()
 }
 
 /// Sanitize patterns that contain `${` (common in shell-like patterns from LLMs).
@@ -354,7 +367,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         || truncated_by_pagination
         || output_stats.text_truncated
         || output_stats.payload_truncated
-        || output_stats.skipped_large_files > 0;
+        || !output_stats.skipped_large_files.is_empty();
 
     let mut data = serde_json::Map::new();
     data.insert(
@@ -363,6 +376,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     );
     data.insert("total_matches".to_string(), Value::from(total_matches));
     data.insert("truncated".to_string(), Value::from(truncated));
+    insert_skipped_files(&mut data, &output_stats);
     if truncated && total_matches > 0 {
         data.insert(
             "next_offset".to_string(),
@@ -373,7 +387,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         offset,
         total_matches,
         truncated_by_cap || truncated_by_pagination,
-        output_stats,
+        &output_stats,
     ) {
         data.insert("warning".to_string(), Value::String(warning));
     }
@@ -445,7 +459,7 @@ fn execute_extract_unique(
     let truncated = total_unique > values.len()
         || output_stats.text_truncated
         || output_stats.payload_truncated
-        || output_stats.skipped_large_files > 0;
+        || !output_stats.skipped_large_files.is_empty();
     let returned_unique = values.len();
 
     let mut data = serde_json::Map::new();
@@ -455,7 +469,8 @@ fn execute_extract_unique(
     );
     data.insert("total_unique".to_string(), Value::from(returned_unique));
     data.insert("truncated".to_string(), Value::from(truncated));
-    if let Some(warning) = build_extract_unique_warning(output_stats, total_unique) {
+    insert_skipped_files(&mut data, &output_stats);
+    if let Some(warning) = build_extract_unique_warning(&output_stats, total_unique) {
         data.insert("warning".to_string(), Value::String(warning));
     }
 
@@ -468,22 +483,20 @@ fn walk_files(
     root: &Path,
     glob_matcher: Option<&GlobMatcher>,
     file_type_filter: Option<ignore::types::Types>,
-) -> (Vec<PathBuf>, usize) {
+) -> (Vec<PathBuf>, Vec<String>) {
     if search_path.is_file() {
-        let skipped = search_path
+        let too_large = search_path
             .metadata()
-            .ok()
-            .filter(|meta| meta.len() > MAX_FILE_SIZE)
-            .map_or(0, |_| 1);
-        return if skipped > 0 {
-            (Vec::new(), skipped)
+            .is_ok_and(|meta| meta.len() > MAX_FILE_SIZE);
+        return if too_large {
+            (Vec::new(), vec![display_path(search_path, root)])
         } else {
-            (vec![search_path.to_path_buf()], 0)
+            (vec![search_path.to_path_buf()], Vec::new())
         };
     }
 
     let mut files = Vec::new();
-    let mut skipped_large_files = 0;
+    let mut skipped_large_files = Vec::new();
     let mut wb = WalkBuilder::new(search_path);
     if let Some(t) = file_type_filter {
         wb.types(t);
@@ -507,7 +520,7 @@ fn walk_files(
         if let Ok(metadata) = entry.metadata()
             && metadata.len() > MAX_FILE_SIZE
         {
-            skipped_large_files += 1;
+            skipped_large_files.push(display_path(entry.path(), root));
             continue;
         }
 
@@ -561,7 +574,7 @@ fn match_output_text_bytes(m: &Match) -> usize {
 
 fn cap_matches_for_output(
     matches: Vec<Match>,
-    skipped_large_files: usize,
+    skipped_large_files: Vec<String>,
 ) -> (Vec<Match>, GrepOutputStats) {
     let mut stats = GrepOutputStats {
         skipped_large_files,
@@ -588,7 +601,7 @@ fn cap_matches_for_output(
 fn cap_unique_values_for_output(
     unique_values: BTreeSet<String>,
     max_count: usize,
-    skipped_large_files: usize,
+    skipped_large_files: Vec<String>,
 ) -> (Vec<String>, GrepOutputStats) {
     let mut stats = GrepOutputStats {
         skipped_large_files,
@@ -614,24 +627,55 @@ fn cap_unique_values_for_output(
     (values, stats)
 }
 
+/// Adds the `skipped_files` field when oversized files were left unsearched.
+fn insert_skipped_files(data: &mut serde_json::Map<String, Value>, stats: &GrepOutputStats) {
+    if stats.skipped_large_files.is_empty() {
+        return;
+    }
+    let listed: Vec<Value> = stats
+        .skipped_large_files
+        .iter()
+        .take(MAX_SKIPPED_FILES_LISTED)
+        .map(|p| Value::String(p.clone()))
+        .collect();
+    data.insert("skipped_files".to_string(), Value::Array(listed));
+    data.insert(
+        "skipped_files_total".to_string(),
+        Value::from(stats.skipped_large_files.len()),
+    );
+}
+
+/// Warns that oversized files were never searched, so a pattern in them cannot
+/// show up as a match. Names the paths so the caller can `read` them directly.
+fn skipped_files_warning(skipped: &[String]) -> Option<String> {
+    let count = skipped.len();
+    if count == 0 {
+        return None;
+    }
+    let noun = if count == 1 { "file" } else { "files" };
+    let shown = skipped.len().min(3);
+    let listed = skipped[..shown].join(", ");
+    let list = if count > shown {
+        let rest = count - shown;
+        format!("{listed} and {rest} more")
+    } else {
+        listed
+    };
+    Some(format!(
+        "Skipped {count} large {noun} above 4MB: {list}. They were not searched, so a match there would be missing from these results rather than absent — read the file directly to check. Full list in `skipped_files`."
+    ))
+}
+
 fn build_grep_warning(
     offset: usize,
     returned: usize,
     paginated_or_capped: bool,
-    stats: GrepOutputStats,
+    stats: &GrepOutputStats,
 ) -> Option<String> {
     let mut parts = Vec::new();
 
-    if stats.skipped_large_files > 0 {
-        let noun = if stats.skipped_large_files == 1 {
-            "file"
-        } else {
-            "files"
-        };
-        parts.push(format!(
-            "Skipped {} large {noun} above 4MB.",
-            stats.skipped_large_files
-        ));
+    if let Some(skipped) = skipped_files_warning(&stats.skipped_large_files) {
+        parts.push(skipped);
     }
 
     if stats.text_truncated {
@@ -656,19 +700,11 @@ fn build_grep_warning(
     (!parts.is_empty()).then(|| parts.join(" "))
 }
 
-fn build_extract_unique_warning(stats: GrepOutputStats, total_unique: usize) -> Option<String> {
+fn build_extract_unique_warning(stats: &GrepOutputStats, total_unique: usize) -> Option<String> {
     let mut parts = Vec::new();
 
-    if stats.skipped_large_files > 0 {
-        let noun = if stats.skipped_large_files == 1 {
-            "file"
-        } else {
-            "files"
-        };
-        parts.push(format!(
-            "Skipped {} large {noun} above 4MB.",
-            stats.skipped_large_files
-        ));
+    if let Some(skipped) = skipped_files_warning(&stats.skipped_large_files) {
+        parts.push(skipped);
     }
 
     if stats.text_truncated {
@@ -695,7 +731,7 @@ fn collect_matches(
     glob_matcher: Option<&GlobMatcher>,
     context_lines: usize,
     file_type_filter: Option<ignore::types::Types>,
-) -> (Vec<Vec<Match>>, usize) {
+) -> (Vec<Vec<Match>>, Vec<String>) {
     let mut per_file: Vec<Vec<Match>> = Vec::new();
     let mut total_collected: usize = 0;
     let (files, skipped_large_files) =
@@ -728,11 +764,7 @@ fn search_file(
     file_matches: &mut Vec<Match>,
     total_collected: &mut usize,
 ) {
-    let relative_path = path
-        .strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .to_string();
+    let relative_path = display_path(path, root);
 
     // First pass: collect line numbers of matches.
     let mut match_line_numbers: Vec<u64> = Vec::new();
@@ -841,6 +873,80 @@ mod tests {
         assert_eq!(data["matches"][0]["file"], "hello.txt");
         assert_eq!(data["matches"][0]["line_number"], 1);
         assert_eq!(data["matches"][0]["text"], "Hello World");
+    }
+
+    #[test]
+    fn test_large_file_skip_is_reported_by_path() {
+        let temp = TempDir::new().unwrap();
+        // Oversized file that DOES contain the pattern, so a silent skip would
+        // report "no matches" for content that is actually present.
+        let big = "ZZMATCHZZ".to_string() + &"x".repeat(MAX_FILE_SIZE as usize + 1);
+        fs::write(temp.path().join("huge.txt"), &big).unwrap();
+        fs::write(temp.path().join("small.txt"), "ZZMATCHZZ here\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let result = execute(&json!({"pattern": "ZZMATCHZZ"}), &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+
+        assert_eq!(data["total_matches"], 1, "only the small file is searched");
+        assert_eq!(data["skipped_files"], json!(["huge.txt"]));
+        assert_eq!(data["skipped_files_total"], 1);
+        assert_eq!(data["truncated"], true);
+
+        let warning = data["warning"].as_str().unwrap();
+        assert!(
+            warning.contains("huge.txt"),
+            "warning names the file: {warning}"
+        );
+        assert!(warning.contains("not searched"), "warning: {warning}");
+    }
+
+    #[test]
+    fn test_no_skipped_files_field_when_nothing_skipped() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("a.txt"), "hit\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let result = execute(&json!({"pattern": "hit"}), &ctx);
+        let data = result.data().unwrap();
+
+        assert_eq!(data["total_matches"], 1);
+        assert!(data.get("skipped_files").is_none());
+        assert!(data.get("skipped_files_total").is_none());
+    }
+
+    #[test]
+    fn test_extract_unique_reports_skipped_files() {
+        let temp = TempDir::new().unwrap();
+        let big = "TAG_zzz ".to_string() + &"x".repeat(MAX_FILE_SIZE as usize + 1);
+        fs::write(temp.path().join("huge.txt"), &big).unwrap();
+        fs::write(temp.path().join("small.txt"), "TAG_aaa\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let result = execute(
+            &json!({"pattern": "TAG_[a-z]+", "extract_unique": true}),
+            &ctx,
+        );
+        let data = result.data().unwrap();
+
+        assert_eq!(data["values"], json!(["TAG_aaa"]));
+        assert_eq!(data["skipped_files"], json!(["huge.txt"]));
+        assert_eq!(data["truncated"], true);
+    }
+
+    #[test]
+    fn test_explicit_large_file_path_is_reported() {
+        let temp = TempDir::new().unwrap();
+        let big = "ZZMATCHZZ".to_string() + &"x".repeat(MAX_FILE_SIZE as usize + 1);
+        fs::write(temp.path().join("huge.txt"), &big).unwrap();
+
+        let ctx = make_ctx(&temp);
+        let result = execute(&json!({"pattern": "ZZMATCHZZ", "path": "huge.txt"}), &ctx);
+        let data = result.data().unwrap();
+
+        assert_eq!(data["total_matches"], 0);
+        assert_eq!(data["skipped_files"], json!(["huge.txt"]));
     }
 
     #[test]
