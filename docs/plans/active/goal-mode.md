@@ -12,6 +12,7 @@
 - No transcript or tool-result assembly in the scheduler; `Read_Thread` is the verifier's only history input.
 - No token budget or per-goal usage accounting; the continuation limit is the MVP safety bound.
 - No pause/resume controls, statusline UI, goal history, multiple goals, sub-goals, or independent deterministic checks.
+- No durable goal state machine. Goal state is process-local; ending the process ends the run.
 - No surface-specific goal dashboards or progress UI; the TUI and Telegram share the same minimal commands and completion messages.
 - No verifier-model picker; use the configured `oracle` subagent so the verifier has `Read_Thread` access.
 
@@ -25,29 +26,32 @@
 7. ZDX displays the completion or limit reason on the originating surface and returns to normal turn-by-turn use.
 
 # Phase 1 — A bounded verifier-driven goal loop
-- [ ] Add minimal per-thread goal persistence to the JSONL event log: objective, `active|completed`, continuation count, and verifier reason. Goal events must not render, replay as chat messages, or contribute searchable text.
+- [ ] Hold goal state in memory only — objective, continuation count, and latest verifier reason — keyed per thread in the bot's chat state and in the TUI runtime. The goal is not its own persisted event type.
+- [ ] Treat process lifetime as the goal's lifetime: a bot restart, TUI exit, thread reopen, or fork ends the run, and no autonomous work resumes on its own. This is the safety property that replaces an explicit re-arm step; do not add a durable `active` flag that could restart work nobody asked for.
 - [ ] Add `[goals] enabled = false` and `max_continuations = 10` to config. Goal mode remains opt-in.
 - [ ] Add `/goal` and `/goal_clear` to the TUI command palette and Telegram command registry. `/goal` accepts no inline objective; `/goal_clear` stops further verification and continuation.
 - [ ] Reuse the existing staged-input pattern from Telegram `/btw` and `/handoff`: `/goal` enters a per-topic pending session, prompts `Send your goal as text or a voice note, or /cancel to abort`, and consumes the next transcribed voice or text message as the objective. `/cancel` exits without changing goal state.
 - [ ] Keep goal staging in the current topic's normal serial queue because accepting the objective writes to and starts work in that same thread; unlike `/btw`, it must not bypass the queue.
 - [ ] In the TUI, `/goal` opens a pending goal composer using the same input area; submitting stores the objective and starts the first turn, while Escape cancels without changing goal state.
-- [ ] Persist the submitted objective as the active goal, reset its continuation count, and also use the submitted text as the first ordinary user turn so the agent begins work immediately.
+- [ ] Store the submitted objective as the in-memory active goal, reset its continuation count, and also use the submitted text as the first ordinary user turn so the agent begins work immediately.
 - [ ] After `TurnFinished`, wait until the current turn checkpoint is flushed before scheduling verification so `Read_Thread` sees the latest assistant response and tool evidence.
 - [ ] Invoke the configured `oracle` subagent with only the thread ID, active goal, and this contract: call `Read_Thread`, judge completion from evidence in the thread, and return strict structured output with `completed`, `reason`, and `next_action` when incomplete.
 - [ ] Parse and validate the verifier response. A malformed or failed verification stops the loop and reports the failure instead of guessing.
-- [ ] If `completed` is true, persist the completed state and show `Goal completed: <reason>`.
-- [ ] If `completed` is false and the cap remains, persist the incremented continuation count and start a typed `GoalContinuation` turn using `next_action` as an ephemeral instruction.
-- [ ] Keep `GoalContinuation` separate from the user prompt queue: it must not persist, render, export, index, or replay as a user-authored message, and it must not trigger title generation.
+- [ ] If `completed` is true, drop the in-memory goal and show `Goal completed: <reason>`.
+- [ ] If `completed` is false and the cap remains, increment the in-memory continuation count and start a `GoalContinuation` turn from `next_action`.
+- [ ] Persist each `GoalContinuation` as an ordinary user `ThreadEvent::Message` carrying the objective, `round/max`, and `next_action`, so it replays to the provider like any other turn. It does not count as user input for queue priority or the continuation cap; that bookkeeping lives in the in-memory goal state.
+- [ ] Record every terminal outcome — completion, continuation limit, verifier failure — as a `ThreadEvent::Notice`, which already persists and renders on reload without replaying to the provider. Together with the goal-round turns, the thread stays readable as its own goal log after the in-memory state is gone.
 - [ ] Before starting a continuation, give queued real user input priority. `/goal clear` and cancellation prevent any pending verifier result from starting another turn.
 - [ ] Route each Telegram verification/continuation step through the existing per-topic serial queue as separate work rather than looping inside one message handler. Between turns, queued inbound Telegram messages take priority over autonomous continuation.
-- [ ] Reuse the same persisted goal projection, verifier contract, completion rules, and continuation cap across TUI and Telegram; keep only command parsing, queue adaptation, and result presentation surface-specific.
+- [ ] Reuse the same in-memory goal model, verifier contract, completion rules, and continuation cap across TUI and Telegram; keep only command parsing, queue adaptation, and result presentation surface-specific.
 - [ ] On Telegram, post `Goal completed: <reason>`, verifier failure, or continuation-limit status to the originating topic and leave ordinary bot message handling unchanged when no goal is active.
 - [ ] When `max_continuations` is reached, stop and show the verifier's latest reason and next action.
-- [ ] Add focused regression tests for goal-event restoration, post-flush verifier scheduling, strict verifier-output parsing, TUI and Telegram user-input priority, completion, clearing/cancellation, malformed verifier output, and the continuation cap.
+- [ ] Add focused regression tests for post-flush verifier scheduling, strict verifier-output parsing, continuation replay as an ordinary user message, terminal-outcome notices, a reloaded thread starting no continuation, TUI and Telegram user-input priority, completion, clearing/cancellation, malformed verifier output, and the continuation cap.
 
-✅ **Demo**: Enable goals and run `/goal` once in the TUI and once in a bound Telegram topic. Submit `Make the focused test pass` through the TUI composer and as a Telegram voice note. On both surfaces, ZDX stores the transcribed objective, starts the first turn, persists each result, invokes an Oracle verifier that calls `Read_Thread`, and automatically continues from `next_action` while incomplete. It stops with `Goal completed: <reason>` when the thread contains evidence that the test passes, or stops at 10 continuations. A new TUI or Telegram message is handled before another continuation, and no synthetic continuation appears as a user message in the transcript, export, or thread search.
+✅ **Demo**: Enable goals and run `/goal` once in the TUI and once in a bound Telegram topic. Submit `Make the focused test pass` through the TUI composer and as a Telegram voice note. On both surfaces, ZDX stores the transcribed objective, starts the first turn, persists each result, invokes an Oracle verifier that calls `Read_Thread`, and automatically continues from `next_action` while incomplete. It stops with `Goal completed: <reason>` when the thread contains evidence that the test passes, or stops at 10 continuations. A new TUI or Telegram message is handled before another continuation, and each continuation is visible in the transcript as an ordinary user turn that replays on the next request. Restarting the bot mid-goal ends the run silently, and reopening the thread shows the goal-round turns plus the terminal notice without starting another continuation.
 
 # Later
+- Add durable goal state plus an explicit re-arm step when goals need to survive a restart or span sessions. That is the point to introduce a persisted phase, kept separate from a process-local armed flag so reload and fork can never resume work on their own.
 - Add `/goal pause|resume|status` and status UI when users need to manage goals that span interactive sessions.
 - Add verifier/model selection when one fixed Oracle profile is measurably too slow or expensive.
 - Add token budgets when continuation count alone does not provide enough cost control.
