@@ -21,7 +21,7 @@ Scope: Telegram bot runtime, ingest/handler flow, queueing, and Telegram API int
 - `src/handlers/message/launcher.rs`: General-topic thread launcher — bot-visible `[[favorites]]` filter, `create_topic_with_model`, `create_topic_resuming`, `/launcher` keyboard (`nt:p:{alias}`/`nt:custom`/`nt:resume`) + callback routing; Custom opens the model picker in `NewThread` scope; `🔄 Continue` picker resumes a source thread via `alias_to`; `LauncherMap` + `schedule_repost` keep the launcher as the last message in General (debounced per-chat repost)
 - `src/handlers/message/mod.rs`: message intake orchestration + shared turn types; `thread_id_for_chat` + `resolve_effective_thread_id` (follows one `alias_to` hop so resumed topics load/persist to the source thread); re-exports the keyboard builders
 - `src/handlers/message/turn.rs`: agent turn lifecycle (`run_agent_turn`, spawn/stream/finalize)
-- `src/handlers/message/status.rs`: turn status setup/update/cleanup + status-message formatting (usage, pricing, context)
+- `src/handlers/message/status.rs`: turn status setup/update/cleanup, the status keyboard (Cancel + Mini App `Open Thread`), and status-message formatting (usage, pricing, context)
 - `src/handlers/message/thread_header.rs`: first-message topic status card, Mini App/refresh keyboard, and silent pinning
 - `src/handlers/message/response.rs`: final response sending (text send/edit/fallback)
 - `src/handlers/message/media.rs`: `<media>` routing parse + path classification (image→`sendPhoto`, `.ogg/.oga/.opus`→`sendVoice`, `.mp3/.m4a/.wav`→`sendAudio`, else `sendDocument`)

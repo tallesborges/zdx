@@ -336,6 +336,18 @@ pub(crate) fn resolve_effective_thread_id(id: &str) -> String {
     }
 }
 
+/// Mini App base URL for a chat, when the embedded server is enabled and
+/// configured. `None` means Mini App buttons are omitted.
+pub(super) fn mini_app_base_url(context: &BotContext, chat_id: i64) -> Option<String> {
+    context
+        .config_for_chat(chat_id)
+        .telegram
+        .server
+        .as_ref()
+        .filter(|server| server.enabled)
+        .and_then(|server| server.mini_app_url.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};

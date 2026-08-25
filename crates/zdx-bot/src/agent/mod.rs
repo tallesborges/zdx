@@ -76,7 +76,8 @@ pub(crate) fn record_user_message(
 /// Handle to a running agent turn with streaming events.
 ///
 /// The caller consumes events from `rx`. Thread persistence is handled
-/// internally — the caller doesn't need to manage it.
+/// internally, but the caller must `await_persisted()` before anything reads
+/// the thread back from disk.
 pub(crate) struct AgentTurnHandle {
     /// Event stream for the caller to consume.
     pub rx: AgentEventRx,
@@ -84,6 +85,26 @@ pub(crate) struct AgentTurnHandle {
     pub cancel: CancellationToken,
     /// Task handle kept alive for the running agent turn.
     pub _task: tokio::task::JoinHandle<Result<(String, Vec<ChatMessage>)>>,
+    /// Persistence task for this turn. Resolves once every event has been
+    /// appended to the thread log.
+    persist: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl AgentTurnHandle {
+    /// Waits until this turn is fully written to the thread log.
+    ///
+    /// `TurnFinished` only means the agent stopped producing events. Persistence
+    /// runs as a separate task fed by the same broadcast, so the log can still
+    /// be missing the tail of the turn when streaming ends. Every bot turn
+    /// rebuilds its history with `load_thread_state`, so the next turn would
+    /// read a truncated conversation without this barrier.
+    pub(crate) async fn await_persisted(&mut self) {
+        if let Some(persist) = self.persist.take()
+            && let Err(err) = persist.await
+        {
+            tracing::warn!(%err, "Thread persistence task failed");
+        }
+    }
 }
 
 struct PreparedBotTurn {
@@ -170,7 +191,7 @@ pub(crate) fn spawn_agent_turn(
     let (persist_tx, persist_rx) = agent::create_event_channel();
 
     agent::spawn_broadcaster(agent_rx, vec![bot_tx, persist_tx]);
-    thread_persistence::spawn_thread_persist_task(thread.clone(), persist_rx);
+    let persist = thread_persistence::spawn_thread_persist_task(thread.clone(), persist_rx);
 
     // Spawn agent in background — owned values moved in
     let config = bot_config;
@@ -192,6 +213,7 @@ pub(crate) fn spawn_agent_turn(
         rx: bot_rx,
         cancel,
         _task: task,
+        persist: Some(persist),
     })
 }
 

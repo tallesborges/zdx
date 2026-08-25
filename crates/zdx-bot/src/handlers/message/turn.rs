@@ -81,6 +81,7 @@ pub(super) async fn run_agent_turn(
         &incoming,
         reply_ctx.reply_to_message_id,
         reply_ctx.topic_id,
+        thread_id,
         provisional_status,
     )
     .await;
@@ -94,6 +95,9 @@ pub(super) async fn run_agent_turn(
     };
     let mut handle = spawn_or_fail(context, &incoming, &status, spawn).await?;
     let result = stream_turn_events(context, &incoming, &mut handle, &mut status).await;
+    // Barrier: the next queued message rebuilds its history from the thread log,
+    // so the turn must be fully written before this one releases the queue slot.
+    handle.await_persisted().await;
     drop(typing);
     cleanup_turn_status(context, &status).await;
     finalize_turn(

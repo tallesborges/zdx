@@ -109,14 +109,10 @@ async fn header_text(context: &BotContext, chat_id: i64, thread_id: &str) -> Res
 }
 
 fn header_keyboard(context: &BotContext, chat_id: i64, thread_id: &str) -> InlineKeyboardMarkup {
-    let config = context.config_for_chat(chat_id);
-    let mini_app_url = config
-        .telegram
-        .server
-        .as_ref()
-        .filter(|server| server.enabled)
-        .and_then(|server| server.mini_app_url.as_deref());
-    header_keyboard_for_url(mini_app_url, thread_id)
+    header_keyboard_for_url(
+        super::mini_app_base_url(context, chat_id).as_deref(),
+        thread_id,
+    )
 }
 
 fn header_keyboard_for_url(mini_app_url: Option<&str>, thread_id: &str) -> InlineKeyboardMarkup {

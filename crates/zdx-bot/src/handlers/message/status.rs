@@ -17,25 +17,54 @@ use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message};
 /// Minimum interval between Telegram status message edits (avoid rate limiting).
 pub(super) const STATUS_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(3);
 
+fn turn_status_markup(
+    context: &BotContext,
+    chat_id: i64,
+    key: (i64, i64),
+    thread_id: Option<&str>,
+) -> InlineKeyboardMarkup {
+    let mini_app_url = thread_id.and(super::mini_app_base_url(context, chat_id));
+    turn_status_markup_for_url(key, mini_app_url.as_deref(), thread_id)
+}
+
+fn turn_status_markup_for_url(
+    key: (i64, i64),
+    mini_app_url: Option<&str>,
+    thread_id: Option<&str>,
+) -> InlineKeyboardMarkup {
+    let mut row = vec![InlineKeyboardButton::callback(
+        "⏹ Cancel",
+        format!("cancel:{}:{}", key.0, key.1),
+    )];
+    if let (Some(mini_app_url), Some(thread_id)) = (mini_app_url, thread_id) {
+        row.push(InlineKeyboardButton::url(
+            "💬 Open Thread",
+            format!("{mini_app_url}?startapp={thread_id}"),
+        ));
+    }
+    InlineKeyboardMarkup {
+        inline_keyboard: vec![row],
+    }
+}
+
 pub(super) async fn setup_turn_status(
     context: &BotContext,
     incoming: &crate::types::IncomingMessage,
     reply_to_message_id: Option<i64>,
     topic_id: Option<i64>,
+    thread_id: &str,
     existing: Option<TurnStatus>,
 ) -> TurnStatus {
-    if let Some(status) = existing {
+    if let Some(mut status) = existing {
+        // The provisional (transcription) status was created before the thread
+        // was known, so it only had Cancel. Give it the thread link now.
+        status.markup = turn_status_markup(context, incoming.chat_id, status.key, Some(thread_id));
         update_turn_status_text(context, incoming.chat_id, &status, agent::STATUS_WAITING).await;
         return status;
     }
 
     let key = (incoming.chat_id, incoming.message_id);
-    let cancel_markup = InlineKeyboardMarkup {
-        inline_keyboard: vec![vec![InlineKeyboardButton::callback(
-            "⏹ Cancel",
-            format!("cancel:{}:{}", key.0, key.1),
-        )]],
-    };
+    let cancel_markup = turn_status_markup(context, incoming.chat_id, key, Some(thread_id));
 
     let token = CancellationToken::new();
     {
@@ -86,12 +115,7 @@ pub(super) async fn setup_preprocessing_status(
     synthetic_topic_routed_from_general: bool,
 ) -> TurnStatus {
     let key = (message.chat.id, message.id);
-    let cancel_markup = InlineKeyboardMarkup {
-        inline_keyboard: vec![vec![InlineKeyboardButton::callback(
-            "⏹ Cancel",
-            format!("cancel:{}:{}", key.0, key.1),
-        )]],
-    };
+    let cancel_markup = turn_status_markup(context, message.chat.id, key, None);
     let token = CancellationToken::new();
     {
         let mut map = context.cancel_map().lock().await;
@@ -450,4 +474,40 @@ fn trim_price(value: f64) -> String {
         text.pop();
     }
     text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::turn_status_markup_for_url;
+
+    #[test]
+    fn configured_status_cancels_and_opens_the_effective_thread() {
+        let markup = turn_status_markup_for_url(
+            (-100, 42),
+            Some("https://t.me/zdx_bot/threads"),
+            Some("source-thread-id"),
+        );
+        let row = &markup.inline_keyboard[0];
+        assert_eq!(markup.inline_keyboard.len(), 1);
+        assert_eq!(row.len(), 2);
+        assert_eq!(row[0].callback_data.as_deref(), Some("cancel:-100:42"));
+        assert_eq!(
+            row[1].url.as_deref(),
+            Some("https://t.me/zdx_bot/threads?startapp=source-thread-id")
+        );
+    }
+
+    #[test]
+    fn status_without_mini_app_or_thread_only_cancels() {
+        for markup in [
+            turn_status_markup_for_url((-100, 42), None, Some("thread-id")),
+            turn_status_markup_for_url((-100, 42), Some("https://t.me/zdx_bot/threads"), None),
+        ] {
+            assert_eq!(markup.inline_keyboard[0].len(), 1);
+            assert_eq!(
+                markup.inline_keyboard[0][0].callback_data.as_deref(),
+                Some("cancel:-100:42")
+            );
+        }
+    }
 }
