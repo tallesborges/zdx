@@ -22,6 +22,7 @@ use tokio::process::Command;
 use tokio::sync::{Mutex, RwLock};
 use zdx_engine::config::{Config, paths};
 use zdx_engine::core::events::NoticeKind;
+use zdx_engine::core::thread_index;
 use zdx_engine::core::thread_persistence::{self, ThreadEvent, load_thread_events};
 use zdx_engine::core::usage_stats::{self, UsageStats};
 use zdx_engine::providers::ReplayToken;
@@ -112,19 +113,6 @@ pub enum ThreadActivity {
         role: String,
         text: String,
     },
-}
-
-#[derive(Serialize)]
-pub struct ThreadListItem {
-    pub id: String,
-    pub raw_id: String,
-    pub title: String,
-}
-
-#[derive(Serialize)]
-pub struct ThreadListResponse {
-    pub count: usize,
-    pub threads: Vec<ThreadListItem>,
 }
 
 #[derive(Deserialize)]
@@ -367,7 +355,6 @@ struct InitDataUser {
 /// Creates the router for the embedded web server.
 pub(crate) fn create_router(state: Arc<ServerState>) -> Router {
     let api = Router::new()
-        .route("/threads", get(list_threads))
         .route("/threads/{id}", get(get_thread))
         .route("/monitor", get(get_monitor))
         .route("/git", get(get_git))
@@ -399,62 +386,32 @@ async fn authorize_api(
     Ok(next.run(request).await)
 }
 
-async fn list_threads() -> Result<Json<ThreadListResponse>, ApiError> {
-    let threads_dir = paths::threads_dir();
-    let mut items = Vec::new();
-
-    if let Ok(entries) = std::fs::read_dir(threads_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
-                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-            {
-                let title = if let Some(topic) = stem.strip_prefix("telegram-") {
-                    if let Some((_, topic_id)) = topic.split_once("-topic-") {
-                        format!("Telegram Topic #{topic_id}")
-                    } else {
-                        stem.to_string()
-                    }
-                } else if stem.len() > 18 {
-                    stem[..18].to_string()
-                } else {
-                    stem.to_string()
-                };
-
-                items.push(ThreadListItem {
-                    id: urlencoding_encode(stem),
-                    raw_id: stem.to_string(),
-                    title,
-                });
-            }
-        }
-    }
-
-    let count = items.len();
-    Ok(Json(ThreadListResponse {
-        count,
-        threads: items,
-    }))
-}
-
 async fn get_thread(Path(id): Path<String>) -> Result<Json<ThreadResponse>, ApiError> {
-    let target_id = if id == "active" {
-        find_latest_telegram_thread().unwrap_or(id)
-    } else {
-        id
-    };
-    if !valid_thread_id(&target_id) {
-        return Err((StatusCode::BAD_REQUEST, "Invalid thread ID"));
-    }
+    tokio::task::spawn_blocking(move || {
+        let target_id = if id == "active" {
+            thread_index::latest_thread_id_with_prefix("telegram-")
+                .ok()
+                .flatten()
+                .unwrap_or(id)
+        } else {
+            id
+        };
+        if !valid_thread_id(&target_id) {
+            return Err((StatusCode::BAD_REQUEST, "Invalid thread ID"));
+        }
 
-    let events = load_thread_events(&target_id).map_err(|error| {
-        tracing::warn!(thread_id = target_id, %error, "Failed to load Mini App thread");
-        (StatusCode::NOT_FOUND, "Thread not found")
-    })?;
+        let events = load_thread_events(&target_id).map_err(|error| {
+            tracing::warn!(thread_id = target_id, %error, "Failed to load Mini App thread");
+            (StatusCode::NOT_FOUND, "Thread not found")
+        })?;
 
-    Ok(Json(project_thread(target_id, events)))
+        Ok(Json(project_thread(target_id, events)))
+    })
+    .await
+    .map_err(|error| {
+        tracing::warn!(%error, "Mini App thread load task failed");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Thread load failed")
+    })?
 }
 
 #[allow(clippy::too_many_lines)]
@@ -749,36 +706,6 @@ fn clean_message_text(text: &str) -> String {
     clean.trim().to_string()
 }
 
-fn find_latest_telegram_thread() -> Option<String> {
-    let threads_dir = paths::threads_dir();
-    let mut latest_file: Option<(String, std::time::SystemTime)> = None;
-
-    if let Ok(entries) = std::fs::read_dir(threads_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if let Some(name) = path.file_name().and_then(|n| n.to_str())
-                && name.starts_with("telegram-")
-                && path
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
-                && let Ok(meta) = entry.metadata()
-                && let Ok(modified) = meta.modified()
-            {
-                let stem = path.file_stem()?.to_str()?.to_string();
-                if latest_file.as_ref().is_none_or(|(_, m)| modified > *m) {
-                    latest_file = Some((stem, modified));
-                }
-            }
-        }
-    }
-
-    latest_file.map(|(name, _)| name)
-}
-
-fn urlencoding_encode(s: &str) -> String {
-    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
-}
-
 struct GitSelection {
     thread_id: Option<String>,
     thread_root: Option<PathBuf>,
@@ -959,7 +886,9 @@ async fn resolve_git_repository(
     let bot_root = state.root.clone();
     let selection = tokio::task::spawn_blocking(move || {
         let thread_id = if requested_id == "active" {
-            find_latest_telegram_thread()
+            thread_index::latest_thread_id_with_prefix("telegram-")
+                .ok()
+                .flatten()
         } else {
             Some(requested_id)
         };
@@ -1634,7 +1563,6 @@ mod tests {
         let client = reqwest::Client::new();
 
         for path in [
-            "/api/threads",
             "/api/threads/active",
             "/api/monitor",
             "/api/git?thread_id=active",

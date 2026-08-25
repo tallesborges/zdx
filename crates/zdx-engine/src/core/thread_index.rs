@@ -217,6 +217,28 @@ pub fn list_threads_cached() -> Result<Vec<ThreadSummary>> {
     })
 }
 
+/// Returns the most recently modified thread whose ID starts with `prefix`.
+///
+/// Ordering and the limit are applied in SQL, so this stays a single indexed
+/// lookup instead of a directory scan. Syncs incrementally first, so the answer
+/// can lag on-disk reality by at most [`SYNC_INTERVAL`].
+///
+/// # Errors
+/// Returns an error when the cache cannot be opened, synced, or queried.
+pub fn latest_thread_id_with_prefix(prefix: &str) -> Result<Option<String>> {
+    with_conn(|conn| {
+        sync_if_stale(conn)?;
+        conn.prepare_cached(
+            "SELECT thread_id FROM thread_meta
+             WHERE thread_id LIKE ?1 ESCAPE '\\'
+             ORDER BY mtime_ns DESC, thread_id ASC LIMIT 1",
+        )?
+        .query_row([format!("{}%", escape_like(prefix))], |row| row.get(0))
+        .optional()
+        .map_err(Into::into)
+    })
+}
+
 /// Which run kinds a thread browse query returns.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ThreadKindFilter {
@@ -255,7 +277,8 @@ impl ThreadKindFilter {
     }
 }
 
-/// Filters for [`browse_threads`], applied in SQL.#[derive(Debug, Clone)]
+/// Filters for [`browse_threads`], applied in SQL.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadBrowseOptions {
     pub kind: ThreadKindFilter,
     /// Exact `root_path` match, as returned by [`browse_projects`].
