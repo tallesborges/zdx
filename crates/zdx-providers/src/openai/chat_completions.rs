@@ -401,10 +401,15 @@ fn assistant_blocks_message(
         } else {
             None
         };
+    let content = if !text.is_empty() || (!has_tool_calls && reasoning_content.is_some()) {
+        Some(ChatMessageContent::Text(text))
+    } else {
+        None
+    };
 
     Some(ChatCompletionMessage {
         role: "assistant".to_string(),
-        content: (!text.is_empty()).then_some(ChatMessageContent::Text(text)),
+        content,
         reasoning_content,
         tool_calls: has_tool_calls.then_some(tool_calls),
         tool_call_id: None,
@@ -1150,6 +1155,32 @@ mod tests {
             Some(&json!("let me think about this")),
             "captured reasoning text must be preserved"
         );
+    }
+
+    #[test]
+    fn test_reasoning_only_assistant_message_emits_empty_content() {
+        use crate::{ChatContentBlock, ChatMessage, ReasoningBlock};
+
+        let config = test_config(true);
+        let messages = vec![
+            ChatMessage::user("inspect the project"),
+            ChatMessage::assistant_blocks(vec![ChatContentBlock::Reasoning(ReasoningBlock {
+                text: Some("I should inspect the project first".to_string()),
+                replay: None,
+            })]),
+            ChatMessage::user("focus on the tests"),
+        ];
+
+        let request = ChatCompletionRequest::new(&config, &HashMap::new(), &messages, &[], None);
+        let value = serde_json::to_value(&request).expect("request should serialize");
+        let assistant = assistant_message(&value);
+
+        assert_eq!(assistant.get("content"), Some(&json!("")));
+        assert_eq!(
+            assistant.get("reasoning_content"),
+            Some(&json!("I should inspect the project first"))
+        );
+        assert!(assistant.get("tool_calls").is_none());
     }
 
     /// Text-only assistant turn (no tool call, no captured reasoning) should

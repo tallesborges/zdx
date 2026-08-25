@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use reqwest::header::HeaderMap;
 use serde_json::json;
-use zdx_types::ToolDefinition;
+use zdx_types::{ThinkingLevel, ToolDefinition};
 
 use crate::openai::chat_completions::{OpenAIChatCompletionsClient, OpenAIChatCompletionsConfig};
 use crate::shared::merge_system_prompt;
@@ -65,26 +65,19 @@ pub struct DeepSeekClient {
     inner: OpenAIChatCompletionsClient,
 }
 
-/// Maps an OpenAI-style reasoning effort to `DeepSeek`'s `reasoning_effort` values.
-///
-/// `DeepSeek` only supports `"high"` and `"max"`:
-/// - `Off` → no effort sent (thinking disabled)
-/// - `low`, `medium`, `high` → `"high"`
-/// - `xhigh` → `"max"`
-fn map_deepseek_effort(effort: Option<&str>) -> Option<String> {
-    match effort {
-        Some("xhigh") => Some("max".to_string()),
-        Some(_) => Some("high".to_string()),
-        None => None,
+fn reasoning_effort_from_thinking_level(level: ThinkingLevel) -> Option<&'static str> {
+    match level {
+        ThinkingLevel::Off => None,
+        ThinkingLevel::Low => Some("low"),
+        ThinkingLevel::Medium | ThinkingLevel::High | ThinkingLevel::XHigh => Some("high"),
+        ThinkingLevel::Max => Some("max"),
     }
 }
 
 impl DeepSeekClient {
     pub fn new(config: DeepSeekConfig) -> Self {
-        let deepseek_effort = map_deepseek_effort(config.reasoning_effort.as_deref());
-
         let mut extra_body = HashMap::new();
-        if let Some(effort) = &deepseek_effort {
+        if let Some(effort) = &config.reasoning_effort {
             extra_body.insert("reasoning_effort".to_string(), json!(effort));
         }
 
@@ -140,6 +133,39 @@ pub fn build(
         ctx.api_key,
         ctx.cache_key.clone(),
         ctx.thinking_level.is_enabled(),
-        crate::openai::reasoning_effort_from_thinking_level(ctx.thinking_level).map(str::to_owned),
+        reasoning_effort_from_thinking_level(ctx.thinking_level).map(str::to_owned),
     )?)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_reasoning_effort_to_deepseek_levels() {
+        assert_eq!(
+            reasoning_effort_from_thinking_level(ThinkingLevel::Off),
+            None
+        );
+        assert_eq!(
+            reasoning_effort_from_thinking_level(ThinkingLevel::Low),
+            Some("low")
+        );
+        assert_eq!(
+            reasoning_effort_from_thinking_level(ThinkingLevel::Medium),
+            Some("high")
+        );
+        assert_eq!(
+            reasoning_effort_from_thinking_level(ThinkingLevel::High),
+            Some("high")
+        );
+        assert_eq!(
+            reasoning_effort_from_thinking_level(ThinkingLevel::XHigh),
+            Some("high")
+        );
+        assert_eq!(
+            reasoning_effort_from_thinking_level(ThinkingLevel::Max),
+            Some("max")
+        );
+    }
 }
