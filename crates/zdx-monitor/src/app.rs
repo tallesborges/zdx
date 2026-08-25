@@ -15,7 +15,7 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::prelude::*;
 use serde_json::Value;
 use zdx_engine::config::{self, paths};
-use zdx_engine::core::thread_index::{self, ThreadKindFilter};
+use zdx_engine::core::thread_index::{self, ThreadBrowseOptions, ThreadKindFilter};
 use zdx_engine::core::thread_persistence;
 use zdx_engine::core::thread_timing::{format_thread_timing_report, inspect_thread_timings};
 use zdx_engine::core::usage_stats::{self, UsageStats};
@@ -354,12 +354,22 @@ pub struct MonitorApp {
     pub thread_project_filter: Option<String>,
     /// Open project-picker overlay for the Threads tab, if any.
     pub thread_project_picker: Option<TargetPickerState>,
+    /// Distinct project roots with thread counts, refreshed with every Threads
+    /// query so `p` opens the picker without touching the index.
+    pub thread_projects: Vec<(String, usize)>,
     /// Full-text query over titles and user/assistant text, edited with `/`.
     pub thread_query: String,
     /// Whether keystrokes are currently being captured into `thread_query`.
     pub thread_query_editing: bool,
     /// When the Threads result set was last loaded (drives the slow refresh).
     pub threads_loaded_at: Option<Instant>,
+    /// Receiver for an in-flight background Threads query, if any. The query
+    /// syncs `threads.sqlite`, which stats every thread file, so it never runs
+    /// on the render thread.
+    pub threads_rx: Option<mpsc::Receiver<ThreadsSnapshot>>,
+    /// Filters the in-flight query (`threads_rx`) was started for, so a filter
+    /// change while it runs supersedes it with a fresh query.
+    pub threads_scan_options: Option<ThreadBrowseOptions>,
     /// Raw thread JSONL queued to open after the current key event.
     pending_open_path: Option<PathBuf>,
     pub automations: Vec<AutomationInfo>,
@@ -443,6 +453,14 @@ type QuotaFetchResult = Vec<(
     Option<String>,
     std::result::Result<SubscriptionQuota, QuotaError>,
 )>;
+
+/// Result of one background Threads query: the rows for the active filters
+/// plus the project list feeding the `p` picker, both read from the same
+/// synced index.
+pub struct ThreadsSnapshot {
+    threads: Vec<ThreadInfo>,
+    projects: Vec<(String, usize)>,
+}
 
 /// A cached snapshot of the usage aggregation plus when it was computed.
 pub struct CachedUsageStats {
@@ -1212,7 +1230,7 @@ fn switch_section(app: &mut MonitorApp, section: Section) {
         app.log_query_editing = false;
     }
     if app.active_section == Section::Threads {
-        reload_threads(app);
+        refresh_threads_if_stale(app);
     } else {
         app.thread_query_editing = false;
         app.thread_project_picker = None;
@@ -1379,9 +1397,12 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
         thread_kind_filter: ThreadKindFilter::All,
         thread_project_filter: None,
         thread_project_picker: None,
+        thread_projects: Vec::new(),
         thread_query: String::new(),
         thread_query_editing: false,
         threads_loaded_at: None,
+        threads_rx: None,
+        threads_scan_options: None,
         pending_open_path: None,
         automations: load_automations(&root),
         services,
@@ -1558,16 +1579,13 @@ fn handle_threads_key(app: &mut MonitorApp, key: KeyCode) -> bool {
     match key {
         KeyCode::Char('t') => {
             app.thread_kind_filter = app.thread_kind_filter.next();
-            reload_threads(app);
-            app.set_status(format!(
-                "Kind filter: {} ({} threads)",
-                app.thread_kind_filter.label(),
-                app.threads.len(),
-            ));
+            start_threads_query(app);
+            app.set_status(format!("Kind filter: {}", app.thread_kind_filter.label()));
             true
         }
         KeyCode::Char('p') => {
-            app.thread_project_picker = Some(TargetPickerState::from_items(thread_project_items()));
+            app.thread_project_picker =
+                Some(TargetPickerState::from_items(app.thread_projects.clone()));
             true
         }
         KeyCode::Char('/') => {
@@ -1594,7 +1612,7 @@ fn handle_threads_key(app: &mut MonitorApp, key: KeyCode) -> bool {
                 app.thread_kind_filter = ThreadKindFilter::All;
                 app.thread_project_filter = None;
                 app.thread_query.clear();
-                reload_threads(app);
+                start_threads_query(app);
                 app.set_status("Filters cleared");
             }
             true
@@ -1628,11 +1646,8 @@ fn handle_thread_project_picker_key(app: &mut MonitorApp, key: KeyCode) {
             app.thread_project_picker = None;
             if let Some(root_path) = chosen {
                 app.thread_project_filter = Some(root_path.clone());
-                reload_threads(app);
-                app.set_status(format!(
-                    "Project filter: {root_path} ({} threads)",
-                    app.threads.len()
-                ));
+                start_threads_query(app);
+                app.set_status(format!("Project filter: {root_path}"));
             }
         }
         _ => {}
@@ -1651,39 +1666,84 @@ fn handle_thread_query_key(app: &mut MonitorApp, key: KeyCode) {
         }
         KeyCode::Enter => {
             app.thread_query_editing = false;
-            reload_threads(app);
+            start_threads_query(app);
             let status = if app.thread_query.is_empty() {
                 "Search cleared".to_string()
             } else {
-                format!(
-                    "Search: /{} ({} threads)",
-                    app.thread_query,
-                    app.threads.len()
-                )
+                format!("Search: /{}", app.thread_query)
             };
             app.set_status(status);
         }
         KeyCode::Esc => {
             app.thread_query_editing = false;
             app.thread_query.clear();
-            reload_threads(app);
+            start_threads_query(app);
             app.set_status("Search cleared");
         }
         _ => {}
     }
 }
 
-/// Re-runs the Threads query after a filter change and keeps the selection in
-/// range of the new result set.
-fn reload_threads(app: &mut MonitorApp) {
-    app.threads = load_threads(app);
-    app.threads_loaded_at = Some(Instant::now());
-    app.clamp_selection();
+/// Filters the Threads tab is currently showing.
+fn thread_browse_options(app: &MonitorApp) -> ThreadBrowseOptions {
+    ThreadBrowseOptions {
+        kind: app.thread_kind_filter,
+        project: app.thread_project_filter.clone(),
+        query: Some(app.thread_query.clone()).filter(|q| !q.trim().is_empty()),
+        limit: THREAD_LIST_LIMIT,
+    }
 }
 
-/// Timed refresh for the Threads tab. The query indexes thousands of threads,
-/// so it runs on its own slow cadence instead of on every tick and keypress;
-/// filter changes reload immediately via [`reload_threads`].
+/// Spawns a background Threads query unless one is already in flight.
+///
+/// Reading the index syncs it first, and that sync stats every thread file
+/// (~125ms at 12k threads) before re-parsing whatever changed, so it must
+/// never run inline: `switch_section` is on the path between a keypress and
+/// the next `terminal.draw`, and the Threads tab sits directly before Usage in
+/// the tab order, so an inline sync stalls every pass through it.
+fn start_threads_query(app: &mut MonitorApp) {
+    if app.threads_rx.is_some() {
+        return;
+    }
+    let options = thread_browse_options(app);
+    app.threads_scan_options = Some(options.clone());
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(ThreadsSnapshot {
+            threads: load_threads(&options),
+            projects: thread_index::browse_projects().unwrap_or_default(),
+        });
+    });
+    app.threads_rx = Some(rx);
+}
+
+/// Collects a finished background Threads query into the view. Non-blocking:
+/// returns immediately while the query is still running. If the filters moved
+/// on while it ran, re-queries now rather than waiting for the staleness tick.
+fn poll_threads_result(app: &mut MonitorApp) {
+    let Some(rx) = &app.threads_rx else {
+        return;
+    };
+    match rx.try_recv() {
+        Ok(snapshot) => {
+            app.threads_rx = None;
+            let scanned = app.threads_scan_options.take();
+            app.threads = snapshot.threads;
+            app.thread_projects = snapshot.projects;
+            app.threads_loaded_at = Some(Instant::now());
+            app.clamp_selection();
+            if scanned.is_some_and(|options| options != thread_browse_options(app)) {
+                start_threads_query(app);
+            }
+        }
+        Err(mpsc::TryRecvError::Empty) => {}
+        Err(mpsc::TryRecvError::Disconnected) => app.threads_rx = None,
+    }
+}
+
+/// Starts a Threads query when the tab is active and its rows are missing or
+/// older than [`THREAD_REFRESH_INTERVAL`]. Filter changes bypass this and call
+/// [`start_threads_query`] directly.
 fn refresh_threads_if_stale(app: &mut MonitorApp) {
     if app.active_section != Section::Threads {
         return;
@@ -1694,12 +1754,7 @@ fn refresh_threads_if_stale(app: &mut MonitorApp) {
     {
         return;
     }
-    reload_threads(app);
-}
-
-/// Distinct project roots with thread counts, for the project picker.
-fn thread_project_items() -> Vec<(String, usize)> {
-    thread_index::browse_projects().unwrap_or_default()
+    start_threads_query(app);
 }
 
 /// Handle a key while the Usage section is active. Returns `true` if the key
@@ -2135,6 +2190,7 @@ fn refresh_app(app: &mut MonitorApp) {
     refresh_usage(app);
     poll_quota_result(app);
     refresh_quota(app);
+    poll_threads_result(app);
 }
 
 /// Run the monitor dashboard.
@@ -2241,15 +2297,9 @@ fn open_in_editor(path: &Path) -> io::Result<()> {
 
 /// Rows shown in the Threads tab. Filtering, ordering, and the cap all happen
 /// in `threads.sqlite`; a cache error yields an empty list rather than a
-/// directory walk.
-fn load_threads(app: &MonitorApp) -> Vec<ThreadInfo> {
-    let options = thread_index::ThreadBrowseOptions {
-        kind: app.thread_kind_filter,
-        project: app.thread_project_filter.clone(),
-        query: Some(app.thread_query.clone()).filter(|q| !q.trim().is_empty()),
-        limit: THREAD_LIST_LIMIT,
-    };
-    let Ok(rows) = thread_index::browse_threads(&options) else {
+/// directory walk. Runs on the background query thread, never on the UI thread.
+fn load_threads(options: &ThreadBrowseOptions) -> Vec<ThreadInfo> {
+    let Ok(rows) = thread_index::browse_threads(options) else {
         return Vec::new();
     };
 

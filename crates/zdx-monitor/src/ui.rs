@@ -440,6 +440,9 @@ fn render_threads(f: &mut Frame, app: &MonitorApp, area: Rect) {
     } else if !app.thread_query.is_empty() {
         parts.push(format!("/{}", app.thread_query));
     }
+    if app.threads_rx.is_some() {
+        parts.push("refreshing".to_string());
+    }
     let title = format!(" {} ", parts.join(" · "));
 
     let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
