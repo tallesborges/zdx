@@ -798,6 +798,34 @@ pub(crate) fn thread_summary_from_file(file: &ThreadFileMeta) -> ThreadSummary {
     }
 }
 
+/// Builds a [`ThreadSummary`] for a single thread ID (one `stat` + one meta
+/// line read), without scanning the threads directory.
+///
+/// Prefer this over filtering [`list_all_threads`] when the ID is already
+/// known: it costs one file open instead of one per saved thread.
+///
+/// Returns `None` when no thread file exists for `id`.
+///
+/// # Errors
+/// Returns an error if the thread file exists but cannot be read.
+pub fn read_thread_summary(id: &str) -> Result<Option<ThreadSummary>> {
+    let path = threads_dir().join(format!("{id}.jsonl"));
+    let Ok(file_meta) = fs::metadata(&path) else {
+        return Ok(None);
+    };
+    let meta = read_meta(&path)?;
+    Ok(Some(ThreadSummary {
+        id: id.to_string(),
+        title: meta.as_ref().and_then(|m| m.title.clone()),
+        root_path: meta.as_ref().and_then(|m| m.root_path.clone()),
+        modified: file_meta.modified().ok(),
+        handoff_from: meta.as_ref().and_then(|m| m.handoff_from.clone()),
+        origin_kind: meta.as_ref().and_then(|m| m.origin_kind.clone()),
+        parent_thread_id: meta.as_ref().and_then(|m| m.parent_thread_id.clone()),
+        subagent_name: meta.and_then(|m| m.subagent_name),
+    }))
+}
+
 /// Lists all saved threads including child runs (subagents/helpers), sorted by
 /// modification time, newest first.
 ///

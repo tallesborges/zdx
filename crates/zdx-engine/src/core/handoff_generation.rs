@@ -5,7 +5,6 @@
 //! context prompt for continuing the work in a fresh thread. Shared by the TUI
 //! `/handoff` command and the Telegram bot.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -27,26 +26,22 @@ type LineageEntry = (String, String);
 /// Walks `handoff_from` from `source_thread_id` up to the root, returning the
 /// chain as `(id, display_title)` starting at the source thread.
 ///
-/// The lookup is built once from `list_all_threads()`. The walk stops when a
-/// thread has no `handoff_from` or its parent isn't found. Falls back to a
-/// single source entry when thread metadata can't be read.
+/// Each step reads one thread's meta line by ID, so the walk costs one file
+/// open per ancestor rather than a scan of the whole threads directory. The
+/// walk stops when a thread has no `handoff_from` or its parent isn't found.
+/// Falls back to a single source entry when thread metadata can't be read.
 fn collect_lineage(source_thread_id: &str) -> Vec<LineageEntry> {
-    let Ok(threads) = tp::list_all_threads() else {
-        return vec![(source_thread_id.to_string(), source_thread_id.to_string())];
-    };
-    let by_id: HashMap<String, _> = threads.into_iter().map(|t| (t.id.clone(), t)).collect();
-
     let mut chain: Vec<LineageEntry> = Vec::new();
-    let mut current: Option<&str> = Some(source_thread_id);
+    let mut current = Some(source_thread_id.to_string());
     while let Some(id) = current {
-        let Some(summary) = by_id.get(id) else {
+        let Ok(Some(summary)) = tp::read_thread_summary(&id) else {
             if chain.is_empty() {
-                chain.push((id.to_string(), id.to_string()));
+                chain.push((id.clone(), id));
             }
             break;
         };
         chain.push((summary.id.clone(), summary.display_title()));
-        current = summary.handoff_from.as_deref();
+        current = summary.handoff_from;
     }
     chain
 }

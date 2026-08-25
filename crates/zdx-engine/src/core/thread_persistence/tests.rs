@@ -2071,6 +2071,38 @@ fn test_alias_roundtrip() {
     assert_eq!(read_thread_alias(&thread_id).unwrap(), None);
 }
 
+/// The handoff lineage walk (`/btw` seeds, `zdx threads show`) resolves a
+/// thread by ID. It must not need `list_all_threads()`, which opens every
+/// saved thread file just to answer one lookup.
+#[test]
+fn read_thread_summary_resolves_one_thread_by_id() {
+    let _temp = setup_temp_zdx_home();
+
+    let parent_id = unique_thread_id("summary-parent");
+    let mut parent = Thread::with_id(parent_id.clone()).unwrap();
+    parent.append(&ThreadEvent::user_message("parent")).unwrap();
+    parent.set_title(Some("Parent work".to_string())).unwrap();
+
+    let child_id = unique_thread_id("summary-child");
+    let mut child = Thread::with_id(child_id.clone()).unwrap();
+    child.set_handoff_from(Some(parent_id.clone()));
+    child.append(&ThreadEvent::user_message("child")).unwrap();
+
+    let summary = read_thread_summary(&child_id).unwrap().unwrap();
+    assert_eq!(summary.id, child_id);
+    assert_eq!(summary.handoff_from.as_deref(), Some(parent_id.as_str()));
+
+    let parent_summary = read_thread_summary(&parent_id).unwrap().unwrap();
+    assert_eq!(parent_summary.display_title(), "Parent work");
+    assert!(parent_summary.handoff_from.is_none());
+
+    assert!(
+        read_thread_summary(&unique_thread_id("summary-missing"))
+            .unwrap()
+            .is_none()
+    );
+}
+
 #[test]
 fn test_thread_lineage_roundtrip_and_list_filtering() {
     let _temp = setup_temp_zdx_home();
