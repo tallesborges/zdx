@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -540,6 +540,12 @@ pub struct AgentOverlayState {
     pub cells: Vec<zdx_transcript::HistoryCell>,
     /// Tool calls in display order, with the line each one's header sits on.
     pub tools: Vec<ToolRef>,
+    /// Thinking blocks in display order, one entry per thinking cell.
+    pub thinking: Vec<ThinkingRef>,
+    /// Ordinals of the thinking blocks the user expanded. Cells are rebuilt
+    /// from disk on every refresh, so expansion lives here and is re-applied
+    /// on each load rather than on the cell.
+    pub expanded_thinking: HashSet<usize>,
     /// Currently highlighted tool call (`tool_use_id`), for drill-in.
     pub tool_selected: Option<String>,
     /// Open tool detail pane, if any.
@@ -595,8 +601,21 @@ pub struct ToolRef {
     pub tool_use_id: String,
     /// Index in `AgentOverlayState::lines` of this tool's header row.
     pub line: usize,
-    /// One past this tool's last rendered row, excluding the blank separator.
+    /// One past this tool's last rendered row, excluding any separator.
     /// Clicks anywhere in `line..end` target this tool.
+    pub end: usize,
+}
+
+/// A thinking block in the rendered transcript.
+pub struct ThinkingRef {
+    /// Position among the window's thinking cells. Used instead of a cell
+    /// index because cells are rebuilt on refresh and the window trims from
+    /// the front once a thread exceeds `TRANSCRIPT_MAX_CELLS`.
+    pub ordinal: usize,
+    /// Index in `AgentOverlayState::lines` of this block's header row.
+    pub line: usize,
+    /// One past this block's last rendered row, excluding any separator.
+    /// Clicks anywhere in `line..end` toggle this block.
     pub end: usize,
 }
 
@@ -1980,7 +1999,7 @@ fn handle_mouse_event(app: &mut MonitorApp, mouse: MouseEvent) {
             MouseEventKind::ScrollDown => state.scroll = Some((cur + 1).min(max_offset)),
             MouseEventKind::ScrollUp => state.scroll = Some(cur.saturating_sub(1)),
             MouseEventKind::Down(MouseButton::Left) => {
-                open_tool_pane_at_row(state, mouse.row, overlay_page);
+                handle_overlay_click(state, mouse.row, overlay_page);
             }
             _ => {}
         }
@@ -2513,38 +2532,80 @@ const TRANSCRIPT_MAX_CELLS: usize = 200;
 
 /// Reads a thread transcript and renders it to formatted ratatui lines using
 /// the shared `zdx-transcript` renderer (markdown, wrapping, tool pairing).
-/// Also returns the cells and the tool rows found in them, so the overlay can
-/// drill into a tool call.
+/// Also returns the cells, the tool rows, and the thinking rows found in them,
+/// so the overlay can drill into a tool call or expand a thinking block.
+/// `expanded` re-applies the user's thinking expansions to the fresh cells.
 /// Best-effort; a missing file yields no lines.
 fn read_thread_transcript(
     id: &str,
     width: usize,
+    expanded: &HashSet<usize>,
 ) -> (
     Vec<zdx_transcript::HistoryCell>,
     Vec<Line<'static>>,
     Vec<ToolRef>,
+    Vec<ThinkingRef>,
 ) {
     let events = thread_persistence::load_thread_events(id).unwrap_or_default();
     let all_cells = zdx_transcript::build_transcript_from_events(&events);
     let start = all_cells.len().saturating_sub(TRANSCRIPT_MAX_CELLS);
-    let cells = all_cells[start..].to_vec();
-    let (lines, offsets) = zdx_transcript::cells_to_lines_with_offsets(&cells, width.max(1));
-    let tools = cells
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, cell)| match cell {
-            zdx_transcript::HistoryCell::Tool { tool_use_id, .. } => Some(ToolRef {
+    let mut cells = all_cells[start..].to_vec();
+    apply_thinking_expansion(&mut cells, expanded);
+    let (lines, tools, thinking) = render_cells(&cells, width);
+    (cells, lines, tools, thinking)
+}
+
+/// Applies the tracked expansions to freshly built cells, which always arrive
+/// collapsed.
+fn apply_thinking_expansion(cells: &mut [zdx_transcript::HistoryCell], expanded: &HashSet<usize>) {
+    let mut ordinal = 0usize;
+    for cell in cells {
+        if let zdx_transcript::HistoryCell::Thinking { is_collapsed, .. } = cell {
+            *is_collapsed = !expanded.contains(&ordinal);
+            ordinal += 1;
+        }
+    }
+}
+
+/// Renders cells to lines plus the tool and thinking rows they occupy.
+fn render_cells(
+    cells: &[zdx_transcript::HistoryCell],
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<ToolRef>, Vec<ThinkingRef>) {
+    let (lines, offsets) = zdx_transcript::cells_to_lines_with_offsets(cells, width.max(1));
+    let total = lines.len();
+    let mut tools = Vec::new();
+    let mut thinking = Vec::new();
+    for (idx, cell) in cells.iter().enumerate() {
+        match cell {
+            zdx_transcript::HistoryCell::Tool { tool_use_id, .. } => tools.push(ToolRef {
                 tool_use_id: tool_use_id.clone(),
                 line: offsets[idx],
-                // Each cell is followed by a blank separator line; exclude it.
-                end: offsets
-                    .get(idx + 1)
-                    .map_or(lines.len(), |next| next.saturating_sub(1)),
+                end: cell_end_row(cells, &offsets, total, idx),
             }),
-            _ => None,
-        })
-        .collect();
-    (cells, lines, tools)
+            zdx_transcript::HistoryCell::Thinking { .. } => thinking.push(ThinkingRef {
+                ordinal: thinking.len(),
+                line: offsets[idx],
+                end: cell_end_row(cells, &offsets, total, idx),
+            }),
+            _ => {}
+        }
+    }
+    (lines, tools, thinking)
+}
+
+/// One past the last row belonging to `cells[idx]`, excluding the separator
+/// blank lines that follow it. Consecutive tool/thinking cells have no
+/// separator at all, so this must come from the shared gap rule.
+fn cell_end_row(
+    cells: &[zdx_transcript::HistoryCell],
+    offsets: &[usize],
+    total: usize,
+    idx: usize,
+) -> usize {
+    offsets.get(idx + 1).map_or(total, |next| {
+        next.saturating_sub(zdx_transcript::gap_after(&cells[idx], cells.get(idx + 1)))
+    })
 }
 
 /// Number of visible transcript rows in the full-screen overlay.
@@ -2567,6 +2628,8 @@ fn open_agent_overlay(app: &mut MonitorApp) {
                 lines: Vec::new(),
                 cells: Vec::new(),
                 tools: Vec::new(),
+                thinking: Vec::new(),
+                expanded_thinking: HashSet::new(),
                 tool_selected: None,
                 tool_pane: None,
                 scroll: None,
@@ -2586,6 +2649,8 @@ fn open_agent_overlay(app: &mut MonitorApp) {
                 lines: vec![Line::from("transcript unavailable (no thread id)")],
                 cells: Vec::new(),
                 tools: Vec::new(),
+                thinking: Vec::new(),
+                expanded_thinking: HashSet::new(),
                 tool_selected: None,
                 tool_pane: None,
                 scroll: None,
@@ -2623,6 +2688,8 @@ fn open_thread_overlay(app: &mut MonitorApp) {
         lines: Vec::new(),
         cells: Vec::new(),
         tools: Vec::new(),
+        thinking: Vec::new(),
+        expanded_thinking: HashSet::new(),
         tool_selected: None,
         tool_pane: None,
         scroll: None,
@@ -2686,10 +2753,12 @@ fn load_transcript_into(state: &mut AgentOverlayState) {
     let (len, mtime) = transcript_file_fingerprint(&path);
     state.file_len = len;
     state.file_mtime = mtime;
-    let (cells, lines, tools) = read_thread_transcript(&state.thread_id, state.width);
+    let (cells, lines, tools, thinking) =
+        read_thread_transcript(&state.thread_id, state.width, &state.expanded_thinking);
     state.cells = cells;
     state.lines = lines;
     state.tools = tools;
+    state.thinking = thinking;
     // A tool trimmed out of the window can no longer be highlighted or shown.
     if state.selected_tool_index().is_none() {
         state.tool_selected = None;
@@ -2790,6 +2859,67 @@ fn open_tool_pane_at_row(state: &mut AgentOverlayState, row: u16, page: usize) {
     open_tool_pane(state, tool_use_id);
 }
 
+/// Routes a left click in the transcript overlay: a thinking block toggles,
+/// otherwise a tool's rows open its detail pane.
+fn handle_overlay_click(state: &mut AgentOverlayState, row: u16, page: usize) {
+    if toggle_thinking_at_row(state, row, page) {
+        return;
+    }
+    open_tool_pane_at_row(state, row, page);
+}
+
+/// Expands or collapses the thinking block under a clicked overlay row.
+///
+/// Returns `true` when a block was toggled, so the caller can fall through to
+/// tool hit-testing otherwise. The clicked block keeps its screen row, since
+/// expanding shifts every line below it.
+fn toggle_thinking_at_row(state: &mut AgentOverlayState, row: u16, page: usize) -> bool {
+    let Some(content_row) = row.checked_sub(1).map(usize::from).filter(|r| *r < page) else {
+        return false;
+    };
+    let line = state.top_line(page) + content_row;
+    let Some(block) = state
+        .thinking
+        .iter()
+        .find(|t| (t.line..t.end).contains(&line))
+    else {
+        return false;
+    };
+
+    let ordinal = block.ordinal;
+    if !state.expanded_thinking.remove(&ordinal) {
+        state.expanded_thinking.insert(ordinal);
+    }
+    rerender_transcript(state);
+
+    if let Some(block) = state.thinking.iter().find(|t| t.ordinal == ordinal) {
+        let anchored = block.line.saturating_sub(content_row);
+        state.scroll = Some(anchored.min(state.max_scroll(page)));
+    }
+    true
+}
+
+/// Expands every thinking block, or collapses them all when any are open.
+fn toggle_all_thinking(state: &mut AgentOverlayState) {
+    if state.expanded_thinking.is_empty() {
+        state.expanded_thinking = (0..state.thinking.len()).collect();
+    } else {
+        state.expanded_thinking.clear();
+    }
+    rerender_transcript(state);
+}
+
+/// Re-renders the overlay from the cells already in memory. Used by the
+/// thinking toggles, which change only how existing cells display and must not
+/// re-read the transcript file on a keystroke or click.
+fn rerender_transcript(state: &mut AgentOverlayState) {
+    apply_thinking_expansion(&mut state.cells, &state.expanded_thinking);
+    let (lines, tools, thinking) = render_cells(&state.cells, state.width);
+    state.lines = lines;
+    state.tools = tools;
+    state.thinking = thinking;
+}
+
 /// Handles a key while the tool detail pane is open. Scroll offsets are clamped
 /// at render time, where the wrapped body height is known.
 fn handle_tool_pane_key(pane: &mut ToolPaneState, key: KeyCode, page_size: usize) -> bool {
@@ -2826,6 +2956,7 @@ fn handle_agent_overlay_key(app: &mut MonitorApp, key: KeyCode) {
         KeyCode::Tab | KeyCode::Char('n') => move_agent_overlay_tool(state, 1, page),
         KeyCode::BackTab | KeyCode::Char('p') => move_agent_overlay_tool(state, -1, page),
         KeyCode::Enter => open_agent_overlay_tool_pane(state, page),
+        KeyCode::Char('t') => toggle_all_thinking(state),
         KeyCode::Char('j') | KeyCode::Down => state.scroll = Some((cur + 1).min(max_offset)),
         KeyCode::Char('k') | KeyCode::Up => state.scroll = Some(cur.saturating_sub(1)),
         KeyCode::PageDown => state.scroll = Some((cur + page).min(max_offset)),
@@ -3649,6 +3780,8 @@ mod transcript_tests {
                 line: tool_line,
                 end: tool_line + 1,
             }],
+            thinking: Vec::new(),
+            expanded_thinking: HashSet::new(),
             tool_selected: None,
             tool_pane: None,
             scroll: Some(0),
@@ -3676,6 +3809,138 @@ mod transcript_tests {
             state.tool_pane.is_none(),
             "clicking the border opens nothing"
         );
+    }
+
+    /// Consecutive tool cells render with no blank separator between them, so a
+    /// tool's clickable rows must come from the shared gap rule rather than
+    /// assuming one trailing blank line.
+    #[test]
+    fn adjacent_tool_rows_stay_clickable() {
+        let events = parse(&[
+            r#"{"type":"tool_use","id":"t1","name":"grep","input":{"pattern":"one"},"ts":"t"}"#,
+            r#"{"type":"tool_result","tool_use_id":"t1","output":"a","ok":true,"ts":"t"}"#,
+            r#"{"type":"tool_use","id":"t2","name":"read","input":{"file_path":"b.rs"},"ts":"t"}"#,
+            r#"{"type":"tool_result","tool_use_id":"t2","output":"b","ok":true,"ts":"t"}"#,
+        ]);
+        let cells = zdx_transcript::build_transcript_from_events(&events);
+        let (_, tools, _) = render_cells(&cells, 80);
+
+        assert_eq!(tools.len(), 2);
+        for tool in &tools {
+            assert!(
+                tool.end > tool.line,
+                "tool {} has no clickable rows ({}..{})",
+                tool.tool_use_id,
+                tool.line,
+                tool.end
+            );
+        }
+    }
+
+    /// Clicking a thinking header expands it in place; clicking again collapses
+    /// it, and the block keeps the screen row it was clicked on.
+    #[test]
+    fn click_toggles_a_thinking_block() {
+        let events = parse(&[
+            r#"{"type":"message","role":"user","text":"hi","ts":"t"}"#,
+            r#"{"type":"reasoning","text":"Weighing the options\n\nThe gap rule is the cheaper fix.","ts":"t"}"#,
+            r#"{"type":"message","role":"assistant","text":"done","ts":"t"}"#,
+        ]);
+        let mut cells = zdx_transcript::build_transcript_from_events(&events);
+        let expanded = HashSet::new();
+        apply_thinking_expansion(&mut cells, &expanded);
+        let (lines, tools, thinking) = render_cells(&cells, 80);
+
+        assert_eq!(thinking.len(), 1, "one thinking block");
+        let header = thinking[0].line;
+        let collapsed_total = lines.len();
+
+        let mut state = AgentOverlayState {
+            thread_id: "t".into(),
+            title: String::new(),
+            lines,
+            cells,
+            tools,
+            thinking,
+            expanded_thinking: expanded,
+            tool_selected: None,
+            tool_pane: None,
+            scroll: Some(0),
+            ended: false,
+            unavailable: false,
+            file_len: 0,
+            file_mtime: None,
+            width: 80,
+        };
+        let page = 40;
+
+        // Screen row 0 is the border, so the header sits at `header + 1`.
+        assert!(toggle_thinking_at_row(
+            &mut state,
+            u16::try_from(header + 1).unwrap(),
+            page
+        ));
+        assert_eq!(state.expanded_thinking.len(), 1);
+        assert!(
+            state.lines.len() > collapsed_total,
+            "expanding adds rows: {} -> {}",
+            collapsed_total,
+            state.lines.len()
+        );
+
+        assert!(toggle_thinking_at_row(
+            &mut state,
+            u16::try_from(header + 1).unwrap(),
+            page
+        ));
+        assert!(state.expanded_thinking.is_empty());
+        assert_eq!(
+            state.lines.len(),
+            collapsed_total,
+            "collapsing restores the original height"
+        );
+
+        // A row outside any thinking block is left for tool hit-testing.
+        assert!(!toggle_thinking_at_row(&mut state, 0, page));
+    }
+
+    /// `t` expands every block at once, then collapses them all.
+    #[test]
+    fn t_key_toggles_all_thinking_blocks() {
+        let events = parse(&[
+            r#"{"type":"reasoning","text":"First pass\n\nCheck the renderer.","ts":"t"}"#,
+            r#"{"type":"message","role":"assistant","text":"mid","ts":"t"}"#,
+            r#"{"type":"reasoning","text":"Second pass\n\nCheck the monitor.","ts":"t"}"#,
+        ]);
+        let cells = zdx_transcript::build_transcript_from_events(&events);
+        let (lines, tools, thinking) = render_cells(&cells, 80);
+        let collapsed_total = lines.len();
+
+        let mut state = AgentOverlayState {
+            thread_id: "t".into(),
+            title: String::new(),
+            lines,
+            cells,
+            tools,
+            thinking,
+            expanded_thinking: HashSet::new(),
+            tool_selected: None,
+            tool_pane: None,
+            scroll: Some(0),
+            ended: false,
+            unavailable: false,
+            file_len: 0,
+            file_mtime: None,
+            width: 80,
+        };
+
+        toggle_all_thinking(&mut state);
+        assert_eq!(state.expanded_thinking.len(), 2, "both blocks expanded");
+        assert!(state.lines.len() > collapsed_total);
+
+        toggle_all_thinking(&mut state);
+        assert!(state.expanded_thinking.is_empty());
+        assert_eq!(state.lines.len(), collapsed_total);
     }
 
     #[test]

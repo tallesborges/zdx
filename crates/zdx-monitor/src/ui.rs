@@ -1254,11 +1254,14 @@ fn render_agent_overlay(f: &mut Frame, state: &AgentOverlayState, area: Rect) {
     } else {
         ""
     };
-    let hints = if state.tools.is_empty() {
-        " · Esc close "
-    } else {
-        " · click/Tab tool · Enter detail · Esc close "
-    };
+    let mut hints = String::from(" · ");
+    if !state.tools.is_empty() {
+        hints.push_str("click/Tab tool · Enter detail · ");
+    }
+    if !state.thinking.is_empty() {
+        hints.push_str("click/t thinking · ");
+    }
+    hints.push_str("Esc close ");
     let title = format!(" {}{status}{hints}", state.title);
     let block = Block::default()
         .borders(Borders::ALL)
