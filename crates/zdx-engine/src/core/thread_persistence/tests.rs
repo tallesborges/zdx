@@ -417,6 +417,31 @@ fn test_format_transcript_with_tools() {
 }
 
 #[test]
+fn test_format_transcript_keeps_large_tool_output_verbatim() {
+    // Verification callers (read_thread) judge completion from tool evidence,
+    // and the decisive line — a test summary, an exit status — sits at the end
+    // of the output. A normal-sized thread must render it untouched.
+    let long_output = format!(
+        "running tests\n{}\nSummary: 97 tests passed",
+        "x".repeat(20_000)
+    );
+    let events = vec![
+        ThreadEvent::meta_with_root(None),
+        ThreadEvent::user_message("run the tests"),
+        ThreadEvent::tool_use("t1", "bash", json!({"command": "cargo nextest run"})),
+        ThreadEvent::tool_result("t1", json!({"stdout": long_output}), true),
+    ];
+
+    let transcript = format_transcript(&events);
+    assert!(transcript.contains("running tests"));
+    assert!(
+        transcript.contains("Summary: 97 tests passed"),
+        "verdict line at the end of tool output must survive"
+    );
+    assert!(!transcript.contains("… truncated …"));
+}
+
+#[test]
 fn test_reasoning_event_deserialization() {
     let json = r#"{"type":"reasoning","text":"sum","replay":{"provider":"openai","id":"r1","encrypted_content":"enc"},"ts":"2024-01-01T00:00:00Z"}"#;
     let event: ThreadEvent = serde_json::from_str(json).unwrap();
