@@ -206,8 +206,13 @@ struct SearchRequest {
     objective: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     search_queries: Option<Vec<String>>,
-    max_results: u32,
     mode: &'static str,
+    advanced_settings: AdvancedSearchSettings,
+}
+
+#[derive(Debug, Serialize)]
+struct AdvancedSearchSettings {
+    max_results: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -262,8 +267,8 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
     let request = SearchRequest {
         objective: objective.map(str::to_string),
         search_queries,
-        max_results,
         mode: "advanced",
+        advanced_settings: AdvancedSearchSettings { max_results },
     };
 
     let response = match send_search_request(&request, &api_key).await {
@@ -467,6 +472,20 @@ mod tests {
         });
         let parsed: WebSearchInput = serde_json::from_value(input).unwrap();
         assert_eq!(parsed.max_results, 10);
+    }
+
+    #[test]
+    fn test_v1_request_nests_max_results_under_advanced_settings() {
+        let request = SearchRequest {
+            objective: Some("test query".to_string()),
+            search_queries: Some(vec!["test query".to_string()]),
+            mode: "advanced",
+            advanced_settings: AdvancedSearchSettings { max_results: 5 },
+        };
+        let payload = serde_json::to_value(request).unwrap();
+
+        assert!(payload.get("max_results").is_none());
+        assert_eq!(payload["advanced_settings"]["max_results"], json!(5));
     }
 
     #[test]
