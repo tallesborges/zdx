@@ -26,6 +26,11 @@ LLM provider implementations extracted from `zdx-core`.
 - `zdx-engine` re-exports everything via a thin `providers.rs` facade.
 - Provider routing hints (e.g. for the opencode-go meta-provider) are passed as `api_hint: Option<String>` parameters — model registry lookups happen in the caller (`zdx-engine`).
 
+### OAuth credentials
+
+- `oauth.json` is rewritten whole on every change, and providers rotate the refresh token on each refresh. Any read-modify-write MUST hold the cross-process lock (`<zdx home>/oauth.lock`): use `OAuthCache::update` for writes and `oauth::refresh_locked` for refreshes. `OAuthCache::save` is atomic (temp file + rename, 0600) but does not lock on its own.
+- `refresh_locked` re-reads the cache after taking the lock and returns the stored credentials when another process already refreshed, so a rotated refresh token is never replayed. Provider `resolve_credentials` must not refresh or persist tokens itself.
+
 ### Request logging
 
 - Every streaming request site MUST go through `shared::log_request(client, url)` before sending and `shared::check_response_status(client, response)` for the status check. `check_response_status` owns the non-success path (log + `ProviderError::http_status`); do not hand-roll it.

@@ -30,17 +30,21 @@ fn reasoning_effort_from_thinking_level(level: ThinkingLevel) -> &'static str {
 /// # Errors
 /// Returns an error if no credentials are stored or the refresh fails.
 pub async fn resolve_access_token(account: Option<&str>) -> Result<String> {
-    let mut creds = oauth_grok_build::load_credentials(account)?.ok_or_else(|| {
+    let creds = oauth_grok_build::load_credentials(account)?.ok_or_else(|| {
         anyhow::anyhow!("No Grok Build OAuth credentials found. Run `zdx login --grok-build`.")
     })?;
 
-    if creds.is_expired() {
-        let refreshed = oauth_grok_build::refresh_token(&creds.refresh)
-            .await
-            .context("Failed to refresh Grok Build OAuth token")?;
-        oauth_grok_build::save_credentials(account, &refreshed)?;
-        creds = refreshed;
-    }
+    let creds = if creds.is_expired() {
+        crate::oauth::refresh_locked(
+            oauth_grok_build::PROVIDER_KEY,
+            account,
+            |refresh| async move { oauth_grok_build::refresh_token(&refresh).await },
+        )
+        .await
+        .context("Failed to refresh Grok Build OAuth token")?
+    } else {
+        creds
+    };
 
     Ok(creds.access)
 }

@@ -52,7 +52,7 @@ impl AntigravityConfig {
 pub async fn resolve_credentials(
     account: Option<&str>,
 ) -> Result<oauth_antigravity::AntigravityCredentials> {
-    let mut creds = oauth_antigravity::load_credentials(account)?.ok_or_else(|| {
+    let creds = oauth_antigravity::load_credentials(account)?.ok_or_else(|| {
         anyhow::anyhow!(
             "No Google Antigravity OAuth credentials found. Run 'zdx login --antigravity' to authenticate."
         )
@@ -63,13 +63,18 @@ pub async fn resolve_credentials(
         .clone()
         .ok_or_else(|| anyhow::anyhow!("Missing project ID in credentials"))?;
 
-    if creds.is_expired() {
-        let refreshed = oauth_antigravity::refresh_token(&creds.refresh, &project_id)
-            .await
-            .context("Failed to refresh Google Antigravity OAuth token")?;
-        oauth_antigravity::save_credentials(account, &refreshed)?;
-        creds = refreshed;
-    }
+    let creds = if creds.is_expired() {
+        let project_id = project_id.clone();
+        crate::oauth::refresh_locked(
+            oauth_antigravity::PROVIDER_KEY,
+            account,
+            |refresh| async move { oauth_antigravity::refresh_token(&refresh, &project_id).await },
+        )
+        .await
+        .context("Failed to refresh Google Antigravity OAuth token")?
+    } else {
+        creds
+    };
 
     Ok(oauth_antigravity::AntigravityCredentials {
         access: creds.access,

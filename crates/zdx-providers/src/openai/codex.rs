@@ -85,11 +85,13 @@ pub async fn resolve_credentials(
         .ok_or_else(|| anyhow::anyhow!("No OpenAI Codex OAuth credentials found"))?;
 
     if creds.is_expired() {
-        let refreshed = oauth_codex::refresh_token(&creds.refresh)
-            .await
-            .context("Failed to refresh OpenAI Codex OAuth token")?;
-        oauth_codex::save_credentials(account, &refreshed)?;
-        creds = refreshed;
+        creds = crate::oauth::refresh_locked(
+            oauth_codex::PROVIDER_KEY,
+            account,
+            |refresh| async move { oauth_codex::refresh_token(&refresh).await },
+        )
+        .await
+        .context("Failed to refresh OpenAI Codex OAuth token")?;
     }
 
     let account_id = if let Some(id) = creds.account_id.clone() {

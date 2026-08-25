@@ -5,15 +5,25 @@
 
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
+use std::future::Future;
 use std::io::Write;
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 /// OAuth token cache filename.
 const OAUTH_CACHE_FILE: &str = "oauth.json";
+
+/// Lock file guarding read-modify-write access to the OAuth cache.
+const OAUTH_LOCK_FILE: &str = "oauth.lock";
+
+/// How long to wait for the cache lock before giving up.
+const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How often to retry a contended cache lock.
+const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Returns the ZDX home directory (`$ZDX_HOME` or `~/.zdx`).
 fn zdx_home() -> PathBuf {
@@ -112,6 +122,203 @@ pub struct OAuthCache {
     pub providers: HashMap<String, OAuthCredentials>,
 }
 
+/// Cross-process guard around read-modify-write access to `oauth.json`.
+///
+/// Providers rotate the refresh token on every refresh, so two zdx processes
+/// (bot daemon, TUI, subagent runs) refreshing the same account concurrently
+/// would leave the loser persisting a token the provider already invalidated.
+/// The lock also keeps a login/logout from clobbering another account's entry,
+/// since the whole file is rewritten on every change.
+pub struct CacheLock {
+    #[cfg(unix)]
+    file: fs::File,
+}
+
+fn lock_path() -> PathBuf {
+    zdx_home().join(OAUTH_LOCK_FILE)
+}
+
+/// Writes `contents` to `path`, owner-readable only, flushed to disk.
+fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .with_context(|| format!("Failed to open {} for writing", path.display()))?;
+        file.write_all(contents)
+            .with_context(|| format!("Failed to write to {}", path.display()))?;
+        file.sync_all()
+            .with_context(|| format!("Failed to flush {}", path.display()))?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::write(path, contents)
+            .with_context(|| format!("Failed to write to {}", path.display()))?;
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+impl CacheLock {
+    /// Acquires the lock, blocking the current thread until it is free.
+    ///
+    /// # Errors
+    /// Returns an error if the lock file cannot be opened or stays contended
+    /// past [`LOCK_TIMEOUT`].
+    pub fn acquire_blocking() -> Result<Self> {
+        let file = open_lock_file()?;
+        let deadline = Instant::now() + LOCK_TIMEOUT;
+        loop {
+            if try_lock(&file)? {
+                return Ok(Self { file });
+            }
+            check_deadline(deadline)?;
+            std::thread::sleep(LOCK_POLL_INTERVAL);
+        }
+    }
+
+    /// Acquires the lock, yielding to the async runtime while waiting.
+    ///
+    /// # Errors
+    /// Returns an error if the lock file cannot be opened or stays contended
+    /// past [`LOCK_TIMEOUT`].
+    pub async fn acquire() -> Result<Self> {
+        let file = open_lock_file()?;
+        let deadline = Instant::now() + LOCK_TIMEOUT;
+        loop {
+            if try_lock(&file)? {
+                return Ok(Self { file });
+            }
+            check_deadline(deadline)?;
+            tokio::time::sleep(LOCK_POLL_INTERVAL).await;
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for CacheLock {
+    fn drop(&mut self) {
+        use std::os::unix::io::AsRawFd;
+        // SAFETY: the fd is owned by `self.file`, which outlives this call.
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn open_lock_file() -> Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let path = lock_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+    }
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(&path)
+        .with_context(|| format!("Failed to open OAuth lock file {}", path.display()))
+}
+
+#[cfg(unix)]
+fn try_lock(file: &fs::File) -> Result<bool> {
+    use std::os::unix::io::AsRawFd;
+
+    // SAFETY: the fd is owned by `file`, which outlives this call.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(true);
+    }
+    let err = std::io::Error::last_os_error();
+    if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
+        return Ok(false);
+    }
+    Err(anyhow::Error::new(err).context("Failed to lock the OAuth cache"))
+}
+
+#[cfg(unix)]
+fn check_deadline(deadline: Instant) -> Result<()> {
+    if Instant::now() >= deadline {
+        anyhow::bail!(
+            "Timed out after {}s waiting for the OAuth cache lock at {}",
+            LOCK_TIMEOUT.as_secs(),
+            lock_path().display()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+impl CacheLock {
+    /// Acquires the lock. File locking is only implemented on Unix.
+    ///
+    /// # Errors
+    /// Never returns an error on this platform.
+    pub fn acquire_blocking() -> Result<Self> {
+        Ok(Self {})
+    }
+
+    /// Acquires the lock. File locking is only implemented on Unix.
+    ///
+    /// # Errors
+    /// Never returns an error on this platform.
+    pub async fn acquire() -> Result<Self> {
+        Ok(Self {})
+    }
+}
+
+/// Refreshes the stored credentials for `provider_key`/`account` while holding
+/// the cache lock.
+///
+/// The cache is re-read after the lock is taken so a refresh another process
+/// already completed is reused, instead of replaying a refresh token that the
+/// provider has since rotated away.
+///
+/// # Errors
+/// Returns an error if the lock cannot be taken, no credentials are stored for
+/// the account, the refresh call fails, or the cache cannot be written.
+pub async fn refresh_locked<F, Fut>(
+    provider_key: &str,
+    account: Option<&str>,
+    refresh: F,
+) -> Result<OAuthCredentials>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: Future<Output = Result<OAuthCredentials>>,
+{
+    let _lock = CacheLock::acquire().await?;
+
+    let key = account_cache_key(provider_key, account);
+    let mut cache = OAuthCache::load()?;
+    let current = cache
+        .get(&key)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("No OAuth credentials stored for '{key}'"))?;
+
+    if !current.is_expired() {
+        return Ok(current);
+    }
+
+    let mut refreshed = refresh(current.refresh.clone()).await?;
+    if refreshed.account_id.is_none() {
+        refreshed.account_id = current.account_id;
+    }
+    cache.set(&key, refreshed.clone());
+    cache.save()?;
+
+    Ok(refreshed)
+}
+
 impl OAuthCache {
     /// Returns the path to the OAuth cache file.
     pub fn cache_path() -> PathBuf {
@@ -138,6 +345,11 @@ impl OAuthCache {
 
     /// Saves the OAuth cache to disk with restricted permissions (0600).
     ///
+    /// The JSON is staged in a same-directory temp file and renamed into place,
+    /// so a crash or a concurrent reader never sees a half-written cache.
+    /// Callers that read-modify-write must hold a [`CacheLock`]; prefer
+    /// [`OAuthCache::update`].
+    ///
     /// # Errors
     /// Returns an error if the operation fails.
     pub fn save(&self) -> Result<()> {
@@ -152,28 +364,34 @@ impl OAuthCache {
         let contents =
             serde_json::to_string_pretty(self).context("Failed to serialize OAuth cache")?;
 
-        // Write with restricted permissions
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&path)
-                .with_context(|| format!("Failed to open {} for writing", path.display()))?;
-            file.write_all(contents.as_bytes())
-                .with_context(|| format!("Failed to write to {}", path.display()))?;
-        }
+        let tmp_path = path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
+        write_private(&tmp_path, contents.as_bytes())?;
 
-        #[cfg(not(unix))]
-        {
-            fs::write(&path, contents)
-                .with_context(|| format!("Failed to write to {}", path.display()))?;
+        if let Err(err) = fs::rename(&tmp_path, &path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(
+                anyhow::Error::new(err).context(format!("Failed to replace {}", path.display()))
+            );
         }
 
         Ok(())
+    }
+
+    /// Applies `f` to the on-disk cache under the cache lock, then saves it.
+    ///
+    /// This is the only safe way to change a single entry: the whole file is
+    /// rewritten on save, so an unlocked read-modify-write can drop another
+    /// account's credentials written in between.
+    ///
+    /// # Errors
+    /// Returns an error if the lock cannot be taken or the cache cannot be
+    /// read or written.
+    pub fn update<T>(f: impl FnOnce(&mut Self) -> T) -> Result<T> {
+        let _lock = CacheLock::acquire_blocking()?;
+        let mut cache = Self::load()?;
+        let out = f(&mut cache);
+        cache.save()?;
+        Ok(out)
     }
 
     /// Gets the credentials for a provider.
@@ -462,13 +680,12 @@ pub mod claude_cli {
     /// # Errors
     /// Returns an error if the operation fails.
     pub fn save_credentials(account: Option<&str>, creds: &OAuthCredentials) -> Result<()> {
-        let mut cache = OAuthCache::load()?;
-        cache.set(
-            &super::account_cache_key(PROVIDER_KEY, account),
-            creds.clone(),
-        );
-        cache.save()?;
-        Ok(())
+        OAuthCache::update(|cache| {
+            cache.set(
+                &super::account_cache_key(PROVIDER_KEY, account),
+                creds.clone(),
+            );
+        })
     }
 
     /// Removes the Claude CLI OAuth credentials for an account from cache.
@@ -476,12 +693,11 @@ pub mod claude_cli {
     /// # Errors
     /// Returns an error if the operation fails.
     pub fn clear_credentials(account: Option<&str>) -> Result<bool> {
-        let mut cache = OAuthCache::load()?;
-        let had_creds = cache
-            .remove(&super::account_cache_key(PROVIDER_KEY, account))
-            .is_some();
-        cache.save()?;
-        Ok(had_creds)
+        OAuthCache::update(|cache| {
+            cache
+                .remove(&super::account_cache_key(PROVIDER_KEY, account))
+                .is_some()
+        })
     }
 
     /// Returns a masked version of a token for display (first 12 chars + ...).
@@ -737,13 +953,12 @@ pub mod openai_codex {
     /// # Errors
     /// Returns an error if the operation fails.
     pub fn save_credentials(account: Option<&str>, creds: &OAuthCredentials) -> Result<()> {
-        let mut cache = OAuthCache::load()?;
-        cache.set(
-            &super::account_cache_key(PROVIDER_KEY, account),
-            creds.clone(),
-        );
-        cache.save()?;
-        Ok(())
+        OAuthCache::update(|cache| {
+            cache.set(
+                &super::account_cache_key(PROVIDER_KEY, account),
+                creds.clone(),
+            );
+        })
     }
 
     /// Removes the `OpenAI` Codex OAuth credentials for an account from cache.
@@ -751,12 +966,11 @@ pub mod openai_codex {
     /// # Errors
     /// Returns an error if the operation fails.
     pub fn clear_credentials(account: Option<&str>) -> Result<bool> {
-        let mut cache = OAuthCache::load()?;
-        let had_creds = cache
-            .remove(&super::account_cache_key(PROVIDER_KEY, account))
-            .is_some();
-        cache.save()?;
-        Ok(had_creds)
+        OAuthCache::update(|cache| {
+            cache
+                .remove(&super::account_cache_key(PROVIDER_KEY, account))
+                .is_some()
+        })
     }
 }
 
@@ -1031,25 +1245,23 @@ pub mod google_antigravity {
     /// # Errors
     /// Returns an error if the operation fails.
     pub fn save_credentials(account: Option<&str>, creds: &OAuthCredentials) -> Result<()> {
-        let mut cache = OAuthCache::load()?;
-        cache.set(
-            &super::account_cache_key(PROVIDER_KEY, account),
-            creds.clone(),
-        );
-        cache.save()?;
-        Ok(())
+        OAuthCache::update(|cache| {
+            cache.set(
+                &super::account_cache_key(PROVIDER_KEY, account),
+                creds.clone(),
+            );
+        })
     }
 
     ///
     /// # Errors
     /// Returns an error if the operation fails.
     pub fn clear_credentials(account: Option<&str>) -> Result<bool> {
-        let mut cache = OAuthCache::load()?;
-        let had_creds = cache
-            .remove(&super::account_cache_key(PROVIDER_KEY, account))
-            .is_some();
-        cache.save()?;
-        Ok(had_creds)
+        OAuthCache::update(|cache| {
+            cache
+                .remove(&super::account_cache_key(PROVIDER_KEY, account))
+                .is_some()
+        })
     }
 }
 
@@ -1282,13 +1494,12 @@ pub mod grok_build {
     /// # Errors
     /// Returns an error if the operation fails.
     pub fn save_credentials(account: Option<&str>, creds: &OAuthCredentials) -> Result<()> {
-        let mut cache = OAuthCache::load()?;
-        cache.set(
-            &super::account_cache_key(PROVIDER_KEY, account),
-            creds.clone(),
-        );
-        cache.save()?;
-        Ok(())
+        OAuthCache::update(|cache| {
+            cache.set(
+                &super::account_cache_key(PROVIDER_KEY, account),
+                creds.clone(),
+            );
+        })
     }
 
     /// Removes the Grok Build OAuth credentials for an account from cache.
@@ -1296,12 +1507,11 @@ pub mod grok_build {
     /// # Errors
     /// Returns an error if the operation fails.
     pub fn clear_credentials(account: Option<&str>) -> Result<bool> {
-        let mut cache = OAuthCache::load()?;
-        let had_creds = cache
-            .remove(&super::account_cache_key(PROVIDER_KEY, account))
-            .is_some();
-        cache.save()?;
-        Ok(had_creds)
+        OAuthCache::update(|cache| {
+            cache
+                .remove(&super::account_cache_key(PROVIDER_KEY, account))
+                .is_some()
+        })
     }
 }
 

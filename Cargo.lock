@@ -4806,6 +4806,7 @@ dependencies = [
  "chrono",
  "eventsource-stream",
  "futures-util",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",

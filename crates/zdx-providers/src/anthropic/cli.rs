@@ -64,7 +64,7 @@ impl ClaudeCliConfig {
 pub async fn resolve_credentials(
     account: Option<&str>,
 ) -> Result<oauth_claude_cli::ClaudeCliCredentials> {
-    let mut creds = oauth_claude_cli::load_credentials(account)?.ok_or_else(|| {
+    let creds = oauth_claude_cli::load_credentials(account)?.ok_or_else(|| {
         let hint = account.map_or_else(
             || "zdx login --claude-cli".to_string(),
             |name| format!("zdx login --claude-cli --account {name}"),
@@ -72,13 +72,17 @@ pub async fn resolve_credentials(
         anyhow::anyhow!("No Claude CLI OAuth credentials found. Run '{hint}' to authenticate.")
     })?;
 
-    if creds.is_expired() {
-        let refreshed = oauth_claude_cli::refresh_token(&creds.refresh)
-            .await
-            .context("Failed to refresh Claude CLI OAuth token")?;
-        oauth_claude_cli::save_credentials(account, &refreshed)?;
-        creds = refreshed;
-    }
+    let creds = if creds.is_expired() {
+        crate::oauth::refresh_locked(
+            oauth_claude_cli::PROVIDER_KEY,
+            account,
+            |refresh| async move { oauth_claude_cli::refresh_token(&refresh).await },
+        )
+        .await
+        .context("Failed to refresh Claude CLI OAuth token")?
+    } else {
+        creds
+    };
 
     Ok(oauth_claude_cli::ClaudeCliCredentials {
         access: creds.access,
