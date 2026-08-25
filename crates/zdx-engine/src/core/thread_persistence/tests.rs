@@ -27,6 +27,46 @@ fn extract_handoff_from_reads_meta_parent() {
     assert_eq!(extract_handoff_from_from_events(&[]), None);
 }
 
+#[tokio::test]
+async fn test_persist_handle_resolves_only_after_events_are_on_disk() {
+    // Callers that reload a thread from disk after a turn (the Telegram bot does
+    // this for every message) must be able to wait for persistence. Awaiting the
+    // task handle is that barrier, so it has to imply a complete thread log.
+    let _temp = setup_temp_zdx_home();
+
+    let thread_id = unique_thread_id("persist-barrier");
+    let thread = Thread::with_id(thread_id.clone()).unwrap();
+
+    let (tx, rx) = create_event_channel();
+    let handle = spawn_thread_persist_task(thread, rx);
+
+    let messages = vec![crate::providers::ChatMessage {
+        role: "assistant".to_string(),
+        phase: None,
+        content: crate::providers::MessageContent::Text("done working".to_string()),
+    }];
+    tx.send(Arc::new(AgentEvent::TurnFinished {
+        status: TurnStatus::Completed,
+        final_text: "done working".to_string(),
+        messages,
+        prior_message_count: 0,
+    }))
+    .unwrap();
+    drop(tx);
+
+    handle.await.unwrap();
+
+    let events = load_thread_events(&thread_id).unwrap();
+    let has_assistant = events.iter().any(|e| {
+        matches!(e, ThreadEvent::Message { role, text, .. }
+            if role == "assistant" && text == "done working")
+    });
+    assert!(
+        has_assistant,
+        "assistant turn must be on disk once the handle resolves: {events:#?}"
+    );
+}
+
 fn setup_temp_zdx_home() -> crate::test_support::TestZdxHomeGuard {
     crate::test_support::temp_zdx_home()
 }
