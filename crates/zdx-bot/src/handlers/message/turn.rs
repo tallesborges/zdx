@@ -4,7 +4,9 @@ use zdx_engine::core::thread_persistence;
 
 use super::response::send_final_response;
 use super::status::{STATUS_DEBOUNCE, cleanup_turn_status, setup_turn_status, update_status};
-use super::{ReplyContext, SpawnRequest, TurnResult, TurnStatus, format_user_error_message};
+use super::{
+    ReplyContext, SpawnRequest, TurnOutcome, TurnResult, TurnStatus, format_user_error_message,
+};
 use crate::agent;
 use crate::bot::context::BotContext;
 use crate::telegram::InlineKeyboardMarkup;
@@ -17,7 +19,7 @@ pub(super) async fn run_agent_turn(
     synthetic_topic_routed_from_general: bool,
     provisional_status: Option<TurnStatus>,
     record_user: bool,
-) -> Result<()> {
+) -> Result<TurnOutcome> {
     let resolved_root = context.root_for_chat(incoming.chat_id);
     let stored_root = thread_persistence::read_thread_root_path(thread_id)?;
     let worktree_root = stored_root
@@ -223,7 +225,7 @@ async fn finalize_turn(
     _thread: &mut zdx_engine::core::thread_persistence::Thread,
     status: &TurnStatus,
     result: TurnResult,
-) -> Result<()> {
+) -> Result<TurnOutcome> {
     if status.token.is_cancelled() {
         tracing::info!(
             chat_id = incoming.chat_id,
@@ -241,7 +243,7 @@ async fn finalize_turn(
                 )
                 .await;
         }
-        return Ok(());
+        return Ok(TurnOutcome::Cancelled);
     }
 
     if result.had_error && !result.got_result {
@@ -266,7 +268,11 @@ async fn finalize_turn(
             },
         )
         .await;
-        return Ok(());
+        return Ok(TurnOutcome::Failed(
+            result
+                .error_message
+                .unwrap_or_else(|| "the turn failed".to_string()),
+        ));
     }
 
     send_final_response(
@@ -276,5 +282,7 @@ async fn finalize_turn(
         status.message_id,
         &result.final_text,
     )
-    .await
+    .await?;
+
+    Ok(TurnOutcome::Completed)
 }

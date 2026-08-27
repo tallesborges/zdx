@@ -41,6 +41,7 @@ pub(crate) enum StagingCommand {
     Handoff,
     Btw,
     PromptBuilder,
+    Goal,
 }
 
 impl StagingCommand {
@@ -160,6 +161,7 @@ fn staged_command_request(incoming: &IncomingMessage) -> Option<StagingCommand> 
         BotCommand::Handoff => Some(StagingCommand::Handoff),
         BotCommand::Btw => Some(StagingCommand::Btw),
         BotCommand::PromptBuilder => Some(StagingCommand::PromptBuilder),
+        BotCommand::Goal => Some(StagingCommand::Goal),
         _ => None,
     }
 }
@@ -220,6 +222,9 @@ async fn start_staging(
         }
         StagingCommand::PromptBuilder => {
             "🛠 <b>Prompt builder</b>\nSend your intent (text or voice) — I'll draft a prompt you can accept to run here, or discard. Send /cancel to abort."
+        }
+        StagingCommand::Goal => {
+            "🎯 <b>Goal</b>\nSend the objective (text or voice) — I'll keep working on it here until a verifier agent confirms it's done, or the continuation limit is hit. Send /cancel to abort."
         }
     };
     let ask = context
@@ -284,6 +289,9 @@ async fn process_staged_input(
             StagingCommand::PromptBuilder => {
                 "Send text or a voice note describing the prompt you want, or /cancel to abort."
             }
+            StagingCommand::Goal => {
+                "Send text or a voice note describing the objective, or /cancel to abort."
+            }
         };
         let hint = context
             .client()
@@ -299,6 +307,12 @@ async fn process_staged_input(
         return Ok(());
     };
 
+    // A goal needs no LLM call and no preview: store the objective and start
+    // the first turn in this same topic.
+    if command == StagingCommand::Goal {
+        return start_goal(context, queues, incoming, topic_id, thread_id, input).await;
+    }
+
     // btw needs no LLM call, so there is nothing to preview or accept: open the
     // side topic straight away.
     if command == StagingCommand::Btw {
@@ -308,6 +322,7 @@ async fn process_staged_input(
     let generating_text = match command {
         StagingCommand::Handoff => "⏳ Generating handoff…",
         StagingCommand::Btw => unreachable!("btw returns above without generating"),
+        StagingCommand::Goal => unreachable!("goal returns above without generating"),
         StagingCommand::PromptBuilder => "⏳ Building prompt…",
     };
     let generating = context
@@ -328,6 +343,7 @@ async fn process_staged_input(
             run_handoff_generation(context, incoming, thread_id, input).await
         }
         StagingCommand::Btw => unreachable!("btw returns above without generating"),
+        StagingCommand::Goal => unreachable!("goal returns above without generating"),
         StagingCommand::PromptBuilder => {
             run_prompt_builder_generation(context, incoming, thread_id, input).await
         }
@@ -510,7 +526,7 @@ pub(crate) async fn handle_callback(
             }
             // btw opens its topic on input, so it never stages an Accept button.
             // Telegram can still redeliver a stale callback, so answer politely.
-            StagingCommand::Btw => {
+            StagingCommand::Btw | StagingCommand::Goal => {
                 let _ = client
                     .answer_callback_query(&callback.id, Some("Nothing to accept"))
                     .await;
@@ -528,6 +544,90 @@ pub(crate) async fn handle_callback(
 /// The seed is the user's question plus a pointer at the current thread, which
 /// the new topic's agent resolves with `Read_Thread`. On failure the staging
 /// session is kept so the next message retries.
+/// Accepts a goal objective: stores it in memory and runs it as the first
+/// ordinary turn in this same topic.
+///
+/// Unlike the other staged commands, the user's objective message is kept.
+/// It is the visible record of what was asked for — deleting it would leave a
+/// topic that starts working with nothing on screen explaining why.
+async fn start_goal(
+    context: &Arc<BotContext>,
+    queues: &ChatQueueMap,
+    incoming: &IncomingMessage,
+    topic_id: Option<i64>,
+    thread_id: &str,
+    input: &str,
+) -> Result<()> {
+    let max_continuations = context
+        .config_for_chat(incoming.chat_id)
+        .goals
+        .max_continuations;
+
+    let goal = match zdx_engine::core::goal::Goal::new(input, max_continuations) {
+        Ok(goal) => goal,
+        Err(err) => {
+            context
+                .client()
+                .send_message(
+                    incoming.chat_id,
+                    &format!("Could not set that goal: {err}"),
+                    Some(incoming.message_id),
+                    topic_id,
+                )
+                .await?;
+            return Ok(());
+        }
+    };
+
+    // The session is done either way; drop the objective from its cleanup list
+    // so only the command and prompt artifacts are removed.
+    let session = {
+        let mut map = context.staging_map().lock().expect("staging lock poisoned");
+        map.remove(thread_id).map(|mut session| {
+            session
+                .user_message_ids
+                .retain(|&id| id != incoming.message_id);
+            session
+        })
+    };
+    if let Some(session) = session {
+        cleanup_session_messages(context, incoming.chat_id, &session).await;
+    }
+
+    crate::goal::set_goal(context.goal_map(), thread_id, goal);
+
+    let confirmation = context
+        .client()
+        .send_message(
+            incoming.chat_id,
+            &format!(
+                "🎯 Goal set. Working until a verifier confirms it, or {max_continuations} continuations."
+            ),
+            Some(incoming.message_id),
+            topic_id,
+        )
+        .await;
+    if let Err(err) = confirmation {
+        tracing::warn!(%err, "Failed to confirm goal");
+    }
+
+    // Re-dispatch the objective as an ordinary turn. Reusing the real
+    // `message_id` keeps the status and cancel machinery anchored to a message
+    // Telegram actually has.
+    let mut synthetic = json!({
+        "message_id": incoming.message_id,
+        "chat": { "id": incoming.chat_id, "type": if incoming.is_forum { "supergroup" } else { "private" }, "is_forum": incoming.is_forum },
+        "from": { "id": incoming.user_id, "is_bot": false },
+        "text": input,
+    });
+    if let Some(topic_id) = topic_id {
+        synthetic["message_thread_id"] = json!(topic_id);
+    }
+    let synthetic: crate::telegram::Message = serde_json::from_value(synthetic)?;
+    dispatch_message(queues, context, synthetic).await;
+    Ok(())
+}
+
 async fn start_btw_topic(
     context: &Arc<BotContext>,
     queues: &ChatQueueMap,
@@ -791,6 +891,7 @@ fn suggestion_preview(command: StagingCommand, suggestion: &str) -> String {
             "Accept opens a new topic seeded with this context. Send another message to regenerate.",
         ),
         StagingCommand::Btw => unreachable!("btw never stages a preview"),
+        StagingCommand::Goal => unreachable!("goal never stages a preview"),
         StagingCommand::PromptBuilder => (
             "🛠",
             "Prompt preview",

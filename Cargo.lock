@@ -4736,6 +4736,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+ "uuid",
  "zdx-engine",
 ]
 

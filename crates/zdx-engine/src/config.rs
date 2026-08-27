@@ -529,6 +529,29 @@ impl Default for NotificationsConfig {
     }
 }
 
+/// Autonomous goal-loop configuration.
+///
+/// A goal runs the agent repeatedly until a verifier agent judges the objective
+/// complete. `max_continuations` is the only safety bound on that loop, so it
+/// is a hard cap rather than a hint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GoalsConfig {
+    /// Whether `/goal` is available. Opt-in.
+    pub enabled: bool,
+    /// Maximum autonomous continuations after the first turn.
+    pub max_continuations: u32,
+}
+
+impl Default for GoalsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_continuations: 10,
+        }
+    }
+}
+
 /// Memory system configuration.
 ///
 /// Configures the root directory for memory storage.
@@ -751,6 +774,10 @@ pub struct Config {
     /// Telegram bot configuration
     #[serde(default)]
     pub telegram: TelegramConfig,
+
+    /// Autonomous goal-loop configuration
+    #[serde(default)]
+    pub goals: GoalsConfig,
 }
 
 impl Config {
@@ -1546,6 +1573,7 @@ impl Default for Config {
             system_prompt_file: None,
             tool_timeout_secs: Self::DEFAULT_TOOL_TIMEOUT_SECS,
             providers: ProvidersConfig::default(),
+            goals: GoalsConfig::default(),
             handoff_model: Self::DEFAULT_HANDOFF_MODEL.to_string(),
             title_model: Self::DEFAULT_TITLE_MODEL.to_string(),
             read_thread_model: Self::DEFAULT_READ_THREAD_MODEL.to_string(),

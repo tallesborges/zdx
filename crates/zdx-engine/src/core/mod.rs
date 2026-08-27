@@ -25,6 +25,7 @@ pub mod agent;
 pub mod context;
 pub mod events;
 pub mod fts_query;
+pub mod goal;
 pub mod handoff_generation;
 pub mod interrupt;
 pub mod media_fallback;

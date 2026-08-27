@@ -13,6 +13,8 @@ pub(crate) enum BotCommand {
     ThreadId,
     Threads,
     Launcher,
+    Goal,
+    GoalClear,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +93,24 @@ const COMMAND_DEFS: &[CommandDef] = &[
         telegram_spec: TelegramCommandSpec {
             command: "btw",
             description: "Ask a side question in a new topic",
+        },
+    },
+    CommandDef {
+        command: BotCommand::Goal,
+        patterns: &["/goal"],
+        blocks_topic_autocreate: true,
+        telegram_spec: TelegramCommandSpec {
+            command: "goal",
+            description: "Work autonomously until a verifier says the goal is done",
+        },
+    },
+    CommandDef {
+        command: BotCommand::GoalClear,
+        patterns: &["/goal_clear", "/goal-clear", "/goalclear"],
+        blocks_topic_autocreate: true,
+        telegram_spec: TelegramCommandSpec {
+            command: "goal_clear",
+            description: "Stop the active goal in this topic",
         },
     },
     CommandDef {

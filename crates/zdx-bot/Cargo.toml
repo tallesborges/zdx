@@ -32,3 +32,4 @@ tokio-util.workspace = true
 url = { workspace = true }
 zdx-engine = { path = "../zdx-engine" }
 tracing.workspace = true
+uuid.workspace = true

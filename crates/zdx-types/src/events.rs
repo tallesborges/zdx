@@ -204,6 +204,9 @@ pub enum NoticeKind {
     /// Generation stopped due to context window exhaustion
     /// (Anthropic `stop_reason=model_context_window_exceeded`).
     ContextWindowExceeded,
+    /// Terminal outcome of a goal run: completion, continuation limit,
+    /// verifier failure, manual clear, or cancellation.
+    Goal,
 }
 
 /// Terminal status for a turn.

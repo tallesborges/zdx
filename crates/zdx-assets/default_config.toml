@@ -292,3 +292,7 @@ websocket = false
 
 [notifications]
 osc = true
+
+[goals]
+enabled = false
+max_continuations = 10

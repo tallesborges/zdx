@@ -132,7 +132,14 @@ pub(crate) async fn handle_message(
         return Ok(());
     }
 
-    run_agent_turn(
+    // Any turn starting invalidates a verdict already in flight: it was
+    // computed against older evidence and must not start a continuation now.
+    crate::goal::invalidate(ctx.goal_map(), &thread_id);
+
+    let chat_id = incoming.chat_id;
+    let user_id = incoming.user_id;
+    let topic_id = reply_ctx.topic_id;
+    let outcome = run_agent_turn(
         ctx,
         incoming,
         reply_ctx,
@@ -141,7 +148,20 @@ pub(crate) async fn handle_message(
         provisional_status,
         true,
     )
-    .await
+    .await?;
+
+    crate::goal::after_turn(
+        context,
+        queues,
+        crate::goal::TurnSite {
+            chat: chat_id,
+            topic: topic_id,
+            user: user_id,
+            thread: thread_id.clone(),
+        },
+        &outcome,
+    );
+    Ok(())
 }
 
 /// Re-runs a failed turn from the already-persisted thread state.
@@ -177,7 +197,9 @@ pub(crate) async fn retry_agent_turn(
         cross_topic_reply_parameters: None,
     };
 
-    run_agent_turn(context, incoming, reply_ctx, thread_id, false, None, false).await
+    run_agent_turn(context, incoming, reply_ctx, thread_id, false, None, false)
+        .await
+        .map(|_| ())
 }
 
 async fn parse_message_with_status(
@@ -273,6 +295,16 @@ fn message_has_audio(message: &Message) -> bool {
             .as_ref()
             .and_then(|doc| doc.mime_type.as_deref())
             .is_some_and(|mime| mime.starts_with("audio/"))
+}
+
+/// Terminal shape of one agent turn, reported to the goal loop.
+///
+/// A goal must only continue after real work completed: a cancelled or failed
+/// turn ends the run instead of feeding an error back into another round.
+pub(crate) enum TurnOutcome {
+    Completed,
+    Cancelled,
+    Failed(String),
 }
 
 struct TurnResult {

@@ -560,6 +560,7 @@ fn project_thread(target_id: String, events: Vec<ThreadEvent>) -> ThreadResponse
                 let kind = match kind {
                     NoticeKind::Refusal => "refusal",
                     NoticeKind::ContextWindowExceeded => "context_window_exceeded",
+                    NoticeKind::Goal => "goal",
                 };
                 activity.push(ThreadActivity::Notice {
                     sequence,
