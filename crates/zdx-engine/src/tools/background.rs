@@ -155,14 +155,6 @@ async fn kill_failed_spawn(mut spawn: zdx_tools::bash::BackgroundSpawn, pid: u32
     let _ = spawn.child.wait().await;
 }
 
-fn read_tail(path: &std::path::Path, max_bytes: usize) -> String {
-    let Ok(bytes) = std::fs::read(path) else {
-        return String::new();
-    };
-    let start = bytes.len().saturating_sub(max_bytes);
-    String::from_utf8_lossy(&bytes[start..]).into_owned()
-}
-
 /// Loads the record for the request's `bg_id` and enforces thread ownership.
 /// On any failure returns the `ToolOutput` the tool should return directly.
 fn resolve_owned(input: &Value, ctx: &ToolContext) -> Result<BackgroundProcess, ToolOutput> {
@@ -233,8 +225,8 @@ impl Tool for BackgroundOutput {
                 "status": status,
                 "exit_code": rec.exit_code,
                 "uptime": rec.uptime(),
-                "stdout": read_tail(&background_activity::stdout_log_path(&rec.bg_id), OUTPUT_TAIL_BYTES),
-                "stderr": read_tail(&background_activity::stderr_log_path(&rec.bg_id), OUTPUT_TAIL_BYTES),
+                "stdout": background_activity::read_log_tail(&background_activity::stdout_log_path(&rec.bg_id), OUTPUT_TAIL_BYTES),
+                "stderr": background_activity::read_log_tail(&background_activity::stderr_log_path(&rec.bg_id), OUTPUT_TAIL_BYTES),
             }))
         })
     }

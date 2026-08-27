@@ -104,6 +104,18 @@ fn marker_path_in(dir: &Path, bg_id: &str) -> PathBuf {
     dir.join(format!("{bg_id}.json"))
 }
 
+/// Reads the trailing `max_bytes` of a background log file as lossy UTF-8.
+/// Missing/unreadable files read as empty (the process may not have written
+/// that stream yet).
+#[must_use]
+pub fn read_log_tail(path: &Path, max_bytes: usize) -> String {
+    let Ok(bytes) = fs::read(path) else {
+        return String::new();
+    };
+    let start = bytes.len().saturating_sub(max_bytes);
+    String::from_utf8_lossy(&bytes[start..]).into_owned()
+}
+
 /// Ensures the registry + logs directories exist with user-only permissions.
 ///
 /// # Errors

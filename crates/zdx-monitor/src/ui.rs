@@ -8,8 +8,9 @@ use zdx_engine::core::usage_stats::{self, DailyUsage, UsageRow, UsageStats, Usag
 use zdx_engine::providers::subscription_quota::{QuotaWindow, account_display};
 
 use crate::app::{
-    AgentOverlayState, CachedQuotas, CachedUsageStats, ConfigLine, ModelPickerState, MonitorApp,
-    QuotaEntry, Section, TargetPickerState, TimingOverlayState, ToolPaneState, UsageSpan,
+    AgentOverlayState, BackgroundDetailState, CachedQuotas, CachedUsageStats, ConfigLine,
+    ModelPickerState, MonitorApp, QuotaEntry, Section, TargetPickerState, TimingOverlayState,
+    ToolPaneState, UsageSpan,
 };
 use crate::log_line::parse_log_line;
 
@@ -60,6 +61,10 @@ pub fn render(f: &mut Frame, app: &MonitorApp) {
 
     if let Some(state) = &app.timing_overlay {
         render_timing_overlay(f, state, f.area());
+    }
+
+    if let Some(state) = &app.background_detail {
+        render_background_detail(f, state, f.area());
     }
 
     if let Some(picker) = &app.model_picker {
@@ -141,7 +146,7 @@ fn footer_hint(section: Section) -> &'static str {
             "↑↓ navigate • Enter toggle • r restart • R force • Tab/⇧Tab switch • q quit"
         }
         Section::ActiveAgents => "↑↓ navigate • Enter inspect • Tab/⇧Tab switch • q quit",
-        Section::Background => "↑↓ navigate • x kill • Tab/⇧Tab switch • q quit",
+        Section::Background => "↑↓ navigate • Enter details • x kill • Tab/⇧Tab switch • q quit",
         Section::Automations => "↑↓ navigate • Tab/⇧Tab switch • q quit",
         Section::Config => {
             "↑↓ select model • Enter edit • d delete favorite / reset subagent • PgUp/PgDn scroll • Tab/⇧Tab switch • q quit"
@@ -1335,7 +1340,36 @@ fn render_timing_overlay(f: &mut Frame, state: &TimingOverlayState, area: Rect) 
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
         .title(format!(" Timings · {} ", state.title))
-        .title_bottom(" j/k scroll · g/G top/bottom · Esc close ");
+        .title_bottom(" j/k scroll · gg/G top/bottom · Esc close ");
+    f.render_widget(List::new(items).block(block), area);
+}
+
+/// Full-frame detail view for one background process: marker metadata, the
+/// full command, and the stdout/stderr log tails. Lines are pre-wrapped at
+/// build time, so scrolling is a plain row-window here.
+fn render_background_detail(f: &mut Frame, state: &BackgroundDetailState, area: Rect) {
+    f.render_widget(Clear, area);
+    let visible_rows = (area.height.saturating_sub(2) as usize).max(1);
+    let offset = state.offset(visible_rows);
+    let end = (offset + visible_rows).min(state.lines.len());
+    let items: Vec<ListItem> = state.lines[offset..end]
+        .iter()
+        .map(|line| ListItem::new(line.clone()))
+        .collect();
+
+    let position = if state.lines.len() > visible_rows {
+        format!(" [{}/{}]", offset + 1, state.lines.len())
+    } else {
+        String::new()
+    };
+    let follow = if state.follow { " · following" } else { "" };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Green))
+        .title(format!(" Background · {} ", state.title))
+        .title_bottom(format!(
+            " j/k scroll · gg top · G follow · Esc close{position}{follow} "
+        ));
     f.render_widget(List::new(items).block(block), area);
 }
 
@@ -1381,7 +1415,7 @@ fn render_tool_pane(f: &mut Frame, state: &AgentOverlayState, pane: &ToolPaneSta
         .border_style(Style::default().fg(color))
         .title(format!(" {glyph} {name} "))
         .title_bottom(format!(
-            " j/k scroll · g/G top/bottom · Esc back{position} "
+            " j/k scroll · gg/G top/bottom · Esc back{position} "
         ));
 
     let items: Vec<ListItem> = wrapped[offset..end]

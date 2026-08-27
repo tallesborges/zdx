@@ -382,6 +382,12 @@ pub struct MonitorApp {
     pub agent_overlay: Option<AgentOverlayState>,
     /// Open timing overlay for a selected saved thread, if any.
     pub timing_overlay: Option<TimingOverlayState>,
+    /// Open process detail overlay on the Background tab, if any.
+    pub background_detail: Option<BackgroundDetailState>,
+    /// A `g` was pressed and the next key completes (or aborts) the sequence.
+    pub pending_g: bool,
+    /// List scrolling is swallowed until this instant (armed on overlay close).
+    pub scroll_guard_until: Option<Instant>,
     pub log_file_name: Option<String>,
     /// Log files in `~/.zdx/logs` matching `zdx.log*`, newest first.
     pub log_files: Vec<PathBuf>,
@@ -659,6 +665,62 @@ pub struct TimingOverlayState {
     pub scroll: usize,
 }
 
+/// State for the Background tab's process detail overlay (drill-in on
+/// `Enter`). Keyed by `bg_id` so the on-tick refresh keeps re-reading the
+/// marker + log tails while the process runs.
+pub struct BackgroundDetailState {
+    pub bg_id: String,
+    /// Header label, e.g. `bg-abc123 · pid 4567`.
+    pub title: String,
+    /// Rendered body, pre-wrapped to the terminal width at build time so
+    /// scroll offsets count real rows.
+    pub lines: Vec<Line<'static>>,
+    /// Top-row offset; ignored while `follow` is set.
+    pub scroll: usize,
+    /// Pin the view to the newest output (like the Logs tab's `G` follow).
+    pub follow: bool,
+}
+
+impl BackgroundDetailState {
+    /// Handles a key while the overlay is open. Returns `true` when the
+    /// overlay should close.
+    fn handle_key(&mut self, key: KeyCode, page: usize) -> bool {
+        let max = self.max_scroll(page);
+        match key {
+            KeyCode::Esc | KeyCode::Char('q') => return true,
+            KeyCode::Down | KeyCode::Char('j') => self.scroll_to(self.offset(page) + 1, max),
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.scroll_to(self.offset(page).saturating_sub(1), max);
+            }
+            KeyCode::PageDown => self.scroll_to(self.offset(page) + page, max),
+            KeyCode::PageUp => self.scroll_to(self.offset(page).saturating_sub(page), max),
+            KeyCode::Home => self.scroll_to(0, max),
+            KeyCode::Char('G') | KeyCode::End => self.follow = true,
+            _ => {}
+        }
+        false
+    }
+
+    fn scroll_to(&mut self, target: usize, max: usize) {
+        self.follow = target >= max;
+        self.scroll = target.min(max);
+    }
+
+    /// Current top row, resolving follow mode against the rendered height.
+    pub fn offset(&self, page: usize) -> usize {
+        let max = self.max_scroll(page);
+        if self.follow {
+            max
+        } else {
+            self.scroll.min(max)
+        }
+    }
+
+    fn max_scroll(&self, page: usize) -> usize {
+        self.lines.len().saturating_sub(page.max(1))
+    }
+}
+
 impl TimingOverlayState {
     fn handle_key(&mut self, key: KeyCode, page: usize) -> bool {
         let max = self.lines.len().saturating_sub(page.max(1));
@@ -670,8 +732,8 @@ impl TimingOverlayState {
             KeyCode::Up | KeyCode::Char('k') => self.scroll = self.scroll.saturating_sub(1),
             KeyCode::PageDown => self.scroll = self.scroll.saturating_add(page).min(max),
             KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(page),
-            KeyCode::Char('g') => self.scroll = 0,
-            KeyCode::Char('G') => self.scroll = max,
+            KeyCode::Home => self.scroll = 0,
+            KeyCode::Char('G') | KeyCode::End => self.scroll = max,
             _ => {}
         }
         false
@@ -1417,6 +1479,9 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
         background: load_background(),
         agent_overlay: None,
         timing_overlay: None,
+        background_detail: None,
+        pending_g: false,
+        scroll_guard_until: None,
         log_file_name: None,
         log_files: Vec::new(),
         log_file_index: 0,
@@ -1478,13 +1543,78 @@ fn restart_force_for_key(key: KeyCode) -> bool {
     key == KeyCode::Char('R')
 }
 
+/// How long list scrolling stays swallowed after an overlay closes. Trackpad
+/// momentum keeps emitting scroll events past the close; each swallowed event
+/// re-arms the guard so the whole inertia tail dies out instead of moving the
+/// list that was underneath the overlay.
+const OVERLAY_CLOSE_SCROLL_GUARD: Duration = Duration::from_millis(250);
+
+/// Whether any modal surface is stacked over the active section.
+fn overlay_open(app: &MonitorApp) -> bool {
+    app.model_picker.is_some()
+        || app.timing_overlay.is_some()
+        || app.background_detail.is_some()
+        || app.agent_overlay.is_some()
+        || app.log_overlay_open
+        || app.log_target_picker.is_some()
+        || app.thread_project_picker.is_some()
+}
+
+/// Whether keystrokes are currently being captured as text (queries, picker
+/// filters), where the vim `g` prefix must not intercept typing.
+fn text_input_active(app: &MonitorApp) -> bool {
+    app.log_query_editing
+        || app.thread_query_editing
+        || app.model_picker.is_some()
+        || app.log_target_picker.is_some()
+        || app.thread_project_picker.is_some()
+}
+
+/// Vim-style two-key prefix: `gg` is delivered as `Home` (every scroll surface
+/// binds `Home`/`End`). Returns `None` when the key was consumed as a pending
+/// prefix, or when an unknown `g` sequence was aborted (vim swallows those).
+fn apply_g_prefix(pending: &mut bool, code: KeyCode) -> Option<KeyCode> {
+    if *pending {
+        *pending = false;
+        return (code == KeyCode::Char('g')).then_some(KeyCode::Home);
+    }
+    if code == KeyCode::Char('g') {
+        *pending = true;
+        return None;
+    }
+    Some(code)
+}
+
+/// Key entry point: applies the `g` prefix, dispatches, and arms the scroll
+/// guard when the key closed an overlay.
 fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
+    let had_overlay = overlay_open(app);
+    let code = if text_input_active(app) {
+        app.pending_g = false;
+        Some(key.code)
+    } else {
+        apply_g_prefix(&mut app.pending_g, key.code)
+    };
+    let Some(code) = code else {
+        return;
+    };
+    dispatch_key_event(app, KeyEvent::new(code, key.modifiers));
+    if had_overlay && !overlay_open(app) {
+        app.scroll_guard_until = Some(Instant::now() + OVERLAY_CLOSE_SCROLL_GUARD);
+    }
+}
+
+fn dispatch_key_event(app: &mut MonitorApp, key: KeyEvent) {
     if app.model_picker.is_some() {
         handle_model_picker_key(app, key.code);
         return;
     }
     if app.timing_overlay.is_some() {
         handle_timing_overlay_key(app, key.code);
+        return;
+    }
+    if app.background_detail.is_some() {
+        handle_background_detail_key(app, key.code);
         return;
     }
     if app.agent_overlay.is_some() {
@@ -1567,16 +1697,35 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
             kill_selected_background(app);
         }
         KeyCode::Char('r' | 'R') => restart_selected_service(app, restart_force_for_key(key.code)),
-        KeyCode::Enter => {
-            if app.active_section == Section::ActiveAgents {
-                open_agent_overlay(app);
-            } else if app.active_section == Section::Config {
-                open_model_picker(app);
-            } else {
-                toggle_selected_service(app);
-            }
-        }
+        KeyCode::Home => jump_to_edge(app, true),
+        KeyCode::Char('G') | KeyCode::End => jump_to_edge(app, false),
+        KeyCode::Enter => handle_enter_key(app),
         _ => {}
+    }
+}
+
+/// `gg`/`G` on the active section: jump the selection (or scroll) to an edge.
+fn jump_to_edge(app: &mut MonitorApp, top: bool) {
+    match app.active_section {
+        Section::Config => {
+            app.config_scroll = if top { 0 } else { config_max_scroll(app) };
+        }
+        Section::Usage => {
+            app.usage_scroll = if top { 0 } else { usage_max_scroll(app) };
+        }
+        _ => {
+            let count = app.item_count();
+            app.selected_index = if top { 0 } else { count.saturating_sub(1) };
+        }
+    }
+}
+
+fn handle_enter_key(app: &mut MonitorApp) {
+    match app.active_section {
+        Section::ActiveAgents => open_agent_overlay(app),
+        Section::Background => open_background_detail(app),
+        Section::Config => open_model_picker(app),
+        _ => toggle_selected_service(app),
     }
 }
 
@@ -1985,6 +2134,12 @@ fn handle_logs_nav_key(app: &mut MonitorApp, key: KeyCode) -> bool {
             ensure_log_selected_visible(app);
             true
         }
+        KeyCode::Home => {
+            app.log_selected = 0;
+            app.log_follow = false;
+            ensure_log_selected_visible(app);
+            true
+        }
         KeyCode::Char('G') | KeyCode::End => {
             if total > 0 {
                 app.log_selected = total - 1;
@@ -2031,43 +2186,18 @@ fn copy_selected_log_entry(app: &mut MonitorApp) {
 }
 
 fn handle_mouse_event(app: &mut MonitorApp, mouse: MouseEvent) {
+    if handle_overlay_mouse(app, mouse) {
+        return;
+    }
     let kind = mouse.kind;
-    if app.model_picker.is_some() {
-        if let Some(picker) = app.model_picker.as_mut() {
-            match kind {
-                MouseEventKind::ScrollUp => picker.selected = picker.selected.saturating_sub(1),
-                MouseEventKind::ScrollDown => {
-                    let last = picker.matches.len().saturating_sub(1);
-                    picker.selected = (picker.selected + 1).min(last);
-                }
-                _ => {}
-            }
-        }
-        return;
-    }
-    let overlay_page = agent_overlay_page_size(app);
-    if let Some(state) = app.agent_overlay.as_mut() {
-        if let Some(pane) = state.tool_pane.as_mut() {
-            match kind {
-                MouseEventKind::ScrollDown => pane.scroll = pane.scroll.saturating_add(1),
-                MouseEventKind::ScrollUp => pane.scroll = pane.scroll.saturating_sub(1),
-                _ => {}
-            }
-            return;
-        }
-        let max_offset = state.max_scroll(overlay_page);
-        let cur = state.top_line(overlay_page);
-        match kind {
-            MouseEventKind::ScrollDown => state.scroll = Some((cur + 1).min(max_offset)),
-            MouseEventKind::ScrollUp => state.scroll = Some(cur.saturating_sub(1)),
-            MouseEventKind::Down(MouseButton::Left) => {
-                handle_overlay_click(state, mouse.row, overlay_page);
-            }
-            _ => {}
-        }
-        return;
-    }
-    if app.log_overlay_open {
+    // Trackpad momentum after an overlay close: swallow the inertia tail and
+    // keep extending the guard until the events stop.
+    if matches!(kind, MouseEventKind::ScrollDown | MouseEventKind::ScrollUp)
+        && app
+            .scroll_guard_until
+            .is_some_and(|until| Instant::now() < until)
+    {
+        app.scroll_guard_until = Some(Instant::now() + OVERLAY_CLOSE_SCROLL_GUARD);
         return;
     }
     match kind {
@@ -2111,6 +2241,68 @@ fn handle_mouse_event(app: &mut MonitorApp, mouse: MouseEvent) {
         }
         _ => {}
     }
+}
+
+/// Mouse routing while a modal surface is stacked over the active section.
+/// Returns `true` when the event was consumed (every open overlay consumes,
+/// so scrolling never leaks to the list underneath).
+fn handle_overlay_mouse(app: &mut MonitorApp, mouse: MouseEvent) -> bool {
+    let kind = mouse.kind;
+    if let Some(picker) = app.model_picker.as_mut() {
+        match kind {
+            MouseEventKind::ScrollUp => picker.selected = picker.selected.saturating_sub(1),
+            MouseEventKind::ScrollDown => {
+                let last = picker.matches.len().saturating_sub(1);
+                picker.selected = (picker.selected + 1).min(last);
+            }
+            _ => {}
+        }
+        return true;
+    }
+    let overlay_page = agent_overlay_page_size(app);
+    if let Some(state) = app.agent_overlay.as_mut() {
+        if let Some(pane) = state.tool_pane.as_mut() {
+            match kind {
+                MouseEventKind::ScrollDown => pane.scroll = pane.scroll.saturating_add(1),
+                MouseEventKind::ScrollUp => pane.scroll = pane.scroll.saturating_sub(1),
+                _ => {}
+            }
+            return true;
+        }
+        let max_offset = state.max_scroll(overlay_page);
+        let cur = state.top_line(overlay_page);
+        match kind {
+            MouseEventKind::ScrollDown => state.scroll = Some((cur + 1).min(max_offset)),
+            MouseEventKind::ScrollUp => state.scroll = Some(cur.saturating_sub(1)),
+            MouseEventKind::Down(MouseButton::Left) => {
+                handle_overlay_click(state, mouse.row, overlay_page);
+            }
+            _ => {}
+        }
+        return true;
+    }
+    let page = (app.terminal_height.saturating_sub(2) as usize).max(1);
+    if let Some(state) = app.timing_overlay.as_mut() {
+        let max = state.lines.len().saturating_sub(page);
+        match kind {
+            MouseEventKind::ScrollDown => state.scroll = state.scroll.saturating_add(1).min(max),
+            MouseEventKind::ScrollUp => state.scroll = state.scroll.saturating_sub(1),
+            _ => {}
+        }
+        return true;
+    }
+    if let Some(state) = app.background_detail.as_mut() {
+        let max = state.max_scroll(page);
+        match kind {
+            MouseEventKind::ScrollDown => state.scroll_to(state.offset(page) + 1, max),
+            MouseEventKind::ScrollUp => {
+                state.scroll_to(state.offset(page).saturating_sub(1), max);
+            }
+            _ => {}
+        }
+        return true;
+    }
+    app.log_overlay_open
 }
 
 fn copy_selected_thread_id(app: &mut MonitorApp) {
@@ -2191,6 +2383,7 @@ fn refresh_app(app: &mut MonitorApp) {
     app.services = load_services();
     app.active_agents = load_active_agents();
     app.background = load_background();
+    refresh_background_detail(app);
     load_active_log(app);
     app.clamp_selection();
     poll_usage_result(app);
@@ -2412,6 +2605,148 @@ fn load_background() -> Vec<BackgroundInfo> {
         .collect();
     v.sort_by(|a, b| a.thread_id.cmp(&b.thread_id).then(a.bg_id.cmp(&b.bg_id)));
     v
+}
+
+/// Max bytes shown per stream (stdout/stderr) in the Background detail overlay.
+const BACKGROUND_DETAIL_TAIL_BYTES: usize = 64 * 1024;
+
+/// Rows visible inside the full-frame Background detail overlay (borders eat 2).
+fn background_detail_page_size(app: &MonitorApp) -> usize {
+    (app.terminal_height.saturating_sub(2) as usize).max(1)
+}
+
+/// Wrap width inside the full-frame Background detail overlay.
+fn background_detail_wrap_width(app: &MonitorApp) -> usize {
+    (app.terminal_width.saturating_sub(2) as usize).max(20)
+}
+
+/// Opens the detail overlay for the selected background process: full
+/// command, marker metadata, and the stdout/stderr log tails.
+fn open_background_detail(app: &mut MonitorApp) {
+    let Some(info) = app.background.get(app.selected_index) else {
+        return;
+    };
+    let bg_id = info.bg_id.clone();
+    let title = format!("{bg_id} · pid {}", info.pid);
+    let Some(lines) = build_background_detail_lines(&bg_id, background_detail_wrap_width(app))
+    else {
+        app.set_status(format!("No record for {bg_id} (it may have just exited)"));
+        return;
+    };
+    app.background_detail = Some(BackgroundDetailState {
+        bg_id,
+        title,
+        lines,
+        scroll: 0,
+        follow: true,
+    });
+}
+
+/// Rebuilds the open detail overlay from disk on the refresh tick so a running
+/// process's output keeps streaming in. If the marker vanished (tombstone
+/// pruned), the last snapshot is kept until the overlay is closed.
+fn refresh_background_detail(app: &mut MonitorApp) {
+    let width = background_detail_wrap_width(app);
+    if let Some(state) = app.background_detail.as_mut()
+        && let Some(lines) = build_background_detail_lines(&state.bg_id, width)
+    {
+        state.lines = lines;
+    }
+}
+
+/// Builds the detail body for one background process, pre-wrapped to `width`.
+/// `None` when no marker exists for `bg_id` anymore.
+fn build_background_detail_lines(bg_id: &str, width: usize) -> Option<Vec<Line<'static>>> {
+    use zdx_engine::background_activity as bg;
+
+    let rec = bg::get(bg_id)?;
+    let label = |name: &str| Span::styled(format!(" {name:<9}"), Style::default().fg(Color::Cyan));
+    let dim = Style::default().fg(Color::DarkGray);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let status = if rec.is_running() {
+        Span::styled(
+            format!("running · up {}", rec.uptime()),
+            Style::default().fg(Color::Green),
+        )
+    } else {
+        let code = rec
+            .exit_code
+            .map_or_else(|| "killed/unknown".to_string(), |c| format!("code {c}"));
+        Span::styled(format!("exited ({code})"), Style::default().fg(Color::Red))
+    };
+    lines.push(Line::from(vec![label("status"), status]));
+    lines.push(Line::from(vec![
+        label("pid"),
+        Span::raw(format!("{} (pgid {})", rec.pid, rec.pgid)),
+    ]));
+    lines.push(Line::from(vec![
+        label("started"),
+        Span::raw(rec.started_at.clone()),
+    ]));
+    if let Some(exited_at) = &rec.exited_at {
+        lines.push(Line::from(vec![
+            label("ended"),
+            Span::raw(exited_at.clone()),
+        ]));
+    }
+    lines.push(Line::from(vec![
+        label("thread"),
+        Span::raw(
+            rec.thread_id
+                .clone()
+                .unwrap_or_else(|| "(no thread)".to_string()),
+        ),
+    ]));
+    lines.push(Line::from(vec![label("cwd"), Span::raw(rec.cwd.clone())]));
+
+    let header = |name: &str, color: Color| {
+        Line::from(Span::styled(
+            format!(" ── {name} "),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ))
+    };
+
+    lines.push(Line::default());
+    lines.push(header("command", Color::Cyan));
+    for l in rec.command.lines() {
+        let l = zdx_transcript::text::sanitize_for_display(l);
+        lines.push(Line::from(format!(" {l}")));
+    }
+
+    for (name, path, color) in [
+        ("stdout", bg::stdout_log_path(bg_id), Color::Green),
+        ("stderr", bg::stderr_log_path(bg_id), Color::Yellow),
+    ] {
+        lines.push(Line::default());
+        lines.push(header(name, color));
+        let tail = bg::read_log_tail(&path, BACKGROUND_DETAIL_TAIL_BYTES);
+        if tail.is_empty() {
+            lines.push(Line::from(Span::styled(" (no output)", dim)));
+        } else {
+            for l in tail.lines() {
+                let l = zdx_transcript::text::sanitize_for_display(l);
+                lines.push(Line::from(format!(" {l}")));
+            }
+        }
+    }
+
+    Some(
+        lines
+            .iter()
+            .flat_map(|line| zdx_transcript::wrap_line_to_width(line, width))
+            .collect(),
+    )
+}
+
+fn handle_background_detail_key(app: &mut MonitorApp, key: KeyCode) {
+    let page = background_detail_page_size(app);
+    let Some(state) = app.background_detail.as_mut() else {
+        return;
+    };
+    if state.handle_key(key, page) {
+        app.background_detail = None;
+    }
 }
 
 /// Stops the selected background process. Optimistically removes the row; the
@@ -3061,7 +3396,7 @@ fn handle_tool_pane_key(pane: &mut ToolPaneState, key: KeyCode, page_size: usize
         KeyCode::Char('k') | KeyCode::Up => pane.scroll = pane.scroll.saturating_sub(1),
         KeyCode::PageDown => pane.scroll = pane.scroll.saturating_add(page_size),
         KeyCode::PageUp => pane.scroll = pane.scroll.saturating_sub(page_size),
-        KeyCode::Char('g') | KeyCode::Home => pane.scroll = 0,
+        KeyCode::Home => pane.scroll = 0,
         KeyCode::Char('G') | KeyCode::End => pane.scroll = usize::MAX,
         _ => {}
     }
@@ -3093,7 +3428,7 @@ fn handle_agent_overlay_key(app: &mut MonitorApp, key: KeyCode) {
         KeyCode::Char('k') | KeyCode::Up => state.scroll = Some(cur.saturating_sub(1)),
         KeyCode::PageDown => state.scroll = Some((cur + page).min(max_offset)),
         KeyCode::PageUp => state.scroll = Some(cur.saturating_sub(page)),
-        KeyCode::Char('g') | KeyCode::Home => state.scroll = Some(0),
+        KeyCode::Home => state.scroll = Some(0),
         KeyCode::Char('G') | KeyCode::End => state.scroll = None,
         _ => {}
     }
@@ -4421,8 +4756,31 @@ mod transcript_tests {
         assert_eq!(state.scroll, 15);
         assert!(!state.handle_key(KeyCode::PageUp, 5));
         assert_eq!(state.scroll, 10);
-        assert!(!state.handle_key(KeyCode::Char('g'), 5));
+        assert!(!state.handle_key(KeyCode::Home, 5));
         assert_eq!(state.scroll, 0);
         assert!(state.handle_key(KeyCode::Esc, 5));
+    }
+
+    /// `gg` must arrive as a single `Home`, and an unknown `g` sequence must
+    /// be swallowed like vim aborts it.
+    #[test]
+    fn g_prefix_translates_gg_and_aborts_unknown_sequences() {
+        let mut pending = false;
+        assert_eq!(apply_g_prefix(&mut pending, KeyCode::Char('g')), None);
+        assert!(pending);
+        assert_eq!(
+            apply_g_prefix(&mut pending, KeyCode::Char('g')),
+            Some(KeyCode::Home)
+        );
+        assert!(!pending);
+
+        assert_eq!(apply_g_prefix(&mut pending, KeyCode::Char('g')), None);
+        assert_eq!(apply_g_prefix(&mut pending, KeyCode::Char('j')), None);
+        assert!(!pending);
+
+        assert_eq!(
+            apply_g_prefix(&mut pending, KeyCode::Char('G')),
+            Some(KeyCode::Char('G'))
+        );
     }
 }
