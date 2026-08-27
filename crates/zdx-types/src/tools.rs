@@ -27,6 +27,98 @@ impl ToolDefinition {
     }
 }
 
+fn value_as_trimmed_str<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
+    let value = input.get(key)?.as_str()?.trim();
+    (!value.is_empty()).then_some(value)
+}
+
+fn value_as_string_list(input: &Value, key: &str) -> Vec<String> {
+    match input.get(key) {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect(),
+        Some(Value::String(item)) => {
+            let item = item.trim();
+            if item.is_empty() {
+                Vec::new()
+            } else {
+                vec![item.to_string()]
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Raw, untruncated primary command/target for a tool.
+///
+/// Returns the underlying value verbatim (e.g. the `bash` command, the
+/// `read`/`edit` file path) so a copy of "the command that ran" matches
+/// exactly. Returns an empty string when the tool has no single obvious
+/// command.
+#[must_use]
+pub fn tool_command_text(name: &str, input: &Value) -> String {
+    let field = |key: &str| {
+        value_as_trimmed_str(input, key)
+            .unwrap_or_default()
+            .to_string()
+    };
+    match name {
+        "bash" => field("command"),
+        "read" | "write" | "edit" => value_as_trimmed_str(input, "file_path")
+            .or_else(|| value_as_trimmed_str(input, "path"))
+            .unwrap_or_default()
+            .to_string(),
+        "glob" => field("pattern"),
+        "grep" => match (
+            value_as_trimmed_str(input, "pattern"),
+            value_as_trimmed_str(input, "path"),
+        ) {
+            (Some(pattern), Some(path)) => format!("{pattern} {path}"),
+            (Some(pattern), None) => pattern.to_string(),
+            _ => String::new(),
+        },
+        "fetch_webpage" => field("url"),
+        "read_thread" => field("thread_id"),
+        "thread_search" => field("query"),
+        "apply_patch" => field("patch"),
+        "invoke_subagent" => field("prompt"),
+        "web_search" => {
+            let queries = value_as_string_list(input, "search_queries");
+            if queries.is_empty() {
+                field("objective")
+            } else {
+                queries.join("\n")
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+/// The input key holding a tool's primary command/target, when it has one.
+///
+/// Inverse companion of [`tool_command_text`]: lets a consumer that only kept
+/// the summarized command (e.g. an active-run marker) rebuild a displayable
+/// input object like `{"command": "cargo build"}`.
+#[must_use]
+pub fn primary_input_key(name: &str) -> Option<&'static str> {
+    match name {
+        "bash" => Some("command"),
+        "read" | "write" | "edit" => Some("file_path"),
+        "glob" | "grep" => Some("pattern"),
+        "fetch_webpage" => Some("url"),
+        "read_thread" => Some("thread_id"),
+        "thread_search" => Some("query"),
+        "apply_patch" => Some("patch"),
+        "invoke_subagent" => Some("prompt"),
+        "web_search" => Some("objective"),
+        _ => None,
+    }
+}
+
 /// Content block within a tool result.
 ///
 /// Anthropic API requires `tool_result` content to be an array of blocks

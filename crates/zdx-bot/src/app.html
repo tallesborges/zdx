@@ -429,6 +429,10 @@
     .event-summary .success { color: var(--accent); }
     .event-summary .failure { color: var(--red); }
     .event-summary .pending { color: var(--amber); }
+    .running-tool { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 42px; padding: 9px 12px; border-color: color-mix(in srgb, var(--amber) 35%, transparent); }
+    .running-tool .running-label { color: var(--amber); }
+    .running-dot { display: inline-block; flex: 0 0 auto; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; background: var(--amber); animation: runningBlink 1.4s ease-in-out infinite; }
+    @keyframes runningBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
     .detail-body { padding: 2px 12px 12px 33px; color: var(--muted); font-size: var(--fs-small); line-height: var(--lh); }
     .detail-label { margin: 10px 0 5px; color: var(--text); font-family: var(--mono); font-size: var(--fs-micro); text-transform: uppercase; }
     .detail-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -1011,7 +1015,11 @@
         const role = agent.role || agent.surface || "agent";
         const detail = `${model}${agent.thinking ? ` @${agent.thinking}` : ""} · ${shortId(agent.thread_id)}`;
         const open = agent.thread_id ? () => navigate("threads", agent.thread_id) : undefined;
-        panel.append(listRow({ tone: "active", title: role, detail, meta: `PID ${agent.pid}\n${agent.uptime || "—"}`, onClick: open }));
+        const row = listRow({ tone: "active", title: role, detail, meta: `PID ${agent.pid}\n${agent.uptime || "—"}`, onClick: open });
+        if (agent.current_tool) {
+          row.querySelector(".row-main").append(element("div", "row-detail row-tool", `⚙ ${agent.current_tool}`));
+        }
+        panel.append(row);
       }
       wrapper.append(panel);
       return wrapper;
@@ -1438,6 +1446,20 @@
       return renderTool({ name: "Tool result", input: { tool_use_id: record.tool_use_id }, time: record.time }, record);
     }
 
+    function renderRunningTool(record) {
+      const row = element("div", "activity-detail running-tool");
+      const label = element("span", "event-summary");
+      label.append(
+        element("span", "running-dot"),
+        element("strong", "", record.name || "Tool"),
+        document.createTextNode(" · "),
+        element("span", "running-label", "running"),
+        document.createTextNode(record.summary ? ` · ${record.summary}` : ""),
+      );
+      row.append(label, element("span", "event-time", record.time || ""));
+      return row;
+    }
+
     function renderBanner(record) {
       const interrupted = record.type === "interrupted";
       const banner = element("div", `system-banner ${interrupted ? "interrupted" : ""}`);
@@ -1481,6 +1503,7 @@
         if (record.type === "message") return renderMessage(record);
         if (record.type === "reasoning") return renderReasoning(record);
         if (record.type === "tool_use") return renderTool(record, paired);
+        if (record.type === "tool_running") return renderRunningTool(record);
         if (record.type === "tool_result") return renderOrphanToolResult(record);
         if (record.type === "usage") return renderUsageActivity(record);
         if (record.type === "notice" || record.type === "interrupted") return renderBanner(record);

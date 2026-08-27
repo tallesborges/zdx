@@ -884,7 +884,7 @@ async fn run_turn_inner(
         subagent = options.activity_subagent_name.as_deref().unwrap_or("-"),
         "Turn started"
     );
-    let _run_guard = crate::agent_activity::start(crate::agent_activity::StartParams {
+    let run_guard = crate::agent_activity::start(crate::agent_activity::StartParams {
         thread_id,
         surface: options.surface.as_deref(),
         model: Some(setup.model.as_str()),
@@ -1067,6 +1067,7 @@ async fn run_turn_inner(
                 sender,
                 cancel,
                 initial_message_count,
+                run_guard.as_ref(),
             )
             .await
             .map_err(|e| (e, messages.clone()))?;
@@ -1961,6 +1962,7 @@ struct ToolTurnStats {
 }
 
 #[tracing::instrument(name = "tool_turn", skip_all)]
+#[allow(clippy::too_many_arguments)]
 async fn process_tool_turn(
     messages: &mut Vec<ChatMessage>,
     turn: &mut AssistantTurnBuilder,
@@ -1968,6 +1970,7 @@ async fn process_tool_turn(
     sender: &EventSender,
     cancel: Option<&CancellationToken>,
     prior_message_count: usize,
+    run_guard: Option<&crate::agent_activity::RunGuard>,
 ) -> TurnResult<ToolTurnStats> {
     let finalized = std::mem::take(turn).finalize();
     let executable_count = finalized.executable.len();
@@ -1997,6 +2000,7 @@ async fn process_tool_turn(
         sender,
         &setup.tool_registry,
         cancel,
+        run_guard,
     )
     .await;
     tool_results.extend(finalized.malformed_results);
@@ -2224,6 +2228,7 @@ struct CompletedTool {
 /// On interrupt, aborts all remaining tasks and emits abort results for
 /// incomplete tools. The caller should check `is_interrupted()` after this
 /// function returns to determine if an interrupt occurred.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn execute_tools_async(
     tool_uses: &[ToolUse],
     ctx: &ToolContext,
@@ -2231,6 +2236,7 @@ async fn execute_tools_async(
     sender: &EventSender,
     tool_registry: &ToolRegistry,
     cancel: Option<&CancellationToken>,
+    run_guard: Option<&crate::agent_activity::RunGuard>,
 ) -> Vec<ToolResult> {
     let mut join_set: JoinSet<CompletedTool> = JoinSet::new();
     let mut results: Vec<Option<(ToolOutput, ToolResult)>> = vec![None; tool_uses.len()];
@@ -2244,7 +2250,7 @@ async fn execute_tools_async(
             .any(|tool| tool.to_ascii_lowercase() == name_lower)
     };
 
-    emit_tool_started_events(tool_uses, sender);
+    emit_tool_started_events(tool_uses, sender, run_guard);
 
     // Execute todo_write calls in order so later calls in the same turn can see
     // earlier mutations without waiting for thread persistence. Spawn everything
@@ -2273,6 +2279,7 @@ async fn execute_tools_async(
                     result,
                     duration_ms: Some(duration_ms),
                 },
+                run_guard,
             );
             continue;
         }
@@ -2316,6 +2323,7 @@ async fn execute_tools_async(
                     &mut results,
                     tool_uses,
                     sender,
+                    run_guard,
                 );
                 break;
             }
@@ -2326,13 +2334,14 @@ async fn execute_tools_async(
                     &mut results,
                     tool_uses,
                     sender,
+                    run_guard,
                 );
                 break;
             }
             task_result = join_set.join_next() => {
                 match task_result {
                     Some(Ok(tool)) => {
-                        record_tool_completion(sender, &mut completed, &mut results, tool);
+                        record_tool_completion(sender, &mut completed, &mut results, tool, run_guard);
                     }
                     Some(Err(e)) => {
                         // JoinError: panic or cancellation
@@ -2365,12 +2374,24 @@ async fn wait_for_cancel(cancel: Option<&CancellationToken>) {
     }
 }
 
-fn emit_tool_started_events(tool_uses: &[ToolUse], sender: &EventSender) {
+fn emit_tool_started_events(
+    tool_uses: &[ToolUse],
+    sender: &EventSender,
+    run_guard: Option<&crate::agent_activity::RunGuard>,
+) {
     for tu in tool_uses {
         sender.send(AgentEvent::ToolStarted {
             id: tu.id.clone(),
             name: tu.name.clone(),
         });
+    }
+    if let Some(guard) = run_guard {
+        guard.set_tools_started(
+            tool_uses
+                .iter()
+                .map(|tu| crate::agent_activity::ActiveToolCall::new(&tu.id, &tu.name, &tu.input))
+                .collect(),
+        );
     }
 }
 
@@ -2379,8 +2400,12 @@ fn record_tool_completion(
     completed: &mut HashSet<usize>,
     results: &mut [Option<(ToolOutput, ToolResult)>],
     tool: CompletedTool,
+    run_guard: Option<&crate::agent_activity::RunGuard>,
 ) {
     completed.insert(tool.idx);
+    if let Some(guard) = run_guard {
+        guard.set_tool_finished(&tool.id);
+    }
     sender.send(AgentEvent::ToolCompleted {
         id: tool.id,
         result: tool.output.clone(),
@@ -2395,6 +2420,7 @@ fn handle_tool_interrupt(
     results: &mut [Option<(ToolOutput, ToolResult)>],
     tool_uses: &[ToolUse],
     sender: &EventSender,
+    run_guard: Option<&crate::agent_activity::RunGuard>,
 ) {
     join_set.abort_all();
 
@@ -2402,7 +2428,7 @@ fn handle_tool_interrupt(
         if let Ok(tool) = task_result
             && !completed.contains(&tool.idx)
         {
-            record_tool_completion(sender, completed, results, tool);
+            record_tool_completion(sender, completed, results, tool, run_guard);
         }
     }
 
@@ -2421,8 +2447,13 @@ fn handle_tool_interrupt(
                     result: abort_result,
                     duration_ms: None,
                 },
+                run_guard,
             );
         }
+    }
+
+    if let Some(guard) = run_guard {
+        guard.set_tools_started(Vec::new());
     }
 }
 
@@ -2849,6 +2880,7 @@ mod tests {
                 &sender,
                 &tool_registry,
                 None,
+                None,
             )
             .await
         });
@@ -2915,6 +2947,7 @@ mod tests {
             &enabled_tools,
             &sender,
             &tool_registry,
+            None,
             None,
         )
         .await;
@@ -4783,9 +4816,17 @@ mod tests {
         // Run the tool turn; the unknown tool name produces a tool_result
         // (failure) but the path still emits a TurnCheckpoint when it
         // completes successfully (no interrupt).
-        process_tool_turn(&mut messages, &mut turn, &setup, &sender, None, prior_count)
-            .await
-            .expect("tool turn should complete");
+        process_tool_turn(
+            &mut messages,
+            &mut turn,
+            &setup,
+            &sender,
+            None,
+            prior_count,
+            None,
+        )
+        .await
+        .expect("tool turn should complete");
 
         // Drain events looking for a TurnCheckpoint with our prior_count.
         let mut saw_checkpoint = false;

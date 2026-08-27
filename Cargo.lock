@@ -4853,6 +4853,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "zdx-engine",
+ "zdx-types",
 ]
 
 [[package]]

@@ -10,7 +10,7 @@ Scope: pure shared value types, enums, and associated pure helper logic used acr
 - `src/providers.rs`: `ProviderErrorKind`, `ProviderError`, `ProviderResult`, `Usage`, `StreamEvent`, `ProviderStream` — provider error/retry classification and streaming types
 - `src/subscription_quota.rs`: `QuotaWindow`, `SubscriptionQuota`, `QuotaError`, and shared multi-account snapshot result types
 - `src/events.rs`: `AgentEvent`, `ErrorKind`, `TurnStatus`, `ToolOutput`, `ToolError`, `ImageContent` — agent event and tool output types with serialization logic
-- `src/tools.rs`: `ToolDefinition`, `ToolResult`, `ToolResultBlock`, `ToolResultContent`
+- `src/tools.rs`: `ToolDefinition`, `ToolResult`, `ToolResultBlock`, `ToolResultContent`, `tool_command_text` (one-line primary command/target summary for a tool call; shared by `zdx-transcript` display and the engine's active-run marker)
 - `src/logging.rs`: `log_field(value, max_bytes)` — collapses whitespace and truncates a value for use as a `tracing` field, so one event stays one log line and stays bounded. Used by providers (HTTP error bodies), engine tools (tool errors), agent turn errors, and subagent stderr.
 
 ## Conventions

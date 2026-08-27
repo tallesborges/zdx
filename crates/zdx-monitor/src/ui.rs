@@ -205,7 +205,21 @@ fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
             } else {
                 Style::default().fg(Color::Green)
             };
-            ListItem::new(line).style(style)
+            let mut lines = vec![Line::styled(line, style)];
+            if let Some(tool) = a.current_tool.as_deref() {
+                let tool_line = format!(
+                    "   {}⚙ {}",
+                    a.tree_prefix,
+                    truncate_chars(tool, inner_width.saturating_sub(a.tree_prefix.len() + 5))
+                );
+                let tool_style = if i == app.selected_index {
+                    Style::default().fg(Color::Yellow).bg(SELECTED_BG)
+                } else {
+                    Style::default().fg(Color::Yellow)
+                };
+                lines.push(Line::styled(tool_line, tool_style));
+            }
+            ListItem::new(lines)
         })
         .collect();
 

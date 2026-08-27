@@ -7,7 +7,8 @@
 
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
@@ -15,6 +16,45 @@ use uuid::Uuid;
 
 use crate::config::paths;
 use crate::proc_liveness::is_alive;
+
+/// Maximum characters kept in an [`ActiveToolCall`] summary.
+const TOOL_SUMMARY_MAX_CHARS: usize = 200;
+
+/// A tool call currently executing within an active run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveToolCall {
+    /// Tool-use id (matches the `ToolStarted`/`ToolCompleted` event id).
+    pub id: String,
+    /// Tool name, e.g. `bash`.
+    pub name: String,
+    /// One-line input summary, e.g. the bash command or the edited path.
+    /// Empty when the tool has no single obvious command.
+    pub summary: String,
+    pub started_at: String,
+}
+
+impl ActiveToolCall {
+    /// Builds an entry from a tool call's name and input, summarizing the
+    /// primary command/target on one bounded line.
+    #[must_use]
+    pub fn new(id: &str, name: &str, input: &serde_json::Value) -> Self {
+        let raw = zdx_types::tool_command_text(&name.to_ascii_lowercase(), input);
+        let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+        let summary = if collapsed.chars().count() > TOOL_SUMMARY_MAX_CHARS {
+            let mut truncated: String = collapsed.chars().take(TOOL_SUMMARY_MAX_CHARS).collect();
+            truncated.push('…');
+            truncated
+        } else {
+            collapsed
+        };
+        Self {
+            id: id.to_string(),
+            name: name.to_string(),
+            summary,
+            started_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+}
 
 /// Record stored in each marker file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +87,9 @@ pub struct RunRecord {
     /// (e.g. `"explorer"`, `"oracle"`, `"task"`).
     #[serde(default)]
     pub subagent_name: Option<String>,
+    /// Tool calls currently executing (empty between tool rounds).
+    #[serde(default)]
+    pub current_tools: Vec<ActiveToolCall>,
 }
 
 /// Parameters for [`start`].
@@ -66,11 +109,33 @@ pub struct StartParams<'a> {
 /// Guard that creates a marker file on construction and removes it on drop.
 pub struct RunGuard {
     path: PathBuf,
+    record: Mutex<RunRecord>,
 }
 
 impl Drop for RunGuard {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
+    }
+}
+
+impl RunGuard {
+    /// Replaces the current-tool list for a new tool round and rewrites the
+    /// marker. Best-effort: write failures are ignored.
+    pub fn set_tools_started(&self, tools: Vec<ActiveToolCall>) {
+        let Ok(mut record) = self.record.lock() else {
+            return;
+        };
+        record.current_tools = tools;
+        write_record(&self.path, &record);
+    }
+
+    /// Removes one finished tool call from the marker.
+    pub fn set_tool_finished(&self, id: &str) {
+        let Ok(mut record) = self.record.lock() else {
+            return;
+        };
+        record.current_tools.retain(|tool| tool.id != id);
+        write_record(&self.path, &record);
     }
 }
 
@@ -99,18 +164,28 @@ pub fn start(params: StartParams<'_>) -> Option<RunGuard> {
         kind: params.kind.map(String::from),
         parent_thread_id: params.parent_thread_id.map(String::from),
         subagent_name: params.subagent_name.map(String::from),
+        current_tools: Vec::new(),
     };
 
     let filename = format!("{pid}-{}.json", Uuid::new_v4());
     let path = dir.join(filename);
-    let json = serde_json::to_string(&record).ok()?;
+    write_record(&path, &record)?;
 
-    let mut tmp = NamedTempFile::new_in(&dir).ok()?;
+    Some(RunGuard {
+        path,
+        record: Mutex::new(record),
+    })
+}
+
+/// Atomically writes a marker record (same-directory temp file + rename).
+fn write_record(path: &Path, record: &RunRecord) -> Option<()> {
+    let dir = path.parent()?;
+    let json = serde_json::to_string(record).ok()?;
+    let mut tmp = NamedTempFile::new_in(dir).ok()?;
     tmp.write_all(json.as_bytes()).ok()?;
     tmp.flush().ok()?;
-    tmp.persist(&path).ok()?;
-
-    Some(RunGuard { path })
+    tmp.persist(path).ok()?;
+    Some(())
 }
 
 /// Lists all currently active agent runs, filtering out stale markers.
@@ -172,5 +247,81 @@ fn format_duration(d: std::time::Duration) -> String {
         format!("{}m {}s", secs / 60, secs % 60)
     } else {
         format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_record() -> RunRecord {
+        RunRecord {
+            pid: std::process::id(),
+            started_at: chrono::Utc::now().to_rfc3339(),
+            thread_id: Some("t1".to_string()),
+            surface: None,
+            model: None,
+            provider: None,
+            account: None,
+            thinking: None,
+            kind: None,
+            parent_thread_id: None,
+            subagent_name: None,
+            current_tools: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn old_marker_without_current_tools_deserializes() {
+        let json = r#"{"pid":123,"started_at":"2026-08-26T00:00:00Z","thread_id":null,"surface":null,"model":null}"#;
+        let record: RunRecord = serde_json::from_str(json).unwrap();
+        assert!(record.current_tools.is_empty());
+    }
+
+    #[test]
+    fn active_tool_call_summarizes_and_bounds_input() {
+        let call = ActiveToolCall::new(
+            "id1",
+            "Bash",
+            &serde_json::json!({ "command": "cargo  build\n  --release" }),
+        );
+        assert_eq!(call.summary, "cargo build --release");
+
+        let long = "x".repeat(500);
+        let call = ActiveToolCall::new("id2", "bash", &serde_json::json!({ "command": long }));
+        assert_eq!(call.summary.chars().count(), TOOL_SUMMARY_MAX_CHARS + 1);
+        assert!(call.summary.ends_with('…'));
+
+        let call = ActiveToolCall::new("id3", "todo_write", &serde_json::json!({}));
+        assert!(call.summary.is_empty());
+    }
+
+    #[test]
+    fn run_guard_updates_current_tools_in_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("marker.json");
+        let record = test_record();
+        write_record(&path, &record).unwrap();
+        let guard = RunGuard {
+            path: path.clone(),
+            record: Mutex::new(record),
+        };
+
+        guard.set_tools_started(vec![ActiveToolCall::new(
+            "tool1",
+            "bash",
+            &serde_json::json!({ "command": "sleep 30" }),
+        )]);
+        let on_disk: RunRecord = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(on_disk.current_tools.len(), 1);
+        assert_eq!(on_disk.current_tools[0].name, "bash");
+        assert_eq!(on_disk.current_tools[0].summary, "sleep 30");
+
+        guard.set_tool_finished("tool1");
+        let on_disk: RunRecord = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(on_disk.current_tools.is_empty());
+
+        drop(guard);
+        assert!(!path.exists());
     }
 }

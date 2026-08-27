@@ -76,6 +76,15 @@ pub enum ThreadActivity {
         name: String,
         input: Value,
     },
+    /// A tool call currently executing (from the run's activity marker), not
+    /// yet persisted to the thread. Always the tail of `activity`.
+    ToolRunning {
+        sequence: usize,
+        time: String,
+        id: String,
+        name: String,
+        summary: String,
+    },
     ToolResult {
         sequence: usize,
         time: String,
@@ -229,6 +238,9 @@ struct MonitorAgent {
     account: Option<String>,
     thinking: Option<String>,
     uptime: String,
+    /// Currently executing tool call (`"bash: cargo build …"`), when the run
+    /// is inside a tool round.
+    current_tool: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -405,13 +417,49 @@ async fn get_thread(Path(id): Path<String>) -> Result<Json<ThreadResponse>, ApiE
             (StatusCode::NOT_FOUND, "Thread not found")
         })?;
 
-        Ok(Json(project_thread(target_id, events)))
+        let mut response = project_thread(target_id, events);
+        append_running_tools(&mut response);
+        Ok(Json(response))
     })
     .await
     .map_err(|error| {
         tracing::warn!(%error, "Mini App thread load task failed");
         (StatusCode::INTERNAL_SERVER_ERROR, "Thread load failed")
     })?
+}
+
+/// Appends a `ToolRunning` record for each in-flight tool from the active-run
+/// marker bound to this thread. Skips ids already persisted as `tool_use`
+/// (a finished round lands in the JSONL just before the marker entry clears).
+fn append_running_tools(response: &mut ThreadResponse) {
+    let Some(record) = agent_activity::list_active()
+        .into_iter()
+        .find(|r| r.thread_id.as_deref() == Some(response.id.as_str()))
+    else {
+        return;
+    };
+    let persisted: HashSet<String> = response
+        .activity
+        .iter()
+        .filter_map(|a| match a {
+            ThreadActivity::ToolUse { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut sequence = response.total_events;
+    for tool in record.current_tools {
+        if persisted.contains(&tool.id) {
+            continue;
+        }
+        response.activity.push(ThreadActivity::ToolRunning {
+            sequence,
+            time: event_time(&tool.started_at),
+            id: tool.id,
+            name: tool.name.to_ascii_lowercase(),
+            summary: tool.summary,
+        });
+        sequence += 1;
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1299,17 +1347,32 @@ fn build_monitor_response(root: &FilePath) -> anyhow::Result<MonitorResponse> {
 
     let active_agents = agent_activity::list_active()
         .into_iter()
-        .map(|record| MonitorAgent {
-            pid: record.pid,
-            thread_id: record.thread_id,
-            parent_thread_id: record.parent_thread_id,
-            surface: record.surface,
-            role: record.subagent_name.or(record.kind),
-            model: record.model,
-            provider: record.provider,
-            account: record.account,
-            thinking: record.thinking,
-            uptime: agent_activity::uptime_since(&record.started_at),
+        .map(|record| {
+            let current_tool = record.current_tools.first().map(|tool| {
+                let mut label = if tool.summary.is_empty() {
+                    tool.name.clone()
+                } else {
+                    format!("{}: {}", tool.name, tool.summary)
+                };
+                if record.current_tools.len() > 1 {
+                    use std::fmt::Write as _;
+                    let _ = write!(label, " (+{} more)", record.current_tools.len() - 1);
+                }
+                label
+            });
+            MonitorAgent {
+                pid: record.pid,
+                thread_id: record.thread_id,
+                parent_thread_id: record.parent_thread_id,
+                surface: record.surface,
+                role: record.subagent_name.or(record.kind),
+                model: record.model,
+                provider: record.provider,
+                account: record.account,
+                thinking: record.thinking,
+                uptime: agent_activity::uptime_since(&record.started_at),
+                current_tool,
+            }
         })
         .collect();
 

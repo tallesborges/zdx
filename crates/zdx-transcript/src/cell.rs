@@ -151,46 +151,9 @@ fn tool_key_arg(name: &str, input: &Value) -> Option<String> {
 /// Raw, untruncated primary command/target for a tool, for copy actions.
 ///
 /// Sibling of [`tool_key_arg`], which returns a truncated/summarized form for
-/// compact headers. This returns the underlying value verbatim so a copy of
-/// "the command that ran" matches exactly. Returns an empty string when the
-/// tool has no single obvious command.
-pub fn tool_command_text(name: &str, input: &Value) -> String {
-    let field = |key: &str| {
-        value_as_trimmed_str(input, key)
-            .unwrap_or_default()
-            .to_string()
-    };
-    match name {
-        "bash" => field("command"),
-        "read" | "write" | "edit" => value_as_trimmed_str(input, "file_path")
-            .or_else(|| value_as_trimmed_str(input, "path"))
-            .unwrap_or_default()
-            .to_string(),
-        "glob" => field("pattern"),
-        "grep" => match (
-            value_as_trimmed_str(input, "pattern"),
-            value_as_trimmed_str(input, "path"),
-        ) {
-            (Some(pattern), Some(path)) => format!("{pattern} {path}"),
-            (Some(pattern), None) => pattern.to_string(),
-            _ => String::new(),
-        },
-        "fetch_webpage" => field("url"),
-        "read_thread" => field("thread_id"),
-        "thread_search" => field("query"),
-        "apply_patch" => field("patch"),
-        "invoke_subagent" => field("prompt"),
-        "web_search" => {
-            let queries = value_as_string_list(input, "search_queries");
-            if queries.is_empty() {
-                field("objective")
-            } else {
-                queries.join("\n")
-            }
-        }
-        _ => String::new(),
-    }
-}
+/// compact headers. Shared with the engine's active-run marker via
+/// `zdx_types`.
+pub use zdx_types::{primary_input_key, tool_command_text};
 
 /// Regex pattern matching `[Image N]` placeholders in text (e.g., `[Image 1]`, `[Image 23]`).
 fn highlight_image_placeholders(styled_line: StyledLine) -> StyledLine {

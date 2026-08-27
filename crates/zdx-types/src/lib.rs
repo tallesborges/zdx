@@ -25,7 +25,10 @@ pub use providers::{
 pub use subscription_quota::{
     QuotaError, QuotaWindow, SubscriptionQuota, SubscriptionQuotaResult, SubscriptionQuotaSnapshot,
 };
-pub use tools::{ToolDefinition, ToolResult, ToolResultBlock, ToolResultContent};
+pub use tools::{
+    ToolDefinition, ToolResult, ToolResultBlock, ToolResultContent, primary_input_key,
+    tool_command_text,
+};
 pub mod config;
 pub use config::{TextVerbosity, ThinkingLevel};
 pub use logging::log_field;
