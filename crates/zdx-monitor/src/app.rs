@@ -542,6 +542,9 @@ pub struct ActiveAgentInfo {
     /// Currently executing tool call (`"bash: cargo build …"`), when the run
     /// is inside a tool round. `None` between tool rounds.
     pub current_tool: Option<String>,
+    /// Coarse run phase from the marker (`waiting`/`thinking`/`answering`/
+    /// `retrying`), shown when no tool is running.
+    pub phase: Option<String>,
 }
 
 /// One running background process shown in the Background tab.
@@ -592,6 +595,12 @@ pub struct AgentOverlayState {
     /// overlay rebuilds when a tool starts/finishes even though the JSONL
     /// hasn't changed yet.
     pub running_sig: Vec<String>,
+    /// Coarse phase of the run from its activity marker, shown in the title.
+    /// Refreshed every tick; `None` once the run ends.
+    pub run_phase: Option<String>,
+    /// Name of the first in-flight tool, shown in the title with precedence
+    /// over `run_phase` (a stale `thinking` would mislead during tool rounds).
+    pub running_tool: Option<String>,
     /// Width the transcript was last rendered at (re-render on resize).
     pub width: usize,
 }
@@ -2809,6 +2818,7 @@ fn load_active_agents() -> Vec<ActiveAgentInfo> {
                 kind: r.kind,
                 subagent_name: r.subagent_name,
                 current_tool,
+                phase: r.phase,
             }
         })
         .collect();
@@ -2963,10 +2973,11 @@ fn read_thread_transcript(
 }
 
 /// Appends a synthetic running-tool cell for each in-flight tool from the
-/// run's activity marker. The marker only keeps a bounded input summary, so
-/// the input is rebuilt as `{primary_key: summary}` for display. Skips ids
-/// already persisted (a completed round lands in the JSONL just before the
-/// marker entry clears).
+/// run's activity marker. Uses the marker's full input when it was stored;
+/// otherwise rebuilds a display input as `{primary_key: summary}`. The cell's
+/// start time comes from the marker so elapsed time survives rebuilds. Skips
+/// ids already persisted (a completed round lands in the JSONL just before
+/// the marker entry clears).
 fn append_running_tool_cells(
     cells: &mut Vec<zdx_transcript::HistoryCell>,
     running: &[agent_activity::ActiveToolCall],
@@ -2979,30 +2990,34 @@ fn append_running_tool_cells(
             continue;
         }
         let name = tool.name.to_ascii_lowercase();
-        let input = zdx_transcript::primary_input_key(&name)
-            .filter(|_| !tool.summary.is_empty())
-            .map_or_else(
-                || serde_json::json!({}),
-                |key| serde_json::json!({ key: tool.summary }),
-            );
-        cells.push(zdx_transcript::HistoryCell::tool_running(
-            tool.id.clone(),
-            name,
-            input,
-        ));
+        let input = if tool.input.is_null() {
+            zdx_transcript::primary_input_key(&name)
+                .filter(|_| !tool.summary.is_empty())
+                .map_or_else(
+                    || serde_json::json!({}),
+                    |key| serde_json::json!({ key: tool.summary }),
+                )
+        } else {
+            tool.input.clone()
+        };
+        let mut cell = zdx_transcript::HistoryCell::tool_running(tool.id.clone(), name, input);
+        if let Ok(marker_start) = chrono::DateTime::parse_from_rfc3339(&tool.started_at)
+            && let zdx_transcript::HistoryCell::Tool { started_at, .. } = &mut cell
+        {
+            *started_at = marker_start.with_timezone(&chrono::Utc);
+        }
+        cells.push(cell);
     }
 }
 
-/// Marker `current_tools` for the active run bound to `thread_id`, if any.
-fn running_tools_for(thread_id: &str) -> Vec<agent_activity::ActiveToolCall> {
+/// Marker record for the active run bound to `thread_id`, if any.
+fn active_run_for(thread_id: &str) -> Option<agent_activity::RunRecord> {
     if thread_id.is_empty() {
-        return Vec::new();
+        return None;
     }
     agent_activity::list_active()
         .into_iter()
         .find(|r| r.thread_id.as_deref() == Some(thread_id))
-        .map(|r| r.current_tools)
-        .unwrap_or_default()
 }
 
 /// Applies the tracked expansions to freshly built cells, which always arrive
@@ -3088,6 +3103,8 @@ fn open_agent_overlay(app: &mut MonitorApp) {
                 file_len: 0,
                 file_mtime: None,
                 running_sig: Vec::new(),
+                run_phase: None,
+                running_tool: None,
                 width,
             };
             load_transcript_into(&mut state);
@@ -3110,6 +3127,8 @@ fn open_agent_overlay(app: &mut MonitorApp) {
                 file_len: 0,
                 file_mtime: None,
                 running_sig: Vec::new(),
+                run_phase: None,
+                running_tool: None,
                 width,
             });
         }
@@ -3150,6 +3169,8 @@ fn open_thread_overlay(app: &mut MonitorApp) {
         file_len: 0,
         file_mtime: None,
         running_sig: Vec::new(),
+        run_phase: None,
+        running_tool: None,
         width: app.terminal_width.saturating_sub(2) as usize,
     };
     load_transcript_into(&mut state);
@@ -3206,7 +3227,13 @@ fn load_transcript_into(state: &mut AgentOverlayState) {
     let (len, mtime) = transcript_file_fingerprint(&path);
     state.file_len = len;
     state.file_mtime = mtime;
-    let running = running_tools_for(&state.thread_id);
+    let run = active_run_for(&state.thread_id);
+    state.run_phase = run.as_ref().and_then(|r| r.phase.clone());
+    state.running_tool = run
+        .as_ref()
+        .and_then(|r| r.current_tools.first())
+        .map(|t| t.name.to_ascii_lowercase());
+    let running = run.map(|r| r.current_tools).unwrap_or_default();
     state.running_sig = running.iter().map(|t| t.id.clone()).collect();
     let (cells, lines, tools, thinking) = read_thread_transcript(
         &state.thread_id,
@@ -3248,10 +3275,15 @@ fn refresh_agent_overlay(app: &mut MonitorApp) {
 
     let path = transcript_path(&state.thread_id);
     let (len, mtime) = transcript_file_fingerprint(&path);
-    let running_sig: Vec<String> = running_tools_for(&state.thread_id)
-        .iter()
-        .map(|t| t.id.clone())
-        .collect();
+    let run = active_run_for(&state.thread_id);
+    state.run_phase = run.as_ref().and_then(|r| r.phase.clone());
+    state.running_tool = run
+        .as_ref()
+        .and_then(|r| r.current_tools.first())
+        .map(|t| t.name.to_ascii_lowercase());
+    let running_sig: Vec<String> = run
+        .map(|r| r.current_tools.iter().map(|t| t.id.clone()).collect())
+        .unwrap_or_default();
     if len == state.file_len
         && mtime == state.file_mtime
         && width == state.width
@@ -4257,6 +4289,8 @@ mod transcript_tests {
             file_len: 0,
             file_mtime: None,
             running_sig: Vec::new(),
+            run_phase: None,
+            running_tool: None,
             width: 80,
         };
         let page = 40;
@@ -4339,6 +4373,8 @@ mod transcript_tests {
             file_len: 0,
             file_mtime: None,
             running_sig: Vec::new(),
+            run_phase: None,
+            running_tool: None,
             width: 80,
         };
         let page = 40;
@@ -4401,6 +4437,8 @@ mod transcript_tests {
             file_len: 0,
             file_mtime: None,
             running_sig: Vec::new(),
+            run_phase: None,
+            running_tool: None,
             width: 80,
         };
 
@@ -4588,6 +4626,7 @@ mod transcript_tests {
                 kind: None,
                 subagent_name: None,
                 current_tool: None,
+                phase: None,
             }
         }
 
@@ -4635,6 +4674,7 @@ mod transcript_tests {
                 kind: None,
                 subagent_name: None,
                 current_tool: None,
+                phase: None,
             }
         }
 

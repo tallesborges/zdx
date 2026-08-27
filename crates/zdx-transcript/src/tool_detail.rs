@@ -185,7 +185,17 @@ pub fn tool_detail_body(cell: &HistoryCell) -> ToolDetailBody {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     let status_text = match state {
-        ToolState::Running => "Running…".to_string(),
+        ToolState::Running => {
+            let secs = chrono::Utc::now()
+                .signed_duration_since(*started_at)
+                .num_seconds()
+                .max(0);
+            if secs < 60 {
+                format!("Running… ({secs}s)")
+            } else {
+                format!("Running… ({}m {}s)", secs / 60, secs % 60)
+            }
+        }
         ToolState::Done => match completed_at {
             Some(completed) => {
                 let elapsed = completed.signed_duration_since(*started_at);

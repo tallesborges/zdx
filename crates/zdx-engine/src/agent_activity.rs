@@ -20,6 +20,10 @@ use crate::proc_liveness::is_alive;
 /// Maximum characters kept in an [`ActiveToolCall`] summary.
 const TOOL_SUMMARY_MAX_CHARS: usize = 200;
 
+/// Maximum serialized size of an [`ActiveToolCall`] full input. Larger inputs
+/// (e.g. a `write` with a whole file body) fall back to summary-only.
+const TOOL_INPUT_MAX_BYTES: usize = 16 * 1024;
+
 /// A tool call currently executing within an active run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActiveToolCall {
@@ -30,6 +34,10 @@ pub struct ActiveToolCall {
     /// One-line input summary, e.g. the bash command or the edited path.
     /// Empty when the tool has no single obvious command.
     pub summary: String,
+    /// Full tool input for detail views, or `Value::Null` when it exceeds
+    /// [`TOOL_INPUT_MAX_BYTES`] (consumers fall back to `summary`).
+    #[serde(default)]
+    pub input: serde_json::Value,
     pub started_at: String,
 }
 
@@ -47,10 +55,17 @@ impl ActiveToolCall {
         } else {
             collapsed
         };
+        let stored_input =
+            if serde_json::to_string(input).is_ok_and(|s| s.len() <= TOOL_INPUT_MAX_BYTES) {
+                input.clone()
+            } else {
+                serde_json::Value::Null
+            };
         Self {
             id: id.to_string(),
             name: name.to_string(),
             summary,
+            input: stored_input,
             started_at: chrono::Utc::now().to_rfc3339(),
         }
     }
@@ -90,6 +105,11 @@ pub struct RunRecord {
     /// Tool calls currently executing (empty between tool rounds).
     #[serde(default)]
     pub current_tools: Vec<ActiveToolCall>,
+    /// What the run is doing right now: `waiting` (request sent, no tokens
+    /// yet), `thinking`, `answering`, or `retrying`. Updated on transitions
+    /// only. A tool round is reported through `current_tools` instead.
+    #[serde(default)]
+    pub phase: Option<String>,
 }
 
 /// Parameters for [`start`].
@@ -137,6 +157,19 @@ impl RunGuard {
         record.current_tools.retain(|tool| tool.id != id);
         write_record(&self.path, &record);
     }
+
+    /// Records the run's current phase and rewrites the marker. No-op when the
+    /// phase is unchanged, so callers may invoke it once per streamed delta.
+    pub fn set_phase(&self, phase: &str) {
+        let Ok(mut record) = self.record.lock() else {
+            return;
+        };
+        if record.phase.as_deref() == Some(phase) {
+            return;
+        }
+        record.phase = Some(phase.to_string());
+        write_record(&self.path, &record);
+    }
 }
 
 /// Creates a `RunGuard` that writes a marker file for the current agent turn.
@@ -165,6 +198,7 @@ pub fn start(params: StartParams<'_>) -> Option<RunGuard> {
         parent_thread_id: params.parent_thread_id.map(String::from),
         subagent_name: params.subagent_name.map(String::from),
         current_tools: Vec::new(),
+        phase: Some("waiting".to_string()),
     };
 
     let filename = format!("{pid}-{}.json", Uuid::new_v4());
@@ -268,6 +302,7 @@ mod tests {
             parent_thread_id: None,
             subagent_name: None,
             current_tools: Vec::new(),
+            phase: None,
         }
     }
 
@@ -286,11 +321,16 @@ mod tests {
             &serde_json::json!({ "command": "cargo  build\n  --release" }),
         );
         assert_eq!(call.summary, "cargo build --release");
+        assert_eq!(call.input["command"], "cargo  build\n  --release");
 
         let long = "x".repeat(500);
         let call = ActiveToolCall::new("id2", "bash", &serde_json::json!({ "command": long }));
         assert_eq!(call.summary.chars().count(), TOOL_SUMMARY_MAX_CHARS + 1);
         assert!(call.summary.ends_with('…'));
+
+        let huge = "y".repeat(TOOL_INPUT_MAX_BYTES + 1);
+        let call = ActiveToolCall::new("id4", "bash", &serde_json::json!({ "command": huge }));
+        assert!(call.input.is_null(), "oversized input must not be stored");
 
         let call = ActiveToolCall::new("id3", "todo_write", &serde_json::json!({}));
         assert!(call.summary.is_empty());
@@ -323,5 +363,31 @@ mod tests {
 
         drop(guard);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn set_phase_writes_only_on_transitions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("marker.json");
+        let record = test_record();
+        write_record(&path, &record).unwrap();
+        let guard = RunGuard {
+            path: path.clone(),
+            record: Mutex::new(record),
+        };
+
+        guard.set_phase("thinking");
+        let on_disk: RunRecord = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(on_disk.phase.as_deref(), Some("thinking"));
+
+        // Unchanged phase must not rewrite the marker: delete the file and
+        // confirm a repeat call does not recreate it.
+        fs::remove_file(&path).unwrap();
+        guard.set_phase("thinking");
+        assert!(!path.exists(), "no-op transition must not write");
+
+        guard.set_phase("answering");
+        let on_disk: RunRecord = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(on_disk.phase.as_deref(), Some("answering"));
     }
 }

@@ -164,6 +164,8 @@ fn footer_hint(section: Section) -> &'static str {
 }
 
 fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
+    /// Fixed width of the status column after the PID (`⚙ bash`, `◌ waiting`).
+    const STATUS_COL: usize = 12;
     if app.active_agents.is_empty() {
         let p = Paragraph::new(" No active agent runs")
             .style(Style::default().fg(Color::DarkGray))
@@ -188,15 +190,27 @@ fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
             } else {
                 role.to_string()
             };
-            let prefix = format!(
-                " {}● PID {} {} model:",
-                a.tree_prefix,
-                a.pid,
-                truncate_chars(&role_label, 18)
+            let (status, status_color) = a.current_tool.as_deref().map_or_else(
+                || {
+                    (
+                        a.phase
+                            .as_deref()
+                            .map_or_else(String::new, |phase| format!("◌ {phase}")),
+                        Color::DarkGray,
+                    )
+                },
+                |tool| {
+                    let name = tool.split(':').next().unwrap_or(tool);
+                    (format!("⚙ {name}"), Color::Yellow)
+                },
             );
+            let status = format!("{:<STATUS_COL$}", truncate_chars(&status, STATUS_COL));
+            let pre = format!(" {}● PID {} ", a.tree_prefix, a.pid);
+            let mid = format!(" {} model:", truncate_chars(&role_label, 18));
             let suffix = format!(" thread:{} up {}", a.thread_id, a.uptime);
-            let model_width =
-                inner_width.saturating_sub(prefix.chars().count() + suffix.chars().count());
+            let model_width = inner_width.saturating_sub(
+                pre.chars().count() + STATUS_COL + mid.chars().count() + suffix.chars().count(),
+            );
             let model_desc = format!(
                 "{}:{}@{}",
                 zdx_engine::providers::oauth::account_cache_key(&a.provider, a.account.as_deref()),
@@ -204,25 +218,35 @@ fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
                 a.thinking
             );
             let model = truncate_chars(&model_desc, model_width);
-            let line = format!("{prefix}{model:<model_width$}{suffix}");
-            let style = if i == app.selected_index {
-                Style::default().fg(Color::Green).bg(SELECTED_BG)
+            let (style, status_style) = if i == app.selected_index {
+                (
+                    Style::default().fg(Color::Green).bg(SELECTED_BG),
+                    Style::default().fg(status_color).bg(SELECTED_BG),
+                )
             } else {
-                Style::default().fg(Color::Green)
+                (
+                    Style::default().fg(Color::Green),
+                    Style::default().fg(status_color),
+                )
             };
-            let mut lines = vec![Line::styled(line, style)];
+            let line = Line::from(vec![
+                Span::styled(pre, style),
+                Span::styled(status, status_style),
+                Span::styled(format!("{mid}{model:<model_width$}{suffix}"), style),
+            ]);
+            let mut lines = vec![line];
             if let Some(tool) = a.current_tool.as_deref() {
-                let tool_line = format!(
+                let preview = format!(
                     "   {}⚙ {}",
                     a.tree_prefix,
                     truncate_chars(tool, inner_width.saturating_sub(a.tree_prefix.len() + 5))
                 );
-                let tool_style = if i == app.selected_index {
+                let preview_style = if i == app.selected_index {
                     Style::default().fg(Color::Yellow).bg(SELECTED_BG)
                 } else {
                     Style::default().fg(Color::Yellow)
                 };
-                lines.push(Line::styled(tool_line, tool_style));
+                lines.push(Line::styled(preview, preview_style));
             }
             ListItem::new(lines)
         })
@@ -1268,13 +1292,17 @@ fn render_agent_overlay(f: &mut Frame, state: &AgentOverlayState, area: Rect) {
     f.render_widget(Clear, area);
 
     let status = if state.unavailable {
-        ""
+        String::new()
     } else if state.ended {
-        " · ENDED"
+        " · ENDED".to_string()
+    } else if let Some(tool) = state.running_tool.as_deref() {
+        format!(" · ⚙ {}…", tool.to_ascii_uppercase())
+    } else if let Some(phase) = state.run_phase.as_deref() {
+        format!(" · {}…", phase.to_ascii_uppercase())
     } else if state.scroll.is_none() {
-        " · FOLLOW"
+        " · FOLLOW".to_string()
     } else {
-        ""
+        String::new()
     };
     let mut hints = String::from(" · ");
     if !state.tools.is_empty() {

@@ -113,19 +113,44 @@ pub fn create_event_channel() -> (AgentEventTx, AgentEventRx) {
 }
 
 /// Event sender wrapper with a single reliable send operation.
+///
+/// When bound to an active-run guard via [`EventSender::with_activity`], it
+/// derives the run's coarse phase (`waiting`/`thinking`/`answering`/
+/// `retrying`) from the events flowing through it and records transitions in
+/// the run marker. Phase updates are no-ops when unchanged, so per-delta
+/// calls stay cheap.
 #[derive(Clone)]
 pub struct EventSender {
     tx: AgentEventTx,
+    activity: Option<Arc<crate::agent_activity::RunGuard>>,
 }
 
 impl EventSender {
     /// Creates a new `EventSender` wrapping the given channel sender.
     pub fn new(tx: AgentEventTx) -> Self {
-        Self { tx }
+        Self { tx, activity: None }
+    }
+
+    /// Returns a sender that also records run-phase transitions in `guard`.
+    #[must_use]
+    pub fn with_activity(mut self, guard: Option<Arc<crate::agent_activity::RunGuard>>) -> Self {
+        self.activity = guard;
+        self
     }
 
     /// Sends an event. Never blocks; ignored silently if the receiver has dropped.
     pub fn send(&self, ev: AgentEvent) {
+        if let Some(guard) = &self.activity {
+            match &ev {
+                AgentEvent::ReasoningDelta { .. } => guard.set_phase("thinking"),
+                AgentEvent::AssistantDelta { .. } => guard.set_phase("answering"),
+                AgentEvent::ProviderRetry { .. } => guard.set_phase("retrying"),
+                // Emitted after a tool round flushes, right before the next
+                // model request goes out.
+                AgentEvent::TurnCheckpoint { .. } => guard.set_phase("waiting"),
+                _ => {}
+            }
+        }
         let _ = self.tx.send(Arc::new(ev));
     }
 }
@@ -894,7 +919,11 @@ async fn run_turn_inner(
         kind: options.activity_kind.as_deref(),
         parent_thread_id: options.activity_parent_thread_id.as_deref(),
         subagent_name: options.activity_subagent_name.as_deref(),
-    });
+    })
+    .map(Arc::new);
+    // Every event this turn emits flows through the activity-bound sender so
+    // the run marker tracks phase transitions without per-site hooks.
+    let sender = &sender.clone().with_activity(run_guard.clone());
     let mut messages = messages;
     let initial_message_count = messages.len();
     let mut consecutive_malformed_tool_turns = 0usize;
@@ -1067,7 +1096,7 @@ async fn run_turn_inner(
                 sender,
                 cancel,
                 initial_message_count,
-                run_guard.as_ref(),
+                run_guard.as_deref(),
             )
             .await
             .map_err(|e| (e, messages.clone()))?;

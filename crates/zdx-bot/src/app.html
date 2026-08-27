@@ -276,6 +276,7 @@
     .row-title { overflow: hidden; font-size: var(--fs-base); font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
     .row-detail { overflow: hidden; margin-top: 4px; color: var(--muted); font-family: var(--mono); font-size: var(--fs-caption); line-height: var(--lh); text-overflow: ellipsis; white-space: nowrap; }
     .row-tool { color: var(--amber); }
+    .row-phase { color: var(--cyan); }
     .row-meta { color: var(--muted); font-size: var(--fs-caption); text-align: right; white-space: pre-line; }
 
     .status-chip {
@@ -429,7 +430,7 @@
     .event-summary .success { color: var(--accent); }
     .event-summary .failure { color: var(--red); }
     .event-summary .pending { color: var(--amber); }
-    .running-tool { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 42px; padding: 9px 12px; border-color: color-mix(in srgb, var(--amber) 35%, transparent); }
+    .running-tool { border-color: color-mix(in srgb, var(--amber) 35%, transparent); }
     .running-tool .running-label { color: var(--amber); }
     .running-dot { display: inline-block; flex: 0 0 auto; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; background: var(--amber); animation: runningBlink 1.4s ease-in-out infinite; }
     @keyframes runningBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
@@ -1018,6 +1019,8 @@
         const row = listRow({ tone: "active", title: role, detail, meta: `PID ${agent.pid}\n${agent.uptime || "—"}`, onClick: open });
         if (agent.current_tool) {
           row.querySelector(".row-main").append(element("div", "row-detail row-tool", `⚙ ${agent.current_tool}`));
+        } else if (agent.phase) {
+          row.querySelector(".row-main").append(element("div", "row-detail row-phase", `◌ ${agent.phase}…`));
         }
         panel.append(row);
       }
@@ -1447,17 +1450,31 @@
     }
 
     function renderRunningTool(record) {
-      const row = element("div", "activity-detail running-tool");
+      const details = element("details", "activity-detail running-tool");
+      const summary = element("summary");
       const label = element("span", "event-summary");
+      const runningText = record.running_for ? `running · ${record.running_for}` : "running";
       label.append(
         element("span", "running-dot"),
         element("strong", "", record.name || "Tool"),
         document.createTextNode(" · "),
-        element("span", "running-label", "running"),
+        element("span", "running-label", runningText),
         document.createTextNode(record.summary ? ` · ${record.summary}` : ""),
       );
-      row.append(label, element("span", "event-time", record.time || ""));
-      return row;
+      summary.append(label, element("span", "event-time", record.time || ""));
+      let populated = false;
+      details.addEventListener("toggle", () => {
+        if (!details.open || populated) return;
+        populated = true;
+        const body = element("div", "detail-body");
+        const hasInput = record.input && typeof record.input === "object" && Object.keys(record.input).length;
+        const args = hasInput ? prettyValue(record.input) : (record.summary || "No arguments");
+        body.append(element("p", "detail-label", "Arguments"), element("pre", "detail-code", args));
+        body.append(element("p", "detail-label", "Result"), element("pre", "detail-code", "Running…"));
+        details.append(body);
+      });
+      details.append(summary);
+      return details;
     }
 
     function renderBanner(record) {

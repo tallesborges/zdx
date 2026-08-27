@@ -84,6 +84,11 @@ pub enum ThreadActivity {
         id: String,
         name: String,
         summary: String,
+        /// Full tool input, or `Value::Null` when the marker only kept the
+        /// summary (oversized input).
+        input: Value,
+        /// Human elapsed time since the tool started, e.g. `42s`.
+        running_for: String,
     },
     ToolResult {
         sequence: usize,
@@ -241,6 +246,8 @@ struct MonitorAgent {
     /// Currently executing tool call (`"bash: cargo build …"`), when the run
     /// is inside a tool round.
     current_tool: Option<String>,
+    /// Coarse run phase (`waiting`/`thinking`/`answering`/`retrying`).
+    phase: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -454,9 +461,11 @@ fn append_running_tools(response: &mut ThreadResponse) {
         response.activity.push(ThreadActivity::ToolRunning {
             sequence,
             time: event_time(&tool.started_at),
+            running_for: agent_activity::uptime_since(&tool.started_at),
             id: tool.id,
             name: tool.name.to_ascii_lowercase(),
             summary: tool.summary,
+            input: tool.input,
         });
         sequence += 1;
     }
@@ -1373,6 +1382,7 @@ fn build_monitor_response(root: &FilePath) -> anyhow::Result<MonitorResponse> {
                 thinking: record.thinking,
                 uptime: agent_activity::uptime_since(&record.started_at),
                 current_tool,
+                phase: record.phase,
             }
         })
         .collect();
