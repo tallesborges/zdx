@@ -29,8 +29,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use super::OverlayUpdate;
 use super::render_utils::centered_rect;
+use super::{GPrefix, OverlayUpdate};
 use crate::effects::UiEffect;
 use crate::runtime::{AnalysisMode, ContextReport, DisplayMode};
 use crate::transcript::markdown::render_markdown;
@@ -88,6 +88,8 @@ pub struct ContextState {
     pub refining: bool,
     pub tab: ContextTab,
     scroll_offset: Cell<usize>,
+    /// Vim `g` prefix (`gg` ⇒ top).
+    g_prefix: GPrefix,
 }
 
 impl ContextState {
@@ -99,6 +101,7 @@ impl ContextState {
             refining: false,
             tab: ContextTab::Usage,
             scroll_offset: Cell::new(0),
+            g_prefix: GPrefix::default(),
         }
     }
 
@@ -121,7 +124,10 @@ impl ContextState {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> OverlayUpdate {
-        match key.code {
+        let Some(code) = self.g_prefix.translate(key) else {
+            return OverlayUpdate::stay();
+        };
+        match code {
             KeyCode::Esc | KeyCode::Char('q') => OverlayUpdate::close(),
             KeyCode::Tab => {
                 self.tab = self.tab.next();
@@ -175,7 +181,7 @@ impl ContextState {
                     .set(self.scroll_offset.get().saturating_sub(10));
                 OverlayUpdate::stay()
             }
-            KeyCode::Home | KeyCode::Char('g') => {
+            KeyCode::Home => {
                 self.scroll_offset.set(0);
                 OverlayUpdate::stay()
             }
@@ -359,7 +365,7 @@ impl ContextState {
             Span::styled(" view  ", Style::default().fg(Color::DarkGray)),
             Span::styled("[j/k]", Style::default().fg(Color::Yellow)),
             Span::styled(" scroll  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[g/G]", Style::default().fg(Color::Yellow)),
+            Span::styled("[gg/G]", Style::default().fg(Color::Yellow)),
             Span::styled(" top/bottom  ", Style::default().fg(Color::DarkGray)),
         ];
 

@@ -10,10 +10,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use zdx_engine::background_activity;
 
-use super::OverlayUpdate;
 use super::render_utils::{
     InputHint, calculate_overlay_area, render_hints, render_overlay_container, render_separator,
 };
+use super::{GPrefix, OverlayUpdate};
 use crate::common::truncate_with_ellipsis;
 use crate::effects::UiEffect;
 use crate::state::TuiState;
@@ -35,6 +35,8 @@ pub struct BackgroundState {
     pub entries: Vec<BgEntry>,
     pub selected: usize,
     pub offset: usize,
+    /// Vim `g` prefix (`gg` ⇒ top).
+    g_prefix: GPrefix,
 }
 
 impl BackgroundState {
@@ -46,6 +48,7 @@ impl BackgroundState {
             entries,
             selected: 0,
             offset: 0,
+            g_prefix: GPrefix::default(),
         }
     }
 
@@ -63,7 +66,10 @@ impl BackgroundState {
 
     pub fn handle_key(&mut self, _tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
+        let Some(code) = self.g_prefix.translate(key) else {
+            return OverlayUpdate::stay();
+        };
+        match code {
             KeyCode::Esc => OverlayUpdate::close(),
             KeyCode::Char('c') if ctrl => OverlayUpdate::close(),
             KeyCode::Up | KeyCode::Char('k') => {
@@ -72,6 +78,16 @@ impl BackgroundState {
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.move_selection(1);
+                OverlayUpdate::stay()
+            }
+            KeyCode::Home => {
+                self.selected = 0;
+                self.ensure_visible();
+                OverlayUpdate::stay()
+            }
+            KeyCode::End | KeyCode::Char('G') => {
+                self.selected = self.entries.len().saturating_sub(1);
+                self.ensure_visible();
                 OverlayUpdate::stay()
             }
             KeyCode::Char('r') => {
@@ -214,6 +230,7 @@ fn render_background(frame: &mut Frame, state: &BackgroundState, area: Rect, inp
         inner_area,
         &[
             InputHint::new("↑↓", "navigate"),
+            InputHint::new("gg/G", "ends"),
             InputHint::new("x", "kill"),
             InputHint::new("r", "refresh"),
             InputHint::new("Esc", "close"),

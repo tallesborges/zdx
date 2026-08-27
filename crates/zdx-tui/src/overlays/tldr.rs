@@ -18,8 +18,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use super::OverlayUpdate;
 use super::render_utils::centered_rect;
+use super::{GPrefix, OverlayUpdate};
 use crate::transcript::markdown::render_markdown;
 use crate::transcript::{SPINNER_SPEED_DIVISOR, convert_styled_line};
 
@@ -41,6 +41,8 @@ pub struct TldrState {
     pub thread_id: String,
     pub phase: TldrPhase,
     scroll_offset: Cell<usize>,
+    /// Vim `g` prefix (`gg` ⇒ top).
+    g_prefix: GPrefix,
 }
 
 impl TldrState {
@@ -49,6 +51,7 @@ impl TldrState {
             thread_id,
             phase: TldrPhase::Loading,
             scroll_offset: Cell::new(0),
+            g_prefix: GPrefix::default(),
         }
     }
 
@@ -63,7 +66,10 @@ impl TldrState {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> OverlayUpdate {
-        match key.code {
+        let Some(code) = self.g_prefix.translate(key) else {
+            return OverlayUpdate::stay();
+        };
+        match code {
             KeyCode::Esc | KeyCode::Char('q') => OverlayUpdate::close(),
             KeyCode::Down | KeyCode::Char('j') => {
                 self.scroll_offset
@@ -85,7 +91,7 @@ impl TldrState {
                     .set(self.scroll_offset.get().saturating_sub(10));
                 OverlayUpdate::stay()
             }
-            KeyCode::Home | KeyCode::Char('g') => {
+            KeyCode::Home => {
                 self.scroll_offset.set(0);
                 OverlayUpdate::stay()
             }
@@ -192,7 +198,7 @@ impl TldrState {
                 Span::styled(" close  ", Style::default().fg(Color::DarkGray)),
                 Span::styled("[j/k]", Style::default().fg(Color::Yellow)),
                 Span::styled(" scroll  ", Style::default().fg(Color::DarkGray)),
-                Span::styled("[g/G]", Style::default().fg(Color::Yellow)),
+                Span::styled("[gg/G]", Style::default().fg(Color::Yellow)),
                 Span::styled(" top/bottom ", Style::default().fg(Color::DarkGray)),
                 Span::styled(scroll_indicator, Style::default().fg(Color::Cyan)),
             ]));

@@ -14,7 +14,7 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use serde_json::json;
 use zdx_engine::core::thread_persistence::ThreadEvent;
 
-use super::OverlayUpdate;
+use super::{GPrefix, OverlayUpdate};
 use crate::common::{TaskKind, sanitize_for_display, truncate_with_ellipsis};
 use crate::effects::UiEffect;
 use crate::mutations::{StateMutation, TranscriptMutation};
@@ -59,6 +59,8 @@ pub struct TimelineState {
     pub selected: usize,
     pub offset: usize,
     initial_scroll: ScrollMode,
+    /// Vim `g` prefix (`gg` ⇒ top).
+    g_prefix: GPrefix,
 }
 
 impl TimelineState {
@@ -83,6 +85,7 @@ impl TimelineState {
                 selected: 0,
                 offset: 0,
                 initial_scroll,
+                g_prefix: GPrefix::default(),
             },
             vec![],
             mutations,
@@ -95,9 +98,12 @@ impl TimelineState {
 
     pub fn handle_key(&mut self, tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(code) = self.g_prefix.translate(key) else {
+            return OverlayUpdate::stay();
+        };
 
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
+        match code {
+            KeyCode::Esc | KeyCode::Char('c') if code == KeyCode::Esc || ctrl => {
                 OverlayUpdate::close().with_mutations(vec![StateMutation::Transcript(
                     TranscriptMutation::SetScrollMode(self.initial_scroll.clone()),
                 )])
@@ -127,7 +133,7 @@ impl TimelineState {
                 }
                 OverlayUpdate::stay().with_mutations(self.preview_scroll_command(tui))
             }
-            KeyCode::End => {
+            KeyCode::End | KeyCode::Char('G') => {
                 if !self.entries.is_empty() {
                     self.selected = self.entries.len().saturating_sub(1);
                     self.ensure_visible();

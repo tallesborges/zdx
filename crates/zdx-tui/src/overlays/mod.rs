@@ -42,7 +42,7 @@ mod update;
 pub use background::BackgroundState;
 pub use command_palette::CommandPaletteState;
 pub use context::{ContextPhase, ContextState};
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub use file_picker::{FilePickerState, discover_files};
 pub use followup_picker::FollowupPickerState;
 pub use image_preview::ImagePreviewState;
@@ -68,6 +68,40 @@ use crate::state::TuiState;
 // ============================================================================
 // OverlayRequest / OverlayTransition / OverlayUpdate
 // ============================================================================
+
+/// Vim-style `g` prefix shared by scrollable overlays: `gg` is delivered as
+/// `Home` (every scroll overlay binds `Home`/`End`), and an unknown `g`
+/// sequence is swallowed like vim aborts it. Keys with Ctrl/Alt bypass the
+/// prefix so chords like Ctrl+C keep working mid-sequence.
+///
+/// Same convention as the monitor's `apply_g_prefix`; overlays with a
+/// type-to-filter input (thread/skill/file pickers, palette) must not use it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GPrefix {
+    pending: bool,
+}
+
+impl GPrefix {
+    /// Translates a key; `None` means the prefix consumed it.
+    pub fn translate(&mut self, key: KeyEvent) -> Option<KeyCode> {
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            self.pending = false;
+            return Some(key.code);
+        }
+        if self.pending {
+            self.pending = false;
+            return (key.code == KeyCode::Char('g')).then_some(KeyCode::Home);
+        }
+        if key.code == KeyCode::Char('g') {
+            self.pending = true;
+            return None;
+        }
+        Some(key.code)
+    }
+}
 
 /// Requests to open a new overlay.
 #[derive(Debug)]

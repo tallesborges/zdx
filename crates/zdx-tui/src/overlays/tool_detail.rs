@@ -20,8 +20,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_segmentation::UnicodeSegmentation;
 
-use super::OverlayUpdate;
 use super::render_utils::centered_rect;
+use super::{GPrefix, OverlayUpdate};
 use crate::common::clipboard::Clipboard;
 use crate::common::grapheme_col_at_width;
 use crate::transcript::{
@@ -58,6 +58,8 @@ pub struct ToolDetailState {
     content_area: Cell<Rect>,
     /// When a keyboard copy last happened (drives the "✓ copied" flash).
     copied_flash: Cell<Option<Instant>>,
+    /// Vim `g` prefix (`gg` ⇒ top).
+    g_prefix: GPrefix,
 }
 
 impl ToolDetailState {
@@ -70,6 +72,7 @@ impl ToolDetailState {
             position_map: PositionMap::new(),
             content_area: Cell::new(Rect::default()),
             copied_flash: Cell::new(None),
+            g_prefix: GPrefix::default(),
         }
     }
 
@@ -189,7 +192,10 @@ impl ToolDetailState {
     }
 
     pub fn handle_key(&mut self, cell: Option<&HistoryCell>, key: KeyEvent) -> OverlayUpdate {
-        match key.code {
+        let Some(code) = self.g_prefix.translate(key) else {
+            return OverlayUpdate::stay();
+        };
+        match code {
             KeyCode::Esc | KeyCode::Char('q') => OverlayUpdate::close(),
             KeyCode::Down | KeyCode::Char('j') => {
                 self.scroll_down(1);
@@ -207,7 +213,7 @@ impl ToolDetailState {
                 self.scroll_up(20);
                 OverlayUpdate::stay()
             }
-            KeyCode::Home | KeyCode::Char('g') => {
+            KeyCode::Home => {
                 self.scroll_offset.set(0);
                 self.user_scrolled.set(true);
                 OverlayUpdate::stay()
@@ -375,7 +381,7 @@ fn footer_spans(scroll_indicator: &str, copied: bool) -> Vec<Span<'static>> {
         Span::styled(" close  ", dim),
         Span::styled("[j/k]", key),
         Span::styled(" scroll  ", dim),
-        Span::styled("[g/G]", key),
+        Span::styled("[gg/G]", key),
         Span::styled(" top/bottom  ", dim),
         Span::styled("[y]", key),
         Span::styled(" output  ", dim),
