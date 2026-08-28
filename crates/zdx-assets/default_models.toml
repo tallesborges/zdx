@@ -178,10 +178,10 @@ display_name = "GPT-5.6 Sol"
 context_limit = 1050000
 
 [model.pricing]
-input = 5.0
-output = 30.0
-cache_read = 0.5
-cache_write = 6.25
+input = 4.0
+output = 20.0
+cache_read = 0.4
+cache_write = 5.0
 
 [model.capabilities]
 reasoning = true
@@ -923,6 +923,24 @@ output_limit = 131072
 api = "openai-completions"
 
 [[model]]
+id = "opencode-go:glm-5.3-flash"
+provider = "opencode-go"
+display_name = "GLM-5.3-Flash (2x usage)"
+context_limit = 1000000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 131072
+api = "openai-completions"
+
+[[model]]
 id = "opencode-go:glm-5.2"
 provider = "opencode-go"
 display_name = "GLM-5.2"
@@ -1171,12 +1189,12 @@ cache_write = 0.0
 [model.capabilities]
 reasoning = true
 input_images = true
-output_limit = 128000
+output_limit = 512000
 
 [[model]]
-id = "zai:glm-5.2"
+id = "zai:glm-5.3"
 provider = "zai"
-display_name = "GLM-5.2"
+display_name = "GLM-5.3"
 context_limit = 1000000
 
 [model.pricing]
@@ -1191,26 +1209,26 @@ input_images = false
 output_limit = 131072
 
 [[model]]
-id = "zai:glm-4.7-flash"
+id = "zai:glm-5.3-flash"
 provider = "zai"
-display_name = "GLM-4.7-Flash"
-context_limit = 200000
+display_name = "GLM-5.3-Flash"
+context_limit = 1000000
 
 [model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
+input = 0.15
+output = 0.5
+cache_read = 0.03
 cache_write = 0.0
 
 [model.capabilities]
 reasoning = true
-input_images = false
+input_images = true
 output_limit = 131072
 
 [[model]]
-id = "zai:glm-5.3"
+id = "zai:glm-5.2"
 provider = "zai"
-display_name = "GLM-5.3"
+display_name = "GLM-5.2"
 context_limit = 1000000
 
 [model.pricing]

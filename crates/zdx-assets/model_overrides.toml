@@ -62,6 +62,15 @@ output_limit = 65536
 reasoning = true
 input_images = false
 
+# GLM-5.3-Flash: models.dev serves the 50% launch promo (ends 2026-09-09, UTC+8).
+# Pinned to list price. https://docs.z.ai/guides/overview/pricing — verified 2026-08-28
+[[override]]
+id = "zai:glm-5.3-flash"
+input = 0.15
+output = 0.5
+cache_read = 0.03
+cache_write = 0.0
+
 # Antigravity fixed-tier models bake the reasoning effort into the model id
 # (-low/-medium/-high), so a separate user-selectable thinking level is redundant
 # and misleading in the UI. Flag them non-reasoning to hide the thinking picker/

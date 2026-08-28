@@ -1999,6 +1999,7 @@ fn default_opencode_go_provider() -> ProviderConfig {
             "gpt-5.6-luna".to_string(),
             "grok-4.5".to_string(),
             "glm-5.3".to_string(),
+            "glm-5.3-flash".to_string(),
             "glm-5.2".to_string(),
             "kimi-k3".to_string(),
             "kimi-k2.6".to_string(),
@@ -2030,8 +2031,8 @@ fn default_zai_provider() -> ProviderConfig {
         enabled: Some(true),
         models: vec![
             "glm-5.3".to_string(),
+            "glm-5.3-flash".to_string(),
             "glm-5.2".to_string(),
-            "glm-4.7-flash".to_string(),
         ],
         ..Default::default()
     }
