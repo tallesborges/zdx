@@ -3,6 +3,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs};
 
 use crate::app::{MonitorApp, Section, TargetPickerState};
 use crate::tabs::agents::{render_active_agents, render_agent_overlay};
+use crate::tabs::automations::render_automations;
 use crate::tabs::background::{render_background, render_background_detail};
 use crate::tabs::config::{render_config, render_model_picker};
 use crate::tabs::logs::{render_log_overlay, render_logs};
@@ -144,26 +145,6 @@ pub(crate) fn truncate_chars(value: &str, max_chars: usize) -> String {
 /// Highlight for the selected row: a subtle background instead of a full
 /// reverse-video block, which reads as a white bar on dark terminals.
 pub(crate) const SELECTED_BG: Color = Color::Indexed(238);
-
-fn render_automations(f: &mut Frame, app: &MonitorApp, area: Rect) {
-    let items: Vec<ListItem> = app
-        .automations
-        .iter()
-        .enumerate()
-        .map(|(i, a)| {
-            let sched = a.schedule.as_deref().unwrap_or("-");
-            let line = format!(" {:<20} | {sched}", a.name);
-            let style = if i == app.selected_index {
-                Style::default().bg(SELECTED_BG)
-            } else {
-                Style::default()
-            };
-            ListItem::new(line).style(style)
-        })
-        .collect();
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Automations"));
-    f.render_widget(list, area);
-}
 
 /// Filter-and-pick popup shared by the Logs target filter and the Threads
 /// project filter.

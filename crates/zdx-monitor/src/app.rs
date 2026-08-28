@@ -12,15 +12,16 @@ use crossterm::event::{
 use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::prelude::*;
+use zdx_engine::config;
 use zdx_engine::core::thread_index::{ThreadBrowseOptions, ThreadKindFilter};
 use zdx_engine::core::usage_stats::UsageStats;
-use zdx_engine::{automations, config};
 
 use crate::log_line::{LevelFilter, line_target};
 use crate::tabs::agents::{
     ActiveAgentInfo, AgentOverlayState, agent_overlay_page_size, handle_agent_overlay_key,
     handle_overlay_click, load_active_agents, open_agent_overlay, refresh_agent_overlay,
 };
+use crate::tabs::automations::{AutomationInfo, load_automations};
 use crate::tabs::background::{
     BackgroundDetailState, BackgroundInfo, handle_background_detail_key, kill_selected_background,
     load_background, open_background_detail, refresh_background_detail,
@@ -170,11 +171,6 @@ pub struct MonitorApp {
     /// Per-account rate-limit cooldown keyed by `provider`/`provider@account`:
     /// don't refetch before this instant.
     pub quota_backoff: HashMap<String, Instant>,
-}
-
-pub struct AutomationInfo {
-    pub name: String,
-    pub schedule: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -901,19 +897,6 @@ fn open_in_editor(path: &Path) -> io::Result<()> {
         .arg(path)
         .status()
         .map(|_| ())
-}
-
-fn load_automations(root: &Path) -> Vec<AutomationInfo> {
-    match automations::discover(root) {
-        Ok(defs) => defs
-            .into_iter()
-            .map(|d| AutomationInfo {
-                name: d.name,
-                schedule: d.schedule,
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    }
 }
 
 /// Plain-text content of rendered lines, for clipboard copies.

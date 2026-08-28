@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod automations;
 pub mod background;
 pub mod config;
 pub mod logs;
