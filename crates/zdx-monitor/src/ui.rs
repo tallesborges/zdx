@@ -132,7 +132,7 @@ fn render_footer(f: &mut Frame, app: &MonitorApp, area: Rect) {
     } else if !app.status_message.is_empty() && app.status_section == app.active_section {
         app.status_message.clone()
     } else {
-        footer_hint(app.active_section).to_string()
+        format!("{} • M mouse", footer_hint(app.active_section))
     };
     let footer = Paragraph::new(text)
         .style(Style::default().fg(Color::DarkGray))
@@ -1324,7 +1324,7 @@ fn render_agent_overlay(f: &mut Frame, state: &AgentOverlayState, area: Rect) {
     };
     let mut hints = String::from(" · ");
     if !state.tools.is_empty() {
-        hints.push_str("click/Tab tool · Enter detail · ");
+        hints.push_str("click/Tab tool · Enter detail · y copy · ");
     }
     if !state.thinking.is_empty() {
         hints.push_str("click/t thinking · ");
@@ -1414,7 +1414,7 @@ fn render_background_detail(f: &mut Frame, state: &BackgroundDetailState, area: 
         .border_style(Style::default().fg(Color::Green))
         .title(format!(" Background · {} ", state.title))
         .title_bottom(format!(
-            " j/k scroll · gg top · G follow · Esc close{position}{follow} "
+            " j/k scroll · gg top · G follow · y cmd · Y text · Esc close{position}{follow} "
         ));
     f.render_widget(List::new(items).block(block), area);
 }
@@ -1461,7 +1461,7 @@ fn render_tool_pane(f: &mut Frame, state: &AgentOverlayState, pane: &ToolPaneSta
         .border_style(Style::default().fg(color))
         .title(format!(" {glyph} {name} "))
         .title_bottom(format!(
-            " j/k scroll · gg/G top/bottom · Esc back{position} "
+            " j/k scroll · gg/G top/bottom · y cmd · Y all · Esc back{position} "
         ));
 
     let items: Vec<ListItem> = wrapped[offset..end]

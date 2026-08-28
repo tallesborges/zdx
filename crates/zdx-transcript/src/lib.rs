@@ -8,7 +8,9 @@
 
 mod build;
 mod cell;
+pub mod clipboard;
 mod convert;
+pub mod keys;
 pub mod markdown;
 mod reasoning;
 mod style;

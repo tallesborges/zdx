@@ -4847,7 +4847,10 @@ dependencies = [
 name = "zdx-transcript"
 version = "0.10.0"
 dependencies = [
+ "arboard",
+ "base64",
  "chrono",
+ "crossterm",
  "pulldown-cmark",
  "ratatui",
  "serde_json",
@@ -4862,7 +4865,6 @@ name = "zdx-tui"
 version = "0.10.0"
 dependencies = [
  "anyhow",
- "arboard",
  "base64",
  "chrono",
  "cpal",

@@ -385,7 +385,10 @@ pub struct MonitorApp {
     /// Open process detail overlay on the Background tab, if any.
     pub background_detail: Option<BackgroundDetailState>,
     /// A `g` was pressed and the next key completes (or aborts) the sequence.
-    pub pending_g: bool,
+    pub g_prefix: zdx_transcript::keys::GPrefix,
+    /// Mouse capture is active (default). `M` releases it so the terminal's
+    /// native text selection/copy works, and restores it on the next press.
+    pub mouse_captured: bool,
     /// List scrolling is swallowed until this instant (armed on overlay close).
     pub scroll_guard_until: Option<Instant>,
     pub log_file_name: Option<String>,
@@ -1489,7 +1492,8 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
         agent_overlay: None,
         timing_overlay: None,
         background_detail: None,
-        pending_g: false,
+        g_prefix: zdx_transcript::keys::GPrefix::default(),
+        mouse_captured: true,
         scroll_guard_until: None,
         log_file_name: None,
         log_files: Vec::new(),
@@ -1579,30 +1583,20 @@ fn text_input_active(app: &MonitorApp) -> bool {
         || app.thread_project_picker.is_some()
 }
 
-/// Vim-style two-key prefix: `gg` is delivered as `Home` (every scroll surface
-/// binds `Home`/`End`). Returns `None` when the key was consumed as a pending
-/// prefix, or when an unknown `g` sequence was aborted (vim swallows those).
-fn apply_g_prefix(pending: &mut bool, code: KeyCode) -> Option<KeyCode> {
-    if *pending {
-        *pending = false;
-        return (code == KeyCode::Char('g')).then_some(KeyCode::Home);
-    }
-    if code == KeyCode::Char('g') {
-        *pending = true;
-        return None;
-    }
-    Some(code)
-}
-
 /// Key entry point: applies the `g` prefix, dispatches, and arms the scroll
 /// guard when the key closed an overlay.
 fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
     let had_overlay = overlay_open(app);
-    let code = if text_input_active(app) {
-        app.pending_g = false;
+    let text_input = text_input_active(app);
+    if !text_input && key.code == KeyCode::Char('M') {
+        toggle_mouse_capture(app);
+        return;
+    }
+    let code = if text_input {
+        app.g_prefix.reset();
         Some(key.code)
     } else {
-        apply_g_prefix(&mut app.pending_g, key.code)
+        app.g_prefix.translate(key)
     };
     let Some(code) = code else {
         return;
@@ -1610,6 +1604,22 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
     dispatch_key_event(app, KeyEvent::new(code, key.modifiers));
     if had_overlay && !overlay_open(app) {
         app.scroll_guard_until = Some(Instant::now() + OVERLAY_CLOSE_SCROLL_GUARD);
+    }
+}
+
+/// Releases or restores terminal mouse capture. While released, the terminal's
+/// native selection/copy works everywhere; click/scroll handling resumes when
+/// capture is restored.
+fn toggle_mouse_capture(app: &mut MonitorApp) {
+    let mut stdout = std::io::stdout();
+    if app.mouse_captured {
+        if execute!(stdout, DisableMouseCapture).is_ok() {
+            app.mouse_captured = false;
+            app.set_status("Mouse capture OFF — select/copy freely · M to re-enable");
+        }
+    } else if execute!(stdout, EnableMouseCapture).is_ok() {
+        app.mouse_captured = true;
+        app.set_status("Mouse capture ON");
     }
 }
 
@@ -2180,17 +2190,16 @@ fn handle_log_overlay_key(app: &mut MonitorApp, key: KeyCode) {
 
 fn copy_selected_log_entry(app: &mut MonitorApp) {
     if let Some(line) = app.selected_log_line().cloned() {
-        let _ = std::process::Command::new("pbcopy")
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .and_then(|mut child| {
-                use std::io::Write;
-                if let Some(ref mut stdin) = child.stdin {
-                    stdin.write_all(line.as_bytes())?;
-                }
-                child.wait()
-            });
-        app.set_status("Copied log entry");
+        copy_text(app, &line, "Copied log entry");
+    }
+}
+
+/// Copies `text` via the shared clipboard (OSC 52 → system) and reports the
+/// outcome in the status line.
+fn copy_text(app: &mut MonitorApp, text: &str, done: &str) {
+    match zdx_transcript::clipboard::Clipboard::copy(text) {
+        Ok(()) => app.set_status(done),
+        Err(_) => app.set_status("Copy failed"),
     }
 }
 
@@ -2318,17 +2327,8 @@ fn copy_selected_thread_id(app: &mut MonitorApp) {
     if app.active_section == Section::Threads
         && let Some(t) = app.threads.get(app.selected_index)
     {
-        let _ = std::process::Command::new("pbcopy")
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .and_then(|mut child| {
-                use std::io::Write;
-                if let Some(ref mut stdin) = child.stdin {
-                    stdin.write_all(t.id.as_bytes())?;
-                }
-                child.wait()
-            });
-        app.set_status(format!("Copied thread ID {}", t.id));
+        let id = t.id.clone();
+        copy_text(app, &id, &format!("Copied thread ID {id}"));
     }
 }
 
@@ -2753,9 +2753,38 @@ fn handle_background_detail_key(app: &mut MonitorApp, key: KeyCode) {
     let Some(state) = app.background_detail.as_mut() else {
         return;
     };
+    match key {
+        KeyCode::Char('y') => {
+            let command = zdx_engine::background_activity::get(&state.bg_id).map(|r| r.command);
+            if let Some(command) = command {
+                copy_text(app, &command, "Copied command");
+            }
+            return;
+        }
+        KeyCode::Char('Y') => {
+            let text = lines_text(&state.lines);
+            copy_text(app, &text, "Copied process detail");
+            return;
+        }
+        _ => {}
+    }
     if state.handle_key(key, page) {
         app.background_detail = None;
     }
+}
+
+/// Plain-text content of rendered lines, for clipboard copies.
+fn lines_text(lines: &[Line<'static>]) -> String {
+    lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Stops the selected background process. Optimistically removes the row; the
@@ -3453,6 +3482,12 @@ fn handle_tool_pane_key(pane: &mut ToolPaneState, key: KeyCode, page_size: usize
 
 /// Handles a key while the transcript overlay is open.
 fn handle_agent_overlay_key(app: &mut MonitorApp, key: KeyCode) {
+    if matches!(key, KeyCode::Char('y' | 'Y')) {
+        if let Some((text, done)) = agent_overlay_copy_payload(app, key) {
+            copy_text(app, &text, &done);
+        }
+        return;
+    }
     let page = agent_overlay_page_size(app);
     let Some(state) = app.agent_overlay.as_mut() else {
         return;
@@ -3479,6 +3514,33 @@ fn handle_agent_overlay_key(app: &mut MonitorApp, key: KeyCode) {
         KeyCode::Home => state.scroll = Some(0),
         KeyCode::Char('G') | KeyCode::End => state.scroll = None,
         _ => {}
+    }
+}
+
+/// Copy payload for the transcript overlay: `y` yields the highlighted (or
+/// open) tool's primary command, `Y` its full detail body. `None` when no
+/// tool is highlighted.
+fn agent_overlay_copy_payload(app: &MonitorApp, key: KeyCode) -> Option<(String, String)> {
+    let state = app.agent_overlay.as_ref()?;
+    let tool_use_id = state
+        .tool_pane
+        .as_ref()
+        .map(|pane| pane.tool_use_id.clone())
+        .or_else(|| state.tool_selected.clone())?;
+    let cell = state.tool_cell(&tool_use_id)?;
+    match key {
+        KeyCode::Char('y') => {
+            let zdx_transcript::HistoryCell::Tool { name, input, .. } = cell else {
+                return None;
+            };
+            let text = zdx_transcript::tool_command_text(&name.to_ascii_lowercase(), input);
+            (!text.is_empty()).then(|| (text, "Copied command".to_string()))
+        }
+        KeyCode::Char('Y') => {
+            let text = lines_text(&zdx_transcript::tool_detail_body(cell).lines);
+            (!text.is_empty()).then(|| (text, "Copied tool detail".to_string()))
+        }
+        _ => None,
     }
 }
 
@@ -4815,28 +4877,5 @@ mod transcript_tests {
         assert!(!state.handle_key(KeyCode::Home, 5));
         assert_eq!(state.scroll, 0);
         assert!(state.handle_key(KeyCode::Esc, 5));
-    }
-
-    /// `gg` must arrive as a single `Home`, and an unknown `g` sequence must
-    /// be swallowed like vim aborts it.
-    #[test]
-    fn g_prefix_translates_gg_and_aborts_unknown_sequences() {
-        let mut pending = false;
-        assert_eq!(apply_g_prefix(&mut pending, KeyCode::Char('g')), None);
-        assert!(pending);
-        assert_eq!(
-            apply_g_prefix(&mut pending, KeyCode::Char('g')),
-            Some(KeyCode::Home)
-        );
-        assert!(!pending);
-
-        assert_eq!(apply_g_prefix(&mut pending, KeyCode::Char('g')), None);
-        assert_eq!(apply_g_prefix(&mut pending, KeyCode::Char('j')), None);
-        assert!(!pending);
-
-        assert_eq!(
-            apply_g_prefix(&mut pending, KeyCode::Char('G')),
-            Some(KeyCode::Char('G'))
-        );
     }
 }
