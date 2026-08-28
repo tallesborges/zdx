@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs};
 use zdx_engine::core::usage_stats::{self, DailyUsage, UsageRow, UsageStats, UsageTotals};
 use zdx_engine::providers::subscription_quota::{QuotaWindow, account_display};
 
@@ -11,8 +11,8 @@ use crate::app::{
     BackgroundDetailState, CachedQuotas, CachedUsageStats, ConfigLine, ModelPickerState,
     MonitorApp, QuotaEntry, Section, TargetPickerState, TimingOverlayState, UsageSpan,
 };
-use crate::log_line::parse_log_line;
 use crate::tabs::agents::{render_active_agents, render_agent_overlay};
+use crate::tabs::logs::{render_log_overlay, render_logs};
 
 pub fn render(f: &mut Frame, app: &MonitorApp) {
     let chunks = Layout::default()
@@ -1012,109 +1012,6 @@ fn render_automations(f: &mut Frame, app: &MonitorApp, area: Rect) {
     f.render_widget(list, area);
 }
 
-fn render_logs(f: &mut Frame, app: &MonitorApp, area: Rect) {
-    if app.log_lines.is_empty() {
-        let msg = match &app.log_file_name {
-            Some(name) => format!(" {name} is empty"),
-            None => " No log files found in ~/.zdx/logs".to_string(),
-        };
-        let p = Paragraph::new(msg)
-            .style(Style::default().fg(Color::DarkGray))
-            .block(Block::default().borders(Borders::ALL).title(" Logs "));
-        f.render_widget(p, area);
-        return;
-    }
-
-    let total = app.log_visible.len();
-    if total == 0 {
-        // The active filters are already spelled out in the block title.
-        let msg = format!(
-            " No lines match · {} tailed lines · Esc clear · l level",
-            app.log_lines.len(),
-        );
-        let p = Paragraph::new(msg)
-            .style(Style::default().fg(Color::DarkGray))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(log_title(app, 0, 0)),
-            );
-        f.render_widget(p, area);
-        return;
-    }
-
-    let inner_width = area.width.saturating_sub(2) as usize;
-    let visible_rows = area.height.saturating_sub(2) as usize;
-    // Re-clamp against the *actual* rendered area: `terminal_height` is updated
-    // post-draw, so the stored offset may lag by one frame.
-    let (selected, offset) = crate::app::clamp_log_view(
-        total,
-        app.log_follow,
-        visible_rows,
-        app.log_selected,
-        app.log_offset,
-    );
-    let end = (offset + visible_rows).min(total);
-
-    let items: Vec<ListItem> = app.log_visible[offset..end]
-        .iter()
-        .enumerate()
-        .map(|(i, &raw_index)| {
-            let visible_index = offset + i;
-            let raw = &app.log_lines[raw_index];
-            let spans = truncate_spans(log_line_spans(raw), inner_width);
-            let item = ListItem::new(Line::from(spans));
-            if visible_index == selected {
-                item.style(Style::default().bg(Color::DarkGray))
-            } else {
-                item
-            }
-        })
-        .collect();
-
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(log_title(
-        app,
-        selected + 1,
-        total,
-    )));
-    f.render_widget(list, area);
-}
-
-fn log_title(app: &MonitorApp, pos: usize, total: usize) -> String {
-    use std::fmt::Write as _;
-
-    let file_label = app.log_file_name.as_deref().unwrap_or("(no file)");
-    let mut title = format!(" Logs ({file_label}");
-    if app.log_files.len() > 1 {
-        let _ = write!(
-            title,
-            " [{}/{}]",
-            app.log_file_index + 1,
-            app.log_files.len()
-        );
-    }
-    let _ = write!(title, " · {pos}/{total}");
-    if app.log_level_filter != crate::log_line::LevelFilter::All {
-        let _ = write!(title, " · lvl={}", app.log_level_filter.label());
-    }
-    if let Some(target) = &app.log_target_filter {
-        let _ = write!(title, " · @{target}");
-    }
-    if app.log_query_editing {
-        let _ = write!(title, " · /{}\u{2588}", app.log_query);
-    } else if !app.log_query.is_empty() {
-        let _ = write!(title, " · /{}", app.log_query);
-    }
-    if app.log_tail_lines != 500 {
-        let _ = write!(title, " · tail={}", app.log_tail_lines);
-    }
-    if app.log_follow {
-        title.push_str(" · FOLLOW");
-    }
-    title.push_str(") ");
-    title
-}
-
 /// Filter-and-pick popup shared by the Logs target filter and the Threads
 /// project filter.
 fn render_picker(f: &mut Frame, picker: &TargetPickerState, area: Rect, noun: &str) {
@@ -1173,31 +1070,6 @@ fn render_picker(f: &mut Frame, picker: &TargetPickerState, area: Rect, noun: &s
         })
         .collect();
     f.render_widget(List::new(items), rows[1]);
-}
-
-fn render_log_overlay(f: &mut Frame, app: &MonitorApp, area: Rect) {
-    let Some(line) = app.selected_log_line() else {
-        return;
-    };
-
-    let popup_area = centered_rect(80, 60, area);
-    f.render_widget(Clear, popup_area);
-
-    let title = format!(
-        " Log entry [{pos}/{total}] · Esc close · y copy ",
-        pos = app.log_selected + 1,
-        total = app.log_visible.len(),
-    );
-
-    let body = Paragraph::new(Line::from(log_line_spans(line)))
-        .wrap(Wrap { trim: false })
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
-                .title(title),
-        );
-    f.render_widget(body, popup_area);
 }
 
 fn render_timing_overlay(f: &mut Frame, state: &TimingOverlayState, area: Rect) {
@@ -1374,103 +1246,6 @@ pub(crate) fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect 
         width: popup_w,
         height: popup_h,
     }
-}
-
-/// Build colored spans for a single log line.
-///
-/// Coloring:
-/// - timestamp: dark gray
-/// - level: ERROR=red+bold, WARN=yellow+bold, INFO=green+bold, DEBUG=cyan, TRACE=magenta
-/// - span scope (`run_turn:execute_tool:`): blue
-/// - target (`module::path:`): cyan
-/// - message: red for ERROR, dark gray for DEBUG/TRACE, default otherwise
-fn log_line_spans(line: &str) -> Vec<Span<'static>> {
-    let parts = parse_log_line(line);
-    if !parts.structured {
-        let style = match parts.level {
-            "ERROR" => Style::default().fg(Color::Red),
-            "WARN" => Style::default().fg(Color::Yellow),
-            "DEBUG" | "TRACE" => Style::default().fg(Color::DarkGray),
-            _ => Style::default(),
-        };
-        return vec![Span::styled(line.to_string(), style)];
-    }
-
-    let level_style = match parts.level {
-        "ERROR" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        "WARN" => Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-        "INFO" => Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
-        "DEBUG" => Style::default().fg(Color::Cyan),
-        "TRACE" => Style::default().fg(Color::Magenta),
-        _ => Style::default(),
-    };
-    let message_style = match parts.level {
-        "ERROR" => Style::default().fg(Color::Red),
-        "DEBUG" | "TRACE" => Style::default().fg(Color::DarkGray),
-        _ => Style::default(),
-    };
-
-    let mut out = vec![
-        Span::styled(
-            parts.timestamp.to_string(),
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::raw(" "),
-        Span::styled(parts.level.to_string(), level_style),
-        Span::raw(" "),
-    ];
-    if !parts.spans.is_empty() {
-        out.push(Span::styled(
-            parts.spans.to_string(),
-            Style::default().fg(Color::Blue),
-        ));
-        out.push(Span::raw(" "));
-    }
-    out.push(Span::styled(
-        parts.target.to_string(),
-        Style::default().fg(Color::Cyan),
-    ));
-    out.push(Span::raw(" "));
-    out.push(Span::styled(parts.message.to_string(), message_style));
-    out
-}
-
-/// Truncate a span sequence to `max_chars` total characters, replacing the
-/// overflow with `…`. Preserves per-span styling.
-fn truncate_spans(spans: Vec<Span<'static>>, max_chars: usize) -> Vec<Span<'static>> {
-    if max_chars == 0 {
-        return Vec::new();
-    }
-    let total: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-    if total <= max_chars {
-        return spans;
-    }
-    let limit = max_chars.saturating_sub(1); // reserve 1 char for the ellipsis
-    let mut out: Vec<Span<'static>> = Vec::with_capacity(spans.len() + 1);
-    let mut used = 0usize;
-    for span in spans {
-        let span_len = span.content.chars().count();
-        if used + span_len <= limit {
-            used += span_len;
-            out.push(span);
-        } else {
-            let take = limit.saturating_sub(used);
-            if take > 0 {
-                let truncated: String = span.content.chars().take(take).collect();
-                out.push(Span::styled(truncated, span.style));
-            }
-            break;
-        }
-    }
-    out.push(Span::styled(
-        "…".to_string(),
-        Style::default().fg(Color::DarkGray),
-    ));
-    out
 }
 
 #[cfg(test)]
