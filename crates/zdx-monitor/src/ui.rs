@@ -8,11 +8,11 @@ use zdx_engine::core::usage_stats::{self, DailyUsage, UsageRow, UsageStats, Usag
 use zdx_engine::providers::subscription_quota::{QuotaWindow, account_display};
 
 use crate::app::{
-    AgentOverlayState, BackgroundDetailState, CachedQuotas, CachedUsageStats, ConfigLine,
-    ModelPickerState, MonitorApp, QuotaEntry, Section, TargetPickerState, TimingOverlayState,
-    ToolPaneState, UsageSpan,
+    BackgroundDetailState, CachedQuotas, CachedUsageStats, ConfigLine, ModelPickerState,
+    MonitorApp, QuotaEntry, Section, TargetPickerState, TimingOverlayState, UsageSpan,
 };
 use crate::log_line::parse_log_line;
+use crate::tabs::agents::{render_active_agents, render_agent_overlay};
 
 pub fn render(f: &mut Frame, app: &MonitorApp) {
     let chunks = Layout::default()
@@ -165,110 +165,8 @@ fn footer_hint(section: Section) -> &'static str {
 
 /// Spinner frame index derived from wall-clock seconds: the monitor redraws
 /// on its 1s tick, so the running-tool glyph advances one frame per tick.
-fn spinner_frame_now() -> usize {
+pub(crate) fn spinner_frame_now() -> usize {
     usize::try_from(chrono::Utc::now().timestamp().max(0)).unwrap_or(0)
-}
-
-fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
-    /// Fixed width of the status column after the PID (`⚙ bash`, `◌ waiting`).
-    const STATUS_COL: usize = 12;
-    if app.active_agents.is_empty() {
-        let p = Paragraph::new(" No active agent runs")
-            .style(Style::default().fg(Color::DarkGray))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Active Agents"),
-            );
-        f.render_widget(p, area);
-        return;
-    }
-
-    let inner_width = area.width.saturating_sub(2) as usize;
-    let items: Vec<ListItem> = app
-        .active_agents
-        .iter()
-        .enumerate()
-        .map(|(i, a)| {
-            let role = a.kind.as_deref().unwrap_or(&a.surface);
-            let role_label = if let Some(name) = a.subagent_name.as_deref() {
-                format!("{role}:{name}")
-            } else {
-                role.to_string()
-            };
-            let (status, status_color) = a.current_tool.as_deref().map_or_else(
-                || {
-                    (
-                        a.phase
-                            .as_deref()
-                            .map_or_else(String::new, |phase| format!("◌ {phase}")),
-                        Color::DarkGray,
-                    )
-                },
-                |tool| {
-                    let name = tool.split(':').next().unwrap_or(tool);
-                    let glyph = zdx_transcript::tool_state_glyph(
-                        &zdx_transcript::ToolState::Running,
-                        spinner_frame_now(),
-                    );
-                    (format!("{glyph} {name}"), Color::Yellow)
-                },
-            );
-            let status = format!("{:<STATUS_COL$}", truncate_chars(&status, STATUS_COL));
-            let pre = format!(" {}● PID {} ", a.tree_prefix, a.pid);
-            let mid = format!(" {} model:", truncate_chars(&role_label, 18));
-            let suffix = format!(" thread:{} up {}", a.thread_id, a.uptime);
-            let model_width = inner_width.saturating_sub(
-                pre.chars().count() + STATUS_COL + mid.chars().count() + suffix.chars().count(),
-            );
-            let model_desc = format!(
-                "{}:{}@{}",
-                zdx_engine::providers::oauth::account_cache_key(&a.provider, a.account.as_deref()),
-                a.model,
-                a.thinking
-            );
-            let model = truncate_chars(&model_desc, model_width);
-            let (style, status_style) = if i == app.selected_index {
-                (
-                    Style::default().fg(Color::Green).bg(SELECTED_BG),
-                    Style::default().fg(status_color).bg(SELECTED_BG),
-                )
-            } else {
-                (
-                    Style::default().fg(Color::Green),
-                    Style::default().fg(status_color),
-                )
-            };
-            let line = Line::from(vec![
-                Span::styled(pre, style),
-                Span::styled(status, status_style),
-                Span::styled(format!("{mid}{model:<model_width$}{suffix}"), style),
-            ]);
-            let mut lines = vec![line];
-            if let Some(tool) = a.current_tool.as_deref() {
-                let glyph = zdx_transcript::tool_state_glyph(
-                    &zdx_transcript::ToolState::Running,
-                    spinner_frame_now(),
-                );
-                let preview = format!(
-                    "   {}{glyph} {}",
-                    a.tree_prefix,
-                    truncate_chars(tool, inner_width.saturating_sub(a.tree_prefix.len() + 5))
-                );
-                let preview_style = if i == app.selected_index {
-                    Style::default().fg(Color::Yellow).bg(SELECTED_BG)
-                } else {
-                    Style::default().fg(Color::Yellow)
-                };
-                lines.push(Line::styled(preview, preview_style));
-            }
-            ListItem::new(lines)
-        })
-        .collect();
-
-    let title = format!("Active Agents ({})", app.active_agents.len());
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
-    f.render_widget(list, area);
 }
 
 fn render_background(f: &mut Frame, app: &MonitorApp, area: Rect) {
@@ -312,7 +210,7 @@ fn render_background(f: &mut Frame, app: &MonitorApp, area: Rect) {
     f.render_widget(list, area);
 }
 
-fn truncate_chars(value: &str, max_chars: usize) -> String {
+pub(crate) fn truncate_chars(value: &str, max_chars: usize) -> String {
     if value.chars().count() <= max_chars {
         return value.to_string();
     }
@@ -413,7 +311,7 @@ fn render_config(f: &mut Frame, app: &MonitorApp, area: Rect) {
 
 /// Highlight for the selected row: a subtle background instead of a full
 /// reverse-video block, which reads as a white bar on dark terminals.
-const SELECTED_BG: Color = Color::Indexed(238);
+pub(crate) const SELECTED_BG: Color = Color::Indexed(238);
 
 fn render_threads(f: &mut Frame, app: &MonitorApp, area: Rect) {
     let rows = (area.height.saturating_sub(2) as usize).max(1);
@@ -1302,76 +1200,6 @@ fn render_log_overlay(f: &mut Frame, app: &MonitorApp, area: Rect) {
     f.render_widget(body, popup_area);
 }
 
-fn render_agent_overlay(f: &mut Frame, state: &AgentOverlayState, area: Rect) {
-    f.render_widget(Clear, area);
-
-    let status = if state.unavailable {
-        String::new()
-    } else if state.ended {
-        " · ENDED".to_string()
-    } else if let Some(tool) = state.running_tool.as_deref() {
-        let glyph = zdx_transcript::tool_state_glyph(
-            &zdx_transcript::ToolState::Running,
-            spinner_frame_now(),
-        );
-        format!(" · {glyph} {}…", tool.to_ascii_uppercase())
-    } else if let Some(phase) = state.run_phase.as_deref() {
-        format!(" · {}…", phase.to_ascii_uppercase())
-    } else if state.scroll.is_none() {
-        " · FOLLOW".to_string()
-    } else {
-        String::new()
-    };
-    let mut hints = String::from(" · ");
-    if !state.tools.is_empty() {
-        hints.push_str("click/Tab tool · Enter detail · y copy · ");
-    }
-    if !state.thinking.is_empty() {
-        hints.push_str("click/t thinking · ");
-    }
-    hints.push_str("Esc close ");
-    let title = format!(" {}{status}{hints}", state.title);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(title);
-
-    let total = state.lines.len();
-    if total == 0 {
-        let p = Paragraph::new(" No transcript yet for this run.")
-            .style(Style::default().fg(Color::DarkGray))
-            .block(block);
-        f.render_widget(p, area);
-        return;
-    }
-
-    let visible_rows = area.height.saturating_sub(2) as usize;
-    let offset = state.top_line(visible_rows);
-    let end = (offset + visible_rows).min(total);
-
-    let selected_line = state.selected_tool_index().map(|idx| state.tools[idx].line);
-
-    let items: Vec<ListItem> = state.lines[offset..end]
-        .iter()
-        .enumerate()
-        .map(|(row, line)| {
-            let item = ListItem::new(line.clone());
-            if selected_line == Some(offset + row) {
-                item.style(Style::default().bg(SELECTED_BG))
-            } else {
-                item
-            }
-        })
-        .collect();
-
-    let list = List::new(items).block(block);
-    f.render_widget(list, area);
-
-    if let Some(pane) = &state.tool_pane {
-        render_tool_pane(f, state, pane, area);
-    }
-}
-
 fn render_timing_overlay(f: &mut Frame, state: &TimingOverlayState, area: Rect) {
     f.render_widget(Clear, area);
     let visible_rows = area.height.saturating_sub(2) as usize;
@@ -1417,58 +1245,6 @@ fn render_background_detail(f: &mut Frame, state: &BackgroundDetailState, area: 
             " j/k scroll · gg top · G follow · y cmd · Y text · Esc close{position}{follow} "
         ));
     f.render_widget(List::new(items).block(block), area);
-}
-
-/// Tool detail pane: the same body the chat TUI's tool popup shows, rendered
-/// read-only over the transcript overlay.
-fn render_tool_pane(f: &mut Frame, state: &AgentOverlayState, pane: &ToolPaneState, area: Rect) {
-    let popup = centered_rect(88, 88, area);
-    f.render_widget(Clear, popup);
-
-    let Some(cell) = state.tool_cell(&pane.tool_use_id) else {
-        // Panes for vanished tools are dropped on refresh, so a miss here only
-        // means the transcript window moved mid-frame; nothing useful to draw.
-        return;
-    };
-    let (name, glyph, color) = match cell {
-        zdx_transcript::HistoryCell::Tool { name, state, .. } => (
-            name.as_str(),
-            zdx_transcript::tool_state_glyph(state, spinner_frame_now()),
-            zdx_transcript::tool_state_color(state),
-        ),
-        _ => return,
-    };
-    let body = zdx_transcript::tool_detail_body(cell).lines;
-
-    let visible_rows = popup.height.saturating_sub(2) as usize;
-    let inner_width = popup.width.saturating_sub(2) as usize;
-    // Pre-wrap so the scroll offset counts rendered rows, not logical lines.
-    let wrapped: Vec<Line<'static>> = body
-        .iter()
-        .flat_map(|line| zdx_transcript::wrap_line_to_width(line, inner_width.max(1)))
-        .collect();
-    let max_offset = wrapped.len().saturating_sub(visible_rows);
-    let offset = pane.scroll.min(max_offset);
-    let end = (offset + visible_rows).min(wrapped.len());
-
-    let position = if wrapped.len() > visible_rows {
-        format!(" [{}/{}]", offset + 1, wrapped.len())
-    } else {
-        String::new()
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(color))
-        .title(format!(" {glyph} {name} "))
-        .title_bottom(format!(
-            " j/k scroll · gg/G top/bottom · y cmd · Y all · Esc back{position} "
-        ));
-
-    let items: Vec<ListItem> = wrapped[offset..end]
-        .iter()
-        .map(|line| ListItem::new(line.clone()))
-        .collect();
-    f.render_widget(List::new(items).block(block), popup);
 }
 
 /// Build a centered Rect using `percent_x` × `percent_y` of `area`.
@@ -1587,7 +1363,7 @@ fn render_picker_thinking(f: &mut Frame, picker: &ModelPickerState, popup: Rect)
 }
 
 /// Build a centered Rect using `percent_x` × `percent_y` of `area`.
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+pub(crate) fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let popup_w = area.width.saturating_mul(percent_x) / 100;
     let popup_h = area.height.saturating_mul(percent_y) / 100;
     let x = area.x + area.width.saturating_sub(popup_w) / 2;
