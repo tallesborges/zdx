@@ -1,8 +1,9 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs};
 
-use crate::app::{BackgroundDetailState, MonitorApp, Section, TargetPickerState};
+use crate::app::{MonitorApp, Section, TargetPickerState};
 use crate::tabs::agents::{render_active_agents, render_agent_overlay};
+use crate::tabs::background::{render_background, render_background_detail};
 use crate::tabs::config::{render_config, render_model_picker};
 use crate::tabs::logs::{render_log_overlay, render_logs};
 use crate::tabs::threads::{render_threads, render_timing_overlay};
@@ -163,47 +164,6 @@ pub(crate) fn spinner_frame_now() -> usize {
     usize::try_from(chrono::Utc::now().timestamp().max(0)).unwrap_or(0)
 }
 
-fn render_background(f: &mut Frame, app: &MonitorApp, area: Rect) {
-    if app.background.is_empty() {
-        let p = Paragraph::new(" No background processes")
-            .style(Style::default().fg(Color::DarkGray))
-            .block(Block::default().borders(Borders::ALL).title("Background"));
-        f.render_widget(p, area);
-        return;
-    }
-
-    let inner_width = area.width.saturating_sub(2) as usize;
-    let mut items: Vec<ListItem> = Vec::new();
-    let mut last_thread: Option<&Option<String>> = None;
-    for (i, b) in app.background.iter().enumerate() {
-        if last_thread != Some(&b.thread_id) {
-            last_thread = Some(&b.thread_id);
-            let label = b.thread_id.as_deref().unwrap_or("(no thread)");
-            items.push(
-                ListItem::new(format!(" thread {label}")).style(
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            );
-        }
-        let prefix = format!("   ● pid {:<7} up {:<8} ", b.pid, b.uptime);
-        let cmd_width = inner_width.saturating_sub(prefix.chars().count());
-        let cmd = truncate_chars(&b.command, cmd_width);
-        let line = format!("{prefix}{cmd}");
-        let style = if i == app.selected_index {
-            Style::default().fg(Color::Green).bg(SELECTED_BG)
-        } else {
-            Style::default().fg(Color::Green)
-        };
-        items.push(ListItem::new(line).style(style));
-    }
-
-    let title = format!("Background processes ({})", app.background.len());
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
-    f.render_widget(list, area);
-}
-
 pub(crate) fn truncate_chars(value: &str, max_chars: usize) -> String {
     if value.chars().count() <= max_chars {
         return value.to_string();
@@ -300,35 +260,6 @@ fn render_picker(f: &mut Frame, picker: &TargetPickerState, area: Rect, noun: &s
         })
         .collect();
     f.render_widget(List::new(items), rows[1]);
-}
-
-/// Full-frame detail view for one background process: marker metadata, the
-/// full command, and the stdout/stderr log tails. Lines are pre-wrapped at
-/// build time, so scrolling is a plain row-window here.
-fn render_background_detail(f: &mut Frame, state: &BackgroundDetailState, area: Rect) {
-    f.render_widget(Clear, area);
-    let visible_rows = (area.height.saturating_sub(2) as usize).max(1);
-    let offset = state.offset(visible_rows);
-    let end = (offset + visible_rows).min(state.lines.len());
-    let items: Vec<ListItem> = state.lines[offset..end]
-        .iter()
-        .map(|line| ListItem::new(line.clone()))
-        .collect();
-
-    let position = if state.lines.len() > visible_rows {
-        format!(" [{}/{}]", offset + 1, state.lines.len())
-    } else {
-        String::new()
-    };
-    let follow = if state.follow { " · following" } else { "" };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Green))
-        .title(format!(" Background · {} ", state.title))
-        .title_bottom(format!(
-            " j/k scroll · gg top · G follow · y cmd · Y text · Esc close{position}{follow} "
-        ));
-    f.render_widget(List::new(items).block(block), area);
 }
 
 /// Build a centered Rect using `percent_x` × `percent_y` of `area`.
