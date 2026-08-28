@@ -7,10 +7,11 @@ use zdx_engine::core::usage_stats::{self, DailyUsage, UsageRow, UsageStats, Usag
 use zdx_engine::providers::subscription_quota::{QuotaWindow, account_display};
 
 use crate::app::{
-    BackgroundDetailState, CachedQuotas, CachedUsageStats, ConfigLine, ModelPickerState,
-    MonitorApp, QuotaEntry, Section, TargetPickerState, UsageSpan,
+    BackgroundDetailState, CachedQuotas, CachedUsageStats, MonitorApp, QuotaEntry, Section,
+    TargetPickerState, UsageSpan,
 };
 use crate::tabs::agents::{render_active_agents, render_agent_overlay};
+use crate::tabs::config::{render_config, render_model_picker};
 use crate::tabs::logs::{render_log_overlay, render_logs};
 use crate::tabs::threads::{render_threads, render_timing_overlay};
 
@@ -222,91 +223,6 @@ pub(crate) fn truncate_chars(value: &str, max_chars: usize) -> String {
     } else {
         format!("{}…", value.chars().take(max_chars - 1).collect::<String>())
     }
-}
-
-fn render_config(f: &mut Frame, app: &MonitorApp, area: Rect) {
-    let inner_width = area.width.saturating_sub(2) as usize;
-    let key_col = 30usize;
-
-    let selected_line = crate::app::editable_model_fields(&app.config_lines)
-        .get(app.config_selected)
-        .map(|f| f.line_index);
-
-    let mut lines: Vec<Line> = Vec::new();
-    let mut is_first = true;
-
-    for (idx, cl) in app.config_lines.iter().enumerate() {
-        match cl {
-            ConfigLine::Section(name) => {
-                if !is_first {
-                    lines.push(Line::from(""));
-                }
-                is_first = false;
-
-                lines.push(Line::from(vec![Span::styled(
-                    format!(" ── {} ", name.to_uppercase()),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )]));
-            }
-            ConfigLine::Separator => {
-                let dashes = "─".repeat(inner_width.saturating_sub(4));
-                lines.push(Line::from(Span::styled(
-                    format!("    {dashes}"),
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-            ConfigLine::Row(key, value) => {
-                let is_selected = selected_line == Some(idx);
-                let val_style = if value == "***" || value.starts_with("***") {
-                    Style::default().fg(Color::DarkGray)
-                } else {
-                    Style::default()
-                };
-                let marker = if is_selected { "  ▸ " } else { "    " };
-                let key_style = if is_selected {
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                };
-                lines.push(Line::from(vec![
-                    Span::styled(format!("{marker}{key:<key_col$} "), key_style),
-                    Span::styled(value.clone(), val_style),
-                ]));
-            }
-        }
-    }
-
-    let total_fields = app
-        .config_lines
-        .iter()
-        .filter(|l| matches!(l, ConfigLine::Row(..)))
-        .count();
-
-    let visible_lines = area.height.saturating_sub(2) as usize;
-    let total_lines = lines.len();
-
-    let scroll_info = if total_lines > visible_lines {
-        let max_scroll = total_lines - visible_lines;
-        let current_scroll = app.config_scroll.min(max_scroll);
-        let percent = (current_scroll * 100)
-            .checked_div(max_scroll)
-            .unwrap_or(100);
-        format!(" [{percent}%]")
-    } else {
-        String::new()
-    };
-
-    let title = format!(" Config ({total_fields} fields){scroll_info} ");
-
-    let p = Paragraph::new(Text::from(lines))
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .scroll((app.config_scroll as u16, 0));
-
-    f.render_widget(p, area);
 }
 
 /// Highlight for the selected row: a subtle background instead of a full
@@ -1008,121 +924,6 @@ fn render_background_detail(f: &mut Frame, state: &BackgroundDetailState, area: 
             " j/k scroll · gg top · G follow · y cmd · Y text · Esc close{position}{follow} "
         ));
     f.render_widget(List::new(items).block(block), area);
-}
-
-/// Build a centered Rect using `percent_x` × `percent_y` of `area`.
-fn render_model_picker(f: &mut Frame, picker: &ModelPickerState, area: Rect) {
-    use crate::app::PickerPhase;
-
-    let popup = centered_rect(70, 70, area);
-    f.render_widget(Clear, popup);
-
-    match picker.phase {
-        PickerPhase::Model => render_picker_models(f, picker, popup),
-        PickerPhase::Thinking => render_picker_thinking(f, picker, popup),
-    }
-}
-
-fn render_picker_models(f: &mut Frame, picker: &ModelPickerState, popup: Rect) {
-    use crate::app::ModelFieldKind;
-
-    let confirm = if picker.kind == ModelFieldKind::Chat {
-        "Enter next"
-    } else {
-        "Enter save"
-    };
-    let title = format!(
-        " {} · pick model · {} match · {confirm} · Esc cancel ",
-        picker.field,
-        picker.matches.len(),
-    );
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(title);
-    let inner = block.inner(popup);
-    f.render_widget(block, popup);
-
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner);
-
-    let filter_line = Line::from(vec![
-        Span::styled("filter: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            if picker.filter.is_empty() {
-                "(type to filter)".to_string()
-            } else {
-                picker.filter.clone()
-            },
-            Style::default().fg(Color::Yellow),
-        ),
-    ]);
-    f.render_widget(Paragraph::new(filter_line), rows[0]);
-
-    let visible = rows[1].height as usize;
-    let offset = picker.selected.saturating_sub(visible.saturating_sub(1));
-    let end = (offset + visible).min(picker.matches.len());
-
-    let items: Vec<ListItem> = picker.matches[offset..end]
-        .iter()
-        .enumerate()
-        .map(|(i, &item_idx)| {
-            let global = offset + i;
-            let model = &picker.items[item_idx];
-            let is_current = *model == picker.chosen_model
-                || model.rsplit(':').next() == Some(picker.chosen_model.as_str());
-            let marker = if is_current { "● " } else { "  " };
-            let mut style = Style::default();
-            if global == picker.selected {
-                style = style.fg(Color::Green).bg(SELECTED_BG);
-            } else if is_current {
-                style = style.fg(Color::Green);
-            }
-            ListItem::new(Line::from(format!("{marker}{model}"))).style(style)
-        })
-        .collect();
-
-    f.render_widget(List::new(items), rows[1]);
-}
-
-fn render_picker_thinking(f: &mut Frame, picker: &ModelPickerState, popup: Rect) {
-    use zdx_engine::config::ThinkingLevel;
-
-    let title = format!(
-        " {} · thinking for {} · Enter save · Esc back ",
-        picker.field, picker.chosen_model,
-    );
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(title);
-    let inner = block.inner(popup);
-    f.render_widget(block, popup);
-
-    let items: Vec<ListItem> = ThinkingLevel::all()
-        .iter()
-        .enumerate()
-        .map(|(i, level)| {
-            let is_current = *level == picker.thinking_current;
-            let marker = if is_current { "● " } else { "  " };
-            let mut style = Style::default();
-            if i == picker.thinking_selected {
-                style = style.fg(Color::Green).bg(SELECTED_BG);
-            } else if is_current {
-                style = style.fg(Color::Green);
-            }
-            let text = format!(
-                "{marker}{:<7} {}",
-                level.display_name(),
-                level.description()
-            );
-            ListItem::new(Line::from(text)).style(style)
-        })
-        .collect();
-
-    f.render_widget(List::new(items), inner);
 }
 
 /// Build a centered Rect using `percent_x` × `percent_y` of `area`.
