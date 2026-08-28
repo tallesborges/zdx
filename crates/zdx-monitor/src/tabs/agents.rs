@@ -1039,9 +1039,9 @@ mod transcript_tests {
     use super::*;
     use crate::app::{
         ADD_FAVORITE_LABEL, ConfigLine, HELPER_MODEL_KEYS, ModelFieldKind, ModelPickerState,
-        SUBAGENT_DEFAULT_LABEL, SUBAGENTS_ENABLED_PATH, TimingOverlayState, build_config_lines,
-        editable_model_fields, timing_overlay_from_events,
+        SUBAGENT_DEFAULT_LABEL, SUBAGENTS_ENABLED_PATH, build_config_lines, editable_model_fields,
     };
+    use crate::tabs::threads::{TimingOverlayState, timing_overlay_from_events};
 
     fn parse(lines: &[&str]) -> Vec<ThreadEvent> {
         lines

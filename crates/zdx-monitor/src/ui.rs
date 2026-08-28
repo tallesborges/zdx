@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -9,10 +8,11 @@ use zdx_engine::providers::subscription_quota::{QuotaWindow, account_display};
 
 use crate::app::{
     BackgroundDetailState, CachedQuotas, CachedUsageStats, ConfigLine, ModelPickerState,
-    MonitorApp, QuotaEntry, Section, TargetPickerState, TimingOverlayState, UsageSpan,
+    MonitorApp, QuotaEntry, Section, TargetPickerState, UsageSpan,
 };
 use crate::tabs::agents::{render_active_agents, render_agent_overlay};
 use crate::tabs::logs::{render_log_overlay, render_logs};
+use crate::tabs::threads::{render_threads, render_timing_overlay};
 
 pub fn render(f: &mut Frame, app: &MonitorApp) {
     let chunks = Layout::default()
@@ -312,97 +312,6 @@ fn render_config(f: &mut Frame, app: &MonitorApp, area: Rect) {
 /// Highlight for the selected row: a subtle background instead of a full
 /// reverse-video block, which reads as a white bar on dark terminals.
 pub(crate) const SELECTED_BG: Color = Color::Indexed(238);
-
-fn render_threads(f: &mut Frame, app: &MonitorApp, area: Rect) {
-    let rows = (area.height.saturating_sub(2) as usize).max(1);
-    let offset = app.selected_index.saturating_sub(rows.saturating_sub(1));
-    let end = (offset + rows).min(app.threads.len());
-    let width = area.width.saturating_sub(2) as usize;
-
-    let items: Vec<ListItem> = app.threads[offset..end]
-        .iter()
-        .enumerate()
-        .map(|(i, t)| {
-            let selected = offset + i == app.selected_index;
-            let marker = if selected { "▌" } else { " " };
-            let mut spans = vec![
-                Span::styled(marker, Style::default().fg(Color::Cyan)),
-                Span::styled(format!("{} ", t.modified), Style::default().fg(Color::Gray)),
-                Span::styled(
-                    format!(
-                        "{:<20} ",
-                        truncate_chars(t.project.as_deref().unwrap_or("-"), 20)
-                    ),
-                    Style::default().fg(Color::Blue),
-                ),
-            ];
-            if let Some(badge) = &t.badge {
-                spans.push(Span::styled(
-                    format!("[{badge}] "),
-                    Style::default().fg(Color::Magenta),
-                ));
-            }
-            // Child runs have no title, so their stored preview is the only
-            // thing that identifies them on a one-line row.
-            let label = t.title.as_deref().map_or_else(
-                || {
-                    t.preview.as_deref().map_or_else(
-                        || "(untitled)".to_string(),
-                        |preview| {
-                            preview
-                                .lines()
-                                .find(|l| !l.trim().is_empty())
-                                .unwrap_or("(untitled)")
-                                .trim()
-                                .to_string()
-                        },
-                    )
-                },
-                str::to_string,
-            );
-            let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-            spans.push(Span::raw(truncate_chars(
-                &label,
-                width.saturating_sub(used + 11),
-            )));
-            spans.push(Span::styled(
-                format!("  {}", t.id.get(..8).unwrap_or(&t.id)),
-                Style::default().fg(Color::DarkGray),
-            ));
-
-            let item = ListItem::new(Line::from(spans));
-            if selected {
-                item.style(Style::default().bg(SELECTED_BG))
-            } else {
-                item
-            }
-        })
-        .collect();
-
-    let mut parts = vec![
-        format!("Threads ({})", app.threads.len()),
-        app.thread_kind_filter.label().to_string(),
-    ];
-    if let Some(project) = &app.thread_project_filter {
-        parts.push(
-            Path::new(project)
-                .file_name()
-                .map_or_else(|| project.clone(), |n| n.to_string_lossy().to_string()),
-        );
-    }
-    if app.thread_query_editing {
-        parts.push(format!("/{}_", app.thread_query));
-    } else if !app.thread_query.is_empty() {
-        parts.push(format!("/{}", app.thread_query));
-    }
-    if app.threads_rx.is_some() {
-        parts.push("refreshing".to_string());
-    }
-    let title = format!(" {} ", parts.join(" · "));
-
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
-    f.render_widget(list, area);
-}
 
 fn render_usage(f: &mut Frame, app: &MonitorApp, area: Rect) {
     let Some(cached) = &app.usage_stats else {
@@ -1072,24 +981,6 @@ fn render_picker(f: &mut Frame, picker: &TargetPickerState, area: Rect, noun: &s
     f.render_widget(List::new(items), rows[1]);
 }
 
-fn render_timing_overlay(f: &mut Frame, state: &TimingOverlayState, area: Rect) {
-    f.render_widget(Clear, area);
-    let visible_rows = area.height.saturating_sub(2) as usize;
-    let max = state.lines.len().saturating_sub(visible_rows);
-    let offset = state.scroll.min(max);
-    let end = (offset + visible_rows).min(state.lines.len());
-    let items: Vec<ListItem> = state.lines[offset..end]
-        .iter()
-        .map(|line| ListItem::new(line.as_str()))
-        .collect();
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(format!(" Timings · {} ", state.title))
-        .title_bottom(" j/k scroll · gg/G top/bottom · Esc close ");
-    f.render_widget(List::new(items).block(block), area);
-}
-
 /// Full-frame detail view for one background process: marker metadata, the
 /// full command, and the stdout/stderr log tails. Lines are pre-wrapped at
 /// build time, so scrolling is a plain row-window here.
@@ -1255,6 +1146,7 @@ mod tests {
 
     use super::*;
     use crate::app::QuotaEntry;
+    use crate::tabs::threads::TimingOverlayState;
 
     #[test]
     fn percent_color_thresholds() {
