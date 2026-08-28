@@ -691,7 +691,6 @@ fn truncate_spans(spans: Vec<Span<'static>>, max_chars: usize) -> Vec<Span<'stat
 #[cfg(test)]
 mod log_view_tests {
     use super::*;
-    use crate::app::restart_force_for_key;
 
     fn sample_lines() -> Vec<String> {
         [
@@ -703,12 +702,6 @@ mod log_view_tests {
         .iter()
         .map(|s| (*s).to_string())
         .collect()
-    }
-
-    #[test]
-    fn restart_keys_distinguish_guarded_and_forced_modes() {
-        assert!(!restart_force_for_key(KeyCode::Char('r')));
-        assert!(restart_force_for_key(KeyCode::Char('R')));
     }
 
     #[test]

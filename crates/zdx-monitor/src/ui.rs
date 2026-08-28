@@ -6,6 +6,7 @@ use crate::tabs::agents::{render_active_agents, render_agent_overlay};
 use crate::tabs::background::{render_background, render_background_detail};
 use crate::tabs::config::{render_config, render_model_picker};
 use crate::tabs::logs::{render_log_overlay, render_logs};
+use crate::tabs::services::render_services;
 use crate::tabs::threads::{render_threads, render_timing_overlay};
 use crate::tabs::usage::render_usage;
 
@@ -78,44 +79,6 @@ fn render_tabs(f: &mut Frame, app: &MonitorApp, area: Rect) {
         .select(selected)
         .highlight_style(Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED));
     f.render_widget(tabs, area);
-}
-
-fn render_services(f: &mut Frame, app: &MonitorApp, area: Rect) {
-    let items: Vec<ListItem> = app
-        .services
-        .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            let (icon, style) = if s.status == "running" {
-                ("●", Style::default().fg(Color::Green))
-            } else {
-                ("○", Style::default().fg(Color::DarkGray))
-            };
-            let line = {
-                let display_details = &s.details;
-                if display_details.is_empty() {
-                    format!(" {:<10} {icon} {}", s.name, s.status)
-                } else {
-                    format!(
-                        " {:<10} {icon} {:<10} {}",
-                        s.name, s.status, display_details
-                    )
-                }
-            };
-            let style = if i == app.selected_index && app.active_section == Section::Services {
-                style.bg(SELECTED_BG)
-            } else {
-                style
-            };
-            ListItem::new(line).style(style)
-        })
-        .collect();
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Services (Enter=toggle, r=restart, R=force)"),
-    );
-    f.render_widget(list, area);
 }
 
 fn render_footer(f: &mut Frame, app: &MonitorApp, area: Rect) {

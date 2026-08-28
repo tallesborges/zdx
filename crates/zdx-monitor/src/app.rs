@@ -14,7 +14,6 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::prelude::*;
 use zdx_engine::core::thread_index::{ThreadBrowseOptions, ThreadKindFilter};
 use zdx_engine::core::usage_stats::UsageStats;
-use zdx_engine::service::{self, Service};
 use zdx_engine::{automations, config};
 
 use crate::log_line::{LevelFilter, line_target};
@@ -35,6 +34,10 @@ use crate::tabs::logs::{
     LOG_TAIL_LINES, LoadedLogFile, ensure_log_selected_visible, handle_log_overlay_key,
     handle_log_query_key, handle_log_target_picker_key, handle_logs_key, load_active_log,
     recompute_log_visible,
+};
+use crate::tabs::services::{
+    ServiceInfo, load_services, restart_force_for_key, restart_selected_service,
+    toggle_selected_service,
 };
 use crate::tabs::threads::{
     ThreadInfo, ThreadsSnapshot, TimingOverlayState, copy_selected_thread_id,
@@ -172,14 +175,6 @@ pub struct MonitorApp {
 pub struct AutomationInfo {
     pub name: String,
     pub schedule: Option<String>,
-}
-
-#[derive(Clone)]
-pub struct ServiceInfo {
-    pub service: Service,
-    pub name: String,
-    pub status: String,
-    pub details: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -459,10 +454,6 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
     )
     .context("leave alternate screen")?;
     terminal.show_cursor().context("show cursor")
-}
-
-pub(crate) fn restart_force_for_key(key: KeyCode) -> bool {
-    key == KeyCode::Char('R')
 }
 
 /// How long list scrolling stays swallowed after an overlay closes. Trackpad
@@ -786,40 +777,6 @@ fn handle_overlay_mouse(app: &mut MonitorApp, mouse: MouseEvent) -> bool {
     app.log_overlay_open
 }
 
-fn toggle_selected_service(app: &mut MonitorApp) {
-    if app.active_section == Section::Services
-        && let Some(service) = app.services.get(app.selected_index)
-    {
-        match toggle_service(service) {
-            Ok(message) => app.set_status(message),
-            Err(err) => {
-                app.set_status(format!("Failed to toggle {}: {err}", service.name));
-            }
-        }
-    }
-}
-
-fn restart_selected_service(app: &mut MonitorApp, force: bool) {
-    if app.active_section == Section::Services
-        && let Some(service) = app.services.get(app.selected_index)
-    {
-        match service::restart(service.service, force) {
-            Ok(message) => app.set_status(message),
-            Err(err) => {
-                if let Some(blocked) = err.downcast_ref::<service::RestartBlocked>() {
-                    let active_runs = blocked.active_runs();
-                    let suffix = if active_runs == 1 { "" } else { "s" };
-                    app.set_status(format!(
-                        "Restart blocked: {active_runs} active agent run{suffix}; wait or press R to force"
-                    ));
-                } else {
-                    app.set_status(format!("Failed to restart {}: {err}", service.name));
-                }
-            }
-        }
-    }
-}
-
 /// How long a status message replaces the footer hints.
 const STATUS_TTL: Duration = Duration::from_secs(4);
 
@@ -956,44 +913,6 @@ fn load_automations(root: &Path) -> Vec<AutomationInfo> {
             })
             .collect(),
         Err(_) => Vec::new(),
-    }
-}
-
-fn load_services() -> Vec<ServiceInfo> {
-    Service::ALL
-        .into_iter()
-        .map(|svc| {
-            let state = service::state(svc);
-            let launchd = if state.installed {
-                "launchd"
-            } else {
-                "not installed"
-            };
-            let (status, details) = match (state.pid, state.uptime) {
-                (Some(pid), uptime) => {
-                    let uptime = uptime.map(service::format_uptime).unwrap_or_default();
-                    (
-                        "running".to_string(),
-                        format!("PID {pid} | up {uptime} | {launchd}"),
-                    )
-                }
-                (None, _) => ("stopped".to_string(), launchd.to_string()),
-            };
-            ServiceInfo {
-                service: svc,
-                name: svc.name().to_string(),
-                status,
-                details,
-            }
-        })
-        .collect()
-}
-
-fn toggle_service(info: &ServiceInfo) -> Result<String> {
-    if info.status == "running" {
-        service::stop(info.service)
-    } else {
-        service::start(info.service)
     }
 }
 
