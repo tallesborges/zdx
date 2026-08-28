@@ -3001,10 +3001,18 @@ fn append_running_tool_cells(
             tool.input.clone()
         };
         let mut cell = zdx_transcript::HistoryCell::tool_running(tool.id.clone(), name, input);
-        if let Ok(marker_start) = chrono::DateTime::parse_from_rfc3339(&tool.started_at)
-            && let zdx_transcript::HistoryCell::Tool { started_at, .. } = &mut cell
+        if let zdx_transcript::HistoryCell::Tool {
+            started_at,
+            output_delta,
+            ..
+        } = &mut cell
         {
-            *started_at = marker_start.with_timezone(&chrono::Utc);
+            if let Ok(marker_start) = chrono::DateTime::parse_from_rfc3339(&tool.started_at) {
+                *started_at = marker_start.with_timezone(&chrono::Utc);
+            }
+            if !tool.output_tail.is_empty() {
+                *output_delta = Some(tool.output_tail.clone());
+            }
         }
         cells.push(cell);
     }
@@ -3234,7 +3242,10 @@ fn load_transcript_into(state: &mut AgentOverlayState) {
         .and_then(|r| r.current_tools.first())
         .map(|t| t.name.to_ascii_lowercase());
     let running = run.map(|r| r.current_tools).unwrap_or_default();
-    state.running_sig = running.iter().map(|t| t.id.clone()).collect();
+    state.running_sig = running
+        .iter()
+        .map(|t| format!("{}:{}", t.id, t.output_tail.len()))
+        .collect();
     let (cells, lines, tools, thinking) = read_thread_transcript(
         &state.thread_id,
         state.width,
@@ -3282,7 +3293,12 @@ fn refresh_agent_overlay(app: &mut MonitorApp) {
         .and_then(|r| r.current_tools.first())
         .map(|t| t.name.to_ascii_lowercase());
     let running_sig: Vec<String> = run
-        .map(|r| r.current_tools.iter().map(|t| t.id.clone()).collect())
+        .map(|r| {
+            r.current_tools
+                .iter()
+                .map(|t| format!("{}:{}", t.id, t.output_tail.len()))
+                .collect()
+        })
         .unwrap_or_default();
     if len == state.file_len
         && mtime == state.file_mtime

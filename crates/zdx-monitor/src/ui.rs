@@ -163,6 +163,12 @@ fn footer_hint(section: Section) -> &'static str {
     }
 }
 
+/// Spinner frame index derived from wall-clock seconds: the monitor redraws
+/// on its 1s tick, so the running-tool glyph advances one frame per tick.
+fn spinner_frame_now() -> usize {
+    usize::try_from(chrono::Utc::now().timestamp().max(0)).unwrap_or(0)
+}
+
 fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
     /// Fixed width of the status column after the PID (`⚙ bash`, `◌ waiting`).
     const STATUS_COL: usize = 12;
@@ -201,7 +207,11 @@ fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
                 },
                 |tool| {
                     let name = tool.split(':').next().unwrap_or(tool);
-                    (format!("⚙ {name}"), Color::Yellow)
+                    let glyph = zdx_transcript::tool_state_glyph(
+                        &zdx_transcript::ToolState::Running,
+                        spinner_frame_now(),
+                    );
+                    (format!("{glyph} {name}"), Color::Yellow)
                 },
             );
             let status = format!("{:<STATUS_COL$}", truncate_chars(&status, STATUS_COL));
@@ -236,8 +246,12 @@ fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
             ]);
             let mut lines = vec![line];
             if let Some(tool) = a.current_tool.as_deref() {
+                let glyph = zdx_transcript::tool_state_glyph(
+                    &zdx_transcript::ToolState::Running,
+                    spinner_frame_now(),
+                );
                 let preview = format!(
-                    "   {}⚙ {}",
+                    "   {}{glyph} {}",
                     a.tree_prefix,
                     truncate_chars(tool, inner_width.saturating_sub(a.tree_prefix.len() + 5))
                 );
@@ -1296,7 +1310,11 @@ fn render_agent_overlay(f: &mut Frame, state: &AgentOverlayState, area: Rect) {
     } else if state.ended {
         " · ENDED".to_string()
     } else if let Some(tool) = state.running_tool.as_deref() {
-        format!(" · ⚙ {}…", tool.to_ascii_uppercase())
+        let glyph = zdx_transcript::tool_state_glyph(
+            &zdx_transcript::ToolState::Running,
+            spinner_frame_now(),
+        );
+        format!(" · {glyph} {}…", tool.to_ascii_uppercase())
     } else if let Some(phase) = state.run_phase.as_deref() {
         format!(" · {}…", phase.to_ascii_uppercase())
     } else if state.scroll.is_none() {
@@ -1415,7 +1433,7 @@ fn render_tool_pane(f: &mut Frame, state: &AgentOverlayState, pane: &ToolPaneSta
     let (name, glyph, color) = match cell {
         zdx_transcript::HistoryCell::Tool { name, state, .. } => (
             name.as_str(),
-            zdx_transcript::tool_state_glyph(state, 0),
+            zdx_transcript::tool_state_glyph(state, spinner_frame_now()),
             zdx_transcript::tool_state_color(state),
         ),
         _ => return,

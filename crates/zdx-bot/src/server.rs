@@ -87,6 +87,8 @@ pub enum ThreadActivity {
         /// Full tool input, or `Value::Null` when the marker only kept the
         /// summary (oversized input).
         input: Value,
+        /// Tail of the tool's streaming output so far (bounded).
+        output_tail: String,
         /// Human elapsed time since the tool started, e.g. `42s`.
         running_for: String,
     },
@@ -466,6 +468,7 @@ fn append_running_tools(response: &mut ThreadResponse) {
             name: tool.name.to_ascii_lowercase(),
             summary: tool.summary,
             input: tool.input,
+            output_tail: tool.output_tail,
         });
         sequence += 1;
     }

@@ -145,6 +145,7 @@ impl EventSender {
                 AgentEvent::ReasoningDelta { .. } => guard.set_phase("thinking"),
                 AgentEvent::AssistantDelta { .. } => guard.set_phase("answering"),
                 AgentEvent::ProviderRetry { .. } => guard.set_phase("retrying"),
+                AgentEvent::ToolOutputDelta { id, chunk } => guard.append_tool_output(id, chunk),
                 // Emitted after a tool round flushes, right before the next
                 // model request goes out.
                 AgentEvent::TurnCheckpoint { .. } => guard.set_phase("waiting"),

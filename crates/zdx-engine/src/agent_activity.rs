@@ -24,6 +24,13 @@ const TOOL_SUMMARY_MAX_CHARS: usize = 200;
 /// (e.g. a `write` with a whole file body) fall back to summary-only.
 const TOOL_INPUT_MAX_BYTES: usize = 16 * 1024;
 
+/// Maximum bytes of streaming output kept per in-flight tool (tail).
+const TOOL_OUTPUT_TAIL_MAX_BYTES: usize = 8 * 1024;
+
+/// Minimum interval between marker rewrites caused by streaming output, so a
+/// chatty `bash` cannot turn every chunk into a disk write.
+const OUTPUT_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// A tool call currently executing within an active run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActiveToolCall {
@@ -38,6 +45,10 @@ pub struct ActiveToolCall {
     /// [`TOOL_INPUT_MAX_BYTES`] (consumers fall back to `summary`).
     #[serde(default)]
     pub input: serde_json::Value,
+    /// Tail of the tool's streaming output (bounded by
+    /// [`TOOL_OUTPUT_TAIL_MAX_BYTES`], flushed at most once per second).
+    #[serde(default)]
+    pub output_tail: String,
     pub started_at: String,
 }
 
@@ -66,6 +77,7 @@ impl ActiveToolCall {
             name: name.to_string(),
             summary,
             input: stored_input,
+            output_tail: String::new(),
             started_at: chrono::Utc::now().to_rfc3339(),
         }
     }
@@ -130,6 +142,8 @@ pub struct StartParams<'a> {
 pub struct RunGuard {
     path: PathBuf,
     record: Mutex<RunRecord>,
+    /// When streaming output last caused a marker rewrite (throttling).
+    last_output_flush: Mutex<Option<std::time::Instant>>,
 }
 
 impl Drop for RunGuard {
@@ -170,6 +184,36 @@ impl RunGuard {
         record.phase = Some(phase.to_string());
         write_record(&self.path, &record);
     }
+
+    /// Appends streaming output to an in-flight tool's bounded tail. Marker
+    /// rewrites are throttled to [`OUTPUT_FLUSH_INTERVAL`]; the in-memory
+    /// tail always stays current so the next flush carries everything.
+    pub fn append_tool_output(&self, id: &str, chunk: &str) {
+        let Ok(mut record) = self.record.lock() else {
+            return;
+        };
+        let Some(tool) = record.current_tools.iter_mut().find(|tool| tool.id == id) else {
+            return;
+        };
+        tool.output_tail.push_str(chunk);
+        if tool.output_tail.len() > TOOL_OUTPUT_TAIL_MAX_BYTES {
+            let mut cut = tool.output_tail.len() - TOOL_OUTPUT_TAIL_MAX_BYTES;
+            while !tool.output_tail.is_char_boundary(cut) {
+                cut += 1;
+            }
+            tool.output_tail.drain(..cut);
+        }
+
+        let Ok(mut last_flush) = self.last_output_flush.lock() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        if last_flush.is_some_and(|at| now.duration_since(at) < OUTPUT_FLUSH_INTERVAL) {
+            return;
+        }
+        *last_flush = Some(now);
+        write_record(&self.path, &record);
+    }
 }
 
 /// Creates a `RunGuard` that writes a marker file for the current agent turn.
@@ -208,6 +252,7 @@ pub fn start(params: StartParams<'_>) -> Option<RunGuard> {
     Some(RunGuard {
         path,
         record: Mutex::new(record),
+        last_output_flush: Mutex::new(None),
     })
 }
 
@@ -345,6 +390,7 @@ mod tests {
         let guard = RunGuard {
             path: path.clone(),
             record: Mutex::new(record),
+            last_output_flush: Mutex::new(None),
         };
 
         guard.set_tools_started(vec![ActiveToolCall::new(
@@ -366,6 +412,45 @@ mod tests {
     }
 
     #[test]
+    fn append_tool_output_keeps_bounded_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("marker.json");
+        let mut record = test_record();
+        record.current_tools = vec![ActiveToolCall::new(
+            "tool1",
+            "bash",
+            &serde_json::json!({ "command": "make" }),
+        )];
+        write_record(&path, &record).unwrap();
+        let guard = RunGuard {
+            path: path.clone(),
+            record: Mutex::new(record),
+            last_output_flush: Mutex::new(None),
+        };
+
+        guard.append_tool_output("tool1", "hello ");
+        let on_disk: RunRecord = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(on_disk.current_tools[0].output_tail, "hello ");
+
+        // Unknown tool ids are ignored.
+        guard.append_tool_output("nope", "x");
+
+        // The tail stays bounded even when appended output exceeds the cap.
+        guard.append_tool_output("tool1", &"y".repeat(TOOL_OUTPUT_TAIL_MAX_BYTES * 2));
+        let record = guard.record.lock().unwrap();
+        assert_eq!(
+            record.current_tools[0].output_tail.len(),
+            TOOL_OUTPUT_TAIL_MAX_BYTES
+        );
+        assert!(
+            record.current_tools[0]
+                .output_tail
+                .chars()
+                .all(|c| c == 'y')
+        );
+    }
+
+    #[test]
     fn set_phase_writes_only_on_transitions() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("marker.json");
@@ -374,6 +459,7 @@ mod tests {
         let guard = RunGuard {
             path: path.clone(),
             record: Mutex::new(record),
+            last_output_flush: Mutex::new(None),
         };
 
         guard.set_phase("thinking");

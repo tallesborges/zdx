@@ -1470,7 +1470,8 @@
         const hasInput = record.input && typeof record.input === "object" && Object.keys(record.input).length;
         const args = hasInput ? prettyValue(record.input) : (record.summary || "No arguments");
         body.append(element("p", "detail-label", "Arguments"), element("pre", "detail-code", args));
-        body.append(element("p", "detail-label", "Result"), element("pre", "detail-code", "Running…"));
+        const output = record.output_tail ? record.output_tail : "Running…";
+        body.append(element("p", "detail-label", "Output"), element("pre", "detail-code", output));
         details.append(body);
       });
       details.append(summary);
