@@ -257,6 +257,7 @@ pub(crate) fn bypasses_queue(text: &str) -> bool {
                 | BotCommand::Tldr
                 | BotCommand::ThreadId
                 | BotCommand::Btw
+                | BotCommand::Commands
         )
     )
 }
@@ -503,6 +504,9 @@ mod tests {
         assert!(!bypasses_queue("/handoff"));
         assert!(bypasses_queue("/tldr"));
         assert_eq!(parse_command("/tldr"), Some(BotCommand::Tldr));
+        // The picker only lists project commands; it never touches the thread.
+        assert!(bypasses_queue("/commands"));
+        assert!(bypasses_queue("/commands@zdx_bot"));
         assert!(!bypasses_queue("/prompt-builder"));
         assert_eq!(
             parse_command("/prompt-builder"),
