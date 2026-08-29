@@ -1608,7 +1608,7 @@ pub(crate) fn spawn_server(
 mod tests {
     use super::*;
 
-    const SAMPLE_BOT_TOKEN: &str = "5768337691:AAH5YkoiEuPk8-FZa32hStHTqXiLPtAEhx8";
+    const SAMPLE_BOT_TOKEN: &str = "1234567890:TEST-BOT-TOKEN-FOR-UNIT-TESTS-ONLY";
     const SAMPLE_AUTH_DATE: u64 = 1_662_771_648;
     const SAMPLE_INIT_DATA: &str = concat!(
         "query_id=AAHdF6IQAAAAAN0XohDhrOrc&",
@@ -1616,7 +1616,7 @@ mod tests {
         "%22last_name%22%3A%22Kibenko%22%2C%22username%22%3A%22vdkfrost%22%2C",
         "%22language_code%22%3A%22ru%22%2C%22is_premium%22%3Atrue%7D&",
         "auth_date=1662771648&",
-        "hash=c501b71e775f74ce10e377dea85a7ea24ecd640b223ea86dfe453e0eaed2e2b2"
+        "hash=c4d45b6d00cd75400ade8589bba0ac122375ae8594ecc3495de5fb63c3697c17"
     );
 
     fn sample_allowlist() -> HashSet<i64> {
