@@ -94,6 +94,8 @@ fn test_bot_command_fails_when_token_is_missing() {
     let zdx_home = tempdir().unwrap();
     cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", zdx_home.path())
+        .env_remove("ZDX_TELEGRAM_BOT_TOKEN")
+        .env_remove("TELEGRAM_BOT_TOKEN")
         .args(["bot"])
         .assert()
         .failure()
@@ -106,6 +108,8 @@ fn test_telegram_command_requires_bot_token() {
 
     cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", zdx_home.path())
+        .env_remove("ZDX_TELEGRAM_BOT_TOKEN")
+        .env_remove("TELEGRAM_BOT_TOKEN")
         .args([
             "telegram",
             "create-topic",
