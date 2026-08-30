@@ -505,8 +505,9 @@ When the Telegram bot is used in a forum-enabled supergroup:
   - if the topic was created by `/new` in `General`, the bot waits and auto-generates the topic title from the first later in-topic message that contains usable text (plain text or audio transcript)
 - `/handoff` (inside a topic) starts a staged, memory-only handoff flow:
   - the next message (text or voice transcript) is consumed as the handoff input — it never runs an agent turn and is never persisted to the topic's thread
-  - the bot shows a generated handoff preview with Accept / Discard buttons; sending another message regenerates the preview from the new input
-  - Accept creates a new topic whose thread records `handoff_from` (source thread) and runs the first agent turn there with the generated handoff prompt
+  - that input completes the command with no confirmation step: the bot generates the handoff context and immediately creates a new topic whose thread records `handoff_from` (source thread), then runs the first agent turn there with the generated handoff prompt
+  - the generated context is posted into the new topic before that turn starts, because the handoff prompt itself is dispatched synthetically and never appears as a chat message
+  - if generation or topic creation fails, the staging session stays open: sending another message retries, Discard / `/cancel` aborts
   - Discard (or `/cancel`) deletes the staging messages — the bot's own always, the user's best-effort (needs `can_delete_messages`) — and leaves the source thread untouched
   - `/handoff` outside a forum topic (DM or `General`) does not start staging; the bot explains it needs a topic
   - stale staging sessions expire; a message after expiry runs as a normal agent turn
@@ -520,7 +521,7 @@ When the Telegram bot is used in a forum-enabled supergroup:
 - `/threads` (with `/thread` accepted) posts a named Mini App link for the current thread when `[telegram.server]` is enabled and `mini_app_url` is configured.
 - The embedded Mini App server is opt-in. It serves one unified shell at canonical route `/app`; `/threads` and `/monitor` remain compatibility aliases. The shell navigates between Monitor, Threads, and Git without a page reload. Threads preserves event order and shows messages plus collapsed reasoning, tool calls/results, usage, notices, and interruptions; private persistence metadata and provider replay tokens are never exposed. Monitor covers managed services, active agents, background processes, live subscription quota windows, 30-day usage, an explicit safe config summary, and automations. Git is a read-only inspector for the current branch and ahead/behind state, worktrees, staged/unstaged/untracked files, recent commits, and lazy per-file diffs capped at 256 KiB. Git resolves the selected thread's persisted project root when it belongs to a repository, then falls back to the bot root. Every `/api/*` route requires fresh, bot-token-signed `Telegram.WebApp.initData` from an allowlisted Telegram user. Local monitor snapshots run off the async request worker and are cached for 30 seconds. Subscription quota endpoints use stored credentials read-only, never refresh tokens, run concurrently, and are cached for five minutes. The Mini App exposes no service control, process control, Git write, or destructive Git actions.
 - `/prompt_builder` (typed, native menu; `/prompt-builder` also accepted) starts the same staged flow as `/handoff` with the intent as input:
-  - works inside topics and DMs (not `General`); the generated prompt is previewed with Accept / Discard buttons and regenerates on a new message
+  - works inside topics and DMs (not `General`); the generated prompt is previewed with Accept / Discard buttons and regenerates on a new message — it is the one staged command that gates on confirmation, because accepting it writes to the current thread
   - Accept runs the generated prompt as the user's real message in the current topic (a normal agent turn); the preview message is kept (edited) as the turn's reply anchor
   - Discard / `/cancel` delete the staging messages and leave the thread untouched
 

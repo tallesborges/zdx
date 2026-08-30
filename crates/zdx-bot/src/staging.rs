@@ -1,13 +1,17 @@
 //! Staged (memory-only) slash-command flow for input-taking commands.
 //!
-//! `/handoff` and `/prompt-builder` enter a per-topic staging session: the
-//! next message (text or transcribed voice) is consumed as command input
-//! instead of running a normal agent turn, a generated suggestion is shown
-//! with Accept / Discard buttons, and sending another message regenerates the
-//! suggestion. Nothing is persisted to the real thread until Accept; Discard
-//! deletes the staging messages and leaves the topic as it was. Accept:
-//! handoff seeds a new topic; prompt-builder runs the generated prompt as the
-//! user's real message in the current topic.
+//! Each command enters a per-topic staging session: the next message (text or
+//! transcribed voice) is consumed as command input instead of running a normal
+//! agent turn. Nothing is persisted to the real thread until the command
+//! completes; `/cancel` deletes the staging messages and leaves the topic as it
+//! was.
+//!
+//! Only `/prompt-builder` gates on confirmation, because accepting it runs a
+//! prompt as the user's real message in the *current* thread: its suggestion is
+//! shown with Accept / Discard buttons and regenerates when another message is
+//! sent. `/handoff` and `/btw` both complete on input with no Accept tap, since
+//! they only open a brand-new topic — `/handoff` generates a context block
+//! first, `/btw` makes no LLM call at all.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -32,8 +36,8 @@ use crate::types::IncomingMessage;
 /// normal turn instead of being swallowed as command input.
 const STAGING_TTL: Duration = Duration::from_mins(15);
 
-/// Max characters of the generated suggestion shown in the preview message
-/// (Telegram caps messages at 4096 chars including HTML tags).
+/// Max characters of a generated suggestion shown in a preview or record
+/// message (Telegram caps messages at 4096 chars including HTML tags).
 const SUGGESTION_PREVIEW_MAX_CHARS: usize = 3000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,7 +219,7 @@ async fn start_staging(
 
     let ask_text = match command {
         StagingCommand::Handoff => {
-            "🔀 <b>Handoff</b>\nSend the message (text or voice) to start the new topic with — I'll show a preview to accept or discard. Send /cancel to abort."
+            "🔀 <b>Handoff</b>\nSend the message (text or voice) to start the new topic with — I'll generate the context and open it straight away. Send /cancel to abort."
         }
         StagingCommand::Btw => {
             "💬 <b>Side question</b>\nSend your question (text or voice) — I'll answer it in a new topic that reads this thread, leaving this one untouched. Send /cancel to abort."
@@ -319,17 +323,17 @@ async fn process_staged_input(
         return start_btw_topic(context, queues, incoming, topic_id, thread_id, input).await;
     }
 
-    let generating_text = match command {
-        StagingCommand::Handoff => "⏳ Generating handoff…",
-        StagingCommand::Btw => unreachable!("btw returns above without generating"),
-        StagingCommand::Goal => unreachable!("goal returns above without generating"),
-        StagingCommand::PromptBuilder => "⏳ Building prompt…",
-    };
+    // Handoff generates a context block, but accepting it only ever opens a new
+    // topic, so it does not gate on confirmation either.
+    if command == StagingCommand::Handoff {
+        return start_handoff_topic(context, queues, incoming, topic_id, thread_id, input).await;
+    }
+
     let generating = context
         .client()
         .send_message_with_markup(
             incoming.chat_id,
-            generating_text,
+            "⏳ Building prompt…",
             Some(incoming.message_id),
             topic_id,
             &InlineKeyboardMarkup {
@@ -338,41 +342,23 @@ async fn process_staged_input(
         )
         .await?;
 
-    let result = match command {
-        StagingCommand::Handoff => {
-            run_handoff_generation(context, incoming, thread_id, input).await
-        }
-        StagingCommand::Btw => unreachable!("btw returns above without generating"),
-        StagingCommand::Goal => unreachable!("goal returns above without generating"),
-        StagingCommand::PromptBuilder => {
-            run_prompt_builder_generation(context, incoming, thread_id, input).await
-        }
-    };
-    present_generation_result(
-        context,
-        incoming.chat_id,
-        thread_id,
-        command,
-        generating.id,
-        result,
-    )
-    .await;
+    let result = run_prompt_builder_generation(context, incoming, thread_id, input).await;
+    present_generation_result(context, incoming.chat_id, thread_id, generating.id, result).await;
     Ok(())
 }
 
-/// Edits the "generating…" message into the suggestion preview (with Accept /
+/// Edits the "building…" message into the prompt-builder preview (with Accept /
 /// Discard buttons) or an error, updating the session accordingly.
 async fn present_generation_result(
     context: &BotContext,
     chat_id: i64,
     thread_id: &str,
-    command: StagingCommand,
     generating_message_id: i64,
     result: Result<String>,
 ) {
     match result {
         Ok(suggestion) => {
-            let preview = suggestion_preview(command, &suggestion);
+            let preview = suggestion_preview(&suggestion);
             if let Err(err) = context
                 .client()
                 .edit_message_text(
@@ -515,18 +501,13 @@ pub(crate) async fn handle_callback(
                 .await;
         }
         "a" => match session.command {
-            StagingCommand::Handoff => {
-                accept_handoff(
-                    context, queues, client, callback, chat_id, &thread_id, session,
-                )
-                .await;
-            }
             StagingCommand::PromptBuilder => {
                 accept_prompt_builder(context, queues, client, callback, &thread_id, session).await;
             }
-            // btw opens its topic on input, so it never stages an Accept button.
-            // Telegram can still redeliver a stale callback, so answer politely.
-            StagingCommand::Btw | StagingCommand::Goal => {
+            // Only prompt-builder stages an Accept button, because accepting it
+            // runs a prompt in this thread. Telegram can still redeliver a stale
+            // callback, so answer politely.
+            StagingCommand::Handoff | StagingCommand::Btw | StagingCommand::Goal => {
                 let _ = client
                     .answer_callback_query(&callback.id, Some("Nothing to accept"))
                     .await;
@@ -539,11 +520,6 @@ pub(crate) async fn handle_callback(
     }
 }
 
-/// Opens the side topic for `/btw` immediately — no preview, no Accept tap.
-///
-/// The seed is the user's question plus a pointer at the current thread, which
-/// the new topic's agent resolves with `Read_Thread`. On failure the staging
-/// session is kept so the next message retries.
 /// Accepts a goal objective: stores it in memory and runs it as the first
 /// ordinary turn in this same topic.
 ///
@@ -628,6 +604,11 @@ async fn start_goal(
     Ok(())
 }
 
+/// Opens the side topic for `/btw` immediately — no preview, no Accept tap.
+///
+/// The seed is the user's question plus a pointer at the current thread, which
+/// the new topic's agent resolves with `Read_Thread`. On failure the staging
+/// session is kept so the next message retries.
 async fn start_btw_topic(
     context: &Arc<BotContext>,
     queues: &ChatQueueMap,
@@ -652,6 +633,7 @@ async fn start_btw_topic(
         thread_id,
         "Btw",
         seed,
+        None,
     )
     .await
     {
@@ -686,12 +668,15 @@ async fn start_btw_topic(
 }
 
 /// Creates a forum topic seeded with `seed_text` and dispatches that text as
-/// the new topic's first message.
+/// the new topic's first message. `record`, when present, is posted into the
+/// new topic before the turn starts, since the seed is synthetic and never
+/// shows up in the chat.
 ///
 /// The new thread is pre-created so its meta records the `handoff_from` lineage
 /// and a pending auto-title before the first turn opens it, and it inherits the
 /// source thread's model/thinking overrides so it continues with the same
-/// effective model and thinking level. Shared by `/handoff` Accept and `/btw`.
+/// effective model and thinking level. Shared by `/handoff` and `/btw`.
+#[allow(clippy::too_many_arguments)]
 async fn seed_new_topic(
     context: &Arc<BotContext>,
     queues: &ChatQueueMap,
@@ -700,6 +685,7 @@ async fn seed_new_topic(
     source_thread_id: &str,
     topic_prefix: &str,
     seed_text: String,
+    record: Option<String>,
 ) -> Result<()> {
     let topic_name = chrono::Utc::now()
         .format(&format!("{topic_prefix} %Y-%m-%d %H:%M"))
@@ -741,6 +727,20 @@ async fn seed_new_topic(
         );
     }
 
+    if let Some(record) = record
+        && let Err(err) = context
+            .client()
+            .send_message(chat_id, &record, None, Some(new_topic_id))
+            .await
+    {
+        tracing::warn!(
+            chat_id,
+            topic_id = new_topic_id,
+            %err,
+            "Created seeded topic but failed to post the context record"
+        );
+    }
+
     let synthetic: crate::telegram::Message = serde_json::from_value(json!({
         "message_id": new_topic_id,
         "chat": { "id": chat_id, "type": "supergroup", "is_forum": true },
@@ -752,50 +752,82 @@ async fn seed_new_topic(
     Ok(())
 }
 
-/// Accepts a staged handoff: creates the new topic and seeds it with the
-/// generated context block.
-async fn accept_handoff(
+/// Generates the handoff context and opens the new topic immediately — no
+/// preview, no Accept tap.
+///
+/// The generated context is posted into the new topic as its visible record:
+/// the seed itself is dispatched synthetically and never appears in the chat.
+/// On failure the staging session is kept so the next message retries.
+async fn start_handoff_topic(
     context: &Arc<BotContext>,
     queues: &ChatQueueMap,
-    client: &TelegramClient,
-    callback: &CallbackQuery,
-    chat_id: i64,
-    source_thread_id: &str,
-    session: StagingSession,
-) {
-    let Some(suggestion) = session.suggestion_text.clone() else {
-        let _ = client
-            .answer_callback_query(&callback.id, Some("Nothing staged to accept yet"))
-            .await;
-        let mut map = context.staging_map().lock().expect("staging lock poisoned");
-        map.insert(source_thread_id.to_string(), session);
-        return;
+    incoming: &IncomingMessage,
+    topic_id: Option<i64>,
+    thread_id: &str,
+    input: &str,
+) -> Result<()> {
+    let generating = context
+        .client()
+        .send_message_with_markup(
+            incoming.chat_id,
+            "⏳ Generating handoff…",
+            Some(incoming.message_id),
+            topic_id,
+            &InlineKeyboardMarkup {
+                inline_keyboard: vec![],
+            },
+        )
+        .await?;
+    track_bot_message(context, thread_id, generating.id);
+
+    let seeded = match run_handoff_generation(context, incoming, thread_id, input).await {
+        Ok(suggestion) => {
+            let record = handoff_record(&suggestion);
+            seed_new_topic(
+                context,
+                queues,
+                incoming.chat_id,
+                incoming.user_id,
+                thread_id,
+                "Handoff",
+                suggestion,
+                Some(record),
+            )
+            .await
+        }
+        Err(err) => Err(err),
     };
 
-    if let Err(err) = seed_new_topic(
-        context,
-        queues,
-        chat_id,
-        callback.from.id,
-        source_thread_id,
-        "Handoff",
-        suggestion,
-    )
-    .await
-    {
-        tracing::error!(chat_id, %err, "Failed to open handoff topic");
-        let _ = client
-            .answer_callback_query(&callback.id, Some("Failed to create the new topic"))
-            .await;
-        let mut map = context.staging_map().lock().expect("staging lock poisoned");
-        map.insert(source_thread_id.to_string(), session);
-        return;
+    match seeded {
+        Ok(()) => {
+            let session = {
+                let mut map = context.staging_map().lock().expect("staging lock poisoned");
+                map.remove(thread_id)
+            };
+            if let Some(session) = session {
+                cleanup_session_messages(context, incoming.chat_id, &session).await;
+            }
+        }
+        Err(err) => {
+            let text = format!(
+                "⚠️ Handoff failed:\n<pre>{}</pre>\nSend another message to retry, or /cancel.",
+                escape_html(&format!("{err:#}"))
+            );
+            if let Err(edit_err) = context
+                .client()
+                .edit_message_text(
+                    incoming.chat_id,
+                    generating.id,
+                    &text,
+                    Some(&discard_only_keyboard()),
+                )
+                .await
+            {
+                tracing::warn!(%edit_err, "Failed to show handoff error");
+            }
+        }
     }
-
-    cleanup_session_messages(context, chat_id, &session).await;
-    let _ = client
-        .answer_callback_query(&callback.id, Some("Handoff topic created ✓"))
-        .await;
+    Ok(())
 }
 
 /// Accepts a staged prompt-builder suggestion: the generated prompt becomes
@@ -883,24 +915,23 @@ async fn cleanup_session_messages(context: &BotContext, chat_id: i64, session: &
     }
 }
 
-fn suggestion_preview(command: StagingCommand, suggestion: &str) -> String {
-    let (icon, title, hint) = match command {
-        StagingCommand::Handoff => (
-            "🔀",
-            "Handoff preview",
-            "Accept opens a new topic seeded with this context. Send another message to regenerate.",
-        ),
-        StagingCommand::Btw => unreachable!("btw never stages a preview"),
-        StagingCommand::Goal => unreachable!("goal never stages a preview"),
-        StagingCommand::PromptBuilder => (
-            "🛠",
-            "Prompt preview",
-            "Accept runs this prompt here. Send another message to regenerate.",
-        ),
-    };
+/// The prompt-builder preview: the only staged suggestion that still gates on
+/// Accept, because accepting it runs the prompt in the current thread.
+fn suggestion_preview(suggestion: &str) -> String {
     let html = to_telegram_html(suggestion);
     let truncated = truncate_telegram_html(&html, SUGGESTION_PREVIEW_MAX_CHARS);
-    format!("{icon} <b>{title}</b>\n\n{truncated}\n\n<i>{hint}</i>")
+    format!(
+        "🛠 <b>Prompt preview</b>\n\n{truncated}\n\n<i>Accept runs this prompt here. Send another message to regenerate.</i>"
+    )
+}
+
+/// The handoff context posted into the new topic. The seed reaches the agent
+/// synthetically, so without this the context the turn started from would never
+/// be visible anywhere.
+fn handoff_record(suggestion: &str) -> String {
+    let html = to_telegram_html(suggestion);
+    let truncated = truncate_telegram_html(&html, SUGGESTION_PREVIEW_MAX_CHARS);
+    format!("🔀 <b>Handoff context</b>\n\n{truncated}")
 }
 
 fn accept_discard_keyboard() -> InlineKeyboardMarkup {
@@ -922,7 +953,7 @@ fn discard_only_keyboard() -> InlineKeyboardMarkup {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{STAGING_TTL, StagingCommand, StagingSession, suggestion_preview};
+    use super::{STAGING_TTL, StagingCommand, StagingSession, handoff_record, suggestion_preview};
 
     fn session_created_at(created_at: Instant) -> StagingSession {
         StagingSession {
@@ -951,23 +982,24 @@ mod tests {
 
     #[test]
     fn suggestion_preview_converts_markdown_and_keeps_actions_hint() {
-        let preview = suggestion_preview(
-            StagingCommand::Handoff,
-            "**Fix** `<script>` & stuff\n\n> Check first",
-        );
-        assert!(preview.contains("Handoff preview"));
+        let preview = suggestion_preview("**Fix** `<script>` & stuff\n\n> Check first");
+        assert!(preview.contains("Prompt preview"));
         assert!(preview.contains("<b>Fix</b> <code>&lt;script&gt;</code> &amp; stuff"));
         assert!(preview.contains("<blockquote>Check first</blockquote>"));
         assert!(!preview.contains("<blockquote><b>Fix"));
+        assert!(preview.contains("runs this prompt here"));
         assert!(preview.contains("regenerate"));
     }
 
+    /// The handoff seed is dispatched synthetically, so this record is the only
+    /// place the generated context is ever visible. It carries no Accept hint.
     #[test]
-    fn prompt_builder_preview_says_it_runs_here() {
-        let preview = suggestion_preview(StagingCommand::PromptBuilder, "do the thing");
-        assert!(preview.contains("Prompt preview"));
-        assert!(preview.contains("runs this prompt here"));
-        assert!(preview.contains("regenerate"));
+    fn handoff_record_converts_markdown_and_offers_no_action() {
+        let record = handoff_record("**Fix** `<script>` & stuff");
+        assert!(record.contains("Handoff context"));
+        assert!(record.contains("<b>Fix</b> <code>&lt;script&gt;</code> &amp; stuff"));
+        assert!(!record.contains("Accept"));
+        assert!(!record.contains("regenerate"));
     }
 
     /// Handoff and btw both seed a fresh topic, so both require running inside
@@ -980,10 +1012,11 @@ mod tests {
     }
 
     #[test]
-    fn suggestion_preview_truncates_long_suggestions() {
+    fn long_suggestions_are_truncated() {
         let long = "x".repeat(10_000);
-        let preview = suggestion_preview(StagingCommand::Handoff, &long);
-        assert!(preview.chars().count() < 3_500);
-        assert!(preview.contains('…'));
+        assert!(suggestion_preview(&long).chars().count() < 3_500);
+        assert!(suggestion_preview(&long).contains('…'));
+        assert!(handoff_record(&long).chars().count() < 3_500);
+        assert!(handoff_record(&long).contains('…'));
     }
 }
