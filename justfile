@@ -74,10 +74,29 @@ update-defaults:
 codebase *CRATES:
     cargo xtask codebase {{CRATES}}
 
+# ─── Mini App (apps/web) ──────────────────────────
+
+# Svelte Mini App dev server (proxies /api to a running `zdx bot` on :4141)
+web-dev *ARGS:
+    cd apps/web && bun run dev {{ARGS}}
+
+# Preview the Mini App with fixture data, no bot required
+web-demo:
+    @echo "http://localhost:5173/app/?view=threads&demo=1"
+    cd apps/web && bun run dev
+
+# Type-check the Mini App
+web-check:
+    cd apps/web && bun install --frozen-lockfile && bun run check
+
+# Build the Mini App into apps/web/dist
+web-build:
+    cd apps/web && bun install --frozen-lockfile && bun run build
+
 # ─── Build ────────────────────────────────────────
 
-# Build release binary
-build-release:
+# Build release binary (embeds the Mini App, so build it first)
+build-release: web-build
     cargo build -p zdx --release
 
 # Install current workspace as the released `zdx` binary at ~/.local/bin/zdx
