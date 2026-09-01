@@ -122,6 +122,11 @@ pub enum ThreadEvent {
         /// thread stays a thin pointer (used by Telegram "resume" topics).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         alias_to: Option<String>,
+        /// Marks a Telegram mirror topic for a managed worker thread. Messages
+        /// in such topics are queued into the worker FIFO instead of running an
+        /// in-process turn (the worker child process owns the aliased JSONL).
+        #[serde(default, skip_serializing_if = "is_false")]
+        worker_topic: bool,
         ts: String,
     },
 
@@ -242,6 +247,7 @@ impl ThreadEvent {
             thinking_override: None,
             pending_topic_title: false,
             alias_to: None,
+            worker_topic: false,
             ts: chrono_timestamp(),
         }
     }
@@ -263,6 +269,7 @@ impl ThreadEvent {
             thinking_override: None,
             pending_topic_title: false,
             alias_to: None,
+            worker_topic: false,
             ts: chrono_timestamp(),
         }
     }
@@ -287,6 +294,7 @@ impl ThreadEvent {
             thinking_override: None,
             pending_topic_title: false,
             alias_to: None,
+            worker_topic: false,
             ts: chrono_timestamp(),
         }
     }

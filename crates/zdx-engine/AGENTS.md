@@ -20,7 +20,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - `src/mcp.rs`: MCP config loading, server discovery, helper workspace/runtime, and MCP tool-call execution helpers
 - `src/prompts.rs`: prompt template helpers/re-exports of `zdx_assets` prompt constants.
 - `src/skills.rs`: skills discovery + parsing (materializes bundled skills from `zdx_assets::bundled_skill_assets()`)
-- `src/subagents.rs`: named subagent discovery + parsing (built-in subagents come from `zdx_assets::{EXPLORER_SUBAGENT,ORACLE_SUBAGENT}`)
+- `src/subagents.rs`: named subagent discovery + parsing (built-in subagents come from `zdx_assets::{EXPLORER_SUBAGENT,ORACLE_SUBAGENT,ORCHESTRATOR_SUBAGENT}`; `orchestrator` is reserved — user/project files cannot define it, and `load_builtin_orchestrator()` loads it directly from the embedded asset)
 - `src/images/mod.rs`: shared image utilities module exports
 - `src/images/decode.rs`: generic image decode/resize/PNG encode helpers
 - `src/images/path_mime.rs`: path normalization + extension MIME helpers
@@ -41,13 +41,14 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - `core/recency.rs`: shared recency decay applied to search relevance scores (`thread_index` and `native_memory`)
 - `core/native_memory.rs`: native SQLite-backed memory index/search over exported thread Markdown, Notes, and Calendar; owns `$ZDX_HOME/cache/memory.sqlite` and native `zdxmem:v1:*` docids. Includes the opt-in hosted embedding layer (`[memory.embeddings]` profile, budgets, `(input_hash, profile_fingerprint)` vector storage, vector/hybrid retrieval with RRF fusion); agent searches never trigger corpus embedding.
 - `core/thread_index.rs`: derived thread cache — owns `$ZDX_HOME/cache/threads.sqlite` (thread metadata, export dirty state, FTS over title + user/assistant text, tool-call rows). Incremental `(mtime,size)` sync; serves `list_threads()`, `search_threads()`, and `search_thread_tools()` with raw file-scan fallback. Documents its intentional semantic differences from the old raw-JSONL scan in the module docs.
-- `core/subagent.rs`: child `zdx exec` subagent runner. Child runs persist their own thread JSONL tagged via `ExecSubagentOptions::thread_origin_kind`/`thread_parent_id`/`thread_subagent_name` (so their usage is captured by `usage_stats`); tagged threads are hidden from default listings.
+- `core/subagent.rs`: child `zdx exec` subagent runner. Child runs persist their own thread JSONL tagged via `ExecSubagentOptions::thread_origin_kind`/`thread_parent_id`/`thread_subagent_name` (so their usage is captured by `usage_stats`); tagged threads are hidden from default listings. `ExecSubagentOptions::thread_id` runs the child against an explicit existing thread (`--thread`, resumable workers). Children run in their own process group; cancel/timeout TERM→KILLs the group and reaps before returning.
 - `core/thread_export.rs`: clean Markdown transcript exports derived from saved thread JSONL
 - `core/title_generation.rs`: LLM-based title generation (shared by TUI + bot)
 - `core/tldr_generation.rs`: LLM-based thread TLDR/recap generation (shared by TUI)
 - `core/thread_persistence.rs`: thread persistence. `list_threads()` hides child runs (any thread with `Meta.origin_kind` set — subagents/helpers); `list_all_threads()` includes them. Usage stats scan raw files (`list_thread_files`) so they still count child runs.
 - `core/thread_timing.rs`: UI-agnostic per-thread timing reducer + shared text formatter used by CLI and Monitor; reports recorded request/TTFT/tool durations without inferring wall or thinking time
 - `core/usage_stats.rs`: usage/cost aggregation over saved threads (per provider/model), backed by a derived, disposable SQLite cache at `$ZDX_HOME/cache/usage.sqlite` (`rusqlite`, bundled) that re-scans only changed threads
+- `core/workers.rs`: in-memory `WorkerManager` for the orchestrator profile — one FIFO/status/cancel-token per worker thread, serial prompts per worker, concurrent workers, `WorkerEvent` channel (`Created` + `Completed`); workers run through `zdx --thread <id> exec` via the child subagent runner with process-group cancellation. All state is process-lifetime (restart loses queues/ownership; thread JSONL survives).
 - `core/worktree.rs`: git worktree management helpers
 
 ### Tools (`src/tools/`)

@@ -16,6 +16,7 @@ use crate::skills::{LoadSkillsOptions, Skill, load_skills, read_skill_content, s
 pub const TASK_BUILTIN_ALIAS_NAME: &str = "task";
 pub const EXPLORER_SUBAGENT_NAME: &str = "explorer";
 pub const ORACLE_SUBAGENT_NAME: &str = "oracle";
+pub const ORCHESTRATOR_SUBAGENT_NAME: &str = "orchestrator";
 
 /// Reserved runtime aliases that are not backed by a markdown subagent file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,7 +188,10 @@ pub fn discover(root: &Path) -> Result<Vec<SubagentDefinition>> {
 pub fn list_summaries(root: &Path) -> Result<Vec<SubagentSummary>> {
     discover(root).map(|defs| {
         defs.into_iter()
-            .filter(|definition| !is_reserved_runtime_alias(&definition.name))
+            .filter(|definition| {
+                !is_reserved_runtime_alias(&definition.name)
+                    && definition.name != ORCHESTRATOR_SUBAGENT_NAME
+            })
             .map(|definition| SubagentSummary {
                 name: definition.name,
                 description: definition.description,
@@ -275,7 +279,34 @@ pub fn render_prompt(
 ) -> Result<String> {
     let mut inclusion = inclusion;
     inclusion.skills = false;
+    render_prompt_inner(config, root, definition, model, inclusion)
+}
 
+/// Renders a subagent prompt with the full discovered skills catalog exposed
+/// as the `skills_list` template var, instead of forcing skills off.
+///
+/// Used by the reserved orchestrator profile, whose home-base role should see
+/// every enabled skill rather than a declared allowlist.
+///
+/// # Errors
+/// Returns an error if rendering fails or produces an empty prompt.
+pub fn render_prompt_with_discovered_skills(
+    config: &crate::config::Config,
+    root: &Path,
+    definition: &SubagentDefinition,
+    model: &str,
+    inclusion: PromptContextInclusion,
+) -> Result<String> {
+    render_prompt_inner(config, root, definition, model, inclusion)
+}
+
+fn render_prompt_inner(
+    config: &crate::config::Config,
+    root: &Path,
+    definition: &SubagentDefinition,
+    model: &str,
+    inclusion: PromptContextInclusion,
+) -> Result<String> {
     let subagent_skills = resolve_subagent_skills(config, root, definition)?;
 
     crate::core::context::render_standalone_prompt_template(
@@ -416,10 +447,31 @@ fn built_in_definitions() -> Result<Vec<SubagentDefinition>> {
             manifest_dir.join("subagents").join("oracle.md"),
             zdx_assets::ORACLE_SUBAGENT,
         ),
+        (
+            manifest_dir.join("subagents").join("orchestrator.md"),
+            zdx_assets::ORCHESTRATOR_SUBAGENT,
+        ),
     ]
     .into_iter()
     .map(|(path, content)| parse_subagent_content(&path, SubagentSource::BuiltIn, content))
     .collect()
+}
+
+/// Loads the reserved built-in `orchestrator` profile directly from the
+/// embedded asset, bypassing user/project discovery so the reserved profile
+/// can never be widened or replaced by a subagent file.
+///
+/// # Errors
+/// Returns an error if the embedded definition fails to parse.
+pub fn load_builtin_orchestrator() -> Result<SubagentDefinition> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("subagents")
+        .join("orchestrator.md");
+    parse_subagent_content(
+        &path,
+        SubagentSource::BuiltIn,
+        zdx_assets::ORCHESTRATOR_SUBAGENT,
+    )
 }
 
 fn task_capability() -> CapabilityDescriptor {
@@ -504,6 +556,11 @@ fn parse_subagent_content(
     let name = normalize_required_string(frontmatter.name, "name")?.unwrap_or(fallback_name);
     if is_reserved_runtime_alias(&name) {
         bail!("Subagent name '{name}' is reserved for runtime aliases and cannot be used");
+    }
+    if source != SubagentSource::BuiltIn && name.eq_ignore_ascii_case(ORCHESTRATOR_SUBAGENT_NAME) {
+        bail!(
+            "Subagent name '{name}' is reserved for the built-in orchestrator profile and cannot be overridden"
+        );
     }
     let description = normalize_required_string(frontmatter.description, "description")?
         .ok_or_else(|| anyhow::anyhow!("description is required"))?;
@@ -706,6 +763,121 @@ mod tests {
         let all = discover(root.path()).unwrap();
         assert!(all.iter().any(|s| s.name == "explorer"));
         assert!(all.iter().any(|s| s.name == "oracle"));
+        assert!(all.iter().any(|s| s.name == "orchestrator"));
+    }
+
+    #[test]
+    fn orchestrator_profile_cannot_be_overridden_by_project_files() {
+        let root = tempdir().unwrap();
+        let project_dir = root.path().join(".zdx").join("subagents");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("orchestrator.md"),
+            "---\ndescription: Widened orchestrator\ntools:\n  - write\n---\nPrompt",
+        )
+        .unwrap();
+
+        let err = discover(root.path()).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("reserved for the built-in orchestrator profile"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn builtin_orchestrator_declares_exact_tool_surface() {
+        let definition = load_builtin_orchestrator().unwrap();
+        assert_eq!(definition.name, ORCHESTRATOR_SUBAGENT_NAME);
+        assert_eq!(definition.source, SubagentSource::BuiltIn);
+
+        let tools = definition.tools.expect("orchestrator declares tools");
+        for required in [
+            "bash",
+            "read",
+            "create_thread",
+            "send_thread_message",
+            "get_thread_status",
+            "wait_for_threads",
+            "update_thread",
+            "cancel_thread",
+            "thread_search",
+            "read_thread",
+            "todo_write",
+            "memory_search",
+            "web_search",
+            "fetch_webpage",
+        ] {
+            assert!(tools.contains(&required.to_string()), "missing {required}");
+        }
+        for excluded in [
+            "edit",
+            "write",
+            "apply_patch",
+            "invoke_subagent",
+            "background_output",
+            "background_kill",
+        ] {
+            assert!(
+                !tools.contains(&excluded.to_string()),
+                "must not include {excluded}"
+            );
+        }
+    }
+
+    #[test]
+    fn orchestrator_is_hidden_from_subagent_summaries() {
+        let root = tempdir().unwrap();
+        let summaries = list_summaries(root.path()).unwrap();
+        assert!(summaries.iter().all(|s| s.name != "orchestrator"));
+    }
+
+    #[test]
+    fn orchestrator_renders_discovered_skills_catalog() {
+        let root = tempdir().unwrap();
+        write_project_skill(
+            root.path(),
+            "team-mgmt",
+            "Manage the team backlog.",
+            "# Team",
+        );
+
+        let mut config = crate::config::Config::default();
+        config.skills.sources.zdx_user = false;
+        config.skills.sources.zdx_project = true;
+        config.skills.sources.codex_user = false;
+        config.skills.sources.claude_user = false;
+        config.skills.sources.claude_project = false;
+        config.skills.sources.agents_user = false;
+        config.skills.sources.agents_project = false;
+
+        let definition = load_builtin_orchestrator().unwrap();
+        let inclusion = PromptContextInclusion {
+            project_context: true,
+            memory_index: true,
+            skills: true,
+        };
+
+        let rendered = render_prompt_with_discovered_skills(
+            &config,
+            root.path(),
+            &definition,
+            "anthropic:claude-opus-4-6",
+            inclusion,
+        )
+        .unwrap();
+        assert!(rendered.contains("<available_skills>"));
+        assert!(rendered.contains("team-mgmt"));
+
+        // The plain subagent path keeps skills forced off.
+        let plain = render_prompt(
+            &config,
+            root.path(),
+            &definition,
+            "anthropic:claude-opus-4-6",
+            inclusion,
+        )
+        .unwrap();
+        assert!(!plain.contains("team-mgmt"));
     }
 
     #[test]

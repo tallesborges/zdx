@@ -480,6 +480,13 @@ pub(crate) async fn handle_callback(
     } else if rest == "resume" {
         let root = context.root_for_chat(chat_id).root;
         let all = zdx_engine::core::thread_persistence::list_threads().unwrap_or_default();
+        // Managed workers must not be offered for resume: an in-process turn
+        // on a worker thread would race its child process writing the same
+        // JSONL. Steering happens in the worker's mirror topic instead.
+        let all: Vec<_> = all
+            .into_iter()
+            .filter(|t| context.worker_manager().snapshot(&t.id).is_none())
+            .collect();
         let threads = resumable_threads(all, &root, 8);
         if threads.is_empty() {
             let _ = client

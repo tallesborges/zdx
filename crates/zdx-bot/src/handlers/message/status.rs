@@ -277,6 +277,11 @@ async fn current_status_message_with_heading(
     let events = thread_persistence::load_thread_events(thread_id)?;
     let (cumulative_usage, latest_usage) =
         thread_persistence::extract_usage_from_thread_events(&events);
+    // Orchestrator home bases get their own card: the folder/branch are fixed
+    // noise there, while live worker state is the interesting part.
+    let is_orchestrator = thread_persistence::read_persistent_profile(thread_id)?.as_deref()
+        == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME);
+    let workers = is_orchestrator.then(|| context.worker_manager().list_for_owner(thread_id));
     Ok(format_status_message_with_heading(
         &StatusSnapshot {
             model_id: effective_model,
@@ -291,12 +296,22 @@ async fn current_status_message_with_heading(
             latest_usage,
         },
         heading,
+        workers.as_deref(),
     ))
 }
 
-fn format_status_message_with_heading(snapshot: &StatusSnapshot<'_>, heading: &str) -> String {
+fn format_status_message_with_heading(
+    snapshot: &StatusSnapshot<'_>,
+    heading: &str,
+    orchestrator_workers: Option<&[zdx_engine::core::workers::WorkerSnapshot]>,
+) -> String {
     let model_meta = ModelOption::find_by_id(snapshot.model_id);
     let provider = provider_for_model(snapshot.model_id);
+    let heading = if orchestrator_workers.is_some() {
+        "🎛 <b>Orchestrator</b>"
+    } else {
+        heading
+    };
     let mut lines = vec![heading.to_string()];
 
     lines.push(format!(
@@ -325,14 +340,16 @@ fn format_status_message_with_heading(snapshot: &StatusSnapshot<'_>, heading: &s
         "Profile: <code>{}</code>",
         escape_html(snapshot.profile_name.unwrap_or("fallback"))
     ));
-    lines.push(format!(
-        "Root: <code>{}</code>",
-        escape_html(&snapshot.root_path.display().to_string())
-    ));
-    lines.push(format!(
-        "Branch: <code>{}</code>",
-        escape_html(snapshot.branch.unwrap_or("n/a"))
-    ));
+    if orchestrator_workers.is_none() {
+        lines.push(format!(
+            "Root: <code>{}</code>",
+            escape_html(&snapshot.root_path.display().to_string())
+        ));
+        lines.push(format!(
+            "Branch: <code>{}</code>",
+            escape_html(snapshot.branch.unwrap_or("n/a"))
+        ));
+    }
 
     lines.push(format_context_usage_line(model_meta, snapshot.latest_usage));
     lines.push(format!(
@@ -348,7 +365,54 @@ fn format_status_message_with_heading(snapshot: &StatusSnapshot<'_>, heading: &s
         snapshot.cumulative_usage,
     ));
 
+    if let Some(workers) = orchestrator_workers {
+        lines.extend(format_worker_lines(workers));
+    }
+
     lines.join("\n")
+}
+
+/// Formats the live worker section of the orchestrator card.
+fn format_worker_lines(workers: &[zdx_engine::core::workers::WorkerSnapshot]) -> Vec<String> {
+    use zdx_engine::core::workers::WorkerStatus;
+
+    if workers.is_empty() {
+        return vec!["Workers: <i>none yet</i>".to_string()];
+    }
+
+    let count = |status: WorkerStatus| workers.iter().filter(|w| w.status == status).count();
+    let running = count(WorkerStatus::Running);
+    let queued = workers
+        .iter()
+        .filter(|w| w.status == WorkerStatus::Queued)
+        .count();
+    let done = workers.len() - running - queued;
+
+    let mut lines = vec![format!(
+        "Workers: <code>{running} running · {queued} queued · {done} settled</code>"
+    )];
+    for worker in workers.iter().take(5) {
+        let glyph = match worker.status {
+            WorkerStatus::Running => "⚙️",
+            WorkerStatus::Queued => "⏳",
+            WorkerStatus::Completed => "✅",
+            WorkerStatus::Failed => "❌",
+            WorkerStatus::Cancelled => "🚫",
+        };
+        let title = thread_persistence::read_thread_title(&worker.thread_id)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| worker.thread_id.chars().take(8).collect());
+        lines.push(format!(
+            "• {glyph} {} — {}",
+            escape_html(&title),
+            worker.status.as_str()
+        ));
+    }
+    if workers.len() > 5 {
+        lines.push(format!("• … and {} more", workers.len() - 5));
+    }
+    lines
 }
 
 async fn git_branch_name(root: &Path) -> Option<String> {
@@ -478,7 +542,49 @@ fn trim_price(value: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::turn_status_markup_for_url;
+    use super::{format_worker_lines, turn_status_markup_for_url};
+
+    #[test]
+    fn worker_lines_summarize_counts_and_cap_listing() {
+        use std::path::PathBuf;
+
+        use zdx_engine::core::workers::{WorkerSnapshot, WorkerStatus};
+
+        let snapshot = |id: &str, status: WorkerStatus| WorkerSnapshot {
+            thread_id: format!("nonexistent-worker-{id}"),
+            owner_thread_id: "owner".to_string(),
+            root: PathBuf::from("/tmp"),
+            status,
+            queue_depth: 0,
+            latest_final_text: None,
+            last_error: None,
+        };
+
+        assert_eq!(format_worker_lines(&[]), vec!["Workers: <i>none yet</i>"]);
+
+        let workers: Vec<_> = [
+            WorkerStatus::Running,
+            WorkerStatus::Queued,
+            WorkerStatus::Completed,
+            WorkerStatus::Failed,
+            WorkerStatus::Cancelled,
+            WorkerStatus::Completed,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, status)| snapshot(&i.to_string(), status))
+        .collect();
+
+        let lines = format_worker_lines(&workers);
+        assert_eq!(
+            lines[0],
+            "Workers: <code>1 running · 1 queued · 4 settled</code>"
+        );
+        // 5 listed + overflow line.
+        assert_eq!(lines.len(), 7);
+        assert!(lines[6].contains("and 1 more"));
+        assert!(lines[1].starts_with("• ⚙️"));
+    }
 
     #[test]
     fn configured_status_cancels_and_opens_the_effective_thread() {

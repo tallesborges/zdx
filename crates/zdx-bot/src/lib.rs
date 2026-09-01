@@ -26,6 +26,7 @@ mod followups;
 mod goal;
 mod handlers;
 mod ingest;
+mod orchestrator;
 mod retry;
 pub(crate) mod server;
 mod staging;
@@ -105,26 +106,35 @@ pub async fn run_named_with_config_and_root(
     Box::pin(run_bot(config, settings, root)).await
 }
 
-async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> Result<()> {
-    let miniapp_server = miniapp_server_settings(&config, &settings);
-    let miniapp_root = root.clone();
-    let client = TelegramClient::new(settings.bot_token);
-    let command_specs = crate::commands::telegram_command_specs();
-    match client.set_my_commands(&command_specs).await {
-        Ok(()) => tracing::info!(count = command_specs.len(), "Telegram command menu updated"),
-        Err(err) => tracing::error!(%err, "Failed to update Telegram command menu"),
+/// Builds the shared bot tool config: the default registry with the six
+/// orchestrator thread-control tools rebound to the live worker manager.
+fn orchestrator_tool_config(
+    worker_manager: &Arc<zdx_engine::core::workers::WorkerManager>,
+) -> ToolConfig {
+    let mut tool_registry = zdx_engine::tools::ToolRegistry::builtins();
+    for tool in zdx_engine::tools::orchestrator::OrchestratorTool::bound(worker_manager) {
+        tool_registry.register_boxed(Arc::new(tool));
     }
-    let tool_config = ToolConfig::default();
+    ToolConfig {
+        registry: tool_registry,
+        selection: zdx_engine::core::agent::ToolSelection::default(),
+    }
+}
 
-    let cancel_map = new_cancel_map();
-    let queue_cancel_map = new_queue_cancel_map();
-    let allowlist_user_len = settings.allowlist_user_ids.len();
-    let allowlist_chat_len = settings.allowlist_chat_ids.len();
+/// Builds the shared bot context with all per-process maps initialized.
+fn build_bot_context(
+    client: TelegramClient,
+    config: Config,
+    settings: TelegramSettings,
+    root: PathBuf,
+    tool_config: ToolConfig,
+    worker_manager: Arc<zdx_engine::core::workers::WorkerManager>,
+) -> Arc<BotContext> {
     let trimmed_instruction_layer = TELEGRAM_INSTRUCTION_LAYER.trim();
     let bot_instruction_layer =
         (!trimmed_instruction_layer.is_empty()).then(|| trimmed_instruction_layer.to_string());
-    let context = Arc::new(BotContext::new(
-        client.clone(),
+    Arc::new(BotContext::new(
+        client,
         config,
         BotContextDeps {
             allowlist_user_ids: settings.allowlist_user_ids,
@@ -132,8 +142,9 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
             root,
             bot_instruction_layer,
             tool_config,
-            cancel_map,
-            queue_cancel_map,
+            worker_manager,
+            cancel_map: new_cancel_map(),
+            queue_cancel_map: new_queue_cancel_map(),
             followup_map: followups::new_followup_map(),
             retry_map: retry::new_retry_map(),
             staging_map: staging::new_staging_map(),
@@ -141,10 +152,39 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
             command_picker_map: command_picker::new_command_picker_map(),
             launcher_map: crate::handlers::message::new_launcher_map(),
         },
-    ));
+    ))
+}
+
+async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> Result<()> {
+    let miniapp_server = miniapp_server_settings(&config, &settings);
+    let miniapp_root = root.clone();
+    let client = TelegramClient::new(settings.bot_token.clone());
+    let command_specs = crate::commands::telegram_command_specs();
+    match client.set_my_commands(&command_specs).await {
+        Ok(()) => tracing::info!(count = command_specs.len(), "Telegram command menu updated"),
+        Err(err) => tracing::error!(%err, "Failed to update Telegram command menu"),
+    }
+    // Worker completions flow back through the bridge task spawned below.
+    let (worker_manager, completion_rx) = zdx_engine::core::workers::WorkerManager::new();
+    let tool_config = orchestrator_tool_config(&worker_manager);
+    let context = build_bot_context(
+        client.clone(),
+        config,
+        settings,
+        root,
+        tool_config,
+        Arc::clone(&worker_manager),
+    );
     let chat_queues = new_chat_queues();
     let pending_media_groups: PendingMediaGroups =
         Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+    // Worker completions wake the owning orchestrator topic (best-effort).
+    crate::orchestrator::spawn_completion_bridge(
+        Arc::clone(&context),
+        Arc::clone(&chat_queues),
+        completion_rx,
+    );
 
     // Start embedded Mini App web server if enabled
     if let Some((bot_token, allowlist_user_ids, port)) = miniapp_server {
@@ -157,8 +197,8 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
     tokio::pin!(shutdown);
 
     tracing::info!(
-        allowlist_users = allowlist_user_len,
-        allowlist_chats = allowlist_chat_len,
+        allowlist_users = context.allowlist_user_ids().len(),
+        allowlist_chats = context.allowlist_chat_ids().len(),
         "zdx-bot started, polling for updates"
     );
 

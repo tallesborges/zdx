@@ -342,6 +342,7 @@ fn build_exec_options(
         thread_origin_kind: Some("subagent".to_string()),
         thread_parent_id: ctx.current_thread_id.clone(),
         thread_subagent_name: Some(subagent_name),
+        thread_id: None,
     }
 }
 

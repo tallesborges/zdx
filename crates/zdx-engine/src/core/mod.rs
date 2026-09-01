@@ -40,4 +40,5 @@ pub mod thread_timing;
 pub mod title_generation;
 pub mod tldr_generation;
 pub mod usage_stats;
+pub mod workers;
 pub mod worktree;

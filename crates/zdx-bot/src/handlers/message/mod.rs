@@ -76,6 +76,15 @@ pub(crate) async fn handle_message(
 
     let reply_ctx = build_reply_context(&incoming, synthetic_topic_routed_from_general);
 
+    // Worker mirror topics are checked before ANY local interpretation:
+    // slash commands, staging, and setup flows would otherwise act on (or
+    // rewrite) the aliased worker JSONL while the worker's child process owns
+    // it. Every mirror-topic message is queued to the worker verbatim.
+    if route_worker_topic_message(ctx, &incoming, &reply_ctx).await? {
+        cleanup_provisional_status(ctx, Some(incoming.chat_id), provisional_status).await;
+        return Ok(());
+    }
+
     if handle_pre_agent_commands(ctx, &incoming, &reply_ctx).await? {
         cleanup_provisional_status(ctx, Some(incoming.chat_id), provisional_status).await;
         return Ok(());
@@ -117,18 +126,7 @@ pub(crate) async fn handle_message(
     // now (cancelled, or already used by an earlier input).
     if routed_as_btw_input {
         cleanup_provisional_status(ctx, Some(incoming.chat_id), provisional_status).await;
-        if let Err(err) = ctx
-            .client()
-            .send_message(
-                incoming.chat_id,
-                "💬 No side question is pending anymore — send /btw again to ask one.",
-                Some(incoming.message_id),
-                reply_ctx.topic_id,
-            )
-            .await
-        {
-            tracing::warn!(%err, "Failed to notify stale btw input");
-        }
+        notify_stale_btw_input(ctx, &incoming, &reply_ctx).await;
         return Ok(());
     }
 
@@ -229,6 +227,78 @@ async fn parse_message_with_status(
     }
 }
 
+/// Tells the user their `/btw` input arrived after the session ended.
+async fn notify_stale_btw_input(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    reply_ctx: &ReplyContext,
+) {
+    if let Err(err) = context
+        .client()
+        .send_message(
+            incoming.chat_id,
+            "💬 No side question is pending anymore — send /btw again to ask one.",
+            Some(incoming.message_id),
+            reply_ctx.topic_id,
+        )
+        .await
+    {
+        tracing::warn!(%err, "Failed to notify stale btw input");
+    }
+}
+
+/// Routes a mirror-topic message into its worker's FIFO, returning `true` when
+/// the message was consumed.
+///
+/// The aliased thread's JSONL is written by the worker's child process, so an
+/// in-process turn in a mirror topic would mean two writers on one file. The
+/// queued prompt uses the same text a normal turn would record (voice
+/// transcripts and attachment notes included), so steering by voice works.
+async fn route_worker_topic_message(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    reply_ctx: &ReplyContext,
+) -> Result<bool> {
+    let topic_thread_id = thread_id_for_chat(incoming.chat_id, reply_ctx.topic_id);
+    if !thread_persistence::read_thread_worker_topic(&topic_thread_id)? {
+        return Ok(false);
+    }
+    let worker_thread_id = resolve_effective_thread_id(&topic_thread_id);
+
+    let prompt = crate::agent::build_user_text(incoming);
+    let reply = match context
+        .worker_manager()
+        .enqueue_from_topic(&worker_thread_id, &prompt)
+    {
+        Ok(snapshot) => {
+            if snapshot.status == zdx_engine::core::workers::WorkerStatus::Running
+                || snapshot.queue_depth > 1
+            {
+                format!(
+                    "📨 Queued to the worker ({} waiting).",
+                    snapshot.queue_depth
+                )
+            } else {
+                "📨 Queued to the worker.".to_string()
+            }
+        }
+        Err(err) => format!("❌ Couldn't queue to the worker: {err:#}"),
+    };
+    if let Err(err) = context
+        .client()
+        .send_message(
+            incoming.chat_id,
+            &reply,
+            Some(incoming.message_id),
+            reply_ctx.topic_id,
+        )
+        .await
+    {
+        tracing::warn!(%err, "Failed to acknowledge worker topic message");
+    }
+    Ok(true)
+}
+
 fn build_reply_context(
     incoming: &crate::types::IncomingMessage,
     synthetic_topic_routed_from_general: bool,
@@ -320,6 +390,8 @@ struct SpawnRequest<'a> {
     thread: &'a zdx_engine::core::thread_persistence::Thread,
     messages: Vec<zdx_engine::providers::ChatMessage>,
     config: &'a zdx_engine::config::Config,
+    /// Persistent top-level profile (e.g. `orchestrator`) for this thread.
+    persistent_profile: Option<&'a str>,
 }
 
 struct StatusSnapshot<'a> {

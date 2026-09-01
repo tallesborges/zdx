@@ -1,9 +1,10 @@
+use std::fmt::Write as _;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use tokio_util::sync::CancellationToken;
 use zdx_engine::config::{Config, TextVerbosity};
-use zdx_engine::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig};
+use zdx_engine::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig, ToolSelection};
 use zdx_engine::core::context::{PromptContextInclusion, build_prompt_with_context_and_layers};
 use zdx_engine::core::events::AgentEvent;
 use zdx_engine::core::thread_persistence::{self, Thread, ThreadEvent};
@@ -110,6 +111,8 @@ impl AgentTurnHandle {
 struct PreparedBotTurn {
     config: Config,
     system_prompt: Option<String>,
+    /// Explicit tool allowlist for persistent-profile turns (orchestrator).
+    tools_override: Option<Vec<String>>,
 }
 
 fn bot_prompt_context() -> PromptContextInclusion {
@@ -128,7 +131,12 @@ fn prepare_bot_turn(
     config: &Config,
     root: &Path,
     bot_instruction_layer: Option<&str>,
+    persistent_profile: Option<&str>,
 ) -> Result<PreparedBotTurn> {
+    if let Some(profile) = persistent_profile {
+        return prepare_persistent_profile_turn(config, root, bot_instruction_layer, profile);
+    }
+
     let bot_config = config.clone();
     let instruction_layers = collect_bot_instruction_layers(bot_instruction_layer);
     let effective = build_prompt_with_context_and_layers(
@@ -144,7 +152,166 @@ fn prepare_bot_turn(
     Ok(PreparedBotTurn {
         config: bot_config,
         system_prompt: effective.prompt,
+        tools_override: None,
     })
+}
+
+/// Builds the system prompt and tool allowlist for a persistent top-level
+/// profile thread. Only the reserved built-in `orchestrator` profile exists;
+/// unknown profile names fail the turn instead of silently loading the default
+/// coding toolset.
+fn prepare_persistent_profile_turn(
+    config: &Config,
+    root: &Path,
+    bot_instruction_layer: Option<&str>,
+    profile: &str,
+) -> Result<PreparedBotTurn> {
+    ensure!(
+        profile == zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME,
+        "Unknown persistent profile '{profile}' on this thread"
+    );
+
+    let definition = zdx_engine::subagents::load_builtin_orchestrator()
+        .context("load built-in orchestrator profile")?;
+    let mut prompt = zdx_engine::subagents::render_prompt_with_discovered_skills(
+        config,
+        root,
+        &definition,
+        &config.model,
+        bot_prompt_context(),
+    )
+    .context("render orchestrator prompt")?;
+    if let Some(activity) = recent_activity_block() {
+        prompt = format!("{prompt}\n\n{activity}");
+    }
+    let overlay_path = zdx_engine::config::paths::zdx_home().join("orchestrator.md");
+    if let Some(overlay) = load_orchestrator_overlay(&overlay_path) {
+        prompt = format!("{prompt}\n\n# Personal Orchestrator Rules\n\n{overlay}");
+    }
+    if let Some(layer) = bot_instruction_layer {
+        prompt = format!("{prompt}\n\n{layer}");
+    }
+
+    let tools = definition.tools.clone().unwrap_or_default();
+    ensure!(
+        !tools.is_empty(),
+        "Orchestrator profile declares no tools; refusing to fall back to the default toolset"
+    );
+
+    Ok(PreparedBotTurn {
+        config: config.clone(),
+        system_prompt: Some(prompt),
+        tools_override: Some(tools),
+    })
+}
+
+const ACTIVITY_MAX_PROJECTS: usize = 8;
+const ACTIVITY_MAX_THREADS: usize = 12;
+
+/// Loads the user's personal orchestrator overlay (`$ZDX_HOME/orchestrator.md`):
+/// free-form manager rules appended only to orchestrator turns, editable
+/// without rebuilding. A missing file is a no-op; other read failures are
+/// logged and skipped so a broken overlay never blocks the home base.
+fn load_orchestrator_overlay(path: &Path) -> Option<String> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            let trimmed = content.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            tracing::warn!(path = %path.display(), %err, "Failed to read orchestrator overlay");
+            None
+        }
+    }
+}
+
+/// Live orchestration context injected into the orchestrator prompt: the most
+/// recently active projects and top-level threads (`list_threads` already
+/// excludes subagent/helper child runs). Best-effort — listing failures or an
+/// empty history render nothing.
+fn recent_activity_block() -> Option<String> {
+    let threads = thread_persistence::list_threads().ok()?;
+    if threads.is_empty() {
+        return None;
+    }
+    let now = std::time::SystemTime::now();
+    let home = std::env::var("HOME").unwrap_or_default();
+
+    // Threads arrive newest-first; first sighting of a root is its latest activity.
+    let mut projects: Vec<(String, usize, Option<std::time::SystemTime>)> = Vec::new();
+    for thread in &threads {
+        let Some(root) = thread.root_path.as_deref() else {
+            continue;
+        };
+        match projects.iter_mut().find(|(path, ..)| path == root) {
+            Some((_, count, _)) => *count += 1,
+            None => projects.push((root.to_string(), 1, thread.modified)),
+        }
+    }
+
+    let mut block = String::from(
+        "# Recent Activity\n\nSnapshot from saved threads at prompt-build time (child runs excluded). Use `thread_search`/`read_thread` for anything older or deeper.\n",
+    );
+
+    if !projects.is_empty() {
+        block.push_str("\n## Active projects (latest first)\n");
+        for (root, count, modified) in projects.iter().take(ACTIVITY_MAX_PROJECTS) {
+            let root = shorten_home(root, &home);
+            let plural = if *count == 1 { "" } else { "s" };
+            let _ = writeln!(
+                block,
+                "- `{root}` — {count} thread{plural}, last active {}",
+                format_age(now, *modified),
+            );
+        }
+    }
+
+    block.push_str("\n## Recent threads (top-level only)\n");
+    for thread in threads.iter().take(ACTIVITY_MAX_THREADS) {
+        let title = thread.display_title();
+        let project = thread
+            .root_path
+            .as_deref()
+            .map_or_else(|| "-".to_string(), |root| shorten_home(root, &home));
+        let _ = writeln!(
+            block,
+            "- `{}` — \"{}\" ({}, {})",
+            thread.id,
+            title,
+            project,
+            format_age(now, thread.modified),
+        );
+    }
+
+    Some(block)
+}
+
+fn shorten_home(path: &str, home: &str) -> String {
+    if !home.is_empty() && path.starts_with(home) {
+        format!("~{}", &path[home.len()..])
+    } else {
+        path.to_string()
+    }
+}
+
+fn format_age(now: std::time::SystemTime, modified: Option<std::time::SystemTime>) -> String {
+    let Some(modified) = modified else {
+        return "unknown".to_string();
+    };
+    let Ok(elapsed) = now.duration_since(modified) else {
+        return "just now".to_string();
+    };
+    let secs = elapsed.as_secs();
+    if secs < 60 {
+        "just now".to_string()
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86_400)
+    }
 }
 
 /// Spawns an agent turn and returns a handle with streaming events.
@@ -155,6 +322,7 @@ fn prepare_bot_turn(
 ///
 /// # Errors
 /// Returns an error if the operation fails.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_agent_turn(
     messages: Vec<ChatMessage>,
     config: &Config,
@@ -163,6 +331,7 @@ pub(crate) fn spawn_agent_turn(
     thread_id: &str,
     thread: &Thread,
     tool_config: &ToolConfig,
+    persistent_profile: Option<&str>,
 ) -> Result<AgentTurnHandle> {
     // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
     zdx_engine::core::context::set_runtime_env(config, Some(thread_id));
@@ -170,11 +339,22 @@ pub(crate) fn spawn_agent_turn(
     let PreparedBotTurn {
         config: bot_config,
         system_prompt,
-    } = prepare_bot_turn(config, root, bot_instruction_layer)?;
+        tools_override,
+    } = prepare_bot_turn(config, root, bot_instruction_layer, persistent_profile)?;
+
+    // Persistent-profile turns pin the exact tool selection from the profile
+    // definition; the shared registry (with bound orchestrator tools) is kept.
+    let tool_config = match tools_override {
+        Some(tools) => ToolConfig {
+            registry: tool_config.registry.clone(),
+            selection: ToolSelection::Explicit(tools),
+        },
+        None => tool_config.clone(),
+    };
 
     let agent_opts = AgentOptions {
         root: root.to_path_buf(),
-        tool_config: tool_config.clone(),
+        tool_config,
         surface: Some("telegram".to_string()),
         text_verbosity: Some(TextVerbosity::Low),
         service_tier: None,
@@ -244,7 +424,7 @@ pub(crate) fn event_to_status(event: &AgentEvent) -> Option<String> {
     }
 }
 
-fn build_user_text(incoming: &IncomingMessage) -> String {
+pub(crate) fn build_user_text(incoming: &IncomingMessage) -> String {
     let mut parts = Vec::new();
     if let Some(text) = incoming.text.as_ref()
         && !text.trim().is_empty()
@@ -298,7 +478,8 @@ mod tests {
     use zdx_engine::core::events::{AgentEvent, ToolOutput};
 
     use super::{
-        STATUS_THINKING, STATUS_WAITING, STATUS_WRITING, event_to_status, prepare_bot_turn,
+        STATUS_THINKING, STATUS_WAITING, STATUS_WRITING, event_to_status,
+        load_orchestrator_overlay, prepare_bot_turn,
     };
 
     fn make_temp_dir() -> std::path::PathBuf {
@@ -381,10 +562,75 @@ mod tests {
             agents_project: false,
         };
 
-        let prepared = prepare_bot_turn(&config, &dir, None).unwrap();
+        let prepared = prepare_bot_turn(&config, &dir, None, None).unwrap();
         let prompt = prepared.system_prompt.unwrap_or_default();
 
         assert!(prompt.contains("Bot project note"));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn orchestrator_turn_renders_project_context_and_pins_tools() {
+        let dir = make_temp_dir();
+        std::fs::write(dir.join("AGENTS.md"), "Orchestrator project note").unwrap();
+
+        let mut config = Config::default();
+        config.subagents.enabled = false;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let prepared =
+            prepare_bot_turn(&config, &dir, Some("TELEGRAM LAYER"), Some("orchestrator")).unwrap();
+        let prompt = prepared.system_prompt.unwrap_or_default();
+
+        // SPEC §18: profile prompt composes project context + Telegram layer.
+        assert!(prompt.contains("ZDX Orchestrator"));
+        assert!(prompt.contains("Orchestrator project note"));
+        assert!(prompt.contains("TELEGRAM LAYER"));
+
+        // Exact profile tool surface, no default-toolset fallback.
+        let tools = prepared.tools_override.expect("orchestrator pins tools");
+        assert!(tools.contains(&"create_thread".to_string()));
+        assert!(!tools.contains(&"write".to_string()));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unknown_persistent_profile_fails_the_turn() {
+        let dir = make_temp_dir();
+        let err = prepare_bot_turn(&Config::default(), &dir, None, Some("mystery"))
+            .err()
+            .expect("unknown profile must fail");
+        assert!(err.to_string().contains("Unknown persistent profile"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn orchestrator_overlay_loads_only_when_present_and_non_empty() {
+        let dir = make_temp_dir();
+        let path = dir.join("orchestrator.md");
+
+        // Missing file is a silent no-op.
+        assert_eq!(load_orchestrator_overlay(&path), None);
+
+        // Whitespace-only content is treated as absent.
+        std::fs::write(&path, "  \n\t\n").unwrap();
+        assert_eq!(load_orchestrator_overlay(&path), None);
+
+        std::fs::write(&path, "\n- Reply in English\n- dub first\n").unwrap();
+        assert_eq!(
+            load_orchestrator_overlay(&path).as_deref(),
+            Some("- Reply in English\n- dub first")
+        );
 
         std::fs::remove_dir_all(dir).unwrap();
     }

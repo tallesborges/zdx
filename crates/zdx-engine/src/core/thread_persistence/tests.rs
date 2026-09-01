@@ -76,6 +76,60 @@ fn unique_thread_id(prefix: &str) -> String {
 }
 
 #[test]
+fn test_persistent_profile_round_trip_and_visibility() {
+    let _temp = setup_temp_zdx_home();
+
+    let thread_id = unique_thread_id("orchestrator-home");
+    let mut thread = Thread::with_id(thread_id.clone()).unwrap();
+    thread.set_persistent_profile("orchestrator").unwrap();
+
+    // Round trip: profile is readable before any turn is persisted.
+    assert_eq!(
+        read_persistent_profile(&thread_id).unwrap().as_deref(),
+        Some("orchestrator")
+    );
+
+    // Encoding: subagent_name set, origin_kind stays None → top-level visible.
+    let summary = read_thread_summary(&thread_id).unwrap().unwrap();
+    assert_eq!(summary.subagent_name.as_deref(), Some("orchestrator"));
+    assert!(summary.origin_kind.is_none());
+    assert!(!summary.is_child_run());
+    assert!(
+        list_threads_scan()
+            .unwrap()
+            .iter()
+            .any(|t| t.id == thread_id),
+        "persistent-profile thread must stay visible in default listings"
+    );
+
+    // Appending events preserves the profile.
+    thread.append(&ThreadEvent::user_message("hello")).unwrap();
+    assert_eq!(
+        read_persistent_profile(&thread_id).unwrap().as_deref(),
+        Some("orchestrator")
+    );
+}
+
+#[test]
+fn test_persistent_profile_is_none_for_child_runs() {
+    let _temp = setup_temp_zdx_home();
+
+    let thread_id = unique_thread_id("child-run");
+    let mut thread = Thread::with_id(thread_id.clone()).unwrap();
+    thread.set_origin(
+        Some("subagent".to_string()),
+        Some("parent".to_string()),
+        Some("explorer".to_string()),
+    );
+    thread.append(&ThreadEvent::user_message("go")).unwrap();
+
+    // Child lineage is unchanged and never reads as a persistent profile.
+    assert_eq!(read_persistent_profile(&thread_id).unwrap(), None);
+    let summary = read_thread_summary(&thread_id).unwrap().unwrap();
+    assert!(summary.is_child_run());
+}
+
+#[test]
 fn test_thread_creates_file_with_meta() {
     let _temp = setup_temp_zdx_home();
 

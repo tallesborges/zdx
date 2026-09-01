@@ -102,6 +102,19 @@ pub(crate) async fn handle_callback(
         return;
     };
 
+    // Defense in depth: never re-run a turn inside a worker mirror topic — the
+    // worker's child process owns that thread's JSONL (normally unreachable,
+    // since mirror topics don't post retry buttons).
+    let topic_thread_id = crate::handlers::message::thread_id_for_chat(chat_id, request.topic_id);
+    if zdx_engine::core::thread_persistence::read_thread_worker_topic(&topic_thread_id)
+        .unwrap_or(false)
+    {
+        let _ = client
+            .answer_callback_query(&callback.id, Some("Not available in a worker topic"))
+            .await;
+        return;
+    }
+
     let _ = client
         .edit_message_text(chat_id, message.id, "🔄 Retrying…", None)
         .await;

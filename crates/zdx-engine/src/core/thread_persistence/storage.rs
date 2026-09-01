@@ -37,6 +37,8 @@ pub struct Thread {
     origin_kind: Option<String>,
     parent_thread_id: Option<String>,
     subagent_name: Option<String>,
+    /// Marks a Telegram mirror topic for a managed worker thread.
+    worker_topic: bool,
 }
 
 impl Thread {
@@ -116,6 +118,7 @@ impl Thread {
             origin_kind: None,
             parent_thread_id: None,
             subagent_name: None,
+            worker_topic: false,
         })
     }
 
@@ -144,6 +147,7 @@ impl Thread {
             origin_kind: None,
             parent_thread_id: None,
             subagent_name: None,
+            worker_topic: false,
         })
     }
 
@@ -173,16 +177,33 @@ impl Thread {
         self.handoff_from = handoff_from;
     }
 
+    /// Marks this thread as a Telegram mirror topic for a managed worker.
+    ///
+    /// Only effective before the meta event is written (i.e. on a new thread),
+    /// like [`Thread::set_origin`]; mirror topics are always created fresh.
+    pub fn set_worker_topic(&mut self) {
+        self.worker_topic = true;
+    }
+
     /// Ensures the meta event is written for new threads.
     fn ensure_meta(&mut self) -> Result<()> {
         if self.is_new {
-            self.append_raw(&ThreadEvent::meta_with_lineage(
+            let mut meta = ThreadEvent::meta_with_lineage(
                 self.root_path.clone(),
                 self.handoff_from.clone(),
                 self.origin_kind.clone(),
                 self.parent_thread_id.clone(),
                 self.subagent_name.clone(),
-            ))?;
+            );
+            if self.worker_topic
+                && let ThreadEvent::Meta {
+                    ref mut worker_topic,
+                    ..
+                } = meta
+            {
+                *worker_topic = true;
+            }
+            self.append_raw(&meta)?;
             self.is_new = false;
         }
         Ok(())
@@ -292,6 +313,24 @@ impl Thread {
         self.ensure_meta()?;
         rewrite_meta_with_alias(&self.path, alias_to)?;
         Ok(())
+    }
+
+    /// Marks this thread as a persistent top-level profile (e.g. the reserved
+    /// `orchestrator` home base): `subagent_name` is set while `origin_kind`
+    /// stays `None`, so the thread remains visible in default listings.
+    ///
+    /// For a new thread the profile is written into the fresh meta line in one
+    /// append; an existing thread gets an atomic meta rewrite.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn set_persistent_profile(&mut self, name: &str) -> Result<()> {
+        self.subagent_name = Some(name.to_string());
+        if self.is_new {
+            self.ensure_meta()
+        } else {
+            rewrite_meta_with_persistent_profile(&self.path, Some(name.to_string()))
+        }
     }
 }
 
@@ -569,6 +608,52 @@ fn rewrite_meta_with_alias(path: &PathBuf, alias_to: Option<String>) -> Result<(
     Ok(())
 }
 
+/// Rewrites the meta event with an updated persistent-profile `subagent_name`,
+/// preserving the rest of the file. `origin_kind` is intentionally left alone:
+/// a persistent profile is a top-level thread (`origin_kind = None`).
+fn rewrite_meta_with_persistent_profile(
+    path: &PathBuf,
+    subagent_name: Option<String>,
+) -> Result<()> {
+    let file = fs::File::open(path).context("Failed to open thread file")?;
+    let reader = BufReader::new(file);
+
+    let temp_path = path.with_extension("jsonl.tmp");
+    let mut temp = fs::File::create(&temp_path).context("Failed to create temp thread file")?;
+
+    let mut lines = reader.lines();
+    let first_line = lines
+        .next()
+        .transpose()
+        .context("Failed to read meta line")?
+        .ok_or_else(|| anyhow!("Thread file is empty"))?;
+
+    let mut meta_event: ThreadEvent =
+        serde_json::from_str(&first_line).context("Failed to parse meta event")?;
+    match meta_event {
+        ThreadEvent::Meta {
+            subagent_name: ref mut meta_subagent,
+            ..
+        } => {
+            *meta_subagent = subagent_name;
+        }
+        _ => bail!("First thread event is not a meta event"),
+    }
+
+    let new_meta =
+        serde_json::to_string(&meta_event).context("Failed to serialize updated meta event")?;
+    writeln!(temp, "{new_meta}").context("Failed to write updated meta")?;
+
+    for line in lines {
+        let line = line.context("Failed to read thread line")?;
+        writeln!(temp, "{line}").context("Failed to write thread line")?;
+    }
+
+    temp.sync_all().context("Failed to sync temp thread file")?;
+    fs::rename(&temp_path, path).context("Failed to replace thread file")?;
+    Ok(())
+}
+
 /// Reads only the meta line to extract title (backward compatible).
 /// Parsed meta fields from the first line of a thread file.
 pub(crate) struct ThreadMeta {
@@ -582,6 +667,7 @@ pub(crate) struct ThreadMeta {
     thinking_override: Option<crate::config::ThinkingLevel>,
     pending_topic_title: bool,
     alias_to: Option<String>,
+    worker_topic: bool,
 }
 
 /// Reads and parses the meta line from a thread file (single open + parse).
@@ -622,6 +708,7 @@ pub(crate) fn read_meta(path: &PathBuf) -> Result<Option<ThreadMeta>> {
         thinking_override,
         pending_topic_title,
         alias_to,
+        worker_topic,
         ..
     } = parsed
     {
@@ -636,6 +723,7 @@ pub(crate) fn read_meta(path: &PathBuf) -> Result<Option<ThreadMeta>> {
             thinking_override,
             pending_topic_title,
             alias_to,
+            worker_topic,
         }))
     } else {
         Ok(None)
@@ -940,6 +1028,30 @@ pub fn read_thread_pending_topic_title(id: &str) -> Result<bool> {
 pub fn read_thread_alias(id: &str) -> Result<Option<String>> {
     let path = threads_dir().join(format!("{id}.jsonl"));
     read_meta_alias(&path)
+}
+
+/// Reads whether a thread is a Telegram mirror topic for a managed worker.
+///
+/// # Errors
+/// Returns an error if the operation fails.
+pub fn read_thread_worker_topic(id: &str) -> Result<bool> {
+    let path = threads_dir().join(format!("{id}.jsonl"));
+    Ok(read_meta(&path)?.is_some_and(|m| m.worker_topic))
+}
+
+/// Reads a thread's persistent top-level profile by ID.
+///
+/// Returns `Some(subagent_name)` only for visible top-level threads
+/// (`origin_kind = None`) that carry a `subagent_name` — i.e. the reserved
+/// persistent-profile encoding. Child runs (`origin_kind` set) return `None`.
+///
+/// # Errors
+/// Returns an error if the operation fails.
+pub fn read_persistent_profile(id: &str) -> Result<Option<String>> {
+    let path = threads_dir().join(format!("{id}.jsonl"));
+    Ok(read_meta(&path)?
+        .filter(|meta| meta.origin_kind.is_none())
+        .and_then(|meta| meta.subagent_name))
 }
 
 /// Returns whether a thread file exists for the given ID.

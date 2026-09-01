@@ -6,23 +6,17 @@
 //! explicit re-arm step a durable "active" flag would have needed.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use serde_json::json;
 use uuid::Uuid;
 use zdx_engine::core::events::NoticeKind;
 use zdx_engine::core::goal::{Goal, GoalOutcome, verify_goal};
 use zdx_engine::core::thread_persistence::{Thread, ThreadEvent};
 
 use crate::bot::context::BotContext;
-use crate::bot::queue::{ChatQueueMap, dispatch_message};
+use crate::bot::queue::ChatQueueMap;
+use crate::bot::synthetic::dispatch_synthetic_prompt;
 use crate::handlers::message::TurnOutcome;
-
-/// Message ids for synthetic continuations. Counted down from `i64::MAX` so
-/// they cannot collide with real Telegram ids, which the status and cancel maps
-/// are keyed by.
-static SYNTHETIC_MESSAGE_ID: AtomicI64 = AtomicI64::new(i64::MAX);
 
 /// Where a finished turn happened, so the loop can answer in the same place.
 pub(crate) struct TurnSite {
@@ -240,27 +234,10 @@ async fn dispatch_continuation(
     site: &TurnSite,
     prompt: String,
 ) {
-    let message_id = SYNTHETIC_MESSAGE_ID.fetch_sub(1, Ordering::Relaxed);
-    let mut value = json!({
-        "message_id": message_id,
-        "chat": {
-            "id": site.chat,
-            "type": if site.topic.is_some() { "supergroup" } else { "private" },
-            "is_forum": site.topic.is_some(),
-        },
-        "from": { "id": site.user, "is_bot": false },
-        "text": prompt,
-    });
-    if let Some(topic) = site.topic {
-        value["message_thread_id"] = json!(topic);
-    }
-
-    match serde_json::from_value::<crate::telegram::Message>(value) {
-        Ok(message) => dispatch_message(queues, context, message).await,
-        Err(err) => {
-            tracing::error!(%err, "Failed to build goal continuation message");
-            clear_goal(context.goal_map(), &site.thread);
-        }
+    let dispatched =
+        dispatch_synthetic_prompt(context, queues, site.chat, site.topic, site.user, prompt).await;
+    if !dispatched {
+        clear_goal(context.goal_map(), &site.thread);
     }
 }
 

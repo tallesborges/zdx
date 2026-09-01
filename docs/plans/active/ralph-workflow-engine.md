@@ -7,7 +7,7 @@
 
 # Non-goals
 - A heavy workflow DSL or graph editor.
-- Orchestrator-as-agent (a dedicated agent that coordinates other agents).
+- Orchestrator-as-agent (a dedicated agent that coordinates other agents). *Superseded for the Telegram bot: the reserved `orchestrator` profile + worker threads shipped separately (SPEC §18). Explicit user-triggered workflows remain a separate concern and are still in scope here.*
 - tmux-based team management or parallel worker processes.
 - Automatic workflow activation (workflows are always explicitly triggered by the user).
 - Turning `deep-interview` into a workflow — it remains a conversational skill.

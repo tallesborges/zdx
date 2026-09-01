@@ -194,6 +194,11 @@ pub struct TelegramProfileConfig {
     pub chat_id: i64,
     /// Working directory for agent turns in this chat.
     pub cwd: String,
+    /// Opt-in: topics created from ordinary General messages in this chat
+    /// become persistent orchestrator home bases. Default: normal coding
+    /// topics.
+    #[serde(default)]
+    pub orchestrator: bool,
 }
 
 impl TelegramProfileConfig {
@@ -3473,6 +3478,7 @@ cwd = "~/work"
                     TelegramProfileConfig {
                         chat_id: -100_456,
                         cwd: "/tmp/work".to_string(),
+                        orchestrator: false,
                     },
                 )]),
             },
@@ -3495,6 +3501,7 @@ cwd = "~/work"
                         TelegramProfileConfig {
                             chat_id: -100_123,
                             cwd: "/tmp/one".to_string(),
+                            orchestrator: false,
                         },
                     ),
                     (
@@ -3502,6 +3509,7 @@ cwd = "~/work"
                         TelegramProfileConfig {
                             chat_id: -100_123,
                             cwd: "/tmp/two".to_string(),
+                            orchestrator: false,
                         },
                     ),
                 ]),
@@ -3533,6 +3541,7 @@ allowlist_user_ids = [42]
             &TelegramProfileConfig {
                 chat_id: -100_123,
                 cwd: "/tmp/zdx".to_string(),
+                orchestrator: false,
             },
         )
         .unwrap();
@@ -3578,6 +3587,7 @@ bravo = { chat_id = -100200, cwd = "/tmp/bravo" }
             &TelegramProfileConfig {
                 chat_id: -100_123,
                 cwd: "/tmp/zdx".to_string(),
+                orchestrator: false,
             },
         )
         .unwrap();

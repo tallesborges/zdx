@@ -535,3 +535,58 @@ When the Telegram bot is used in a forum-enabled supergroup:
 - The new reply keeps the same reply target the status message used; an invalid reply target falls back to sending without one.
 - A turn that produces no text, media, or follow-ups deletes the status message and posts nothing.
 - Cancelled and failed turns still resolve in place: the status message is edited to `Cancelled ✓` or to the error text (failures then post the retry buttons as a separate message).
+
+---
+
+## 18) Orchestrator profile and worker threads (`zdx-bot`)
+
+The reserved built-in `orchestrator` profile turns a Telegram topic into a persistent home base that coordinates work across projects by delegating to worker threads.
+
+### Persistent top-level profiles
+
+- A thread whose meta has `origin_kind = None` and `subagent_name` set is a **persistent top-level profile** thread. It stays visible in default listings (unlike child runs, which set `origin_kind`).
+- Existing child-run lineage semantics (`origin_kind` set) are unchanged.
+- Only the reserved built-in `orchestrator` profile exists. An unknown persistent profile name fails the turn instead of silently falling back to the default coding toolset.
+- The `orchestrator` name is reserved: user/project subagent files may not define or override it, and it is loaded directly from the embedded built-in definition.
+
+### Orchestrator topics
+
+- A topic created from an ordinary `General` message in a forum chat is initialized as an orchestrator topic before its first turn **only when the chat's Telegram profile opts in** with `telegram.profiles.<name>.orchestrator = true` (default `false`; unprofiled chats never opt in). Chats without the flag keep classic behavior (General → normal coding topic). `/new`, the launcher, `/handoff`, and `/btw` topics keep the default profile regardless.
+- With BotFather **Threaded Mode** enabled, each brand-new thread in the bot's private chat is likewise initialized as an orchestrator thread on its first sighting: the message must carry a client-created `message_thread_id`, not be a known slash command, and map to a thread file that does not exist yet. Plain unthreaded DMs and pre-existing DM threads keep their current profile.
+- Orchestrator turns use the built-in profile's rendered prompt — which composes a ZDX operating manual, the full discovered skills catalog, project context, memory, and a bounded recent-activity snapshot (most recently active projects and top-level threads) — plus the Telegram instruction layer, and exactly its declared tool list: `bash`, `read`, `thread_search`, `read_thread`, `todo_write`, `memory_search`, `web_search`, `fetch_webpage`, plus the six thread controls below. `edit`, `write`, `apply_patch`, `invoke_subagent`, and the background tools are excluded.
+- `bash` is governed only by a prompt policy (read-only inspection; delegate all mutations to workers). This is intentional YOLO guidance, not sandboxing.
+- The orchestrator inherits the chat's configured model and thinking level.
+- An optional personal overlay at `$ZDX_HOME/orchestrator.md` is appended to orchestrator prompts only (never to workers or other agents). A missing or empty file is a no-op; read failures are logged and skipped.
+- Orchestrator topics do not get async LLM title rewrites and do not post retry buttons on failed turns.
+- The orchestrator topic's pinned header (and `/status`) uses an orchestrator card: model/thinking, thread, profile, context/usage/pricing, plus a live worker summary (running/queued/settled counts and the first few workers by title and status). Root and branch lines are omitted as fixed noise for the home base.
+
+### Worker threads
+
+- A worker is an ordinary visible thread bound to one existing project root, created by the orchestrator. Worker turns run through a child `zdx --thread <id> exec` process in that root, so the worker resumes its own persisted JSONL history on every prompt and can also be resumed manually.
+- Prompts for one worker run strictly serially through an in-memory FIFO; different workers run concurrently with no global cap.
+- Cancellation stops the current worker turn by terminating the child's entire process group (TERM, short grace, then KILL), reaps it before any queued successor could start, and clears the queue. The thread survives and a later message resumes it.
+
+### Thread-control tools
+
+Available only where a live worker manager exists (the Telegram bot); elsewhere the tools fail with `orchestrator_unavailable`:
+
+- `create_thread(root, prompt, title?, model?, thinking_level?)` — validates the root exists, creates a visible worker thread, queues the first prompt, returns the thread id immediately.
+- `send_thread_message(thread_id, message)` — queues another prompt; re-attaches an unmanaged existing thread from its persisted root.
+- `get_thread_status(thread_id?)` — status (`queued`/`running`/`completed`/`failed`/`cancelled`), queue depth, and bounded latest final text; without an id, lists all workers owned by the calling orchestrator.
+- `wait_for_threads(thread_ids, timeout_seconds?)` — waits until all listed workers are idle or a bounded timeout (default 60s, max 600s) expires.
+- `update_thread(thread_id, title)` — title only; refused while that managed worker is mid-turn (the atomic rewrite must not race the worker's own appends).
+- `cancel_thread(thread_id)` — cancels the current turn and clears the queue; the thread is preserved.
+
+### Worker mirror topics
+
+- When an orchestrator creates a worker, the bot also opens a **mirror topic** for it, named after the worker. The host chat is the group whose Telegram profile `cwd` contains the worker's project root (deepest match), falling back to the orchestrator's own group — so project workers surface in their project's group even when orchestrated from a DM home. The topic's thread is a thin pointer: it aliases the worker thread (`alias_to`) and is marked `worker_topic` in its meta.
+- Each finished worker turn posts its final text (bounded) — or its failure/cancellation — into the mirror topic, in addition to the orchestrator callback. Orchestrator-sent prompts are posted there too (the first prompt with the header, follow-ups as `📤` messages), so the topic reads as a full prompt → result conversation; topic-originated prompts are not re-posted since the user's message is already visible.
+- Messages sent in a mirror topic never run an in-process turn (the worker's child process owns the aliased JSONL); **every** mirror-topic message — including slash commands and staged flows — is checked before any local interpretation, queued verbatim into the worker's FIFO, and acknowledged. Retry callbacks are also refused in mirror topics. After a restart, a mirror-topic message re-attaches the worker owning itself, so results keep landing in the topic even though orchestrator callbacks are gone.
+- Managed workers are excluded from the General launcher's `🔄 Continue` picker while managed, so a resume topic can never become a second writer on a running worker's thread.
+- Mirror-topic creation is best-effort: when no group profile covers the worker root and the home is a DM, it is skipped (the worker still runs), and the worker→topic mapping is process-lifetime.
+
+### Completion callbacks and restart semantics
+
+- After every finished worker prompt, the bot dispatches one best-effort synthetic `[worker update]` message (worker id, status, bounded final text) into the owning orchestrator topic through that topic's normal queue, using the same synthetic-message mechanism as `/goal` continuations.
+- All manager state is in-memory by design: worker ownership, queues, routes, and pending callbacks are lost on bot restart. Orchestrator and worker JSONL transcripts survive; workers can be re-attached with `send_thread_message`. There is no database, scheduler, durable job store, or delivery guarantee.
+sage`. There is no database, scheduler, durable job store, or delivery guarantee.

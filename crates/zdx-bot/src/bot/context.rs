@@ -6,6 +6,7 @@ use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
 use zdx_engine::config::{Config, TelegramProfileConfig, ThinkingLevel};
 use zdx_engine::core::agent::ToolConfig;
+use zdx_engine::core::workers::WorkerManager;
 
 use crate::command_picker::CommandPickerMap;
 use crate::followups::FollowupMap;
@@ -45,6 +46,15 @@ pub(crate) fn new_queue_cancel_map() -> QueueCancelMap {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
+/// Where an orchestrator thread last ran, so worker completion callbacks can be
+/// dispatched into the same chat/topic. Process-lifetime only by design.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OrchestratorRoute {
+    pub chat: i64,
+    pub topic: Option<i64>,
+    pub user: i64,
+}
+
 pub(crate) struct BotContext {
     client: TelegramClient,
     config: RwLock<Config>,
@@ -65,6 +75,12 @@ pub(crate) struct BotContext {
     goal_map: GoalMap,
     command_picker_map: CommandPickerMap,
     launcher_map: LauncherMap,
+    /// Shared worker manager (also bound into the tool registry); used to
+    /// route mirror-topic messages into worker FIFOs.
+    worker_manager: Arc<WorkerManager>,
+    /// Owner-thread → Telegram route for orchestrator completion callbacks.
+    /// Populated on every orchestrator turn; lost on restart by design.
+    orchestrator_routes: RwLock<HashMap<String, OrchestratorRoute>>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +95,7 @@ pub(crate) struct BotContextDeps {
     pub root: PathBuf,
     pub bot_instruction_layer: Option<String>,
     pub tool_config: ToolConfig,
+    pub worker_manager: Arc<WorkerManager>,
     pub cancel_map: CancelMap,
     pub queue_cancel_map: QueueCancelMap,
     pub followup_map: FollowupMap,
@@ -97,6 +114,7 @@ impl BotContext {
             root,
             bot_instruction_layer,
             tool_config,
+            worker_manager,
             cancel_map,
             queue_cancel_map,
             followup_map,
@@ -117,6 +135,7 @@ impl BotContext {
             root,
             bot_instruction_layer,
             tool_config,
+            worker_manager,
             exit_signal: Notify::new(),
             cancel_map,
             queue_cancel_map,
@@ -126,7 +145,12 @@ impl BotContext {
             goal_map,
             command_picker_map,
             launcher_map,
+            orchestrator_routes: RwLock::new(HashMap::new()),
         }
+    }
+
+    pub(crate) fn worker_manager(&self) -> &Arc<WorkerManager> {
+        &self.worker_manager
     }
 
     pub(crate) fn client(&self) -> &TelegramClient {
@@ -266,6 +290,54 @@ impl BotContext {
     pub(crate) fn launcher_map(&self) -> &LauncherMap {
         &self.launcher_map
     }
+
+    /// Whether General-created topics in this chat become orchestrator home
+    /// bases (opt-in via `telegram.profiles.<name>.orchestrator`).
+    pub(crate) fn orchestrator_enabled_for_chat(&self, chat_id: i64) -> bool {
+        self.config
+            .read()
+            .expect("bot config lock poisoned")
+            .telegram_profile_for_chat(chat_id)
+            .is_some_and(|(_, profile)| profile.orchestrator)
+    }
+
+    /// Picks the group chat whose profile `cwd` contains `root` (deepest match)
+    /// for hosting a worker's mirror topic, so project workers surface in
+    /// their project's group even when orchestrated from elsewhere (e.g. a DM
+    /// home). Returns `None` when no group profile covers the root.
+    pub(crate) fn mirror_chat_for_root(&self, root: &std::path::Path) -> Option<i64> {
+        let config = self.config.read().expect("bot config lock poisoned");
+        config
+            .telegram
+            .profiles
+            .values()
+            .filter(|profile| profile.chat_id < 0)
+            .filter_map(|profile| {
+                let cwd = profile.cwd_path();
+                let cwd = cwd.canonicalize().unwrap_or(cwd);
+                root.starts_with(&cwd)
+                    .then(|| (cwd.components().count(), profile.chat_id))
+            })
+            .max_by_key(|(depth, _)| *depth)
+            .map(|(_, chat_id)| chat_id)
+    }
+
+    /// Records where an orchestrator thread last ran.
+    pub(crate) fn record_orchestrator_route(&self, thread_id: &str, route: OrchestratorRoute) {
+        self.orchestrator_routes
+            .write()
+            .expect("orchestrator route lock poisoned")
+            .insert(thread_id.to_string(), route);
+    }
+
+    /// Latest known Telegram route for an orchestrator thread, if any.
+    pub(crate) fn orchestrator_route(&self, thread_id: &str) -> Option<OrchestratorRoute> {
+        self.orchestrator_routes
+            .read()
+            .expect("orchestrator route lock poisoned")
+            .get(thread_id)
+            .copied()
+    }
 }
 
 fn profile_root_path(profile: &TelegramProfileConfig) -> PathBuf {
@@ -334,6 +406,7 @@ mod tests {
                     TelegramProfileConfig {
                         chat_id: -100_123,
                         cwd: profile_root.display().to_string(),
+                        orchestrator: false,
                     },
                 )]),
                 ..Default::default()
@@ -349,6 +422,100 @@ mod tests {
         let fallback = context.root_for_chat(-100_999);
         assert_eq!(fallback.profile_name, None);
         assert_eq!(fallback.root, temp_root.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn mirror_chat_prefers_deepest_matching_group_profile() {
+        let umbrella = unique_temp_dir("mirror-umbrella");
+        let project = umbrella.join("dub");
+        fs::create_dir_all(&project).unwrap();
+
+        let config = Config {
+            telegram: TelegramConfig {
+                profiles: BTreeMap::from([
+                    (
+                        "umbrella".to_string(),
+                        TelegramProfileConfig {
+                            chat_id: -100_500,
+                            cwd: umbrella.display().to_string(),
+                            orchestrator: false,
+                        },
+                    ),
+                    (
+                        "dub".to_string(),
+                        TelegramProfileConfig {
+                            chat_id: -100_600,
+                            cwd: project.display().to_string(),
+                            orchestrator: false,
+                        },
+                    ),
+                    (
+                        "dm-like".to_string(),
+                        TelegramProfileConfig {
+                            chat_id: 777,
+                            cwd: project.display().to_string(),
+                            orchestrator: false,
+                        },
+                    ),
+                ]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let root = unique_temp_dir("mirror-fallback");
+        fs::create_dir_all(&root).unwrap();
+        let context = test_context(config, root);
+
+        let project = project.canonicalize().unwrap();
+        // Deepest matching group wins; positive (DM-like) chat ids are ignored.
+        assert_eq!(context.mirror_chat_for_root(&project), Some(-100_600));
+        // Parent-only match falls back to the umbrella group.
+        assert_eq!(
+            context.mirror_chat_for_root(&umbrella.canonicalize().unwrap()),
+            Some(-100_500)
+        );
+        // Roots outside every profile match nothing.
+        assert_eq!(
+            context.mirror_chat_for_root(std::path::Path::new("/nonexistent/elsewhere")),
+            None
+        );
+    }
+
+    #[test]
+    fn orchestrator_flag_is_per_chat_opt_in() {
+        let root = unique_temp_dir("orch-flag");
+        fs::create_dir_all(&root).unwrap();
+
+        let config = Config {
+            telegram: TelegramConfig {
+                profiles: BTreeMap::from([
+                    (
+                        "manager".to_string(),
+                        TelegramProfileConfig {
+                            chat_id: -100_111,
+                            cwd: root.display().to_string(),
+                            orchestrator: true,
+                        },
+                    ),
+                    (
+                        "project".to_string(),
+                        TelegramProfileConfig {
+                            chat_id: -100_222,
+                            cwd: root.display().to_string(),
+                            orchestrator: false,
+                        },
+                    ),
+                ]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let context = test_context(config, root);
+
+        assert!(context.orchestrator_enabled_for_chat(-100_111));
+        assert!(!context.orchestrator_enabled_for_chat(-100_222));
+        // Unprofiled chats never opt in.
+        assert!(!context.orchestrator_enabled_for_chat(-100_999));
     }
 
     /// A profile's workspace `.zdx/config.toml` overrides the global layer for
@@ -375,6 +542,7 @@ mod tests {
                     TelegramProfileConfig {
                         chat_id: -100_123,
                         cwd: profile_root.display().to_string(),
+                        orchestrator: false,
                     },
                 )]),
                 ..Default::default()
@@ -411,6 +579,7 @@ mod tests {
                     TelegramProfileConfig {
                         chat_id: -100_123,
                         cwd: profile_root.display().to_string(),
+                        orchestrator: false,
                     },
                 )]),
                 ..Default::default()
@@ -444,6 +613,7 @@ mod tests {
                 root,
                 bot_instruction_layer: None,
                 tool_config: ToolConfig::default(),
+                worker_manager: WorkerManager::new().0,
                 cancel_map: new_cancel_map(),
                 queue_cancel_map: new_queue_cancel_map(),
                 followup_map: crate::followups::new_followup_map(),

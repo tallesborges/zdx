@@ -4,18 +4,18 @@ Scope: Telegram bot runtime, ingest/handler flow, queueing, and Telegram API int
 
 ## Where things are
 
-- `DESIGN.md`: Mini App design system in the open Stitch DESIGN.md format (YAML design tokens + Overview/Colors/Typography/Layout/Elevation/Shapes/Components/Do's-and-Don'ts) — read before adding/changing Mini App UI
 - `src/lib.rs`: bot crate entrypoint
 - `src/followups.rs`: end-of-turn follow-up suggestion buttons (`<followups>` tag → tap dispatches new turn)
 - `src/retry.rs`: post-failure "Try again" button — on a turn that fails without a reply, offers a button that re-runs the same turn from persisted thread state (no new user message); `retry:go`/`retry:x` callbacks
-- `src/server.rs`: embedded HTTP web server for the unified Mini App. `/app` is canonical; `/threads` and `/monitor` are compatibility aliases for the same shell. Every `/api/*` endpoint requires fresh bot-token-signed Telegram `initData` from an allowlisted user. The read-only monitor snapshot is built off the async hot path and cached for 30 seconds; live quotas come from the same shared snapshot API as `zdx quota`. Git inspection resolves the selected thread root before the bot root and bounds lazy per-file diffs.
-- `src/app.html`: mobile-first unified Monitor, Threads, and Git shell. Monitor covers services, active/background work, live subscription quotas, 30-day usage, safe config, and automations. Threads renders messages plus collapsed reasoning, tool activity, usage, notices, and interruptions. Git is a lazygit-inspired read-only inspector for branch sync, worktrees, changed files, bounded lazy diffs, and recent commits. Subscription endpoints are read-only and cached for five minutes.
+- `src/server.rs`: embedded HTTP web server for the unified Mini App. Serves the built Svelte app from `apps/web/dist` via `rust-embed` — `/app` is the SPA entry point (`no-cache`), `/app/{*path}` serves content-hashed assets (`immutable`, one year), and `/threads` / `/monitor` are compatibility aliases for the same shell. Responses are gzip-compressed via `tower_http::CompressionLayer`. Every `/api/*` endpoint requires fresh bot-token-signed Telegram `initData` from an allowlisted user. The read-only monitor snapshot is built off the async hot path and cached for 30 seconds; live quotas come from the same shared snapshot API as `zdx quota`. Git inspection resolves the selected thread root before the bot root and bounds lazy per-file diffs.
 - `src/staging.rs`: staged (memory-only) slash-command flow — `/handoff`, `/btw` + `/prompt_builder` input capture. `/handoff` and `/btw` complete on the staged input with no Accept tap and seed a new topic with `handoff_from` via the shared `seed_new_topic`; only `/prompt_builder` stages an Accept/Discard preview with regenerate, because accepting it runs the prompt in the current thread. `/handoff` generates its context block first and passes it to `seed_new_topic` as a `record` posted into the new topic (the seed is dispatched synthetically and never appears in chat); on failure the session stays open to retry. `/btw` makes no LLM call at all: its seed is the question plus a parent-thread pointer the new topic's agent resolves with `Read_Thread`. `/btw` also bypasses the per-topic queue (both the command and the staged question, via `staging::awaiting_btw_input`), so a side question never waits behind the running turn. Bypassed inputs are marked `Message::routed_as_btw_input`, so if the session is gone by the time they land they are answered with a hint instead of falling through to a normal (concurrent) turn; messages older than the command's `message_id` are never taken as staged input.
 - `src/command_picker.rs`: `/commands` picker — project/context `.md` commands only (picker-only; built-ins live in the native `/` menu)
 - `src/commands.rs`: centralized slash-command parsing and matching, including strict `/restart [--force]` parsing
 - `src/bot/mod.rs`: bot module exports
-- `src/bot/context.rs`: shared bot context; also owns per-profile layered configs (`config_for_chat`)
-- `src/bot/queue.rs`: per-chat queueing helpers
+- `src/bot/context.rs`: shared bot context; also owns per-profile layered configs (`config_for_chat`) and the process-lifetime orchestrator route map (owner thread → chat/topic/user for worker completion callbacks)
+- `src/bot/queue.rs`: per-chat queueing helpers; topics created from ordinary General messages — and brand-new Threaded Mode DM threads on first sighting — are marked as the persistent `orchestrator` profile before the first turn
+- `src/bot/synthetic.rs`: shared synthetic-message helper (`i64::MAX`-countdown id counter + dispatch through the topic queue), used by `/goal` continuations and the orchestrator completion bridge
+- `src/orchestrator.rs`: orchestrator worker bridge — consumes engine `WorkerManager` `WorkerEvent`s: `Created` opens a mirror topic (aliased + `worker_topic`-marked) in the owner's forum chat; `Completed` posts the result there and wakes the owning orchestrator topic with a bounded synthetic `[worker update]` turn (best-effort; routes and the worker→topic map die with the process)
 - `src/handlers/mod.rs`: handler module exports
 - `src/handlers/message/mod.rs`: message intake orchestration + shared turn types (`ReplyContext`, `TurnStatus`, `TurnResult`, `SpawnRequest`, `StatusSnapshot`); re-exports the keyboard builders
 - `src/handlers/message/commands.rs`: slash-command handlers (`/new`, `/model`, `/thinking`, `/status`, `/whereami`, `/launcher`, thread/worktree, exit) + model/provider/thinking keyboards + `ModelPickerScope` (General/Topic/NewThread)
@@ -43,6 +43,7 @@ Scope: Telegram bot runtime, ingest/handler flow, queueing, and Telegram API int
 
 ## Checks
 
+- The Mini App must be built before any cargo command touches this crate: `just web-build` (rust-embed reads `apps/web/dist` at compile time). `just build-release` and CI do this automatically.
 - Default final verification after code changes: `just ci` from repo root
 - Intermediate iteration for this crate: `cargo nextest run -p zdx-bot`
 - Use `just lint` or `just test` only when intentionally running one half of CI

@@ -69,6 +69,9 @@ pub const EXPLORER_SUBAGENT: &str = include_str!("../subagents/explorer.md");
 /// Built-in `oracle` subagent definition.
 pub const ORACLE_SUBAGENT: &str = include_str!("../subagents/oracle.md");
 
+/// Built-in reserved `orchestrator` profile definition (persistent home base).
+pub const ORCHESTRATOR_SUBAGENT: &str = include_str!("../subagents/orchestrator.md");
+
 // ---------------------------------------------------------------------------
 // Bundled skills (materialized into `$ZDX_HOME/bundled-skills` at runtime)
 // ---------------------------------------------------------------------------

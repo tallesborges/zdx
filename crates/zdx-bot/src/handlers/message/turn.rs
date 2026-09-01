@@ -45,6 +45,21 @@ pub(super) async fn run_agent_turn(
     if stored_root.is_none() {
         thread.set_root_path(&worktree_root)?;
     }
+    // Persistent top-level profile (reserved orchestrator home base). Recorded
+    // routes let worker completion callbacks reach this topic later.
+    let persistent_profile = thread_persistence::read_persistent_profile(thread_id)?;
+    let is_orchestrator =
+        persistent_profile.as_deref() == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME);
+    if is_orchestrator {
+        context.record_orchestrator_route(
+            thread_id,
+            crate::bot::context::OrchestratorRoute {
+                chat: incoming.chat_id,
+                topic: reply_ctx.topic_id,
+                user: incoming.user_id,
+            },
+        );
+    }
     let pending_topic_title = thread_persistence::read_thread_pending_topic_title(thread_id)?;
     if record_user {
         agent::record_user_message(&mut thread, &mut messages, &incoming)?;
@@ -52,7 +67,10 @@ pub(super) async fn run_agent_turn(
 
     // Async topic title: spawn LLM-based title generation + rename for new topics.
     // This runs only after the user message is persisted, so the thread file exists.
-    if (synthetic_topic_routed_from_general || pending_topic_title)
+    // Orchestrator topics keep their literal name: the async rename races the
+    // process-lifetime queue/routes for no benefit on a long-lived home base.
+    if !is_orchestrator
+        && (synthetic_topic_routed_from_general || pending_topic_title)
         && let Some(topic_id) = reply_ctx.topic_id
     {
         let effective_text = incoming
@@ -94,6 +112,7 @@ pub(super) async fn run_agent_turn(
         thread: &thread,
         messages,
         config: &config,
+        persistent_profile: persistent_profile.as_deref(),
     };
     let mut handle = spawn_or_fail(context, &incoming, &status, spawn).await?;
     let result = stream_turn_events(context, &incoming, &mut handle, &mut status).await;
@@ -110,6 +129,7 @@ pub(super) async fn run_agent_turn(
         &mut thread,
         &status,
         result,
+        is_orchestrator,
     )
     .await
 }
@@ -128,6 +148,7 @@ async fn spawn_or_fail(
         spawn.thread_id,
         spawn.thread,
         context.tool_config(),
+        spawn.persistent_profile,
     );
 
     match handle {
@@ -217,6 +238,7 @@ async fn stream_turn_events(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn finalize_turn(
     context: &BotContext,
     incoming: &crate::types::IncomingMessage,
@@ -225,6 +247,7 @@ async fn finalize_turn(
     _thread: &mut zdx_engine::core::thread_persistence::Thread,
     status: &TurnStatus,
     result: TurnResult,
+    is_orchestrator: bool,
 ) -> Result<TurnOutcome> {
     if status.token.is_cancelled() {
         tracing::info!(
@@ -257,17 +280,21 @@ async fn finalize_turn(
                 .edit_message_text(incoming.chat_id, msg_id, &error_text, None)
                 .await;
         }
-        crate::retry::send_retry_buttons(
-            context,
-            incoming.chat_id,
-            crate::retry::RetryRequest {
-                thread_id: thread_id.to_string(),
-                topic_id: reply_ctx.topic_id,
-                reply_to_message_id: reply_ctx.reply_to_message_id,
-                user_message_id: incoming.message_id,
-            },
-        )
-        .await;
+        // No retry buttons on orchestrator topics: a retry can be tapped long
+        // after the process-lifetime routes/queues it depends on are gone.
+        if !is_orchestrator {
+            crate::retry::send_retry_buttons(
+                context,
+                incoming.chat_id,
+                crate::retry::RetryRequest {
+                    thread_id: thread_id.to_string(),
+                    topic_id: reply_ctx.topic_id,
+                    reply_to_message_id: reply_ctx.reply_to_message_id,
+                    user_message_id: incoming.message_id,
+                },
+            )
+            .await;
+        }
         return Ok(TurnOutcome::Failed(
             result
                 .error_message

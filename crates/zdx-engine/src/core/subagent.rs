@@ -53,6 +53,10 @@ pub struct ExecSubagentOptions {
     pub thread_parent_id: Option<String>,
     /// Named subagent recorded in the child thread's meta (subagent runs).
     pub thread_subagent_name: Option<String>,
+    /// Explicit thread id for the child run (`--thread`). The child appends to
+    /// this existing thread (loading its prior history), so repeated runs
+    /// against the same id behave like a resumable worker thread.
+    pub thread_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -145,6 +149,10 @@ pub async fn run_exec_subagent_with_cancel(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // Run the child in its own process group so cancellation can terminate its
+    // whole descendant tree (bash children etc.), not just the direct child.
+    #[cfg(unix)]
+    command.process_group(0);
 
     let child = command
         .spawn()
@@ -154,38 +162,147 @@ pub async fn run_exec_subagent_with_cancel(
         return run_child_streaming(child, cancel, options.timeout, sink).await;
     }
 
-    let wait_future = child.wait_with_output();
-    let output = match (cancel, options.timeout) {
-        (Some(cancel), Some(timeout)) => {
-            tokio::select! {
-                () = cancel.cancelled() => bail!("Subagent cancelled"),
-                result = tokio::time::timeout(timeout, wait_future) => {
-                    result
-                        .with_context(|| format!("Subagent timed out after {} seconds", timeout.as_secs()))?
-                        .context("Failed to get subagent output")?
+    run_child_buffered(child, cancel, options.timeout).await
+}
+
+/// How a supervised child run ended, before output processing.
+enum ChildWait {
+    Exited(std::process::ExitStatus),
+    Cancelled,
+    TimedOut(Duration),
+}
+
+/// Waits for the child while honoring cancellation and timeout.
+///
+/// On cancellation or timeout the child's entire process group is terminated
+/// (TERM, short grace, then KILL) and the direct child is reaped before this
+/// returns, so no successor run can race a half-dead child appending to the
+/// same worker thread JSONL.
+async fn wait_child(
+    child: &mut tokio::process::Child,
+    cancel: Option<&CancellationToken>,
+    timeout: Option<Duration>,
+) -> Result<std::process::ExitStatus> {
+    let outcome = {
+        let wait = child.wait();
+        tokio::pin!(wait);
+        match (cancel, timeout) {
+            (Some(cancel), Some(timeout)) => {
+                tokio::select! {
+                    () = cancel.cancelled() => ChildWait::Cancelled,
+                    result = tokio::time::timeout(timeout, &mut wait) => match result {
+                        Ok(status) => ChildWait::Exited(status.context("Failed to wait for subagent")?),
+                        Err(_) => ChildWait::TimedOut(timeout),
+                    },
                 }
             }
-        }
-        (Some(cancel), None) => {
-            tokio::select! {
-                () = cancel.cancelled() => bail!("Subagent cancelled"),
-                result = wait_future => result.context("Failed to get subagent output")?,
+            (Some(cancel), None) => {
+                tokio::select! {
+                    () = cancel.cancelled() => ChildWait::Cancelled,
+                    status = &mut wait => ChildWait::Exited(status.context("Failed to wait for subagent")?),
+                }
             }
+            (None, Some(timeout)) => match tokio::time::timeout(timeout, &mut wait).await {
+                Ok(status) => ChildWait::Exited(status.context("Failed to wait for subagent")?),
+                Err(_) => ChildWait::TimedOut(timeout),
+            },
+            (None, None) => ChildWait::Exited(wait.await.context("Failed to wait for subagent")?),
         }
-        (None, Some(timeout)) => tokio::time::timeout(timeout, wait_future)
-            .await
-            .with_context(|| format!("Subagent timed out after {} seconds", timeout.as_secs()))?
-            .context("Failed to get subagent output")?,
-        (None, None) => wait_future.await.context("Failed to get subagent output")?,
     };
 
-    if output.status.success() {
-        tracing::info!(stdout_bytes = output.stdout.len(), "Subagent finished");
-    } else {
-        log_nonzero_exit(output.status, &String::from_utf8_lossy(&output.stderr));
+    match outcome {
+        ChildWait::Exited(status) => Ok(status),
+        ChildWait::Cancelled => {
+            terminate_process_group(child).await;
+            bail!("Subagent cancelled")
+        }
+        ChildWait::TimedOut(timeout) => {
+            terminate_process_group(child).await;
+            bail!("Subagent timed out after {} seconds", timeout.as_secs())
+        }
+    }
+}
+
+/// Terminates the child's process group and reaps the direct child.
+///
+/// TERM first, a short grace period, then KILL. A final group KILL sweeps any
+/// stragglers that detached from the direct child but stayed in the group.
+async fn terminate_process_group(child: &mut tokio::process::Child) {
+    const GRACE: Duration = Duration::from_secs(5);
+
+    let Some(pid) = child.id() else {
+        // Already exited; reap and return.
+        let _ = child.wait().await;
+        return;
+    };
+    #[cfg(unix)]
+    let group = i32::try_from(pid).unwrap_or_default();
+
+    #[cfg(unix)]
+    // SAFETY: plain kill(2) on a process group we spawned; no memory safety concerns.
+    unsafe {
+        libc::kill(-group, libc::SIGTERM);
     }
 
-    process_subagent_output(&output)
+    if tokio::time::timeout(GRACE, child.wait()).await.is_err() {
+        #[cfg(unix)]
+        // SAFETY: see above.
+        unsafe {
+            libc::kill(-group, libc::SIGKILL);
+        }
+        let _ = child.wait().await;
+    }
+
+    #[cfg(unix)]
+    // SAFETY: see above.
+    unsafe {
+        libc::kill(-group, libc::SIGKILL);
+    }
+    tracing::debug!(pid, "Subagent process group terminated");
+}
+
+/// Buffered path: drains stdout/stderr concurrently, waits for the child with
+/// cancellation/timeout supervision, then processes the captured output.
+async fn run_child_buffered(
+    mut child: tokio::process::Child,
+    cancel: Option<CancellationToken>,
+    timeout: Option<Duration>,
+) -> Result<String> {
+    let stdout = child
+        .stdout
+        .take()
+        .context("Subagent stdout was not piped")?;
+    let stderr = child
+        .stderr
+        .take()
+        .context("Subagent stderr was not piped")?;
+
+    let stdout_handle = tokio::spawn(read_to_end(stdout));
+    let stderr_handle = tokio::spawn(read_to_end(stderr));
+
+    let status = wait_child(&mut child, cancel.as_ref(), timeout).await?;
+
+    let stdout = stdout_handle.await.unwrap_or_default();
+    let stderr = stderr_handle.await.unwrap_or_default();
+
+    if status.success() {
+        tracing::info!(stdout_bytes = stdout.len(), "Subagent finished");
+    } else {
+        log_nonzero_exit(status, &String::from_utf8_lossy(&stderr));
+    }
+
+    process_subagent_output(&std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+async fn read_to_end<R: AsyncRead + Unpin>(reader: R) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut reader = BufReader::new(reader);
+    let _ = reader.read_to_end(&mut buf).await;
+    buf
 }
 
 /// Live sink for relaying a child subagent's tool activity to the parent.
@@ -231,9 +348,13 @@ struct StreamOutcome {
 }
 
 /// Streams a child `zdx exec` process: relays tool activity live via `sink`,
-/// drains stderr concurrently to avoid pipe deadlocks, and returns the final
-/// turn text (preserving the same completion/failure semantics as the
+/// drains stdout/stderr concurrently to avoid pipe deadlocks, and returns the
+/// final turn text (preserving the same completion/failure semantics as the
 /// non-streaming path).
+///
+/// Cancellation and timeout supervise the child's actual exit via
+/// [`wait_child`], not merely stdout EOF, so a child that closes stdout and
+/// then hangs is still terminated and reaped.
 async fn run_child_streaming(
     mut child: tokio::process::Child,
     cancel: Option<CancellationToken>,
@@ -249,35 +370,20 @@ async fn run_child_streaming(
         .take()
         .context("Subagent stderr was not piped")?;
 
-    // Drain stderr concurrently so the child never blocks on a full pipe.
-    let stderr_handle = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        let mut reader = BufReader::new(stderr);
-        let _ = reader.read_to_end(&mut buf).await;
-        buf
+    let stderr_handle = tokio::spawn(read_to_end(stderr));
+    let stdout_handle = tokio::spawn(async move {
+        let outcome = read_stdout_events(stdout, &sink).await;
+        drop(sink);
+        outcome
     });
 
-    let read_future = read_stdout_events(stdout, &sink);
+    // On cancel/timeout `wait_child` terminates the process group and reaps
+    // the child before erroring; the detached reader tasks then finish at EOF.
+    let status = wait_child(&mut child, cancel.as_ref(), timeout).await?;
 
-    let outcome = match (cancel, timeout) {
-        (Some(cancel), Some(timeout)) => tokio::select! {
-            () = cancel.cancelled() => bail!("Subagent cancelled"),
-            result = tokio::time::timeout(timeout, read_future) => result
-                .with_context(|| format!("Subagent timed out after {} seconds", timeout.as_secs()))??,
-        },
-        (Some(cancel), None) => tokio::select! {
-            () = cancel.cancelled() => bail!("Subagent cancelled"),
-            result = read_future => result?,
-        },
-        (None, Some(timeout)) => tokio::time::timeout(timeout, read_future)
-            .await
-            .with_context(|| format!("Subagent timed out after {} seconds", timeout.as_secs()))??,
-        (None, None) => read_future.await?,
-    };
-
-    // Await the child exit and stderr drain before returning so diagnostics are
-    // complete and no pipe is left dangling.
-    let status = child.wait().await.context("Failed to wait for subagent")?;
+    let outcome = stdout_handle
+        .await
+        .context("Subagent stdout reader task failed")??;
     let stderr_buf = stderr_handle.await.unwrap_or_default();
 
     if let Some(message) = outcome.turn_failed {
@@ -427,6 +533,10 @@ fn build_exec_args(
 
     // Global thread-lineage flags (before the subcommand) so the persisted
     // child thread records its subagent/helper origin in its meta line.
+    if let Some(id) = normalize_optional(options.thread_id.as_deref()) {
+        args.push(OsString::from("--thread"));
+        args.push(OsString::from(id));
+    }
     if let Some(kind) = normalize_optional(options.thread_origin_kind.as_deref()) {
         args.push(OsString::from("--thread-origin-kind"));
         args.push(OsString::from(kind));
@@ -654,6 +764,7 @@ mod tests {
                 thread_origin_kind: None,
                 thread_parent_id: None,
                 thread_subagent_name: None,
+                thread_id: None,
             },
             Some(system_prompt_file),
         );
@@ -714,6 +825,36 @@ mod tests {
                 "thread-parent",
                 "--thread-subagent-name",
                 "explorer",
+                "exec",
+                "--prompt-file",
+                "/tmp/subagent-prompt.md"
+            ]
+        );
+    }
+
+    #[test]
+    fn build_exec_args_emits_explicit_thread_id_before_subcommand() {
+        let args = build_exec_args(
+            Path::new("/tmp/project"),
+            Path::new("/tmp/subagent-prompt.md"),
+            &ExecSubagentOptions {
+                thread_id: Some("worker-thread-1".to_string()),
+                ..Default::default()
+            },
+            None,
+        );
+        let args: Vec<String> = args
+            .iter()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+
+        assert_eq!(
+            args,
+            vec![
+                "--root",
+                "/tmp/project",
+                "--thread",
+                "worker-thread-1",
                 "exec",
                 "--prompt-file",
                 "/tmp/subagent-prompt.md"

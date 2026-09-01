@@ -1882,6 +1882,7 @@ mod tests {
                 thinking_override: None,
                 pending_topic_title: false,
                 alias_to: None,
+                worker_topic: false,
                 ts: "2026-08-24T10:00:00Z".to_string(),
             },
             ThreadEvent::Reasoning {

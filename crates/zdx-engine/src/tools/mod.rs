@@ -9,6 +9,7 @@ pub use zdx_tools::{apply_patch, bash, edit, fetch_webpage, glob, grep, read, we
 // Engine-backed tools (need full ToolContext with config, threads, etc.)
 pub mod background;
 pub mod memory_search;
+pub mod orchestrator;
 pub mod read_thread;
 pub mod subagent;
 pub mod thread_search;
@@ -362,6 +363,12 @@ impl ToolRegistry {
         self.register_tool(FetchWebpage);
         self.register_tool(Grep);
         self.register_tool(Glob);
+        // Orchestrator thread controls: unbound stubs so schemas and tool-name
+        // validation exist everywhere; the bot rebinds them to a live
+        // WorkerManager via `register_boxed`.
+        for tool in orchestrator::OrchestratorTool::stubs() {
+            self.register_tool(tool);
+        }
     }
 }
 

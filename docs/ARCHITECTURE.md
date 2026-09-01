@@ -40,6 +40,16 @@ Prompt assembly is layered in `zdx-engine` (assets come from `zdx-assets`):
 
 This keeps one source of truth for the default assistant while allowing surfaces and automation behavior to compose cleanly, and still supports specialist standalone subagents when needed.
 
+## Orchestrator + Worker Threads (Telegram bot)
+
+The reserved built-in `orchestrator` profile (SPEC §18) reuses existing primitives instead of adding a database or workflow engine:
+
+- **Persistent profile resolution:** a top-level thread with `origin_kind = None` and `subagent_name = "orchestrator"` is a persistent-profile thread (`thread_persistence::{set_persistent_profile, read_persistent_profile}`). The bot resolves the reserved embedded definition (`subagents::load_builtin_orchestrator`) on every turn — user/project subagent files cannot override it — and pins the turn's tool selection to the profile's declared tools (`ToolSelection::Explicit`).
+- **WorkerManager (`zdx-engine/src/core/workers.rs`):** the only new runtime structure. An in-memory map of worker thread id → owner thread, canonical root, prompt FIFO, status, cancellation token, and latest result, plus one unbounded completion channel. One tokio task drains each worker FIFO serially; different workers overlap naturally. All state is process-lifetime.
+- **Child-runner reuse:** worker prompts run through `run_exec_subagent_with_cancel` with `ExecSubagentOptions.thread_id`, i.e. `zdx --thread <id> exec` in the worker's project root, so the worker resumes its own JSONL history. The child is spawned in its own process group; cancellation/timeout TERMs the group, waits briefly, KILLs, and reaps the child before the FIFO can start a successor.
+- **Thread-control tools (`zdx-engine/src/tools/orchestrator.rs`):** six tools registered as unbound stubs in the default registry (schemas/validation everywhere) and rebound to the live `WorkerManager` in the bot's registry via `register_boxed`.
+- **Completion bridge (`zdx-bot/src/orchestrator.rs`):** worker `CompletionEvent`s are turned into synthetic `[worker update]` messages dispatched through the owner topic's normal per-topic queue, using the same shared synthetic-message helper (`zdx-bot/src/bot/synthetic.rs`) as `/goal` continuations. Routes are recorded per orchestrator turn and are process-lifetime; missed callbacks are dropped by design.
+
 ## TUI Architecture (Elm/MVU)
 
 The interactive mode (`crates/zdx-tui/src/`) strictly follows The Elm Architecture (Model-View-Update).

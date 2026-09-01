@@ -17,7 +17,7 @@ Scope: embedded asset content (prompts, instruction layers, default TOMLs, bundl
 - `bundled_skills/*/`: built-in bundled skill fallbacks; `build.rs` embeds every file under this tree
 - `bundled_skills/model-dispatch/`: named-model dispatch, fan-out, and reasoning-level comparisons
 - `bundled_commands/*.md`: built-in bundled custom slash commands; `build.rs` embeds every file under this tree
-- `subagents/*.md`: built-in standalone subagent prompts (`explorer`, `oracle`)
+- `subagents/*.md`: built-in standalone subagent prompts (`explorer`, `oracle`) plus the reserved persistent `orchestrator` profile (Telegram home base; cannot be overridden by user/project subagent files)
 
 ## Conventions
 

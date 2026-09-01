@@ -102,6 +102,24 @@ pub(crate) async fn dispatch_message(
                     // Enqueue with the new topic ID so handler knows to use it
                     let chat_id = message.chat.id;
                     let thread_id = thread_id_for_chat(chat_id, Some(topic_id));
+                    // Topics created from an ordinary General message become
+                    // the persistent orchestrator home base only in chats that
+                    // opted in via `telegram.profiles.<name>.orchestrator`
+                    // (SPEC §orchestrator). `/new`, the launcher, `/handoff`,
+                    // and `/btw` keep the default profile. Fail closed: a topic
+                    // that cannot record the profile must not run the default
+                    // coding agent.
+                    if context.orchestrator_enabled_for_chat(chat_id)
+                        && let Err(err) = mark_orchestrator_thread(&thread_id)
+                    {
+                        tracing::error!(
+                            thread_id = %thread_id,
+                            %err,
+                            "Failed to mark orchestrator profile on new topic; not running the turn"
+                        );
+                        notify_orchestrator_init_failure(&context, chat_id, Some(topic_id)).await;
+                        return;
+                    }
                     if let Err(err) =
                         post_thread_header(&context, chat_id, topic_id, &thread_id).await
                     {
@@ -138,8 +156,72 @@ pub(crate) async fn dispatch_message(
             }
         });
     } else {
+        // Telegram bot Threaded Mode: a brand-new client-created thread in the
+        // bot's private chat becomes an orchestrator home base, mirroring
+        // General-created forum topics. Plain unthreaded DMs keep the default
+        // profile. Fail closed: without the profile the turn would run the
+        // default coding agent (with write tools) instead.
+        if let Some(thread_id) = dm_thread_needing_orchestrator(&message)
+            && let Err(err) = mark_orchestrator_thread(&thread_id)
+        {
+            tracing::error!(
+                thread_id = %thread_id,
+                %err,
+                "Failed to mark orchestrator profile on DM thread; not running the turn"
+            );
+            notify_orchestrator_init_failure(context, message.chat.id, message.thread_id).await;
+            return;
+        }
         enqueue_message(queues, context, message).await;
     }
+}
+
+/// Tells the user why their message was not answered when orchestrator profile
+/// initialization failed (fail-closed path).
+async fn notify_orchestrator_init_failure(
+    context: &Arc<BotContext>,
+    chat_id: i64,
+    topic_id: Option<i64>,
+) {
+    if let Err(err) = context
+        .client()
+        .send_message(
+            chat_id,
+            "⚠️ I couldn't initialize this thread as an orchestrator, so I didn't run your message. Please try again.",
+            None,
+            topic_id,
+        )
+        .await
+    {
+        tracing::error!(chat_id, %err, "Failed to notify orchestrator init failure");
+    }
+}
+
+/// Marks a freshly created General-routed topic thread as the persistent
+/// orchestrator profile: `subagent_name = "orchestrator"` with no origin kind,
+/// so the thread stays a visible top-level thread.
+fn mark_orchestrator_thread(thread_id: &str) -> anyhow::Result<()> {
+    let mut thread = zdx_engine::core::thread_persistence::Thread::with_id(thread_id.to_string())?;
+    thread.set_persistent_profile(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME)
+}
+
+/// Returns the thread id to mark as orchestrator for a Threaded Mode DM
+/// message, or `None` when this message should not establish the profile.
+///
+/// A DM thread qualifies only on its first sighting: private chat, a
+/// client-created `message_thread_id`, not a known slash command, and no
+/// persisted thread file yet. Later messages (and pre-existing threads) leave
+/// the profile as-is.
+fn dm_thread_needing_orchestrator(message: &Message) -> Option<String> {
+    if !message.chat.is_private() {
+        return None;
+    }
+    let topic_id = message.effective_thread_id()?;
+    if message.text.as_deref().and_then(parse_command).is_some() {
+        return None;
+    }
+    let thread_id = thread_id_for_chat(message.chat.id, Some(topic_id));
+    (!zdx_engine::core::thread_persistence::thread_exists(&thread_id)).then_some(thread_id)
 }
 
 /// Whether this message is the question a live `/btw` session is waiting for.
@@ -406,5 +488,58 @@ async fn release_slot(queues: &ChatQueueMap, key: QueueKey) {
     };
     if drained {
         queues.remove(&key);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn message(chat_id: i64, chat_type: &str, thread_id: Option<i64>, text: &str) -> Message {
+        serde_json::from_value(json!({
+            "message_id": 100,
+            "chat": { "id": chat_id, "type": chat_type, "is_forum": chat_type == "supergroup" },
+            "from": { "id": 7, "is_bot": false },
+            "message_thread_id": thread_id,
+            "text": text,
+        }))
+        .expect("valid test message")
+    }
+
+    /// Improbable private chat id so `thread_exists` is deterministic without
+    /// a ZDX_HOME guard (the check is read-only).
+    fn unseen_chat_id() -> i64 {
+        880_000_000_000 + i64::from(std::process::id())
+    }
+
+    #[test]
+    fn new_dm_thread_message_marks_orchestrator() {
+        let chat_id = unseen_chat_id();
+        let thread_id = dm_thread_needing_orchestrator(&message(chat_id, "private", Some(5), "hi"))
+            .expect("fresh DM thread qualifies");
+        assert_eq!(thread_id, format!("telegram-{chat_id}-topic-5"));
+    }
+
+    #[test]
+    fn plain_dm_and_group_messages_do_not_mark_orchestrator() {
+        let chat_id = unseen_chat_id();
+        // Unthreaded DM keeps the default profile.
+        assert!(dm_thread_needing_orchestrator(&message(chat_id, "private", None, "hi")).is_none());
+        // Group topics are handled by the forum General flow instead.
+        assert!(
+            dm_thread_needing_orchestrator(&message(-chat_id, "supergroup", Some(5), "hi"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn known_command_does_not_establish_dm_orchestrator() {
+        let chat_id = unseen_chat_id();
+        assert!(
+            dm_thread_needing_orchestrator(&message(chat_id, "private", Some(5), "/status"))
+                .is_none()
+        );
     }
 }

@@ -52,6 +52,7 @@ pub fn add_profile(config: &Config, name: &str, chat_id: i64, cwd: &Path) -> Res
     let profile = TelegramProfileConfig {
         chat_id,
         cwd: cwd.display().to_string(),
+        orchestrator: false,
     };
     Config::save_telegram_profile(&name, &profile).context("save telegram profile")?;
 
