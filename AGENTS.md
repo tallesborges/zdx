@@ -18,6 +18,7 @@ This monorepo now uses scoped `AGENTS.md` files per crate.
 - `crates/zdx-bot/AGENTS.md`: Telegram bot flow map + bot-specific conventions
 - `crates/zdx-monitor/AGENTS.md`: monitor TUI dashboard map + conventions
 - `crates/xtask/AGENTS.md`: maintainer task crate guidance
+- `apps/web/AGENTS.md`: Svelte Mini App frontend (design system + views, consumes the zdx-bot HTTP API)
 
 ### Scope and precedence
 
@@ -32,6 +33,7 @@ This monorepo now uses scoped `AGENTS.md` files per crate.
 - `docs/SPEC.md`: behavior contracts
 - `docs/ARCHITECTURE.md`: architecture and data flow
 - `docs/plans/`: commit-sized implementation plans, staged by lifecycle: `drafts/` (exploratory) → `active/` (building) → `done/` + `archived/`
+- `apps/web/`: Svelte Mini App frontend, embedded into `zdx-bot` at compile time (see `apps/web/AGENTS.md`)
 - `.github/workflows/`: CI/release workflows
 - `.cargo/config.toml`: cargo aliases/shared target dir config
 - `justfile`: common development tasks
@@ -58,6 +60,7 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `just codebase` (generate codebase.txt for entire workspace)
 - `just codebase crates/zdx-tui` (generate codebase.txt for specific crate)
 - `just build-release` (build release binary)
+- `just web-demo` / `just web-dev` / `just web-check` / `just web-build` (Svelte Mini App in `apps/web`; requires `bun`)
 
 ## Verification
 
