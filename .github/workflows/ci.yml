@@ -58,6 +58,14 @@ jobs:
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
+      # The Mini App is embedded into zdx-bot with rust-embed, so apps/web/dist
+      # must exist before any cargo invocation compiles that crate.
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build Mini App
+        run: cd apps/web && bun install --frozen-lockfile && bun run build
+
       - name: Format
         run: cargo +nightly fmt --check
 

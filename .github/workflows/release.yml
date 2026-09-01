@@ -57,6 +57,14 @@ jobs:
         with:
           key: release-${{ matrix.target }}
 
+      # The Mini App is embedded into zdx-bot with rust-embed, so apps/web/dist
+      # must exist before the release binary is compiled.
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build Mini App
+        run: cd apps/web && bun install --frozen-lockfile && bun run build
+
       - name: Build
         run: cargo build -p zdx --release --locked --target ${{ matrix.target }}
 
