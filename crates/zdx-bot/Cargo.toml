@@ -29,6 +29,8 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 tokio = { workspace = true, features = ["signal"] }
 tokio-util.workspace = true
+rust-embed = { workspace = true }
+tower-http = { workspace = true }
 url = { workspace = true }
 zdx-engine = { path = "../zdx-engine" }
 tracing.workspace = true

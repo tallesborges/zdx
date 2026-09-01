@@ -9,28 +9,30 @@ use anyhow::Context as _;
 use axum::Router;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::header::AUTHORIZATION;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::{self, Next};
-use axum::response::{Html, IntoResponse, Json, Response};
+use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use hmac::{Hmac, Mac};
+use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Sha256;
 use tokio::io::AsyncReadExt as _;
 use tokio::process::Command;
 use tokio::sync::{Mutex, RwLock};
+use tower_http::compression::CompressionLayer;
 use zdx_engine::config::{Config, paths};
 use zdx_engine::core::events::NoticeKind;
 use zdx_engine::core::thread_index;
 use zdx_engine::core::thread_persistence::{self, ThreadEvent, load_thread_events};
 use zdx_engine::core::usage_stats::{self, UsageStats};
+use zdx_engine::models::ModelOption;
 use zdx_engine::providers::ReplayToken;
 use zdx_engine::providers::subscription_quota::{self, QuotaError, SubscriptionQuota};
 use zdx_engine::service::{self, Service};
 use zdx_engine::{agent_activity, automations, background_activity};
 
-const APP_HTML: &str = include_str!("app.html");
 const INIT_DATA_MAX_AGE_SECS: u64 = 60 * 60;
 const INIT_DATA_FUTURE_SKEW_SECS: u64 = 30;
 const MONITOR_CACHE_TTL: Duration = Duration::from_secs(30);
@@ -116,6 +118,10 @@ pub enum ThreadActivity {
         duration_ms: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         ttft_ms: Option<u64>,
+        /// Context window of the model that served this request, so clients can
+        /// show usage as a percentage without their own model registry.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        context_limit: Option<u64>,
     },
     Notice {
         sequence: usize,
@@ -387,14 +393,62 @@ pub(crate) fn create_router(state: Arc<ServerState>) -> Router {
 
     Router::new()
         .route("/app", get(serve_app))
+        .route("/app/{*path}", get(serve_asset))
         .route("/threads", get(serve_app))
         .route("/monitor", get(serve_app))
         .nest("/api", api)
+        // Shell HTML and thread transcripts are highly compressible text fetched
+        // over a tunnel from a phone, so compress whatever the client accepts.
+        // The default predicate already skips tiny bodies and images.
+        .layer(CompressionLayer::new())
         .with_state(state)
 }
 
-async fn serve_app() -> impl IntoResponse {
-    Html(APP_HTML)
+/// The built Svelte Mini App (`apps/web/dist`), embedded so the binary stays
+/// self-contained. Built by `just web-build`; a missing folder is a compile
+/// error rather than a silently empty UI.
+#[derive(RustEmbed)]
+#[folder = "../../apps/web/dist"]
+struct Assets;
+
+/// Serves the SPA entry point. Never cached, so a new build's content-hashed
+/// asset names are picked up on the next open.
+async fn serve_app() -> Response {
+    match Assets::get("index.html") {
+        Some(file) => (
+            [
+                (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                (header::CACHE_CONTROL, "no-cache"),
+            ],
+            file.data.into_owned(),
+        )
+            .into_response(),
+        None => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Mini App assets are missing; run `just web-build`",
+        )
+            .into_response(),
+    }
+}
+
+/// Serves a content-hashed asset. Vite renames these on every build, so they are
+/// safe to cache permanently — the only caching layer Telegram gives us, since
+/// service workers do not work in the iOS `WebView`.
+async fn serve_asset(Path(path): Path<String>) -> Response {
+    match Assets::get(&path) {
+        Some(file) => {
+            let mime = file.metadata.mimetype().to_owned();
+            (
+                [
+                    (header::CONTENT_TYPE, mime.as_str()),
+                    (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+                ],
+                file.data.into_owned(),
+            )
+                .into_response()
+        }
+        None => (StatusCode::NOT_FOUND, "Not found").into_response(),
+    }
 }
 
 async fn authorize_api(
@@ -563,6 +617,11 @@ fn project_thread(target_id: String, events: Vec<ThreadEvent>) -> ThreadResponse
                 output_tokens,
                 cache_read_tokens,
                 cache_write_tokens,
+                context_limit: model
+                    .as_deref()
+                    .and_then(ModelOption::find_by_id)
+                    .map(|m| m.context_limit)
+                    .filter(|limit| *limit > 0),
                 model,
                 provider,
                 duration_ms,
@@ -1623,6 +1682,19 @@ mod tests {
         HashSet::from([279_058_397])
     }
 
+    /// Pulls the first content-hashed script URL out of the served shell.
+    fn first_script_asset(html: &str) -> String {
+        html.split(['"', '\''])
+            .find(|s| {
+                s.starts_with("/app/assets/")
+                    && FilePath::new(s)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("js"))
+            })
+            .expect("shell references a hashed script")
+            .to_string()
+    }
+
     #[tokio::test]
     async fn protects_every_api_route_but_not_the_miniapp_page() {
         let app = create_router(Arc::new(ServerState::new(
@@ -1661,6 +1733,136 @@ mod tests {
                 .expect("request public Mini App page");
             assert_eq!(response.status(), StatusCode::OK);
         }
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn serves_the_built_miniapp_with_cacheable_assets() {
+        let app = create_router(Arc::new(ServerState::new(
+            SAMPLE_BOT_TOKEN.to_string(),
+            sample_allowlist(),
+            PathBuf::from("."),
+        )));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("read test server address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve test app");
+        });
+        let client = reqwest::Client::new();
+
+        let index = client
+            .get(format!("http://{addr}/app"))
+            .send()
+            .await
+            .expect("request shell");
+        assert_eq!(index.status(), StatusCode::OK);
+        // The entry point must revalidate so new content hashes are picked up.
+        assert_eq!(
+            index
+                .headers()
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok()),
+            Some("no-cache")
+        );
+        let html = index.text().await.expect("read shell");
+        assert!(
+            html.contains("<div id=\"app\">"),
+            "expected the Svelte shell"
+        );
+
+        // Pull a hashed asset straight out of the shell and confirm it is served
+        // immutable — the only caching layer Telegram WebViews give us.
+        let asset = first_script_asset(&html);
+
+        let response = client
+            .get(format!("http://{addr}{asset}"))
+            .send()
+            .await
+            .expect("request hashed asset");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok()),
+            Some("public, max-age=31536000, immutable")
+        );
+
+        let missing = client
+            .get(format!("http://{addr}/app/assets/nope.js"))
+            .send()
+            .await
+            .expect("request missing asset");
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn compresses_miniapp_assets_when_the_client_accepts_gzip() {
+        let app = create_router(Arc::new(ServerState::new(
+            SAMPLE_BOT_TOKEN.to_string(),
+            sample_allowlist(),
+            PathBuf::from("."),
+        )));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("read test server address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve test app");
+        });
+
+        // reqwest transparently decodes gzip, so ask for the raw bytes instead.
+        let client = reqwest::Client::builder()
+            .no_gzip()
+            .build()
+            .expect("build client");
+
+        // The SPA entry point is tiny; the bundle it pulls in is what actually
+        // benefits, so assert the saving there.
+        let html = client
+            .get(format!("http://{addr}/app"))
+            .send()
+            .await
+            .expect("request shell")
+            .text()
+            .await
+            .expect("read shell");
+        let asset = first_script_asset(&html);
+
+        let compressed = client
+            .get(format!("http://{addr}{asset}"))
+            .header("accept-encoding", "gzip")
+            .send()
+            .await
+            .expect("request compressed asset");
+        assert_eq!(compressed.status(), StatusCode::OK);
+        assert_eq!(
+            compressed
+                .headers()
+                .get("content-encoding")
+                .and_then(|v| v.to_str().ok()),
+            Some("gzip")
+        );
+        let compressed_len = compressed.bytes().await.expect("read body").len();
+
+        let identity = client
+            .get(format!("http://{addr}{asset}"))
+            .header("accept-encoding", "identity")
+            .send()
+            .await
+            .expect("request uncompressed asset");
+        assert!(identity.headers().get("content-encoding").is_none());
+        let identity_len = identity.bytes().await.expect("read body").len();
+
+        assert!(
+            compressed_len * 2 < identity_len,
+            "gzip should at least halve the bundle: {compressed_len} vs {identity_len}"
+        );
 
         server.abort();
     }
