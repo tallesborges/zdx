@@ -18,6 +18,8 @@
   let scopeOpen = $state(false);
   let scopeFiles = $state<GitFile[]>([]);
   let scopeUntracked = $state<string[]>([]);
+  let scopeBaseRef = $state<string | null>(null);
+  let scopeAhead = $state(0);
   let scopeError = $state("");
   let scopeLoading = $state(false);
 
@@ -53,6 +55,8 @@
         if (cancelled) return;
         scopeFiles = res.files;
         scopeUntracked = res.untracked;
+        scopeBaseRef = res.base_ref;
+        scopeAhead = res.ahead;
       })
       .catch((e) => {
         if (cancelled) return;
@@ -64,6 +68,14 @@
     return () => {
       cancelled = true;
     };
+  });
+
+  // What "All Changes" is compared against, e.g. "vs master · 3 commits".
+  let scopeSubtitle = $derived.by(() => {
+    if (scope !== "all" || scopeLoading) return "";
+    if (!scopeBaseRef) return "vs HEAD";
+    const commits = scopeAhead === 1 ? "1 commit" : `${scopeAhead} commits`;
+    return scopeAhead > 0 ? `vs ${scopeBaseRef} · ${commits}` : `vs ${scopeBaseRef}`;
   });
 
   function pickScope(next: string) {
@@ -147,10 +159,8 @@
           class="flex w-full items-center gap-2 rounded-md border border-border bg-card px-2.5 py-2 text-left hover:bg-accent"
         >
           <span class="text-xs font-medium">{scopeLabel}</span>
-          {#if data.repository.ahead && data.repository.upstream}
-            <span class="font-mono text-xxs text-muted-foreground">
-              {data.repository.ahead} ahead of {data.repository.upstream}
-            </span>
+          {#if scopeSubtitle}
+            <span class="font-mono text-xxs text-muted-foreground">{scopeSubtitle}</span>
           {/if}
           <svg viewBox="0 0 24 24" class="ml-auto size-4 shrink-0 text-muted-foreground" aria-hidden="true">
             <path

@@ -24,6 +24,8 @@ export function demoEnabled(): boolean {
 export const demoScope: GitScopeResponse = {
   scope: "all",
   base: "e655104f491c3f59e6e358e5e00f1914538a5d22",
+  base_ref: "master",
+  ahead: 3,
   files: [
     { path: "apps/web/src/views/ChangesPane.svelte", status: "M" },
     { path: "apps/web/src/lib/api.ts", status: "M" },

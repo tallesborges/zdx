@@ -191,6 +191,11 @@ struct GitScopeResponse {
     scope: &'static str,
     /// Resolved base revision (`all`) or the commit itself.
     base: Option<String>,
+    /// For `all`: the main branch the base was taken from (`master`,
+    /// `origin/main`). `None` for commits, or when no main branch was found.
+    base_ref: Option<String>,
+    /// For `all`: commits on this branch since the base.
+    ahead: usize,
     files: Vec<GitFile>,
     /// Subset of `files` that are untracked, so the client knows to request
     /// those diffs with `kind=untracked`.
@@ -986,19 +991,96 @@ fn valid_commit_hash(value: &str) -> bool {
     (7..=40).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// Resolves the base revision for the "all changes" scope: the merge base with
-/// the tracked upstream, so the view shows what this branch adds on top of the
-/// remote. Falls back to `HEAD` (making the scope equal to "uncommitted") when
-/// there is no upstream, which is the case on a detached or unpublished branch.
-async fn resolve_all_base(root: &FilePath) -> String {
-    let merge_base = git_output(root, &["merge-base", "@{upstream}", "HEAD"])
+/// The revision "all changes" diffs against, plus what it was derived from.
+struct AllChangesBase {
+    /// Object id (or `HEAD`) handed to `git diff`.
+    rev: String,
+    /// Branch the base was taken from (`master`, `origin/main`, ...). `None`
+    /// when no main branch could be found and the scope fell back to `HEAD`.
+    reference: Option<String>,
+    /// Commits on this branch since the base, for the selector subtitle.
+    ahead: usize,
+}
+
+/// Resolves the base for the "all changes" scope: the merge base with the
+/// repository's main branch, so the view shows what *this branch* adds, the way
+/// a pull request would. On the main branch itself the base is `HEAD` and the
+/// scope equals "uncommitted", which is the correct answer there.
+///
+/// The main branch is read from `origin/HEAD` and falls back to `main` then
+/// `master`. A local branch is preferred over its remote so that unpushed
+/// commits on main do not appear as "changes"; the remote is used only when no
+/// local branch of that name exists.
+async fn resolve_all_base(root: &FilePath) -> AllChangesBase {
+    let fallback = AllChangesBase {
+        rev: "HEAD".to_string(),
+        reference: None,
+        ahead: 0,
+    };
+
+    let Some(reference) = main_branch_ref(root).await else {
+        return fallback;
+    };
+    let merge_base = git_output(root, &["merge-base", &reference, "HEAD"])
         .await
         .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok());
-    match merge_base {
-        Some(base) if valid_commit_hash(base.trim()) => base.trim().to_string(),
-        _ => "HEAD".to_string(),
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map(|base| base.trim().to_string())
+        .filter(|base| valid_commit_hash(base));
+    let Some(rev) = merge_base else {
+        return fallback;
+    };
+
+    let ahead = git_output(root, &["rev-list", "--count", &format!("{rev}..HEAD")])
+        .await
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .and_then(|count| count.trim().parse().ok())
+        .unwrap_or(0);
+
+    AllChangesBase {
+        rev,
+        reference: Some(reference),
+        ahead,
     }
+}
+
+/// Finds the repository's main branch as a revision `git merge-base` accepts.
+async fn main_branch_ref(root: &FilePath) -> Option<String> {
+    // `origin/HEAD` names the default branch on a normal clone.
+    let from_origin = git_output(
+        root,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    )
+    .await
+    .ok()
+    .and_then(|bytes| String::from_utf8(bytes).ok())
+    .map(|name| name.trim().to_string())
+    .and_then(|name| name.strip_prefix("origin/").map(str::to_string));
+
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(name) = from_origin {
+        candidates.push(name);
+    }
+    candidates.extend(["main".to_string(), "master".to_string()]);
+
+    for name in &candidates {
+        if git_ref_exists(root, &format!("refs/heads/{name}")).await {
+            return Some(name.clone());
+        }
+    }
+    for name in &candidates {
+        if git_ref_exists(root, &format!("refs/remotes/origin/{name}")).await {
+            return Some(format!("origin/{name}"));
+        }
+    }
+    None
+}
+
+async fn git_ref_exists(root: &FilePath, full_ref: &str) -> bool {
+    git_output(root, &["rev-parse", "--verify", "--quiet", full_ref])
+        .await
+        .is_ok()
 }
 
 async fn get_git(
@@ -1107,10 +1189,11 @@ async fn get_git_scope(
     let repository = resolve_git_repository(&state, query.thread_id).await?;
     let scope = query.scope.trim();
 
-    let kind = if scope == "all" {
-        GitDiffKind::Range(resolve_all_base(&repository.root).await)
+    let (kind, base_ref, ahead) = if scope == "all" {
+        let base = resolve_all_base(&repository.root).await;
+        (GitDiffKind::Range(base.rev), base.reference, base.ahead)
     } else if valid_commit_hash(scope) {
-        GitDiffKind::Commit(scope.to_string())
+        (GitDiffKind::Commit(scope.to_string()), None, 0)
     } else {
         return Err((StatusCode::BAD_REQUEST, "Invalid Git scope"));
     };
@@ -1139,6 +1222,8 @@ async fn get_git_scope(
             GitDiffKind::Commit(hash) => Some(hash.clone()),
             _ => None,
         },
+        base_ref,
+        ahead,
         untracked: untracked.into_iter().map(|file| file.path).collect(),
         files,
     }))
@@ -1160,7 +1245,7 @@ async fn get_git_diff(
         "staged" => GitDiffKind::Staged,
         "unstaged" => GitDiffKind::Unstaged,
         "untracked" => GitDiffKind::Untracked,
-        "all" => GitDiffKind::Range(resolve_all_base(&repository.root).await),
+        "all" => GitDiffKind::Range(resolve_all_base(&repository.root).await.rev),
         "commit" => {
             let hash = query
                 .commit

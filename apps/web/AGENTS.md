@@ -32,8 +32,10 @@ has been removed.
 - `src/views/TranscriptPane.svelte` / `AgentPane.svelte` / `ChangesPane.svelte`: the thread tabs.
   `ChangesPane` owns a scope selector — **All Changes** / **Uncommitted** / a specific commit.
   `uncommitted` renders the status groups already in `GitResponse`; the history scopes fetch
-  `/api/git/scope` and render one flat file list. Untracked files keep `kind=untracked` even inside
-  `all`, because they are not part of any diff.
+  `/api/git/scope` and render one flat file list. `All Changes` is the branch's contribution over
+  the repo's main branch (PR-diff semantics) plus local edits; the selector subtitle names the base
+  (`vs master · 3 commits`) so it is obvious that on main it equals Uncommitted. Untracked files
+  keep `kind=untracked` even inside `all`, because they are not part of any diff.
 - `src/views/MonitorView.svelte`: section-aware monitor (`overview` renders everything)
 - `src/views/ThreadListView.svelte`: recent-thread browser (`?view=threads`). Each row opens the
   thread in-app; threads bound to a Telegram topic also get a jump button that calls

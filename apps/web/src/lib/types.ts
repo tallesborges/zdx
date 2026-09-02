@@ -242,6 +242,11 @@ export interface GitScopeResponse {
   scope: "all" | "commit";
   /** Resolved base revision for `all`, or the commit itself. */
   base: string | null;
+  /** For `all`: the main branch the base was taken from (`master`,
+   *  `origin/main`). Null for commits, or when no main branch was found. */
+  base_ref: string | null;
+  /** For `all`: commits on this branch since the base. */
+  ahead: number;
   files: GitFile[];
   /** Subset of `files` that are untracked — request those diffs with
    *  `kind=untracked`, since they are not part of any diff. */
