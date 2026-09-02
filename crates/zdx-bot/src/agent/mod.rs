@@ -184,6 +184,9 @@ fn prepare_persistent_profile_turn(
     if let Some(activity) = recent_activity_block() {
         prompt = format!("{prompt}\n\n{activity}");
     }
+    if let Some(workspaces) = telegram_workspaces_block(config) {
+        prompt = format!("{prompt}\n\n{workspaces}");
+    }
     let overlay_path = zdx_engine::config::paths::zdx_home().join("orchestrator.md");
     if let Some(overlay) = load_orchestrator_overlay(&overlay_path) {
         prompt = format!("{prompt}\n\n# Personal Orchestrator Rules\n\n{overlay}");
@@ -207,6 +210,34 @@ fn prepare_persistent_profile_turn(
 
 const ACTIVITY_MAX_PROJECTS: usize = 8;
 const ACTIVITY_MAX_THREADS: usize = 12;
+
+/// Telegram project groups bound to the bot, so the orchestrator can pick
+/// worker roots deliberately and tell the user where a worker's mirror topic
+/// will appear. `None` when no profiles are configured.
+fn telegram_workspaces_block(config: &Config) -> Option<String> {
+    if config.telegram.profiles.is_empty() {
+        return None;
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+
+    let mut block = String::from(
+        "# Telegram Workspaces\n\nProject groups bound to this bot (profile — root). A worker created inside one of these roots gets its mirror topic in that group (deepest matching root wins); workers in other roots get a topic in the chat you are in. Tell the user where to follow each worker.\n\n",
+    );
+    for (name, profile) in &config.telegram.profiles {
+        let root = shorten_home(&profile.cwd_path().display().to_string(), &home);
+        let flag = if profile.orchestrator {
+            " (orchestrator home)"
+        } else {
+            ""
+        };
+        let _ = writeln!(
+            block,
+            "- {name} (chat {}) — `{root}`{flag}",
+            profile.chat_id
+        );
+    }
+    Some(block)
+}
 
 /// Loads the user's personal orchestrator overlay (`$ZDX_HOME/orchestrator.md`):
 /// free-form manager rules appended only to orchestrator turns, editable
@@ -479,7 +510,7 @@ mod tests {
 
     use super::{
         STATUS_THINKING, STATUS_WAITING, STATUS_WRITING, event_to_status,
-        load_orchestrator_overlay, prepare_bot_turn,
+        load_orchestrator_overlay, prepare_bot_turn, telegram_workspaces_block,
     };
 
     fn make_temp_dir() -> std::path::PathBuf {
@@ -612,6 +643,45 @@ mod tests {
             .expect("unknown profile must fail");
         assert!(err.to_string().contains("Unknown persistent profile"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn telegram_workspaces_block_lists_profiles_with_routing_rule() {
+        use std::collections::BTreeMap;
+
+        use zdx_engine::config::{TelegramConfig, TelegramProfileConfig};
+
+        assert!(telegram_workspaces_block(&Config::default()).is_none());
+
+        let config = Config {
+            telegram: TelegramConfig {
+                profiles: BTreeMap::from([
+                    (
+                        "dub".to_string(),
+                        TelegramProfileConfig {
+                            chat_id: -100_1,
+                            cwd: "/tmp/work/dub".to_string(),
+                            orchestrator: false,
+                        },
+                    ),
+                    (
+                        "zdx".to_string(),
+                        TelegramProfileConfig {
+                            chat_id: -100_2,
+                            cwd: "/tmp/personal/zdx".to_string(),
+                            orchestrator: true,
+                        },
+                    ),
+                ]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let block = telegram_workspaces_block(&config).unwrap();
+        assert!(block.starts_with("# Telegram Workspaces"));
+        assert!(block.contains("mirror topic in that group"));
+        assert!(block.contains("- dub (chat -1001) — `/tmp/work/dub`"));
+        assert!(block.contains("- zdx (chat -1002) — `/tmp/personal/zdx` (orchestrator home)"));
     }
 
     #[test]
