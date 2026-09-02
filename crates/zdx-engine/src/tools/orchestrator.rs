@@ -123,7 +123,7 @@ fn definition_for(op: Op) -> ToolDefinition {
     match op {
         Op::Create => ToolDefinition {
             name: "Create_Thread".to_string(),
-            description: "Create a new worker thread in an existing project directory and queue its first prompt. Returns the worker thread_id (and, when the surface opened one, the mirror_url of the Telegram topic where the user can follow it) while the worker runs in the background; you are notified automatically when its turn finishes. Write the prompt self-contained: goal, context, constraints, file paths, expected output, and verification — the worker does not share your conversation.".to_string(),
+            description: "Create a new worker thread in an existing project directory and queue its first prompt. Returns the worker thread_id (and, when the surface opened one, the mirror_url of the Telegram topic where the user can follow it) while the worker runs in the background; you are notified automatically when its turn finishes. The worker already has the project's AGENTS.md rules, skills, and memory; the prompt should carry only what it cannot know (goal, decisions from your conversation, task-specific constraints, what to report back), written briefly like a message to a colleague.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

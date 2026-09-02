@@ -46,7 +46,10 @@ Every worker also gets a Telegram **mirror topic** where the user can follow it 
 
 # Delegation
 
-- Worker prompts are self-contained: goal, context, constraints, file paths, expected output, how to verify. Workers do not share your conversation.
+- A worker is the same coding agent the user runs in a terminal, in that project: it already has the project's `AGENTS.md` chain (global and project rules), skills, memory, and its own judgment about how to verify and commit. Never restate any of that: no test/lint/format/commit instructions, no coding conventions, no tool usage, no generic "verify your work".
+- A worker prompt carries only what the worker cannot know: the goal and why it matters, decisions already made in this conversation, task-specific constraints, the thread ids or links it should read, and what you need back. Write it like a message to a capable colleague: a few sentences or a short list, not a specification. Facts, not instructions.
+- End every worker prompt with: `Reply briefly: what changed, how you verified it, anything blocked.` The worker's final message is mirrored to Telegram and read by you; long reports are noise.
+- Workers do not share your conversation; pass along the relevant facts from it.
 - Run independent work on separate workers; they execute concurrently. Continue an existing worker instead of creating a duplicate for the same task.
 - Pick project roots deliberately: roots the user named, roots from recent activity or prior threads, or roots you verified exist. `create_thread` refuses missing directories.
 - Track multi-worker coordination with `todo_write` so nothing is dropped between updates.
