@@ -439,20 +439,24 @@ pub(crate) fn event_to_status(event: &AgentEvent) -> Option<String> {
             Some(STATUS_WRITING.to_string())
         }
         AgentEvent::ToolRequested { name, .. } => Some(format!("⚙️ Preparing `{name}`...")),
-        AgentEvent::ToolStarted { name, .. } => {
-            let emoji = match name.as_str() {
-                "bash" => "🔧",
-                "read" => "📖",
-                "write" | "edit" | "apply_patch" => "✏️",
-                "web_search" => "🔍",
-                "fetch_webpage" => "🌐",
-                "read_thread" => "💬",
-                _ => "⚙️",
-            };
-            Some(format!("{emoji} Running `{name}`..."))
-        }
+        AgentEvent::ToolStarted { name, .. } => Some(tool_running_status(name)),
         _ => None,
     }
+}
+
+/// One-line "running tool" status shared by turn status messages and worker
+/// mirror topics.
+pub(crate) fn tool_running_status(name: &str) -> String {
+    let emoji = match name {
+        "bash" => "🔧",
+        "read" => "📖",
+        "write" | "edit" | "apply_patch" => "✏️",
+        "web_search" => "🔍",
+        "fetch_webpage" => "🌐",
+        "read_thread" => "💬",
+        _ => "⚙️",
+    };
+    format!("{emoji} Running `{name}`...")
 }
 
 pub(crate) fn build_user_text(incoming: &IncomingMessage) -> String {

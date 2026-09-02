@@ -7,12 +7,12 @@
 //!   worker in Telegram. Messages typed there are queued into the worker FIFO
 //!   by the message handler (never run as in-process turns). The topic link
 //!   is registered on the manager so `create_thread` can hand it back.
-//! - `Activity` keeps one live `⏳ Working…` message per running turn up to
-//!   date with the worker's tool calls (debounced edits).
-//! - `Completed` finalizes the live message, posts the worker's final text
-//!   into its mirror topic and wakes the owning orchestrator topic with a
-//!   synthetic queued turn, reusing the same dispatch path as `/goal`
-//!   continuations.
+//! - `Activity` keeps one live status line per running turn (`🔧 Running
+//!   `bash`...`, same shape as a normal turn's status) up to date with
+//!   debounced edits; it is deleted when the result posts.
+//! - `Completed` posts the worker's final text into its mirror topic and
+//!   wakes the owning orchestrator topic with a synthetic queued turn,
+//!   reusing the same dispatch path as `/goal` continuations.
 //!
 //! Mirror header and result messages carry `⏹ Cancel worker` (`wk:c`) and
 //! `💬 Open Thread` buttons; the cancel callback resolves the worker from the
@@ -33,6 +33,7 @@ use tokio::time::Instant;
 use zdx_engine::core::thread_persistence::{self, Thread};
 use zdx_engine::core::workers::{CompletionEvent, WorkerActivity, WorkerEvent, WorkerStatus};
 
+use crate::agent::{STATUS_WAITING, tool_running_status};
 use crate::bot::context::BotContext;
 use crate::bot::queue::ChatQueueMap;
 use crate::bot::synthetic::dispatch_synthetic_prompt;
@@ -50,12 +51,8 @@ use crate::telegram::{
 const MAX_CALLBACK_TEXT_CHARS: usize = 2000;
 /// Longest final-text excerpt posted into a mirror topic message.
 const MAX_MIRROR_TEXT_CHARS: usize = 3500;
-/// Minimum spacing between edits of one live activity message.
+/// Minimum spacing between edits of one live status message.
 const LIVE_EDIT_INTERVAL: Duration = Duration::from_secs(3);
-/// Most recent tool calls kept visible in the live activity message.
-const MAX_ACTIVITY_LINES: usize = 12;
-/// Longest tool argument shown per activity line.
-const MAX_ACTIVITY_ARG_CHARS: usize = 80;
 
 const CANCEL_CALLBACK: &str = "wk:c";
 
@@ -66,90 +63,31 @@ struct MirrorTopic {
     topic: i64,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ToolState {
-    Running,
-    Done,
-    Failed,
-}
-
-struct ToolLine {
-    id: String,
-    name: String,
-    arg: Option<String>,
-    state: ToolState,
-}
-
-/// One running worker turn's live activity message.
+/// One running worker turn's live status message: a single line naming the
+/// tool currently running (same shape as a normal turn's status), deleted
+/// when the result posts.
 struct LiveTurn {
     mirror: MirrorTopic,
     message_id: i64,
-    tools: Vec<ToolLine>,
-    /// Tool calls dropped from the visible window.
-    elided: usize,
+    status: String,
     dirty: bool,
     last_edit: Instant,
 }
 
 impl LiveTurn {
-    fn apply(&mut self, activity: WorkerActivity) {
-        match activity {
-            WorkerActivity::ToolStarted { id, name } => {
-                self.tools.push(ToolLine {
-                    id,
-                    name,
-                    arg: None,
-                    state: ToolState::Running,
-                });
-                if self.tools.len() > MAX_ACTIVITY_LINES {
-                    let overflow = self.tools.len() - MAX_ACTIVITY_LINES;
-                    self.tools.drain(..overflow);
-                    self.elided += overflow;
-                }
-            }
-            WorkerActivity::ToolInput { id, arg } => {
-                if let Some(line) = self.tools.iter_mut().rev().find(|line| line.id == id) {
-                    line.arg = Some(arg);
-                }
-            }
-            WorkerActivity::ToolFinished { id, ok } => {
-                if let Some(line) = self.tools.iter_mut().rev().find(|line| line.id == id) {
-                    line.state = if ok {
-                        ToolState::Done
-                    } else {
-                        ToolState::Failed
-                    };
-                }
-            }
+    /// Returns whether the visible status changed.
+    fn apply(&mut self, activity: &WorkerActivity) -> bool {
+        let next = match activity {
+            WorkerActivity::ToolStarted { name, .. } => tool_running_status(name),
+            WorkerActivity::ToolFinished { .. } => STATUS_WAITING.to_string(),
+            WorkerActivity::ToolInput { .. } => return false,
+        };
+        if next == self.status {
+            return false;
         }
+        self.status = next;
         self.dirty = true;
-    }
-
-    fn total_calls(&self) -> usize {
-        self.elided + self.tools.len()
-    }
-
-    fn render(&self, headline: &str) -> String {
-        let mut text = String::from(headline);
-        if self.elided > 0 {
-            let _ = write!(text, "\n<i>… {} earlier tool calls</i>", self.elided);
-        }
-        for line in &self.tools {
-            let marker = match line.state {
-                ToolState::Running => "▸",
-                ToolState::Done => "✓",
-                ToolState::Failed => "✗",
-            };
-            let _ = write!(text, "\n{marker} {}", escape_html(&line.name));
-            if let Some(arg) = line.arg.as_deref() {
-                let _ = write!(
-                    text,
-                    " <code>{}</code>",
-                    escape_html(&truncate_plain(arg, MAX_ACTIVITY_ARG_CHARS))
-                );
-            }
-        }
-        text
+        true
     }
 
     fn next_flush_at(&self) -> Option<Instant> {
@@ -286,8 +224,7 @@ impl Bridge {
 
     async fn handle_activity(&mut self, worker_thread_id: &str, activity: WorkerActivity) {
         if let Some(turn) = self.live.get_mut(worker_thread_id) {
-            turn.apply(activity);
-            if turn.last_edit.elapsed() >= LIVE_EDIT_INTERVAL {
+            if turn.apply(&activity) && turn.last_edit.elapsed() >= LIVE_EDIT_INTERVAL {
                 self.flush(worker_thread_id).await;
             }
             return;
@@ -299,19 +236,23 @@ impl Bridge {
         let mut turn = LiveTurn {
             mirror,
             message_id: 0,
-            tools: Vec::new(),
-            elided: 0,
+            status: STATUS_WAITING.to_string(),
             dirty: false,
             last_edit: Instant::now(),
         };
-        turn.apply(activity);
+        turn.apply(&activity);
         turn.dirty = false;
-        let text = turn.render("⏳ Working…");
         let keyboard = mirror_keyboard(&self.context, mirror.chat, worker_thread_id);
         let sent = self
             .context
             .client()
-            .send_message_with_markup(mirror.chat, &text, None, Some(mirror.topic), &keyboard)
+            .send_message_with_markup(
+                mirror.chat,
+                &turn.status,
+                None,
+                Some(mirror.topic),
+                &keyboard,
+            )
             .await;
         match sent {
             Ok(message) => {
@@ -319,7 +260,7 @@ impl Bridge {
                 self.live.insert(worker_thread_id.to_string(), turn);
             }
             Err(err) => {
-                tracing::warn!(worker = %worker_thread_id, %err, "Failed to post live activity message");
+                tracing::warn!(worker = %worker_thread_id, %err, "Failed to post live status message");
             }
         }
     }
@@ -345,43 +286,39 @@ impl Bridge {
         let Some(turn) = self.live.get_mut(worker_thread_id) else {
             return;
         };
-        let text = turn.render("⏳ Working…");
         let keyboard = mirror_keyboard(&self.context, turn.mirror.chat, worker_thread_id);
         turn.dirty = false;
         turn.last_edit = Instant::now();
-        edit_live_message(&self.context, turn, &text, &keyboard).await;
+        if let Err(err) = self
+            .context
+            .client()
+            .edit_message_text(
+                turn.mirror.chat,
+                turn.message_id,
+                &turn.status,
+                Some(&keyboard),
+            )
+            .await
+            && !err.to_string().contains("message is not modified")
+        {
+            tracing::warn!(message_id = turn.message_id, %err, "Failed to edit live status message");
+        }
     }
 
-    /// Freezes the live activity message into a terminal summary (buttons
-    /// removed) so the result message below it carries the actions.
+    /// Removes the live status message; the result posted right after it is
+    /// the record of the turn, exactly like a normal turn's status.
     async fn finish_live_turn(&mut self, event: &CompletionEvent) {
         let Some(turn) = self.live.remove(&event.worker_thread_id) else {
             return;
         };
-        let calls = turn.total_calls();
-        let headline = match event.status {
-            WorkerStatus::Completed => format!("✅ Finished · {calls} tool calls"),
-            WorkerStatus::Cancelled => format!("🚫 Cancelled · {calls} tool calls"),
-            _ => format!("❌ Failed · {calls} tool calls"),
-        };
-        let text = turn.render(&headline);
-        edit_live_message(&self.context, &turn, &text, &InlineKeyboardMarkup::empty()).await;
-    }
-}
-
-async fn edit_live_message(
-    context: &Arc<BotContext>,
-    turn: &LiveTurn,
-    text: &str,
-    keyboard: &InlineKeyboardMarkup,
-) {
-    if let Err(err) = context
-        .client()
-        .edit_message_text(turn.mirror.chat, turn.message_id, text, Some(keyboard))
-        .await
-        && !err.to_string().contains("message is not modified")
-    {
-        tracing::warn!(message_id = turn.message_id, %err, "Failed to edit live activity message");
+        if let Err(err) = self
+            .context
+            .client()
+            .delete_message(turn.mirror.chat, turn.message_id)
+            .await
+        {
+            tracing::warn!(message_id = turn.message_id, %err, "Failed to delete live status message");
+        }
     }
 }
 
@@ -675,14 +612,6 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     format!("{head}… [truncated — use Read_Thread for the rest]")
 }
 
-fn truncate_plain(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-    let head: String = text.chars().take(max_chars).collect();
-    format!("{head}…")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -745,75 +674,42 @@ mod tests {
         LiveTurn {
             mirror: MirrorTopic { chat: -1, topic: 1 },
             message_id: 1,
-            tools: Vec::new(),
-            elided: 0,
+            status: STATUS_WAITING.to_string(),
             dirty: false,
             last_edit: Instant::now(),
         }
     }
 
     #[test]
-    fn live_turn_renders_tool_lifecycle_with_escaped_args() {
+    fn live_turn_tracks_only_the_current_tool() {
         let mut turn = live_turn();
-        turn.apply(WorkerActivity::ToolStarted {
+        assert!(turn.apply(&WorkerActivity::ToolStarted {
             id: "a".to_string(),
             name: "bash".to_string(),
-        });
-        turn.apply(WorkerActivity::ToolInput {
+        }));
+        assert_eq!(turn.status, "🔧 Running `bash`...");
+        // Arguments are noise here; the thread has the detail.
+        assert!(!turn.apply(&WorkerActivity::ToolInput {
             id: "a".to_string(),
-            arg: "cat <file> && echo".to_string(),
-        });
-        turn.apply(WorkerActivity::ToolStarted {
-            id: "b".to_string(),
-            name: "edit".to_string(),
-        });
-        turn.apply(WorkerActivity::ToolFinished {
+            arg: "cat <file>".to_string(),
+        }));
+        assert!(turn.apply(&WorkerActivity::ToolFinished {
             id: "a".to_string(),
             ok: true,
-        });
-        turn.apply(WorkerActivity::ToolFinished {
-            id: "b".to_string(),
+        }));
+        assert_eq!(turn.status, STATUS_WAITING);
+        // Same visible status again is not a change.
+        assert!(!turn.apply(&WorkerActivity::ToolFinished {
+            id: "a".to_string(),
             ok: false,
-        });
-        assert!(turn.dirty);
-
-        let text = turn.render("⏳ Working…");
-        assert!(text.starts_with("⏳ Working…"));
-        assert!(text.contains("✓ bash <code>cat &lt;file&gt; &amp;&amp; echo</code>"));
-        assert!(text.contains("✗ edit"));
-        assert_eq!(turn.total_calls(), 2);
-    }
-
-    #[test]
-    fn live_turn_keeps_a_bounded_window_and_counts_elided_calls() {
-        let mut turn = live_turn();
-        for i in 0..(MAX_ACTIVITY_LINES + 3) {
-            turn.apply(WorkerActivity::ToolStarted {
-                id: format!("t{i}"),
-                name: "read".to_string(),
-            });
-        }
-        assert_eq!(turn.tools.len(), MAX_ACTIVITY_LINES);
-        assert_eq!(turn.elided, 3);
-        assert_eq!(turn.total_calls(), MAX_ACTIVITY_LINES + 3);
-        assert!(turn.render("x").contains("… 3 earlier tool calls"));
-        // A late finish for an elided call is ignored rather than mis-applied.
-        turn.apply(WorkerActivity::ToolFinished {
-            id: "t0".to_string(),
-            ok: true,
-        });
-        assert!(
-            turn.tools
-                .iter()
-                .all(|line| line.state == ToolState::Running)
-        );
+        }));
     }
 
     #[test]
     fn flush_is_due_only_while_dirty() {
         let mut turn = live_turn();
         assert_eq!(turn.next_flush_at(), None);
-        turn.apply(WorkerActivity::ToolStarted {
+        turn.apply(&WorkerActivity::ToolStarted {
             id: "a".to_string(),
             name: "glob".to_string(),
         });
