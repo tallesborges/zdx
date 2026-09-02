@@ -149,7 +149,7 @@ websocket = false
 enabled = true
 # api_key = "sk-ant-..."  # Overrides ANTHROPIC_API_KEY env var
 # base_url = "https://api.anthropic.com"
-models = ["claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"]
+models = ["claude-fable-5-1", "claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"]
 websocket = false
 
 [providers.lmstudio]
@@ -160,7 +160,7 @@ websocket = false
 [providers.claude_cli]
 enabled = true
 # base_url = "https://api.anthropic.com"
-models = ["claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"]
+models = ["claude-fable-5-1", "claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"]
 websocket = false
 
 [providers.openai]
@@ -230,7 +230,7 @@ websocket = false
 
 [providers.alibaba]
 enabled = true
-models = ["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.7-flash"]
+models = ["qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.7-flash"]
 websocket = false
 
 [providers.qwen_code]

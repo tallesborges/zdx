@@ -1809,6 +1809,7 @@ fn default_anthropic_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "claude-fable-5-1".to_string(),
             "claude-fable-5".to_string(),
             "claude-opus-5".to_string(),
             "claude-opus-4-8".to_string(),
@@ -1823,6 +1824,7 @@ fn default_claude_cli_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "claude-fable-5-1".to_string(),
             "claude-fable-5".to_string(),
             "claude-opus-5".to_string(),
             "claude-opus-4-8".to_string(),
@@ -1933,6 +1935,7 @@ fn default_alibaba_provider() -> ProviderConfig {
         enabled: Some(true),
         models: vec![
             "qwen3.8-max".to_string(),
+            "qwen3.8-flash".to_string(),
             "qwen3.7-max".to_string(),
             "qwen3.7-plus".to_string(),
             "qwen3.7-flash".to_string(),
