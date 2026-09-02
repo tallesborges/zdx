@@ -118,13 +118,13 @@ ZDX solves this with a boring, reliable core:
 
 ### `zdx service ...` (macOS/launchd)
 
-- launchd owns the lifetime of the `bot` and `daemon` services: start at login, restart on crash. Telegram `/restart` restarts the daemon first, then exits the bot so launchd restarts it; `/restart --force` explicitly allows interrupting active runs.
+- launchd owns the lifetime of the `bot` and `daemon` services: start at login, restart on crash. Telegram `/restart` restarts the daemon first, then exits the bot so launchd restarts it. `/restart f` (also `force`, `--force`) explicitly allows interrupting active runs; `/restart q` (also `queue`) waits until no agent run is active anywhere and then performs the gated restart automatically, announcing it in the topic that queued it. Only one queued restart is pending at a time; a second `/restart q` reports that. `/restart` in any mode bypasses the per-topic queue, so it is answered while a turn runs.
 - Agents run `~/.local/bin/zdx` (the `just install` target), never the calling binary, so `restart` always picks up the currently installed build.
 - Agents are launched via `zsh -c 'exec …'` so `~/.zshenv` is sourced; launchd sources no shell startup files, and provider API keys live there.
 - `install` refuses when the service is already running outside launchd; PID-file uniqueness continues to prevent duplicate instances.
 - `stop` is durable: the service stays stopped until an explicit `start`, across reboots.
 - `restart` waits for the old process to exit before the replacement starts, and reports `PID old → new`.
-- `restart` refuses while any agent run is active across ZDX surfaces. A multi-service restart checks once before changing either service. CLI `--force`, Telegram `/restart --force`, and Monitor `R` bypass the guard and may interrupt those runs; Monitor `r` remains guarded.
+- `restart` refuses while any agent run is active across ZDX surfaces. A multi-service restart checks once before changing either service. CLI `--force`, Telegram `/restart f`, and Monitor `R` bypass the guard and may interrupt those runs; Monitor `r` remains guarded. A blocked Telegram `/restart` lists `/restart q` and `/restart f` as the two ways forward.
 - Service stdout/stderr are captured to `$ZDX_HOME/run/logs/{bot,daemon}.{out,err}`.
 - Plists set `ZDX_SERVICE_SUPERVISOR=launchd`; the bot uses this to self-mark as supervised so `/restart` is honored with no monitor running.
 - `zdx monitor` is a control panel over the same operations, not an independent supervisor; it never spawns service processes itself.

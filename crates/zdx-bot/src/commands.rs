@@ -47,7 +47,7 @@ const COMMAND_DEFS: &[CommandDef] = &[
         blocks_topic_autocreate: true,
         telegram_spec: TelegramCommandSpec {
             command: "restart",
-            description: "Restart bot and daemon (--force overrides active agents)",
+            description: "Restart bot and daemon (f = force now, q = when idle)",
         },
     },
     CommandDef {
@@ -212,9 +212,20 @@ pub(crate) fn parse_command(text: &str) -> Option<BotCommand> {
         })
 }
 
+/// How `/restart` treats active agent runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RestartMode {
+    /// Refuse while any agent run is active (default).
+    Gated,
+    /// Interrupt active runs and restart now (`f`, `force`, `--force`).
+    Force,
+    /// Restart automatically once no agent run is active (`q`, `queue`).
+    Queued,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RestartCommand {
-    pub force: bool,
+    pub mode: RestartMode,
 }
 
 pub(crate) fn parse_restart_command(text: &str) -> Option<RestartCommand> {
@@ -228,11 +239,13 @@ pub(crate) fn parse_restart_command(text: &str) -> Option<RestartCommand> {
         return None;
     }
 
-    match (parts.next(), parts.next()) {
-        (None, None) => Some(RestartCommand { force: false }),
-        (Some("--force"), None) => Some(RestartCommand { force: true }),
-        _ => None,
-    }
+    let mode = match (parts.next(), parts.next()) {
+        (None, None) => RestartMode::Gated,
+        (Some("f" | "force" | "--force"), None) => RestartMode::Force,
+        (Some("q" | "queue"), None) => RestartMode::Queued,
+        _ => return None,
+    };
+    Some(RestartCommand { mode })
 }
 
 pub(crate) fn blocks_topic_autocreate(command: BotCommand) -> bool {
@@ -258,6 +271,7 @@ pub(crate) fn bypasses_queue(text: &str) -> bool {
                 | BotCommand::ThreadId
                 | BotCommand::Btw
                 | BotCommand::Commands
+                | BotCommand::Restart
         )
     )
 }
@@ -349,8 +363,9 @@ mod tests {
     use std::collections::HashSet;
 
     use super::{
-        BotCommand, bypasses_queue, command_matches, is_topic_blocking_command, parse_command,
-        parse_model_command, parse_restart_command, parse_thinking_command, telegram_command_specs,
+        BotCommand, RestartMode, bypasses_queue, command_matches, is_topic_blocking_command,
+        parse_command, parse_model_command, parse_restart_command, parse_thinking_command,
+        telegram_command_specs,
     };
 
     #[test]
@@ -375,20 +390,23 @@ mod tests {
     }
 
     #[test]
-    fn parses_restart_force_strictly() {
-        assert!(!parse_restart_command("/restart").unwrap().force);
-        assert!(parse_restart_command("/restart --force").unwrap().force);
-        assert!(
-            parse_restart_command(" /restart@zdx_bot --force ")
-                .unwrap()
-                .force
-        );
+    fn parses_restart_modes_strictly() {
+        let mode = |text: &str| parse_restart_command(text).map(|cmd| cmd.mode);
+        assert_eq!(mode("/restart"), Some(RestartMode::Gated));
+        assert_eq!(mode("/restart f"), Some(RestartMode::Force));
+        assert_eq!(mode("/restart force"), Some(RestartMode::Force));
+        assert_eq!(mode("/restart --force"), Some(RestartMode::Force));
+        assert_eq!(mode(" /restart@zdx_bot f "), Some(RestartMode::Force));
+        assert_eq!(mode("/restart q"), Some(RestartMode::Queued));
+        assert_eq!(mode("/restart queue"), Some(RestartMode::Queued));
         assert_eq!(
             parse_command("/restart@zdx_bot --force"),
             Some(BotCommand::Restart)
         );
-        assert!(parse_restart_command("/restart force").is_none());
-        assert!(parse_restart_command("/restart --force now").is_none());
+        assert_eq!(parse_command("/restart q"), Some(BotCommand::Restart));
+        assert_eq!(mode("/restart now"), None);
+        assert_eq!(mode("/restart f now"), None);
+        assert_eq!(mode("/restart q f"), None);
     }
 
     #[test]
@@ -504,6 +522,11 @@ mod tests {
         assert!(!bypasses_queue("/handoff"));
         assert!(bypasses_queue("/tldr"));
         assert_eq!(parse_command("/tldr"), Some(BotCommand::Tldr));
+        // Restart must be answered (blocked / queued / forced) while a turn
+        // runs, never wait behind it.
+        assert!(bypasses_queue("/restart"));
+        assert!(bypasses_queue("/restart q"));
+        assert!(bypasses_queue("/restart f"));
         // The picker only lists project commands; it never touches the thread.
         assert!(bypasses_queue("/commands"));
         assert!(bypasses_queue("/commands@zdx_bot"));
