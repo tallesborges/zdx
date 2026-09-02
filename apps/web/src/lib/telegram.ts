@@ -24,6 +24,7 @@ interface TelegramWebApp {
   onEvent(event: string, handler: () => void): void;
   offEvent(event: string, handler: () => void): void;
   isVersionAtLeast?(version: string): boolean;
+  openTelegramLink?(url: string): void;
   requestFullscreen?(): void;
   disableVerticalSwipes?(): void;
   setHeaderColor?(color: string): void;
@@ -69,6 +70,20 @@ export function notify(type: "error" | "success" | "warning"): void {
 /** Telegram's `startapp=` payload, used to deep-link straight to a thread. */
 export function startParam(): string {
   return String(tg?.initDataUnsafe?.start_param ?? "").trim();
+}
+
+/**
+ * Jumps to a `t.me` link inside the Telegram client.
+ *
+ * Since Bot API 7.0 the Mini App is *not* closed, so the user can come back.
+ * Outside Telegram (browser dev) this falls back to a normal new-tab open.
+ */
+export function openTelegramLink(url: string): void {
+  if (tg?.openTelegramLink) {
+    tg.openTelegramLink(url);
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 function applyScheme(): void {

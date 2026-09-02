@@ -33,6 +33,12 @@
     onclose();
   }
 
+  function goThreadList() {
+    selectionChanged();
+    router.openThreadList();
+    onclose();
+  }
+
   function goMonitor(section: MonitorSection) {
     selectionChanged();
     router.openMonitor(section);
@@ -69,6 +75,23 @@
 
       <div class="scroll-area flex-1 px-2 py-3" data-sidebar="content">
         <div data-sidebar="group">
+          <p class="grp">Browse</p>
+          <ul data-sidebar="menu">
+            <li data-sidebar="menu-item">
+              <button
+                type="button"
+                data-sidebar="menu-button"
+                data-active={route.view === "threads"}
+                onclick={goThreadList}
+                class="item"
+              >
+                Recent threads
+              </button>
+            </li>
+          </ul>
+        </div>
+
+        <div data-sidebar="group" class="mt-4">
           <p class="grp">Thread</p>
           <ul data-sidebar="menu">
             {#each threadTabs as tab (tab)}

@@ -2,16 +2,18 @@
  * Query-string router.
  *
  * Canonical shapes:
+ *   ?view=threads                  (recent-thread browser)
  *   ?view=thread&id=<id>&tab=agent|transcript|changes
  *   ?view=monitor&section=overview|agents|services|usage|config|automations
  *
  * The bot already publishes `?view=threads&id=…`, `?view=git&id=…` and bare
  * `startapp=<thread_id>` deep links, so those are accepted and normalized rather
- * than broken.
+ * than broken. `?view=threads` *with* an id stays a single-thread link for that
+ * reason; only the bare form opens the list.
  */
 import { startParam } from "./telegram";
 
-export type View = "thread" | "monitor";
+export type View = "thread" | "threads" | "monitor";
 export type ThreadTab = "agent" | "transcript" | "changes";
 export type MonitorSection =
   | "overview"
@@ -113,6 +115,10 @@ class Router {
 
   openThread(id: string, tab: ThreadTab = "transcript"): void {
     this.push({ ...this.current, view: "thread", id, tab });
+  }
+
+  openThreadList(): void {
+    this.push({ ...this.current, view: "threads" });
   }
 
   setTab(tab: ThreadTab): void {

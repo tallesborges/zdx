@@ -40,6 +40,8 @@ const SUBSCRIPTION_CACHE_TTL: Duration = Duration::from_mins(5);
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
 const GIT_DIFF_LIMIT_BYTES: usize = 256 * 1024;
 const GIT_COMMIT_LIMIT: usize = 24;
+/// How many recent threads the Mini App browser lists. Applied in SQL.
+const THREAD_LIST_LIMIT: usize = 50;
 
 type HmacSha256 = Hmac<Sha256>;
 type ApiError = (StatusCode, &'static str);
@@ -50,7 +52,32 @@ pub struct ThreadResponse {
     pub title: String,
     pub total_messages: usize,
     pub total_events: usize,
+    /// `t.me` link to the Telegram topic this thread is bound to, derived from
+    /// the *resolved* id so it is present even when the client asked for
+    /// `active`. `None` for TUI/CLI threads and plain DMs.
+    pub telegram_link: Option<String>,
     pub activity: Vec<ThreadActivity>,
+}
+
+#[derive(Serialize)]
+pub struct ThreadListResponse {
+    pub threads: Vec<ThreadListItem>,
+}
+
+#[derive(Serialize)]
+pub struct ThreadListItem {
+    pub id: String,
+    pub title: String,
+    pub root_path: Option<String>,
+    /// Trailing component of `root_path`, for a compact project label.
+    pub project: Option<String>,
+    /// Time since the last write (`12m`, `3h`, `2d`), or `None` when the
+    /// thread's mtime is unknown or in the future.
+    pub age: Option<String>,
+    /// `t.me` link to the Telegram topic this thread is bound to, when it has
+    /// one. `None` for TUI/CLI threads and plain DMs, which have no linkable
+    /// topic.
+    pub telegram_link: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -147,6 +174,27 @@ struct GitDiffQuery {
     thread_id: Option<String>,
     path: String,
     kind: String,
+    /// Commit hash for `kind=commit`. Ignored by the other kinds.
+    commit: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GitScopeQuery {
+    thread_id: Option<String>,
+    /// `all` or a commit hash.
+    scope: String,
+}
+
+#[derive(Serialize)]
+struct GitScopeResponse {
+    /// `all` or `commit`.
+    scope: &'static str,
+    /// Resolved base revision (`all`) or the commit itself.
+    base: Option<String>,
+    files: Vec<GitFile>,
+    /// Subset of `files` that are untracked, so the client knows to request
+    /// those diffs with `kind=untracked`.
+    untracked: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -382,9 +430,11 @@ struct InitDataUser {
 /// Creates the router for the embedded web server.
 pub(crate) fn create_router(state: Arc<ServerState>) -> Router {
     let api = Router::new()
+        .route("/threads", get(get_threads))
         .route("/threads/{id}", get(get_thread))
         .route("/monitor", get(get_monitor))
         .route("/git", get(get_git))
+        .route("/git/scope", get(get_git_scope))
         .route("/git/diff", get(get_git_diff))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
@@ -459,6 +509,59 @@ async fn authorize_api(
 ) -> Result<Response, ApiError> {
     authorize(&headers, &state)?;
     Ok(next.run(request).await)
+}
+
+/// Builds a `t.me/c/<internal_id>/<topic_id>` link for a Telegram topic thread.
+///
+/// Thread ids are minted as `telegram-{chat_id}-topic-{topic_id}`, and
+/// supergroup chat ids carry the `-100` prefix that `t.me/c` links omit. A forum
+/// topic id is the id of the service message that opened the topic, so the
+/// message-link form resolves to the topic itself. Threads with no topic (plain
+/// DMs) and non-Telegram threads have no linkable target.
+fn telegram_topic_link(thread_id: &str) -> Option<String> {
+    let rest = thread_id.strip_prefix("telegram-")?;
+    let (chat, topic) = rest.rsplit_once("-topic-")?;
+    let internal = chat.strip_prefix("-100")?;
+    let numeric = |value: &str| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit());
+    (numeric(internal) && numeric(topic)).then(|| format!("https://t.me/c/{internal}/{topic}"))
+}
+
+/// Lists the most recently active top-level threads for the Mini App browser.
+async fn get_threads() -> Result<Json<ThreadListResponse>, ApiError> {
+    tokio::task::spawn_blocking(|| {
+        let now = SystemTime::now();
+        let threads = thread_persistence::list_recent_threads(THREAD_LIST_LIMIT)
+            .map_err(|error| {
+                tracing::warn!(%error, "Failed to list Mini App threads");
+                (StatusCode::INTERNAL_SERVER_ERROR, "Thread list failed")
+            })?
+            .into_iter()
+            .map(|summary| ThreadListItem {
+                project: summary.root_path.as_deref().and_then(|root| {
+                    FilePath::new(root)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                }),
+                age: summary
+                    .modified
+                    .and_then(|modified| now.duration_since(modified).ok())
+                    .map(service::format_uptime),
+                telegram_link: telegram_topic_link(&summary.id),
+                title: summary
+                    .title
+                    .filter(|title| !title.trim().is_empty())
+                    .unwrap_or_else(|| summary.id.clone()),
+                root_path: summary.root_path,
+                id: summary.id,
+            })
+            .collect();
+        Ok(Json(ThreadListResponse { threads }))
+    })
+    .await
+    .map_err(|error| {
+        tracing::warn!(%error, "Mini App thread list task failed");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Thread list failed")
+    })?
 }
 
 async fn get_thread(Path(id): Path<String>) -> Result<Json<ThreadResponse>, ApiError> {
@@ -653,6 +756,7 @@ fn project_thread(target_id: String, events: Vec<ThreadEvent>) -> ThreadResponse
     }
 
     ThreadResponse {
+        telegram_link: telegram_topic_link(&target_id),
         id: target_id,
         title,
         total_messages,
@@ -855,29 +959,50 @@ struct GitWorktreeBuilder {
     flags: Vec<&'static str>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum GitDiffKind {
     Staged,
     Unstaged,
     Untracked,
+    /// One commit, addressed by a validated hash (`git show <hash>`).
+    Commit(String),
+    /// Everything since a base revision *including* the working tree, so a
+    /// single view covers committed-but-unpushed work plus local edits.
+    Range(String),
 }
 
 impl GitDiffKind {
-    fn parse(value: &str) -> Option<Self> {
-        match value {
-            "staged" => Some(Self::Staged),
-            "unstaged" => Some(Self::Unstaged),
-            "untracked" => Some(Self::Untracked),
-            _ => None,
-        }
-    }
-
-    const fn as_str(self) -> &'static str {
+    const fn as_str(&self) -> &'static str {
         match self {
             Self::Staged => "staged",
             Self::Unstaged => "unstaged",
             Self::Untracked => "untracked",
+            Self::Commit(_) => "commit",
+            Self::Range(_) => "all",
         }
+    }
+}
+
+/// Accepts only an abbreviated-or-full hex object id.
+///
+/// Everything here reaches a `git` argument list, so a revision that could be
+/// read as an option or a range never gets built in the first place.
+fn valid_commit_hash(value: &str) -> bool {
+    (7..=40).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Resolves the base revision for the "all changes" scope: the merge base with
+/// the tracked upstream, so the view shows what this branch adds on top of the
+/// remote. Falls back to `HEAD` (making the scope equal to "uncommitted") when
+/// there is no upstream, which is the case on a detached or unpublished branch.
+async fn resolve_all_base(root: &FilePath) -> String {
+    let merge_base = git_output(root, &["merge-base", "@{upstream}", "HEAD"])
+        .await
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok());
+    match merge_base {
+        Some(base) if valid_commit_hash(base.trim()) => base.trim().to_string(),
+        _ => "HEAD".to_string(),
     }
 }
 
@@ -944,34 +1069,145 @@ async fn get_git(
     }))
 }
 
+/// Lists the files a non-uncommitted scope touches.
+///
+/// `scope=all` diffs the base against the working tree, so it already covers
+/// committed, staged and unstaged changes in one pass; untracked files are not
+/// part of a diff and are appended from `status`. A commit scope lists exactly
+/// what that commit changed.
+async fn load_scope_files(root: &FilePath, kind: &GitDiffKind) -> anyhow::Result<Vec<GitFile>> {
+    let output = match kind {
+        GitDiffKind::Range(base) => {
+            git_output(root, &["diff", "--name-status", "--no-renames", base]).await?
+        }
+        GitDiffKind::Commit(hash) => {
+            git_output(
+                root,
+                &["show", "--name-status", "--no-renames", "--format=", hash],
+            )
+            .await?
+        }
+        _ => return Ok(Vec::new()),
+    };
+    let output = String::from_utf8(output).context("Git file list contains non-UTF-8 text")?;
+
+    Ok(output
+        .lines()
+        .filter_map(|line| {
+            let (status, path) = line.split_once('\t')?;
+            let path = path.trim();
+            (!path.is_empty() && valid_git_path(path)).then(|| GitFile {
+                path: path.to_string(),
+                status: status.trim().to_string(),
+                original_path: None,
+            })
+        })
+        .collect())
+}
+
+async fn get_git_scope(
+    State(state): State<Arc<ServerState>>,
+    Query(query): Query<GitScopeQuery>,
+) -> Result<Json<GitScopeResponse>, ApiError> {
+    let repository = resolve_git_repository(&state, query.thread_id).await?;
+    let scope = query.scope.trim();
+
+    let kind = if scope == "all" {
+        GitDiffKind::Range(resolve_all_base(&repository.root).await)
+    } else if valid_commit_hash(scope) {
+        GitDiffKind::Commit(scope.to_string())
+    } else {
+        return Err((StatusCode::BAD_REQUEST, "Invalid Git scope"));
+    };
+
+    let mut files = load_scope_files(&repository.root, &kind).await.map_err(|error| {
+        tracing::warn!(root = %repository.root.display(), %error, "Failed to list Mini App Git scope");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Git scope unavailable")
+    })?;
+
+    // Untracked files never appear in a diff, so "all changes" would silently
+    // omit brand-new files without this.
+    let mut untracked = Vec::new();
+    if matches!(kind, GitDiffKind::Range(_)) {
+        let status = load_git_status(&repository.root).await.map_err(|error| {
+            tracing::warn!(root = %repository.root.display(), %error, "Failed to read Mini App Git state");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Git state unavailable")
+        })?;
+        untracked = status.files.untracked;
+    }
+    files.append(&mut untracked.clone());
+
+    Ok(Json(GitScopeResponse {
+        scope: kind.as_str(),
+        base: match &kind {
+            GitDiffKind::Range(base) => Some(base.clone()),
+            GitDiffKind::Commit(hash) => Some(hash.clone()),
+            _ => None,
+        },
+        untracked: untracked.into_iter().map(|file| file.path).collect(),
+        files,
+    }))
+}
+
 async fn get_git_diff(
     State(state): State<Arc<ServerState>>,
     Query(query): Query<GitDiffQuery>,
 ) -> Result<Json<GitDiffResponse>, ApiError> {
-    let kind = GitDiffKind::parse(&query.kind)
-        .ok_or((StatusCode::BAD_REQUEST, "Invalid Git file category"))?;
     if !valid_git_path(&query.path) {
         return Err((StatusCode::BAD_REQUEST, "Invalid Git file path"));
     }
 
     let repository = resolve_git_repository(&state, query.thread_id).await?;
-    let status = load_git_status(&repository.root).await.map_err(|error| {
-        tracing::warn!(root = %repository.root.display(), %error, "Failed to validate Mini App Git diff");
-        (StatusCode::INTERNAL_SERVER_ERROR, "Git state unavailable")
-    })?;
-    let files = match kind {
-        GitDiffKind::Staged => &status.files.staged,
-        GitDiffKind::Unstaged => &status.files.unstaged,
-        GitDiffKind::Untracked => &status.files.untracked,
+
+    // `all` and `commit` address history, so their base has to be resolved
+    // against the repository before the file can be validated.
+    let kind = match query.kind.as_str() {
+        "staged" => GitDiffKind::Staged,
+        "unstaged" => GitDiffKind::Unstaged,
+        "untracked" => GitDiffKind::Untracked,
+        "all" => GitDiffKind::Range(resolve_all_base(&repository.root).await),
+        "commit" => {
+            let hash = query
+                .commit
+                .as_deref()
+                .map(str::trim)
+                .filter(|hash| valid_commit_hash(hash))
+                .ok_or((StatusCode::BAD_REQUEST, "Invalid commit hash"))?;
+            GitDiffKind::Commit(hash.to_string())
+        }
+        _ => return Err((StatusCode::BAD_REQUEST, "Invalid Git file category")),
     };
-    if !files.iter().any(|file| file.path == query.path) {
-        return Err((
-            StatusCode::NOT_FOUND,
-            "Git file is no longer in that category",
-        ));
+
+    match &kind {
+        GitDiffKind::Staged | GitDiffKind::Unstaged | GitDiffKind::Untracked => {
+            let status = load_git_status(&repository.root).await.map_err(|error| {
+                tracing::warn!(root = %repository.root.display(), %error, "Failed to validate Mini App Git diff");
+                (StatusCode::INTERNAL_SERVER_ERROR, "Git state unavailable")
+            })?;
+            let files = match kind {
+                GitDiffKind::Staged => &status.files.staged,
+                GitDiffKind::Unstaged => &status.files.unstaged,
+                _ => &status.files.untracked,
+            };
+            if !files.iter().any(|file| file.path == query.path) {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    "Git file is no longer in that category",
+                ));
+            }
+        }
+        GitDiffKind::Commit(_) | GitDiffKind::Range(_) => {
+            let files = load_scope_files(&repository.root, &kind).await.map_err(|error| {
+                tracing::warn!(root = %repository.root.display(), %error, "Failed to validate Mini App Git diff");
+                (StatusCode::INTERNAL_SERVER_ERROR, "Git scope unavailable")
+            })?;
+            if !files.iter().any(|file| file.path == query.path) {
+                return Err((StatusCode::NOT_FOUND, "Git file is not in that scope"));
+            }
+        }
     }
 
-    let (bytes, truncated) = load_git_diff(&repository.root, &query.path, kind)
+    let (bytes, truncated) = load_git_diff(&repository.root, &query.path, &kind)
         .await
         .map_err(|error| {
             tracing::warn!(root = %repository.root.display(), path = query.path, %error, "Failed to read Mini App Git diff");
@@ -1266,10 +1502,46 @@ fn parse_git_commits(output: &str) -> Vec<GitCommit> {
         .collect()
 }
 
+/// Builds the `git` argument list that renders one file's diff for a scope.
+fn git_diff_args<'a>(kind: &'a GitDiffKind, path: &'a str) -> Vec<&'a str> {
+    const FLAGS: [&str; 3] = ["--no-color", "--no-ext-diff", "--no-textconv"];
+    let mut args = Vec::with_capacity(9);
+    match kind {
+        GitDiffKind::Staged => {
+            args.extend(["diff", "--cached"]);
+            args.extend(FLAGS);
+            args.extend(["--", path]);
+        }
+        GitDiffKind::Unstaged => {
+            args.push("diff");
+            args.extend(FLAGS);
+            args.extend(["--", path]);
+        }
+        GitDiffKind::Untracked => {
+            args.extend(["diff", "--no-index"]);
+            args.extend(FLAGS);
+            args.extend(["--", "/dev/null", path]);
+        }
+        GitDiffKind::Commit(hash) => {
+            args.push("show");
+            args.extend(FLAGS);
+            args.extend(["--format=", hash.as_str(), "--", path]);
+        }
+        GitDiffKind::Range(base) => {
+            // Base against the working tree, so one diff covers the committed,
+            // staged and unstaged state of this file.
+            args.push("diff");
+            args.extend(FLAGS);
+            args.extend([base.as_str(), "--", path]);
+        }
+    }
+    args
+}
+
 async fn load_git_diff(
     root: &FilePath,
     path: &str,
-    kind: GitDiffKind,
+    kind: &GitDiffKind,
 ) -> anyhow::Result<(Vec<u8>, bool)> {
     let mut command = Command::new("git");
     command
@@ -1279,42 +1551,8 @@ async fn load_git_diff(
         .env("GIT_LITERAL_PATHSPECS", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .kill_on_drop(true);
-    match kind {
-        GitDiffKind::Staged => {
-            command.args([
-                "diff",
-                "--cached",
-                "--no-color",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--",
-                path,
-            ]);
-        }
-        GitDiffKind::Unstaged => {
-            command.args([
-                "diff",
-                "--no-color",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--",
-                path,
-            ]);
-        }
-        GitDiffKind::Untracked => {
-            command.args([
-                "diff",
-                "--no-index",
-                "--no-color",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--",
-                "/dev/null",
-                path,
-            ]);
-        }
-    }
+        .kill_on_drop(true)
+        .args(git_diff_args(kind, path));
 
     let mut child = command.spawn().context("Failed to start Git diff")?;
     let mut stdout = child.stdout.take().context("Git diff stdout unavailable")?;
@@ -1712,9 +1950,11 @@ mod tests {
         let client = reqwest::Client::new();
 
         for path in [
+            "/api/threads",
             "/api/threads/active",
             "/api/monitor",
             "/api/git?thread_id=active",
+            "/api/git/scope?thread_id=active&scope=all",
             "/api/git/diff?thread_id=active&kind=unstaged&path=README.md",
         ] {
             let response = client
@@ -1946,6 +2186,46 @@ mod tests {
     }
 
     #[test]
+    fn accepts_only_hex_object_ids_as_revisions() {
+        assert!(valid_commit_hash("723a11e"));
+        assert!(valid_commit_hash(
+            "8e66e93a1b2c3d4e5f60718293a4b5c6d7e8f900"
+        ));
+
+        // Too short to be an abbreviated hash, or too long to be a hash at all.
+        assert!(!valid_commit_hash("723a11"));
+        assert!(!valid_commit_hash(&"a".repeat(41)));
+        assert!(!valid_commit_hash(""));
+        // Anything that git could read as an option, a range or a second
+        // argument must never reach the command line.
+        assert!(!valid_commit_hash("--output=/tmp/x"));
+        assert!(!valid_commit_hash("HEAD~1"));
+        assert!(!valid_commit_hash("main..HEAD"));
+        assert!(!valid_commit_hash("723a11e; rm -rf /"));
+    }
+
+    #[test]
+    fn builds_topic_links_only_for_supergroup_topic_threads() {
+        assert_eq!(
+            telegram_topic_link("telegram--1001234567890-topic-17771").as_deref(),
+            Some("https://t.me/c/1234567890/17771")
+        );
+
+        // Plain DM threads carry no topic, and DM chat ids have no `-100`
+        // prefix, so neither form yields a linkable topic.
+        assert_eq!(telegram_topic_link("telegram--1001234567890"), None);
+        assert_eq!(telegram_topic_link("telegram-12345-topic-7"), None);
+        // Threads started outside Telegram (TUI/CLI/zbar).
+        assert_eq!(
+            telegram_topic_link("3d6f20e3-78d4-4d1f-9f8e-4d442f3bba31"),
+            None
+        );
+        // Non-numeric segments must not be pasted into a URL.
+        assert_eq!(telegram_topic_link("telegram--100abc-topic-7"), None);
+        assert_eq!(telegram_topic_link("telegram--1001-topic-"), None);
+    }
+
+    #[test]
     fn rejects_thread_ids_that_can_escape_the_threads_directory() {
         assert!(valid_thread_id("telegram--100-topic-42"));
         assert!(valid_thread_id("3d6f20e3-78d4-4d1f-9f8e-4d442f3bba31"));
@@ -2040,7 +2320,7 @@ mod tests {
         std::fs::write(root.join("large.txt"), vec![b'x'; GIT_DIFF_LIMIT_BYTES * 2])
             .expect("write oversized untracked file");
 
-        let (diff, truncated) = load_git_diff(&root, "large.txt", GitDiffKind::Untracked)
+        let (diff, truncated) = load_git_diff(&root, "large.txt", &GitDiffKind::Untracked)
             .await
             .expect("read bounded Git diff");
 
@@ -2087,7 +2367,7 @@ mod tests {
         std::fs::write(root.join("literal*.txt"), "selected\n").expect("modify literal path");
         std::fs::write(root.join("literal-match.txt"), "other\n").expect("modify matching path");
 
-        let (diff, truncated) = load_git_diff(&root, "literal*.txt", GitDiffKind::Unstaged)
+        let (diff, truncated) = load_git_diff(&root, "literal*.txt", &GitDiffKind::Unstaged)
             .await
             .expect("read literal Git diff");
         let diff = String::from_utf8(diff).expect("UTF-8 fixture diff");

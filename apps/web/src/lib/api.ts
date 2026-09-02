@@ -3,7 +3,9 @@ import type {
   GitDiffResponse,
   GitFileKind,
   GitResponse,
+  GitScopeResponse,
   MonitorResponse,
+  ThreadListResponse,
   ThreadResponse,
 } from "./types";
 
@@ -66,6 +68,14 @@ async function get<T>(path: string, params: Record<string, string> = {}): Promis
 }
 
 export const api = {
+  threads: async () => {
+    if (import.meta.env.DEV) {
+      const demo = await import("./demo");
+      if (demo.demoEnabled()) return demo.demoThreads;
+    }
+    return get<ThreadListResponse>("/api/threads");
+  },
+
   thread: async (id: string) => {
     if (import.meta.env.DEV) {
       const demo = await import("./demo");
@@ -90,11 +100,21 @@ export const api = {
     return get<GitResponse>("/api/git", { thread_id: threadId });
   },
 
-  gitDiff: async (threadId: string, kind: GitFileKind, path: string) => {
+  gitDiff: async (threadId: string, kind: GitFileKind, path: string, commit?: string) => {
     if (import.meta.env.DEV) {
       const demo = await import("./demo");
       if (demo.demoEnabled()) return { ...demo.demoDiff, path, kind };
     }
-    return get<GitDiffResponse>("/api/git/diff", { thread_id: threadId, kind, path });
+    const params: Record<string, string> = { thread_id: threadId, kind, path };
+    if (commit) params.commit = commit;
+    return get<GitDiffResponse>("/api/git/diff", params);
+  },
+
+  gitScope: async (threadId: string, scope: string) => {
+    if (import.meta.env.DEV) {
+      const demo = await import("./demo");
+      if (demo.demoEnabled()) return demo.demoScope;
+    }
+    return get<GitScopeResponse>("/api/git/scope", { thread_id: threadId, scope });
   },
 };

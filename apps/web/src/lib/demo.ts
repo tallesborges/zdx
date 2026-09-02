@@ -8,17 +8,66 @@
  * Guarded by `import.meta.env.DEV`, so this module is dropped from production
  * bundles entirely.
  */
-import type { GitDiffResponse, GitResponse, MonitorResponse, ThreadResponse } from "./types";
+import type {
+  GitDiffResponse,
+  GitResponse,
+  GitScopeResponse,
+  MonitorResponse,
+  ThreadListResponse,
+  ThreadResponse,
+} from "./types";
 
 export function demoEnabled(): boolean {
   return import.meta.env.DEV && new URLSearchParams(window.location.search).has("demo");
 }
+
+export const demoScope: GitScopeResponse = {
+  scope: "all",
+  base: "e655104f491c3f59e6e358e5e00f1914538a5d22",
+  files: [
+    { path: "apps/web/src/views/ChangesPane.svelte", status: "M" },
+    { path: "apps/web/src/lib/api.ts", status: "M" },
+    { path: "crates/zdx-bot/src/server.rs", status: "M" },
+    { path: "apps/web/src/views/ThreadListView.svelte", status: "A" },
+  ],
+  untracked: ["apps/web/src/views/ThreadListView.svelte"],
+};
+
+export const demoThreads: ThreadListResponse = {
+  threads: [
+    {
+      id: "telegram--1001234567890-topic-18012",
+      title: "Svelte Mini App for the bot",
+      root_path: "/Users/me/projects/personal/zdx",
+      project: "zdx",
+      age: "4m",
+      telegram_link: "https://t.me/c/1234567890/18012",
+    },
+    {
+      id: "telegram--1002345678901-topic-412",
+      title: "Remote config activates on restart",
+      root_path: "/Users/me/projects/work/brevity-dozer",
+      project: "brevity-dozer",
+      age: "3h",
+      telegram_link: "https://t.me/c/2345678901/412",
+    },
+    {
+      id: "3d6f20e3-78d4-4d1f-9f8e-4d442f3bba31",
+      title: "Rework the transcript wrapping",
+      root_path: "/Users/me/projects/personal/zdx",
+      project: "zdx",
+      age: "2d",
+      telegram_link: null,
+    },
+  ],
+};
 
 export const demoThread: ThreadResponse = {
   id: "telegram--1001234567890-topic-18012",
   title: "Svelte Mini App for the bot",
   total_messages: 4,
   total_events: 9,
+  telegram_link: "https://t.me/c/1234567890/18012",
   activity: [
     {
       type: "message",

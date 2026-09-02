@@ -13,10 +13,70 @@
 
   let { id, data, error = "" }: Props = $props();
 
+  /** `uncommitted` | `all` | a commit hash. */
+  let scope = $state("uncommitted");
+  let scopeOpen = $state(false);
+  let scopeFiles = $state<GitFile[]>([]);
+  let scopeUntracked = $state<string[]>([]);
+  let scopeError = $state("");
+  let scopeLoading = $state(false);
+
   let selected = $state<{ kind: GitFileKind; path: string } | null>(null);
   let diff = $state<GitDiffResponse | null>(null);
   let diffError = $state("");
   let diffLoading = $state(false);
+
+  let scopeLabel = $derived(
+    scope === "uncommitted"
+      ? "Uncommitted"
+      : scope === "all"
+        ? "All Changes"
+        : (data?.commits.find((c) => c.hash === scope)?.short_hash ?? scope.slice(0, 8)),
+  );
+
+  // History scopes are served by a separate endpoint; `uncommitted` is already
+  // in the GitResponse the thread view fetched.
+  $effect(() => {
+    const current = scope;
+    if (current === "uncommitted") {
+      scopeFiles = [];
+      scopeUntracked = [];
+      scopeError = "";
+      return;
+    }
+    let cancelled = false;
+    scopeLoading = true;
+    scopeError = "";
+    api
+      .gitScope(id, current)
+      .then((res) => {
+        if (cancelled) return;
+        scopeFiles = res.files;
+        scopeUntracked = res.untracked;
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        scopeError = e instanceof ApiError ? e.message : String(e);
+      })
+      .finally(() => {
+        if (!cancelled) scopeLoading = false;
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  function pickScope(next: string) {
+    selectionChanged();
+    scope = next;
+    scopeOpen = false;
+  }
+
+  /** Untracked files are not in any diff, so they keep their own kind. */
+  function kindFor(path: string): GitFileKind {
+    if (scope === "all") return scopeUntracked.includes(path) ? "untracked" : "all";
+    return "commit";
+  }
 
   async function openDiff(kind: GitFileKind, path: string) {
     selectionChanged();
@@ -25,7 +85,8 @@
     diffError = "";
     diffLoading = true;
     try {
-      diff = await api.gitDiff(id, kind, path);
+      const commit = kind === "commit" ? scope : undefined;
+      diff = await api.gitDiff(id, kind, path, commit);
     } catch (e) {
       diffError = e instanceof ApiError ? e.message : String(e);
     } finally {
@@ -46,7 +107,9 @@
   ];
 
   function filesFor(kind: GitFileKind): GitFile[] {
-    return data ? data.files[kind] : [];
+    return data && (kind === "staged" || kind === "unstaged" || kind === "untracked")
+      ? data.files[kind]
+      : [];
   }
 </script>
 
@@ -74,29 +137,89 @@
         </p>
       </div>
 
-      {#if data.repository.clean}
-        <p class="rounded-md border border-border bg-card px-2.5 py-2 text-xs text-muted-foreground">
-          Working tree clean.
-        </p>
-      {/if}
+      <div class="relative">
+        <button
+          type="button"
+          onclick={() => {
+            selectionChanged();
+            scopeOpen = !scopeOpen;
+          }}
+          class="flex w-full items-center gap-2 rounded-md border border-border bg-card px-2.5 py-2 text-left hover:bg-accent"
+        >
+          <span class="text-xs font-medium">{scopeLabel}</span>
+          {#if data.repository.ahead && data.repository.upstream}
+            <span class="font-mono text-xxs text-muted-foreground">
+              {data.repository.ahead} ahead of {data.repository.upstream}
+            </span>
+          {/if}
+          <svg viewBox="0 0 24 24" class="ml-auto size-4 shrink-0 text-muted-foreground" aria-hidden="true">
+            <path
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.75"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="m6 9 6 6 6-6"
+            />
+          </svg>
+        </button>
 
-      {#each groups as [kind, label] (kind)}
-        {@const files = filesFor(kind)}
-        {#if files.length}
-          <section>
-            <h2 class="sec">{label} · {files.length}</h2>
-            <div class="flex flex-col gap-1">
-              {#each files as file (file.path)}
+        {#if scopeOpen}
+          <div
+            class="absolute inset-x-0 top-full z-10 mt-1 max-h-80 overflow-y-auto rounded-md border border-border bg-surface shadow-lg"
+          >
+            {#each [["all", "All Changes"], ["uncommitted", "Uncommitted"]] as [value, label] (value)}
+              <button
+                type="button"
+                onclick={() => pickScope(value)}
+                class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-accent"
+              >
+                <span class="flex-1">{label}</span>
+                {#if scope === value}<span class="text-muted-foreground">✓</span>{/if}
+              </button>
+            {/each}
+
+            {#if data.commits.length}
+              <div class="border-t border-border"></div>
+              {#each data.commits as c (c.hash)}
                 <button
                   type="button"
-                  onclick={() => openDiff(kind, file.path)}
+                  onclick={() => pickScope(c.hash)}
+                  class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-accent"
+                >
+                  <span class="shrink-0 font-mono text-xxs text-muted-foreground">{c.short_hash}</span>
+                  <span class="min-w-0 flex-1 truncate text-xs">{c.subject}</span>
+                  {#if scope === c.hash}<span class="text-muted-foreground">✓</span>{/if}
+                </button>
+              {/each}
+            {/if}
+          </div>
+        {/if}
+      </div>
+
+      {#if scope !== "uncommitted"}
+        {#if scopeLoading}
+          <p class="py-8 text-center text-xs text-muted-foreground">Loading…</p>
+        {:else if scopeError}
+          <p class="rounded-md border border-destructive px-3 py-2 text-xs text-destructive">
+            {scopeError}
+          </p>
+        {:else if scopeFiles.length === 0}
+          <p class="rounded-md border border-border bg-card px-2.5 py-2 text-xs text-muted-foreground">
+            No files changed in this scope.
+          </p>
+        {:else}
+          <section>
+            <h2 class="sec">{scopeLabel} · {scopeFiles.length}</h2>
+            <div class="flex flex-col gap-1">
+              {#each scopeFiles as file (file.path)}
+                <button
+                  type="button"
+                  onclick={() => openDiff(kindFor(file.path), file.path)}
                   class="flex w-full items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 text-left hover:bg-accent"
                 >
-                  <span
-                    class="w-3 shrink-0 text-center font-mono text-xxs"
-                    class:text-success={kind === "staged"}
-                    class:text-warning={kind === "unstaged"}
-                    class:text-muted-foreground={kind === "untracked"}>{file.status}</span
+                  <span class="w-3 shrink-0 text-center font-mono text-xxs text-muted-foreground"
+                    >{file.status}</span
                   >
                   <span class="truncate font-mono text-xs" dir="rtl">{file.path}</span>
                 </button>
@@ -104,9 +227,41 @@
             </div>
           </section>
         {/if}
-      {/each}
+      {:else}
+        {#if data.repository.clean}
+          <p class="rounded-md border border-border bg-card px-2.5 py-2 text-xs text-muted-foreground">
+            Working tree clean.
+          </p>
+        {/if}
 
-      {#if data.commits.length}
+        {#each groups as [kind, label] (kind)}
+          {@const files = filesFor(kind)}
+          {#if files.length}
+            <section>
+              <h2 class="sec">{label} · {files.length}</h2>
+              <div class="flex flex-col gap-1">
+                {#each files as file (file.path)}
+                  <button
+                    type="button"
+                    onclick={() => openDiff(kind, file.path)}
+                    class="flex w-full items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 text-left hover:bg-accent"
+                  >
+                    <span
+                      class="w-3 shrink-0 text-center font-mono text-xxs"
+                      class:text-success={kind === "staged"}
+                      class:text-warning={kind === "unstaged"}
+                      class:text-muted-foreground={kind === "untracked"}>{file.status}</span
+                    >
+                    <span class="truncate font-mono text-xs" dir="rtl">{file.path}</span>
+                  </button>
+                {/each}
+              </div>
+            </section>
+          {/if}
+        {/each}
+      {/if}
+
+      {#if data.commits.length && scope === "uncommitted"}
         <section>
           <h2 class="sec">Recent commits</h2>
           <div class="flex flex-col gap-1">

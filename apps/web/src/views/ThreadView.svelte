@@ -2,7 +2,7 @@
   import { api, ApiError } from "$lib/api";
   import type { ThreadResponse, GitResponse } from "$lib/types";
   import { router, THREAD_TAB_LABELS, type ThreadTab } from "$lib/router.svelte";
-  import { haptic } from "$lib/telegram";
+  import { haptic, openTelegramLink } from "$lib/telegram";
   import TabStrip from "../components/TabStrip.svelte";
   import type { IconName } from "../components/Icon.svelte";
   import TranscriptPane from "./TranscriptPane.svelte";
@@ -85,6 +85,14 @@
     loadGit();
   }
 
+  // Jumps to the Telegram topic this thread is bound to. The Mini App stays
+  // open behind it (Bot API 7.0+), so this is a jump, not a close.
+  function openInTelegram() {
+    if (!data?.telegram_link) return;
+    haptic();
+    openTelegramLink(data.telegram_link);
+  }
+
   // Tabs are data-driven so new panes (Files, Terminal, …) are a one-line add.
   const TAB_ICONS: Record<ThreadTab, IconName> = {
     agent: "bot",
@@ -134,6 +142,27 @@
       </p>
     {/if}
   </div>
+
+  {#if data?.telegram_link}
+    <button
+      type="button"
+      onclick={openInTelegram}
+      aria-label="Open in Telegram"
+      title="Open in Telegram"
+      class="rounded-sm p-1.5 text-muted-foreground hover:bg-accent"
+    >
+      <svg viewBox="0 0 24 24" class="size-4" aria-hidden="true">
+        <path
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.75"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          d="M21.5 3.5 2.5 10.2l6.2 2.3M21.5 3.5l-3.1 16.9-9.7-8.9M21.5 3.5 8.7 12.5m0 0v5.6l3-3.1"
+        />
+      </svg>
+    </button>
+  {/if}
 
   <button
     type="button"

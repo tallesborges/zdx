@@ -217,6 +217,42 @@ pub fn list_threads_cached() -> Result<Vec<ThreadSummary>> {
     })
 }
 
+/// Returns at most `limit` top-level thread summaries from the cache, newest
+/// first.
+///
+/// Ordering and the limit are both applied in SQL, so a browse view never
+/// materializes the whole corpus to show one page. Syncs incrementally first,
+/// like [`list_threads_cached`].
+///
+/// # Errors
+/// Returns an error when the cache cannot be opened, synced, or read.
+pub fn list_recent_threads_cached(limit: usize) -> Result<Vec<ThreadSummary>> {
+    let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+    with_conn(|conn| {
+        sync_if_stale(conn)?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT thread_id, mtime_ns, title, root_path, handoff_from,
+                parent_thread_id, subagent_name
+         FROM thread_meta WHERE origin_kind IS NULL
+         ORDER BY mtime_ns DESC, thread_id ASC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit], |row| {
+            Ok(ThreadSummary {
+                id: row.get(0)?,
+                modified: system_time_from_nanos(row.get(1)?),
+                title: row.get(2)?,
+                root_path: row.get(3)?,
+                handoff_from: row.get(4)?,
+                origin_kind: None,
+                parent_thread_id: row.get(5)?,
+                subagent_name: row.get(6)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    })
+}
+
 /// Returns the most recently modified thread whose ID starts with `prefix`.
 ///
 /// Ordering and the limit are applied in SQL, so this stays a single indexed

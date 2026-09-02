@@ -14,7 +14,28 @@ export interface ThreadResponse {
   /** Counted before live `tool_running` entries are appended, so this can be
    *  lower than `activity.length` while tools are in flight. */
   total_events: number;
+  /** `t.me` link to the bound Telegram topic, derived from the resolved id so
+   *  it is present even when the client asked for `active`. Null for TUI/CLI
+   *  threads and plain DMs. */
+  telegram_link: string | null;
   activity: ThreadActivity[];
+}
+
+export interface ThreadListResponse {
+  threads: ThreadListItem[];
+}
+
+export interface ThreadListItem {
+  id: string;
+  title: string;
+  root_path: string | null;
+  /** Trailing component of `root_path`, for a compact project label. */
+  project: string | null;
+  /** Time since the thread's last write ("12m", "3h", "2d"). */
+  age: string | null;
+  /** `t.me` link to the bound Telegram topic. Null for TUI/CLI threads and
+   *  plain DMs, which have no linkable topic. */
+  telegram_link: string | null;
 }
 
 export interface ActivityBase {
@@ -214,7 +235,18 @@ export interface MonitorSubscription {
 
 /* ------------------------------------ git ----------------------------------- */
 
-export type GitFileKind = "staged" | "unstaged" | "untracked";
+export type GitFileKind = "staged" | "unstaged" | "untracked" | "commit" | "all";
+
+/** Files touched by a history scope (`all` or one commit). */
+export interface GitScopeResponse {
+  scope: "all" | "commit";
+  /** Resolved base revision for `all`, or the commit itself. */
+  base: string | null;
+  files: GitFile[];
+  /** Subset of `files` that are untracked — request those diffs with
+   *  `kind=untracked`, since they are not part of any diff. */
+  untracked: string[];
+}
 
 export interface GitResponse {
   repository: GitRepository;

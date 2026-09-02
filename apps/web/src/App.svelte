@@ -2,6 +2,7 @@
   import { router } from "$lib/router.svelte";
   import { backButton } from "$lib/telegram";
   import MonitorView from "./views/MonitorView.svelte";
+  import ThreadListView from "./views/ThreadListView.svelte";
   import ThreadView from "./views/ThreadView.svelte";
   import Drawer from "./components/Drawer.svelte";
 
@@ -29,6 +30,8 @@
         {#key route.id}
           <ThreadView id={route.id} tab={route.tab} onmenu={() => (menuOpen = true)} />
         {/key}
+      {:else if route.view === "threads"}
+        <ThreadListView onmenu={() => (menuOpen = true)} />
       {:else}
         <MonitorView section={route.section} onmenu={() => (menuOpen = true)} />
       {/if}

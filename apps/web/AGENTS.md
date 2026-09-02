@@ -11,12 +11,13 @@ has been removed.
 - `src/main.ts`: entrypoint; initializes the Telegram bridge before mounting
 - `src/App.svelte`: framed app shell (shell colour behind, rounded surface panel) + drawer host
 - `src/app.css`: the whole design system — Tailwind v4 `@theme` tokens
-- `src/lib/telegram.ts`: `window.Telegram.WebApp` bridge (scheme, safe areas, haptics, back button, `start_param`)
+- `src/lib/telegram.ts`: `window.Telegram.WebApp` bridge (scheme, safe areas, haptics, back button, `start_param`, `openTelegramLink`)
 - `src/lib/api.ts`: typed fetch client; sends `Authorization: tma <initData>`
 - `src/lib/types.ts`: response types mirroring `server.rs` — keep in sync when the Rust structs change
-- `src/lib/router.svelte.ts`: query-string router. Canonical: `?view=thread&id=…&tab=…` and
-  `?view=monitor&section=…`. Also accepts the bot's legacy `?view=threads`, `?view=git` and bare
-  `startapp=<thread_id>` links and normalizes them — do not break those.
+- `src/lib/router.svelte.ts`: query-string router. Canonical: `?view=threads`, `?view=thread&id=…&tab=…`
+  and `?view=monitor&section=…`. The bot's legacy `?view=threads&id=…`, `?view=git` and bare
+  `startapp=<thread_id>` links are normalized — do not break those. `?view=threads` **with** an `id`
+  stays a single-thread link for that reason; only the bare form opens the list.
 - `src/lib/transcript.ts`: projects the flat activity stream into a three-level collapsible tree
   (`work` turn → folded `group` → single `tool`) and derives the one-line summaries
 - `src/lib/diff.ts`: unified-diff parser with word-level intra-line segmentation
@@ -25,9 +26,19 @@ has been removed.
 - `src/lib/demo.ts`: **DEV-only** fixtures behind `?demo=1`; dropped from prod builds
 - `src/components/`: `Collapse`, `Markdown`, `DiffView`, `Drawer`, `TabStrip`, `Icon`,
   `WorkGroup` (the "Worked for 5m" turn divider), `GroupLine` (folded run), `ToolLine` (one call)
-- `src/views/ThreadView.svelte`: thread shell — owns the thread fetch + tab strip, renders one pane
-- `src/views/TranscriptPane.svelte` / `AgentPane.svelte` / `ChangesPane.svelte`: the thread tabs
+- `src/views/ThreadView.svelte`: thread shell — owns the thread fetch + tab strip, renders one pane.
+  Shows a Telegram jump button when the response carries `telegram_link`; the link is built
+  server-side from the *resolved* id, so it works for `?id=active` too.
+- `src/views/TranscriptPane.svelte` / `AgentPane.svelte` / `ChangesPane.svelte`: the thread tabs.
+  `ChangesPane` owns a scope selector — **All Changes** / **Uncommitted** / a specific commit.
+  `uncommitted` renders the status groups already in `GitResponse`; the history scopes fetch
+  `/api/git/scope` and render one flat file list. Untracked files keep `kind=untracked` even inside
+  `all`, because they are not part of any diff.
 - `src/views/MonitorView.svelte`: section-aware monitor (`overview` renders everything)
+- `src/views/ThreadListView.svelte`: recent-thread browser (`?view=threads`). Each row opens the
+  thread in-app; threads bound to a Telegram topic also get a jump button that calls
+  `openTelegramLink` with the `t.me/c/<internal_id>/<topic_id>` link built server-side. TUI/CLI
+  threads and plain DMs have no linkable topic, so they show the in-app open only.
 
 ## Transcript rendering
 

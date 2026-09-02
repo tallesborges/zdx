@@ -859,6 +859,26 @@ pub fn list_threads() -> Result<Vec<ThreadSummary>> {
     }
 }
 
+/// Lists at most `limit` top-level saved threads, newest first.
+///
+/// Prefers the derived cache, where the ordering and limit run in SQL. The
+/// file-scan fallback sorts newest-first before truncating, so both paths
+/// return the same page.
+///
+/// # Errors
+/// Returns an error if the threads directory cannot be read.
+pub fn list_recent_threads(limit: usize) -> Result<Vec<ThreadSummary>> {
+    match crate::core::thread_index::list_recent_threads_cached(limit) {
+        Ok(threads) => Ok(threads),
+        Err(err) => {
+            tracing::debug!(error = %err, "thread index unavailable; using file scan");
+            let mut threads = list_threads_scan()?;
+            threads.truncate(limit);
+            Ok(threads)
+        }
+    }
+}
+
 /// Lists top-level saved threads via the raw file scan, bypassing the derived
 /// thread cache (used by cache-free paths and as the cache fallback).
 ///
