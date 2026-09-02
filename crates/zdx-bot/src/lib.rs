@@ -298,6 +298,7 @@ fn media_group_key(message: &crate::telegram::Message) -> Option<MediaGroupKey> 
 /// - `cancel:{chat_id}:{user_message_id}` — cancel an active agent turn
 /// - `cancel_q:{chat_id}:{message_id}` — cancel a queued (not-yet-processing) item
 /// - `retry:{go|x}` — re-run a failed turn / dismiss the retry button
+/// - `wk:c` — cancel the worker behind a mirror topic
 async fn handle_callback_query(
     context: &Arc<BotContext>,
     client: &TelegramClient,
@@ -350,6 +351,8 @@ async fn handle_callback_query(
         followups::handle_callback(context, chat_queues, client, &callback, rest).await;
     } else if let Some(rest) = data.strip_prefix("retry:") {
         retry::handle_callback(context, client, &callback, rest).await;
+    } else if let Some(rest) = data.strip_prefix("wk:") {
+        orchestrator::handle_callback(context.as_ref(), client, &callback, rest).await;
     } else if let Some(rest) = data.strip_prefix("stg:") {
         staging::handle_callback(context, chat_queues, client, &callback, rest).await;
     } else if let Some(rest) = data.strip_prefix("cmd:") {

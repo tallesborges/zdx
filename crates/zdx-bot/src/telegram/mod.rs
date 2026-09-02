@@ -58,6 +58,18 @@ const TELEGRAM_PARSE_MODE: &str = "HTML";
 const TELEGRAM_CONNECT_TIMEOUT_SECS: u64 = 2;
 const TELEGRAM_HTTP_TIMEOUT_SECS: u64 = 35;
 const TELEGRAM_PHOTO_MAX_BYTES: usize = 10 * 1024 * 1024;
+
+/// Builds a `t.me/c/<internal_id>/<topic_id>` link for a forum topic.
+///
+/// Supergroup chat ids carry the `-100` prefix that `t.me/c` links omit. A
+/// forum topic id is the id of the service message that opened the topic, so
+/// the message-link form resolves to the topic itself. Private chats (positive
+/// ids, including Threaded Mode DMs) have no linkable topic form.
+pub(crate) fn topic_link(chat_id: i64, topic_id: i64) -> Option<String> {
+    let internal = chat_id.to_string();
+    let internal = internal.strip_prefix("-100")?;
+    (!internal.is_empty() && topic_id > 0).then(|| format!("https://t.me/c/{internal}/{topic_id}"))
+}
 const TELEGRAM_DOCUMENT_MAX_BYTES: usize = 50 * 1024 * 1024;
 const TELEGRAM_PHOTO_MAX_LONG_EDGE: u32 = 1920;
 const TELEGRAM_PHOTO_MAX_ASPECT_RATIO: f64 = 20.0;
@@ -793,6 +805,29 @@ impl TelegramClient {
         Ok(())
     }
 
+    /// Forward a message (any content type, keeping the "Forwarded from"
+    /// attribution) into a chat, optionally into a forum topic. Silent.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub async fn forward_message(
+        &self,
+        chat_id: i64,
+        from_chat_id: i64,
+        message_id: i64,
+        message_thread_id: Option<i64>,
+    ) -> Result<()> {
+        let request = ForwardMessageRequest {
+            chat_id,
+            from_chat_id,
+            message_id,
+            message_thread_id,
+            disable_notification: true,
+        };
+        let _: Value = self.post("forwardMessage", &request).await?;
+        Ok(())
+    }
+
     /// Acknowledge a callback query (dismisses the loading spinner on the
     /// button). Optionally show a notification to the user.
     ///
@@ -1282,6 +1317,16 @@ struct DeleteMessageRequest {
 struct PinChatMessageRequest {
     chat_id: i64,
     message_id: i64,
+    disable_notification: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ForwardMessageRequest {
+    chat_id: i64,
+    from_chat_id: i64,
+    message_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_thread_id: Option<i64>,
     disable_notification: bool,
 }
 

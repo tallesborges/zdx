@@ -5,39 +5,163 @@
 //! - `Created` opens a **mirror topic** in the owner's forum chat, aliased to
 //!   the worker thread and marked `worker_topic`, so the user can follow the
 //!   worker in Telegram. Messages typed there are queued into the worker FIFO
-//!   by the message handler (never run as in-process turns).
-//! - `Completed` posts the worker's final text into its mirror topic and wakes
-//!   the owning orchestrator topic with a synthetic queued turn, reusing the
-//!   same dispatch path as `/goal` continuations.
+//!   by the message handler (never run as in-process turns). The topic link
+//!   is registered on the manager so `create_thread` can hand it back.
+//! - `Activity` keeps one live `⏳ Working…` message per running turn up to
+//!   date with the worker's tool calls (debounced edits).
+//! - `Completed` finalizes the live message, posts the worker's final text
+//!   into its mirror topic and wakes the owning orchestrator topic with a
+//!   synthetic queued turn, reusing the same dispatch path as `/goal`
+//!   continuations.
 //!
-//! Best-effort by design: routes and the worker→topic map are process-lifetime.
-//! After a restart the mirror topics and transcripts survive, and a message in
-//! a mirror topic re-attaches its worker.
+//! Mirror header and result messages carry `⏹ Cancel worker` (`wk:c`) and
+//! `💬 Open Thread` buttons; the cancel callback resolves the worker from the
+//! topic's persisted alias, so it works after a restart too.
+//!
+//! Routes are process-lifetime; the worker→topic map is rebuilt at startup
+//! from the persisted `worker_topic` + `alias_to` metadata, so results keep
+//! landing in their mirrors across restarts without anyone poking the topic.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::mpsc::UnboundedReceiver;
-use zdx_engine::core::thread_persistence::Thread;
-use zdx_engine::core::workers::{CompletionEvent, WorkerEvent, WorkerStatus};
+use tokio::time::Instant;
+use zdx_engine::core::thread_persistence::{self, Thread};
+use zdx_engine::core::workers::{CompletionEvent, WorkerActivity, WorkerEvent, WorkerStatus};
 
 use crate::bot::context::BotContext;
 use crate::bot::queue::ChatQueueMap;
 use crate::bot::synthetic::dispatch_synthetic_prompt;
-use crate::handlers::message::thread_id_for_chat;
+use crate::handlers::message::{
+    escape_html, mini_app_base_url, parse_topic_thread_id, resolve_effective_thread_id,
+    thread_id_for_chat,
+};
+use crate::telegram::markdown::{to_telegram_html, truncate_telegram_html};
+use crate::telegram::{
+    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, TelegramClient, topic_link,
+};
 
 /// Longest worker final-text excerpt embedded in the callback prompt; the
 /// orchestrator is told to use `Read_Thread` for anything longer.
 const MAX_CALLBACK_TEXT_CHARS: usize = 2000;
 /// Longest final-text excerpt posted into a mirror topic message.
 const MAX_MIRROR_TEXT_CHARS: usize = 3500;
+/// Minimum spacing between edits of one live activity message.
+const LIVE_EDIT_INTERVAL: Duration = Duration::from_secs(3);
+/// Most recent tool calls kept visible in the live activity message.
+const MAX_ACTIVITY_LINES: usize = 12;
+/// Longest tool argument shown per activity line.
+const MAX_ACTIVITY_ARG_CHARS: usize = 80;
 
-/// Mirror topic destination for one worker (process-lifetime).
+const CANCEL_CALLBACK: &str = "wk:c";
+
+/// Mirror topic destination for one worker.
 #[derive(Clone, Copy)]
 struct MirrorTopic {
     chat: i64,
     topic: i64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ToolState {
+    Running,
+    Done,
+    Failed,
+}
+
+struct ToolLine {
+    id: String,
+    name: String,
+    arg: Option<String>,
+    state: ToolState,
+}
+
+/// One running worker turn's live activity message.
+struct LiveTurn {
+    mirror: MirrorTopic,
+    message_id: i64,
+    tools: Vec<ToolLine>,
+    /// Tool calls dropped from the visible window.
+    elided: usize,
+    dirty: bool,
+    last_edit: Instant,
+}
+
+impl LiveTurn {
+    fn apply(&mut self, activity: WorkerActivity) {
+        match activity {
+            WorkerActivity::ToolStarted { id, name } => {
+                self.tools.push(ToolLine {
+                    id,
+                    name,
+                    arg: None,
+                    state: ToolState::Running,
+                });
+                if self.tools.len() > MAX_ACTIVITY_LINES {
+                    let overflow = self.tools.len() - MAX_ACTIVITY_LINES;
+                    self.tools.drain(..overflow);
+                    self.elided += overflow;
+                }
+            }
+            WorkerActivity::ToolInput { id, arg } => {
+                if let Some(line) = self.tools.iter_mut().rev().find(|line| line.id == id) {
+                    line.arg = Some(arg);
+                }
+            }
+            WorkerActivity::ToolFinished { id, ok } => {
+                if let Some(line) = self.tools.iter_mut().rev().find(|line| line.id == id) {
+                    line.state = if ok {
+                        ToolState::Done
+                    } else {
+                        ToolState::Failed
+                    };
+                }
+            }
+        }
+        self.dirty = true;
+    }
+
+    fn total_calls(&self) -> usize {
+        self.elided + self.tools.len()
+    }
+
+    fn render(&self, headline: &str) -> String {
+        let mut text = String::from(headline);
+        if self.elided > 0 {
+            let _ = write!(text, "\n<i>… {} earlier tool calls</i>", self.elided);
+        }
+        for line in &self.tools {
+            let marker = match line.state {
+                ToolState::Running => "▸",
+                ToolState::Done => "✓",
+                ToolState::Failed => "✗",
+            };
+            let _ = write!(text, "\n{marker} {}", escape_html(&line.name));
+            if let Some(arg) = line.arg.as_deref() {
+                let _ = write!(
+                    text,
+                    " <code>{}</code>",
+                    escape_html(&truncate_plain(arg, MAX_ACTIVITY_ARG_CHARS))
+                );
+            }
+        }
+        text
+    }
+
+    fn next_flush_at(&self) -> Option<Instant> {
+        self.dirty.then(|| self.last_edit + LIVE_EDIT_INTERVAL)
+    }
+}
+
+struct Bridge {
+    context: Arc<BotContext>,
+    queues: ChatQueueMap,
+    mirrors: HashMap<String, MirrorTopic>,
+    live: HashMap<String, LiveTurn>,
 }
 
 /// Spawns the process-lifetime bridge task.
@@ -47,43 +171,290 @@ pub(crate) fn spawn_completion_bridge(
     mut events_rx: UnboundedReceiver<WorkerEvent>,
 ) {
     tokio::spawn(async move {
-        let mut mirrors: HashMap<String, MirrorTopic> = HashMap::new();
-        while let Some(event) = events_rx.recv().await {
-            match event {
-                WorkerEvent::Created {
-                    owner_thread_id,
-                    worker_thread_id,
-                    root,
-                    title,
-                    prompt,
-                } => {
-                    if let Some(mirror) = create_mirror_topic(
-                        &context,
-                        &owner_thread_id,
-                        &worker_thread_id,
-                        &root,
-                        title.as_deref(),
-                        &prompt,
-                    )
-                    .await
-                    {
-                        mirrors.insert(worker_thread_id, mirror);
+        let mut bridge = Bridge {
+            context,
+            queues,
+            mirrors: HashMap::new(),
+            live: HashMap::new(),
+        };
+        bridge.recover_mirrors().await;
+
+        loop {
+            let next_flush = bridge.next_flush_at();
+            tokio::select! {
+                event = events_rx.recv() => {
+                    let Some(event) = event else { break };
+                    bridge.handle(event).await;
+                }
+                () = async {
+                    match next_flush {
+                        Some(at) => tokio::time::sleep_until(at).await,
+                        None => std::future::pending().await,
                     }
-                }
-                WorkerEvent::Prompted {
-                    worker_thread_id,
-                    prompt,
                 } => {
-                    post_mirror_prompt(&context, mirrors.get(&worker_thread_id), &prompt).await;
-                }
-                WorkerEvent::Completed(event) => {
-                    post_mirror_update(&context, mirrors.get(&event.worker_thread_id), &event)
-                        .await;
-                    dispatch_owner_callback(&context, &queues, &event).await;
+                    bridge.flush_due().await;
                 }
             }
         }
     });
+}
+
+impl Bridge {
+    /// Rebuilds the worker→mirror map from persisted mirror-topic metadata so
+    /// feeds resume after a restart, and registers each link on the manager.
+    async fn recover_mirrors(&mut self) {
+        let pairs = tokio::task::spawn_blocking(thread_persistence::list_worker_topics).await;
+        let pairs = match pairs {
+            Ok(Ok(pairs)) => pairs,
+            Ok(Err(err)) => {
+                tracing::warn!(%err, "Failed to scan persisted worker mirror topics");
+                return;
+            }
+            Err(err) => {
+                tracing::warn!(%err, "Mirror topic scan task failed");
+                return;
+            }
+        };
+        for (topic_thread_id, worker_thread_id) in pairs {
+            let Some((chat, topic)) = parse_topic_thread_id(&topic_thread_id) else {
+                continue;
+            };
+            let mirror = MirrorTopic { chat, topic };
+            self.context
+                .worker_manager()
+                .set_mirror_url(&worker_thread_id, topic_link(chat, topic));
+            self.mirrors.insert(worker_thread_id, mirror);
+        }
+        if !self.mirrors.is_empty() {
+            tracing::info!(count = self.mirrors.len(), "Recovered worker mirror topics");
+        }
+    }
+
+    async fn handle(&mut self, event: WorkerEvent) {
+        match event {
+            WorkerEvent::Created {
+                owner_thread_id,
+                worker_thread_id,
+                root,
+                title,
+                prompt,
+            } => {
+                let mirror = create_mirror_topic(
+                    &self.context,
+                    &owner_thread_id,
+                    &worker_thread_id,
+                    &root,
+                    title.as_deref(),
+                    &prompt,
+                )
+                .await;
+                // Always resolve the link, even to `None`, so a `create_thread`
+                // waiting on it returns immediately instead of timing out.
+                self.context.worker_manager().set_mirror_url(
+                    &worker_thread_id,
+                    mirror.and_then(|mirror| topic_link(mirror.chat, mirror.topic)),
+                );
+                if let Some(mirror) = mirror {
+                    self.mirrors.insert(worker_thread_id, mirror);
+                }
+            }
+            WorkerEvent::Prompted {
+                worker_thread_id,
+                prompt,
+            } => {
+                post_mirror_prompt(&self.context, self.mirrors.get(&worker_thread_id), &prompt)
+                    .await;
+            }
+            WorkerEvent::Activity {
+                worker_thread_id,
+                activity,
+            } => {
+                self.handle_activity(&worker_thread_id, activity).await;
+            }
+            WorkerEvent::Completed(event) => {
+                self.finish_live_turn(&event).await;
+                post_mirror_update(
+                    &self.context,
+                    self.mirrors.get(&event.worker_thread_id),
+                    &event,
+                )
+                .await;
+                dispatch_owner_callback(&self.context, &self.queues, &event).await;
+            }
+        }
+    }
+
+    async fn handle_activity(&mut self, worker_thread_id: &str, activity: WorkerActivity) {
+        if let Some(turn) = self.live.get_mut(worker_thread_id) {
+            turn.apply(activity);
+            if turn.last_edit.elapsed() >= LIVE_EDIT_INTERVAL {
+                self.flush(worker_thread_id).await;
+            }
+            return;
+        }
+
+        let Some(mirror) = self.mirrors.get(worker_thread_id).copied() else {
+            return;
+        };
+        let mut turn = LiveTurn {
+            mirror,
+            message_id: 0,
+            tools: Vec::new(),
+            elided: 0,
+            dirty: false,
+            last_edit: Instant::now(),
+        };
+        turn.apply(activity);
+        turn.dirty = false;
+        let text = turn.render("⏳ Working…");
+        let keyboard = mirror_keyboard(&self.context, mirror.chat, worker_thread_id);
+        let sent = self
+            .context
+            .client()
+            .send_message_with_markup(mirror.chat, &text, None, Some(mirror.topic), &keyboard)
+            .await;
+        match sent {
+            Ok(message) => {
+                turn.message_id = message.id;
+                self.live.insert(worker_thread_id.to_string(), turn);
+            }
+            Err(err) => {
+                tracing::warn!(worker = %worker_thread_id, %err, "Failed to post live activity message");
+            }
+        }
+    }
+
+    fn next_flush_at(&self) -> Option<Instant> {
+        self.live.values().filter_map(LiveTurn::next_flush_at).min()
+    }
+
+    async fn flush_due(&mut self) {
+        let now = Instant::now();
+        let due: Vec<String> = self
+            .live
+            .iter()
+            .filter(|(_, turn)| turn.next_flush_at().is_some_and(|at| at <= now))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for worker_thread_id in due {
+            self.flush(&worker_thread_id).await;
+        }
+    }
+
+    async fn flush(&mut self, worker_thread_id: &str) {
+        let Some(turn) = self.live.get_mut(worker_thread_id) else {
+            return;
+        };
+        let text = turn.render("⏳ Working…");
+        let keyboard = mirror_keyboard(&self.context, turn.mirror.chat, worker_thread_id);
+        turn.dirty = false;
+        turn.last_edit = Instant::now();
+        edit_live_message(&self.context, turn, &text, &keyboard).await;
+    }
+
+    /// Freezes the live activity message into a terminal summary (buttons
+    /// removed) so the result message below it carries the actions.
+    async fn finish_live_turn(&mut self, event: &CompletionEvent) {
+        let Some(turn) = self.live.remove(&event.worker_thread_id) else {
+            return;
+        };
+        let calls = turn.total_calls();
+        let headline = match event.status {
+            WorkerStatus::Completed => format!("✅ Finished · {calls} tool calls"),
+            WorkerStatus::Cancelled => format!("🚫 Cancelled · {calls} tool calls"),
+            _ => format!("❌ Failed · {calls} tool calls"),
+        };
+        let text = turn.render(&headline);
+        edit_live_message(&self.context, &turn, &text, &InlineKeyboardMarkup::empty()).await;
+    }
+}
+
+async fn edit_live_message(
+    context: &Arc<BotContext>,
+    turn: &LiveTurn,
+    text: &str,
+    keyboard: &InlineKeyboardMarkup,
+) {
+    if let Err(err) = context
+        .client()
+        .edit_message_text(turn.mirror.chat, turn.message_id, text, Some(keyboard))
+        .await
+        && !err.to_string().contains("message is not modified")
+    {
+        tracing::warn!(message_id = turn.message_id, %err, "Failed to edit live activity message");
+    }
+}
+
+/// Buttons under mirror header/result messages: cancel the worker from its
+/// topic, and open the worker thread in the Mini App when configured.
+fn mirror_keyboard(
+    context: &BotContext,
+    chat_id: i64,
+    worker_thread_id: &str,
+) -> InlineKeyboardMarkup {
+    mirror_keyboard_for_url(
+        mini_app_base_url(context, chat_id).as_deref(),
+        worker_thread_id,
+    )
+}
+
+fn mirror_keyboard_for_url(
+    mini_app_url: Option<&str>,
+    worker_thread_id: &str,
+) -> InlineKeyboardMarkup {
+    let mut row = vec![InlineKeyboardButton::callback(
+        "⏹ Cancel worker",
+        CANCEL_CALLBACK,
+    )];
+    if let Some(mini_app_url) = mini_app_url {
+        row.push(InlineKeyboardButton::url(
+            "💬 Open Thread",
+            format!("{mini_app_url}?startapp={worker_thread_id}"),
+        ));
+    }
+    InlineKeyboardMarkup {
+        inline_keyboard: vec![row],
+    }
+}
+
+/// Handles `wk:*` callbacks from mirror-topic keyboards. The worker is
+/// resolved from the topic's persisted alias, never from callback data.
+pub(crate) async fn handle_callback(
+    context: &BotContext,
+    client: &TelegramClient,
+    callback: &CallbackQuery,
+    rest: &str,
+) {
+    let answer = |text: &'static str| async move {
+        if let Err(err) = client.answer_callback_query(&callback.id, Some(text)).await {
+            tracing::warn!(%err, "Failed to answer worker callback");
+        }
+    };
+    if rest != "c" {
+        answer("Unknown action").await;
+        return;
+    }
+    let Some((chat_id, topic_id)) = callback
+        .message
+        .as_ref()
+        .and_then(|message| Some((message.chat.id, message.effective_thread_id()?)))
+    else {
+        answer("Not inside a worker topic").await;
+        return;
+    };
+    let topic_thread_id = thread_id_for_chat(chat_id, Some(topic_id));
+    if !thread_persistence::read_thread_worker_topic(&topic_thread_id).unwrap_or(false) {
+        answer("Not a worker topic").await;
+        return;
+    }
+    let worker_thread_id = resolve_effective_thread_id(&topic_thread_id);
+    match context.worker_manager().cancel(&worker_thread_id) {
+        Ok(_) => {
+            tracing::info!(worker = %worker_thread_id, chat_id, topic_id, "Worker cancelled from mirror topic");
+            answer("Cancelling worker…").await;
+        }
+        Err(_) => answer("Worker is idle; nothing to cancel").await,
+    }
 }
 
 /// Opens the worker's mirror topic: preferred host is the group whose profile
@@ -153,13 +524,14 @@ async fn create_mirror_topic(
     }
 
     let header = format!(
-        "🛠 Worker `{worker_thread_id}`\nProject: {}\n\nResults are posted here as the worker finishes each turn. Messages you send in this topic are queued straight to the worker.\n\n📤 First prompt:\n{}",
-        root.display(),
-        truncate_chars(prompt, MAX_MIRROR_TEXT_CHARS),
+        "🛠 Worker <code>{worker_thread_id}</code>\nProject: {}\n\nTool activity and results are posted here as the worker runs. Messages you send in this topic are queued straight to the worker.\n\n📤 First prompt:\n{}",
+        escape_html(&root.display().to_string()),
+        escape_html(&truncate_chars(prompt, MAX_MIRROR_TEXT_CHARS)),
     );
+    let keyboard = mirror_keyboard(context, chat, worker_thread_id);
     if let Err(err) = context
         .client()
-        .send_message(chat, &header, None, Some(topic_id))
+        .send_message_with_markup(chat, &header, None, Some(topic_id), &keyboard)
         .await
     {
         tracing::warn!(worker = %worker_thread_id, %err, "Failed to post mirror topic header");
@@ -178,7 +550,7 @@ async fn post_mirror_prompt(context: &Arc<BotContext>, mirror: Option<&MirrorTop
     };
     let text = format!(
         "📤 Prompt from the orchestrator:\n{}",
-        truncate_chars(prompt, MAX_MIRROR_TEXT_CHARS)
+        escape_html(&truncate_chars(prompt, MAX_MIRROR_TEXT_CHARS))
     );
     if let Err(err) = context
         .client()
@@ -202,19 +574,23 @@ async fn post_mirror_update(
     let text = match event.status {
         WorkerStatus::Completed => {
             let body = event.final_text.as_deref().unwrap_or_default();
-            truncate_chars(body, MAX_MIRROR_TEXT_CHARS)
+            truncate_telegram_html(&to_telegram_html(body), MAX_MIRROR_TEXT_CHARS)
         }
         WorkerStatus::Cancelled => "🚫 Turn cancelled.".to_string(),
         _ => format!(
-            "❌ Turn {}:\n{}",
+            "❌ Turn {}:\n<pre>{}</pre>",
             event.status.as_str(),
-            truncate_chars(event.error.as_deref().unwrap_or("unknown error"), 1000)
+            escape_html(&truncate_chars(
+                event.error.as_deref().unwrap_or("unknown error"),
+                1000
+            ))
         ),
     };
 
+    let keyboard = mirror_keyboard(context, mirror.chat, &event.worker_thread_id);
     if let Err(err) = context
         .client()
-        .send_message(mirror.chat, &text, None, Some(mirror.topic))
+        .send_message_with_markup(mirror.chat, &text, None, Some(mirror.topic), &keyboard)
         .await
     {
         tracing::warn!(worker = %event.worker_thread_id, %err, "Failed to post mirror update");
@@ -267,6 +643,9 @@ fn build_worker_update_prompt(event: &CompletionEvent) -> String {
     let mut prompt = format!(
         "[worker update] Worker thread `{worker}` finished a turn with status: {status}.\n"
     );
+    if let Some(url) = event.mirror_url.as_deref() {
+        let _ = writeln!(prompt, "Mirror topic: {url}");
+    }
     match event.status {
         WorkerStatus::Completed => {
             let text = event.final_text.as_deref().unwrap_or_default();
@@ -296,36 +675,151 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     format!("{head}… [truncated — use Read_Thread for the rest]")
 }
 
+fn truncate_plain(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(max_chars).collect();
+    format!("{head}…")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn completed_prompt_carries_final_text() {
-        let prompt = build_worker_update_prompt(&CompletionEvent {
+    fn completion(status: WorkerStatus) -> CompletionEvent {
+        CompletionEvent {
             owner_thread_id: "owner".to_string(),
             worker_thread_id: "worker-1".to_string(),
-            status: WorkerStatus::Completed,
-            final_text: Some("all done".to_string()),
+            status,
+            final_text: None,
             error: None,
+            mirror_url: None,
+        }
+    }
+
+    #[test]
+    fn completed_prompt_carries_final_text_and_link() {
+        let prompt = build_worker_update_prompt(&CompletionEvent {
+            final_text: Some("all done".to_string()),
+            mirror_url: Some("https://t.me/c/1/2".to_string()),
+            ..completion(WorkerStatus::Completed)
         });
         assert!(prompt.starts_with("[worker update]"));
         assert!(prompt.contains("`worker-1`"));
         assert!(prompt.contains("status: completed"));
+        assert!(prompt.contains("Mirror topic: https://t.me/c/1/2"));
         assert!(prompt.contains("all done"));
     }
 
     #[test]
     fn failed_prompt_carries_error_and_bounds_length() {
         let prompt = build_worker_update_prompt(&CompletionEvent {
-            owner_thread_id: "owner".to_string(),
-            worker_thread_id: "worker-1".to_string(),
-            status: WorkerStatus::Failed,
-            final_text: None,
             error: Some("x".repeat(10_000)),
+            ..completion(WorkerStatus::Failed)
         });
         assert!(prompt.contains("status: failed"));
+        assert!(!prompt.contains("Mirror topic:"));
         assert!(prompt.contains("[truncated"));
         assert!(prompt.chars().count() < 3000);
+    }
+
+    #[test]
+    fn mirror_keyboard_has_cancel_and_optional_open_thread() {
+        assert!(CANCEL_CALLBACK.len() <= 64);
+
+        let with_app = mirror_keyboard_for_url(Some("https://t.me/zdx_bot/threads"), "w-1");
+        let row = &with_app.inline_keyboard[0];
+        assert_eq!(row.len(), 2);
+        assert_eq!(row[0].callback_data.as_deref(), Some(CANCEL_CALLBACK));
+        assert_eq!(
+            row[1].url.as_deref(),
+            Some("https://t.me/zdx_bot/threads?startapp=w-1")
+        );
+
+        let without_app = mirror_keyboard_for_url(None, "w-1");
+        assert_eq!(without_app.inline_keyboard[0].len(), 1);
+    }
+
+    fn live_turn() -> LiveTurn {
+        LiveTurn {
+            mirror: MirrorTopic { chat: -1, topic: 1 },
+            message_id: 1,
+            tools: Vec::new(),
+            elided: 0,
+            dirty: false,
+            last_edit: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn live_turn_renders_tool_lifecycle_with_escaped_args() {
+        let mut turn = live_turn();
+        turn.apply(WorkerActivity::ToolStarted {
+            id: "a".to_string(),
+            name: "bash".to_string(),
+        });
+        turn.apply(WorkerActivity::ToolInput {
+            id: "a".to_string(),
+            arg: "cat <file> && echo".to_string(),
+        });
+        turn.apply(WorkerActivity::ToolStarted {
+            id: "b".to_string(),
+            name: "edit".to_string(),
+        });
+        turn.apply(WorkerActivity::ToolFinished {
+            id: "a".to_string(),
+            ok: true,
+        });
+        turn.apply(WorkerActivity::ToolFinished {
+            id: "b".to_string(),
+            ok: false,
+        });
+        assert!(turn.dirty);
+
+        let text = turn.render("⏳ Working…");
+        assert!(text.starts_with("⏳ Working…"));
+        assert!(text.contains("✓ bash <code>cat &lt;file&gt; &amp;&amp; echo</code>"));
+        assert!(text.contains("✗ edit"));
+        assert_eq!(turn.total_calls(), 2);
+    }
+
+    #[test]
+    fn live_turn_keeps_a_bounded_window_and_counts_elided_calls() {
+        let mut turn = live_turn();
+        for i in 0..(MAX_ACTIVITY_LINES + 3) {
+            turn.apply(WorkerActivity::ToolStarted {
+                id: format!("t{i}"),
+                name: "read".to_string(),
+            });
+        }
+        assert_eq!(turn.tools.len(), MAX_ACTIVITY_LINES);
+        assert_eq!(turn.elided, 3);
+        assert_eq!(turn.total_calls(), MAX_ACTIVITY_LINES + 3);
+        assert!(turn.render("x").contains("… 3 earlier tool calls"));
+        // A late finish for an elided call is ignored rather than mis-applied.
+        turn.apply(WorkerActivity::ToolFinished {
+            id: "t0".to_string(),
+            ok: true,
+        });
+        assert!(
+            turn.tools
+                .iter()
+                .all(|line| line.state == ToolState::Running)
+        );
+    }
+
+    #[test]
+    fn flush_is_due_only_while_dirty() {
+        let mut turn = live_turn();
+        assert_eq!(turn.next_flush_at(), None);
+        turn.apply(WorkerActivity::ToolStarted {
+            id: "a".to_string(),
+            name: "glob".to_string(),
+        });
+        assert_eq!(
+            turn.next_flush_at(),
+            Some(turn.last_edit + LIVE_EDIT_INTERVAL)
+        );
     }
 }

@@ -2125,6 +2125,31 @@ fn test_alias_roundtrip() {
     assert_eq!(read_thread_alias(&thread_id).unwrap(), None);
 }
 
+/// Restart recovery of worker mirror topics: only threads flagged
+/// `worker_topic` with an alias are listed; plain launcher aliases are not.
+#[test]
+fn list_worker_topics_returns_only_flagged_aliases() {
+    let _temp = setup_temp_zdx_home();
+
+    let mirror_id = unique_thread_id("mirror");
+    let mut mirror = Thread::with_id(mirror_id.clone()).unwrap();
+    mirror.set_worker_topic();
+    mirror.set_alias(Some("worker-abc".to_string())).unwrap();
+
+    let resume_id = unique_thread_id("resume");
+    let mut resume = Thread::with_id(resume_id).unwrap();
+    resume.set_alias(Some("source-xyz".to_string())).unwrap();
+
+    let plain_id = unique_thread_id("plain");
+    let mut plain = Thread::with_id(plain_id).unwrap();
+    plain.append(&ThreadEvent::user_message("hi")).unwrap();
+
+    assert_eq!(
+        list_worker_topics().unwrap(),
+        vec![(mirror_id, "worker-abc".to_string())]
+    );
+}
+
 /// The handoff lineage walk (`/btw` seeds, `zdx threads show`) resolves a
 /// thread by ID. It must not need `list_all_threads()`, which opens every
 /// saved thread file just to answer one lookup.

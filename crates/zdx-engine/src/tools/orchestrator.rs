@@ -27,6 +27,9 @@ const MAX_FINAL_TEXT_CHARS: usize = 4000;
 /// Default and maximum `wait_for_threads` timeouts.
 const DEFAULT_WAIT_SECS: u64 = 60;
 const MAX_WAIT_SECS: u64 = 600;
+/// How long `create_thread` waits for the surface bridge to open the worker's
+/// mirror before returning without a link. The worker is already queued.
+const MIRROR_LINK_WAIT: Duration = Duration::from_secs(5);
 
 /// Which orchestrator control a tool instance implements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,7 +107,7 @@ impl Tool for OrchestratorTool {
                 );
             };
             match op {
-                Op::Create => create_thread(&manager, &owner, &input),
+                Op::Create => create_thread(&manager, &owner, &input).await,
                 Op::Send => send_thread_message(&manager, &owner, &input),
                 Op::Status => get_thread_status(&manager, &owner, &input),
                 Op::Wait => wait_for_threads(&manager, &input).await,
@@ -120,7 +123,7 @@ fn definition_for(op: Op) -> ToolDefinition {
     match op {
         Op::Create => ToolDefinition {
             name: "Create_Thread".to_string(),
-            description: "Create a new worker thread in an existing project directory and queue its first prompt. Returns the worker thread_id immediately while the worker runs in the background; you are notified automatically when its turn finishes. Write the prompt self-contained: goal, context, constraints, file paths, expected output, and verification — the worker does not share your conversation.".to_string(),
+            description: "Create a new worker thread in an existing project directory and queue its first prompt. Returns the worker thread_id (and, when the surface opened one, the mirror_url of the Telegram topic where the user can follow it) while the worker runs in the background; you are notified automatically when its turn finishes. Write the prompt self-contained: goal, context, constraints, file paths, expected output, and verification — the worker does not share your conversation.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -283,6 +286,7 @@ fn snapshot_json(snapshot: &WorkerSnapshot) -> Value {
             .as_deref()
             .map(|text| truncate_chars(text, MAX_FINAL_TEXT_CHARS)),
         "last_error": snapshot.last_error,
+        "mirror_url": snapshot.mirror_url,
     })
 }
 
@@ -294,7 +298,7 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     format!("{head}…")
 }
 
-fn create_thread(manager: &Arc<WorkerManager>, owner: &str, input: &Value) -> ToolOutput {
+async fn create_thread(manager: &Arc<WorkerManager>, owner: &str, input: &Value) -> ToolOutput {
     let root = match required_str(input, "root") {
         Ok(value) => value,
         Err(failure) => return failure,
@@ -319,7 +323,7 @@ fn create_thread(manager: &Arc<WorkerManager>, owner: &str, input: &Value) -> To
         None => None,
     };
 
-    match manager.create_worker(
+    let worker_id = match manager.create_worker(
         owner,
         &PathBuf::from(root),
         prompt,
@@ -327,14 +331,23 @@ fn create_thread(manager: &Arc<WorkerManager>, owner: &str, input: &Value) -> To
         model,
         thinking_level,
     ) {
-        Ok(worker_id) => match manager.snapshot(&worker_id) {
-            Some(snapshot) => ToolOutput::success(json!({
-                "thread_id": worker_id,
-                "worker": snapshot_json(&snapshot),
-            })),
-            None => ToolOutput::success(json!({ "thread_id": worker_id })),
-        },
-        Err(err) => ToolOutput::failure("create_thread_failed", format!("{err:#}"), None),
+        Ok(worker_id) => worker_id,
+        Err(err) => {
+            return ToolOutput::failure("create_thread_failed", format!("{err:#}"), None);
+        }
+    };
+    // The mirror topic opens asynchronously; wait a bounded moment so the
+    // link can be handed back in the same result. The worker is already queued.
+    let mirror_url = manager
+        .wait_for_mirror_url(&worker_id, MIRROR_LINK_WAIT)
+        .await;
+    match manager.snapshot(&worker_id) {
+        Some(snapshot) => ToolOutput::success(json!({
+            "thread_id": worker_id,
+            "mirror_url": mirror_url,
+            "worker": snapshot_json(&snapshot),
+        })),
+        None => ToolOutput::success(json!({ "thread_id": worker_id, "mirror_url": mirror_url })),
     }
 }
 

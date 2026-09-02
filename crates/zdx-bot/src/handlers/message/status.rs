@@ -558,6 +558,7 @@ mod tests {
             queue_depth: 0,
             latest_final_text: None,
             last_error: None,
+            mirror_url: None,
         };
 
         assert_eq!(format_worker_lines(&[]), vec!["Workers: <i>none yet</i>"]);

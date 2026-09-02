@@ -513,17 +513,12 @@ async fn authorize_api(
 
 /// Builds a `t.me/c/<internal_id>/<topic_id>` link for a Telegram topic thread.
 ///
-/// Thread ids are minted as `telegram-{chat_id}-topic-{topic_id}`, and
-/// supergroup chat ids carry the `-100` prefix that `t.me/c` links omit. A forum
-/// topic id is the id of the service message that opened the topic, so the
-/// message-link form resolves to the topic itself. Threads with no topic (plain
+/// Thread ids are minted as `telegram-{chat_id}-topic-{topic_id}`; the link
+/// form itself is [`crate::telegram::topic_link`]. Threads with no topic (plain
 /// DMs) and non-Telegram threads have no linkable target.
 fn telegram_topic_link(thread_id: &str) -> Option<String> {
-    let rest = thread_id.strip_prefix("telegram-")?;
-    let (chat, topic) = rest.rsplit_once("-topic-")?;
-    let internal = chat.strip_prefix("-100")?;
-    let numeric = |value: &str| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit());
-    (numeric(internal) && numeric(topic)).then(|| format!("https://t.me/c/{internal}/{topic}"))
+    let (chat_id, topic_id) = crate::handlers::message::parse_topic_thread_id(thread_id)?;
+    crate::telegram::topic_link(chat_id, topic_id)
 }
 
 /// Lists the most recently active top-level threads for the Mini App browser.

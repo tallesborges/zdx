@@ -4,9 +4,9 @@
 //! manager owns one FIFO per worker: prompts for a single worker run strictly
 //! serially through a child `zdx --thread <id> exec` process, while different
 //! workers run concurrently. All manager state (ownership, queues, status,
-//! completion channel) is process-lifetime only by design — on restart the
-//! thread JSONL transcripts survive and workers can be re-attached with
-//! `send_message`, but queued prompts and pending callbacks are lost.
+//! completion channel, mirror links) is process-lifetime only by design — on
+//! restart the thread JSONL transcripts survive and workers can be re-attached
+//! with `send_message`, but queued prompts and pending callbacks are lost.
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
@@ -17,11 +17,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
+use serde_json::Value;
 use tokio::sync::{Notify, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::ThinkingLevel;
-use crate::core::subagent::{ExecSubagentOptions, run_exec_subagent_with_cancel};
+use crate::core::agent::{AgentEventRx, EventSender, create_event_channel};
+use crate::core::events::AgentEvent;
+use crate::core::subagent::{
+    ExecSubagentOptions, SubagentStreamSink, run_exec_subagent_with_cancel,
+};
 use crate::core::thread_persistence;
 
 /// Lifecycle status of a managed worker.
@@ -60,9 +65,45 @@ pub struct CompletionEvent {
     pub status: WorkerStatus,
     pub final_text: Option<String>,
     pub error: Option<String>,
+    /// Link to the worker's surface mirror (Telegram topic), when registered.
+    pub mirror_url: Option<String>,
+}
+
+/// One live tool-activity update from a running worker turn, decoded from the
+/// child runner's stream chunks (`{"t":"start"|"input"|"done"|"error", ...}`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkerActivity {
+    ToolStarted { id: String, name: String },
+    ToolInput { id: String, arg: String },
+    ToolFinished { id: String, ok: bool },
+}
+
+impl WorkerActivity {
+    fn from_stream_chunk(chunk: &str) -> Option<Self> {
+        let value: Value = serde_json::from_str(chunk).ok()?;
+        let id = value.get("id")?.as_str()?.to_string();
+        match value.get("t")?.as_str()? {
+            "start" => Some(Self::ToolStarted {
+                id,
+                name: value.get("name")?.as_str()?.to_string(),
+            }),
+            "input" => Some(Self::ToolInput {
+                id,
+                arg: value.get("arg")?.as_str()?.to_string(),
+            }),
+            "done" => Some(Self::ToolFinished { id, ok: true }),
+            "error" => Some(Self::ToolFinished { id, ok: false }),
+            _ => None,
+        }
+    }
 }
 
 /// Manager lifecycle events consumed by the surface bridge (Telegram bot).
+///
+/// Per worker the channel order is `Created` → (`Prompted` | `Activity`)* →
+/// `Completed` for every turn: `Created` is sent before the FIFO task exists,
+/// and the runner drains all `Activity` for a turn before that turn's
+/// `Completed` is emitted.
 #[derive(Debug, Clone)]
 pub enum WorkerEvent {
     /// A brand-new worker thread was created via `create_worker` (re-attached
@@ -82,6 +123,11 @@ pub enum WorkerEvent {
         worker_thread_id: String,
         prompt: String,
     },
+    /// Live tool activity from the worker's running turn.
+    Activity {
+        worker_thread_id: String,
+        activity: WorkerActivity,
+    },
     /// A worker prompt finished (any terminal status).
     Completed(CompletionEvent),
 }
@@ -96,6 +142,8 @@ pub struct WorkerSnapshot {
     pub queue_depth: usize,
     pub latest_final_text: Option<String>,
     pub last_error: Option<String>,
+    /// Link to the worker's surface mirror (Telegram topic), when registered.
+    pub mirror_url: Option<String>,
 }
 
 impl WorkerSnapshot {
@@ -115,6 +163,8 @@ pub struct WorkerRunRequest {
     pub model: Option<String>,
     pub thinking_level: Option<ThinkingLevel>,
     pub cancel: CancellationToken,
+    /// Manager event channel, for runners that relay live `Activity`.
+    pub events: mpsc::UnboundedSender<WorkerEvent>,
 }
 
 type RunnerFuture = Pin<Box<dyn Future<Output = Result<String>> + Send>>;
@@ -134,7 +184,7 @@ struct WorkerState {
 }
 
 impl WorkerState {
-    fn snapshot(&self, thread_id: &str) -> WorkerSnapshot {
+    fn snapshot(&self, thread_id: &str, mirror_url: Option<String>) -> WorkerSnapshot {
         WorkerSnapshot {
             thread_id: thread_id.to_string(),
             owner_thread_id: self.owner_thread_id.clone(),
@@ -143,6 +193,7 @@ impl WorkerState {
             queue_depth: self.queue.len(),
             latest_final_text: self.latest_final_text.clone(),
             last_error: self.last_error.clone(),
+            mirror_url,
         }
     }
 }
@@ -150,6 +201,12 @@ impl WorkerState {
 /// Process-lifetime manager for orchestrator-owned worker threads.
 pub struct WorkerManager {
     state: Mutex<HashMap<String, WorkerState>>,
+    /// Worker thread id → surface mirror link, registered by the bridge once
+    /// it has opened (or failed to open, `None`) the mirror, or recovered it
+    /// after a restart. Kept apart from `state` so a link can outlive/precede
+    /// the worker's managed state. Lock order when both are needed: `state`
+    /// first, then `mirrors`.
+    mirrors: Mutex<HashMap<String, Option<String>>>,
     /// Manager-wide change signal used by `wait_for`.
     changed: Notify,
     events_tx: mpsc::UnboundedSender<WorkerEvent>,
@@ -169,11 +226,71 @@ impl WorkerManager {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let manager = Arc::new(Self {
             state: Mutex::new(HashMap::new()),
+            mirrors: Mutex::new(HashMap::new()),
             changed: Notify::new(),
             events_tx,
             runner,
         });
         (manager, events_rx)
+    }
+
+    /// Records the outcome of opening a worker's surface mirror: `Some(url)`
+    /// for a linkable mirror (e.g. a Telegram topic), `None` when the surface
+    /// opened none or it has no link. Either way it resolves any pending
+    /// `wait_for_mirror_url`.
+    ///
+    /// # Panics
+    /// Panics if the internal mirror lock is poisoned.
+    pub fn set_mirror_url(&self, worker_thread_id: &str, url: Option<String>) {
+        self.mirrors
+            .lock()
+            .expect("worker mirror lock poisoned")
+            .insert(worker_thread_id.to_string(), url);
+        self.changed.notify_waiters();
+    }
+
+    /// The registered mirror link for a worker, if any.
+    ///
+    /// # Panics
+    /// Panics if the internal mirror lock is poisoned.
+    #[must_use]
+    pub fn mirror_url(&self, worker_thread_id: &str) -> Option<String> {
+        self.mirrors
+            .lock()
+            .expect("worker mirror lock poisoned")
+            .get(worker_thread_id)
+            .cloned()
+            .flatten()
+    }
+
+    fn mirror_resolved(&self, worker_thread_id: &str) -> bool {
+        self.mirrors
+            .lock()
+            .expect("worker mirror lock poisoned")
+            .contains_key(worker_thread_id)
+    }
+
+    /// Waits up to `timeout` for the surface to resolve a worker's mirror and
+    /// returns its link, if it has one. The mirror is opened asynchronously by
+    /// the surface bridge, so callers that want to hand the link back
+    /// immediately (`create_thread`) wait a bounded moment instead of
+    /// blocking on it.
+    pub async fn wait_for_mirror_url(
+        &self,
+        worker_thread_id: &str,
+        timeout: Duration,
+    ) -> Option<String> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let notified = self.changed.notified();
+            if self.mirror_resolved(worker_thread_id) {
+                return self.mirror_url(worker_thread_id);
+            }
+            tokio::select! {
+                () = notified => {}
+                () = tokio::time::sleep_until(deadline) => return self.mirror_url(worker_thread_id),
+            }
+        }
     }
 
     /// Creates a new visible worker thread in `root`, queues its first prompt,
@@ -341,7 +458,7 @@ impl WorkerManager {
                 state.status = WorkerStatus::Queued;
             }
             state.wake.notify_one();
-            state.snapshot(worker_thread_id)
+            state.snapshot(worker_thread_id, self.mirror_url(worker_thread_id))
         };
         self.changed.notify_waiters();
         Some(snapshot)
@@ -364,6 +481,7 @@ impl WorkerManager {
         prompt: String,
     ) -> WorkerSnapshot {
         let (snapshot, spawn_wake) = {
+            let mirror_url = self.mirror_url(worker_thread_id);
             let mut map = self.state.lock().expect("worker state lock poisoned");
             match map.entry(worker_thread_id.to_string()) {
                 Entry::Occupied(mut occupied) => {
@@ -376,7 +494,7 @@ impl WorkerManager {
                         state.status = WorkerStatus::Queued;
                     }
                     state.wake.notify_one();
-                    (state.snapshot(worker_thread_id), None)
+                    (state.snapshot(worker_thread_id, mirror_url), None)
                 }
                 Entry::Vacant(vacant) => {
                     let wake = Arc::new(Notify::new());
@@ -394,7 +512,7 @@ impl WorkerManager {
                         last_error: None,
                         wake: Arc::clone(&wake),
                     });
-                    (state.snapshot(worker_thread_id), Some(wake))
+                    (state.snapshot(worker_thread_id, mirror_url), Some(wake))
                 }
             }
         };
@@ -411,11 +529,12 @@ impl WorkerManager {
     /// Panics if the internal worker state lock is poisoned.
     #[must_use]
     pub fn snapshot(&self, worker_thread_id: &str) -> Option<WorkerSnapshot> {
+        let mirror_url = self.mirror_url(worker_thread_id);
         self.state
             .lock()
             .expect("worker state lock poisoned")
             .get(worker_thread_id)
-            .map(|state| state.snapshot(worker_thread_id))
+            .map(|state| state.snapshot(worker_thread_id, mirror_url))
     }
 
     /// Snapshots of every worker owned by `owner_thread_id`.
@@ -428,7 +547,7 @@ impl WorkerManager {
         let mut workers: Vec<WorkerSnapshot> = map
             .iter()
             .filter(|(_, state)| state.owner_thread_id == owner_thread_id)
-            .map(|(id, state)| state.snapshot(id))
+            .map(|(id, state)| state.snapshot(id, self.mirror_url(id)))
             .collect();
         workers.sort_by(|a, b| a.thread_id.cmp(&b.thread_id));
         workers
@@ -498,7 +617,7 @@ impl WorkerManager {
             } else {
                 state.status = WorkerStatus::Cancelled;
             }
-            state.snapshot(worker_thread_id)
+            state.snapshot(worker_thread_id, self.mirror_url(worker_thread_id))
         };
         self.changed.notify_waiters();
         Ok(snapshot)
@@ -549,7 +668,8 @@ fn resolve_persisted_root(worker_thread_id: &str) -> Result<PathBuf> {
 }
 
 /// Default runner: executes one prompt through `zdx --thread <id> exec` in the
-/// worker's project root, resuming the worker thread's persisted history.
+/// worker's project root, resuming the worker thread's persisted history, and
+/// relays the child's tool activity as `WorkerEvent::Activity`.
 async fn run_worker_prompt(request: WorkerRunRequest) -> Result<String> {
     let options = ExecSubagentOptions {
         model: request.model.clone(),
@@ -559,14 +679,53 @@ async fn run_worker_prompt(request: WorkerRunRequest) -> Result<String> {
         activity_parent_thread_id: Some(request.owner_thread_id.clone()),
         ..Default::default()
     };
-    run_exec_subagent_with_cancel(
+    let (tx, rx) = create_event_channel();
+    let sink = SubagentStreamSink {
+        sender: EventSender::new(tx),
+        parent_tool_id: request.worker_thread_id.clone(),
+    };
+    let forwarder = tokio::spawn(forward_activity(
+        rx,
+        request.worker_thread_id.clone(),
+        request.events.clone(),
+    ));
+    let result = run_exec_subagent_with_cancel(
         &request.root,
         &request.prompt,
         &options,
         Some(request.cancel.clone()),
-        None,
+        Some(sink),
     )
-    .await
+    .await;
+    // The sink's sender dies with the child's stdout reader, so the forwarder
+    // finishing means every Activity for this turn is already on the channel,
+    // ahead of the Completed the FIFO emits after we return.
+    let _ = forwarder.await;
+    result
+}
+
+/// Translates the streaming sink's `ToolOutputDelta` chunks into
+/// `WorkerEvent::Activity` until the sink is dropped.
+async fn forward_activity(
+    mut rx: AgentEventRx,
+    worker_thread_id: String,
+    events: mpsc::UnboundedSender<WorkerEvent>,
+) {
+    while let Some(event) = rx.recv().await {
+        let AgentEvent::ToolOutputDelta { chunk, .. } = event.as_ref() else {
+            continue;
+        };
+        let Some(activity) = WorkerActivity::from_stream_chunk(chunk) else {
+            continue;
+        };
+        let event = WorkerEvent::Activity {
+            worker_thread_id: worker_thread_id.clone(),
+            activity,
+        };
+        if events.send(event).is_err() {
+            break;
+        }
+    }
 }
 
 /// One FIFO task per worker: drains queued prompts strictly serially, updating
@@ -591,6 +750,7 @@ fn spawn_worker_task(manager: Arc<WorkerManager>, worker_thread_id: String, wake
                         model: state.model.clone(),
                         thinking_level: state.thinking_level,
                         cancel,
+                        events: manager.events_tx.clone(),
                     }
                 })
             };
@@ -633,6 +793,7 @@ fn spawn_worker_task(manager: Arc<WorkerManager>, worker_thread_id: String, wake
                     status: state.status,
                     final_text: result.as_ref().ok().cloned(),
                     error: state.last_error.clone(),
+                    mirror_url: manager.mirror_url(&worker_thread_id),
                 }
             };
             manager.changed.notify_waiters();
@@ -665,7 +826,9 @@ mod tests {
         loop {
             match rx.recv().await.expect("worker event channel open") {
                 WorkerEvent::Completed(event) => return event,
-                WorkerEvent::Created { .. } | WorkerEvent::Prompted { .. } => {}
+                WorkerEvent::Created { .. }
+                | WorkerEvent::Prompted { .. }
+                | WorkerEvent::Activity { .. } => {}
             }
         }
     }
@@ -1035,5 +1198,151 @@ mod tests {
         assert!(timed_out);
         assert_eq!(snapshots.len(), 1);
         manager.cancel(&worker_id).unwrap();
+    }
+
+    #[tokio::test]
+    async fn runner_activity_lands_before_completed() {
+        let _home = temp_zdx_home();
+        let project = tempfile::tempdir().unwrap();
+
+        let runner: WorkerRunner = Arc::new(|request: WorkerRunRequest| {
+            Box::pin(async move {
+                for activity in [
+                    WorkerActivity::ToolStarted {
+                        id: "t1".to_string(),
+                        name: "bash".to_string(),
+                    },
+                    WorkerActivity::ToolInput {
+                        id: "t1".to_string(),
+                        arg: "cargo test".to_string(),
+                    },
+                    WorkerActivity::ToolFinished {
+                        id: "t1".to_string(),
+                        ok: true,
+                    },
+                ] {
+                    request
+                        .events
+                        .send(WorkerEvent::Activity {
+                            worker_thread_id: request.worker_thread_id.clone(),
+                            activity,
+                        })
+                        .unwrap();
+                }
+                Ok(request.prompt)
+            })
+        });
+        let (manager, mut events_rx) = WorkerManager::with_runner(runner);
+        let worker_id = manager
+            .create_worker("owner", project.path(), "go", None, None, None)
+            .unwrap();
+
+        let mut kinds = Vec::new();
+        loop {
+            match events_rx.recv().await.unwrap() {
+                WorkerEvent::Created { .. } => kinds.push("created"),
+                WorkerEvent::Activity {
+                    worker_thread_id, ..
+                } => {
+                    assert_eq!(worker_thread_id, worker_id);
+                    kinds.push("activity");
+                }
+                WorkerEvent::Completed(_) => {
+                    kinds.push("completed");
+                    break;
+                }
+                WorkerEvent::Prompted { .. } => kinds.push("prompted"),
+            }
+        }
+        assert_eq!(
+            kinds,
+            vec!["created", "activity", "activity", "activity", "completed"]
+        );
+    }
+
+    #[test]
+    fn activity_decodes_stream_chunks() {
+        assert_eq!(
+            WorkerActivity::from_stream_chunk(r#"{"t":"start","id":"a","name":"edit"}"#),
+            Some(WorkerActivity::ToolStarted {
+                id: "a".to_string(),
+                name: "edit".to_string()
+            })
+        );
+        assert_eq!(
+            WorkerActivity::from_stream_chunk(r#"{"t":"input","id":"a","arg":"src/x.rs"}"#),
+            Some(WorkerActivity::ToolInput {
+                id: "a".to_string(),
+                arg: "src/x.rs".to_string()
+            })
+        );
+        assert_eq!(
+            WorkerActivity::from_stream_chunk(r#"{"t":"error","id":"a"}"#),
+            Some(WorkerActivity::ToolFinished {
+                id: "a".to_string(),
+                ok: false
+            })
+        );
+        assert_eq!(WorkerActivity::from_stream_chunk("not json"), None);
+        assert_eq!(
+            WorkerActivity::from_stream_chunk(r#"{"t":"other","id":"a"}"#),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn mirror_url_is_awaitable_and_flows_into_snapshots_and_completions() {
+        let _home = temp_zdx_home();
+        let project = tempfile::tempdir().unwrap();
+
+        let runner: WorkerRunner = Arc::new(|request: WorkerRunRequest| {
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+                Ok(request.prompt)
+            })
+        });
+        let (manager, mut events_rx) = WorkerManager::with_runner(runner);
+        let worker_id = manager
+            .create_worker("owner", project.path(), "go", None, None, None)
+            .unwrap();
+
+        // Nothing registered yet: a bounded wait returns None promptly.
+        assert_eq!(
+            manager
+                .wait_for_mirror_url(&worker_id, Duration::from_millis(10))
+                .await,
+            None
+        );
+
+        let waiter = {
+            let manager = Arc::clone(&manager);
+            let id = worker_id.clone();
+            tokio::spawn(async move {
+                manager
+                    .wait_for_mirror_url(&id, Duration::from_secs(5))
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        manager.set_mirror_url(&worker_id, Some("https://t.me/c/1/2".to_string()));
+        assert_eq!(waiter.await.unwrap().as_deref(), Some("https://t.me/c/1/2"));
+
+        assert_eq!(
+            manager.snapshot(&worker_id).unwrap().mirror_url.as_deref(),
+            Some("https://t.me/c/1/2")
+        );
+        let event = next_completion(&mut events_rx).await;
+        assert_eq!(event.mirror_url.as_deref(), Some("https://t.me/c/1/2"));
+
+        // A mirror resolved without a link releases the waiter immediately.
+        let started = tokio::time::Instant::now();
+        manager.set_mirror_url("other-worker", None);
+        assert_eq!(
+            manager
+                .wait_for_mirror_url("other-worker", Duration::from_secs(5))
+                .await,
+            None
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 }

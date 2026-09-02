@@ -85,7 +85,7 @@ pub(crate) async fn handle_message(
         return Ok(());
     }
 
-    if handle_pre_agent_commands(ctx, &incoming, &reply_ctx).await? {
+    if handle_pre_agent_commands(context, &incoming, &reply_ctx).await? {
         cleanup_provisional_status(ctx, Some(incoming.chat_id), provisional_status).await;
         return Ok(());
     }
@@ -330,7 +330,7 @@ fn build_reply_context(
 }
 
 async fn handle_pre_agent_commands(
-    context: &BotContext,
+    context: &std::sync::Arc<BotContext>,
     incoming: &crate::types::IncomingMessage,
     reply_ctx: &ReplyContext,
 ) -> Result<bool> {
@@ -430,6 +430,14 @@ pub(crate) fn thread_id_for_chat(chat_id: i64, message_thread_id: Option<i64>) -
     }
 }
 
+/// Inverse of [`thread_id_for_chat`] for topic threads: `(chat_id, topic_id)`
+/// from a `telegram-{chat_id}-topic-{topic_id}` id, `None` for anything else.
+pub(crate) fn parse_topic_thread_id(thread_id: &str) -> Option<(i64, i64)> {
+    let rest = thread_id.strip_prefix("telegram-")?;
+    let (chat, topic) = rest.rsplit_once("-topic-")?;
+    Some((chat.parse().ok()?, topic.parse().ok()?))
+}
+
 /// Follow a single `alias_to` hop so a resumed topic reads history from and
 /// persists new events to its source thread. One hop only (no chains/loops);
 /// a no-op when the thread has no alias.
@@ -442,7 +450,7 @@ pub(crate) fn resolve_effective_thread_id(id: &str) -> String {
 
 /// Mini App base URL for a chat, when the embedded server is enabled and
 /// configured. `None` means Mini App buttons are omitted.
-pub(super) fn mini_app_base_url(context: &BotContext, chat_id: i64) -> Option<String> {
+pub(crate) fn mini_app_base_url(context: &BotContext, chat_id: i64) -> Option<String> {
     context
         .config_for_chat(chat_id)
         .telegram

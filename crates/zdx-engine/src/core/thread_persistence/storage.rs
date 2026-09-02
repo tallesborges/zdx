@@ -1059,6 +1059,26 @@ pub fn read_thread_worker_topic(id: &str) -> Result<bool> {
     Ok(read_meta(&path)?.is_some_and(|m| m.worker_topic))
 }
 
+/// Lists every persisted worker mirror topic as `(mirror_thread_id,
+/// worker_thread_id)` pairs, by scanning each thread's meta line for
+/// `worker_topic` + `alias_to`. Startup/maintenance-only: it opens every thread
+/// file once.
+///
+/// # Errors
+/// Returns an error if the threads directory cannot be read.
+pub fn list_worker_topics() -> Result<Vec<(String, String)>> {
+    let mut pairs = Vec::new();
+    for file in list_thread_files(&threads_dir())? {
+        let Ok(Some(meta)) = read_meta(&file.path) else {
+            continue;
+        };
+        if let (true, Some(worker)) = (meta.worker_topic, meta.alias_to) {
+            pairs.push((file.id, worker));
+        }
+    }
+    Ok(pairs)
+}
+
 /// Reads a thread's persistent top-level profile by ID.
 ///
 /// Returns `Some(subagent_name)` only for visible top-level threads
