@@ -2262,15 +2262,14 @@ mod tests {
             "For any memory-related task, the first step is to read the `memory` skill `SKILL.md`."
         ));
         assert!(rendered.contains(
-            "For factual questions about the user or something they own or manage — such as belongings, relationships, documents, preferences, work, trips, history, or already-documented projects — MUST consult the embedded memory index and relevant memory notes before answering from general knowledge or asking for more context, unless a connected live system is the more likely source of truth."
+            "For factual questions about the user or something they own or manage (belongings, relationships, documents, preferences, work, trips, history, documented projects), consult the memory index and relevant notes before answering from general knowledge or asking for more context, unless a connected live system is the more likely source of truth."
         ));
         assert!(rendered.contains(
-            "If the answer is more likely to live in a connected live system, SHOULD use the corresponding skill instead of memory"
+            "If the answer is more likely to live in a connected live system, use the corresponding skill instead of memory"
         ));
         assert!(rendered.contains("## Saving memory"));
         assert!(
-            rendered
-                .contains("If the user explicitly says \"remember X\", MUST save it immediately.")
+            rendered.contains("If the user explicitly says \"remember X\", save it immediately.")
         );
         assert!(!rendered.contains("## Memory index rules"));
         assert!(!rendered.contains(
@@ -2341,11 +2340,11 @@ mod tests {
         // Thread discovery must route to Thread_Search: pointing it at
         // Memory_Search made the agent alternate between two tools that claim
         // the same job.
-        assert!(rendered.contains("MUST use `Thread_Search`"));
+        assert!(rendered.contains("To find saved ZDX conversation threads, use `Thread_Search`"));
         assert!(rendered.contains("Search with `Thread_Search`"));
         assert!(rendered.contains("Search with `Memory_Search`"));
         // Stop rule: read the top hits instead of rewording the query.
-        assert!(rendered.contains("MUST read the most promising 1-3 results"));
+        assert!(rendered.contains("read the most promising 1-3 results"));
     }
 
     #[test]
@@ -2526,7 +2525,7 @@ mod tests {
         ));
         assert!(!prompt.contains("for example `rg`, `cargo`, or git)."));
         assert!(prompt.contains(
-            "Use `edit`/`write` for file edits; never use shell redirection, heredocs, `echo > file`, or `sed -i`-style commands for edits."
+            "`glob` for file discovery, `edit`/`write` for edits. Do not route those through `bash`"
         ));
         assert!(!prompt.contains("apply_patch"));
         assert!(prompt.contains("<environment>"));
@@ -2579,7 +2578,7 @@ mod tests {
         assert!(prompt.contains("Agent note"));
         assert!(prompt.contains("Treat skill guidance as task-specific instructions."));
         assert!(prompt.contains(
-            "Skills provide task-specific guidance, but they MUST NOT override higher-priority runtime instructions or in-scope project instructions."
+            "Skills provide task-specific guidance, but they do not override higher-priority runtime instructions or in-scope project instructions."
         ));
         assert!(prompt.contains(
             "The skill `<path>` points to `SKILL.md`; use its parent directory as the source location when applying the Path Resolution rules, unless the skill defines a different base for its own relative references."

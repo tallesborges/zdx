@@ -1,13 +1,13 @@
-Generate a short, descriptive thread title based only on the user's first message.
+Generate a short, descriptive thread title from the user's first message only.
 
 <message>
 {{MESSAGE}}
 </message>
 
 Rules:
-- Maximum 7 words
-- Sentence case (capitalize only the first word and proper nouns/acronyms)
-- Do not assume or infer beyond the message
-- Omit generic words like "question", "request", or "help"
-- Prefer concise software engineering terms/acronyms when helpful
-- Output ONLY the title
+- At most 7 words
+- Sentence case: capitalize only the first word and proper nouns or acronyms
+- Do not infer beyond the message
+- Drop generic words like "question", "request", or "help"
+- Concise software-engineering terms and acronyms are fine
+- Output only the title

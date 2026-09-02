@@ -512,7 +512,7 @@ fn fallback_explorer_capability() -> CapabilityDescriptor {
         name: EXPLORER_SUBAGENT_NAME.to_string(),
         title: "Explorer".to_string(),
         description:
-            "Use for read-only local codebase and thread exploration: open-ended multi-step discovery across the current workspace, other machine-local paths, and saved thread history. Prefer it when the task likely needs several search/read rounds or broad orientation before implementation. It uses native read/search tools and does not have `bash`."
+            "Use for read-only exploration: current workspace, other local paths, saved thread history, external docs, or shallow-cloned repositories. Prefer it when the task likely needs several search/read rounds or broad orientation before implementation. It has `bash` for read-only `gh`/shallow-clone/inspection workflows."
                 .to_string(),
         kind: CapabilityKind::Subagent {
             subagent: EXPLORER_SUBAGENT_NAME.to_string(),
@@ -525,7 +525,7 @@ fn fallback_oracle_capability() -> CapabilityDescriptor {
         name: ORACLE_SUBAGENT_NAME.to_string(),
         title: "Oracle".to_string(),
         description:
-            "Read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions. Use it for interpreting evidence, identifying likely causes, evaluating tradeoffs, and recommending next steps after evidence is gathered. It uses read-only inspection/research tools and does not have `bash`. `oracle` is not the default search agent and MUST NOT be used as a substitute for broad local exploration or discovery when `explorer` is a better fit."
+            "Read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions. Use it for interpreting evidence, identifying likely causes, evaluating tradeoffs, and recommending next steps after evidence is gathered. It uses read-only inspection/research tools and does not have `bash`. It is not a search agent; use `explorer` for broad local exploration or discovery."
                 .to_string(),
         kind: CapabilityKind::Subagent {
             subagent: ORACLE_SUBAGENT_NAME.to_string(),
