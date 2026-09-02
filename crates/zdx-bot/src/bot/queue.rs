@@ -131,6 +131,10 @@ pub(crate) async fn dispatch_message(
                             "Created routed topic but failed to post thread header"
                         );
                     }
+                    // The user's message stays in General; forward it (and
+                    // any album siblings) so the topic opens with what was
+                    // asked — text, photo+caption, or voice alike.
+                    forward_original_into_topic(&context, &message, topic_id).await;
                     let mut message = message;
                     message.thread_id = Some(topic_id);
                     message.synthetic_topic_routed_from_general = true;
@@ -173,6 +177,22 @@ pub(crate) async fn dispatch_message(
             return;
         }
         enqueue_message(queues, context, message).await;
+    }
+}
+
+/// Forwards a General message (plus its album siblings, in order) into the
+/// topic it was routed to. Best-effort: the turn runs either way.
+async fn forward_original_into_topic(context: &Arc<BotContext>, message: &Message, topic_id: i64) {
+    let chat_id = message.chat.id;
+    let ids = std::iter::once(message.id).chain(message.grouped_messages.iter().map(|m| m.id));
+    for message_id in ids {
+        if let Err(err) = context
+            .client()
+            .forward_message(chat_id, chat_id, message_id, Some(topic_id))
+            .await
+        {
+            tracing::warn!(chat_id, topic_id, message_id, %err, "Failed to forward General message into topic");
+        }
     }
 }
 

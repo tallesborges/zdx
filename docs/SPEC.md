@@ -494,7 +494,7 @@ Contracts:
 
 When the Telegram bot is used in a forum-enabled supergroup:
 
-- A normal user message sent in `General` creates a new topic and routes that message into the topic before the agent replies.
+- A normal user message sent in `General` creates a new topic and routes that message into the topic before the agent replies. Right after the pinned header, the original message is **forwarded** into the new topic (text, photo + caption, voice, and every item of an album alike, keeping the "Forwarded from" attribution), so the topic reads from the question onward instead of starting at the answer. The forward is silent and best-effort; the turn runs even if it fails.
 - Slash commands that act on setup/status do not auto-create topics from `General`; they run in place instead (for example `/model`, `/thinking`, `/status`, `/worktree`).
 - `/new` sent in `General` creates an empty topic only:
   - no prompt is routed into the new topic
