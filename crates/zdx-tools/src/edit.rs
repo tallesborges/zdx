@@ -3,6 +3,7 @@
 //! Allows the agent to perform exact string replacements in files.
 
 use std::fs;
+use std::sync::PoisonError;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -99,6 +100,9 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(e) => return e,
     };
     let file_path = &resolved.resolved_path;
+
+    let lock = super::file_lock::for_path(file_path);
+    let _guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
 
     // Read file content
     let content = match fs::read_to_string(file_path) {
@@ -298,6 +302,36 @@ mod tests {
         // Verify CRLF is preserved
         let content = fs::read_to_string(&file_path).unwrap();
         assert_eq!(content, "line1\r\nreplaced\r\nline3");
+    }
+
+    #[test]
+    fn test_edit_concurrent_same_file_keeps_every_replacement() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("test.txt");
+        let lines = 16;
+        let original: String = (0..lines).map(|i| format!("k{i}=0\n")).collect();
+        fs::write(&file_path, &original).unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let handles: Vec<_> = (0..lines)
+            .map(|i| {
+                let ctx = ctx.clone();
+                std::thread::spawn(move || {
+                    let input = json!({
+                        "file_path": "test.txt",
+                        "old_string": format!("k{i}=0"),
+                        "new_string": format!("k{i}=1"),
+                    });
+                    assert!(execute(&input, &ctx).is_ok(), "edit {i} failed");
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let expected: String = (0..lines).map(|i| format!("k{i}=1\n")).collect();
+        assert_eq!(fs::read_to_string(&file_path).unwrap(), expected);
     }
 
     #[test]

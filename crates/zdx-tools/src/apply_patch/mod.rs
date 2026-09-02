@@ -4,11 +4,12 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::PoisonError;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{ToolContext, ToolDefinition, ToolOutput};
+use super::{ToolContext, ToolDefinition, ToolOutput, file_lock};
 
 pub mod parser;
 pub mod types;
@@ -182,6 +183,8 @@ pub fn apply_patch(patch: &str, root: &Path) -> Result<ApplyResult, ApplyPatchEr
         match hunk {
             Hunk::AddFile { path, contents } => {
                 let target = resolve_path(&path, root);
+                let lock = file_lock::for_path(&target);
+                let _guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
                 if target.exists() {
                     return Err(ApplyPatchError::FileExists { path: target });
                 }
@@ -204,6 +207,8 @@ pub fn apply_patch(patch: &str, root: &Path) -> Result<ApplyResult, ApplyPatchEr
             }
             Hunk::DeleteFile { path } => {
                 let target = resolve_path(&path, root);
+                let lock = file_lock::for_path(&target);
+                let _guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
                 if !target.exists() {
                     return Err(ApplyPatchError::FileNotFound { path: target });
                 }
@@ -219,6 +224,8 @@ pub fn apply_patch(patch: &str, root: &Path) -> Result<ApplyResult, ApplyPatchEr
                 chunks,
             } => {
                 let target = resolve_path(&path, root);
+                let lock = file_lock::for_path(&target);
+                let _guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
                 if !target.exists() {
                     return Err(ApplyPatchError::FileNotFound { path: target });
                 }

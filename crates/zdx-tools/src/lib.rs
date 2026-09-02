@@ -7,6 +7,7 @@ pub mod apply_patch;
 pub mod bash;
 pub mod edit;
 pub mod fetch_webpage;
+pub mod file_lock;
 pub mod glob;
 pub mod grep;
 mod parallel;

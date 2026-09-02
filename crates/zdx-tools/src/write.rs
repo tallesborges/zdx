@@ -3,6 +3,7 @@
 //! Allows the agent to write content to files on the filesystem.
 
 use std::fs;
+use std::sync::PoisonError;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -68,6 +69,9 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
             Some(format!("OS error: {e}")),
         );
     }
+
+    let lock = super::file_lock::for_path(&file_path);
+    let _guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
 
     // Check if file already exists (to determine `created` field)
     let created = !file_path.exists();
