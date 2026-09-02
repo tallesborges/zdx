@@ -308,6 +308,7 @@ async fn finalize_turn(
         reply_ctx,
         status.message_id,
         &result.final_text,
+        thread_id,
     )
     .await?;
 

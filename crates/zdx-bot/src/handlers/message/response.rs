@@ -10,6 +10,7 @@ pub(super) async fn send_final_response(
     reply_ctx: &ReplyContext,
     status_message_id: Option<i64>,
     final_text: &str,
+    thread_id: &str,
 ) -> Result<()> {
     let parsed = parse_final_response(final_text);
     let has_text = !parsed.text.trim().is_empty();
@@ -30,7 +31,8 @@ pub(super) async fn send_final_response(
     }
 
     if has_text {
-        send_text_response(context, incoming, reply_ctx, parsed.text.as_str()).await?;
+        let text = with_thread_link(context, incoming.chat_id, thread_id, parsed.text.as_str());
+        send_text_response(context, incoming, reply_ctx, &text).await?;
     }
 
     send_media_responses(context, incoming, reply_ctx, &parsed.media_paths, has_text).await?;
@@ -45,6 +47,31 @@ pub(super) async fn send_final_response(
     Ok(())
 }
 
+/// Appends a subtle Mini App deep link for this thread to an answer.
+///
+/// Saves the trip through the pinned thread header just to reach the Mini App.
+/// The link is skipped when the Mini App is not configured for this chat, and
+/// the answer is sent with link previews disabled so it stays a plain line of
+/// text instead of a preview card.
+fn with_thread_link(context: &BotContext, chat_id: i64, thread_id: &str, text: &str) -> String {
+    append_thread_link(
+        super::mini_app_base_url(context, chat_id).as_deref(),
+        thread_id,
+        text,
+    )
+}
+
+/// Pure half of [`with_thread_link`], so the rendered suffix is testable
+/// without constructing a whole bot context.
+fn append_thread_link(base: Option<&str>, thread_id: &str, text: &str) -> String {
+    match base {
+        Some(base) => {
+            format!("{text}\n\n<a href=\"{base}?startapp={thread_id}\">↗ Open thread</a>")
+        }
+        None => text.to_string(),
+    }
+}
+
 async fn send_text_response(
     context: &BotContext,
     incoming: &crate::types::IncomingMessage,
@@ -56,7 +83,7 @@ async fn send_text_response(
     if let Some(ref reply_parameters) = reply_ctx.cross_topic_reply_parameters {
         context
             .client()
-            .send_message_with_reply_params(
+            .send_message_with_reply_params_without_preview(
                 incoming.chat_id,
                 text,
                 reply_ctx.topic_id,
@@ -68,7 +95,7 @@ async fn send_text_response(
 
     let send_result = context
         .client()
-        .send_message(
+        .send_message_without_preview(
             incoming.chat_id,
             text,
             reply_ctx.reply_to_message_id,
@@ -79,7 +106,7 @@ async fn send_text_response(
         if e.to_string().contains("REPLY_MESSAGE_ID_INVALID") {
             context
                 .client()
-                .send_message(incoming.chat_id, text, None, reply_ctx.topic_id)
+                .send_message_without_preview(incoming.chat_id, text, None, reply_ctx.topic_id)
                 .await?;
         } else {
             send_result?;
@@ -87,4 +114,27 @@ async fn send_text_response(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::append_thread_link;
+
+    #[test]
+    fn appends_a_deep_link_only_when_the_mini_app_is_configured() {
+        assert_eq!(
+            append_thread_link(
+                Some("https://t.me/zdx_2026_bot/app"),
+                "telegram--1001234567890-topic-17771",
+                "done",
+            ),
+            "done\n\n<a href=\"https://t.me/zdx_2026_bot/app?startapp=telegram--1001234567890-topic-17771\">↗ Open thread</a>"
+        );
+
+        // Mini App disabled or unset: the answer must go out untouched.
+        assert_eq!(
+            append_thread_link(None, "telegram--100-topic-1", "done"),
+            "done"
+        );
+    }
 }

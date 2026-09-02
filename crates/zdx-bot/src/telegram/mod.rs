@@ -462,9 +462,42 @@ impl TelegramClient {
         reply_to_message_id: Option<i64>,
         message_thread_id: Option<i64>,
     ) -> Result<()> {
-        self.send_message_inner(chat_id, text, reply_to_message_id, message_thread_id, None)
-            .await
-            .map(|_| ())
+        self.send_message_inner(
+            chat_id,
+            text,
+            reply_to_message_id,
+            message_thread_id,
+            None,
+            None,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Send a message with link previews suppressed.
+    ///
+    /// Used for final answers, which carry an appended Mini App deep link that
+    /// would otherwise render a preview card under every reply.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub async fn send_message_without_preview(
+        &self,
+        chat_id: i64,
+        text: &str,
+        reply_to_message_id: Option<i64>,
+        message_thread_id: Option<i64>,
+    ) -> Result<()> {
+        self.send_message_inner(
+            chat_id,
+            text,
+            reply_to_message_id,
+            message_thread_id,
+            None,
+            Some(NO_LINK_PREVIEW),
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Send a message using an explicit parse mode.
@@ -489,6 +522,7 @@ impl TelegramClient {
             parse_mode,
             reply_markup: None,
             reply_parameters: None,
+            link_preview_options: None,
         })
         .await
         .map(|_| ())
@@ -513,6 +547,7 @@ impl TelegramClient {
             reply_to_message_id,
             message_thread_id,
             Some(reply_markup),
+            None,
         )
         .await
     }
@@ -534,6 +569,31 @@ impl TelegramClient {
             message_thread_id,
             None,
             reply_parameters,
+            None,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Cross-topic reply with link previews suppressed. See
+    /// [`Self::send_message_without_preview`].
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub async fn send_message_with_reply_params_without_preview(
+        &self,
+        chat_id: i64,
+        text: &str,
+        message_thread_id: Option<i64>,
+        reply_parameters: Option<ReplyParameters>,
+    ) -> Result<()> {
+        self.send_message_inner_with_reply_params(
+            chat_id,
+            text,
+            message_thread_id,
+            None,
+            reply_parameters,
+            Some(NO_LINK_PREVIEW),
         )
         .await
         .map(|_| ())
@@ -547,6 +607,7 @@ impl TelegramClient {
         reply_to_message_id: Option<i64>,
         message_thread_id: Option<i64>,
         reply_markup: Option<&InlineKeyboardMarkup>,
+        link_preview_options: Option<LinkPreviewOptions>,
     ) -> Result<Message> {
         self.send_message_with_html_fallback(SendMessageRawArgs {
             chat_id,
@@ -556,6 +617,7 @@ impl TelegramClient {
             parse_mode: Some(TELEGRAM_PARSE_MODE),
             reply_markup,
             reply_parameters: None,
+            link_preview_options,
         })
         .await
     }
@@ -568,6 +630,7 @@ impl TelegramClient {
         message_thread_id: Option<i64>,
         reply_markup: Option<&InlineKeyboardMarkup>,
         reply_parameters: Option<ReplyParameters>,
+        link_preview_options: Option<LinkPreviewOptions>,
     ) -> Result<Message> {
         self.send_message_with_html_fallback(SendMessageRawArgs {
             chat_id,
@@ -577,6 +640,7 @@ impl TelegramClient {
             parse_mode: Some(TELEGRAM_PARSE_MODE),
             reply_markup,
             reply_parameters,
+            link_preview_options,
         })
         .await
     }
@@ -621,6 +685,7 @@ impl TelegramClient {
             parse_mode: args.parse_mode,
             reply_markup: args.reply_markup,
             reply_parameters: args.reply_parameters,
+            link_preview_options: args.link_preview_options,
         };
         self.post("sendMessage", &request).await
     }
@@ -1122,6 +1187,17 @@ pub struct ReplyParameters {
     pub allow_sending_without_reply: Option<bool>,
 }
 
+/// `link_preview_options` for `sendMessage`.
+///
+/// Only the disable flag is modelled: the bot appends its own deep link to
+/// answers, and Telegram would otherwise attach a preview card for it.
+#[derive(Debug, Clone, Copy, Serialize)]
+struct LinkPreviewOptions {
+    is_disabled: bool,
+}
+
+const NO_LINK_PREVIEW: LinkPreviewOptions = LinkPreviewOptions { is_disabled: true };
+
 #[derive(Clone)]
 struct SendMessageRawArgs<'a> {
     chat_id: i64,
@@ -1131,6 +1207,7 @@ struct SendMessageRawArgs<'a> {
     parse_mode: Option<&'a str>,
     reply_markup: Option<&'a InlineKeyboardMarkup>,
     reply_parameters: Option<ReplyParameters>,
+    link_preview_options: Option<LinkPreviewOptions>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1149,6 +1226,8 @@ struct SendMessageRequest<'a> {
     reply_markup: Option<&'a InlineKeyboardMarkup>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reply_parameters: Option<ReplyParameters>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    link_preview_options: Option<LinkPreviewOptions>,
 }
 
 #[derive(Debug, Serialize)]
