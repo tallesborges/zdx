@@ -38,8 +38,8 @@ use crate::bot::context::BotContext;
 use crate::bot::queue::ChatQueueMap;
 use crate::bot::synthetic::dispatch_synthetic_prompt;
 use crate::handlers::message::{
-    escape_html, mini_app_base_url, parse_topic_thread_id, resolve_effective_thread_id,
-    thread_id_for_chat,
+    escape_html, mini_app_base_url, parse_topic_thread_id, post_thread_header,
+    resolve_effective_thread_id, thread_id_for_chat,
 };
 use crate::telegram::markdown::{to_telegram_html, truncate_telegram_html};
 use crate::telegram::{
@@ -200,8 +200,13 @@ impl Bridge {
                 worker_thread_id,
                 prompt,
             } => {
-                post_mirror_prompt(&self.context, self.mirrors.get(&worker_thread_id), &prompt)
-                    .await;
+                post_mirror_prompt(
+                    &self.context,
+                    self.mirrors.get(&worker_thread_id),
+                    &worker_thread_id,
+                    &prompt,
+                )
+                .await;
             }
             WorkerEvent::Activity {
                 worker_thread_id,
@@ -460,41 +465,64 @@ async fn create_mirror_topic(
         return None;
     }
 
-    let header = format!(
-        "🛠 Worker <code>{worker_thread_id}</code>\nProject: {}\n\nTool activity and results are posted here as the worker runs. Messages you send in this topic are queued straight to the worker.\n\n📤 First prompt:\n{}",
-        escape_html(&root.display().to_string()),
-        escape_html(&truncate_chars(prompt, MAX_MIRROR_TEXT_CHARS)),
-    );
-    let keyboard = mirror_keyboard(context, chat, worker_thread_id);
-    if let Err(err) = context
-        .client()
-        .send_message_with_markup(chat, &header, None, Some(topic_id), &keyboard)
-        .await
-    {
+    // Same pinned status card as every other topic (model, thinking, root,
+    // usage, Open Thread + Refresh), computed for the worker thread itself.
+    if let Err(err) = post_thread_header(context, chat, topic_id, worker_thread_id).await {
         tracing::warn!(worker = %worker_thread_id, %err, "Failed to post mirror topic header");
     }
-
-    Some(MirrorTopic {
+    let mirror = MirrorTopic {
         chat,
         topic: topic_id,
-    })
+    };
+    post_prompt_message(
+        context,
+        &mirror,
+        worker_thread_id,
+        "📤 First prompt",
+        prompt,
+    )
+    .await;
+    Some(mirror)
 }
 
 /// Posts an orchestrator-sent follow-up prompt into the worker's mirror topic.
-async fn post_mirror_prompt(context: &Arc<BotContext>, mirror: Option<&MirrorTopic>, prompt: &str) {
+async fn post_mirror_prompt(
+    context: &Arc<BotContext>,
+    mirror: Option<&MirrorTopic>,
+    worker_thread_id: &str,
+    prompt: &str,
+) {
     let Some(mirror) = mirror else {
         return;
     };
-    let text = format!(
-        "📤 Prompt from the orchestrator:\n{}",
-        escape_html(&truncate_chars(prompt, MAX_MIRROR_TEXT_CHARS))
-    );
+    post_prompt_message(
+        context,
+        mirror,
+        worker_thread_id,
+        "📤 Prompt from the orchestrator",
+        prompt,
+    )
+    .await;
+}
+
+/// Renders a prompt (Markdown → Telegram HTML, entity-safe truncation) under
+/// `label`, with the worker action buttons.
+async fn post_prompt_message(
+    context: &Arc<BotContext>,
+    mirror: &MirrorTopic,
+    worker_thread_id: &str,
+    label: &str,
+    prompt: &str,
+) {
+    let body = truncate_telegram_html(&to_telegram_html(prompt), MAX_MIRROR_TEXT_CHARS);
+    let text = format!("<b>{label}</b>\n\n{body}");
+    let keyboard = mirror_keyboard(context, mirror.chat, worker_thread_id);
     if let Err(err) = context
         .client()
-        .send_message(mirror.chat, &text, None, Some(mirror.topic))
+        .send_message_with_markup(mirror.chat, &text, None, Some(mirror.topic), &keyboard)
         .await
     {
-        tracing::warn!(%err, "Failed to post mirror prompt");
+        tracing::warn!(worker = %worker_thread_id, %err, "Failed to post mirror prompt");
     }
 }
 

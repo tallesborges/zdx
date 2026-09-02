@@ -333,6 +333,19 @@ impl WorkerManager {
                 .set_title(Some(title.to_string()))
                 .context("Failed to set worker thread title")?;
         }
+        // Record the overrides on the thread too, so surfaces that describe
+        // the worker (status cards, `zdx threads`) report what it really runs
+        // with; the runner still passes them explicitly to the child.
+        if model.is_some() {
+            thread
+                .set_model_override(model.clone())
+                .context("Failed to set worker model override")?;
+        }
+        if thinking_level.is_some() {
+            thread
+                .set_thinking_override(thinking_level)
+                .context("Failed to set worker thinking override")?;
+        }
         let worker_id = thread.id.clone();
 
         // Emit Created before the FIFO task can exist: a fast first prompt
