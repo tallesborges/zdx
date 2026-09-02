@@ -557,7 +557,7 @@ The reserved built-in `orchestrator` profile turns a Telegram topic into a persi
 - `bash` is governed only by a prompt policy (read-only inspection; delegate all mutations to workers). This is intentional YOLO guidance, not sandboxing.
 - The orchestrator inherits the chat's configured model and thinking level.
 - An optional personal overlay at `$ZDX_HOME/orchestrator.md` is appended to orchestrator prompts only (never to workers or other agents). A missing or empty file is a no-op; read failures are logged and skipped.
-- Orchestrator topics do not get async LLM title rewrites and do not post retry buttons on failed turns.
+- Orchestrator topics get the same async LLM title on their first message as other topics (Threaded Mode DM threads are otherwise left as "New Thread" or a truncated first line), and do not post retry buttons on failed turns.
 - The orchestrator topic's pinned header (and `/status`) uses an orchestrator card: model/thinking, thread, profile, context/usage/pricing, plus a live worker summary (running/queued/settled counts and the first few workers by title and status). Root and branch lines are omitted as fixed noise for the home base.
 
 ### Worker threads
@@ -579,11 +579,11 @@ Available only where a live worker manager exists (the Telegram bot); elsewhere 
 
 ### Worker mirror topics
 
-- When an orchestrator creates a worker, the bot also opens a **mirror topic** for it, named after the worker. The host chat is the group whose Telegram profile `cwd` contains the worker's project root (deepest match), falling back to the orchestrator's own group — so project workers surface in their project's group even when orchestrated from a DM home. The topic's thread is a thin pointer: it aliases the worker thread (`alias_to`) and is marked `worker_topic` in its meta.
+- When an orchestrator creates a worker, the bot also opens a **mirror topic** for it, named after the worker. The host chat is the group whose Telegram profile `cwd` contains the worker's project root (deepest match), falling back to the orchestrator's own chat — including a Threaded Mode DM home, where bots may create topics — so project workers surface in their project's group even when orchestrated from a DM. The topic's thread is a thin pointer: it aliases the worker thread (`alias_to`) and is marked `worker_topic` in its meta.
 - Each finished worker turn posts its final text (bounded) — or its failure/cancellation — into the mirror topic, in addition to the orchestrator callback. Orchestrator-sent prompts are posted there too (the first prompt with the header, follow-ups as `📤` messages), so the topic reads as a full prompt → result conversation; topic-originated prompts are not re-posted since the user's message is already visible.
 - Messages sent in a mirror topic never run an in-process turn (the worker's child process owns the aliased JSONL); **every** mirror-topic message — including slash commands and staged flows — is checked before any local interpretation, queued verbatim into the worker's FIFO, and acknowledged. Retry callbacks are also refused in mirror topics. After a restart, a mirror-topic message re-attaches the worker owning itself, so results keep landing in the topic even though orchestrator callbacks are gone.
 - Managed workers are excluded from the General launcher's `🔄 Continue` picker while managed, so a resume topic can never become a second writer on a running worker's thread.
-- Mirror-topic creation is best-effort: when no group profile covers the worker root and the home is a DM, it is skipped (the worker still runs), and the worker→topic mapping is process-lifetime.
+- Mirror-topic creation is best-effort: when no candidate chat accepts the topic it is skipped (the worker still runs), and the worker→topic mapping is process-lifetime.
 
 ### Completion callbacks and restart semantics
 

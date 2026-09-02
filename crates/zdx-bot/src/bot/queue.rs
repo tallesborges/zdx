@@ -110,7 +110,7 @@ pub(crate) async fn dispatch_message(
                     // that cannot record the profile must not run the default
                     // coding agent.
                     if context.orchestrator_enabled_for_chat(chat_id)
-                        && let Err(err) = mark_orchestrator_thread(&thread_id)
+                        && let Err(err) = mark_orchestrator_thread(&thread_id, false)
                     {
                         tracing::error!(
                             thread_id = %thread_id,
@@ -162,7 +162,7 @@ pub(crate) async fn dispatch_message(
         // profile. Fail closed: without the profile the turn would run the
         // default coding agent (with write tools) instead.
         if let Some(thread_id) = dm_thread_needing_orchestrator(&message)
-            && let Err(err) = mark_orchestrator_thread(&thread_id)
+            && let Err(err) = mark_orchestrator_thread(&thread_id, true)
         {
             tracing::error!(
                 thread_id = %thread_id,
@@ -197,12 +197,19 @@ async fn notify_orchestrator_init_failure(
     }
 }
 
-/// Marks a freshly created General-routed topic thread as the persistent
-/// orchestrator profile: `subagent_name = "orchestrator"` with no origin kind,
-/// so the thread stays a visible top-level thread.
-fn mark_orchestrator_thread(thread_id: &str) -> anyhow::Result<()> {
+/// Marks a freshly created topic thread as the persistent orchestrator
+/// profile: `subagent_name = "orchestrator"` with no origin kind, so the
+/// thread stays a visible top-level thread. `pending_title` asks the first
+/// turn to generate a real topic title (Threaded Mode names client-created DM
+/// threads "New Thread" or by a truncated first line; General-routed forum
+/// topics already get one).
+fn mark_orchestrator_thread(thread_id: &str, pending_title: bool) -> anyhow::Result<()> {
     let mut thread = zdx_engine::core::thread_persistence::Thread::with_id(thread_id.to_string())?;
-    thread.set_persistent_profile(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME)
+    thread.set_persistent_profile(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME)?;
+    if pending_title {
+        thread.set_pending_topic_title(true)?;
+    }
+    Ok(())
 }
 
 /// Returns the thread id to mark as orchestrator for a Threaded Mode DM

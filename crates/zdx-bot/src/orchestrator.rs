@@ -101,11 +101,11 @@ async fn create_mirror_topic(
     prompt: &str,
 ) -> Option<MirrorTopic> {
     let project_chat = context.mirror_chat_for_root(root);
-    // Topics exist only in forum supergroups; a DM home contributes no fallback.
+    // Bots may create topics in Threaded Mode private chats too, so a DM home
+    // is a valid fallback host for workers whose root has no group profile.
     let owner_chat = context
         .orchestrator_route(owner_thread_id)
-        .map(|route| route.chat)
-        .filter(|chat| *chat < 0);
+        .map(|route| route.chat);
     let mut candidates: Vec<i64> = Vec::new();
     candidates.extend(project_chat);
     if let Some(chat) = owner_chat

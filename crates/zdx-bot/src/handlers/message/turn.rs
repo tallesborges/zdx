@@ -67,10 +67,9 @@ pub(super) async fn run_agent_turn(
 
     // Async topic title: spawn LLM-based title generation + rename for new topics.
     // This runs only after the user message is persisted, so the thread file exists.
-    // Orchestrator topics keep their literal name: the async rename races the
-    // process-lifetime queue/routes for no benefit on a long-lived home base.
-    if !is_orchestrator
-        && (synthetic_topic_routed_from_general || pending_topic_title)
+    // Orchestrator homes get titles too: Threaded Mode DM threads are otherwise
+    // left as "New Thread" (voice) or a truncated first line (text).
+    if (synthetic_topic_routed_from_general || pending_topic_title)
         && let Some(topic_id) = reply_ctx.topic_id
     {
         let effective_text = incoming
