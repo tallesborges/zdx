@@ -663,8 +663,10 @@ fn expand_tilde(path: &str) -> std::path::PathBuf {
 /// A favorite model preset cycled with Tab in the TUI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelFavorite {
+    #[serde(default)]
     pub alias: String,
     /// Model id, with or without a `provider:` prefix.
+    #[serde(default)]
     pub model: String,
     #[serde(default)]
     pub thinking: ThinkingLevel,

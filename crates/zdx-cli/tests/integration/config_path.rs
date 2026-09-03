@@ -60,7 +60,117 @@ fn test_config_help_shows_subcommands() {
         .assert()
         .success()
         .stdout(predicate::str::contains("path"))
-        .stdout(predicate::str::contains("init"));
+        .stdout(predicate::str::contains("init"))
+        .stdout(predicate::str::contains("get"))
+        .stdout(predicate::str::contains("set"))
+        .stdout(predicate::str::contains("unset"));
+}
+
+#[test]
+fn test_config_get_set_unset() {
+    let zdx_home = tempdir().unwrap();
+    let isolated_cwd = tempdir().unwrap();
+
+    // Init config
+    cargo_bin_cmd!("zdx")
+        .current_dir(isolated_cwd.path())
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["config", "init"])
+        .assert()
+        .success();
+
+    // Set model
+    cargo_bin_cmd!("zdx")
+        .current_dir(isolated_cwd.path())
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["config", "set", "model", "test-model-1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Set model"));
+
+    // Get model
+    cargo_bin_cmd!("zdx")
+        .current_dir(isolated_cwd.path())
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["config", "get", "model"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("test-model-1"));
+
+    // Unset a key
+    cargo_bin_cmd!("zdx")
+        .current_dir(isolated_cwd.path())
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["config", "unset", "tool_timeout_secs"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Unset tool_timeout_secs"));
+
+    // Set array elements generically (e.g. favorites)
+    cargo_bin_cmd!("zdx")
+        .current_dir(isolated_cwd.path())
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["config", "set", "favorites.0.alias", "Fast"])
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("zdx")
+        .current_dir(isolated_cwd.path())
+        .env("ZDX_HOME", zdx_home.path())
+        .args([
+            "config",
+            "set",
+            "favorites.0.model",
+            "google-antigravity:gemini-3.8-flash-high",
+        ])
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("zdx")
+        .current_dir(isolated_cwd.path())
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["config", "set", "favorites.0.thinking", "high"])
+        .assert()
+        .success();
+
+    // Plain get on array field works without --json
+    cargo_bin_cmd!("zdx")
+        .current_dir(isolated_cwd.path())
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["config", "get", "favorites"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Fast"))
+        .stdout(predicate::str::contains("gemini-3.8-flash-high"));
+
+    // Plain get on indexed field
+    cargo_bin_cmd!("zdx")
+        .current_dir(isolated_cwd.path())
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["config", "get", "favorites.0.model"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "google-antigravity:gemini-3.8-flash-high",
+        ));
+
+    // Validation rejects invalid schema writes
+    cargo_bin_cmd!("zdx")
+        .current_dir(isolated_cwd.path())
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["config", "set", "tool_timeout_secs", "not_a_number"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("modified config would be invalid"));
+
+    // Unset array element
+    cargo_bin_cmd!("zdx")
+        .current_dir(isolated_cwd.path())
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["config", "unset", "favorites.0"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Unset favorites.0"));
 }
 
 #[test]

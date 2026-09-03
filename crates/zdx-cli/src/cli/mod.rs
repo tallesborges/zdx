@@ -731,6 +731,36 @@ enum ConfigCommands {
     Init,
     /// Generate a fresh config from Rust defaults (for xtask)
     Generate,
+    /// Get a config value or dump full config
+    Get {
+        /// Configuration key (e.g. `model`, `memory.root`, `favorites`)
+        key: Option<String>,
+        /// Emit JSON instead of TOML/plain value
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set a configuration value (persists to ~/.zdx/config.toml, or workspace with --local)
+    Set {
+        /// Configuration key (e.g. `model`, `thinking_level`, `tool_timeout_secs`)
+        key: String,
+        /// New value
+        #[arg(allow_hyphen_values = true)]
+        value: String,
+        /// Write to workspace `.zdx/config.toml` instead of global config
+        #[arg(long)]
+        local: bool,
+        /// Force value to be treated as a string, avoiding type inference (e.g. "true", "123")
+        #[arg(long = "string")]
+        force_string: bool,
+    },
+    /// Unset/remove a configuration key
+    Unset {
+        /// Configuration key to remove
+        key: String,
+        /// Remove from workspace `.zdx/config.toml` instead of global config
+        #[arg(long)]
+        local: bool,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -916,6 +946,12 @@ pub fn run() -> Result<()> {
 }
 
 async fn dispatch(cli: Cli) -> Result<()> {
+    // Config management commands do not require a healthy or loaded config file
+    // and must remain operational to inspect or repair a broken config.
+    if let Some(Commands::Config { command }) = &cli.command {
+        return dispatch_config(command);
+    }
+
     let mut config = config::Config::load().context("load config")?;
     apply_system_prompt_override(&mut config, cli.system_prompt.as_deref());
 
@@ -1515,6 +1551,14 @@ fn dispatch_config(command: &ConfigCommands) -> Result<()> {
         }
         ConfigCommands::Init => commands::config::init(),
         ConfigCommands::Generate => commands::config::generate(),
+        ConfigCommands::Get { key, json } => commands::config::get(key.as_deref(), *json),
+        ConfigCommands::Set {
+            key,
+            value,
+            local,
+            force_string,
+        } => commands::config::set(key, value, *local, *force_string),
+        ConfigCommands::Unset { key, local } => commands::config::unset(key, *local),
     }
 }
 
