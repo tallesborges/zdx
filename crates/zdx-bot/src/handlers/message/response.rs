@@ -36,7 +36,7 @@ pub(super) async fn send_final_response(
     }
 
     if has_text {
-        let text = with_worker_links(context, touched_workers, parsed.text.as_str());
+        let text = with_worker_links(context, incoming.chat_id, touched_workers, &parsed.text);
         let text = with_thread_link(context, incoming.chat_id, thread_id, &text);
         send_text_response(context, incoming, reply_ctx, &text).await?;
     }
@@ -78,15 +78,25 @@ fn append_thread_link(base: Option<&str>, thread_id: &str, text: &str) -> String
     }
 }
 
-/// Appends one `🛠 <title>` link per worker this turn created or messaged,
-/// pointing at its mirror topic, so the user can follow the work without
-/// relying on the model to mention it. Workers without a linkable mirror
-/// (none opened, or DM-hosted) are skipped.
-fn with_worker_links(context: &BotContext, touched_workers: &[String], text: &str) -> String {
+/// Appends one `🛠 <title>` link per worker this turn created or messaged, so
+/// the user can follow the work without relying on the model to mention it.
+/// Points at the worker's mirror topic when it has a link (group-hosted), or
+/// at the worker thread in the Mini App otherwise (DM-hosted mirrors have no
+/// topic link form). Skipped only when neither exists.
+fn with_worker_links(
+    context: &BotContext,
+    chat_id: i64,
+    touched_workers: &[String],
+    text: &str,
+) -> String {
+    let mini_app = super::mini_app_base_url(context, chat_id);
     let links: Vec<(String, String)> = touched_workers
         .iter()
         .filter_map(|worker| {
-            let url = context.worker_manager().mirror_url(worker)?;
+            let url = context
+                .worker_manager()
+                .mirror_url(worker)
+                .or_else(|| mini_app.as_ref().map(|base| format!("{base}?startapp={worker}")))?;
             let title = thread_persistence::read_thread_title(worker)
                 .ok()
                 .flatten()
