@@ -748,7 +748,7 @@ mod tests {
                     (
                         "dub".to_string(),
                         TelegramProfileConfig {
-                            chat_id: -100_1,
+                            chat_id: -1001,
                             cwd: "/tmp/work/dub".to_string(),
                             orchestrator: false,
                         },
@@ -756,7 +756,7 @@ mod tests {
                     (
                         "zdx".to_string(),
                         TelegramProfileConfig {
-                            chat_id: -100_2,
+                            chat_id: -1002,
                             cwd: "/tmp/personal/zdx".to_string(),
                             orchestrator: true,
                         },
@@ -803,7 +803,7 @@ mod tests {
                     (
                         "dub".to_string(),
                         TelegramProfileConfig {
-                            chat_id: -100_1,
+                            chat_id: -1001,
                             cwd: project.display().to_string(),
                             orchestrator: false,
                         },
@@ -811,7 +811,7 @@ mod tests {
                     (
                         "parity".to_string(),
                         TelegramProfileConfig {
-                            chat_id: -100_2,
+                            chat_id: -1002,
                             cwd: umbrella.display().to_string(),
                             orchestrator: false,
                         },

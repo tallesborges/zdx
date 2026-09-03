@@ -536,7 +536,7 @@ mod tests {
     }
 
     /// Improbable private chat id so `thread_exists` is deterministic without
-    /// a ZDX_HOME guard (the check is read-only).
+    /// a `ZDX_HOME` guard (the check is read-only).
     fn unseen_chat_id() -> i64 {
         880_000_000_000 + i64::from(std::process::id())
     }
