@@ -34,8 +34,8 @@ pub struct ActiveAgentInfo {
     pub uptime: String,
     pub kind: Option<String>,
     pub subagent_name: Option<String>,
-    /// Currently executing tool call (`"bash: cargo build …"`), when the run
-    /// is inside a tool round. `None` between tool rounds.
+    /// Name of the currently executing tool call (`"bash"`), when the run is
+    /// inside a tool round. `None` between tool rounds.
     pub current_tool: Option<String>,
     /// Coarse run phase from the marker (`waiting`/`thinking`/`answering`/
     /// `retrying`), shown when no tool is running.
@@ -162,18 +162,7 @@ pub(crate) fn load_active_agents() -> Vec<ActiveAgentInfo> {
                 .as_deref()
                 .map_or("-", |id| if id.len() > 8 { &id[..8] } else { id })
                 .to_string();
-            let current_tool = r.current_tools.first().map(|tool| {
-                let mut label = if tool.summary.is_empty() {
-                    tool.name.clone()
-                } else {
-                    format!("{}: {}", tool.name, tool.summary)
-                };
-                if r.current_tools.len() > 1 {
-                    use std::fmt::Write as _;
-                    let _ = write!(label, " (+{} more)", r.current_tools.len() - 1);
-                }
-                label
-            });
+            let current_tool = r.current_tools.first().map(|tool| tool.name.clone());
             ActiveAgentInfo {
                 pid: r.pid,
                 surface: r.surface.unwrap_or_else(|| "-".to_string()),
@@ -843,12 +832,11 @@ pub(crate) fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) 
                     )
                 },
                 |tool| {
-                    let name = tool.split(':').next().unwrap_or(tool);
                     let glyph = zdx_transcript::tool_state_glyph(
                         &zdx_transcript::ToolState::Running,
                         spinner_frame_now(),
                     );
-                    (format!("{glyph} {name}"), Color::Yellow)
+                    (format!("{glyph} {tool}"), Color::Yellow)
                 },
             );
             let status = format!("{:<STATUS_COL$}", truncate_chars(&status, STATUS_COL));
@@ -881,25 +869,7 @@ pub(crate) fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) 
                 Span::styled(status, status_style),
                 Span::styled(format!("{mid}{model:<model_width$}{suffix}"), style),
             ]);
-            let mut lines = vec![line];
-            if let Some(tool) = a.current_tool.as_deref() {
-                let glyph = zdx_transcript::tool_state_glyph(
-                    &zdx_transcript::ToolState::Running,
-                    spinner_frame_now(),
-                );
-                let preview = format!(
-                    "   {}{glyph} {}",
-                    a.tree_prefix,
-                    truncate_chars(tool, inner_width.saturating_sub(a.tree_prefix.len() + 5))
-                );
-                let preview_style = if i == app.selected_index {
-                    Style::default().fg(Color::Yellow).bg(SELECTED_BG)
-                } else {
-                    Style::default().fg(Color::Yellow)
-                };
-                lines.push(Line::styled(preview, preview_style));
-            }
-            ListItem::new(lines)
+            ListItem::new(line)
         })
         .collect();
 
