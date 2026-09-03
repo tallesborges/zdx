@@ -72,8 +72,13 @@ fn capabilities_for_model(model: &str) -> GeminiCapabilities {
         };
     }
 
-    // Gemini 3.7 Flash / 3.7 variants: "low", "medium", "high" — Google dropped "minimal".
-    if model.contains("gemini-3.7-flash") || model.contains("gemini-3.7") {
+    // Gemini 3.7 / 3.8 Flash variants: "low", "medium", "high" — Google dropped
+    // "minimal" (the backend rejects it with a 400).
+    if model.contains("gemini-3.7-flash")
+        || model.contains("gemini-3.7")
+        || model.contains("gemini-3.8-flash")
+        || model.contains("gemini-3.8")
+    {
         return GeminiCapabilities {
             supports_minimal: false,
             supports_low: true,
@@ -82,7 +87,12 @@ fn capabilities_for_model(model: &str) -> GeminiCapabilities {
     }
 
     // Pro (text) variants: "low", "medium", "high" — no "minimal".
-    if model.contains("gemini-3-pro") || model.contains("gemini-3.1-pro") {
+    // `gemini-pro-agent` is Antigravity's unversioned alias for 3.1 Pro (High);
+    // it also rejects `thinkingBudget: 0` ("this model only works in thinking mode").
+    if model.contains("gemini-3-pro")
+        || model.contains("gemini-3.1-pro")
+        || model.contains("gemini-pro-agent")
+    {
         return GeminiCapabilities {
             supports_minimal: false,
             supports_low: true,
@@ -105,7 +115,7 @@ impl GeminiThinkingConfig {
     /// nearest level the target model supports (per `capabilities_for_model`).
     /// For Gemini 2.5 models: maps to thinkingBudget tokens.
     pub fn from_thinking_level(level: ThinkingLevel, model: &str) -> Self {
-        if model.contains("gemini-3") {
+        if model.contains("gemini-3") || model.contains("gemini-pro-agent") {
             let caps = capabilities_for_model(model);
             return Self::gemini_3_level(level, caps);
         }

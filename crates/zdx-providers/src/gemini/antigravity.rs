@@ -242,8 +242,11 @@ mod tests {
             "gemini-3.7-flash-low",
             "gemini-3.7-flash-medium",
             "gemini-3.7-flash-high",
+            "gemini-3.8-flash-low",
+            "gemini-3.8-flash-medium",
+            "gemini-3.8-flash-high",
         ] {
-            // Off and Low (alias minimal) should both clamp to "low" because 3.7 has no minimal
+            // Off and Low (alias minimal) should both clamp to "low" because 3.7/3.8 have no minimal
             assert!(matches!(
                 antigravity_thinking_config(ThinkingLevel::Off, model, Some(65_536)),
                 GeminiThinkingConfig::Level(ref l) if l == "low"
@@ -260,6 +263,28 @@ mod tests {
                 antigravity_thinking_config(ThinkingLevel::High, model, Some(65_536)),
                 GeminiThinkingConfig::Level(ref l) if l == "high"
             ));
+        }
+    }
+
+    /// `gemini-pro-agent` carries no `gemini-3` marker, so it must be routed to
+    /// the Gemini 3 Pro tier rules explicitly: the backend rejects both
+    /// `minimal` and `thinkingBudget: 0` ("this model only works in thinking mode").
+    #[test]
+    fn gemini_pro_agent_uses_pro_levels_and_never_budget_zero() {
+        for (level, expected) in [
+            (ThinkingLevel::Off, "low"),
+            (ThinkingLevel::Low, "low"),
+            (ThinkingLevel::Medium, "medium"),
+            (ThinkingLevel::High, "high"),
+            (ThinkingLevel::Max, "high"),
+        ] {
+            assert!(
+                matches!(
+                    antigravity_thinking_config(level, "gemini-pro-agent", Some(65_535)),
+                    GeminiThinkingConfig::Level(ref l) if l == expected
+                ),
+                "{level:?} should map to {expected}"
+            );
         }
     }
 }
