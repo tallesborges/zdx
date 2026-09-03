@@ -580,6 +580,18 @@ async fn dispatch_owner_callback(
         return;
     };
 
+    // The synthetic prompt itself is invisible in chat, so post a one-line
+    // notice first: the user sees which worker woke the orchestrator and can
+    // jump to its topic.
+    let notice = worker_update_notice(event);
+    if let Err(err) = context
+        .client()
+        .send_message_without_preview(route.chat, &notice, None, route.topic)
+        .await
+    {
+        tracing::warn!(worker = %event.worker_thread_id, %err, "Failed to post worker update notice");
+    }
+
     let prompt = build_worker_update_prompt(event);
     let dispatched =
         dispatch_synthetic_prompt(context, queues, route.chat, route.topic, route.user, prompt)
@@ -596,6 +608,26 @@ async fn dispatch_owner_callback(
             "Failed to dispatch worker completion callback"
         );
     }
+}
+
+/// One-line notice posted in the orchestrator topic when a worker turn ends:
+/// status glyph, worker title linked to its mirror topic when it has one.
+fn worker_update_notice(event: &CompletionEvent) -> String {
+    let title = thread_persistence::read_thread_title(&event.worker_thread_id)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| event.worker_thread_id.chars().take(8).collect());
+    let title = escape_html(&title);
+    let worker = match event.mirror_url.as_deref() {
+        Some(url) => format!("<a href=\"{url}\">{title}</a>"),
+        None => title,
+    };
+    let (glyph, verb) = match event.status {
+        WorkerStatus::Completed => ("✅", "finished"),
+        WorkerStatus::Cancelled => ("🚫", "was cancelled"),
+        _ => ("❌", "failed"),
+    };
+    format!("{glyph} Worker 🛠 {worker} {verb} · reviewing…")
 }
 
 /// Compact synthetic prompt describing one finished worker turn.
@@ -677,6 +709,21 @@ mod tests {
         assert!(!prompt.contains("Mirror topic:"));
         assert!(prompt.contains("[truncated"));
         assert!(prompt.chars().count() < 3000);
+    }
+
+    #[test]
+    fn update_notice_links_the_worker_when_it_has_a_mirror() {
+        let linked = worker_update_notice(&CompletionEvent {
+            mirror_url: Some("https://t.me/c/1/2".to_string()),
+            ..completion(WorkerStatus::Completed)
+        });
+        assert_eq!(
+            linked,
+            "✅ Worker 🛠 <a href=\"https://t.me/c/1/2\">worker-1</a> finished · reviewing…"
+        );
+        // No thread on disk → short id; no mirror → plain text.
+        let plain = worker_update_notice(&completion(WorkerStatus::Failed));
+        assert_eq!(plain, "❌ Worker 🛠 worker-1 failed · reviewing…");
     }
 
     #[test]
