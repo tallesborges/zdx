@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use tokio_util::sync::CancellationToken;
@@ -213,15 +214,18 @@ const ACTIVITY_MAX_THREADS: usize = 12;
 
 /// Telegram project groups bound to the bot, so the orchestrator can pick
 /// worker roots deliberately and tell the user where a worker's mirror topic
-/// will appear. `None` when no profiles are configured.
+/// will appear. Each workspace also lists the project skills its workers
+/// discover there, since the orchestrator's own skill catalog only covers its
+/// home root. `None` when no profiles are configured.
 fn telegram_workspaces_block(config: &Config) -> Option<String> {
     if config.telegram.profiles.is_empty() {
         return None;
     }
     let home = std::env::var("HOME").unwrap_or_default();
+    let skills = workspace_skills(config);
 
     let mut block = String::from(
-        "# Telegram Workspaces\n\nProject groups bound to this bot (profile — root). A worker created inside one of these roots gets its mirror topic in that group (deepest matching root wins); workers in other roots get a topic in the chat you are in. Tell the user where to follow each worker.\n\n",
+        "# Telegram Workspaces\n\nProject groups bound to this bot (profile — root). A worker created inside one of these roots gets its mirror topic in that group (deepest matching root wins); workers in other roots get a topic in the chat you are in. Tell the user where to follow each worker.\n\nWorkers in a root automatically discover that project's skills (listed under it); you do not have them yourself. Use them to know what a workspace can do and to point a worker at the right one by name when the task matches.\n\n",
     );
     for (name, profile) in &config.telegram.profiles {
         let root = shorten_home(&profile.cwd_path().display().to_string(), &home);
@@ -235,8 +239,89 @@ fn telegram_workspaces_block(config: &Config) -> Option<String> {
             "- {name} (chat {}) — `{root}`{flag}",
             profile.chat_id
         );
+        for (skill_name, description) in skills.get(name).into_iter().flatten() {
+            let _ = writeln!(block, "  - skill `{skill_name}`: {description}");
+        }
     }
     Some(block)
+}
+
+/// Longest skill description shown per workspace skill line.
+const WORKSPACE_SKILL_DESCRIPTION_CHARS: usize = 140;
+
+/// Project-level skills each Telegram workspace's workers will discover, keyed
+/// by profile name. Only project sources are scanned (user/global skills are
+/// already in the orchestrator's own catalog). A skill reachable from several
+/// nested workspaces is attributed once, to the deepest root that contains it.
+fn workspace_skills(config: &Config) -> HashMap<String, Vec<(String, String)>> {
+    use zdx_engine::config::SkillSourceToggles;
+    use zdx_engine::skills::{LoadSkillsOptions, SkillSource, load_skills};
+
+    // skill file → (owning profile, depth of that profile's root)
+    let mut owner: HashMap<PathBuf, (String, usize, String, String)> = HashMap::new();
+    for (name, profile) in &config.telegram.profiles {
+        let root = profile.cwd_path();
+        let root = root.canonicalize().unwrap_or(root);
+        let depth = root.components().count();
+        let options = LoadSkillsOptions {
+            sources: SkillSourceToggles {
+                zdx_project: true,
+                claude_project: true,
+                agents_project: true,
+                ..SkillSourceToggles::default()
+            },
+            ..LoadSkillsOptions::new(root.clone())
+        };
+        // Bundled skills ignore the toggles; keep project sources only.
+        let project_skills = load_skills(&options).skills.into_iter().filter(|skill| {
+            matches!(
+                skill.source,
+                SkillSource::ZdxProject | SkillSource::ClaudeProject | SkillSource::AgentsProject
+            )
+        });
+        for skill in project_skills {
+            let contains = skill.base_dir.starts_with(&root);
+            // Prefer the deepest root that actually contains the skill; a
+            // skill inherited from an ancestor without a profile goes to
+            // whichever workspace saw it first.
+            let rank = if contains { depth } else { 0 };
+            let replace = owner
+                .get(&skill.file_path)
+                .is_none_or(|(_, existing, _, _)| rank > *existing);
+            if replace {
+                owner.insert(
+                    skill.file_path.clone(),
+                    (
+                        name.clone(),
+                        rank,
+                        skill.name.clone(),
+                        truncate_description(&skill.description, WORKSPACE_SKILL_DESCRIPTION_CHARS),
+                    ),
+                );
+            }
+        }
+    }
+
+    let mut by_profile: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    for (profile, _, skill_name, description) in owner.into_values() {
+        by_profile
+            .entry(profile)
+            .or_default()
+            .push((skill_name, description));
+    }
+    for skills in by_profile.values_mut() {
+        skills.sort();
+    }
+    by_profile
+}
+
+fn truncate_description(text: &str, max_chars: usize) -> String {
+    let first_line = text.lines().next().unwrap_or_default().trim();
+    if first_line.chars().count() <= max_chars {
+        return first_line.to_string();
+    }
+    let head: String = first_line.chars().take(max_chars).collect();
+    format!("{}…", head.trim_end())
 }
 
 /// Loads the user's personal orchestrator overlay (`$ZDX_HOME/orchestrator.md`):
@@ -514,7 +599,7 @@ mod tests {
 
     use super::{
         STATUS_THINKING, STATUS_WAITING, STATUS_WRITING, event_to_status,
-        load_orchestrator_overlay, prepare_bot_turn, telegram_workspaces_block,
+        load_orchestrator_overlay, prepare_bot_turn, telegram_workspaces_block, workspace_skills,
     };
 
     fn make_temp_dir() -> std::path::PathBuf {
@@ -686,6 +771,75 @@ mod tests {
         assert!(block.contains("mirror topic in that group"));
         assert!(block.contains("- dub (chat -1001) — `/tmp/work/dub`"));
         assert!(block.contains("- zdx (chat -1002) — `/tmp/personal/zdx` (orchestrator home)"));
+    }
+
+    /// Workers discover a workspace's project skills, the orchestrator does
+    /// not, so the workspace list names them. A skill living in an umbrella
+    /// root is attributed to that umbrella, not repeated under nested roots.
+    #[test]
+    fn telegram_workspaces_block_lists_project_skills_once_under_their_root() {
+        use std::collections::BTreeMap;
+
+        use zdx_engine::config::{TelegramConfig, TelegramProfileConfig};
+
+        let umbrella = make_temp_dir();
+        let project = umbrella.join("dub");
+        std::fs::create_dir_all(umbrella.join(".zdx/skills/parity-flow")).unwrap();
+        std::fs::write(
+            umbrella.join(".zdx/skills/parity-flow/SKILL.md"),
+            "---\nname: parity-flow\ndescription: ExampleCo release flow.\n---\nbody\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(project.join(".zdx/skills/dub-attest")).unwrap();
+        std::fs::write(
+            project.join(".zdx/skills/dub-attest/SKILL.md"),
+            "---\nname: dub-attest\ndescription: Run device attestation end to end.\n---\nbody\n",
+        )
+        .unwrap();
+
+        let config = Config {
+            telegram: TelegramConfig {
+                profiles: BTreeMap::from([
+                    (
+                        "dub".to_string(),
+                        TelegramProfileConfig {
+                            chat_id: -100_1,
+                            cwd: project.display().to_string(),
+                            orchestrator: false,
+                        },
+                    ),
+                    (
+                        "parity".to_string(),
+                        TelegramProfileConfig {
+                            chat_id: -100_2,
+                            cwd: umbrella.display().to_string(),
+                            orchestrator: false,
+                        },
+                    ),
+                ]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let skills = workspace_skills(&config);
+        assert_eq!(
+            skills.get("dub").unwrap(),
+            &vec![(
+                "dub-attest".to_string(),
+                "Run device attestation end to end.".to_string()
+            )]
+        );
+        assert_eq!(
+            skills.get("parity").unwrap(),
+            &vec![(
+                "parity-flow".to_string(),
+                "ExampleCo release flow.".to_string()
+            )]
+        );
+
+        let block = telegram_workspaces_block(&config).unwrap();
+        assert!(block.contains("  - skill `dub-attest`: Run device attestation end to end."));
+        assert_eq!(block.matches("skill `parity-flow`").count(), 1);
     }
 
     #[test]
