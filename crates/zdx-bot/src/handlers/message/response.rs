@@ -1,9 +1,13 @@
+use std::fmt::Write as _;
+
 use anyhow::Result;
+use zdx_engine::core::thread_persistence;
 
 use super::ReplyContext;
 use super::media::{parse_final_response, send_media_responses};
 use crate::bot::context::BotContext;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn send_final_response(
     context: &BotContext,
     incoming: &crate::types::IncomingMessage,
@@ -11,6 +15,7 @@ pub(super) async fn send_final_response(
     status_message_id: Option<i64>,
     final_text: &str,
     thread_id: &str,
+    touched_workers: &[String],
 ) -> Result<()> {
     let parsed = parse_final_response(final_text);
     let has_text = !parsed.text.trim().is_empty();
@@ -31,7 +36,8 @@ pub(super) async fn send_final_response(
     }
 
     if has_text {
-        let text = with_thread_link(context, incoming.chat_id, thread_id, parsed.text.as_str());
+        let text = with_worker_links(context, touched_workers, parsed.text.as_str());
+        let text = with_thread_link(context, incoming.chat_id, thread_id, &text);
         send_text_response(context, incoming, reply_ctx, &text).await?;
     }
 
@@ -70,6 +76,41 @@ fn append_thread_link(base: Option<&str>, thread_id: &str, text: &str) -> String
         }
         None => text.to_string(),
     }
+}
+
+/// Appends one `🛠 <title>` link per worker this turn created or messaged,
+/// pointing at its mirror topic, so the user can follow the work without
+/// relying on the model to mention it. Workers without a linkable mirror
+/// (none opened, or DM-hosted) are skipped.
+fn with_worker_links(context: &BotContext, touched_workers: &[String], text: &str) -> String {
+    let links: Vec<(String, String)> = touched_workers
+        .iter()
+        .filter_map(|worker| {
+            let url = context.worker_manager().mirror_url(worker)?;
+            let title = thread_persistence::read_thread_title(worker)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| worker.chars().take(8).collect());
+            Some((title, url))
+        })
+        .collect();
+    append_worker_links(&links, text)
+}
+
+fn append_worker_links(links: &[(String, String)], text: &str) -> String {
+    if links.is_empty() {
+        return text.to_string();
+    }
+    let mut out = text.to_string();
+    out.push('\n');
+    for (title, url) in links {
+        let _ = write!(
+            out,
+            "\n🛠 <a href=\"{url}\">{}</a>",
+            super::escape_html(title)
+        );
+    }
+    out
 }
 
 async fn send_text_response(
@@ -118,7 +159,7 @@ async fn send_text_response(
 
 #[cfg(test)]
 mod tests {
-    use super::append_thread_link;
+    use super::{append_thread_link, append_worker_links};
 
     #[test]
     fn appends_a_deep_link_only_when_the_mini_app_is_configured() {
@@ -136,5 +177,21 @@ mod tests {
             append_thread_link(None, "telegram--100-topic-1", "done"),
             "done"
         );
+    }
+
+    #[test]
+    fn appends_one_escaped_link_per_touched_worker() {
+        let links = vec![
+            (
+                "dub · fix <PR> comments".to_string(),
+                "https://t.me/c/1/2".to_string(),
+            ),
+            ("zdx".to_string(), "https://t.me/c/1/3".to_string()),
+        ];
+        assert_eq!(
+            append_worker_links(&links, "sent"),
+            "sent\n\n🛠 <a href=\"https://t.me/c/1/2\">dub · fix &lt;PR&gt; comments</a>\n🛠 <a href=\"https://t.me/c/1/3\">zdx</a>"
+        );
+        assert_eq!(append_worker_links(&[], "sent"), "sent");
     }
 }

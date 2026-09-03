@@ -185,6 +185,11 @@ async fn stream_turn_events(
     let mut got_result = false;
     let mut had_error = false;
     let mut error_message = None;
+    let mut touched_workers: Vec<String> = Vec::new();
+    // Tool call id → name, so a completed Create_Thread / Send_Thread_Message
+    // can be recognized (ToolCompleted carries only the id).
+    let mut tool_names: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
 
     loop {
         tokio::select! {
@@ -222,6 +227,20 @@ async fn stream_turn_events(
                         tracing::info!(?kind, message, "Agent notice event");
                     }
                     other => {
+                        match other {
+                            AgentEvent::ToolStarted { id, name } => {
+                                tool_names.insert(id.clone(), name.clone());
+                            }
+                            AgentEvent::ToolCompleted { id, result, .. } => {
+                                if let Some(name) = tool_names.remove(id)
+                                    && let Some(worker) = touched_worker_id(&name, result)
+                                    && !touched_workers.contains(&worker)
+                                {
+                                    touched_workers.push(worker);
+                                }
+                            }
+                            _ => {}
+                        }
                         update_status(context, incoming.chat_id, status, other, &mut current_status, &mut last_edit).await;
                     }
                 }
@@ -234,7 +253,32 @@ async fn stream_turn_events(
         got_result,
         had_error,
         error_message,
+        touched_workers,
     }
+}
+
+/// Worker thread id from a successful `Create_Thread` / `Send_Thread_Message`
+/// result, so the reply can link the worker's mirror topic.
+fn touched_worker_id(
+    tool_name: &str,
+    result: &zdx_engine::core::events::ToolOutput,
+) -> Option<String> {
+    if !matches!(
+        tool_name.to_ascii_lowercase().as_str(),
+        "create_thread" | "send_thread_message"
+    ) {
+        return None;
+    }
+    let zdx_engine::core::events::ToolOutput::Success { data, .. } = result else {
+        return None;
+    };
+    data.get("thread_id")
+        .or_else(|| {
+            data.get("worker")
+                .and_then(|worker| worker.get("thread_id"))
+        })
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -308,6 +352,7 @@ async fn finalize_turn(
         status.message_id,
         &result.final_text,
         thread_id,
+        &result.touched_workers,
     )
     .await?;
 

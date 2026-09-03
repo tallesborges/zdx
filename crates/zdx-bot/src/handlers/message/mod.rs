@@ -382,6 +382,9 @@ struct TurnResult {
     got_result: bool,
     had_error: bool,
     error_message: Option<String>,
+    /// Worker thread ids this turn created or messaged (orchestrator turns),
+    /// in first-touch order, so the reply can link their mirror topics.
+    touched_workers: Vec<String>,
 }
 
 struct SpawnRequest<'a> {
