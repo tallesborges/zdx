@@ -918,7 +918,12 @@ fn lookup_openrouter_model(
         other => other,
     };
 
-    let openrouter_id = format!("{vendor}/{model_id}");
+    let openrouter_id = if provider_id == "openrouter" {
+        // openrouter ids already carry the vendor prefix (e.g. "meta/muse-spark-1.3").
+        model_id.to_string()
+    } else {
+        format!("{vendor}/{model_id}")
+    };
 
     let or_model = openrouter_models
         .iter()
@@ -962,7 +967,12 @@ fn lookup_openrouter_model(
         .and_then(|tp| tp.max_completion_tokens)
         .unwrap_or(0);
 
-    let display_name = or_model.name.clone();
+    // OpenRouter names carry a vendor prefix ("Meta: Muse Spark 1.3"); the registry
+    // stores bare names, like the models.dev path does.
+    let display_name = or_model
+        .name
+        .split_once(": ")
+        .map_or(or_model.name.clone(), |(_, rest)| rest.to_string());
 
     let reasoning = or_model
         .supported_parameters
@@ -1212,6 +1222,31 @@ mod tests {
     }
 
     #[test]
+    fn test_lookup_openrouter_model_uses_openrouter_ids_verbatim() {
+        // openrouter: ids already carry the vendor ("meta/muse-spark-1.3"), so they
+        // must not be prefixed again, and the vendor is stripped from the display name.
+        let models = vec![OpenRouterModel {
+            id: "meta/muse-spark-1.3".to_string(),
+            name: "Meta: Muse Spark 1.3".to_string(),
+            context_length: Some(1_048_576),
+            pricing: None,
+            architecture: None,
+            top_provider: None,
+            supported_parameters: vec!["reasoning".to_string()],
+        }];
+
+        let candidate =
+            lookup_openrouter_model("openrouter", "meta/muse-spark-1.3", &models).unwrap();
+        assert_eq!(candidate.full_id, "openrouter:meta/muse-spark-1.3");
+        assert_eq!(candidate.display_name, "Muse Spark 1.3");
+        assert_eq!(candidate.context_limit, 1_048_576);
+        assert!(candidate.capabilities.reasoning);
+
+        // Native providers still get the vendor prefix applied.
+        assert!(lookup_openrouter_model("meta", "muse-spark-1.3", &models).is_some());
+    }
+
+    #[test]
     fn test_select_candidates_tracks_unmatched_patterns() {
         let candidates = vec![ModelCandidate {
             full_id: "openrouter:gpt-4".to_string(),
@@ -1306,9 +1341,9 @@ mod tests {
 
     #[test]
     fn test_lookup_default_model_meta_preserves_muse_spark_metadata() {
-        // Meta is not on models.dev, so `zdx models update` falls back to the
-        // embedded default record. Verify it carries the pinned Muse Spark
-        // pricing/context/capabilities instead of a "(custom)" placeholder.
+        // models.dev's `meta` provider lags Meta's releases, so `zdx models update`
+        // falls back to the embedded default record. Verify it carries the pinned
+        // Muse Spark pricing/context/capabilities instead of a "(custom)" placeholder.
         let result = lookup_default_model("meta:muse-spark-1.1");
         assert!(result.is_some(), "Should find meta model in defaults");
 
@@ -1319,6 +1354,41 @@ mod tests {
         assert_eq!(model.context_limit, 1_000_000);
         assert!((model.pricing.input - 1.25).abs() < f64::EPSILON);
         assert!((model.pricing.output - 4.25).abs() < f64::EPSILON);
+        assert!(model.capabilities.reasoning);
+        assert!(model.capabilities.input_images);
+    }
+
+    #[test]
+    fn test_lookup_default_model_covers_muse_spark_1_3() {
+        let model = lookup_default_model("meta:muse-spark-1.3").expect("meta:muse-spark-1.3");
+        assert_eq!(model.provider, "meta");
+        assert_eq!(model.display_name, "Muse Spark 1.3");
+        assert_eq!(model.context_limit, 1_048_576);
+        assert!((model.pricing.input - 1.25).abs() < f64::EPSILON);
+        assert!((model.pricing.output - 4.25).abs() < f64::EPSILON);
+        assert!(model.capabilities.reasoning);
+        assert!(model.capabilities.input_images);
+        // Pinned proxy from the 1.2 sibling; OpenRouter's 943718 is a routing cap.
+        assert_eq!(model.capabilities.output_limit, 131_072);
+
+        let contributor = lookup_default_model("meta:muse-spark-1.3-contributor")
+            .expect("meta:muse-spark-1.3-contributor");
+        assert_eq!(contributor.display_name, "Muse Spark 1.3 Contributor");
+        assert!((contributor.pricing.input - 0.1).abs() < 1e-9);
+        assert!((contributor.pricing.output - 0.2).abs() < 1e-9);
+        assert_eq!(contributor.capabilities.output_limit, 131_072);
+    }
+
+    #[test]
+    fn test_lookup_default_model_covers_gemini_3_8_flash() {
+        let model =
+            lookup_default_model("gemini:gemini-3.8-flash").expect("gemini:gemini-3.8-flash");
+        assert_eq!(model.provider, "gemini");
+        assert_eq!(model.display_name, "Gemini 3.8 Flash");
+        assert_eq!(model.context_limit, 1_048_576);
+        assert!((model.pricing.input - 0.75).abs() < f64::EPSILON);
+        assert!((model.pricing.output - 3.75).abs() < f64::EPSILON);
+        assert_eq!(model.capabilities.output_limit, 65_536);
         assert!(model.capabilities.reasoning);
         assert!(model.capabilities.input_images);
     }
