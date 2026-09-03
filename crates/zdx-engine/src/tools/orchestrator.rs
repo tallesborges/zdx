@@ -189,7 +189,7 @@ fn definition_for(op: Op) -> ToolDefinition {
         },
         Op::Wait => ToolDefinition {
             name: "Wait_For_Threads".to_string(),
-            description: "Wait until all listed workers are idle (no running turn, empty queue) or a bounded timeout expires. Returns each worker's snapshot plus whether the wait timed out. Prefer short waits — worker completions also wake you automatically.".to_string(),
+            description: "Wait until all listed workers are idle (no running turn, empty queue) or a bounded timeout expires. Returns each worker's snapshot plus whether the wait timed out. Only one active wait is allowed per owner thread at a time. Prefer short waits — worker completions also wake you automatically.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

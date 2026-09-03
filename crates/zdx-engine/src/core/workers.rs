@@ -9,7 +9,7 @@
 //! with `send_message`, but queued prompts and pending callbacks are lost.
 
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -129,7 +129,14 @@ pub enum WorkerEvent {
         activity: WorkerActivity,
     },
     /// A worker prompt finished (any terminal status).
-    Completed(CompletionEvent),
+    Completed {
+        event: CompletionEvent,
+        suppress_owner_callback: bool,
+    },
+    /// Replayed completion event intended only for waking the orchestrator's
+    /// topic callback (e.g. after a wait future is aborted/dropped), without
+    /// repeating mirror updates or live-turn teardown.
+    OwnerCallback(CompletionEvent),
 }
 
 /// Point-in-time view of a managed worker.
@@ -170,6 +177,12 @@ pub struct WorkerRunRequest {
 type RunnerFuture = Pin<Box<dyn Future<Output = Result<String>> + Send>>;
 type WorkerRunner = Arc<dyn Fn(WorkerRunRequest) -> RunnerFuture + Send + Sync>;
 
+struct WorkerWaitRegistration {
+    owner_thread_id: String,
+    worker_thread_ids: HashSet<String>,
+    claimed: Vec<CompletionEvent>,
+}
+
 struct WorkerState {
     owner_thread_id: String,
     root: PathBuf,
@@ -201,6 +214,9 @@ impl WorkerState {
 /// Process-lifetime manager for orchestrator-owned worker threads.
 pub struct WorkerManager {
     state: Mutex<HashMap<String, WorkerState>>,
+    /// Active `wait_for` registrations: `wait_id` → registration.
+    active_waits: Mutex<HashMap<u64, WorkerWaitRegistration>>,
+    next_wait_id: std::sync::atomic::AtomicU64,
     /// Worker thread id → surface mirror link, registered by the bridge once
     /// it has opened (or failed to open, `None`) the mirror, or recovered it
     /// after a restart. Kept apart from `state` so a link can outlive/precede
@@ -226,6 +242,8 @@ impl WorkerManager {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let manager = Arc::new(Self {
             state: Mutex::new(HashMap::new()),
+            active_waits: Mutex::new(HashMap::new()),
+            next_wait_id: std::sync::atomic::AtomicU64::new(1),
             mirrors: Mutex::new(HashMap::new()),
             changed: Notify::new(),
             events_tx,
@@ -569,25 +587,120 @@ impl WorkerManager {
     /// Waits until every listed worker is idle/terminal or `timeout` expires.
     /// Returns `(timed_out, snapshots)`.
     ///
+    /// Completions arriving for the awaited workers while this wait is active
+    /// are claimed by this wait and do not enqueue synthetic `[worker update]`
+    /// turns behind the orchestrator. If the wait times out or completes, the
+    /// claimed completions are consumed. If the wait future is dropped or
+    /// cancelled before completion, claimed completions are replayed as
+    /// `WorkerEvent::OwnerCallback` so callbacks are never lost.
+    ///
     /// # Errors
-    /// Returns an error if any id is not currently managed.
+    /// Returns an error if any id is not currently managed, or if another
+    /// wait is already active for the same owner thread.
     ///
     /// # Panics
     /// Panics if the internal worker state lock is poisoned.
+    #[allow(clippy::too_many_lines)]
     pub async fn wait_for(
         &self,
         worker_thread_ids: &[String],
         timeout: Duration,
     ) -> Result<(bool, Vec<WorkerSnapshot>)> {
-        let snapshots = |manager: &Self| -> Result<Vec<WorkerSnapshot>> {
-            worker_thread_ids
-                .iter()
-                .map(|id| {
-                    manager
-                        .snapshot(id)
-                        .ok_or_else(|| anyhow::anyhow!("Worker '{id}' is not managed"))
-                })
-                .collect()
+        struct WaitGuard<'a> {
+            manager: &'a WorkerManager,
+            wait_id: u64,
+            completed: bool,
+        }
+
+        impl Drop for WaitGuard<'_> {
+            fn drop(&mut self) {
+                let unhandled = {
+                    let Ok(mut active) = self.manager.active_waits.lock() else {
+                        return;
+                    };
+                    let Some(registration) = active.remove(&self.wait_id) else {
+                        return;
+                    };
+                    if self.completed {
+                        Vec::new()
+                    } else {
+                        registration.claimed
+                    }
+                };
+
+                for event in unhandled {
+                    let _ = self
+                        .manager
+                        .events_tx
+                        .send(WorkerEvent::OwnerCallback(event));
+                }
+            }
+        }
+
+        let wait_id = self
+            .next_wait_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id_set: HashSet<String> = worker_thread_ids.iter().cloned().collect();
+
+        // Validate all workers exist, resolve owner_thread_id, and register the wait atomically.
+        let _owner_thread_id = {
+            let state_map = self.state.lock().expect("worker state lock poisoned");
+            let mut active_map = self
+                .active_waits
+                .lock()
+                .expect("worker active_waits lock poisoned");
+
+            let mut owner = None;
+            for id in worker_thread_ids {
+                let Some(w) = state_map.get(id) else {
+                    bail!("Worker '{id}' is not managed");
+                };
+                if owner.is_none() {
+                    owner = Some(w.owner_thread_id.clone());
+                }
+            }
+            let owner_id = owner.unwrap_or_default();
+
+            // Reject if another wait is already active for this owner
+            if active_map
+                .values()
+                .any(|reg| reg.owner_thread_id == owner_id)
+            {
+                bail!("Another wait_for is already active for owner '{owner_id}'");
+            }
+
+            active_map.insert(
+                wait_id,
+                WorkerWaitRegistration {
+                    owner_thread_id: owner_id.clone(),
+                    worker_thread_ids: id_set.clone(),
+                    claimed: Vec::new(),
+                },
+            );
+
+            owner_id
+        };
+
+        let mut guard = WaitGuard {
+            manager: self,
+            wait_id,
+            completed: false,
+        };
+
+        let snapshots_atomic = |manager: &Self| -> Result<Option<Vec<WorkerSnapshot>>> {
+            let state_map = manager.state.lock().expect("worker state lock poisoned");
+            let mut list = Vec::with_capacity(worker_thread_ids.len());
+            for id in worker_thread_ids {
+                let Some(st) = state_map.get(id) else {
+                    bail!("Worker '{id}' is not managed");
+                };
+                list.push(st.snapshot(id, manager.mirror_url(id)));
+            }
+            if list.iter().all(WorkerSnapshot::is_idle) {
+                Ok(Some(list))
+            } else {
+                Ok(None)
+            }
         };
 
         let deadline = tokio::time::Instant::now() + timeout;
@@ -595,14 +708,29 @@ impl WorkerManager {
             // Register interest before checking so a state change between the
             // check and the await cannot be missed.
             let notified = self.changed.notified();
-            let current = snapshots(self)?;
-            if current.iter().all(WorkerSnapshot::is_idle) {
-                return Ok((false, current));
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            if let Some(idle_snapshots) = snapshots_atomic(self)? {
+                guard.completed = true;
+                return Ok((false, idle_snapshots));
             }
             tokio::select! {
-                () = notified => {}
+                () = &mut notified => {}
                 () = tokio::time::sleep_until(deadline) => {
-                    return Ok((true, snapshots(self)?));
+                    // On timeout, do NOT set guard.completed = true.
+                    // Any completions claimed during the wait were suppressed on the
+                    // Completed event; dropping guard with completed = false replays them
+                    // as OwnerCallback so callbacks are never lost.
+                    let state_map = self.state.lock().expect("worker state lock poisoned");
+                    let mut list = Vec::with_capacity(worker_thread_ids.len());
+                    for id in worker_thread_ids {
+                        let Some(st) = state_map.get(id) else {
+                            bail!("Worker '{id}' is not managed");
+                        };
+                        list.push(st.snapshot(id, self.mirror_url(id)));
+                    }
+                    return Ok((true, list));
                 }
             }
         }
@@ -810,9 +938,31 @@ fn spawn_worker_task(manager: Arc<WorkerManager>, worker_thread_id: String, wake
                 }
             };
             manager.changed.notify_waiters();
+
+            // If an active wait_for registration covers this worker and owner,
+            // claim the completion so it doesn't enqueue a redundant synthetic turn.
+            let is_claimed = {
+                let mut active_waits = manager
+                    .active_waits
+                    .lock()
+                    .expect("worker active_waits lock poisoned");
+                if let Some(reg) = active_waits.values_mut().find(|r| {
+                    r.owner_thread_id == event.owner_thread_id
+                        && r.worker_thread_ids.contains(&event.worker_thread_id)
+                }) {
+                    reg.claimed.push(event.clone());
+                    true
+                } else {
+                    false
+                }
+            };
+
             if manager
                 .events_tx
-                .send(WorkerEvent::Completed(event))
+                .send(WorkerEvent::Completed {
+                    event,
+                    suppress_owner_callback: is_claimed,
+                })
                 .is_err()
             {
                 tracing::debug!(worker = %worker_thread_id, "Worker event channel closed");
@@ -838,7 +988,9 @@ mod tests {
     async fn next_completion(rx: &mut mpsc::UnboundedReceiver<WorkerEvent>) -> CompletionEvent {
         loop {
             match rx.recv().await.expect("worker event channel open") {
-                WorkerEvent::Completed(event) => return event,
+                WorkerEvent::Completed { event, .. } | WorkerEvent::OwnerCallback(event) => {
+                    return event;
+                }
                 WorkerEvent::Created { .. }
                 | WorkerEvent::Prompted { .. }
                 | WorkerEvent::Activity { .. } => {}
@@ -892,11 +1044,11 @@ mod tests {
 
     #[tokio::test]
     async fn prompts_on_one_worker_run_serially() {
+        static CONCURRENT: AtomicUsize = AtomicUsize::new(0);
+        static MAX_SEEN: AtomicUsize = AtomicUsize::new(0);
         let _home = temp_zdx_home();
         let project = tempfile::tempdir().unwrap();
 
-        static CONCURRENT: AtomicUsize = AtomicUsize::new(0);
-        static MAX_SEEN: AtomicUsize = AtomicUsize::new(0);
         let runner: WorkerRunner = Arc::new(|request: WorkerRunRequest| {
             Box::pin(async move {
                 let now = CONCURRENT.fetch_add(1, Ordering::SeqCst) + 1;
@@ -926,11 +1078,11 @@ mod tests {
 
     #[tokio::test]
     async fn different_workers_run_concurrently() {
+        static CONCURRENT: AtomicUsize = AtomicUsize::new(0);
+        static MAX_SEEN: AtomicUsize = AtomicUsize::new(0);
         let _home = temp_zdx_home();
         let project = tempfile::tempdir().unwrap();
 
-        static CONCURRENT: AtomicUsize = AtomicUsize::new(0);
-        static MAX_SEEN: AtomicUsize = AtomicUsize::new(0);
         let runner: WorkerRunner = Arc::new(|request: WorkerRunRequest| {
             Box::pin(async move {
                 let now = CONCURRENT.fetch_add(1, Ordering::SeqCst) + 1;
@@ -1021,6 +1173,8 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_reattach_keeps_both_prompts_and_one_fifo() {
+        static CONCURRENT: AtomicUsize = AtomicUsize::new(0);
+        static MAX_SEEN: AtomicUsize = AtomicUsize::new(0);
         let _home = temp_zdx_home();
         let project = tempfile::tempdir().unwrap();
 
@@ -1028,8 +1182,6 @@ mod tests {
         thread.set_root_path(project.path()).unwrap();
         let existing_id = thread.id.clone();
 
-        static CONCURRENT: AtomicUsize = AtomicUsize::new(0);
-        static MAX_SEEN: AtomicUsize = AtomicUsize::new(0);
         let runner: WorkerRunner = Arc::new(|request: WorkerRunRequest| {
             Box::pin(async move {
                 let now = CONCURRENT.fetch_add(1, Ordering::SeqCst) + 1;
@@ -1205,7 +1357,7 @@ mod tests {
             .unwrap();
 
         let (timed_out, snapshots) = manager
-            .wait_for(&[worker_id.clone()], Duration::from_millis(50))
+            .wait_for(std::slice::from_ref(&worker_id), Duration::from_millis(50))
             .await
             .unwrap();
         assert!(timed_out);
@@ -1260,7 +1412,7 @@ mod tests {
                     assert_eq!(worker_thread_id, worker_id);
                     kinds.push("activity");
                 }
-                WorkerEvent::Completed(_) => {
+                WorkerEvent::Completed { .. } | WorkerEvent::OwnerCallback(_) => {
                     kinds.push("completed");
                     break;
                 }
@@ -1357,5 +1509,146 @@ mod tests {
             None
         );
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn wait_for_claims_completions_and_suppresses_owner_callback() {
+        let _home = temp_zdx_home();
+        let project = tempfile::tempdir().unwrap();
+
+        let (manager, mut events_rx) = WorkerManager::with_runner(instant_runner("done"));
+        let worker_id = manager
+            .create_worker("owner-1", project.path(), "job 1", None, None, None)
+            .unwrap();
+
+        // Active wait_for on worker_id claims the completion
+        let (timed_out, snapshots) = manager
+            .wait_for(std::slice::from_ref(&worker_id), Duration::from_secs(5))
+            .await
+            .unwrap();
+
+        assert!(!timed_out);
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].status, WorkerStatus::Completed);
+
+        // Verify that the completion event on the channel has suppress_owner_callback = true
+        let event = events_rx.recv().await.unwrap();
+        match event {
+            WorkerEvent::Created { .. } => {}
+            _ => panic!("expected Created event"),
+        }
+        let event = events_rx.recv().await.unwrap();
+        match event {
+            WorkerEvent::Completed {
+                event: comp,
+                suppress_owner_callback,
+            } => {
+                assert_eq!(comp.worker_thread_id, worker_id);
+                assert!(suppress_owner_callback);
+            }
+            other => panic!("expected Completed event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn wait_for_aborted_replays_claimed_callbacks_as_owner_callback() {
+        let _home = temp_zdx_home();
+        let project = tempfile::tempdir().unwrap();
+
+        // Runner completes prompt 1 quickly, then prompt 2 takes longer than wait.
+        let runner: WorkerRunner = Arc::new(|request: WorkerRunRequest| {
+            Box::pin(async move {
+                if request.prompt == "turn 2" {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+                Ok(request.prompt)
+            })
+        });
+
+        let (manager, mut events_rx) = WorkerManager::with_runner(runner);
+        let worker_id = manager
+            .create_worker("owner-abort", project.path(), "turn 1", None, None, None)
+            .unwrap();
+
+        // Queue turn 2 so worker remains non-idle after turn 1
+        manager
+            .send_message("owner-abort", &worker_id, "turn 2")
+            .unwrap();
+
+        // Run wait_for with a timeout helper in tokio::select! so the future is dropped on timeout
+        let wait_mgr = Arc::clone(&manager);
+        let wait_ids = [worker_id.clone()];
+        let aborted = tokio::select! {
+            res = wait_mgr.wait_for(&wait_ids, Duration::from_secs(10)) => {
+                panic!("wait_for should not complete before timeout; got {res:?}");
+            }
+            () = tokio::time::sleep(Duration::from_millis(60)) => true,
+        };
+        assert!(aborted);
+
+        // Verify that dropping the wait_for future replayed turn 1's completion as OwnerCallback
+        let mut saw_owner_callback = false;
+        while let Ok(event) = events_rx.try_recv() {
+            if let WorkerEvent::OwnerCallback(comp) = event {
+                assert_eq!(comp.worker_thread_id, worker_id);
+                saw_owner_callback = true;
+                break;
+            }
+        }
+        assert!(
+            saw_owner_callback,
+            "dropping wait_for future should trigger WaitGuard::drop and replay as OwnerCallback"
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_timeout_replays_claimed_callbacks() {
+        let _home = temp_zdx_home();
+        let project = tempfile::tempdir().unwrap();
+
+        // Runner completes prompt 1 quickly, then prompt 2 takes longer than timeout.
+        let runner: WorkerRunner = Arc::new(|request: WorkerRunRequest| {
+            Box::pin(async move {
+                if request.prompt == "turn 2" {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+                Ok(request.prompt)
+            })
+        });
+
+        let (manager, mut events_rx) = WorkerManager::with_runner(runner);
+        let worker_id = manager
+            .create_worker("owner-timeout", project.path(), "turn 1", None, None, None)
+            .unwrap();
+
+        // Queue turn 2 so worker remains non-idle after turn 1
+        manager
+            .send_message("owner-timeout", &worker_id, "turn 2")
+            .unwrap();
+
+        // wait_for with a short timeout (50ms)
+        let (timed_out, snapshots) = manager
+            .wait_for(std::slice::from_ref(&worker_id), Duration::from_millis(50))
+            .await
+            .unwrap();
+
+        assert!(timed_out, "wait should time out since turn 2 is running");
+        assert_eq!(snapshots.len(), 1);
+
+        // Turn 1 finished during the wait and was claimed.
+        // Because wait timed out, WaitGuard dropped with completed = false,
+        // replaying turn 1's completion as an OwnerCallback.
+        let mut saw_owner_callback = false;
+        while let Ok(event) = events_rx.try_recv() {
+            if let WorkerEvent::OwnerCallback(comp) = event {
+                assert_eq!(comp.worker_thread_id, worker_id);
+                saw_owner_callback = true;
+                break;
+            }
+        }
+        assert!(
+            saw_owner_callback,
+            "timing out in wait_for should replay claimed completions as OwnerCallback"
+        );
     }
 }

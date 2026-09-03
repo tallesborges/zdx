@@ -214,7 +214,10 @@ impl Bridge {
             } => {
                 self.handle_activity(&worker_thread_id, activity).await;
             }
-            WorkerEvent::Completed(event) => {
+            WorkerEvent::Completed {
+                event,
+                suppress_owner_callback,
+            } => {
                 self.finish_live_turn(&event).await;
                 post_mirror_update(
                     &self.context,
@@ -222,6 +225,11 @@ impl Bridge {
                     &event,
                 )
                 .await;
+                if !suppress_owner_callback {
+                    dispatch_owner_callback(&self.context, &self.queues, &event).await;
+                }
+            }
+            WorkerEvent::OwnerCallback(event) => {
                 dispatch_owner_callback(&self.context, &self.queues, &event).await;
             }
         }
@@ -541,14 +549,11 @@ async fn post_mirror_update(
             truncate_telegram_html(&to_telegram_html(body), MAX_MIRROR_TEXT_CHARS)
         }
         WorkerStatus::Cancelled => "🚫 Turn cancelled.".to_string(),
-        _ => format!(
-            "❌ Turn {}:\n<pre>{}</pre>",
-            event.status.as_str(),
-            escape_html(&truncate_chars(
-                event.error.as_deref().unwrap_or("unknown error"),
-                1000
-            ))
-        ),
+        _ => {
+            let err_raw = event.error.as_deref().unwrap_or("unknown error");
+            let summary = summarize_worker_error(err_raw);
+            format!("❌ Turn {}: {summary}", event.status.as_str())
+        }
     };
 
     if let Err(err) = context
@@ -662,6 +667,63 @@ fn build_worker_update_prompt(event: &CompletionEvent) -> String {
     prompt
 }
 
+fn summarize_worker_error(error: &str) -> String {
+    // Strip ANSI escape sequences.
+    let stripped = strip_ansi_escapes(error);
+
+    // If the error indicates a provider overload or rate limit on terminal failure,
+    // summarize cleanly without misleading "retrying" claims.
+    let lower = stripped.to_lowercase();
+    if lower.contains("overloaded_error") || lower.contains(": overloaded") {
+        return "provider overloaded".to_string();
+    }
+    if lower.contains("rate_limit") || lower.contains("rate limit") {
+        return "provider rate limited".to_string();
+    }
+
+    // Otherwise, pick the most informative line (ignoring boilerplate log lines).
+    for line in stripped.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(msg) = trimmed.strip_prefix("execute prompt: ") {
+            return escape_html(&truncate_chars(msg, 200));
+        }
+        if let Some(msg) = trimmed.strip_prefix("provider: ") {
+            return escape_html(&truncate_chars(msg, 200));
+        }
+        if let Some(msg) = trimmed.strip_prefix("Subagent failed: ") {
+            // Avoid returning raw timestamped tracing lines.
+            if !msg.contains("WARN") && !msg.contains("INFO") && !msg.contains("ERROR") {
+                return escape_html(&truncate_chars(msg, 200));
+            }
+        }
+    }
+
+    format!(
+        "<pre>{}</pre>",
+        escape_html(&truncate_chars(&stripped, 500))
+    )
+}
+
+fn strip_ansi_escapes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_escape = false;
+    for c in s.chars() {
+        if c == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if c.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn truncate_chars(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_string();
@@ -724,6 +786,15 @@ mod tests {
         // No thread on disk → short id; no mirror → plain text.
         let plain = worker_update_notice(&completion(WorkerStatus::Failed));
         assert_eq!(plain, "❌ Worker 🛠 worker-1 failed · reviewing…");
+    }
+
+    #[test]
+    fn summarizes_worker_error_cleanly() {
+        let overload_log = "Subagent failed: \u{1b}[2m2026-09-03T13:28:05.481367Z\u{1b}[0m \u{1b}[33m WARN\u{1b}[0m \u{1b}[2mzdx_engine::core::agent\u{1b}[0m:\u{1b}[0m Transient provider error, retrying attempt=2 max=3 delay_ms=4000 error=overloaded_error: Overloaded\nprovider: overloaded_error: Overloaded";
+        assert_eq!(summarize_worker_error(overload_log), "provider overloaded");
+
+        let simple_err = "execute prompt: something broke";
+        assert_eq!(summarize_worker_error(simple_err), "something broke");
     }
 
     #[test]
