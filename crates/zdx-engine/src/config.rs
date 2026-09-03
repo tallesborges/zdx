@@ -1865,7 +1865,12 @@ fn default_openai_codex_provider() -> ProviderConfig {
 fn default_openrouter_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["*:exacto".to_string()],
+        models: vec![
+            "google/gemini-3.8-flash".to_string(),
+            "meta/muse-spark-1.3".to_string(),
+            "meta/muse-spark-1.3-contributor".to_string(),
+            "*:exacto".to_string(),
+        ],
         ..Default::default()
     }
 }
@@ -1893,7 +1898,12 @@ fn default_moonshot_provider() -> ProviderConfig {
 fn default_meta_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["muse-spark-1.2".to_string(), "muse-spark-1.1".to_string()],
+        models: vec![
+            "muse-spark-1.3".to_string(),
+            "muse-spark-1.3-contributor".to_string(),
+            "muse-spark-1.2".to_string(),
+            "muse-spark-1.1".to_string(),
+        ],
         ..Default::default()
     }
 }
@@ -1959,6 +1969,7 @@ fn default_gemini_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gemini-3.8-flash".to_string(),
             "gemini-3.6-flash".to_string(),
             "gemini-3.5-flash".to_string(),
             "gemini-3.5-flash-lite".to_string(),
@@ -1973,17 +1984,15 @@ fn default_google_antigravity_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
-            "gemini-3.7-flash-low".to_string(),
-            "gemini-3.7-flash-medium".to_string(),
+            "gemini-3.8-flash-high".to_string(),
+            "gemini-3.8-flash-medium".to_string(),
+            "gemini-3.8-flash-low".to_string(),
             "gemini-3.7-flash-high".to_string(),
-            "gemini-3.6-flash-tiered".to_string(),
-            "gemini-3.6-flash-low".to_string(),
-            "gemini-3.6-flash-medium".to_string(),
-            "gemini-3.6-flash-high".to_string(),
-            "gemini-3.5-flash-low".to_string(),
-            "gemini-3-flash-agent".to_string(),
+            "gemini-3.7-flash-medium".to_string(),
+            "gemini-3.7-flash-low".to_string(),
+            "gemini-3.7-flash-tiered".to_string(),
+            "gemini-pro-agent".to_string(),
             "gemini-3.1-pro-low".to_string(),
-            "gemini-3.1-pro-high".to_string(),
             "claude-sonnet-4-6".to_string(),
             "claude-opus-4-6-thinking".to_string(),
             "gpt-oss-120b-medium".to_string(),
@@ -3636,6 +3645,58 @@ file = "prompts/template.md"
         assert_eq!(
             config.prompt_template.file,
             Some("prompts/template.md".to_string())
+        );
+    }
+
+    /// The picker allow-lists gate which registry models are selectable, so the
+    /// newest ids must be present and listed first.
+    #[test]
+    fn test_default_provider_models_lead_with_newest() {
+        let providers = ProvidersConfig::default();
+
+        assert_eq!(providers.gemini.models.first().unwrap(), "gemini-3.8-flash");
+        assert!(
+            providers
+                .gemini
+                .models
+                .contains(&"gemini-3.6-flash".to_string())
+        );
+
+        assert_eq!(
+            providers.meta.models,
+            vec![
+                "muse-spark-1.3",
+                "muse-spark-1.3-contributor",
+                "muse-spark-1.2",
+                "muse-spark-1.1"
+            ]
+        );
+
+        // Gemini 3.8 Flash batch is deliberately absent: OpenRouter serves it only
+        // through /api/beta/batches, so it 404s on the chat-completions path zdx uses.
+        for id in [
+            "google/gemini-3.8-flash",
+            "meta/muse-spark-1.3",
+            "meta/muse-spark-1.3-contributor",
+        ] {
+            assert!(
+                providers.openrouter.models.contains(&id.to_string()),
+                "openrouter defaults must expose {id}"
+            );
+        }
+        assert!(
+            !providers
+                .openrouter
+                .models
+                .contains(&"google/gemini-3.8-flash:batch".to_string()),
+            "batch-only ids must stay out of the picker allow-list"
+        );
+        assert!(
+            providers
+                .openrouter
+                .models
+                .contains(&"*:exacto".to_string()),
+            "existing openrouter patterns must be kept"
         );
     }
 

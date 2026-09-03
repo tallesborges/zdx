@@ -182,12 +182,12 @@ websocket = false
 enabled = true
 # api_key = "sk-or-..."  # Overrides OPENROUTER_API_KEY env var
 # base_url = "https://openrouter.ai/api/v1"
-models = ["*:exacto"]
+models = ["google/gemini-3.8-flash", "meta/muse-spark-1.3", "meta/muse-spark-1.3-contributor", "*:exacto"]
 websocket = false
 
 [providers.google_antigravity]
 enabled = true
-models = ["gemini-3.7-flash-low", "gemini-3.7-flash-medium", "gemini-3.7-flash-high", "gemini-3.6-flash-tiered", "gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-high", "gemini-3.5-flash-low", "gemini-3-flash-agent", "gemini-3.1-pro-low", "gemini-3.1-pro-high", "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"]
+models = ["gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low", "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low", "gemini-3.7-flash-tiered", "gemini-pro-agent", "gemini-3.1-pro-low", "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"]
 websocket = false
 
 [providers.moonshot]
@@ -240,7 +240,7 @@ websocket = false
 
 [providers.meta]
 enabled = true
-models = ["muse-spark-1.2", "muse-spark-1.1"]
+models = ["muse-spark-1.3", "muse-spark-1.3-contributor", "muse-spark-1.2", "muse-spark-1.1"]
 websocket = false
 
 [providers.custom]
@@ -259,7 +259,7 @@ websocket = false
 enabled = true
 # api_key = "..."  # Overrides GEMINI_API_KEY env var
 # base_url = "https://generativelanguage.googleapis.com/v1beta"
-models = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"]
+models = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"]
 websocket = false
 
 [providers.minimax]
