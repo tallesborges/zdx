@@ -93,10 +93,11 @@ fn with_worker_links(
     let links: Vec<(String, String)> = touched_workers
         .iter()
         .filter_map(|worker| {
-            let url = context
-                .worker_manager()
-                .mirror_url(worker)
-                .or_else(|| mini_app.as_ref().map(|base| format!("{base}?startapp={worker}")))?;
+            let url = context.worker_manager().mirror_url(worker).or_else(|| {
+                mini_app
+                    .as_ref()
+                    .map(|base| format!("{base}?startapp={worker}"))
+            })?;
             let title = thread_persistence::read_thread_title(worker)
                 .ok()
                 .flatten()

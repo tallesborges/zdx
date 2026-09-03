@@ -159,6 +159,8 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use tempfile::TempDir;
 
     use super::*;
@@ -309,7 +311,10 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let file_path = temp.path().join("test.txt");
         let lines = 16;
-        let original: String = (0..lines).map(|i| format!("k{i}=0\n")).collect();
+        let original: String = (0..lines).fold(String::new(), |mut acc, i| {
+            let _ = writeln!(acc, "k{i}=0");
+            acc
+        });
         fs::write(&file_path, &original).unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
@@ -330,7 +335,10 @@ mod tests {
             handle.join().unwrap();
         }
 
-        let expected: String = (0..lines).map(|i| format!("k{i}=1\n")).collect();
+        let expected: String = (0..lines).fold(String::new(), |mut acc, i| {
+            let _ = writeln!(acc, "k{i}=1");
+            acc
+        });
         assert_eq!(fs::read_to_string(&file_path).unwrap(), expected);
     }
 
