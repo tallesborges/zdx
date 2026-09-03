@@ -14,9 +14,9 @@
 //!   wakes the owning orchestrator topic with a synthetic queued turn,
 //!   reusing the same dispatch path as `/goal` continuations.
 //!
-//! Mirror header and result messages carry `⏹ Cancel worker` (`wk:c`) and
-//! `💬 Open Thread` buttons; the cancel callback resolves the worker from the
-//! topic's persisted alias, so it works after a restart too.
+//! Only the live status message carries buttons (`⏹ Cancel worker` = `wk:c`,
+//! `💬 Open Thread`), like a normal turn's status; the cancel callback resolves
+//! the worker from the topic's persisted alias, so it works after a restart too.
 //!
 //! Routes are process-lifetime; the worker→topic map is rebuilt at startup
 //! from the persisted `worker_topic` + `alias_to` metadata, so results keep
@@ -327,7 +327,7 @@ impl Bridge {
     }
 }
 
-/// Buttons under mirror header/result messages: cancel the worker from its
+/// Buttons under the live status message: cancel the worker from its
 /// topic, and open the worker thread in the Mini App when configured.
 fn mirror_keyboard(
     context: &BotContext,
@@ -516,10 +516,9 @@ async fn post_prompt_message(
 ) {
     let body = truncate_telegram_html(&to_telegram_html(prompt), MAX_MIRROR_TEXT_CHARS);
     let text = format!("<b>{label}</b>\n\n{body}");
-    let keyboard = mirror_keyboard(context, mirror.chat, worker_thread_id);
     if let Err(err) = context
         .client()
-        .send_message_with_markup(mirror.chat, &text, None, Some(mirror.topic), &keyboard)
+        .send_message(mirror.chat, &text, None, Some(mirror.topic))
         .await
     {
         tracing::warn!(worker = %worker_thread_id, %err, "Failed to post mirror prompt");
@@ -552,10 +551,9 @@ async fn post_mirror_update(
         ),
     };
 
-    let keyboard = mirror_keyboard(context, mirror.chat, &event.worker_thread_id);
     if let Err(err) = context
         .client()
-        .send_message_with_markup(mirror.chat, &text, None, Some(mirror.topic), &keyboard)
+        .send_message(mirror.chat, &text, None, Some(mirror.topic))
         .await
     {
         tracing::warn!(worker = %event.worker_thread_id, %err, "Failed to post mirror update");
