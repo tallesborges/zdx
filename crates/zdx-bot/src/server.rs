@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::{Component, Path as FilePath, PathBuf};
 use std::process::Stdio;
@@ -520,16 +520,40 @@ async fn authorize_api(
 ///
 /// Thread ids are minted as `telegram-{chat_id}-topic-{topic_id}`; the link
 /// form itself is [`crate::telegram::topic_link`]. Threads with no topic (plain
-/// DMs) and non-Telegram threads have no linkable target.
+/// DMs) and non-Telegram threads have no direct linkable target.
 fn telegram_topic_link(thread_id: &str) -> Option<String> {
     let (chat_id, topic_id) = crate::handlers::message::parse_topic_thread_id(thread_id)?;
     crate::telegram::topic_link(chat_id, topic_id)
+}
+
+/// Resolves a Telegram topic link for either a direct Telegram thread or a
+/// worker thread linked to a mirror topic via `list_worker_topics()`.
+///
+/// Populates `worker_mirrors` lazily only when direct topic parsing fails,
+/// avoiding full-disk scans of thread files on requests for normal Telegram topics.
+fn resolve_telegram_link(
+    thread_id: &str,
+    worker_mirrors: &mut Option<HashMap<String, String>>,
+) -> Option<String> {
+    if let Some(link) = telegram_topic_link(thread_id) {
+        return Some(link);
+    }
+    let mirrors = worker_mirrors.get_or_insert_with(|| {
+        thread_persistence::list_worker_topics()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(topic_thread_id, worker_thread_id)| (worker_thread_id, topic_thread_id))
+            .collect()
+    });
+    let mirror_id = mirrors.get(thread_id)?;
+    telegram_topic_link(mirror_id)
 }
 
 /// Lists the most recently active top-level threads for the Mini App browser.
 async fn get_threads() -> Result<Json<ThreadListResponse>, ApiError> {
     tokio::task::spawn_blocking(|| {
         let now = SystemTime::now();
+        let mut worker_mirrors: Option<HashMap<String, String>> = None;
         let threads = thread_persistence::list_recent_threads(THREAD_LIST_LIMIT)
             .map_err(|error| {
                 tracing::warn!(%error, "Failed to list Mini App threads");
@@ -546,7 +570,7 @@ async fn get_threads() -> Result<Json<ThreadListResponse>, ApiError> {
                     .modified
                     .and_then(|modified| now.duration_since(modified).ok())
                     .map(service::format_uptime),
-                telegram_link: telegram_topic_link(&summary.id),
+                telegram_link: resolve_telegram_link(&summary.id, &mut worker_mirrors),
                 title: summary
                     .title
                     .filter(|title| !title.trim().is_empty())
@@ -583,7 +607,10 @@ async fn get_thread(Path(id): Path<String>) -> Result<Json<ThreadResponse>, ApiE
             (StatusCode::NOT_FOUND, "Thread not found")
         })?;
 
-        let mut response = project_thread(target_id, events);
+        let mut worker_mirrors = None;
+        let telegram_link = resolve_telegram_link(&target_id, &mut worker_mirrors);
+
+        let mut response = project_thread(target_id, events, telegram_link);
         append_running_tools(&mut response);
         Ok(Json(response))
     })
@@ -632,7 +659,11 @@ fn append_running_tools(response: &mut ThreadResponse) {
 }
 
 #[allow(clippy::too_many_lines)]
-fn project_thread(target_id: String, events: Vec<ThreadEvent>) -> ThreadResponse {
+fn project_thread(
+    target_id: String,
+    events: Vec<ThreadEvent>,
+    telegram_link: Option<String>,
+) -> ThreadResponse {
     let mut title = "Thread Transcript".to_string();
     let mut activity = Vec::new();
     let mut total_messages = 0;
@@ -756,7 +787,7 @@ fn project_thread(target_id: String, events: Vec<ThreadEvent>) -> ThreadResponse
     }
 
     ThreadResponse {
-        telegram_link: telegram_topic_link(&target_id),
+        telegram_link,
         id: target_id,
         title,
         total_messages,
@@ -2249,7 +2280,7 @@ mod tests {
             },
         ];
 
-        let response = project_thread("thread-1".to_string(), events);
+        let response = project_thread("thread-1".to_string(), events, None);
         let json = serde_json::to_string(&response).expect("serialize thread activity");
 
         assert_eq!(response.title, "Inspect the agent");
@@ -2303,6 +2334,37 @@ mod tests {
         // Non-numeric segments must not be pasted into a URL.
         assert_eq!(telegram_topic_link("telegram--100abc-topic-7"), None);
         assert_eq!(telegram_topic_link("telegram--1001-topic-"), None);
+    }
+
+    #[test]
+    fn resolves_telegram_link_for_direct_and_worker_threads() {
+        let mut worker_mirrors = HashMap::new();
+        worker_mirrors.insert(
+            "ca82112f-30ef-4dff-ad90-a4a7564a5136".to_string(),
+            "telegram--1003810826527-topic-1359".to_string(),
+        );
+
+        let mut mirrors_cache = Some(worker_mirrors);
+
+        // Direct topic thread
+        assert_eq!(
+            resolve_telegram_link("telegram--1001234567890-topic-17771", &mut mirrors_cache)
+                .as_deref(),
+            Some("https://t.me/c/1234567890/17771")
+        );
+
+        // Worker thread resolved via mirror mapping
+        assert_eq!(
+            resolve_telegram_link("ca82112f-30ef-4dff-ad90-a4a7564a5136", &mut mirrors_cache)
+                .as_deref(),
+            Some("https://t.me/c/3810826527/1359")
+        );
+
+        // Unmirrored worker thread
+        assert_eq!(
+            resolve_telegram_link("149115d3-716f-45ac-86e1-ec48dab37103", &mut mirrors_cache),
+            None
+        );
     }
 
     #[test]
