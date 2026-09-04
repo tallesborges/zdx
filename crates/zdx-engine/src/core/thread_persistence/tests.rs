@@ -2184,9 +2184,9 @@ fn mirror_thread_id_for_worker_resolves_from_the_index() {
     );
 }
 
-/// Rows indexed before `alias_to`/`worker_topic` existed are handled by the
-/// `SCHEMA_VERSION` bump, which discards the cache file and reindexes from the
-/// canonical JSONL — there is no in-place column repair to test.
+// Rows indexed before `alias_to`/`worker_topic` existed are handled by the
+// `SCHEMA_VERSION` bump, which discards the cache file and reindexes from the
+// canonical JSONL — there is no in-place column repair to test.
 
 /// The handoff lineage walk (`/btw` seeds, `zdx threads show`) resolves a
 /// thread by ID. It must not need `list_all_threads()`, which opens every
