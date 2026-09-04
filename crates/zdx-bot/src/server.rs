@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::{Component, Path as FilePath, PathBuf};
 use std::process::Stdio;
@@ -527,33 +527,28 @@ fn telegram_topic_link(thread_id: &str) -> Option<String> {
 }
 
 /// Resolves a Telegram topic link for either a direct Telegram thread or a
-/// worker thread linked to a mirror topic via `list_worker_topics()`.
+/// worker thread linked to a mirror topic.
 ///
-/// Populates `worker_mirrors` lazily only when direct topic parsing fails,
-/// avoiding full-disk scans of thread files on requests for normal Telegram topics.
-fn resolve_telegram_link(
-    thread_id: &str,
-    worker_mirrors: &mut Option<HashMap<String, String>>,
-) -> Option<String> {
+/// The worker→mirror lookup is answered by the thread index from an indexed
+/// column, so a thread that is not a Telegram topic costs one SQL row read
+/// instead of opening every saved thread file.
+fn resolve_telegram_link(thread_id: &str) -> Option<String> {
     if let Some(link) = telegram_topic_link(thread_id) {
         return Some(link);
     }
-    let mirrors = worker_mirrors.get_or_insert_with(|| {
-        thread_persistence::list_worker_topics()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(topic_thread_id, worker_thread_id)| (worker_thread_id, topic_thread_id))
-            .collect()
-    });
-    let mirror_id = mirrors.get(thread_id)?;
-    telegram_topic_link(mirror_id)
+    let mirror_id = thread_index::mirror_thread_id_for_worker(thread_id)
+        .inspect_err(|error| {
+            tracing::warn!(thread_id, %error, "Failed to resolve worker mirror topic");
+        })
+        .ok()
+        .flatten()?;
+    telegram_topic_link(&mirror_id)
 }
 
 /// Lists the most recently active top-level threads for the Mini App browser.
 async fn get_threads() -> Result<Json<ThreadListResponse>, ApiError> {
     tokio::task::spawn_blocking(|| {
         let now = SystemTime::now();
-        let mut worker_mirrors: Option<HashMap<String, String>> = None;
         let threads = thread_persistence::list_recent_threads(THREAD_LIST_LIMIT)
             .map_err(|error| {
                 tracing::warn!(%error, "Failed to list Mini App threads");
@@ -570,7 +565,7 @@ async fn get_threads() -> Result<Json<ThreadListResponse>, ApiError> {
                     .modified
                     .and_then(|modified| now.duration_since(modified).ok())
                     .map(service::format_uptime),
-                telegram_link: resolve_telegram_link(&summary.id, &mut worker_mirrors),
+                telegram_link: resolve_telegram_link(&summary.id),
                 title: summary
                     .title
                     .filter(|title| !title.trim().is_empty())
@@ -607,8 +602,7 @@ async fn get_thread(Path(id): Path<String>) -> Result<Json<ThreadResponse>, ApiE
             (StatusCode::NOT_FOUND, "Thread not found")
         })?;
 
-        let mut worker_mirrors = None;
-        let telegram_link = resolve_telegram_link(&target_id, &mut worker_mirrors);
+        let telegram_link = resolve_telegram_link(&target_id);
 
         let mut response = project_thread(target_id, events, telegram_link);
         append_running_tools(&mut response);
@@ -2337,33 +2331,14 @@ mod tests {
     }
 
     #[test]
-    fn resolves_telegram_link_for_direct_and_worker_threads() {
-        let mut worker_mirrors = HashMap::new();
-        worker_mirrors.insert(
-            "ca82112f-30ef-4dff-ad90-a4a7564a5136".to_string(),
-            "telegram--1003810826527-topic-1359".to_string(),
-        );
-
-        let mut mirrors_cache = Some(worker_mirrors);
-
-        // Direct topic thread
+    fn resolves_telegram_link_for_direct_topic_threads() {
+        // Direct topic threads resolve from the ID alone and never consult the
+        // thread index. The worker→mirror branch is covered in zdx-engine
+        // (`mirror_thread_id_for_worker`), which owns the indexed lookup and
+        // has a temp-ZDX_HOME harness to persist mirror metadata.
         assert_eq!(
-            resolve_telegram_link("telegram--1001234567890-topic-17771", &mut mirrors_cache)
-                .as_deref(),
+            resolve_telegram_link("telegram--1001234567890-topic-17771").as_deref(),
             Some("https://t.me/c/1234567890/17771")
-        );
-
-        // Worker thread resolved via mirror mapping
-        assert_eq!(
-            resolve_telegram_link("ca82112f-30ef-4dff-ad90-a4a7564a5136", &mut mirrors_cache)
-                .as_deref(),
-            Some("https://t.me/c/3810826527/1359")
-        );
-
-        // Unmirrored worker thread
-        assert_eq!(
-            resolve_telegram_link("149115d3-716f-45ac-86e1-ec48dab37103", &mut mirrors_cache),
-            None
         );
     }
 

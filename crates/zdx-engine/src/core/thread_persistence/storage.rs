@@ -775,6 +775,11 @@ pub struct ThreadSummary {
     pub parent_thread_id: Option<String>,
     /// Named subagent when `origin_kind == "subagent"`.
     pub subagent_name: Option<String>,
+    /// Source thread this one redirects to. On a worker mirror topic
+    /// (`worker_topic`) this is the worker thread the topic mirrors.
+    pub alias_to: Option<String>,
+    /// Whether this thread is a Telegram mirror topic for a managed worker.
+    pub worker_topic: bool,
 }
 
 impl ThreadSummary {
@@ -859,6 +864,61 @@ pub fn list_threads() -> Result<Vec<ThreadSummary>> {
     }
 }
 
+/// Returns one thread summary by ID, preferring the derived cache.
+///
+/// Falls back to reading the thread's meta line directly when the cache is
+/// unavailable. Either way this is a single-thread lookup, never a scan.
+///
+/// # Errors
+/// Returns an error if the thread file exists but cannot be read.
+pub fn read_thread_summary_cached(id: &str) -> Result<Option<ThreadSummary>> {
+    match crate::core::thread_index::read_summary_cached(id) {
+        Ok(Some(summary)) => Ok(Some(summary)),
+        Ok(None) => read_thread_summary(id),
+        Err(err) => {
+            tracing::debug!(error = %err, "thread index unavailable; using file read");
+            read_thread_summary(id)
+        }
+    }
+}
+
+/// Lists all saved threads including child runs, newest first.
+///
+/// Served from the derived `threads.sqlite` cache when possible, falling back
+/// to the raw file scan ([`list_all_threads`]) when the cache is unavailable.
+///
+/// # Errors
+/// Returns an error if the threads directory cannot be read.
+pub fn list_all_threads_cached() -> Result<Vec<ThreadSummary>> {
+    match crate::core::thread_index::list_all_threads_cached() {
+        Ok(threads) => Ok(threads),
+        Err(err) => {
+            tracing::debug!(error = %err, "thread index unavailable; using file scan");
+            list_all_threads()
+        }
+    }
+}
+
+/// Returns the child runs spawned by `parent_id`, newest first.
+///
+/// Served from the derived cache, falling back to the raw file scan when it is
+/// unavailable.
+///
+/// # Errors
+/// Returns an error if the threads directory cannot be read.
+pub fn child_runs(parent_id: &str) -> Result<Vec<ThreadSummary>> {
+    match crate::core::thread_index::child_runs_cached(parent_id) {
+        Ok(threads) => Ok(threads),
+        Err(err) => {
+            tracing::debug!(error = %err, "thread index unavailable; using file scan");
+            Ok(list_all_threads()?
+                .into_iter()
+                .filter(|s| s.parent_thread_id.as_deref() == Some(parent_id))
+                .collect())
+        }
+    }
+}
+
 /// Lists at most `limit` top-level saved threads, newest first.
 ///
 /// Prefers the derived cache, where the ordering and limit run in SQL. The
@@ -902,7 +962,9 @@ pub(crate) fn thread_summary_from_file(file: &ThreadFileMeta) -> ThreadSummary {
         handoff_from: meta.as_ref().and_then(|m| m.handoff_from.clone()),
         origin_kind: meta.as_ref().and_then(|m| m.origin_kind.clone()),
         parent_thread_id: meta.as_ref().and_then(|m| m.parent_thread_id.clone()),
-        subagent_name: meta.and_then(|m| m.subagent_name),
+        subagent_name: meta.as_ref().and_then(|m| m.subagent_name.clone()),
+        alias_to: meta.as_ref().and_then(|m| m.alias_to.clone()),
+        worker_topic: meta.is_some_and(|m| m.worker_topic),
     }
 }
 
@@ -930,7 +992,9 @@ pub fn read_thread_summary(id: &str) -> Result<Option<ThreadSummary>> {
         handoff_from: meta.as_ref().and_then(|m| m.handoff_from.clone()),
         origin_kind: meta.as_ref().and_then(|m| m.origin_kind.clone()),
         parent_thread_id: meta.as_ref().and_then(|m| m.parent_thread_id.clone()),
-        subagent_name: meta.and_then(|m| m.subagent_name),
+        subagent_name: meta.as_ref().and_then(|m| m.subagent_name.clone()),
+        alias_to: meta.as_ref().and_then(|m| m.alias_to.clone()),
+        worker_topic: meta.is_some_and(|m| m.worker_topic),
     }))
 }
 

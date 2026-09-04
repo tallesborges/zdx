@@ -2150,6 +2150,44 @@ fn list_worker_topics_returns_only_flagged_aliases() {
     );
 }
 
+/// The Mini App resolves a worker's mirror topic on every thread list/open.
+/// That lookup must be an indexed query, not a scan of every thread file.
+#[test]
+fn mirror_thread_id_for_worker_resolves_from_the_index() {
+    let _temp = setup_temp_zdx_home();
+    crate::core::thread_index::reset_cache_for_test();
+
+    let worker_id = unique_thread_id("worker");
+    let mirror_id = unique_thread_id("mirror");
+    let mut mirror = Thread::with_id(mirror_id.clone()).unwrap();
+    mirror.set_worker_topic();
+    mirror.set_alias(Some(worker_id.clone())).unwrap();
+
+    // A plain alias without the worker_topic flag must not resolve: launcher
+    // resume aliases share the `alias_to` field.
+    let resume_target = unique_thread_id("source");
+    let resume_id = unique_thread_id("resume");
+    let mut resume = Thread::with_id(resume_id).unwrap();
+    resume.set_alias(Some(resume_target.clone())).unwrap();
+
+    assert_eq!(
+        crate::core::thread_index::mirror_thread_id_for_worker(&worker_id).unwrap(),
+        Some(mirror_id)
+    );
+    assert_eq!(
+        crate::core::thread_index::mirror_thread_id_for_worker(&resume_target).unwrap(),
+        None
+    );
+    assert_eq!(
+        crate::core::thread_index::mirror_thread_id_for_worker("never-mirrored").unwrap(),
+        None
+    );
+}
+
+/// Rows indexed before `alias_to`/`worker_topic` existed are handled by the
+/// `SCHEMA_VERSION` bump, which discards the cache file and reindexes from the
+/// canonical JSONL — there is no in-place column repair to test.
+
 /// The handoff lineage walk (`/btw` seeds, `zdx threads show`) resolves a
 /// thread by ID. It must not need `list_all_threads()`, which opens every
 /// saved thread file just to answer one lookup.

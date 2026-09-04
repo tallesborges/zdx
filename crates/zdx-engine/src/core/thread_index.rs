@@ -45,7 +45,7 @@ use crate::core::thread_persistence::{
 };
 use crate::core::{fts_query, recency};
 
-const SCHEMA_VERSION: &str = "4";
+const SCHEMA_VERSION: &str = "5";
 
 const CREATE_SQL: &str = "\
 CREATE TABLE IF NOT EXISTS cache_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -62,7 +62,9 @@ CREATE TABLE IF NOT EXISTS thread_meta (
     subagent_name TEXT,
     activity_at TEXT,
     modified_at TEXT,
-    preview TEXT
+    preview TEXT,
+    alias_to TEXT,
+    worker_topic INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS thread_export_state (
     thread_id TEXT PRIMARY KEY,
@@ -97,7 +99,11 @@ CREATE INDEX IF NOT EXISTS idx_thread_tool_ts ON thread_tool(tool_ts);
 CREATE INDEX IF NOT EXISTS idx_thread_meta_list
     ON thread_meta(origin_kind, mtime_ns DESC, thread_id);
 CREATE INDEX IF NOT EXISTS idx_thread_meta_project
-    ON thread_meta(root_path, mtime_ns DESC, thread_id);";
+    ON thread_meta(root_path, mtime_ns DESC, thread_id);
+CREATE INDEX IF NOT EXISTS idx_thread_meta_parent
+    ON thread_meta(parent_thread_id);
+CREATE INDEX IF NOT EXISTS idx_thread_meta_worker_mirror
+    ON thread_meta(alias_to) WHERE worker_topic = 1;";
 
 /// Process-wide `threads.sqlite` handle.
 ///
@@ -184,6 +190,26 @@ pub fn sync_and_export(
     })
 }
 
+/// Column list backing [`summary_from_row`]; the two must stay in step.
+const SUMMARY_COLUMNS: &str = "thread_id, mtime_ns, title, root_path, handoff_from, \
+     origin_kind, parent_thread_id, subagent_name, alias_to, worker_topic";
+
+/// Maps a [`SUMMARY_COLUMNS`] row onto a [`ThreadSummary`].
+fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadSummary> {
+    Ok(ThreadSummary {
+        id: row.get(0)?,
+        modified: system_time_from_nanos(row.get(1)?),
+        title: row.get(2)?,
+        root_path: row.get(3)?,
+        handoff_from: row.get(4)?,
+        origin_kind: row.get(5)?,
+        parent_thread_id: row.get(6)?,
+        subagent_name: row.get(7)?,
+        alias_to: row.get(8)?,
+        worker_topic: row.get::<_, i64>(9)? != 0,
+    })
+}
+
 /// Returns top-level thread summaries from the cache, newest first.
 ///
 /// Syncs incrementally first so results reflect on-disk reality; unchanged
@@ -194,25 +220,90 @@ pub fn sync_and_export(
 pub fn list_threads_cached() -> Result<Vec<ThreadSummary>> {
     with_conn(|conn| {
         sync_if_stale(conn)?;
-        let mut stmt = conn.prepare_cached(
-            "SELECT thread_id, mtime_ns, title, root_path, handoff_from,
-                parent_thread_id, subagent_name
-         FROM thread_meta WHERE origin_kind IS NULL
-         ORDER BY mtime_ns DESC, thread_id ASC",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(ThreadSummary {
-                id: row.get(0)?,
-                modified: system_time_from_nanos(row.get(1)?),
-                title: row.get(2)?,
-                root_path: row.get(3)?,
-                handoff_from: row.get(4)?,
-                origin_kind: None,
-                parent_thread_id: row.get(5)?,
-                subagent_name: row.get(6)?,
-            })
-        })?;
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT {SUMMARY_COLUMNS} FROM thread_meta WHERE origin_kind IS NULL
+             ORDER BY mtime_ns DESC, thread_id ASC"
+        ))?;
+        let rows = stmt.query_map([], summary_from_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    })
+}
+
+/// Returns every thread summary from the cache including child runs
+/// (subagents/helpers), newest first.
+///
+/// The cached counterpart of `thread_persistence::list_all_threads`, which
+/// opens every thread file to read one meta line each.
+///
+/// # Errors
+/// Returns an error when the cache cannot be opened, synced, or read.
+pub fn list_all_threads_cached() -> Result<Vec<ThreadSummary>> {
+    with_conn(|conn| {
+        sync_if_stale(conn)?;
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT {SUMMARY_COLUMNS} FROM thread_meta
+             ORDER BY mtime_ns DESC, thread_id ASC"
+        ))?;
+        let rows = stmt.query_map([], summary_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    })
+}
+
+/// Returns the child runs spawned by `parent_id`, newest first.
+///
+/// Answers the `zdx threads show` lineage footer from an indexed lookup rather
+/// than filtering a full-corpus listing.
+///
+/// # Errors
+/// Returns an error when the cache cannot be opened, synced, or read.
+pub fn child_runs_cached(parent_id: &str) -> Result<Vec<ThreadSummary>> {
+    with_conn(|conn| {
+        sync_if_stale(conn)?;
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT {SUMMARY_COLUMNS} FROM thread_meta WHERE parent_thread_id = ?1
+             ORDER BY mtime_ns DESC, thread_id ASC"
+        ))?;
+        let rows = stmt.query_map([parent_id], summary_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    })
+}
+
+/// Returns one thread summary by ID from the cache.
+///
+/// # Errors
+/// Returns an error when the cache cannot be opened, synced, or read.
+pub fn read_summary_cached(id: &str) -> Result<Option<ThreadSummary>> {
+    with_conn(|conn| {
+        sync_if_stale(conn)?;
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT {SUMMARY_COLUMNS} FROM thread_meta WHERE thread_id = ?1"
+        ))?;
+        stmt.query_row([id], summary_from_row)
+            .optional()
+            .map_err(Into::into)
+    })
+}
+
+/// Resolves the mirror topic thread that mirrors `worker_thread_id`.
+///
+/// Replaces a full-corpus `list_worker_topics()` scan with one indexed lookup
+/// against the partial index on `alias_to WHERE worker_topic = 1`.
+///
+/// # Errors
+/// Returns an error when the cache cannot be opened, synced, or read.
+pub fn mirror_thread_id_for_worker(worker_thread_id: &str) -> Result<Option<String>> {
+    with_conn(|conn| {
+        sync_if_stale(conn)?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT thread_id FROM thread_meta
+             WHERE worker_topic = 1 AND alias_to = ?1
+             ORDER BY mtime_ns DESC LIMIT 1",
+        )?;
+        stmt.query_row([worker_thread_id], |row| row.get(0))
+            .optional()
             .map_err(Into::into)
     })
 }
@@ -230,24 +321,11 @@ pub fn list_recent_threads_cached(limit: usize) -> Result<Vec<ThreadSummary>> {
     let limit = i64::try_from(limit).unwrap_or(i64::MAX);
     with_conn(|conn| {
         sync_if_stale(conn)?;
-        let mut stmt = conn.prepare_cached(
-            "SELECT thread_id, mtime_ns, title, root_path, handoff_from,
-                parent_thread_id, subagent_name
-         FROM thread_meta WHERE origin_kind IS NULL
-         ORDER BY mtime_ns DESC, thread_id ASC LIMIT ?1",
-        )?;
-        let rows = stmt.query_map([limit], |row| {
-            Ok(ThreadSummary {
-                id: row.get(0)?,
-                modified: system_time_from_nanos(row.get(1)?),
-                title: row.get(2)?,
-                root_path: row.get(3)?,
-                handoff_from: row.get(4)?,
-                origin_kind: None,
-                parent_thread_id: row.get(5)?,
-                subagent_name: row.get(6)?,
-            })
-        })?;
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT {SUMMARY_COLUMNS} FROM thread_meta WHERE origin_kind IS NULL
+             ORDER BY mtime_ns DESC, thread_id ASC LIMIT ?1"
+        ))?;
+        let rows = stmt.query_map([limit], summary_from_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     })
@@ -780,14 +858,16 @@ fn index_one_thread(
     let doc_id: i64 = conn.query_row(
         "INSERT INTO thread_meta(
             thread_id, mtime_ns, size, title, root_path, handoff_from, origin_kind,
-            parent_thread_id, subagent_name, activity_at, modified_at, preview
-         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            parent_thread_id, subagent_name, activity_at, modified_at, preview,
+            alias_to, worker_topic
+         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
          ON CONFLICT(thread_id) DO UPDATE SET
            mtime_ns=excluded.mtime_ns, size=excluded.size, title=excluded.title,
            root_path=excluded.root_path, handoff_from=excluded.handoff_from,
            origin_kind=excluded.origin_kind, parent_thread_id=excluded.parent_thread_id,
            subagent_name=excluded.subagent_name, activity_at=excluded.activity_at,
-           modified_at=excluded.modified_at, preview=excluded.preview
+           modified_at=excluded.modified_at, preview=excluded.preview,
+           alias_to=excluded.alias_to, worker_topic=excluded.worker_topic
          RETURNING doc_id",
         params![
             thread.id,
@@ -802,6 +882,8 @@ fn index_one_thread(
             activity_at,
             modified_at,
             preview,
+            thread.alias_to,
+            thread.worker_topic,
         ],
         |row| row.get(0),
     )?;

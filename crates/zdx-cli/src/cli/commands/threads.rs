@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use zdx_engine::config;
 use zdx_engine::core::thread_export::{self, ThreadExportOptions};
-use zdx_engine::core::thread_persistence::{self, ThreadSummary};
+use zdx_engine::core::thread_persistence::{self};
 use zdx_engine::core::thread_timing::{format_thread_timing_report, inspect_thread_timings};
 use zdx_engine::core::usage_stats::{self, UsageTotals};
 
@@ -56,7 +56,7 @@ pub struct ToolsCommandOptions {
 
 pub fn list(include_children: bool) -> Result<()> {
     let threads = if include_children {
-        thread_persistence::list_all_threads().context("list threads")?
+        thread_persistence::list_all_threads_cached().context("list threads")?
     } else {
         thread_persistence::list_threads().context("list threads")?
     };
@@ -95,10 +95,9 @@ pub fn show(id: &str, config: &config::Config) -> Result<()> {
         return Ok(());
     }
 
-    // Lineage (needs the full list so hidden child runs are visible here).
-    let all = thread_persistence::list_all_threads().unwrap_or_default();
-
-    if let Some(this) = all.iter().find(|s| s.id == id)
+    // Lineage: one indexed row for this thread, one indexed query for its
+    // children — never a full-corpus listing.
+    if let Ok(Some(this)) = thread_persistence::read_thread_summary_cached(id)
         && let Some(kind) = this.origin_kind.as_deref()
     {
         let label = this
@@ -116,7 +115,7 @@ pub fn show(id: &str, config: &config::Config) -> Result<()> {
 
     println!("{}", thread_persistence::format_transcript(&events));
 
-    print_child_runs(id, &all, config);
+    print_child_runs(id, config);
     Ok(())
 }
 
@@ -139,15 +138,13 @@ pub fn inspect(id: &str) -> Result<()> {
 
 /// Prints the child runs (subagents/helpers) spawned by thread `id`, each with
 /// its token/cost totals. Subagent children are listed before helper children.
-fn print_child_runs(id: &str, all: &[ThreadSummary], config: &config::Config) {
-    let mut children: Vec<&ThreadSummary> = all
-        .iter()
-        .filter(|s| s.parent_thread_id.as_deref() == Some(id))
-        .collect();
+fn print_child_runs(id: &str, config: &config::Config) {
+    let mut children = thread_persistence::child_runs(id).unwrap_or_default();
     if children.is_empty() {
         return;
     }
-    // Subagents first, then helpers; `all` is already newest-first within each.
+    // Subagents first, then helpers; the query is already newest-first within
+    // each, and `sort_by_key` is stable.
     children.sort_by_key(|s| {
         s.origin_kind
             .as_deref()
@@ -155,7 +152,7 @@ fn print_child_runs(id: &str, all: &[ThreadSummary], config: &config::Config) {
     });
 
     println!("\n── Child runs ({}) ──", children.len());
-    for child in children {
+    for child in &children {
         let kind = child.origin_kind.as_deref().unwrap_or("child");
         let name = child
             .subagent_name
