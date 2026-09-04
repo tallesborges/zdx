@@ -1905,8 +1905,6 @@ fn default_meta_provider() -> ProviderConfig {
         models: vec![
             "muse-spark-1.3".to_string(),
             "muse-spark-1.3-contributor".to_string(),
-            "muse-spark-1.2".to_string(),
-            "muse-spark-1.1".to_string(),
         ],
         ..Default::default()
     }
@@ -3668,12 +3666,7 @@ file = "prompts/template.md"
 
         assert_eq!(
             providers.meta.models,
-            vec![
-                "muse-spark-1.3",
-                "muse-spark-1.3-contributor",
-                "muse-spark-1.2",
-                "muse-spark-1.1"
-            ]
+            vec!["muse-spark-1.3", "muse-spark-1.3-contributor"]
         );
 
         // Gemini 3.8 Flash batch is deliberately absent: OpenRouter serves it only
