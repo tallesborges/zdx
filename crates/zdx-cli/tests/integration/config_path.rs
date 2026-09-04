@@ -1,6 +1,5 @@
 use std::fs;
 
-use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use serde_json::Value;
 use tempfile::tempdir;
@@ -9,7 +8,7 @@ use tempfile::tempdir;
 fn test_config_path_command() {
     let dir = tempdir().unwrap();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", dir.path())
         .args(["config", "path"])
         .assert()
@@ -24,7 +23,7 @@ fn test_config_init_creates_file() {
 
     assert!(!config_path.exists());
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", dir.path())
         .args(["config", "init"])
         .assert()
@@ -45,7 +44,7 @@ fn test_config_init_fails_if_exists() {
 
     fs::write(&config_path, "# existing config").unwrap();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", dir.path())
         .args(["config", "init"])
         .assert()
@@ -55,7 +54,7 @@ fn test_config_init_fails_if_exists() {
 
 #[test]
 fn test_config_help_shows_subcommands() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["config", "--help"])
         .assert()
         .success()
@@ -72,7 +71,7 @@ fn test_config_get_set_unset() {
     let isolated_cwd = tempdir().unwrap();
 
     // Init config
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .current_dir(isolated_cwd.path())
         .env("ZDX_HOME", zdx_home.path())
         .args(["config", "init"])
@@ -80,7 +79,7 @@ fn test_config_get_set_unset() {
         .success();
 
     // Set model
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .current_dir(isolated_cwd.path())
         .env("ZDX_HOME", zdx_home.path())
         .args(["config", "set", "model", "test-model-1"])
@@ -89,7 +88,7 @@ fn test_config_get_set_unset() {
         .stdout(predicate::str::contains("Set model"));
 
     // Get model
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .current_dir(isolated_cwd.path())
         .env("ZDX_HOME", zdx_home.path())
         .args(["config", "get", "model"])
@@ -98,7 +97,7 @@ fn test_config_get_set_unset() {
         .stdout(predicate::str::contains("test-model-1"));
 
     // Unset a key
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .current_dir(isolated_cwd.path())
         .env("ZDX_HOME", zdx_home.path())
         .args(["config", "unset", "tool_timeout_secs"])
@@ -107,14 +106,14 @@ fn test_config_get_set_unset() {
         .stdout(predicate::str::contains("Unset tool_timeout_secs"));
 
     // Set array elements generically (e.g. favorites)
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .current_dir(isolated_cwd.path())
         .env("ZDX_HOME", zdx_home.path())
         .args(["config", "set", "favorites.0.alias", "Fast"])
         .assert()
         .success();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .current_dir(isolated_cwd.path())
         .env("ZDX_HOME", zdx_home.path())
         .args([
@@ -126,7 +125,7 @@ fn test_config_get_set_unset() {
         .assert()
         .success();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .current_dir(isolated_cwd.path())
         .env("ZDX_HOME", zdx_home.path())
         .args(["config", "set", "favorites.0.thinking", "high"])
@@ -134,7 +133,7 @@ fn test_config_get_set_unset() {
         .success();
 
     // Plain get on array field works without --json
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .current_dir(isolated_cwd.path())
         .env("ZDX_HOME", zdx_home.path())
         .args(["config", "get", "favorites"])
@@ -144,7 +143,7 @@ fn test_config_get_set_unset() {
         .stdout(predicate::str::contains("gemini-3.8-flash-high"));
 
     // Plain get on indexed field
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .current_dir(isolated_cwd.path())
         .env("ZDX_HOME", zdx_home.path())
         .args(["config", "get", "favorites.0.model"])
@@ -155,7 +154,7 @@ fn test_config_get_set_unset() {
         ));
 
     // Validation rejects invalid schema writes
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .current_dir(isolated_cwd.path())
         .env("ZDX_HOME", zdx_home.path())
         .args(["config", "set", "tool_timeout_secs", "not_a_number"])
@@ -164,7 +163,7 @@ fn test_config_get_set_unset() {
         .stderr(predicate::str::contains("modified config would be invalid"));
 
     // Unset array element
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .current_dir(isolated_cwd.path())
         .env("ZDX_HOME", zdx_home.path())
         .args(["config", "unset", "favorites.0"])
@@ -178,7 +177,7 @@ fn test_bot_init_updates_global_telegram_config() {
     let zdx_home = tempdir().unwrap();
     let config_path = zdx_home.path().join("config.toml");
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .args([
             "bot",
@@ -202,7 +201,7 @@ fn test_bot_init_updates_global_telegram_config() {
 #[test]
 fn test_bot_command_fails_when_token_is_missing() {
     let zdx_home = tempdir().unwrap();
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env_remove("ZDX_TELEGRAM_BOT_TOKEN")
         .env_remove("TELEGRAM_BOT_TOKEN")
@@ -216,7 +215,7 @@ fn test_bot_command_fails_when_token_is_missing() {
 fn test_telegram_command_requires_bot_token() {
     let zdx_home = tempdir().unwrap();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env_remove("ZDX_TELEGRAM_BOT_TOKEN")
         .env_remove("TELEGRAM_BOT_TOKEN")
@@ -237,7 +236,7 @@ fn test_telegram_command_requires_bot_token() {
 fn test_automations_list_empty() {
     let dir = tempdir().unwrap();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", dir.path())
         .args(["automations", "list"])
         .assert()
@@ -256,7 +255,7 @@ fn test_automations_validate_single_file() {
     )
     .unwrap();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", user_home.path())
         .args(["automations", "validate"])
         .assert()
@@ -276,7 +275,7 @@ fn test_automations_validate_fails_for_missing_subagent() {
     )
     .unwrap();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", user_home.path())
         .args(["automations", "validate"])
         .assert()
@@ -298,7 +297,7 @@ fn test_automations_runs_reads_jsonl_log() {
     )
     .unwrap();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", dir.path())
         .args(["automations", "runs", "morning-report"])
         .assert()
@@ -312,7 +311,7 @@ fn test_automations_runs_reads_jsonl_log() {
 fn test_mcp_servers_reports_missing_config() {
     let root = tempdir().unwrap();
 
-    let output = cargo_bin_cmd!("zdx")
+    let output = crate::fixtures::zdx_cmd()
         .args(["--root", root.path().to_str().unwrap(), "mcp", "servers"])
         .assert()
         .success()
@@ -330,7 +329,7 @@ fn test_mcp_servers_reports_invalid_config() {
     let root = tempdir().unwrap();
     fs::write(root.path().join(".mcp.json"), "not json").unwrap();
 
-    let output = cargo_bin_cmd!("zdx")
+    let output = crate::fixtures::zdx_cmd()
         .args(["--root", root.path().to_str().unwrap(), "mcp", "servers"])
         .assert()
         .success()
@@ -351,7 +350,7 @@ fn test_mcp_servers_reports_invalid_config() {
 fn test_mcp_call_rejects_invalid_json() {
     let root = tempdir().unwrap();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args([
             "--root",
             root.path().to_str().unwrap(),

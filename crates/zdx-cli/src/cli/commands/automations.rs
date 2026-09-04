@@ -679,6 +679,8 @@ mod tests {
 
     #[test]
     fn prepare_automation_run_uses_effective_model_and_project_context() {
+        // Building the prompt materializes bundled skills into $ZDX_HOME.
+        let _home = zdx_engine::test_support::temp_zdx_home();
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("AGENTS.md"), "Automation project note").unwrap();
 
@@ -777,6 +779,8 @@ mod tests {
 
     #[test]
     fn prepare_automation_run_task_alias_uses_default_prompt_pipeline() {
+        // Building the prompt materializes bundled skills into $ZDX_HOME.
+        let _home = zdx_engine::test_support::temp_zdx_home();
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("AGENTS.md"), "Automation task alias note").unwrap();
 

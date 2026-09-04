@@ -2,7 +2,32 @@
 
 #![allow(dead_code)]
 
+use std::path::Path;
+use std::sync::LazyLock;
+
+use assert_cmd::Command;
+use tempfile::TempDir;
 use wiremock::ResponseTemplate;
+
+/// Throwaway `ZDX_HOME` shared by this test binary.
+///
+/// Without it the spawned `zdx` inherits the developer's real `ZDX_HOME` and
+/// writes logs, materializes bundled skills, and can index the live thread
+/// store. Tests that need their own home override it with `.env` after
+/// [`zdx_cmd`].
+static SANDBOX_HOME: LazyLock<TempDir> =
+    LazyLock::new(|| TempDir::new().expect("create sandbox ZDX_HOME"));
+
+pub fn sandbox_home() -> &'static Path {
+    SANDBOX_HOME.path()
+}
+
+/// The `zdx` binary, pointed at a throwaway `ZDX_HOME`.
+pub fn zdx_cmd() -> Command {
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("zdx");
+    cmd.env("ZDX_HOME", sandbox_home());
+    cmd
+}
 
 // Load fixture templates at compile time
 /// Model id used by tests that answer requests with a mock `/v1/messages`

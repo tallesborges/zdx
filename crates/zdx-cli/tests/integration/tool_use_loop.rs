@@ -10,7 +10,6 @@ use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use tempfile::TempDir;
 use wiremock::matchers::{header, method, path};
@@ -66,7 +65,7 @@ async fn test_tool_use_loop_reads_file() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -125,7 +124,7 @@ async fn test_tool_use_loop_second_request_has_tool_result() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -196,7 +195,7 @@ async fn test_tool_read_outside_root_allowed() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -257,7 +256,7 @@ async fn test_tool_shows_activity_indicator() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -296,7 +295,7 @@ async fn test_exec_omits_assistant_deltas_from_stdout() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -326,7 +325,7 @@ async fn test_exec_omits_empty_reasoning_completed_from_stdout() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -353,7 +352,7 @@ async fn test_exec_keeps_reasoning_text_without_replay_in_stdout() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -380,7 +379,7 @@ async fn test_exec_filter_turn_finished_only_emits_turn_finished() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -441,7 +440,7 @@ async fn test_tool_use_loop_writes_file() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -524,7 +523,7 @@ async fn test_tool_use_loop_edits_file() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -597,7 +596,7 @@ async fn test_bash_tool_shows_debug_lines() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -659,7 +658,7 @@ fn run_exec_turn(
     thread_id: &str,
     prompt: &str,
 ) {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_uri)
@@ -860,7 +859,7 @@ async fn exec_persists_the_assistant_answer_once() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())

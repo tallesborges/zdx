@@ -3,7 +3,6 @@
 use std::fs;
 use std::time::Duration;
 
-use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use serde_json::json;
 use tempfile::TempDir;
@@ -53,7 +52,7 @@ fn test_threads_export_creates_markdown_transcript() {
     let temp_dir = TempDir::new().unwrap();
     create_thread(&temp_dir, "thread-export");
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "export"])
         .assert()
@@ -81,13 +80,13 @@ fn test_threads_export_skips_unchanged_threads() {
     let temp_dir = TempDir::new().unwrap();
     create_thread(&temp_dir, "thread-skip");
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "export"])
         .assert()
         .success();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "export"])
         .assert()
@@ -102,7 +101,7 @@ fn test_threads_export_force_regenerates_unchanged_threads() {
     let temp_dir = TempDir::new().unwrap();
     create_thread(&temp_dir, "thread-force");
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "export"])
         .assert()
@@ -110,7 +109,7 @@ fn test_threads_export_force_regenerates_unchanged_threads() {
 
     std::thread::sleep(Duration::from_millis(20));
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "export", "--force"])
         .assert()
@@ -125,7 +124,7 @@ fn test_threads_export_dry_run_does_not_write_files() {
     let temp_dir = TempDir::new().unwrap();
     create_thread(&temp_dir, "thread-dry-run");
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "export", "--dry-run"])
         .assert()
@@ -152,7 +151,7 @@ fn test_threads_export_removes_stale_exports() {
     let stale_path = exports_dir.join("stale-thread.md");
     fs::write(&stale_path, "# stale").unwrap();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "export"])
         .assert()
@@ -169,7 +168,7 @@ fn test_memory_index_exports_and_builds_native_sqlite() {
     let temp_dir = TempDir::new().unwrap();
     create_thread(&temp_dir, "thread-index");
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["memory", "index"])
         .assert()
@@ -196,7 +195,7 @@ fn test_memory_index_second_run_reads_no_unchanged_thread_files() {
     let temp_dir = TempDir::new().unwrap();
     create_thread(&temp_dir, "thread-incremental");
 
-    let first = cargo_bin_cmd!("zdx")
+    let first = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["memory", "index", "--json"])
         .assert()
@@ -205,7 +204,7 @@ fn test_memory_index_second_run_reads_no_unchanged_thread_files() {
     assert_eq!(first["thread_cache"]["metas_read"], 1);
     assert_eq!(first["thread_exports"]["exported"], 1);
 
-    let second = cargo_bin_cmd!("zdx")
+    let second = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["memory", "index", "--json"])
         .assert()
@@ -218,7 +217,7 @@ fn test_memory_index_second_run_reads_no_unchanged_thread_files() {
 
     // Deleting the derived cache rebuilds it and re-exports without data loss.
     fs::remove_file(temp_dir.path().join("cache").join("threads.sqlite")).unwrap();
-    let rebuilt = cargo_bin_cmd!("zdx")
+    let rebuilt = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["memory", "index", "--json"])
         .assert()
@@ -227,7 +226,7 @@ fn test_memory_index_second_run_reads_no_unchanged_thread_files() {
     assert_eq!(rebuilt["thread_cache"]["metas_read"], 1);
     assert_eq!(rebuilt["thread_exports"]["exported"], 1);
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["memory", "search", "hello", "--source", "thread", "--json"])
         .assert()
@@ -243,7 +242,7 @@ fn test_memory_index_reexports_changed_thread_only() {
     create_thread(&temp_dir, "thread-a");
     create_thread(&temp_dir, "thread-b");
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["memory", "index"])
         .assert()
@@ -264,7 +263,7 @@ fn test_memory_index_reexports_changed_thread_only() {
     content.push('\n');
     fs::write(&thread_a, content).unwrap();
 
-    let summary = cargo_bin_cmd!("zdx")
+    let summary = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["memory", "index", "--json"])
         .assert()
@@ -281,13 +280,13 @@ fn test_memory_search_returns_canonical_paths_and_thread_ids() {
     let temp_dir = TempDir::new().unwrap();
     create_thread(&temp_dir, "thread-native");
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["memory", "index"])
         .assert()
         .success();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["memory", "search", "hello", "--source", "thread", "--json"])
         .assert()

@@ -1,4 +1,3 @@
-use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use serde_json::Value;
 use tempfile::tempdir;
@@ -10,7 +9,7 @@ use tempfile::tempdir;
 fn test_quota_json_reports_all_providers_not_logged_in() {
     let dir = tempdir().unwrap();
 
-    let output = cargo_bin_cmd!("zdx")
+    let output = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", dir.path())
         .env_remove("OPENCODE_API_KEY")
         .args(["quota", "--json"])
@@ -43,7 +42,7 @@ fn test_quota_json_reports_all_providers_not_logged_in() {
 
 #[test]
 fn test_quota_help_lists_json_flag() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["quota", "--help"])
         .assert()
         .success()

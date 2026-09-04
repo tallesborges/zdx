@@ -2,7 +2,6 @@
 
 use std::fs;
 
-use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use serde_json::json;
 use tempfile::TempDir;
@@ -116,7 +115,7 @@ fn test_threads_inspect_reports_request_and_tool_timings() {
         ],
     );
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "inspect", "timed-thread"])
         .assert()
@@ -154,7 +153,7 @@ fn test_threads_inspect_marks_legacy_timings_unavailable() {
         ],
     );
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "inspect", "legacy-timing"])
         .assert()
@@ -168,7 +167,7 @@ fn test_threads_inspect_marks_legacy_timings_unavailable() {
 #[test]
 fn test_threads_inspect_nonexistent_is_clear() {
     let temp_dir = TempDir::new().unwrap();
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "inspect", "missing"])
         .assert()
@@ -180,7 +179,7 @@ fn test_threads_inspect_nonexistent_is_clear() {
 fn test_threads_list_empty() {
     let temp_dir = TempDir::new().unwrap();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "list"])
         .assert()
@@ -212,7 +211,7 @@ fn test_threads_list_shows_ids() {
         )],
     );
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "list"])
         .assert()
@@ -243,7 +242,7 @@ fn test_threads_list_ignores_non_jsonl() {
     // Invalid file (not .jsonl)
     fs::write(threads_dir.join("notes.txt"), "some notes").unwrap();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "list"])
         .assert()
@@ -278,7 +277,7 @@ fn test_threads_show_prints_transcript() {
         ],
     );
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "show", "my-thread"])
         .assert()
@@ -296,7 +295,7 @@ fn test_threads_show_prints_transcript() {
 fn test_threads_show_nonexistent() {
     let temp_dir = TempDir::new().unwrap();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "show", "does-not-exist"])
         .assert()
@@ -332,7 +331,7 @@ fn test_threads_list_shows_multiple_sorted() {
         )],
     );
 
-    let output = cargo_bin_cmd!("zdx")
+    let output = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "list"])
         .assert()
@@ -362,7 +361,7 @@ fn test_threads_list_shows_title_from_meta() {
 
     create_thread_with_meta(&temp_dir, "titled-thread", Some("My Thread Title"), &[]);
 
-    let output = cargo_bin_cmd!("zdx")
+    let output = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "list"])
         .assert()
@@ -391,7 +390,7 @@ fn test_threads_rename_updates_title() {
         )],
     );
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "rename", "rename-thread", "New Title"])
         .assert()
@@ -399,7 +398,7 @@ fn test_threads_rename_updates_title() {
         .stdout(predicate::str::contains("New Title"));
 
     // Ensure list reflects new title
-    let output = cargo_bin_cmd!("zdx")
+    let output = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "list"])
         .assert()
@@ -428,7 +427,7 @@ fn test_threads_rename_missing_thread_fails() {
     let temp_dir = TempDir::new().unwrap();
     let missing_path = temp_dir.path().join("threads").join("missing-thread.jsonl");
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "rename", "missing-thread", "New Title"])
         .assert()
@@ -468,7 +467,7 @@ fn test_threads_search_query_matches_content() {
         )],
     );
 
-    let output = cargo_bin_cmd!("zdx")
+    let output = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "search", "thread search"])
         .assert()
@@ -507,7 +506,7 @@ fn test_threads_search_filters_by_date() {
         )],
     );
 
-    let output = cargo_bin_cmd!("zdx")
+    let output = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "search", "--date", "2026-02-12"])
         .assert()
@@ -536,7 +535,7 @@ fn test_threads_search_json_output() {
         )],
     );
 
-    let output = cargo_bin_cmd!("zdx")
+    let output = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "search", "report", "--json"])
         .assert()
@@ -599,7 +598,7 @@ fn test_threads_tools_filters_by_name() {
         ],
     );
 
-    let output = cargo_bin_cmd!("zdx")
+    let output = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "tools", "grep"])
         .assert()
@@ -664,7 +663,7 @@ fn test_threads_tools_filters_failed_calls() {
         ],
     );
 
-    let output = cargo_bin_cmd!("zdx")
+    let output = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "tools", "read", "--failed", "--json"])
         .assert()
@@ -729,7 +728,7 @@ fn test_threads_tools_filters_by_date() {
         ],
     );
 
-    let output = cargo_bin_cmd!("zdx")
+    let output = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "tools", "thread_search", "--date", "2026-02-12"])
         .assert()
@@ -760,7 +759,7 @@ fn test_threads_search_reindexes_changed_thread_after_warmup() {
     );
 
     // Warm the thread index.
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "search", "alpha-marker"])
         .assert()
@@ -798,7 +797,7 @@ fn test_threads_search_reindexes_changed_thread_after_warmup() {
     fs::write(&thread_path, content).unwrap();
 
     // The appended message is found without --force or manual reindexing.
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "search", "beta-marker", "--json"])
         .assert()
@@ -806,7 +805,7 @@ fn test_threads_search_reindexes_changed_thread_after_warmup() {
         .stdout(predicate::str::contains("warm-thread"));
 
     // The appended tool call is found through indexed tool rows.
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "tools", "grep", "--json"])
         .assert()
@@ -842,7 +841,7 @@ fn test_threads_search_drops_stale_text_and_deleted_threads() {
     );
 
     let search = |query: &str| {
-        cargo_bin_cmd!("zdx")
+        crate::fixtures::zdx_cmd()
             .env("ZDX_HOME", temp_dir.path())
             .args(["threads", "search", query])
             .assert()

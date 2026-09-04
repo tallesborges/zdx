@@ -14,7 +14,6 @@ use std::fmt::Write as _;
 use std::fs;
 use std::time::{Duration, Instant};
 
-use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use serde_json::json;
 use tempfile::TempDir;
@@ -137,7 +136,7 @@ fn search_json(temp_dir: &TempDir, query: &str, source: Option<&str>) -> serde_j
         args.push("--source");
         args.push(source);
     }
-    let output = cargo_bin_cmd!("zdx")
+    let output = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(&args)
         .assert()
@@ -234,7 +233,7 @@ fn test_lexical_relevance_fixture_set() {
     let temp_dir = TempDir::new().unwrap();
     build_corpus(&temp_dir);
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["memory", "index"])
         .assert()
@@ -285,7 +284,7 @@ fn test_search_without_index_reports_stale_index_guidance() {
     let temp_dir = TempDir::new().unwrap();
     build_corpus(&temp_dir);
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["memory", "search", "solar"])
         .assert()

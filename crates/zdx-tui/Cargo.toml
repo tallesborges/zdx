@@ -42,5 +42,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# Isolated ZDX_HOME for tests that create threads on disk.
+zdx-engine = { path = "../zdx-engine", features = ["testing"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process", "test-util"] }

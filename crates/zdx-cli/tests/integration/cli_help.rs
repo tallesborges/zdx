@@ -1,9 +1,8 @@
-use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 
 #[test]
 fn test_version_includes_build_id() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .arg("--version")
         .assert()
         .success()
@@ -12,7 +11,7 @@ fn test_version_includes_build_id() {
 
 #[test]
 fn test_help_shows_all_commands() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .arg("--help")
         .assert()
         .success()
@@ -28,7 +27,7 @@ fn test_help_shows_all_commands() {
 
 #[test]
 fn test_mcp_help_shows_subcommands() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["mcp", "--help"])
         .assert()
         .success()
@@ -42,7 +41,7 @@ fn test_mcp_help_shows_subcommands() {
 
 #[test]
 fn test_mcp_call_help_shows_json_flag() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["mcp", "call", "--help"])
         .assert()
         .success()
@@ -51,7 +50,7 @@ fn test_mcp_call_help_shows_json_flag() {
 
 #[test]
 fn test_imagine_help_shows_flags() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["imagine", "--help"])
         .assert()
         .success()
@@ -64,7 +63,7 @@ fn test_imagine_help_shows_flags() {
 
 #[test]
 fn test_imagine_rejects_invalid_aspect_ratio() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["imagine", "-p", "test", "--aspect", "2:1"])
         .assert()
         .failure()
@@ -73,7 +72,7 @@ fn test_imagine_rejects_invalid_aspect_ratio() {
 
 #[test]
 fn test_imagine_rejects_invalid_image_size() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["imagine", "-p", "test", "--size", "8K"])
         .assert()
         .failure()
@@ -82,7 +81,7 @@ fn test_imagine_rejects_invalid_image_size() {
 
 #[test]
 fn test_speak_help_shows_flags() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["speak", "--help"])
         .assert()
         .success()
@@ -94,7 +93,7 @@ fn test_speak_help_shows_flags() {
 
 #[test]
 fn test_speak_requires_text_argument() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["speak"])
         .assert()
         .failure()
@@ -103,7 +102,7 @@ fn test_speak_requires_text_argument() {
 
 #[test]
 fn test_speak_rejects_empty_text() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["speak", "   "])
         .assert()
         .failure()
@@ -112,7 +111,7 @@ fn test_speak_rejects_empty_text() {
 
 #[test]
 fn test_threads_help_shows_subcommands() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["threads", "--help"])
         .assert()
         .success()
@@ -127,7 +126,7 @@ fn test_threads_help_shows_subcommands() {
 
 #[test]
 fn test_threads_inspect_help_shows_thread_id() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["threads", "inspect", "--help"])
         .assert()
         .success()
@@ -136,7 +135,7 @@ fn test_threads_inspect_help_shows_thread_id() {
 
 #[test]
 fn test_memory_help_shows_subcommands() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["memory", "--help"])
         .assert()
         .success()
@@ -146,7 +145,7 @@ fn test_memory_help_shows_subcommands() {
 
 #[test]
 fn test_threads_tools_help_shows_flags() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["threads", "tools", "--help"])
         .assert()
         .success()
@@ -156,7 +155,7 @@ fn test_threads_tools_help_shows_flags() {
 
 #[test]
 fn test_automations_help_shows_subcommands() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["automations", "--help"])
         .assert()
         .success()
@@ -168,7 +167,7 @@ fn test_automations_help_shows_subcommands() {
 
 #[test]
 fn test_bot_help_shows_init_subcommand() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["bot", "--help"])
         .assert()
         .success()
@@ -178,7 +177,7 @@ fn test_bot_help_shows_init_subcommand() {
 
 #[test]
 fn test_daemon_help_shows_poll_interval() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["automations", "daemon", "--help"])
         .assert()
         .success()

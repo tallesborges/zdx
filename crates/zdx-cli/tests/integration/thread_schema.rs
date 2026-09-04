@@ -7,7 +7,6 @@
 
 use std::fs;
 
-use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
@@ -27,7 +26,7 @@ async fn test_threads_show_displays_tool_events() {
 {"type":"message","role":"assistant","text":"Here is the file.","ts":"2025-01-01T00:00:04Z"}"#;
     fs::write(&thread_path, thread_content).unwrap();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "show", "tool-thread"])
         .assert()
@@ -53,7 +52,7 @@ async fn test_interrupted_thread_mid_tool_is_resumable() {
     fs::write(&thread_path, thread_content).unwrap();
 
     // Thread should be loadable and resumable
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["threads", "show", "interrupted"])
         .assert()

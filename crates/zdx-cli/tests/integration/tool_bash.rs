@@ -6,7 +6,6 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use assert_cmd::cargo::cargo_bin_cmd;
 use tempfile::TempDir;
 use tokio::time::{Duration, timeout};
 use wiremock::matchers::{method, path};
@@ -62,7 +61,7 @@ async fn test_bash_executes_command() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -132,7 +131,7 @@ async fn test_bash_runs_in_root_directory() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -196,7 +195,7 @@ async fn test_bash_times_out_when_configured() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())

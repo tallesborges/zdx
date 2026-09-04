@@ -3,7 +3,6 @@
 use std::fs;
 use std::sync::{Arc, Mutex};
 
-use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use tempfile::TempDir;
 use wiremock::matchers::{method, path};
@@ -50,7 +49,7 @@ async fn test_exec_subagent_applies_prompt_and_tools() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -90,7 +89,7 @@ async fn test_exec_unknown_subagent_fails() {
     let zdx_home = TempDir::new().unwrap();
     let root = TempDir::new().unwrap();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .args([

@@ -664,6 +664,8 @@ mod tests {
 
     #[test]
     fn prepare_bot_turn_includes_project_context() {
+        // Rendering skills materializes bundled skills into $ZDX_HOME.
+        let _home = zdx_engine::test_support::temp_zdx_home();
         let dir = make_temp_dir();
         std::fs::write(dir.join("AGENTS.md"), "Bot project note").unwrap();
 
@@ -740,6 +742,8 @@ mod tests {
 
     #[test]
     fn telegram_workspaces_block_lists_profiles_with_routing_rule() {
+        // Rendering skills materializes bundled skills into $ZDX_HOME.
+        let _home = zdx_engine::test_support::temp_zdx_home();
         use std::collections::BTreeMap;
 
         use zdx_engine::config::{TelegramConfig, TelegramProfileConfig};
@@ -782,6 +786,8 @@ mod tests {
     /// root is attributed to that umbrella, not repeated under nested roots.
     #[test]
     fn telegram_workspaces_block_lists_project_skills_once_under_their_root() {
+        // Rendering skills materializes bundled skills into $ZDX_HOME.
+        let _home = zdx_engine::test_support::temp_zdx_home();
         use std::collections::BTreeMap;
 
         use zdx_engine::config::{TelegramConfig, TelegramProfileConfig};

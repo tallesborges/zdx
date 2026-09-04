@@ -1959,6 +1959,8 @@ mod tests {
 
     #[test]
     fn test_effective_prompt_loads_memory_index_from_configured_root() {
+        // Rendering a prompt materializes bundled skills into $ZDX_HOME.
+        let _home = crate::test_support::temp_zdx_home();
         let project_root = tempdir().unwrap();
         let memory_root = tempdir().unwrap();
         fs::create_dir_all(memory_root.path().join("Notes")).unwrap();
@@ -2427,6 +2429,8 @@ mod tests {
 
     #[test]
     fn test_template_mode_omits_z_identity_for_claude_cli_provider() {
+        // Rendering a prompt materializes bundled skills into $ZDX_HOME.
+        let _home = crate::test_support::temp_zdx_home();
         let dir = tempdir().unwrap();
 
         let mut config = crate::config::Config {
@@ -2453,6 +2457,8 @@ mod tests {
 
     #[test]
     fn test_template_mode_includes_linked_identity_for_non_claude() {
+        // Rendering a prompt materializes bundled skills into $ZDX_HOME.
+        let _home = crate::test_support::temp_zdx_home();
         let dir = tempdir().unwrap();
 
         let mut config = crate::config::Config {
@@ -2480,6 +2486,8 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn test_template_mode_default_template_renders_runtime_and_context_sections() {
+        // Rendering a prompt materializes bundled skills into $ZDX_HOME.
+        let _home = crate::test_support::temp_zdx_home();
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("AGENTS.md"), "Agent note").unwrap();
 
@@ -2596,6 +2604,8 @@ mod tests {
 
     #[test]
     fn test_template_mode_lists_scoped_claude_context_path() {
+        // Rendering a prompt materializes bundled skills into $ZDX_HOME.
+        let _home = crate::test_support::temp_zdx_home();
         let dir = tempdir().unwrap();
         let nested = dir.path().join("nested");
         fs::create_dir_all(&nested).unwrap();
@@ -2656,6 +2666,8 @@ mod tests {
 
     #[test]
     fn test_template_mode_includes_instruction_layers_when_provided() {
+        // Rendering a prompt materializes bundled skills into $ZDX_HOME.
+        let _home = crate::test_support::temp_zdx_home();
         let dir = tempdir().unwrap();
 
         let mut config = crate::config::Config {
@@ -2689,6 +2701,8 @@ mod tests {
 
     #[test]
     fn test_template_mode_renders_custom_template_file() {
+        // Rendering a prompt materializes bundled skills into $ZDX_HOME.
+        let _home = crate::test_support::temp_zdx_home();
         let dir = tempdir().unwrap();
         let template_file = dir.path().join("template.md");
         fs::write(
@@ -2725,6 +2739,8 @@ mod tests {
 
     #[test]
     fn test_template_mode_falls_back_on_render_error() {
+        // Rendering a prompt materializes bundled skills into $ZDX_HOME.
+        let _home = crate::test_support::temp_zdx_home();
         let dir = tempdir().unwrap();
         let template_file = dir.path().join("template.md");
         fs::write(&template_file, "{{unknown_var}}").unwrap();
@@ -2758,6 +2774,8 @@ mod tests {
 
     #[test]
     fn test_template_mode_falls_back_when_template_file_missing() {
+        // Rendering a prompt materializes bundled skills into $ZDX_HOME.
+        let _home = crate::test_support::temp_zdx_home();
         let dir = tempdir().unwrap();
 
         let mut config = crate::config::Config {
@@ -2792,6 +2810,8 @@ mod tests {
 
     #[test]
     fn test_delegation_capabilities_omit_task_and_oracle_when_subagents_disabled() {
+        // Rendering a prompt materializes bundled skills into $ZDX_HOME.
+        let _home = crate::test_support::temp_zdx_home();
         let dir = tempdir().unwrap();
         let mut config = crate::config::Config::default();
         config.subagents.enabled = false;

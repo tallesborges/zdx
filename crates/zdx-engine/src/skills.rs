@@ -1279,6 +1279,8 @@ mod tests {
 
     #[test]
     fn test_ignored_skills_filtering() {
+        // Loading skills materializes bundled skills into $ZDX_HOME.
+        let _home = crate::test_support::temp_zdx_home();
         let dir = tempdir().unwrap();
         write_skill(dir.path(), "test-skill", "Test");
         write_skill(dir.path(), "prod-skill", "Prod");
@@ -1302,6 +1304,8 @@ mod tests {
 
     #[test]
     fn test_include_skills_filtering() {
+        // Loading skills materializes bundled skills into $ZDX_HOME.
+        let _home = crate::test_support::temp_zdx_home();
         let dir = tempdir().unwrap();
         write_skill(dir.path(), "alpha-skill", "Alpha");
         write_skill(dir.path(), "beta-skill", "Beta");
@@ -1325,6 +1329,8 @@ mod tests {
 
     #[test]
     fn test_ignore_overrides_include() {
+        // Loading skills materializes bundled skills into $ZDX_HOME.
+        let _home = crate::test_support::temp_zdx_home();
         let dir = tempdir().unwrap();
         write_skill(dir.path(), "alpha-skill", "Alpha");
 

@@ -6,7 +6,6 @@ use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use tempfile::TempDir;
 use wiremock::matchers::{method, path};
@@ -87,7 +86,7 @@ async fn test_memory_embed_flow_incremental_and_semantic_search() {
     write_embeddings_config(&temp_dir, &server.uri(), 1_000_000);
 
     // Dry run performs no provider calls and no database writes.
-    let dry = cargo_bin_cmd!("zdx")
+    let dry = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .env("OPENAI_API_KEY", "test-key")
         .args(["memory", "index", "--embed", "--dry-run", "--json"])
@@ -99,7 +98,7 @@ async fn test_memory_embed_flow_incremental_and_semantic_search() {
     assert!(!temp_dir.path().join("cache").join("memory.sqlite").exists());
 
     // Real run embeds the allowlisted note chunks.
-    let first = cargo_bin_cmd!("zdx")
+    let first = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .env("OPENAI_API_KEY", "test-key")
         .args(["memory", "index", "--embed", "--json"])
@@ -113,7 +112,7 @@ async fn test_memory_embed_flow_incremental_and_semantic_search() {
     assert!(first["embeddings"]["actual_tokens"].as_u64().is_some());
 
     // Second run embeds zero unchanged inputs and spends zero hosted tokens.
-    let second = cargo_bin_cmd!("zdx")
+    let second = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .env("OPENAI_API_KEY", "test-key")
         .args(["memory", "index", "--embed", "--json"])
@@ -127,7 +126,7 @@ async fn test_memory_embed_flow_incremental_and_semantic_search() {
     assert_eq!(second["embeddings"]["state"], "ready");
 
     // Vector search embeds only the query and ranks the semantic match first.
-    let vector = cargo_bin_cmd!("zdx")
+    let vector = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .env("OPENAI_API_KEY", "test-key")
         .args([
@@ -156,7 +155,7 @@ async fn test_memory_embed_flow_incremental_and_semantic_search() {
     );
 
     // Hybrid search fuses lexical and vector rankings.
-    let hybrid = cargo_bin_cmd!("zdx")
+    let hybrid = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .env("OPENAI_API_KEY", "test-key")
         .args([
@@ -186,14 +185,14 @@ async fn test_memory_embed_refuses_over_budget_run_without_calls() {
     let calls = mount_embeddings_mock(&server).await;
     write_embeddings_config(&temp_dir, &server.uri(), 1);
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .env("OPENAI_API_KEY", "test-key")
         .args(["memory", "index"])
         .assert()
         .success();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .env("OPENAI_API_KEY", "test-key")
         .args(["memory", "index", "--embed"])
@@ -208,20 +207,20 @@ fn test_memory_embed_and_vector_search_require_configuration() {
     let temp_dir = TempDir::new().unwrap();
     write_notes(&temp_dir);
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["memory", "index", "--embed"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("[memory.embeddings]"));
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["memory", "index"])
         .assert()
         .success();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
         .args(["memory", "search", "solar", "--strategy", "vector"])
         .assert()

@@ -833,6 +833,8 @@ mod tests {
 
     #[test]
     fn orchestrator_renders_discovered_skills_catalog() {
+        // Rendering a prompt materializes bundled skills into $ZDX_HOME.
+        let _home = crate::test_support::temp_zdx_home();
         let root = tempdir().unwrap();
         write_project_skill(
             root.path(),
@@ -1078,6 +1080,8 @@ mod tests {
 
     #[test]
     fn render_prompt_includes_available_and_auto_loaded_skills() {
+        // Rendering a prompt materializes bundled skills into $ZDX_HOME.
+        let _home = crate::test_support::temp_zdx_home();
         let root = tempdir().unwrap();
         write_project_skill(
             root.path(),

@@ -1,4 +1,3 @@
-use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use serde_json::Value;
 use tempfile::tempdir;
@@ -10,7 +9,7 @@ use tempfile::tempdir;
 fn test_service_status_json_reports_stopped_and_not_installed() {
     let dir = tempdir().unwrap();
 
-    let output = cargo_bin_cmd!("zdx")
+    let output = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", dir.path())
         .env("HOME", dir.path())
         .args(["service", "status", "--json"])
@@ -44,7 +43,7 @@ fn test_service_status_json_reports_stopped_and_not_installed() {
 fn test_service_rejects_unknown_target() {
     let dir = tempdir().unwrap();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", dir.path())
         .env("HOME", dir.path())
         .args(["service", "restart", "monitor"])
@@ -57,7 +56,7 @@ fn test_service_rejects_unknown_target() {
 fn test_service_restart_requires_install() {
     let dir = tempdir().unwrap();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", dir.path())
         .env("HOME", dir.path())
         .args(["service", "restart", "bot"])
@@ -67,7 +66,7 @@ fn test_service_restart_requires_install() {
 
 #[test]
 fn test_service_restart_help_lists_force_flag() {
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .args(["service", "restart", "--help"])
         .assert()
         .success()
@@ -92,7 +91,7 @@ fn test_service_restart_blocks_active_agent_unless_forced() {
     )
     .unwrap();
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", dir.path())
         .env("HOME", dir.path())
         .args(["service", "restart", "bot"])
@@ -101,7 +100,7 @@ fn test_service_restart_blocks_active_agent_unless_forced() {
         .stderr(predicate::str::contains("restart blocked"))
         .stderr(predicate::str::contains("--force"));
 
-    cargo_bin_cmd!("zdx")
+    crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", dir.path())
         .env("HOME", dir.path())
         .args(["service", "restart", "bot", "--force"])
