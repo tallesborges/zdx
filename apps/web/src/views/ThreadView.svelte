@@ -21,17 +21,27 @@
   let error = $state("");
   let loading = $state(true);
 
-  // Git state lives here rather than in ChangesPane: the tab strip needs to know
-  // whether the tree is dirty before that pane is ever opened. Fetching it here
-  // and passing it down keeps it to a single request either way.
+  // Git state lives here rather than in ChangesPane: both the Agent and Changes
+  // panes read it, and the tab strip shows a dirty dot from it. `git status`
+  // shells out, so it is fetched on first use of a tab that needs it rather
+  // than on every thread open — the dot appears once one of those is visited.
   let git = $state<GitResponse | null>(null);
   let gitError = $state("");
+  // Thread `git` belongs to; `null` means "not fetched yet". Keying on it makes
+  // the state order-independent: a result for a previous thread is filtered out
+  // by `currentGit` rather than cleared by a separate reset effect.
+  let gitFor = $state<string | null>(null);
+
+  let currentGit = $derived(gitFor === id ? git : null);
 
   let live = $derived(data ? data.activity.some((a) => a.type === "tool_running") : false);
 
   let dirty = $derived(
-    git
-      ? git.files.staged.length + git.files.unstaged.length + git.files.untracked.length > 0
+    currentGit
+      ? currentGit.files.staged.length +
+          currentGit.files.unstaged.length +
+          currentGit.files.untracked.length >
+        0
       : false,
   );
 
@@ -48,17 +58,28 @@
   }
 
   async function loadGit() {
+    const target = id;
+    gitFor = target;
     gitError = "";
     try {
-      git = await api.git(id);
+      const response = await api.git(target);
+      if (gitFor !== target) return; // thread changed mid-flight
+      git = response;
     } catch (e) {
-      gitError = e instanceof ApiError ? e.message : String(e);
+      if (gitFor === target) gitError = e instanceof ApiError ? e.message : String(e);
     }
   }
 
   $effect(() => {
     void id;
     load();
+  });
+
+  // Fetch git the first time a pane that needs it is opened for this thread,
+  // then keep it across tab switches.
+  $effect(() => {
+    if (tab !== "agent" && tab !== "changes") return;
+    if (gitFor === id) return;
     loadGit();
   });
 
@@ -72,17 +93,17 @@
   });
 
   // `git status` shells out, so refresh it when a turn finishes rather than on
-  // every 4s transcript poll.
+  // every 4s transcript poll — and only if something already asked for it.
   let wasLive = false;
   $effect(() => {
-    if (wasLive && !live) loadGit();
+    if (wasLive && !live && gitFor === id) loadGit();
     wasLive = live;
   });
 
   function refresh() {
     haptic();
     load(false);
-    loadGit();
+    if (gitFor === id) loadGit();
   }
 
   // Jumps to the Telegram topic this thread is bound to. The Mini App stays
@@ -194,7 +215,7 @@
 {:else if tab === "transcript"}
   <TranscriptPane activity={data?.activity ?? []} />
 {:else if tab === "agent"}
-  <AgentPane thread={data} {git} />
+  <AgentPane thread={data} git={currentGit} />
 {:else}
-  <ChangesPane {id} data={git} error={gitError} />
+  <ChangesPane {id} data={currentGit} error={gitError} />
 {/if}
