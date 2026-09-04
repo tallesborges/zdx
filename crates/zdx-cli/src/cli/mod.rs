@@ -502,6 +502,8 @@ enum ThreadCommands {
         #[arg(long)]
         text: String,
     },
+    /// Bring the thread index up to date (thread metadata only, no exports)
+    Reindex,
     /// Export saved threads to Markdown transcripts
     Export {
         /// Regenerate exports even when they are up to date
@@ -1403,6 +1405,7 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
         ThreadCommands::Resume { id } => commands::threads::resume(id, context.config).await,
         ThreadCommands::Rename { id, title } => commands::threads::rename(&id, &title),
         ThreadCommands::Append { id, role, text } => commands::threads::append(&id, &role, &text),
+        ThreadCommands::Reindex => commands::threads::reindex(),
         ThreadCommands::Export { force, dry_run } => commands::threads::export(force, dry_run),
         ThreadCommands::Search {
             query,

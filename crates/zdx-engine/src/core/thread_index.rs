@@ -173,6 +173,30 @@ pub fn db_path() -> PathBuf {
         .join("threads.sqlite")
 }
 
+/// Syncs the thread index and nothing else.
+///
+/// Deliberately excludes transcript export and the memory index: this runs on
+/// install so a `SCHEMA_VERSION` bump rebuilds here rather than inside the first
+/// request after a restart, and pulling in the other corpora would defeat that
+/// by costing seconds when there is nothing to do.
+///
+/// # Errors
+/// Returns an error when the cache cannot be opened or synced.
+pub fn reindex() -> Result<ThreadCacheSyncSummary> {
+    with_conn(|conn| {
+        let summary = sync(conn).context("sync native thread metadata cache")?;
+        *LAST_SYNC.lock().unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
+        // Fold the WAL back into the database. A rebuild writes the whole cache
+        // in one transaction, and an unchecked WAL reached 464MB on a
+        // 13.6k-thread store — enough that opening a fresh connection cost
+        // ~3.8s before reading a single row, which every CLI invocation and
+        // every bot restart pays. Best-effort: a live reader makes this busy,
+        // and the next run will checkpoint instead.
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        Ok(summary)
+    })
+}
+
 /// Opens (creating/rebuilding as needed) the thread index and syncs it
 /// incrementally, then exports transcripts selected by dirty state.
 ///

@@ -109,6 +109,10 @@ install: build-release
         echo "ZDX_CODESIGN_ID unset — skipping codesign; macOS will re-prompt for permissions after each rebuild"; \
     fi
     @echo "Installed $(~/.local/bin/zdx --version 2>/dev/null || echo zdx) to ~/.local/bin/zdx"
+    @# Pay any thread-index schema rebuild here rather than inside the first
+    @# request after a restart, which would otherwise block the bot. Thread
+    @# index only: no exports, no memory index.
+    ~/.local/bin/zdx threads reindex
 
 # Build, install, and restart the launchd services with the new binary
 deploy: install

@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use zdx_engine::config;
 use zdx_engine::core::thread_export::{self, ThreadExportOptions};
+use zdx_engine::core::thread_index;
 use zdx_engine::core::thread_persistence::{self};
 use zdx_engine::core::thread_timing::{format_thread_timing_report, inspect_thread_timings};
 use zdx_engine::core::usage_stats::{self, UsageTotals};
@@ -204,6 +205,28 @@ pub fn export(force: bool, dry_run: bool) -> Result<()> {
     println!(
         "Thread exports: exported={}, skipped={}, removed={}, failed={}",
         summary.exported, summary.skipped, summary.removed, summary.failed
+    );
+
+    Ok(())
+}
+
+/// Brings the thread index up to date without touching exports or the memory
+/// index.
+///
+/// Run from `just install` so a `SCHEMA_VERSION` bump pays its rebuild there
+/// rather than inside the first request after a restart, which would otherwise
+/// block the bot while it lists recent threads.
+pub fn reindex() -> Result<()> {
+    let started = std::time::Instant::now();
+    let summary = thread_index::reindex().context("reindex threads")?;
+
+    println!(
+        "Thread index: {} files, {} read, {} updated, {} removed ({:.2}s)",
+        summary.files_enumerated,
+        summary.metas_read,
+        summary.rows_upserted,
+        summary.rows_removed,
+        started.elapsed().as_secs_f64()
     );
 
     Ok(())

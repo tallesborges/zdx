@@ -87,7 +87,7 @@ For any disposable store rebuilt from files on disk (SQLite caches, search index
 - Anything a user waits on is hot, even when it runs async.
 - Filter, order, and limit in the store, not in memory. Add the index that query needs.
 - When you add something the indexer stores, capture it in the indexer and bump the schema version. It rebuilds on next start. Prefer one mechanism over per-field migrations and backfills: no trivial lookup should ever fall back to opening every file.
-- Know what the bump costs before you make it. On a 13.6k-thread, 3.2GB store the full rebuild is ~2m34s, and it runs inside `sync()` holding the process-wide connection lock — so it blocks whoever triggers it, including the first Telegram message after a bot restart, which lists recent threads to build the orchestrator prompt.
+- Know what the bump costs before you make it. On a 13.7k-thread, 3.2GB store the full rebuild is ~2.5-4min depending on load, and it runs inside `sync()` holding the process-wide connection lock — so it blocks whoever triggers it. `just install` runs `zdx threads reindex` to pay that there instead of inside the first Telegram message after a restart, which lists recent threads to build the orchestrator prompt. Warm, that command is ~0.2s.
 - Reuse expensive handles only when you have measured the saving.
 - Test against real data volume. Fixtures are too small to show scaling bugs.
 - Keep tests off the developer's real `ZDX_HOME`. A test that reaches thread listing will index the live store; take `zdx_engine::test_support::temp_zdx_home()` (feature `testing` from other crates).
