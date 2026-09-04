@@ -69,6 +69,8 @@ export const demoThread: ThreadResponse = {
   title: "Svelte Mini App for the bot",
   total_messages: 4,
   total_events: 9,
+  cursor: 9,
+  partial: false,
   telegram_link: "https://t.me/c/1234567890/18012",
   activity: [
     {

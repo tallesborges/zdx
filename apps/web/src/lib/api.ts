@@ -76,12 +76,13 @@ export const api = {
     return get<ThreadListResponse>("/api/threads");
   },
 
-  thread: async (id: string) => {
+  thread: async (id: string, after?: number) => {
     if (import.meta.env.DEV) {
       const demo = await import("./demo");
       if (demo.demoEnabled()) return demo.demoThread;
     }
-    return get<ThreadResponse>(`/api/threads/${encodeURIComponent(id)}`);
+    const params = after === undefined ? undefined : { after: String(after) };
+    return get<ThreadResponse>(`/api/threads/${encodeURIComponent(id)}`, params);
   },
 
   monitor: async () => {

@@ -18,6 +18,12 @@ export interface ThreadResponse {
    *  it is present even when the client asked for `active`. Null for TUI/CLI
    *  threads and plain DMs. */
   telegram_link: string | null;
+  /** Cursor to send as `after` on the next poll; items at or above it have not
+   *  been delivered yet. */
+  cursor: number;
+  /** True when `activity` holds only items at or after the requested `after`
+   *  cursor, so it must be merged into the existing transcript. */
+  partial: boolean;
   activity: ThreadActivity[];
 }
 

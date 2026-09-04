@@ -20,6 +20,7 @@
   let data = $state<ThreadResponse | null>(null);
   let error = $state("");
   let loading = $state(true);
+  let polling = false;
 
   // Git state lives here rather than in ChangesPane: both the Agent and Changes
   // panes read it, and the tab strip shows a dirty dot from it. `git status`
@@ -57,6 +58,34 @@
     }
   }
 
+  // A live poll asks only for activity past the last cursor and merges it in.
+  // Re-fetching the whole transcript every 4s re-sent hundreds of kilobytes per
+  // tick on a long thread. Running tools are always resent, so they are dropped
+  // before merging and replaced by whatever the poll reports.
+  async function poll() {
+    if (polling || !data) return;
+    polling = true;
+    const target = id;
+    try {
+      const delta = await api.thread(target, data.cursor);
+      if (target !== id || !data) return;
+      if (!delta.partial) {
+        data = delta;
+        return;
+      }
+      const persisted = data.activity.filter((a) => a.type !== "tool_running");
+      const seen = new Set(persisted.map((a) => a.sequence));
+      data = {
+        ...delta,
+        activity: [...persisted, ...delta.activity.filter((a) => !seen.has(a.sequence))],
+      };
+    } catch {
+      // A failed poll is not worth surfacing; the next tick retries.
+    } finally {
+      polling = false;
+    }
+  }
+
   async function loadGit() {
     const target = id;
     gitFor = target;
@@ -83,11 +112,12 @@
     loadGit();
   });
 
-  // Poll only while a tool is actually executing, and only when visible.
+  // Poll only while a tool is actually executing, and only when visible. The
+  // in-flight guard in `poll` keeps a slow response from stacking up ticks.
   $effect(() => {
     if (!live) return;
     const timer = setInterval(() => {
-      if (document.visibilityState === "visible") load(false);
+      if (document.visibilityState === "visible") poll();
     }, 4000);
     return () => clearInterval(timer);
   });

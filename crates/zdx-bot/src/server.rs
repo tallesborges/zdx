@@ -56,6 +56,12 @@ pub struct ThreadResponse {
     /// the *resolved* id so it is present even when the client asked for
     /// `active`. `None` for TUI/CLI threads and plain DMs.
     pub telegram_link: Option<String>,
+    /// Cursor to send back as `?after=` on the next poll. Items at or above it
+    /// have not been delivered yet.
+    pub cursor: usize,
+    /// True when `activity` holds only items at or after the requested `after`
+    /// cursor, so the client must merge rather than replace.
+    pub partial: bool,
     pub activity: Vec<ThreadActivity>,
 }
 
@@ -162,6 +168,30 @@ pub enum ThreadActivity {
         role: String,
         text: String,
     },
+}
+
+impl ThreadActivity {
+    /// Position of this item in the thread, used as the delta cursor and as the
+    /// client-side merge key.
+    fn sequence(&self) -> usize {
+        match self {
+            Self::Message { sequence, .. }
+            | Self::Reasoning { sequence, .. }
+            | Self::ToolUse { sequence, .. }
+            | Self::ToolRunning { sequence, .. }
+            | Self::ToolResult { sequence, .. }
+            | Self::Usage { sequence, .. }
+            | Self::Notice { sequence, .. }
+            | Self::Interrupted { sequence, .. } => *sequence,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ThreadQuery {
+    /// Return only activity at or after this cursor. Live polling sends the
+    /// `cursor` from its previous response; a first load omits it.
+    after: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -583,7 +613,10 @@ async fn get_threads() -> Result<Json<ThreadListResponse>, ApiError> {
     })?
 }
 
-async fn get_thread(Path(id): Path<String>) -> Result<Json<ThreadResponse>, ApiError> {
+async fn get_thread(
+    Path(id): Path<String>,
+    Query(query): Query<ThreadQuery>,
+) -> Result<Json<ThreadResponse>, ApiError> {
     tokio::task::spawn_blocking(move || {
         let target_id = if id == "active" {
             thread_index::latest_thread_id_with_prefix("telegram-")
@@ -606,6 +639,14 @@ async fn get_thread(Path(id): Path<String>) -> Result<Json<ThreadResponse>, ApiE
 
         let mut response = project_thread(target_id, events, telegram_link);
         append_running_tools(&mut response);
+
+        // Live polling asks only for what it has not seen. Dropping delivered
+        // items keeps a steady-state poll small on a thread whose transcript is
+        // hundreds of kilobytes, without changing what a first load returns.
+        if let Some(after) = query.after {
+            response.activity.retain(|item| item.sequence() >= after);
+            response.partial = true;
+        }
         Ok(Json(response))
     })
     .await
@@ -786,6 +827,8 @@ fn project_thread(
         title,
         total_messages,
         total_events: activity.len(),
+        cursor: activity.len(),
+        partial: false,
         activity,
     }
 }
@@ -2288,6 +2331,54 @@ mod tests {
         assert!(!json.contains("/private/project"));
         assert!(!json.contains("private-replay-blob"));
         assert!(!json.contains("private-tool-signature"));
+    }
+
+    /// The live poll asks for a window instead of the whole transcript. The
+    /// window must drop delivered items, keep the totals a first load reports,
+    /// and leave sequences untouched so the client can merge on them.
+    #[test]
+    fn delta_window_returns_only_undelivered_activity() {
+        let events = vec![
+            ThreadEvent::user_message("first"),
+            ThreadEvent::Message {
+                role: "assistant".to_string(),
+                text: "second".to_string(),
+                phase: None,
+                replay: None,
+                ts: "2026-08-24T10:00:01Z".to_string(),
+            },
+            ThreadEvent::Message {
+                role: "assistant".to_string(),
+                text: "third".to_string(),
+                phase: None,
+                replay: None,
+                ts: "2026-08-24T10:00:02Z".to_string(),
+            },
+        ];
+
+        let full = project_thread("thread-delta".to_string(), events.clone(), None);
+        assert_eq!(full.activity.len(), 3);
+        assert_eq!(full.cursor, 3);
+        assert!(!full.partial, "a first load is never partial");
+
+        // Simulate the handler's windowing at the cursor the client last saw.
+        let mut delta = project_thread("thread-delta".to_string(), events, None);
+        let after = 2;
+        delta.activity.retain(|item| item.sequence() >= after);
+        delta.partial = true;
+
+        assert_eq!(delta.activity.len(), 1, "only the undelivered item");
+        assert_eq!(delta.activity[0].sequence(), 2);
+        assert_eq!(
+            delta.total_messages, full.total_messages,
+            "totals describe the whole thread, not the window"
+        );
+        assert_eq!(delta.cursor, full.cursor);
+
+        let json = serde_json::to_string(&delta).expect("serialize delta");
+        assert!(json.contains("third"));
+        assert!(!json.contains("first"), "delivered items are not resent");
+        assert!(!json.contains("second"));
     }
 
     #[test]
