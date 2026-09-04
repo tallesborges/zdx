@@ -69,7 +69,7 @@ fn with_thread_link(context: &BotContext, chat_id: i64, thread_id: &str, text: &
 
 /// Pure half of [`with_thread_link`], so the rendered suffix is testable
 /// without constructing a whole bot context.
-fn append_thread_link(base: Option<&str>, thread_id: &str, text: &str) -> String {
+pub(crate) fn append_thread_link(base: Option<&str>, thread_id: &str, text: &str) -> String {
     match base {
         Some(base) => {
             format!("{text}\n\n<a href=\"{base}?startapp={thread_id}\">↗ Open thread</a>")

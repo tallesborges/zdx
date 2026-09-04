@@ -160,24 +160,43 @@ pub(crate) async fn dispatch_message(
             }
         });
     } else {
-        // Telegram bot Threaded Mode: a brand-new client-created thread in the
-        // bot's private chat becomes an orchestrator home base, mirroring
-        // General-created forum topics. Plain unthreaded DMs keep the default
-        // profile. Fail closed: without the profile the turn would run the
-        // default coding agent (with write tools) instead.
-        if let Some(thread_id) = dm_thread_needing_orchestrator(&message)
-            && let Err(err) = mark_orchestrator_thread(&thread_id, true)
-        {
-            tracing::error!(
-                thread_id = %thread_id,
-                %err,
-                "Failed to mark orchestrator profile on DM thread; not running the turn"
-            );
-            notify_orchestrator_init_failure(context, message.chat.id, message.thread_id).await;
+        if !init_dm_orchestrator_thread(context, &message).await {
             return;
         }
         enqueue_message(queues, context, message).await;
     }
+}
+
+/// Telegram bot Threaded Mode: a brand-new client-created thread in the
+/// bot's private chat becomes an orchestrator home base, mirroring
+/// General-created forum topics, and gets the same pinned orchestrator card
+/// (live worker summary + Refresh); the thread already holds the user's
+/// message, so the card lands right after it. Plain unthreaded DMs keep the
+/// default profile. Returns `false` when the turn must not run: without the
+/// profile it would run the default coding agent (with write tools) instead.
+async fn init_dm_orchestrator_thread(context: &Arc<BotContext>, message: &Message) -> bool {
+    let Some(thread_id) = dm_thread_needing_orchestrator(message) else {
+        return true;
+    };
+    if let Err(err) = mark_orchestrator_thread(&thread_id, true) {
+        tracing::error!(
+            thread_id = %thread_id,
+            %err,
+            "Failed to mark orchestrator profile on DM thread; not running the turn"
+        );
+        notify_orchestrator_init_failure(context, message.chat.id, message.thread_id).await;
+        return false;
+    }
+    if let Some(topic_id) = message.thread_id
+        && let Err(err) = post_thread_header(context, message.chat.id, topic_id, &thread_id).await
+    {
+        tracing::warn!(
+            thread_id = %thread_id,
+            %err,
+            "Failed to post header on new DM orchestrator thread"
+        );
+    }
+    true
 }
 
 /// Forwards a General message (plus its album siblings, in order) into the

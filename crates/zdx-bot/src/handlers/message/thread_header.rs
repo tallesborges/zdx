@@ -30,6 +30,7 @@ pub(crate) async fn post_thread_header(
         .send_message_with_markup(chat_id, &text, None, Some(topic_id), &keyboard)
         .await
         .context("post thread header")?;
+    context.record_thread_header(thread_id, chat_id, message.id);
 
     if let Err(err) = context
         .client()
@@ -46,6 +47,33 @@ pub(crate) async fn post_thread_header(
     }
 
     Ok(())
+}
+
+/// Re-renders a thread's pinned header in place, when this process posted
+/// it. Used by the worker bridge so an orchestrator's card tracks its workers
+/// without a manual Refresh. Best-effort: unknown headers and unchanged text
+/// are no-ops.
+pub(crate) async fn refresh_thread_header(context: &BotContext, thread_id: &str) {
+    let Some((chat_id, message_id)) = context.thread_header(thread_id) else {
+        return;
+    };
+    let result = async {
+        let text = header_text(context, chat_id, thread_id).await?;
+        let keyboard = header_keyboard(context, chat_id, thread_id);
+        match context
+            .client()
+            .edit_message_text(chat_id, message_id, &text, Some(&keyboard))
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(err) if is_message_not_modified(&err) => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
+    .await;
+    if let Err(err) = result {
+        tracing::warn!(thread_id, message_id, %err, "Failed to refresh thread header");
+    }
 }
 
 pub(crate) async fn handle_callback(

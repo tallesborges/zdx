@@ -38,8 +38,8 @@ use crate::bot::context::BotContext;
 use crate::bot::queue::ChatQueueMap;
 use crate::bot::synthetic::dispatch_synthetic_prompt;
 use crate::handlers::message::{
-    escape_html, mini_app_base_url, parse_topic_thread_id, post_thread_header,
-    resolve_effective_thread_id, thread_id_for_chat,
+    append_thread_link, escape_html, mini_app_base_url, parse_topic_thread_id, post_thread_header,
+    refresh_thread_header, resolve_effective_thread_id, thread_id_for_chat,
 };
 use crate::telegram::markdown::{to_telegram_html, truncate_telegram_html};
 use crate::telegram::{
@@ -195,6 +195,7 @@ impl Bridge {
                 if let Some(mirror) = mirror {
                     self.mirrors.insert(worker_thread_id, mirror);
                 }
+                refresh_thread_header(&self.context, &owner_thread_id).await;
             }
             WorkerEvent::Prompted {
                 worker_thread_id,
@@ -207,6 +208,7 @@ impl Bridge {
                     &prompt,
                 )
                 .await;
+                self.refresh_owner_header_of(&worker_thread_id).await;
             }
             WorkerEvent::Activity {
                 worker_thread_id,
@@ -228,10 +230,19 @@ impl Bridge {
                 if !suppress_owner_callback {
                     dispatch_owner_callback(&self.context, &self.queues, &event).await;
                 }
+                refresh_thread_header(&self.context, &event.owner_thread_id).await;
             }
             WorkerEvent::OwnerCallback(event) => {
                 dispatch_owner_callback(&self.context, &self.queues, &event).await;
             }
+        }
+    }
+
+    /// Refreshes the pinned card of whichever orchestrator owns `worker` (the
+    /// card carries the live worker summary).
+    async fn refresh_owner_header_of(&self, worker_thread_id: &str) {
+        if let Some(snapshot) = self.context.worker_manager().snapshot(worker_thread_id) {
+            refresh_thread_header(&self.context, &snapshot.owner_thread_id).await;
         }
     }
 
@@ -276,6 +287,8 @@ impl Bridge {
                 tracing::warn!(worker = %worker_thread_id, %err, "Failed to post live status message");
             }
         }
+        // First activity of a turn: the worker just went queued → running.
+        self.refresh_owner_header_of(worker_thread_id).await;
     }
 
     fn next_flush_at(&self) -> Option<Instant> {
@@ -555,10 +568,17 @@ async fn post_mirror_update(
             format!("❌ Turn {}: {summary}", event.status.as_str())
         }
     };
+    // Same trailing Mini App link as a normal answer: results here are
+    // bounded, and the full transcript is one tap away.
+    let text = append_thread_link(
+        mini_app_base_url(context, mirror.chat).as_deref(),
+        &event.worker_thread_id,
+        &text,
+    );
 
     if let Err(err) = context
         .client()
-        .send_message(mirror.chat, &text, None, Some(mirror.topic))
+        .send_message_without_preview(mirror.chat, &text, None, Some(mirror.topic))
         .await
     {
         tracing::warn!(worker = %event.worker_thread_id, %err, "Failed to post mirror update");

@@ -84,6 +84,9 @@ pub(crate) struct BotContext {
     orchestrator_routes: RwLock<HashMap<String, OrchestratorRoute>>,
     /// Whether a `/restart q` is waiting for all agent runs to finish.
     restart_queued: AtomicBool,
+    /// Thread id → (chat, message id) of the pinned header posted this
+    /// process, so worker events can refresh an orchestrator's card in place.
+    thread_headers: RwLock<HashMap<String, (i64, i64)>>,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +153,7 @@ impl BotContext {
             launcher_map,
             orchestrator_routes: RwLock::new(HashMap::new()),
             restart_queued: AtomicBool::new(false),
+            thread_headers: RwLock::new(HashMap::new()),
         }
     }
 
@@ -352,6 +356,23 @@ impl BotContext {
         self.orchestrator_routes
             .read()
             .expect("orchestrator route lock poisoned")
+            .get(thread_id)
+            .copied()
+    }
+
+    /// Remembers where a thread's pinned header lives (process-lifetime).
+    pub(crate) fn record_thread_header(&self, thread_id: &str, chat_id: i64, message_id: i64) {
+        self.thread_headers
+            .write()
+            .expect("thread header lock poisoned")
+            .insert(thread_id.to_string(), (chat_id, message_id));
+    }
+
+    /// `(chat_id, message_id)` of a thread's pinned header posted this process.
+    pub(crate) fn thread_header(&self, thread_id: &str) -> Option<(i64, i64)> {
+        self.thread_headers
+            .read()
+            .expect("thread header lock poisoned")
             .get(thread_id)
             .copied()
     }
