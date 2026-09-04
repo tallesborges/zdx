@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 use super::{ToolContext, ToolDefinition, ToolOutput};
 
@@ -40,7 +41,7 @@ fn format_extract_errors(errors: &[ExtractError]) -> String {
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Fetch_Webpage".to_string(),
-        description: "Extract clean markdown content from a URL. Use this when you already have a specific URL to read; use Web_Search when you need to discover URLs first. Provide `objective` to guide what to extract and `search_queries` to focus results — both improve extraction quality. Set `full_content: true` only when you need the complete page rather than the most relevant excerpts. Returns LLM-optimized markdown excerpts by default.".to_string(),
+        description: "Extract clean markdown content from a URL. Use this when you already have a specific URL to read; use Web_Search when you need to discover URLs first. Provide `objective` to guide what to extract and `search_queries` to focus results — both improve extraction quality. Set `full_content: true` only when you need the complete page rather than the most relevant excerpts. Returns LLM-optimized markdown excerpts by default. Long page bodies are truncated; when `full_content_truncated` is set, use Read on `full_content_file` to inspect the whole body.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
@@ -130,6 +131,14 @@ struct ExtractResult {
     excerpts: Option<Vec<String>>,
     #[serde(default)]
     full_content: Option<String>,
+    /// Set when `full_content` was capped at [`MAX_CONTENT_BYTES`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    full_content_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    full_content_total_bytes: Option<usize>,
+    /// Temp file holding the untruncated body, readable with the `Read` tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    full_content_file: Option<String>,
 }
 
 /// Executes the `fetch_webpage` tool asynchronously.
@@ -223,11 +232,46 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
     }
 
     // Build successful response
+    let mut results = extract_response.results;
+    for result in &mut results {
+        cap_full_content(result);
+    }
+
     ToolOutput::success(json!({
         "extract_id": extract_response.extract_id,
-        "results": extract_response.results,
+        "results": results,
         "warnings": extract_response.warnings
     }))
+}
+
+/// Maximum bytes of extracted page body returned inline before truncation.
+///
+/// Matches the `Bash`/`Grep` convention: a `full_content: true` extract of a
+/// large page otherwise returns the whole body, and every byte is persisted
+/// verbatim into the thread JSONL and replayed on later provider requests.
+const MAX_CONTENT_BYTES: usize = 40 * 1024; // 40KB
+
+/// Truncates `full_content` to [`MAX_CONTENT_BYTES`], spilling the full body to
+/// a temp file so it stays reachable via the `Read` tool.
+fn cap_full_content(result: &mut ExtractResult) {
+    let Some(content) = result.full_content.take() else {
+        return;
+    };
+    let (text, truncated, total_bytes) =
+        super::truncate_bytes_to_byte_limit(content.as_bytes(), MAX_CONTENT_BYTES);
+    result.full_content = Some(text);
+    if truncated {
+        result.full_content_truncated = true;
+        result.full_content_total_bytes = Some(total_bytes);
+        result.full_content_file = write_temp_file(content.as_bytes());
+    }
+}
+
+/// Writes the untruncated page body to a temp file for follow-up `Read` calls.
+fn write_temp_file(bytes: &[u8]) -> Option<String> {
+    let path = std::env::temp_dir().join(format!("zdx-fetch-{}.txt", Uuid::new_v4()));
+    std::fs::write(&path, bytes).ok()?;
+    Some(path.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
@@ -235,6 +279,57 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    #[test]
+    fn caps_oversized_full_content_and_spills_the_rest_to_a_file() {
+        let body = "x".repeat(MAX_CONTENT_BYTES * 3);
+        let mut result = ExtractResult {
+            url: "https://example.com".to_string(),
+            title: "big".to_string(),
+            publish_date: None,
+            excerpts: None,
+            full_content: Some(body.clone()),
+            full_content_truncated: false,
+            full_content_total_bytes: None,
+            full_content_file: None,
+        };
+
+        cap_full_content(&mut result);
+
+        let kept = result.full_content.expect("content kept");
+        assert!(
+            kept.len() <= MAX_CONTENT_BYTES,
+            "kept {} bytes, cap is {MAX_CONTENT_BYTES}",
+            kept.len()
+        );
+        assert!(result.full_content_truncated);
+        assert_eq!(result.full_content_total_bytes, Some(body.len()));
+
+        let spill = result.full_content_file.expect("spill file written");
+        assert_eq!(std::fs::read_to_string(&spill).unwrap(), body);
+        let _ = std::fs::remove_file(&spill);
+    }
+
+    #[test]
+    fn leaves_content_under_the_cap_untouched() {
+        let body = "small page".to_string();
+        let mut result = ExtractResult {
+            url: "https://example.com".to_string(),
+            title: "small".to_string(),
+            publish_date: None,
+            excerpts: None,
+            full_content: Some(body.clone()),
+            full_content_truncated: false,
+            full_content_total_bytes: None,
+            full_content_file: None,
+        };
+
+        cap_full_content(&mut result);
+
+        assert_eq!(result.full_content.as_deref(), Some(body.as_str()));
+        assert!(!result.full_content_truncated);
+        assert!(result.full_content_file.is_none());
+    }
 
     #[test]
     fn test_definition_schema() {
