@@ -465,12 +465,27 @@ fn parse_claude(wire: &ClaudeUsageWire) -> Option<SubscriptionQuota> {
 struct CodexUsageWire {
     plan_type: Option<String>,
     rate_limit: Option<CodexRateLimit>,
+    spend_control: Option<CodexSpendControl>,
 }
 
 #[derive(Debug, Deserialize)]
 struct CodexRateLimit {
     primary_window: Option<CodexWindow>,
     secondary_window: Option<CodexWindow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexSpendControl {
+    individual_limit: Option<CodexSpendLimit>,
+}
+
+/// Dollar amounts arrive as strings; `used_percent` arrives as a number.
+#[derive(Debug, Deserialize)]
+struct CodexSpendLimit {
+    limit: Option<String>,
+    used: Option<String>,
+    used_percent: Option<f64>,
+    reset_at: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -497,18 +512,50 @@ fn codex_window(w: &CodexWindow) -> QuotaWindow {
     }
 }
 
+/// Builds the spend-budget window used by business/workspace plans.
+///
+/// This is a spend budget in dollars, not a rolling rate-limit window, so it is
+/// labelled `spend` and carries the raw dollar figures as the window scope.
+/// `used_percent` from the payload is integer-rounded, so the percentage is
+/// derived from `used`/`limit` whenever both parse.
+fn codex_spend_window(spend: &CodexSpendLimit) -> Option<QuotaWindow> {
+    let limit = spend.limit.as_deref().and_then(|v| v.parse::<f64>().ok());
+    let used = spend.used.as_deref().and_then(|v| v.parse::<f64>().ok());
+    let (used_percent, scope) = match (used, limit) {
+        (Some(used), Some(limit)) if limit > 0.0 => (
+            used / limit * 100.0,
+            Some(format!("${used:.2} of ${limit:.2}")),
+        ),
+        _ => (spend.used_percent?, None),
+    };
+    Some(QuotaWindow {
+        label: "spend".to_string(),
+        used_percent,
+        resets_at: spend
+            .reset_at
+            .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
+        scope,
+    })
+}
+
 /// Parses the Codex usage payload into a neutral snapshot.
+///
+/// Consumer plans report rolling `rate_limit` windows. Business/workspace plans
+/// report `rate_limit: null` and expose a dollar budget under
+/// `spend_control.individual_limit` instead, which is used as the fallback.
 fn parse_codex(wire: &CodexUsageWire) -> Option<SubscriptionQuota> {
-    let rate_limit = wire.rate_limit.as_ref()?;
     let mut windows = Vec::new();
-    if let Some(w) = &rate_limit.primary_window {
-        windows.push(codex_window(w));
-    }
-    if let Some(w) = &rate_limit.secondary_window {
-        windows.push(codex_window(w));
+    if let Some(rate_limit) = &wire.rate_limit {
+        if let Some(w) = &rate_limit.primary_window {
+            windows.push(codex_window(w));
+        }
+        if let Some(w) = &rate_limit.secondary_window {
+            windows.push(codex_window(w));
+        }
     }
     if windows.is_empty() {
-        return None;
+        let spend = wire.spend_control.as_ref()?.individual_limit.as_ref()?;
+        windows.push(codex_spend_window(spend)?);
     }
     Some(SubscriptionQuota {
         plan: wire.plan_type.clone(),
@@ -851,6 +898,57 @@ mod tests {
     }
 
     #[test]
+    fn parses_codex_business_spend_control_when_rate_limit_is_null() {
+        let wire: CodexUsageWire =
+            serde_json::from_str(&load_fixture("codex_usage_business.json")).unwrap();
+        let quota = parse_codex(&wire).expect("codex business quota");
+        assert_eq!(quota.plan.as_deref(), Some("business"));
+        assert_eq!(quota.windows.len(), 1);
+        let w = &quota.windows[0];
+        assert_eq!(w.label, "spend");
+        // Derived from used/limit, not the integer-rounded used_percent (0).
+        assert!((w.used_percent - 0.035_721_998).abs() < 1e-6);
+        assert_eq!(w.scope.as_deref(), Some("$0.89 of $2500.00"));
+        assert_eq!(w.resets_at, Utc.timestamp_opt(1_790_812_801, 0).single());
+    }
+
+    #[test]
+    fn codex_prefers_rate_limit_windows_over_spend_control() {
+        // The consumer fixture carries `spend_control.individual_limit: null`,
+        // so a plan with real windows never reaches the spend fallback.
+        let wire: CodexUsageWire = serde_json::from_str(&load_fixture("codex_usage.json")).unwrap();
+        let quota = parse_codex(&wire).expect("codex quota");
+        assert_eq!(quota.windows.len(), 1);
+        assert_eq!(quota.windows[0].label, "weekly");
+    }
+
+    #[test]
+    fn codex_spend_window_falls_back_to_used_percent_without_dollar_amounts() {
+        let spend = CodexSpendLimit {
+            limit: None,
+            used: None,
+            used_percent: Some(42.0),
+            reset_at: None,
+        };
+        let w = codex_spend_window(&spend).expect("spend window");
+        assert_eq!(w.label, "spend");
+        assert!((w.used_percent - 42.0).abs() < f64::EPSILON);
+        assert!(w.scope.is_none());
+        assert!(w.resets_at.is_none());
+
+        // A zero limit is not divisible and has no percentage to fall back to.
+        assert!(
+            codex_spend_window(&CodexSpendLimit {
+                limit: Some("0".to_string()),
+                used: Some("0".to_string()),
+                used_percent: None,
+                reset_at: None,
+            })
+            .is_none()
+        );
+    }
+
+    #[test]
     fn codex_window_labels_from_seconds() {
         assert_eq!(codex_window_label(Some(18_000)), "5h");
         assert_eq!(codex_window_label(Some(604_800)), "weekly");
@@ -869,6 +967,7 @@ mod tests {
         let codex = CodexUsageWire {
             plan_type: None,
             rate_limit: None,
+            spend_control: None,
         };
         assert!(parse_codex(&codex).is_none());
     }
