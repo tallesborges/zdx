@@ -10,7 +10,7 @@ static TEST_MUTEX: Mutex<()> = Mutex::new(());
 /// Acquires a process-wide mutex, creates a `TempDir`, sets `ZDX_HOME`, and resets
 /// `thread_index` caches. On `Drop`, it resets the cache again and restores the
 /// previous `ZDX_HOME` environment variable before releasing the lock and deleting `temp`.
-pub(crate) struct TestZdxHomeGuard {
+pub struct TestZdxHomeGuard {
     temp: TempDir,
     prev_zdx_home: Option<OsString>,
     _lock_guard: MutexGuard<'static, ()>,
@@ -37,7 +37,7 @@ impl Drop for TestZdxHomeGuard {
 }
 
 /// Returns an isolated RAII test environment.
-pub(crate) fn temp_zdx_home() -> TestZdxHomeGuard {
+pub fn temp_zdx_home() -> TestZdxHomeGuard {
     let guard = TEST_MUTEX
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);

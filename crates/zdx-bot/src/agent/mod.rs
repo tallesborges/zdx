@@ -692,6 +692,10 @@ mod tests {
 
     #[test]
     fn orchestrator_turn_renders_project_context_and_pins_tools() {
+        // A persistent profile renders a recent-activity block, which lists
+        // threads. Without an isolated home that runs against the developer's
+        // real ~/.zdx and can rebuild their live thread index.
+        let _home = zdx_engine::test_support::temp_zdx_home();
         let dir = make_temp_dir();
         std::fs::write(dir.join("AGENTS.md"), "Orchestrator project note").unwrap();
 

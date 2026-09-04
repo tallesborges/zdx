@@ -49,6 +49,12 @@ rusqlite = { version = "0.40.1", features = ["bundled"] }
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
+[features]
+# Exposes `test_support` (isolated ZDX_HOME guard) to other crates.
+# Without it, a test that reaches thread listing runs against the developer's
+# real ~/.zdx and can rebuild their live thread index.
+testing = []
+
 [dev-dependencies]
 bytes.workspace = true
 futures-util.workspace = true

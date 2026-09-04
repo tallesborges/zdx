@@ -19,7 +19,7 @@ pub mod providers;
 pub mod service;
 pub mod skills;
 pub mod subagents;
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub mod test_support;
 pub mod tools;
 pub mod tracing_init;
