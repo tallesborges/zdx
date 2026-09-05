@@ -341,6 +341,11 @@ impl WorkerManager {
 
         let mut thread = thread_persistence::Thread::new_with_root(&root)
             .context("Failed to create worker thread")?;
+        // The owning orchestrator is the worker's parent (lineage only: no
+        // `origin_kind`, so the worker stays a visible top-level thread).
+        // Persisted so surfaces can link back to the orchestrator after a
+        // restart, when the manager no longer knows the owner.
+        thread.set_origin(None, Some(owner_thread_id.to_string()), None);
         // Write the meta line now so the worker thread exists on disk (visible
         // in listings, re-attachable after restart) before the first turn runs.
         thread
@@ -1029,6 +1034,8 @@ mod tests {
             .unwrap()
             .expect("worker thread persisted");
         assert!(summary.origin_kind.is_none());
+        assert_eq!(summary.parent_thread_id.as_deref(), Some("owner-thread"));
+        assert!(!summary.is_child_run());
         assert_eq!(summary.title.as_deref(), Some("Worker A"));
         assert!(summary.root_path.is_some());
 

@@ -137,18 +137,53 @@ async fn header_text(context: &BotContext, chat_id: i64, thread_id: &str) -> Res
 }
 
 fn header_keyboard(context: &BotContext, chat_id: i64, thread_id: &str) -> InlineKeyboardMarkup {
+    let mini_app_url = super::mini_app_base_url(context, chat_id);
+    let orchestrator_url = orchestrator_link(thread_id, mini_app_url.as_deref());
     header_keyboard_for_url(
-        super::mini_app_base_url(context, chat_id).as_deref(),
+        mini_app_url.as_deref(),
         thread_id,
+        orchestrator_url.as_deref(),
     )
 }
 
-fn header_keyboard_for_url(mini_app_url: Option<&str>, thread_id: &str) -> InlineKeyboardMarkup {
+/// Link back to the orchestrator that owns `thread_id`, for worker threads:
+/// the owner is the worker's persisted parent, linked as its Telegram topic
+/// when it has one, else opened in the Mini App. `None` for non-workers and
+/// when neither link form exists.
+fn orchestrator_link(thread_id: &str, mini_app_url: Option<&str>) -> Option<String> {
+    let parent = thread_persistence::read_thread_summary(thread_id)
+        .ok()
+        .flatten()?
+        .parent_thread_id?;
+    let is_orchestrator = thread_persistence::read_persistent_profile(&parent)
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME);
+    if !is_orchestrator {
+        return None;
+    }
+    super::parse_topic_thread_id(&parent)
+        .and_then(|(chat, topic)| crate::telegram::topic_link(chat, topic))
+        .or_else(|| mini_app_url.map(|base| format!("{base}?startapp={parent}")))
+}
+
+fn header_keyboard_for_url(
+    mini_app_url: Option<&str>,
+    thread_id: &str,
+    orchestrator_url: Option<&str>,
+) -> InlineKeyboardMarkup {
     let mut rows = Vec::new();
     if let Some(mini_app_url) = mini_app_url {
         rows.push(vec![InlineKeyboardButton::url(
             "💬 Open Thread",
             format!("{mini_app_url}?startapp={thread_id}"),
+        )]);
+    }
+    if let Some(orchestrator_url) = orchestrator_url {
+        rows.push(vec![InlineKeyboardButton::url(
+            "🎛 Open orchestrator",
+            orchestrator_url,
         )]);
     }
     rows.push(vec![InlineKeyboardButton::callback(
@@ -163,8 +198,11 @@ fn header_keyboard_for_url(mini_app_url: Option<&str>, thread_id: &str) -> Inlin
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
+    use zdx_engine::core::thread_persistence::Thread;
 
-    use super::{REFRESH_CALLBACK, header_keyboard_for_url, is_message_not_modified};
+    use super::{
+        REFRESH_CALLBACK, header_keyboard_for_url, is_message_not_modified, orchestrator_link,
+    };
 
     #[test]
     fn refresh_callback_fits_telegram_limit() {
@@ -173,8 +211,11 @@ mod tests {
 
     #[test]
     fn configured_header_opens_effective_thread_and_refreshes() {
-        let keyboard =
-            header_keyboard_for_url(Some("https://t.me/zdx_bot/threads"), "source-thread-id");
+        let keyboard = header_keyboard_for_url(
+            Some("https://t.me/zdx_bot/threads"),
+            "source-thread-id",
+            None,
+        );
         assert_eq!(keyboard.inline_keyboard.len(), 2);
         assert_eq!(
             keyboard.inline_keyboard[0][0].url.as_deref(),
@@ -187,13 +228,70 @@ mod tests {
     }
 
     #[test]
+    fn worker_header_links_back_to_its_orchestrator() {
+        let keyboard = header_keyboard_for_url(
+            Some("https://t.me/zdx_bot/threads"),
+            "worker-id",
+            Some("https://t.me/c/1/2"),
+        );
+        assert_eq!(keyboard.inline_keyboard.len(), 3);
+        assert_eq!(keyboard.inline_keyboard[1][0].text, "🎛 Open orchestrator");
+        assert_eq!(
+            keyboard.inline_keyboard[1][0].url.as_deref(),
+            Some("https://t.me/c/1/2")
+        );
+    }
+
+    #[test]
     fn unconfigured_header_still_refreshes() {
-        let keyboard = header_keyboard_for_url(None, "thread-id");
+        let keyboard = header_keyboard_for_url(None, "thread-id", None);
         assert_eq!(keyboard.inline_keyboard.len(), 1);
         assert_eq!(
             keyboard.inline_keyboard[0][0].callback_data.as_deref(),
             Some(REFRESH_CALLBACK)
         );
+    }
+
+    /// Only a worker whose persisted parent is an orchestrator gets the
+    /// back-link: a group topic parent links as its `t.me/c` topic, a DM
+    /// parent falls back to the Mini App, and a non-orchestrator parent
+    /// (e.g. a subagent child) yields nothing.
+    #[test]
+    fn orchestrator_link_follows_the_persisted_parent() {
+        let _home = zdx_engine::test_support::temp_zdx_home();
+        let group_home = "telegram--1001234567890-topic-17771";
+        let dm_home = "telegram-5678901234-topic-3088";
+        for home in [group_home, dm_home] {
+            let mut thread = Thread::with_id(home.to_string()).unwrap();
+            thread
+                .set_persistent_profile(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME)
+                .unwrap();
+        }
+        let mut plain = Thread::with_id("plain-parent".to_string()).unwrap();
+        plain.set_root_path(std::path::Path::new("/tmp")).unwrap();
+
+        let worker_of = |parent: &str| {
+            let mut thread = Thread::with_id(format!("worker-of-{parent}")).unwrap();
+            thread.set_origin(None, Some(parent.to_string()), None);
+            thread.set_root_path(std::path::Path::new("/tmp")).unwrap();
+            thread.id
+        };
+        let mini_app = Some("https://t.me/zdx_bot/app");
+
+        assert_eq!(
+            orchestrator_link(&worker_of(group_home), mini_app).as_deref(),
+            Some("https://t.me/c/1234567890/17771")
+        );
+        assert_eq!(
+            orchestrator_link(&worker_of(dm_home), mini_app).as_deref(),
+            Some("https://t.me/zdx_bot/app?startapp=telegram-5678901234-topic-3088")
+        );
+        assert_eq!(orchestrator_link(&worker_of(dm_home), None), None);
+        assert_eq!(
+            orchestrator_link(&worker_of("plain-parent"), mini_app),
+            None
+        );
+        assert_eq!(orchestrator_link("no-such-thread", mini_app), None);
     }
 
     #[test]
