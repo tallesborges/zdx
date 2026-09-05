@@ -562,7 +562,7 @@ pub(crate) fn build_user_text(incoming: &IncomingMessage) -> String {
         if let Some(transcript) = &audio.transcript {
             parts.push(zdx_engine::providers::wrap_voice_transcript(transcript));
             parts.push(format!(
-                "(Audio file saved at {} — use `zdx ask-media` on it if you need more than the transcript.)",
+                "(Audio file saved at {} — use the `ask_media` tool on it if you need more than the transcript.)",
                 audio.local_path.display()
             ));
         } else {
@@ -582,7 +582,7 @@ pub(crate) fn build_user_text(incoming: &IncomingMessage) -> String {
 
     for doc in &incoming.documents {
         parts.push(format!(
-            "Document attachment '{}' saved at {}.",
+            "Document attachment '{}' saved at {} — use the `ask_media` tool on it to read its contents.",
             doc.file_name,
             doc.local_path.display()
         ));

@@ -944,6 +944,7 @@ mod tests {
             "read",
             "grep",
             "glob",
+            "ask_media",
             "create_thread",
             "send_thread_message",
             "get_thread_status",

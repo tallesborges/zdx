@@ -7,6 +7,7 @@
 pub use zdx_tools::{apply_patch, bash, edit, fetch_webpage, glob, grep, read, web_search, write};
 
 // Engine-backed tools (need full ToolContext with config, threads, etc.)
+pub mod ask_media;
 pub mod background;
 pub mod memory_search;
 pub mod orchestrator;
@@ -160,6 +161,7 @@ impl ToolSet {
                 "bash",
                 "background_output",
                 "background_kill",
+                "ask_media",
                 "edit",
                 "fetch_webpage",
                 "glob",
@@ -178,6 +180,7 @@ impl ToolSet {
                 "background_output",
                 "background_kill",
                 "apply_patch",
+                "ask_media",
                 "fetch_webpage",
                 "glob",
                 "grep",
@@ -365,6 +368,7 @@ impl ToolRegistry {
         self.register_tool(ApplyPatch);
         self.register_tool(Edit);
         self.register_tool(Read);
+        self.register_tool(AskMedia);
         self.register_tool(MemorySearch);
         self.register_tool(ReadThread);
         self.register_tool(TodoWrite);
@@ -538,6 +542,18 @@ impl Tool for Glob {
         let input = input.clone();
         let ctx = ctx.clone();
         Box::pin(async move { execute_glob(&input, &ctx.as_leaf()).await })
+    }
+}
+
+struct AskMedia;
+impl Tool for AskMedia {
+    fn definition(&self) -> ToolDefinition {
+        ask_media::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { ask_media::execute(&input, &ctx).await })
     }
 }
 
@@ -940,6 +956,7 @@ mod tests {
         // Verify all expected tools are present
         assert!(names.contains(&"bash".to_string()));
         assert!(names.contains(&"apply_patch".to_string()));
+        assert!(names.contains(&"ask_media".to_string()));
         assert!(names.contains(&"edit".to_string()));
         assert!(names.contains(&"fetch_webpage".to_string()));
         assert!(names.contains(&"invoke_subagent".to_string()));
@@ -960,6 +977,7 @@ mod tests {
         let names: Vec<_> = tools.iter().map(|t| t.name.to_lowercase()).collect();
         assert!(names.contains(&"bash".to_string()));
         assert!(names.contains(&"apply_patch".to_string()));
+        assert!(names.contains(&"ask_media".to_string()));
         assert!(names.contains(&"edit".to_string()));
         assert!(names.contains(&"fetch_webpage".to_string()));
         assert!(names.contains(&"invoke_subagent".to_string()));

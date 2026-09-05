@@ -3,14 +3,15 @@
 //! Some chat models (e.g. `deepseek:deepseek-v4-flash`) have no vision path:
 //! sending image bytes either errors or is silently dropped by the provider.
 //! Instead of shipping bytes the model cannot read, the engine swaps every
-//! image block for a text note pointing at `zdx ask-media`, which the model can
-//! call with a question it writes itself for whatever it actually needs.
+//! image block for a text note pointing at the `ask_media` tool, which the
+//! model can call with a question it writes itself for whatever it actually
+//! needs.
 
 use zdx_types::{ToolResultBlock, ToolResultContent};
 
 use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
 
-const IMAGE_NOTE: &str = "[Image omitted: the active model cannot read images. To inspect it, run `zdx ask-media <path> -p \"<question>\"` (see the `ask-media` skill) with a question written for what you need from this image. The file path is in the surrounding text or tool output.]";
+const IMAGE_NOTE: &str = "[Image omitted: the active model cannot read images. To inspect it, call the `ask_media` tool with the file path and a question written for what you need from this image. The file path is in the surrounding text or tool output.]";
 
 /// Replaces every image block with [`IMAGE_NOTE`], in user content and in tool
 /// results, and returns how many images were replaced.
@@ -107,7 +108,7 @@ mod tests {
         );
         assert!(matches!(
             &blocks[1],
-            ChatContentBlock::Text { text, .. } if text.contains("zdx ask-media")
+            ChatContentBlock::Text { text, .. } if text.contains("ask_media")
         ));
     }
 
@@ -141,7 +142,7 @@ mod tests {
         assert_eq!(result_blocks.len(), 1);
         let text = result.content.as_text().unwrap();
         assert!(text.starts_with("{\"file_path\""));
-        assert!(text.contains("zdx ask-media"));
+        assert!(text.contains("ask_media"));
     }
 
     #[test]

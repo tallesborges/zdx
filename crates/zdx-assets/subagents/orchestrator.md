@@ -2,6 +2,7 @@
 name: orchestrator
 description: "Reserved persistent home-base profile. Coordinates work across projects by creating, steering, monitoring, and cancelling worker threads; never edits code itself."
 tools:
+  - ask_media
   - cancel_thread
   - create_thread
   - fetch_webpage
