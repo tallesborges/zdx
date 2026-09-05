@@ -286,12 +286,24 @@ pub fn fallback_capability_catalog(delegation_enabled: bool) -> Vec<CapabilityDe
 
 /// Loads a single subagent by name.
 ///
+/// The reserved `orchestrator` profile is not loadable here: it is a
+/// persistent home-base profile, not a delegable subagent, and is resolved
+/// only through [`load_builtin_orchestrator`]. Rejecting it at this chokepoint
+/// makes it uninvokable through `invoke_subagent`, `zdx exec --subagent`, and
+/// automation `subagent:` frontmatter alike, rather than merely hidden from
+/// the advertised catalog.
+///
 /// # Errors
-/// Returns an error if the named subagent is missing or invalid.
+/// Returns an error if the named subagent is missing, reserved, or invalid.
 pub fn load_by_name(root: &Path, name: &str) -> Result<SubagentDefinition> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         bail!("Subagent name cannot be empty");
+    }
+    if trimmed.eq_ignore_ascii_case(ORCHESTRATOR_SUBAGENT_NAME) {
+        bail!(
+            "Subagent '{trimmed}' is a reserved persistent profile and cannot be invoked as a subagent"
+        );
     }
 
     discover(root)?
@@ -842,19 +854,18 @@ mod tests {
     }
 
     #[test]
-    fn builtin_orchestrator_restricts_delegation_to_explorer() {
+    fn builtin_orchestrator_grants_no_subagent_access() {
         let definition = load_builtin_orchestrator().unwrap();
-        let allowed = definition
-            .allowed_subagents
-            .expect("orchestrator restricts delegation");
-        assert_eq!(allowed, vec!["explorer".to_string()]);
+        assert!(
+            definition.allowed_subagents.is_none(),
+            "orchestrator declares no subagent allowlist"
+        );
     }
 
     #[test]
-    fn orchestrator_cannot_reach_task_or_oracle_at_execute_time() {
+    fn allowed_subagents_restricts_resolution_and_blocks_the_task_fallback() {
         let root = tempdir().unwrap();
-        let definition = load_builtin_orchestrator().unwrap();
-        let allowed = definition.allowed_subagents.unwrap();
+        let allowed = vec!["explorer".to_string()];
 
         // Omitting `subagent` must not fall back to the default coding agent.
         assert!(resolve_runtime_selection(root.path(), None, Some(&allowed)).is_err());
@@ -865,6 +876,38 @@ mod tests {
             resolve_runtime_selection(root.path(), Some("explorer"), Some(&allowed)).unwrap();
         assert!(
             matches!(selection, RuntimeSubagentSelection::Named(def) if def.name == "explorer")
+        );
+
+        // Unrestricted callers keep the implicit `task` default.
+        assert_eq!(
+            resolve_runtime_selection(root.path(), None, None).unwrap(),
+            RuntimeSubagentSelection::Default
+        );
+    }
+
+    #[test]
+    fn orchestrator_is_not_invokable_as_a_subagent() {
+        let root = tempdir().unwrap();
+
+        // Reserved at the load chokepoint, so `invoke_subagent`, `zdx exec
+        // --subagent`, and automation frontmatter are all covered.
+        let err = load_by_name(root.path(), "orchestrator").unwrap_err();
+        assert!(
+            format!("{err:#}").contains("reserved persistent profile"),
+            "unexpected error: {err:#}"
+        );
+
+        for name in ["orchestrator", "Orchestrator"] {
+            assert!(
+                resolve_runtime_selection(root.path(), Some(name), None).is_err(),
+                "{name} must not resolve"
+            );
+        }
+
+        // The bot's own profile resolution is unaffected.
+        assert_eq!(
+            load_builtin_orchestrator().unwrap().name,
+            ORCHESTRATOR_SUBAGENT_NAME
         );
     }
 
@@ -901,7 +944,6 @@ mod tests {
             "read",
             "grep",
             "glob",
-            "invoke_subagent",
             "create_thread",
             "send_thread_message",
             "get_thread_status",
@@ -922,6 +964,7 @@ mod tests {
             "edit",
             "write",
             "apply_patch",
+            "invoke_subagent",
             "background_output",
             "background_kill",
         ] {

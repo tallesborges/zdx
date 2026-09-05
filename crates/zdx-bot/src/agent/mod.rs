@@ -733,12 +733,10 @@ mod tests {
         assert!(tools.contains(&"create_thread".to_string()));
         assert!(!tools.contains(&"write".to_string()));
         assert!(!tools.contains(&"bash".to_string()));
+        assert!(!tools.contains(&"invoke_subagent".to_string()));
 
-        // SPEC §18: delegation is restricted to explorer, carried onto the turn.
-        assert_eq!(
-            prepared.allowed_subagents,
-            Some(vec!["explorer".to_string()])
-        );
+        // SPEC §18: the home base delegates to visible workers, not subagents.
+        assert_eq!(prepared.allowed_subagents, None);
 
         std::fs::remove_dir_all(dir).unwrap();
     }
