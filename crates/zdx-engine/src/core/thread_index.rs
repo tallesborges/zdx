@@ -38,12 +38,11 @@ use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde::Serialize;
 
 use crate::config;
-use crate::core::thread_export::{self, EXPORT_FORMAT_VERSION};
 use crate::core::thread_persistence::{
     self, ThreadEvent, ThreadSearchOptions, ThreadSearchResult, ThreadSummary, ThreadToolMatch,
     ThreadToolSearchOptions,
 };
-use crate::core::{fts_query, recency};
+use crate::core::{fts_query, recency, thread_export};
 
 const SCHEMA_VERSION: &str = "5";
 
@@ -66,15 +65,10 @@ CREATE TABLE IF NOT EXISTS thread_meta (
     alias_to TEXT,
     worker_topic INTEGER NOT NULL DEFAULT 0
 );
-CREATE TABLE IF NOT EXISTS thread_export_state (
-    thread_id TEXT PRIMARY KEY,
-    source_mtime_ns INTEGER NOT NULL,
-    source_size INTEGER NOT NULL,
-    export_mtime_ns INTEGER,
-    export_size INTEGER,
-    export_format_version TEXT,
-    dirty INTEGER NOT NULL DEFAULT 1
-);
+-- Export freshness is derived from the export files themselves, so no table
+-- records it. Dropped in place rather than via a SCHEMA_VERSION bump, which
+-- would cost a full corpus rebuild to delete one unused table.
+DROP TABLE IF EXISTS thread_export_state;
 CREATE VIRTUAL TABLE IF NOT EXISTS thread_fts USING fts5(
     title,
     text,
@@ -943,124 +937,58 @@ fn index_one_thread(
             ])?;
         }
     }
-
-    conn.execute(
-        "INSERT INTO thread_export_state(thread_id, source_mtime_ns, source_size, dirty)
-         VALUES(?1, ?2, ?3, 1)
-         ON CONFLICT(thread_id) DO UPDATE SET
-           source_mtime_ns=excluded.source_mtime_ns,
-           source_size=excluded.source_size,
-           dirty=1",
-        params![thread.id, mtime_ns, size],
-    )?;
     Ok(())
 }
 
 fn delete_thread_rows(conn: &Connection, thread_id: &str, doc_id: i64) -> Result<()> {
     conn.execute("DELETE FROM thread_meta WHERE doc_id = ?1", [doc_id])?;
     conn.execute("DELETE FROM thread_fts WHERE rowid = ?1", [doc_id])?;
-    conn.execute(
-        "DELETE FROM thread_export_state WHERE thread_id = ?1",
-        [thread_id],
-    )?;
     conn.execute("DELETE FROM thread_tool WHERE thread_id = ?1", [thread_id])?;
     Ok(())
 }
 
-#[derive(Debug)]
-struct ExportCandidate {
-    thread_id: String,
-    source_mtime_ns: i64,
-    source_size: i64,
-    export_format_version: Option<String>,
-    dirty: Option<i64>,
-}
-
-/// Exports thread transcripts selected by `threads.sqlite` dirty state.
+/// Exports transcripts for threads the index knows about.
 ///
-/// A thread is exported when it is forced, dirty, missing its export file, has
-/// no export state row, or was exported with a different format version. The
-/// dirty flag is cleared only after re-statting the source and proving its
-/// `(mtime,size)` token did not change during export.
+/// The index supplies the candidate list (cheap and already ordered); whether
+/// each one needs writing is decided from the files on disk, the same rule
+/// `zdx threads export` uses. Nothing about export freshness is stored in
+/// `threads.sqlite`, so wiping that cache — as a `SCHEMA_VERSION` bump does —
+/// cannot invent a backlog for the memory indexer to chew through.
 fn export_threads_from_cache(
     conn: &Connection,
     force: bool,
 ) -> Result<thread_export::ThreadExportSummary> {
-    let candidates: Vec<ExportCandidate> = {
-        let mut stmt = conn.prepare(
-            "SELECT m.thread_id, m.mtime_ns, m.size, s.export_format_version, s.dirty
-             FROM thread_meta m
-             LEFT JOIN thread_export_state s ON s.thread_id = m.thread_id
-             WHERE m.origin_kind IS NULL",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(ExportCandidate {
-                thread_id: row.get(0)?,
-                source_mtime_ns: row.get(1)?,
-                source_size: row.get(2)?,
-                export_format_version: row.get(3)?,
-                dirty: row.get(4)?,
-            })
-        })?;
+    // A format bump is the only thing that forces a full pass; per-thread
+    // freshness is decided by comparing the `.md` to its `.jsonl`.
+    let options = thread_export::ThreadExportOptions {
+        force: force || !thread_export::exports_match_current_format(),
+        dry_run: false,
+    };
+
+    let candidates: Vec<(String, i64)> = {
+        let mut stmt =
+            conn.prepare("SELECT thread_id, mtime_ns FROM thread_meta WHERE origin_kind IS NULL")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
 
-    let export_dir = config::paths::thread_exports_dir();
-    let threads_dir = config::paths::threads_dir();
     let mut summary = thread_export::ThreadExportSummary::default();
     let mut thread_ids = HashSet::with_capacity(candidates.len());
-    let mut upsert_state = conn.prepare_cached(
-        "INSERT INTO thread_export_state(
-            thread_id, source_mtime_ns, source_size, export_mtime_ns, export_size,
-            export_format_version, dirty
-         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)
-         ON CONFLICT(thread_id) DO UPDATE SET
-           source_mtime_ns=excluded.source_mtime_ns, source_size=excluded.source_size,
-           export_mtime_ns=excluded.export_mtime_ns, export_size=excluded.export_size,
-           export_format_version=excluded.export_format_version, dirty=excluded.dirty",
-    )?;
 
-    for candidate in &candidates {
-        thread_ids.insert(candidate.thread_id.clone());
-        let export_path = export_dir.join(format!("{}.md", candidate.thread_id));
-        let needs_export = force
-            || candidate.dirty.unwrap_or(1) != 0
-            || candidate.export_format_version.as_deref() != Some(EXPORT_FORMAT_VERSION)
-            || !export_path.exists();
-        if !needs_export {
-            summary.skipped += 1;
-            continue;
+    for (thread_id, mtime_ns) in candidates {
+        let source_modified = system_time_from_nanos(mtime_ns);
+        thread_ids.insert(thread_id.clone());
+        match thread_export::export_one_incremental(&thread_id, source_modified, options) {
+            Ok(thread_export::ExportAction::Exported) => summary.exported += 1,
+            Ok(thread_export::ExportAction::Skipped) => summary.skipped += 1,
+            Err(_) => summary.failed += 1,
         }
-
-        let Ok(export_path) = thread_export::export_thread(&candidate.thread_id) else {
-            summary.failed += 1;
-            continue;
-        };
-        summary.exported += 1;
-
-        let source_meta =
-            fs::metadata(threads_dir.join(format!("{}.jsonl", candidate.thread_id))).ok();
-        let source_mtime_ns = mtime_nanos(source_meta.as_ref().and_then(|m| m.modified().ok()));
-        let source_size = source_meta
-            .as_ref()
-            .map_or(0, |m| i64::try_from(m.len()).unwrap_or(i64::MAX));
-        let source_unchanged =
-            source_mtime_ns == candidate.source_mtime_ns && source_size == candidate.source_size;
-        let export_meta = fs::metadata(&export_path).ok();
-        upsert_state.execute(params![
-            candidate.thread_id,
-            candidate.source_mtime_ns,
-            candidate.source_size,
-            export_meta.as_ref().map(|m| mtime_nanos(m.modified().ok())),
-            export_meta
-                .as_ref()
-                .map(|m| i64::try_from(m.len()).unwrap_or(i64::MAX)),
-            EXPORT_FORMAT_VERSION,
-            i64::from(!source_unchanged),
-        ])?;
     }
 
     thread_export::remove_orphan_exports(&thread_ids, false, &mut summary)?;
+    if summary.failed == 0 {
+        thread_export::write_format_stamp();
+    }
     Ok(summary)
 }
 

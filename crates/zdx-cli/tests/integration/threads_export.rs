@@ -215,7 +215,9 @@ fn test_memory_index_second_run_reads_no_unchanged_thread_files() {
     assert_eq!(second["thread_exports"]["exported"], 0);
     assert_eq!(second["thread_exports"]["skipped"], 1);
 
-    // Deleting the derived cache rebuilds it and re-exports without data loss.
+    // Deleting the derived cache rebuilds it without inventing export work:
+    // the transcript on disk is still current, so it is skipped, and search
+    // still resolves it afterwards.
     fs::remove_file(temp_dir.path().join("cache").join("threads.sqlite")).unwrap();
     let rebuilt = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())
@@ -224,7 +226,8 @@ fn test_memory_index_second_run_reads_no_unchanged_thread_files() {
         .success();
     let rebuilt: serde_json::Value = serde_json::from_slice(&rebuilt.get_output().stdout).unwrap();
     assert_eq!(rebuilt["thread_cache"]["metas_read"], 1);
-    assert_eq!(rebuilt["thread_exports"]["exported"], 1);
+    assert_eq!(rebuilt["thread_exports"]["exported"], 0);
+    assert_eq!(rebuilt["thread_exports"]["skipped"], 1);
 
     crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", temp_dir.path())

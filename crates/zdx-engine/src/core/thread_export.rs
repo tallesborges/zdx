@@ -19,6 +19,34 @@ use crate::core::thread_persistence::{self, ThreadEvent};
 /// thread index re-export every transcript without `--force`.
 pub(crate) const EXPORT_FORMAT_VERSION: &str = "thread-md-v1";
 
+/// Records which format produced the exports currently on disk.
+///
+/// Freshness of an individual export is a filesystem question (is the `.md`
+/// newer than its `.jsonl`), so the only thing that needs recording is the
+/// format the whole directory was written in. Keeping it as a file beside the
+/// exports means no derived database can lose it, and a format bump still
+/// re-exports everything exactly once.
+fn format_stamp_path() -> PathBuf {
+    thread_exports_dir().join(".export-format")
+}
+
+/// Whether the exports on disk were produced by [`EXPORT_FORMAT_VERSION`].
+///
+/// An unreadable or absent stamp reports `false`, which forces one full
+/// re-export and then writes the stamp.
+pub(crate) fn exports_match_current_format() -> bool {
+    fs::read_to_string(format_stamp_path()).is_ok_and(|tag| tag.trim() == EXPORT_FORMAT_VERSION)
+}
+
+/// Records the current format tag after a completed (non-dry-run) export pass.
+pub(crate) fn write_format_stamp() {
+    let path = format_stamp_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(path, EXPORT_FORMAT_VERSION);
+}
+
 /// Options for batch thread transcript export.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ThreadExportOptions {
@@ -57,6 +85,10 @@ pub fn export_threads_incremental(options: ThreadExportOptions) -> Result<Thread
     // Full-reconcile path: raw file scan, never writes the thread cache (so
     // dry runs stay write-free).
     let threads = thread_persistence::list_threads_scan().context("list threads for export")?;
+    let options = ThreadExportOptions {
+        force: options.force || !exports_match_current_format(),
+        ..options
+    };
     let mut summary = ThreadExportSummary::default();
     let mut thread_ids = HashSet::with_capacity(threads.len());
 
@@ -70,6 +102,10 @@ pub fn export_threads_incremental(options: ThreadExportOptions) -> Result<Thread
     }
 
     remove_orphan_exports(&thread_ids, options.dry_run, &mut summary)?;
+
+    if !options.dry_run && summary.failed == 0 {
+        write_format_stamp();
+    }
 
     Ok(summary)
 }
@@ -238,12 +274,17 @@ fn write_thread_export(thread_id: &str, markdown: &str) -> Result<PathBuf> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExportAction {
+pub(crate) enum ExportAction {
     Exported,
     Skipped,
 }
 
-fn export_one_incremental(
+/// Exports one thread unless its `.md` is already newer than its `.jsonl`.
+///
+/// This is the single freshness rule for both export paths: the answer comes
+/// from the two files themselves, so it cannot drift from, or be lost with, a
+/// derived database.
+pub(crate) fn export_one_incremental(
     thread_id: &str,
     source_modified: Option<std::time::SystemTime>,
     options: ThreadExportOptions,
@@ -283,6 +324,67 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// Wiping the derived thread index must not resurrect exports that are
+    /// already current on disk. A rebuild used to hand the memory indexer
+    /// thousands of stale-dirty threads because export bookkeeping lived in the
+    /// file the rebuild deletes.
+    #[test]
+    fn rebuilding_the_thread_index_does_not_make_current_exports_stale() {
+        let _home = crate::test_support::temp_zdx_home();
+
+        let thread_id = format!("export-fresh-{}", uuid::Uuid::new_v4());
+        let mut thread = thread_persistence::Thread::with_id(thread_id.clone()).unwrap();
+        thread.append(&ThreadEvent::user_message("hello")).unwrap();
+
+        // First pass writes the export and the format stamp.
+        let first = crate::core::thread_index::sync_and_export(false).unwrap().1;
+        assert_eq!(first.exported, 1, "first pass exports the thread");
+        assert!(exports_match_current_format());
+
+        // Delete the whole index file, exactly as a SCHEMA_VERSION bump does.
+        crate::core::thread_index::reset_cache_for_test();
+        let db = crate::core::thread_index::db_path();
+        let _ = fs::remove_file(&db);
+        let _ = fs::remove_file(db.with_extension("sqlite-wal"));
+        let _ = fs::remove_file(db.with_extension("sqlite-shm"));
+
+        let second = crate::core::thread_index::sync_and_export(false).unwrap().1;
+        assert_eq!(
+            second.exported, 0,
+            "a rebuilt index must not re-export an unchanged transcript"
+        );
+        assert_eq!(second.skipped, 1);
+    }
+
+    /// A format bump is the one thing that still re-exports everything.
+    #[test]
+    fn a_missing_format_stamp_forces_one_full_re_export() {
+        let _home = crate::test_support::temp_zdx_home();
+
+        let thread_id = format!("export-format-{}", uuid::Uuid::new_v4());
+        let mut thread = thread_persistence::Thread::with_id(thread_id).unwrap();
+        thread.append(&ThreadEvent::user_message("hi")).unwrap();
+
+        assert_eq!(
+            export_threads_incremental(ThreadExportOptions::default())
+                .unwrap()
+                .exported,
+            1
+        );
+        assert_eq!(
+            export_threads_incremental(ThreadExportOptions::default())
+                .unwrap()
+                .skipped,
+            1,
+            "second pass is a no-op"
+        );
+
+        fs::write(format_stamp_path(), "thread-md-v0").unwrap();
+        let after_bump = export_threads_incremental(ThreadExportOptions::default()).unwrap();
+        assert_eq!(after_bump.exported, 1, "a format change re-exports");
+        assert!(exports_match_current_format(), "stamp is rewritten");
+    }
 
     #[test]
     fn formats_user_and_assistant_messages_only() {
