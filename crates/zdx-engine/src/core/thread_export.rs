@@ -32,10 +32,18 @@ fn format_stamp_path() -> PathBuf {
 
 /// Whether the exports on disk were produced by [`EXPORT_FORMAT_VERSION`].
 ///
-/// An unreadable or absent stamp reports `false`, which forces one full
-/// re-export and then writes the stamp.
+/// A missing stamp adopts whatever is on disk instead of forcing a rebuild:
+/// per-file freshness is already decided by comparing the `.md` to its
+/// `.jsonl`, so forcing here would re-export the whole corpus the first time a
+/// home without a stamp is indexed — and rewriting every transcript is exactly
+/// the pointless backlog this design exists to prevent. Only a stamp that
+/// disagrees means the format actually changed. `--force` covers the gap for
+/// exports predating the stamp.
 pub(crate) fn exports_match_current_format() -> bool {
-    fs::read_to_string(format_stamp_path()).is_ok_and(|tag| tag.trim() == EXPORT_FORMAT_VERSION)
+    match fs::read_to_string(format_stamp_path()) {
+        Ok(tag) => tag.trim() == EXPORT_FORMAT_VERSION,
+        Err(_) => true,
+    }
 }
 
 /// Records the current format tag after a completed (non-dry-run) export pass.
@@ -357,9 +365,9 @@ mod tests {
         assert_eq!(second.skipped, 1);
     }
 
-    /// A format bump is the one thing that still re-exports everything.
+    /// A changed format tag re-exports everything; a missing one does not.
     #[test]
-    fn a_missing_format_stamp_forces_one_full_re_export() {
+    fn a_changed_format_stamp_forces_one_full_re_export() {
         let _home = crate::test_support::temp_zdx_home();
 
         let thread_id = format!("export-format-{}", uuid::Uuid::new_v4());
@@ -380,6 +388,18 @@ mod tests {
             "second pass is a no-op"
         );
 
+        // A home whose exports predate the stamp must adopt them, not rewrite
+        // the corpus.
+        fs::remove_file(format_stamp_path()).unwrap();
+        let adopted = export_threads_incremental(ThreadExportOptions::default()).unwrap();
+        assert_eq!(
+            adopted.exported, 0,
+            "a missing stamp adopts current exports"
+        );
+        assert_eq!(adopted.skipped, 1);
+        assert!(exports_match_current_format(), "stamp is rewritten");
+
+        // A stamp that disagrees means the format really changed.
         fs::write(format_stamp_path(), "thread-md-v0").unwrap();
         let after_bump = export_threads_incremental(ThreadExportOptions::default()).unwrap();
         assert_eq!(after_bump.exported, 1, "a format change re-exports");
