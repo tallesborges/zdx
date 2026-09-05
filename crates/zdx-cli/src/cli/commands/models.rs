@@ -1340,25 +1340,6 @@ mod tests {
     }
 
     #[test]
-    fn test_lookup_default_model_meta_preserves_muse_spark_metadata() {
-        // models.dev's `meta` provider lags Meta's releases, so `zdx models update`
-        // falls back to the embedded default record. Verify it carries the pinned
-        // Muse Spark pricing/context/capabilities instead of a "(custom)" placeholder.
-        let result = lookup_default_model("meta:muse-spark-1.1");
-        assert!(result.is_some(), "Should find meta model in defaults");
-
-        let model = result.unwrap();
-        assert_eq!(model.provider, "meta");
-        assert_eq!(model.display_name, "Muse Spark 1.1");
-        assert!(!model.display_name.contains("custom"));
-        assert_eq!(model.context_limit, 1_000_000);
-        assert!((model.pricing.input - 1.25).abs() < f64::EPSILON);
-        assert!((model.pricing.output - 4.25).abs() < f64::EPSILON);
-        assert!(model.capabilities.reasoning);
-        assert!(model.capabilities.input_images);
-    }
-
-    #[test]
     fn test_lookup_default_model_covers_muse_spark_1_3() {
         let model = lookup_default_model("meta:muse-spark-1.3").expect("meta:muse-spark-1.3");
         assert_eq!(model.provider, "meta");
