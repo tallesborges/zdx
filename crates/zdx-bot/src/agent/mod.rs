@@ -114,6 +114,8 @@ struct PreparedBotTurn {
     system_prompt: Option<String>,
     /// Explicit tool allowlist for persistent-profile turns (orchestrator).
     tools_override: Option<Vec<String>>,
+    /// Subagents `invoke_subagent` may reach on this turn; `None` is unrestricted.
+    allowed_subagents: Option<Vec<String>>,
 }
 
 fn bot_prompt_context() -> PromptContextInclusion {
@@ -154,6 +156,7 @@ fn prepare_bot_turn(
         config: bot_config,
         system_prompt: effective.prompt,
         tools_override: None,
+        allowed_subagents: None,
     })
 }
 
@@ -206,6 +209,7 @@ fn prepare_persistent_profile_turn(
         config: config.clone(),
         system_prompt: Some(prompt),
         tools_override: Some(tools),
+        allowed_subagents: definition.allowed_subagents.clone(),
     })
 }
 
@@ -456,6 +460,7 @@ pub(crate) fn spawn_agent_turn(
         config: bot_config,
         system_prompt,
         tools_override,
+        allowed_subagents,
     } = prepare_bot_turn(config, root, bot_instruction_layer, persistent_profile)?;
 
     // Persistent-profile turns pin the exact tool selection from the profile
@@ -464,6 +469,7 @@ pub(crate) fn spawn_agent_turn(
         Some(tools) => ToolConfig {
             registry: tool_config.registry.clone(),
             selection: ToolSelection::Explicit(tools),
+            allowed_subagents,
         },
         None => tool_config.clone(),
     };
@@ -726,6 +732,13 @@ mod tests {
         let tools = prepared.tools_override.expect("orchestrator pins tools");
         assert!(tools.contains(&"create_thread".to_string()));
         assert!(!tools.contains(&"write".to_string()));
+        assert!(!tools.contains(&"bash".to_string()));
+
+        // SPEC §18: delegation is restricted to explorer, carried onto the turn.
+        assert_eq!(
+            prepared.allowed_subagents,
+            Some(vec!["explorer".to_string()])
+        );
 
         std::fs::remove_dir_all(dir).unwrap();
     }

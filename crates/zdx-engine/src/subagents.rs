@@ -87,7 +87,7 @@ pub enum RuntimeSubagentSelection {
     /// Use the default delegated ZDX prompt/context behavior.
     Default,
     /// Use a named standalone subagent prompt.
-    Named(SubagentDefinition),
+    Named(Box<SubagentDefinition>),
 }
 
 /// Source location for a subagent definition.
@@ -122,6 +122,13 @@ pub struct SubagentDefinition {
     pub model: Option<String>,
     pub thinking_level: Option<ThinkingLevel>,
     pub tools: Option<Vec<String>>,
+    /// Restricts which subagents this agent may reach via `invoke_subagent`.
+    ///
+    /// `None` means unrestricted (the full discovered catalog plus the `task`
+    /// alias). `Some(list)` is enforced both in the tool schema and at execute
+    /// time, and suppresses the implicit `task` fallback for an omitted
+    /// `subagent` argument.
+    pub allowed_subagents: Option<Vec<String>>,
     pub skills: Option<Vec<String>>,
     pub auto_loaded_skills: Option<Vec<String>>,
     /// Standalone prompt body used as the child subagent system prompt.
@@ -143,6 +150,7 @@ struct SubagentFrontmatter {
     model: Option<String>,
     thinking_level: Option<ThinkingLevel>,
     tools: Option<Vec<String>>,
+    allowed_subagents: Option<Vec<String>>,
     skills: Option<Vec<String>>,
     auto_loaded_skills: Option<Vec<String>>,
 }
@@ -202,18 +210,44 @@ pub fn list_summaries(root: &Path) -> Result<Vec<SubagentSummary>> {
 
 /// Resolves a runtime `subagent` selection, including reserved aliases.
 ///
+/// `allowed` restricts which subagents the caller may reach. When it is
+/// `Some`, an omitted `requested` is an error rather than the implicit `task`
+/// fallback, so a restricted caller cannot reach the default coding agent by
+/// leaving the argument out.
+///
 /// # Errors
-/// Returns an error if a named subagent is requested but missing or invalid.
+/// Returns an error if a named subagent is requested but missing, invalid, or
+/// not permitted for this caller.
 pub fn resolve_runtime_selection(
     root: &Path,
     requested: Option<&str>,
+    allowed: Option<&[String]>,
 ) -> Result<RuntimeSubagentSelection> {
-    match requested.map(str::trim).filter(|name| !name.is_empty()) {
+    let requested = requested.map(str::trim).filter(|name| !name.is_empty());
+
+    if let Some(allowed) = allowed {
+        let listed = allowed.join(", ");
+        let Some(name) = requested else {
+            bail!("subagent is required for this agent; allowed subagent(s): {listed}");
+        };
+        if !allowed
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(name))
+        {
+            bail!(
+                "Subagent '{name}' is not permitted for this agent; allowed subagent(s): {listed}"
+            );
+        }
+    }
+
+    match requested {
         None => Ok(RuntimeSubagentSelection::Default),
         Some(name) if builtin_alias_from_name(name) == Some(BuiltinAlias::Task) => {
             Ok(RuntimeSubagentSelection::Default)
         }
-        Some(name) => load_by_name(root, name).map(RuntimeSubagentSelection::Named),
+        Some(name) => load_by_name(root, name)
+            .map(Box::new)
+            .map(RuntimeSubagentSelection::Named),
     }
 }
 
@@ -566,6 +600,9 @@ fn parse_subagent_content(
         .ok_or_else(|| anyhow::anyhow!("description is required"))?;
     let model = normalize_optional_string(frontmatter.model, "model")?;
     let tools = normalize_tools(frontmatter.tools)?;
+    let allowed_subagents =
+        normalize_named_items(frontmatter.allowed_subagents, "allowed_subagents")?;
+    validate_allowed_subagents(&name, allowed_subagents.as_deref())?;
     let skills = normalize_named_items(frontmatter.skills, "skills")?;
     let auto_loaded_skills =
         normalize_named_items(frontmatter.auto_loaded_skills, "auto_loaded_skills")?;
@@ -581,6 +618,7 @@ fn parse_subagent_content(
         model,
         thinking_level: frontmatter.thinking_level,
         tools,
+        allowed_subagents,
         skills,
         auto_loaded_skills,
         prompt_body,
@@ -689,6 +727,25 @@ fn validate_auto_loaded_skills(
     )
 }
 
+fn validate_allowed_subagents(owner: &str, allowed: Option<&[String]>) -> Result<()> {
+    let Some(allowed) = allowed else {
+        return Ok(());
+    };
+
+    for name in allowed {
+        if name.eq_ignore_ascii_case(owner) {
+            bail!("allowed_subagents cannot list '{owner}' itself");
+        }
+        if name.eq_ignore_ascii_case(ORCHESTRATOR_SUBAGENT_NAME) {
+            bail!(
+                "allowed_subagents cannot list '{ORCHESTRATOR_SUBAGENT_NAME}': it is a reserved profile, not a delegable subagent"
+            );
+        }
+    }
+
+    Ok(())
+}
+
 fn validate_tool_names(tools: &[String]) -> Result<()> {
     let available = crate::tools::all_tool_names();
     let available_set: std::collections::BTreeSet<String> = available
@@ -785,6 +842,55 @@ mod tests {
     }
 
     #[test]
+    fn builtin_orchestrator_restricts_delegation_to_explorer() {
+        let definition = load_builtin_orchestrator().unwrap();
+        let allowed = definition
+            .allowed_subagents
+            .expect("orchestrator restricts delegation");
+        assert_eq!(allowed, vec!["explorer".to_string()]);
+    }
+
+    #[test]
+    fn orchestrator_cannot_reach_task_or_oracle_at_execute_time() {
+        let root = tempdir().unwrap();
+        let definition = load_builtin_orchestrator().unwrap();
+        let allowed = definition.allowed_subagents.unwrap();
+
+        // Omitting `subagent` must not fall back to the default coding agent.
+        assert!(resolve_runtime_selection(root.path(), None, Some(&allowed)).is_err());
+        assert!(resolve_runtime_selection(root.path(), Some("task"), Some(&allowed)).is_err());
+        assert!(resolve_runtime_selection(root.path(), Some("oracle"), Some(&allowed)).is_err());
+
+        let selection =
+            resolve_runtime_selection(root.path(), Some("explorer"), Some(&allowed)).unwrap();
+        assert!(
+            matches!(selection, RuntimeSubagentSelection::Named(def) if def.name == "explorer")
+        );
+    }
+
+    #[test]
+    fn allowed_subagents_rejects_self_and_orchestrator_references() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("looper.md");
+        fs::write(
+            &file,
+            "---\ndescription: Loops\nallowed_subagents:\n  - looper\n---\nPrompt",
+        )
+        .unwrap();
+        let err = parse_subagent_file(&file, SubagentSource::User).unwrap_err();
+        assert!(format!("{err:#}").contains("cannot list 'looper' itself"));
+
+        let file = dir.path().join("sneaky.md");
+        fs::write(
+            &file,
+            "---\ndescription: Sneaky\nallowed_subagents:\n  - orchestrator\n---\nPrompt",
+        )
+        .unwrap();
+        let err = parse_subagent_file(&file, SubagentSource::User).unwrap_err();
+        assert!(format!("{err:#}").contains("reserved profile"));
+    }
+
+    #[test]
     fn builtin_orchestrator_declares_exact_tool_surface() {
         let definition = load_builtin_orchestrator().unwrap();
         assert_eq!(definition.name, ORCHESTRATOR_SUBAGENT_NAME);
@@ -792,8 +898,10 @@ mod tests {
 
         let tools = definition.tools.expect("orchestrator declares tools");
         for required in [
-            "bash",
             "read",
+            "grep",
+            "glob",
+            "invoke_subagent",
             "create_thread",
             "send_thread_message",
             "get_thread_status",
@@ -810,10 +918,10 @@ mod tests {
             assert!(tools.contains(&required.to_string()), "missing {required}");
         }
         for excluded in [
+            "bash",
             "edit",
             "write",
             "apply_patch",
-            "invoke_subagent",
             "background_output",
             "background_kill",
         ] {
@@ -1005,7 +1113,7 @@ mod tests {
     fn resolve_runtime_selection_treats_task_alias_as_default() {
         let root = tempdir().unwrap();
 
-        let selection = resolve_runtime_selection(root.path(), Some("task")).unwrap();
+        let selection = resolve_runtime_selection(root.path(), Some("task"), None).unwrap();
         assert_eq!(selection, RuntimeSubagentSelection::Default);
     }
 
@@ -1048,6 +1156,7 @@ mod tests {
             description: "Templated subagent".to_string(),
             path: root.path().join("templated.md"),
             source: SubagentSource::User,
+            allowed_subagents: None,
             model: None,
             thinking_level: None,
             tools: None,
@@ -1110,6 +1219,7 @@ mod tests {
             description: "Researcher".to_string(),
             path: root.path().join("researcher.md"),
             source: SubagentSource::User,
+            allowed_subagents: None,
             model: None,
             thinking_level: None,
             tools: Some(vec!["read".to_string()]),

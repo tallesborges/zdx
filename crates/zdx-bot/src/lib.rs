@@ -118,6 +118,7 @@ fn orchestrator_tool_config(
     ToolConfig {
         registry: tool_registry,
         selection: zdx_engine::core::agent::ToolSelection::default(),
+        allowed_subagents: None,
     }
 }
 

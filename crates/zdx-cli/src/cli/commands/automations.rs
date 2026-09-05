@@ -314,7 +314,7 @@ fn prepare_automation_run(
         .unwrap_or_else(|| run_config.model.clone());
 
     if let Some(subagent_name) = automation.subagent.as_deref() {
-        match subagents::resolve_runtime_selection(root, Some(subagent_name))
+        match subagents::resolve_runtime_selection(root, Some(subagent_name), None)
             .with_context(|| format!("load subagent '{subagent_name}'"))?
         {
             subagents::RuntimeSubagentSelection::Default => {}

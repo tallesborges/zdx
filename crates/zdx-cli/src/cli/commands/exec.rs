@@ -142,11 +142,11 @@ fn resolve_subagent(
         return Ok(None);
     };
 
-    match subagents::resolve_runtime_selection(root, Some(name))
+    match subagents::resolve_runtime_selection(root, Some(name), None)
         .with_context(|| format!("load subagent '{name}'"))?
     {
         RuntimeSubagentSelection::Default => Ok(None),
-        RuntimeSubagentSelection::Named(definition) => Ok(Some(definition)),
+        RuntimeSubagentSelection::Named(definition) => Ok(Some(*definition)),
     }
 }
 

@@ -56,6 +56,9 @@ pub struct AgentOptions {
 pub struct ToolConfig {
     pub registry: ToolRegistry,
     pub selection: ToolSelection,
+    /// Restricts which subagents `invoke_subagent` may reach. `None` is
+    /// unrestricted. Set from a persistent profile's `allowed_subagents`.
+    pub allowed_subagents: Option<Vec<String>>,
 }
 
 impl ToolConfig {
@@ -63,7 +66,14 @@ impl ToolConfig {
         Self {
             registry,
             selection,
+            allowed_subagents: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_allowed_subagents(mut self, allowed: Option<Vec<String>>) -> Self {
+        self.allowed_subagents = allowed;
+        self
     }
 }
 
@@ -72,6 +82,7 @@ impl Default for ToolConfig {
         Self {
             registry: ToolRegistry::builtins(),
             selection: ToolSelection::default(),
+            allowed_subagents: None,
         }
     }
 }
@@ -1227,7 +1238,8 @@ fn build_run_turn_setup(
         config.tool_timeout(),
     )
     .with_current_thread_id(thread_id)
-    .with_config(config);
+    .with_config(config)
+    .with_allowed_subagents(options.tool_config.allowed_subagents.clone());
     let tool_registry = options.tool_config.registry.clone();
     let tools = resolve_tools(
         config,
@@ -1287,7 +1299,8 @@ fn build_custom_run_turn_setup(
         config.tool_timeout(),
     )
     .with_current_thread_id(thread_id)
-    .with_config(config);
+    .with_config(config)
+    .with_allowed_subagents(options.tool_config.allowed_subagents.clone());
     let tool_registry = options.tool_config.registry.clone();
     let provider_config = crate::config::ProviderConfig::default();
     let tools = resolve_tools(config, options, &provider_config, false, &tool_registry);
@@ -1366,8 +1379,10 @@ fn resolve_tools(
             Ok(available_subagents) => {
                 for tool in &mut tools {
                     if tool.name.eq_ignore_ascii_case("Invoke_Subagent") {
-                        *tool =
-                            crate::tools::subagent::definition_with_subagents(&available_subagents);
+                        *tool = crate::tools::subagent::definition_with_subagents(
+                            &available_subagents,
+                            options.tool_config.allowed_subagents.as_deref(),
+                        );
                     }
                 }
             }

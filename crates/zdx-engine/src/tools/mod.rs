@@ -63,6 +63,10 @@ pub struct ToolContext {
     /// Available model list for subagent delegation.
     pub subagent_available_models: Vec<String>,
 
+    /// Restricts which subagents `invoke_subagent` may reach this turn.
+    /// `None` is unrestricted; `Some(list)` is enforced at execute time.
+    pub allowed_subagents: Option<Vec<String>>,
+
     /// Event sender for emitting streaming tool output events.
     /// Set by the engine before tool execution; used by `bash_handler`
     /// to bridge output chunks to `ToolOutputDelta` events.
@@ -84,6 +88,7 @@ impl std::fmt::Debug for ToolContext {
             .field("config", &self.config.is_some())
             .field("subagents_enabled", &self.subagents_enabled)
             .field("subagent_available_models", &self.subagent_available_models)
+            .field("allowed_subagents", &self.allowed_subagents)
             .field("event_sender", &self.event_sender.as_ref().map(|_| ".."))
             .field("tool_use_id", &self.tool_use_id)
             .finish()
@@ -102,6 +107,7 @@ impl ToolContext {
             config: None,
             subagents_enabled: true,
             subagent_available_models: Vec::new(),
+            allowed_subagents: None,
             event_sender: None,
             tool_use_id: None,
         }
@@ -115,6 +121,12 @@ impl ToolContext {
         self.thinking_level = Some(config.thinking_level);
         self.subagents_enabled = config.subagents.enabled;
         self.subagent_available_models = config.subagent_available_models();
+        self
+    }
+
+    #[must_use]
+    pub fn with_allowed_subagents(mut self, allowed: Option<Vec<String>>) -> Self {
+        self.allowed_subagents = allowed;
         self
     }
 
