@@ -29,5 +29,5 @@ The **Services** tab is a control panel over launchd, not a supervisor. `load_se
 
 ## Checks
 - Default final verification after code changes: `just ci` from repo root
-- Intermediate iteration for this crate: `cargo nextest run -p zdx-monitor`
+- Intermediate iteration for this crate: `cargo test -p zdx-monitor` --lib --bins --tests
 - Use `just lint` or `just test` only when intentionally running one half of CI

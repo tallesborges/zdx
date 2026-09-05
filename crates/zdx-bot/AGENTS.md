@@ -45,7 +45,7 @@ Scope: Telegram bot runtime, ingest/handler flow, queueing, and Telegram API int
 
 - The Mini App must be built before any cargo command touches this crate: `just web-build` (rust-embed reads `apps/web/dist` at compile time). `just build-release` and CI do this automatically.
 - Default final verification after code changes: `just ci` from repo root
-- Intermediate iteration for this crate: `cargo nextest run -p zdx-bot`
+- Intermediate iteration for this crate: `cargo test -p zdx-bot` --lib --bins --tests
 - Use `just lint` or `just test` only when intentionally running one half of CI
 
 ## Maintenance

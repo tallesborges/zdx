@@ -52,9 +52,9 @@ install-hooks:
 clippy:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-# Run tests with nextest (fast path, no doctests)
+# Run tests (skips doctests: there are none, and building them costs ~15s)
 test:
-    cargo nextest run --workspace
+    cargo test --workspace --lib --bins --tests
 
 # ─── Xtask ────────────────────────────────────────
 

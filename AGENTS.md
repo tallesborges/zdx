@@ -52,7 +52,7 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `just lint` (format + clippy)
 - `just fmt` (nightly rustfmt)
 - `just clippy` (lint only)
-- `just test` (fast path via `cargo nextest`; skips doc tests — requires `cargo-nextest`)
+- `just test` (workspace tests; skips doctests, which are empty and cost ~15s to build)
 - `just install-hooks` (enable pre-commit formatting and change-aware pre-push Clippy)
 - `just update-defaults` (maintainer: refresh both default_models.toml + default_config.toml)
 - `just update-models` (maintainer: refresh default_models.toml)
@@ -65,7 +65,7 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 ## Verification
 
 - During iteration, prefer `just ci-fast` for quick feedback (clippy on default features, lib+bins only).
-- When behavior changes, also run `just test` (or a narrower `cargo nextest run -p <crate>`).
+- When behavior changes, also run `just test` (or a narrower `cargo test -p <crate> --lib --bins --tests`).
 - `just ci` matches what GHA runs on push/PR; treat it as an optional pre-push gate rather than the default after every change. GHA will catch what local `ci-fast` misses (all-features, all-targets, tests).
 - Use `just lint` or `just test` only when intentionally running one half of CI.
 
