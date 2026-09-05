@@ -282,6 +282,7 @@ async fn current_status_message_with_heading(
     let is_orchestrator = thread_persistence::read_persistent_profile(thread_id)?.as_deref()
         == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME);
     let workers = is_orchestrator.then(|| context.worker_manager().list_for_owner(thread_id));
+    let mini_app_url = super::mini_app_base_url(context, chat_id);
     Ok(format_status_message_with_heading(
         &StatusSnapshot {
             model_id: effective_model,
@@ -297,6 +298,7 @@ async fn current_status_message_with_heading(
         },
         heading,
         workers.as_deref(),
+        mini_app_url.as_deref(),
     ))
 }
 
@@ -304,6 +306,7 @@ fn format_status_message_with_heading(
     snapshot: &StatusSnapshot<'_>,
     heading: &str,
     orchestrator_workers: Option<&[zdx_engine::core::workers::WorkerSnapshot]>,
+    mini_app_url: Option<&str>,
 ) -> String {
     let model_meta = ModelOption::find_by_id(snapshot.model_id);
     let provider = provider_for_model(snapshot.model_id);
@@ -366,14 +369,20 @@ fn format_status_message_with_heading(
     ));
 
     if let Some(workers) = orchestrator_workers {
-        lines.extend(format_worker_lines(workers));
+        lines.extend(format_worker_lines(workers, mini_app_url));
     }
 
     lines.join("\n")
 }
 
-/// Formats the live worker section of the orchestrator card.
-fn format_worker_lines(workers: &[zdx_engine::core::workers::WorkerSnapshot]) -> Vec<String> {
+/// Formats the live worker section of the orchestrator card. Each worker
+/// line links to its mirror topic, or to the worker thread in the Mini App
+/// when the mirror has no topic link (`mini_app_url` set), so the card is a
+/// jump table as well as a status.
+fn format_worker_lines(
+    workers: &[zdx_engine::core::workers::WorkerSnapshot],
+    mini_app_url: Option<&str>,
+) -> Vec<String> {
     use zdx_engine::core::workers::WorkerStatus;
 
     if workers.is_empty() {
@@ -403,11 +412,16 @@ fn format_worker_lines(workers: &[zdx_engine::core::workers::WorkerSnapshot]) ->
             .ok()
             .flatten()
             .unwrap_or_else(|| worker.thread_id.chars().take(8).collect());
-        lines.push(format!(
-            "• {glyph} {} — {}",
-            escape_html(&title),
-            worker.status.as_str()
-        ));
+        let title = escape_html(&title);
+        let url = worker
+            .mirror_url
+            .clone()
+            .or_else(|| mini_app_url.map(|base| format!("{base}?startapp={}", worker.thread_id)));
+        let label = match url {
+            Some(url) => format!("<a href=\"{url}\">{title}</a>"),
+            None => title,
+        };
+        lines.push(format!("• {glyph} {label} — {}", worker.status.as_str()));
     }
     if workers.len() > 5 {
         lines.push(format!("• … and {} more", workers.len() - 5));
@@ -561,7 +575,10 @@ mod tests {
             mirror_url: None,
         };
 
-        assert_eq!(format_worker_lines(&[]), vec!["Workers: <i>none yet</i>"]);
+        assert_eq!(
+            format_worker_lines(&[], None),
+            vec!["Workers: <i>none yet</i>"]
+        );
 
         let workers: Vec<_> = [
             WorkerStatus::Running,
@@ -576,7 +593,7 @@ mod tests {
         .map(|(i, status)| snapshot(&i.to_string(), status))
         .collect();
 
-        let lines = format_worker_lines(&workers);
+        let lines = format_worker_lines(&workers, None);
         assert_eq!(
             lines[0],
             "Workers: <code>1 running · 1 queued · 4 settled</code>"
@@ -585,6 +602,25 @@ mod tests {
         assert_eq!(lines.len(), 7);
         assert!(lines[6].contains("and 1 more"));
         assert!(lines[1].starts_with("• ⚙️"));
+        // No mirror and no Mini App: plain title.
+        assert_eq!(lines[1], "• ⚙️ nonexist — running");
+
+        // Each worker line is a jump link: mirror topic first, Mini App
+        // fallback when the mirror has no topic link.
+        let mut linked = snapshot("m", WorkerStatus::Running);
+        linked.mirror_url = Some("https://t.me/c/1/2".to_string());
+        let lines = format_worker_lines(
+            &[linked, snapshot("n", WorkerStatus::Completed)],
+            Some("https://t.me/zdx_bot/app"),
+        );
+        assert_eq!(
+            lines[1],
+            "• ⚙️ <a href=\"https://t.me/c/1/2\">nonexist</a> — running"
+        );
+        assert_eq!(
+            lines[2],
+            "• ✅ <a href=\"https://t.me/zdx_bot/app?startapp=nonexistent-worker-n\">nonexist</a> — completed"
+        );
     }
 
     #[test]

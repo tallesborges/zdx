@@ -742,11 +742,12 @@ mod tests {
 
     #[test]
     fn telegram_workspaces_block_lists_profiles_with_routing_rule() {
-        // Rendering skills materializes bundled skills into $ZDX_HOME.
-        let _home = zdx_engine::test_support::temp_zdx_home();
         use std::collections::BTreeMap;
 
         use zdx_engine::config::{TelegramConfig, TelegramProfileConfig};
+
+        // Rendering skills materializes bundled skills into $ZDX_HOME.
+        let _home = zdx_engine::test_support::temp_zdx_home();
 
         assert!(telegram_workspaces_block(&Config::default()).is_none());
 
@@ -786,11 +787,12 @@ mod tests {
     /// root is attributed to that umbrella, not repeated under nested roots.
     #[test]
     fn telegram_workspaces_block_lists_project_skills_once_under_their_root() {
-        // Rendering skills materializes bundled skills into $ZDX_HOME.
-        let _home = zdx_engine::test_support::temp_zdx_home();
         use std::collections::BTreeMap;
 
         use zdx_engine::config::{TelegramConfig, TelegramProfileConfig};
+
+        // Rendering skills materializes bundled skills into $ZDX_HOME.
+        let _home = zdx_engine::test_support::temp_zdx_home();
 
         let umbrella = make_temp_dir();
         let project = umbrella.join("dub");
