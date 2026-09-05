@@ -13,6 +13,7 @@ pub mod memory_search;
 pub mod orchestrator;
 pub mod read_thread;
 pub mod subagent;
+pub mod telegram;
 pub mod thread_search;
 pub mod todo_write;
 
@@ -170,6 +171,7 @@ impl ToolSet {
                 "memory_search",
                 "read",
                 "read_thread",
+                "telegram",
                 "todo_write",
                 "thread_search",
                 "web_search",
@@ -188,6 +190,7 @@ impl ToolSet {
                 "memory_search",
                 "read",
                 "read_thread",
+                "telegram",
                 "todo_write",
                 "thread_search",
                 "web_search",
@@ -371,6 +374,7 @@ impl ToolRegistry {
         self.register_tool(AskMedia);
         self.register_tool(MemorySearch);
         self.register_tool(ReadThread);
+        self.register_tool(Telegram);
         self.register_tool(TodoWrite);
         self.register_tool(ThreadSearch);
         self.register_tool(Subagent);
@@ -554,6 +558,18 @@ impl Tool for AskMedia {
         let input = input.clone();
         let ctx = ctx.clone();
         Box::pin(async move { ask_media::execute(&input, &ctx).await })
+    }
+}
+
+struct Telegram;
+impl Tool for Telegram {
+    fn definition(&self) -> ToolDefinition {
+        telegram::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { telegram::execute(&input, &ctx).await })
     }
 }
 
@@ -957,6 +973,7 @@ mod tests {
         assert!(names.contains(&"bash".to_string()));
         assert!(names.contains(&"apply_patch".to_string()));
         assert!(names.contains(&"ask_media".to_string()));
+        assert!(names.contains(&"telegram".to_string()));
         assert!(names.contains(&"edit".to_string()));
         assert!(names.contains(&"fetch_webpage".to_string()));
         assert!(names.contains(&"invoke_subagent".to_string()));
@@ -978,6 +995,7 @@ mod tests {
         assert!(names.contains(&"bash".to_string()));
         assert!(names.contains(&"apply_patch".to_string()));
         assert!(names.contains(&"ask_media".to_string()));
+        assert!(names.contains(&"telegram".to_string()));
         assert!(names.contains(&"edit".to_string()));
         assert!(names.contains(&"fetch_webpage".to_string()));
         assert!(names.contains(&"invoke_subagent".to_string()));

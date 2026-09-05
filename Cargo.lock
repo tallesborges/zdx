@@ -4892,6 +4892,7 @@ dependencies = [
  "grep-searcher",
  "ignore",
  "image",
+ "infer",
  "libc",
  "minijinja",
  "reqwest",

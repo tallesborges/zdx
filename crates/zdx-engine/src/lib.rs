@@ -19,6 +19,7 @@ pub mod providers;
 pub mod service;
 pub mod skills;
 pub mod subagents;
+pub mod telegram;
 #[cfg(any(test, feature = "testing"))]
 pub mod test_support;
 pub mod tools;

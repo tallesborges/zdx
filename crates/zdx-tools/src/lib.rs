@@ -184,6 +184,37 @@ pub mod i64_or_string {
             }),
         }
     }
+
+    /// Deserializes an `Option<i64>` that also accepts a numeric string.
+    ///
+    /// # Errors
+    /// Returns an error if a present value cannot be parsed as an integer.
+    pub fn deserialize_optional<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum OptI64OrString {
+            Int(i64),
+            String(String),
+            Null,
+        }
+
+        match Option::<OptI64OrString>::deserialize(deserializer)? {
+            None | Some(OptI64OrString::Null) => Ok(None),
+            Some(OptI64OrString::Int(v)) => Ok(Some(v)),
+            Some(OptI64OrString::String(raw)) => {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    return Ok(None);
+                }
+                trimmed.parse::<i64>().map(Some).map_err(|_err| {
+                    de::Error::custom(format!("expected integer or integer string, got '{raw}'"))
+                })
+            }
+        }
+    }
 }
 
 /// Serde helper that accepts either a JSON unsigned integer or a numeric string.

@@ -13,6 +13,7 @@ tools:
   - read
   - read_thread
   - send_thread_message
+  - telegram
   - thread_search
   - todo_write
   - update_thread

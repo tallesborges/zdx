@@ -55,6 +55,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 
 - `tools/mod.rs`: ToolContext, ToolRegistry, ToolSet, handlers
 - `tools/background.rs`: `run_background` (spawn+register a background process, invoked by the Bash tool on `background: true`) + `background_output`/`background_kill` agent tools (thread-scoped)
+- `tools/telegram.rs`: outbound Telegram tool (`send_message`/`send_document`/`create_topic`) over `telegram.rs`; shares its core with `zdx telegram`
 - `tools/ask_media.rs`: one-shot media understanding tool (image/PDF/audio/video → text) over `media.rs`; read-only, shares its core with `zdx ask-media`
 - `tools/memory_search.rs`: native memory search returning stable memory refs
 - `tools/read_thread.rs`: read saved thread transcript tool

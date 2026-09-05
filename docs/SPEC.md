@@ -195,6 +195,16 @@ The `meta` line (first line only) may be rewritten atomically to update thread m
 
 Tools are intentionally few, stable, and machine-parseable.
 
+### `telegram`
+
+- Posts into a Telegram chat or forum topic other than the current conversation. One tool with an `action` enum: `send_message`, `send_document`, `create_topic`.
+- Requires `chat_id`; `message_thread_id` selects a forum topic and is omitted for the group's General topic. `create_topic` returns the new topic id.
+- `send_message` defaults to `parse_mode: html` and sends text raw — the Markdown conversion on the normal reply path does not apply. Body is capped at 4096 characters and captions at 1024; both are rejected locally with a clear message rather than by the Telegram API.
+- `send_document` resolves paths like other file tools. An optional `bot_token` overrides the configured bot; otherwise the token resolves from `telegram.bot_token`, then `ZDX_TELEGRAM_BOT_TOKEN`, then `TELEGRAM_BOT_TOKEN`.
+- Needs no shell, so the orchestrator can post to other topics; it previously could not.
+- Shares its implementation with the `zdx telegram` CLI subcommands, which are unchanged apart from `--parse-mode markdown` now sending Markdown instead of HTML.
+- Posting is externally visible and cannot be cleanly unsent; the tool description instructs confirming the destination unless the user named it in the current turn.
+
 ### `ask_media`
 
 - One-shot understanding of a local image, PDF, audio, or video file: takes a `file` path and a `prompt`, sends the file inline to a Gemini model, and returns the model's text answer.
@@ -564,7 +574,7 @@ The reserved built-in `orchestrator` profile turns a Telegram topic into a persi
 
 - A topic created from an ordinary `General` message in a forum chat is initialized as an orchestrator topic before its first turn **only when the chat's Telegram profile opts in** with `telegram.profiles.<name>.orchestrator = true` (default `false`; unprofiled chats never opt in). Chats without the flag keep classic behavior (General → normal coding topic). `/new`, the launcher, `/handoff`, and `/btw` topics keep the default profile regardless.
 - With BotFather **Threaded Mode** enabled, each brand-new thread in the bot's private chat is likewise initialized as an orchestrator thread on its first sighting: the message must carry a client-created `message_thread_id`, not be a known slash command, and map to a thread file that does not exist yet. It also gets the same pinned orchestrator card a General-created topic gets, posted right after the user's first message (pinning is best-effort in private chats). Plain unthreaded DMs and pre-existing DM threads keep their current profile.
-- Orchestrator turns use the built-in profile's rendered prompt — which composes a ZDX operating manual, the full discovered skills catalog, project context, memory, and a bounded recent-activity snapshot (most recently active projects and top-level threads) — plus the Telegram instruction layer, and exactly its declared tool list: `read`, `grep`, `glob`, `ask_media`, `thread_search`, `read_thread`, `todo_write`, `memory_search`, `web_search`, `fetch_webpage`, plus the six thread controls below. `bash`, `edit`, `write`, `apply_patch`, `invoke_subagent`, and the background tools are excluded.
+- Orchestrator turns use the built-in profile's rendered prompt — which composes a ZDX operating manual, the full discovered skills catalog, project context, memory, and a bounded recent-activity snapshot (most recently active projects and top-level threads) — plus the Telegram instruction layer, and exactly its declared tool list: `read`, `grep`, `glob`, `ask_media`, `telegram`, `thread_search`, `read_thread`, `todo_write`, `memory_search`, `web_search`, `fetch_webpage`, plus the six thread controls below. `bash`, `edit`, `write`, `apply_patch`, `invoke_subagent`, and the background tools are excluded.
 - In the Telegram bot, orchestrator turns also receive a **Telegram Workspaces** block: every bound profile (name, chat id, root, orchestrator flag) and, under each, the project-level skills a worker in that root will discover (`.zdx/skills`, `.claude/skills`, `.agents/skills` of the root and its ancestors; bundled and user skills are excluded since the orchestrator already has them). A skill reachable from nested workspaces is listed once, under the deepest root containing it. Descriptions are cut to their first line (≤140 chars). This is how the orchestrator knows what a workspace can do without running there.
 - The orchestrator's read-only posture is structural: its declared tool list contains nothing that can mutate local or remote state, so mutations and anything needing a shell must go to a worker.
 - The orchestrator has no subagent access. `invoke_subagent` is excluded so every unit of delegated work is a visible, mirrored worker thread the user can follow and interrupt, rather than a hidden child run blocking the middle of a reply.
