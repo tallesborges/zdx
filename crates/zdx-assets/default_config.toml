@@ -85,7 +85,6 @@ prompt_builder_model = "openai:gpt-5.6-terra@low"
 
 # Subagent delegation configuration
 # enabled: Expose invoke_subagent tool to the model.
-# available_models: Auto-populated from enabled providers + model registry (TUI picker source).
 [subagents]
 enabled = true
 

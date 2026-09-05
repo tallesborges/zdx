@@ -107,12 +107,6 @@ pub struct SubagentsConfig {
     /// Enables/disables subagent delegation tool exposure.
     #[serde(default = "default_subagents_enabled")]
     pub enabled: bool,
-    /// Available models for `invoke_subagent`.
-    ///
-    /// This list is derived at runtime from enabled providers and the model
-    /// registry (same source used by the TUI model picker).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub available_models: Vec<String>,
     /// Per-subagent model overrides keyed by subagent name. Applied on top of
     /// the (live) built-in or file definition, so built-in prompts stay current
     /// while only the model/thinking is overridden. Written as
@@ -125,7 +119,6 @@ impl Default for SubagentsConfig {
     fn default() -> Self {
         Self {
             enabled: default_subagents_enabled(),
-            available_models: Vec::new(),
             overrides: BTreeMap::new(),
         }
     }
@@ -3619,7 +3612,6 @@ bravo = { chat_id = -100200, cwd = "/tmp/bravo" }
     fn test_subagents_config_defaults() {
         let config = SubagentsConfig::default();
         assert!(config.enabled);
-        assert!(config.available_models.is_empty());
     }
 
     /// `PromptTemplateConfig`: defaults to built-in template and no custom file.
@@ -3707,6 +3699,25 @@ file = "prompts/template.md"
             &config_path,
             r#"[subagents]
 enabled = true
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert!(config.subagents.enabled);
+    }
+
+    /// Configs written before `subagents.available_models` was removed must
+    /// still load: the key is ignored, not rejected.
+    #[test]
+    fn test_subagents_config_ignores_removed_available_models_key() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        fs::write(
+            &config_path,
+            r#"[subagents]
+enabled = true
 available_models = ["codex:gpt-5.3-codex"]
 "#,
         )
@@ -3714,10 +3725,6 @@ available_models = ["codex:gpt-5.3-codex"]
 
         let config = Config::load_from(&config_path).unwrap();
         assert!(config.subagents.enabled);
-        assert_eq!(
-            config.subagents.available_models,
-            vec!["codex:gpt-5.3-codex"]
-        );
     }
 
     #[test]
