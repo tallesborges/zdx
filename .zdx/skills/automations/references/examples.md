@@ -78,7 +78,7 @@ If git commands fail, report the exact error and stop.
 ```md
 ---
 schedule: "0 9 * * 1"
-model: "gemini-cli:gemini-3-flash-preview"
+model: "gemini:gemini-3.8-flash"
 timeout_secs: 600
 ---
 
