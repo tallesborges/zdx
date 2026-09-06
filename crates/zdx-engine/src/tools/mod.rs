@@ -9,6 +9,7 @@ pub use zdx_tools::{apply_patch, bash, edit, fetch_webpage, glob, grep, read, we
 // Engine-backed tools (need full ToolContext with config, threads, etc.)
 pub mod ask_media;
 pub mod background;
+pub mod git;
 pub mod memory_search;
 pub mod orchestrator;
 pub mod read_thread;
@@ -165,6 +166,7 @@ impl ToolSet {
                 "ask_media",
                 "edit",
                 "fetch_webpage",
+                "git",
                 "glob",
                 "grep",
                 "invoke_subagent",
@@ -184,6 +186,7 @@ impl ToolSet {
                 "apply_patch",
                 "ask_media",
                 "fetch_webpage",
+                "git",
                 "glob",
                 "grep",
                 "invoke_subagent",
@@ -372,6 +375,7 @@ impl ToolRegistry {
         self.register_tool(Edit);
         self.register_tool(Read);
         self.register_tool(AskMedia);
+        self.register_tool(Git);
         self.register_tool(MemorySearch);
         self.register_tool(ReadThread);
         self.register_tool(Telegram);
@@ -546,6 +550,18 @@ impl Tool for Glob {
         let input = input.clone();
         let ctx = ctx.clone();
         Box::pin(async move { execute_glob(&input, &ctx.as_leaf()).await })
+    }
+}
+
+struct Git;
+impl Tool for Git {
+    fn definition(&self) -> ToolDefinition {
+        git::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { git::execute(&input, &ctx).await })
     }
 }
 
@@ -973,6 +989,7 @@ mod tests {
         assert!(names.contains(&"bash".to_string()));
         assert!(names.contains(&"apply_patch".to_string()));
         assert!(names.contains(&"ask_media".to_string()));
+        assert!(names.contains(&"git".to_string()));
         assert!(names.contains(&"telegram".to_string()));
         assert!(names.contains(&"edit".to_string()));
         assert!(names.contains(&"fetch_webpage".to_string()));
@@ -995,6 +1012,7 @@ mod tests {
         assert!(names.contains(&"bash".to_string()));
         assert!(names.contains(&"apply_patch".to_string()));
         assert!(names.contains(&"ask_media".to_string()));
+        assert!(names.contains(&"git".to_string()));
         assert!(names.contains(&"telegram".to_string()));
         assert!(names.contains(&"edit".to_string()));
         assert!(names.contains(&"fetch_webpage".to_string()));

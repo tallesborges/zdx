@@ -946,6 +946,7 @@ mod tests {
             "glob",
             "ask_media",
             "telegram",
+            "git",
             "create_thread",
             "send_thread_message",
             "get_thread_status",
