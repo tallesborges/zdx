@@ -2101,13 +2101,13 @@ mod tests {
     /// See `crates/zdx-tui/src/features/input/update.rs::handle_handoff_submission`.
     #[test]
     fn handoff_submit_opens_new_tab_and_preserves_source_tab() {
-        // Submitting a handoff persists a new thread under $ZDX_HOME.
-        let _home = zdx_engine::test_support::temp_zdx_home();
         use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
 
         use crate::input::HandoffState;
         use crate::transcript::TranscriptState;
 
+        // Submitting a handoff persists a new thread under $ZDX_HOME.
+        let _home = zdx_engine::test_support::temp_zdx_home();
         let config = zdx_engine::config::Config::default();
         let mut app = AppState::new(config, PathBuf::new(), None, None);
 
