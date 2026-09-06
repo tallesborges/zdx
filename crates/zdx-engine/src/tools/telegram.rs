@@ -98,6 +98,17 @@ fn missing(field: &str, action: &str) -> ToolOutput {
     )
 }
 
+fn resolve_parse_mode(mode: Option<&str>) -> Result<ParseMode, ToolOutput> {
+    let mode = mode.map(str::trim).filter(|mode| !mode.is_empty());
+    ParseMode::parse(mode.unwrap_or("html")).map_err(|err| {
+        ToolOutput::failure(
+            "invalid_input",
+            "Invalid parse_mode",
+            Some(format!("{err:#}")),
+        )
+    })
+}
+
 /// Executes the telegram tool and returns a structured envelope.
 pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     let input: TelegramInput = match serde_json::from_value(input.clone()) {
@@ -130,18 +141,9 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
             let Some(text) = input.text.as_deref() else {
                 return missing("text", action);
             };
-            let parse_mode = match input.parse_mode.as_deref() {
-                Some(mode) => match ParseMode::parse(mode) {
-                    Ok(mode) => mode,
-                    Err(err) => {
-                        return ToolOutput::failure(
-                            "invalid_input",
-                            "Invalid parse_mode",
-                            Some(format!("{err:#}")),
-                        );
-                    }
-                },
-                None => ParseMode::Html,
+            let parse_mode = match resolve_parse_mode(input.parse_mode.as_deref()) {
+                Ok(mode) => mode,
+                Err(output) => return output,
             };
 
             match client
@@ -169,7 +171,10 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
                 .send_document(
                     input.chat_id,
                     &resolved.resolved_path,
-                    input.caption.as_deref(),
+                    input
+                        .caption
+                        .as_deref()
+                        .filter(|caption| !caption.trim().is_empty()),
                     input.message_thread_id,
                 )
                 .await
@@ -262,6 +267,48 @@ mod tests {
             let output = execute(&input, &ctx()).await;
             assert!(!output.is_ok(), "expected failure for {input}");
         }
+    }
+
+    #[tokio::test]
+    async fn blank_optional_parse_mode_and_token_use_defaults() {
+        for mode in [None, Some(""), Some(" \t\n")] {
+            assert_eq!(resolve_parse_mode(mode).unwrap(), ParseMode::Html);
+        }
+        let mut config = crate::config::Config::default();
+        config.telegram.bot_token = Some("test-token".to_string());
+        let ctx = ctx().with_config(&config);
+        let omitted = execute(
+            &json!({ "action": "send_message", "chat_id": -100, "text": "" }),
+            &ctx,
+        )
+        .await;
+        assert!(matches!(
+            &omitted,
+            ToolOutput::Failure { error, .. }
+                if error.details.as_deref() == Some("text must not be empty")
+        ));
+
+        for blank in ["", " \t\n"] {
+            let output = execute(
+                &json!({
+                    "action": "send_message", "chat_id": -100, "text": "",
+                    "parse_mode": blank, "bot_token": blank
+                }),
+                &ctx,
+            )
+            .await;
+            assert_eq!(output, omitted);
+        }
+
+        let invalid = execute(
+            &json!({ "action": "send_message", "chat_id": -100, "text": "", "parse_mode": "rst" }),
+            &ctx,
+        )
+        .await;
+        assert!(matches!(
+            invalid,
+            ToolOutput::Failure { error, .. } if error.message == "Invalid parse_mode"
+        ));
     }
 
     #[tokio::test]

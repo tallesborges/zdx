@@ -118,7 +118,13 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
         Ok(path) => path,
         Err(output) => return output,
     };
-    let media_type = input.media_type.as_deref().unwrap_or("json").to_string();
+    let media_type = input
+        .media_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|media_type| !media_type.is_empty())
+        .unwrap_or("json")
+        .to_string();
     let accept = match accept_header(&media_type) {
         Ok(accept) => accept,
         Err(output) => return output,
@@ -275,6 +281,8 @@ mod tests {
 
     #[test]
     fn maps_media_types_to_accept_headers() {
+        assert_eq!(accept_header("").unwrap(), None);
+        assert_eq!(accept_header(" \t\n").unwrap(), None);
         assert_eq!(accept_header("json").unwrap(), None);
         assert_eq!(
             accept_header("diff").unwrap().as_deref(),

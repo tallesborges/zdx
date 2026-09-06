@@ -91,14 +91,10 @@ struct GitInput {
 ///
 /// Combined with the `--` separators below, this is what keeps the fixed
 /// argument lists fixed.
-fn checked_operand(value: &str, field: &str) -> Result<String, ToolOutput> {
+fn checked_operand(value: &str, field: &str) -> Result<Option<String>, ToolOutput> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(ToolOutput::failure(
-            "invalid_input",
-            format!("`{field}` cannot be empty"),
-            None,
-        ));
+        return Ok(None);
     }
     if trimmed.starts_with('-') {
         return Err(ToolOutput::failure(
@@ -107,7 +103,7 @@ fn checked_operand(value: &str, field: &str) -> Result<String, ToolOutput> {
             Some("This tool builds its own flags; only refs and paths are accepted.".to_string()),
         ));
     }
-    Ok(trimmed.to_string())
+    Ok(Some(trimmed.to_string()))
 }
 
 /// Executes the git tool and returns a structured envelope.
@@ -138,14 +134,14 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
 
     let revision = match input.revision.as_deref() {
         Some(value) => match checked_operand(value, "revision") {
-            Ok(value) => Some(value),
+            Ok(value) => value,
             Err(output) => return output,
         },
         None => None,
     };
     let path = match input.path.as_deref() {
         Some(value) => match checked_operand(value, "path") {
-            Ok(value) => Some(value),
+            Ok(value) => value,
             Err(output) => return output,
         },
         None => None,
@@ -326,6 +322,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn blank_optional_strings_behave_like_omitted_fields() {
+        let dir = init_repo();
+        let ctx = ctx_for(&dir);
+        std::fs::write(dir.path().join("a.txt"), "two\n").unwrap();
+
+        for blank in ["", " \t\n"] {
+            for action in ["status", "log", "diff"] {
+                let omitted = execute(&json!({ "action": action }), &ctx).await;
+                let explicit = execute(
+                    &json!({ "action": action, "repo": blank, "revision": blank, "path": blank }),
+                    &ctx,
+                )
+                .await;
+                assert!(explicit.is_ok(), "{action}: {explicit:?}");
+                assert_eq!(explicit, omitted);
+            }
+
+            let show = execute(
+                &json!({ "action": "show", "revision": "HEAD", "path": blank }),
+                &ctx,
+            )
+            .await;
+            assert!(show.is_ok());
+            let missing_revision = execute(&json!({ "action": "show" }), &ctx).await;
+            assert!(!missing_revision.is_ok());
+            assert_eq!(
+                execute(&json!({ "action": "show", "revision": blank }), &ctx).await,
+                missing_revision
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn rejects_flag_shaped_operands() {
         let dir = init_repo();
         let ctx = ctx_for(&dir);
@@ -337,6 +366,8 @@ mod tests {
             json!({ "action": "log", "revision": "--output=/tmp/pwned" }),
             json!({ "action": "diff", "path": "--output=/tmp/pwned" }),
             json!({ "action": "status", "path": "-x" }),
+            json!({ "action": "log", "revision": " \t--all" }),
+            json!({ "action": "diff", "path": " \t--output=/tmp/pwned" }),
         ] {
             let output = execute(&input, &ctx).await;
             assert!(!output.is_ok(), "expected rejection for {input}");
