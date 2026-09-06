@@ -174,7 +174,7 @@ fn definition_for(op: Op) -> ToolDefinition {
         },
         Op::Status => ToolDefinition {
             name: "Get_Thread_Status".to_string(),
-            description: "Report a worker thread's status (queued/running/completed/failed/cancelled), queue depth, and latest final text. Omit thread_id to list every worker owned by this orchestrator in the current process.".to_string(),
+            description: "Report a worker thread's status (queued/running/completed/failed/cancelled), queue depth, and latest final text. For a running worker it also reports `current_tool`, `seconds_since_last_activity`, and `turn_elapsed_seconds` — use these to tell a worker doing slow work from one that is stuck: a live tool with recent activity is working, while a long `seconds_since_last_activity` with no `current_tool` means it is waiting on the model or hung. For a thread this process does not manage, only `seconds_since_last_write` (the thread file's mtime) is available and `current_tool` is null. Omit thread_id to list every worker owned by this orchestrator in the current process.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -287,6 +287,42 @@ fn snapshot_json(snapshot: &WorkerSnapshot) -> Value {
             .map(|text| truncate_chars(text, MAX_FINAL_TEXT_CHARS)),
         "last_error": snapshot.last_error,
         "mirror_url": snapshot.mirror_url,
+        "current_tool": snapshot.current_tool,
+        "seconds_since_last_activity": snapshot.seconds_since_last_activity,
+        "turn_elapsed_seconds": snapshot.turn_elapsed_seconds,
+    })
+}
+
+/// On-disk JSONL path for a thread id.
+fn thread_file_path(thread_id: &str) -> std::path::PathBuf {
+    crate::config::paths::threads_dir().join(format!("{thread_id}.jsonl"))
+}
+
+/// Status for a thread this process does not manage.
+///
+/// Live tool activity only exists in the owning process, so the current tool is
+/// genuinely unavailable here rather than unknown-and-guessable: the thread
+/// JSONL has no `tool_started` event, and a running tool's `tool_use` is not
+/// flushed until its turn checkpoints. The file mtime does advance during a
+/// turn, so it is a real staleness signal and is all this path reports.
+fn unmanaged_thread_json(thread_id: &str) -> Value {
+    let title = thread_persistence::read_thread_title(thread_id)
+        .ok()
+        .flatten();
+    let seconds_since_last_write = thread_file_path(thread_id)
+        .metadata()
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .map(|elapsed| elapsed.as_secs());
+
+    json!({
+        "thread_id": thread_id,
+        "title": title,
+        "managed": false,
+        "seconds_since_last_write": seconds_since_last_write,
+        "current_tool": Value::Null,
+        "note": "Not a managed worker in this process: live tool activity is unavailable. `seconds_since_last_write` is the thread file's mtime and is the only progress signal here; a turn writes to it as it goes, so a large value means the thread is idle or stuck.",
     })
 }
 
@@ -371,6 +407,9 @@ fn get_thread_status(manager: &Arc<WorkerManager>, owner: &str, input: &Value) -
     if let Some(thread_id) = optional_str(input, "thread_id") {
         return match manager.snapshot(thread_id) {
             Some(snapshot) => ToolOutput::success(json!({ "worker": snapshot_json(&snapshot) })),
+            None if thread_file_path(thread_id).is_file() => {
+                ToolOutput::success(json!({ "worker": unmanaged_thread_json(thread_id) }))
+            }
             None => ToolOutput::failure(
                 "not_managed",
                 format!("Thread '{thread_id}' is not a managed worker in this process"),

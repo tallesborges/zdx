@@ -573,6 +573,9 @@ mod tests {
             latest_final_text: None,
             last_error: None,
             mirror_url: None,
+            current_tool: None,
+            seconds_since_last_activity: None,
+            turn_elapsed_seconds: None,
         };
 
         assert_eq!(

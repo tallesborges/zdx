@@ -13,8 +13,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, Weak};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
@@ -151,6 +151,14 @@ pub struct WorkerSnapshot {
     pub last_error: Option<String>,
     /// Link to the worker's surface mirror (Telegram topic), when registered.
     pub mirror_url: Option<String>,
+    /// Tool the current turn is running right now, when one is in flight.
+    /// `None` between tools or when no turn is running.
+    pub current_tool: Option<String>,
+    /// Seconds since the last tool activity on the current turn. `None` when
+    /// no turn is running or no activity has arrived yet.
+    pub seconds_since_last_activity: Option<u64>,
+    /// Seconds the current turn has been running. `None` when idle.
+    pub turn_elapsed_seconds: Option<u64>,
 }
 
 impl WorkerSnapshot {
@@ -194,6 +202,12 @@ struct WorkerState {
     latest_final_text: Option<String>,
     last_error: Option<String>,
     wake: Arc<Notify>,
+    /// Tool currently in flight on this worker's turn, from live activity.
+    current_tool: Option<String>,
+    /// When the last tool activity arrived on the current turn.
+    last_activity_at: Option<Instant>,
+    /// When the current turn started running.
+    turn_started_at: Option<Instant>,
 }
 
 impl WorkerState {
@@ -207,6 +221,9 @@ impl WorkerState {
             latest_final_text: self.latest_final_text.clone(),
             last_error: self.last_error.clone(),
             mirror_url,
+            current_tool: self.current_tool.clone(),
+            seconds_since_last_activity: self.last_activity_at.map(|at| at.elapsed().as_secs()),
+            turn_elapsed_seconds: self.turn_started_at.map(|at| at.elapsed().as_secs()),
         }
     }
 }
@@ -233,23 +250,55 @@ impl WorkerManager {
     /// Creates a manager whose workers run through `zdx --thread <id> exec`.
     #[must_use]
     pub fn new() -> (Arc<Self>, mpsc::UnboundedReceiver<WorkerEvent>) {
-        Self::with_runner(Arc::new(|request| Box::pin(run_worker_prompt(request))))
+        // The default runner reaches back into the manager to record live tool
+        // activity, so it is built with a weak self-reference.
+        Self::with_runner_cyclic(|manager| {
+            Arc::new(move |request| Box::pin(run_worker_prompt(request, Weak::clone(&manager))))
+        })
     }
 
     /// Creates a manager with a custom prompt runner (used by tests).
     #[must_use]
     pub fn with_runner(runner: WorkerRunner) -> (Arc<Self>, mpsc::UnboundedReceiver<WorkerEvent>) {
+        Self::with_runner_cyclic(|_| runner)
+    }
+
+    /// Creates a manager whose runner may hold a weak reference back to it.
+    fn with_runner_cyclic(
+        make_runner: impl FnOnce(Weak<Self>) -> WorkerRunner,
+    ) -> (Arc<Self>, mpsc::UnboundedReceiver<WorkerEvent>) {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
-        let manager = Arc::new(Self {
+        let mut make_runner = Some(make_runner);
+        let manager = Arc::new_cyclic(|weak| Self {
             state: Mutex::new(HashMap::new()),
             active_waits: Mutex::new(HashMap::new()),
             next_wait_id: std::sync::atomic::AtomicU64::new(1),
             mirrors: Mutex::new(HashMap::new()),
             changed: Notify::new(),
             events_tx,
-            runner,
+            runner: (make_runner.take().expect("runner factory runs once"))(Weak::clone(weak)),
         });
         (manager, events_rx)
+    }
+
+    /// Records live tool activity against a worker's current turn, so
+    /// `Get_Thread_Status` can tell a worker mid-tool from one that is hung.
+    ///
+    /// # Panics
+    /// Panics if the internal worker state lock is poisoned.
+    pub fn record_activity(&self, worker_thread_id: &str, activity: &WorkerActivity) {
+        let mut map = self.state.lock().expect("worker state lock poisoned");
+        let Some(state) = map.get_mut(worker_thread_id) else {
+            return;
+        };
+        state.last_activity_at = Some(Instant::now());
+        match activity {
+            WorkerActivity::ToolStarted { name, .. } => {
+                state.current_tool = Some(name.clone());
+            }
+            WorkerActivity::ToolFinished { .. } => state.current_tool = None,
+            WorkerActivity::ToolInput { .. } => {}
+        }
     }
 
     /// Records the outcome of opening a worker's surface mirror: `Some(url)`
@@ -547,6 +596,9 @@ impl WorkerManager {
                         latest_final_text: None,
                         last_error: None,
                         wake: Arc::clone(&wake),
+                        current_tool: None,
+                        last_activity_at: None,
+                        turn_started_at: None,
                     });
                     (state.snapshot(worker_thread_id, mirror_url), Some(wake))
                 }
@@ -816,7 +868,10 @@ fn resolve_persisted_root(worker_thread_id: &str) -> Result<PathBuf> {
 /// Default runner: executes one prompt through `zdx --thread <id> exec` in the
 /// worker's project root, resuming the worker thread's persisted history, and
 /// relays the child's tool activity as `WorkerEvent::Activity`.
-async fn run_worker_prompt(request: WorkerRunRequest) -> Result<String> {
+async fn run_worker_prompt(
+    request: WorkerRunRequest,
+    manager: Weak<WorkerManager>,
+) -> Result<String> {
     let options = ExecSubagentOptions {
         model: request.model.clone(),
         thinking_level: request.thinking_level,
@@ -834,6 +889,7 @@ async fn run_worker_prompt(request: WorkerRunRequest) -> Result<String> {
         rx,
         request.worker_thread_id.clone(),
         request.events.clone(),
+        manager,
     ));
     let result = run_exec_subagent_with_cancel(
         &request.root,
@@ -856,6 +912,7 @@ async fn forward_activity(
     mut rx: AgentEventRx,
     worker_thread_id: String,
     events: mpsc::UnboundedSender<WorkerEvent>,
+    manager: Weak<WorkerManager>,
 ) {
     while let Some(event) = rx.recv().await {
         let AgentEvent::ToolOutputDelta { chunk, .. } = event.as_ref() else {
@@ -864,6 +921,11 @@ async fn forward_activity(
         let Some(activity) = WorkerActivity::from_stream_chunk(chunk) else {
             continue;
         };
+        // Record before forwarding so a status read racing the mirror update
+        // never sees stale activity.
+        if let Some(manager) = manager.upgrade() {
+            manager.record_activity(&worker_thread_id, &activity);
+        }
         let event = WorkerEvent::Activity {
             worker_thread_id: worker_thread_id.clone(),
             activity,
@@ -888,6 +950,9 @@ fn spawn_worker_task(manager: Arc<WorkerManager>, worker_thread_id: String, wake
                     let cancel = CancellationToken::new();
                     state.current_cancel = Some(cancel.clone());
                     state.status = WorkerStatus::Running;
+                    state.turn_started_at = Some(Instant::now());
+                    state.last_activity_at = None;
+                    state.current_tool = None;
                     WorkerRunRequest {
                         worker_thread_id: worker_thread_id.clone(),
                         owner_thread_id: state.owner_thread_id.clone(),
@@ -918,6 +983,9 @@ fn spawn_worker_task(manager: Arc<WorkerManager>, worker_thread_id: String, wake
                     break;
                 };
                 state.current_cancel = None;
+                state.turn_started_at = None;
+                state.last_activity_at = None;
+                state.current_tool = None;
                 match &result {
                     Ok(text) => {
                         state.status = WorkerStatus::Completed;
@@ -1657,5 +1725,150 @@ mod tests {
             saw_owner_callback,
             "timing out in wait_for should replay claimed completions as OwnerCallback"
         );
+    }
+
+    #[tokio::test]
+    async fn snapshot_reports_current_tool_and_turn_timing() {
+        let _home = temp_zdx_home();
+        let project = tempfile::tempdir().unwrap();
+
+        // A runner that starts a tool, reports it, and blocks until released
+        // so the snapshot is taken with a tool genuinely in flight.
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let release = Arc::new(Mutex::new(Some(release_rx)));
+        let runner: WorkerRunner = Arc::new(move |request: WorkerRunRequest| {
+            let release = Arc::clone(&release);
+            Box::pin(async move {
+                request
+                    .events
+                    .send(WorkerEvent::Activity {
+                        worker_thread_id: request.worker_thread_id.clone(),
+                        activity: WorkerActivity::ToolStarted {
+                            id: "t1".to_string(),
+                            name: "bash".to_string(),
+                        },
+                    })
+                    .unwrap();
+                let rx = release.lock().expect("release lock").take().unwrap();
+                let _ = rx.await;
+                Ok("done".to_string())
+            })
+        });
+
+        let (manager, _rx) = WorkerManager::with_runner(runner);
+        let worker_id = manager
+            .create_worker("owner", project.path(), "go", None, None, None)
+            .unwrap();
+
+        // The FIFO task starts the turn asynchronously; wait for it so the
+        // turn timer is actually running before asserting on it.
+        for _ in 0..200 {
+            if manager.snapshot(&worker_id).unwrap().status == WorkerStatus::Running {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            manager.snapshot(&worker_id).unwrap().status,
+            WorkerStatus::Running
+        );
+
+        // Custom runners send Activity straight to the event channel, so drive
+        // the tap the way the default runner's forwarder does.
+        manager.record_activity(
+            &worker_id,
+            &WorkerActivity::ToolStarted {
+                id: "t1".to_string(),
+                name: "bash".to_string(),
+            },
+        );
+
+        let running = manager.snapshot(&worker_id).unwrap();
+        assert_eq!(running.current_tool.as_deref(), Some("bash"));
+        assert!(running.seconds_since_last_activity.is_some());
+        assert!(running.turn_elapsed_seconds.is_some());
+
+        // Finishing the tool clears the current tool but keeps the turn timer.
+        manager.record_activity(
+            &worker_id,
+            &WorkerActivity::ToolFinished {
+                id: "t1".to_string(),
+                ok: true,
+            },
+        );
+        let between = manager.snapshot(&worker_id).unwrap();
+        assert_eq!(between.current_tool, None);
+        assert!(between.turn_elapsed_seconds.is_some());
+
+        let _ = release_tx.send(());
+        manager.cancel(&worker_id).ok();
+    }
+
+    #[test]
+    fn record_activity_ignores_unknown_workers() {
+        let _home = temp_zdx_home();
+        let (manager, _rx) =
+            WorkerManager::with_runner(Arc::new(|_| Box::pin(async { Ok(String::new()) })));
+        // Must not panic or insert state for a worker it does not know.
+        manager.record_activity(
+            "nope",
+            &WorkerActivity::ToolStarted {
+                id: "t".to_string(),
+                name: "bash".to_string(),
+            },
+        );
+        assert!(manager.snapshot("nope").is_none());
+    }
+
+    /// Exercises the real tap: `forward_activity` (the single funnel the
+    /// default runner uses) must record activity onto manager state, not just
+    /// forward it to the mirror. The unit test above drives `record_activity`
+    /// directly, so this is what proves the wiring.
+    #[tokio::test]
+    async fn forward_activity_records_onto_manager_state() {
+        let _home = temp_zdx_home();
+        let project = tempfile::tempdir().unwrap();
+
+        // Built via `new()` so the cyclic weak self-reference is the one under test.
+        let (manager, _rx) = WorkerManager::new();
+        let worker_id = manager
+            .create_worker("owner", project.path(), "go", None, None, None)
+            .unwrap();
+
+        let (tx, rx) = crate::core::agent::create_event_channel();
+        let (fwd_tx, mut fwd_rx) = mpsc::unbounded_channel();
+        let forwarder = tokio::spawn(forward_activity(
+            rx,
+            worker_id.clone(),
+            fwd_tx,
+            Arc::downgrade(&manager),
+        ));
+
+        tx.send(Arc::new(AgentEvent::ToolOutputDelta {
+            id: worker_id.clone(),
+            chunk: r#"{"t":"start","id":"t1","name":"grep"}"#.to_string(),
+        }))
+        .unwrap();
+
+        // The forwarded event lands only after the tap ran, so receiving it
+        // means the state write already happened.
+        let forwarded = fwd_rx.recv().await.expect("activity forwarded");
+        assert!(matches!(forwarded, WorkerEvent::Activity { .. }));
+
+        let snap = manager.snapshot(&worker_id).unwrap();
+        assert_eq!(snap.current_tool.as_deref(), Some("grep"));
+        assert!(snap.seconds_since_last_activity.is_some());
+
+        tx.send(Arc::new(AgentEvent::ToolOutputDelta {
+            id: worker_id.clone(),
+            chunk: r#"{"t":"done","id":"t1"}"#.to_string(),
+        }))
+        .unwrap();
+        fwd_rx.recv().await.expect("finish forwarded");
+        assert_eq!(manager.snapshot(&worker_id).unwrap().current_tool, None);
+
+        drop(tx);
+        forwarder.await.ok();
+        manager.cancel(&worker_id).ok();
     }
 }
