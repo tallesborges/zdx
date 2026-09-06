@@ -475,6 +475,7 @@ pub(crate) fn spawn_agent_turn(
     };
 
     let agent_opts = AgentOptions {
+        conversation_id: None,
         root: root.to_path_buf(),
         tool_config,
         surface: Some("telegram".to_string()),

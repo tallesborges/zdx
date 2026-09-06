@@ -21,6 +21,8 @@ pub struct GeminiConfig {
     pub max_output_tokens: Option<u32>,
     /// Thinking configuration (level for Gemini 3, budget for Gemini 2.5)
     pub thinking_config: Option<GeminiThinkingConfig>,
+    /// Extra headers sent with every request (e.g. proxy routing headers).
+    pub extra_headers: HeaderMap,
 }
 
 impl GeminiConfig {
@@ -52,6 +54,7 @@ impl GeminiConfig {
             model,
             max_output_tokens,
             thinking_config,
+            extra_headers: HeaderMap::new(),
         })
     }
 }
@@ -147,7 +150,7 @@ impl GeminiClient {
             "{}/models/{}:streamGenerateContent?alt=sse",
             self.config.base_url, self.config.model
         );
-        let headers = build_headers(&self.config.api_key)?;
+        let headers = build_headers(&self.config.api_key, &self.config.extra_headers)?;
         crate::shared::log_request("gemini", &url);
 
         let response = if let Some(trace) = &trace {
@@ -191,7 +194,7 @@ impl GeminiClient {
             "{}/models/{}:generateContent",
             self.config.base_url, self.config.model
         );
-        let headers = build_json_headers(&self.config.api_key)?;
+        let headers = build_json_headers(&self.config.api_key, &self.config.extra_headers)?;
         crate::shared::log_request("gemini-image", &url);
 
         let response = self
@@ -231,7 +234,7 @@ impl GeminiClient {
             "{}/models/{}:generateContent",
             self.config.base_url, self.config.model
         );
-        let headers = build_json_headers(&self.config.api_key)?;
+        let headers = build_json_headers(&self.config.api_key, &self.config.extra_headers)?;
         crate::shared::log_request("gemini-media", &url);
 
         let response = self
@@ -393,7 +396,7 @@ fn parse_image_usage(payload: &Value) -> Option<ImageUsage> {
     })
 }
 
-fn build_headers(api_key: &str) -> anyhow::Result<HeaderMap> {
+fn build_headers(api_key: &str, extra_headers: &HeaderMap) -> anyhow::Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(
         "x-goog-api-key",
@@ -405,11 +408,14 @@ fn build_headers(api_key: &str) -> anyhow::Result<HeaderMap> {
         "user-agent",
         HeaderValue::from_static(crate::shared::USER_AGENT),
     );
+    for (name, value) in extra_headers {
+        headers.insert(name, value.clone());
+    }
     Ok(headers)
 }
 
-fn build_json_headers(api_key: &str) -> anyhow::Result<HeaderMap> {
-    let mut headers = build_headers(api_key)?;
+fn build_json_headers(api_key: &str, extra_headers: &HeaderMap) -> anyhow::Result<HeaderMap> {
+    let mut headers = build_headers(api_key, extra_headers)?;
     headers.insert("accept", HeaderValue::from_static("application/json"));
     Ok(headers)
 }

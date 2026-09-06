@@ -12,6 +12,7 @@ mod exec_subagent;
 mod login_logout;
 mod memory_embed;
 mod memory_relevance;
+mod opencode_go_headers;
 mod quota;
 mod service;
 mod thread_schema;

@@ -28,6 +28,8 @@ pub struct OpenAIConfig {
     pub service_tier: Option<String>,
     /// Use the persistent WebSocket transport instead of HTTP/SSE.
     pub websocket: bool,
+    /// Extra headers sent with every HTTP request (e.g. proxy routing headers).
+    pub extra_headers: HeaderMap,
 }
 
 impl OpenAIConfig {
@@ -68,6 +70,7 @@ impl OpenAIConfig {
             prompt_cache_key,
             service_tier,
             websocket,
+            extra_headers: HeaderMap::new(),
         })
     }
 }
@@ -106,7 +109,7 @@ impl OpenAIClient {
         if let Some(ws) = &self.ws {
             return ws.send_messages_stream(messages, tools, system).await;
         }
-        let headers = build_headers(&self.config.api_key)?;
+        let headers = build_headers(&self.config.api_key, &self.config.extra_headers)?;
         let config = responses_config(&self.config);
         send_responses_stream(
             "openai", &self.http, &config, headers, messages, tools, system,
@@ -123,7 +126,7 @@ impl OpenAIClient {
         prompt: &str,
         options: &OpenAIImageGenerationOptions,
     ) -> Result<OpenAIGenerateImageResponse> {
-        let headers = build_headers(&self.config.api_key)?;
+        let headers = build_headers(&self.config.api_key, &self.config.extra_headers)?;
         let request = build_image_generation_request(
             &self.config.model,
             prompt,
@@ -182,7 +185,7 @@ fn responses_config(config: &OpenAIConfig) -> ResponsesConfig {
     }
 }
 
-fn build_headers(api_key: &str) -> anyhow::Result<HeaderMap> {
+fn build_headers(api_key: &str, extra_headers: &HeaderMap) -> anyhow::Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(
         "Authorization",
@@ -194,6 +197,9 @@ fn build_headers(api_key: &str) -> anyhow::Result<HeaderMap> {
         "user-agent",
         HeaderValue::from_static(crate::shared::USER_AGENT),
     );
+    for (name, value) in extra_headers {
+        headers.insert(name, value.clone());
+    }
     Ok(headers)
 }
 
@@ -233,6 +239,7 @@ mod tests {
             prompt_cache_key: None,
             service_tier: None,
             websocket: false,
+            extra_headers: HeaderMap::new(),
         };
 
         assert_eq!(

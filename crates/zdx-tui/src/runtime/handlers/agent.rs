@@ -33,7 +33,8 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
 
     let messages = tui.thread.messages.clone();
     let config = tui.config.clone();
-    let agent_opts = tui.agent_opts.clone();
+    let mut agent_opts = tui.agent_opts.clone();
+    agent_opts.conversation_id = Some(tui.thread.conversation_id.clone());
     let system_prompt = tui.system_prompt.clone();
     let thread_id = tui.thread.thread_handle.as_ref().map(|h| h.id.clone());
 

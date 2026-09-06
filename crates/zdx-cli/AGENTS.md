@@ -27,6 +27,8 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 
 ## Conventions
 
+- `tests/integration/opencode_go_headers.rs` covers OpenCode session routing, identity isolation, and stability across requests.
+
 - Keep CLI glue thin; shared behavior belongs in `zdx-engine`.
 - Prefer integration tests in `crates/zdx-cli/tests/integration/` for CLI behavior. Do not add top-level `tests/*.rs` files — they would compile as separate test binaries and slow down `just ci`.
 

@@ -52,6 +52,7 @@ pub struct ExecOptions {
 impl From<&ExecOptions> for AgentOptions {
     fn from(opts: &ExecOptions) -> Self {
         AgentOptions {
+            conversation_id: None,
             root: opts.root.clone(),
             tool_config: opts.tool_config.clone(),
             surface: Some("exec".to_string()),

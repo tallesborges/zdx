@@ -32,6 +32,8 @@ use crate::tools::{ToolContext, ToolDefinition, ToolRegistry, ToolResult, ToolSe
 /// Options for agent execution.
 #[derive(Debug, Clone)]
 pub struct AgentOptions {
+    /// Stable identity for a threadless multi-turn conversation (`OpenCode` routing).
+    pub conversation_id: Option<String>,
     /// Root directory for file operations.
     pub root: PathBuf,
     /// Tool configuration (registry + selection).
@@ -1205,7 +1207,13 @@ fn build_run_turn_setup(
         max_tokens,
         config_max_tokens: config.max_tokens,
         thinking_level,
-        cache_key: thread_id.map(str::to_owned),
+        cache_key: thread_id
+            .or_else(|| {
+                (provider == ProviderKind::OpencodeGo)
+                    .then_some(options.conversation_id.as_deref())
+                    .flatten()
+            })
+            .map(str::to_owned),
         text_verbosity: options.text_verbosity,
         service_tier: options
             .service_tier
@@ -4848,6 +4856,7 @@ mod tests {
                 model: "gemini-3-pro-preview".to_string(),
                 max_output_tokens: None,
                 thinking_config: None,
+                extra_headers: reqwest::header::HeaderMap::new(),
             })),
             tools: Vec::new(),
             enabled_tools: HashSet::new(),

@@ -431,6 +431,7 @@ impl TuiState {
     ) -> Self {
         let tool_config = ToolConfig::default();
         let agent_opts = AgentOptions {
+            conversation_id: None,
             root,
             tool_config,
             surface: Some("chat".to_string()),

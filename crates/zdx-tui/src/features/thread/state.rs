@@ -13,6 +13,8 @@ use crate::mutations::ThreadMutation;
 ///
 /// Encapsulates the active thread, message history, and usage tracking.
 pub struct ThreadState {
+    /// Routing identity retained across turns even when persistence is disabled.
+    pub conversation_id: String,
     /// Active thread for persistence (if enabled).
     pub thread_handle: Option<Thread>,
 
@@ -42,6 +44,7 @@ impl ThreadState {
     /// Creates a new `ThreadState` with no active thread.
     pub fn new() -> Self {
         Self {
+            conversation_id: uuid::Uuid::new_v4().to_string(),
             thread_handle: None,
             title: None,
             messages: Vec::new(),
@@ -59,6 +62,7 @@ impl ThreadState {
             .flatten();
         Self {
             thread_handle,
+            conversation_id: uuid::Uuid::new_v4().to_string(),
             title,
             messages,
             model_override: None,
@@ -70,10 +74,14 @@ impl ThreadState {
     /// Applies a cross-slice thread mutation.
     pub fn apply(&mut self, mutation: ThreadMutation) {
         match mutation {
-            ThreadMutation::ClearMessages => self.messages.clear(),
+            ThreadMutation::ClearMessages => {
+                self.messages.clear();
+                self.conversation_id = uuid::Uuid::new_v4().to_string();
+            }
             ThreadMutation::SetMessages(messages) => self.messages = messages,
             ThreadMutation::AppendMessage(message) => self.messages.push(message),
             ThreadMutation::SetThread(thread_handle) => {
+                self.conversation_id = uuid::Uuid::new_v4().to_string();
                 self.thread_handle = thread_handle;
                 if self.thread_handle.is_none() {
                     self.title = None;
@@ -280,6 +288,22 @@ impl ThreadUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opencode_session_survives_threadless_turns_and_rotates_on_new_chat() {
+        let mut thread = ThreadState::with_thread(None, Vec::new());
+        let session = thread.conversation_id.clone();
+        thread.apply(ThreadMutation::AppendMessage(ChatMessage::user("first")));
+        thread.apply(ThreadMutation::SetMessages(thread.messages.clone()));
+        thread.apply(ThreadMutation::AppendMessage(ChatMessage::user("second")));
+        assert_eq!(thread.conversation_id, session);
+        assert_ne!(ThreadState::new().conversation_id, session);
+        thread.apply(ThreadMutation::ClearMessages);
+        assert_ne!(thread.conversation_id, session);
+        let cleared = thread.conversation_id.clone();
+        thread.apply(ThreadMutation::SetThread(None));
+        assert_ne!(thread.conversation_id, cleared);
+    }
 
     #[test]
     fn test_thread_usage_default() {

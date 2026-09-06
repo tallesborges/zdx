@@ -2,7 +2,9 @@
 //! API client based on the model registry hint.
 
 use anyhow::Result;
-use reqwest::header::HeaderMap;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use reqwest::header::{HeaderMap, HeaderValue};
 use zdx_types::ToolDefinition;
 
 use crate::anthropic::api::{AnthropicClient, AnthropicConfig};
@@ -97,6 +99,26 @@ fn resolve_go_route(api_hint: Option<&str>) -> GoRoute {
         .unwrap_or(GoRoute::OpenAICompletions)
 }
 
+/// `OpenCode` Go requires a stable per-conversation id on every request so it
+/// can keep a conversation on one prompt cache; requests without it are rejected.
+const SESSION_HEADER: &str = "x-opencode-session";
+
+fn session_id(cache_key: Option<&str>) -> String {
+    match cache_key {
+        Some(key) => format!("thread:{}", URL_SAFE_NO_PAD.encode(key)),
+        // Created once per client, outside the request/retry/tool loops.
+        None => format!("run:{}", uuid::Uuid::new_v4()),
+    }
+}
+
+fn session_headers(cache_key: Option<&str>) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    let value = HeaderValue::from_str(&session_id(cache_key))
+        .expect("session id is encoded as header-safe ASCII");
+    headers.insert(SESSION_HEADER, value);
+    headers
+}
+
 /// `OpenCode` Go meta-provider that routes requests to the appropriate API
 /// client based on the model registry hint.
 pub struct OpencodeGoClient {
@@ -107,6 +129,7 @@ impl OpencodeGoClient {
     /// Creates a new `OpencodeGoClient`, selecting the inner provider based on the registry hint.
     pub fn new(config: OpencodeGoConfig) -> Self {
         let route = resolve_go_route(config.api_hint.as_deref());
+        let session_headers = session_headers(config.cache_key.as_deref());
         let inner: Box<dyn StreamingProvider> = match route {
             GoRoute::AnthropicMessages => {
                 // Anthropic Messages API — base_url as-is (client appends /v1/messages)
@@ -118,6 +141,7 @@ impl OpencodeGoClient {
                     thinking_enabled: config.thinking_enabled,
                     thinking_budget_tokens: config.thinking_budget_tokens,
                     thinking_effort: config.thinking_effort,
+                    extra_headers: session_headers,
                 }))
             }
             GoRoute::OpenAIResponses => {
@@ -132,6 +156,7 @@ impl OpencodeGoClient {
                     prompt_cache_key: config.cache_key,
                     service_tier: None,
                     websocket: false,
+                    extra_headers: session_headers,
                 }))
             }
             GoRoute::GoogleGenerativeAI => {
@@ -142,6 +167,7 @@ impl OpencodeGoClient {
                     model: config.model,
                     max_output_tokens: config.max_tokens,
                     thinking_config: config.gemini_thinking,
+                    extra_headers: session_headers,
                 }))
             }
             GoRoute::OpenAICompletions => {
@@ -158,7 +184,7 @@ impl OpencodeGoClient {
                         max_completion_tokens: None,
                         reasoning_effort: None,
                         prompt_cache_key: None,
-                        extra_headers: HeaderMap::new(),
+                        extra_headers: session_headers,
                         include_usage: true,
                         include_reasoning_content: config.thinking_enabled,
                         thinking: config
@@ -222,6 +248,24 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_encoding_preserves_distinct_thread_ids() {
+        let ids = ["foo!", "foo?", "foo", "foo%21", "", "é", "e", "\r\n"];
+        let mut sessions = std::collections::HashSet::new();
+        for id in ids {
+            let headers = session_headers(Some(id));
+            let session = headers[SESSION_HEADER].to_str().unwrap();
+            assert_eq!(session, session_id(Some(id)));
+            assert!(sessions.insert(session.to_owned()));
+            assert_eq!(
+                URL_SAFE_NO_PAD
+                    .decode(session.strip_prefix("thread:").unwrap())
+                    .unwrap(),
+                id.as_bytes()
+            );
+        }
+    }
 
     #[test]
     fn test_route_from_registry_api_hint() {

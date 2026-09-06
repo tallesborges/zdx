@@ -1,6 +1,7 @@
 //! Anthropic API key provider (Messages API).
 
 use anyhow::{Result, bail};
+use reqwest::header::HeaderMap;
 use zdx_types::ToolDefinition;
 
 use super::shared::{
@@ -30,6 +31,8 @@ pub struct AnthropicConfig {
     pub thinking_budget_tokens: u32,
     /// Optional effort level for supported models
     pub thinking_effort: Option<EffortLevel>,
+    /// Extra headers sent with every request (e.g. proxy routing headers).
+    pub extra_headers: HeaderMap,
 }
 
 impl AnthropicConfig {
@@ -70,6 +73,7 @@ impl AnthropicConfig {
             thinking_enabled,
             thinking_budget_tokens,
             thinking_effort,
+            extra_headers: HeaderMap::new(),
         })
     }
 }
@@ -141,9 +145,13 @@ impl AnthropicClient {
         let url = format!("{}/v1/messages", self.config.base_url);
 
         send_streaming_request("anthropic", &self.http, &url, &request, |builder| {
-            let builder = builder
+            let mut builder = builder
                 .header("anthropic-version", API_VERSION)
                 .header("x-api-key", &self.config.api_key);
+
+            for (name, value) in &self.config.extra_headers {
+                builder = builder.header(name, value);
+            }
 
             if beta_header.is_empty() {
                 builder
@@ -283,6 +291,7 @@ mod tests {
             thinking_enabled: true,
             thinking_budget_tokens: 2048,
             thinking_effort: Some(EffortLevel::High),
+            extra_headers: HeaderMap::new(),
         };
         let client = AnthropicClient::new(config);
 
@@ -308,6 +317,7 @@ mod tests {
             thinking_enabled: true,
             thinking_budget_tokens: 1024,
             thinking_effort: Some(EffortLevel::Medium),
+            extra_headers: HeaderMap::new(),
         };
         let client = AnthropicClient::new(config);
 
