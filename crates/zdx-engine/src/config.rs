@@ -3786,9 +3786,9 @@ file = "prompts/template.md"
 
         fs::write(
             &config_path,
-            r#"[subagents]
+            "[subagents]
 enabled = true
-"#,
+",
         )
         .unwrap();
 

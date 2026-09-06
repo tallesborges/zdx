@@ -1852,8 +1852,8 @@ mod tests {
 
         // The forwarded event lands only after the tap ran, so receiving it
         // means the state write already happened.
-        let forwarded = fwd_rx.recv().await.expect("activity forwarded");
-        assert!(matches!(forwarded, WorkerEvent::Activity { .. }));
+        let activity_event = fwd_rx.recv().await.expect("activity forwarded");
+        assert!(matches!(activity_event, WorkerEvent::Activity { .. }));
 
         let snap = manager.snapshot(&worker_id).unwrap();
         assert_eq!(snap.current_tool.as_deref(), Some("grep"));

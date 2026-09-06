@@ -37,6 +37,9 @@ impl Drop for TestZdxHomeGuard {
 }
 
 /// Returns an isolated RAII test environment.
+///
+/// # Panics
+/// Panics if the temporary directory cannot be created.
 pub fn temp_zdx_home() -> TestZdxHomeGuard {
     let guard = TEST_MUTEX
         .lock()
