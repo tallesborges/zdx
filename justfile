@@ -89,9 +89,9 @@ web-demo:
 web-check:
     cd apps/web && bun install --frozen-lockfile && bun run check
 
-# Build the Mini App into apps/web/dist
+# Build the Mini App only when inputs or dist contents change
 web-build:
-    cd apps/web && bun install --frozen-lockfile && bun run build
+    cd apps/web && bun run build-cached.mjs
 
 # ─── Build ────────────────────────────────────────
 

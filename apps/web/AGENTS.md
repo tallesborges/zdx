@@ -8,6 +8,8 @@ has been removed.
 
 ## Where things are
 
+- `build-cached.mjs`: content-fingerprinted build wrapper for `just web-build`; cache metadata lives in `node_modules/.cache/zdx-web-build.json`, never in embedded `dist`
+- `build-cached.test.mjs`: temporary-fixture tests for no-op builds, input invalidation, output integrity, and failures
 - `src/main.ts`: entrypoint; initializes the Telegram bridge before mounting
 - `src/App.svelte`: framed app shell (shell colour behind, rounded surface panel) + drawer host
 - `src/app.css`: the whole design system — Tailwind v4 `@theme` tokens
@@ -127,7 +129,8 @@ design live in `.zdx/design-reference/` — local only, gitignored, not shipped.
 - `just web-demo` — dev server with fixture data, no bot needed (`?demo=1`)
 - `just web-dev` — dev server proxying `/api` to a running `zdx bot` on `:4141`
 - `just web-check` — `svelte-check`
-- `just web-build` — production build into `apps/web/dist/`
+- `just web-build` — production build into `apps/web/dist/`; skips Bun install/Vite when web input contents (including configs, lockfile, `.env*`, Bun version, `VITE_*` and `NODE_ENV`) and the complete dist contents match the last successful build. No-op builds preserve dist timestamps so Cargo stays fresh. `node_modules`, `dist`, `.git`, and `AGENTS.md` are excluded from input hashing.
+- `bun test apps/web/build-cached.test.mjs` — build cache regression tests (from the workspace root)
 
 Working against the real API in a desktop browser needs signed initData: put a
 real one in `apps/web/.env.local` as `ZDX_DEV_INIT_DATA=...`.

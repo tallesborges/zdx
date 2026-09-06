@@ -59,8 +59,9 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `just update-config` (maintainer: refresh default_config.toml)
 - `just codebase` (generate codebase.txt for entire workspace)
 - `just codebase crates/zdx-tui` (generate codebase.txt for specific crate)
-- `just build-release` (build release binary)
+- `just build-release` (build release binary; skips the web build when input fingerprints and dist contents match)
 - `just web-demo` / `just web-dev` / `just web-check` / `just web-build` (Svelte Mini App in `apps/web`; requires `bun`)
+- `bun test apps/web/build-cached.test.mjs` (web-build cache/invalidation regression tests)
 
 ## Verification
 
