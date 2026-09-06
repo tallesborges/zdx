@@ -784,7 +784,7 @@ pub struct Config {
     #[serde(default = "default_prompt_builder_model")]
     pub prompt_builder_model: String,
 
-    /// Thinking level for extended thinking feature
+    /// Effective thinking level: explicit config field, then the model suffix, then Off.
     #[serde(default)]
     pub thinking_level: ThinkingLevel,
 
@@ -1047,7 +1047,7 @@ impl Config {
         if path.exists() {
             let contents = fs::read_to_string(path)
                 .with_context(|| format!("Failed to read config from {}", path.display()))?;
-            toml::from_str(&contents)
+            Self::parse_config(&contents)
                 .with_context(|| format!("Failed to parse config from {}", path.display()))
         } else {
             Ok(Config::default())
@@ -1088,7 +1088,20 @@ impl Config {
 
         tracing::debug!(layers = %applied.join(", "), "Loaded config layers");
 
-        toml::from_str(&merged.to_string()).context("Failed to parse merged config")
+        Self::parse_config(&merged.to_string()).context("Failed to parse merged config")
+    }
+
+    fn parse_config(contents: &str) -> Result<Self> {
+        let mut config: Self = toml::from_str(contents)?;
+        let document: toml::Value = toml::from_str(contents)?;
+        let explicit_thinking = document.get("thinking_level").is_some();
+        // Resolve after merging: even an inherited explicit Off beats a model suffix.
+        if !explicit_thinking {
+            config.thinking_level = crate::models::ModelSpec::parse(&config.model)
+                .thinking
+                .unwrap_or_default();
+        }
+        Ok(config)
     }
 
     /// Saves only the model field to the config file.
@@ -3063,6 +3076,98 @@ max_tokens = 2048
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.thinking_level, ThinkingLevel::High);
         assert!(config.thinking_level.is_enabled());
+    }
+
+    #[test]
+    fn test_thinking_config_model_suffix_fallback() {
+        use std::fmt::Write as _;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for (model, legacy, expected) in [
+            ("openai-codex:gpt-6-astra@high", None, ThinkingLevel::High),
+            (
+                "openai-codex:gpt-6-astra@high",
+                Some("off"),
+                ThinkingLevel::Off,
+            ),
+            (
+                "openai-codex:gpt-6-astra@off",
+                Some("high"),
+                ThinkingLevel::High,
+            ),
+            (
+                "openai-codex:gpt-6-astra@high",
+                Some("low"),
+                ThinkingLevel::Low,
+            ),
+            (
+                "openai-codex:gpt-6-astra",
+                Some("high"),
+                ThinkingLevel::High,
+            ),
+            ("openai-codex:gpt-6-astra", None, ThinkingLevel::Off),
+            ("openai-codex:gpt-6-astra@fast", None, ThinkingLevel::Off),
+            (
+                "openai-codex:gpt-6-astra@fast@high",
+                None,
+                ThinkingLevel::High,
+            ),
+            (
+                "openai-codex@work:gpt-6-astra@high@fast",
+                None,
+                ThinkingLevel::High,
+            ),
+        ] {
+            let mut contents = format!("model = {model:?}\n");
+            if let Some(level) = legacy {
+                writeln!(contents, "thinking_level = {level:?}").unwrap();
+            }
+            fs::write(&path, &contents).unwrap();
+            for config in [
+                Config::load_from(&path).unwrap(),
+                Config::load_layered(std::slice::from_ref(&path)).unwrap(),
+            ] {
+                assert_eq!(config.thinking_level, expected, "{contents}");
+                assert_eq!(config.model, model);
+            }
+            assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+        }
+    }
+
+    #[test]
+    fn test_thinking_config_suffix_resolves_after_layer_merge() {
+        let dir = tempdir().unwrap();
+        let global = dir.path().join("global.toml");
+        let workspace = dir.path().join("workspace.toml");
+        let layers = [global.clone(), workspace.clone()];
+        for (base, overlay, expected) in [
+            (
+                "thinking_level = \"off\"",
+                "model = \"openai-codex:gpt-6-astra@high\"",
+                ThinkingLevel::Off,
+            ),
+            (
+                "model = \"openai-codex:gpt-6-astra@high\"",
+                "thinking_level = \"off\"",
+                ThinkingLevel::Off,
+            ),
+            (
+                "model = \"openai-codex:gpt-6-astra@high\"",
+                "model = \"openai-codex:gpt-6-astra@low\"",
+                ThinkingLevel::Low,
+            ),
+            (
+                "model = \"openai-codex:gpt-6-astra@high\"",
+                "model = \"openai-codex:gpt-6-astra\"",
+                ThinkingLevel::Off,
+            ),
+        ] {
+            fs::write(&global, base).unwrap();
+            fs::write(&workspace, overlay).unwrap();
+            let config = Config::load_layered(&layers).unwrap();
+            assert_eq!(config.thinking_level, expected, "{base}; {overlay}");
+        }
     }
 
     /// Thinking: old configs without `thinking_level` use defaults (serde default).

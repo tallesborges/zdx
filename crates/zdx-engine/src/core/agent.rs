@@ -2516,6 +2516,40 @@ mod tests {
     use tokio::time::{Duration, timeout};
 
     use super::*;
+
+    #[tokio::test]
+    async fn main_turn_uses_suffix_only_when_legacy_thinking_is_absent() {
+        let home = crate::test_support::temp_zdx_home();
+        let path = home.path().join("config.toml");
+        let options = AgentOptions {
+            conversation_id: None,
+            root: home.path().to_path_buf(),
+            tool_config: ToolConfig::new(ToolRegistry::new(), ToolSelection::Explicit(Vec::new())),
+            surface: None,
+            text_verbosity: None,
+            service_tier: None,
+            activity_kind: None,
+            activity_parent_thread_id: None,
+            activity_subagent_name: None,
+        };
+        for (legacy, expected) in [
+            ("", ThinkingLevel::High),
+            ("thinking_level = \"off\"", ThinkingLevel::Off),
+        ] {
+            std::fs::write(
+                &path,
+                format!("model = \"anthropic:claude-sonnet-4-6@high\"\n{legacy}\n"),
+            )
+            .unwrap();
+            let mut config = Config::load_from(&path).unwrap();
+            config.providers.anthropic.api_key = Some("test-key".to_string());
+            config.subagents.enabled = false;
+            let setup = build_run_turn_setup(&config, &options, None).unwrap();
+            assert_eq!(setup.thinking_level, expected);
+            assert_eq!(setup.model, "claude-sonnet-4-6");
+            assert_eq!(setup.tool_ctx.thinking_level, Some(expected));
+        }
+    }
     use crate::providers::gemini::{GeminiClient, GeminiConfig};
 
     #[test]
