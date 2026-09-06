@@ -692,6 +692,55 @@ fn models_equivalent(a: &str, b: &str) -> bool {
     ra.kind == rb.kind && ra.model == rb.model
 }
 
+/// Tracks the on-disk state of a set of config layers so a long-lived process
+/// (bot, TUI) can notice edits made outside it — the monitor's Config tab, an
+/// editor — and re-read them at a turn boundary instead of at restart.
+///
+/// A layer is stamped by modified time + size, and a missing layer stamps as
+/// `None`, so creating or deleting one counts as a change. Checking is a
+/// `stat` per layer; the parse only happens when something actually changed.
+#[derive(Debug, Default, Clone)]
+pub struct ConfigWatch {
+    stamps: std::collections::HashMap<PathBuf, LayerStamp>,
+}
+
+type LayerStamp = Option<(std::time::SystemTime, u64)>;
+
+fn layer_stamp(path: &Path) -> LayerStamp {
+    let meta = fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+impl ConfigWatch {
+    /// Stamps `layers` as their current on-disk state.
+    #[must_use]
+    pub fn new(layers: &[PathBuf]) -> Self {
+        let mut watch = Self::default();
+        watch.restamp(layers);
+        watch
+    }
+
+    /// Whether any of `layers` differs from the last stamp. An untracked layer
+    /// counts as changed, so a caller that switches to a different layer set
+    /// (another workspace root) reloads for it.
+    #[must_use]
+    pub fn changed(&self, layers: &[PathBuf]) -> bool {
+        self.stamps.len() != layers.len()
+            || layers.iter().any(|path| {
+                let stamp = layer_stamp(path);
+                self.stamps.get(path) != Some(&stamp)
+            })
+    }
+
+    /// Replaces the tracked set with `layers` at their current on-disk state.
+    pub fn restamp(&mut self, layers: &[PathBuf]) {
+        self.stamps = layers
+            .iter()
+            .map(|path| (path.clone(), layer_stamp(path)))
+            .collect();
+    }
+}
+
 /// Main configuration structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -2208,6 +2257,46 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    /// `ConfigWatch` is the freshness check long-lived surfaces (bot, TUI) run
+    /// at a turn boundary, so it must fire on edits, on creation of a layer
+    /// that did not exist, on deletion, and for layers it has never stamped.
+    #[test]
+    fn config_watch_detects_layer_edits() {
+        let dir = tempdir().unwrap();
+        let tracked = dir.path().join("config.toml");
+        let missing = dir.path().join("overlay.toml");
+        fs::write(&tracked, "model = \"before\"\n").unwrap();
+
+        let layers = vec![tracked.clone(), missing.clone()];
+        let mut watch = ConfigWatch::new(&layers);
+        assert!(!watch.changed(&layers), "untouched layers are not changed");
+
+        fs::write(&tracked, "model = \"after-the-edit\"\n").unwrap();
+        assert!(watch.changed(&layers), "an edited layer is changed");
+
+        watch.restamp(&layers);
+        assert!(!watch.changed(&layers));
+
+        // A layer that appears counts as a change.
+        fs::write(&missing, "model = \"overlay\"\n").unwrap();
+        assert!(watch.changed(&layers));
+        watch.restamp(&layers);
+
+        // So does one that disappears.
+        fs::remove_file(&missing).unwrap();
+        assert!(watch.changed(&layers));
+        watch.restamp(&layers);
+
+        // An untracked layer (e.g. switching to another workspace root) is
+        // always treated as changed, so its config gets loaded.
+        let other = dir.path().join("other/.zdx/config.toml");
+        assert!(watch.changed(&[other]));
+        assert!(
+            watch.changed(&layers[..1]),
+            "leaving a workspace layer reloads too"
+        );
+    }
 
     /// Custom providers: a model prefixed with a configured custom-provider
     /// name resolves to that provider config + bare model id.

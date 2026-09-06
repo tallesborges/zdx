@@ -61,6 +61,9 @@ pub(crate) async fn dispatch_message(
         return;
     }
 
+    // Config edits made outside this process apply from here on.
+    context.reload_config_if_changed();
+
     if let Some(text) = message.text.as_deref()
         && bypasses_queue(text)
     {

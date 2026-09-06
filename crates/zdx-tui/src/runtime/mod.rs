@@ -194,6 +194,20 @@ impl TuiRuntime {
         thread_handle: Option<Thread>,
         history: Vec<ChatMessage>,
     ) -> Result<Self> {
+        let model_override = thread_handle
+            .as_ref()
+            .map(|handle| {
+                zdx_engine::core::thread_persistence::read_thread_model_override(&handle.id)
+            })
+            .transpose()?
+            .flatten();
+        let thinking_override = thread_handle
+            .as_ref()
+            .map(|handle| {
+                zdx_engine::core::thread_persistence::read_thread_thinking_override(&handle.id)
+            })
+            .transpose()?
+            .flatten();
         // Set up panic hook BEFORE entering alternate screen
         terminal::install_panic_hook();
         interrupt::set_restore_hook(|| {
@@ -220,8 +234,15 @@ impl TuiRuntime {
         }
 
         // Create state
-        let state = AppState::with_history(config, root, system_prompt, thread_handle, history)
+        let config_watch = zdx_engine::config::ConfigWatch::new(
+            &zdx_engine::config::paths::config_layer_paths_for(&root),
+        );
+        let mut state = AppState::with_history(config, root, system_prompt, thread_handle, history)
             .with_custom_commands(custom_load.commands);
+        state.tui.config_watch = config_watch;
+        state.tui.thread.model_override = model_override;
+        state.tui.thread.thinking_override = thinking_override;
+        state.tui.apply_reloaded_config(state.tui.config.clone());
 
         // Create inbox channel for async event collection
         let (inbox_tx, inbox_rx) = mpsc::unbounded_channel();
@@ -537,6 +558,27 @@ impl TuiRuntime {
         });
     }
 
+    /// Re-reads the config layers for a tab's root when any of them changed on
+    /// disk, so edits made outside this process (the monitor's Config tab, an
+    /// editor) apply to the next turn instead of waiting for a restart.
+    /// `None` targets the active tab.
+    fn reload_config_if_changed(&mut self, tab_id: Option<crate::state::TabId>) {
+        let tab = match tab_id {
+            None => Some(&mut self.state.tui),
+            Some(tab_id) => self
+                .state
+                .background_tabs
+                .iter_mut()
+                .find(|tab| tab.tab_id == tab_id),
+        };
+        let Some(tab) = tab else {
+            return;
+        };
+
+        let layers = zdx_engine::config::paths::config_layer_paths_for(&tab.agent_opts.root);
+        reload_tab_config(tab, &layers);
+    }
+
     /// Executes a single effect by dispatching to the appropriate handler.
     ///
     /// Uses `spawn_task` for async task lifecycles.
@@ -579,10 +621,12 @@ impl TuiRuntime {
 
             // Agent effects (still returns event for now - streaming is special)
             UiEffect::StartAgentTurn => {
+                self.reload_config_if_changed(None);
                 let event = handlers::spawn_agent_turn(&self.state.tui);
                 self.dispatch_event(event);
             }
             UiEffect::StartAgentTurnInBackgroundTab { tab_id } => {
+                self.reload_config_if_changed(Some(tab_id));
                 // Spawn the agent task against the background tab's
                 // `TuiState` and re-route the resulting `AgentSpawned`
                 // event so it lands on the same background tab. Without
@@ -1426,6 +1470,25 @@ fn map_loaded_to_tab(event: UiEvent) -> UiEvent {
     }
 }
 
+fn reload_tab_config(tab: &mut crate::state::TuiState, layers: &[PathBuf]) {
+    if !tab.config_watch.changed(layers) {
+        return;
+    }
+
+    // Stamp before reading so a concurrent edit still invalidates the next turn.
+    let watch = zdx_engine::config::ConfigWatch::new(layers);
+    match Config::load_layered(layers) {
+        Ok(config) => {
+            tracing::info!(model = %config.model, "Reloaded config after on-disk change");
+            tab.apply_reloaded_config(config);
+        }
+        Err(err) => {
+            tracing::warn!(%err, "Failed to reload config; keeping the previous one");
+        }
+    }
+    tab.config_watch = watch;
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1436,6 +1499,59 @@ mod tests {
     use zdx_engine::core::events::TurnStatus;
 
     use super::*;
+
+    #[test]
+    fn config_reload_reaches_each_tab_after_another_tab_restamps() {
+        let dir = tempfile::tempdir().unwrap();
+        let global = dir.path().join("config.toml");
+        let overlay = dir.path().join("overlay.toml");
+        std::fs::write(&global, "model = \"before\"\n").unwrap();
+        let layers = vec![global.clone(), overlay.clone()];
+        let config = Config::load_layered(&layers).unwrap();
+        let mut app = AppState::new(config.clone(), dir.path().into(), None, None);
+        app.tui.config_watch = zdx_engine::config::ConfigWatch::new(&layers);
+        let mut other = crate::state::TuiState::with_history(
+            app.next_tab_id(),
+            crate::state::TabKind::Main,
+            config,
+            dir.path().into(),
+            None,
+            None,
+            Vec::new(),
+        );
+        other.config_watch = app.tui.config_watch.clone();
+        app.push_tab(other);
+
+        std::fs::write(
+            &global,
+            "model = \"after-global-edit\"\n[subagents.overrides.oracle]\nmodel = \"oracle-new\"\n",
+        )
+        .unwrap();
+        reload_tab_config(&mut app.tui, &layers);
+        assert_eq!(app.background_tabs[0].config.model, "before");
+        reload_tab_config(&mut app.background_tabs[0], &layers);
+        for tab in [&app.tui, &app.background_tabs[0]] {
+            assert_eq!(tab.config.model, "after-global-edit");
+            assert_eq!(
+                tab.config.subagents.overrides["oracle"].model.as_deref(),
+                Some("oracle-new")
+            );
+            assert!(!tab.config_watch.changed(&layers));
+        }
+
+        std::fs::write(&overlay, "model = \"workspace-choice\"\n").unwrap();
+        reload_tab_config(&mut app.background_tabs[0], &layers);
+        reload_tab_config(&mut app.tui, &layers);
+        assert_eq!(app.tui.config.model, "workspace-choice");
+        assert_eq!(app.background_tabs[0].config.model, "workspace-choice");
+
+        std::fs::write(&overlay, "broken = [").unwrap();
+        reload_tab_config(&mut app.tui, &layers);
+        assert_eq!(app.tui.config.model, "workspace-choice");
+        std::fs::remove_file(&overlay).unwrap();
+        reload_tab_config(&mut app.tui, &layers);
+        assert_eq!(app.tui.config.model, "after-global-edit");
+    }
 
     #[test]
     fn drain_agent_rx_folds_deltas_and_preserves_lifecycle_order() {

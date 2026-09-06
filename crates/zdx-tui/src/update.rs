@@ -73,6 +73,8 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             if let Some(handle) = thread_handle {
                 app.tui.mark_thread_running(handle.id.clone());
                 app.tui.thread.thread_handle = Some(handle);
+                app.tui.thread.model_override = Some(app.tui.config.model.clone());
+                app.tui.thread.thinking_override = Some(app.tui.config.thinking_level);
             } else if let Some(thread_id) = app
                 .tui
                 .thread
@@ -123,6 +125,8 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             if let Some(tab) = app.background_tab_mut(tab_id) {
                 if let Some(handle) = thread_handle {
                     tab.mark_thread_running(handle.id.clone());
+                    tab.thread.model_override = Some(tab.config.model.clone());
+                    tab.thread.thinking_override = Some(tab.config.thinking_level);
                     tab.thread.thread_handle = Some(handle);
                 } else if let Some(thread_id) = tab
                     .thread
@@ -1298,6 +1302,7 @@ fn create_btw_tab(tab_id: TabId, parent_thread_id: Option<String>, parent: &TuiS
         tasks: crate::common::Tasks::default(),
         auth: crate::auth::AuthState::new(),
         config: parent.config.clone(),
+        config_watch: parent.config_watch.clone(),
         base_model: parent.base_model.clone(),
         base_thinking_level: parent.base_thinking_level,
         last_skill_repo: parent.last_skill_repo.clone(),
@@ -1338,6 +1343,7 @@ fn create_main_tab(tab_id: TabId, parent: &TuiState) -> TuiState {
         Vec::new(),
     );
     tab.last_skill_repo.clone_from(&parent.last_skill_repo);
+    tab.config_watch = parent.config_watch.clone();
     tab.show_debug_status = parent.show_debug_status;
     tab
 }
@@ -1405,6 +1411,7 @@ fn create_thread_tab(
         tasks: crate::common::Tasks::default(),
         auth: crate::auth::AuthState::new(),
         config,
+        config_watch: parent.config_watch.clone(),
         base_model: parent.base_model.clone(),
         base_thinking_level: parent.base_thinking_level,
         last_skill_repo: parent.last_skill_repo.clone(),
@@ -1724,6 +1731,25 @@ mod tests {
 
     fn unique_thread_id(prefix: &str) -> String {
         format!("{prefix}-{}", uuid::Uuid::new_v4())
+    }
+
+    #[test]
+    fn new_tabs_inherit_config_stamps_without_acknowledging_unread_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let layers = vec![dir.path().join("config.toml")];
+        std::fs::write(&layers[0], "model = \"before\"\n").unwrap();
+        let config = zdx_engine::config::Config::load_layered(&layers).unwrap();
+        let mut app = AppState::new(config, dir.path().into(), None, None);
+        app.tui.config_watch = zdx_engine::config::ConfigWatch::new(&layers);
+        std::fs::write(&layers[0], "model = \"after-edit\"\n").unwrap();
+
+        let mut main = create_main_tab(app.next_tab_id(), &app.tui);
+        let btw = create_btw_tab(app.next_tab_id(), None, &app.tui);
+        assert!(main.config_watch.changed(&layers));
+        assert!(btw.config_watch.changed(&layers));
+        main.config_watch.restamp(&layers);
+        assert!(app.tui.config_watch.changed(&layers));
+        assert!(btw.config_watch.changed(&layers));
     }
 
     /// btw tabs answer by reference, so they must not copy the parent's

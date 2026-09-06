@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -60,8 +60,12 @@ pub(crate) struct BotContext {
     client: TelegramClient,
     config: RwLock<Config>,
     /// Per-profile config, keyed by `chat_id`, layered from the profile's cwd.
-    /// Built once at startup because profiles are static in `config.toml`.
+    /// Rebuilt whenever a config layer changes on disk (see
+    /// [`BotContext::reload_config_if_changed`]).
     profile_configs: RwLock<HashMap<i64, Config>>,
+    /// Size + mtime of every config layer feeding `config`/`profile_configs`,
+    /// so a turn can detect on-disk edits without re-parsing every time.
+    config_watch: std::sync::Mutex<zdx_engine::config::ConfigWatch>,
     allowlist_user_ids: HashSet<i64>,
     allowlist_chat_ids: HashSet<i64>,
     root: PathBuf,
@@ -132,10 +136,14 @@ impl BotContext {
         } = deps;
         let root = root.canonicalize().unwrap_or(root);
         let profile_configs = load_profile_configs(&config);
+        let config_stamps = std::sync::Mutex::new(zdx_engine::config::ConfigWatch::new(
+            &watched_config_layers(&root, &config),
+        ));
         Self {
             client,
             config: RwLock::new(config),
             profile_configs: RwLock::new(profile_configs),
+            config_watch: config_stamps,
             allowlist_user_ids,
             allowlist_chat_ids,
             root,
@@ -185,6 +193,50 @@ impl BotContext {
         }
 
         self.config()
+    }
+
+    /// Re-reads the config layers when any of them changed on disk, so edits
+    /// made outside this process (monitor Config tab, an editor) apply to the
+    /// next turn instead of waiting for a restart.
+    ///
+    /// Runtime `/model` and `/thinking` changes survive this: both persist to
+    /// the config layer for the chat's root before mutating the in-memory
+    /// config, so the reload reads the same value back.
+    ///
+    /// Startup-derived state (allowlists, Telegram settings, tool registry) is
+    /// not affected by a reload and still needs a restart.
+    pub(crate) fn reload_config_if_changed(&self) {
+        let mut watch = self
+            .config_watch
+            .lock()
+            .expect("bot config watch lock poisoned");
+        if !watch.changed(&watched_config_layers(&self.root, &self.config())) {
+            return;
+        }
+
+        match Config::load_layered(&zdx_engine::config::paths::config_layer_paths_for(
+            &self.root,
+        )) {
+            Ok(config) => {
+                let profile_configs = load_profile_configs(&config);
+                // Restamp from the reloaded config: the same edit may have
+                // added, removed, or repointed a profile.
+                watch.restamp(&watched_config_layers(&self.root, &config));
+                tracing::info!(model = %config.model, "Reloaded config after on-disk change");
+                *self
+                    .profile_configs
+                    .write()
+                    .expect("bot profile config lock poisoned") = profile_configs;
+                *self.config.write().expect("bot config lock poisoned") = config;
+            }
+            Err(err) => {
+                // Keep serving the last good config; restamping stops a broken
+                // file from being re-parsed on every turn (a fix changes the
+                // stamp again).
+                watch.restamp(&watched_config_layers(&self.root, &self.config()));
+                tracing::warn!(%err, "Failed to reload config; keeping the previous one");
+            }
+        }
     }
 
     /// Persists a runtime model change for `chat_id`.
@@ -383,12 +435,28 @@ fn profile_root_path(profile: &TelegramProfileConfig) -> PathBuf {
     root.canonicalize().unwrap_or(root)
 }
 
+/// Every config file that feeds the bot-level config or any profile config, so
+/// an edit to any of them triggers one reload.
+fn watched_config_layers(root: &Path, base: &Config) -> Vec<PathBuf> {
+    let mut layers = zdx_engine::config::paths::config_layer_paths_for(root);
+    for profile in base.telegram.profiles.values() {
+        for path in zdx_engine::config::paths::config_layer_paths_for(&profile_root_path(profile)) {
+            if !layers.contains(&path) {
+                layers.push(path);
+            }
+        }
+    }
+
+    layers
+}
+
 /// Loads one layered [`Config`] per Telegram profile, anchored at the profile's
 /// cwd so a workspace `.zdx/config.toml` applies to chats bound to it.
 ///
-/// Profiles are static in `config.toml`, so this runs once at startup. A profile
-/// whose layers fail to load is skipped and falls back to the bot-level config,
-/// so one broken workspace file cannot take the whole bot down.
+/// Runs at startup and again whenever [`BotContext::reload_config_if_changed`]
+/// sees a layer change on disk. A profile whose layers fail to load is skipped
+/// and falls back to the bot-level config, so one broken workspace file cannot
+/// take the whole bot down.
 fn load_profile_configs(base: &Config) -> HashMap<i64, Config> {
     let mut configs = HashMap::new();
 
@@ -638,6 +706,92 @@ mod tests {
 
         let overlay = fs::read_to_string(profile_root.join(".zdx").join("config.toml")).unwrap();
         assert_eq!(overlay.trim(), "model = \"sentinel:picked\"");
+    }
+
+    /// A config edit landing on disk after startup (monitor Config tab, an
+    /// editor) applies on the next turn, without restarting the bot.
+    #[test]
+    fn test_reload_applies_on_disk_config_edits() {
+        let home = zdx_engine::test_support::temp_zdx_home();
+        let fallback_root = unique_temp_dir("reload-fallback");
+        let profile_root = unique_temp_dir("reload-profile");
+        fs::create_dir_all(&fallback_root).unwrap();
+        fs::create_dir_all(profile_root.join(".zdx")).unwrap();
+
+        let overlay = profile_root.join(".zdx").join("config.toml");
+        fs::write(&overlay, "model = \"sentinel:before\"\n").unwrap();
+        let global = home.path().join("config.toml");
+        fs::write(
+            &global,
+            format!(
+                "model = \"sentinel:global\"\n\n[telegram.profiles.zdx]\nchat_id = -100123\ncwd = \"{}\"\n",
+                profile_root.display()
+            ),
+        )
+        .unwrap();
+
+        let context = test_context(
+            Config::load_layered(std::slice::from_ref(&global)).unwrap(),
+            fallback_root,
+        );
+        assert_eq!(context.config_for_chat(-100_123).model, "sentinel:before");
+
+        fs::write(
+            &overlay,
+            "model = \"sentinel:after-the-edit\"\n\n[subagents.overrides.oracle]\nmodel = \"sentinel:oracle-override\"\n",
+        )
+        .unwrap();
+        context.reload_config_if_changed();
+
+        let reloaded = context.config_for_chat(-100_123);
+        assert_eq!(reloaded.model, "sentinel:after-the-edit");
+        assert_eq!(
+            reloaded
+                .subagents
+                .overrides
+                .get("oracle")
+                .and_then(|over| over.model.as_deref()),
+            Some("sentinel:oracle-override")
+        );
+    }
+
+    /// `/model` persists to the chat root's overlay before mutating the
+    /// in-memory config, so a later reload must read the same value back
+    /// instead of reverting the runtime choice.
+    #[test]
+    fn test_runtime_model_and_thinking_changes_survive_reload() {
+        let home = zdx_engine::test_support::temp_zdx_home();
+        let fallback_root = unique_temp_dir("reload-set-fallback");
+        let profile_root = unique_temp_dir("reload-set-profile");
+        fs::create_dir_all(&fallback_root).unwrap();
+        fs::create_dir_all(profile_root.join(".zdx")).unwrap();
+
+        let global = home.path().join("config.toml");
+        fs::write(
+            &global,
+            format!(
+                "model = \"sentinel:global\"\n\n[telegram.profiles.zdx]\nchat_id = -100123\ncwd = \"{}\"\n",
+                profile_root.display()
+            ),
+        )
+        .unwrap();
+
+        let context = test_context(
+            Config::load_layered(std::slice::from_ref(&global)).unwrap(),
+            fallback_root,
+        );
+        context.set_chat_model(-100_123, "sentinel:picked").unwrap();
+        context
+            .set_chat_thinking_level(-100_123, ThinkingLevel::High)
+            .unwrap();
+
+        context.reload_config_if_changed();
+
+        assert_eq!(context.config_for_chat(-100_123).model, "sentinel:picked");
+        assert_eq!(
+            context.config_for_chat(-100_123).thinking_level,
+            ThinkingLevel::High
+        );
     }
 
     fn test_context(config: Config, root: PathBuf) -> BotContext {

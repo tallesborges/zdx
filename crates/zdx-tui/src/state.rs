@@ -364,6 +364,7 @@ pub struct TuiState {
     pub auth: AuthState,
     /// Agent configuration.
     pub config: Config,
+    pub(crate) config_watch: zdx_engine::config::ConfigWatch,
     /// User/default model preference (without per-thread overrides applied).
     pub base_model: String,
     /// User/default thinking preference (without per-thread overrides applied).
@@ -485,6 +486,7 @@ impl TuiState {
             base_model: config.model.clone(),
             base_thinking_level: config.thinking_level,
             config,
+            config_watch: zdx_engine::config::ConfigWatch::default(),
             last_skill_repo: None,
             loaded_skills: Vec::new(),
             agent_opts,
@@ -526,6 +528,37 @@ impl TuiState {
                 .messages
                 .last()
                 .is_some_and(|m| m.role == "user")
+    }
+
+    /// Adopts a freshly loaded [`Config`] as this tab's defaults, keeping the
+    /// per-thread model/thinking overrides that are currently in effect.
+    pub fn apply_reloaded_config(&mut self, config: Config) {
+        // A new btw tab pins its inherited selection when its first turn
+        // creates the thread. Until then, that selection only lives in config.
+        let pending_btw =
+            matches!(self.tab_kind, TabKind::Btw { .. }) && self.thread.thread_handle.is_none();
+        let (model_override, thinking_override) = if pending_btw {
+            (
+                Some(self.config.model.clone()),
+                Some(self.config.thinking_level),
+            )
+        } else {
+            (
+                self.thread.model_override.clone(),
+                self.thread.thinking_override,
+            )
+        };
+
+        self.base_model.clone_from(&config.model);
+        self.base_thinking_level = config.thinking_level;
+        self.config = config;
+
+        if let Some(model) = model_override {
+            self.config.model = model;
+        }
+        if let Some(level) = thinking_override {
+            self.config.thinking_level = level;
+        }
     }
 
     /// Recomputes `background_count` for the current thread, throttled to at
@@ -732,4 +765,93 @@ fn compact_segment(segment: &str, keep_chars_each_side: usize) -> String {
         .skip(char_count.saturating_sub(keep_chars_each_side))
         .collect();
     format!("{start}...{end}")
+}
+
+#[cfg(test)]
+mod tests {
+    use zdx_engine::config::{Config, ThinkingLevel};
+
+    use super::*;
+
+    fn state_with_config(config: Config) -> TuiState {
+        AppState::new(config, PathBuf::new(), None, None).tui
+    }
+
+    /// A config reloaded from disk becomes the tab's new default when no
+    /// per-thread override is active.
+    #[test]
+    fn reloaded_config_updates_the_tab_defaults() {
+        let config = Config {
+            model: "sentinel:before".into(),
+            thinking_level: ThinkingLevel::Low,
+            ..Config::default()
+        };
+        let mut tui = state_with_config(config.clone());
+
+        let mut reloaded = config;
+        reloaded.model = "sentinel:after-the-edit".to_string();
+        reloaded.thinking_level = ThinkingLevel::High;
+        tui.apply_reloaded_config(reloaded);
+
+        assert_eq!(tui.base_model, "sentinel:after-the-edit");
+        assert_eq!(tui.config.model, "sentinel:after-the-edit");
+        assert_eq!(tui.base_thinking_level, ThinkingLevel::High);
+        assert_eq!(tui.config.thinking_level, ThinkingLevel::High);
+    }
+
+    /// A per-thread `/model` or `/thinking` override outlives a reload: the
+    /// defaults move, the override still wins for the active thread.
+    #[test]
+    fn reloaded_config_keeps_active_thread_overrides() {
+        let config = Config {
+            model: "sentinel:default".into(),
+            thinking_level: ThinkingLevel::Low,
+            ..Config::default()
+        };
+        let mut tui = state_with_config(config.clone());
+
+        tui.thread.model_override = Some("sentinel:thread-override".into());
+        tui.thread.thinking_override = Some(ThinkingLevel::High);
+        tui.config.model = "sentinel:thread-override".to_string();
+        tui.config.thinking_level = ThinkingLevel::High;
+
+        let mut reloaded = config;
+        reloaded.model = "sentinel:new-default".to_string();
+        reloaded.thinking_level = ThinkingLevel::Medium;
+        tui.apply_reloaded_config(reloaded);
+
+        assert_eq!(tui.base_model, "sentinel:new-default");
+        assert_eq!(tui.base_thinking_level, ThinkingLevel::Medium);
+        assert_eq!(tui.config.model, "sentinel:thread-override");
+        assert_eq!(tui.config.thinking_level, ThinkingLevel::High);
+    }
+
+    #[test]
+    fn reloaded_config_keeps_explicit_overrides_equal_to_old_defaults() {
+        let config = Config {
+            model: "sentinel:default".into(),
+            thinking_level: ThinkingLevel::Low,
+            ..Config::default()
+        };
+        let mut tui = state_with_config(config.clone());
+        tui.thread.model_override = Some(config.model.clone());
+        tui.thread.thinking_override = Some(config.thinking_level);
+
+        let reloaded = Config {
+            model: "sentinel:new-default".into(),
+            thinking_level: ThinkingLevel::High,
+            ..config
+        };
+        tui.apply_reloaded_config(reloaded.clone());
+        assert_eq!(tui.config.model, "sentinel:default");
+        assert_eq!(tui.config.thinking_level, ThinkingLevel::Low);
+        assert_eq!(tui.base_model, "sentinel:new-default");
+        assert_eq!(tui.base_thinking_level, ThinkingLevel::High);
+
+        tui.thread.model_override = None;
+        tui.thread.thinking_override = None;
+        tui.apply_reloaded_config(reloaded);
+        assert_eq!(tui.config.model, "sentinel:new-default");
+        assert_eq!(tui.config.thinking_level, ThinkingLevel::High);
+    }
 }

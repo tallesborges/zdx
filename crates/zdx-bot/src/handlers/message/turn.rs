@@ -20,6 +20,10 @@ pub(super) async fn run_agent_turn(
     provisional_status: Option<TurnStatus>,
     record_user: bool,
 ) -> Result<TurnOutcome> {
+    // Queued turns can start long after the message arrived, so re-check the
+    // config layers here too: this is what feeds model, thinking level, and
+    // subagent overrides into the run.
+    context.reload_config_if_changed();
     let resolved_root = context.root_for_chat(incoming.chat_id);
     let stored_root = thread_persistence::read_thread_root_path(thread_id)?;
     let worktree_root = stored_root
