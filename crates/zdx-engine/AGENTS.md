@@ -55,6 +55,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 
 - `tools/mod.rs`: ToolContext, ToolRegistry, ToolSet, handlers
 - `tools/background.rs`: `run_background` (spawn+register a background process, invoked by the Bash tool on `background: true`) + `background_output`/`background_kill` agent tools (thread-scoped)
+- `tools/gh_api.rs`: read-only GitHub REST tool over `gh api` (GET only, base64 content decoded, diff/raw media types); wraps `gh` because its token lives in the OS keyring
 - `tools/git.rs`: read-only git inspection tool (`status`/`log`/`diff`/`show`); fixed subcommands and flags, operands rejected if they look like options
 - `tools/telegram.rs`: outbound Telegram tool (`send_message`/`send_document`/`create_topic`) over `telegram.rs`; shares its core with `zdx telegram`
 - `tools/ask_media.rs`: one-shot media understanding tool (image/PDF/audio/video → text) over `media.rs`; read-only, shares its core with `zdx ask-media`

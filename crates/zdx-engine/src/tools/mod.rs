@@ -9,6 +9,7 @@ pub use zdx_tools::{apply_patch, bash, edit, fetch_webpage, glob, grep, read, we
 // Engine-backed tools (need full ToolContext with config, threads, etc.)
 pub mod ask_media;
 pub mod background;
+pub mod gh_api;
 pub mod git;
 pub mod memory_search;
 pub mod orchestrator;
@@ -166,6 +167,7 @@ impl ToolSet {
                 "ask_media",
                 "edit",
                 "fetch_webpage",
+                "gh_api",
                 "git",
                 "glob",
                 "grep",
@@ -186,6 +188,7 @@ impl ToolSet {
                 "apply_patch",
                 "ask_media",
                 "fetch_webpage",
+                "gh_api",
                 "git",
                 "glob",
                 "grep",
@@ -375,6 +378,7 @@ impl ToolRegistry {
         self.register_tool(Edit);
         self.register_tool(Read);
         self.register_tool(AskMedia);
+        self.register_tool(GhApi);
         self.register_tool(Git);
         self.register_tool(MemorySearch);
         self.register_tool(ReadThread);
@@ -550,6 +554,18 @@ impl Tool for Glob {
         let input = input.clone();
         let ctx = ctx.clone();
         Box::pin(async move { execute_glob(&input, &ctx.as_leaf()).await })
+    }
+}
+
+struct GhApi;
+impl Tool for GhApi {
+    fn definition(&self) -> ToolDefinition {
+        gh_api::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { gh_api::execute(&input, &ctx).await })
     }
 }
 
@@ -989,6 +1005,7 @@ mod tests {
         assert!(names.contains(&"bash".to_string()));
         assert!(names.contains(&"apply_patch".to_string()));
         assert!(names.contains(&"ask_media".to_string()));
+        assert!(names.contains(&"gh_api".to_string()));
         assert!(names.contains(&"git".to_string()));
         assert!(names.contains(&"telegram".to_string()));
         assert!(names.contains(&"edit".to_string()));
@@ -1012,6 +1029,7 @@ mod tests {
         assert!(names.contains(&"bash".to_string()));
         assert!(names.contains(&"apply_patch".to_string()));
         assert!(names.contains(&"ask_media".to_string()));
+        assert!(names.contains(&"gh_api".to_string()));
         assert!(names.contains(&"git".to_string()));
         assert!(names.contains(&"telegram".to_string()));
         assert!(names.contains(&"edit".to_string()));

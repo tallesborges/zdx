@@ -7,6 +7,7 @@ tools:
   - create_thread
   - fetch_webpage
   - get_thread_status
+  - gh_api
   - git
   - glob
   - grep
