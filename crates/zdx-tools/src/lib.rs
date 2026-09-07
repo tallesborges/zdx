@@ -12,6 +12,7 @@ pub mod glob;
 pub mod grep;
 mod parallel;
 pub mod read;
+mod walk;
 pub mod web_search;
 pub mod write;
 

@@ -12,6 +12,7 @@ Leaf tool implementations that only need a root directory and optional timeout â
 - `src/read.rs`: file reading (text + images)
 - `src/glob.rs`: file discovery by name pattern
 - `src/grep.rs`: regex search across files
+- `src/walk.rs`: shared traversal policy for `glob`/`grep` â€” the wall-clock `WalkBudget` (5s, sliceable into phases), `.git` pruning, and the shallow-then-parallel `walk()`
 - `src/web_search.rs`: web search via Parallel API
 - `src/fetch_webpage.rs`: URL content extraction via Parallel API
 - `src/apply_patch/`: unified diff patch application
@@ -27,3 +28,5 @@ Leaf tool implementations that only need a root directory and optional timeout â
 - `bash::run` is the async variant; `bash::execute` is the sync wrapper
 - Path helpers (`expand_env_vars`, `resolve_existing_path`, etc.) are public for reuse
 - Engine-backed tools (read_thread, subagent, thread_search, todo_write) stay in `zdx-engine`
+- Any filesystem traversal goes through `walk::walk` with a `WalkPolicy`: it is the only place that decides hidden traversal, gitignore, `.git` pruning, and the time budget, so `glob` and `grep` cannot drift. Hidden files are always searched (dotted paths are ordinary content, and `rg`/`fd` are run with `--hidden` by comparable agents); `.git` is the only hardcoded prune, and it lifts when the caller's pattern names it. Everything else â€” `node_modules`, `target`, caches â€” is gitignore's job, never a denylist.
+- A traversal that hits the budget must return what it has with `truncated: true` and a `warning` naming the cutoff, never an error and never a silent empty result. The warning must not claim absence, and must point at a deeper `path` rather than a narrower pattern: walk cost tracks tree size, not pattern width.

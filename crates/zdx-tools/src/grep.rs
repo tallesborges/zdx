@@ -5,17 +5,19 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use globset::{Glob, GlobMatcher};
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::SearcherBuilder;
 use grep_searcher::sinks::UTF8;
-use ignore::WalkBuilder;
+use ignore::WalkState;
 use regex::RegexBuilder;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{ToolContext, ToolDefinition, ToolOutput};
+use crate::walk::{self, WALK_BUDGET, WalkPolicy};
 
 /// Maximum number of matches to return (prevents context flooding).
 const MAX_MATCHES: usize = 2000;
@@ -41,11 +43,17 @@ const MAX_OUTPUT_TEXT_BYTES: usize = 40 * 1024; // 40KB
 /// Maximum allowed value for `context_lines`.
 const MAX_CONTEXT_LINES: usize = 5;
 
+/// Share of the traversal budget the walk may use.
+///
+/// Finding files is useless if there is no time left to search them, so the
+/// walk stops early and the remainder pays for reading and matching.
+const WALK_PHASE: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Returns the tool definition for the grep tool.
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Grep".to_string(),
-        description: "Search file contents for text matching a regex pattern. ALWAYS use this tool instead of running grep or rg through Bash — it returns structured JSON with file paths, line numbers, and context, respects .gitignore, supports pagination, and never floods the context window. NEVER invoke grep or rg as a Bash command. This is not the ripgrep CLI: do not pass CLI-style flags or unsupported fields such as `output_mode`, `head_limit`, or `-i`; use `case_insensitive`, `max_count`/`offset`, `extract_unique`, `glob`, `type`, and `path` instead. Use `glob`, `type`, or `path` to narrow the search, and use `extract_unique` for discovery queries such as listing tags or symbol names. Returns structured JSON results with file paths, line numbers, matched text, and optional context. Large files are skipped above 4MB and listed in `skipped_files` — those files were never searched, so treat a missing match there as unknown rather than absent and `read` them directly. Long match/context lines are truncated to safe snippets, and oversized result sets include a warning so the model can narrow the search or paginate with offset/max_count. Respects .gitignore by default: gitignored files are skipped during directory searches; pass an exact file path in `path` to search a known ignored file."
+        description: "Search file contents with a regex. ALWAYS use this instead of grep or rg through Bash. It is not the ripgrep CLI — no CLI-style flags: use `path`, `glob`, `type`, `case_insensitive`, `context_lines`, `max_count`/`offset`, and `extract_unique` (for discovery queries such as listing tag or symbol names). Narrow broad searches with `path`, `glob`, or `type`; a search over a very large tree can stop before it finishes. Matches come back as file, line number, matched text, and optional context. Gitignored files are skipped — pass an exact file path in `path` to search one; hidden files are searched, and `.git` only when `glob` names it. When a result is `truncated`, treat it as incomplete rather than absent: continue with `offset`, narrow the search, or `read` the files listed in `skipped_files` (over 4MB, never searched)."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -177,6 +185,8 @@ struct Match {
 struct GrepOutputStats {
     text_truncated: bool,
     payload_truncated: bool,
+    /// Set when the traversal budget expired before every file was searched.
+    timed_out: bool,
     /// Display paths of files skipped for exceeding `MAX_FILE_SIZE`. Reported so
     /// callers can tell "no match" apart from "never searched".
     skipped_large_files: Vec<String>,
@@ -331,6 +341,10 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(output) => return output,
     };
 
+    // One traversal policy per call: `.git` pruning keyed off the glob, and one
+    // wall-clock deadline shared by walking and searching.
+    let policy = WalkPolicy::for_pattern(input.glob.as_deref()).with_types(file_type_filter);
+
     // Extract-unique mode: return sorted deduplicated capture values.
     if input.extract_unique {
         return execute_extract_unique(
@@ -339,7 +353,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
             &search_path,
             &ctx.root,
             glob_matcher.as_ref(),
-            file_type_filter,
+            &policy,
             max_count,
         );
     }
@@ -352,7 +366,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         &ctx.root,
         glob_matcher.as_ref(),
         input.context_lines,
-        file_type_filter,
+        &policy,
     );
 
     let (all_matches, truncated_by_cap) = round_robin_select(per_file, MAX_MATCHES);
@@ -361,12 +375,14 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     let after_offset: Vec<Match> = all_matches.into_iter().skip(offset).collect();
     let truncated_by_pagination = after_offset.len() > max_count;
     let selected: Vec<Match> = after_offset.into_iter().take(max_count).collect();
-    let (selected, output_stats) = cap_matches_for_output(selected, skipped_large_files);
+    let (selected, mut output_stats) = cap_matches_for_output(selected, skipped_large_files);
+    output_stats.timed_out = policy.budget.is_partial();
     let total_matches = selected.len();
     let truncated = truncated_by_cap
         || truncated_by_pagination
         || output_stats.text_truncated
         || output_stats.payload_truncated
+        || output_stats.timed_out
         || !output_stats.skipped_large_files.is_empty();
 
     let mut data = serde_json::Map::new();
@@ -406,7 +422,7 @@ fn execute_extract_unique(
     search_path: &Path,
     root: &Path,
     glob_matcher: Option<&GlobMatcher>,
-    file_type_filter: Option<ignore::types::Types>,
+    policy: &WalkPolicy,
     max_count: usize,
 ) -> ToolOutput {
     let re = match RegexBuilder::new(pattern)
@@ -426,10 +442,12 @@ fn execute_extract_unique(
     let has_captures = re.captures_len() > 1;
     let mut unique_values = BTreeSet::new();
 
-    let (files, skipped_large_files) =
-        walk_files(search_path, root, glob_matcher, file_type_filter);
+    let (files, skipped_large_files) = walk_files(search_path, root, glob_matcher, policy);
 
     for path in &files {
+        if policy.budget.is_expired() {
+            break;
+        }
         let Ok(content) = std::fs::read_to_string(path) else {
             continue;
         };
@@ -454,11 +472,13 @@ fn execute_extract_unique(
     }
 
     let total_unique = unique_values.len();
-    let (values, output_stats) =
+    let (values, mut output_stats) =
         cap_unique_values_for_output(unique_values, max_count, skipped_large_files);
+    output_stats.timed_out = policy.budget.is_partial();
     let truncated = total_unique > values.len()
         || output_stats.text_truncated
         || output_stats.payload_truncated
+        || output_stats.timed_out
         || !output_stats.skipped_large_files.is_empty();
     let returned_unique = values.len();
 
@@ -478,11 +498,15 @@ fn execute_extract_unique(
 }
 
 /// Walk the file tree and return paths to search, respecting glob filters and size limits.
+///
+/// Traversal is parallel and stops early once `policy`'s budget expires. Results
+/// are sorted so match ordering (and therefore `offset` pagination) stays stable
+/// across calls.
 fn walk_files(
     search_path: &Path,
     root: &Path,
     glob_matcher: Option<&GlobMatcher>,
-    file_type_filter: Option<ignore::types::Types>,
+    policy: &WalkPolicy,
 ) -> (Vec<PathBuf>, Vec<String>) {
     if search_path.is_file() {
         let too_large = search_path
@@ -495,37 +519,41 @@ fn walk_files(
         };
     }
 
-    let mut files = Vec::new();
-    let mut skipped_large_files = Vec::new();
-    let mut wb = WalkBuilder::new(search_path);
-    if let Some(t) = file_type_filter {
-        wb.types(t);
-    }
-    let walker = wb.build();
+    let collected = Mutex::new((Vec::new(), Vec::new()));
 
-    for entry in walker {
-        let Ok(entry) = entry else { continue };
-
+    // Walking only gets part of the budget; the rest belongs to searching.
+    let walk_policy = policy.with_phase(WALK_PHASE);
+    walk::walk(search_path, &walk_policy, |entry| {
         if !entry.file_type().is_some_and(|ft| ft.is_file()) {
-            continue;
+            return WalkState::Continue;
         }
 
         if let Some(gm) = glob_matcher {
             let rel = entry.path().strip_prefix(root).unwrap_or(entry.path());
             if !gm.is_match(rel) {
-                continue;
+                return WalkState::Continue;
             }
         }
 
-        if let Ok(metadata) = entry.metadata()
-            && metadata.len() > MAX_FILE_SIZE
-        {
-            skipped_large_files.push(display_path(entry.path(), root));
-            continue;
-        }
+        let too_large = entry
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() > MAX_FILE_SIZE);
 
-        files.push(entry.into_path());
-    }
+        let (files, skipped_large_files) =
+            &mut *collected.lock().unwrap_or_else(PoisonError::into_inner);
+        if too_large {
+            skipped_large_files.push(display_path(entry.path(), root));
+        } else {
+            files.push(entry.path().to_path_buf());
+        }
+        WalkState::Continue
+    });
+
+    let (mut files, mut skipped_large_files) = collected
+        .into_inner()
+        .unwrap_or_else(PoisonError::into_inner);
+    files.sort();
+    skipped_large_files.sort();
 
     (files, skipped_large_files)
 }
@@ -666,6 +694,17 @@ fn skipped_files_warning(skipped: &[String]) -> Option<String> {
     ))
 }
 
+/// Warns that the traversal budget expired, so part of the tree was never
+/// searched and a missing match means "unknown" rather than "absent".
+fn timed_out_warning(stats: &GrepOutputStats) -> Option<String> {
+    stats.timed_out.then(|| {
+        let secs = WALK_BUDGET.as_secs();
+        format!(
+            "Search stopped after about {secs}s, so part of the tree was never searched: these results are partial and a missing match is not proof of absence. Walk cost tracks the size of the directory tree, not how narrow the pattern is: re-run against a deeper `path`."
+        )
+    })
+}
+
 fn build_grep_warning(
     offset: usize,
     returned: usize,
@@ -673,6 +712,10 @@ fn build_grep_warning(
     stats: &GrepOutputStats,
 ) -> Option<String> {
     let mut parts = Vec::new();
+
+    if let Some(timed_out) = timed_out_warning(stats) {
+        parts.push(timed_out);
+    }
 
     if let Some(skipped) = skipped_files_warning(&stats.skipped_large_files) {
         parts.push(skipped);
@@ -703,6 +746,10 @@ fn build_grep_warning(
 fn build_extract_unique_warning(stats: &GrepOutputStats, total_unique: usize) -> Option<String> {
     let mut parts = Vec::new();
 
+    if let Some(timed_out) = timed_out_warning(stats) {
+        parts.push(timed_out);
+    }
+
     if let Some(skipped) = skipped_files_warning(&stats.skipped_large_files) {
         parts.push(skipped);
     }
@@ -730,14 +777,16 @@ fn collect_matches(
     root: &Path,
     glob_matcher: Option<&GlobMatcher>,
     context_lines: usize,
-    file_type_filter: Option<ignore::types::Types>,
+    policy: &WalkPolicy,
 ) -> (Vec<Vec<Match>>, Vec<String>) {
     let mut per_file: Vec<Vec<Match>> = Vec::new();
     let mut total_collected: usize = 0;
-    let (files, skipped_large_files) =
-        walk_files(search_path, root, glob_matcher, file_type_filter);
+    let (files, skipped_large_files) = walk_files(search_path, root, glob_matcher, policy);
 
     for path in files {
+        if policy.budget.is_expired() {
+            break;
+        }
         let mut file_matches = Vec::new();
         search_file(
             &path,
@@ -1967,5 +2016,97 @@ mod type_filter_tests {
         assert!(!result.is_ok());
         let json_str = result.to_json_string();
         assert!(json_str.contains(r#""code":"invalid_input""#));
+    }
+
+    #[test]
+    fn test_searches_hidden_files() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join(".zshrc"), "export SCCACHE_DIR=/tmp\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+
+        let result = execute(
+            &json!({"pattern": "SCCACHE_", "glob": "{.zshrc,.zshenv}"}),
+            &ctx,
+        );
+        let data = result.data().unwrap();
+        assert_eq!(data["total_matches"], 1);
+        assert_eq!(data["matches"][0]["file"], ".zshrc");
+
+        // Also reachable without naming the dotfile in the glob.
+        let result = execute(&json!({"pattern": "SCCACHE_"}), &ctx);
+        let data = result.data().unwrap();
+        assert_eq!(data["total_matches"], 1);
+    }
+
+    #[test]
+    fn test_git_directory_is_not_searched_by_default() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+        fs::write(temp.path().join(".git/COMMIT_EDITMSG"), "ZZNEEDLE\n").unwrap();
+        fs::write(temp.path().join("notes.md"), "ZZNEEDLE\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let result = execute(&json!({"pattern": "ZZNEEDLE"}), &ctx);
+        let data = result.data().unwrap();
+
+        assert_eq!(data["total_matches"], 1);
+        assert_eq!(data["matches"][0]["file"], "notes.md");
+    }
+
+    #[test]
+    fn test_expired_budget_stops_walking() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("a.txt"), "hit\n").unwrap();
+        fs::write(temp.path().join("b.txt"), "hit\n").unwrap();
+
+        let policy = WalkPolicy {
+            budget: crate::walk::WalkBudget::new(std::time::Duration::ZERO),
+            ..WalkPolicy::for_pattern(None)
+        };
+
+        let (files, skipped) = walk_files(temp.path(), temp.path(), None, &policy);
+
+        assert!(files.is_empty(), "no entries visited past the deadline");
+        assert!(skipped.is_empty());
+        assert!(policy.budget.is_partial());
+    }
+
+    #[test]
+    fn test_timed_out_warning_marks_results_partial() {
+        let stats = GrepOutputStats {
+            timed_out: true,
+            ..GrepOutputStats::default()
+        };
+
+        let warning = build_grep_warning(0, 3, false, &stats).unwrap();
+        assert!(
+            warning.contains("Search stopped after about 5s"),
+            "{warning}"
+        );
+        assert!(warning.contains("partial"), "{warning}");
+
+        let warning = build_extract_unique_warning(&stats, 3).unwrap();
+        assert!(
+            warning.contains("Search stopped after about 5s"),
+            "{warning}"
+        );
+    }
+
+    #[test]
+    fn test_walk_files_returns_sorted_paths() {
+        let temp = TempDir::new().unwrap();
+        for name in ["c.txt", "a.txt", "b.txt"] {
+            fs::write(temp.path().join(name), "x\n").unwrap();
+        }
+
+        let policy = WalkPolicy::for_pattern(None);
+        let (files, _) = walk_files(temp.path(), temp.path(), None, &policy);
+
+        let names: Vec<String> = files
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec!["a.txt", "b.txt", "c.txt"]);
     }
 }

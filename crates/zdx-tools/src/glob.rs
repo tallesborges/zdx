@@ -4,13 +4,15 @@
 //! file discovery that returns structured JSON results.
 
 use std::path::Path;
+use std::sync::{Mutex, PoisonError};
 
 use globset::Glob;
-use ignore::WalkBuilder;
+use ignore::WalkState;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{ToolContext, ToolDefinition, ToolOutput};
+use crate::walk::{self, WALK_BUDGET, WalkPolicy};
 
 /// Maximum number of files to return (prevents context flooding).
 const MAX_FILES: usize = 500;
@@ -20,7 +22,7 @@ pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Glob".to_string(),
         description:
-            "Find files by name pattern (glob). NEVER use find or rg --files through Bash for file discovery — use this tool instead. Use Glob when finding files by name pattern or discovering likely paths before Read; use Grep when searching file contents. Returns a sorted list of matching file paths. Respects .gitignore by default, retries without .gitignore if no results are found, and auto-prefixes patterns without path separators with **/ for recursive matching. Batch multiple Glob calls together rather than running them sequentially."
+            "Find files by name pattern. Use it for path lookups and to find files before Read; use Grep to search file contents. NEVER use find or `rg --files` through Bash for file discovery. Patterns match at any depth, and `*` crosses `/`, so `*.rs` and `src/*.rs` both match nested files; results come back sorted and relative to the workspace root. Respects .gitignore, includes hidden files, and skips `.git` unless the pattern names it. A `truncated` result is incomplete rather than proof that nothing else matches — re-run against a narrower `path`."
                 .to_string(),
         input_schema: json!({
             "type": "object",
@@ -59,39 +61,37 @@ fn make_recursive(pattern: &str) -> String {
 }
 
 /// Walk a directory tree and collect files matching the glob pattern.
+///
+/// Traversal is parallel and stops early when `policy`'s shared budget expires,
+/// so a miss on a huge tree costs bounded time instead of minutes.
 fn collect_files(
     search_path: &Path,
     root: &Path,
     glob_matcher: &globset::GlobMatcher,
-    respect_gitignore: bool,
+    policy: &WalkPolicy,
 ) -> Vec<String> {
-    let mut files = Vec::new();
+    let files = Mutex::new(Vec::new());
 
-    let walker = WalkBuilder::new(search_path)
-        .git_ignore(respect_gitignore)
-        .git_global(respect_gitignore)
-        .git_exclude(respect_gitignore)
-        .build();
-
-    for entry in walker {
-        let Ok(entry) = entry else { continue };
-
+    walk::walk(search_path, policy, |entry| {
         if !entry.file_type().is_some_and(|ft| ft.is_file()) {
-            continue;
+            return WalkState::Continue;
         }
 
         let rel = entry.path().strip_prefix(root).unwrap_or(entry.path());
-
-        if glob_matcher.is_match(rel) {
-            files.push(rel.to_string_lossy().to_string());
-            // Collect one extra to detect truncation.
-            if files.len() > MAX_FILES {
-                break;
-            }
+        if !glob_matcher.is_match(rel) {
+            return WalkState::Continue;
         }
-    }
 
-    files
+        let mut files = files.lock().unwrap_or_else(PoisonError::into_inner);
+        files.push(rel.to_string_lossy().to_string());
+        // Collect one extra to detect truncation.
+        if files.len() > MAX_FILES {
+            return WalkState::Quit;
+        }
+        WalkState::Continue
+    });
+
+    files.into_inner().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Executes the glob tool and returns structured results.
@@ -125,33 +125,57 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     };
 
     // First attempt: respect .gitignore
-    let mut files = collect_files(&search_path, &ctx.root, &glob_matcher, true);
+    let policy = WalkPolicy::for_pattern(Some(&recursive_pattern));
+    let mut files = collect_files(&search_path, &ctx.root, &glob_matcher, &policy);
 
-    // Retry without gitignore if no results
-    if files.is_empty() {
-        files = collect_files(&search_path, &ctx.root, &glob_matcher, false);
+    // A miss can mean the file is gitignored, but retrying doubles the traversal
+    // and un-prunes `target/`, `node_modules/`, and friends. Only retry while the
+    // shared budget still has time left, so both passes cost one deadline total.
+    if files.is_empty() && !policy.budget.is_expired() {
+        files = collect_files(
+            &search_path,
+            &ctx.root,
+            &glob_matcher,
+            &policy.without_gitignore(),
+        );
     }
 
-    // Sort alphabetically
+    // Sort alphabetically (parallel traversal yields no stable order)
     files.sort();
 
     // Cap at MAX_FILES
-    let truncated = files.len() > MAX_FILES;
+    let capped = files.len() > MAX_FILES;
     files.truncate(MAX_FILES);
 
-    ToolOutput::success(json!({
-        "files": files,
-        "truncated": truncated,
-    }))
+    let timed_out = policy.budget.is_partial();
+    let mut data = serde_json::Map::new();
+    data.insert(
+        "files".to_string(),
+        serde_json::to_value(files).unwrap_or(Value::Null),
+    );
+    data.insert("truncated".to_string(), Value::from(capped || timed_out));
+    if timed_out {
+        let secs = WALK_BUDGET.as_secs();
+        data.insert(
+            "warning".to_string(),
+            Value::String(format!(
+                "Traversal stopped after about {secs}s, so these results are partial and a missing file is not proof of absence. Walk cost tracks the size of the directory tree, not how narrow the pattern is: re-run against a deeper `path`."
+            )),
+        );
+    }
+
+    ToolOutput::success(Value::Object(data))
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::time::Duration;
 
     use tempfile::TempDir;
 
     use super::*;
+    use crate::walk::WalkBudget;
 
     fn make_ctx(dir: &TempDir) -> ToolContext {
         ToolContext::new(dir.path().to_path_buf(), None)
@@ -356,5 +380,85 @@ mod tests {
         // Should find the file via retry without gitignore
         assert_eq!(data["files"].as_array().unwrap().len(), 1);
         assert_eq!(data["files"][0], "ignored/hidden.txt");
+    }
+
+    #[test]
+    fn test_finds_hidden_files() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join(".zshrc"), "").unwrap();
+        fs::create_dir_all(temp.path().join(".cargo")).unwrap();
+        fs::write(temp.path().join(".cargo/config.toml"), "").unwrap();
+
+        let ctx = make_ctx(&temp);
+
+        let result = execute(&json!({"pattern": ".zshrc"}), &ctx);
+        let data = result.data().unwrap();
+        assert_eq!(data["files"], json!([".zshrc"]));
+
+        let result = execute(&json!({"pattern": ".cargo/config.toml"}), &ctx);
+        let data = result.data().unwrap();
+        assert_eq!(data["files"], json!([".cargo/config.toml"]));
+    }
+
+    #[test]
+    fn test_ordinary_patterns_reach_dot_directories() {
+        // `.github/workflows/*.yml` is ordinary content, not something the
+        // caller should have to ask for with a dotted pattern.
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".github/workflows")).unwrap();
+        fs::write(temp.path().join(".github/workflows/ci.yml"), "").unwrap();
+        fs::write(temp.path().join("visible.yml"), "").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let result = execute(&json!({"pattern": "*.yml"}), &ctx);
+        let data = result.data().unwrap();
+
+        assert_eq!(
+            data["files"],
+            json!([".github/workflows/ci.yml", "visible.yml"])
+        );
+    }
+
+    #[test]
+    fn test_git_directory_is_pruned_unless_named() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+        fs::write(temp.path().join(".git/config"), "").unwrap();
+        fs::write(temp.path().join("config"), "").unwrap();
+
+        let ctx = make_ctx(&temp);
+
+        let result = execute(&json!({"pattern": "config"}), &ctx);
+        let data = result.data().unwrap();
+        assert_eq!(data["files"], json!(["config"]), "no .git noise by default");
+
+        let result = execute(&json!({"pattern": ".git/config"}), &ctx);
+        let data = result.data().unwrap();
+        assert_eq!(
+            data["files"],
+            json!([".git/config"]),
+            "naming .git reaches it"
+        );
+    }
+
+    #[test]
+    fn test_expired_budget_stops_traversal_and_reports_partial() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("a.txt"), "").unwrap();
+        fs::write(temp.path().join("b.txt"), "").unwrap();
+
+        let matcher = Glob::new("**/*.txt").unwrap().compile_matcher();
+        let policy = WalkPolicy {
+            budget: WalkBudget::new(Duration::ZERO),
+            ..WalkPolicy::for_pattern(Some("**/*.txt"))
+        };
+
+        let files = collect_files(temp.path(), temp.path(), &matcher, &policy);
+
+        assert!(files.is_empty(), "no entries visited past the deadline");
+        assert!(
+            policy.budget.is_partial(),
+            "cutoff is reported, so the caller can mark the result partial"
+        );
     }
 }
