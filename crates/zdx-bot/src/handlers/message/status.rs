@@ -265,10 +265,19 @@ async fn current_status_message_with_heading(
     thread_id: &str,
     heading: &str,
 ) -> Result<String> {
-    let config = context.config_for_chat(chat_id);
+    let mut config = context.config_for_chat(chat_id);
     let resolved_root = context.root_for_chat(chat_id);
     let root_path = thread_persistence::read_thread_root_path(thread_id)?
         .map_or_else(|| resolved_root.root.clone(), PathBuf::from);
+    // Orchestrator home bases get their own card: the folder/branch are fixed
+    // noise there, while live worker state is the interesting part. They also
+    // run with `[subagents.overrides.orchestrator]` layered under any topic
+    // override, mirroring the turn path.
+    let is_orchestrator = thread_persistence::read_persistent_profile(thread_id)?.as_deref()
+        == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME);
+    if is_orchestrator {
+        zdx_engine::subagents::apply_orchestrator_override(&mut config);
+    }
     let model_override = thread_persistence::read_thread_model_override(thread_id)?;
     let thinking_override = thread_persistence::read_thread_thinking_override(thread_id)?;
     let effective_model = model_override.as_deref().unwrap_or(&config.model);
@@ -277,10 +286,6 @@ async fn current_status_message_with_heading(
     let events = thread_persistence::load_thread_events(thread_id)?;
     let (cumulative_usage, latest_usage) =
         thread_persistence::extract_usage_from_thread_events(&events);
-    // Orchestrator home bases get their own card: the folder/branch are fixed
-    // noise there, while live worker state is the interesting part.
-    let is_orchestrator = thread_persistence::read_persistent_profile(thread_id)?.as_deref()
-        == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME);
     let workers = is_orchestrator.then(|| context.worker_manager().list_for_owner(thread_id));
     let mini_app_url = super::mini_app_base_url(context, chat_id);
     Ok(format_status_message_with_heading(
@@ -570,6 +575,7 @@ mod tests {
             root: PathBuf::from("/tmp"),
             status,
             queue_depth: 0,
+            queue: Vec::new(),
             latest_final_text: None,
             last_error: None,
             mirror_url: None,

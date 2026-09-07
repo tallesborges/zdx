@@ -1,8 +1,9 @@
 //! Orchestrator thread-control tools.
 //!
-//! Six controls the reserved `orchestrator` profile uses to manage worker
+//! Seven controls the reserved `orchestrator` profile uses to manage worker
 //! threads: `Create_Thread`, `Send_Thread_Message`, `Get_Thread_Status`,
-//! `Wait_For_Threads`, `Update_Thread`, and `Cancel_Thread`.
+//! `Wait_For_Threads`, `Update_Thread`, `Remove_Thread_Prompt`, and
+//! `Cancel_Thread`.
 //!
 //! The registry always contains unbound stubs (so tool-name validation and
 //! schemas work everywhere); surfaces that host a live
@@ -24,6 +25,8 @@ use crate::core::workers::{WorkerManager, WorkerSnapshot};
 
 /// Longest final-text excerpt returned inside tool output.
 const MAX_FINAL_TEXT_CHARS: usize = 4000;
+/// Longest queued-prompt excerpt returned per queue entry.
+const MAX_QUEUED_PROMPT_CHARS: usize = 300;
 /// Default and maximum `wait_for_threads` timeouts.
 const DEFAULT_WAIT_SECS: u64 = 60;
 const MAX_WAIT_SECS: u64 = 600;
@@ -39,15 +42,17 @@ enum Op {
     Status,
     Wait,
     Update,
+    RemovePrompt,
     Cancel,
 }
 
-const ALL_OPS: [Op; 6] = [
+const ALL_OPS: [Op; 7] = [
     Op::Create,
     Op::Send,
     Op::Status,
     Op::Wait,
     Op::Update,
+    Op::RemovePrompt,
     Op::Cancel,
 ];
 
@@ -122,6 +127,7 @@ impl Tool for OrchestratorTool {
                 }),
                 Op::Wait => wait_for_threads(&manager, &input).await,
                 Op::Update => update_thread(&manager, &input),
+                Op::RemovePrompt => remove_thread_prompt(&manager, &input),
                 Op::Cancel => cancel_thread(&manager, &input),
             }
         })
@@ -165,7 +171,7 @@ fn definition_for(op: Op) -> ToolDefinition {
         },
         Op::Send => ToolDefinition {
             name: "Send_Thread_Message".to_string(),
-            description: "Queue another prompt on an existing worker thread. Prompts on one worker run strictly one at a time in order, with the worker's full prior context. Also re-attaches a thread that is no longer managed (e.g. after a restart) using its persisted project root.".to_string(),
+            description: "Queue another prompt on an existing worker thread. Prompts on one worker run strictly one at a time in order, with the worker's full prior context. The returned snapshot's `queue` lists every waiting prompt with its `prompt_id`; the one you just sent is last. Also re-attaches a thread that is no longer managed (e.g. after a restart) using its persisted project root.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -184,7 +190,7 @@ fn definition_for(op: Op) -> ToolDefinition {
         },
         Op::Status => ToolDefinition {
             name: "Get_Thread_Status".to_string(),
-            description: "Report a worker thread's status (queued/running/completed/failed/cancelled), queue depth, and latest final text. Managed workers also report `current_tool`, `current_tool_input` (a one-line command/path/pattern preview, at most 200 characters), `seconds_since_last_activity`, and `turn_elapsed_seconds`. The name and input belong to the same tool-use id; with concurrent tools, they describe the most recently started unfinished call. Inspect the preview before judging a long wait: a build can be quiet, and activity age alone does not prove a hang. Input is null until available or when the tool has no primary argument. For a thread this process does not manage, live tool information is unavailable; it reports `seconds_since_last_write` from the file mtime. Both paths include `context`: the latest recorded request's input tokens INCLUDING cache reads/writes, its recorded model/provider, context_limit, percent_used, and recorded_at. This estimates context occupancy, not cumulative spend; output tokens are excluded, and it is not an exact count of the next resumed request. Context is null when no input-bearing usage is found in the last 256 KiB or the file cannot be read. Unknown model/provider/limit leaves tokens visible but limit and percentage null. Use percent_used to decide whether to move work to a fresh thread. Omit thread_id to list every worker owned by this orchestrator in the current process.".to_string(),
+            description: "Report a worker thread's status (queued/running/completed/failed/cancelled), queue depth, the waiting prompts (`queue`: `prompt_id` + a bounded excerpt, in run order; the running prompt is not listed), and latest final text. Managed workers also report `current_tool`, `current_tool_input` (a one-line command/path/pattern preview, at most 200 characters), `seconds_since_last_activity`, and `turn_elapsed_seconds`. The name and input belong to the same tool-use id; with concurrent tools, they describe the most recently started unfinished call. Inspect the preview before judging a long wait: a build can be quiet, and activity age alone does not prove a hang. Input is null until available or when the tool has no primary argument. For a thread this process does not manage, live tool information is unavailable; it reports `seconds_since_last_write` from the file mtime. Both paths include `context`: the latest recorded request's input tokens INCLUDING cache reads/writes, its recorded model/provider, context_limit, percent_used, and recorded_at. This estimates context occupancy, not cumulative spend; output tokens are excluded, and it is not an exact count of the next resumed request. Context is null when no input-bearing usage is found in the last 256 KiB or the file cannot be read. Unknown model/provider/limit leaves tokens visible but limit and percentage null. Use percent_used to decide whether to move work to a fresh thread. Omit thread_id to list every worker owned by this orchestrator in the current process.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -239,6 +245,26 @@ fn definition_for(op: Op) -> ToolDefinition {
                 "additionalProperties": false
             }),
         },
+        Op::RemovePrompt => ToolDefinition {
+            name: "Remove_Thread_Prompt".to_string(),
+            description: "Drop one prompt that is still waiting in a worker's queue, without touching the running turn or the other queued prompts. Use it to retract a prompt that became stale or was sent to the wrong worker; to change what runs next, remove the old prompt and Send_Thread_Message the new one. Get `prompt_id` from Get_Thread_Status or the snapshot returned by Send_Thread_Message. Fails when the id is not waiting (already running, finished, or never queued).".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "thread_id": {
+                        "type": "string",
+                        "description": "Worker thread id whose queue holds the prompt"
+                    },
+                    "prompt_id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Id of the queued prompt to remove"
+                    }
+                },
+                "required": ["thread_id", "prompt_id"],
+                "additionalProperties": false
+            }),
+        },
         Op::Cancel => ToolDefinition {
             name: "Cancel_Thread".to_string(),
             description: "Cancel a worker: stop the current turn, terminate its process tree, and clear all queued prompts. The thread itself is preserved — a later Send_Thread_Message resumes it.".to_string(),
@@ -290,6 +316,14 @@ fn snapshot_json(snapshot: &WorkerSnapshot) -> Value {
         "root": snapshot.root.display().to_string(),
         "status": snapshot.status.as_str(),
         "queue_depth": snapshot.queue_depth,
+        "queue": snapshot
+            .queue
+            .iter()
+            .map(|prompt| json!({
+                "prompt_id": prompt.id,
+                "prompt": truncate_chars(&prompt.text, MAX_QUEUED_PROMPT_CHARS),
+            }))
+            .collect::<Vec<_>>(),
         "idle": snapshot.is_idle(),
         "latest_final_text": snapshot
             .latest_final_text
@@ -559,6 +593,31 @@ fn update_thread(manager: &Arc<WorkerManager>, input: &Value) -> ToolOutput {
     }
 }
 
+fn remove_thread_prompt(manager: &Arc<WorkerManager>, input: &Value) -> ToolOutput {
+    let thread_id = match required_str(input, "thread_id") {
+        Ok(value) => value,
+        Err(failure) => return failure,
+    };
+    let Some(prompt_id) = input.get("prompt_id").and_then(Value::as_u64) else {
+        return ToolOutput::failure(
+            "invalid_input",
+            "Missing required integer field: prompt_id",
+            None,
+        );
+    };
+
+    match manager.remove_queued_prompt(thread_id, prompt_id) {
+        Ok((removed, snapshot)) => ToolOutput::success(json!({
+            "removed": {
+                "prompt_id": removed.id,
+                "prompt": truncate_chars(&removed.text, MAX_QUEUED_PROMPT_CHARS),
+            },
+            "worker": snapshot_json(&snapshot),
+        })),
+        Err(err) => ToolOutput::failure("remove_thread_prompt_failed", format!("{err:#}"), None),
+    }
+}
+
 fn cancel_thread(manager: &Arc<WorkerManager>, input: &Value) -> ToolOutput {
     let thread_id = match required_str(input, "thread_id") {
         Ok(value) => value,
@@ -695,6 +754,7 @@ mod tests {
             root: std::path::PathBuf::from("/tmp"),
             status: crate::core::workers::WorkerStatus::Running,
             queue_depth: 0,
+            queue: Vec::new(),
             latest_final_text: None,
             last_error: None,
             mirror_url: None,
@@ -714,7 +774,7 @@ mod tests {
     }
 
     #[test]
-    fn definitions_cover_all_six_controls() {
+    fn definitions_cover_all_seven_controls() {
         let names: Vec<String> = OrchestratorTool::stubs()
             .iter()
             .map(|tool| tool.definition().name)
@@ -727,9 +787,48 @@ mod tests {
                 "Get_Thread_Status",
                 "Wait_For_Threads",
                 "Update_Thread",
+                "Remove_Thread_Prompt",
                 "Cancel_Thread",
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn remove_thread_prompt_lists_and_drops_a_queued_prompt() {
+        let home = crate::test_support::temp_zdx_home();
+        let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+        let (manager, _events) = WorkerManager::with_runner(Arc::new(move |request| {
+            let mut release = release_rx.clone();
+            Box::pin(async move {
+                release.wait_for(|released| *released).await.unwrap();
+                Ok(request.prompt)
+            })
+        }));
+        let id = manager
+            .create_worker("owner", home.path(), "first", None, None, None)
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let sent = send_thread_message(
+            &manager,
+            "owner",
+            &json!({"thread_id": id, "message": "stale"}),
+        );
+        let queue = sent.data().unwrap()["worker"]["queue"].clone();
+        assert_eq!(queue[0]["prompt"], "stale");
+        let prompt_id = queue[0]["prompt_id"].as_u64().unwrap();
+
+        let removed =
+            remove_thread_prompt(&manager, &json!({"thread_id": id, "prompt_id": prompt_id}));
+        let data = removed.data().unwrap();
+        assert_eq!(data["removed"]["prompt"], "stale");
+        assert_eq!(data["worker"]["queue_depth"], 0);
+        assert_eq!(data["worker"]["status"], "running");
+
+        let again =
+            remove_thread_prompt(&manager, &json!({"thread_id": id, "prompt_id": prompt_id}));
+        let (code, _, _) = again.error_info().unwrap();
+        assert_eq!(code, "remove_thread_prompt_failed");
+        release_tx.send(true).unwrap();
     }
 
     #[tokio::test]

@@ -139,6 +139,14 @@ pub enum WorkerEvent {
     OwnerCallback(CompletionEvent),
 }
 
+/// A prompt waiting in a worker's FIFO. Ids are unique per manager process
+/// and are how the orchestrator names one queued prompt to remove it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueuedPrompt {
+    pub id: u64,
+    pub text: String,
+}
+
 /// Point-in-time view of a managed worker.
 #[derive(Debug, Clone)]
 pub struct WorkerSnapshot {
@@ -147,6 +155,8 @@ pub struct WorkerSnapshot {
     pub root: PathBuf,
     pub status: WorkerStatus,
     pub queue_depth: usize,
+    /// Prompts still waiting, in run order (the running prompt is not here).
+    pub queue: Vec<QueuedPrompt>,
     pub latest_final_text: Option<String>,
     pub last_error: Option<String>,
     /// Link to the worker's surface mirror (Telegram topic), when registered.
@@ -204,7 +214,7 @@ struct WorkerState {
     root: PathBuf,
     model: Option<String>,
     thinking_level: Option<ThinkingLevel>,
-    queue: VecDeque<String>,
+    queue: VecDeque<QueuedPrompt>,
     status: WorkerStatus,
     current_cancel: Option<CancellationToken>,
     latest_final_text: Option<String>,
@@ -226,6 +236,7 @@ impl WorkerState {
             root: self.root.clone(),
             status: self.status,
             queue_depth: self.queue.len(),
+            queue: self.queue.iter().cloned().collect(),
             latest_final_text: self.latest_final_text.clone(),
             last_error: self.last_error.clone(),
             mirror_url,
@@ -246,6 +257,8 @@ pub struct WorkerManager {
     /// Active `wait_for` registrations: `wait_id` → registration.
     active_waits: Mutex<HashMap<u64, WorkerWaitRegistration>>,
     next_wait_id: std::sync::atomic::AtomicU64,
+    /// Source of `QueuedPrompt::id`, unique across all workers in this process.
+    next_prompt_id: std::sync::atomic::AtomicU64,
     /// Worker thread id → surface mirror link, registered by the bridge once
     /// it has opened (or failed to open, `None`) the mirror, or recovered it
     /// after a restart. Kept apart from `state` so a link can outlive/precede
@@ -285,6 +298,7 @@ impl WorkerManager {
             state: Mutex::new(HashMap::new()),
             active_waits: Mutex::new(HashMap::new()),
             next_wait_id: std::sync::atomic::AtomicU64::new(1),
+            next_prompt_id: std::sync::atomic::AtomicU64::new(1),
             mirrors: Mutex::new(HashMap::new()),
             changed: Notify::new(),
             events_tx,
@@ -468,7 +482,7 @@ impl WorkerManager {
             root,
             model,
             thinking_level,
-            prompt.to_string(),
+            prompt,
         );
         Ok(worker_id)
     }
@@ -511,7 +525,7 @@ impl WorkerManager {
             root,
             None,
             None,
-            message.to_string(),
+            message,
         ))
     }
 
@@ -539,14 +553,7 @@ impl WorkerManager {
         }
 
         let root = resolve_persisted_root(worker_thread_id)?;
-        Ok(self.attach_or_enqueue(
-            worker_thread_id,
-            None,
-            root,
-            None,
-            None,
-            message.to_string(),
-        ))
+        Ok(self.attach_or_enqueue(worker_thread_id, None, root, None, None, message))
     }
 
     /// Enqueues onto an already-managed worker; `None` when unmanaged.
@@ -557,13 +564,14 @@ impl WorkerManager {
         owner: Option<&str>,
         message: &str,
     ) -> Option<WorkerSnapshot> {
+        let prompt = self.queued_prompt(message);
         let snapshot = {
             let mut map = self.state.lock().expect("worker state lock poisoned");
             let state = map.get_mut(worker_thread_id)?;
             if let Some(owner) = owner {
                 state.owner_thread_id = owner.to_string();
             }
-            state.queue.push_back(message.to_string());
+            state.queue.push_back(prompt);
             if state.status != WorkerStatus::Running {
                 state.status = WorkerStatus::Queued;
             }
@@ -588,8 +596,9 @@ impl WorkerManager {
         root: PathBuf,
         model: Option<String>,
         thinking_level: Option<ThinkingLevel>,
-        prompt: String,
+        prompt: &str,
     ) -> WorkerSnapshot {
+        let prompt = self.queued_prompt(prompt);
         let (snapshot, spawn_wake) = {
             let mirror_url = self.mirror_url(worker_thread_id);
             let mut map = self.state.lock().expect("worker state lock poisoned");
@@ -846,6 +855,49 @@ impl WorkerManager {
         Ok(snapshot)
     }
 
+    /// Removes one prompt that is still waiting in a worker's FIFO. The
+    /// running turn (if any) and every other queued prompt are untouched.
+    ///
+    /// # Errors
+    /// Returns an error if the worker is not managed or no queued prompt has
+    /// that id (it may already have started running).
+    ///
+    /// # Panics
+    /// Panics if the internal worker state lock is poisoned.
+    pub fn remove_queued_prompt(
+        &self,
+        worker_thread_id: &str,
+        prompt_id: u64,
+    ) -> Result<(QueuedPrompt, WorkerSnapshot)> {
+        let removed = {
+            let mut map = self.state.lock().expect("worker state lock poisoned");
+            let Some(state) = map.get_mut(worker_thread_id) else {
+                bail!("Worker '{worker_thread_id}' is not managed");
+            };
+            let Some(index) = state.queue.iter().position(|p| p.id == prompt_id) else {
+                bail!(
+                    "Worker '{worker_thread_id}' has no queued prompt {prompt_id}; it may already be running or finished"
+                );
+            };
+            let prompt = state.queue.remove(index).expect("index from position");
+            (
+                prompt,
+                state.snapshot(worker_thread_id, self.mirror_url(worker_thread_id)),
+            )
+        };
+        self.changed.notify_waiters();
+        Ok(removed)
+    }
+
+    fn queued_prompt(&self, text: &str) -> QueuedPrompt {
+        QueuedPrompt {
+            id: self
+                .next_prompt_id
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            text: text.to_string(),
+        }
+    }
+
     /// Updates a thread's title.
     ///
     /// For a managed worker the rewrite runs while holding the manager lock and
@@ -982,7 +1034,7 @@ fn spawn_worker_task(manager: Arc<WorkerManager>, worker_thread_id: String, wake
                         worker_thread_id: worker_thread_id.clone(),
                         owner_thread_id: state.owner_thread_id.clone(),
                         root: state.root.clone(),
-                        prompt,
+                        prompt: prompt.text,
                         model: state.model.clone(),
                         thinking_level: state.thinking_level,
                         cancel,
@@ -1247,6 +1299,61 @@ mod tests {
         let event = next_completion(&mut completion_rx).await;
         assert_eq!(event.status, WorkerStatus::Completed);
         assert_eq!(event.final_text.as_deref(), Some("resume"));
+    }
+
+    #[tokio::test]
+    async fn remove_queued_prompt_drops_one_item_and_keeps_the_turn() {
+        let _home = temp_zdx_home();
+        let project = tempfile::tempdir().unwrap();
+
+        let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+        let runner: WorkerRunner = Arc::new(move |request: WorkerRunRequest| {
+            let mut release = release_rx.clone();
+            Box::pin(async move {
+                if request.prompt == "long task" {
+                    release.wait_for(|released| *released).await.unwrap();
+                }
+                Ok(request.prompt)
+            })
+        });
+        let (manager, mut completion_rx) = WorkerManager::with_runner(runner);
+
+        let worker_id = manager
+            .create_worker("owner", project.path(), "long task", None, None, None)
+            .unwrap();
+        // Give the FIFO a moment to start the first prompt.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let stale = manager.send_message("owner", &worker_id, "stale").unwrap();
+        let handoff = manager
+            .send_message("owner", &worker_id, "handoff")
+            .unwrap();
+
+        let stale_id = stale.queue.last().unwrap().id;
+        assert_eq!(
+            handoff
+                .queue
+                .iter()
+                .map(|p| p.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["stale", "handoff"],
+            "snapshot lists waiting prompts in run order"
+        );
+
+        let (removed, snapshot) = manager.remove_queued_prompt(&worker_id, stale_id).unwrap();
+        assert_eq!(removed.text, "stale");
+        assert_eq!(snapshot.status, WorkerStatus::Running);
+        assert_eq!(snapshot.queue.len(), 1);
+        assert_eq!(snapshot.queue[0].text, "handoff");
+        assert!(
+            manager.remove_queued_prompt(&worker_id, stale_id).is_err(),
+            "a removed id is gone"
+        );
+
+        release_tx.send(true).unwrap();
+        let first = next_completion(&mut completion_rx).await;
+        let second = next_completion(&mut completion_rx).await;
+        assert_eq!(first.final_text.as_deref(), Some("long task"));
+        assert_eq!(second.final_text.as_deref(), Some("handoff"));
     }
 
     #[tokio::test]

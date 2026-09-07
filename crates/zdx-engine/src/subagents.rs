@@ -434,6 +434,29 @@ pub fn load_builtin_orchestrator() -> Result<SubagentDefinition> {
     )
 }
 
+/// Applies `[subagents.overrides.orchestrator]` to the config an orchestrator
+/// home base runs with. The orchestrator is never reached through
+/// `invoke_subagent`, so the generic override path in `tools/subagent.rs`
+/// never sees this entry; surfaces that run the profile call this instead.
+/// Same semantics as other overrides: the model replaces the chat's model and
+/// the thinking level follows the override's `@level` suffix when present.
+pub fn apply_orchestrator_override(config: &mut crate::config::Config) {
+    let Some(over) = config
+        .subagents
+        .overrides
+        .get(ORCHESTRATOR_SUBAGENT_NAME)
+        .cloned()
+    else {
+        return;
+    };
+    if let Some(model) = over.model {
+        config.model = model;
+    }
+    if let Some(level) = over.thinking_level {
+        config.thinking_level = level;
+    }
+}
+
 fn oracle_capability(root: &Path) -> Result<CapabilityDescriptor> {
     let definition = load_by_name(root, ORACLE_SUBAGENT_NAME)?;
     Ok(CapabilityDescriptor {
@@ -819,6 +842,54 @@ mod tests {
     }
 
     #[test]
+    fn orchestrator_override_replaces_model_and_thinking() {
+        use crate::config::{Config, SubagentOverride};
+
+        let base = || {
+            let mut config = Config::default();
+            config.model = "claude-cli:opus@high".to_string();
+            config.thinking_level = ThinkingLevel::High;
+            config
+        };
+        let with_override = |name: &str, model: &str, level: Option<ThinkingLevel>| {
+            let mut config = base();
+            config.subagents.overrides.insert(
+                name.to_string(),
+                SubagentOverride {
+                    model: Some(model.to_string()),
+                    thinking_level: level,
+                },
+            );
+            config
+        };
+
+        let mut config = with_override(
+            ORCHESTRATOR_SUBAGENT_NAME,
+            "claude-cli:fable@low",
+            Some(ThinkingLevel::Low),
+        );
+        apply_orchestrator_override(&mut config);
+        assert_eq!(config.model, "claude-cli:fable@low");
+        assert_eq!(config.thinking_level, ThinkingLevel::Low);
+
+        let mut config = with_override(ORCHESTRATOR_SUBAGENT_NAME, "claude-cli:fable", None);
+        apply_orchestrator_override(&mut config);
+        assert_eq!(config.model, "claude-cli:fable");
+        assert_eq!(
+            config.thinking_level,
+            ThinkingLevel::High,
+            "no suffix keeps the chat's thinking level"
+        );
+
+        let mut config = with_override("explorer", "gemini:flash@low", Some(ThinkingLevel::Low));
+        apply_orchestrator_override(&mut config);
+        assert_eq!(
+            config.model, "claude-cli:opus@high",
+            "other overrides are ignored"
+        );
+    }
+
+    #[test]
     fn builtin_orchestrator_declares_exact_tool_surface() {
         let definition = load_builtin_orchestrator().unwrap();
         assert_eq!(definition.name, ORCHESTRATOR_SUBAGENT_NAME);
@@ -838,6 +909,7 @@ mod tests {
             "get_thread_status",
             "wait_for_threads",
             "update_thread",
+            "remove_thread_prompt",
             "cancel_thread",
             "thread_search",
             "read_thread",
