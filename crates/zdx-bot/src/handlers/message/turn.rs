@@ -29,31 +29,25 @@ pub(super) async fn run_agent_turn(
     let worktree_root = stored_root
         .clone()
         .map_or_else(|| resolved_root.root.clone(), std::path::PathBuf::from);
+    // Persistent top-level profile (reserved orchestrator home base). Recorded
+    // routes let worker completion callbacks reach this topic later.
+    let persistent_profile = thread_persistence::read_persistent_profile(thread_id)?;
+    let is_orchestrator =
+        persistent_profile.as_deref() == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME);
     let model_override = thread_persistence::read_thread_model_override(thread_id)?;
     let thinking_override = thread_persistence::read_thread_thinking_override(thread_id)?;
-    let config = if model_override.is_some() || thinking_override.is_some() {
-        let mut cfg = context.config_for_chat(incoming.chat_id);
-        if let Some(ref model_id) = model_override {
-            cfg.model.clone_from(model_id);
-        }
-        if let Some(level) = thinking_override {
-            cfg.thinking_level = level;
-        }
-        cfg
-    } else {
-        context.config_for_chat(incoming.chat_id)
-    };
+    let config = turn_config(
+        context.config_for_chat(incoming.chat_id),
+        is_orchestrator,
+        model_override.as_deref(),
+        thinking_override,
+    );
     let (mut thread, mut messages) = agent::load_thread_state(thread_id)?;
     // Bot threads are opened by id, so their meta has no root until now. Record
     // the chat's project root so they group by project like CLI/TUI threads.
     if stored_root.is_none() {
         thread.set_root_path(&worktree_root)?;
     }
-    // Persistent top-level profile (reserved orchestrator home base). Recorded
-    // routes let worker completion callbacks reach this topic later.
-    let persistent_profile = thread_persistence::read_persistent_profile(thread_id)?;
-    let is_orchestrator =
-        persistent_profile.as_deref() == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME);
     if is_orchestrator {
         context.record_orchestrator_route(
             thread_id,
@@ -135,6 +129,27 @@ pub(super) async fn run_agent_turn(
         is_orchestrator,
     )
     .await
+}
+
+/// Layers the model/thinking a turn runs with: chat config →
+/// `[subagents.overrides.orchestrator]` (orchestrator topics only) → the
+/// topic's own `/model` and `/thinking` overrides.
+fn turn_config(
+    mut config: zdx_engine::config::Config,
+    is_orchestrator: bool,
+    model_override: Option<&str>,
+    thinking_override: Option<zdx_engine::config::ThinkingLevel>,
+) -> zdx_engine::config::Config {
+    if is_orchestrator {
+        zdx_engine::subagents::apply_orchestrator_override(&mut config);
+    }
+    if let Some(model_id) = model_override {
+        config.model = model_id.to_string();
+    }
+    if let Some(level) = thinking_override {
+        config.thinking_level = level;
+    }
+    config
 }
 
 async fn spawn_or_fail(
