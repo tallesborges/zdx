@@ -13,55 +13,9 @@ use crate::core::context::{
 };
 use crate::skills::{LoadSkillsOptions, Skill, load_skills, read_skill_content, skill_access_path};
 
-pub const TASK_BUILTIN_ALIAS_NAME: &str = "task";
 pub const EXPLORER_SUBAGENT_NAME: &str = "explorer";
 pub const ORACLE_SUBAGENT_NAME: &str = "oracle";
 pub const ORCHESTRATOR_SUBAGENT_NAME: &str = "orchestrator";
-
-/// Reserved runtime aliases that are not backed by a markdown subagent file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BuiltinAlias {
-    /// Default delegated ZDX behavior using the base prompt + context pipeline.
-    Task,
-}
-
-impl BuiltinAlias {
-    #[must_use]
-    pub const fn runtime_name(self) -> &'static str {
-        match self {
-            Self::Task => TASK_BUILTIN_ALIAS_NAME,
-        }
-    }
-
-    #[must_use]
-    pub const fn display_name(self) -> &'static str {
-        match self {
-            Self::Task => "Task",
-        }
-    }
-
-    #[must_use]
-    pub const fn description(self) -> &'static str {
-        match self {
-            Self::Task => {
-                "Delegate an independent execution-oriented sub-task using the default full ZDX prompt and project context. Use it for complex multi-step work, output-heavy subtasks, or parallelizable implementation slices; prefer `explorer` for broad local exploration and `oracle` for deep analysis."
-            }
-        }
-    }
-}
-
-#[must_use]
-pub fn builtin_alias_from_name(name: &str) -> Option<BuiltinAlias> {
-    match name.trim() {
-        name if name.eq_ignore_ascii_case(TASK_BUILTIN_ALIAS_NAME) => Some(BuiltinAlias::Task),
-        _ => None,
-    }
-}
-
-#[must_use]
-pub fn is_reserved_runtime_alias(name: &str) -> bool {
-    builtin_alias_from_name(name).is_some()
-}
 
 /// Curated capability metadata surfaced in the main system prompt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,25 +23,8 @@ pub struct CapabilityDescriptor {
     pub name: String,
     pub title: String,
     pub description: String,
-    pub kind: CapabilityKind,
-}
-
-/// Internal implementation backing a curated capability.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CapabilityKind {
-    /// Backed by a named standalone subagent prompt.
-    Subagent { subagent: String },
-    /// Backed by a reserved runtime alias.
-    BuiltinAlias(BuiltinAlias),
-}
-
-/// Runtime resolution for `subagent:` inputs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RuntimeSubagentSelection {
-    /// Use the default delegated ZDX prompt/context behavior.
-    Default,
-    /// Use a named standalone subagent prompt.
-    Named(Box<SubagentDefinition>),
+    /// Named standalone subagent backing this capability.
+    pub subagent: String,
 }
 
 /// Source location for a subagent definition.
@@ -196,10 +133,7 @@ pub fn discover(root: &Path) -> Result<Vec<SubagentDefinition>> {
 pub fn list_summaries(root: &Path) -> Result<Vec<SubagentSummary>> {
     discover(root).map(|defs| {
         defs.into_iter()
-            .filter(|definition| {
-                !is_reserved_runtime_alias(&definition.name)
-                    && definition.name != ORCHESTRATOR_SUBAGENT_NAME
-            })
+            .filter(|definition| definition.name != ORCHESTRATOR_SUBAGENT_NAME)
             .map(|definition| SubagentSummary {
                 name: definition.name,
                 description: definition.description,
@@ -208,47 +142,29 @@ pub fn list_summaries(root: &Path) -> Result<Vec<SubagentSummary>> {
     })
 }
 
-/// Resolves a runtime `subagent` selection, including reserved aliases.
-///
-/// `allowed` restricts which subagents the caller may reach. When it is
-/// `Some`, an omitted `requested` is an error rather than the implicit `task`
-/// fallback, so a restricted caller cannot reach the default coding agent by
-/// leaving the argument out.
+/// Resolves a named subagent for a caller, enforcing `allowed` when set.
 ///
 /// # Errors
-/// Returns an error if a named subagent is requested but missing, invalid, or
-/// not permitted for this caller.
-pub fn resolve_runtime_selection(
+/// Returns an error if the name is empty, missing, invalid, or not permitted
+/// for this caller.
+pub fn resolve_named(
     root: &Path,
-    requested: Option<&str>,
+    requested: &str,
     allowed: Option<&[String]>,
-) -> Result<RuntimeSubagentSelection> {
-    let requested = requested.map(str::trim).filter(|name| !name.is_empty());
-
-    if let Some(allowed) = allowed {
-        let listed = allowed.join(", ");
-        let Some(name) = requested else {
-            bail!("subagent is required for this agent; allowed subagent(s): {listed}");
-        };
-        if !allowed
+) -> Result<SubagentDefinition> {
+    let name = requested.trim();
+    if name.is_empty() {
+        bail!("Subagent name cannot be empty");
+    }
+    if let Some(allowed) = allowed
+        && !allowed
             .iter()
             .any(|candidate| candidate.eq_ignore_ascii_case(name))
-        {
-            bail!(
-                "Subagent '{name}' is not permitted for this agent; allowed subagent(s): {listed}"
-            );
-        }
+    {
+        let listed = allowed.join(", ");
+        bail!("Subagent '{name}' is not permitted for this agent; allowed subagent(s): {listed}");
     }
-
-    match requested {
-        None => Ok(RuntimeSubagentSelection::Default),
-        Some(name) if builtin_alias_from_name(name) == Some(BuiltinAlias::Task) => {
-            Ok(RuntimeSubagentSelection::Default)
-        }
-        Some(name) => load_by_name(root, name)
-            .map(Box::new)
-            .map(RuntimeSubagentSelection::Named),
-    }
+    load_by_name(root, name)
 }
 
 /// Builds the curated specialized capability catalog for the main system prompt.
@@ -262,7 +178,6 @@ pub fn capability_catalog(
     let mut capabilities = Vec::new();
 
     if delegation_enabled {
-        capabilities.push(task_capability());
         capabilities.push(explorer_capability(root)?);
         capabilities.push(oracle_capability(root)?);
     }
@@ -276,7 +191,6 @@ pub fn fallback_capability_catalog(delegation_enabled: bool) -> Vec<CapabilityDe
     let mut capabilities = Vec::new();
 
     if delegation_enabled {
-        capabilities.push(task_capability());
         capabilities.push(fallback_explorer_capability());
         capabilities.push(fallback_oracle_capability());
     }
@@ -520,24 +434,13 @@ pub fn load_builtin_orchestrator() -> Result<SubagentDefinition> {
     )
 }
 
-fn task_capability() -> CapabilityDescriptor {
-    CapabilityDescriptor {
-        name: BuiltinAlias::Task.runtime_name().to_string(),
-        title: BuiltinAlias::Task.display_name().to_string(),
-        description: BuiltinAlias::Task.description().to_string(),
-        kind: CapabilityKind::BuiltinAlias(BuiltinAlias::Task),
-    }
-}
-
 fn oracle_capability(root: &Path) -> Result<CapabilityDescriptor> {
     let definition = load_by_name(root, ORACLE_SUBAGENT_NAME)?;
     Ok(CapabilityDescriptor {
         name: definition.name.clone(),
         title: "Oracle".to_string(),
         description: definition.description,
-        kind: CapabilityKind::Subagent {
-            subagent: definition.name,
-        },
+        subagent: definition.name,
     })
 }
 
@@ -547,9 +450,7 @@ fn explorer_capability(root: &Path) -> Result<CapabilityDescriptor> {
         name: definition.name.clone(),
         title: "Explorer".to_string(),
         description: definition.description,
-        kind: CapabilityKind::Subagent {
-            subagent: definition.name,
-        },
+        subagent: definition.name,
     })
 }
 
@@ -560,9 +461,7 @@ fn fallback_explorer_capability() -> CapabilityDescriptor {
         description:
             "Use for read-only exploration: current workspace, other local paths, saved thread history, external docs, or shallow-cloned repositories. Prefer it when the task likely needs several search/read rounds or broad orientation before implementation. It has `bash` for read-only `gh`/shallow-clone/inspection workflows."
                 .to_string(),
-        kind: CapabilityKind::Subagent {
-            subagent: EXPLORER_SUBAGENT_NAME.to_string(),
-        },
+        subagent: EXPLORER_SUBAGENT_NAME.to_string(),
     }
 }
 
@@ -573,9 +472,7 @@ fn fallback_oracle_capability() -> CapabilityDescriptor {
         description:
             "Read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions. Use it for interpreting evidence, identifying likely causes, evaluating tradeoffs, and recommending next steps after evidence is gathered. It uses read-only inspection/research tools and does not have `bash`. It is not a search agent; use `explorer` for broad local exploration or discovery."
                 .to_string(),
-        kind: CapabilityKind::Subagent {
-            subagent: ORACLE_SUBAGENT_NAME.to_string(),
-        },
+        subagent: ORACLE_SUBAGENT_NAME.to_string(),
     }
 }
 
@@ -600,9 +497,6 @@ fn parse_subagent_content(
 
     let fallback_name = file_stem(path)?;
     let name = normalize_required_string(frontmatter.name, "name")?.unwrap_or(fallback_name);
-    if is_reserved_runtime_alias(&name) {
-        bail!("Subagent name '{name}' is reserved for runtime aliases and cannot be used");
-    }
     if source != SubagentSource::BuiltIn && name.eq_ignore_ascii_case(ORCHESTRATOR_SUBAGENT_NAME) {
         bail!(
             "Subagent name '{name}' is reserved for the built-in orchestrator profile and cannot be overridden"
@@ -863,25 +757,16 @@ mod tests {
     }
 
     #[test]
-    fn allowed_subagents_restricts_resolution_and_blocks_the_task_fallback() {
+    fn allowed_subagents_restricts_resolution() {
         let root = tempdir().unwrap();
         let allowed = vec!["explorer".to_string()];
 
-        // Omitting `subagent` must not fall back to the default coding agent.
-        assert!(resolve_runtime_selection(root.path(), None, Some(&allowed)).is_err());
-        assert!(resolve_runtime_selection(root.path(), Some("task"), Some(&allowed)).is_err());
-        assert!(resolve_runtime_selection(root.path(), Some("oracle"), Some(&allowed)).is_err());
-
-        let selection =
-            resolve_runtime_selection(root.path(), Some("explorer"), Some(&allowed)).unwrap();
-        assert!(
-            matches!(selection, RuntimeSubagentSelection::Named(def) if def.name == "explorer")
-        );
-
-        // Unrestricted callers keep the implicit `task` default.
+        assert!(resolve_named(root.path(), "oracle", Some(&allowed)).is_err());
         assert_eq!(
-            resolve_runtime_selection(root.path(), None, None).unwrap(),
-            RuntimeSubagentSelection::Default
+            resolve_named(root.path(), "explorer", Some(&allowed))
+                .unwrap()
+                .name,
+            "explorer"
         );
     }
 
@@ -899,7 +784,7 @@ mod tests {
 
         for name in ["orchestrator", "Orchestrator"] {
             assert!(
-                resolve_runtime_selection(root.path(), Some(name), None).is_err(),
+                resolve_named(root.path(), name, None).is_err(),
                 "{name} must not resolve"
             );
         }
@@ -1133,13 +1018,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_subagent_rejects_reserved_runtime_alias_name() {
+    fn parse_subagent_accepts_a_user_defined_task_file() {
         let dir = tempdir().unwrap();
         let file = dir.path().join("task.md");
-        fs::write(&file, "---\ndescription: Reserved\n---\nPrompt").unwrap();
+        fs::write(&file, "---\ndescription: User defined\n---\nPrompt").unwrap();
 
-        let err = parse_subagent_file(&file, SubagentSource::User).unwrap_err();
-        assert!(err.to_string().contains("reserved for runtime aliases"));
+        let definition = parse_subagent_file(&file, SubagentSource::User).unwrap();
+        assert_eq!(definition.name, "task");
     }
 
     #[test]
@@ -1157,26 +1042,10 @@ mod tests {
     }
 
     #[test]
-    fn resolve_runtime_selection_treats_task_alias_as_default() {
+    fn task_is_not_a_built_in_subagent() {
         let root = tempdir().unwrap();
 
-        let selection = resolve_runtime_selection(root.path(), Some("task"), None).unwrap();
-        assert_eq!(selection, RuntimeSubagentSelection::Default);
-    }
-
-    #[test]
-    fn discover_rejects_reserved_runtime_alias_files() {
-        let root = tempdir().unwrap();
-        let project_dir = root.path().join(".zdx").join("subagents");
-        fs::create_dir_all(&project_dir).unwrap();
-        fs::write(
-            project_dir.join("task.md"),
-            "---\ndescription: User-defined task file\n---\nPrompt",
-        )
-        .unwrap();
-
-        let err = discover(root.path()).unwrap_err();
-        assert!(format!("{err:#}").contains("reserved for runtime aliases"));
+        assert!(resolve_named(root.path(), "task", None).is_err());
     }
 
     #[test]
@@ -1189,7 +1058,7 @@ mod tests {
                 .iter()
                 .map(|cap| cap.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["task", "explorer", "oracle"]
+            vec!["explorer", "oracle"]
         );
     }
 

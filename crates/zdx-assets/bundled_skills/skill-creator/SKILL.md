@@ -168,7 +168,7 @@ What to do. Specific commands when relevant.
 **Rules:** hard constraints, especially user corrections from the source material.
 ```
 
-- For zdx, the built-in subagents are Explorer, Oracle, and Task. Reference them as proper nouns in prose; use the lowercase id (`explorer`, `oracle`, `task`) only when it's the literal value passed to `invoke_subagent`. Other runtimes have their own subagent names — use those instead.
+- For zdx, the built-in subagents are Explorer and Oracle, and both are read-only. Reference them as proper nouns in prose; use the lowercase id (`explorer`, `oracle`) only when it's the literal value passed to `invoke_subagent`. Other runtimes have their own subagent names — use those instead.
 - For parallel steps, use sub-numbers: `3a`, `3b`.
 - Steps the user must do themselves get `[human]` in the title.
 - Simple skills don't need annotations on every step. A 2-step workflow can stay plain prose.

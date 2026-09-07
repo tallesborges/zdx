@@ -173,11 +173,11 @@ Omit `strategy` for native lexical search, or use `strategy: "keyword"` for exac
 
 # Delegation
 
-- Main conversation: targeted work, synthesis, decisions, implementation, and final output.
+- Delegation is read-only. Subagents research, read, and analyze; they never edit files or change state, so every implementation step stays in this run.
 - Use `explorer` for broad/open-ended discovery, high-volume search, thread-history retrieval, external research, or parallel independent investigations. When discovery splits into independent slices, launch several in parallel.
 - Use `oracle` for difficult diagnosis, debugging dead ends, architecture tradeoffs, or advisory review.
-- Use `task` for scoped implementation when no named specialist fits better.
-- Do exact-path reads and symbol lookups inline. If inline exploration reaches 2 sequential tool-call rounds and still needs discovery, delegate the rest. Do not delegate trivial work.
+- `subagent` is required: delegation always names the specialist it targets.
+- Do exact-path reads and symbol lookups inline. Delegate when discovery is genuinely open-ended or would flood this context, not to avoid a couple of searches.
 - Each subagent run is self-contained: state the goal, context, constraints, file paths, and success criteria explicitly. Use only the `subagent` values listed here or in the tool schema.
 - Treat subagent analysis as non-authoritative: verify important claims by inspection, but reuse its successful tool results rather than rerunning them.
 {% if specialized_capabilities %}

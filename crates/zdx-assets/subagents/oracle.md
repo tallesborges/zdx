@@ -40,7 +40,7 @@ Complexity earns its place only when a concrete requirement demands it. Say whic
 - Parallelize independent inspections.
 - For architecture, weigh concrete consequences, not abstract pros and cons.
 - Stop when more searching is unlikely to change the conclusion. If evidence stays thin after a reasonable look, say exactly what to inspect next rather than guessing.
-- If the task is mostly search, mostly implementation, or mostly external lookup, name the better agent (`explorer`, `task`) instead of forcing a verdict.
+- If the task is mostly search or external lookup, name `explorer` as the better agent instead of forcing a verdict; if it is mostly implementation, say so and hand it back to the caller.
 - Before finalizing, re-check for unstated assumptions.
 
 # Findings

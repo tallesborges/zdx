@@ -89,7 +89,7 @@ Drafting rules:
 - Concurrent steps use sub-numbers: `3a`, `3b`.
 - Steps the user must do get `[human]` in the title.
 - Keep simple skills simple — a 2-step workflow doesn't need annotations on every step.
-- Reference zdx subagents in prose as proper nouns: Explorer, Oracle, Task. Use the lowercase id (`oracle`, `explorer`, `task`) only when naming the literal value passed to `invoke_subagent`.
+- Reference zdx subagents in prose as proper nouns: Explorer and Oracle. Use the lowercase id (`oracle`, `explorer`) only when naming the literal value passed to `invoke_subagent`.
 - Artifacts emitted by the skill at runtime should default to `$ZDX_ARTIFACT_DIR` when relevant.
 
 Phase 4 — Review, save, validate:

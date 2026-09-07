@@ -104,7 +104,7 @@ fn log_nonzero_exit(status: std::process::ExitStatus, stderr: &str) {
     name = "subagent",
     skip_all,
     fields(
-        subagent = options.activity_subagent_name.as_deref().unwrap_or("task"),
+        subagent = options.activity_subagent_name.as_deref().unwrap_or("-"),
         model = options.model.as_deref().unwrap_or("-"),
     )
 )]

@@ -388,9 +388,6 @@ fn build_subagent_lines(config: &config::Config, root: &Path) -> Vec<ConfigLine>
         return out;
     };
     for def in defs {
-        if zdx_engine::subagents::is_reserved_runtime_alias(&def.name) {
-            continue;
-        }
         let over = config.subagents.overrides.get(&def.name);
         let model = over
             .and_then(|o| o.model.clone())

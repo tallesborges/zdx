@@ -100,7 +100,7 @@ ZDX solves this with a boring, reliable core:
 - **stdout:** assistant text only (or JSON if/when `--format json` ships).
 - **stderr:** diagnostics, warnings, tool status, errors.
 - `--no-system-prompt` disables all system/context composition for that run (config system prompt, `AGENTS.md`/`CLAUDE.md`, memory, skills).
-- `--subagent <NAME>` runs the prompt under a named subagent (`explorer`, `oracle`, or any discovered subagent): the subagent's rendered prompt becomes the run's system prompt, and its `model`, `thinking_level`, and `tools` apply as defaults. Explicit `-m`/`-t`/`--tools`/`--no-tools` still win. The reserved `task` name resolves to default exec behavior. Conflicts with `--no-system-prompt`; unknown names fail the run.
+- `--subagent <NAME>` runs the prompt under a named subagent (`explorer`, `oracle`, or any discovered subagent): the subagent's rendered prompt becomes the run's system prompt, and its `model`, `thinking_level`, and `tools` apply as defaults. Explicit `-m`/`-t`/`--tools`/`--no-tools` still win. Omitting the flag runs default exec behavior. Conflicts with `--no-system-prompt`; unknown names fail the run.
 
 ### `zdx imagine` (non-interactive, scriptable)
 
@@ -402,15 +402,14 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 
 - Named subagents are markdown files with YAML frontmatter plus a standalone prompt body.
 - Discovery order/override precedence: built-in → `~/.zdx/subagents/` → project `.zdx/subagents/` (later sources override earlier by name).
-- `invoke_subagent` accepts `subagent: <name>`. When omitted, it uses the default/base system prompt behavior.
+- `invoke_subagent` requires `subagent: <name>`: delegation always targets a named subagent, and there is no unnamed/default delegated agent. Omitting the argument is an error.
 - `invoke_subagent` also accepts optional per-invocation `model` and `thinking_level` overrides. Resolution precedence is explicit invocation override → named subagent profile → parent/default configuration; profile prompt, tools, and context behavior remain unchanged.
 - For each `[subagents.overrides.<name>]`, config readers resolve thinking after layer merging: an explicit legacy `thinking_level`, including `off`, wins over the override model's `@thinking` suffix. When neither exists, the override leaves thinking unset so the existing definition/caller fallback remains. Readers preserve model strings and do not rewrite files; override saves persist the chosen thinking level in `model` and remove the separate key.
-- Reserved runtime alias `task` explicitly selects that same default delegated-worker behavior using the normal base prompt + context pipeline.
-- The `task` alias is intended for complex multi-step, output-heavy, or independently parallelizable delegated work; direct execution should stay the default for small tasks.
+- Delegation is read-only: every delegable subagent researches, reads, and analyzes without mutating local or remote state, so implementation stays in the calling run. Mutating work is delegated by creating a worker thread (§18), which exists only where a live worker manager runs.
 - Delegated child runs should be prompted self-sufficiently: the parent should include the goal, relevant context, constraints/non-goals, expected output, and verification when relevant rather than assuming the child inherits its implicit reasoning state.
 - When a named subagent is selected, its body is rendered with the same prompt-template syntax/vars as the main prompt pipeline, then used as the child run's system prompt directly; it does not inherit the default ZDX prompt/context pipeline unless that text is written into the subagent body.
 - Named subagents may declare `skills:` (allowed on-demand skills) and `auto_loaded_skills:` (skills whose `SKILL.md` contents are injected directly into the subagent prompt). Auto-loaded skills should be treated as already in context for that run.
-- A subagent definition may declare `allowed_subagents`, restricting which subagents it can reach via `invoke_subagent`. The restriction is enforced twice: the tool schema advertises only the listed subagents (dropping the `task` alias unless listed) and marks `subagent` required, and execute-time resolution rejects any unlisted name. When restricted, an omitted `subagent` argument is an error rather than the implicit `task` fallback, so a restricted caller cannot reach the default coding agent by leaving the argument out. `allowed_subagents` may not list the declaring agent itself or the reserved `orchestrator` profile. Omitting the field leaves the caller unrestricted.
+- A subagent definition may declare `allowed_subagents`, restricting which subagents it can reach via `invoke_subagent`. The restriction is enforced twice: the tool schema advertises only the listed subagents, and execute-time resolution rejects any unlisted name. `allowed_subagents` may not list the declaring agent itself or the reserved `orchestrator` profile. Omitting the field leaves the caller unrestricted.
 - Explicit subagent skill dependencies are resolved from enabled sources even if global `include_skills` / `ignored_skills` filters would otherwise hide them.
 - Built-in subagents currently include:
   - `explorer`: a read-only local exploration specialist for open-ended multi-step discovery across the current workspace, broader machine-local filesystem paths, and saved thread history.

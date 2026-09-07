@@ -583,25 +583,14 @@ fn fallback_prompt_template_capabilities(
 fn prompt_template_capability(
     capability: subagents::CapabilityDescriptor,
 ) -> PromptTemplateCapability {
-    let kind_label = match &capability.kind {
-        subagents::CapabilityKind::Subagent { .. } => "standalone subagent".to_string(),
-        subagents::CapabilityKind::BuiltinAlias(_) => "builtin alias".to_string(),
-    };
-    let backing = match capability.kind {
-        subagents::CapabilityKind::Subagent { subagent } => {
-            format!("`invoke_subagent(subagent: \"{subagent}\", prompt: \"...\")`")
-        }
-        subagents::CapabilityKind::BuiltinAlias(alias) => format!(
-            "`invoke_subagent(subagent: \"{}\", prompt: \"...\")`",
-            alias.runtime_name()
-        ),
-    };
+    let subagent = capability.subagent;
+    let backing = format!("`invoke_subagent(subagent: \"{subagent}\", prompt: \"...\")`");
 
     PromptTemplateCapability {
         name: capability.name,
         title: capability.title,
         description: capability.description,
-        kind_label,
+        kind_label: "standalone subagent".to_string(),
         backing,
     }
 }
@@ -2223,7 +2212,7 @@ mod tests {
         assert!(rendered.contains("<name>demo-skill</name>"));
         assert!(rendered.contains("Use <special> syntax"));
         assert!(rendered.contains("demo&skill"));
-        assert!(rendered.contains("<title>Task</title>"));
+        assert!(rendered.contains("<title>Explorer</title>"));
         assert!(rendered.contains("<title>Oracle</title>"));
         assert!(rendered.contains("invoke_subagent"));
     }
@@ -2596,9 +2585,10 @@ mod tests {
             "Use `oracle` for difficult diagnosis, debugging dead ends, architecture tradeoffs, or advisory review."
         ));
         assert!(prompt.contains(
-            "Use `task` for scoped implementation when no named specialist fits better."
+            "Delegation is read-only. Subagents research, read, and analyze; they never edit files or change state, so every implementation step stays in this run."
         ));
-        assert!(prompt.contains("Task (`task`)"));
+        assert!(!prompt.contains("Task (`task`)"));
+        assert!(prompt.contains("Explorer (`explorer`)"));
         assert!(prompt.contains("Oracle (`oracle`)"));
     }
 
@@ -2809,7 +2799,7 @@ mod tests {
     }
 
     #[test]
-    fn test_delegation_capabilities_omit_task_and_oracle_when_subagents_disabled() {
+    fn test_delegation_capabilities_omit_specialists_when_subagents_disabled() {
         // Rendering a prompt materializes bundled skills into $ZDX_HOME.
         let _home = crate::test_support::temp_zdx_home();
         let dir = tempdir().unwrap();
@@ -2828,7 +2818,7 @@ mod tests {
         let effective =
             build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
-        assert!(!prompt.contains("Task (`task`)"));
+        assert!(!prompt.contains("Explorer (`explorer`)"));
         assert!(!prompt.contains("Oracle (`oracle`)"));
     }
 }

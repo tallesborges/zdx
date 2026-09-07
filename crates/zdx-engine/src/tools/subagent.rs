@@ -7,13 +7,13 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{ToolContext, ToolDefinition, ToolSet, toolset_tool_names};
-use crate::core::context::{PromptContextInclusion, build_prompt_with_context_and_layers};
+use crate::core::context::PromptContextInclusion;
 use crate::core::events::ToolOutput;
 use crate::core::subagent::{
     ExecSubagentOptions, SubagentStreamSink, run_exec_subagent_with_cancel,
 };
 use crate::providers::{ProviderKind, resolve_provider};
-use crate::subagents::{self, RuntimeSubagentSelection, SubagentSummary};
+use crate::subagents::{self, SubagentDefinition, SubagentSummary};
 
 /// Returns the tool definition for the `invoke_subagent` tool.
 pub fn definition() -> ToolDefinition {
@@ -22,10 +22,9 @@ pub fn definition() -> ToolDefinition {
 
 /// Returns the tool definition enriched with available named subagents.
 ///
-/// `allowed` restricts the advertised catalog. When it is `Some`, only the
-/// listed subagents appear in the `subagent` enum, the `task` alias is dropped
-/// unless explicitly listed, and `subagent` becomes required so the model
-/// cannot fall back to the default coding agent by omitting it.
+/// `allowed` restricts the advertised catalog: when it is `Some`, only the
+/// listed subagents appear in the `subagent` enum. `subagent` is always
+/// required — delegation always names the agent it targets.
 pub fn definition_with_subagents(
     subagents: &[SubagentSummary],
     allowed: Option<&[String]>,
@@ -42,12 +41,7 @@ pub fn definition_with_subagents(
             .collect(),
         None => subagents.to_vec(),
     };
-    let valid_subagents = supported_subagent_names(&subagents, allowed);
-    let required: Vec<&str> = if allowed.is_some() {
-        vec!["prompt", "subagent"]
-    } else {
-        vec!["prompt"]
-    };
+    let valid_subagents = supported_subagent_names(&subagents);
     ToolDefinition {
         name: "Invoke_Subagent".to_string(),
         description: build_description(&subagents, allowed),
@@ -60,7 +54,7 @@ pub fn definition_with_subagents(
                 },
                 "subagent": {
                     "type": "string",
-                    "description": build_subagent_field_description(&subagents, allowed),
+                    "description": build_subagent_field_description(&subagents),
                     "enum": valid_subagents
                 },
                 "model": {
@@ -73,7 +67,7 @@ pub fn definition_with_subagents(
                     "enum": ["off", "low", "medium", "high", "xhigh", "max"]
                 }
             },
-            "required": required,
+            "required": ["prompt", "subagent"],
             "additionalProperties": false
         }),
     }
@@ -102,20 +96,18 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(err) => return err,
     };
     let config = ctx.config.clone().unwrap_or_default();
-    let mut selection = match resolve_subagent_selection(
+    let mut definition = match resolve_subagent_definition(
         &ctx.root,
         input.subagent.clone(),
         ctx.allowed_subagents.as_deref(),
     ) {
-        Ok(selection) => selection,
+        Ok(definition) => definition,
         Err(err) => return err,
     };
 
     // Apply any per-subagent config override on top of the (live) definition so
     // built-in prompts stay current while only the model/thinking is overridden.
-    if let RuntimeSubagentSelection::Named(definition) = &mut selection
-        && let Some(over) = config.subagents.overrides.get(&definition.name)
-    {
+    if let Some(over) = config.subagents.overrides.get(&definition.name) {
         if let Some(model) = &over.model {
             definition.model = Some(model.clone());
         }
@@ -124,10 +116,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         }
     }
 
-    let definition = match &selection {
-        RuntimeSubagentSelection::Default => None,
-        RuntimeSubagentSelection::Named(definition) => Some(definition.as_ref()),
-    };
+    let definition = &definition;
 
     let model = match resolve_execution_model(definition, &config, ctx, input.model.as_deref()) {
         Ok(model) => model,
@@ -205,7 +194,7 @@ fn build_delegated_prompt(
 }
 
 fn child_has_read_thread_access(
-    definition: Option<&subagents::SubagentDefinition>,
+    definition: &SubagentDefinition,
     config: &crate::config::Config,
     model: &str,
 ) -> bool {
@@ -215,11 +204,11 @@ fn child_has_read_thread_access(
 }
 
 fn effective_child_tool_names(
-    definition: Option<&subagents::SubagentDefinition>,
+    definition: &SubagentDefinition,
     config: &crate::config::Config,
     model: &str,
 ) -> Vec<String> {
-    if let Some(tools) = definition.and_then(|definition| definition.tools.clone()) {
+    if let Some(tools) = definition.tools.clone() {
         return tools;
     }
 
@@ -246,24 +235,29 @@ fn effective_child_tool_names(
     toolset_tool_names(tool_set)
 }
 
-fn resolve_subagent_selection(
+fn resolve_subagent_definition(
     root: &std::path::Path,
     requested: Option<String>,
     allowed: Option<&[String]>,
-) -> Result<RuntimeSubagentSelection, ToolOutput> {
-    let requested = normalize_optional(requested);
-    subagents::resolve_runtime_selection(root, requested.as_deref(), allowed).map_err(|err| {
-        let label = requested.unwrap_or_else(|| "<default>".to_string());
+) -> Result<SubagentDefinition, ToolOutput> {
+    let Some(requested) = normalize_optional(requested) else {
+        return Err(ToolOutput::failure(
+            "invalid_input",
+            "subagent is required",
+            Some("Name the subagent to delegate to; see the `subagent` field.".to_string()),
+        ));
+    };
+    subagents::resolve_named(root, &requested, allowed).map_err(|err| {
         ToolOutput::failure(
             "invalid_input",
-            format!("Subagent '{label}' is not available"),
+            format!("Subagent '{requested}' is not available"),
             Some(err.to_string()),
         )
     })
 }
 
 fn resolve_execution_model(
-    definition: Option<&subagents::SubagentDefinition>,
+    definition: &SubagentDefinition,
     config: &crate::config::Config,
     ctx: &ToolContext,
     model_override: Option<&str>,
@@ -272,9 +266,7 @@ fn resolve_execution_model(
         .map(str::trim)
         .filter(|model| !model.is_empty())
         .map(str::to_string);
-    let model = match explicit_model
-        .or_else(|| definition.and_then(|definition| definition.model.clone()))
-    {
+    let model = match explicit_model.or_else(|| definition.model.clone()) {
         Some(model) => {
             if let Some(err) = validate_model_supported(&model, ctx) {
                 return Err(err);
@@ -298,67 +290,42 @@ fn resolve_execution_model(
 fn build_system_prompt(
     config: &crate::config::Config,
     root: &std::path::Path,
-    definition: Option<&subagents::SubagentDefinition>,
+    definition: &SubagentDefinition,
     model: &str,
 ) -> Result<String, ToolOutput> {
-    let result = match definition {
-        Some(definition) => subagents::render_prompt(
-            config,
-            root,
-            definition,
-            model,
-            PromptContextInclusion::default(),
+    subagents::render_prompt(
+        config,
+        root,
+        definition,
+        model,
+        PromptContextInclusion::default(),
+    )
+    .map_err(|err| {
+        ToolOutput::failure(
+            "invalid_input",
+            format!("Failed to render subagent '{}'", definition.name),
+            Some(err.to_string()),
         )
-        .map_err(|err| {
-            ToolOutput::failure(
-                "invalid_input",
-                format!("Failed to render subagent '{}'", definition.name),
-                Some(err.to_string()),
-            )
-        }),
-        None => build_prompt_with_context_and_layers(
-            config,
-            root,
-            model,
-            &[],
-            false,
-            PromptContextInclusion::default(),
-        )
-        .map(|effective| effective.prompt.unwrap_or_default())
-        .map_err(|err| {
-            ToolOutput::failure(
-                "invalid_input",
-                "Failed to build default subagent prompt",
-                Some(err.to_string()),
-            )
-        }),
-    }?;
-
-    Ok(result)
+    })
 }
 
 fn build_exec_options(
-    definition: Option<&subagents::SubagentDefinition>,
+    definition: &SubagentDefinition,
     ctx: &ToolContext,
     model: String,
     system_prompt: String,
     thinking_override: Option<crate::config::ThinkingLevel>,
 ) -> ExecSubagentOptions {
-    let subagent_name = definition.map_or_else(
-        || subagents::TASK_BUILTIN_ALIAS_NAME.to_string(),
-        |definition| definition.name.clone(),
-    );
+    let subagent_name = definition.name.clone();
     ExecSubagentOptions {
         model: Some(model),
         system_prompt: Some(system_prompt),
-        thinking_level: thinking_override.or_else(|| {
-            definition
-                .and_then(|definition| definition.thinking_level)
-                .or(ctx.thinking_level)
-        }),
+        thinking_level: thinking_override
+            .or(definition.thinking_level)
+            .or(ctx.thinking_level),
         no_tools: false,
         no_system_prompt: false,
-        tools_override: definition.and_then(|definition| definition.tools.clone()),
+        tools_override: definition.tools.clone(),
         event_filter: Some(vec![
             "turn_finished".to_string(),
             "tool_started".to_string(),
@@ -382,20 +349,8 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-fn supported_subagent_names(
-    subagents: &[SubagentSummary],
-    allowed: Option<&[String]>,
-) -> Vec<String> {
-    let task_allowed = allowed.is_none_or(|allowed| {
-        allowed
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case(subagents::TASK_BUILTIN_ALIAS_NAME))
-    });
-
-    let mut names = Vec::with_capacity(subagents.len() + 1);
-    if task_allowed {
-        names.push(subagents::TASK_BUILTIN_ALIAS_NAME.to_string());
-    }
+fn supported_subagent_names(subagents: &[SubagentSummary]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::with_capacity(subagents.len());
     for subagent in subagents {
         if !names.iter().any(|name| name == &subagent.name) {
             names.push(subagent.name.clone());
@@ -404,32 +359,23 @@ fn supported_subagent_names(
     names
 }
 
-fn build_subagent_field_description(
-    subagents: &[SubagentSummary],
-    allowed: Option<&[String]>,
-) -> String {
-    let valid = supported_subagent_names(subagents, allowed)
+fn build_subagent_field_description(subagents: &[SubagentSummary]) -> String {
+    let valid = supported_subagent_names(subagents)
         .into_iter()
         .map(|name| format!("`{name}`"))
         .collect::<Vec<_>>()
         .join(", ");
 
-    if allowed.is_some() {
-        return format!(
-            "Required named subagent. This agent may only delegate to: {valid}. No other subagent is reachable, and omitting this field is an error rather than a fallback to the default agent."
-        );
-    }
-
     format!(
-        "Optional named subagent or reserved runtime alias. Choose the most specialized available subagent when one clearly fits. Use `task` for the default delegated ZDX behavior with the base prompt + context when no named specialist fits and delegation is still worthwhile. Valid values: {valid}. Skill names are invalid unless they are also listed here."
+        "Required named subagent. Delegation always targets one of: {valid}. Skill names are invalid unless they are also listed here."
     )
 }
 
 fn build_description(subagents: &[SubagentSummary], allowed: Option<&[String]>) -> String {
     let mut description = if allowed.is_some() {
-        "Delegate a scoped task to an isolated child agent run. Child runs are self-contained and do not share your full parent reasoning or implicit context, so every important decision, relevant detail, file path, constraint, non-goal, and acceptance criterion must be made explicit in the prompt. Provide a focused prompt with the goal, relevant context, constraints/non-goals, file paths, expected output, and how success should be verified. When multiple subtasks are independent, call `invoke_subagent` multiple times in the same response to run them in parallel. Trust but verify: if a child reports claims you plan to rely on, inspect the key evidence before reporting success. The `subagent` argument is required and restricted for this agent; see its description. Optional `model` and `thinking_level` values are user-controlled overrides for that invocation only; never change a named subagent's defaults autonomously. Returns response text only.".to_string()
+        "Delegate a scoped read-only investigation to an isolated child agent run. This agent may only reach the subagents listed in the `subagent` field, which is required. Child runs are self-contained and do not share your full parent reasoning or implicit context, so every important decision, relevant detail, file path, constraint, non-goal, and acceptance criterion must be made explicit in the prompt. Provide a focused prompt with the goal, relevant context, constraints/non-goals, file paths, and expected output. When multiple subtasks are independent, call `invoke_subagent` multiple times in the same response to run them in parallel. Trust but verify: if a child reports claims you plan to rely on, inspect the key evidence before reporting success. Optional `model` and `thinking_level` values are user-controlled overrides for that invocation only; never change a named subagent's defaults autonomously. Returns response text only.".to_string()
     } else {
-        "Delegate a scoped task to an isolated child agent run. Choose the named specialist when one clearly fits: use `explorer` for multi-round local exploration, repo understanding, or thread-history discovery; use `oracle` for deep diagnosis, debugging dead ends, architecture, or tradeoff analysis; use `task` for scoped implementation when no named specialist fits better. Exact one-hop reads or exact string/symbol lookups are direct work and should not be delegated. When multiple subtasks are independent, call `invoke_subagent` multiple times in the same response to run them in parallel; `explorer` is especially appropriate for fan-out across separate search areas. Child runs are self-contained and do not share your full parent reasoning or implicit context, so every important decision, relevant detail, file path, constraint, non-goal, and acceptance criterion must be made explicit in the prompt. Provide a focused prompt with the goal, relevant context, constraints/non-goals, file paths, expected output, and how success should be verified. Trust but verify: if a child reports edits or claims you plan to rely on, inspect the resulting files or key evidence before reporting success. Use `subagent` to select a named configuration, or `task` for the default delegated ZDX behavior when no named specialist fits. Optional `model` and `thinking_level` values are user-controlled overrides for that invocation only; never change a named subagent's defaults autonomously. Returns response text only. Skill names are invalid unless they are also listed as supported subagents.".to_string()
+        "Delegate a scoped read-only investigation to an isolated child agent run. Every subagent is read-only: they can research, read, and analyze, but they never edit files or change state, so all implementation stays in this run. `subagent` is required — use `explorer` for multi-round local exploration, repo understanding, or thread-history discovery, and `oracle` for deep diagnosis, debugging dead ends, architecture, or tradeoff analysis. Exact one-hop reads or exact string/symbol lookups are direct work and should not be delegated. When multiple investigations are independent, call `invoke_subagent` multiple times in the same response to run them in parallel; `explorer` is especially appropriate for fan-out across separate search areas. Child runs are self-contained and do not share your full parent reasoning or implicit context, so every important decision, relevant detail, file path, constraint, non-goal, and acceptance criterion must be made explicit in the prompt. Provide a focused prompt with the goal, relevant context, constraints/non-goals, file paths, and expected output. Trust but verify: if a child reports claims you plan to rely on, inspect the key evidence before relying on it. Optional `model` and `thinking_level` values are user-controlled overrides for that invocation only; never change a named subagent's defaults autonomously. Returns response text only. Skill names are invalid unless they are also listed as supported subagents.".to_string()
     };
 
     if !subagents.is_empty() {
@@ -536,7 +482,7 @@ mod tests {
         };
 
         assert!(child_has_read_thread_access(
-            Some(&definition),
+            &definition,
             &crate::config::Config::default(),
             "anthropic:claude-sonnet-4-5"
         ));
@@ -559,7 +505,7 @@ mod tests {
         };
 
         assert!(!child_has_read_thread_access(
-            Some(&definition),
+            &definition,
             &crate::config::Config::default(),
             "anthropic:claude-sonnet-4-5"
         ));
@@ -569,7 +515,7 @@ mod tests {
     fn test_definition_schema() {
         let def = definition();
         assert_eq!(def.name, "Invoke_Subagent");
-        assert!(def.description.contains("Use `subagent`"));
+        assert!(def.description.contains("`subagent` is required"));
         assert!(def.description.contains("Skill names are invalid"));
 
         let required = def
@@ -578,20 +524,9 @@ mod tests {
             .and_then(serde_json::Value::as_array)
             .unwrap();
         assert!(required.iter().any(|v| v == "prompt"));
+        assert!(required.iter().any(|v| v == "subagent"));
         assert!(!required.iter().any(|v| v == "model"));
         assert!(!required.iter().any(|v| v == "thinking_level"));
-        assert!(!required.iter().any(|v| v == "subagent"));
-
-        let subagent = def
-            .input_schema
-            .get("properties")
-            .and_then(|props| props.get("subagent"))
-            .unwrap();
-        let enum_values = subagent
-            .get("enum")
-            .and_then(serde_json::Value::as_array)
-            .unwrap();
-        assert!(enum_values.iter().any(|v| v == "task"));
     }
 
     #[test]
@@ -652,7 +587,7 @@ mod tests {
 
         assert_eq!(
             resolve_execution_model(
-                Some(&definition),
+                &definition,
                 &crate::config::Config::default(),
                 &ctx,
                 Some("openai-codex:gpt-5.6-luna")
@@ -681,7 +616,7 @@ mod tests {
         };
 
         let options = build_exec_options(
-            Some(&definition),
+            &definition,
             &ctx,
             "openai-codex:gpt-5.6-luna".to_string(),
             "system".to_string(),
@@ -745,10 +680,10 @@ mod tests {
 
         assert!(desc.contains("coder (Coding helper)"));
         assert!(desc.contains("researcher (Research helper)"));
-        assert!(desc.contains("Choose the named specialist when one clearly fits"));
+        assert!(desc.contains("Every subagent is read-only"));
         assert!(desc.contains("use `explorer` for multi-round local exploration"));
-        assert!(desc.contains("use `oracle` for deep diagnosis"));
-        assert!(desc.contains("`task`"));
+        assert!(desc.contains("`oracle` for deep diagnosis"));
+        assert!(!desc.contains("`task`"));
         assert!(desc.contains("Child runs are self-contained"));
         assert!(desc.contains("do not share your full parent reasoning"));
         assert!(desc.contains("acceptance criterion"));
@@ -757,26 +692,37 @@ mod tests {
 
     #[test]
     fn test_subagent_field_description_lists_valid_values() {
-        let description = build_subagent_field_description(
-            &[SubagentSummary {
+        let description = build_subagent_field_description(&[
+            SubagentSummary {
+                name: "explorer".to_string(),
+                description: "Exploration".to_string(),
+            },
+            SubagentSummary {
                 name: "oracle".to_string(),
                 description: "Deep reasoning".to_string(),
-            }],
-            None,
-        );
+            },
+        ]);
 
-        assert!(description.contains("Valid values: `task`, `oracle`"));
-        assert!(description.contains("most specialized available subagent"));
+        assert!(description.contains("Delegation always targets one of: `explorer`, `oracle`"));
+        assert!(description.contains("Required named subagent"));
         assert!(description.contains("Skill names are invalid"));
     }
 
     #[test]
-    fn test_task_alias_resolves_to_default_runtime_behavior() {
-        let selection =
-            resolve_subagent_selection(std::path::Path::new("."), Some("task".to_string()), None)
-                .unwrap();
+    fn omitted_subagent_is_rejected() {
+        let failure = resolve_subagent_definition(std::path::Path::new("."), None, None)
+            .expect_err("omitted subagent must fail");
 
-        assert_eq!(selection, RuntimeSubagentSelection::Default);
+        assert!(format!("{failure:?}").contains("subagent is required"));
+    }
+
+    #[test]
+    fn task_alias_is_no_longer_resolvable() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(
+            resolve_subagent_definition(root.path(), Some("task".to_string()), None).is_err(),
+            "`task` must not resolve to any subagent"
+        );
     }
 
     #[test]
@@ -802,8 +748,6 @@ mod tests {
             .expect("subagent enum");
         assert_eq!(enum_values, &vec![json!("explorer")]);
 
-        // `task` must not be reachable, and omitting `subagent` must not be
-        // possible at the schema level either.
         let required = schema["required"].as_array().expect("required");
         assert!(required.contains(&json!("subagent")));
         assert!(!definition.description.contains("oracle (Deep reasoning)"));
@@ -814,29 +758,28 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let allowed = vec!["explorer".to_string()];
 
-        // Omitted argument must not silently fall back to the `task` default.
-        let omitted = resolve_subagent_selection(root.path(), None, Some(&allowed));
+        let omitted = resolve_subagent_definition(root.path(), None, Some(&allowed));
         assert!(omitted.is_err(), "omitted subagent must be rejected");
 
         for denied in ["task", "oracle"] {
             let result =
-                resolve_subagent_selection(root.path(), Some(denied.to_string()), Some(&allowed));
+                resolve_subagent_definition(root.path(), Some(denied.to_string()), Some(&allowed));
             assert!(result.is_err(), "{denied} must be rejected");
         }
     }
 
     #[test]
-    fn unrestricted_schema_keeps_task_optional() {
+    fn unrestricted_schema_requires_a_named_subagent() {
         let definition = definition_with_subagents(&[], None);
         let required = definition.input_schema["required"]
             .as_array()
             .expect("required");
-        assert!(!required.contains(&json!("subagent")));
+        assert!(required.contains(&json!("subagent")));
         assert!(
             definition.input_schema["properties"]["subagent"]["enum"]
                 .as_array()
                 .expect("enum")
-                .contains(&json!("task"))
+                .is_empty()
         );
     }
 }

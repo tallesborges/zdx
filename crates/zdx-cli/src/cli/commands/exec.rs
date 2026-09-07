@@ -7,7 +7,7 @@ use zdx_engine::config::{self, ThinkingLevel};
 use zdx_engine::core::agent::{ToolConfig, ToolSelection};
 use zdx_engine::core::context::PromptContextInclusion;
 use zdx_engine::core::thread_persistence::ThreadPersistenceOptions;
-use zdx_engine::subagents::{self, RuntimeSubagentSelection, SubagentDefinition};
+use zdx_engine::subagents::{self, SubagentDefinition};
 use zdx_engine::tools::ToolRegistry;
 
 use crate::modes;
@@ -131,9 +131,6 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
 }
 
 /// Resolves an explicit `--subagent` name into a definition.
-///
-/// The reserved `task` alias resolves to default exec behavior, so it yields
-/// `None` and leaves prompt/model/tool composition untouched.
 fn resolve_subagent(
     root: &std::path::Path,
     requested: Option<&str>,
@@ -142,12 +139,9 @@ fn resolve_subagent(
         return Ok(None);
     };
 
-    match subagents::resolve_runtime_selection(root, Some(name), None)
-        .with_context(|| format!("load subagent '{name}'"))?
-    {
-        RuntimeSubagentSelection::Default => Ok(None),
-        RuntimeSubagentSelection::Named(definition) => Ok(Some(*definition)),
-    }
+    subagents::resolve_named(root, name, None)
+        .with_context(|| format!("load subagent '{name}'"))
+        .map(Some)
 }
 
 pub(super) fn parse_thinking_level(s: &str) -> Result<ThinkingLevel> {
