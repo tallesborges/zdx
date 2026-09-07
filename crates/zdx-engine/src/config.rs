@@ -286,28 +286,48 @@ fn merge_with_template(user_config: &str) -> Result<String> {
 
 /// Recursively merges items from source table into target table.
 fn merge_items(target: &mut toml_edit::Table, source: &toml_edit::Table) {
+    merge_items_with_sources(target, source, None, "");
+}
+
+fn merge_items_with_sources(
+    target: &mut toml_edit::Table,
+    source: &toml_edit::Table,
+    mut provenance: Option<(&mut ConfigSources, &Path)>,
+    prefix: &str,
+) {
     use toml_edit::Item;
 
     for (key, value) in source {
-        match value {
-            Item::Value(v) => {
-                // Scalar value: override in target
-                target[key] = Item::Value(v.clone());
+        let field = provenance.as_ref().map(|_| {
+            if prefix.is_empty() {
+                key.to_string()
+            } else {
+                format!("{prefix}.{key}")
             }
-            Item::Table(src_table) => {
-                // Nested table: recursively merge
-                if let Some(Item::Table(target_table)) = target.get_mut(key) {
-                    merge_items(target_table, src_table);
-                } else {
-                    // Target doesn't have this table, copy it
-                    target[key] = Item::Table(src_table.clone());
-                }
+        });
+        if let Item::Table(src_table) = value
+            && let Some(Item::Table(target_table)) = target.get_mut(key)
+        {
+            merge_items_with_sources(
+                target_table,
+                src_table,
+                provenance
+                    .as_mut()
+                    .map(|(sources, path)| (&mut **sources, *path)),
+                field.as_deref().unwrap_or_default(),
+            );
+        } else if !value.is_none() {
+            if let Some((sources, path)) = provenance.as_mut() {
+                let field = field.as_deref().unwrap();
+                sources.fields.retain(|existing, _| {
+                    existing != field
+                        && !existing
+                            .strip_prefix(field)
+                            .is_some_and(|suffix| suffix.starts_with('.'))
+                });
+                sources.record(field, value, path);
             }
-            Item::ArrayOfTables(src_arr) => {
-                // Array of tables: replace entirely with user's version
-                target[key] = Item::ArrayOfTables(src_arr.clone());
-            }
-            Item::None => {}
+            target[key] = value.clone();
         }
     }
 }
@@ -751,6 +771,37 @@ impl ConfigWatch {
     }
 }
 
+/// Explicit field origins, separate from the config's serialized values and defaults.
+#[derive(Debug, Default, Clone)]
+pub struct ConfigSources {
+    fields: BTreeMap<String, PathBuf>,
+}
+
+impl ConfigSources {
+    /// Returns the latest layer that explicitly supplied a dotted field path.
+    /// Array entries such as `favorites.0.model` or `favorites[0].model`
+    /// resolve to their container's source. Missing defaults have no source.
+    #[must_use]
+    pub fn source(&self, mut key: &str) -> Option<&Path> {
+        loop {
+            if let Some(path) = self.fields.get(key) {
+                return Some(path.as_path());
+            }
+            key = &key[..key.rfind(['.', '['])?];
+        }
+    }
+
+    fn record(&mut self, key: &str, item: &toml_edit::Item, path: &Path) {
+        if let Some(table) = item.as_table_like() {
+            for (child, value) in table.iter() {
+                self.record(&format!("{key}.{child}"), value, path);
+            }
+        } else if !item.is_none() {
+            self.fields.insert(key.to_string(), path.to_path_buf());
+        }
+    }
+}
+
 /// Main configuration structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -1076,6 +1127,25 @@ impl Config {
     /// Returns an error if a layer cannot be read or parsed, or if the merged
     /// document does not deserialize into a valid config.
     pub fn load_layered(layers: &[PathBuf]) -> Result<Self> {
+        Self::load_layered_impl(layers, None)
+    }
+
+    /// Loads the same config as [`Self::load_layered`], also recording explicit
+    /// field origins from every layer, including the first (global) layer.
+    ///
+    /// # Errors
+    /// Returns an error if a layer cannot be read or parsed, or if the merged
+    /// document does not deserialize into a valid config.
+    pub fn load_layered_with_sources(layers: &[PathBuf]) -> Result<(Self, ConfigSources)> {
+        let mut sources = ConfigSources::default();
+        let config = Self::load_layered_impl(layers, Some(&mut sources))?;
+        Ok((config, sources))
+    }
+
+    fn load_layered_impl(
+        layers: &[PathBuf],
+        mut sources: Option<&mut ConfigSources>,
+    ) -> Result<Self> {
         use toml_edit::DocumentMut;
 
         let mut merged = DocumentMut::new();
@@ -1092,7 +1162,14 @@ impl Config {
                 .parse()
                 .with_context(|| format!("Failed to parse config from {}", path.display()))?;
 
-            merge_items(merged.as_table_mut(), layer.as_table());
+            merge_items_with_sources(
+                merged.as_table_mut(),
+                layer.as_table(),
+                sources
+                    .as_deref_mut()
+                    .map(|sources| (sources, path.as_path())),
+                "",
+            );
             applied.push(path.display().to_string());
         }
 
@@ -2562,6 +2639,245 @@ models = ["w-1"]
 
         let defaults = Config::load_layered(&[missing]).unwrap();
         assert_eq!(defaults.model, Config::default().model);
+    }
+
+    fn load_provenance(layers: &[PathBuf]) -> (Config, ConfigSources) {
+        let (config, sources) = Config::load_layered_with_sources(layers).unwrap();
+        let ordinary = Config::load_layered(layers).unwrap();
+        assert_eq!(
+            toml::to_string(&config).unwrap(),
+            toml::to_string(&ordinary).unwrap()
+        );
+        (config, sources)
+    }
+
+    #[test]
+    fn provenance_nested_layers_and_equal_value_overrides() {
+        let dir = tempdir().unwrap();
+        let global = dir.path().join("global.toml");
+        let parent = dir.path().join("parent.toml");
+        let workspace = dir.path().join("workspace.toml");
+        fs::write(
+            &global,
+            r#"model = "global-model"
+max_tokens = 4096
+[providers.custom.proxy]
+base_url = "https://global.example.com/v1"
+api_key = "same-key"
+models = ["model-a"]
+"#,
+        )
+        .unwrap();
+        fs::write(
+            &parent,
+            "[providers.custom.proxy]\nbase_url = \"https://parent.example.com/v1\"\n",
+        )
+        .unwrap();
+        fs::write(
+            &workspace,
+            "max_tokens = 4096\n[providers.custom.proxy]\napi_key = \"same-key\"\n",
+        )
+        .unwrap();
+
+        let (config, sources) =
+            load_provenance(&[global.clone(), parent.clone(), workspace.clone()]);
+        assert_eq!(config.max_tokens, Some(4096));
+        assert_eq!(
+            config.providers.custom["proxy"].base_url,
+            "https://parent.example.com/v1"
+        );
+        for (key, path) in [
+            ("model", &global),
+            ("max_tokens", &workspace),
+            ("providers.custom.proxy.base_url", &parent),
+            ("providers.custom.proxy.api_key", &workspace),
+            ("providers.custom.proxy.models.0", &global),
+        ] {
+            assert_eq!(sources.source(key), Some(path.as_path()), "{key}");
+        }
+        assert_eq!(sources.source("providers.custom.proxy.api_key_env"), None);
+        assert_eq!(sources.source("providers.custom.proxy"), None);
+    }
+
+    #[test]
+    fn provenance_inline_and_standard_tables_follow_merge_semantics() {
+        let dir = tempdir().unwrap();
+        let global = dir.path().join("global.toml");
+        let workspace = dir.path().join("workspace.toml");
+        for base_inline in [false, true] {
+            for overlay_inline in [false, true] {
+                let base = if base_inline {
+                    "[subagents.overrides]\nexplorer = { model = \"old\", thinking_level = \"off\" }\n"
+                } else {
+                    "[subagents.overrides.explorer]\nmodel = \"old\"\nthinking_level = \"off\"\n"
+                };
+                let overlay = if overlay_inline {
+                    "subagents = { overrides = { explorer = { model = \"new@high\" } } }\n"
+                } else {
+                    "[subagents.overrides.explorer]\nmodel = \"new@high\"\n"
+                };
+                fs::write(&global, base).unwrap();
+                fs::write(&workspace, overlay).unwrap();
+                let (config, sources) = load_provenance(&[global.clone(), workspace.clone()]);
+                let inherits = !base_inline && !overlay_inline;
+                assert_eq!(
+                    config.subagents.overrides["explorer"].thinking_level,
+                    Some(if inherits {
+                        ThinkingLevel::Off
+                    } else {
+                        ThinkingLevel::High
+                    })
+                );
+                assert_eq!(
+                    sources.source("subagents.overrides.explorer.model"),
+                    Some(workspace.as_path())
+                );
+                assert_eq!(
+                    sources.source("subagents.overrides.explorer.thinking_level"),
+                    inherits.then_some(global.as_path())
+                );
+                assert_eq!(sources.source("subagents.max_concurrent"), None);
+            }
+        }
+        fs::write(&workspace, "subagents = {}\n").unwrap();
+        let (config, sources) = load_provenance(&[global, workspace]);
+        assert!(config.subagents.overrides.is_empty());
+        assert_eq!(sources.source("subagents.overrides.explorer.model"), None);
+        assert_eq!(sources.source("subagents"), None);
+    }
+
+    #[test]
+    fn provenance_arrays_replace_and_resolve_indexed_fields() {
+        let dir = tempdir().unwrap();
+        let global = dir.path().join("global.toml");
+        let workspace = dir.path().join("workspace.toml");
+        let array = "favorites = [{ alias = \"a\", model = \"new@high\" }]\n";
+        let tables = "[[favorites]]\nalias = \"b\"\nmodel = \"old\"\n\n[[favorites]]\nalias = \"c\"\nmodel = \"other\"\n";
+        for (base, overlay, count) in [(tables, array, 1), (array, tables, 2)] {
+            fs::write(
+                &global,
+                format!("{base}\n[skills]\nignored_skills = [\"old\"]\n"),
+            )
+            .unwrap();
+            fs::write(
+                &workspace,
+                format!("{overlay}\n[skills]\nignored_skills = []\n"),
+            )
+            .unwrap();
+            let (config, sources) = load_provenance(&[global.clone(), workspace.clone()]);
+            assert_eq!(config.favorites.len(), count);
+            assert!(config.skills.ignored_skills.is_empty());
+            for key in [
+                "favorites",
+                "favorites.0",
+                "favorites[0]",
+                "favorites.0.model",
+                "favorites[0].thinking",
+                "skills.ignored_skills",
+            ] {
+                assert_eq!(sources.source(key), Some(workspace.as_path()), "{key}");
+            }
+            assert_eq!(sources.source("favorites_extra.0"), None);
+            assert_eq!(sources.source("skills"), None);
+        }
+    }
+
+    #[test]
+    fn provenance_parent_only_inheritance_missing_files_and_absent_defaults() {
+        let dir = tempdir().unwrap();
+        let missing_global = dir.path().join("missing-global.toml");
+        let parent = dir.path().join("parent.toml");
+        let workspace = dir.path().join("workspace.toml");
+        let missing_child = dir.path().join("missing-child.toml");
+        fs::write(&parent, "model = \"parent@high\"\n[skills]\n").unwrap();
+        fs::write(&workspace, "[providers]\n[subagents.overrides.explorer]\n").unwrap();
+        let (config, sources) = load_provenance(&[
+            missing_global.clone(),
+            parent.clone(),
+            workspace,
+            missing_child,
+        ]);
+        assert_eq!(config.model, "parent@high");
+        assert_eq!(config.thinking_level, ThinkingLevel::High);
+        assert_eq!(sources.source("model"), Some(parent.as_path()));
+        assert_eq!(sources.fields.len(), 1);
+        for key in [
+            "thinking_level",
+            "max_tokens",
+            "skills.ignored_skills",
+            "providers.openai.base_url",
+            "subagents.overrides.explorer.model",
+            "",
+        ] {
+            assert_eq!(sources.source(key), None, "{key}");
+        }
+        for layers in [vec![], vec![missing_global]] {
+            let (config, sources) = load_provenance(&layers);
+            assert_eq!(config.model, Config::default().model);
+            assert!(sources.fields.is_empty());
+        }
+    }
+
+    #[test]
+    fn provenance_model_and_thinking_origins_are_independent() {
+        let dir = tempdir().unwrap();
+        let global = dir.path().join("global.toml");
+        let workspace = dir.path().join("workspace.toml");
+        for (base, overlay, model_in_workspace, thinking_source, expected) in [
+            (
+                "thinking_level = \"off\"",
+                "model = \"model@high\"",
+                true,
+                Some(global.as_path()),
+                ThinkingLevel::Off,
+            ),
+            (
+                "model = \"model@high\"",
+                "thinking_level = \"low\"",
+                false,
+                Some(workspace.as_path()),
+                ThinkingLevel::Low,
+            ),
+            (
+                "model = \"model@low\"",
+                "model = \"model@high\"",
+                true,
+                None,
+                ThinkingLevel::High,
+            ),
+        ] {
+            fs::write(
+                &global,
+                format!("{base}\n[subagents.overrides.explorer]\n{base}\n"),
+            )
+            .unwrap();
+            fs::write(
+                &workspace,
+                format!("{overlay}\n[subagents.overrides.explorer]\n{overlay}\n"),
+            )
+            .unwrap();
+            let (config, sources) = load_provenance(&[global.clone(), workspace.clone()]);
+            assert_eq!(config.thinking_level, expected);
+            assert_eq!(
+                config.subagents.overrides["explorer"].thinking_level,
+                Some(expected)
+            );
+            let model_source = if model_in_workspace {
+                &workspace
+            } else {
+                &global
+            };
+            for prefix in ["", "subagents.overrides.explorer."] {
+                assert_eq!(
+                    sources.source(&format!("{prefix}model")),
+                    Some(model_source.as_path())
+                );
+                assert_eq!(
+                    sources.source(&format!("{prefix}thinking_level")),
+                    thinking_source
+                );
+            }
+        }
     }
 
     #[test]

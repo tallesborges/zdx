@@ -14,6 +14,8 @@ zdx is a terminal-based AI coding assistant built in Rust, featuring a non-inter
 - **zdx-bot:** Telegram bot surface.
 - **zdx-monitor:** Service dashboard TUI.
 
+Config provenance is an opt-in companion to the engine's layered loader: `Config::load_layered_with_sources` uses the same merge/parser as ordinary loading, retaining explicit leaf origins and array-owner origins in `ConfigSources` without serializing them into `Config`. Monitor loads its supplied root through this API and stores row labels separately from values; rendering adds compact workspace names without changing picker inputs or save targets. Ordinary config loads do not collect provenance.
+
 ## MCP Internal Engine
 
 MCP support lives in `zdx-engine/src/mcp.rs` as an internal engine. The primary product surface is the helper CLI (`zdx mcp ...`), not automatic model-visible tool exposure.

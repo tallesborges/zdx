@@ -22,3 +22,6 @@ serde_json.workspace = true
 tokio.workspace = true
 zdx-engine = { path = "../zdx-engine" }
 zdx-transcript = { path = "../zdx-transcript" }
+
+[dev-dependencies]
+zdx-engine = { path = "../zdx-engine", features = ["testing"] }

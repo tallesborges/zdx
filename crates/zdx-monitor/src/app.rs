@@ -12,7 +12,6 @@ use crossterm::event::{
 use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::prelude::*;
-use zdx_engine::config;
 use zdx_engine::core::thread_index::{ThreadBrowseOptions, ThreadKindFilter};
 use zdx_engine::core::usage_stats::UsageStats;
 
@@ -27,8 +26,8 @@ use crate::tabs::background::{
     load_background, open_background_detail, refresh_background_detail,
 };
 use crate::tabs::config::{
-    ConfigLine, ModelPickerState, build_config_lines, config_max_scroll, config_page_size,
-    delete_or_reset_selected, handle_model_picker_key, move_config_selection, open_model_picker,
+    ConfigLine, ModelPickerState, config_max_scroll, config_page_size, delete_or_reset_selected,
+    handle_model_picker_key, load_config_view, move_config_selection, open_model_picker,
     rendered_line_count,
 };
 use crate::tabs::logs::{
@@ -54,6 +53,7 @@ use crate::ui;
 #[allow(clippy::struct_excessive_bools)]
 pub struct MonitorApp {
     pub config_lines: Vec<ConfigLine>,
+    pub config_sources: Vec<Option<String>>,
     pub config_line_count: usize,
     pub config_scroll: usize,
     /// Index into the editable model rows of the Config tab (see
@@ -359,14 +359,15 @@ fn switch_section(app: &mut MonitorApp, section: Section) {
 
 fn build_app(root: &Path) -> Result<MonitorApp> {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let config = config::Config::load().context("load config")?;
-    let default_model = config.model.clone();
-    let config_lines = build_config_lines(&config, &root);
+    let view = load_config_view(&root).context("load config")?;
+    let default_model = view.model;
+    let config_lines = view.lines;
     let config_line_count = rendered_line_count(&config_lines);
     let services = load_services();
 
     let mut app = MonitorApp {
         config_lines,
+        config_sources: view.sources,
         config_line_count,
         config_scroll: 0,
         config_selected: 0,

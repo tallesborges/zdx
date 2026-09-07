@@ -10,7 +10,7 @@ use zdx_engine::models::{
 };
 
 use crate::app::MonitorApp;
-use crate::ui::{SELECTED_BG, centered_rect};
+use crate::ui::{SELECTED_BG, centered_rect, truncate_chars};
 
 /// A single displayable line in the Config tab.
 #[derive(Clone)]
@@ -21,6 +21,116 @@ pub enum ConfigLine {
     Separator,
     /// Key-value row inside a section.
     Row(String, String),
+}
+
+pub(crate) struct ConfigView {
+    pub model: String,
+    pub lines: Vec<ConfigLine>,
+    pub sources: Vec<Option<String>>,
+}
+
+pub(crate) fn load_config_view(root: &Path) -> anyhow::Result<ConfigView> {
+    let (config, sources) =
+        config::Config::load_layered_with_sources(&config::paths::config_layer_paths_for(root))?;
+    let lines = build_config_lines(&config, root);
+    let sources = config_source_labels(&config, &lines, &sources, &config::paths::config_path());
+    Ok(ConfigView {
+        model: config.model,
+        lines,
+        sources,
+    })
+}
+
+fn source_name(source: Option<&Path>, global: &Path) -> String {
+    match source {
+        None => "default".to_string(),
+        Some(path) if path == global => "global".to_string(),
+        Some(path) => path
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::file_name)
+            .map_or_else(
+                || "workspace".to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            ),
+    }
+}
+
+fn model_source_label(
+    model: Option<&Path>,
+    thinking: Option<&Path>,
+    global: &Path,
+) -> Option<String> {
+    if !model.into_iter().chain(thinking).any(|path| path != global) {
+        return None;
+    }
+    if model == thinking {
+        Some(source_name(model, global))
+    } else {
+        Some(format!(
+            "model:{} thinking:{}",
+            source_name(model, global),
+            source_name(thinking, global)
+        ))
+    }
+}
+
+fn config_source_labels(
+    config: &config::Config,
+    lines: &[ConfigLine],
+    sources: &config::ConfigSources,
+    global: &Path,
+) -> Vec<Option<String>> {
+    let mut section = "";
+    lines
+        .iter()
+        .map(|line| {
+            let ConfigLine::Row(key, value) = line else {
+                if let ConfigLine::Section(name) = line {
+                    section = name;
+                }
+                return None;
+            };
+            if section == "core" && key == "model" {
+                let model = sources.source("model");
+                let thinking = sources.source("thinking_level").or_else(|| {
+                    zdx_engine::models::ModelSpec::parse(&config.model)
+                        .thinking
+                        .and(model)
+                });
+                return model_source_label(model, thinking, global);
+            }
+            if section == "subagents" && key != "enabled" {
+                if value == SUBAGENT_DEFAULT_LABEL {
+                    return None;
+                }
+                let prefix = format!("subagents.overrides.{key}");
+                let model = sources.source(&format!("{prefix}.model"));
+                let thinking = sources
+                    .source(&format!("{prefix}.thinking_level"))
+                    .or_else(|| {
+                        config
+                            .subagents
+                            .overrides
+                            .get(key)
+                            .and_then(|entry| entry.model.as_deref())
+                            .and_then(|value| zdx_engine::models::ModelSpec::parse(value).thinking)
+                            .and(model)
+                    });
+                return model_source_label(model, thinking, global);
+            }
+            let path = match section {
+                "core" | "helper models" => key.clone(),
+                "favorites" if key == ADD_FAVORITE_LABEL => return None,
+                "favorites" => "favorites".to_string(),
+                _ => format!("{section}.{key}"),
+            };
+            sources
+                .source(&path)
+                .filter(|path| *path != global)
+                .map(|source| source_name(Some(source), global))
+        })
+        .collect()
 }
 
 const SENSITIVE_PATTERNS: &[&str] = &["api_key", "token", "secret", "password", "webhook"];
@@ -521,12 +631,13 @@ fn toggle_subagents_enabled(app: &mut MonitorApp) {
 
 /// Reloads config lines from disk after an edit, clamping selection.
 fn reload_config_lines(app: &mut MonitorApp) {
-    let Ok(cfg) = config::Config::load() else {
+    let Ok(view) = load_config_view(&app.root) else {
         app.set_status("Failed to reload config");
         return;
     };
-    app.default_model.clone_from(&cfg.model);
-    app.config_lines = build_config_lines(&cfg, &app.root);
+    app.default_model = view.model;
+    app.config_lines = view.lines;
+    app.config_sources = view.sources;
     app.config_line_count = rendered_line_count(&app.config_lines);
     let count = editable_model_fields(&app.config_lines).len();
     if app.config_selected >= count {
@@ -879,9 +990,24 @@ pub(crate) fn render_config(f: &mut Frame, app: &MonitorApp, area: Rect) {
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
+                let key_span = Span::styled(format!("{marker}{key:<key_col$} "), key_style);
+                let source = app.config_sources.get(idx).and_then(Option::as_deref);
+                let source_span = Span::styled(
+                    source.map_or_else(String::new, |source| format!(" [{source}]")),
+                    Style::default().fg(Color::DarkGray),
+                );
+                let value = if source.is_some() {
+                    truncate_chars(
+                        value,
+                        inner_width.saturating_sub(key_span.width() + source_span.width()),
+                    )
+                } else {
+                    value.clone()
+                };
                 lines.push(Line::from(vec![
-                    Span::styled(format!("{marker}{key:<key_col$} "), key_style),
-                    Span::styled(value.clone(), val_style),
+                    key_span,
+                    Span::styled(value, val_style),
+                    source_span,
                 ]));
             }
         }
@@ -907,7 +1033,8 @@ pub(crate) fn render_config(f: &mut Frame, app: &MonitorApp, area: Rect) {
         String::new()
     };
 
-    let title = format!(" Config ({total_fields} fields){scroll_info} ");
+    let root_label = app.root.file_name().unwrap_or_default().to_string_lossy();
+    let title = format!(" Config · {root_label} ({total_fields} fields){scroll_info} ");
 
     let p = Paragraph::new(Text::from(lines))
         .block(Block::default().borders(Borders::ALL).title(title))
@@ -1030,6 +1157,111 @@ fn render_picker_thinking(f: &mut Frame, picker: &ModelPickerState, popup: Rect)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn row_index(lines: &[ConfigLine], wanted_section: &str, wanted_key: &str) -> usize {
+        let mut section = "";
+        lines
+            .iter()
+            .position(|line| match line {
+                ConfigLine::Section(name) => {
+                    section = name;
+                    false
+                }
+                ConfigLine::Row(key, _) => section == wanted_section && key == wanted_key,
+                ConfigLine::Separator => false,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn config_view_loads_supplied_root_instead_of_process_cwd() {
+        let home = zdx_engine::test_support::temp_zdx_home();
+        let root = home.path().join("selected-root");
+        std::fs::create_dir_all(root.join(".zdx")).unwrap();
+        std::fs::write(home.path().join("config.toml"), "model = \"global@low\"\n").unwrap();
+        let overlay = root.join(".zdx/config.toml");
+        std::fs::write(&overlay, "model = \"selected@high\"\n").unwrap();
+        assert_ne!(std::env::current_dir().unwrap(), root);
+
+        let view = load_config_view(&root).unwrap();
+        let row = row_index(&view.lines, "core", "model");
+        assert_eq!(view.model, "selected@high");
+        assert_eq!(view.sources[row].as_deref(), Some("selected-root"));
+        assert!(matches!(&view.lines[row], ConfigLine::Row(_, value) if value == "selected@high"));
+        std::fs::write(&overlay, "model = \"changed@medium\"\n").unwrap();
+        assert_eq!(load_config_view(&root).unwrap().model, "changed@medium");
+    }
+
+    #[test]
+    fn workspace_labels_name_the_actual_parent_or_child_source() {
+        let home = zdx_engine::test_support::temp_zdx_home();
+        let global = home.path().join("config.toml");
+        let parent = home.path().join("parity/.zdx/config.toml");
+        let child = home.path().join("parity/nova/.zdx/config.toml");
+        std::fs::create_dir_all(parent.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(child.parent().unwrap()).unwrap();
+        std::fs::write(&global, "model = \"global@low\"\nmax_tokens = 42\n").unwrap();
+        std::fs::write(&parent, "model = \"parent@high\"\n[[favorites]]\nalias = \"work\"\nmodel = \"favorite@high\"\n[providers.openai]\napi_key = \"private-value\"\n").unwrap();
+        for (contents, expected) in [
+            ("[skills]\nenabled = true\n", "parity"),
+            ("model = \"parent@high\"\n", "nova"),
+        ] {
+            std::fs::write(&child, contents).unwrap();
+            let (cfg, sources) = config::Config::load_layered_with_sources(&[
+                global.clone(),
+                parent.clone(),
+                child.clone(),
+            ])
+            .unwrap();
+            let lines = build_config_lines(&cfg, child.parent().unwrap().parent().unwrap());
+            let labels = config_source_labels(&cfg, &lines, &sources, &global);
+            assert_eq!(
+                labels[row_index(&lines, "core", "model")].as_deref(),
+                Some(expected)
+            );
+            assert_eq!(labels[row_index(&lines, "core", "max_tokens")], None);
+            assert_eq!(
+                labels[row_index(&lines, "favorites", "work")].as_deref(),
+                Some("parity")
+            );
+            assert_eq!(
+                labels[row_index(&lines, "favorites", ADD_FAVORITE_LABEL)],
+                None
+            );
+            let secret_row = row_index(&lines, "providers", "openai.api_key");
+            assert_eq!(labels[secret_row].as_deref(), Some("parity"));
+            assert!(matches!(&lines[secret_row], ConfigLine::Row(_, value) if value == "***"));
+            let field = editable_model_fields(&lines)
+                .into_iter()
+                .find(|field| field.path == "model")
+                .unwrap();
+            assert!(
+                matches!(&lines[field.line_index], ConfigLine::Row(_, value) if value == "parent@high")
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_model_and_thinking_origins_are_not_misattributed() {
+        let home = zdx_engine::test_support::temp_zdx_home();
+        let global = home.path().join("config.toml");
+        let parent = home.path().join("parity/.zdx/config.toml");
+        std::fs::create_dir_all(parent.parent().unwrap()).unwrap();
+        std::fs::write(&global, "thinking_level = \"off\"\n[subagents.overrides.explorer]\nmodel = \"global-model@low\"\n").unwrap();
+        std::fs::write(&parent, "model = \"workspace@high\"\n[subagents.overrides.explorer]\nthinking_level = \"high\"\n").unwrap();
+        let (cfg, sources) =
+            config::Config::load_layered_with_sources(&[global.clone(), parent]).unwrap();
+        let lines = build_config_lines(&cfg, home.path());
+        let labels = config_source_labels(&cfg, &lines, &sources, &global);
+        assert_eq!(
+            labels[row_index(&lines, "core", "model")].as_deref(),
+            Some("model:parity thinking:global")
+        );
+        assert_eq!(
+            labels[row_index(&lines, "subagents", "explorer")].as_deref(),
+            Some("model:global thinking:parity")
+        );
+    }
 
     #[test]
     fn editable_fields_resolve_path_and_kind_by_section() {
