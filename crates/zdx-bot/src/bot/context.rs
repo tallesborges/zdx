@@ -257,7 +257,11 @@ impl BotContext {
         chat_id: i64,
         level: ThinkingLevel,
     ) -> anyhow::Result<()> {
-        Config::save_thinking_level_for_cwd(&self.root_for_chat(chat_id).root, level)?;
+        Config::save_thinking_level_for_cwd(
+            &self.root_for_chat(chat_id).root,
+            &self.config_for_chat(chat_id).model,
+            level,
+        )?;
         self.update_config_for_chat(chat_id, |cfg| cfg.thinking_level = level);
         Ok(())
     }
@@ -787,7 +791,11 @@ mod tests {
 
         context.reload_config_if_changed();
 
-        assert_eq!(context.config_for_chat(-100_123).model, "sentinel:picked");
+        // The level is persisted as the model's `@<level>` suffix.
+        assert_eq!(
+            context.config_for_chat(-100_123).model,
+            "sentinel:picked@high"
+        );
         assert_eq!(
             context.config_for_chat(-100_123).thinking_level,
             ThinkingLevel::High

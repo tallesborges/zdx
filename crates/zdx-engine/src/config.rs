@@ -130,9 +130,9 @@ pub struct SubagentOverride {
     /// Model id (`provider:id`) to use instead of the definition's model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// Thinking level to use instead of the definition's thinking level.
-    /// Config readers use the override model's suffix when this field is absent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Thinking level derived from the override model's `@<level>` suffix.
+    /// Not a config key: it is read from `model`, never from TOML.
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<ThinkingLevel>,
 }
 
@@ -254,6 +254,55 @@ fn default_config_template() -> &'static str {
     zdx_assets::DEFAULT_CONFIG_TOML
 }
 
+/// Rejects the removed thinking keys with a message pointing at the model spec.
+///
+/// Thinking lives only in a model's `@<level>` suffix. Serde would silently
+/// ignore these leftovers, so a stale config must fail loudly instead of
+/// quietly resolving to a different level than the file reads like.
+///
+/// # Errors
+/// Returns an error naming the first offending key.
+pub fn reject_removed_thinking_keys(document: &toml::Value) -> Result<()> {
+    fn removed(key: &str, model_hint: &str) -> anyhow::Error {
+        anyhow::anyhow!(
+            "`{key}` was removed: put the thinking level in the model spec instead, \
+             e.g. model = \"{model_hint}@high\""
+        )
+    }
+
+    if document.get("thinking_level").is_some() {
+        return Err(removed("thinking_level", "provider:id"));
+    }
+
+    if let Some(overrides) = document
+        .get("subagents")
+        .and_then(|s| s.get("overrides"))
+        .and_then(toml::Value::as_table)
+    {
+        for (name, entry) in overrides {
+            if entry.get("thinking_level").is_some() {
+                return Err(removed(
+                    &format!("subagents.overrides.{name}.thinking_level"),
+                    "provider:id",
+                ));
+            }
+        }
+    }
+
+    if let Some(favorites) = document.get("favorites").and_then(toml::Value::as_array) {
+        for (index, entry) in favorites.iter().enumerate() {
+            if entry.get("thinking").is_some() {
+                return Err(removed(
+                    &format!("favorites[{index}].thinking"),
+                    "provider:id",
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Merges user config values into the default template.
 ///
 /// This ensures new comments/sections from the template are always present,
@@ -271,15 +320,6 @@ fn merge_with_template(user_config: &str) -> Result<String> {
 
     // Overlay user values onto template
     merge_items(doc.as_table_mut(), user_doc.as_table());
-
-    if !user_doc.contains_key("thinking_level")
-        && user_doc
-            .get("model")
-            .and_then(toml_edit::Item::as_str)
-            .is_some_and(|model| crate::models::ModelSpec::parse(model).thinking.is_some())
-    {
-        doc.remove("thinking_level");
-    }
 
     Ok(doc.to_string())
 }
@@ -688,10 +728,13 @@ fn expand_tilde(path: &str) -> std::path::PathBuf {
 pub struct ModelFavorite {
     #[serde(default)]
     pub alias: String,
-    /// Model id, with or without a `provider:` prefix.
+    /// Model id, with or without a `provider:` prefix, carrying the thinking
+    /// level as an `@<level>` suffix.
     #[serde(default)]
     pub model: String,
-    #[serde(default)]
+    /// Thinking level derived from `model`'s `@<level>` suffix. Not a config
+    /// key: it is read from `model`, never from TOML.
+    #[serde(skip_deserializing)]
     pub thinking: ThinkingLevel,
 }
 
@@ -845,8 +888,9 @@ pub struct Config {
     #[serde(default = "default_prompt_builder_model")]
     pub prompt_builder_model: String,
 
-    /// Effective thinking level: explicit config field, then the model suffix, then Off.
-    #[serde(default)]
+    /// Effective thinking level, derived from the `model` spec's `@<level>`
+    /// suffix. Not a config key: it is neither read from nor written to TOML.
+    #[serde(skip)]
     pub thinking_level: ThinkingLevel,
 
     /// Favorite model presets cycled with Tab in the TUI.
@@ -1179,31 +1223,23 @@ impl Config {
     }
 
     fn parse_config(contents: &str) -> Result<Self> {
-        let mut config: Self = toml::from_str(contents)?;
         let document: toml::Value = toml::from_str(contents)?;
-        let explicit_thinking = document.get("thinking_level").is_some();
-        // Resolve after merging: even an inherited explicit Off beats a model suffix.
-        if !explicit_thinking {
-            config.thinking_level = crate::models::ModelSpec::parse(&config.model)
+        reject_removed_thinking_keys(&document)?;
+
+        let mut config: Self = toml::from_str(contents)?;
+        config.thinking_level = crate::models::ModelSpec::parse(&config.model)
+            .thinking
+            .unwrap_or_default();
+        for override_config in config.subagents.overrides.values_mut() {
+            override_config.thinking_level = override_config
+                .model
+                .as_deref()
+                .and_then(|model| crate::models::ModelSpec::parse(model).thinking);
+        }
+        for favorite in &mut config.favorites {
+            favorite.thinking = crate::models::ModelSpec::parse(&favorite.model)
                 .thinking
                 .unwrap_or_default();
-        }
-        for override_config in config.subagents.overrides.values_mut() {
-            override_config.thinking_level = override_config.thinking_level.or_else(|| {
-                override_config
-                    .model
-                    .as_deref()
-                    .and_then(|model| crate::models::ModelSpec::parse(model).thinking)
-            });
-        }
-        if let Some(favorites) = document.get("favorites").and_then(toml::Value::as_array) {
-            for (favorite, entry) in config.favorites.iter_mut().zip(favorites) {
-                if entry.get("thinking").is_none() {
-                    favorite.thinking = crate::models::ModelSpec::parse(&favorite.model)
-                        .thinking
-                        .unwrap_or_default();
-                }
-            }
         }
         Ok(config)
     }
@@ -1328,7 +1364,6 @@ impl Config {
             let spec = crate::models::ModelSpec::parse(model);
             if spec.thinking.is_some() {
                 doc[field] = value(spec.to_string());
-                doc.remove("thinking_level");
             }
         }
 
@@ -1469,7 +1504,6 @@ impl Config {
             "model",
             value(crate::models::format_model_thinking(model, thinking)),
         );
-        entry.remove("thinking_level");
 
         Self::write_config(path, &doc.to_string())
     }
@@ -1512,57 +1546,18 @@ impl Config {
         Self::write_config(path, &doc.to_string())
     }
 
-    /// Saves only the `thinking_level` field to the config file.
-    ///
-    /// Creates the file if it doesn't exist.
-    /// Preserves existing fields and comments using `toml_edit`.
-    ///
-    /// # Errors
-    /// Returns an error if the operation fails.
-    pub fn save_thinking_level(level: ThinkingLevel) -> Result<()> {
-        Self::save_thinking_level_to(&paths::config_path(), level)
-    }
-
-    /// Persists the thinking level for `cwd`, workspace-scoped when `cwd` is
-    /// inside a project. See [`Config::save_model_for_cwd`].
+    /// Persists `level` for `cwd` by folding it into `model`'s `@<level>`
+    /// suffix, workspace-scoped when `cwd` is inside a project.
+    /// See [`Config::save_model_for_cwd`].
     ///
     /// # Errors
     /// Returns an error if the write fails.
-    pub fn save_thinking_level_for_cwd(cwd: &Path, level: ThinkingLevel) -> Result<()> {
-        match paths::workspace_config_path_for(cwd) {
-            Some(path) => Self::save_overlay_field(&path, "thinking_level", level.display_name()),
-            None => Self::save_thinking_level(level),
-        }
-    }
-
-    /// Saves only the `thinking_level` field to a specific config file path.
-    ///
-    /// Creates the file with default template if it doesn't exist.
-    /// If file exists, merges user values into the latest template.
-    ///
-    /// # Errors
-    /// Returns an error if the operation fails.
-    pub fn save_thinking_level_to(path: &Path, level: ThinkingLevel) -> Result<()> {
-        use toml_edit::{DocumentMut, value};
-
-        // Start from template, merge user values if file exists
-        let contents = if path.exists() {
-            let user_config = fs::read_to_string(path)
-                .with_context(|| format!("Failed to read config from {}", path.display()))?;
-            merge_with_template(&user_config)?
-        } else {
-            default_config_template().to_string()
-        };
-
-        // Parse as editable document
-        let mut doc: DocumentMut = contents
-            .parse()
-            .with_context(|| format!("Failed to parse config from {}", path.display()))?;
-
-        // Update thinking_level field
-        doc["thinking_level"] = value(level.display_name());
-
-        Self::write_config(path, &doc.to_string())
+    pub fn save_thinking_level_for_cwd(
+        cwd: &Path,
+        model: &str,
+        level: ThinkingLevel,
+    ) -> Result<()> {
+        Self::save_model_for_cwd(cwd, &crate::models::format_model_thinking(model, level))
     }
 
     /// Returns the effective system prompt, preferring the file if both are set.
@@ -2704,40 +2699,34 @@ models = ["model-a"]
         let dir = tempdir().unwrap();
         let global = dir.path().join("global.toml");
         let workspace = dir.path().join("workspace.toml");
-        for base_inline in [false, true] {
-            for overlay_inline in [false, true] {
-                let base = if base_inline {
-                    "[subagents.overrides]\nexplorer = { model = \"old\", thinking_level = \"off\" }\n"
-                } else {
-                    "[subagents.overrides.explorer]\nmodel = \"old\"\nthinking_level = \"off\"\n"
-                };
-                let overlay = if overlay_inline {
-                    "subagents = { overrides = { explorer = { model = \"new@high\" } } }\n"
-                } else {
-                    "[subagents.overrides.explorer]\nmodel = \"new@high\"\n"
-                };
-                fs::write(&global, base).unwrap();
-                fs::write(&workspace, overlay).unwrap();
-                let (config, sources) = load_provenance(&[global.clone(), workspace.clone()]);
-                let inherits = !base_inline && !overlay_inline;
-                assert_eq!(
-                    config.subagents.overrides["explorer"].thinking_level,
-                    Some(if inherits {
-                        ThinkingLevel::Off
-                    } else {
-                        ThinkingLevel::High
-                    })
-                );
-                assert_eq!(
-                    sources.source("subagents.overrides.explorer.model"),
-                    Some(workspace.as_path())
-                );
-                assert_eq!(
-                    sources.source("subagents.overrides.explorer.thinking_level"),
-                    inherits.then_some(global.as_path())
-                );
-                assert_eq!(sources.source("subagents.max_concurrent"), None);
-            }
+        let base =
+            "[subagents]\nenabled = false\n\n[subagents.overrides.explorer]\nmodel = \"old@off\"\n";
+        for overlay_inline in [false, true] {
+            let overlay = if overlay_inline {
+                "subagents = { overrides = { explorer = { model = \"new@high\" } } }\n"
+            } else {
+                "[subagents.overrides.explorer]\nmodel = \"new@high\"\n"
+            };
+            fs::write(&global, base).unwrap();
+            fs::write(&workspace, overlay).unwrap();
+            let (config, sources) = load_provenance(&[global.clone(), workspace.clone()]);
+
+            assert_eq!(
+                config.subagents.overrides["explorer"].thinking_level,
+                Some(ThinkingLevel::High)
+            );
+            assert_eq!(
+                sources.source("subagents.overrides.explorer.model"),
+                Some(workspace.as_path())
+            );
+            // An inline overlay replaces the whole `subagents` table; a standard
+            // table merges per key, so `enabled` survives from the base layer.
+            assert_eq!(config.subagents.enabled, overlay_inline);
+            assert_eq!(
+                sources.source("subagents.enabled"),
+                (!overlay_inline).then_some(global.as_path())
+            );
+            assert_eq!(sources.source("subagents.max_concurrent"), None);
         }
         fs::write(&workspace, "subagents = {}\n").unwrap();
         let (config, sources) = load_provenance(&[global, workspace]);
@@ -2819,30 +2808,27 @@ models = ["model-a"]
     }
 
     #[test]
-    fn provenance_model_and_thinking_origins_are_independent() {
+    fn provenance_model_origins_are_tracked_per_layer() {
         let dir = tempdir().unwrap();
         let global = dir.path().join("global.toml");
         let workspace = dir.path().join("workspace.toml");
-        for (base, overlay, model_in_workspace, thinking_source, expected) in [
+        for (base, overlay, model_in_workspace, expected) in [
             (
-                "thinking_level = \"off\"",
+                "model = \"model@off\"",
                 "model = \"model@high\"",
                 true,
-                Some(global.as_path()),
-                ThinkingLevel::Off,
+                ThinkingLevel::High,
             ),
             (
-                "model = \"model@high\"",
-                "thinking_level = \"low\"",
+                "model = \"model@low\"",
+                "max_tokens = 4096",
                 false,
-                Some(workspace.as_path()),
                 ThinkingLevel::Low,
             ),
             (
                 "model = \"model@low\"",
                 "model = \"model@high\"",
                 true,
-                None,
                 ThinkingLevel::High,
             ),
         ] {
@@ -2874,7 +2860,8 @@ models = ["model-a"]
                 );
                 assert_eq!(
                     sources.source(&format!("{prefix}thinking_level")),
-                    thinking_source
+                    None,
+                    "thinking_level is no longer a config key"
                 );
             }
         }
@@ -3232,98 +3219,74 @@ language = "pt"
     }
 
     #[test]
-    fn save_main_model_canonicalizes_only_explicit_thinking() {
-        for existing in [None, Some("off"), Some("high")] {
-            for (model, expected, thinking) in [
-                (
-                    "claude-cli:opus@off",
-                    "claude-cli:opus@off",
-                    Some(ThinkingLevel::Off),
-                ),
-                (
-                    "openai-codex@work:gpt-6-astra@fast@HIGH",
-                    "openai-codex@work:gpt-6-astra@high@fast",
-                    Some(ThinkingLevel::High),
-                ),
-                ("claude-cli:opus", "claude-cli:opus", None),
-                (
-                    "openai-codex@work:gpt-6-astra@fast",
-                    "openai-codex@work:gpt-6-astra@fast",
-                    None,
-                ),
-            ] {
-                let dir = tempdir().unwrap();
-                let path = dir.path().join("config.toml");
-                if let Some(existing) = existing {
-                    fs::write(
-                        &path,
-                        format!("thinking_level = {existing:?}\nmax_tokens = 2048\n"),
-                    )
-                    .unwrap();
-                }
-                Config::save_model_field_to(&path, "model", model).unwrap();
-                let contents = fs::read_to_string(&path).unwrap();
-                let document: toml::Value = toml::from_str(&contents).unwrap();
-                let config = Config::load_from(&path).unwrap();
-                assert_eq!(config.model, expected);
-                if let Some(thinking) = thinking {
-                    assert!(document.get("thinking_level").is_none());
-                    assert_eq!(config.thinking_level, thinking);
-                } else {
-                    assert_eq!(
-                        document["thinking_level"].as_str(),
-                        Some(existing.unwrap_or("off"))
-                    );
-                }
-                if existing.is_some() {
-                    assert_eq!(config.max_tokens, Some(2048));
-                }
-            }
+    fn save_main_model_canonicalizes_explicit_thinking() {
+        for (model, expected, thinking) in [
+            (
+                "claude-cli:opus@off",
+                "claude-cli:opus@off",
+                ThinkingLevel::Off,
+            ),
+            (
+                "openai-codex@work:gpt-6-astra@fast@HIGH",
+                "openai-codex@work:gpt-6-astra@high@fast",
+                ThinkingLevel::High,
+            ),
+            ("claude-cli:opus", "claude-cli:opus", ThinkingLevel::Off),
+            (
+                "openai-codex@work:gpt-6-astra@fast",
+                "openai-codex@work:gpt-6-astra@fast",
+                ThinkingLevel::Off,
+            ),
+        ] {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            fs::write(&path, "max_tokens = 2048\n").unwrap();
+
+            Config::save_model_field_to(&path, "model", model).unwrap();
+            let contents = fs::read_to_string(&path).unwrap();
+            let document: toml::Value = toml::from_str(&contents).unwrap();
+            let config = Config::load_from(&path).unwrap();
+
+            assert_eq!(config.model, expected);
+            assert_eq!(config.thinking_level, thinking);
+            assert!(document.get("thinking_level").is_none());
+            assert_eq!(config.max_tokens, Some(2048));
         }
     }
 
     #[test]
-    fn unrelated_saves_preserve_main_suffix_and_legacy_presence() {
+    fn unrelated_saves_preserve_main_suffix() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        for legacy in ["", "thinking_level = \"off\"\n"] {
-            for operation in 0..6 {
-                fs::write(&path, format!(
-                    "model = \"openai-codex@work:gpt-6-astra@high@fast\"\n{legacy}\n[subagents.overrides.explorer]\nmodel = \"gemini:flash@low\"\n"
-                )).unwrap();
-                match operation {
-                    0 => Config::save_model_field_to(&path, "title_model", "helper@fast@low"),
-                    1 => Config::save_model_field_to(&path, "speech.model", "tts"),
-                    2 => Config::save_favorites_to(
-                        &path,
-                        &[ModelFavorite {
-                            alias: "deep".into(),
-                            model: "claude-cli:opus".into(),
-                            thinking: ThinkingLevel::High,
-                        }],
-                    ),
-                    3 => Config::save_favorites_to(&path, &[]),
-                    4 => Config::clear_subagent_override_to(&path, "explorer"),
-                    5 => Config::save_subagents_enabled_to(&path, false),
-                    _ => unreachable!(),
-                }
-                .unwrap();
-                let contents = fs::read_to_string(&path).unwrap();
-                let document: toml::Value = toml::from_str(&contents).unwrap();
-                assert_eq!(document.get("thinking_level").is_some(), !legacy.is_empty());
-                let config = Config::load_from(&path).unwrap();
-                assert_eq!(config.model, "openai-codex@work:gpt-6-astra@high@fast");
-                assert_eq!(
-                    config.thinking_level,
-                    if legacy.is_empty() {
-                        ThinkingLevel::High
-                    } else {
-                        ThinkingLevel::Off
-                    }
-                );
-                if operation == 0 {
-                    assert_eq!(config.title_model, "helper@fast@low");
-                }
+        for operation in 0..6 {
+            fs::write(&path,
+                "model = \"openai-codex@work:gpt-6-astra@high@fast\"\n\n[subagents.overrides.explorer]\nmodel = \"gemini:flash@low\"\n"
+            ).unwrap();
+            match operation {
+                0 => Config::save_model_field_to(&path, "title_model", "helper@fast@low"),
+                1 => Config::save_model_field_to(&path, "speech.model", "tts"),
+                2 => Config::save_favorites_to(
+                    &path,
+                    &[ModelFavorite {
+                        alias: "deep".into(),
+                        model: "claude-cli:opus".into(),
+                        thinking: ThinkingLevel::High,
+                    }],
+                ),
+                3 => Config::save_favorites_to(&path, &[]),
+                4 => Config::clear_subagent_override_to(&path, "explorer"),
+                5 => Config::save_subagents_enabled_to(&path, false),
+                _ => unreachable!(),
+            }
+            .unwrap();
+            let contents = fs::read_to_string(&path).unwrap();
+            let document: toml::Value = toml::from_str(&contents).unwrap();
+            assert!(document.get("thinking_level").is_none());
+            let config = Config::load_from(&path).unwrap();
+            assert_eq!(config.model, "openai-codex@work:gpt-6-astra@high@fast");
+            assert_eq!(config.thinking_level, ThinkingLevel::High);
+            if operation == 0 {
+                assert_eq!(config.title_model, "helper@fast@low");
             }
         }
     }
@@ -3525,13 +3488,13 @@ max_tokens = 2048
         assert_eq!(config.effective_max_tokens_for(model_id), expected);
     }
 
-    /// Thinking: config loads from file with `thinking_level`.
+    /// Thinking: the level comes from the main model's `@<level>` suffix.
     #[test]
-    fn test_thinking_config_loads_from_file() {
+    fn test_thinking_config_loads_from_model_suffix() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
 
-        fs::write(&config_path, r#"thinking_level = "high""#).unwrap();
+        fs::write(&config_path, r#"model = "claude-cli:opus@high""#).unwrap();
 
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.thinking_level, ThinkingLevel::High);
@@ -3539,50 +3502,21 @@ max_tokens = 2048
     }
 
     #[test]
-    fn test_thinking_config_model_suffix_fallback() {
-        use std::fmt::Write as _;
-
+    fn test_thinking_config_model_suffix() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        for (model, legacy, expected) in [
-            ("openai-codex:gpt-6-astra@high", None, ThinkingLevel::High),
-            (
-                "openai-codex:gpt-6-astra@high",
-                Some("off"),
-                ThinkingLevel::Off,
-            ),
-            (
-                "openai-codex:gpt-6-astra@off",
-                Some("high"),
-                ThinkingLevel::High,
-            ),
-            (
-                "openai-codex:gpt-6-astra@high",
-                Some("low"),
-                ThinkingLevel::Low,
-            ),
-            (
-                "openai-codex:gpt-6-astra",
-                Some("high"),
-                ThinkingLevel::High,
-            ),
-            ("openai-codex:gpt-6-astra", None, ThinkingLevel::Off),
-            ("openai-codex:gpt-6-astra@fast", None, ThinkingLevel::Off),
-            (
-                "openai-codex:gpt-6-astra@fast@high",
-                None,
-                ThinkingLevel::High,
-            ),
+        for (model, expected) in [
+            ("openai-codex:gpt-6-astra@high", ThinkingLevel::High),
+            ("openai-codex:gpt-6-astra@off", ThinkingLevel::Off),
+            ("openai-codex:gpt-6-astra", ThinkingLevel::Off),
+            ("openai-codex:gpt-6-astra@fast", ThinkingLevel::Off),
+            ("openai-codex:gpt-6-astra@fast@high", ThinkingLevel::High),
             (
                 "openai-codex@work:gpt-6-astra@high@fast",
-                None,
                 ThinkingLevel::High,
             ),
         ] {
-            let mut contents = format!("model = {model:?}\n");
-            if let Some(level) = legacy {
-                writeln!(contents, "thinking_level = {level:?}").unwrap();
-            }
+            let contents = format!("model = {model:?}\n");
             fs::write(&path, &contents).unwrap();
             for config in [
                 Config::load_from(&path).unwrap(),
@@ -3603,14 +3537,9 @@ max_tokens = 2048
         let layers = [global.clone(), workspace.clone()];
         for (base, overlay, expected) in [
             (
-                "thinking_level = \"off\"",
+                "model = \"openai-codex:gpt-6-astra@off\"",
                 "model = \"openai-codex:gpt-6-astra@high\"",
-                ThinkingLevel::Off,
-            ),
-            (
-                "model = \"openai-codex:gpt-6-astra@high\"",
-                "thinking_level = \"off\"",
-                ThinkingLevel::Off,
+                ThinkingLevel::High,
             ),
             (
                 "model = \"openai-codex:gpt-6-astra@high\"",
@@ -3630,13 +3559,13 @@ max_tokens = 2048
         }
     }
 
-    /// Thinking: old configs without `thinking_level` use defaults (serde default).
+    /// Thinking: a model with no `@<level>` suffix resolves to Off.
     #[test]
     fn test_thinking_config_missing_uses_defaults() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
 
-        // Old config without thinking_level field
+        // Model without a thinking suffix
         fs::write(&config_path, "model = \"claude-3-opus\"\n").unwrap();
 
         let config = Config::load_from(&config_path).unwrap();
@@ -3654,8 +3583,7 @@ max_tokens = 2048
 
 [[favorites]]
 alias = "sonnet-hi"
-model = "anthropic:claude-sonnet-4-6"
-thinking = "high"
+model = "anthropic:claude-sonnet-4-6@high"
 
 [[favorites]]
 alias = "opus"
@@ -3667,46 +3595,38 @@ model = "anthropic:claude-opus-4-6"
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.favorites.len(), 2);
         assert_eq!(config.favorites[0].alias, "sonnet-hi");
-        assert_eq!(config.favorites[0].model, "anthropic:claude-sonnet-4-6");
+        assert_eq!(
+            config.favorites[0].model,
+            "anthropic:claude-sonnet-4-6@high"
+        );
         assert_eq!(config.favorites[0].thinking, ThinkingLevel::High);
-        // thinking defaults to Off when omitted
+        // thinking is Off when the model carries no suffix
         assert_eq!(config.favorites[1].thinking, ThinkingLevel::Off);
 
         // Saving an unrelated field (via template merge) must not drop favorites.
-        Config::save_thinking_level_to(&config_path, ThinkingLevel::Medium).unwrap();
+        Config::save_model_field_to(&config_path, "title_model", "gemini:flash").unwrap();
         let reloaded = Config::load_from(&config_path).unwrap();
-        assert_eq!(reloaded.thinking_level, ThinkingLevel::Medium);
+        assert_eq!(reloaded.title_model, "gemini:flash");
         assert_eq!(reloaded.favorites.len(), 2);
         assert_eq!(reloaded.favorites[1].alias, "opus");
         assert_eq!(reloaded.favorites[0].thinking, ThinkingLevel::High);
     }
 
     #[test]
-    fn favorite_suffix_fallback_preserves_explicit_thinking() {
+    fn favorite_thinking_comes_from_model_suffix() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        for (model, legacy, expected) in [
-            ("claude-cli:opus@high", None, ThinkingLevel::High),
-            ("claude-cli:opus@high", Some("off"), ThinkingLevel::Off),
-            ("claude-cli:opus@off", Some("high"), ThinkingLevel::High),
-            ("claude-cli:opus", Some("high"), ThinkingLevel::High),
-            ("claude-cli:opus", None, ThinkingLevel::Off),
+        for (model, expected) in [
+            ("claude-cli:opus@high", ThinkingLevel::High),
+            ("claude-cli:opus@off", ThinkingLevel::Off),
+            ("claude-cli:opus", ThinkingLevel::Off),
             (
                 "openai-codex@work:gpt-6-astra@fast@high",
-                None,
                 ThinkingLevel::High,
             ),
-            (
-                "openai-codex@work:gpt-6-astra@fast",
-                None,
-                ThinkingLevel::Off,
-            ),
+            ("openai-codex@work:gpt-6-astra@fast", ThinkingLevel::Off),
         ] {
-            let thinking = legacy
-                .map(|level| format!(", thinking = {level:?}"))
-                .unwrap_or_default();
-            let contents =
-                format!("favorites = [{{ alias = \"test\", model = {model:?}{thinking} }}]\n");
+            let contents = format!("favorites = [{{ alias = \"test\", model = {model:?} }}]\n");
             fs::write(&path, &contents).unwrap();
             for config in [
                 Config::load_from(&path).unwrap(),
@@ -3778,98 +3698,66 @@ text_verbosity = "low"
         );
     }
 
-    /// `save_thinking_level`: creates new config file with template if it doesn't exist.
+    /// `save_thinking_level_for_cwd`: folds the level into the model spec.
     #[test]
-    fn test_save_thinking_level_creates_file_with_template() {
+    fn save_thinking_level_for_cwd_folds_level_into_model() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
 
-        Config::save_thinking_level_to(&config_path, ThinkingLevel::High).unwrap();
-
-        assert!(config_path.exists());
-
-        // Verify thinking_level was updated
-        let config = Config::load_from(&config_path).unwrap();
-        assert_eq!(config.thinking_level, ThinkingLevel::High);
-
-        // Verify template comments are preserved
-        let contents = fs::read_to_string(&config_path).unwrap();
-        assert!(contents.contains("# ZDX Configuration"));
-        assert!(contents.contains("thinking_level = \"high\""));
-    }
-
-    /// `save_thinking_level`: preserves other fields in existing config.
-    #[test]
-    fn test_save_thinking_level_preserves_other_fields() {
-        let dir = tempdir().unwrap();
-        let config_path = dir.path().join("config.toml");
-
-        // Create config with other fields
         fs::write(
             &config_path,
-            r#"model = "claude-sonnet-4"
-max_tokens = 4096
-thinking_level = "off"
-"#,
+            "model = \"claude-cli:opus@low@fast\"\nmax_tokens = 4096\n",
         )
         .unwrap();
 
-        Config::save_thinking_level_to(&config_path, ThinkingLevel::Medium).unwrap();
+        Config::save_model_field_to(
+            &config_path,
+            "model",
+            &crate::models::format_model_thinking("claude-cli:opus@low@fast", ThinkingLevel::High),
+        )
+        .unwrap();
 
         let config = Config::load_from(&config_path).unwrap();
-        assert_eq!(config.thinking_level, ThinkingLevel::Medium);
-        assert_eq!(config.model, "claude-sonnet-4"); // preserved
-        assert_eq!(config.max_tokens, Some(4096)); // preserved
+        assert_eq!(config.model, "claude-cli:opus@high@fast");
+        assert_eq!(config.thinking_level, ThinkingLevel::High);
+        assert_eq!(config.max_tokens, Some(4096));
+
+        let contents = fs::read_to_string(&config_path).unwrap();
+        assert!(contents.contains("# ZDX Configuration"));
+        assert!(!contents.contains("thinking_level"));
     }
 
     #[test]
-    fn subagent_override_suffix_fallback_preserves_explicit_levels() {
+    fn subagent_override_thinking_comes_from_model_suffix() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        for (model, legacy, expected) in [
+        for (model, expected) in [
             (
                 Some("claude-cli:claude-opus-5@high"),
-                None,
                 Some(ThinkingLevel::High),
-            ),
-            (
-                Some("claude-cli:claude-opus-5@high"),
-                Some("off"),
-                Some(ThinkingLevel::Off),
             ),
             (
                 Some("claude-cli:claude-opus-5@off"),
-                Some("high"),
-                Some(ThinkingLevel::High),
+                Some(ThinkingLevel::Off),
             ),
-            (
-                Some("claude-cli:claude-opus-5"),
-                Some("high"),
-                Some(ThinkingLevel::High),
-            ),
-            (Some("claude-cli:claude-opus-5"), None, None),
+            (Some("claude-cli:claude-opus-5"), None),
             (
                 Some("openai-codex@work:gpt-6-astra@fast@high"),
-                None,
                 Some(ThinkingLevel::High),
             ),
-            (Some("openai-codex:gpt-6-astra@fast"), None, None),
-            (None, Some("low"), Some(ThinkingLevel::Low)),
-            (None, None, None),
+            (Some("openai-codex:gpt-6-astra@fast"), None),
+            (None, None),
         ] {
             let mut fields = Vec::new();
             if let Some(model) = model {
                 fields.push(format!("model = {model:?}"));
             }
-            if let Some(level) = legacy {
-                fields.push(format!("thinking_level = {level:?}"));
-            }
             let inline = format!(
-                "thinking_level = \"off\"\n[subagents.overrides]\nexplorer = {{ {} }}\n",
+                "model = \"claude-cli:opus@off\"\n[subagents.overrides]\nexplorer = {{ {} }}\n",
                 fields.join(", ")
             );
             let table = format!(
-                "thinking_level = \"off\"\n[subagents.overrides.explorer]\n{}\n",
+                "model = \"claude-cli:opus@off\"\n[subagents.overrides.explorer]\n{}\n",
                 fields.join("\n")
             );
             for contents in [inline, table] {
@@ -3888,6 +3776,37 @@ thinking_level = "off"
         }
     }
 
+    /// Removed thinking keys must fail loudly instead of being ignored.
+    #[test]
+    fn removed_thinking_keys_are_rejected() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for (contents, expected_key) in [
+            (
+                "model = \"claude-cli:opus@high\"\nthinking_level = \"off\"\n",
+                "thinking_level",
+            ),
+            (
+                "[subagents.overrides]\nexplorer = { model = \"claude-cli:opus\", thinking_level = \"low\" }\n",
+                "subagents.overrides.explorer.thinking_level",
+            ),
+            (
+                "[[favorites]]\nalias = \"Low\"\nmodel = \"claude-cli:opus\"\nthinking = \"high\"\n",
+                "favorites[0].thinking",
+            ),
+        ] {
+            fs::write(&path, contents).unwrap();
+            for result in [
+                Config::load_from(&path),
+                Config::load_layered(std::slice::from_ref(&path)),
+            ] {
+                let err = format!("{:#}", result.expect_err(contents));
+                assert!(err.contains(expected_key), "{err}");
+                assert!(err.contains("model spec"), "{err}");
+            }
+        }
+    }
+
     #[test]
     fn subagent_override_suffix_resolves_after_layer_merge() {
         let dir = tempdir().unwrap();
@@ -3895,14 +3814,9 @@ thinking_level = "off"
         let workspace = dir.path().join("workspace.toml");
         for (base, overlay, expected) in [
             (
-                "thinking_level = \"off\"",
+                "model = \"claude-cli:claude-opus-5@off\"",
                 "model = \"claude-cli:claude-opus-5@high\"",
-                Some(ThinkingLevel::Off),
-            ),
-            (
-                "model = \"claude-cli:claude-opus-5@high\"",
-                "thinking_level = \"off\"",
-                Some(ThinkingLevel::Off),
+                Some(ThinkingLevel::High),
             ),
             (
                 "model = \"claude-cli:claude-opus-5@high\"",
@@ -3969,8 +3883,8 @@ max_tokens = 4096
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
         for overrides in [
-            "[subagents.overrides]\nexplorer = { model = \"old\", thinking_level = \"high\" }\noracle = { model = \"keep@low\" }\n",
-            "[subagents.overrides.explorer]\nmodel = \"old\"\nthinking_level = \"high\"\n[subagents.overrides.oracle]\nmodel = \"keep@low\"\n",
+            "[subagents.overrides]\nexplorer = { model = \"old@high\" }\noracle = { model = \"keep@low\" }\n",
+            "[subagents.overrides.explorer]\nmodel = \"old@high\"\n[subagents.overrides.oracle]\nmodel = \"keep@low\"\n",
         ] {
             fs::write(&path, format!("model = \"main@high\"\n{overrides}")).unwrap();
             Config::save_subagent_override_to(
@@ -4072,60 +3986,6 @@ max_tokens = 4096
         let cfg = Config::load_from(&config_path).unwrap();
         assert!(cfg.favorites.is_empty());
         assert_eq!(cfg.model, "claude-sonnet-4"); // still preserved
-    }
-
-    /// `save_thinking_level`: uses template structure but preserves user values.
-    #[test]
-    fn test_save_thinking_level_merges_with_template() {
-        let dir = tempdir().unwrap();
-        let config_path = dir.path().join("config.toml");
-
-        // Create config with user values (old format, no template comments)
-        fs::write(
-            &config_path,
-            r#"model = "claude-sonnet-4"
-thinking_level = "off"
-max_tokens = 4096
-"#,
-        )
-        .unwrap();
-
-        Config::save_thinking_level_to(&config_path, ThinkingLevel::High).unwrap();
-
-        let contents = fs::read_to_string(&config_path).unwrap();
-        // Template comments should now be present
-        assert!(contents.contains("# ZDX Configuration"));
-        assert!(contents.contains("# Extended thinking level"));
-        assert!(contents.contains("thinking_level = \"high\""));
-        // User values should be preserved
-        let config = Config::load_from(&config_path).unwrap();
-        assert_eq!(config.model, "claude-sonnet-4");
-        assert_eq!(config.max_tokens, Some(4096));
-    }
-
-    /// `save_thinking_level`: roundtrip - save and reload works correctly.
-    #[test]
-    fn test_save_thinking_level_roundtrip() {
-        let dir = tempdir().unwrap();
-        let config_path = dir.path().join("config.toml");
-
-        // Create initial config
-        fs::write(&config_path, "model = \"test-model\"\n").unwrap();
-
-        // Save thinking level
-        Config::save_thinking_level_to(&config_path, ThinkingLevel::Low).unwrap();
-
-        // Reload and verify
-        let config = Config::load_from(&config_path).unwrap();
-        assert_eq!(config.thinking_level, ThinkingLevel::Low);
-        assert_eq!(config.model, "test-model");
-
-        // Change to different level
-        Config::save_thinking_level_to(&config_path, ThinkingLevel::Max).unwrap();
-
-        // Reload and verify again
-        let config = Config::load_from(&config_path).unwrap();
-        assert_eq!(config.thinking_level, ThinkingLevel::Max);
     }
 
     /// `filter_tools`: returns all tools when no filtering configured.

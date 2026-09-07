@@ -259,6 +259,8 @@ pub fn set(key: &str, val_str: &str, local: bool, force_string: bool) -> Result<
 
     // Validate the modified document deserializes as a valid Config if it's the global config
     let doc_str = doc.to_string();
+    config::reject_removed_thinking_keys(&toml::from_str(&doc_str)?)
+        .with_context(|| format!("modified config would be invalid: key '{key}'"))?;
     if !local {
         toml::from_str::<Config>(&doc_str)
             .with_context(|| format!("modified config would be invalid: key '{key}'"))?;

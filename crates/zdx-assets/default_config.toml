@@ -14,12 +14,10 @@ model = "claude-haiku-4-5"
 # Timeout for tool execution in seconds (0 disables timeout)
 tool_timeout_secs = 0
 
-# Extended thinking level
-# Controls how much reasoning effort the model uses before responding.
-# Providers map unsupported levels to their nearest available effort.
+# Thinking level is part of the model spec: append `@<level>` to any model
+# string, e.g. model = "provider:id@high".
 # Options: off, low, medium, high, xhigh, max
 # Note: when max_tokens is set, it is auto-adjusted to ensure room for both thinking and response.
-thinking_level = "off"
 handoff_model = "gemini:gemini-3-flash-preview"
 title_model = "gemini:gemini-3.1-flash-lite-preview"
 read_thread_model = "gemini:gemini-3.1-flash-lite-preview"
@@ -119,7 +117,7 @@ websocket = false
 # include_skills = ["deploy-*", "release-*"]
 
 # Telegram bot configuration
-# The bot uses the layered `model` / `thinking_level` resolved from the chat's
+# The bot uses the layered `model` resolved from the chat's
 # working directory (profile cwd, else the bot's own cwd).
 [telegram]
 # bot_token = "123456789:abcDEF..."

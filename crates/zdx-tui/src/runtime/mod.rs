@@ -847,6 +847,7 @@ impl TuiRuntime {
             UiEffect::PersistThinking { level } => {
                 let _ = zdx_engine::config::Config::save_thinking_level_for_cwd(
                     &self.state.tui.agent_opts.root,
+                    &self.state.tui.config.model,
                     level,
                 );
                 // Errors are silently ignored - level is already set in state

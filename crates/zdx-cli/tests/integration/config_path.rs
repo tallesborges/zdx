@@ -120,17 +120,20 @@ fn test_config_get_set_unset() {
             "config",
             "set",
             "favorites.0.model",
-            "google-antigravity:gemini-3.8-flash-high",
+            "google-antigravity:gemini-3.8-flash-high@high",
         ])
         .assert()
         .success();
 
+    // The removed `thinking` key is rejected instead of silently ignored
     crate::fixtures::zdx_cmd()
         .current_dir(isolated_cwd.path())
         .env("ZDX_HOME", zdx_home.path())
         .args(["config", "set", "favorites.0.thinking", "high"])
         .assert()
-        .success();
+        .failure()
+        .stderr(predicate::str::contains("favorites[0].thinking"))
+        .stderr(predicate::str::contains("model spec"));
 
     // Plain get on array field works without --json
     crate::fixtures::zdx_cmd()
@@ -150,8 +153,18 @@ fn test_config_get_set_unset() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "google-antigravity:gemini-3.8-flash-high",
+            "google-antigravity:gemini-3.8-flash-high@high",
         ));
+
+    // The removed top-level `thinking_level` key is rejected too
+    crate::fixtures::zdx_cmd()
+        .current_dir(isolated_cwd.path())
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["config", "set", "thinking_level", "high"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("thinking_level"))
+        .stderr(predicate::str::contains("model spec"));
 
     // Validation rejects invalid schema writes
     crate::fixtures::zdx_cmd()

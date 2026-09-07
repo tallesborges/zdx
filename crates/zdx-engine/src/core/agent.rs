@@ -2518,7 +2518,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn main_turn_uses_suffix_only_when_legacy_thinking_is_absent() {
+    async fn main_turn_uses_model_thinking_suffix() {
         let home = crate::test_support::temp_zdx_home();
         let path = home.path().join("config.toml");
         let options = AgentOptions {
@@ -2532,13 +2532,14 @@ mod tests {
             activity_parent_thread_id: None,
             activity_subagent_name: None,
         };
-        for (legacy, expected) in [
-            ("", ThinkingLevel::High),
-            ("thinking_level = \"off\"", ThinkingLevel::Off),
+        for (suffix, expected) in [
+            ("@high", ThinkingLevel::High),
+            ("@off", ThinkingLevel::Off),
+            ("", ThinkingLevel::Off),
         ] {
             std::fs::write(
                 &path,
-                format!("model = \"anthropic:claude-sonnet-4-6@high\"\n{legacy}\n"),
+                format!("model = \"anthropic:claude-sonnet-4-6{suffix}\"\n"),
             )
             .unwrap();
             let mut config = Config::load_from(&path).unwrap();
