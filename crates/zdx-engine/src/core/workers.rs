@@ -25,7 +25,7 @@ use crate::config::ThinkingLevel;
 use crate::core::agent::{AgentEventRx, EventSender, create_event_channel};
 use crate::core::events::AgentEvent;
 use crate::core::subagent::{
-    ExecSubagentOptions, SubagentStreamSink, run_exec_subagent_with_cancel,
+    ExecSubagentOptions, SubagentStreamSink, run_exec_subagent_with_cancel, tool_input_preview,
 };
 use crate::core::thread_persistence;
 
@@ -154,6 +154,8 @@ pub struct WorkerSnapshot {
     /// Tool the current turn is running right now, when one is in flight.
     /// `None` between tools or when no turn is running.
     pub current_tool: Option<String>,
+    /// One-line primary input for `current_tool`, capped at 200 characters.
+    pub current_tool_input: Option<String>,
     /// Seconds since the last tool activity on the current turn. `None` when
     /// no turn is running or no activity has arrived yet.
     pub seconds_since_last_activity: Option<u64>,
@@ -191,6 +193,12 @@ struct WorkerWaitRegistration {
     claimed: Vec<CompletionEvent>,
 }
 
+struct WorkerTool {
+    id: String,
+    name: String,
+    input: Option<String>,
+}
+
 struct WorkerState {
     owner_thread_id: String,
     root: PathBuf,
@@ -202,8 +210,8 @@ struct WorkerState {
     latest_final_text: Option<String>,
     last_error: Option<String>,
     wake: Arc<Notify>,
-    /// Tool currently in flight on this worker's turn, from live activity.
-    current_tool: Option<String>,
+    /// In-flight calls in start order; the newest supplies the status preview.
+    current_tools: Vec<WorkerTool>,
     /// When the last tool activity arrived on the current turn.
     last_activity_at: Option<Instant>,
     /// When the current turn started running.
@@ -221,7 +229,11 @@ impl WorkerState {
             latest_final_text: self.latest_final_text.clone(),
             last_error: self.last_error.clone(),
             mirror_url,
-            current_tool: self.current_tool.clone(),
+            current_tool: self.current_tools.last().map(|tool| tool.name.clone()),
+            current_tool_input: self
+                .current_tools
+                .last()
+                .and_then(|tool| tool.input.clone()),
             seconds_since_last_activity: self.last_activity_at.map(|at| at.elapsed().as_secs()),
             turn_elapsed_seconds: self.turn_started_at.map(|at| at.elapsed().as_secs()),
         }
@@ -293,11 +305,24 @@ impl WorkerManager {
         };
         state.last_activity_at = Some(Instant::now());
         match activity {
-            WorkerActivity::ToolStarted { name, .. } => {
-                state.current_tool = Some(name.clone());
+            WorkerActivity::ToolStarted { id, name } => {
+                if !state.current_tools.iter().any(|tool| tool.id == *id) {
+                    state.current_tools.push(WorkerTool {
+                        id: id.clone(),
+                        name: name.clone(),
+                        input: None,
+                    });
+                }
             }
-            WorkerActivity::ToolFinished { .. } => state.current_tool = None,
-            WorkerActivity::ToolInput { .. } => {}
+            WorkerActivity::ToolFinished { id, .. } => {
+                state.current_tools.retain(|tool| tool.id != *id);
+            }
+            WorkerActivity::ToolInput { id, arg } => {
+                if let Some(tool) = state.current_tools.iter_mut().find(|tool| tool.id == *id) {
+                    let preview = tool_input_preview(arg);
+                    tool.input = (!preview.is_empty()).then_some(preview);
+                }
+            }
         }
     }
 
@@ -596,7 +621,7 @@ impl WorkerManager {
                         latest_final_text: None,
                         last_error: None,
                         wake: Arc::clone(&wake),
-                        current_tool: None,
+                        current_tools: Vec::new(),
                         last_activity_at: None,
                         turn_started_at: None,
                     });
@@ -952,7 +977,7 @@ fn spawn_worker_task(manager: Arc<WorkerManager>, worker_thread_id: String, wake
                     state.status = WorkerStatus::Running;
                     state.turn_started_at = Some(Instant::now());
                     state.last_activity_at = None;
-                    state.current_tool = None;
+                    state.current_tools.clear();
                     WorkerRunRequest {
                         worker_thread_id: worker_thread_id.clone(),
                         owner_thread_id: state.owner_thread_id.clone(),
@@ -985,7 +1010,7 @@ fn spawn_worker_task(manager: Arc<WorkerManager>, worker_thread_id: String, wake
                 state.current_cancel = None;
                 state.turn_started_at = None;
                 state.last_activity_at = None;
-                state.current_tool = None;
+                state.current_tools.clear();
                 match &result {
                     Ok(text) => {
                         state.status = WorkerStatus::Completed;
@@ -1785,8 +1810,25 @@ mod tests {
 
         let running = manager.snapshot(&worker_id).unwrap();
         assert_eq!(running.current_tool.as_deref(), Some("bash"));
+        assert_eq!(running.current_tool_input, None);
         assert!(running.seconds_since_last_activity.is_some());
         assert!(running.turn_elapsed_seconds.is_some());
+
+        manager.record_activity(
+            &worker_id,
+            &WorkerActivity::ToolInput {
+                id: "t1".into(),
+                arg: "./gradlew assembleDebug".into(),
+            },
+        );
+        assert_eq!(
+            manager
+                .snapshot(&worker_id)
+                .unwrap()
+                .current_tool_input
+                .as_deref(),
+            Some("./gradlew assembleDebug")
+        );
 
         // Finishing the tool clears the current tool but keeps the turn timer.
         manager.record_activity(
@@ -1798,6 +1840,7 @@ mod tests {
         );
         let between = manager.snapshot(&worker_id).unwrap();
         assert_eq!(between.current_tool, None);
+        assert_eq!(between.current_tool_input, None);
         assert!(between.turn_elapsed_seconds.is_some());
 
         let _ = release_tx.send(());
@@ -1829,11 +1872,20 @@ mod tests {
         let _home = temp_zdx_home();
         let project = tempfile::tempdir().unwrap();
 
-        // Built via `new()` so the cyclic weak self-reference is the one under test.
-        let (manager, _rx) = WorkerManager::new();
+        let ready = Arc::new(Notify::new());
+        let runner_ready = Arc::clone(&ready);
+        let (manager, _rx) = WorkerManager::with_runner(Arc::new(move |request| {
+            let ready = Arc::clone(&runner_ready);
+            Box::pin(async move {
+                ready.notify_one();
+                request.cancel.cancelled().await;
+                Ok(String::new())
+            })
+        }));
         let worker_id = manager
             .create_worker("owner", project.path(), "go", None, None, None)
             .unwrap();
+        ready.notified().await;
 
         let (tx, rx) = crate::core::agent::create_event_channel();
         let (fwd_tx, mut fwd_rx) = mpsc::unbounded_channel();
@@ -1861,14 +1913,119 @@ mod tests {
 
         tx.send(Arc::new(AgentEvent::ToolOutputDelta {
             id: worker_id.clone(),
+            chunk: r#"{"t":"input","id":"t1","arg":"TODO src"}"#.to_string(),
+        }))
+        .unwrap();
+        fwd_rx.recv().await.expect("input forwarded");
+        assert_eq!(
+            manager
+                .snapshot(&worker_id)
+                .unwrap()
+                .current_tool_input
+                .as_deref(),
+            Some("TODO src")
+        );
+
+        tx.send(Arc::new(AgentEvent::ToolOutputDelta {
+            id: worker_id.clone(),
             chunk: r#"{"t":"done","id":"t1"}"#.to_string(),
         }))
         .unwrap();
         fwd_rx.recv().await.expect("finish forwarded");
         assert_eq!(manager.snapshot(&worker_id).unwrap().current_tool, None);
+        assert_eq!(
+            manager.snapshot(&worker_id).unwrap().current_tool_input,
+            None
+        );
 
         drop(tx);
         forwarder.await.ok();
         manager.cancel(&worker_id).ok();
+        wait_idle(&manager, &worker_id).await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_tool_previews_match_ids_and_clear_on_turn_end() {
+        let _home = temp_zdx_home();
+        let project = tempfile::tempdir().unwrap();
+        let ready = Arc::new(Notify::new());
+        let runner_ready = Arc::clone(&ready);
+        let (manager, _rx) = WorkerManager::with_runner(Arc::new(move |request| {
+            let ready = Arc::clone(&runner_ready);
+            Box::pin(async move {
+                ready.notify_one();
+                request.cancel.cancelled().await;
+                Ok(String::new())
+            })
+        }));
+        let id = manager
+            .create_worker("owner", project.path(), "go", None, None, None)
+            .unwrap();
+        ready.notified().await;
+        let record = |activity| manager.record_activity(&id, &activity);
+        record(WorkerActivity::ToolStarted {
+            id: "a".into(),
+            name: "bash".into(),
+        });
+        record(WorkerActivity::ToolStarted {
+            id: "b".into(),
+            name: "read".into(),
+        });
+        record(WorkerActivity::ToolInput {
+            id: "a".into(),
+            arg: "./gradlew build".into(),
+        });
+        assert_eq!(manager.snapshot(&id).unwrap().current_tool_input, None);
+        record(WorkerActivity::ToolInput {
+            id: "b".into(),
+            arg: "Cargo.toml".into(),
+        });
+        record(WorkerActivity::ToolInput {
+            id: "unknown".into(),
+            arg: "wrong".into(),
+        });
+        record(WorkerActivity::ToolStarted {
+            id: "b".into(),
+            name: "read".into(),
+        });
+        assert_eq!(
+            manager.snapshot(&id).unwrap().current_tool_input.as_deref(),
+            Some("Cargo.toml")
+        );
+        record(WorkerActivity::ToolFinished {
+            id: "b".into(),
+            ok: true,
+        });
+        let remaining = manager.snapshot(&id).unwrap();
+        assert_eq!(remaining.current_tool.as_deref(), Some("bash"));
+        assert_eq!(
+            remaining.current_tool_input.as_deref(),
+            Some("./gradlew build")
+        );
+        record(WorkerActivity::ToolStarted {
+            id: "c".into(),
+            name: "grep".into(),
+        });
+        record(WorkerActivity::ToolInput {
+            id: "c".into(),
+            arg: "é".repeat(1000),
+        });
+        record(WorkerActivity::ToolFinished {
+            id: "a".into(),
+            ok: false,
+        });
+        let latest = manager.snapshot(&id).unwrap();
+        assert_eq!(latest.current_tool.as_deref(), Some("grep"));
+        assert_eq!(latest.current_tool_input.unwrap().chars().count(), 200);
+
+        manager.cancel(&id).unwrap();
+        let idle = wait_idle(&manager, &id).await;
+        assert_eq!(idle.current_tool, None);
+        assert_eq!(idle.current_tool_input, None);
+        manager.send_message("owner", &id, "next").unwrap();
+        ready.notified().await;
+        assert_eq!(manager.snapshot(&id).unwrap().current_tool_input, None);
+        manager.cancel(&id).unwrap();
+        wait_idle(&manager, &id).await;
     }
 }

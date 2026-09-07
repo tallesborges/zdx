@@ -109,7 +109,17 @@ impl Tool for OrchestratorTool {
             match op {
                 Op::Create => create_thread(&manager, &owner, &input).await,
                 Op::Send => send_thread_message(&manager, &owner, &input),
-                Op::Status => get_thread_status(&manager, &owner, &input),
+                Op::Status => tokio::task::spawn_blocking(move || {
+                    get_thread_status(&manager, &owner, &input, ctx.config.as_ref())
+                })
+                .await
+                .unwrap_or_else(|err| {
+                    ToolOutput::failure(
+                        "status_failed",
+                        "Failed to read thread status",
+                        Some(err.to_string()),
+                    )
+                }),
                 Op::Wait => wait_for_threads(&manager, &input).await,
                 Op::Update => update_thread(&manager, &input),
                 Op::Cancel => cancel_thread(&manager, &input),
@@ -174,7 +184,7 @@ fn definition_for(op: Op) -> ToolDefinition {
         },
         Op::Status => ToolDefinition {
             name: "Get_Thread_Status".to_string(),
-            description: "Report a worker thread's status (queued/running/completed/failed/cancelled), queue depth, and latest final text. For a running worker it also reports `current_tool`, `seconds_since_last_activity`, and `turn_elapsed_seconds` — use these to tell a worker doing slow work from one that is stuck: a live tool with recent activity is working, while a long `seconds_since_last_activity` with no `current_tool` means it is waiting on the model or hung. For a thread this process does not manage, only `seconds_since_last_write` (the thread file's mtime) is available and `current_tool` is null. Omit thread_id to list every worker owned by this orchestrator in the current process.".to_string(),
+            description: "Report a worker thread's status (queued/running/completed/failed/cancelled), queue depth, and latest final text. Managed workers also report `current_tool`, `current_tool_input` (a one-line command/path/pattern preview, at most 200 characters), `seconds_since_last_activity`, and `turn_elapsed_seconds`. The name and input belong to the same tool-use id; with concurrent tools, they describe the most recently started unfinished call. Inspect the preview before judging a long wait: a build can be quiet, and activity age alone does not prove a hang. Input is null until available or when the tool has no primary argument. For a thread this process does not manage, live tool information is unavailable; it reports `seconds_since_last_write` from the file mtime. Both paths include `context`: the latest recorded request's input tokens INCLUDING cache reads/writes, its recorded model/provider, context_limit, percent_used, and recorded_at. This estimates context occupancy, not cumulative spend; output tokens are excluded, and it is not an exact count of the next resumed request. Context is null when no input-bearing usage is found in the last 256 KiB or the file cannot be read. Unknown model/provider/limit leaves tokens visible but limit and percentage null. Use percent_used to decide whether to move work to a fresh thread. Omit thread_id to list every worker owned by this orchestrator in the current process.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -288,6 +298,7 @@ fn snapshot_json(snapshot: &WorkerSnapshot) -> Value {
         "last_error": snapshot.last_error,
         "mirror_url": snapshot.mirror_url,
         "current_tool": snapshot.current_tool,
+        "current_tool_input": snapshot.current_tool_input,
         "seconds_since_last_activity": snapshot.seconds_since_last_activity,
         "turn_elapsed_seconds": snapshot.turn_elapsed_seconds,
     })
@@ -403,14 +414,68 @@ fn send_thread_message(manager: &Arc<WorkerManager>, owner: &str, input: &Value)
     }
 }
 
-fn get_thread_status(manager: &Arc<WorkerManager>, owner: &str, input: &Value) -> ToolOutput {
+fn thread_context_json(thread_id: &str, config: Option<&crate::config::Config>) -> Value {
+    let Some(usage) = thread_persistence::read_latest_context_usage(thread_id)
+        .ok()
+        .flatten()
+    else {
+        return Value::Null;
+    };
+    let models = crate::models::available_models().iter().chain(
+        config
+            .into_iter()
+            .flat_map(|config| crate::models::custom_provider_models(&config.providers)),
+    );
+    usage_context_json(&usage, models)
+}
+
+fn usage_context_json<'a>(
+    usage: &thread_persistence::LatestContextUsage,
+    mut models: impl Iterator<Item = &'a crate::models::ModelOption>,
+) -> Value {
+    let model = usage
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let provider = usage
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let limit = provider.zip(model).and_then(|(provider, model)| {
+        models
+            .find(|entry| {
+                entry.provider.eq_ignore_ascii_case(provider)
+                    && entry.id.eq_ignore_ascii_case(model)
+            })
+            .map(|entry| entry.context_limit)
+            .filter(|limit| *limit > 0)
+    });
+    json!({
+        "input_tokens": usage.input_tokens,
+        "model": model,
+        "provider": provider,
+        "context_limit": limit,
+        "percent_used": limit.map(|limit| usage.input_tokens as f64 / limit as f64 * 100.0),
+        "recorded_at": usage.recorded_at,
+        "basis": "last_recorded_request_input",
+    })
+}
+
+fn get_thread_status(
+    manager: &Arc<WorkerManager>,
+    owner: &str,
+    input: &Value,
+    config: Option<&crate::config::Config>,
+) -> ToolOutput {
     if let Some(thread_id) = optional_str(input, "thread_id") {
-        return match manager.snapshot(thread_id) {
-            Some(snapshot) => ToolOutput::success(json!({ "worker": snapshot_json(&snapshot) })),
+        let mut worker = match manager.snapshot(thread_id) {
+            Some(snapshot) => snapshot_json(&snapshot),
             None if thread_file_path(thread_id).is_file() => {
-                ToolOutput::success(json!({ "worker": unmanaged_thread_json(thread_id) }))
+                unmanaged_thread_json(thread_id)
             }
-            None => ToolOutput::failure(
+            None => return ToolOutput::failure(
                 "not_managed",
                 format!("Thread '{thread_id}' is not a managed worker in this process"),
                 Some(
@@ -418,12 +483,18 @@ fn get_thread_status(manager: &Arc<WorkerManager>, owner: &str, input: &Value) -
                 ),
             ),
         };
+        worker["context"] = thread_context_json(thread_id, config);
+        return ToolOutput::success(json!({ "worker": worker }));
     }
 
     let workers: Vec<Value> = manager
         .list_for_owner(owner)
         .iter()
-        .map(snapshot_json)
+        .map(|snapshot| {
+            let mut worker = snapshot_json(snapshot);
+            worker["context"] = thread_context_json(&snapshot.thread_id, config);
+            worker
+        })
         .collect();
     ToolOutput::success(json!({ "count": workers.len(), "workers": workers }))
 }
@@ -503,6 +574,144 @@ fn cancel_thread(manager: &Arc<WorkerManager>, input: &Value) -> ToolOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn context_model(provider: &'static str, context_limit: u64) -> crate::models::ModelOption {
+        crate::models::ModelOption {
+            id: "gpt-6-astra",
+            provider,
+            account: None,
+            display_name: "Astra",
+            pricing: crate::models::ModelPricing {
+                input: 0.0,
+                output: 0.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            context_limit,
+            capabilities: crate::models::ModelCapabilities::default(),
+        }
+    }
+
+    #[test]
+    fn context_percentage_uses_the_recorded_provider_and_model() {
+        let models = [
+            context_model("other-provider", 1000),
+            context_model("openai-codex", 1_050_000),
+        ];
+        let context = usage_context_json(
+            &thread_persistence::LatestContextUsage {
+                input_tokens: 105_000,
+                model: Some("gpt-6-astra".into()),
+                provider: Some("openai-codex".into()),
+                recorded_at: "2026-09-07T10:00:00Z".into(),
+            },
+            models.iter(),
+        );
+        assert_eq!(context["input_tokens"], 105_000);
+        assert_eq!(context["context_limit"], 1_050_000);
+        assert_eq!(context["percent_used"], 10.0);
+        assert_eq!(context["recorded_at"], "2026-09-07T10:00:00Z");
+    }
+
+    #[test]
+    fn context_without_attribution_or_limit_keeps_tokens_but_not_percentage() {
+        for (model, provider, limit) in [
+            (None, None, 1_050_000),
+            (Some("gpt-6-astra"), None, 1_050_000),
+            (Some("gpt-6-astra"), Some("unknown-provider"), 1_050_000),
+            (Some("unknown-model"), Some("openai-codex"), 1_050_000),
+            (Some("gpt-6-astra"), Some("openai-codex"), 0),
+        ] {
+            let models = [context_model("openai-codex", limit)];
+            let context = usage_context_json(
+                &thread_persistence::LatestContextUsage {
+                    input_tokens: 42,
+                    model: model.map(str::to_string),
+                    provider: provider.map(str::to_string),
+                    recorded_at: "sample".into(),
+                },
+                models.iter(),
+            );
+            assert_eq!(context["input_tokens"], 42);
+            assert!(context["context_limit"].is_null());
+            assert!(context["percent_used"].is_null());
+        }
+    }
+
+    #[tokio::test]
+    async fn status_context_reports_latest_input_for_managed_and_unmanaged_threads() {
+        let home = crate::test_support::temp_zdx_home();
+        let (manager, _events) =
+            WorkerManager::with_runner(Arc::new(|_| Box::pin(async { Ok("done".into()) })));
+        let id = manager
+            .create_worker("owner", home.path(), "go", None, None, None)
+            .unwrap();
+        let empty = get_thread_status(&manager, "owner", &json!({"thread_id": id}), None);
+        assert!(empty.data().unwrap()["worker"]["context"].is_null());
+        let mut thread = thread_persistence::Thread::with_id(id.clone()).unwrap();
+        for usage in [
+            thread_persistence::Usage::new(900_000, 1000, 0, 0),
+            thread_persistence::Usage::new(5_000, 1000, 90_000, 10_000),
+            thread_persistence::Usage::new(0, 500, 0, 0),
+        ] {
+            thread
+                .append(&thread_persistence::ThreadEvent::usage(
+                    usage,
+                    Some("gpt-6-astra".into()),
+                    Some("openai-codex".into()),
+                    None,
+                    None,
+                ))
+                .unwrap();
+        }
+        thread
+            .set_model_override(Some("different-current-model".into()))
+            .unwrap();
+        let tool = OrchestratorTool {
+            op: Op::Status,
+            manager: Some(Arc::clone(&manager)),
+        };
+        let ctx =
+            ToolContext::new(home.path().to_path_buf(), None).with_current_thread_id(Some("owner"));
+        let response = tool.execute(&json!({"thread_id": id}), &ctx).await;
+        let expected = response.data().unwrap()["worker"]["context"].clone();
+        assert_eq!(expected["input_tokens"], 105_000);
+        assert_eq!(expected["model"], "gpt-6-astra");
+        let listing = get_thread_status(&manager, "owner", &json!({}), None);
+        assert_eq!(listing.data().unwrap()["workers"][0]["context"], expected);
+
+        let (other_manager, _other_events) = WorkerManager::new();
+        let unmanaged = get_thread_status(&other_manager, "owner", &json!({"thread_id": id}), None);
+        assert_eq!(unmanaged.data().unwrap()["worker"]["managed"], false);
+        assert_eq!(unmanaged.data().unwrap()["worker"]["context"], expected);
+    }
+
+    #[test]
+    fn status_exposes_preview_only_for_managed_workers() {
+        let _home = crate::test_support::temp_zdx_home();
+        let snapshot = WorkerSnapshot {
+            thread_id: "worker-status".into(),
+            owner_thread_id: "owner".into(),
+            root: std::path::PathBuf::from("/tmp"),
+            status: crate::core::workers::WorkerStatus::Running,
+            queue_depth: 0,
+            latest_final_text: None,
+            last_error: None,
+            mirror_url: None,
+            current_tool: Some("bash".into()),
+            current_tool_input: Some("./gradlew assembleDebug".into()),
+            seconds_since_last_activity: Some(360),
+            turn_elapsed_seconds: Some(400),
+        };
+        let payload = snapshot_json(&snapshot);
+        assert_eq!(payload["current_tool"], "bash");
+        assert_eq!(payload["current_tool_input"], "./gradlew assembleDebug");
+        assert!(
+            unmanaged_thread_json("unowned")
+                .get("current_tool_input")
+                .is_none()
+        );
+    }
 
     #[test]
     fn definitions_cover_all_six_controls() {

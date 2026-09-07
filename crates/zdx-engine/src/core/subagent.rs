@@ -480,47 +480,23 @@ async fn read_stdout_events<R: AsyncRead + Unpin>(
 /// Tool names are matched lowercase (the engine normalizes them). Reads only
 /// the needed field so large `write`/`edit` inputs are not cloned wholesale.
 fn extract_key_arg(tool_name: &str, input: &Value) -> Option<String> {
-    match tool_name {
-        "bash" => input
-            .get("command")
-            .and_then(Value::as_str)
-            .map(truncate_command),
-        "read" | "edit" | "write" => input
-            .get("file_path")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        "glob" | "grep" => input
-            .get("pattern")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        "fetch_webpage" => input.get("url").and_then(Value::as_str).map(str::to_string),
-        "web_search" => input
-            .get("search_queries")
-            .and_then(Value::as_array)
-            .and_then(|queries| queries.first())
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        "invoke_subagent" => Some(
-            input
-                .get("subagent")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or("task")
-                .to_string(),
-        ),
-        _ => None,
-    }
+    let raw = zdx_types::tool_command_text(tool_name, input);
+    let preview = tool_input_preview(&raw);
+    (!preview.is_empty()).then_some(preview)
 }
 
-fn truncate_command(command: &str) -> String {
-    const MAX_CHARS: usize = 60;
-    let trimmed = command.trim();
-    if trimmed.chars().count() <= MAX_CHARS {
-        return trimmed.to_string();
+pub(super) fn tool_input_preview(input: &str) -> String {
+    const MAX_CHARS: usize = 200;
+    let mut chars = input
+        .split_whitespace()
+        .enumerate()
+        .flat_map(|(i, word)| (i > 0).then_some(' ').into_iter().chain(word.chars()));
+    let mut preview: String = chars.by_ref().take(MAX_CHARS).collect();
+    if chars.next().is_some() {
+        preview.pop();
+        preview.push('…');
     }
-    let head: String = trimmed.chars().take(MAX_CHARS).collect();
-    format!("{head}…")
+    preview
 }
 
 fn build_exec_args(
@@ -963,6 +939,10 @@ mod tests {
             Some("Cargo.toml")
         );
         assert_eq!(
+            extract_key_arg("read", &json!({ "path": "Cargo.toml" })).as_deref(),
+            Some("Cargo.toml")
+        );
+        assert_eq!(
             extract_key_arg("write", &json!({ "file_path": "src/lib.rs" })).as_deref(),
             Some("src/lib.rs")
         );
@@ -975,6 +955,10 @@ mod tests {
             Some("TODO")
         );
         assert_eq!(
+            extract_key_arg("grep", &json!({ "pattern": "TODO", "path": "src" })).as_deref(),
+            Some("TODO src")
+        );
+        assert_eq!(
             extract_key_arg("fetch_webpage", &json!({ "url": "https://example.com" })).as_deref(),
             Some("https://example.com")
         );
@@ -984,30 +968,45 @@ mod tests {
                 &json!({ "search_queries": ["rust async", "tokio"] })
             )
             .as_deref(),
-            Some("rust async")
+            Some("rust async tokio")
         );
         assert_eq!(
-            extract_key_arg("invoke_subagent", &json!({ "subagent": "explorer" })).as_deref(),
-            Some("explorer")
+            extract_key_arg(
+                "invoke_subagent",
+                &json!({ "subagent": "explorer", "prompt": "inspect the build" })
+            )
+            .as_deref(),
+            Some("inspect the build")
         );
-        // invoke_subagent with no explicit subagent falls back to the default alias.
         assert_eq!(
             extract_key_arg("invoke_subagent", &json!({ "prompt": "go" })).as_deref(),
-            Some("task")
+            Some("go")
         );
         // Unknown tools have no key arg.
         assert_eq!(extract_key_arg("todo_write", &json!({ "todos": [] })), None);
     }
 
     #[test]
-    fn truncate_command_caps_long_input() {
+    fn tool_input_preview_is_bounded_and_single_line() {
         let short = "cargo build";
-        assert_eq!(truncate_command(short), short);
+        assert_eq!(tool_input_preview(short), short);
+        assert_eq!(
+            tool_input_preview(" \t./gradlew\n  assembleDebug  "),
+            "./gradlew assembleDebug"
+        );
 
-        let long = "a".repeat(200);
-        let truncated = truncate_command(&long);
+        let long = "é".repeat(10000);
+        let truncated = tool_input_preview(&long);
         assert!(truncated.ends_with('…'));
-        assert_eq!(truncated.chars().count(), 61); // 60 chars + ellipsis
+        assert_eq!(truncated.chars().count(), 200);
+        assert_eq!(tool_input_preview(&truncated), truncated);
+        for (name, input) in [
+            ("bash", serde_json::json!({ "command": long })),
+            ("invoke_subagent", serde_json::json!({ "prompt": long })),
+            ("grep", serde_json::json!({ "pattern": long })),
+        ] {
+            assert_eq!(extract_key_arg(name, &input).unwrap().chars().count(), 200);
+        }
     }
 
     fn make_sink() -> (SubagentStreamSink, crate::core::agent::AgentEventRx) {
@@ -1065,6 +1064,10 @@ mod tests {
             if let AgentEvent::ToolOutputDelta { id, chunk } = event.as_ref() {
                 assert_eq!(id, "parent-tool");
                 let value: Value = serde_json::from_str(chunk).unwrap();
+                assert_eq!(value["id"], "tu1");
+                if value["t"] == "input" {
+                    assert_eq!(value["arg"], "Cargo.toml");
+                }
                 kinds.push(value["t"].as_str().unwrap().to_string());
             }
         }

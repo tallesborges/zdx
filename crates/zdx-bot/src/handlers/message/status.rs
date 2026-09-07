@@ -574,6 +574,7 @@ mod tests {
             last_error: None,
             mirror_url: None,
             current_tool: None,
+            current_tool_input: None,
             seconds_since_last_activity: None,
             turn_elapsed_seconds: None,
         };

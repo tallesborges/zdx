@@ -1,11 +1,11 @@
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use super::event::{ThreadEvent, normalize_title};
+use super::event::{ThreadEvent, Usage, normalize_title};
 use super::format::display_title_or_short_id;
 use crate::config::paths::threads_dir;
 
@@ -1022,6 +1022,69 @@ pub fn list_all_threads() -> Result<Vec<ThreadSummary>> {
 pub fn load_thread_events(id: &str) -> Result<Vec<ThreadEvent>> {
     let thread = Thread::with_id(id.to_string())?;
     thread.read_events()
+}
+
+#[derive(Debug)]
+pub(crate) struct LatestContextUsage {
+    pub input_tokens: u64,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub recorded_at: String,
+}
+
+/// Reads the newest input-bearing usage from at most the final 256 KiB.
+pub(crate) fn read_latest_context_usage(id: &str) -> Result<Option<LatestContextUsage>> {
+    const TAIL_BYTES: u64 = 256 * 1024;
+
+    let path = threads_dir().join(format!("{id}.jsonl"));
+    let mut file = match fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("Failed to open thread usage tail"),
+    };
+    let len = file
+        .metadata()
+        .context("Failed to stat thread usage tail")?
+        .len();
+    let offset = len.saturating_sub(TAIL_BYTES);
+    file.seek(SeekFrom::Start(offset))
+        .context("Failed to seek thread usage tail")?;
+    let mut tail = Vec::new();
+    file.take(len - offset)
+        .read_to_end(&mut tail)
+        .context("Failed to read thread usage tail")?;
+
+    let mut lines = tail.split(|byte| *byte == b'\n');
+    if offset > 0 {
+        lines.next();
+    }
+    // Only newline-terminated records are complete, including during concurrent appends.
+    lines.next_back();
+    for line in lines.rev() {
+        let Ok(ThreadEvent::Usage {
+            input_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
+            model,
+            provider,
+            ts,
+            ..
+        }) = serde_json::from_slice::<ThreadEvent>(line)
+        else {
+            continue;
+        };
+        let input_tokens =
+            Usage::new(input_tokens, 0, cache_read_tokens, cache_write_tokens).context_input();
+        if input_tokens > 0 {
+            return Ok(Some(LatestContextUsage {
+                input_tokens,
+                model,
+                provider,
+                recorded_at: ts,
+            }));
+        }
+    }
+    Ok(None)
 }
 
 /// Extracts the root path from thread events (if present).

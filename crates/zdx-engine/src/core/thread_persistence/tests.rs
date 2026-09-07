@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -1000,6 +1001,176 @@ fn test_extract_usage_from_events() {
     let (cumulative, latest) = extract_usage_from_thread_events(&events);
     assert_eq!(cumulative, Usage::new(250, 125, 500, 55));
     assert_eq!(latest, Usage::new(150, 75, 300, 30));
+}
+
+#[test]
+fn latest_context_usage_selects_one_request_and_its_attribution() {
+    let _temp = setup_temp_zdx_home();
+    let mut thread = Thread::with_id(unique_thread_id("latest-context")).unwrap();
+    for (usage, model, provider, ts) in [
+        (Usage::new(90_000, 400, 20_000, 10), "old", "a", "older"),
+        (Usage::new(100, 900, 20, 10), "new", "b", "newer"),
+        (Usage::new(0, 999, 40, 5), "cached", "c", "cache-only"),
+    ] {
+        let mut event = ThreadEvent::usage(
+            usage,
+            Some(model.to_string()),
+            Some(provider.to_string()),
+            None,
+            None,
+        );
+        if let ThreadEvent::Usage {
+            ts: recorded_at, ..
+        } = &mut event
+        {
+            *recorded_at = ts.to_string();
+        }
+        thread.append(&event).unwrap();
+        let latest = read_latest_context_usage(&thread.id).unwrap().unwrap();
+        assert_eq!(latest.input_tokens, usage.context_input());
+        assert_eq!(latest.model.as_deref(), Some(model));
+        assert_eq!(latest.provider.as_deref(), Some(provider));
+        assert_eq!(latest.recorded_at, ts);
+    }
+    for output in [500, 800] {
+        thread
+            .append(&ThreadEvent::usage(
+                Usage::new(0, output, 0, 0),
+                Some("later-model".to_string()),
+                Some("later-provider".to_string()),
+                None,
+                None,
+            ))
+            .unwrap();
+    }
+    let latest = read_latest_context_usage(&thread.id).unwrap().unwrap();
+    assert_eq!(latest.input_tokens, 45);
+    assert_eq!(latest.model.as_deref(), Some("cached"));
+    assert_eq!(latest.provider.as_deref(), Some("c"));
+    assert_eq!(latest.recorded_at, "cache-only");
+}
+
+#[test]
+fn latest_context_usage_preserves_unknown_attribution() {
+    let _temp = setup_temp_zdx_home();
+    let mut thread = Thread::with_id(unique_thread_id("unknown-context-model")).unwrap();
+    thread
+        .append(&ThreadEvent::usage(
+            Usage::new(0, 50, 0, 80),
+            None,
+            None,
+            None,
+            None,
+        ))
+        .unwrap();
+    thread
+        .set_model_override(Some("unrelated-model".to_string()))
+        .unwrap();
+    let latest = read_latest_context_usage(&thread.id).unwrap().unwrap();
+    assert_eq!(latest.input_tokens, 80);
+    assert!(latest.model.is_none());
+    assert!(latest.provider.is_none());
+}
+
+#[test]
+fn latest_context_usage_missing_input_is_none() {
+    let _temp = setup_temp_zdx_home();
+    let mut thread = Thread::with_id(unique_thread_id("missing-context")).unwrap();
+    assert!(read_latest_context_usage(&thread.id).unwrap().is_none());
+    fs::write(thread.path(), "").unwrap();
+    assert!(read_latest_context_usage(&thread.id).unwrap().is_none());
+    thread.append(&ThreadEvent::user_message("hello")).unwrap();
+    assert!(read_latest_context_usage(&thread.id).unwrap().is_none());
+    for usage in [Usage::default(), Usage::new(0, 1000, 0, 0)] {
+        thread
+            .append(&ThreadEvent::usage(usage, None, None, None, None))
+            .unwrap();
+        assert!(read_latest_context_usage(&thread.id).unwrap().is_none());
+    }
+}
+
+#[test]
+fn latest_context_usage_ignores_partial_final_record() {
+    let _temp = setup_temp_zdx_home();
+    let mut thread = Thread::with_id(unique_thread_id("partial-context")).unwrap();
+    thread
+        .append(&ThreadEvent::usage(
+            Usage::new(20, 0, 30, 4),
+            None,
+            None,
+            None,
+            None,
+        ))
+        .unwrap();
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(thread.path())
+        .unwrap();
+    file.write_all(b"{\"type\":\"usage\",\"input_tokens\":9999")
+        .unwrap();
+    assert_eq!(
+        read_latest_context_usage(&thread.id)
+            .unwrap()
+            .unwrap()
+            .input_tokens,
+        54
+    );
+}
+
+#[test]
+fn latest_context_usage_skips_bounded_prefix_and_large_tool_output() {
+    let _temp = setup_temp_zdx_home();
+    let mut thread = Thread::with_id(unique_thread_id("bounded-context")).unwrap();
+    thread
+        .append(&ThreadEvent::usage(
+            Usage::new(100, 0, 0, 0),
+            None,
+            None,
+            None,
+            None,
+        ))
+        .unwrap();
+    thread
+        .append(&ThreadEvent::tool_result(
+            "huge-tool",
+            json!({"stdout": "x".repeat(256 * 1024)}),
+            true,
+        ))
+        .unwrap();
+    assert!(read_latest_context_usage(&thread.id).unwrap().is_none());
+    thread
+        .append(&ThreadEvent::usage(
+            Usage::new(12, 0, 0, 0),
+            None,
+            None,
+            None,
+            None,
+        ))
+        .unwrap();
+    assert_eq!(
+        read_latest_context_usage(&thread.id)
+            .unwrap()
+            .unwrap()
+            .input_tokens,
+        12
+    );
+}
+
+#[test]
+fn latest_context_usage_reads_sparse_large_file_tail() {
+    let _temp = setup_temp_zdx_home();
+    let thread = Thread::with_id(unique_thread_id("sparse-context")).unwrap();
+    let mut file = fs::File::create(thread.path()).unwrap();
+    file.seek(SeekFrom::Start(8 * 1024 * 1024 * 1024)).unwrap();
+    let event = ThreadEvent::usage(Usage::new(17, 999, 23, 5), None, None, None, None);
+    writeln!(file, "\n{}", serde_json::to_string(&event).unwrap()).unwrap();
+    assert_eq!(
+        read_latest_context_usage(&thread.id)
+            .unwrap()
+            .unwrap()
+            .input_tokens,
+        45
+    );
 }
 
 #[test]
