@@ -746,19 +746,13 @@ fn commit_model_picker(app: &mut MonitorApp) {
     let level = picker.selected_thinking();
 
     let (result, shown) = match picker.kind {
-        // Main model: separate `model` + `thinking_level` fields.
-        ModelFieldKind::Chat if field == "model" => (
-            config::Config::save_model_field("model", &model)
-                .and_then(|()| config::Config::save_thinking_level(level)),
-            zdx_engine::models::format_model_thinking(&model, level),
-        ),
         // Favorite preset: update the entry at `favorites.<i>` or append via
         // `favorites.add`; thinking is stored on the favorite itself.
         ModelFieldKind::Chat if field.starts_with("favorites.") => (
             save_favorite(&field, &model, level),
             zdx_engine::models::format_model_thinking(&model, level),
         ),
-        // Subagent override: `[subagents.overrides.<name>]` model + thinking.
+        // Subagent override: thinking carried inline in the saved model.
         ModelFieldKind::Chat if field.starts_with("subagents.") => {
             let name = field.strip_prefix("subagents.").unwrap_or_default();
             (
@@ -766,7 +760,7 @@ fn commit_model_picker(app: &mut MonitorApp) {
                 zdx_engine::models::format_model_thinking(&model, level),
             )
         }
-        // Role chat models: thinking carried inline as `model@thinking`.
+        // Main and role chat models: thinking carried inline as `model@thinking`.
         ModelFieldKind::Chat => {
             let combined = zdx_engine::models::format_model_thinking(&model, level);
             (
