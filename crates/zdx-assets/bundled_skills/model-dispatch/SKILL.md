@@ -69,6 +69,6 @@ For a single run, return the answer and identify the model and thinking level. F
 Every result is resumable. Continue it with the same thread ID, model, thinking level, and subagent:
 
 ```text
-zdx --thread <id> exec -m <model> -t <level> [--subagent <name>] \
+zdx --thread <id> exec -m <model>@<level> [--subagent <name>] \
   --filter assistant_completed -p "<follow-up question>"
 ```

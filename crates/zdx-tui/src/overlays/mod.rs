@@ -78,7 +78,10 @@ pub enum OverlayRequest {
     CommandPalette,
     ModelPicker,
     SkillPicker,
-    ThinkingPicker,
+    ThinkingPicker {
+        model: String,
+        display_name: String,
+    },
     NewTab,
     Btw,
     Login,
@@ -283,7 +286,11 @@ mod tests {
         let overlay: Option<Overlay> = Some(Overlay::SkillPicker(skill_picker));
         assert!(overlay.is_some());
 
-        let (thinking, _) = ThinkingPickerState::open(ThinkingLevel::Off);
+        let (thinking, _) = ThinkingPickerState::open(
+            "openai:gpt-5".to_string(),
+            "GPT-5".to_string(),
+            ThinkingLevel::Off,
+        );
         let overlay: Option<Overlay> = Some(Overlay::ThinkingPicker(thinking));
         assert!(overlay.is_some());
 

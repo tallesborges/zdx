@@ -441,7 +441,9 @@ fn rewrite_meta_with_root(path: &PathBuf, root_path: Option<String>) -> Result<(
     Ok(())
 }
 
-/// Rewrites the meta event with an updated model override, preserving the rest of the file.
+/// Rewrites the meta event with an updated model override, preserving the rest
+/// of the file. A new unified model spec supersedes and clears the legacy
+/// standalone thinking override atomically.
 fn rewrite_meta_with_model_override(path: &PathBuf, model_override: Option<String>) -> Result<()> {
     let file = fs::File::open(path).context("Failed to open thread file")?;
     let reader = BufReader::new(file);
@@ -461,9 +463,11 @@ fn rewrite_meta_with_model_override(path: &PathBuf, model_override: Option<Strin
     match meta_event {
         ThreadEvent::Meta {
             model_override: ref mut meta_model,
+            thinking_override: ref mut meta_thinking,
             ..
         } => {
             *meta_model = model_override;
+            *meta_thinking = None;
         }
         _ => bail!("First thread event is not a meta event"),
     }

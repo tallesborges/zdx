@@ -12,6 +12,26 @@ use crate::core::events::{AgentEvent, TurnStatus};
 use crate::providers::ReplayToken;
 
 #[test]
+fn model_override_write_clears_legacy_thinking_override() {
+    let _home = crate::test_support::temp_zdx_home();
+    let id = format!("test-model-spec-{}", uuid::Uuid::new_v4());
+    let mut thread = Thread::with_id(id.clone()).unwrap();
+
+    thread
+        .set_thinking_override(Some(crate::config::ThinkingLevel::Low))
+        .unwrap();
+    thread
+        .set_model_override(Some("openai:gpt-5@high".to_string()))
+        .unwrap();
+
+    assert_eq!(
+        read_thread_model_override(&id).unwrap().as_deref(),
+        Some("openai:gpt-5@high")
+    );
+    assert_eq!(read_thread_thinking_override(&id).unwrap(), None);
+}
+
+#[test]
 fn extract_handoff_from_reads_meta_parent() {
     let with_parent = vec![ThreadEvent::meta_with_root_and_source(
         None,

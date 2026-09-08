@@ -21,7 +21,6 @@
 use std::path::PathBuf;
 
 use tokio_util::sync::CancellationToken;
-use zdx_engine::config::ThinkingLevel;
 use zdx_engine::core::thread_persistence::ThreadEvent;
 use zdx_engine::providers::ProviderKind;
 
@@ -129,12 +128,6 @@ pub enum UiEffect {
 
     /// Persist the active thread's model override.
     PersistThreadModelOverride { model: String },
-
-    /// Persist the thinking level preference to config.
-    PersistThinking { level: ThinkingLevel },
-
-    /// Persist the active thread's thinking override.
-    PersistThreadThinkingOverride { level: ThinkingLevel },
 
     /// Create a new thread (for /new command).
     CreateNewThread,

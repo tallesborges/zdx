@@ -981,8 +981,10 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
                 model_override,
                 thinking_override,
             } => {
-                tui.config.model = model_override.unwrap_or_else(|| tui.base_model.clone());
-                tui.config.thinking_level = thinking_override.unwrap_or(tui.base_thinking_level);
+                tui.config.model.clone_from(&tui.base_model);
+                tui.config.thinking_level = tui.base_thinking_level;
+                tui.config
+                    .apply_thread_model_override(model_override.as_deref(), thinking_override);
             }
             StateMutation::SetSystemPrompt(system_prompt) => {
                 tui.system_prompt = system_prompt;
@@ -1006,12 +1008,9 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
 fn apply_config_mutation(tui: &mut TuiState, mutation: ConfigMutation) {
     match mutation {
         ConfigMutation::SetModel(model) => {
-            tui.base_model.clone_from(&model);
-            tui.config.model = model;
-        }
-        ConfigMutation::SetThinkingLevel(level) => {
-            tui.base_thinking_level = level;
-            tui.config.thinking_level = level;
+            tui.config.apply_model_spec(&model);
+            tui.base_model.clone_from(&tui.config.model);
+            tui.base_thinking_level = tui.config.thinking_level;
         }
     }
 }
@@ -1110,12 +1109,15 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
             app.overlay = Some(overlays::Overlay::SkillPicker(state));
             effects
         }
-        overlays::OverlayRequest::ThinkingPicker => {
-            if !zdx_engine::models::model_supports_reasoning(&app.tui.config.model) {
-                return vec![];
-            }
-            let (state, effects) =
-                overlays::ThinkingPickerState::open(app.tui.config.thinking_level);
+        overlays::OverlayRequest::ThinkingPicker {
+            model,
+            display_name,
+        } => {
+            let (state, effects) = overlays::ThinkingPickerState::open(
+                model.clone(),
+                display_name.clone(),
+                app.tui.config.thinking_level,
+            );
             app.overlay = Some(overlays::Overlay::ThinkingPicker(state));
             effects
         }
@@ -1378,12 +1380,7 @@ fn create_thread_tab(
     thread.usage.restore(usage.0, usage.1);
 
     let mut config = parent.config.clone();
-    if let Some(model) = model_override {
-        config.model.clone_from(model);
-    }
-    if let Some(thinking) = thinking_override {
-        config.thinking_level = thinking;
-    }
+    config.apply_thread_model_override(model_override.map(String::as_str), thinking_override);
 
     let mut input = InputState::new();
     input.history = history;

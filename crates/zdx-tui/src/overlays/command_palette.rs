@@ -233,8 +233,7 @@ impl CommandPaletteState {
     }
 
     /// Returns the merged, filtered list of palette entries (built-ins first,
-    /// then custom commands). Built-in availability is gated on the active
-    /// model (e.g. `thinking` only for reasoning models).
+    /// then custom commands).
     ///
     /// When `filter` is non-empty, entries are ranked by descending nucleo
     /// fuzzy-match score across name and category. The sort is stable, so
@@ -394,7 +393,6 @@ fn execute_command(
             let (effects, mutations) = execute_root_new(tui);
             (None, effects, mutations)
         }
-        "thinking" => (Some(OverlayRequest::ThinkingPicker), vec![], vec![]),
         "timeline" => (Some(OverlayRequest::Timeline), vec![], vec![]),
         "background" => (Some(OverlayRequest::Background), vec![], vec![]),
         "tldr" => (Some(OverlayRequest::Tldr), vec![], vec![]),
@@ -836,7 +834,7 @@ mod tests {
         let state = CommandPaletteState::open("claude-haiku-4-5".to_string(), Vec::new());
         let filtered = state.filtered_entries();
         let names: Vec<&str> = filtered.iter().map(PaletteEntry::name).collect();
-        assert!(names.contains(&"thinking"));
+        assert!(!names.contains(&"thinking"));
     }
 
     #[test]
@@ -855,13 +853,12 @@ mod tests {
     }
 
     #[test]
-    fn test_palette_state_filtered_commands_respects_reasoning_support() {
+    fn test_palette_has_no_standalone_thinking_command() {
         let model_id = "openai:gpt-4.1";
-        let supports_reasoning = zdx_engine::models::model_supports_reasoning(model_id);
         let state = CommandPaletteState::open(model_id.to_string(), Vec::new());
         let filtered = state.filtered_entries();
         let names: Vec<&str> = filtered.iter().map(PaletteEntry::name).collect();
-        assert_eq!(names.contains(&"thinking"), supports_reasoning);
+        assert!(!names.contains(&"thinking"));
     }
 
     #[test]

@@ -935,6 +935,32 @@ pub struct Config {
 }
 
 impl Config {
+    /// Applies a runtime model override while keeping the model string and its
+    /// parsed thinking projection in sync. A suffixless override inherits the
+    /// currently effective thinking level.
+    pub fn apply_model_spec(&mut self, model: &str) {
+        let (model, thinking_level) = crate::models::resolve_model_spec(model, self.thinking_level);
+        self.model = model;
+        self.thinking_level = thinking_level;
+    }
+
+    /// Applies persisted thread selection fields. `thinking_override` is a
+    /// legacy transcript field and remains authoritative when present so old
+    /// threads resume with their historical behavior.
+    pub fn apply_thread_model_override(
+        &mut self,
+        model_override: Option<&str>,
+        thinking_override: Option<ThinkingLevel>,
+    ) {
+        if let Some(model) = model_override {
+            self.apply_model_spec(model);
+        }
+        if let Some(level) = thinking_override {
+            self.model = crate::models::format_model_thinking(&self.model, level);
+            self.thinking_level = level;
+        }
+    }
+
     const DEFAULT_MODEL: &str = "claude-haiku-4-5";
     const DEFAULT_MAX_TOKENS: u32 = 12288;
     /// Default is disabled
@@ -1544,20 +1570,6 @@ impl Config {
             overrides.remove(name);
         }
         Self::write_config(path, &doc.to_string())
-    }
-
-    /// Persists `level` for `cwd` by folding it into `model`'s `@<level>`
-    /// suffix, workspace-scoped when `cwd` is inside a project.
-    /// See [`Config::save_model_for_cwd`].
-    ///
-    /// # Errors
-    /// Returns an error if the write fails.
-    pub fn save_thinking_level_for_cwd(
-        cwd: &Path,
-        model: &str,
-        level: ThinkingLevel,
-    ) -> Result<()> {
-        Self::save_model_for_cwd(cwd, &crate::models::format_model_thinking(model, level))
     }
 
     /// Returns the effective system prompt, preferring the file if both are set.
@@ -3698,9 +3710,8 @@ text_verbosity = "low"
         );
     }
 
-    /// `save_thinking_level_for_cwd`: folds the level into the model spec.
     #[test]
-    fn save_thinking_level_for_cwd_folds_level_into_model() {
+    fn save_model_field_keeps_thinking_in_the_model_spec() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
 

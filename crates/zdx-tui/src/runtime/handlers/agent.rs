@@ -154,13 +154,12 @@ fn prepare_btw_tab_thread(
         let mut thread_handle = thread_persistence::Thread::new_with_root(&tui.agent_opts.root)
             .context("Failed to create btw thread")?;
 
-        // Persist model/thinking overrides
+        // Persist the effective selection as one model spec.
+        let model =
+            zdx_engine::models::format_model_thinking(&tui.config.model, tui.config.thinking_level);
         thread_handle
-            .set_model_override(Some(tui.config.model.clone()))
+            .set_model_override(Some(model))
             .context("Failed to persist btw thread model override")?;
-        thread_handle
-            .set_thinking_override(Some(tui.config.thinking_level))
-            .context("Failed to persist btw thread thinking override")?;
 
         // Find the last user message (the one the user just typed) from thread.messages
         // It was added by the input handler before StartAgentTurn was emitted.

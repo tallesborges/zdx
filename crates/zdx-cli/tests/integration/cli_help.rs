@@ -22,7 +22,17 @@ fn test_help_shows_all_commands() {
         .stdout(predicate::str::contains("automations"))
         .stdout(predicate::str::contains("threads"))
         .stdout(predicate::str::contains("--model"))
-        .stdout(predicate::str::contains("--thinking"));
+        .stdout(predicate::str::contains("--thinking").not());
+}
+
+#[test]
+fn test_exec_uses_model_spec_without_standalone_thinking_flag() {
+    crate::fixtures::zdx_cmd()
+        .args(["exec", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("provider:model[@thinking][@fast]"))
+        .stdout(predicate::str::contains("--thinking").not());
 }
 
 #[test]

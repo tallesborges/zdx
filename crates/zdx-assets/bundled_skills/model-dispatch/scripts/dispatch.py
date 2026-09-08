@@ -5,7 +5,7 @@ Each run gets a resumable thread (`<prefix>-<ts>-<model>-<thinking>[-<subagent>]
 Output is index-first: a header mapping each run to its thread id, then every
 answer inline. Continue any run with:
 
-    zdx --thread <id> exec -m <model> -t <thinking> [--subagent <name>] -p "<follow-up>"
+    zdx --thread <id> exec -m <model>@<thinking> [--subagent <name>] -p "<follow-up>"
 
 Usage:
     dispatch.py -p "PROMPT" --run claude-cli:claude-opus-4-8
@@ -44,8 +44,8 @@ def run_model(model: str, thread_id: str, prompt: str, thinking: str,
               no_tools: bool, no_system_prompt: bool,
               subagent: str | None) -> tuple[str, str, str | None, str, bool, str]:
     """Return (model, thinking, subagent, thread_id, ok, text_or_error)."""
-    cmd = ["zdx", "--thread", thread_id, "exec", "-m", model,
-           "-t", thinking, "--filter", "assistant_completed", "-p", prompt]
+    cmd = ["zdx", "--thread", thread_id, "exec", "-m", f"{model}@{thinking}",
+           "--filter", "assistant_completed", "-p", prompt]
     if subagent:
         cmd += ["--subagent", subagent]
     if no_tools:
@@ -170,7 +170,7 @@ def main() -> int:
     any_role = any(subagent for _, _, subagent, _ in jobs)
     resume_role = " [--subagent <name>]" if any_role else ""
     print(f"Runs: {len(ordered)} · continue any with: "
-          f'zdx --thread <id> exec -m <model> -t <level>{resume_role} -p "..."\n')
+          f'zdx --thread <id> exec -m <model>@<level>{resume_role} -p "..."\n')
     for model, thinking, subagent, tid, ok, _ in ordered:
         flag = "" if ok else "  (ERROR)"
         print(f"- {describe(model, thinking, subagent)} -> {tid}{flag}")

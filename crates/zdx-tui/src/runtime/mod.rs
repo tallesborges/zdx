@@ -844,24 +844,6 @@ impl TuiRuntime {
                     let _ = thread.set_model_override(Some(model));
                 }
             }
-            UiEffect::PersistThinking { level } => {
-                let _ = zdx_engine::config::Config::save_thinking_level_for_cwd(
-                    &self.state.tui.agent_opts.root,
-                    &self.state.tui.config.model,
-                    level,
-                );
-                // Errors are silently ignored - level is already set in state
-            }
-            UiEffect::PersistThreadThinkingOverride { level } => {
-                if let Some(thread_handle) = self.state.tui.thread.thread_handle.as_ref()
-                    && let Ok(mut thread) = zdx_engine::core::thread_persistence::Thread::with_id(
-                        thread_handle.id.clone(),
-                    )
-                {
-                    let _ = thread.set_thinking_override(Some(level));
-                }
-            }
-
             // Thread effects (pure async handlers)
             UiEffect::SaveThread { event } => {
                 if let Some(ref mut s) = self.state.tui.thread.thread_handle {

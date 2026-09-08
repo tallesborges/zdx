@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use anyhow::Result;
 use commands::{
     handle_general_forum_commands, handle_restart_command, handle_thread_setup_commands,
@@ -7,7 +5,6 @@ use commands::{
 use status::{discard_turn_status, finalize_preprocessing_cancelled, setup_preprocessing_status};
 use tokio_util::sync::CancellationToken;
 use turn::run_agent_turn;
-use zdx_engine::config::ThinkingLevel;
 use zdx_engine::core::thread_persistence;
 
 use crate::bot::context::BotContext;
@@ -23,7 +20,8 @@ mod thread_header;
 mod turn;
 
 pub(crate) use commands::{
-    ModelPickerScope, build_models_keyboard, build_provider_keyboard, models_for_provider,
+    ModelPickerScope, build_model_thinking_keyboard, build_models_keyboard,
+    build_provider_keyboard, models_for_provider,
 };
 pub(crate) use launcher::{
     LauncherMap, create_topic_with_model, handle_callback as handle_launcher_callback,
@@ -396,19 +394,6 @@ struct SpawnRequest<'a> {
     config: &'a zdx_engine::config::Config,
     /// Persistent top-level profile (e.g. `orchestrator`) for this thread.
     persistent_profile: Option<&'a str>,
-}
-
-struct StatusSnapshot<'a> {
-    model_id: &'a str,
-    model_override: Option<&'a str>,
-    thinking: ThinkingLevel,
-    thinking_override: Option<ThinkingLevel>,
-    profile_name: Option<&'a str>,
-    thread_id: &'a str,
-    root_path: &'a Path,
-    branch: Option<&'a str>,
-    cumulative_usage: thread_persistence::Usage,
-    latest_usage: thread_persistence::Usage,
 }
 
 pub(crate) fn escape_html(text: &str) -> String {

@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
-use zdx_engine::config::{Config, TelegramProfileConfig, ThinkingLevel};
+use zdx_engine::config::{Config, TelegramProfileConfig};
 use zdx_engine::core::agent::ToolConfig;
 use zdx_engine::core::workers::WorkerManager;
 
@@ -199,9 +199,9 @@ impl BotContext {
     /// made outside this process (monitor Config tab, an editor) apply to the
     /// next turn instead of waiting for a restart.
     ///
-    /// Runtime `/model` and `/thinking` changes survive this: both persist to
-    /// the config layer for the chat's root before mutating the in-memory
-    /// config, so the reload reads the same value back.
+    /// Runtime `/model` changes survive this: they persist to the config layer
+    /// for the chat's root before mutating the in-memory config, so the reload
+    /// reads the same value back.
     ///
     /// Startup-derived state (allowlists, Telegram settings, tool registry) is
     /// not affected by a reload and still needs a restart.
@@ -245,24 +245,10 @@ impl BotContext {
     /// profile cwd, else the bot's own cwd) and applied to that chat's config
     /// only, so bound projects keep independent defaults.
     pub(crate) fn set_chat_model(&self, chat_id: i64, model_id: &str) -> anyhow::Result<()> {
-        Config::save_model_for_cwd(&self.root_for_chat(chat_id).root, model_id)?;
-        self.update_config_for_chat(chat_id, |cfg| cfg.model = model_id.to_string());
-        Ok(())
-    }
-
-    /// Persists a runtime thinking-level change for `chat_id`.
-    /// See [`BotContext::set_chat_model`].
-    pub(crate) fn set_chat_thinking_level(
-        &self,
-        chat_id: i64,
-        level: ThinkingLevel,
-    ) -> anyhow::Result<()> {
-        Config::save_thinking_level_for_cwd(
-            &self.root_for_chat(chat_id).root,
-            &self.config_for_chat(chat_id).model,
-            level,
-        )?;
-        self.update_config_for_chat(chat_id, |cfg| cfg.thinking_level = level);
+        let mut resolved = self.config_for_chat(chat_id);
+        resolved.apply_model_spec(model_id);
+        Config::save_model_for_cwd(&self.root_for_chat(chat_id).root, &resolved.model)?;
+        self.update_config_for_chat(chat_id, |cfg| cfg.apply_model_spec(model_id));
         Ok(())
     }
 
@@ -498,7 +484,7 @@ mod tests {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use zdx_engine::config::TelegramConfig;
+    use zdx_engine::config::{TelegramConfig, ThinkingLevel};
 
     use super::*;
 
@@ -701,7 +687,10 @@ mod tests {
 
         context.set_chat_model(-100_123, "sentinel:picked").unwrap();
 
-        assert_eq!(context.config_for_chat(-100_123).model, "sentinel:picked");
+        assert_eq!(
+            context.config_for_chat(-100_123).model,
+            "sentinel:picked@off"
+        );
         assert_eq!(
             context.config_for_chat(-100_999).model,
             "sentinel:global-model"
@@ -709,7 +698,7 @@ mod tests {
         assert_eq!(context.config().model, "sentinel:global-model");
 
         let overlay = fs::read_to_string(profile_root.join(".zdx").join("config.toml")).unwrap();
-        assert_eq!(overlay.trim(), "model = \"sentinel:picked\"");
+        assert_eq!(overlay.trim(), "model = \"sentinel:picked@off\"");
     }
 
     /// A config edit landing on disk after startup (monitor Config tab, an
@@ -763,7 +752,7 @@ mod tests {
     /// in-memory config, so a later reload must read the same value back
     /// instead of reverting the runtime choice.
     #[test]
-    fn test_runtime_model_and_thinking_changes_survive_reload() {
+    fn test_runtime_model_spec_change_survives_reload() {
         let home = zdx_engine::test_support::temp_zdx_home();
         let fallback_root = unique_temp_dir("reload-set-fallback");
         let profile_root = unique_temp_dir("reload-set-profile");
@@ -784,9 +773,8 @@ mod tests {
             Config::load_layered(std::slice::from_ref(&global)).unwrap(),
             fallback_root,
         );
-        context.set_chat_model(-100_123, "sentinel:picked").unwrap();
         context
-            .set_chat_thinking_level(-100_123, ThinkingLevel::High)
+            .set_chat_model(-100_123, "sentinel:picked@high")
             .unwrap();
 
         context.reload_config_if_changed();

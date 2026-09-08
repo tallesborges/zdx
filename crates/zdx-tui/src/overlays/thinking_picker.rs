@@ -14,15 +14,28 @@ use crate::state::TuiState;
 #[derive(Debug, Clone)]
 pub struct ThinkingPickerState {
     pub selected: usize,
+    model: String,
+    display_name: String,
 }
 
 impl ThinkingPickerState {
-    pub fn open(current: ThinkingLevel) -> (Self, Vec<UiEffect>) {
+    pub fn open(
+        model: String,
+        display_name: String,
+        current: ThinkingLevel,
+    ) -> (Self, Vec<UiEffect>) {
         let selected = ThinkingLevel::all()
             .iter()
             .position(|l| *l == current)
             .unwrap_or(0);
-        (Self { selected }, vec![])
+        (
+            Self {
+                selected,
+                model,
+                display_name,
+            },
+            vec![],
+        )
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
@@ -54,46 +67,54 @@ impl ThinkingPickerState {
                     return OverlayUpdate::close();
                 };
 
-                let message = if level == ThinkingLevel::Off {
-                    "Thinking disabled".to_string()
-                } else {
-                    format!("Thinking level set to {}", level.display_name())
-                };
+                let model = zdx_engine::models::format_model_thinking(&self.model, level);
+                let message = format!("Switched to {}", self.display_name);
                 let use_thread_override = tui.thread.thread_handle.is_some()
                     && (tui.thread.model_override.is_some()
                         || tui.thread.thinking_override.is_some());
                 if use_thread_override && tui.agent_state.is_running() {
                     return OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
                         TranscriptMutation::AppendSystemMessage(
-                            "Stop the current task first before changing this thread's thinking override."
+                            "Stop the current task first before changing this thread's model override."
                                 .to_string(),
                         ),
                     )]);
                 }
                 OverlayUpdate::close()
-                    .with_ui_effects(vec![if use_thread_override {
-                        UiEffect::PersistThreadThinkingOverride { level }
-                    } else {
-                        UiEffect::PersistThinking { level }
-                    }])
+                    .with_ui_effects(vec![
+                        if use_thread_override {
+                            UiEffect::PersistThreadModelOverride {
+                                model: model.clone(),
+                            }
+                        } else {
+                            UiEffect::PersistModel {
+                                model: model.clone(),
+                            }
+                        },
+                        UiEffect::RefreshSystemPrompt {
+                            path: tui.agent_opts.root.clone(),
+                        },
+                    ])
                     .with_mutations(vec![
                         if use_thread_override {
                             StateMutation::Thread(crate::mutations::ThreadMutation::SetOverrides {
-                                model_override: tui.thread.model_override.clone(),
-                                thinking_override: Some(level),
+                                model_override: Some(model.clone()),
+                                thinking_override: None,
                             })
                         } else {
-                            StateMutation::Config(ConfigMutation::SetThinkingLevel(level))
+                            StateMutation::Config(ConfigMutation::SetModel(model.clone()))
                         },
                         StateMutation::SetActiveThreadOverrides {
-                            model_override: tui.thread.model_override.clone(),
-                            thinking_override: if use_thread_override {
-                                Some(level)
+                            model_override: if use_thread_override {
+                                Some(model)
                             } else {
-                                tui.thread.thinking_override
+                                tui.thread.model_override.clone()
                             },
+                            thinking_override: None,
                         },
-                        StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(message)),
+                        StateMutation::Transcript(TranscriptMutation::AppendOrReplaceSwitchNotice(
+                            message,
+                        )),
                     ])
             }
             _ => OverlayUpdate::stay(),
@@ -124,7 +145,7 @@ pub fn render_thinking_picker(
         area,
         input_top_y,
         &OverlayConfig {
-            title: "Thinking Level",
+            title: "Select Thinking Level",
             border_color: Color::Magenta,
             width: picker_width,
             height: picker_height,

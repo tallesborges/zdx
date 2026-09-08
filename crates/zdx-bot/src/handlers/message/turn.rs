@@ -133,7 +133,7 @@ pub(super) async fn run_agent_turn(
 
 /// Layers the model/thinking a turn runs with: chat config →
 /// `[subagents.overrides.orchestrator]` (orchestrator topics only) → the
-/// topic's own `/model` and `/thinking` overrides.
+/// topic's own unified `/model` override, plus historical thinking metadata.
 fn turn_config(
     mut config: zdx_engine::config::Config,
     is_orchestrator: bool,
@@ -143,12 +143,7 @@ fn turn_config(
     if is_orchestrator {
         zdx_engine::subagents::apply_orchestrator_override(&mut config);
     }
-    if let Some(model_id) = model_override {
-        config.model = model_id.to_string();
-    }
-    if let Some(level) = thinking_override {
-        config.thinking_level = level;
-    }
+    config.apply_thread_model_override(model_override, thinking_override);
     config
 }
 

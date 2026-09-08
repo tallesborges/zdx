@@ -311,7 +311,7 @@ pub async fn thread_preview(thread_id: String) -> UiEvent {
 ///
 /// Pure async function - runtime spawns and sends result to inbox.
 pub async fn thread_create(
-    config: zdx_engine::config::Config,
+    mut config: zdx_engine::config::Config,
     root: PathBuf,
     handoff_from: Option<String>,
     initial_input: Option<String>,
@@ -332,8 +332,8 @@ pub async fn thread_create(
             }
         };
 
-        // Inherit the source thread's per-thread model/thinking overrides so a
-        // handoff continues with the same effective model and thinking level.
+        // Inherit the source thread's effective selection, folding any legacy
+        // standalone thinking override into one new model spec.
         let (model_override, thinking_override) = match &handoff_from {
             Some(source_thread_id) => {
                 let model_override = tp::read_thread_model_override(source_thread_id)
@@ -342,13 +342,17 @@ pub async fn thread_create(
                 let thinking_override = tp::read_thread_thinking_override(source_thread_id)
                     .ok()
                     .flatten();
-                if let Some(model) = &model_override {
-                    let _ = thread_handle.set_model_override(Some(model.clone()));
+                if model_override.is_some() || thinking_override.is_some() {
+                    config.apply_thread_model_override(
+                        model_override.as_deref(),
+                        thinking_override,
+                    );
+                    let model_override = Some(config.model.clone());
+                    let _ = thread_handle.set_model_override(model_override.clone());
+                    (model_override, None)
+                } else {
+                    (None, None)
                 }
-                if let Some(level) = thinking_override {
-                    let _ = thread_handle.set_thinking_override(Some(level));
-                }
-                (model_override, thinking_override)
             }
             None => (None, None),
         };

@@ -59,12 +59,7 @@ pub fn definition_with_subagents(
                 },
                 "model": {
                     "type": "string",
-                    "description": "Optional model override for this invocation. Set only when the user explicitly requests this model; otherwise omit it to preserve the named subagent profile. Must be an available subagent model."
-                },
-                "thinking_level": {
-                    "type": "string",
-                    "description": "Optional reasoning-level override for this invocation. Set only when the user explicitly requests this level; otherwise omit it to preserve the named subagent profile.",
-                    "enum": ["off", "low", "medium", "high", "xhigh", "max"]
+                    "description": "Optional model override for this invocation (`provider:model[@thinking][@fast]`). Set only when the user explicitly requests it; otherwise omit it to preserve the named subagent profile. Must be an available subagent model."
                 }
             },
             "required": ["prompt", "subagent"],
@@ -78,7 +73,6 @@ struct SubagentInput {
     prompt: String,
     subagent: Option<String>,
     model: Option<String>,
-    thinking_level: Option<crate::config::ThinkingLevel>,
 }
 
 /// Executes the `invoke_subagent` tool and returns a structured envelope.
@@ -96,7 +90,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(err) => return err,
     };
     let config = ctx.config.clone().unwrap_or_default();
-    let mut definition = match resolve_subagent_definition(
+    let definition = match resolve_subagent_definition(
         &ctx.root,
         input.subagent.clone(),
         ctx.allowed_subagents.as_deref(),
@@ -105,23 +99,13 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(err) => return err,
     };
 
-    // Apply any per-subagent config override on top of the (live) definition so
-    // built-in prompts stay current while only the model/thinking is overridden.
-    if let Some(over) = config.subagents.overrides.get(&definition.name) {
-        if let Some(model) = &over.model {
-            definition.model = Some(model.clone());
-        }
-        if let Some(level) = over.thinking_level {
-            definition.thinking_level = Some(level);
-        }
-    }
-
     let definition = &definition;
 
-    let model = match resolve_execution_model(definition, &config, ctx, input.model.as_deref()) {
-        Ok(model) => model,
-        Err(err) => return err,
-    };
+    let (model, thinking_level) =
+        match resolve_execution_model(definition, &config, ctx, input.model.as_deref()) {
+            Ok(resolved) => resolved,
+            Err(err) => return err,
+        };
     let prompt = build_delegated_prompt(
         &prompt,
         child_has_read_thread_access(definition, &config, &model),
@@ -133,7 +117,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(err) => return err,
     };
 
-    let options = build_exec_options(definition, ctx, model, system_prompt, input.thinking_level);
+    let options = build_exec_options(definition, ctx, model, thinking_level, system_prompt);
 
     // Relay the child's tool activity live to the parent's `invoke_subagent`
     // cell when the engine wired an event sender + tool id for this call.
@@ -261,20 +245,37 @@ fn resolve_execution_model(
     config: &crate::config::Config,
     ctx: &ToolContext,
     model_override: Option<&str>,
-) -> Result<String, ToolOutput> {
-    let explicit_model = model_override
+) -> Result<(String, crate::config::ThinkingLevel), ToolOutput> {
+    let mut resolved = config.clone();
+    let mut requires_validation = false;
+    if let Some(level) = ctx.thinking_level {
+        resolved.thinking_level = level;
+    }
+    if let Some(model) = normalize_optional(ctx.model.clone()) {
+        resolved.apply_model_spec(&model);
+    }
+    if let Some(model) = definition.model.as_deref() {
+        resolved.apply_model_spec(model);
+        requires_validation = true;
+    }
+    if let Some(model) = config
+        .subagents
+        .overrides
+        .get(&definition.name)
+        .and_then(|over| over.model.as_deref())
+    {
+        resolved.apply_model_spec(model);
+        requires_validation = true;
+    }
+    if let Some(model) = model_override
         .map(str::trim)
         .filter(|model| !model.is_empty())
-        .map(str::to_string);
-    let model = match explicit_model.or_else(|| definition.model.clone()) {
-        Some(model) => {
-            if let Some(err) = validate_model_supported(&model, ctx) {
-                return Err(err);
-            }
-            model
-        }
-        None => normalize_optional(ctx.model.clone()).unwrap_or_else(|| config.model.clone()),
-    };
+    {
+        resolved.apply_model_spec(model);
+        requires_validation = true;
+    }
+    let thinking_level = resolved.thinking_level;
+    let model = resolved.model;
 
     if model.trim().is_empty() {
         return Err(ToolOutput::failure(
@@ -283,8 +284,11 @@ fn resolve_execution_model(
             Some("Ensure a parent/default model is available in config".to_string()),
         ));
     }
+    if requires_validation && let Some(err) = validate_model_supported(&model, ctx) {
+        return Err(err);
+    }
 
-    Ok(model)
+    Ok((model, thinking_level))
 }
 
 fn build_system_prompt(
@@ -313,16 +317,14 @@ fn build_exec_options(
     definition: &SubagentDefinition,
     ctx: &ToolContext,
     model: String,
+    thinking_level: crate::config::ThinkingLevel,
     system_prompt: String,
-    thinking_override: Option<crate::config::ThinkingLevel>,
 ) -> ExecSubagentOptions {
     let subagent_name = definition.name.clone();
     ExecSubagentOptions {
         model: Some(model),
         system_prompt: Some(system_prompt),
-        thinking_level: thinking_override
-            .or(definition.thinking_level)
-            .or(ctx.thinking_level),
+        thinking_level: Some(thinking_level),
         no_tools: false,
         no_system_prompt: false,
         tools_override: definition.tools.clone(),
@@ -373,9 +375,9 @@ fn build_subagent_field_description(subagents: &[SubagentSummary]) -> String {
 
 fn build_description(subagents: &[SubagentSummary], allowed: Option<&[String]>) -> String {
     let mut description = if allowed.is_some() {
-        "Delegate a scoped read-only investigation to an isolated child agent run. This agent may only reach the subagents listed in the `subagent` field, which is required. Child runs are self-contained and do not share your full parent reasoning or implicit context, so every important decision, relevant detail, file path, constraint, non-goal, and acceptance criterion must be made explicit in the prompt. Provide a focused prompt with the goal, relevant context, constraints/non-goals, file paths, and expected output. When multiple subtasks are independent, call `invoke_subagent` multiple times in the same response to run them in parallel. Trust but verify: if a child reports claims you plan to rely on, inspect the key evidence before reporting success. Optional `model` and `thinking_level` values are user-controlled overrides for that invocation only; never change a named subagent's defaults autonomously. Returns response text only.".to_string()
+        "Delegate a scoped read-only investigation to an isolated child agent run. This agent may only reach the subagents listed in the `subagent` field, which is required. Child runs are self-contained and do not share your full parent reasoning or implicit context, so every important decision, relevant detail, file path, constraint, non-goal, and acceptance criterion must be made explicit in the prompt. Provide a focused prompt with the goal, relevant context, constraints/non-goals, file paths, and expected output. When multiple subtasks are independent, call `invoke_subagent` multiple times in the same response to run them in parallel. Trust but verify: if a child reports claims you plan to rely on, inspect the key evidence before reporting success. The optional `model` spec is a user-controlled override for that invocation only; never change a named subagent's default autonomously. Returns response text only.".to_string()
     } else {
-        "Delegate a scoped read-only investigation to an isolated child agent run. Every subagent is read-only: they can research, read, and analyze, but they never edit files or change state, so all implementation stays in this run. `subagent` is required — use `explorer` for multi-round local exploration, repo understanding, or thread-history discovery, and `oracle` for deep diagnosis, debugging dead ends, architecture, or tradeoff analysis. Exact one-hop reads or exact string/symbol lookups are direct work and should not be delegated. When multiple investigations are independent, call `invoke_subagent` multiple times in the same response to run them in parallel; `explorer` is especially appropriate for fan-out across separate search areas. Child runs are self-contained and do not share your full parent reasoning or implicit context, so every important decision, relevant detail, file path, constraint, non-goal, and acceptance criterion must be made explicit in the prompt. Provide a focused prompt with the goal, relevant context, constraints/non-goals, file paths, and expected output. Trust but verify: if a child reports claims you plan to rely on, inspect the key evidence before relying on it. Optional `model` and `thinking_level` values are user-controlled overrides for that invocation only; never change a named subagent's defaults autonomously. Returns response text only. Skill names are invalid unless they are also listed as supported subagents.".to_string()
+        "Delegate a scoped read-only investigation to an isolated child agent run. Every subagent is read-only: they can research, read, and analyze, but they never edit files or change state, so all implementation stays in this run. `subagent` is required — use `explorer` for multi-round local exploration, repo understanding, or thread-history discovery, and `oracle` for deep diagnosis, debugging dead ends, architecture, or tradeoff analysis. Exact one-hop reads or exact string/symbol lookups are direct work and should not be delegated. When multiple investigations are independent, call `invoke_subagent` multiple times in the same response to run them in parallel; `explorer` is especially appropriate for fan-out across separate search areas. Child runs are self-contained and do not share your full parent reasoning or implicit context, so every important decision, relevant detail, file path, constraint, non-goal, and acceptance criterion must be made explicit in the prompt. Provide a focused prompt with the goal, relevant context, constraints/non-goals, file paths, and expected output. Trust but verify: if a child reports claims you plan to rely on, inspect the key evidence before relying on it. The optional `model` spec is a user-controlled override for that invocation only; never change a named subagent's default autonomously. Returns response text only. Skill names are invalid unless they are also listed as supported subagents.".to_string()
     };
 
     if !subagents.is_empty() {
@@ -536,7 +538,7 @@ mod tests {
         assert!(props.get("system_prompt").is_none());
         assert!(props.get("subagent").is_some());
         assert!(props.get("model").is_some());
-        assert!(props.get("thinking_level").is_some());
+        assert!(props.get("thinking_level").is_none());
     }
 
     #[test]
@@ -551,15 +553,13 @@ mod tests {
         let input = json!({
             "prompt": "inspect this",
             "subagent": "explorer",
-            "model": "openai-codex:gpt-5.6-luna",
-            "thinking_level": "high"
+            "model": "openai-codex:gpt-5.6-luna@high"
         });
         let parsed: SubagentInput = serde_json::from_value(input).unwrap();
 
-        assert_eq!(parsed.model.as_deref(), Some("openai-codex:gpt-5.6-luna"));
         assert_eq!(
-            parsed.thinking_level,
-            Some(crate::config::ThinkingLevel::High)
+            parsed.model.as_deref(),
+            Some("openai-codex:gpt-5.6-luna@high")
         );
     }
 
@@ -577,7 +577,7 @@ mod tests {
             path: std::path::PathBuf::from("explorer.md"),
             source: subagents::SubagentSource::BuiltIn,
             allowed_subagents: None,
-            model: Some("openai:gpt-5.5".to_string()),
+            model: Some("openai:gpt-5.5@low".to_string()),
             thinking_level: Some(crate::config::ThinkingLevel::Low),
             tools: Some(vec!["read".to_string()]),
             skills: None,
@@ -590,15 +590,18 @@ mod tests {
                 &definition,
                 &crate::config::Config::default(),
                 &ctx,
-                Some("openai-codex:gpt-5.6-luna")
+                Some("openai-codex:gpt-5.6-luna@high")
             )
             .unwrap(),
-            "openai-codex:gpt-5.6-luna"
+            (
+                "openai-codex:gpt-5.6-luna@high".to_string(),
+                crate::config::ThinkingLevel::High
+            )
         );
     }
 
     #[test]
-    fn test_build_exec_options_prefers_invocation_thinking_override() {
+    fn test_build_exec_options_carries_resolved_thinking() {
         let mut ctx = ToolContext::new(std::path::PathBuf::from("."), None);
         ctx.thinking_level = Some(crate::config::ThinkingLevel::Low);
         let definition = subagents::SubagentDefinition {
@@ -618,9 +621,9 @@ mod tests {
         let options = build_exec_options(
             &definition,
             &ctx,
-            "openai-codex:gpt-5.6-luna".to_string(),
+            "openai-codex:gpt-5.6-luna@high".to_string(),
+            crate::config::ThinkingLevel::High,
             "system".to_string(),
-            Some(crate::config::ThinkingLevel::High),
         );
 
         assert_eq!(

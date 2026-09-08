@@ -18,7 +18,6 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::{Tool, ToolContext, ToolDefinition, ToolFuture};
-use crate::config::ThinkingLevel;
 use crate::core::events::ToolOutput;
 use crate::core::thread_persistence;
 use crate::core::workers::{WorkerManager, WorkerSnapshot};
@@ -112,7 +111,7 @@ impl Tool for OrchestratorTool {
                 );
             };
             match op {
-                Op::Create => create_thread(&manager, &owner, &input).await,
+                Op::Create => create_thread(&manager, &owner, &input, &ctx).await,
                 Op::Send => send_thread_message(&manager, &owner, &input),
                 Op::Status => tokio::task::spawn_blocking(move || {
                     get_thread_status(&manager, &owner, &input, ctx.config.as_ref())
@@ -157,12 +156,7 @@ fn definition_for(op: Op) -> ToolDefinition {
                     },
                     "model": {
                         "type": "string",
-                        "description": "Optional model override (provider:model). Omit to inherit configuration."
-                    },
-                    "thinking_level": {
-                        "type": "string",
-                        "enum": ["off", "low", "medium", "high", "xhigh", "max"],
-                        "description": "Optional thinking-level override. Omit to inherit configuration."
+                        "description": "Optional model override (`provider:model[@thinking][@fast]`). Omit to inherit configuration."
                     }
                 },
                 "required": ["root", "prompt"],
@@ -379,7 +373,12 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     format!("{head}…")
 }
 
-async fn create_thread(manager: &Arc<WorkerManager>, owner: &str, input: &Value) -> ToolOutput {
+async fn create_thread(
+    manager: &Arc<WorkerManager>,
+    owner: &str,
+    input: &Value,
+    ctx: &ToolContext,
+) -> ToolOutput {
     let root = match required_str(input, "root") {
         Ok(value) => value,
         Err(failure) => return failure,
@@ -389,19 +388,13 @@ async fn create_thread(manager: &Arc<WorkerManager>, owner: &str, input: &Value)
         Err(failure) => return failure,
     };
     let title = optional_str(input, "title");
-    let model = optional_str(input, "model").map(str::to_string);
-    let thinking_level = match optional_str(input, "thinking_level") {
-        Some(raw) => match ThinkingLevel::from_name(raw) {
-            Some(level) => Some(level),
-            None => {
-                return ToolOutput::failure(
-                    "invalid_input",
-                    format!("Unknown thinking_level: {raw}"),
-                    Some("Valid values: off, low, medium, high, xhigh, max".to_string()),
-                );
-            }
-        },
-        None => None,
+    let (model, thinking_level) = match optional_str(input, "model") {
+        Some(model) => {
+            let inherited = ctx.thinking_level.unwrap_or_default();
+            let (model, thinking) = crate::models::resolve_model_spec(model, inherited);
+            (Some(model), Some(thinking))
+        }
+        None => (None, None),
     };
 
     let worker_id = match manager.create_worker(

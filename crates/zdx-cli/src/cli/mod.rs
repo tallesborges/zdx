@@ -33,13 +33,9 @@ struct Cli {
     #[arg(long)]
     system_prompt: Option<String>,
 
-    /// Override the model from config (chat launch)
+    /// Override the model from config (`provider:model[@thinking][@fast]`)
     #[arg(long)]
     model: Option<String>,
-
-    /// Override the thinking level (off, low, medium, high, xhigh, max)
-    #[arg(long)]
-    thinking: Option<String>,
 
     /// Capture raw request/response traces (optional path)
     #[arg(
@@ -133,13 +129,9 @@ enum Commands {
         #[arg(long = "effective-system-prompt-file", hide = true)]
         effective_system_prompt_file: Option<PathBuf>,
 
-        /// Override the model from config
+        /// Override the model from config (`provider:model[@thinking][@fast]`)
         #[arg(short, long)]
         model: Option<String>,
-
-        /// Override the thinking level (off, low, medium, high, xhigh, max)
-        #[arg(short, long)]
-        thinking: Option<String>,
 
         /// Comma-separated list of tools to enable (full override)
         #[arg(long, value_name = "TOOLS")]
@@ -149,7 +141,7 @@ enum Commands {
         #[arg(long = "no-tools", conflicts_with = "tools")]
         no_tools: bool,
 
-        /// Run with a named subagent's prompt, model, thinking level, and tools
+        /// Run with a named subagent's prompt, model spec, and tools
         /// (e.g. `explorer`, `oracle`); explicit flags still win
         #[arg(
             long = "subagent",
@@ -743,7 +735,7 @@ enum ConfigCommands {
     },
     /// Set a configuration value (persists to ~/.zdx/config.toml, or workspace with --local)
     Set {
-        /// Configuration key (e.g. `model`, `thinking_level`, `tool_timeout_secs`)
+        /// Configuration key (e.g. `model`, `tool_timeout_secs`)
         key: String,
         /// New value
         #[arg(allow_hyphen_values = true)]
@@ -962,7 +954,6 @@ async fn dispatch(cli: Cli) -> Result<()> {
         root,
         system_prompt: _,
         model,
-        thinking,
         thread_args,
         worktree,
         ..
@@ -975,7 +966,6 @@ async fn dispatch(cli: Cli) -> Result<()> {
             &thread_args,
             &config,
             model.as_deref(),
-            thinking.as_deref(),
         )
         .await;
     };
@@ -1021,19 +1011,11 @@ async fn run_chat_command(
     thread_args: &ThreadArgs,
     config: &config::Config,
     model_override: Option<&str>,
-    thinking_override: Option<&str>,
 ) -> Result<()> {
     let thread_opts: ThreadPersistenceOptions = thread_args.into();
     let root_path = resolve_root(root, worktree_id)?;
     let root_string = root_path.to_string_lossy().to_string();
-    commands::chat::run(
-        &root_string,
-        &thread_opts,
-        config,
-        model_override,
-        thinking_override,
-    )
-    .await
+    commands::chat::run(&root_string, &thread_opts, config, model_override).await
 }
 
 struct DispatchContext<'a> {
@@ -1051,7 +1033,6 @@ struct ExecCommandInput {
     stream: bool,
     effective_system_prompt_file: Option<PathBuf>,
     model: Option<String>,
-    thinking: Option<String>,
     tools: Option<String>,
     no_tools: bool,
     no_system_prompt: bool,
@@ -1115,7 +1096,6 @@ async fn run_exec_command(context: &DispatchContext<'_>, input: ExecCommandInput
         model_override: input.model.as_deref(),
         effective_system_prompt_override: effective_system_prompt.as_deref(),
         tool_timeout_override: None,
-        thinking_override: input.thinking.as_deref(),
         event_filter_override: input.filter.as_deref(),
         stream: input.stream,
         tools_override: input.tools.as_deref(),
@@ -1175,7 +1155,6 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             no_skills,
             effective_system_prompt_file,
             model,
-            thinking,
             tools,
             no_tools,
             subagent,
@@ -1192,7 +1171,6 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
                     stream,
                     effective_system_prompt_file,
                     model,
-                    thinking,
                     tools,
                     no_tools,
                     no_system_prompt,

@@ -15,7 +15,6 @@ pub async fn run(
     thread_opts: &ThreadPersistenceOptions,
     config: &config::Config,
     model_override: Option<&str>,
-    thinking_override: Option<&str>,
 ) -> Result<()> {
     // If stdin is piped, run exec mode instead
     if !std::io::stdin().is_terminal() {
@@ -33,7 +32,6 @@ pub async fn run(
             model_override,
             effective_system_prompt_override: None,
             tool_timeout_override: None,
-            thinking_override,
             event_filter_override: None,
             stream: false,
             tools_override: None,
@@ -50,10 +48,7 @@ pub async fn run(
 
     let mut config = config.clone();
     if let Some(model) = model_override {
-        config.model = model.to_string();
-    }
-    if let Some(thinking) = thinking_override {
-        config.thinking_level = exec::parse_thinking_level(thinking)?;
+        config.apply_model_spec(model);
     }
 
     let root_path = PathBuf::from(root);

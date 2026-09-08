@@ -85,7 +85,6 @@ struct SubagentFrontmatter {
     name: Option<String>,
     description: Option<String>,
     model: Option<String>,
-    thinking_level: Option<ThinkingLevel>,
     tools: Option<Vec<String>>,
     allowed_subagents: Option<Vec<String>>,
     skills: Option<Vec<String>>,
@@ -450,10 +449,7 @@ pub fn apply_orchestrator_override(config: &mut crate::config::Config) {
         return;
     };
     if let Some(model) = over.model {
-        config.model = model;
-    }
-    if let Some(level) = over.thinking_level {
-        config.thinking_level = level;
+        config.apply_model_spec(&model);
     }
 }
 
@@ -528,6 +524,9 @@ fn parse_subagent_content(
     let description = normalize_required_string(frontmatter.description, "description")?
         .ok_or_else(|| anyhow::anyhow!("description is required"))?;
     let model = normalize_optional_string(frontmatter.model, "model")?;
+    let thinking_level = model
+        .as_deref()
+        .and_then(|model| crate::models::ModelSpec::parse(model).thinking);
     let tools = normalize_tools(frontmatter.tools)?;
     let allowed_subagents =
         normalize_named_items(frontmatter.allowed_subagents, "allowed_subagents")?;
@@ -545,7 +544,7 @@ fn parse_subagent_content(
         path: path.to_path_buf(),
         source,
         model,
-        thinking_level: frontmatter.thinking_level,
+        thinking_level,
         tools,
         allowed_subagents,
         skills,
@@ -874,7 +873,7 @@ mod tests {
 
         let mut config = with_override(ORCHESTRATOR_SUBAGENT_NAME, "claude-cli:fable", None);
         apply_orchestrator_override(&mut config);
-        assert_eq!(config.model, "claude-cli:fable");
+        assert_eq!(config.model, "claude-cli:fable@high");
         assert_eq!(
             config.thinking_level,
             ThinkingLevel::High,
@@ -1026,19 +1025,36 @@ mod tests {
         let file = dir.path().join("search.md");
         fs::write(
             &file,
-            "---\ndescription: Search helper\nmodel: gemini:gemini-2.5-flash\nthinking_level: low\ntools:\n  - read\n  - grep\n---\nSearch prompt",
+            "---\ndescription: Search helper\nmodel: gemini:gemini-2.5-flash@low\ntools:\n  - read\n  - grep\n---\nSearch prompt",
         )
         .unwrap();
 
         let definition = parse_subagent_file(&file, SubagentSource::User).unwrap();
         assert_eq!(definition.name, "search");
-        assert_eq!(definition.model.as_deref(), Some("gemini:gemini-2.5-flash"));
+        assert_eq!(
+            definition.model.as_deref(),
+            Some("gemini:gemini-2.5-flash@low")
+        );
         assert_eq!(definition.thinking_level, Some(ThinkingLevel::Low));
         assert_eq!(
             definition.tools,
             Some(vec!["read".to_string(), "grep".to_string()])
         );
         assert_eq!(definition.prompt_body, "Search prompt");
+    }
+
+    #[test]
+    fn parse_subagent_rejects_standalone_thinking_level() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("legacy.md");
+        fs::write(
+            &file,
+            "---\ndescription: Legacy\nmodel: openai:gpt-5\nthinking_level: high\n---\nPrompt",
+        )
+        .unwrap();
+
+        let err = parse_subagent_file(&file, SubagentSource::User).unwrap_err();
+        assert!(format!("{err:#}").contains("thinking_level"));
     }
 
     #[test]

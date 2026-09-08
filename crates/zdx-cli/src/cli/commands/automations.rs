@@ -46,7 +46,6 @@ struct AutomationRunRecord {
 struct PreparedAutomationRun {
     config: config::Config,
     model_override: Option<String>,
-    thinking_override: Option<String>,
     tools_override: Option<String>,
 }
 
@@ -240,7 +239,6 @@ pub async fn run_definition(
             model_override: prepared.model_override.as_deref(),
             effective_system_prompt_override: prepared.config.system_prompt.as_deref(),
             tool_timeout_override: automation.timeout_secs,
-            thinking_override: prepared.thinking_override.as_deref(),
             event_filter_override: None,
             stream: false,
             tools_override: prepared.tools_override.as_deref(),
@@ -308,40 +306,47 @@ fn prepare_automation_run(
 ) -> Result<PreparedAutomationRun> {
     let mut run_config = config.clone();
     let instruction_layers = automation_instruction_layers();
-    let chosen_model = automation
-        .model
-        .clone()
-        .unwrap_or_else(|| run_config.model.clone());
-
     if let Some(subagent_name) = automation.subagent.as_deref() {
         let definition = subagents::resolve_named(root, subagent_name, None)
             .with_context(|| format!("load subagent '{subagent_name}'"))?;
-        let chosen_model = automation
-            .model
-            .clone()
-            .or_else(|| definition.model.clone())
-            .unwrap_or_else(|| config.model.clone());
+        if let Some(model) = definition.model.as_deref() {
+            run_config.apply_model_spec(model);
+        }
+        if let Some(model) = config
+            .subagents
+            .overrides
+            .get(subagent_name)
+            .and_then(|over| over.model.as_deref())
+        {
+            run_config.apply_model_spec(model);
+        }
+        if let Some(model) = automation.model.as_deref() {
+            run_config.apply_model_spec(model);
+        }
         let system_prompt = subagents::render_prompt(
             &run_config,
             root,
             &definition,
-            &chosen_model,
+            &run_config.model,
             automation_prompt_context(),
         )
         .with_context(|| format!("render subagent '{subagent_name}'"))?;
 
         run_config.system_prompt = Some(system_prompt);
         run_config.system_prompt_file = None;
+        let chosen_model = run_config.model.clone();
 
         return Ok(PreparedAutomationRun {
             config: run_config,
             model_override: Some(chosen_model),
-            thinking_override: definition
-                .thinking_level
-                .map(|level| level.display_name().to_string()),
             tools_override: definition.tools.map(|tools| tools.join(",")),
         });
     }
+
+    if let Some(model) = automation.model.as_deref() {
+        run_config.apply_model_spec(model);
+    }
+    let chosen_model = run_config.model.clone();
 
     let effective = zdx_engine::core::context::build_prompt_with_context_and_layers(
         &run_config,
@@ -359,7 +364,6 @@ fn prepare_automation_run(
     Ok(PreparedAutomationRun {
         config: run_config,
         model_override: Some(chosen_model),
-        thinking_override: None,
         tools_override: None,
     })
 }
@@ -713,9 +717,9 @@ mod tests {
 
         assert_eq!(
             prepared.model_override.as_deref(),
-            Some("openai-codex:gpt-5.4")
+            Some("openai-codex:gpt-5.4@low")
         );
-        assert_eq!(prepared.config.model, "openai-codex:gpt-5.4");
+        assert_eq!(prepared.config.model, "openai-codex:gpt-5.4@low");
         assert!(prompt.contains("Automation project note"));
         // `apply_patch` only appears in the prompt when the resolved provider is OpenAI Codex
         // (via the `is_openai_codex` block and the `edit_tool_label` substitution).

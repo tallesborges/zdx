@@ -56,27 +56,8 @@ fn source_name(source: Option<&Path>, global: &Path) -> String {
     }
 }
 
-fn model_source_label(
-    model: Option<&Path>,
-    thinking: Option<&Path>,
-    global: &Path,
-) -> Option<String> {
-    if !model.into_iter().chain(thinking).any(|path| path != global) {
-        return None;
-    }
-    if model == thinking {
-        Some(source_name(model, global))
-    } else {
-        Some(format!(
-            "model:{} thinking:{}",
-            source_name(model, global),
-            source_name(thinking, global)
-        ))
-    }
-}
-
 fn config_source_labels(
-    config: &config::Config,
+    _config: &config::Config,
     lines: &[ConfigLine],
     sources: &config::ConfigSources,
     global: &Path,
@@ -92,32 +73,20 @@ fn config_source_labels(
                 return None;
             };
             if section == "core" && key == "model" {
-                let model = sources.source("model");
-                let thinking = sources.source("thinking_level").or_else(|| {
-                    zdx_engine::models::ModelSpec::parse(&config.model)
-                        .thinking
-                        .and(model)
-                });
-                return model_source_label(model, thinking, global);
+                return sources
+                    .source("model")
+                    .filter(|path| *path != global)
+                    .map(|source| source_name(Some(source), global));
             }
             if section == "subagents" && key != "enabled" {
                 if value == SUBAGENT_DEFAULT_LABEL {
                     return None;
                 }
                 let prefix = format!("subagents.overrides.{key}");
-                let model = sources.source(&format!("{prefix}.model"));
-                let thinking = sources
-                    .source(&format!("{prefix}.thinking_level"))
-                    .or_else(|| {
-                        config
-                            .subagents
-                            .overrides
-                            .get(key)
-                            .and_then(|entry| entry.model.as_deref())
-                            .and_then(|value| zdx_engine::models::ModelSpec::parse(value).thinking)
-                            .and(model)
-                    });
-                return model_source_label(model, thinking, global);
+                return sources
+                    .source(&format!("{prefix}.model"))
+                    .filter(|path| *path != global)
+                    .map(|source| source_name(Some(source), global));
             }
             let path = match section {
                 "core" | "helper models" => key.clone(),
@@ -277,22 +246,6 @@ pub fn build_config_lines(config: &config::Config, root: &Path) -> Vec<ConfigLin
     }
 
     let mut lines = Vec::new();
-
-    // Show the main model with its thinking level inline (`model@thinking`) and
-    // drop the standalone `thinking_level` row; role models carry `@thinking`
-    // in their own stored value already.
-    if let Some(level) = core_rows
-        .iter()
-        .find(|(k, _)| k == "thinking_level")
-        .map(|(_, v)| v.clone())
-    {
-        if let Some(model_row) = core_rows.iter_mut().find(|(k, _)| k == "model")
-            && let Some(parsed) = config::ThinkingLevel::from_name(&level)
-        {
-            model_row.1 = zdx_engine::models::format_model_thinking(&model_row.1, parsed);
-        }
-        core_rows.retain(|(k, _)| k != "thinking_level");
-    }
 
     // Pull helper-subagent model fields out of `core` into their own group so
     // every model handled by a helper is visible together.
@@ -1239,24 +1192,32 @@ mod tests {
     }
 
     #[test]
-    fn mixed_model_and_thinking_origins_are_not_misattributed() {
+    fn unified_model_spec_origins_follow_the_winning_layer() {
         let home = zdx_engine::test_support::temp_zdx_home();
         let global = home.path().join("config.toml");
         let parent = home.path().join("parity/.zdx/config.toml");
         std::fs::create_dir_all(parent.parent().unwrap()).unwrap();
-        std::fs::write(&global, "thinking_level = \"off\"\n[subagents.overrides.explorer]\nmodel = \"global-model@low\"\n").unwrap();
-        std::fs::write(&parent, "model = \"workspace@high\"\n[subagents.overrides.explorer]\nthinking_level = \"high\"\n").unwrap();
+        std::fs::write(
+            &global,
+            "model = \"global@off\"\n[subagents.overrides.explorer]\nmodel = \"global-model@low\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &parent,
+            "model = \"workspace@high\"\n[subagents.overrides.explorer]\nmodel = \"workspace-model@high\"\n",
+        )
+        .unwrap();
         let (cfg, sources) =
             config::Config::load_layered_with_sources(&[global.clone(), parent]).unwrap();
         let lines = build_config_lines(&cfg, home.path());
         let labels = config_source_labels(&cfg, &lines, &sources, &global);
         assert_eq!(
             labels[row_index(&lines, "core", "model")].as_deref(),
-            Some("model:parity thinking:global")
+            Some("parity")
         );
         assert_eq!(
             labels[row_index(&lines, "subagents", "explorer")].as_deref(),
-            Some("model:global thinking:parity")
+            Some("parity")
         );
     }
 

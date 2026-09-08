@@ -554,12 +554,8 @@ impl TuiState {
         self.base_thinking_level = config.thinking_level;
         self.config = config;
 
-        if let Some(model) = model_override {
-            self.config.model = model;
-        }
-        if let Some(level) = thinking_override {
-            self.config.thinking_level = level;
-        }
+        self.config
+            .apply_thread_model_override(model_override.as_deref(), thinking_override);
     }
 
     /// Recomputes `background_count` for the current thread, throttled to at
@@ -800,7 +796,7 @@ mod tests {
         assert_eq!(tui.config.thinking_level, ThinkingLevel::High);
     }
 
-    /// A per-thread `/model` or `/thinking` override outlives a reload: the
+    /// A historical per-thread model/thinking override outlives a reload: the
     /// defaults move, the override still wins for the active thread.
     #[test]
     fn reloaded_config_keeps_active_thread_overrides() {
@@ -823,7 +819,7 @@ mod tests {
 
         assert_eq!(tui.base_model, "sentinel:new-default");
         assert_eq!(tui.base_thinking_level, ThinkingLevel::Medium);
-        assert_eq!(tui.config.model, "sentinel:thread-override");
+        assert_eq!(tui.config.model, "sentinel:thread-override@high");
         assert_eq!(tui.config.thinking_level, ThinkingLevel::High);
     }
 
@@ -844,7 +840,7 @@ mod tests {
             ..config
         };
         tui.apply_reloaded_config(reloaded.clone());
-        assert_eq!(tui.config.model, "sentinel:default");
+        assert_eq!(tui.config.model, "sentinel:default@low");
         assert_eq!(tui.config.thinking_level, ThinkingLevel::Low);
         assert_eq!(tui.base_model, "sentinel:new-default");
         assert_eq!(tui.base_thinking_level, ThinkingLevel::High);

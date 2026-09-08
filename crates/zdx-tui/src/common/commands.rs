@@ -218,13 +218,6 @@ pub const COMMANDS: &[Command] = &[
         shortcut: None,
     },
     Command {
-        name: "thinking",
-        aliases: &[],
-        description: "Change thinking level",
-        category: "model",
-        shortcut: Some("Ctrl+T"),
-    },
-    Command {
         name: "timeline",
         aliases: &[],
         description: "Jump to a thread turn",
@@ -247,10 +240,7 @@ pub const COMMANDS: &[Command] = &[
     },
 ];
 
-pub fn command_available(command: &Command, model_id: &str) -> bool {
-    if command.name == "thinking" {
-        return zdx_engine::models::model_supports_reasoning(model_id);
-    }
+pub fn command_available(_command: &Command, _model_id: &str) -> bool {
     true
 }
 
@@ -335,7 +325,6 @@ mod tests {
         assert_eq!(find_command("open").display_name(), "open (terminal, term)");
         assert_eq!(find_command("pwd").display_name(), "pwd");
         assert_eq!(find_command("root-new").display_name(), "root-new (root)");
-        assert_eq!(find_command("thinking").display_name(), "thinking");
         assert_eq!(find_command("timeline").display_name(), "timeline");
     }
 

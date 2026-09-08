@@ -65,17 +65,16 @@ fn filter_available_favorites(
         .collect()
 }
 
-/// Create a new forum topic pre-set to `model` (and optional `thinking`), mark
+/// Create a new forum topic pre-set to a unified `model` spec, mark
 /// it for auto-titling on the first real message, and post its pinned thread
 /// header. Returns the new topic id.
 ///
-/// Model/thinking overrides are best-effort: a failure to persist them is
+/// Model overrides are best-effort: a failure to persist one is
 /// logged but does not fail topic creation (the topic still works on defaults).
 pub(crate) async fn create_topic_with_model(
     context: &BotContext,
     chat_id: i64,
     model: &str,
-    thinking: Option<ThinkingLevel>,
 ) -> Result<i64> {
     let topic_name = format!("Chat {}", chrono::Utc::now().format("%Y-%m-%d %H:%M"));
     let topic_id = context
@@ -88,9 +87,6 @@ pub(crate) async fn create_topic_with_model(
     if let Err(err) =
         thread_persistence::Thread::with_id(thread_id.clone()).and_then(|mut thread| {
             thread.set_model_override(Some(model.to_string()))?;
-            if let Some(level) = thinking {
-                thread.set_thinking_override(Some(level))?;
-            }
             thread.set_pending_topic_title(true)
         })
     {
@@ -100,7 +96,7 @@ pub(crate) async fn create_topic_with_model(
             thread_id = %thread_id,
             model,
             %err,
-            "launcher: created topic but failed to apply model/thinking override"
+            "launcher: created topic but failed to apply model override"
         );
     }
 
@@ -446,9 +442,7 @@ pub(crate) async fn handle_callback(
             return;
         };
 
-        match create_topic_with_model(context, chat_id, &favorite.model, Some(favorite.thinking))
-            .await
-        {
+        match create_topic_with_model(context, chat_id, &favorite.model).await {
             Ok(_) => {
                 let _ = client
                     .answer_callback_query(&callback.id, Some("New thread ready ✓"))

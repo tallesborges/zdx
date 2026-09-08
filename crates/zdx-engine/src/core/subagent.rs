@@ -23,11 +23,11 @@ use crate::core::events::{AgentEvent, TurnStatus};
 /// Options for a child `zdx exec` subagent run.
 #[derive(Debug, Clone, Default)]
 pub struct ExecSubagentOptions {
-    /// Optional model override (`-m`).
+    /// Optional model override (`-m provider:model[@thinking][@fast]`).
     pub model: Option<String>,
     /// Optional final system prompt override (`--effective-system-prompt`).
     pub system_prompt: Option<String>,
-    /// Optional thinking override (`-t`).
+    /// Resolved thinking projection folded into `model` at the process boundary.
     pub thinking_level: Option<crate::config::ThinkingLevel>,
     /// Disable tools for the child run (`--no-tools`).
     pub no_tools: bool,
@@ -559,6 +559,10 @@ fn build_exec_args(
     }
 
     if let Some(model) = normalize_optional(options.model.as_deref()) {
+        let model = options.thinking_level.map_or_else(
+            || model.to_string(),
+            |level| crate::models::format_model_thinking(model, level),
+        );
         args.push(OsString::from("-m"));
         args.push(OsString::from(model));
     }
@@ -566,11 +570,6 @@ fn build_exec_args(
     if let Some(system_prompt_file) = effective_system_prompt_file {
         args.push(OsString::from("--effective-system-prompt-file"));
         args.push(system_prompt_file.as_os_str().to_os_string());
-    }
-
-    if let Some(level) = options.thinking_level {
-        args.push(OsString::from("-t"));
-        args.push(OsString::from(level.display_name()));
     }
 
     if let Some(kind) = normalize_optional(options.activity_kind.as_deref()) {
@@ -763,11 +762,9 @@ mod tests {
                 "--filter",
                 "turn_finished",
                 "-m",
-                "openai:gpt-5.2",
+                "openai:gpt-5.2@low",
                 "--effective-system-prompt-file",
-                "/tmp/effective-system-prompt.md",
-                "-t",
-                "low"
+                "/tmp/effective-system-prompt.md"
             ]
         );
     }

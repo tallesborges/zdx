@@ -9,10 +9,71 @@ use zdx_engine::core::thread_persistence;
 use zdx_engine::models::{ModelOption, ModelPricing};
 use zdx_engine::providers::{ProviderAuthMode, provider_for_model};
 
-use super::{StatusSnapshot, TurnStatus, escape_html};
+use super::{TurnStatus, escape_html};
 use crate::agent;
 use crate::bot::context::BotContext;
 use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectionSource {
+    Default,
+    Orchestrator,
+    Topic,
+}
+
+impl SelectionSource {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Default => "workspace/global default",
+            Self::Orchestrator => "orchestrator override",
+            Self::Topic => "topic override",
+        }
+    }
+}
+
+struct StatusSnapshot<'a> {
+    model_id: &'a str,
+    model_source: SelectionSource,
+    thinking: zdx_engine::config::ThinkingLevel,
+    thinking_source: SelectionSource,
+    profile_name: Option<&'a str>,
+    thread_id: &'a str,
+    root_path: &'a Path,
+    branch: Option<&'a str>,
+    cumulative_usage: thread_persistence::Usage,
+    latest_usage: thread_persistence::Usage,
+}
+
+fn selection_sources(
+    orchestrator_model: Option<&str>,
+    topic_model: Option<&str>,
+    legacy_topic_thinking: Option<zdx_engine::config::ThinkingLevel>,
+) -> (SelectionSource, SelectionSource) {
+    let model_source = if topic_model.is_some() {
+        SelectionSource::Topic
+    } else if orchestrator_model.is_some() {
+        SelectionSource::Orchestrator
+    } else {
+        SelectionSource::Default
+    };
+    let thinking_source = if legacy_topic_thinking.is_some()
+        || topic_model.is_some_and(|model| {
+            zdx_engine::models::ModelSpec::parse(model)
+                .thinking
+                .is_some()
+        }) {
+        SelectionSource::Topic
+    } else if orchestrator_model.is_some_and(|model| {
+        zdx_engine::models::ModelSpec::parse(model)
+            .thinking
+            .is_some()
+    }) {
+        SelectionSource::Orchestrator
+    } else {
+        SelectionSource::Default
+    };
+    (model_source, thinking_source)
+}
 
 /// Minimum interval between Telegram status message edits (avoid rate limiting).
 pub(super) const STATUS_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(3);
@@ -275,13 +336,27 @@ async fn current_status_message_with_heading(
     // override, mirroring the turn path.
     let is_orchestrator = thread_persistence::read_persistent_profile(thread_id)?.as_deref()
         == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME);
+    let orchestrator_model = is_orchestrator
+        .then(|| {
+            config
+                .subagents
+                .overrides
+                .get(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME)
+                .and_then(|over| over.model.as_deref())
+        })
+        .flatten()
+        .map(str::to_string);
     if is_orchestrator {
         zdx_engine::subagents::apply_orchestrator_override(&mut config);
     }
     let model_override = thread_persistence::read_thread_model_override(thread_id)?;
     let thinking_override = thread_persistence::read_thread_thinking_override(thread_id)?;
-    let effective_model = model_override.as_deref().unwrap_or(&config.model);
-    let effective_thinking = thinking_override.unwrap_or(config.thinking_level);
+    let (model_source, thinking_source) = selection_sources(
+        orchestrator_model.as_deref(),
+        model_override.as_deref(),
+        thinking_override,
+    );
+    config.apply_thread_model_override(model_override.as_deref(), thinking_override);
     let branch = git_branch_name(&root_path).await;
     let events = thread_persistence::load_thread_events(thread_id)?;
     let (cumulative_usage, latest_usage) =
@@ -290,10 +365,10 @@ async fn current_status_message_with_heading(
     let mini_app_url = super::mini_app_base_url(context, chat_id);
     Ok(format_status_message_with_heading(
         &StatusSnapshot {
-            model_id: effective_model,
-            model_override: model_override.as_deref(),
-            thinking: effective_thinking,
-            thinking_override,
+            model_id: &config.model,
+            model_source,
+            thinking: config.thinking_level,
+            thinking_source,
             profile_name: resolved_root.profile_name.as_deref(),
             thread_id,
             root_path: &root_path,
@@ -325,20 +400,12 @@ fn format_status_message_with_heading(
     lines.push(format!(
         "Model: <code>{}</code> ({})",
         escape_html(snapshot.model_id),
-        if snapshot.model_override.is_some() {
-            "override"
-        } else {
-            "default"
-        }
+        snapshot.model_source.label()
     ));
     lines.push(format!(
         "Thinking: <code>{}</code> ({})",
         snapshot.thinking.display_name(),
-        if snapshot.thinking_override.is_some() {
-            "override"
-        } else {
-            "default"
-        }
+        snapshot.thinking_source.label()
     ));
     lines.push(format!(
         "Thread: <code>{}</code>",
@@ -561,7 +628,37 @@ fn trim_price(value: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_worker_lines, turn_status_markup_for_url};
+    use super::{
+        SelectionSource, format_worker_lines, selection_sources, turn_status_markup_for_url,
+    };
+
+    #[test]
+    fn selection_provenance_distinguishes_orchestrator_and_topic_layers() {
+        assert_eq!(
+            selection_sources(Some("openai:gpt-6@high"), None, None),
+            (SelectionSource::Orchestrator, SelectionSource::Orchestrator)
+        );
+        assert_eq!(
+            selection_sources(Some("openai:gpt-6"), None, None),
+            (SelectionSource::Orchestrator, SelectionSource::Default)
+        );
+        assert_eq!(
+            selection_sources(
+                Some("openai:gpt-6@high"),
+                Some("anthropic:claude@fast"),
+                None,
+            ),
+            (SelectionSource::Topic, SelectionSource::Orchestrator)
+        );
+        assert_eq!(
+            selection_sources(
+                Some("openai:gpt-6@high"),
+                Some("anthropic:claude@low"),
+                None,
+            ),
+            (SelectionSource::Topic, SelectionSource::Topic)
+        );
+    }
 
     #[test]
     fn worker_lines_summarize_counts_and_cap_listing() {

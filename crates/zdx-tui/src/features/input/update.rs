@@ -142,7 +142,7 @@ pub fn handle_main_key(input: &mut InputState, ctx: &InputContext<'_>, key: KeyE
         .or_else(|| handle_word_editing(input, key.code, &mods))
         .or_else(|| handle_navigation(input, key, &mods))
         .or_else(|| handle_control_keys(input, ctx, key.code, &mods))
-        .or_else(|| handle_overlays(input, ctx.model_id, key.code, &mods))
+        .or_else(|| handle_overlays(input, key.code, &mods))
         .or_else(|| handle_submission(input, ctx, key.code, &mods))
         .or_else(|| handle_favorites(input, ctx, key.code, &mods))
         .unwrap_or_else(|| handle_default_input(input, key))
@@ -552,15 +552,10 @@ fn handle_voice_hotkey(input: &mut InputState) -> KeyResult {
 }
 
 // =============================================================================
-// Overlays: command palette, model picker, thinking picker
+// Overlays: command palette and model picker
 // =============================================================================
 
-fn handle_overlays(
-    input: &mut InputState,
-    model_id: &str,
-    code: KeyCode,
-    mods: &Modifiers,
-) -> Option<KeyResult> {
+fn handle_overlays(input: &mut InputState, code: KeyCode, mods: &Modifiers) -> Option<KeyResult> {
     match code {
         // `/` when input is empty: open command palette
         KeyCode::Char('/') if mods.none() && input.get_text().is_empty() => {
@@ -573,14 +568,6 @@ fn handle_overlays(
         // Ctrl+L: open model picker
         KeyCode::Char('l') if mods.only_ctrl() => {
             Some((vec![], vec![], Some(OverlayRequest::ModelPicker)))
-        }
-        // Ctrl+T: open thinking picker (if model supports reasoning)
-        KeyCode::Char('t') if mods.only_ctrl() => {
-            if zdx_engine::models::model_supports_reasoning(model_id) {
-                Some((vec![], vec![], Some(OverlayRequest::ThinkingPicker)))
-            } else {
-                Some((vec![], vec![], None))
-            }
         }
         // Ctrl+R: open thread TLDR/recap overlay
         KeyCode::Char('r') if mods.only_ctrl() => {
@@ -684,7 +671,6 @@ fn handle_favorites(
     let favorite = ctx.config.favorites.get(idx)?;
 
     let model = favorite.model.clone();
-    let level = favorite.thinking;
     let message = format!("Switched to {}", favorite.alias);
 
     Some((
@@ -692,14 +678,12 @@ fn handle_favorites(
             UiEffect::PersistModel {
                 model: model.clone(),
             },
-            UiEffect::PersistThinking { level },
             UiEffect::RefreshSystemPrompt {
                 path: ctx.root.to_path_buf(),
             },
         ],
         vec![
             StateMutation::Config(ConfigMutation::SetModel(model)),
-            StateMutation::Config(ConfigMutation::SetThinkingLevel(level)),
             StateMutation::Transcript(TranscriptMutation::AppendOrReplaceSwitchNotice(message)),
         ],
         None,
@@ -1624,7 +1608,7 @@ mod tests {
     fn fav(alias: &str, model: &str, thinking: ThinkingLevel) -> ModelFavorite {
         ModelFavorite {
             alias: alias.to_string(),
-            model: model.to_string(),
+            model: zdx_engine::models::format_model_thinking(model, thinking),
             thinking,
         }
     }
@@ -1712,11 +1696,7 @@ mod tests {
         assert!(mutations.iter().any(|m| matches!(
             m,
             StateMutation::Config(ConfigMutation::SetModel(model))
-                if model == "anthropic:claude-sonnet-4-6"
-        )));
-        assert!(mutations.iter().any(|m| matches!(
-            m,
-            StateMutation::Config(ConfigMutation::SetThinkingLevel(ThinkingLevel::High))
+                if model == "anthropic:claude-sonnet-4-6@high"
         )));
         assert!(
             effects

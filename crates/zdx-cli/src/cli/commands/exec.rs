@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use zdx_engine::config::{self, ThinkingLevel};
+use zdx_engine::config;
 use zdx_engine::core::agent::{ToolConfig, ToolSelection};
 use zdx_engine::core::context::PromptContextInclusion;
 use zdx_engine::core::thread_persistence::ThreadPersistenceOptions;
@@ -23,7 +23,6 @@ pub struct ExecRunOptions<'a> {
     pub model_override: Option<&'a str>,
     pub effective_system_prompt_override: Option<&'a str>,
     pub tool_timeout_override: Option<u32>,
-    pub thinking_override: Option<&'a str>,
     pub event_filter_override: Option<&'a str>,
     pub stream: bool,
     pub tools_override: Option<&'a str>,
@@ -48,18 +47,22 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
     // Apply overrides if provided
     let config = {
         let mut c = options.config.clone();
+        if let Some(model) = subagent.as_ref().and_then(|d| d.model.as_deref()) {
+            c.apply_model_spec(model);
+        }
+        if let Some(model) = subagent
+            .as_ref()
+            .and_then(|d| c.subagents.overrides.get(&d.name))
+            .and_then(|over| over.model.as_deref())
+        {
+            let model = model.to_string();
+            c.apply_model_spec(&model);
+        }
         if let Some(model) = options.model_override {
-            c.model = model.to_string();
-        } else if let Some(model) = subagent.as_ref().and_then(|d| d.model.clone()) {
-            c.model = model;
+            c.apply_model_spec(model);
         }
         if let Some(timeout_secs) = options.tool_timeout_override {
             c.tool_timeout_secs = timeout_secs;
-        }
-        if let Some(thinking) = options.thinking_override {
-            c.thinking_level = parse_thinking_level(thinking)?;
-        } else if let Some(level) = subagent.as_ref().and_then(|d| d.thinking_level) {
-            c.thinking_level = level;
         }
         if options.no_skills {
             c.skills.enabled = false;
@@ -142,20 +145,6 @@ fn resolve_subagent(
     subagents::resolve_named(root, name, None)
         .with_context(|| format!("load subagent '{name}'"))
         .map(Some)
-}
-
-pub(super) fn parse_thinking_level(s: &str) -> Result<ThinkingLevel> {
-    match s.to_lowercase().as_str() {
-        "off" => Ok(ThinkingLevel::Off),
-        "minimal" | "low" => Ok(ThinkingLevel::Low),
-        "medium" => Ok(ThinkingLevel::Medium),
-        "high" => Ok(ThinkingLevel::High),
-        "xhigh" => Ok(ThinkingLevel::XHigh),
-        "max" => Ok(ThinkingLevel::Max),
-        _ => anyhow::bail!(
-            "Invalid thinking level '{s}'. Valid options: off, low, medium, high, xhigh, max"
-        ),
-    }
 }
 
 fn parse_tools_override(raw: &str, available: &[String]) -> Result<Vec<String>> {

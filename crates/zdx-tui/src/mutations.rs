@@ -125,5 +125,4 @@ pub enum AuthMutation {
 #[derive(Debug)]
 pub enum ConfigMutation {
     SetModel(String),
-    SetThinkingLevel(ThinkingLevel),
 }

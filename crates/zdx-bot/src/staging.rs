@@ -701,15 +701,27 @@ async fn seed_new_topic(
     let inherited_thinking = thread_persistence::read_thread_thinking_override(source_thread_id)
         .ok()
         .flatten();
+    let inherited_model = if inherited_model.is_some() || inherited_thinking.is_some() {
+        let mut config = context.config_for_chat(chat_id);
+        if thread_persistence::read_persistent_profile(source_thread_id)
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME)
+        {
+            zdx_engine::subagents::apply_orchestrator_override(&mut config);
+        }
+        config.apply_thread_model_override(inherited_model.as_deref(), inherited_thinking);
+        Some(config.model)
+    } else {
+        None
+    };
     let new_thread_id = thread_id_for_chat(chat_id, Some(new_topic_id));
     let created =
         thread_persistence::Thread::with_id(new_thread_id.clone()).and_then(|mut thread| {
             thread.set_handoff_from(Some(source_thread_id.to_string()));
             if let Some(model) = inherited_model {
                 thread.set_model_override(Some(model))?;
-            }
-            if let Some(level) = inherited_thinking {
-                thread.set_thinking_override(Some(level))?;
             }
             thread.set_pending_topic_title(true)
         });

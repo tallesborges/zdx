@@ -447,15 +447,14 @@ impl WorkerManager {
         // Record the overrides on the thread too, so surfaces that describe
         // the worker (status cards, `zdx threads`) report what it really runs
         // with; the runner still passes them explicitly to the child.
-        if model.is_some() {
+        if let Some(model_spec) = model.as_deref() {
+            let persisted = thinking_level.map_or_else(
+                || model_spec.to_string(),
+                |level| crate::models::format_model_thinking(model_spec, level),
+            );
             thread
-                .set_model_override(model.clone())
+                .set_model_override(Some(persisted))
                 .context("Failed to set worker model override")?;
-        }
-        if thinking_level.is_some() {
-            thread
-                .set_thinking_override(thinking_level)
-                .context("Failed to set worker thinking override")?;
         }
         let worker_id = thread.id.clone();
 

@@ -338,6 +338,22 @@ pub fn format_model_thinking(model: &str, level: crate::config::ThinkingLevel) -
     ModelSpec::parse(model).with_thinking(level).to_string()
 }
 
+/// Resolves a runtime model override against an inherited thinking level.
+///
+/// An explicit `@<level>` suffix wins. A suffixless override changes only the
+/// model and inherits the active level. The returned model is canonical and
+/// carries the effective level inline, preserving other modifiers such as
+/// `@fast`.
+#[must_use]
+pub fn resolve_model_spec(
+    model: &str,
+    inherited: crate::config::ThinkingLevel,
+) -> (String, crate::config::ThinkingLevel) {
+    let spec = ModelSpec::parse(model);
+    let thinking = spec.thinking.unwrap_or(inherited);
+    (spec.with_thinking(thinking).to_string(), thinking)
+}
+
 /// Returns the `@fast` variant of a model spec when its provider supports the
 /// priority service tier (`OpenAI` and `OpenAI` Codex), otherwise `None`.
 #[must_use]
@@ -429,7 +445,8 @@ mod tests {
     use super::{
         ModelCapabilities, ModelOption, ModelPricing, UserModelOverride,
         apply_user_model_overrides, bare_model_id, custom_provider_models, fast_variant,
-        format_model_thinking, model_id_matches_patterns, model_reads_images, wildcard_match,
+        format_model_thinking, model_id_matches_patterns, model_reads_images, resolve_model_spec,
+        wildcard_match,
     };
     use crate::config::{CustomProviderConfig, ProvidersConfig, ThinkingLevel};
 
@@ -569,6 +586,18 @@ mod tests {
         assert_eq!(
             format_model_thinking("openai:gpt-5.2@low", ThinkingLevel::High),
             "openai:gpt-5.2@high"
+        );
+    }
+
+    #[test]
+    fn resolve_model_spec_inherits_or_replaces_thinking() {
+        assert_eq!(
+            resolve_model_spec("openai:gpt-5.2@fast", ThinkingLevel::High),
+            ("openai:gpt-5.2@high@fast".to_string(), ThinkingLevel::High)
+        );
+        assert_eq!(
+            resolve_model_spec("openai:gpt-5.2@off@fast", ThinkingLevel::High),
+            ("openai:gpt-5.2@off@fast".to_string(), ThinkingLevel::Off)
         );
     }
 

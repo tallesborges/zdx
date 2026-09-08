@@ -12,8 +12,7 @@ use super::{ReplyContext, escape_html, post_thread_header, thread_id_for_chat};
 use crate::agent;
 use crate::bot::context::BotContext;
 use crate::commands::{
-    BotCommand, ModelSubcommand, RestartMode, ThinkingSubcommand, parse_command,
-    parse_restart_command,
+    BotCommand, ModelSubcommand, RestartMode, parse_command, parse_restart_command,
 };
 use crate::telegram::markdown::{to_telegram_html, truncate_telegram_html};
 use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup};
@@ -32,14 +31,6 @@ pub(super) async fn handle_thread_setup_commands(
         reply_ctx.topic_id,
     )
     .await?
-        || handle_thinking_command(
-            context,
-            incoming,
-            thread_id,
-            reply_ctx.reply_to_message_id,
-            reply_ctx.topic_id,
-        )
-        .await?
         || handle_status_command(
             context,
             incoming,
@@ -424,14 +415,15 @@ async fn handle_model_command(
 
     match subcmd {
         ModelSubcommand::Show | ModelSubcommand::List => {
-            let override_model = if is_general {
-                None
+            let (current, has_override) = if is_general {
+                (bot_config.model.clone(), false)
             } else {
-                zdx_engine::core::thread_persistence::read_thread_model_override(thread_id)?
+                let (resolved, overridden) =
+                    resolve_topic_model_config(bot_config.clone(), thread_id)?;
+                (resolved.model, overridden)
             };
-            let current = override_model.as_deref().unwrap_or(&bot_config.model);
 
-            let header = if override_model.is_some() {
+            let header = if has_override {
                 format!(
                     "Current model: <code>{current}</code> (topic override)\nDefault: <code>{}</code>",
                     bot_config.model
@@ -474,11 +466,7 @@ async fn handle_model_command(
                 context.set_chat_model(incoming.chat_id, &model_id)?;
                 format!("✅ Default model set to <code>{model_id}</code>.")
             } else {
-                let mut thread =
-                    zdx_engine::core::thread_persistence::Thread::with_id(thread_id.to_string())
-                        .context("open thread")?;
-                thread.set_model_override(Some(model_id.clone()))?;
-                format!("✅ Model set to <code>{model_id}</code> for this topic.")
+                set_topic_model_override(bot_config.clone(), thread_id, &model_id)?
             };
             context
                 .client()
@@ -511,111 +499,36 @@ async fn handle_model_command(
     Ok(true)
 }
 
-async fn handle_thinking_command(
-    context: &BotContext,
-    incoming: &crate::types::IncomingMessage,
+fn resolve_topic_model_config(
+    mut config: zdx_engine::config::Config,
     thread_id: &str,
-    reply_to_message_id: Option<i64>,
-    topic_id: Option<i64>,
-) -> Result<bool> {
-    if !incoming.images.is_empty() || !incoming.audios.is_empty() {
-        return Ok(false);
+) -> Result<(zdx_engine::config::Config, bool)> {
+    if thread_persistence::read_persistent_profile(thread_id)?.as_deref()
+        == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME)
+    {
+        zdx_engine::subagents::apply_orchestrator_override(&mut config);
     }
-    let Some(text) = incoming.text.as_deref() else {
-        return Ok(false);
-    };
-    let Some(subcmd) = crate::commands::parse_thinking_command(text) else {
-        return Ok(false);
-    };
+    let model = thread_persistence::read_thread_model_override(thread_id)?;
+    let thinking = thread_persistence::read_thread_thinking_override(thread_id)?;
+    let overridden = model.is_some() || thinking.is_some();
+    config.apply_thread_model_override(model.as_deref(), thinking);
+    Ok((config, overridden))
+}
 
-    let is_general = incoming.is_forum && incoming.message_thread_id.is_none();
-    let default_level = context.config_for_chat(incoming.chat_id).thinking_level;
-
-    let msg = match subcmd {
-        ThinkingSubcommand::Show | ThinkingSubcommand::List => {
-            let override_level = if is_general {
-                None
-            } else {
-                thread_persistence::read_thread_thinking_override(thread_id)?
-            };
-            let current = override_level.unwrap_or(default_level);
-            let mut msg = if override_level.is_some() {
-                format!(
-                    "Current thinking: <code>{}</code> (topic override)\nDefault: <code>{}</code>",
-                    current.display_name(),
-                    default_level.display_name()
-                )
-            } else {
-                format!("Current thinking: <code>{}</code>", current.display_name())
-            };
-            if matches!(subcmd, ThinkingSubcommand::List | ThinkingSubcommand::Show) {
-                if is_general {
-                    msg.push_str(
-                        "\n\nPick a level below or use <code>/thinking set &lt;level&gt;</code>.",
-                    );
-                } else {
-                    msg.push_str(
-                        "\n\nPick a level below, use <code>/thinking set &lt;level&gt;</code>, or <code>/thinking reset</code>.",
-                    );
-                }
-            }
-
-            let keyboard = build_thinking_keyboard(current, is_general);
-            context
-                .client()
-                .send_message_with_markup(
-                    incoming.chat_id,
-                    &msg,
-                    reply_to_message_id,
-                    topic_id,
-                    &keyboard,
-                )
-                .await?;
-            return Ok(true);
-        }
-        ThinkingSubcommand::Set(level) => {
-            if is_general {
-                context.set_chat_thinking_level(incoming.chat_id, level)?;
-                format!(
-                    "✅ Default thinking set to <code>{}</code>.",
-                    level.display_name()
-                )
-            } else {
-                let mut thread =
-                    zdx_engine::core::thread_persistence::Thread::with_id(thread_id.to_string())
-                        .context("open thread")?;
-                thread.set_thinking_override(Some(level))?;
-                format!(
-                    "✅ Thinking set to <code>{}</code> for this topic.",
-                    level.display_name()
-                )
-            }
-        }
-        ThinkingSubcommand::Reset => {
-            if is_general {
-                format!(
-                    "Default thinking: <code>{}</code>\n\nUse <code>/thinking set &lt;level&gt;</code> to change.",
-                    default_level.display_name()
-                )
-            } else {
-                let mut thread =
-                    zdx_engine::core::thread_persistence::Thread::with_id(thread_id.to_string())
-                        .context("open thread")?;
-                thread.set_thinking_override(None)?;
-                format!(
-                    "✅ Thinking reset to default: <code>{}</code>",
-                    default_level.display_name()
-                )
-            }
-        }
-    };
-
-    context
-        .client()
-        .send_message(incoming.chat_id, &msg, reply_to_message_id, topic_id)
-        .await?;
-
-    Ok(true)
+fn set_topic_model_override(
+    config: zdx_engine::config::Config,
+    thread_id: &str,
+    model_id: &str,
+) -> Result<String> {
+    let (mut resolved, _) = resolve_topic_model_config(config, thread_id)?;
+    resolved.apply_model_spec(model_id);
+    let mut thread = zdx_engine::core::thread_persistence::Thread::with_id(thread_id.to_string())
+        .context("open thread")?;
+    thread.set_model_override(Some(resolved.model.clone()))?;
+    Ok(format!(
+        "✅ Model set to <code>{}</code> for this topic.",
+        resolved.model
+    ))
 }
 
 async fn handle_status_command(
@@ -1052,14 +965,14 @@ pub(crate) fn build_models_keyboard(
     }
 }
 
-/// Build an inline keyboard showing thinking levels.
-/// Callback data format: `thinking_set:{level}:{scope}`.
-pub(crate) fn build_thinking_keyboard(
+/// Build the second step of the model picker.
+/// Callback data format: `model_thinking:{provider}:{index}:{scope}:{level}`.
+pub(crate) fn build_model_thinking_keyboard(
+    provider: &str,
+    index: usize,
+    scope: ModelPickerScope,
     current: ThinkingLevel,
-    is_general: bool,
 ) -> InlineKeyboardMarkup {
-    let scope = if is_general { "general" } else { "topic" };
-
     let mut rows: Vec<Vec<InlineKeyboardButton>> = ThinkingLevel::all()
         .chunks(2)
         .map(|chunk| {
@@ -1069,23 +982,20 @@ pub(crate) fn build_thinking_keyboard(
                     let prefix = if *level == current { "✅ " } else { "" };
                     InlineKeyboardButton::callback(
                         format!("{prefix}{}", level.display_name()),
-                        format!("thinking_set:{}:{scope}", level.display_name()),
+                        format!(
+                            "model_thinking:{provider}:{index}:{}:{}",
+                            scope.as_str(),
+                            level.display_name()
+                        ),
                     )
                 })
                 .collect()
         })
         .collect();
 
-    if !is_general {
-        rows.push(vec![InlineKeyboardButton::callback(
-            "↺ Use default",
-            "thinking_reset:topic",
-        )]);
-    }
-
     rows.push(vec![InlineKeyboardButton::callback(
-        "✖ Cancel",
-        format!("thinking_cancel:{scope}"),
+        "← Back",
+        format!("model_provider:{provider}:{}", scope.as_str()),
     )]);
 
     InlineKeyboardMarkup {

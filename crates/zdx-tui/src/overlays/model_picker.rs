@@ -15,7 +15,7 @@ use zdx_engine::providers::{ProviderKind, resolve_provider};
 
 use super::OverlayUpdate;
 use crate::effects::UiEffect;
-use crate::mutations::{ConfigMutation, StateMutation, TranscriptMutation};
+use crate::mutations::{StateMutation, TranscriptMutation};
 use crate::state::TuiState;
 
 /// One selectable row: a registry model, optionally as its `@fast` variant.
@@ -134,7 +134,6 @@ impl ModelPickerState {
                 let model_id = row.spec();
                 let display_name = row_label(row);
 
-                let root = tui.agent_opts.root.clone();
                 let use_thread_override = tui.thread.thread_handle.is_some()
                     && (tui.thread.model_override.is_some()
                         || tui.thread.thinking_override.is_some());
@@ -146,40 +145,10 @@ impl ModelPickerState {
                         ),
                     )]);
                 }
-                OverlayUpdate::close()
-                    .with_ui_effects(vec![
-                        if use_thread_override {
-                            UiEffect::PersistThreadModelOverride {
-                                model: model_id.clone(),
-                            }
-                        } else {
-                            UiEffect::PersistModel {
-                                model: model_id.clone(),
-                            }
-                        },
-                        UiEffect::RefreshSystemPrompt { path: root },
-                    ])
-                    .with_mutations(vec![
-                        if use_thread_override {
-                            StateMutation::Thread(crate::mutations::ThreadMutation::SetOverrides {
-                                model_override: Some(model_id.clone()),
-                                thinking_override: tui.thread.thinking_override,
-                            })
-                        } else {
-                            StateMutation::Config(ConfigMutation::SetModel(model_id.clone()))
-                        },
-                        StateMutation::SetActiveThreadOverrides {
-                            model_override: if use_thread_override {
-                                Some(model_id)
-                            } else {
-                                tui.thread.model_override.clone()
-                            },
-                            thinking_override: tui.thread.thinking_override,
-                        },
-                        StateMutation::Transcript(TranscriptMutation::AppendOrReplaceSwitchNotice(
-                            format!("Switched to {display_name}"),
-                        )),
-                    ])
+                OverlayUpdate::open(super::OverlayRequest::ThinkingPicker {
+                    model: model_id,
+                    display_name,
+                })
             }
             // Ctrl+U (or Command+Backspace on macOS): clear the current line
             KeyCode::Char('u') if ctrl && !shift && !alt => {
