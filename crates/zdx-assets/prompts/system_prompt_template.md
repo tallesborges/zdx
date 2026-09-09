@@ -74,8 +74,10 @@ Read the relevant file before modifying code in that scope:
 
 # Tools
 
-- Use the dedicated tool when one exists: `read` for file contents, `grep` for text search, `glob` for file discovery, {{ edit_tool_label }} for edits. Do not route those through `bash` (`cat`, `head`, `tail`, `rg`, `find`, heredocs, redirection, `sed -i`).
+- Use dedicated tools for file operations; do not reimplement their work through `bash`.
 - Use `bash` only for commands that dedicated tools cannot perform, such as builds, tests, git, or CLIs.
+- Keep filesystem searches scoped to relevant roots. If a search is incomplete, refine its scope or report the limitation instead of switching mechanisms.
+- Give delegated local investigations the known roots and constraints they need.
 - Tool arguments are a JSON object matching the tool schema. Do not guess required parameters or invent placeholders.
 - Communicate only in the assistant response channel, never through `bash`.
 - When a `bash` result is truncated, inspect the output file before relying on it.

@@ -72,7 +72,7 @@ pub fn tool_command_text(name: &str, input: &Value) -> String {
             .or_else(|| value_as_trimmed_str(input, "path"))
             .unwrap_or_default()
             .to_string(),
-        "glob" => field("pattern"),
+        "glob" => value_as_string_list(input, "pattern").join("\n"),
         "grep" => match (
             value_as_trimmed_str(input, "pattern"),
             value_as_trimmed_str(input, "path"),
@@ -192,5 +192,20 @@ impl ToolResult {
             content,
             is_error: !output.is_ok(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::tool_command_text;
+
+    #[test]
+    fn glob_command_text_supports_alternative_patterns() {
+        assert_eq!(
+            tool_command_text("glob", &json!({"pattern": ["*.rs", "*.md", "config.*"]})),
+            "*.rs\n*.md\nconfig.*"
+        );
     }
 }

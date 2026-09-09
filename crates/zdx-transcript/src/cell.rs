@@ -128,7 +128,14 @@ fn tool_key_arg(name: &str, input: &Value) -> Option<String> {
         "thread_search" => {
             value_as_trimmed_str(input, "query").map(|q| truncate_with_ellipsis(q, 72))
         }
-        "glob" => value_as_trimmed_str(input, "pattern").map(str::to_string),
+        "glob" => {
+            let patterns = value_as_string_list(input, "pattern");
+            match patterns.as_slice() {
+                [] => None,
+                [pattern] => Some(pattern.clone()),
+                _ => Some(format!("[{}]", format_compact_list(&patterns, 3))),
+            }
+        }
         "grep" => {
             let pattern = value_as_trimmed_str(input, "pattern")?;
             if let Some(path) = value_as_trimmed_str(input, "path") {
@@ -1627,6 +1634,23 @@ mod tests {
         assert!(all_text.contains(']'));
         assert!(all_text.contains("ratatui style guide"));
         assert!(all_text.contains("rust tui styling"));
+    }
+
+    #[test]
+    fn test_glob_display_shows_alternative_patterns() {
+        let cell = HistoryCell::tool_running(
+            "123",
+            "glob",
+            serde_json::json!({"pattern": ["*.rs", "*.md", "config.*"]}),
+        );
+
+        let all_text: String = cell
+            .display_lines(140, 0)
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.text.as_str()))
+            .collect();
+
+        assert!(all_text.contains("[*.rs, *.md, config.*]"));
     }
 
     #[test]

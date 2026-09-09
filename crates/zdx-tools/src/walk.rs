@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use globset::Glob;
 use ignore::types::Types;
 use ignore::{DirEntry, WalkBuilder, WalkState};
 
@@ -81,7 +82,7 @@ impl WalkBudget {
 /// `.git` is pruned, the way ripgrep prunes it under `--hidden`.
 #[derive(Debug, Clone)]
 pub(crate) struct WalkPolicy {
-    /// Whether `.gitignore`/global/exclude rules prune the walk.
+    /// Whether `.ignore`, `.gitignore`, global, and exclude rules prune the walk.
     pub(crate) respect_gitignore: bool,
     /// Whether `.git` is pruned. Off when the caller's pattern names it, so an
     /// explicit request still reaches the repository's own metadata.
@@ -97,7 +98,7 @@ impl WalkPolicy {
     pub(crate) fn for_pattern(pattern: Option<&str>) -> Self {
         Self {
             respect_gitignore: true,
-            skip_git: !pattern.is_some_and(|pattern| pattern.contains(".git")),
+            skip_git: !pattern.is_some_and(pattern_names_git),
             types: None,
             budget: WalkBudget::start(),
         }
@@ -108,7 +109,14 @@ impl WalkPolicy {
         self
     }
 
-    /// Same policy and the same deadline, with gitignore pruning disabled.
+    pub(crate) fn with_include_ignored(mut self, include_ignored: bool) -> Self {
+        if include_ignored {
+            self.respect_gitignore = false;
+        }
+        self
+    }
+
+    /// Same policy and the same deadline, with ignore-file pruning disabled.
     pub(crate) fn without_gitignore(&self) -> Self {
         Self {
             respect_gitignore: false,
@@ -123,6 +131,13 @@ impl WalkPolicy {
             ..self.clone()
         }
     }
+}
+
+fn pattern_names_git(pattern: &str) -> bool {
+    pattern.split(['/', '\n']).any(|component| {
+        component.contains(".git")
+            && Glob::new(component).is_ok_and(|glob| glob.compile_matcher().is_match(".git"))
+    })
 }
 
 /// Depth covered by the sequential first pass.
@@ -196,6 +211,7 @@ fn builder(search_path: &Path, policy: &WalkPolicy) -> WalkBuilder {
         .git_ignore(policy.respect_gitignore)
         .git_global(policy.respect_gitignore)
         .git_exclude(policy.respect_gitignore)
+        .ignore(policy.respect_gitignore)
         .hidden(false);
     if policy.skip_git {
         builder.filter_entry(|entry| entry.file_name() != ".git");
@@ -214,8 +230,12 @@ mod tests {
     fn git_is_pruned_unless_the_pattern_names_it() {
         assert!(WalkPolicy::for_pattern(None).skip_git);
         assert!(WalkPolicy::for_pattern(Some("**/*.rs")).skip_git);
+        assert!(WalkPolicy::for_pattern(Some("**/.github/**")).skip_git);
+        assert!(WalkPolicy::for_pattern(Some(".gitignore")).skip_git);
+        assert!(WalkPolicy::for_pattern(Some("config\n**/.github/**")).skip_git);
         assert!(!WalkPolicy::for_pattern(Some(".git/config")).skip_git);
         assert!(!WalkPolicy::for_pattern(Some("**/.git/**")).skip_git);
+        assert!(!WalkPolicy::for_pattern(Some("**/{.git,.github}/**")).skip_git);
     }
 
     #[test]

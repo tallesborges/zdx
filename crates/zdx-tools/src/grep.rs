@@ -53,7 +53,7 @@ const WALK_PHASE: std::time::Duration = std::time::Duration::from_secs(3);
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Grep".to_string(),
-        description: "Search file contents with a regex. ALWAYS use this instead of grep or rg through Bash. It is not the ripgrep CLI — no CLI-style flags: use `path`, `glob`, `type`, `case_insensitive`, `context_lines`, `max_count`/`offset`, and `extract_unique` (for discovery queries such as listing tag or symbol names). Narrow broad searches with `path`, `glob`, or `type`; a search over a very large tree can stop before it finishes. Matches come back as file, line number, matched text, and optional context. Gitignored files are skipped — pass an exact file path in `path` to search one; hidden files are searched, and `.git` only when `glob` names it. When a result is `truncated`, treat it as incomplete rather than absent: continue with `offset`, narrow the search, or `read` the files listed in `skipped_files` (over 4MB, never searched)."
+        description: "Search file contents with a regular expression within a scoped path; an exact file path is searched directly. Hidden files are included; ignore rules apply by default, and `.git` is searched only when explicitly targeted. Results include source locations and optional context. Result caps can be paginated; an incomplete traversal requires a narrower or split search path. Files over 4MB are skipped and reported."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -69,6 +69,10 @@ pub fn definition() -> ToolDefinition {
                 "glob": {
                     "type": "string",
                     "description": "Glob pattern to filter files (e.g. \"*.rs\", \"src/**/*.ts\")"
+                },
+                "include_ignored": {
+                    "type": "boolean",
+                    "description": "Include files excluded by .gitignore, .ignore, and global git excludes (default: false). The traversal deadline and large-file limit still apply."
                 },
                 "case_insensitive": {
                     "type": "boolean",
@@ -112,6 +116,8 @@ struct GrepInput {
     pattern: String,
     path: Option<String>,
     glob: Option<String>,
+    #[serde(default, deserialize_with = "crate::bool_or_string::deserialize")]
+    include_ignored: bool,
     #[serde(default, deserialize_with = "crate::bool_or_string::deserialize")]
     case_insensitive: bool,
     #[serde(default, deserialize_with = "deserialize_context_lines")]
@@ -343,7 +349,9 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
 
     // One traversal policy per call: `.git` pruning keyed off the glob, and one
     // wall-clock deadline shared by walking and searching.
-    let policy = WalkPolicy::for_pattern(input.glob.as_deref()).with_types(file_type_filter);
+    let policy = WalkPolicy::for_pattern(input.glob.as_deref())
+        .with_types(file_type_filter)
+        .with_include_ignored(input.include_ignored);
 
     // Extract-unique mode: return sorted deduplicated capture values.
     if input.extract_unique {
@@ -2037,6 +2045,36 @@ mod type_filter_tests {
         let result = execute(&json!({"pattern": "SCCACHE_"}), &ctx);
         let data = result.data().unwrap();
         assert_eq!(data["total_matches"], 1);
+    }
+
+    #[test]
+    fn test_include_ignored_applies_to_normal_and_extract_unique_modes() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join(".ignore"), "ignored/\n").unwrap();
+        fs::create_dir_all(temp.path().join("ignored")).unwrap();
+        fs::create_dir_all(temp.path().join("visible")).unwrap();
+        fs::write(temp.path().join("ignored/value.txt"), "name=ignored\n").unwrap();
+        fs::write(temp.path().join("visible/value.txt"), "name=visible\n").unwrap();
+        let ctx = make_ctx(&temp);
+
+        let result = execute(&json!({"pattern": "name="}), &ctx);
+        assert_eq!(result.data().unwrap()["total_matches"], 1);
+
+        let result = execute(&json!({"pattern": "name=", "include_ignored": true}), &ctx);
+        assert_eq!(result.data().unwrap()["total_matches"], 2);
+
+        let result = execute(
+            &json!({
+                "pattern": "name=(\\w+)",
+                "include_ignored": true,
+                "extract_unique": true
+            }),
+            &ctx,
+        );
+        assert_eq!(
+            result.data().unwrap()["values"],
+            json!(["ignored", "visible"])
+        );
     }
 
     #[test]

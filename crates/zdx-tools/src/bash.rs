@@ -46,7 +46,7 @@ fn write_temp_file(bytes: &[u8], stream_name: &str) -> Option<String> {
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Bash".to_string(),
-        description: "Execute a shell command when no dedicated tool exists. Use Bash for builds, tests, git, gh, and other CLI workflows with no first-class tool. NEVER use grep, rg, cat, head, tail, less, find, or ls through Bash for file operations — use the dedicated Read, Grep, and Glob tools instead, which return structured output with pagination and .gitignore awareness. Chain dependent shell steps in one command, but prefer parallel tool calls for independent work. Do not use Bash to communicate with the user. Commands have no timeout by default; set timeout_secs to limit one command. Returns stdout, stderr, and exit code. When stdout or stderr is truncated, use Read on the returned temp file to inspect the full output."
+        description: "Run shell and CLI workflows without an equivalent dedicated tool. Use Grep for file-content search, Glob for path discovery, and Read for file inspection; Bash remains appropriate for processing command output. Long-lived commands use background mode, and truncated output can be inspected with Read."
             .to_string(),
         input_schema: json!({
             "type": "object",
