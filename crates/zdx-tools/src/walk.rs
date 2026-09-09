@@ -248,14 +248,14 @@ mod tests {
 
     #[test]
     fn budget_with_time_left_is_not_expired() {
-        let budget = WalkBudget::new(Duration::from_secs(60));
+        let budget = WalkBudget::new(Duration::from_mins(1));
         assert!(!budget.is_expired());
         assert!(!budget.is_partial());
     }
 
     #[test]
     fn expired_phase_reports_partial_without_ending_the_call() {
-        let call = WalkBudget::new(Duration::from_secs(60));
+        let call = WalkBudget::new(Duration::from_mins(1));
         let walking = call.phase(Duration::ZERO);
 
         assert!(walking.is_expired());
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn phase_never_outlives_the_call() {
         let call = WalkBudget::new(Duration::ZERO);
-        let walking = call.phase(Duration::from_secs(60));
+        let walking = call.phase(Duration::from_mins(1));
         assert!(walking.is_expired());
     }
 
