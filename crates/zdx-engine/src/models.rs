@@ -274,23 +274,7 @@ impl ModelOption {
 
     /// Finds a model by its ID.
     pub fn find_by_id(id: &str) -> Option<&'static ModelOption> {
-        // Try exact match on id first
-        if let Some(model) = available_models().iter().find(|m| m.id == id) {
-            return Some(model);
-        }
-        if let Some(model) = available_models().iter().find(|m| m.qualified_id() == id) {
-            return Some(model);
-        }
-
-        // Fall back to resolving provider prefix and comparing
-        let target = crate::providers::resolve_provider(id);
-        available_models().iter().find(|m| {
-            // Use stored provider instead of resolving from id
-            let provider_kind = crate::providers::provider_kind_from_id(m.provider);
-            provider_kind == Some(target.kind)
-                && m.id == target.model
-                && m.account.map(str::to_string) == target.account
-        })
+        find_model(available_models(), id)
     }
 
     /// Finds a model by explicit provider + model ID.
@@ -299,6 +283,31 @@ impl ModelOption {
             .iter()
             .find(|m| m.provider.eq_ignore_ascii_case(provider) && m.id.eq_ignore_ascii_case(id))
     }
+}
+
+/// Resolves a model spec against a set of models, ignoring `@fast` /
+/// `@<thinking>` modifiers so a spec like `acme:flash-2@max` still finds the
+/// underlying model.
+fn find_model<'a>(models: &'a [ModelOption], id: &str) -> Option<&'a ModelOption> {
+    let base = ModelSpec::parse(id).base;
+
+    // Try exact match on the bare model id first
+    if let Some(model) = models.iter().find(|m| m.id == base) {
+        return Some(model);
+    }
+    if let Some(model) = models.iter().find(|m| m.qualified_id() == base) {
+        return Some(model);
+    }
+
+    // Fall back to resolving provider prefix and comparing
+    let target = crate::providers::resolve_provider(base);
+    models.iter().find(|m| {
+        // Use stored provider instead of resolving from id
+        let provider_kind = crate::providers::provider_kind_from_id(m.provider);
+        provider_kind == Some(target.kind)
+            && m.id == target.model
+            && m.account.map(str::to_string) == target.account
+    })
 }
 
 /// Returns true if the model supports reasoning, defaulting to true when unknown.
@@ -445,8 +454,8 @@ mod tests {
     use super::{
         ModelCapabilities, ModelOption, ModelPricing, UserModelOverride,
         apply_user_model_overrides, bare_model_id, custom_provider_models, fast_variant,
-        format_model_thinking, model_id_matches_patterns, model_reads_images, resolve_model_spec,
-        wildcard_match,
+        find_model, format_model_thinking, model_id_matches_patterns, model_reads_images,
+        resolve_model_spec, wildcard_match,
     };
     use crate::config::{CustomProviderConfig, ProvidersConfig, ThinkingLevel};
 
@@ -561,6 +570,39 @@ mod tests {
             input_images: None,
             api: None,
         }
+    }
+
+    #[test]
+    fn find_model_strips_thinking_modifiers_for_custom_providers() {
+        // Mirrors a custom-provider model promoted into the registry by a
+        // `model_overrides.toml` entry (see
+        // `user_override_adds_custom_provider_model_metadata`).
+        let models = [ModelOption {
+            id: "flash-2",
+            provider: "acme",
+            account: None,
+            display_name: "Acme Flash",
+            pricing: ModelPricing {
+                input: 0.0,
+                output: 0.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            context_limit: 1_000_000,
+            capabilities: ModelCapabilities::default(),
+        }];
+
+        // The TUI passes the full config spec, which carries the `@<thinking>`
+        // suffix. Custom-provider prefixes aren't a `ProviderKind`, so this
+        // must match on the stripped qualified id.
+        let found = find_model(&models, "acme:flash-2@max")
+            .expect("custom-provider model must resolve despite @max suffix");
+        assert_eq!(found.qualified_id(), "acme:flash-2");
+        assert_eq!(found.context_limit, 1_000_000);
+
+        // Bare and unknown specs behave as before.
+        assert!(find_model(&models, "acme:flash-2").is_some());
+        assert!(find_model(&models, "acme:not-a-model@low").is_none());
     }
 
     #[test]
