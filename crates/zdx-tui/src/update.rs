@@ -316,11 +316,36 @@ fn handle_voice_transcribed(
     vec![]
 }
 
+fn refresh_turn_context(tui: &mut crate::state::TuiState) {
+    // Reload on-disk config (config and AGENTS.md/CLAUDE.md edits, root
+    // changes, and the daily date must apply to the message being submitted,
+    // not the next one), then rebuild the effective prompt + runtime-context
+    // snapshot so a submission both attaches and spawns against fresh
+    // authoritative instructions.
+    let layers = zdx_engine::config::paths::config_layer_paths_for(&tui.agent_opts.root);
+    crate::runtime::reload_tab_config(tui, &layers);
+    let instruction_layers = crate::tui_instruction_layers();
+    if let Ok(effective) =
+        zdx_engine::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
+            &tui.config,
+            &tui.agent_opts.root,
+            &instruction_layers,
+            true,
+        )
+    {
+        tui.system_prompt = effective.prompt;
+        tui.runtime_context = effective.runtime_context;
+    }
+}
+
 /// Sends the current composer contents after a voice transcription lands,
 /// reusing the same submission path as pressing Enter. Because Esc discards a
 /// recording before transcription starts, any transcription that reaches here
 /// was finished with the voice hotkey and should be sent immediately.
 fn submit_after_voice(app: &mut AppState) -> Vec<UiEffect> {
+    // Prepare config + effective prompt + runtime context before the voice
+    // submission selects/persists its advisory context.
+    refresh_turn_context(&mut app.tui);
     let thread_id = app
         .tui
         .thread
@@ -328,6 +353,10 @@ fn submit_after_voice(app: &mut AppState) -> Vec<UiEffect> {
         .as_ref()
         .map(|thread_handle| thread_handle.id.clone());
     let active_thread_ids = app.tui.snapshot_active_thread_ids();
+    let last_attached_key =
+        zdx_engine::core::thread_persistence::last_attached_context_key_from_messages(
+            &app.tui.thread.messages,
+        );
     let ctx = input::InputContext {
         agent_state: &app.tui.agent_state,
         tasks: &app.tui.tasks,
@@ -338,6 +367,8 @@ fn submit_after_voice(app: &mut AppState) -> Vec<UiEffect> {
         active_thread_ids: &active_thread_ids,
         root: app.tui.agent_opts.root.as_path(),
         can_retry: false,
+        runtime_context: app.tui.runtime_context.as_ref(),
+        last_attached_key: last_attached_key.as_deref(),
     };
     let (effects, mutations, _overlay) = input::submit_current_input(&mut app.tui.input, &ctx);
     apply_mutations(&mut app.tui, mutations);
@@ -513,6 +544,10 @@ fn maybe_send_next_queued_prompt_for_tab(
         return false;
     };
 
+    // Prepare config + effective prompt + runtime context before this queued
+    // prompt selects/persists its advisory context.
+    refresh_turn_context(tui);
+
     let thread_id = tui.thread.thread_handle.as_ref().map(|log| log.id.clone());
     // Title suggestion only fires for the active tab — see
     // `build_send_effects_for_tab` for the rationale.
@@ -520,12 +555,18 @@ fn maybe_send_next_queued_prompt_for_tab(
         && thread_id.is_some()
         && tui.thread.title.is_none()
         && !tui.tasks.state(TaskKind::ThreadTitle).is_running();
-    let (queue_effects, queue_mutations) = input::build_send_effects_for_tab(
+    let last_attached_key =
+        zdx_engine::core::thread_persistence::last_attached_context_key_from_messages(
+            &tui.thread.messages,
+        );
+    let (queue_effects, queue_mutations) = input::build_send_effects_for_tab_with_context(
         &queued.text,
         thread_id,
         should_suggest_title,
         queued.images,
         tab,
+        tui.runtime_context.as_ref(),
+        last_attached_key.as_deref(),
     );
     apply_tab_mutations(tui, queue_mutations);
     effects.extend(queue_effects);
@@ -847,10 +888,10 @@ fn handle_bash_executed_event(
 
 fn handle_system_prompt_refreshed(
     app: &mut AppState,
-    result: Result<Option<String>, String>,
+    result: Result<crate::events::SystemPromptRefresh, String>,
 ) -> Vec<UiEffect> {
     let mutation = match result {
-        Ok(prompt) => StateMutation::SetSystemPrompt(prompt),
+        Ok(refresh) => StateMutation::SetSystemPrompt(Box::new(refresh)),
         Err(error) => StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(error)),
     };
     apply_mutations(&mut app.tui, vec![mutation]);
@@ -986,8 +1027,9 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
                 tui.config
                     .apply_thread_model_override(model_override.as_deref(), thinking_override);
             }
-            StateMutation::SetSystemPrompt(system_prompt) => {
-                tui.system_prompt = system_prompt;
+            StateMutation::SetSystemPrompt(refresh) => {
+                tui.system_prompt = refresh.prompt;
+                tui.runtime_context = refresh.runtime_context;
             }
             StateMutation::SetLastSkillRepo(repo) => {
                 tui.last_skill_repo = Some(repo);
@@ -1311,6 +1353,7 @@ fn create_btw_tab(tab_id: TabId, parent_thread_id: Option<String>, parent: &TuiS
         loaded_skills: parent.loaded_skills.clone(),
         agent_opts,
         system_prompt: parent.system_prompt.clone(),
+        runtime_context: parent.runtime_context.clone(),
         agent_state: AgentState::Idle,
         last_turn_outcome: None,
         unseen_completion: false,
@@ -1341,6 +1384,7 @@ fn create_main_tab(tab_id: TabId, parent: &TuiState) -> TuiState {
         config,
         parent.agent_opts.root.clone(),
         parent.system_prompt.clone(),
+        parent.runtime_context.clone(),
         None,
         Vec::new(),
     );
@@ -1415,6 +1459,7 @@ fn create_thread_tab(
         loaded_skills: parent.loaded_skills.clone(),
         agent_opts,
         system_prompt: parent.system_prompt.clone(),
+        runtime_context: parent.runtime_context.clone(),
         agent_state: AgentState::Idle,
         last_turn_outcome: None,
         unseen_completion: false,
@@ -1660,10 +1705,30 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         return vec![];
     }
 
+    // A follow-up confirm submits a user message from inside the overlay, so
+    // refresh config + effective prompt + runtime context before the picker
+    // selects/persists its advisory context.
+    let is_followup_confirm = matches!(key.code, KeyCode::Enter)
+        || matches!(key.code, KeyCode::Char(c) if c.is_ascii_digit() && c != '0');
+    if matches!(
+        app.overlay.as_ref(),
+        Some(overlays::Overlay::FollowupPicker(_))
+    ) && is_followup_confirm
+    {
+        refresh_turn_context(&mut app.tui);
+    }
+
     // Try to dispatch to the active overlay
     if let Some(mut update) = overlays::handle_overlay_key(&app.tui, &mut app.overlay, key) {
         apply_mutations(&mut app.tui, std::mem::take(&mut update.mutations));
         return apply_overlay_update(app, update);
+    }
+
+    // A submit is about to run on the active tab (Enter). Refresh config +
+    // effective prompt + runtime context first so the advisory snapshot
+    // selected for this message is not one turn stale.
+    if app.overlay.is_none() && key.code == KeyCode::Enter {
+        refresh_turn_context(&mut app.tui);
     }
 
     // No overlay active - delegate to input feature module
@@ -1675,6 +1740,10 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         .map(|thread_handle| thread_handle.id.clone());
     let active_thread_ids = app.tui.snapshot_active_thread_ids();
     let can_retry = app.tui.can_retry_last_turn();
+    let last_attached_key =
+        zdx_engine::core::thread_persistence::last_attached_context_key_from_messages(
+            &app.tui.thread.messages,
+        );
     let ctx = input::InputContext {
         agent_state: &app.tui.agent_state,
         tasks: &app.tui.tasks,
@@ -1685,6 +1754,8 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         active_thread_ids: &active_thread_ids,
         root: app.tui.agent_opts.root.as_path(),
         can_retry,
+        runtime_context: app.tui.runtime_context.as_ref(),
+        last_attached_key: last_attached_key.as_deref(),
     };
     let (effects, mutations, overlay_request) =
         input::handle_main_key(&mut app.tui.input, &ctx, key);

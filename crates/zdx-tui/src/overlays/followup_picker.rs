@@ -33,7 +33,7 @@ impl FollowupPickerState {
         render_followup_picker(frame, self, area, input_y);
     }
 
-    pub fn handle_key(&mut self, _tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
+    pub fn handle_key(&mut self, tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match key.code {
@@ -53,22 +53,34 @@ impl FollowupPickerState {
                 OverlayUpdate::stay()
             }
             KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
-                self.confirm((c as usize) - ('1' as usize))
+                self.confirm((c as usize) - ('1' as usize), tui)
             }
-            KeyCode::Enter => self.confirm(self.selected),
+            KeyCode::Enter => self.confirm(self.selected, tui),
             _ => OverlayUpdate::stay(),
         }
     }
 
     /// Sends the suggestion at `idx` as the next user message.
-    fn confirm(&self, idx: usize) -> OverlayUpdate {
+    fn confirm(&self, idx: usize, tui: &TuiState) -> OverlayUpdate {
         let Some(text) = self.items.get(idx).cloned() else {
             return OverlayUpdate::stay();
         };
         // Reuse the normal submission path so the selected suggestion
-        // becomes a real user message + agent turn.
-        let (effects, mutations) =
-            crate::input::build_send_effects(&text, self.thread_id.clone(), false, vec![]);
+        // becomes a real user message + agent turn (attaching the runtime
+        // context like any other send).
+        let last_attached_key =
+            zdx_engine::core::thread_persistence::last_attached_context_key_from_messages(
+                &tui.thread.messages,
+            );
+        let (effects, mutations) = crate::input::build_send_effects_for_tab_with_context(
+            &text,
+            self.thread_id.clone(),
+            false,
+            vec![],
+            crate::input::TabContext::Active,
+            tui.runtime_context.as_ref(),
+            last_attached_key.as_deref(),
+        );
         let mut all_mutations = vec![StateMutation::SetLastFollowups(Vec::new())];
         all_mutations.extend(mutations);
         OverlayUpdate::close()

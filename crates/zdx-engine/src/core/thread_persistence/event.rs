@@ -136,6 +136,19 @@ pub enum ThreadEvent {
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         phase: Option<String>,
+        /// Serialized `<runtime_context>` block attached to a user message.
+        /// Persisted here so replay reconstructs the exact provider-visible
+        /// projection (`live == replay == what was sent`). `text` stays pure
+        /// for titles, search, exports, and UI. `None` on assistant messages
+        /// and older transcripts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<String>,
+        /// Stable change key of the attached context block (SHA-256 over the
+        /// update-eligible sections only). Persisted so later turns/processes
+        /// can detect a meaningful environment/capability update without
+        /// re-attaching on ambient tree/memory churn.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context_key: Option<String>,
         /// Provider-specific replay metadata (e.g. Gemini per-text-part
         /// `thoughtSignature`). Persisted so the request builder can replay
         /// the signature exactly on the next turn. Defaults to `None` for
@@ -301,10 +314,22 @@ impl ThreadEvent {
 
     /// Creates a new user message event.
     pub fn user_message(text: impl Into<String>) -> Self {
+        Self::user_message_with_context(text, None, None)
+    }
+
+    /// Creates a new user message event with an optional runtime-context block
+    /// and its change key.
+    pub fn user_message_with_context(
+        text: impl Into<String>,
+        context: Option<String>,
+        context_key: Option<String>,
+    ) -> Self {
         Self::Message {
             role: "user".to_string(),
             text: text.into(),
             phase: None,
+            context,
+            context_key,
             replay: None,
             ts: chrono_timestamp(),
         }
@@ -321,6 +346,8 @@ impl ThreadEvent {
             role: "assistant".to_string(),
             text: text.into(),
             phase,
+            context: None,
+            context_key: None,
             replay: None,
             ts: chrono_timestamp(),
         }

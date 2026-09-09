@@ -117,6 +117,7 @@ pub async fn run_exec(
     } else if let Some(prompt) = options.effective_system_prompt.as_ref() {
         Some(zdx_engine::core::context::EffectivePrompt {
             prompt: Some(prompt.clone()),
+            runtime_context: None,
             loaded_agents_paths: Vec::new(),
             scoped_context_paths: Vec::new(),
             warnings: Vec::new(),
@@ -146,17 +147,34 @@ pub async fn run_exec(
     }
 
     // Load thread history if continuing an existing thread
-    let messages = if let Some(ref existing_thread) = thread {
-        let mut history = thread_persistence::load_thread_as_messages(&existing_thread.id)?;
-        history.push(ChatMessage::user(prompt));
-        history
+    let (mut messages, last_attached_key) = if let Some(ref existing_thread) = thread {
+        let history = thread_persistence::load_thread_as_messages(&existing_thread.id)?;
+        let last_key = thread_persistence::last_attached_context_key_from_messages(&history);
+        (history, last_key)
     } else {
-        vec![ChatMessage::user(prompt)]
+        (Vec::new(), None)
     };
+
+    // Attach the advisory runtime-context snapshot to the new user message per
+    // the approved initial-only rule (full snapshot on first attach; a
+    // replacement block only when the change key moves), so it persists and
+    // replays identically.
+    let runtime_context = effective
+        .as_ref()
+        .and_then(|effective| effective.runtime_context.as_ref());
+    let attach = zdx_engine::core::context::resolve_context_to_attach(
+        runtime_context,
+        last_attached_key.as_deref(),
+    );
+    let (block, key) = match attach {
+        Some(attach) => (Some(attach.block), Some(attach.key)),
+        None => (None, None),
+    };
+    messages.push(ChatMessage::user(prompt).with_runtime_context(block.clone(), key.clone()));
 
     // Log user message to thread (ensures meta is written for new threads)
     if let Some(ref mut s) = thread {
-        s.append(&ThreadEvent::user_message(prompt))?;
+        s.append(&ThreadEvent::user_message_with_context(prompt, block, key))?;
     }
     let agent_opts = AgentOptions::from(options);
 

@@ -396,6 +396,8 @@ mod tests {
         let messages = vec![ChatMessage {
             role: "assistant".to_string(),
             phase: None,
+            context: None,
+            context_key: None,
             content: MessageContent::Text("Done.".to_string()),
         }];
 

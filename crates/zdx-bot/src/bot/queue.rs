@@ -358,7 +358,7 @@ fn generate_topic_name(text: Option<&str>) -> String {
 /// Used only for commands that intentionally bypass topic auto-creation.
 fn spawn_standalone(context: Arc<BotContext>, queues: ChatQueueMap, message: Message) {
     tokio::spawn(async move {
-        if let Err(err) = handle_message(&context, &queues, message).await {
+        if let Err(err) = Box::pin(handle_message(&context, &queues, message)).await {
             tracing::error!(%err, "Standalone message handling error");
         }
     });
@@ -515,7 +515,7 @@ fn spawn_queue_worker(
                 tracing::warn!(status_id = status.status, %err, "Failed to delete queued status message");
             }
 
-            if let Err(err) = handle_message(&context, &queues, message).await {
+            if let Err(err) = Box::pin(handle_message(&context, &queues, message)).await {
                 tracing::error!(?key, %err, "Message handling error");
             }
 

@@ -6,7 +6,10 @@ use anyhow::{Context, Result, ensure};
 use tokio_util::sync::CancellationToken;
 use zdx_engine::config::{Config, TextVerbosity};
 use zdx_engine::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig, ToolSelection};
-use zdx_engine::core::context::{PromptContextInclusion, build_prompt_with_context_and_layers};
+use zdx_engine::core::context::{
+    PromptContextInclusion, RuntimeContext, build_prompt_with_context_and_layers,
+    resolve_context_to_attach,
+};
 use zdx_engine::core::events::AgentEvent;
 use zdx_engine::core::thread_persistence::{self, Thread, ThreadEvent};
 use zdx_engine::providers::{ChatContentBlock, ChatMessage, MessageContent};
@@ -40,6 +43,9 @@ pub(crate) fn clear_thread_history(thread_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Appends the incoming user message to the thread and the in-memory messages,
+/// attaching the advisory runtime-context block per the last-attached dedup
+/// rule (attach only when the candidate differs from the last attached one).
 ///
 /// # Errors
 /// Returns an error if the operation fails.
@@ -47,14 +53,25 @@ pub(crate) fn record_user_message(
     thread: &mut Thread,
     messages: &mut Vec<ChatMessage>,
     incoming: &IncomingMessage,
+    runtime_context: Option<&RuntimeContext>,
 ) -> Result<()> {
     let text = build_user_text(incoming);
+    let last_key = thread_persistence::last_attached_context_key_from_messages(messages);
+    let attach = resolve_context_to_attach(runtime_context, last_key.as_deref());
+    let (block, key) = match attach {
+        Some(attach) => (Some(attach.block), Some(attach.key)),
+        None => (None, None),
+    };
     thread
-        .append(&ThreadEvent::user_message(text.clone()))
+        .append(&ThreadEvent::user_message_with_context(
+            text.clone(),
+            block.clone(),
+            key.clone(),
+        ))
         .context("append user message")?;
 
     if incoming.images.is_empty() {
-        messages.push(ChatMessage::user(text));
+        messages.push(ChatMessage::user(text).with_runtime_context(block, key));
         return Ok(());
     }
 
@@ -70,6 +87,8 @@ pub(crate) fn record_user_message(
     messages.push(ChatMessage {
         role: "user".to_string(),
         phase: None,
+        context: block,
+        context_key: key,
         content: MessageContent::Blocks(blocks),
     });
     Ok(())
@@ -109,13 +128,19 @@ impl AgentTurnHandle {
     }
 }
 
-struct PreparedBotTurn {
-    config: Config,
-    system_prompt: Option<String>,
+pub(crate) struct PreparedBotTurn {
+    pub(crate) config: Config,
+    /// Execution root the turn runs in.
+    pub(crate) root: PathBuf,
+    pub(crate) system_prompt: Option<String>,
+    /// Advisory runtime-context snapshot to attach to the next user message
+    /// (initial on first attach, update-eligible replacement on a meaningful
+    /// change), or `None` when there is nothing to snapshot.
+    pub(crate) runtime_context: Option<RuntimeContext>,
     /// Explicit tool allowlist for persistent-profile turns (orchestrator).
-    tools_override: Option<Vec<String>>,
+    pub(crate) tools_override: Option<Vec<String>>,
     /// Subagents `invoke_subagent` may reach on this turn; `None` is unrestricted.
-    allowed_subagents: Option<Vec<String>>,
+    pub(crate) allowed_subagents: Option<Vec<String>>,
 }
 
 fn bot_prompt_context() -> PromptContextInclusion {
@@ -130,7 +155,7 @@ fn collect_bot_instruction_layers(bot_instruction_layer: Option<&str>) -> Vec<&s
     bot_instruction_layer.into_iter().collect()
 }
 
-fn prepare_bot_turn(
+pub(crate) fn prepare_bot_turn(
     config: &Config,
     root: &Path,
     bot_instruction_layer: Option<&str>,
@@ -154,7 +179,9 @@ fn prepare_bot_turn(
 
     Ok(PreparedBotTurn {
         config: bot_config,
+        root: root.to_path_buf(),
         system_prompt: effective.prompt,
+        runtime_context: effective.runtime_context,
         tools_override: None,
         allowed_subagents: None,
     })
@@ -177,20 +204,20 @@ fn prepare_persistent_profile_turn(
 
     let definition = zdx_engine::subagents::load_builtin_orchestrator()
         .context("load built-in orchestrator profile")?;
-    let mut prompt = zdx_engine::subagents::render_prompt_with_discovered_skills(
-        config,
-        root,
-        &definition,
-        &config.model,
-        bot_prompt_context(),
-    )
-    .context("render orchestrator prompt")?;
-    if let Some(activity) = recent_activity_block() {
-        prompt = format!("{prompt}\n\n{activity}");
-    }
-    if let Some(workspaces) = telegram_workspaces_block(config) {
-        prompt = format!("{prompt}\n\n{workspaces}");
-    }
+    // The Telegram workspaces catalog is observational data: it moves into the
+    // runtime-context snapshot (attached to the first user message) instead of
+    // the system prompt, so it never churns the stable prefix.
+    let workspaces = telegram_workspaces_block(config);
+    let (mut prompt, runtime_context) =
+        zdx_engine::subagents::render_prompt_with_discovered_skills_and_context(
+            config,
+            root,
+            &definition,
+            &config.model,
+            bot_prompt_context(),
+            workspaces.as_deref(),
+        )
+        .context("render orchestrator prompt")?;
     let overlay_path = zdx_engine::config::paths::zdx_home().join("orchestrator.md");
     if let Some(overlay) = load_orchestrator_overlay(&overlay_path) {
         prompt = format!("{prompt}\n\n# Personal Orchestrator Rules\n\n{overlay}");
@@ -207,14 +234,13 @@ fn prepare_persistent_profile_turn(
 
     Ok(PreparedBotTurn {
         config: config.clone(),
+        root: root.to_path_buf(),
         system_prompt: Some(prompt),
+        runtime_context,
         tools_override: Some(tools),
         allowed_subagents: definition.allowed_subagents.clone(),
     })
 }
-
-const ACTIVITY_MAX_PROJECTS: usize = 8;
-const ACTIVITY_MAX_THREADS: usize = 12;
 
 /// Telegram project groups bound to the bot, so the orchestrator can pick
 /// worker roots deliberately and tell the user where a worker's mirror topic
@@ -346,67 +372,6 @@ fn load_orchestrator_overlay(path: &Path) -> Option<String> {
     }
 }
 
-/// Live orchestration context injected into the orchestrator prompt: the most
-/// recently active projects and top-level threads (`list_threads` already
-/// excludes subagent/helper child runs). Best-effort — listing failures or an
-/// empty history render nothing.
-fn recent_activity_block() -> Option<String> {
-    let threads = thread_persistence::list_threads().ok()?;
-    if threads.is_empty() {
-        return None;
-    }
-    let now = std::time::SystemTime::now();
-    let home = std::env::var("HOME").unwrap_or_default();
-
-    // Threads arrive newest-first; first sighting of a root is its latest activity.
-    let mut projects: Vec<(String, usize, Option<std::time::SystemTime>)> = Vec::new();
-    for thread in &threads {
-        let Some(root) = thread.root_path.as_deref() else {
-            continue;
-        };
-        match projects.iter_mut().find(|(path, ..)| path == root) {
-            Some((_, count, _)) => *count += 1,
-            None => projects.push((root.to_string(), 1, thread.modified)),
-        }
-    }
-
-    let mut block = String::from(
-        "# Recent Activity\n\nSnapshot from saved threads at prompt-build time (child runs excluded). Use `thread_search`/`read_thread` for anything older or deeper.\n",
-    );
-
-    if !projects.is_empty() {
-        block.push_str("\n## Active projects (latest first)\n");
-        for (root, count, modified) in projects.iter().take(ACTIVITY_MAX_PROJECTS) {
-            let root = shorten_home(root, &home);
-            let plural = if *count == 1 { "" } else { "s" };
-            let _ = writeln!(
-                block,
-                "- `{root}` — {count} thread{plural}, last active {}",
-                format_age(now, *modified),
-            );
-        }
-    }
-
-    block.push_str("\n## Recent threads (top-level only)\n");
-    for thread in threads.iter().take(ACTIVITY_MAX_THREADS) {
-        let title = thread.display_title();
-        let project = thread
-            .root_path
-            .as_deref()
-            .map_or_else(|| "-".to_string(), |root| shorten_home(root, &home));
-        let _ = writeln!(
-            block,
-            "- `{}` — \"{}\" ({}, {})",
-            thread.id,
-            title,
-            project,
-            format_age(now, thread.modified),
-        );
-    }
-
-    Some(block)
-}
-
 fn shorten_home(path: &str, home: &str) -> String {
     if !home.is_empty() && path.starts_with(home) {
         format!("~{}", &path[home.len()..])
@@ -415,53 +380,26 @@ fn shorten_home(path: &str, home: &str) -> String {
     }
 }
 
-fn format_age(now: std::time::SystemTime, modified: Option<std::time::SystemTime>) -> String {
-    let Some(modified) = modified else {
-        return "unknown".to_string();
-    };
-    let Ok(elapsed) = now.duration_since(modified) else {
-        return "just now".to_string();
-    };
-    let secs = elapsed.as_secs();
-    if secs < 60 {
-        "just now".to_string()
-    } else if secs < 3600 {
-        format!("{}m ago", secs / 60)
-    } else if secs < 86_400 {
-        format!("{}h ago", secs / 3600)
-    } else {
-        format!("{}d ago", secs / 86_400)
-    }
-}
-
 /// Spawns an agent turn and returns a handle with streaming events.
 ///
 /// Thread persistence is wired internally via `spawn_broadcaster`.
 /// The caller receives events through `AgentTurnHandle::rx` and should
 /// look for `TurnFinished` to get the terminal result.
-///
-/// # Errors
-/// Returns an error if the operation fails.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_agent_turn(
     messages: Vec<ChatMessage>,
-    config: &Config,
-    root: &Path,
-    bot_instruction_layer: Option<&str>,
+    prepared: PreparedBotTurn,
     thread_id: &str,
     thread: &Thread,
     tool_config: &ToolConfig,
-    persistent_profile: Option<&str>,
-) -> Result<AgentTurnHandle> {
-    // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
-    zdx_engine::core::context::set_runtime_env(config, Some(thread_id));
-
+) -> AgentTurnHandle {
     let PreparedBotTurn {
         config: bot_config,
+        root,
         system_prompt,
+        runtime_context: _,
         tools_override,
         allowed_subagents,
-    } = prepare_bot_turn(config, root, bot_instruction_layer, persistent_profile)?;
+    } = prepared;
 
     // Persistent-profile turns pin the exact tool selection from the profile
     // definition; the shared registry (with bound orchestrator tools) is kept.
@@ -476,7 +414,7 @@ pub(crate) fn spawn_agent_turn(
 
     let agent_opts = AgentOptions {
         conversation_id: None,
-        root: root.to_path_buf(),
+        root,
         tool_config,
         surface: Some("telegram".to_string()),
         text_verbosity: Some(TextVerbosity::Low),
@@ -512,12 +450,12 @@ pub(crate) fn spawn_agent_turn(
         .await
     });
 
-    Ok(AgentTurnHandle {
+    AgentTurnHandle {
         rx: bot_rx,
         cancel,
         _task: task,
         persist: Some(persist),
-    })
+    }
 }
 
 /// Maps an `AgentEvent` to a short status emoji + label for Telegram display.
@@ -701,9 +639,9 @@ mod tests {
 
     #[test]
     fn orchestrator_turn_renders_project_context_and_pins_tools() {
-        // A persistent profile renders a recent-activity block, which lists
-        // threads. Without an isolated home that runs against the developer's
-        // real ~/.zdx and can rebuild their live thread index.
+        // The orchestrator renders its profile prompt with an isolated home so
+        // the test never runs against the developer's real ~/.zdx or rebuilds
+        // their live thread index.
         let _home = zdx_engine::test_support::temp_zdx_home();
         let dir = make_temp_dir();
         std::fs::write(dir.join("AGENTS.md"), "Orchestrator project note").unwrap();

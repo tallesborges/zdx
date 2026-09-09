@@ -75,22 +75,6 @@ Answer the user directly and concisely. Lead with outcomes and worker status, re
 The current working directory is '{{ cwd }}'
 Current date: {{ date }}
 </environment>
-{% if skills_list %}
-
-# Skills
-
-When a task matches an available skill, read the skill file before acting on it. Treat skill guidance as task-specific instructions.
-
-<available_skills>
-{% for skill in skills_list %}
-  <skill>
-    <name>{{ skill.name }}</name>
-    <description>{{ skill.description }}</description>
-    <path>{{ skill.path }}</path>
-  </skill>
-{% endfor %}
-</available_skills>
-{% endif %}
 {% if project_context or scoped_context %}
 
 # Project Instructions
@@ -106,14 +90,4 @@ The following discovered scoped `AGENTS.md`/`CLAUDE.md` files apply to subdirect
 {% for ctx in scoped_context %}- `{{ ctx.path }}`
 {% endfor %}
 {% endif %}
-{% endif %}
-{% if memory_index %}
-
-# Memory Index
-
-Durable facts about the user and their projects. Consult it to pick project roots, recall prior decisions, and ground answers before searching.
-
-<memory_index>
-{{ memory_index }}
-</memory_index>
 {% endif %}

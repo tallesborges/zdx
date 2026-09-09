@@ -387,13 +387,11 @@ struct TurnResult {
 }
 
 struct SpawnRequest<'a> {
-    worktree_root: &'a std::path::Path,
     thread_id: &'a str,
     thread: &'a zdx_engine::core::thread_persistence::Thread,
     messages: Vec<zdx_engine::providers::ChatMessage>,
-    config: &'a zdx_engine::config::Config,
-    /// Persistent top-level profile (e.g. `orchestrator`) for this thread.
-    persistent_profile: Option<&'a str>,
+    /// Fully prepared turn (config, system prompt, tool overrides).
+    prepared: crate::agent::PreparedBotTurn,
 }
 
 pub(crate) fn escape_html(text: &str) -> String {

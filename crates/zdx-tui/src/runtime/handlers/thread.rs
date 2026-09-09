@@ -171,7 +171,10 @@ pub fn refresh_system_prompt(config: &zdx_engine::config::Config, path: &Path) -
             &instruction_layers,
             true,
         )
-        .map(|context| context.prompt)
+        .map(|context| crate::events::SystemPromptRefresh {
+            prompt: context.prompt,
+            runtime_context: context.runtime_context,
+        })
         .map_err(|error| format!("Failed to refresh system prompt: {error}"));
 
     UiEvent::SystemPromptRefreshed { result }

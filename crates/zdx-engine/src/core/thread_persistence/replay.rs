@@ -15,6 +15,48 @@ pub fn load_thread_as_messages(id: &str) -> Result<Vec<crate::providers::ChatMes
     Ok(thread_events_to_messages(events))
 }
 
+/// Returns the runtime-context change key attached to the most recent user
+/// message that carries one in a thread's persisted events. `None` when no
+/// context has been attached yet (e.g. legacy threads predating the field).
+///
+/// # Errors
+/// Returns an error if the operation fails.
+pub fn last_attached_context_key(id: &str) -> Result<Option<String>> {
+    let events = load_thread_events(id)?;
+    Ok(last_attached_context_key_from_events(&events))
+}
+
+/// Scans persisted events for the most recent user message carrying a
+/// runtime-context change key. Used for the attach-only-on-meaningful-change
+/// dedup rule.
+pub fn last_attached_context_key_from_events(events: &[ThreadEvent]) -> Option<String> {
+    events.iter().rev().find_map(|event| match event {
+        ThreadEvent::Message {
+            role,
+            context,
+            context_key,
+            ..
+        } if role == "user" && context.is_some() && context_key.is_some() => context_key.clone(),
+        _ => None,
+    })
+}
+
+/// Scans in-memory chat messages for the most recent user message carrying a
+/// runtime-context change key. Equivalent to
+/// [`last_attached_context_key_from_events`] over replayed messages; used by
+/// entry points that already hold messages.
+pub fn last_attached_context_key_from_messages(
+    messages: &[crate::providers::ChatMessage],
+) -> Option<String> {
+    messages.iter().rev().find_map(|message| {
+        if message.role == "user" && message.context.is_some() && message.context_key.is_some() {
+            message.context_key.clone()
+        } else {
+            None
+        }
+    })
+}
+
 /// Converts chat messages back into thread events for replay/fork bootstrapping.
 pub fn messages_to_events(messages: &[crate::providers::ChatMessage]) -> Vec<ThreadEvent> {
     let mut events = Vec::new();
@@ -44,18 +86,32 @@ pub(crate) fn emit_message_events(
                 role: msg.role.clone(),
                 text: text.clone(),
                 phase: msg.phase.clone(),
+                context: msg.context.clone(),
+                context_key: msg.context_key.clone(),
                 replay: None,
                 ts: chrono_timestamp(),
             });
         }
         MessageContent::Blocks(blocks) => {
+            // A user message's runtime-context block and change key are
+            // persisted on the first text event so replay reconstructs the
+            // projection once.
+            let mut context = if msg.role == "user" {
+                (msg.context.clone(), msg.context_key.clone())
+            } else {
+                (None, None)
+            };
+            let mut wrote_user_text = false;
             for block in blocks {
                 match block {
                     ChatContentBlock::Text { text, replay } => {
+                        wrote_user_text = true;
                         events.push(ThreadEvent::Message {
                             role: msg.role.clone(),
                             text: text.clone(),
                             phase: msg.phase.clone(),
+                            context: context.0.take(),
+                            context_key: context.1.take(),
                             replay: replay.clone(),
                             ts: chrono_timestamp(),
                         });
@@ -104,6 +160,27 @@ pub(crate) fn emit_message_events(
                     // schema.
                     ChatContentBlock::Image { .. } => {}
                 }
+            }
+            // A user message that carries runtime-context metadata but no text
+            // block (e.g. an image-only TUI send) would otherwise drop the
+            // snapshot. Persist it on a synthetic empty-text event so the
+            // context block/key and its text projection survive replay. This
+            // preserves the metadata, not image bytes — image replay fidelity
+            // is not provided (live is `Blocks([context, image…])`, replay is
+            // an empty-text message with the projected context).
+            if msg.role == "user"
+                && !wrote_user_text
+                && (msg.context.is_some() || msg.context_key.is_some())
+            {
+                events.push(ThreadEvent::Message {
+                    role: "user".to_string(),
+                    text: String::new(),
+                    phase: msg.phase.clone(),
+                    context: msg.context.clone(),
+                    context_key: msg.context_key.clone(),
+                    replay: None,
+                    ts: chrono_timestamp(),
+                });
             }
         }
     }
@@ -155,9 +232,11 @@ impl MessageReplay {
                 role,
                 text,
                 phase,
+                context,
+                context_key,
                 replay,
                 ..
-            } => self.handle_message(role, text, phase, replay),
+            } => self.handle_message(role, text, phase, context, context_key, replay),
             ThreadEvent::Reasoning { text, replay, .. } => {
                 self.flush_tool_results();
                 self.pending_assistant_blocks
@@ -199,6 +278,8 @@ impl MessageReplay {
         role: String,
         text: String,
         phase: Option<String>,
+        context: Option<String>,
+        context_key: Option<String>,
         replay: Option<crate::providers::ReplayToken>,
     ) {
         use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
@@ -223,6 +304,8 @@ impl MessageReplay {
         self.messages.push(ChatMessage {
             role,
             phase,
+            context,
+            context_key,
             content: MessageContent::Text(text),
         });
     }
@@ -281,6 +364,8 @@ impl MessageReplay {
         self.messages.push(crate::providers::ChatMessage {
             role: "assistant".to_string(),
             phase,
+            context: None,
+            context_key: None,
             content: crate::providers::MessageContent::Blocks(blocks),
         });
         self.flush_tool_results();

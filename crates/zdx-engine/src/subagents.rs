@@ -238,7 +238,7 @@ pub fn render_prompt(
 ) -> Result<String> {
     let mut inclusion = inclusion;
     inclusion.skills = false;
-    render_prompt_inner(config, root, definition, model, inclusion)
+    render_prompt_inner(config, root, definition, model, inclusion, None).map(|(prompt, _)| prompt)
 }
 
 /// Renders a subagent prompt with the full discovered skills catalog exposed
@@ -256,7 +256,27 @@ pub fn render_prompt_with_discovered_skills(
     model: &str,
     inclusion: PromptContextInclusion,
 ) -> Result<String> {
-    render_prompt_inner(config, root, definition, model, inclusion)
+    render_prompt_with_discovered_skills_and_context(
+        config, root, definition, model, inclusion, None,
+    )
+    .map(|(prompt, _)| prompt)
+}
+
+/// Like [`render_prompt_with_discovered_skills`], but also returns the advisory
+/// `<runtime_context>` snapshot block and accepts an extra observational
+/// section (e.g. the Telegram workspaces catalog for the orchestrator).
+///
+/// # Errors
+/// Returns an error if rendering fails or produces an empty prompt.
+pub fn render_prompt_with_discovered_skills_and_context(
+    config: &crate::config::Config,
+    root: &Path,
+    definition: &SubagentDefinition,
+    model: &str,
+    inclusion: PromptContextInclusion,
+    extra_context: Option<&str>,
+) -> Result<(String, Option<crate::core::context::RuntimeContext>)> {
+    render_prompt_inner(config, root, definition, model, inclusion, extra_context)
 }
 
 fn render_prompt_inner(
@@ -265,10 +285,11 @@ fn render_prompt_inner(
     definition: &SubagentDefinition,
     model: &str,
     inclusion: PromptContextInclusion,
-) -> Result<String> {
+    extra_context: Option<&str>,
+) -> Result<(String, Option<crate::core::context::RuntimeContext>)> {
     let subagent_skills = resolve_subagent_skills(config, root, definition)?;
 
-    crate::core::context::render_standalone_prompt_template(
+    crate::core::context::render_standalone_prompt_template_with_context(
         config,
         root,
         model,
@@ -279,6 +300,7 @@ fn render_prompt_inner(
             available_skills: subagent_skills.allowed,
             auto_loaded_skill_contents: subagent_skills.auto_loaded,
         },
+        extra_context,
     )
     .with_context(|| format!("render subagent '{}'", definition.name))
 }
@@ -969,16 +991,23 @@ mod tests {
             skills: true,
         };
 
-        let rendered = render_prompt_with_discovered_skills(
+        let (rendered, runtime_context) = render_prompt_with_discovered_skills_and_context(
             &config,
             root.path(),
             &definition,
             "anthropic:claude-opus-4-6",
             inclusion,
+            None,
         )
         .unwrap();
-        assert!(rendered.contains("<available_skills>"));
-        assert!(rendered.contains("team-mgmt"));
+        // The skills catalog is advisory snapshot data: it moved out of the
+        // system prompt into the runtime-context block's update-eligible
+        // replacement (the orchestrator has no tree/memory here).
+        let runtime_context = runtime_context.expect("orchestrator snapshot");
+        let update = runtime_context.update.unwrap_or_default();
+        assert!(!rendered.contains("<available_skills>"));
+        assert!(update.contains("<available_skills>"));
+        assert!(update.contains("team-mgmt"));
 
         // The plain subagent path keeps skills forced off.
         let plain = render_prompt(

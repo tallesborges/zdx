@@ -28,6 +28,14 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Outcome of a system-prompt refresh: the authoritative instructions plus the
+/// advisory runtime-context snapshot built from the same render.
+#[derive(Debug, Clone)]
+pub struct SystemPromptRefresh {
+    pub prompt: Option<String>,
+    pub runtime_context: Option<zdx_engine::core::context::RuntimeContext>,
+}
+
 use crossterm::event::Event as CrosstermEvent;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -297,9 +305,10 @@ pub enum UiEvent {
         display_path: String,
     },
 
-    /// Effective system prompt refresh result for the current root.
+    /// Effective system prompt refresh result for the current root, plus the
+    /// advisory runtime-context snapshot block built from the same render.
     SystemPromptRefreshed {
-        result: Result<Option<String>, String>,
+        result: Result<SystemPromptRefresh, String>,
     },
 
     /// Task lifecycle: runtime started a task (cancel token optional).

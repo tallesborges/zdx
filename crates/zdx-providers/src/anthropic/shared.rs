@@ -672,6 +672,8 @@ mod tests {
         let message = ChatMessage {
             role: "user".to_string(),
             phase: None,
+            context: None,
+            context_key: None,
             content: MessageContent::Blocks(vec![ChatContentBlock::Image {
                 mime_type: "image/png".to_string(),
                 data: "Zm9v".to_string(),

@@ -980,9 +980,18 @@ async fn run_turn_inner(
                 > = {
                     let request_started_at = Instant::now();
                     tracing::debug!(model_turn, attempt, "Provider request attempt");
+                    // Project each user message's persisted runtime-context
+                    // block onto its wire text. Deterministic and idempotent,
+                    // so transparent retries reuse identical bytes; the
+                    // original `messages` (pure text + context) still feed
+                    // persistence and interrupted-turn snapshots.
+                    let wire_messages: Vec<ChatMessage> = messages
+                        .iter()
+                        .map(ChatMessage::with_runtime_context_projected)
+                        .collect();
                     match request_stream(
                         &setup.client,
-                        &messages,
+                        &wire_messages,
                         &setup.tools,
                         system_prompt,
                         cancel,
@@ -2153,6 +2162,8 @@ fn build_provider_failed_messages(
         messages.push(ChatMessage {
             role: "assistant".to_string(),
             phase: Some("commentary".to_string()),
+            context: None,
+            context_key: None,
             content: crate::providers::MessageContent::Blocks(safe_blocks),
         });
     }
@@ -2171,6 +2182,8 @@ fn build_interrupted_messages(
         messages.push(ChatMessage {
             role: "assistant".to_string(),
             phase: Some("commentary".to_string()),
+            context: None,
+            context_key: None,
             content: crate::providers::MessageContent::Blocks(finalized.blocks),
         });
     }
@@ -3263,6 +3276,8 @@ mod tests {
             ChatMessage {
                 role,
                 phase: Some(phase),
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(blocks),
             } if role == "assistant"
                 && phase == "commentary"
@@ -3355,6 +3370,8 @@ mod tests {
         let ChatMessage {
             role,
             phase,
+            context: _,
+            context_key: _,
             content,
         } = &messages[1];
         assert_eq!(role, "assistant");

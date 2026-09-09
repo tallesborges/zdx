@@ -171,7 +171,7 @@ impl AppState {
         system_prompt: Option<String>,
         thread_handle: Option<Thread>,
     ) -> Self {
-        Self::with_history(config, root, system_prompt, thread_handle, Vec::new())
+        Self::with_history(config, root, system_prompt, None, thread_handle, Vec::new())
     }
 
     /// Creates an `AppState` with pre-loaded message history.
@@ -181,6 +181,7 @@ impl AppState {
         config: Config,
         root: PathBuf,
         system_prompt: Option<String>,
+        runtime_context: Option<zdx_engine::core::context::RuntimeContext>,
         thread_handle: Option<Thread>,
         history: Vec<ChatMessage>,
     ) -> Self {
@@ -191,6 +192,7 @@ impl AppState {
                 config,
                 root,
                 system_prompt,
+                runtime_context,
                 thread_handle,
                 history,
             ),
@@ -377,6 +379,10 @@ pub struct TuiState {
     pub agent_opts: AgentOptions,
     /// System prompt for the agent.
     pub system_prompt: Option<String>,
+    /// Advisory runtime-context snapshot, refreshed together with the system
+    /// prompt. Attached to the first (or changed) user message and persisted so
+    /// replay reconstructs the same provider-visible prefix.
+    pub runtime_context: Option<zdx_engine::core::context::RuntimeContext>,
     /// Current agent state.
     pub agent_state: AgentState,
     /// Outcome of the most recent finished turn.
@@ -420,12 +426,14 @@ impl TuiState {
     /// Creates a `TuiState` with pre-loaded message history.
     ///
     /// Used for resuming previous threads.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_history(
         tab_id: TabId,
         tab_kind: TabKind,
         config: Config,
         root: PathBuf,
         system_prompt: Option<String>,
+        runtime_context: Option<zdx_engine::core::context::RuntimeContext>,
         thread_handle: Option<Thread>,
         history: Vec<ChatMessage>,
     ) -> Self {
@@ -492,6 +500,7 @@ impl TuiState {
             loaded_skills: Vec::new(),
             agent_opts,
             system_prompt,
+            runtime_context,
             agent_state: AgentState::Idle,
             last_turn_outcome: None,
             unseen_completion: false,

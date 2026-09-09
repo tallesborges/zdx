@@ -90,6 +90,8 @@ mod tests {
         let mut messages = vec![ChatMessage {
             role: "user".to_string(),
             phase: None,
+            context: None,
+            context_key: None,
             content: MessageContent::Blocks(vec![
                 ChatContentBlock::text("Image attachment saved at /tmp/a.png."),
                 image_block(),
@@ -150,6 +152,8 @@ mod tests {
         let mut messages = vec![ChatMessage {
             role: "user".to_string(),
             phase: None,
+            context: None,
+            context_key: None,
             content: MessageContent::Blocks(vec![image_block()]),
         }];
 

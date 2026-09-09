@@ -39,6 +39,13 @@ pub struct InputContext<'a> {
     pub root: &'a std::path::Path,
     /// True when an empty Enter should retry the last failed turn.
     pub can_retry: bool,
+    /// Advisory runtime-context snapshot to attach to the next user message
+    /// (full snapshot on first attach; a replacement only when the change key
+    /// moves, deduplicated against `last_attached_key`).
+    pub runtime_context: Option<&'a zdx_engine::core::context::RuntimeContext>,
+    /// Change key of the most recent user message in the thread that carries
+    /// one, if any.
+    pub last_attached_key: Option<&'a str>,
 }
 
 fn is_image_path(text: &str) -> bool {
@@ -634,6 +641,8 @@ pub fn submit_current_input(input: &mut InputState, ctx: &InputContext<'_>) -> K
         ctx.thread_title,
         ctx.active_thread_ids,
         ctx.can_retry,
+        ctx.runtime_context,
+        ctx.last_attached_key,
     )
 }
 
@@ -832,6 +841,8 @@ fn submit_input(
     thread_title: Option<&str>,
     active_thread_ids: &std::collections::HashSet<String>,
     can_retry: bool,
+    runtime_context: Option<&zdx_engine::core::context::RuntimeContext>,
+    last_attached_key: Option<&str>,
 ) -> KeyResult {
     // Block input during any modal generation. Each branch shows a hint
     // pointing at Esc as the cancel path and shares the early-return shape.
@@ -920,7 +931,15 @@ fn submit_input(
     input.history.push(text.clone());
     input.reset_navigation();
     input.clear();
-    let (effects, mutations) = build_send_effects(&text, thread_id, should_suggest_title, images);
+    let (effects, mutations) = build_send_effects_for_tab_with_context(
+        &text,
+        thread_id,
+        should_suggest_title,
+        images,
+        TabContext::Active,
+        runtime_context,
+        last_attached_key,
+    );
 
     (effects, mutations, None)
 }
@@ -1165,12 +1184,14 @@ pub fn build_send_effects(
     should_suggest_title: bool,
     images: Vec<PendingImage>,
 ) -> (Vec<UiEffect>, Vec<StateMutation>) {
-    build_send_effects_for_tab(
+    build_send_effects_for_tab_with_context(
         text,
         thread_id,
         should_suggest_title,
         images,
         TabContext::Active,
+        None,
+        None,
     )
 }
 
@@ -1181,7 +1202,38 @@ pub fn build_send_effects_for_tab(
     images: Vec<PendingImage>,
     tab: TabContext,
 ) -> (Vec<UiEffect>, Vec<StateMutation>) {
-    let user_event = ThreadEvent::user_message(text);
+    build_send_effects_for_tab_with_context(
+        text,
+        thread_id,
+        should_suggest_title,
+        images,
+        tab,
+        None,
+        None,
+    )
+}
+
+/// Like [`build_send_effects_for_tab`], but attaches the advisory
+/// runtime-context snapshot to the user message (full snapshot on first
+/// attach; a replacement block only when the change key moves) so it persists
+/// and replays identically.
+#[allow(clippy::too_many_arguments)]
+pub fn build_send_effects_for_tab_with_context(
+    text: &str,
+    thread_id: Option<String>,
+    should_suggest_title: bool,
+    images: Vec<PendingImage>,
+    tab: TabContext,
+    runtime_context: Option<&zdx_engine::core::context::RuntimeContext>,
+    last_attached_key: Option<&str>,
+) -> (Vec<UiEffect>, Vec<StateMutation>) {
+    let attach =
+        zdx_engine::core::context::resolve_context_to_attach(runtime_context, last_attached_key);
+    let (block, key) = match attach {
+        Some(attach) => (Some(attach.block), Some(attach.key)),
+        None => (None, None),
+    };
+    let user_event = ThreadEvent::user_message_with_context(text, block.clone(), key.clone());
     let mut effects: Vec<UiEffect> = match tab {
         TabContext::Active => {
             if thread_id.is_some() {
@@ -1219,11 +1271,14 @@ pub fn build_send_effects_for_tab(
         .collect();
 
     let (cell, message) = if image_paths.is_empty() {
-        (HistoryCell::user(text), ChatMessage::user(text))
+        (
+            HistoryCell::user(text),
+            ChatMessage::user(text).with_runtime_context(block, key),
+        )
     } else {
         (
             HistoryCell::user_with_images(text, image_paths),
-            ChatMessage::user_with_images(text, &image_pairs),
+            ChatMessage::user_with_images(text, &image_pairs).with_runtime_context(block, key),
         )
     };
 
@@ -1517,6 +1572,8 @@ mod tests {
             active_thread_ids: &active_thread_ids,
             root: std::path::Path::new("."),
             can_retry: false,
+            runtime_context: None,
+            last_attached_key: None,
         };
 
         let (effects, mutations, overlay) = handle_main_key(
@@ -1550,6 +1607,8 @@ mod tests {
             active_thread_ids,
             root: std::path::Path::new("."),
             can_retry: false,
+            runtime_context: None,
+            last_attached_key: None,
         }
     }
 

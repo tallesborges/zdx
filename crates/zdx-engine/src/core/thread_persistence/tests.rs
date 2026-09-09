@@ -64,6 +64,8 @@ async fn test_persist_handle_resolves_only_after_events_are_on_disk() {
     let messages = vec![crate::providers::ChatMessage {
         role: "assistant".to_string(),
         phase: None,
+        context: None,
+        context_key: None,
         content: crate::providers::MessageContent::Text("done working".to_string()),
     }];
     tx.send(Arc::new(AgentEvent::TurnFinished {
@@ -299,6 +301,8 @@ fn test_thread_events_to_messages_preserves_replay_tokens_across_fragments() {
             role: "assistant".to_string(),
             text: "Hello **wor".to_string(),
             phase: None,
+            context: None,
+            context_key: None,
             replay: Some(crate::providers::ReplayToken::Gemini {
                 signature: "sig-first".to_string(),
                 model: "gemini-3-pro-preview".to_string(),
@@ -309,6 +313,8 @@ fn test_thread_events_to_messages_preserves_replay_tokens_across_fragments() {
             role: "assistant".to_string(),
             text: "ld**".to_string(),
             phase: None,
+            context: None,
+            context_key: None,
             replay: Some(crate::providers::ReplayToken::Gemini {
                 signature: "sig-second".to_string(),
                 model: "gemini-3-pro-preview".to_string(),
@@ -1333,6 +1339,8 @@ async fn test_persist_task_attaches_tool_durations_in_request_order() {
     let assistant = ChatMessage {
         role: "assistant".to_string(),
         phase: None,
+        context: None,
+        context_key: None,
         content: MessageContent::Blocks(vec![
             ChatContentBlock::tool_use("t1", "read", json!({"file_path": "a"})),
             ChatContentBlock::tool_use("t2", "read", json!({"file_path": "b"})),
@@ -1341,6 +1349,8 @@ async fn test_persist_task_attaches_tool_durations_in_request_order() {
     let results = ChatMessage {
         role: "user".to_string(),
         phase: None,
+        context: None,
+        context_key: None,
         content: MessageContent::Blocks(vec![
             ChatContentBlock::ToolResult(crate::tools::ToolResult::from_output(
                 "t1".to_string(),
@@ -1522,6 +1532,8 @@ async fn test_persist_task_flushes_partial_usage_on_interrupted_turn() {
             role,
             text,
             phase: Some(phase),
+            context: None,
+            context_key: None,
             ..
         } if role == "assistant" && text == "partial" && phase == "commentary"
     )));
@@ -1582,6 +1594,8 @@ async fn test_persistence_round_trip_preserves_order() {
     let assistant = ChatMessage {
         role: "assistant".to_string(),
         phase: None,
+        context: None,
+        context_key: None,
         content: MessageContent::Blocks(vec![
             ChatContentBlock::Reasoning(ReasoningBlock {
                 text: Some("first thoughts".to_string()),
@@ -1642,6 +1656,8 @@ async fn test_persistence_carries_per_part_signatures_and_id_origin() {
     let assistant = ChatMessage {
         role: "assistant".to_string(),
         phase: None,
+        context: None,
+        context_key: None,
         content: MessageContent::Blocks(vec![
             ChatContentBlock::Text {
                 text: "answer".to_string(),
@@ -1772,6 +1788,8 @@ async fn test_streaming_events_no_longer_persisted() {
     let assistant = ChatMessage {
         role: "assistant".to_string(),
         phase: None,
+        context: None,
+        context_key: None,
         content: MessageContent::Blocks(vec![ChatContentBlock::tool_use(
             "t1",
             "bash",
@@ -1824,6 +1842,8 @@ async fn test_tool_result_persisted_with_tool_use_in_order() {
     let assistant = ChatMessage {
         role: "assistant".to_string(),
         phase: None,
+        context: None,
+        context_key: None,
         content: MessageContent::Blocks(vec![ChatContentBlock::tool_use(
             "t1",
             "bash",
@@ -1931,6 +1951,130 @@ fn test_messages_to_events_matches_flush_messages_for_user_blocks() {
     }
 }
 
+/// A user message's runtime-context block persists with the message and is
+/// reconstructed identically on replay, so the provider-visible projection is
+/// the same on the live path and after restart (`live == replay`).
+#[test]
+fn test_runtime_context_survives_events_roundtrip() {
+    use crate::providers::ChatMessage;
+
+    let original = ChatMessage::user("please refactor the loader").with_runtime_context(
+        Some("<runtime_context>\n# Orientation\nGit branch: main\n</runtime_context>".to_string()),
+        Some("abc123".to_string()),
+    );
+
+    let events = messages_to_events(&[original.clone()]);
+    let last_key = last_attached_context_key_from_events(&events);
+    assert_eq!(last_key.as_deref(), Some("abc123"));
+
+    let replayed = thread_events_to_messages(events);
+    assert_eq!(replayed, vec![original.clone()], "context must round-trip");
+
+    // The wire projection is identical before and after the round-trip.
+    assert_eq!(
+        original.with_runtime_context_projected(),
+        replayed[0].with_runtime_context_projected()
+    );
+    let crate::providers::MessageContent::Text(text) =
+        &replayed[0].with_runtime_context_projected().content
+    else {
+        panic!("expected text");
+    };
+    assert!(text.starts_with("<runtime_context>"));
+    assert!(text.ends_with("please refactor the loader"));
+}
+
+/// `last_attached_context_key` scans to the most recent user message carrying
+/// a block, so a later context-less user message does not erase the last
+/// change key.
+#[test]
+fn test_last_attached_context_key_skips_contextless_user_messages() {
+    use crate::providers::ChatMessage;
+
+    let messages = vec![
+        ChatMessage::user("first").with_runtime_context(
+            Some("<runtime_context>v1</runtime_context>".to_string()),
+            Some("k1".to_string()),
+        ),
+        ChatMessage::assistant_text("ok", None),
+        ChatMessage::user("second"),
+    ];
+    let events = messages_to_events(&messages);
+    assert_eq!(
+        last_attached_context_key_from_events(&events).as_deref(),
+        Some("k1")
+    );
+    assert_eq!(
+        last_attached_context_key_from_messages(&messages).as_deref(),
+        Some("k1")
+    );
+}
+
+/// The new optional `context`/`context_key` fields serialize only when present,
+/// and events without them (old transcripts) still deserialize — the
+/// mixed-version contract.
+#[test]
+fn test_message_context_serde_optional_and_backward_compatible() {
+    let with_context = ThreadEvent::Message {
+        role: "user".to_string(),
+        text: "hi".to_string(),
+        phase: None,
+        context: Some("<runtime_context>x</runtime_context>".to_string()),
+        context_key: Some("k1".to_string()),
+        replay: None,
+        ts: "2026-01-01T00:00:00Z".to_string(),
+    };
+    let json = serde_json::to_string(&with_context).unwrap();
+    assert!(json.contains("\"context\":\"<runtime_context>x</runtime_context>\""));
+    assert!(json.contains("\"context_key\":\"k1\""));
+    let parsed: ThreadEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, with_context);
+
+    // Old-format event without the field deserializes with context: None.
+    let legacy_json = r#"{"type":"message","role":"user","text":"hi","ts":"2026-01-01T00:00:00Z"}"#;
+    let parsed: ThreadEvent = serde_json::from_str(legacy_json).unwrap();
+    assert!(matches!(
+        parsed,
+        ThreadEvent::Message { context: None, text, .. } if text == "hi"
+    ));
+}
+
+/// A user message that carries runtime-context metadata but no Text block
+/// (an image-only TUI send) still persists the snapshot on a synthetic
+/// empty-text event, so the context block/key survive replay (image bytes are
+/// not persisted — replay fidelity for media is not provided).
+#[test]
+fn test_image_only_user_message_preserves_runtime_context() {
+    use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
+
+    let original = ChatMessage {
+        role: "user".to_string(),
+        phase: None,
+        context: Some("<runtime_context>snapshot</runtime_context>".to_string()),
+        context_key: Some("k1".to_string()),
+        content: MessageContent::Blocks(vec![ChatContentBlock::Image {
+            mime_type: "image/png".to_string(),
+            data: "Zm9v".to_string(),
+        }]),
+    };
+
+    let events = messages_to_events(&[original.clone()]);
+    assert_eq!(
+        last_attached_context_key_from_events(&events).as_deref(),
+        Some("k1")
+    );
+    let replayed = thread_events_to_messages(events);
+    let crate::providers::MessageContent::Text(text) = &replayed[0].content else {
+        panic!("expected a text message for the persisted context");
+    };
+    assert_eq!(text, "", "image bytes are not persisted, only the context");
+    assert_eq!(
+        replayed[0].context.as_deref(),
+        Some("<runtime_context>snapshot</runtime_context>")
+    );
+    assert_eq!(replayed[0].context_key.as_deref(), Some("k1"));
+}
+
 fn get_test_messages() -> Vec<crate::providers::ChatMessage> {
     use crate::providers::{
         ChatContentBlock, ChatMessage, MessageContent, ReasoningBlock, ReplayToken,
@@ -1942,6 +2086,8 @@ fn get_test_messages() -> Vec<crate::providers::ChatMessage> {
         ChatMessage {
             role: "assistant".to_string(),
             phase: None,
+            context: None,
+            context_key: None,
             content: MessageContent::Blocks(vec![
                 ChatContentBlock::Reasoning(ReasoningBlock {
                     text: Some("planning".to_string()),
@@ -1976,6 +2122,8 @@ fn get_test_messages() -> Vec<crate::providers::ChatMessage> {
         ChatMessage {
             role: "user".to_string(),
             phase: None,
+            context: None,
+            context_key: None,
             content: MessageContent::Blocks(vec![
                 ChatContentBlock::Text {
                     text: "before".to_string(),
@@ -2030,6 +2178,8 @@ async fn test_checkpoint_then_turn_finished_idempotent() {
     let assistant_t1 = ChatMessage {
         role: "assistant".to_string(),
         phase: None,
+        context: None,
+        context_key: None,
         content: MessageContent::Blocks(vec![ChatContentBlock::tool_use(
             "t1",
             "bash",
@@ -2059,6 +2209,8 @@ async fn test_checkpoint_then_turn_finished_idempotent() {
     let assistant_t2 = ChatMessage {
         role: "assistant".to_string(),
         phase: None,
+        context: None,
+        context_key: None,
         content: MessageContent::Blocks(vec![ChatContentBlock::tool_use(
             "t2",
             "bash",
@@ -2144,6 +2296,8 @@ async fn test_interrupted_turn_finished_allows_shorter_snapshot_than_checkpoint(
     let checkpointed_assistant = ChatMessage {
         role: "assistant".to_string(),
         phase: Some("commentary".to_string()),
+        context: None,
+        context_key: None,
         content: MessageContent::Blocks(vec![ChatContentBlock::Text {
             text: "partial".to_string(),
             replay: None,
@@ -2175,6 +2329,8 @@ async fn test_interrupted_turn_finished_allows_shorter_snapshot_than_checkpoint(
                 role,
                 text,
                 phase: Some(phase),
+                context: None,
+                context_key: None,
                 ..
             } if role == "assistant" && text == "partial" && phase == "commentary" => Some(index),
             _ => None,
@@ -2221,6 +2377,8 @@ async fn test_checkpoint_persistence_survives_crash_simulation() {
     let assistant_t1 = ChatMessage {
         role: "assistant".to_string(),
         phase: None,
+        context: None,
+        context_key: None,
         content: MessageContent::Blocks(vec![ChatContentBlock::tool_use(
             "t1",
             "bash",
@@ -2541,6 +2699,8 @@ fn test_interrupted_turn_preserves_reasoning_tools_and_partial_text() {
             role: "assistant".to_string(),
             text: "Here are the files I found so far".to_string(),
             phase: Some("commentary".to_string()),
+            context: None,
+            context_key: None,
             replay: None,
             ts: chrono_timestamp(),
         },

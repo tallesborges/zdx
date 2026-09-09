@@ -11,6 +11,7 @@ use crate::agent;
 use crate::bot::context::BotContext;
 use crate::telegram::InlineKeyboardMarkup;
 
+#[allow(clippy::too_many_lines)]
 pub(super) async fn run_agent_turn(
     context: &BotContext,
     incoming: crate::types::IncomingMessage,
@@ -48,6 +49,46 @@ pub(super) async fn run_agent_turn(
     if stored_root.is_none() {
         thread.set_root_path(&worktree_root)?;
     }
+    // Prepare the turn once so the advisory runtime-context snapshot is known
+    // before the user message is persisted (it is attached there and replayed
+    // identically on the next turn).
+    zdx_engine::core::context::set_runtime_env(&config, Some(thread_id));
+    let prepared = match agent::prepare_bot_turn(
+        &config,
+        &worktree_root,
+        context.bot_instruction_layer(),
+        persistent_profile.as_deref(),
+    ) {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            // The turn cannot run, but the incoming message must not be
+            // silently dropped (the queue caller only logs). Persist it
+            // without a runtime-context snapshot (preparation failed) and
+            // surface a visible error. Only a newly recorded message is
+            // written — a retry has nothing new to persist, and the success
+            // path below never runs, so nothing is double-written.
+            tracing::error!(%err, "Failed to prepare bot turn");
+            if record_user
+                && let Err(persist_err) =
+                    agent::record_user_message(&mut thread, &mut messages, &incoming, None)
+            {
+                tracing::error!(
+                    %persist_err,
+                    "Failed to persist user message after prompt-preparation failure"
+                );
+            }
+            let _ = context
+                .client()
+                .send_message_without_preview(
+                    incoming.chat_id,
+                    &format_user_error_message(&err.to_string()),
+                    reply_ctx.reply_to_message_id,
+                    reply_ctx.topic_id,
+                )
+                .await;
+            return Err(err);
+        }
+    };
     if is_orchestrator {
         context.record_orchestrator_route(
             thread_id,
@@ -60,7 +101,12 @@ pub(super) async fn run_agent_turn(
     }
     let pending_topic_title = thread_persistence::read_thread_pending_topic_title(thread_id)?;
     if record_user {
-        agent::record_user_message(&mut thread, &mut messages, &incoming)?;
+        agent::record_user_message(
+            &mut thread,
+            &mut messages,
+            &incoming,
+            prepared.runtime_context.as_ref(),
+        )?;
     }
 
     // Async topic title: spawn LLM-based title generation + rename for new topics.
@@ -104,14 +150,18 @@ pub(super) async fn run_agent_turn(
     .await;
     let mut status = status;
     let spawn = SpawnRequest {
-        worktree_root: &worktree_root,
         thread_id,
         thread: &thread,
         messages,
-        config: &config,
-        persistent_profile: persistent_profile.as_deref(),
+        prepared,
     };
-    let mut handle = spawn_or_fail(context, &incoming, &status, spawn).await?;
+    let mut handle = agent::spawn_agent_turn(
+        spawn.messages,
+        spawn.prepared,
+        spawn.thread_id,
+        spawn.thread,
+        context.tool_config(),
+    );
     let result = stream_turn_events(context, &incoming, &mut handle, &mut status).await;
     // Barrier: the next queued message rebuilds its history from the thread log,
     // so the turn must be fully written before this one releases the queue slot.
@@ -145,44 +195,6 @@ fn turn_config(
     }
     config.apply_thread_model_override(model_override, thinking_override);
     config
-}
-
-async fn spawn_or_fail(
-    context: &BotContext,
-    incoming: &crate::types::IncomingMessage,
-    status: &TurnStatus,
-    spawn: SpawnRequest<'_>,
-) -> Result<agent::AgentTurnHandle> {
-    let handle = agent::spawn_agent_turn(
-        spawn.messages,
-        spawn.config,
-        spawn.worktree_root,
-        context.bot_instruction_layer(),
-        spawn.thread_id,
-        spawn.thread,
-        context.tool_config(),
-        spawn.persistent_profile,
-    );
-
-    match handle {
-        Ok(handle) => Ok(handle),
-        Err(err) => {
-            tracing::error!(%err, "Failed to spawn agent turn");
-            if let Some(msg_id) = status.message_id {
-                let _ = context
-                    .client()
-                    .edit_message_text(
-                        incoming.chat_id,
-                        msg_id,
-                        &format_user_error_message(&err.to_string()),
-                        None,
-                    )
-                    .await;
-            }
-            cleanup_turn_status(context, status).await;
-            Err(err)
-        }
-    }
 }
 
 async fn stream_turn_events(

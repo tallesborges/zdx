@@ -23,6 +23,6 @@ pub use state::{HandoffState, InputState, PromptBuilderState};
 pub use text_buffer::{CursorMove, TextBuffer};
 pub use update::{
     InputContext, TabContext, build_send_effects, build_send_effects_for_tab,
-    handle_handoff_result, handle_main_key, handle_mouse, handle_paste,
-    handle_prompt_builder_result, submit_current_input,
+    build_send_effects_for_tab_with_context, handle_handoff_result, handle_main_key, handle_mouse,
+    handle_paste, handle_prompt_builder_result, submit_current_input,
 };

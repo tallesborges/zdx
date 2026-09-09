@@ -29,7 +29,7 @@ pub enum StateMutation {
         model_override: Option<String>,
         thinking_override: Option<ThinkingLevel>,
     },
-    SetSystemPrompt(Option<String>),
+    SetSystemPrompt(Box<crate::events::SystemPromptRefresh>),
     SetLastSkillRepo(String),
     SetLoadedSkills(Vec<zdx_engine::skills::Skill>),
     /// Replace the active tab's suggested replies (empty clears).

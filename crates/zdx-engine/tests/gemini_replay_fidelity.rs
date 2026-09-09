@@ -345,6 +345,8 @@ async fn test_function_response_id_symmetry() {
         ChatMessage {
             role: "assistant".to_string(),
             phase: None,
+            context: None,
+            context_key: None,
             content: MessageContent::Blocks(vec![
                 ChatContentBlock::ToolUse {
                     id: "call_real_001".to_string(),
@@ -365,6 +367,8 @@ async fn test_function_response_id_symmetry() {
         ChatMessage {
             role: "user".to_string(),
             phase: None,
+            context: None,
+            context_key: None,
             content: MessageContent::Blocks(vec![
                 ChatContentBlock::ToolResult(ToolResult {
                     tool_use_id: "call_real_001".to_string(),

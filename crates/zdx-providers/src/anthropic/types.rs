@@ -657,6 +657,8 @@ mod tests {
         let msg = ChatMessage {
             role: "assistant".to_string(),
             phase: None,
+            context: None,
+            context_key: None,
             content: MessageContent::Blocks(vec![ChatContentBlock::Reasoning(ReasoningBlock {
                 text: None,
                 replay: Some(ReplayToken::AnthropicRedacted {

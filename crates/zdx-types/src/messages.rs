@@ -193,6 +193,20 @@ pub struct ChatMessage {
     pub role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
+    /// Optional serialized `<runtime_context>` block attached to a user
+    /// message. Persisted and replayed with the message so the provider-visible
+    /// projection is identical on the live path and after restart
+    /// (live == replay == what was sent). `text` stays pure for titles,
+    /// search, exports, and UI; only the wire projection prepends the block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    /// Stable change key of the attached context block (SHA-256 over the
+    /// update-eligible sections only — branch, catalogs, workspace extras).
+    /// Persisted alongside `context` so later turns can decide whether a
+    /// meaningful update warrants a replacement block without re-attaching on
+    /// ambient tree/memory churn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_key: Option<String>,
     pub content: MessageContent,
 }
 
@@ -201,8 +215,53 @@ impl ChatMessage {
         Self {
             role: "user".to_string(),
             phase: None,
+            context: None,
+            context_key: None,
             content: MessageContent::Text(content.into()),
         }
+    }
+
+    /// Attaches an optional runtime-context block to this message. Only
+    /// meaningful for `role == "user"` messages; other roles ignore it.
+    #[must_use]
+    pub fn with_context(mut self, context: Option<String>) -> Self {
+        self.context = context;
+        self
+    }
+
+    /// Attaches a runtime-context block and its change key to this message.
+    #[must_use]
+    pub fn with_runtime_context(mut self, block: Option<String>, key: Option<String>) -> Self {
+        self.context = block;
+        self.context_key = key;
+        self
+    }
+
+    /// Returns a copy with this message's runtime-context block prepended to
+    /// the user content. This is the single projection used by both the live
+    /// path and replay, so live == replay == what was sent. Messages without
+    /// a context block (or non-user roles) project to an unchanged copy.
+    #[must_use]
+    pub fn with_runtime_context_projected(&self) -> Self {
+        let Some(block) = self
+            .context
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            return self.clone();
+        };
+        if self.role != "user" {
+            return self.clone();
+        }
+        let mut projected = self.clone();
+        match &mut projected.content {
+            MessageContent::Text(text) => *text = format!("{block}\n\n{text}"),
+            MessageContent::Blocks(blocks) => {
+                blocks.insert(0, ChatContentBlock::text(block.to_string()));
+            }
+        }
+        projected
     }
 
     /// Creates a user message with text and image attachments.
@@ -242,6 +301,8 @@ impl ChatMessage {
         Self {
             role: "user".to_string(),
             phase: None,
+            context: None,
+            context_key: None,
             content: MessageContent::Blocks(blocks),
         }
     }
@@ -251,6 +312,8 @@ impl ChatMessage {
         Self {
             role: "assistant".to_string(),
             phase: None,
+            context: None,
+            context_key: None,
             content: MessageContent::Blocks(blocks),
         }
     }
@@ -260,6 +323,8 @@ impl ChatMessage {
         Self {
             role: "assistant".to_string(),
             phase,
+            context: None,
+            context_key: None,
             content: MessageContent::Text(content.into()),
         }
     }
@@ -276,6 +341,8 @@ impl ChatMessage {
         Self {
             role: "user".to_string(),
             phase: None,
+            context: None,
+            context_key: None,
             content: MessageContent::Blocks(blocks),
         }
     }
@@ -414,6 +481,53 @@ mod tests {
             }
             _ => panic!("expected Text variant"),
         }
+    }
+
+    /// The runtime-context projection prepends the persisted block to the user
+    /// text (`live == replay == what was sent`) and leaves pure text untouched.
+    #[test]
+    fn test_runtime_context_projection_prepends_block_to_user_text() {
+        let block = "<runtime_context>\norientation data\n</runtime_context>";
+        let msg = ChatMessage::user("original user text").with_context(Some(block.to_string()));
+        let projected = msg.with_runtime_context_projected();
+
+        assert_eq!(projected.role, "user");
+        let MessageContent::Text(text) = &projected.content else {
+            panic!("expected text content");
+        };
+        assert_eq!(
+            text,
+            "<runtime_context>\norientation data\n</runtime_context>\n\noriginal user text"
+        );
+        // The source message keeps pure text + separate context.
+        let MessageContent::Text(source_text) = &msg.content else {
+            panic!("expected text content");
+        };
+        assert_eq!(source_text, "original user text");
+        assert_eq!(msg.context.as_deref(), Some(block));
+    }
+
+    /// Projection is a no-op for messages without a context block, for
+    /// assistant messages, and for blank context blocks.
+    #[test]
+    fn test_runtime_context_projection_is_noop_without_context() {
+        assert_eq!(
+            ChatMessage::user("hello").with_runtime_context_projected(),
+            ChatMessage::user("hello")
+        );
+        let assistant = ChatMessage::assistant_text("hi", None)
+            .with_context(Some("<runtime_context>x</runtime_context>".to_string()));
+        assert_eq!(
+            assistant.with_runtime_context_projected(),
+            assistant,
+            "assistant messages never project context"
+        );
+        let blank = ChatMessage::user("hi").with_context(Some("   ".to_string()));
+        let projected = blank.with_runtime_context_projected();
+        let MessageContent::Text(text) = &projected.content else {
+            panic!("expected text content");
+        };
+        assert_eq!(text, "hi", "blank context must not alter the wire text");
     }
 
     /// Test: new `ChatContentBlock::Text` struct variant round-trips JSON

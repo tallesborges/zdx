@@ -114,12 +114,19 @@ pub async fn run_interactive_chat_with_history(
 
     // Create and run the TUI
     let mut runtime = if history.is_empty() {
-        TuiRuntime::new(config.clone(), root, effective.prompt, thread_handle)?
+        TuiRuntime::new(
+            config.clone(),
+            root,
+            effective.prompt,
+            effective.runtime_context,
+            thread_handle,
+        )?
     } else {
         TuiRuntime::with_history(
             config.clone(),
             root,
             effective.prompt,
+            effective.runtime_context,
             thread_handle,
             history,
         )?

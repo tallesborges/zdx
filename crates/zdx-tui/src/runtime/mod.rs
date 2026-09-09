@@ -178,9 +178,17 @@ impl TuiRuntime {
         config: Config,
         root: PathBuf,
         system_prompt: Option<String>,
+        runtime_context: Option<zdx_engine::core::context::RuntimeContext>,
         thread_handle: Option<Thread>,
     ) -> Result<Self> {
-        Self::with_history(config, root, system_prompt, thread_handle, Vec::new())
+        Self::with_history(
+            config,
+            root,
+            system_prompt,
+            runtime_context,
+            thread_handle,
+            Vec::new(),
+        )
     }
 
     /// Creates a TUI runtime with pre-loaded message history.
@@ -191,6 +199,7 @@ impl TuiRuntime {
         config: Config,
         root: PathBuf,
         system_prompt: Option<String>,
+        runtime_context: Option<zdx_engine::core::context::RuntimeContext>,
         thread_handle: Option<Thread>,
         history: Vec<ChatMessage>,
     ) -> Result<Self> {
@@ -237,8 +246,15 @@ impl TuiRuntime {
         let config_watch = zdx_engine::config::ConfigWatch::new(
             &zdx_engine::config::paths::config_layer_paths_for(&root),
         );
-        let mut state = AppState::with_history(config, root, system_prompt, thread_handle, history)
-            .with_custom_commands(custom_load.commands);
+        let mut state = AppState::with_history(
+            config,
+            root,
+            system_prompt,
+            runtime_context,
+            thread_handle,
+            history,
+        )
+        .with_custom_commands(custom_load.commands);
         state.tui.config_watch = config_watch;
         state.tui.thread.model_override = model_override;
         state.tui.thread.thinking_override = thinking_override;
@@ -579,6 +595,17 @@ impl TuiRuntime {
         reload_tab_config(tab, &layers);
     }
 
+    /// Refreshes the active tab's cached system prompt and runtime context
+    /// against its current config/root, then spawns its agent turn.
+    fn refresh_prompt_and_spawn_agent_turn(&mut self) {
+        let config = self.state.tui.config.clone();
+        let root = self.state.tui.agent_opts.root.clone();
+        let prompt_event = handlers::refresh_system_prompt(&config, &root);
+        self.dispatch_event(prompt_event);
+        let event = handlers::spawn_agent_turn(&self.state.tui);
+        self.dispatch_event(event);
+    }
+
     /// Executes a single effect by dispatching to the appropriate handler.
     ///
     /// Uses `spawn_task` for async task lifecycles.
@@ -621,26 +648,50 @@ impl TuiRuntime {
 
             // Agent effects (still returns event for now - streaming is special)
             UiEffect::StartAgentTurn => {
+                // A config reload can change base prompt / project context, and
+                // an in-scope `AGENTS.md`/`CLAUDE.md` edit changes project
+                // instructions. Both must take effect on the next normal turn,
+                // so rebuild the effective prompt (authoritative instructions +
+                // runtime-context snapshot) before spawning. Runtime-context
+                // attachment stays deduplicated by `context_key`, so rebuilding
+                // never re-attaches on ambient tree/memory churn.
                 self.reload_config_if_changed(None);
-                let event = handlers::spawn_agent_turn(&self.state.tui);
-                self.dispatch_event(event);
+                self.refresh_prompt_and_spawn_agent_turn();
             }
             UiEffect::StartAgentTurnInBackgroundTab { tab_id } => {
                 self.reload_config_if_changed(Some(tab_id));
+                // Always refresh the cached system prompt so config and
+                // project-instruction edits apply on the next turn.
+                let Some(tab) = self
+                    .state
+                    .background_tabs
+                    .iter_mut()
+                    .find(|t| t.tab_id == tab_id)
+                else {
+                    return;
+                };
+                let config = tab.config.clone();
+                let root = tab.agent_opts.root.clone();
+                match zdx_engine::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
+                    &config,
+                    &root,
+                    &crate::tui_instruction_layers(),
+                    true,
+                ) {
+                    Ok(effective) => {
+                        tab.system_prompt = effective.prompt;
+                        tab.runtime_context = effective.runtime_context;
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "Failed to refresh background tab system prompt");
+                    }
+                }
                 // Spawn the agent task against the background tab's
                 // `TuiState` and re-route the resulting `AgentSpawned`
                 // event so it lands on the same background tab. Without
                 // re-routing, `AgentSpawned` would mutate `app.tui` (the
                 // active tab), which is the original cause of the
                 // queue-stuck-in-background-tab bug.
-                let Some(tab) = self
-                    .state
-                    .background_tabs
-                    .iter()
-                    .find(|t| t.tab_id == tab_id)
-                else {
-                    return;
-                };
                 let event = handlers::spawn_agent_turn(tab);
                 let routed = match event {
                     UiEvent::AgentSpawned {
@@ -1453,7 +1504,7 @@ fn map_loaded_to_tab(event: UiEvent) -> UiEvent {
     }
 }
 
-fn reload_tab_config(tab: &mut crate::state::TuiState, layers: &[PathBuf]) {
+pub(crate) fn reload_tab_config(tab: &mut crate::state::TuiState, layers: &[PathBuf]) {
     if !tab.config_watch.changed(layers) {
         return;
     }
@@ -1498,6 +1549,7 @@ mod tests {
             crate::state::TabKind::Main,
             config,
             dir.path().into(),
+            None,
             None,
             None,
             Vec::new(),

@@ -840,6 +840,8 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![
                     ChatContentBlock::Text {
                         text: "first".to_string(),
@@ -876,6 +878,8 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![
                     ChatContentBlock::ToolUse {
                         id: "call_a".to_string(),
@@ -922,6 +926,8 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![
                     ChatContentBlock::Reasoning(ReasoningBlock {
                         text: Some("thinking".to_string()),
@@ -991,6 +997,8 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![ChatContentBlock::text("hello")]),
             },
         ];
@@ -1020,6 +1028,8 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![
                     ChatContentBlock::Reasoning(ReasoningBlock {
                         text: Some("thinking".to_string()),
@@ -1069,6 +1079,8 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![ChatContentBlock::ToolUse {
                     id: "synth-1".to_string(),
                     name: "bash".to_string(),
@@ -1100,6 +1112,8 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![ChatContentBlock::ToolUse {
                     id: "synth-1".to_string(),
                     name: "bash".to_string(),
@@ -1111,6 +1125,8 @@ mod tests {
             ChatMessage {
                 role: "user".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![ChatContentBlock::ToolResult(ToolResult {
                     tool_use_id: "synth-1".to_string(),
                     content: ToolResultContent::Text("ok".to_string()),
@@ -1139,6 +1155,8 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![ChatContentBlock::ToolUse {
                     id: "real-1".to_string(),
                     name: "bash".to_string(),
@@ -1150,6 +1168,8 @@ mod tests {
             ChatMessage {
                 role: "user".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![ChatContentBlock::ToolResult(ToolResult {
                     tool_use_id: "real-1".to_string(),
                     content: ToolResultContent::Text("ok".to_string()),
@@ -1173,6 +1193,8 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![ChatContentBlock::Reasoning(
                     ReasoningBlock {
                         text: Some("hmm".to_string()),
@@ -1204,6 +1226,8 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![
                     ChatContentBlock::Reasoning(ReasoningBlock {
                         text: Some("hmm".to_string()),
@@ -1238,6 +1262,8 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![ChatContentBlock::Reasoning(
                     ReasoningBlock {
                         text: Some("hmm".to_string()),
@@ -1270,6 +1296,8 @@ mod tests {
                 ChatMessage {
                     role: "assistant".to_string(),
                     phase: None,
+                    context: None,
+                    context_key: None,
                     content: MessageContent::Blocks(vec![ChatContentBlock::ToolUse {
                         id: "call_sig_stable".to_string(),
                         name: "bash".to_string(),
@@ -1281,6 +1309,8 @@ mod tests {
                 ChatMessage {
                     role: "user".to_string(),
                     phase: None,
+                    context: None,
+                    context_key: None,
                     content: MessageContent::Blocks(vec![ChatContentBlock::ToolResult(
                         ToolResult {
                             tool_use_id: "call_sig_stable".to_string(),
@@ -1292,6 +1322,8 @@ mod tests {
                 ChatMessage {
                     role: "assistant".to_string(),
                     phase: None,
+                    context: None,
+                    context_key: None,
                     content: MessageContent::Text("Here you go.".to_string()),
                 },
             ]
@@ -1336,6 +1368,8 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![ChatContentBlock::ToolUse {
                     id: "call_123".to_string(),
                     name: "bash".to_string(),
@@ -1347,6 +1381,8 @@ mod tests {
             ChatMessage {
                 role: "user".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![ChatContentBlock::ToolResult(ToolResult {
                     tool_use_id: "call_123".to_string(),
                     content: ToolResultContent::Text("a.txt\nb.txt".to_string()),
@@ -1385,6 +1421,8 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![ChatContentBlock::ToolUse {
                     id: "call_img".to_string(),
                     name: "screenshot".to_string(),
@@ -1396,6 +1434,8 @@ mod tests {
             ChatMessage {
                 role: "user".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![ChatContentBlock::ToolResult(ToolResult {
                     tool_use_id: "call_img".to_string(),
                     content: ToolResultContent::Blocks(vec![
@@ -1451,6 +1491,8 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![ChatContentBlock::ToolUse {
                     id: "call_img".to_string(),
                     name: "screenshot".to_string(),
@@ -1462,6 +1504,8 @@ mod tests {
             ChatMessage {
                 role: "user".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![ChatContentBlock::ToolResult(ToolResult {
                     tool_use_id: "call_img".to_string(),
                     content: ToolResultContent::Blocks(vec![
@@ -1521,6 +1565,8 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![
                     ChatContentBlock::ToolUse {
                         id: "call_a".to_string(),
@@ -1542,6 +1588,8 @@ mod tests {
             ChatMessage {
                 role: "user".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![
                     ChatContentBlock::ToolResult(ToolResult {
                         tool_use_id: "call_b".to_string(),
@@ -1604,6 +1652,8 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![
                     ChatContentBlock::ToolUse {
                         id: "call_a".to_string(),
@@ -1624,6 +1674,8 @@ mod tests {
             ChatMessage {
                 role: "user".to_string(),
                 phase: None,
+                context: None,
+                context_key: None,
                 content: MessageContent::Blocks(vec![
                     ChatContentBlock::ToolResult(ToolResult {
                         tool_use_id: "call_b".to_string(),
