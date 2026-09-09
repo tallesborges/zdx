@@ -844,11 +844,10 @@ mod tests {
     fn orchestrator_override_replaces_model_and_thinking() {
         use crate::config::{Config, SubagentOverride};
 
-        let base = || {
-            let mut config = Config::default();
-            config.model = "claude-cli:opus@high".to_string();
-            config.thinking_level = ThinkingLevel::High;
-            config
+        let base = || Config {
+            model: "claude-cli:opus@high".to_string(),
+            thinking_level: ThinkingLevel::High,
+            ..Default::default()
         };
         let with_override = |name: &str, model: &str, level: Option<ThinkingLevel>| {
             let mut config = base();
