@@ -80,7 +80,7 @@
 
   /** Share of prompt tokens served from cache — the main cost lever. */
   let cacheHit = $derived.by(() => {
-    const prompt = totals.input + totals.cacheRead;
+    const prompt = totals.input + totals.cacheRead + totals.cacheWrite;
     return prompt > 0 ? (totals.cacheRead / prompt) * 100 : null;
   });
 
