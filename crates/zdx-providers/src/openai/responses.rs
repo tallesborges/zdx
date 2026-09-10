@@ -92,7 +92,7 @@ pub async fn send_responses_stream(
 ///
 /// # Errors
 /// Returns an error when there are no input messages to send.
-pub(crate) fn build_request_body(
+pub fn build_request_body(
     config: &ResponsesConfig,
     messages: &[ChatMessage],
     tools: &[ToolDefinition],
