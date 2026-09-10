@@ -634,6 +634,7 @@ async fn start_btw_topic(
         "Btw",
         seed,
         None,
+        false,
     )
     .await
     {
@@ -676,6 +677,13 @@ async fn start_btw_topic(
 /// and a pending auto-title before the first turn opens it, and it inherits the
 /// source thread's model/thinking overrides so it continues with the same
 /// effective model and thinking level. Shared by `/handoff` and `/btw`.
+///
+/// `inherit_profile` continues the source thread's *mode*: `/handoff` copies a
+/// persistent profile (the reserved `orchestrator` home base) onto the
+/// successor, so an orchestrated thread hands off to another orchestrator. The
+/// source thread is left completely alone — it keeps its own workers and stays
+/// usable, so both conversations can run on. `/btw` never inherits, since a
+/// side question is an ordinary read-only thread.
 #[allow(clippy::too_many_arguments)]
 async fn seed_new_topic(
     context: &Arc<BotContext>,
@@ -686,6 +694,7 @@ async fn seed_new_topic(
     topic_prefix: &str,
     seed_text: String,
     record: Option<String>,
+    inherit_profile: bool,
 ) -> Result<()> {
     let topic_name = chrono::Utc::now()
         .format(&format!("{topic_prefix} %Y-%m-%d %H:%M"))
@@ -695,6 +704,11 @@ async fn seed_new_topic(
         .create_forum_topic(chat_id, &topic_name)
         .await?;
 
+    let source_profile = thread_persistence::read_persistent_profile(source_thread_id)
+        .ok()
+        .flatten();
+    let inherited_profile = inherit_profile.then(|| source_profile.clone()).flatten();
+
     let inherited_model = thread_persistence::read_thread_model_override(source_thread_id)
         .ok()
         .flatten();
@@ -703,12 +717,7 @@ async fn seed_new_topic(
         .flatten();
     let inherited_model = if inherited_model.is_some() || inherited_thinking.is_some() {
         let mut config = context.config_for_chat(chat_id);
-        if thread_persistence::read_persistent_profile(source_thread_id)
-            .ok()
-            .flatten()
-            .as_deref()
-            == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME)
-        {
+        if source_profile.as_deref() == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME) {
             zdx_engine::subagents::apply_orchestrator_override(&mut config);
         }
         config.apply_thread_model_override(inherited_model.as_deref(), inherited_thinking);
@@ -720,12 +729,22 @@ async fn seed_new_topic(
     let created =
         thread_persistence::Thread::with_id(new_thread_id.clone()).and_then(|mut thread| {
             thread.set_handoff_from(Some(source_thread_id.to_string()));
+            if let Some(profile) = inherited_profile.as_deref() {
+                thread.set_persistent_profile(profile)?;
+            }
             if let Some(model) = inherited_model {
                 thread.set_model_override(Some(model))?;
             }
             thread.set_pending_topic_title(true)
         });
     if let Err(err) = created {
+        // Fail closed when a mode was supposed to be inherited: running the
+        // default coding agent in the orchestrator's root is exactly what the
+        // handoff is meant to avoid, so surface the failure and let the user
+        // retry instead.
+        if inherited_profile.is_some() {
+            return Err(err.context("record the inherited profile on the handoff thread"));
+        }
         tracing::warn!(chat_id, new_topic_id, %err, "Failed to record lineage on new thread");
     }
 
@@ -804,6 +823,7 @@ async fn start_handoff_topic(
                 "Handoff",
                 suggestion,
                 Some(record),
+                true,
             )
             .await
         }
