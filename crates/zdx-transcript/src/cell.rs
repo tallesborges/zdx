@@ -1302,24 +1302,27 @@ impl HistoryCell {
 
 /// Blank lines rendered after `cell`, given the cell that follows it.
 ///
-/// Tool and thinking cells form one continuous activity run and pack tight;
-/// everything else (user, assistant, system, timing) keeps a blank line of air
-/// after it. The last cell always keeps its trailing blank so the transcript
-/// does not touch the input box.
+/// Consecutive tool calls pack tight as one continuous activity run; a
+/// thinking block next to a tool call gets a blank line of air on that
+/// boundary so the two read as separate steps. Everything else (user,
+/// assistant, system, timing) keeps a blank line of air after it. The last
+/// cell always keeps its trailing blank so the transcript does not touch the
+/// input box.
 ///
 /// Every consumer that lays out cells must use this — the chat transcript's
 /// full and lazy render paths, its line-count bookkeeping, and
 /// `cells_to_lines_with_offsets` — or scroll math and selection drift apart.
 pub fn gap_after(cell: &HistoryCell, next: Option<&HistoryCell>) -> usize {
-    fn is_activity(cell: &HistoryCell) -> bool {
-        matches!(
-            cell,
-            HistoryCell::Tool { .. } | HistoryCell::Thinking { .. }
-        )
+    fn is_tool(cell: &HistoryCell) -> bool {
+        matches!(cell, HistoryCell::Tool { .. })
+    }
+
+    fn is_thinking(cell: &HistoryCell) -> bool {
+        matches!(cell, HistoryCell::Thinking { .. })
     }
 
     match next {
-        Some(next) if is_activity(cell) && is_activity(next) => 0,
+        Some(next) if is_tool(cell) && is_tool(next) || is_thinking(cell) && is_thinking(next) => 0,
         _ => 1,
     }
 }
@@ -1491,10 +1494,13 @@ mod tests {
         let assistant = HistoryCell::assistant("hi");
         let user = HistoryCell::user("hi");
 
-        // Tool/thinking runs pack tight.
+        // Consecutive tool calls and consecutive thinking blocks pack tight.
         assert_eq!(gap_after(&tool, Some(&tool)), 0);
-        assert_eq!(gap_after(&tool, Some(&thinking)), 0);
-        assert_eq!(gap_after(&thinking, Some(&tool)), 0);
+        assert_eq!(gap_after(&thinking, Some(&thinking)), 0);
+
+        // Thinking next to a tool call gets air on that boundary.
+        assert_eq!(gap_after(&tool, Some(&thinking)), 1);
+        assert_eq!(gap_after(&thinking, Some(&tool)), 1);
 
         // Prose keeps its blank line on both sides.
         assert_eq!(gap_after(&tool, Some(&assistant)), 1);
