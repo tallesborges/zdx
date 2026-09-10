@@ -89,6 +89,9 @@ pub(crate) struct WalkPolicy {
     pub(crate) skip_git: bool,
     /// Optional ripgrep-style type filter.
     pub(crate) types: Option<Types>,
+    /// Optional depth ceiling, relative to the search path (`1` = its immediate
+    /// children). `None` walks the whole tree.
+    pub(crate) max_depth: Option<usize>,
     /// Deadline shared by every pass of this call.
     pub(crate) budget: WalkBudget,
 }
@@ -100,8 +103,14 @@ impl WalkPolicy {
             respect_gitignore: true,
             skip_git: !pattern.is_some_and(pattern_names_git),
             types: None,
+            max_depth: None,
             budget: WalkBudget::start(),
         }
+    }
+
+    pub(crate) fn with_max_depth(mut self, max_depth: Option<usize>) -> Self {
+        self.max_depth = max_depth;
+        self
     }
 
     pub(crate) fn with_types(mut self, types: Option<Types>) -> Self {
@@ -155,24 +164,29 @@ const SHALLOW_DEPTH: usize = 2;
 /// expires.
 ///
 /// Entries down to [`SHALLOW_DEPTH`] are visited first, in order; everything
-/// below is visited in parallel. `visit` is called at most once per entry, from
-/// multiple threads in the second pass; returning [`WalkState::Quit`] ends the
-/// walk (used for result caps). Unreadable entries are skipped.
+/// below is visited in parallel. A `policy.max_depth` below that collapses the
+/// call into the sequential pass alone. `visit` is called at most once per
+/// entry, from multiple threads in the second pass; returning
+/// [`WalkState::Quit`] ends the walk (used for result caps). Unreadable entries
+/// are skipped.
 pub(crate) fn walk<F>(search_path: &Path, policy: &WalkPolicy, visit: F)
 where
     F: Fn(&DirEntry) -> WalkState + Send + Sync,
 {
+    let shallow_depth = policy
+        .max_depth
+        .map_or(SHALLOW_DEPTH, |max| max.min(SHALLOW_DEPTH));
     let mut has_deeper = false;
 
     for entry in builder(search_path, policy)
-        .max_depth(Some(SHALLOW_DEPTH))
+        .max_depth(Some(shallow_depth))
         .build()
     {
         if policy.budget.is_expired() {
             return;
         }
         let Ok(entry) = entry else { continue };
-        if entry.depth() == SHALLOW_DEPTH && entry.file_type().is_some_and(|ft| ft.is_dir()) {
+        if entry.depth() == shallow_depth && entry.file_type().is_some_and(|ft| ft.is_dir()) {
             has_deeper = true;
         }
         if visit(&entry) == WalkState::Quit {
@@ -180,8 +194,12 @@ where
         }
     }
 
-    // Nothing below the shallow pass: skip the parallel walk and its startup cost.
-    if !has_deeper || policy.budget.is_expired() {
+    // Nothing below the shallow pass, or the caller asked for no more depth:
+    // skip the parallel walk and its startup cost.
+    if !has_deeper
+        || policy.max_depth.is_some_and(|max| max <= shallow_depth)
+        || policy.budget.is_expired()
+    {
         return;
     }
 
@@ -196,7 +214,7 @@ where
                 return WalkState::Continue;
             };
             // Already covered, exactly, by the shallow pass.
-            if entry.depth() <= SHALLOW_DEPTH {
+            if entry.depth() <= shallow_depth {
                 return WalkState::Continue;
             }
             visit(&entry)
@@ -204,7 +222,7 @@ where
     });
 }
 
-/// Builds a walker configured for `policy`, without a depth limit.
+/// Builds a walker configured for `policy`, limited only by `policy.max_depth`.
 fn builder(search_path: &Path, policy: &WalkPolicy) -> WalkBuilder {
     let mut builder = WalkBuilder::new(search_path);
     builder
@@ -212,7 +230,8 @@ fn builder(search_path: &Path, policy: &WalkPolicy) -> WalkBuilder {
         .git_global(policy.respect_gitignore)
         .git_exclude(policy.respect_gitignore)
         .ignore(policy.respect_gitignore)
-        .hidden(false);
+        .hidden(false)
+        .max_depth(policy.max_depth);
     if policy.skip_git {
         builder.filter_entry(|entry| entry.file_name() != ".git");
     }
@@ -320,5 +339,42 @@ mod tests {
         };
         assert_eq!(seen, deduped, "no entry is visited twice");
         assert_eq!(seen.len(), 5, "shallow and deep files are all visited");
+    }
+
+    #[test]
+    fn max_depth_stops_the_walk_at_the_requested_level() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let deep = temp.path().join("a/b/c/d");
+        std::fs::create_dir_all(&deep).unwrap();
+        for dir in [
+            temp.path(),
+            &temp.path().join("a"),
+            &temp.path().join("a/b"),
+            &temp.path().join("a/b/c"),
+            &deep,
+        ] {
+            std::fs::write(dir.join("file.txt"), "x").unwrap();
+        }
+
+        for (max_depth, expected) in [(1, 1), (2, 2), (3, 3)] {
+            let policy = WalkPolicy::for_pattern(None).with_max_depth(Some(max_depth));
+            let seen = std::sync::Mutex::new(Vec::new());
+            walk(temp.path(), &policy, |entry| {
+                if entry.file_type().is_some_and(|ft| ft.is_file()) {
+                    seen.lock().unwrap().push(entry.path().to_path_buf());
+                }
+                WalkState::Continue
+            });
+
+            let mut seen = seen.into_inner().unwrap();
+            seen.sort();
+            let deduped = {
+                let mut d = seen.clone();
+                d.dedup();
+                d
+            };
+            assert_eq!(seen, deduped, "no entry is visited twice at {max_depth}");
+            assert_eq!(seen.len(), expected, "files within depth {max_depth}");
+        }
     }
 }

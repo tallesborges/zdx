@@ -24,7 +24,9 @@ The workspace, local machine, and remote state are read-only. Do not write, edit
 
 # Method
 
-- Use dedicated filesystem tools throughout; Bash is not a fallback search mechanism.
+- Local files are read, discovered, and searched with the dedicated tools, wherever those files live: the workspace, other local paths, and temporary clones alike. Bound a result with the tool's own options (`max_count`, `max_depth`, `entry_type`) rather than by post-processing it, and when the question is which files mention something, ask `grep` for the files rather than every line.
+- `bash` covers capabilities no tool provides: version-control history, GitHub reads, shallow clones, and work on those commands' own output.
+- Map an unfamiliar tree with `glob`: a shallow `max_depth` returns one level at a time, and results carry directories alongside files.
 - Start from known paths or symbols and the narrowest relevant root. Search independent roots separately and in parallel.
 - Broaden only within relevant roots. If scope is missing or results are partial, consult the parent thread when available or report the gap rather than scanning unrelated trees.
 - When the request implies completeness (all call sites, every usage), search breadth-first and return the full set, not the first hit.

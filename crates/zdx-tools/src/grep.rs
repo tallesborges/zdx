@@ -53,7 +53,7 @@ const WALK_PHASE: std::time::Duration = std::time::Duration::from_secs(3);
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Grep".to_string(),
-        description: "Search file contents with a regular expression within a scoped path; an exact file path is searched directly. Hidden files are included; ignore rules apply by default, and `.git` is searched only when explicitly targeted. Results include source locations and optional context. Result caps can be paginated; an incomplete traversal requires a narrower or split search path. Files over 4MB are skipped and reported."
+        description: "Search file contents with a regular expression within a scoped path; an exact file path is searched directly. Hidden files are included; ignore rules apply by default, and `.git` is searched only when explicitly targeted. Results include source locations and optional context, or just the paths of files that contain a match when locating files is the goal. Result caps can be paginated; an incomplete traversal requires a narrower or split search path. Files over 4MB are skipped and reported."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -99,6 +99,10 @@ pub fn definition() -> ToolDefinition {
                     "type": "boolean",
                     "description": "When true, extract only the matching text (capture group 1 if present, otherwise full match), deduplicate, and return sorted unique values. Useful for discovery queries like listing all unique tags."
                 },
+                "files_only": {
+                    "type": "boolean",
+                    "description": "When true, return the paths of files containing at least one match under `files` instead of the matching lines. Content still decides the result; only the reporting changes. Cannot be combined with extract_unique."
+                },
                 "type": {
                     "type": "string",
                     "description": "Ripgrep file-type filter (e.g. \"rust\", \"ts\", \"py\"). Restricts search to files matching the named type's extensions. Unknown values are treated as file extensions, so \"kt\" matches \"*.kt\"."
@@ -112,6 +116,9 @@ pub fn definition() -> ToolDefinition {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+// Mirrors the flat JSON schema the model sends; `deny_unknown_fields` rules out
+// grouping the flags behind `#[serde(flatten)]`.
+#[allow(clippy::struct_excessive_bools)]
 struct GrepInput {
     pattern: String,
     path: Option<String>,
@@ -128,6 +135,8 @@ struct GrepInput {
     offset: Option<usize>,
     #[serde(default, deserialize_with = "crate::bool_or_string::deserialize")]
     extract_unique: bool,
+    #[serde(default, deserialize_with = "crate::bool_or_string::deserialize")]
+    files_only: bool,
     #[serde(rename = "type")]
     file_type: Option<String>,
 }
@@ -307,6 +316,14 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         return ToolOutput::failure("invalid_input", "pattern cannot be empty", None);
     }
 
+    if input.extract_unique && input.files_only {
+        return ToolOutput::failure(
+            "invalid_input",
+            "extract_unique and files_only report different things; enable only one",
+            None,
+        );
+    }
+
     let sanitized = sanitize_pattern(&input.pattern);
 
     let matcher = match RegexMatcherBuilder::new()
@@ -367,14 +384,56 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     }
 
     let offset = input.offset.unwrap_or(0);
+    let pagination = Pagination { offset, max_count };
 
-    let (per_file, skipped_large_files) = collect_matches(
+    if input.files_only {
+        return execute_files_only(
+            &search_path,
+            &matcher,
+            &ctx.root,
+            glob_matcher.as_ref(),
+            &policy,
+            pagination,
+        );
+    }
+
+    execute_matches(
         &search_path,
         &matcher,
         &ctx.root,
         glob_matcher.as_ref(),
         input.context_lines,
         &policy,
+        pagination,
+    )
+}
+
+/// How many results to skip and return, shared by every reporting mode.
+#[derive(Debug, Clone, Copy)]
+struct Pagination {
+    offset: usize,
+    max_count: usize,
+}
+
+/// Report matching lines with their source locations and optional context.
+fn execute_matches(
+    search_path: &Path,
+    matcher: &grep_regex::RegexMatcher,
+    root: &Path,
+    glob_matcher: Option<&GlobMatcher>,
+    context_lines: usize,
+    policy: &WalkPolicy,
+    pagination: Pagination,
+) -> ToolOutput {
+    let Pagination { offset, max_count } = pagination;
+
+    let (per_file, skipped_large_files) = collect_matches(
+        search_path,
+        matcher,
+        root,
+        glob_matcher,
+        context_lines,
+        policy,
     );
 
     let (all_matches, truncated_by_cap) = round_robin_select(per_file, MAX_MATCHES);
@@ -778,6 +837,140 @@ fn build_extract_unique_warning(stats: &GrepOutputStats, total_unique: usize) ->
     (!parts.is_empty()).then(|| parts.join(" "))
 }
 
+/// Report the files whose contents match, instead of the matching lines.
+///
+/// Same search as the default mode, so the same `path`, `glob`, `type`, and
+/// case options decide what is looked at; only the reporting differs. Each file
+/// stops at its first match, so the cost is bounded by the tree, not by how
+/// often the pattern occurs.
+fn execute_files_only(
+    search_path: &Path,
+    matcher: &grep_regex::RegexMatcher,
+    root: &Path,
+    glob_matcher: Option<&GlobMatcher>,
+    policy: &WalkPolicy,
+    pagination: Pagination,
+) -> ToolOutput {
+    let Pagination { offset, max_count } = pagination;
+    let (files, skipped_large_files) = walk_files(search_path, root, glob_matcher, policy);
+
+    // `walk_files` returns sorted paths, so the result is already stable and
+    // `offset` addresses the same file across calls.
+    let mut matching = Vec::new();
+    for path in files {
+        if policy.budget.is_expired() {
+            break;
+        }
+        if file_has_match(&path, matcher) {
+            matching.push(display_path(&path, root));
+        }
+    }
+
+    let after_offset: Vec<String> = matching.into_iter().skip(offset).collect();
+    let truncated_by_pagination = after_offset.len() > max_count;
+    let selected: Vec<String> = after_offset.into_iter().take(max_count).collect();
+    let (selected, mut output_stats) = cap_paths_for_output(selected, skipped_large_files);
+    output_stats.timed_out = policy.budget.is_partial();
+    let total_files = selected.len();
+    let truncated = truncated_by_pagination
+        || output_stats.text_truncated
+        || output_stats.payload_truncated
+        || output_stats.timed_out
+        || !output_stats.skipped_large_files.is_empty();
+
+    let mut data = serde_json::Map::new();
+    data.insert(
+        "files".to_string(),
+        serde_json::to_value(selected).unwrap_or(Value::Null),
+    );
+    data.insert("total_files".to_string(), Value::from(total_files));
+    data.insert("truncated".to_string(), Value::from(truncated));
+    insert_skipped_files(&mut data, &output_stats);
+    if truncated && total_files > 0 {
+        data.insert("next_offset".to_string(), Value::from(offset + total_files));
+    }
+    if let Some(warning) =
+        build_files_only_warning(offset, total_files, truncated_by_pagination, &output_stats)
+    {
+        data.insert("warning".to_string(), Value::String(warning));
+    }
+
+    ToolOutput::success(Value::Object(data))
+}
+
+/// True as soon as one line of `path` matches; the rest of the file is skipped.
+fn file_has_match(path: &Path, matcher: &grep_regex::RegexMatcher) -> bool {
+    let mut found = false;
+    let mut searcher = SearcherBuilder::new().line_number(true).build();
+    let _ = searcher.search_path(
+        matcher,
+        path,
+        UTF8(|_lnum, _line| {
+            found = true;
+            Ok(false)
+        }),
+    );
+    found
+}
+
+fn cap_paths_for_output(
+    paths: Vec<String>,
+    skipped_large_files: Vec<String>,
+) -> (Vec<String>, GrepOutputStats) {
+    let mut stats = GrepOutputStats {
+        skipped_large_files,
+        ..GrepOutputStats::default()
+    };
+    let mut selected = Vec::new();
+    let mut used_bytes = 0;
+
+    for path in paths {
+        let (path, truncated) = super::truncate_str_to_byte_limit(&path, MAX_SNIPPET_BYTES);
+        stats.text_truncated |= truncated;
+        if used_bytes + path.len() > MAX_OUTPUT_TEXT_BYTES {
+            stats.payload_truncated = true;
+            break;
+        }
+        used_bytes += path.len();
+        selected.push(path);
+    }
+
+    (selected, stats)
+}
+
+fn build_files_only_warning(
+    offset: usize,
+    returned: usize,
+    paginated: bool,
+    stats: &GrepOutputStats,
+) -> Option<String> {
+    let mut parts = Vec::new();
+
+    if let Some(timed_out) = timed_out_warning(stats) {
+        parts.push(timed_out);
+    }
+
+    if let Some(skipped) = skipped_files_warning(&stats.skipped_large_files) {
+        parts.push(skipped);
+    }
+
+    if stats.text_truncated {
+        parts.push(
+            "Long paths were truncated to 500 bytes each to avoid flooding the context window."
+                .to_string(),
+        );
+    }
+
+    if stats.payload_truncated || paginated {
+        let next_offset = offset + returned;
+        parts.push(format!(
+            "More matching files are available. Continue with offset={next_offset} or narrow the search with path/glob/type."
+        ));
+    }
+
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
 /// Collect matches grouped by file for round-robin selection.
 fn collect_matches(
     search_path: &Path,
@@ -908,6 +1101,120 @@ mod tests {
 
     fn make_ctx(dir: &TempDir) -> ToolContext {
         ToolContext::new(dir.path().to_path_buf(), None)
+    }
+
+    #[test]
+    fn files_only_returns_one_path_per_matching_file() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join("src")).unwrap();
+        fs::write(
+            temp.path().join("src/worker.rs"),
+            "fn workerCall() {}\nlet again = workerCall();\n",
+        )
+        .unwrap();
+        fs::write(temp.path().join("src/host.rs"), "workerCall(1);\n").unwrap();
+        fs::write(temp.path().join("src/other.rs"), "nothing here\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let result = execute(&json!({"pattern": "workerCall", "files_only": true}), &ctx);
+
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        assert_eq!(data["files"], json!(["src/host.rs", "src/worker.rs"]));
+        assert_eq!(data["total_files"], 2);
+        assert_eq!(data["truncated"], false);
+        assert!(data.get("matches").is_none(), "lines are not reported");
+    }
+
+    #[test]
+    fn files_only_honors_case_insensitive_alternations_and_scoping() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join("app")).unwrap();
+        fs::write(
+            temp.path().join("app/view.css"),
+            "overscroll-behavior: none;\n",
+        )
+        .unwrap();
+        fs::write(temp.path().join("app/main.ts"), "const H = '100DVH';\n").unwrap();
+        fs::write(temp.path().join("app/readme.md"), "no viewport talk\n").unwrap();
+        fs::write(temp.path().join("outside.css"), "100dvh\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let result = execute(
+            &json!({
+                "pattern": "dvh|overscroll|visualViewport",
+                "path": "app",
+                "case_insensitive": true,
+                "files_only": true
+            }),
+            &ctx,
+        );
+
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        assert_eq!(data["files"], json!(["app/main.ts", "app/view.css"]));
+    }
+
+    #[test]
+    fn files_only_paginates_with_offset() {
+        let temp = TempDir::new().unwrap();
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            fs::write(temp.path().join(name), "needle\n").unwrap();
+        }
+
+        let ctx = make_ctx(&temp);
+        let first = execute(
+            &json!({"pattern": "needle", "files_only": true, "max_count": 2}),
+            &ctx,
+        );
+        let first = first.data().unwrap();
+        assert_eq!(first["files"], json!(["a.txt", "b.txt"]));
+        assert_eq!(first["truncated"], true);
+        assert_eq!(first["next_offset"], 2);
+        assert!(
+            first["warning"]
+                .as_str()
+                .unwrap()
+                .contains("More matching files are available")
+        );
+
+        let second = execute(
+            &json!({"pattern": "needle", "files_only": true, "max_count": 2, "offset": 2}),
+            &ctx,
+        );
+        let second = second.data().unwrap();
+        assert_eq!(second["files"], json!(["c.txt"]));
+        assert_eq!(second["truncated"], false);
+    }
+
+    #[test]
+    fn files_only_reports_skipped_large_files() {
+        let temp = TempDir::new().unwrap();
+        let big = "needle".to_string() + &"x".repeat(MAX_FILE_SIZE as usize + 1);
+        fs::write(temp.path().join("huge.txt"), &big).unwrap();
+        fs::write(temp.path().join("small.txt"), "needle\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let result = execute(&json!({"pattern": "needle", "files_only": true}), &ctx);
+        let data = result.data().unwrap();
+
+        assert_eq!(data["files"], json!(["small.txt"]));
+        assert_eq!(data["skipped_files"], json!(["huge.txt"]));
+        assert_eq!(data["truncated"], true);
+    }
+
+    #[test]
+    fn files_only_and_extract_unique_cannot_be_combined() {
+        let temp = TempDir::new().unwrap();
+        let ctx = make_ctx(&temp);
+
+        let result = execute(
+            &json!({"pattern": "x", "files_only": true, "extract_unique": true}),
+            &ctx,
+        );
+
+        assert!(!result.is_ok());
+        assert!(result.to_json_string().contains("enable only one"));
     }
 
     #[test]

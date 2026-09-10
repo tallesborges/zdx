@@ -22,7 +22,7 @@ pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Glob".to_string(),
         description:
-            "Discover files and directories by glob pattern within a scoped path. Hidden entries are included; ignore rules apply by default, and `.git` is searched only when explicitly targeted. Results are sorted into `files` and `directories` and capped at 500 combined. `truncated: true` means the result is partial; narrow or split the search path."
+            "Discover files and directories by glob pattern within a scoped path. Patterns without a path separator match at any depth; `max_depth` bounds the walk, so one level can be listed on its own before descending. Hidden entries are included; ignore rules apply by default, and `.git` is searched only when explicitly targeted. Results are sorted into `files` and `directories` and capped at 500 combined. `truncated: true` means the result is partial; narrow or split the search path."
                 .to_string(),
         input_schema: json!({
             "type": "object",
@@ -50,7 +50,12 @@ pub fn definition() -> ToolDefinition {
                 "entry_type": {
                     "type": "string",
                     "enum": ["file", "directory", "any"],
-                    "description": "Entry kind to return (default: file). `any` returns files and directories."
+                    "description": "Entry kind to return (default: any). Use `file` or `directory` to drop the other kind."
+                },
+                "max_depth": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Deepest level to walk, relative to `path` (1 = its immediate children). Omit to walk the whole tree."
                 },
                 "include_ignored": {
                     "type": "boolean",
@@ -73,6 +78,11 @@ struct GlobInput {
     match_target: MatchTarget,
     #[serde(default)]
     entry_type: EntryType,
+    #[serde(
+        default,
+        deserialize_with = "crate::u64_or_string::deserialize_optional"
+    )]
+    max_depth: Option<u64>,
     #[serde(default, deserialize_with = "crate::bool_or_string::deserialize")]
     include_ignored: bool,
 }
@@ -112,9 +122,9 @@ impl PatternInput {
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum EntryType {
-    #[default]
     File,
     Directory,
+    #[default]
     Any,
 }
 
@@ -262,8 +272,13 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     } else {
         recursive_patterns.join("\n")
     };
-    let policy =
-        WalkPolicy::for_pattern(Some(&policy_patterns)).with_include_ignored(input.include_ignored);
+    let policy = WalkPolicy::for_pattern(Some(&policy_patterns))
+        .with_include_ignored(input.include_ignored)
+        .with_max_depth(
+            input
+                .max_depth
+                .map(|depth| usize::try_from(depth.max(1)).unwrap_or(usize::MAX)),
+        );
     let mut entries = collect_entries(
         &search_path,
         &ctx.root,
@@ -398,6 +413,71 @@ mod tests {
         let data = result.data().unwrap();
         assert_eq!(data["files"].as_array().unwrap().len(), 1);
         assert_eq!(data["files"][0], "sub/nested.txt");
+    }
+
+    #[test]
+    fn directories_are_returned_by_default() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join("crates/inner")).unwrap();
+        fs::write(temp.path().join("Cargo.toml"), "").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let result = execute(&json!({"pattern": "*"}), &ctx);
+
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        let directories = data["directories"].as_array().unwrap();
+        assert!(directories.iter().any(|d| d == "crates"));
+        assert!(directories.iter().any(|d| d == "crates/inner"));
+        assert_eq!(data["files"], json!(["Cargo.toml"]));
+    }
+
+    #[test]
+    fn max_depth_lists_one_level_like_ls() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join("app/src/deep")).unwrap();
+        fs::write(temp.path().join("README.md"), "").unwrap();
+        fs::write(temp.path().join("app/main.rs"), "").unwrap();
+        fs::write(temp.path().join("app/src/deep/util.rs"), "").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let result = execute(&json!({"pattern": "*", "max_depth": 1}), &ctx);
+
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        assert_eq!(data["directories"], json!(["app"]));
+        assert_eq!(data["files"], json!(["README.md"]));
+        assert_eq!(data["truncated"], false);
+    }
+
+    #[test]
+    fn max_depth_accepts_a_numeric_string_and_bounds_deep_trees() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join("a/b/c")).unwrap();
+        fs::write(temp.path().join("a/b/c/deep.rs"), "").unwrap();
+        fs::write(temp.path().join("a/mid.rs"), "").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let result = execute(&json!({"pattern": "*.rs", "max_depth": "2"}), &ctx);
+
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        assert_eq!(data["files"], json!(["a/mid.rs"]));
+    }
+
+    #[test]
+    fn entry_type_still_narrows_results() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join("docs")).unwrap();
+        fs::write(temp.path().join("docs/spec.md"), "").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let result = execute(&json!({"pattern": "*", "entry_type": "directory"}), &ctx);
+
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        assert_eq!(data["directories"], json!(["docs"]));
+        assert_eq!(data["files"], json!([]));
     }
 
     #[test]

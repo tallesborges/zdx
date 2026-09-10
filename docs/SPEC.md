@@ -297,7 +297,8 @@ Error:
 - Tool results are deterministic and correspond to the correct `tool_use_id`.
 - Relative paths resolve against `--root` (default `.`).
 - `--root` is a working directory context, not a security boundary (YOLO).
-- `Glob` accepts one pattern or an OR-array, can match full paths or entry names case-insensitively, returns files and/or directories, and can explicitly include ignored entries. `Grep` can likewise include ignored files. Both keep their shared traversal deadline and report `truncated: true` with a warning when absence was not proven; continuation is by narrowing or splitting `path`, not an unstable cursor over a partial parallel walk.
+- `Glob` accepts one pattern or an OR-array, can match full paths or entry names case-insensitively, returns files and directories by default (narrowed by `entry_type`), can bound the walk with `max_depth` so a single level is listable on its own, and can explicitly include ignored entries. `Grep` can likewise include ignored files. Both keep their shared traversal deadline and report `truncated: true` with a warning when absence was not proven; continuation is by narrowing or splitting `path`, not an unstable cursor over a partial parallel walk.
+- `Grep` reports matching lines with optional context, unique captured values, or only the paths of files containing a match; those reporting modes are mutually exclusive and all paginate with `offset`/`max_count`.
 - Built-in `Todo_Write` tracks a flat per-thread todo list for multi-step work and keeps at most one active `in_progress` todo while unfinished work remains.
 
 ---
