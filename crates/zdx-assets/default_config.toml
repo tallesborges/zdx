@@ -81,8 +81,22 @@ prompt_builder_model = "openai:gpt-5.6-terra@low"
 # voice = "en_paul_neutral"
 # format = "ogg"
 
+# Named model tiers, referenced everywhere as `mode:<name>`.
+# Cycled with Tab in the TUI, listed by the Telegram launcher, rendered into the
+# system prompt, and usable in `[subagents.overrides]`. Thinking rides in the
+# `@<level>` suffix of `primary`; `alternatives` are equivalent picks at the same
+# tier and are never selected automatically.
+#
+# [[model_modes]]
+# name = "fast"
+# description = "quick searches, cheap checks, exploration"
+# primary = "provider:small-model@low"
+# alternatives = ["provider:other-small-model@low"]
+
 # Subagent delegation configuration
 # enabled: Expose invoke_subagent tool to the model.
+# overrides: Per-subagent model, either a spec or a `mode:<name>` reference,
+#   e.g. explorer = { model = "mode:fast" }
 [subagents]
 enabled = true
 

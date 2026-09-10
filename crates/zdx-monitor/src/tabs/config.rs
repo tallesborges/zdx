@@ -90,8 +90,8 @@ fn config_source_labels(
             }
             let path = match section {
                 "core" | "helper models" => key.clone(),
-                "favorites" if key == ADD_FAVORITE_LABEL => return None,
-                "favorites" => "favorites".to_string(),
+                "model modes" if key == ADD_MODE_LABEL => return None,
+                "model modes" => "model_modes".to_string(),
                 _ => format!("{section}.{key}"),
             };
             sources
@@ -227,9 +227,9 @@ pub fn build_config_lines(config: &config::Config, root: &Path) -> Vec<ConfigLin
     let mut sections: Vec<(String, Vec<ConfigLine>)> = Vec::new();
 
     for (key, val) in obj {
-        if key == "favorites" || key == "subagents" {
-            // Rendered as dedicated groups below (favorites from
-            // `config.favorites`, subagents from `discover` + overrides).
+        if key == "model_modes" || key == "subagents" {
+            // Rendered as dedicated groups below (modes from
+            // `config.model_modes`, subagents from `discover` + overrides).
             continue;
         }
         if let Value::Object(nested) = val {
@@ -270,23 +270,15 @@ pub fn build_config_lines(config: &config::Config, root: &Path) -> Vec<ConfigLin
         }
     }
 
-    // Favorites group: one row per preset (`alias → provider:model@thinking`)
+    // Model modes group: one row per mode (`name → primary@thinking (+N alt)`)
     // plus a trailing action row to add a new one.
-    let mut fav_lines: Vec<ConfigLine> = config
-        .favorites
+    let mut mode_lines: Vec<ConfigLine> = config
+        .model_modes
         .iter()
-        .map(|f| {
-            ConfigLine::Row(
-                f.alias.clone(),
-                zdx_engine::models::format_model_thinking(&f.model, f.thinking),
-            )
-        })
+        .map(|mode| ConfigLine::Row(mode.name.clone(), format_mode_value(mode)))
         .collect();
-    fav_lines.push(ConfigLine::Row(
-        ADD_FAVORITE_LABEL.to_string(),
-        String::new(),
-    ));
-    sections.push(("favorites".to_string(), fav_lines));
+    mode_lines.push(ConfigLine::Row(ADD_MODE_LABEL.to_string(), String::new()));
+    sections.push(("model modes".to_string(), mode_lines));
 
     // Subagents group: every discovered (non-reserved) subagent with its
     // effective model. Config overrides (`[subagents.overrides.<name>]`) win
@@ -310,10 +302,24 @@ pub fn build_config_lines(config: &config::Config, root: &Path) -> Vec<ConfigLin
 
 /// Section names that carry models, in the order they should appear at the top
 /// of the Config tab (after `core`/`helper models`).
-const MODEL_SECTION_ORDER: [&str; 4] = ["transcription", "speech", "favorites", "subagents"];
+const MODEL_SECTION_ORDER: [&str; 4] = ["transcription", "speech", "model modes", "subagents"];
 
-/// Action row appended to the `favorites` group to create a new favorite.
-pub(crate) const ADD_FAVORITE_LABEL: &str = "[+ add favorite]";
+/// Action row appended to the `model modes` group to create a new mode.
+pub(crate) const ADD_MODE_LABEL: &str = "[+ add mode]";
+
+/// True when a model field value references a mode instead of naming a model.
+fn is_mode_ref(value: &str) -> bool {
+    value.trim().starts_with(config::MODE_REF_PREFIX)
+}
+
+/// Row value for a mode: its primary spec plus an alternatives count.
+fn format_mode_value(mode: &config::ModelMode) -> String {
+    let primary = zdx_engine::models::format_model_thinking(&mode.primary, mode.thinking);
+    match mode.alternatives.len() {
+        0 => primary,
+        n => format!("{primary} (+{n} alt)"),
+    }
+}
 
 /// Value shown for a subagent with no model override and no definition model
 /// (it inherits the parent/default model at runtime).
@@ -346,13 +352,19 @@ fn build_subagent_lines(config: &config::Config, root: &Path) -> Vec<ConfigLine>
             .and_then(|o| o.model.clone())
             .or_else(|| def.model.clone());
         let display = match model {
-            Some(m) => {
-                let level = over
-                    .and_then(|o| o.thinking_level)
-                    .or(def.thinking_level)
-                    .unwrap_or(config::ThinkingLevel::Low);
-                zdx_engine::models::format_model_thinking(&m, level)
-            }
+            // A `mode:<name>` override shows what it resolves to, or that it
+            // resolves to nothing, so a stale name is visible where it is fixed.
+            Some(m) => match config.resolve_mode_ref(&m) {
+                Some(Ok(primary)) => format!("{m} → {primary}"),
+                Some(Err(name)) => format!("mode:{name} (missing)"),
+                None => {
+                    let level = over
+                        .and_then(|o| o.thinking_level)
+                        .or(def.thinking_level)
+                        .unwrap_or(config::ThinkingLevel::Low);
+                    zdx_engine::models::format_model_thinking(&m, level)
+                }
+            },
             None => SUBAGENT_DEFAULT_LABEL.to_string(),
         };
         out.push(ConfigLine::Row(def.name, display));
@@ -424,12 +436,12 @@ pub struct EditableModelField {
 pub(crate) fn editable_model_fields(lines: &[ConfigLine]) -> Vec<EditableModelField> {
     let mut out = Vec::new();
     let mut section = String::new();
-    let mut fav_index = 0usize;
+    let mut mode_index = 0usize;
     for (i, cl) in lines.iter().enumerate() {
         match cl {
             ConfigLine::Section(name) => {
                 section.clone_from(name);
-                fav_index = 0;
+                mode_index = 0;
             }
             ConfigLine::Row(key, _) => {
                 let mapped = match (section.as_str(), key.as_str()) {
@@ -449,12 +461,12 @@ pub(crate) fn editable_model_fields(lines: &[ConfigLine]) -> Vec<EditableModelFi
                     ("speech", "model") => {
                         Some(("speech.model".to_string(), ModelFieldKind::Speech))
                     }
-                    ("favorites", k) if k == ADD_FAVORITE_LABEL => {
-                        Some(("favorites.add".to_string(), ModelFieldKind::Chat))
+                    ("model modes", k) if k == ADD_MODE_LABEL => {
+                        Some(("model_modes.add".to_string(), ModelFieldKind::Chat))
                     }
-                    ("favorites", _) => {
-                        let path = format!("favorites.{fav_index}");
-                        fav_index += 1;
+                    ("model modes", _) => {
+                        let path = format!("model_modes.{mode_index}");
+                        mode_index += 1;
                         Some((path, ModelFieldKind::Chat))
                     }
                     ("subagents", "enabled") => {
@@ -557,7 +569,19 @@ pub(crate) fn open_model_picker(app: &mut MonitorApp) {
         app.set_status("Failed to load config");
         return;
     };
-    app.model_picker = Some(ModelPickerState::new(path, kind, &current, &cfg.providers));
+    // A `mode:<name> → primary` row shows the ref, not a model id: seed the
+    // picker with the ref so it preselects the mode entry.
+    let current = current
+        .split_once(" → ")
+        .map_or(current.as_str(), |(head, _)| head)
+        .to_string();
+    app.model_picker = Some(ModelPickerState::new(
+        path,
+        kind,
+        &current,
+        &cfg.providers,
+        &cfg.model_modes,
+    ));
 }
 
 /// Flips `subagents.enabled` in the config and reloads the Config tab.
@@ -633,6 +657,7 @@ impl ModelPickerState {
         kind: ModelFieldKind,
         current: &str,
         providers: &config::ProvidersConfig,
+        modes: &[config::ModelMode],
     ) -> Self {
         let spec = zdx_engine::models::ModelSpec::parse(current);
         let model_part = spec.without_thinking();
@@ -675,6 +700,12 @@ impl ModelPickerState {
         };
         items.sort();
         items.dedup();
+        // Subagent overrides may point at a mode instead of a concrete model;
+        // list those refs first so the tier is the easy choice.
+        if field.starts_with("subagents.") {
+            let refs: Vec<String> = modes.iter().map(config::ModelMode::as_ref_spec).collect();
+            items.splice(0..0, refs);
+        }
 
         let mut state = Self {
             field,
@@ -701,7 +732,8 @@ impl ModelPickerState {
 
     /// Whether this field has a thinking step (chat models only).
     pub(crate) fn has_thinking(&self) -> bool {
-        self.kind == ModelFieldKind::Chat
+        // A mode ref carries its own level in the mode's primary spec.
+        self.kind == ModelFieldKind::Chat && !is_mode_ref(&self.chosen_model)
     }
 
     pub(crate) fn recompute(&mut self) {
@@ -734,32 +766,36 @@ impl ModelPickerState {
     }
 }
 
-/// Applies a favorites edit for a `favorites.<i>`/`favorites.add` field and
-/// persists the whole list. Appends a new preset for `add`, else updates index.
-fn save_favorite(field: &str, model: &str, level: config::ThinkingLevel) -> anyhow::Result<()> {
+/// Applies a mode edit for a `model_modes.<i>`/`model_modes.add` field and
+/// persists the whole list. Appends a new mode for `add`, else updates index.
+/// Only the primary spec is edited here; `description`/`alternatives` stay
+/// TOML-only and are preserved on edit.
+fn save_mode(field: &str, model: &str, level: config::ThinkingLevel) -> anyhow::Result<()> {
     let mut cfg = config::Config::load()?;
-    let suffix = field.strip_prefix("favorites.").unwrap_or_default();
+    let suffix = field.strip_prefix("model_modes.").unwrap_or_default();
     if suffix == "add" {
-        let alias = format!("fav{}", cfg.favorites.len() + 1);
-        cfg.favorites.push(config::ModelFavorite {
-            alias,
-            model: model.to_string(),
+        let name = format!("mode{}", cfg.model_modes.len() + 1);
+        cfg.model_modes.push(config::ModelMode {
+            name,
+            description: String::new(),
+            primary: model.to_string(),
+            alternatives: Vec::new(),
             thinking: level,
         });
     } else if let Ok(idx) = suffix.parse::<usize>() {
-        let fav = cfg
-            .favorites
+        let mode = cfg
+            .model_modes
             .get_mut(idx)
-            .ok_or_else(|| anyhow::anyhow!("favorite index out of range: {idx}"))?;
-        fav.model = model.to_string();
-        fav.thinking = level;
+            .ok_or_else(|| anyhow::anyhow!("mode index out of range: {idx}"))?;
+        mode.primary = model.to_string();
+        mode.thinking = level;
     } else {
-        anyhow::bail!("invalid favorite field: {field}");
+        anyhow::bail!("invalid mode field: {field}");
     }
-    config::Config::save_favorites(&cfg.favorites)
+    config::Config::save_model_modes(&cfg.model_modes)
 }
 
-/// Handles `d`/`Del` on the Config tab: removes the selected favorite, or
+/// Handles `d`/`Del` on the Config tab: removes the selected mode, or
 /// resets the selected subagent to its default (clears the config override).
 pub(crate) fn delete_or_reset_selected(app: &mut MonitorApp) {
     let fields = editable_model_fields(&app.config_lines);
@@ -767,7 +803,7 @@ pub(crate) fn delete_or_reset_selected(app: &mut MonitorApp) {
         return;
     };
 
-    if let Some(suffix) = path.strip_prefix("favorites.") {
+    if let Some(suffix) = path.strip_prefix("model_modes.") {
         let Ok(idx) = suffix.parse::<usize>() else {
             return; // add-row or invalid: nothing to delete
         };
@@ -775,16 +811,16 @@ pub(crate) fn delete_or_reset_selected(app: &mut MonitorApp) {
             app.set_status("Failed to load config");
             return;
         };
-        if idx >= cfg.favorites.len() {
+        if idx >= cfg.model_modes.len() {
             return;
         }
-        let removed = cfg.favorites.remove(idx);
-        match config::Config::save_favorites(&cfg.favorites) {
+        let removed = cfg.model_modes.remove(idx);
+        match config::Config::save_model_modes(&cfg.model_modes) {
             Ok(()) => {
                 reload_config_lines(app);
-                app.set_status(format!("Removed favorite {}", removed.alias));
+                app.set_status(format!("Removed mode {}", removed.name));
             }
-            Err(e) => app.set_status(format!("Failed to remove favorite: {e}")),
+            Err(e) => app.set_status(format!("Failed to remove mode: {e}")),
         }
     } else if let Some(name) = path.strip_prefix("subagents.") {
         match config::Config::clear_subagent_override(name) {
@@ -807,12 +843,21 @@ fn commit_model_picker(app: &mut MonitorApp) {
     let level = picker.selected_thinking();
 
     let (result, shown) = match picker.kind {
-        // Favorite preset: update the entry at `favorites.<i>` or append via
-        // `favorites.add`; thinking is stored on the favorite itself.
-        ModelFieldKind::Chat if field.starts_with("favorites.") => (
-            save_favorite(&field, &model, level),
+        // Model mode: update the entry at `model_modes.<i>` or append via
+        // `model_modes.add`; thinking rides in the saved primary spec.
+        ModelFieldKind::Chat if field.starts_with("model_modes.") => (
+            save_mode(&field, &model, level),
             zdx_engine::models::format_model_thinking(&model, level),
         ),
+        // Subagent override pointed at a mode: store the ref verbatim, since
+        // the mode's primary spec carries the level.
+        ModelFieldKind::Chat if field.starts_with("subagents.") && is_mode_ref(&model) => {
+            let name = field.strip_prefix("subagents.").unwrap_or_default();
+            (
+                config::Config::save_subagent_override_spec(name, &model),
+                model.clone(),
+            )
+        }
         // Subagent override: thinking carried inline in the saved model.
         ModelFieldKind::Chat if field.starts_with("subagents.") => {
             let name = field.strip_prefix("subagents.").unwrap_or_default();
@@ -1151,7 +1196,7 @@ mod tests {
         std::fs::create_dir_all(parent.parent().unwrap()).unwrap();
         std::fs::create_dir_all(child.parent().unwrap()).unwrap();
         std::fs::write(&global, "model = \"global@low\"\nmax_tokens = 42\n").unwrap();
-        std::fs::write(&parent, "model = \"parent@high\"\n[[favorites]]\nalias = \"work\"\nmodel = \"favorite@high\"\n[providers.openai]\napi_key = \"private-value\"\n").unwrap();
+        std::fs::write(&parent, "model = \"parent@high\"\n[[model_modes]]\nname = \"work\"\nprimary = \"tier@high\"\n[providers.openai]\napi_key = \"private-value\"\n").unwrap();
         for (contents, expected) in [
             ("[skills]\nenabled = true\n", "parity"),
             ("model = \"parent@high\"\n", "nova"),
@@ -1171,11 +1216,11 @@ mod tests {
             );
             assert_eq!(labels[row_index(&lines, "core", "max_tokens")], None);
             assert_eq!(
-                labels[row_index(&lines, "favorites", "work")].as_deref(),
+                labels[row_index(&lines, "model modes", "work")].as_deref(),
                 Some("parity")
             );
             assert_eq!(
-                labels[row_index(&lines, "favorites", ADD_FAVORITE_LABEL)],
+                labels[row_index(&lines, "model modes", ADD_MODE_LABEL)],
                 None
             );
             let secret_row = row_index(&lines, "providers", "openai.api_key");
@@ -1292,16 +1337,19 @@ mod tests {
     }
 
     #[test]
-    fn favorites_group_resolves_indices_and_add_row() {
+    fn model_modes_group_resolves_indices_and_add_row() {
         let lines = vec![
-            ConfigLine::Section("favorites".into()),
+            ConfigLine::Section("model modes".into()),
             ConfigLine::Row("fast".into(), "gemini:x@low".into()),
-            ConfigLine::Row("deep".into(), "claude:y@high".into()),
-            ConfigLine::Row(ADD_FAVORITE_LABEL.into(), String::new()),
+            ConfigLine::Row("smart".into(), "claude:y@high (+1 alt)".into()),
+            ConfigLine::Row(ADD_MODE_LABEL.into(), String::new()),
         ];
         let fields = editable_model_fields(&lines);
         let paths: Vec<&str> = fields.iter().map(|f| f.path.as_str()).collect();
-        assert_eq!(paths, vec!["favorites.0", "favorites.1", "favorites.add"]);
+        assert_eq!(
+            paths,
+            vec!["model_modes.0", "model_modes.1", "model_modes.add"]
+        );
     }
 
     #[test]
@@ -1322,6 +1370,83 @@ mod tests {
                 "subagents.oracle",
             ]
         );
+    }
+
+    fn test_mode(name: &str, primary: &str, alternatives: &[&str]) -> config::ModelMode {
+        config::ModelMode {
+            name: name.to_string(),
+            description: "tier".to_string(),
+            primary: primary.to_string(),
+            alternatives: alternatives.iter().map(|a| (*a).to_string()).collect(),
+            thinking: zdx_engine::models::ModelSpec::parse(primary)
+                .thinking
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Mode rows show the primary and an alternatives count; a subagent row
+    /// pointing at a mode shows what it resolves to, and a stale one says so.
+    #[test]
+    fn mode_rows_and_subagent_refs_render_resolved_values() {
+        let modes = vec![
+            test_mode("fast", "gemini:flash", &["claude-cli:sonnet@low"]),
+            test_mode("smart", "claude-cli:opus@high", &[]),
+        ];
+        let rows: Vec<String> = modes.iter().map(format_mode_value).collect();
+        assert_eq!(
+            rows,
+            vec!["gemini:flash@off (+1 alt)", "claude-cli:opus@high"]
+        );
+
+        let config = config::Config {
+            model_modes: modes,
+            ..Default::default()
+        };
+        assert_eq!(
+            config.resolve_mode_ref("mode:smart"),
+            Some(Ok("claude-cli:opus@high"))
+        );
+        assert!(is_mode_ref("mode:fast"));
+        assert!(!is_mode_ref("claude-cli:opus@high"));
+    }
+
+    /// The picker offers mode refs for subagent fields only, and a chosen ref
+    /// skips the thinking step because the mode's primary carries the level.
+    #[test]
+    fn picker_offers_mode_refs_for_subagent_fields_only() {
+        let providers = config::ProvidersConfig::default();
+        let modes = vec![test_mode("fast", "gemini:flash@low", &[])];
+
+        let subagent = ModelPickerState::new(
+            "subagents.explorer".to_string(),
+            ModelFieldKind::Chat,
+            "mode:fast",
+            &providers,
+            &modes,
+        );
+        assert_eq!(
+            subagent.items.first().map(String::as_str),
+            Some("mode:fast")
+        );
+        assert_eq!(subagent.selected_model(), Some("mode:fast"));
+        assert!(
+            !ModelPickerState {
+                chosen_model: "mode:fast".to_string(),
+                ..subagent
+            }
+            .has_thinking(),
+            "a mode ref must not open the thinking step"
+        );
+
+        let helper = ModelPickerState::new(
+            "title_model".to_string(),
+            ModelFieldKind::Chat,
+            "",
+            &providers,
+            &modes,
+        );
+        assert!(!helper.items.iter().any(|item| is_mode_ref(item)));
+        assert!(helper.has_thinking());
     }
 
     #[test]
@@ -1375,6 +1500,7 @@ mod tests {
             ModelFieldKind::Chat,
             "no-such-model",
             &providers,
+            &[],
         );
         assert!(!p.items.is_empty(), "registry should list models");
         let before = p.matches.len();
@@ -1403,13 +1529,23 @@ mod tests {
         provider.enabled = Some(true);
         provider.models.clear();
 
-        let enabled =
-            ModelPickerState::new("model".to_string(), ModelFieldKind::Chat, "", &providers);
+        let enabled = ModelPickerState::new(
+            "model".to_string(),
+            ModelFieldKind::Chat,
+            "",
+            &providers,
+            &[],
+        );
         assert!(enabled.items.contains(&model.qualified_id()));
 
         providers.get_mut(kind).enabled = Some(false);
-        let disabled =
-            ModelPickerState::new("model".to_string(), ModelFieldKind::Chat, "", &providers);
+        let disabled = ModelPickerState::new(
+            "model".to_string(),
+            ModelFieldKind::Chat,
+            "",
+            &providers,
+            &[],
+        );
         assert!(!disabled.items.contains(&model.qualified_id()));
     }
 
@@ -1420,6 +1556,7 @@ mod tests {
             ModelFieldKind::Speech,
             "",
             &config::ProvidersConfig::default(),
+            &[],
         );
         assert!(!p.has_thinking());
         assert!(p.items.iter().all(|o| o.contains(':')));
@@ -1434,6 +1571,7 @@ mod tests {
             ModelFieldKind::Chat,
             "gemini:some-model@high",
             &providers,
+            &[],
         );
         assert_eq!(p.thinking_current, config::ThinkingLevel::High);
         assert_eq!(p.chosen_model, "gemini:some-model");
@@ -1444,6 +1582,7 @@ mod tests {
             ModelFieldKind::Chat,
             "gemini:some-model",
             &providers,
+            &[],
         );
         assert_eq!(p2.thinking_current, config::ThinkingLevel::Low);
     }

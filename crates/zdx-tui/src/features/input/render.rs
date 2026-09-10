@@ -311,10 +311,10 @@ pub fn render_input_with_cursor(
         .fg(Color::DarkGray)
         .add_modifier(Modifier::DIM);
 
-    // Show the favorite alias alongside the actual model id when one matches.
-    let favorite_alias = state.config.active_favorite_alias();
-    let label = match favorite_alias {
-        Some(alias) => format!(" {alias} · {}", state.config.model),
+    // Show the mode name alongside the actual model id when one matches.
+    let mode_name = state.config.active_mode_name();
+    let label = match mode_name {
+        Some(name) => format!(" {name} · {}", state.config.model),
         None => format!(" {}", state.config.model),
     };
     let mut title_spans = vec![Span::styled(label, base_style)];

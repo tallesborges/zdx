@@ -186,7 +186,7 @@ export interface MonitorConfig {
   max_tokens: number | null;
   tool_timeout_secs: number;
   subagents_enabled: boolean;
-  favorite_count: number;
+  mode_count: number;
   helper_models: MonitorConfigModel[];
   server_enabled: boolean;
   server_port: number;

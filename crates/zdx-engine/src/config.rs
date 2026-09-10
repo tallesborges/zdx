@@ -289,17 +289,34 @@ pub fn reject_removed_thinking_keys(document: &toml::Value) -> Result<()> {
         }
     }
 
-    if let Some(favorites) = document.get("favorites").and_then(toml::Value::as_array) {
-        for (index, entry) in favorites.iter().enumerate() {
+    if let Some(modes) = document.get("model_modes").and_then(toml::Value::as_array) {
+        for (index, entry) in modes.iter().enumerate() {
             if entry.get("thinking").is_some() {
                 return Err(removed(
-                    &format!("favorites[{index}].thinking"),
+                    &format!("model_modes[{index}].thinking"),
                     "provider:id",
                 ));
             }
         }
     }
 
+    Ok(())
+}
+
+/// Rejects the removed `[[favorites]]` list, which `[[model_modes]]` replaced.
+///
+/// Serde would ignore the leftover table silently, leaving Tab cycling and the
+/// launcher mysteriously empty, so a stale config must fail loudly instead.
+///
+/// # Errors
+/// Returns an error when the document still defines `favorites`.
+pub fn reject_removed_favorites(document: &toml::Value) -> Result<()> {
+    if document.get("favorites").is_some() {
+        anyhow::bail!(
+            "`favorites` was removed: define `[[model_modes]]` instead, \
+             e.g. [[model_modes]] name = \"fast\" primary = \"provider:id@low\""
+        );
+    }
     Ok(())
 }
 
@@ -723,34 +740,55 @@ fn expand_tilde(path: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(path)
 }
 
-/// A favorite model preset cycled with Tab in the TUI.
+/// Prefix marking a model field as a reference to a `[[model_modes]]` entry.
+pub const MODE_REF_PREFIX: &str = "mode:";
+
+/// A named model tier (`fast`, `smart`, `ultra`, …) referenced across surfaces.
+///
+/// `primary` is the spec actually run; `alternatives` are equivalent picks at
+/// the same tier, surfaced for deliberate choice and never selected
+/// automatically.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelFavorite {
+pub struct ModelMode {
     #[serde(default)]
-    pub alias: String,
-    /// Model id, with or without a `provider:` prefix, carrying the thinking
+    pub name: String,
+    /// When to use this mode, in prose. Rendered into the system prompt.
+    #[serde(default)]
+    pub description: String,
+    /// Model spec, with or without a `provider:` prefix, carrying the thinking
     /// level as an `@<level>` suffix.
     #[serde(default)]
-    pub model: String,
-    /// Thinking level derived from `model`'s `@<level>` suffix. Not a config
-    /// key: it is read from `model`, never from TOML.
+    pub primary: String,
+    /// Equivalent picks at this tier. Not fallbacks: nothing resolves to them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<String>,
+    /// Thinking level derived from `primary`'s `@<level>` suffix. Not a config
+    /// key: it is read from `primary`, never from TOML.
     #[serde(skip_deserializing)]
     pub thinking: ThinkingLevel,
 }
 
-impl ModelFavorite {
-    /// True if this favorite matches the given model + thinking. Prefixed
-    /// (`provider:id`) and bare model ids are treated as equivalent.
+impl ModelMode {
+    /// True if this mode's primary matches the given model + thinking.
+    /// Prefixed (`provider:id`) and bare model ids are treated as equivalent.
     #[must_use]
     pub fn matches(&self, model: &str, thinking: ThinkingLevel) -> bool {
-        self.thinking == thinking && models_equivalent(&self.model, model)
+        self.thinking == thinking && models_equivalent(&self.primary, model)
     }
 
-    /// True if this favorite's model resolves to one of the given available
+    /// True if this mode's primary resolves to one of the given available
     /// model ids. Bare and `provider:`-prefixed ids are treated as equivalent.
     #[must_use]
     pub fn model_available(&self, available: &[String]) -> bool {
-        available.iter().any(|m| models_equivalent(&self.model, m))
+        available
+            .iter()
+            .any(|m| models_equivalent(&self.primary, m))
+    }
+
+    /// This mode as a `mode:<name>` reference.
+    #[must_use]
+    pub fn as_ref_spec(&self) -> String {
+        format!("{MODE_REF_PREFIX}{}", self.name)
     }
 }
 
@@ -822,7 +860,7 @@ pub struct ConfigSources {
 
 impl ConfigSources {
     /// Returns the latest layer that explicitly supplied a dotted field path.
-    /// Array entries such as `favorites.0.model` or `favorites[0].model`
+    /// Array entries such as `model_modes.0.primary` or `model_modes[0].primary`
     /// resolve to their container's source. Missing defaults have no source.
     #[must_use]
     pub fn source(&self, mut key: &str) -> Option<&Path> {
@@ -893,9 +931,10 @@ pub struct Config {
     #[serde(skip)]
     pub thinking_level: ThinkingLevel,
 
-    /// Favorite model presets cycled with Tab in the TUI.
+    /// Named model tiers (`fast`, `smart`, `ultra`, …) cycled with Tab in the
+    /// TUI and referenced elsewhere as `mode:<name>`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub favorites: Vec<ModelFavorite>,
+    pub model_modes: Vec<ModelMode>,
 
     /// Skill discovery configuration
     #[serde(default)]
@@ -980,13 +1019,29 @@ impl Config {
         Self::load_layered(&paths::config_layer_paths())
     }
 
-    /// Alias of the favorite matching the active model + thinking, if any.
+    /// Name of the mode whose primary matches the active model + thinking.
     #[must_use]
-    pub fn active_favorite_alias(&self) -> Option<&str> {
-        self.favorites
+    pub fn active_mode_name(&self) -> Option<&str> {
+        self.model_modes
             .iter()
-            .find(|fav| fav.matches(&self.model, self.thinking_level))
-            .map(|fav| fav.alias.as_str())
+            .find(|mode| mode.matches(&self.model, self.thinking_level))
+            .map(|mode| mode.name.as_str())
+    }
+
+    /// Resolves a `mode:<name>` reference to that mode's primary spec.
+    ///
+    /// Returns `None` when `value` is not a reference, `Some(Err(name))` when
+    /// it references a mode that is not configured.
+    #[must_use]
+    pub fn resolve_mode_ref<'a>(&'a self, value: &'a str) -> Option<Result<&'a str, &'a str>> {
+        let name = value.trim().strip_prefix(MODE_REF_PREFIX)?.trim();
+        Some(
+            self.model_modes
+                .iter()
+                .find(|mode| mode.name.trim().eq_ignore_ascii_case(name))
+                .map(|mode| mode.primary.as_str())
+                .ok_or(name),
+        )
     }
 
     /// Resolves Telegram runtime credentials/settings from config + environment.
@@ -1251,6 +1306,7 @@ impl Config {
     fn parse_config(contents: &str) -> Result<Self> {
         let document: toml::Value = toml::from_str(contents)?;
         reject_removed_thinking_keys(&document)?;
+        reject_removed_favorites(&document)?;
 
         let mut config: Self = toml::from_str(contents)?;
         config.thinking_level = crate::models::ModelSpec::parse(&config.model)
@@ -1262,8 +1318,8 @@ impl Config {
                 .as_deref()
                 .and_then(|model| crate::models::ModelSpec::parse(model).thinking);
         }
-        for favorite in &mut config.favorites {
-            favorite.thinking = crate::models::ModelSpec::parse(&favorite.model)
+        for mode in &mut config.model_modes {
+            mode.thinking = crate::models::ModelSpec::parse(&mode.primary)
                 .thinking
                 .unwrap_or_default();
         }
@@ -1396,21 +1452,21 @@ impl Config {
         Self::write_config(path, &doc.to_string())
     }
 
-    /// Saves the full favorites list, replacing any existing `[[favorites]]`
+    /// Saves the full mode list, replacing any existing `[[model_modes]]`
     /// entries while preserving the rest of the document via `toml_edit`.
     ///
     /// # Errors
     /// Returns an error if the write fails.
-    pub fn save_favorites(favorites: &[ModelFavorite]) -> Result<()> {
-        Self::save_favorites_to(&paths::config_path(), favorites)
+    pub fn save_model_modes(modes: &[ModelMode]) -> Result<()> {
+        Self::save_model_modes_to(&paths::config_path(), modes)
     }
 
-    /// Saves the favorites list to a specific config path.
+    /// Saves the mode list to a specific config path.
     ///
     /// # Errors
     /// Returns an error if the write fails.
-    pub fn save_favorites_to(path: &Path, favorites: &[ModelFavorite]) -> Result<()> {
-        use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
+    pub fn save_model_modes_to(path: &Path, modes: &[ModelMode]) -> Result<()> {
+        use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, value};
 
         let contents = if path.exists() {
             let user_config = fs::read_to_string(path)
@@ -1424,20 +1480,30 @@ impl Config {
             .parse()
             .with_context(|| format!("Failed to parse config from {}", path.display()))?;
 
-        if favorites.is_empty() {
-            doc.remove("favorites");
+        if modes.is_empty() {
+            doc.remove("model_modes");
         } else {
             let mut arr = ArrayOfTables::new();
-            for fav in favorites {
+            for mode in modes {
                 let mut table = Table::new();
-                table["alias"] = value(fav.alias.as_str());
-                table["model"] = value(crate::models::format_model_thinking(
-                    &fav.model,
-                    fav.thinking,
-                ));
+                table["name"] = value(mode.name.as_str());
+                table["description"] = value(mode.description.as_str());
+                // A suffixless spec means `off`, so keep `@off` out of the file
+                // and let models that take no thinking level stay bare.
+                let primary = if mode.thinking == ThinkingLevel::Off {
+                    crate::models::ModelSpec::parse(&mode.primary).without_thinking()
+                } else {
+                    crate::models::format_model_thinking(&mode.primary, mode.thinking)
+                };
+                table["primary"] = value(primary);
+                let mut alternatives = Array::new();
+                for alternative in &mode.alternatives {
+                    alternatives.push(alternative.as_str());
+                }
+                table["alternatives"] = value(alternatives);
                 arr.push(table);
             }
-            doc["favorites"] = Item::ArrayOfTables(arr);
+            doc["model_modes"] = Item::ArrayOfTables(arr);
         }
 
         Self::write_config(path, &doc.to_string())
@@ -1483,7 +1549,20 @@ impl Config {
     /// # Errors
     /// Returns an error if the write fails.
     pub fn save_subagent_override(name: &str, model: &str, thinking: ThinkingLevel) -> Result<()> {
-        Self::save_subagent_override_to(&paths::config_path(), name, model, thinking)
+        Self::save_subagent_override_spec_to(
+            &paths::config_path(),
+            name,
+            &crate::models::format_model_thinking(model, thinking),
+        )
+    }
+
+    /// Saves a per-subagent override from a spec that is already canonical,
+    /// such as a `mode:<name>` reference that carries no thinking of its own.
+    ///
+    /// # Errors
+    /// Returns an error if the write fails.
+    pub fn save_subagent_override_spec(name: &str, spec: &str) -> Result<()> {
+        Self::save_subagent_override_spec_to(&paths::config_path(), name, spec)
     }
 
     /// Saves a per-subagent model override to a specific config path.
@@ -1496,6 +1575,18 @@ impl Config {
         model: &str,
         thinking: ThinkingLevel,
     ) -> Result<()> {
+        Self::save_subagent_override_spec_to(
+            path,
+            name,
+            &crate::models::format_model_thinking(model, thinking),
+        )
+    }
+
+    /// Saves a per-subagent override spec verbatim to a specific config path.
+    ///
+    /// # Errors
+    /// Returns an error if the write fails.
+    pub fn save_subagent_override_spec_to(path: &Path, name: &str, spec: &str) -> Result<()> {
         use toml_edit::{DocumentMut, Item, Table, value};
 
         let contents = if path.exists() {
@@ -1526,10 +1617,7 @@ impl Config {
         let entry = entry
             .as_table_like_mut()
             .context("Subagent override must be a table")?;
-        entry.insert(
-            "model",
-            value(crate::models::format_model_thinking(model, thinking)),
-        );
+        entry.insert("model", value(spec));
 
         Self::write_config(path, &doc.to_string())
     }
@@ -1773,7 +1861,7 @@ impl Default for Config {
             tldr_model: Self::DEFAULT_TLDR_MODEL.to_string(),
             prompt_builder_model: Self::DEFAULT_PROMPT_BUILDER_MODEL.to_string(),
             thinking_level: ThinkingLevel::default(),
-            favorites: Vec::new(),
+            model_modes: Vec::new(),
             skills: SkillsConfig::default(),
             subagents: SubagentsConfig::default(),
             prompt_template: PromptTemplateConfig::default(),
@@ -2752,8 +2840,8 @@ models = ["model-a"]
         let dir = tempdir().unwrap();
         let global = dir.path().join("global.toml");
         let workspace = dir.path().join("workspace.toml");
-        let array = "favorites = [{ alias = \"a\", model = \"new@high\" }]\n";
-        let tables = "[[favorites]]\nalias = \"b\"\nmodel = \"old\"\n\n[[favorites]]\nalias = \"c\"\nmodel = \"other\"\n";
+        let array = "model_modes = [{ name = \"a\", primary = \"new@high\" }]\n";
+        let tables = "[[model_modes]]\nname = \"b\"\nprimary = \"old\"\n\n[[model_modes]]\nname = \"c\"\nprimary = \"other\"\n";
         for (base, overlay, count) in [(tables, array, 1), (array, tables, 2)] {
             fs::write(
                 &global,
@@ -2766,19 +2854,19 @@ models = ["model-a"]
             )
             .unwrap();
             let (config, sources) = load_provenance(&[global.clone(), workspace.clone()]);
-            assert_eq!(config.favorites.len(), count);
+            assert_eq!(config.model_modes.len(), count);
             assert!(config.skills.ignored_skills.is_empty());
             for key in [
-                "favorites",
-                "favorites.0",
-                "favorites[0]",
-                "favorites.0.model",
-                "favorites[0].thinking",
+                "model_modes",
+                "model_modes.0",
+                "model_modes[0]",
+                "model_modes.0.primary",
+                "model_modes[0].thinking",
                 "skills.ignored_skills",
             ] {
                 assert_eq!(sources.source(key), Some(workspace.as_path()), "{key}");
             }
-            assert_eq!(sources.source("favorites_extra.0"), None);
+            assert_eq!(sources.source("model_modes_extra.0"), None);
             assert_eq!(sources.source("skills"), None);
         }
     }
@@ -3277,15 +3365,17 @@ language = "pt"
             match operation {
                 0 => Config::save_model_field_to(&path, "title_model", "helper@fast@low"),
                 1 => Config::save_model_field_to(&path, "speech.model", "tts"),
-                2 => Config::save_favorites_to(
+                2 => Config::save_model_modes_to(
                     &path,
-                    &[ModelFavorite {
-                        alias: "deep".into(),
-                        model: "claude-cli:opus".into(),
+                    &[ModelMode {
+                        name: "smart".into(),
+                        description: "deep work".into(),
+                        primary: "claude-cli:opus".into(),
+                        alternatives: vec!["openai-codex:sol@xhigh".into()],
                         thinking: ThinkingLevel::High,
                     }],
                 ),
-                3 => Config::save_favorites_to(&path, &[]),
+                3 => Config::save_model_modes_to(&path, &[]),
                 4 => Config::clear_subagent_override_to(&path, "explorer"),
                 5 => Config::save_subagents_enabled_to(&path, false),
                 _ => unreachable!(),
@@ -3584,48 +3674,56 @@ max_tokens = 2048
         assert_eq!(config.thinking_level, ThinkingLevel::Off);
     }
 
-    /// Favorites: load from `[[favorites]]` and survive an unrelated save.
+    /// Modes: load from `[[model_modes]]` and survive an unrelated save.
     #[test]
-    fn test_favorites_load_and_survive_save() {
+    fn test_model_modes_load_and_survive_save() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
         fs::write(
             &config_path,
             r#"model = "claude-sonnet-4"
 
-[[favorites]]
-alias = "sonnet-hi"
-model = "anthropic:claude-sonnet-4-6@high"
+[[model_modes]]
+name = "smart"
+description = "deep reasoning"
+primary = "anthropic:claude-sonnet-4-6@high"
+alternatives = ["openai-codex:gpt-6-astra@xhigh"]
 
-[[favorites]]
-alias = "opus"
-model = "anthropic:claude-opus-4-6"
+[[model_modes]]
+name = "fast"
+primary = "anthropic:claude-opus-4-6"
 "#,
         )
         .unwrap();
 
         let config = Config::load_from(&config_path).unwrap();
-        assert_eq!(config.favorites.len(), 2);
-        assert_eq!(config.favorites[0].alias, "sonnet-hi");
+        assert_eq!(config.model_modes.len(), 2);
+        assert_eq!(config.model_modes[0].name, "smart");
+        assert_eq!(config.model_modes[0].description, "deep reasoning");
         assert_eq!(
-            config.favorites[0].model,
+            config.model_modes[0].primary,
             "anthropic:claude-sonnet-4-6@high"
         );
-        assert_eq!(config.favorites[0].thinking, ThinkingLevel::High);
-        // thinking is Off when the model carries no suffix
-        assert_eq!(config.favorites[1].thinking, ThinkingLevel::Off);
+        assert_eq!(
+            config.model_modes[0].alternatives,
+            vec!["openai-codex:gpt-6-astra@xhigh".to_string()]
+        );
+        assert_eq!(config.model_modes[0].thinking, ThinkingLevel::High);
+        // thinking is Off when the primary carries no suffix
+        assert_eq!(config.model_modes[1].thinking, ThinkingLevel::Off);
+        assert!(config.model_modes[1].alternatives.is_empty());
 
-        // Saving an unrelated field (via template merge) must not drop favorites.
+        // Saving an unrelated field (via template merge) must not drop modes.
         Config::save_model_field_to(&config_path, "title_model", "gemini:flash").unwrap();
         let reloaded = Config::load_from(&config_path).unwrap();
         assert_eq!(reloaded.title_model, "gemini:flash");
-        assert_eq!(reloaded.favorites.len(), 2);
-        assert_eq!(reloaded.favorites[1].alias, "opus");
-        assert_eq!(reloaded.favorites[0].thinking, ThinkingLevel::High);
+        assert_eq!(reloaded.model_modes.len(), 2);
+        assert_eq!(reloaded.model_modes[1].name, "fast");
+        assert_eq!(reloaded.model_modes[0].thinking, ThinkingLevel::High);
     }
 
     #[test]
-    fn favorite_thinking_comes_from_model_suffix() {
+    fn mode_thinking_comes_from_primary_suffix() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
         for (model, expected) in [
@@ -3638,49 +3736,80 @@ model = "anthropic:claude-opus-4-6"
             ),
             ("openai-codex@work:gpt-6-astra@fast", ThinkingLevel::Off),
         ] {
-            let contents = format!("favorites = [{{ alias = \"test\", model = {model:?} }}]\n");
+            let contents = format!("model_modes = [{{ name = \"test\", primary = {model:?} }}]\n");
             fs::write(&path, &contents).unwrap();
             for config in [
                 Config::load_from(&path).unwrap(),
                 Config::load_layered(std::slice::from_ref(&path)).unwrap(),
             ] {
-                assert_eq!(config.favorites[0].model, model);
-                assert_eq!(config.favorites[0].thinking, expected);
+                assert_eq!(config.model_modes[0].primary, model);
+                assert_eq!(config.model_modes[0].thinking, expected);
             }
             assert_eq!(fs::read_to_string(&path).unwrap(), contents);
         }
     }
 
-    /// Favorites: `active_favorite_alias` matches the active model + thinking,
-    /// treating bare and prefixed model ids as equivalent.
+    /// Modes: `active_mode_name` matches the active model + thinking, treating
+    /// bare and prefixed model ids as equivalent.
     #[test]
-    fn test_active_favorite_alias() {
+    fn test_active_mode_name() {
         let config = Config {
             model: "anthropic:claude-sonnet-4-6".to_string(),
             thinking_level: ThinkingLevel::High,
-            favorites: vec![
-                ModelFavorite {
-                    alias: "sonnet-hi".to_string(),
+            model_modes: vec![
+                ModelMode {
+                    name: "smart".to_string(),
+                    description: "deep work".to_string(),
                     // bare id should still match the prefixed active model
-                    model: "claude-sonnet-4-6".to_string(),
+                    primary: "claude-sonnet-4-6".to_string(),
+                    alternatives: Vec::new(),
                     thinking: ThinkingLevel::High,
                 },
-                ModelFavorite {
-                    alias: "opus".to_string(),
-                    model: "anthropic:claude-opus-4-6".to_string(),
+                ModelMode {
+                    name: "ultra".to_string(),
+                    description: "hardest tasks".to_string(),
+                    primary: "anthropic:claude-opus-4-6".to_string(),
+                    alternatives: Vec::new(),
                     thinking: ThinkingLevel::Off,
                 },
             ],
             ..Default::default()
         };
-        assert_eq!(config.active_favorite_alias(), Some("sonnet-hi"));
+        assert_eq!(config.active_mode_name(), Some("smart"));
 
-        // Same model but a different thinking level matches no favorite.
+        // Same model but a different thinking level matches no mode.
         let config = Config {
             thinking_level: ThinkingLevel::Off,
             ..config
         };
-        assert_eq!(config.active_favorite_alias(), None);
+        assert_eq!(config.active_mode_name(), None);
+    }
+
+    /// `resolve_mode_ref`: only `mode:` values are refs; lookup is
+    /// trim + case-insensitive and reports the missing name.
+    #[test]
+    fn test_resolve_mode_ref() {
+        let config = Config {
+            model_modes: vec![ModelMode {
+                name: "Fast".to_string(),
+                description: "quick checks".to_string(),
+                primary: "gemini:flash@low".to_string(),
+                alternatives: Vec::new(),
+                thinking: ThinkingLevel::Low,
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(config.resolve_mode_ref("claude-cli:opus@high"), None);
+        assert_eq!(
+            config.resolve_mode_ref("mode:fast"),
+            Some(Ok("gemini:flash@low"))
+        );
+        assert_eq!(
+            config.resolve_mode_ref("  mode: FAST "),
+            Some(Ok("gemini:flash@low"))
+        );
+        assert_eq!(config.resolve_mode_ref("mode:nope"), Some(Err("nope")));
     }
 
     #[test]
@@ -3802,8 +3931,8 @@ text_verbosity = "low"
                 "subagents.overrides.explorer.thinking_level",
             ),
             (
-                "[[favorites]]\nalias = \"Low\"\nmodel = \"claude-cli:opus\"\nthinking = \"high\"\n",
-                "favorites[0].thinking",
+                "[[model_modes]]\nname = \"fast\"\nprimary = \"claude-cli:opus\"\nthinking = \"high\"\n",
+                "model_modes[0].thinking",
             ),
         ] {
             fs::write(&path, contents).unwrap();
@@ -3933,10 +4062,10 @@ max_tokens = 4096
         }
     }
 
-    /// `save_favorites`: add, edit, and remove round-trip while preserving
+    /// `save_model_modes`: add, edit, and remove round-trip while preserving
     /// other config fields.
     #[test]
-    fn test_save_favorites_roundtrip_preserves_fields() {
+    fn test_save_model_modes_roundtrip_preserves_fields() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
         fs::write(
@@ -3947,18 +4076,22 @@ max_tokens = 4096
         )
         .unwrap();
 
-        // Add two favorites.
-        Config::save_favorites_to(
+        // Add two modes.
+        Config::save_model_modes_to(
             &config_path,
             &[
-                ModelFavorite {
-                    alias: "fast".into(),
-                    model: "openai-codex@work:gpt-6-astra@fast@high".into(),
+                ModelMode {
+                    name: "fast".into(),
+                    description: "quick checks".into(),
+                    primary: "openai-codex@work:gpt-6-astra@fast@high".into(),
+                    alternatives: vec!["gemini:flash".into()],
                     thinking: ThinkingLevel::Low,
                 },
-                ModelFavorite {
-                    alias: "deep".into(),
-                    model: "claude-cli:claude-opus-4-6".into(),
+                ModelMode {
+                    name: "smart".into(),
+                    description: "deep work".into(),
+                    primary: "claude-cli:claude-opus-4-6".into(),
+                    alternatives: Vec::new(),
                     thinking: ThinkingLevel::High,
                 },
             ],
@@ -3968,35 +4101,60 @@ max_tokens = 4096
         let cfg = Config::load_from(&config_path).unwrap();
         assert_eq!(cfg.model, "claude-sonnet-4"); // preserved
         assert_eq!(cfg.max_tokens, Some(4096)); // preserved
-        assert_eq!(cfg.favorites.len(), 2);
-        assert_eq!(cfg.favorites[1].alias, "deep");
-        assert_eq!(cfg.favorites[1].thinking, ThinkingLevel::High);
+        assert_eq!(cfg.model_modes.len(), 2);
+        assert_eq!(cfg.model_modes[1].name, "smart");
+        assert_eq!(cfg.model_modes[1].description, "deep work");
+        assert_eq!(cfg.model_modes[1].thinking, ThinkingLevel::High);
         assert_eq!(
-            cfg.favorites[0].model,
+            cfg.model_modes[0].primary,
             "openai-codex@work:gpt-6-astra@low@fast"
         );
-        assert_eq!(cfg.favorites[0].thinking, ThinkingLevel::Low);
+        assert_eq!(
+            cfg.model_modes[0].alternatives,
+            vec!["gemini:flash".to_string()]
+        );
+        assert_eq!(cfg.model_modes[0].thinking, ThinkingLevel::Low);
         let document: toml::Value =
             toml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
-        for entry in document["favorites"].as_array().unwrap() {
-            assert_eq!(entry.as_table().unwrap().len(), 2);
+        for entry in document["model_modes"].as_array().unwrap() {
+            assert_eq!(entry.as_table().unwrap().len(), 4);
             assert!(entry.get("thinking").is_none());
         }
 
         // Edit first, drop second.
-        let mut favs = cfg.favorites.clone();
-        favs[0].model = "openai:gpt-5".into();
-        favs.pop();
-        Config::save_favorites_to(&config_path, &favs).unwrap();
+        let mut modes = cfg.model_modes.clone();
+        modes[0].primary = "openai:gpt-5".into();
+        modes.pop();
+        Config::save_model_modes_to(&config_path, &modes).unwrap();
         let cfg = Config::load_from(&config_path).unwrap();
-        assert_eq!(cfg.favorites.len(), 1);
-        assert_eq!(cfg.favorites[0].model, "openai:gpt-5@low");
+        assert_eq!(cfg.model_modes.len(), 1);
+        assert_eq!(cfg.model_modes[0].primary, "openai:gpt-5@low");
 
         // Clear all removes the key entirely.
-        Config::save_favorites_to(&config_path, &[]).unwrap();
+        Config::save_model_modes_to(&config_path, &[]).unwrap();
         let cfg = Config::load_from(&config_path).unwrap();
-        assert!(cfg.favorites.is_empty());
+        assert!(cfg.model_modes.is_empty());
         assert_eq!(cfg.model, "claude-sonnet-4"); // still preserved
+    }
+
+    /// A leftover `[[favorites]]` list must fail loudly, pointing at modes.
+    #[test]
+    fn removed_favorites_are_rejected() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            "[[favorites]]\nalias = \"Low\"\nmodel = \"claude-cli:opus@high\"\n",
+        )
+        .unwrap();
+        for result in [
+            Config::load_from(&path),
+            Config::load_layered(std::slice::from_ref(&path)),
+        ] {
+            let err = format!("{:#}", result.expect_err("favorites must be rejected"));
+            assert!(err.contains("`favorites` was removed"), "{err}");
+            assert!(err.contains("model_modes"), "{err}");
+        }
     }
 
     /// `filter_tools`: returns all tools when no filtering configured.

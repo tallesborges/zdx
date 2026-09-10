@@ -5,7 +5,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers as CrosstermKeyModifiers};
 use zdx_engine::agent_activity;
-use zdx_engine::config::{Config, ModelFavorite, ThinkingLevel};
+use zdx_engine::config::{Config, ModelMode, ThinkingLevel};
 use zdx_engine::core::thread_persistence::ThreadEvent;
 use zdx_engine::providers::ChatMessage;
 
@@ -151,7 +151,7 @@ pub fn handle_main_key(input: &mut InputState, ctx: &InputContext<'_>, key: KeyE
         .or_else(|| handle_control_keys(input, ctx, key.code, &mods))
         .or_else(|| handle_overlays(input, ctx, key.code, &mods))
         .or_else(|| handle_submission(input, ctx, key.code, &mods))
-        .or_else(|| handle_favorites(input, ctx, key.code, &mods))
+        .or_else(|| handle_model_modes(input, ctx, key.code, &mods))
         .unwrap_or_else(|| handle_default_input(input, key))
 }
 
@@ -671,12 +671,12 @@ pub fn submit_current_input(input: &mut InputState, ctx: &InputContext<'_>) -> K
 // Favorites: Tab / Shift+Tab cycling
 // =============================================================================
 
-/// Tab / Shift+Tab cycles favorite presets when the composer is empty and
-/// `[[favorites]]` is configured; otherwise returns `None` so Tab falls through
-/// to inserting spaces. Switches model + thinking together for this tab's
-/// session (and the active thread's metadata), never the workspace config, and
-/// refreshes the system prompt (which depends on the model).
-fn handle_favorites(
+/// Tab / Shift+Tab cycles model modes when the composer is empty and
+/// `[[model_modes]]` is configured; otherwise returns `None` so Tab falls
+/// through to inserting spaces. Switches model + thinking together for this
+/// tab's session (and the active thread's metadata), never the workspace
+/// config, and refreshes the system prompt (which depends on the model).
+fn handle_model_modes(
     input: &InputState,
     ctx: &InputContext<'_>,
     code: KeyCode,
@@ -686,27 +686,27 @@ fn handle_favorites(
         || mods.ctrl()
         || mods.alt()
         || mods.super_key()
-        || ctx.config.favorites.is_empty()
+        || ctx.config.model_modes.is_empty()
         || !input.get_text().is_empty()
     {
         return None;
     }
 
     let forward = code == KeyCode::Tab && !mods.shift();
-    let idx = next_favorite_index(
-        &ctx.config.favorites,
+    let idx = next_mode_index(
+        &ctx.config.model_modes,
         &ctx.config.model,
         ctx.config.thinking_level,
         forward,
     );
-    let favorite = ctx.config.favorites.get(idx)?;
+    let selected = ctx.config.model_modes.get(idx)?;
 
-    // Canonicalize before storing: a suffixless favorite inherits the currently
+    // Canonicalize before storing: a suffixless primary inherits the currently
     // effective level, and the stored override has to carry that resolved level
     // or a config reload would re-resolve it against the default instead.
     let (model, _) =
-        zdx_engine::models::resolve_model_spec(&favorite.model, ctx.config.thinking_level);
-    let message = format!("Switched to {}", favorite.alias);
+        zdx_engine::models::resolve_model_spec(&selected.primary, ctx.config.thinking_level);
+    let message = format!("Switched to {}", selected.name);
 
     let mut effects = Vec::new();
     if ctx.thread_id.is_some() {
@@ -735,21 +735,21 @@ fn handle_favorites(
     ))
 }
 
-/// Index of the favorite to switch to: the next/previous entry from the one
+/// Index of the mode to switch to: the next/previous entry from the one
 /// matching the current model + thinking, or the first/last when none match.
-fn next_favorite_index(
-    favorites: &[ModelFavorite],
+fn next_mode_index(
+    modes: &[ModelMode],
     current_model: &str,
     current_thinking: ThinkingLevel,
     forward: bool,
 ) -> usize {
-    let len = favorites.len();
+    let len = modes.len();
     if len == 0 {
         return 0;
     }
-    let current = favorites
+    let current = modes
         .iter()
-        .position(|fav| fav.matches(current_model, current_thinking));
+        .position(|mode| mode.matches(current_model, current_thinking));
     match current {
         Some(i) if forward => (i + 1) % len,
         Some(i) => (i + len - 1) % len,
@@ -1731,37 +1731,33 @@ mod tests {
         assert!(overlay.is_none());
     }
 
-    fn fav(alias: &str, model: &str, thinking: ThinkingLevel) -> ModelFavorite {
-        ModelFavorite {
-            alias: alias.to_string(),
-            model: zdx_engine::models::format_model_thinking(model, thinking),
+    fn mode(name: &str, model: &str, thinking: ThinkingLevel) -> ModelMode {
+        ModelMode {
+            name: name.to_string(),
+            description: String::new(),
+            primary: zdx_engine::models::format_model_thinking(model, thinking),
+            alternatives: Vec::new(),
             thinking,
         }
     }
 
     #[test]
-    fn favorite_cycle_index_wraps_and_matches_current() {
-        let favorites = vec![
-            fav("a", "anthropic:claude-sonnet-4-6", ThinkingLevel::Off),
-            fav("b", "anthropic:claude-opus-4-6", ThinkingLevel::High),
-            fav("c", "openai:gpt-5.5", ThinkingLevel::Medium),
+    fn mode_cycle_index_wraps_and_matches_current() {
+        let modes = vec![
+            mode("a", "anthropic:claude-sonnet-4-6", ThinkingLevel::Off),
+            mode("b", "anthropic:claude-opus-4-6", ThinkingLevel::High),
+            mode("c", "openai:gpt-5.5", ThinkingLevel::Medium),
         ];
 
-        // No favorite matches → forward starts at first, backward at last.
+        // No mode matches → forward starts at first, backward at last.
         let none = "anthropic:claude-haiku-4-5";
-        assert_eq!(
-            next_favorite_index(&favorites, none, ThinkingLevel::Off, true),
-            0
-        );
-        assert_eq!(
-            next_favorite_index(&favorites, none, ThinkingLevel::Off, false),
-            2
-        );
+        assert_eq!(next_mode_index(&modes, none, ThinkingLevel::Off, true), 0);
+        assert_eq!(next_mode_index(&modes, none, ThinkingLevel::Off, false), 2);
 
         // Match found → forward advances/wraps, backward retreats/wraps.
         assert_eq!(
-            next_favorite_index(
-                &favorites,
+            next_mode_index(
+                &modes,
                 "anthropic:claude-opus-4-6",
                 ThinkingLevel::High,
                 true
@@ -1769,12 +1765,12 @@ mod tests {
             2
         );
         assert_eq!(
-            next_favorite_index(&favorites, "openai:gpt-5.5", ThinkingLevel::Medium, true),
+            next_mode_index(&modes, "openai:gpt-5.5", ThinkingLevel::Medium, true),
             0
         );
         assert_eq!(
-            next_favorite_index(
-                &favorites,
+            next_mode_index(
+                &modes,
                 "anthropic:claude-sonnet-4-6",
                 ThinkingLevel::Off,
                 false
@@ -1784,8 +1780,8 @@ mod tests {
 
         // Same model, different thinking is not a match → starts fresh.
         assert_eq!(
-            next_favorite_index(
-                &favorites,
+            next_mode_index(
+                &modes,
                 "anthropic:claude-opus-4-6",
                 ThinkingLevel::Off,
                 true
@@ -1795,15 +1791,15 @@ mod tests {
     }
 
     #[test]
-    fn tab_cycles_favorites_when_composer_empty() {
+    fn tab_cycles_modes_when_composer_empty() {
         let mut input = InputState::default();
         let tasks = Tasks::default();
         let active_thread_ids = std::collections::HashSet::new();
         let config = Config {
             model: "anthropic:claude-haiku-4-5".to_string(),
             thinking_level: ThinkingLevel::Off,
-            favorites: vec![fav(
-                "sonnet-hi",
+            model_modes: vec![mode(
+                "smart",
                 "anthropic:claude-sonnet-4-6",
                 ThinkingLevel::High,
             )],
@@ -1833,7 +1829,7 @@ mod tests {
             !effects
                 .iter()
                 .any(|e| matches!(e, UiEffect::PersistModel { .. })),
-            "cycling a favorite must not write the workspace config"
+            "cycling a mode must not write the workspace config"
         );
         assert!(
             effects
@@ -1849,7 +1845,11 @@ mod tests {
         let tasks = Tasks::default();
         let active_thread_ids = std::collections::HashSet::new();
         let config = Config {
-            favorites: vec![fav("s", "anthropic:claude-sonnet-4-6", ThinkingLevel::High)],
+            model_modes: vec![mode(
+                "smart",
+                "anthropic:claude-sonnet-4-6",
+                ThinkingLevel::High,
+            )],
             ..Config::default()
         };
         let ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
@@ -1869,7 +1869,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_inserts_spaces_when_no_favorites() {
+    fn tab_inserts_spaces_when_no_modes() {
         let mut input = InputState::default();
         let tasks = Tasks::default();
         let active_thread_ids = std::collections::HashSet::new();

@@ -269,7 +269,7 @@
         <section>
           <h2 class="sec">Config</h2>
           <dl class="rounded-md border border-border bg-card px-2.5 py-2 font-mono text-xxs">
-            {#each [["model", data.config.model], ["thinking", data.config.thinking], ["max tokens", data.config.max_tokens === null ? "—" : String(data.config.max_tokens)], ["tool timeout", `${data.config.tool_timeout_secs}s`], ["subagents", data.config.subagents_enabled ? "on" : "off"], ["favorites", String(data.config.favorite_count)], ["server port", String(data.config.server_port)]] as [k, v] (k)}
+            {#each [["model", data.config.model], ["thinking", data.config.thinking], ["max tokens", data.config.max_tokens === null ? "—" : String(data.config.max_tokens)], ["tool timeout", `${data.config.tool_timeout_secs}s`], ["subagents", data.config.subagents_enabled ? "on" : "off"], ["modes", String(data.config.mode_count)], ["server port", String(data.config.server_port)]] as [k, v] (k)}
               <div class="flex justify-between gap-3 py-0.5">
                 <dt class="text-muted-foreground">{k}</dt>
                 <dd class="m-0 truncate text-right">{v}</dd>

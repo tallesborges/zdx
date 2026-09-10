@@ -23,7 +23,7 @@ use chrono::Utc;
 use minijinja::{Environment, UndefinedBehavior};
 use serde::Serialize;
 
-use crate::config::{Config, paths};
+use crate::config::{Config, ModelMode, paths};
 use crate::providers::{ProviderKind, resolve_provider};
 use crate::skills::{LoadSkillsOptions, LoadSkillsResult, Skill, load_skills, skill_access_path};
 use crate::{prompts, subagents};
@@ -183,6 +183,15 @@ struct PromptTemplateSkill {
     path: String,
 }
 
+/// One `[[model_modes]]` entry as rendered into the system prompt.
+#[derive(Debug, Clone, Serialize)]
+struct PromptTemplateModelMode {
+    name: String,
+    description: String,
+    primary: String,
+    alternatives: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LoadedSkillContent {
     pub name: String,
@@ -243,6 +252,7 @@ struct PromptTemplateVars {
     scoped_context: Vec<PromptTemplateScopedContext>,
     specialized_capabilities: Vec<PromptTemplateCapability>,
     memory_collections: Vec<PromptTemplateMemoryCollection>,
+    model_modes: Vec<PromptTemplateModelMode>,
     cwd: String,
     cwd_tree: String,
     date: String,
@@ -257,6 +267,7 @@ struct PromptTemplateSections<'a> {
     skills_list: &'a [Skill],
     scoped_context: &'a [ScopedContextFile],
     specialized_capabilities: &'a [PromptTemplateCapability],
+    model_modes: &'a [ModelMode],
 }
 
 fn combine_prompt_sections(
@@ -553,6 +564,16 @@ fn build_prompt_template_vars(
         scoped_context,
         specialized_capabilities: sections.specialized_capabilities.to_vec(),
         memory_collections: prompt_template_memory_collections(),
+        model_modes: sections
+            .model_modes
+            .iter()
+            .map(|mode| PromptTemplateModelMode {
+                name: mode.name.clone(),
+                description: mode.description.clone(),
+                primary: mode.primary.clone(),
+                alternatives: mode.alternatives.clone(),
+            })
+            .collect(),
         cwd: root.display().to_string(),
         cwd_tree: build_cwd_tree(&canonical_root),
         date: Utc::now().format("%Y-%m-%d").to_string(),
@@ -881,6 +902,7 @@ pub fn render_standalone_prompt_template_with_context(
             skills_list: &skills_result.skills,
             scoped_context: &sections_result.scoped_context,
             specialized_capabilities: &specialized_capabilities,
+            model_modes: &config.model_modes,
         },
     );
 
@@ -1407,6 +1429,7 @@ pub fn build_prompt_with_context_and_layers(
             skills_list: &skills,
             scoped_context: &scoped_context,
             specialized_capabilities: &specialized_capabilities,
+            model_modes: &config.model_modes,
         },
     );
 
@@ -1655,6 +1678,7 @@ mod tests {
             scoped_context: Vec::new(),
             specialized_capabilities: Vec::new(),
             memory_collections: Vec::new(),
+            model_modes: Vec::new(),
             cwd: "/tmp".to_string(),
             cwd_tree: String::new(),
             date: "2026-01-01".to_string(),
@@ -2455,6 +2479,7 @@ mod tests {
                 skills_list: &[],
                 scoped_context: &[],
                 specialized_capabilities: &[],
+                model_modes: &[],
             },
         );
 
@@ -2475,6 +2500,7 @@ mod tests {
                 skills_list: &[],
                 scoped_context: &[],
                 specialized_capabilities: &[],
+                model_modes: &[],
             },
         );
 
@@ -2503,6 +2529,7 @@ mod tests {
                 skills_list: &[],
                 scoped_context: &[],
                 specialized_capabilities: &[],
+                model_modes: &[],
             },
         );
 
@@ -2538,6 +2565,7 @@ mod tests {
                 skills_list: &skills,
                 scoped_context: &[],
                 specialized_capabilities: &capabilities,
+                model_modes: &[],
             },
         );
 
@@ -2578,6 +2606,7 @@ mod tests {
                 skills_list: &skills,
                 scoped_context: &[],
                 specialized_capabilities: &capabilities,
+                model_modes: &[],
             },
         );
 
@@ -2649,6 +2678,7 @@ mod tests {
                 skills_list: &[],
                 scoped_context: &[],
                 specialized_capabilities: &[],
+                model_modes: &[],
             },
         );
 
@@ -2731,6 +2761,7 @@ mod tests {
                 skills_list: &[],
                 scoped_context: &[],
                 specialized_capabilities: &[],
+                model_modes: &[],
             },
         );
 
@@ -2749,6 +2780,7 @@ mod tests {
                 skills_list: &[],
                 scoped_context: &[],
                 specialized_capabilities: &[],
+                model_modes: &[],
             },
         );
 
@@ -2981,6 +3013,7 @@ mod tests {
                 skills_list: &[],
                 scoped_context: &[],
                 specialized_capabilities: &[],
+                model_modes: &[],
             },
         );
 

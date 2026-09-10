@@ -267,7 +267,7 @@ export const demoMonitor: MonitorResponse = {
     max_tokens: 64000,
     tool_timeout_secs: 120,
     subagents_enabled: true,
-    favorite_count: 7,
+    mode_count: 3,
     helper_models: [{ role: "title", model: "claude-haiku-4-5" }],
     server_enabled: true,
     server_port: 4141,

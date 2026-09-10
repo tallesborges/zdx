@@ -59,7 +59,7 @@ pub fn definition_with_subagents(
                 },
                 "model": {
                     "type": "string",
-                    "description": "Optional model override for this invocation (`provider:model[@thinking][@fast]`). Set only when the user explicitly requests it; otherwise omit it to preserve the named subagent profile. Must be an available subagent model."
+                    "description": "Optional model override for this invocation (`provider:model[@thinking][@fast]`, or `mode:<name>` for a configured model mode). Set only when the user explicitly requests it; otherwise omit it to preserve the named subagent profile. Must resolve to an available subagent model."
                 }
             },
             "required": ["prompt", "subagent"],
@@ -254,23 +254,29 @@ fn resolve_execution_model(
     if let Some(model) = normalize_optional(ctx.model.clone()) {
         resolved.apply_model_spec(&model);
     }
-    if let Some(model) = definition.model.as_deref() {
-        resolved.apply_model_spec(model);
-        requires_validation = true;
-    }
-    if let Some(model) = config
-        .subagents
-        .overrides
-        .get(&definition.name)
-        .and_then(|over| over.model.as_deref())
-    {
-        resolved.apply_model_spec(model);
-        requires_validation = true;
-    }
-    if let Some(model) = model_override
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-    {
+    // Each layer may name a `mode:<name>` instead of a spec; an unknown mode
+    // falls through to the layer below it rather than failing the delegation.
+    for (source, model) in [
+        ("definition", definition.model.as_deref()),
+        (
+            "override",
+            config
+                .subagents
+                .overrides
+                .get(&definition.name)
+                .and_then(|over| over.model.as_deref()),
+        ),
+        (
+            "invocation",
+            model_override
+                .map(str::trim)
+                .filter(|model| !model.is_empty()),
+        ),
+    ] {
+        let Some(model) = model else { continue };
+        let Some(model) = resolve_mode_layer(config, &definition.name, source, model) else {
+            continue;
+        };
         resolved.apply_model_spec(model);
         requires_validation = true;
     }
@@ -289,6 +295,30 @@ fn resolve_execution_model(
     }
 
     Ok((model, thinking_level))
+}
+
+/// Resolves one model layer, substituting a `mode:<name>` reference with that
+/// mode's primary spec. Returns `None` for a reference naming a mode that is
+/// not configured, so the caller skips the layer.
+fn resolve_mode_layer<'a>(
+    config: &'a crate::config::Config,
+    subagent: &str,
+    source: &str,
+    model: &'a str,
+) -> Option<&'a str> {
+    match config.resolve_mode_ref(model) {
+        None => Some(model),
+        Some(Ok(primary)) => Some(primary),
+        Some(Err(name)) => {
+            tracing::warn!(
+                subagent,
+                source,
+                mode = name,
+                "invoke_subagent: unknown model mode, falling back to the next layer"
+            );
+            None
+        }
+    }
 }
 
 fn build_system_prompt(
@@ -596,6 +626,127 @@ mod tests {
             (
                 "openai-codex:gpt-5.6-luna@high".to_string(),
                 crate::config::ThinkingLevel::High
+            )
+        );
+    }
+
+    fn mode_config(name: &str, primary: &str) -> crate::config::Config {
+        crate::config::Config {
+            model_modes: vec![crate::config::ModelMode {
+                name: name.to_string(),
+                description: "tier".to_string(),
+                primary: primary.to_string(),
+                alternatives: Vec::new(),
+                thinking: crate::models::ModelSpec::parse(primary)
+                    .thinking
+                    .unwrap_or_default(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn explorer_definition(model: Option<&str>) -> subagents::SubagentDefinition {
+        subagents::SubagentDefinition {
+            name: "explorer".to_string(),
+            description: "desc".to_string(),
+            path: std::path::PathBuf::from("explorer.md"),
+            source: subagents::SubagentSource::BuiltIn,
+            allowed_subagents: None,
+            model: model.map(str::to_string),
+            thinking_level: None,
+            tools: Some(vec!["read".to_string()]),
+            skills: None,
+            auto_loaded_skills: None,
+            prompt_body: "body".to_string(),
+        }
+    }
+
+    /// A `mode:<name>` override resolves to that mode's primary spec, taking
+    /// its thinking level with it.
+    #[test]
+    fn test_mode_ref_override_resolves_to_primary() {
+        let mut ctx = ToolContext::new(std::path::PathBuf::from("."), None);
+        ctx.subagent_available_models = vec!["gemini:gemini-3.8-flash".to_string()];
+        let mut config = mode_config("fast", "gemini:gemini-3.8-flash@low");
+        config.subagents.overrides.insert(
+            "explorer".to_string(),
+            crate::config::SubagentOverride {
+                model: Some("mode:fast".to_string()),
+                thinking_level: None,
+            },
+        );
+
+        assert_eq!(
+            resolve_execution_model(&explorer_definition(None), &config, &ctx, None).unwrap(),
+            (
+                "gemini:gemini-3.8-flash@low".to_string(),
+                crate::config::ThinkingLevel::Low
+            )
+        );
+    }
+
+    /// A `mode:<name>` invocation argument resolves the same way and is still
+    /// validated against the available model list.
+    #[test]
+    fn test_mode_ref_invocation_is_resolved_and_validated() {
+        let mut ctx = ToolContext::new(std::path::PathBuf::from("."), None);
+        ctx.subagent_available_models = vec!["claude-cli:claude-opus-5".to_string()];
+        let config = mode_config("smart", "claude-cli:claude-opus-5@high");
+
+        assert_eq!(
+            resolve_execution_model(
+                &explorer_definition(None),
+                &config,
+                &ctx,
+                Some("mode:smart")
+            )
+            .unwrap(),
+            (
+                "claude-cli:claude-opus-5@high".to_string(),
+                crate::config::ThinkingLevel::High
+            )
+        );
+
+        // Same ref, but the resolved model is not available to subagents.
+        ctx.subagent_available_models = vec!["openai:gpt-5.5".to_string()];
+        let err = resolve_execution_model(
+            &explorer_definition(None),
+            &config,
+            &ctx,
+            Some("mode:smart"),
+        )
+        .expect_err("unavailable resolved model must fail");
+        assert!(matches!(
+            err,
+            ToolOutput::Failure { error, .. } if error.code == "model_not_supported"
+        ));
+    }
+
+    /// An unknown mode falls through to the layer below instead of failing.
+    #[test]
+    fn test_unknown_mode_ref_falls_through_to_definition() {
+        let mut ctx = ToolContext::new(std::path::PathBuf::from("."), None);
+        ctx.subagent_available_models = vec!["openai:gpt-5.5".to_string()];
+        let mut config = mode_config("fast", "gemini:gemini-3.8-flash@low");
+        config.subagents.overrides.insert(
+            "explorer".to_string(),
+            crate::config::SubagentOverride {
+                model: Some("mode:nope".to_string()),
+                thinking_level: None,
+            },
+        );
+
+        assert_eq!(
+            resolve_execution_model(
+                &explorer_definition(Some("openai:gpt-5.5@medium")),
+                &config,
+                &ctx,
+                None
+            )
+            .unwrap(),
+            (
+                "openai:gpt-5.5@medium".to_string(),
+                crate::config::ThinkingLevel::Medium
             )
         );
     }

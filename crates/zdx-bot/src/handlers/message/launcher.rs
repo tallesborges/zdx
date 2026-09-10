@@ -1,7 +1,7 @@
 //! General-topic thread launcher.
 //!
-//! Exposes the shared `[[favorites]]` list as a tappable menu in General:
-//! favorite presets + a Custom picker create a new thread pre-set to a model,
+//! Exposes the shared `[[model_modes]]` list as a tappable menu in General:
+//! model modes + a Custom picker create a new thread pre-set to a model,
 //! and the launcher is kept as the last message in General.
 
 use std::collections::HashMap;
@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use tokio::sync::Mutex;
-use zdx_engine::config::{ModelFavorite, ThinkingLevel};
+use zdx_engine::config::{ModelMode, ThinkingLevel};
 use zdx_engine::core::thread_persistence;
 
 use super::{escape_html, post_thread_header, thread_id_for_chat};
@@ -33,30 +33,27 @@ pub(crate) fn new_launcher_map() -> LauncherMap {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
-/// Favorites the launcher can render for this chat: the configured
-/// `[[favorites]]` minus any whose model isn't available (provider disabled).
-/// Skipped favorites are logged. An empty result means the launcher shows only
-/// the `🎛 Custom` button.
-pub(crate) fn bot_visible_favorites(context: &BotContext, chat_id: i64) -> Vec<ModelFavorite> {
+/// Modes the launcher can render for this chat: the configured
+/// `[[model_modes]]` minus any whose primary isn't available (provider
+/// disabled). Skipped modes are logged. An empty result means the launcher
+/// shows only the `🎛 Custom` button.
+pub(crate) fn bot_visible_modes(context: &BotContext, chat_id: i64) -> Vec<ModelMode> {
     let config = context.config_for_chat(chat_id);
-    filter_available_favorites(&config.favorites, &config.subagent_available_models())
+    filter_available_modes(&config.model_modes, &config.subagent_available_models())
 }
 
-/// Pure filter: keep favorites whose model resolves to an available model id.
-/// Logs each skipped favorite so a misconfigured preset is visible in the logs.
-fn filter_available_favorites(
-    favorites: &[ModelFavorite],
-    available: &[String],
-) -> Vec<ModelFavorite> {
-    favorites
+/// Pure filter: keep modes whose primary resolves to an available model id.
+/// Logs each skipped mode so a misconfigured tier is visible in the logs.
+fn filter_available_modes(modes: &[ModelMode], available: &[String]) -> Vec<ModelMode> {
+    modes
         .iter()
-        .filter(|fav| {
-            let ok = fav.model_available(available);
+        .filter(|mode| {
+            let ok = mode.model_available(available);
             if !ok {
                 tracing::warn!(
-                    alias = %fav.alias,
-                    model = %fav.model,
-                    "launcher: skipping favorite with unavailable model"
+                    mode = %mode.name,
+                    primary = %mode.primary,
+                    "launcher: skipping mode with unavailable primary model"
                 );
             }
             ok
@@ -182,24 +179,24 @@ pub(crate) async fn create_topic_resuming(
 }
 
 /// Header text shown above the launcher keyboard. Leads with the chat's
-/// current default model, then lists each preset and the model (+ thinking) it
-/// maps to, so the buttons can stay short (alias only).
+/// current default model, then lists each mode, what it is for, and the model
+/// (+ thinking) it maps to, so the buttons can stay short (name only).
 fn launcher_header(
-    favorites: &[ModelFavorite],
+    modes: &[ModelMode],
     current_model: &str,
     current_thinking: ThinkingLevel,
 ) -> String {
-    let model = current_model.rsplit(':').next().unwrap_or(current_model);
+    let active_id = current_model.rsplit(':').next().unwrap_or(current_model);
     let thinking = if current_thinking == ThinkingLevel::Off {
         String::new()
     } else {
         format!(" · {}", current_thinking.display_name())
     };
-    let active_line = format!("Active: <code>{}</code>{thinking}", escape_html(model));
+    let active_line = format!("Active: <code>{}</code>{thinking}", escape_html(active_id));
 
-    if favorites.is_empty() {
+    if modes.is_empty() {
         return format!(
-            "🚀 <b>Thread launcher</b>\n{active_line}\nNo favorites configured yet — use 🎛 Custom, or add <code>[[favorites]]</code> to your config."
+            "🚀 <b>Thread launcher</b>\n{active_line}\nNo model modes configured yet — use 🎛 Custom, or add <code>[[model_modes]]</code> to your config."
         );
     }
     let mut lines = vec![
@@ -207,34 +204,39 @@ fn launcher_header(
         active_line,
         String::new(),
     ];
-    for fav in favorites {
-        let model = fav.model.rsplit(':').next().unwrap_or(&fav.model);
-        let thinking = if fav.thinking == ThinkingLevel::Off {
+    for mode in modes {
+        let primary_id = mode.primary.rsplit(':').next().unwrap_or(&mode.primary);
+        let thinking = if mode.thinking == ThinkingLevel::Off {
             String::new()
         } else {
-            format!(" · {}", fav.thinking.display_name())
+            format!(" · {}", mode.thinking.display_name())
+        };
+        let description = if mode.description.trim().is_empty() {
+            String::new()
+        } else {
+            format!(" — {}", escape_html(mode.description.trim()))
         };
         lines.push(format!(
-            "<b>{}</b> → <code>{}</code>{thinking}",
-            escape_html(&fav.alias),
-            escape_html(model)
+            "<b>{}</b> → <code>{}</code>{thinking}{description}",
+            escape_html(&mode.name),
+            escape_html(primary_id)
         ));
     }
     lines.push(String::new());
-    lines.push("<i>Tap a preset, or use 🎛 Custom / 🔄 Continue.</i>".to_string());
+    lines.push("<i>Tap a mode, or use 🎛 Custom / 🔄 Continue.</i>".to_string());
     lines.join("\n")
 }
 
-/// Build the General launcher keyboard: one button per available favorite
-/// (callback `nt:p:{alias}`) plus a `🎛 Custom` button (`nt:custom`).
-fn build_launcher_keyboard(favorites: &[ModelFavorite]) -> InlineKeyboardMarkup {
-    let mut rows: Vec<Vec<InlineKeyboardButton>> = favorites
+/// Build the General launcher keyboard: one button per available mode
+/// (callback `nt:p:{name}`) plus a `🎛 Custom` button (`nt:custom`).
+fn build_launcher_keyboard(modes: &[ModelMode]) -> InlineKeyboardMarkup {
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = modes
         .chunks(3)
         .map(|chunk| {
             chunk
                 .iter()
-                .map(|fav| {
-                    InlineKeyboardButton::callback(fav.alias.clone(), format!("nt:p:{}", fav.alias))
+                .map(|mode| {
+                    InlineKeyboardButton::callback(mode.name.clone(), format!("nt:p:{}", mode.name))
                 })
                 .collect()
         })
@@ -313,10 +315,10 @@ async fn send_launcher(
     chat_id: i64,
     reply_to_message_id: Option<i64>,
 ) -> Result<i64> {
-    let favorites = bot_visible_favorites(context, chat_id);
-    let keyboard = build_launcher_keyboard(&favorites);
+    let modes = bot_visible_modes(context, chat_id);
+    let keyboard = build_launcher_keyboard(&modes);
     let config = context.config_for_chat(chat_id);
-    let header = launcher_header(&favorites, &config.model, config.thinking_level);
+    let header = launcher_header(&modes, &config.model, config.thinking_level);
     let msg = context
         .client()
         .send_message_with_markup(chat_id, &header, reply_to_message_id, None, &keyboard)
@@ -332,10 +334,10 @@ pub(crate) async fn render_launcher(
     chat_id: i64,
     message_id: i64,
 ) -> Result<()> {
-    let favorites = bot_visible_favorites(context, chat_id);
-    let keyboard = build_launcher_keyboard(&favorites);
+    let modes = bot_visible_modes(context, chat_id);
+    let keyboard = build_launcher_keyboard(&modes);
     let config = context.config_for_chat(chat_id);
-    let header = launcher_header(&favorites, &config.model, config.thinking_level);
+    let header = launcher_header(&modes, &config.model, config.thinking_level);
     context
         .client()
         .edit_message_text(chat_id, message_id, &header, Some(&keyboard))
@@ -429,27 +431,27 @@ pub(crate) async fn handle_callback(
     };
     let chat_id = msg.chat.id;
 
-    if let Some(alias) = rest.strip_prefix("p:") {
-        // Resolve the preset from current config at click time so stale buttons
+    if let Some(name) = rest.strip_prefix("p:") {
+        // Resolve the mode from current config at click time so stale buttons
         // (e.g. after a restart or config edit) fail gracefully.
-        let favorite = bot_visible_favorites(context, chat_id)
+        let mode = bot_visible_modes(context, chat_id)
             .into_iter()
-            .find(|fav| fav.alias == alias);
-        let Some(favorite) = favorite else {
+            .find(|mode| mode.name == name);
+        let Some(mode) = mode else {
             let _ = client
-                .answer_callback_query(&callback.id, Some("Preset no longer configured"))
+                .answer_callback_query(&callback.id, Some("Mode no longer configured"))
                 .await;
             return;
         };
 
-        match create_topic_with_model(context, chat_id, &favorite.model).await {
+        match create_topic_with_model(context, chat_id, &mode.primary).await {
             Ok(_) => {
                 let _ = client
                     .answer_callback_query(&callback.id, Some("New thread ready ✓"))
                     .await;
             }
             Err(err) => {
-                tracing::error!(chat_id, alias, %err, "launcher: failed to create preset topic");
+                tracing::error!(chat_id, mode = name, %err, "launcher: failed to create mode topic");
                 let _ = client
                     .answer_callback_query(&callback.id, Some("Couldn't create the topic"))
                     .await;
@@ -530,10 +532,12 @@ mod tests {
 
     use super::*;
 
-    fn fav(alias: &str, model: &str) -> ModelFavorite {
-        ModelFavorite {
-            alias: alias.to_string(),
-            model: model.to_string(),
+    fn mode(name: &str, primary: &str) -> ModelMode {
+        ModelMode {
+            name: name.to_string(),
+            description: String::new(),
+            primary: primary.to_string(),
+            alternatives: Vec::new(),
             thinking: ThinkingLevel::Off,
         }
     }
@@ -544,36 +548,36 @@ mod tests {
             "anthropic:claude-opus-4-8".to_string(),
             "gemini:gemini-3.5-flash".to_string(),
         ];
-        let favorites = vec![
+        let modes = vec![
             // Bare id, prefixed availability entry — must still match.
-            fav("Smart", "claude-opus-4-8"),
+            mode("smart", "claude-opus-4-8"),
             // Provider disabled — must be dropped.
-            fav("Gone", "openai:gpt-5.5"),
+            mode("gone", "openai:gpt-5.5"),
             // Prefixed id matching exactly.
-            fav("Fast", "gemini:gemini-3.5-flash"),
+            mode("fast", "gemini:gemini-3.5-flash"),
         ];
 
-        let kept = filter_available_favorites(&favorites, &available);
+        let kept = filter_available_modes(&modes, &available);
 
-        let aliases: Vec<&str> = kept.iter().map(|f| f.alias.as_str()).collect();
-        assert_eq!(aliases, vec!["Smart", "Fast"]);
+        let names: Vec<&str> = kept.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, vec!["smart", "fast"]);
     }
 
     #[test]
-    fn filter_empty_when_no_favorites_available() {
+    fn filter_empty_when_no_modes_available() {
         let available = vec!["anthropic:claude-opus-4-8".to_string()];
-        let favorites = vec![fav("Gone", "openai:gpt-5.5")];
+        let modes = vec![mode("gone", "openai:gpt-5.5")];
 
-        assert!(filter_available_favorites(&favorites, &available).is_empty());
+        assert!(filter_available_modes(&modes, &available).is_empty());
     }
 
     #[test]
-    fn launcher_keyboard_has_preset_and_custom_buttons() {
-        let favorites = vec![
-            fav("Fast", "gemini:gemini-3.5-flash"),
-            fav("Smart", "claude-cli:claude-opus-4-8"),
+    fn launcher_keyboard_has_mode_and_custom_buttons() {
+        let modes = vec![
+            mode("fast", "gemini:gemini-3.5-flash"),
+            mode("smart", "claude-cli:claude-opus-4-8"),
         ];
-        let keyboard = build_launcher_keyboard(&favorites);
+        let keyboard = build_launcher_keyboard(&modes);
         let buttons: Vec<&InlineKeyboardButton> =
             keyboard.inline_keyboard.iter().flatten().collect();
 
@@ -581,8 +585,8 @@ mod tests {
             .iter()
             .filter_map(|b| b.callback_data.as_deref())
             .collect();
-        assert!(data.contains(&"nt:p:Fast"));
-        assert!(data.contains(&"nt:p:Smart"));
+        assert!(data.contains(&"nt:p:fast"));
+        assert!(data.contains(&"nt:p:smart"));
         assert!(data.contains(&"nt:custom"));
 
         // Telegram caps callback data at 64 bytes.
@@ -592,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    fn launcher_keyboard_shows_only_custom_when_no_favorites() {
+    fn launcher_keyboard_shows_only_custom_when_no_modes() {
         let keyboard = build_launcher_keyboard(&[]);
         let data: Vec<&str> = keyboard
             .inline_keyboard

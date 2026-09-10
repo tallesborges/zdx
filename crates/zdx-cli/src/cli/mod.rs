@@ -727,7 +727,7 @@ enum ConfigCommands {
     Generate,
     /// Get a config value or dump full config
     Get {
-        /// Configuration key (e.g. `model`, `memory.root`, `favorites`)
+        /// Configuration key (e.g. `model`, `memory.root`, `model_modes`)
         key: Option<String>,
         /// Emit JSON instead of TOML/plain value
         #[arg(long)]
@@ -806,6 +806,9 @@ enum ModelsCommands {
         /// Include models from disabled providers (default: enabled only)
         #[arg(long)]
         all: bool,
+        /// Only show models on providers covered by a subscription plan
+        #[arg(long)]
+        plan_only: bool,
         /// Output as JSON instead of a table
         #[arg(long)]
         json: bool,
@@ -1562,8 +1565,9 @@ async fn dispatch_models(command: ModelsCommands, context: &DispatchContext<'_>)
         ModelsCommands::List {
             provider,
             all,
+            plan_only,
             json,
-        } => commands::models::list(context.config, provider.as_deref(), all, json),
+        } => commands::models::list(context.config, provider.as_deref(), all, plan_only, json),
     }
 }
 

@@ -363,7 +363,7 @@ struct MonitorConfig {
     max_tokens: Option<u32>,
     tool_timeout_secs: u32,
     subagents_enabled: bool,
-    favorite_count: usize,
+    mode_count: usize,
     helper_models: Vec<MonitorConfigModel>,
     server_enabled: bool,
     server_port: u16,
@@ -1961,7 +1961,7 @@ fn monitor_config(config: &Config) -> MonitorConfig {
         max_tokens: config.max_tokens,
         tool_timeout_secs: config.tool_timeout_secs,
         subagents_enabled: config.subagents.enabled,
-        favorite_count: config.favorites.len(),
+        mode_count: config.model_modes.len(),
         helper_models: vec![
             MonitorConfigModel {
                 role: "title",

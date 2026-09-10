@@ -1219,6 +1219,78 @@ mod tests {
         assert!(rendered.contains(&root.path().display().to_string()));
     }
 
+    /// The mode catalog is orchestrator-only: a worker subagent and the main
+    /// prompt path never carry it, while the reserved orchestrator profile does.
+    #[test]
+    fn model_modes_render_for_the_orchestrator_only() {
+        let _home = crate::test_support::temp_zdx_home();
+        let root = tempdir().unwrap();
+
+        let mut config = crate::config::Config::default();
+        config.model_modes = vec![crate::config::ModelMode {
+            name: "fast".to_string(),
+            description: "quick checks".to_string(),
+            primary: "gemini:flash@low".to_string(),
+            alternatives: vec!["openai:mini@low".to_string()],
+            thinking: crate::config::ThinkingLevel::Low,
+        }];
+        let model = "anthropic:claude-opus-4-6";
+
+        let worker = SubagentDefinition {
+            name: "explorer".to_string(),
+            description: "desc".to_string(),
+            path: root.path().join("explorer.md"),
+            source: SubagentSource::BuiltIn,
+            allowed_subagents: None,
+            model: None,
+            thinking_level: None,
+            tools: Some(vec!["read".to_string()]),
+            skills: None,
+            auto_loaded_skills: None,
+            prompt_body: "body".to_string(),
+        };
+        let rendered_worker = render_prompt(
+            &config,
+            root.path(),
+            &worker,
+            model,
+            PromptContextInclusion::default(),
+        )
+        .unwrap();
+        assert!(
+            !rendered_worker.contains("# Model Modes"),
+            "worker prompts must not carry the mode catalog"
+        );
+
+        let orchestrator = render_prompt_with_discovered_skills(
+            &config,
+            root.path(),
+            &load_builtin_orchestrator().unwrap(),
+            model,
+            PromptContextInclusion::default(),
+        )
+        .unwrap();
+        assert!(orchestrator.contains("# Model Modes"));
+        assert!(orchestrator.contains(
+            "- `fast` — quick checks. Primary: `gemini:flash@low`. Alternatives: `openai:mini@low`."
+        ));
+        assert!(orchestrator.contains("zdx models list --plan-only"));
+
+        // The default (non-subagent) prompt path leaves the section out too.
+        let main = crate::core::context::build_prompt_with_context_and_layers(
+            &config,
+            root.path(),
+            model,
+            &[],
+            false,
+            PromptContextInclusion::default(),
+        )
+        .unwrap()
+        .prompt
+        .unwrap_or_default();
+        assert!(!main.contains("# Model Modes"));
+    }
+
     #[test]
     fn render_prompt_includes_available_and_auto_loaded_skills() {
         // Rendering a prompt materializes bundled skills into $ZDX_HOME.

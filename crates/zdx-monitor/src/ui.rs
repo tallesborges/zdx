@@ -108,7 +108,7 @@ fn footer_hint(section: Section) -> &'static str {
         Section::Background => "↑↓ navigate • Enter details • x kill • Tab/⇧Tab switch • q quit",
         Section::Automations => "↑↓ navigate • Tab/⇧Tab switch • q quit",
         Section::Config => {
-            "↑↓ select model • Enter edit • d delete favorite / reset subagent • PgUp/PgDn scroll • Tab/⇧Tab switch • q quit"
+            "↑↓ select model • Enter edit • d delete mode / reset subagent • PgUp/PgDn scroll • Tab/⇧Tab switch • q quit"
         }
         Section::Threads => {
             "↑↓ navigate • Enter preview • o raw • i timings • t kind • p project • / search • Esc clear • y copy ID"

@@ -198,13 +198,22 @@ pub async fn update(config: &config::Config) -> Result<()> {
 /// Lists available models with the exact `provider:model` id to pass to `-m`.
 ///
 /// Defaults to models from enabled providers only; `all` includes disabled ones.
-pub fn list(config: &config::Config, provider: Option<&str>, all: bool, json: bool) -> Result<()> {
+pub fn list(
+    config: &config::Config,
+    provider: Option<&str>,
+    all: bool,
+    plan_only: bool,
+    json: bool,
+) -> Result<()> {
     use zdx_engine::models::{ModelOption, available_models, custom_provider_models};
 
     let mut models: Vec<&ModelOption> = available_models().iter().collect();
     models.extend(custom_provider_models(&config.providers));
     if !all {
         models.retain(|m| config.providers.is_enabled(m.provider));
+    }
+    if plan_only {
+        models.retain(|m| is_subscription_provider(m.provider));
     }
     if let Some(provider) = provider {
         models.retain(|m| m.provider.eq_ignore_ascii_case(provider));
@@ -219,6 +228,7 @@ pub fn list(config: &config::Config, provider: Option<&str>, all: bool, json: bo
                     "id": m.qualified_id(),
                     "fast_id": zdx_engine::models::fast_variant(&m.qualified_id()),
                     "provider": m.provider,
+                    "subscription": is_subscription_provider(m.provider),
                     "model": m.id,
                     "display_name": m.display_name,
                     "context_limit": m.context_limit,
@@ -260,6 +270,13 @@ pub fn list(config: &config::Config, provider: Option<&str>, all: bool, json: bo
     Ok(())
 }
 
+/// True when the provider is covered by a subscription rather than billed per
+/// token. Custom providers are never subscription-backed.
+fn is_subscription_provider(provider: &str) -> bool {
+    provider_kind_from_id(provider)
+        .is_some_and(zdx_engine::providers::ProviderKind::is_subscription)
+}
+
 #[derive(Clone, Copy)]
 struct ProviderSpec<'a> {
     provider_id: &'static str,
@@ -277,8 +294,7 @@ struct UpdateState {
 impl UpdateState {
     fn push_candidate(&mut self, provider_id: &str, candidate: ModelCandidate) {
         let mut pricing = candidate.pricing;
-        let is_sub = provider_kind_from_id(provider_id)
-            .is_some_and(zdx_engine::providers::ProviderKind::is_subscription);
+        let is_sub = is_subscription_provider(provider_id);
         if is_sub {
             pricing = ModelPricingRecord::default();
         }

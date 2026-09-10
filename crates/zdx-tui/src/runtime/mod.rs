@@ -880,7 +880,7 @@ impl TuiRuntime {
                 // Could add an event for error reporting if needed
             }
             UiEffect::PersistModel { model } => {
-                // Only `/model-save` reaches here. Picker and favorite switches
+                // Only `/model-save` reaches here. Picker and mode switches
                 // stay in session/thread state, so this is the one TUI path
                 // that writes the workspace config.
                 let message = match zdx_engine::config::Config::save_model_for_cwd(

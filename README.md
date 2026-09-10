@@ -96,7 +96,7 @@ Delegate scoped work to isolated child agents:
 ### TUI niceties
 
 - Tabbed threads/forks, image attachments via the **Kitty graphics protocol**, **voice dictation**
-- Overlays for context usage, thread TLDR, and skills; model picker with Tab-cycled favorites
+- Overlays for context usage, thread TLDR, and skills; model picker with Tab-cycled model modes
 - Inline questions + follow-up suggestions, `/prompt-builder`, and a `btw` side chat
 
 ### Telegram bot

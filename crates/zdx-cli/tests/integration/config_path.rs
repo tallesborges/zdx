@@ -105,11 +105,11 @@ fn test_config_get_set_unset() {
         .success()
         .stdout(predicate::str::contains("Unset tool_timeout_secs"));
 
-    // Set array elements generically (e.g. favorites)
+    // Set array elements generically (e.g. model modes)
     crate::fixtures::zdx_cmd()
         .current_dir(isolated_cwd.path())
         .env("ZDX_HOME", zdx_home.path())
-        .args(["config", "set", "favorites.0.alias", "Fast"])
+        .args(["config", "set", "model_modes.0.name", "fast"])
         .assert()
         .success();
 
@@ -119,7 +119,7 @@ fn test_config_get_set_unset() {
         .args([
             "config",
             "set",
-            "favorites.0.model",
+            "model_modes.0.primary",
             "google-antigravity:gemini-3.8-flash-high@high",
         ])
         .assert()
@@ -129,27 +129,37 @@ fn test_config_get_set_unset() {
     crate::fixtures::zdx_cmd()
         .current_dir(isolated_cwd.path())
         .env("ZDX_HOME", zdx_home.path())
-        .args(["config", "set", "favorites.0.thinking", "high"])
+        .args(["config", "set", "model_modes.0.thinking", "high"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("favorites[0].thinking"))
+        .stderr(predicate::str::contains("model_modes[0].thinking"))
         .stderr(predicate::str::contains("model spec"));
+
+    // The removed `[[favorites]]` list is rejected and points at model modes
+    crate::fixtures::zdx_cmd()
+        .current_dir(isolated_cwd.path())
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["config", "set", "favorites.0.alias", "Fast"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("`favorites` was removed"))
+        .stderr(predicate::str::contains("model_modes"));
 
     // Plain get on array field works without --json
     crate::fixtures::zdx_cmd()
         .current_dir(isolated_cwd.path())
         .env("ZDX_HOME", zdx_home.path())
-        .args(["config", "get", "favorites"])
+        .args(["config", "get", "model_modes"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Fast"))
+        .stdout(predicate::str::contains("fast"))
         .stdout(predicate::str::contains("gemini-3.8-flash-high"));
 
     // Plain get on indexed field
     crate::fixtures::zdx_cmd()
         .current_dir(isolated_cwd.path())
         .env("ZDX_HOME", zdx_home.path())
-        .args(["config", "get", "favorites.0.model"])
+        .args(["config", "get", "model_modes.0.primary"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -179,10 +189,10 @@ fn test_config_get_set_unset() {
     crate::fixtures::zdx_cmd()
         .current_dir(isolated_cwd.path())
         .env("ZDX_HOME", zdx_home.path())
-        .args(["config", "unset", "favorites.0"])
+        .args(["config", "unset", "model_modes.0"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Unset favorites.0"));
+        .stdout(predicate::str::contains("Unset model_modes.0"));
 }
 
 #[test]
