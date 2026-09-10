@@ -109,9 +109,10 @@ Read the relevant file before modifying code in that scope:
 # Todos
 
 - Use `todo_write` for work with 3+ meaningful steps or multiple requested changes. No single-step plans.
-- Keep exactly one todo in progress and update it as work advances.
+- Every call sends the complete list and replaces the previous one: include finished items with their final status, and send `[]` to clear.
+- Mark an item `in_progress` when you start it and `completed` as soon as it lands. Several items may be `in_progress` when work genuinely runs in parallel; otherwise keep one.
 - If a failure invalidates the plan, stop and present a revised one.
-- Before finishing, mark every todo completed, blocked, or cancelled. Never end a requested execution task with only a plan.
+- Before finishing, mark every todo completed or abandoned. Never end a requested execution task with only a plan.
 
 # Conventions
 

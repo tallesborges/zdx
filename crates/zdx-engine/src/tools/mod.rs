@@ -634,10 +634,9 @@ impl Tool for TodoWrite {
     fn definition(&self) -> ToolDefinition {
         todo_write::definition()
     }
-    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+    fn execute(&self, input: &Value, _ctx: &ToolContext) -> ToolFuture {
         let input = input.clone();
-        let ctx = ctx.clone();
-        Box::pin(async move { execute_todo_write(&input, &ctx).await })
+        Box::pin(async move { todo_write::execute(&input) })
     }
 }
 
@@ -777,15 +776,6 @@ async fn execute_thread_search(input: &Value, ctx: &ToolContext) -> ToolOutput {
 
 async fn execute_memory_search(input: &Value, ctx: &ToolContext) -> ToolOutput {
     memory_search::execute(input, ctx).await
-}
-
-async fn execute_todo_write(input: &Value, ctx: &ToolContext) -> ToolOutput {
-    execute_blocking(ctx.timeout, {
-        let input = input.clone();
-        let ctx = ctx.clone();
-        move || todo_write::execute(&input, &ctx)
-    })
-    .await
 }
 
 async fn execute_grep(input: &Value, ctx: &zdx_tools::ToolContext) -> ToolOutput {

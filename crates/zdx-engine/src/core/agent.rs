@@ -27,7 +27,7 @@ use crate::providers::{
     resolve_provider,
 };
 use crate::subagents;
-use crate::tools::{ToolContext, ToolDefinition, ToolRegistry, ToolResult, ToolSet, todo_write};
+use crate::tools::{ToolContext, ToolDefinition, ToolRegistry, ToolResult, ToolSet};
 
 /// Options for agent execution.
 #[derive(Debug, Clone)]
@@ -2307,49 +2307,10 @@ async fn execute_tools_async(
     let mut join_set: JoinSet<CompletedTool> = JoinSet::new();
     let mut results: Vec<Option<(ToolOutput, ToolResult)>> = vec![None; tool_uses.len()];
     let mut completed: HashSet<usize> = HashSet::new();
-    let mut current_todo_state: Option<todo_write::TodoState> = None;
-
-    let is_enabled_tool = |name: &str| {
-        let name_lower = name.to_ascii_lowercase();
-        enabled_tools
-            .iter()
-            .any(|tool| tool.to_ascii_lowercase() == name_lower)
-    };
 
     emit_tool_started_events(tool_uses, sender, run_guard);
 
-    // Execute todo_write calls in order so later calls in the same turn can see
-    // earlier mutations without waiting for thread persistence. Spawn everything
-    // else concurrently as before.
     for (i, tu) in tool_uses.iter().enumerate() {
-        if todo_write::is_todo_tool_name(&tu.name) && is_enabled_tool(&tu.name) {
-            let started_at = std::time::Instant::now();
-            let output = todo_write::execute_with_state(
-                &tu.input,
-                current_todo_state.as_ref(),
-                ctx.current_thread_id.as_deref(),
-            );
-            if let Some(state) = todo_write::state_from_output(&output) {
-                current_todo_state = Some(state);
-            }
-            let result = ToolResult::from_output(tu.id.clone(), &output);
-            let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-            record_tool_completion(
-                sender,
-                &mut completed,
-                &mut results,
-                CompletedTool {
-                    idx: i,
-                    id: tu.id.clone(),
-                    output,
-                    result,
-                    duration_ms: Some(duration_ms),
-                },
-                run_guard,
-            );
-            continue;
-        }
-
         // Clone for 'static requirement
         let tu = tu.clone();
         let mut ctx = ctx.clone();
@@ -3009,7 +2970,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_execute_tools_carries_todo_state_within_turn() {
+    async fn test_execute_tools_runs_todo_write_snapshots() {
         let ctx = ToolContext::new(std::path::PathBuf::from("."), None);
         let enabled_tools: HashSet<String> = vec!["Todo_Write".to_string()].into_iter().collect();
         let tool_uses = vec![
@@ -3018,7 +2979,7 @@ mod tests {
                 name: "Todo_Write".to_string(),
                 input: serde_json::json!({
                     "todos": [
-                        {"op": "add", "content": "Inspect codebase", "status": "in_progress"}
+                        {"content": "Inspect codebase", "status": "in_progress"}
                     ]
                 }),
                 id_origin: zdx_types::IdOrigin::Synthesized,
@@ -3029,8 +2990,8 @@ mod tests {
                 name: "Todo_Write".to_string(),
                 input: serde_json::json!({
                     "todos": [
-                        {"op": "update", "id": "todo-1", "status": "completed"},
-                        {"op": "add", "content": "Ship fix"}
+                        {"content": "Inspect codebase", "status": "completed"},
+                        {"content": "Ship fix", "status": "in_progress"}
                     ]
                 }),
                 id_origin: zdx_types::IdOrigin::Synthesized,
@@ -3080,6 +3041,8 @@ mod tests {
             .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
             .expect("Todo_Write result should be valid JSON text");
 
+        // Each call is a whole-list snapshot, so the second result stands alone
+        // rather than being merged with the first.
         let todos = second
             .get("data")
             .and_then(|data| data.get("todos"))
@@ -3088,16 +3051,16 @@ mod tests {
 
         assert_eq!(todos.len(), 2);
         assert_eq!(
-            todos[0].get("id").and_then(|id| id.as_str()),
-            Some("todo-1")
+            todos[0].get("content").and_then(|c| c.as_str()),
+            Some("Inspect codebase")
         );
         assert_eq!(
             todos[0].get("status").and_then(|status| status.as_str()),
             Some("completed")
         );
         assert_eq!(
-            todos[1].get("id").and_then(|id| id.as_str()),
-            Some("todo-2")
+            todos[1].get("content").and_then(|c| c.as_str()),
+            Some("Ship fix")
         );
         assert_eq!(
             todos[1].get("status").and_then(|status| status.as_str()),

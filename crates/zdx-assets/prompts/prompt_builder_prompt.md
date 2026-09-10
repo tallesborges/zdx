@@ -18,7 +18,7 @@ Assemble these in order and drop any that do not apply.
 
 1. **One-line imperative opener** naming the goal and any partner agent. Example: "Investigate this bug and coordinate with Oracle until you both agree on the root cause."
 
-2. **`Rules:` bullet block** of hard constraints. Common ones: do not jump ahead before agreement or context is solid; minimize assumptions and inspect the evidence instead; prefer concrete verification; track progress with `Todo_Write` (open a plan first, keep exactly one item `in_progress`, update statuses as work lands). End with a "Repeat until:" sub-list of 2–3 numbered exit conditions (convergence, a decision needed from the user, a real blocker). Every iterative prompt has this termination contract.
+2. **`Rules:` bullet block** of hard constraints. Common ones: do not jump ahead before agreement or context is solid; minimize assumptions and inspect the evidence instead; prefer concrete verification; track progress with `Todo_Write` (open a plan first, send the complete list on every call, update statuses as work lands). End with a "Repeat until:" sub-list of 2–3 numbered exit conditions (convergence, a decision needed from the user, a real blocker). Every iterative prompt has this termination contract.
 
 3. **Phases or passes** (multi-pass only): a numbered list, one or two lines each. Tell the future assistant to mirror them as `Todo_Write` items.
 

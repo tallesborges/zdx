@@ -299,7 +299,7 @@ Error:
 - `--root` is a working directory context, not a security boundary (YOLO).
 - `Glob` accepts one pattern or an OR-array, can match full paths or entry names case-insensitively, returns files and directories by default (narrowed by `entry_type`), can bound the walk with `max_depth` so a single level is listable on its own, and can explicitly include ignored entries. `Grep` can likewise include ignored files. Both keep their shared traversal deadline and report `truncated: true` with a warning when absence was not proven; continuation is by narrowing or splitting `path`, not an unstable cursor over a partial parallel walk.
 - `Grep` reports matching lines with optional context, unique captured values, or only the paths of files containing a match; those reporting modes are mutually exclusive and all paginate with `offset`/`max_count`.
-- Built-in `Todo_Write` tracks a flat per-thread todo list for multi-step work and keeps at most one active `in_progress` todo while unfinished work remains.
+- Built-in `Todo_Write` tracks a flat todo list for multi-step work. Each call is a whole-list snapshot: `todos` replaces the previous list, `[]` clears it, and every item carries `content` plus an explicit `status` (`pending`, `in_progress`, `completed`, `abandoned`). The tool is a pure function of its input — no ids, no per-item mutations, and no server-held state to reconcile. Statuses are validated and stored exactly as sent: empty content is rejected, and the number of `in_progress` items is never adjusted, so parallel work can hold several active items and a list may have none.
 
 ---
 
