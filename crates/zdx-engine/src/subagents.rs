@@ -461,6 +461,9 @@ pub fn load_builtin_orchestrator() -> Result<SubagentDefinition> {
 /// never sees this entry; surfaces that run the profile call this instead.
 /// Same semantics as other overrides: the model replaces the chat's model and
 /// the thinking level follows the override's `@level` suffix when present.
+/// A `mode:<name>` override resolves to that mode's primary spec first, so the
+/// profile runs — and reports — a real model id; an unknown mode is logged and
+/// leaves the chat's model in place.
 pub fn apply_orchestrator_override(config: &mut crate::config::Config) {
     let Some(over) = config
         .subagents
@@ -470,9 +473,21 @@ pub fn apply_orchestrator_override(config: &mut crate::config::Config) {
     else {
         return;
     };
-    if let Some(model) = over.model {
-        config.apply_model_spec(&model);
-    }
+    let Some(model) = over.model else {
+        return;
+    };
+    let spec = match config.resolve_mode_ref(&model) {
+        None => model.clone(),
+        Some(Ok(primary)) => primary.to_string(),
+        Some(Err(name)) => {
+            tracing::warn!(
+                mode = name,
+                "orchestrator override names an unknown model mode; keeping the chat's model"
+            );
+            return;
+        }
+    };
+    config.apply_model_spec(&spec);
 }
 
 fn oracle_capability(root: &Path) -> Result<CapabilityDescriptor> {
@@ -906,6 +921,51 @@ mod tests {
         assert_eq!(
             config.model, "claude-cli:opus@high",
             "other overrides are ignored"
+        );
+    }
+
+    /// A `mode:<name>` orchestrator override runs (and reports) the mode's
+    /// primary spec, never the raw reference. An unknown mode is ignored.
+    #[test]
+    fn orchestrator_override_resolves_a_model_mode_reference() {
+        let mode = crate::config::ModelMode {
+            name: "smart".to_string(),
+            description: "deep work".to_string(),
+            primary: "claude-cli:claude-opus-5@high".to_string(),
+            alternatives: Vec::new(),
+            thinking: ThinkingLevel::High,
+        };
+        let with_ref = |value: &str| {
+            let mut config = crate::config::Config {
+                model: "gemini:flash@low".to_string(),
+                thinking_level: ThinkingLevel::Low,
+                model_modes: vec![mode.clone()],
+                ..Default::default()
+            };
+            config.subagents.overrides.insert(
+                ORCHESTRATOR_SUBAGENT_NAME.to_string(),
+                crate::config::SubagentOverride {
+                    model: Some(value.to_string()),
+                    thinking_level: None,
+                },
+            );
+            config
+        };
+
+        let mut config = with_ref("mode:smart");
+        apply_orchestrator_override(&mut config);
+        assert_eq!(config.model, "claude-cli:claude-opus-5@high");
+        assert_eq!(config.thinking_level, ThinkingLevel::High);
+
+        // A later thread override still layers on top, as it does for a spec.
+        config.apply_thread_model_override(None, Some(ThinkingLevel::XHigh));
+        assert_eq!(config.model, "claude-cli:claude-opus-5@xhigh");
+
+        let mut config = with_ref("mode:nope");
+        apply_orchestrator_override(&mut config);
+        assert_eq!(
+            config.model, "gemini:flash@low",
+            "an unknown mode leaves the chat's model in place"
         );
     }
 

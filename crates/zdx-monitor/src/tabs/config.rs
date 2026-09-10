@@ -309,7 +309,7 @@ pub(crate) const ADD_MODE_LABEL: &str = "[+ add mode]";
 
 /// True when a model field value references a mode instead of naming a model.
 fn is_mode_ref(value: &str) -> bool {
-    value.trim().starts_with(config::MODE_REF_PREFIX)
+    config::mode_ref_name(value).is_some()
 }
 
 /// Row value for a mode: its primary spec plus an alternatives count.

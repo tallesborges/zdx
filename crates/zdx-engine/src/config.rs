@@ -743,6 +743,17 @@ fn expand_tilde(path: &str) -> std::path::PathBuf {
 /// Prefix marking a model field as a reference to a `[[model_modes]]` entry.
 pub const MODE_REF_PREFIX: &str = "mode:";
 
+/// The mode name a model field references, or `None` when it names a model.
+/// Both the prefix and the name are matched trimmed and case-insensitively,
+/// since these values are hand-written in config and by models in tool calls.
+#[must_use]
+pub fn mode_ref_name(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    let rest = trimmed.get(..MODE_REF_PREFIX.len())?;
+    rest.eq_ignore_ascii_case(MODE_REF_PREFIX)
+        .then(|| trimmed[MODE_REF_PREFIX.len()..].trim())
+}
+
 /// A named model tier (`fast`, `smart`, `ultra`, …) referenced across surfaces.
 ///
 /// `primary` is the spec actually run; `alternatives` are equivalent picks at
@@ -1034,7 +1045,7 @@ impl Config {
     /// it references a mode that is not configured.
     #[must_use]
     pub fn resolve_mode_ref<'a>(&'a self, value: &'a str) -> Option<Result<&'a str, &'a str>> {
-        let name = value.trim().strip_prefix(MODE_REF_PREFIX)?.trim();
+        let name = mode_ref_name(value)?;
         Some(
             self.model_modes
                 .iter()

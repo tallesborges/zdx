@@ -156,7 +156,7 @@ fn definition_for(op: Op) -> ToolDefinition {
                     },
                     "model": {
                         "type": "string",
-                        "description": "Optional model override (`provider:model[@thinking][@fast]`). Omit to inherit configuration."
+                        "description": "Optional model override (`provider:model[@thinking][@fast]`, or `mode:<name>` for a configured model mode). Omit to inherit configuration."
                     }
                 },
                 "required": ["root", "prompt"],
@@ -373,6 +373,28 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     format!("{head}…")
 }
 
+/// Resolves a worker's requested model, substituting a `mode:<name>` reference
+/// with that mode's primary spec. The orchestrator prompt offers mode names, so
+/// a worker must not be started on the literal reference. `None` means "inherit
+/// configuration": either no model was asked for, or the mode is not configured,
+/// which beats starting a worker that cannot reach a provider.
+fn resolve_worker_model_spec(
+    config: Option<&crate::config::Config>,
+    model: &str,
+) -> Option<String> {
+    match config.and_then(|config| config.resolve_mode_ref(model)) {
+        None => Some(model.to_string()),
+        Some(Ok(primary)) => Some(primary.to_string()),
+        Some(Err(name)) => {
+            tracing::warn!(
+                mode = name,
+                "create_thread: unknown model mode; inheriting configuration instead"
+            );
+            None
+        }
+    }
+}
+
 async fn create_thread(
     manager: &Arc<WorkerManager>,
     owner: &str,
@@ -389,11 +411,14 @@ async fn create_thread(
     };
     let title = optional_str(input, "title");
     let (model, thinking_level) = match optional_str(input, "model") {
-        Some(model) => {
-            let inherited = ctx.thinking_level.unwrap_or_default();
-            let (model, thinking) = crate::models::resolve_model_spec(model, inherited);
-            (Some(model), Some(thinking))
-        }
+        Some(model) => match resolve_worker_model_spec(ctx.config.as_ref(), model) {
+            Some(spec) => {
+                let inherited = ctx.thinking_level.unwrap_or_default();
+                let (model, thinking) = crate::models::resolve_model_spec(&spec, inherited);
+                (Some(model), Some(thinking))
+            }
+            None => (None, None),
+        },
         None => (None, None),
     };
 
@@ -626,6 +651,45 @@ fn cancel_thread(manager: &Arc<WorkerManager>, input: &Value) -> ToolOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mode_config() -> crate::config::Config {
+        crate::config::Config {
+            model_modes: vec![crate::config::ModelMode {
+                name: "smart".to_string(),
+                description: "deep work".to_string(),
+                primary: "claude-cli:claude-opus-5@high".to_string(),
+                alternatives: Vec::new(),
+                thinking: crate::config::ThinkingLevel::High,
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// A worker asked for on `mode:<name>` starts on that mode's primary spec;
+    /// an unknown mode inherits configuration instead of a broken model id.
+    #[test]
+    fn worker_model_resolves_mode_references() {
+        let config = mode_config();
+        assert_eq!(
+            resolve_worker_model_spec(Some(&config), "mode:smart").as_deref(),
+            Some("claude-cli:claude-opus-5@high")
+        );
+        assert_eq!(
+            resolve_worker_model_spec(Some(&config), "  MODE:Smart ").as_deref(),
+            Some("claude-cli:claude-opus-5@high")
+        );
+        assert_eq!(
+            resolve_worker_model_spec(Some(&config), "openai:gpt-5.5@low").as_deref(),
+            Some("openai:gpt-5.5@low"),
+            "a plain spec passes through untouched"
+        );
+        assert_eq!(resolve_worker_model_spec(Some(&config), "mode:nope"), None);
+        assert_eq!(
+            resolve_worker_model_spec(None, "mode:smart").as_deref(),
+            Some("mode:smart"),
+            "without config there is nothing to resolve against"
+        );
+    }
 
     fn context_model(provider: &'static str, context_limit: u64) -> crate::models::ModelOption {
         crate::models::ModelOption {
