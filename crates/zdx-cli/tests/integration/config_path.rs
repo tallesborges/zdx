@@ -71,128 +71,151 @@ fn test_config_get_set_unset() {
     let isolated_cwd = tempdir().unwrap();
 
     // Init config
-    crate::fixtures::zdx_cmd()
-        .current_dir(isolated_cwd.path())
-        .env("ZDX_HOME", zdx_home.path())
-        .args(["config", "init"])
+    config_cmd(&zdx_home, &isolated_cwd, &["config", "init"])
         .assert()
         .success();
 
     // Set model
-    crate::fixtures::zdx_cmd()
-        .current_dir(isolated_cwd.path())
-        .env("ZDX_HOME", zdx_home.path())
-        .args(["config", "set", "model", "test-model-1"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Set model"));
+    config_cmd(
+        &zdx_home,
+        &isolated_cwd,
+        &["config", "set", "model", "test-model-1"],
+    )
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Set model"));
 
     // Get model
-    crate::fixtures::zdx_cmd()
-        .current_dir(isolated_cwd.path())
-        .env("ZDX_HOME", zdx_home.path())
-        .args(["config", "get", "model"])
+    config_cmd(&zdx_home, &isolated_cwd, &["config", "get", "model"])
         .assert()
         .success()
         .stdout(predicate::str::contains("test-model-1"));
 
     // Unset a key
-    crate::fixtures::zdx_cmd()
-        .current_dir(isolated_cwd.path())
-        .env("ZDX_HOME", zdx_home.path())
-        .args(["config", "unset", "tool_timeout_secs"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Unset tool_timeout_secs"));
+    config_cmd(
+        &zdx_home,
+        &isolated_cwd,
+        &["config", "unset", "tool_timeout_secs"],
+    )
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Unset tool_timeout_secs"));
 
     // Set array elements generically (e.g. model modes)
-    crate::fixtures::zdx_cmd()
-        .current_dir(isolated_cwd.path())
-        .env("ZDX_HOME", zdx_home.path())
-        .args(["config", "set", "model_modes.0.name", "fast"])
-        .assert()
-        .success();
+    config_cmd(
+        &zdx_home,
+        &isolated_cwd,
+        &["config", "set", "model_modes.0.name", "fast"],
+    )
+    .assert()
+    .success();
 
-    crate::fixtures::zdx_cmd()
-        .current_dir(isolated_cwd.path())
-        .env("ZDX_HOME", zdx_home.path())
-        .args([
+    config_cmd(
+        &zdx_home,
+        &isolated_cwd,
+        &[
             "config",
             "set",
             "model_modes.0.primary",
             "google-antigravity:gemini-3.8-flash-high@high",
-        ])
-        .assert()
-        .success();
-
-    // The removed `thinking` key is rejected instead of silently ignored
-    crate::fixtures::zdx_cmd()
-        .current_dir(isolated_cwd.path())
-        .env("ZDX_HOME", zdx_home.path())
-        .args(["config", "set", "model_modes.0.thinking", "high"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("model_modes[0].thinking"))
-        .stderr(predicate::str::contains("model spec"));
-
-    // The removed `[[favorites]]` list is rejected and points at model modes
-    crate::fixtures::zdx_cmd()
-        .current_dir(isolated_cwd.path())
-        .env("ZDX_HOME", zdx_home.path())
-        .args(["config", "set", "favorites.0.alias", "Fast"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("`favorites` was removed"))
-        .stderr(predicate::str::contains("model_modes"));
+        ],
+    )
+    .assert()
+    .success();
 
     // Plain get on array field works without --json
-    crate::fixtures::zdx_cmd()
-        .current_dir(isolated_cwd.path())
-        .env("ZDX_HOME", zdx_home.path())
-        .args(["config", "get", "model_modes"])
+    config_cmd(&zdx_home, &isolated_cwd, &["config", "get", "model_modes"])
         .assert()
         .success()
         .stdout(predicate::str::contains("fast"))
         .stdout(predicate::str::contains("gemini-3.8-flash-high"));
 
     // Plain get on indexed field
-    crate::fixtures::zdx_cmd()
-        .current_dir(isolated_cwd.path())
-        .env("ZDX_HOME", zdx_home.path())
-        .args(["config", "get", "model_modes.0.primary"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "google-antigravity:gemini-3.8-flash-high@high",
-        ));
-
-    // The removed top-level `thinking_level` key is rejected too
-    crate::fixtures::zdx_cmd()
-        .current_dir(isolated_cwd.path())
-        .env("ZDX_HOME", zdx_home.path())
-        .args(["config", "set", "thinking_level", "high"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("thinking_level"))
-        .stderr(predicate::str::contains("model spec"));
-
-    // Validation rejects invalid schema writes
-    crate::fixtures::zdx_cmd()
-        .current_dir(isolated_cwd.path())
-        .env("ZDX_HOME", zdx_home.path())
-        .args(["config", "set", "tool_timeout_secs", "not_a_number"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("modified config would be invalid"));
+    config_cmd(
+        &zdx_home,
+        &isolated_cwd,
+        &["config", "get", "model_modes.0.primary"],
+    )
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+        "google-antigravity:gemini-3.8-flash-high@high",
+    ));
 
     // Unset array element
-    crate::fixtures::zdx_cmd()
-        .current_dir(isolated_cwd.path())
-        .env("ZDX_HOME", zdx_home.path())
-        .args(["config", "unset", "model_modes.0"])
+    config_cmd(
+        &zdx_home,
+        &isolated_cwd,
+        &["config", "unset", "model_modes.0"],
+    )
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Unset model_modes.0"));
+}
+
+#[test]
+fn test_config_set_rejects_removed_keys() {
+    let zdx_home = tempdir().unwrap();
+    let isolated_cwd = tempdir().unwrap();
+
+    config_cmd(&zdx_home, &isolated_cwd, &["config", "init"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("Unset model_modes.0"));
+        .success();
+
+    // The removed `thinking` key is rejected instead of silently ignored
+    config_cmd(
+        &zdx_home,
+        &isolated_cwd,
+        &["config", "set", "model_modes.0.thinking", "high"],
+    )
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("model_modes[0].thinking"))
+    .stderr(predicate::str::contains("model spec"));
+
+    // The removed `[[favorites]]` list is rejected and points at model modes
+    config_cmd(
+        &zdx_home,
+        &isolated_cwd,
+        &["config", "set", "favorites.0.alias", "Fast"],
+    )
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("`favorites` was removed"))
+    .stderr(predicate::str::contains("model_modes"));
+
+    // The removed top-level `thinking_level` key is rejected too
+    config_cmd(
+        &zdx_home,
+        &isolated_cwd,
+        &["config", "set", "thinking_level", "high"],
+    )
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("thinking_level"))
+    .stderr(predicate::str::contains("model spec"));
+
+    // Validation rejects invalid schema writes
+    config_cmd(
+        &zdx_home,
+        &isolated_cwd,
+        &["config", "set", "tool_timeout_secs", "not_a_number"],
+    )
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("modified config would be invalid"));
+}
+
+/// Builds a `config` CLI invocation isolated to the given home and cwd.
+fn config_cmd(
+    zdx_home: &tempfile::TempDir,
+    cwd: &tempfile::TempDir,
+    args: &[&str],
+) -> assert_cmd::Command {
+    let mut cmd = crate::fixtures::zdx_cmd();
+    cmd.current_dir(cwd.path()).env("ZDX_HOME", zdx_home.path());
+    cmd.args(args);
+    cmd
 }
 
 #[test]

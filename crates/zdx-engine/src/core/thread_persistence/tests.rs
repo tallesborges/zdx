@@ -1963,7 +1963,7 @@ fn test_runtime_context_survives_events_roundtrip() {
         Some("abc123".to_string()),
     );
 
-    let events = messages_to_events(&[original.clone()]);
+    let events = messages_to_events(std::slice::from_ref(&original));
     let last_key = last_attached_context_key_from_events(&events);
     assert_eq!(last_key.as_deref(), Some("abc123"));
 
@@ -2058,7 +2058,7 @@ fn test_image_only_user_message_preserves_runtime_context() {
         }]),
     };
 
-    let events = messages_to_events(&[original.clone()]);
+    let events = messages_to_events(std::slice::from_ref(&original));
     assert_eq!(
         last_attached_context_key_from_events(&events).as_deref(),
         Some("k1")
