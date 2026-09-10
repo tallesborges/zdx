@@ -123,7 +123,8 @@ pub enum UiEffect {
     /// required).
     AnalyzeContext { mode: crate::runtime::AnalysisMode },
 
-    /// Persist the model preference to config.
+    /// Persist the model preference to config. Emitted only by `/model-save`;
+    /// ordinary picker/favorite switches stay in session + thread state.
     PersistModel { model: String },
 
     /// Persist the active thread's model override.

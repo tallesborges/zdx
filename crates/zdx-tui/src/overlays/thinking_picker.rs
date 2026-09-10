@@ -8,8 +8,36 @@ use zdx_engine::config::ThinkingLevel;
 
 use super::OverlayUpdate;
 use crate::effects::UiEffect;
-use crate::mutations::{ConfigMutation, StateMutation, TranscriptMutation};
+use crate::mutations::{StateMutation, TranscriptMutation};
 use crate::state::TuiState;
+
+/// Message shown when a thinking-only switch is requested for a model that has
+/// no reasoning capability.
+pub const NO_REASONING_NOTICE: &str = "This model has no thinking levels.";
+
+/// Builds the request that opens the picker on `model`, changing only the
+/// thinking level. Shared by `/thinking` and Ctrl+T so both apply the same
+/// reasoning-capability guard. Returns `None` when the model cannot reason.
+pub fn thinking_request_for_model(model: &str) -> Option<super::OverlayRequest> {
+    if !zdx_engine::models::model_supports_reasoning(model) {
+        return None;
+    }
+    Some(super::OverlayRequest::ThinkingPicker {
+        model: model.to_string(),
+        display_name: super::model_picker::label_for_model_spec(model),
+    })
+}
+
+/// Switch notice for a committed selection. The level is spelled out because
+/// `/thinking` keeps the model, so the model name alone would not show what
+/// actually changed.
+fn switch_notice(display_name: &str, level: ThinkingLevel) -> String {
+    if level == ThinkingLevel::Off {
+        format!("Switched to {display_name}")
+    } else {
+        format!("Switched to {display_name} [{}]", level.display_name())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ThinkingPickerState {
@@ -68,48 +96,29 @@ impl ThinkingPickerState {
                 };
 
                 let model = zdx_engine::models::format_model_thinking(&self.model, level);
-                let message = format!("Switched to {}", self.display_name);
-                let use_thread_override = tui.thread.thread_handle.is_some()
-                    && (tui.thread.model_override.is_some()
-                        || tui.thread.thinking_override.is_some());
-                if use_thread_override && tui.agent_state.is_running() {
-                    return OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
-                        TranscriptMutation::AppendSystemMessage(
-                            "Stop the current task first before changing this thread's model override."
-                                .to_string(),
-                        ),
-                    )]);
+                let message = switch_notice(&self.display_name, level);
+                let mut effects = Vec::new();
+                // The selection lives in this tab's session state and, when the
+                // thread already exists on disk, in its metadata. It never
+                // reaches the workspace config; `/model-save` does that.
+                if tui.thread.thread_handle.is_some() {
+                    effects.push(UiEffect::PersistThreadModelOverride {
+                        model: model.clone(),
+                    });
                 }
+                effects.push(UiEffect::RefreshSystemPrompt {
+                    path: tui.agent_opts.root.clone(),
+                });
+
                 OverlayUpdate::close()
-                    .with_ui_effects(vec![
-                        if use_thread_override {
-                            UiEffect::PersistThreadModelOverride {
-                                model: model.clone(),
-                            }
-                        } else {
-                            UiEffect::PersistModel {
-                                model: model.clone(),
-                            }
-                        },
-                        UiEffect::RefreshSystemPrompt {
-                            path: tui.agent_opts.root.clone(),
-                        },
-                    ])
+                    .with_ui_effects(effects)
                     .with_mutations(vec![
-                        if use_thread_override {
-                            StateMutation::Thread(crate::mutations::ThreadMutation::SetOverrides {
-                                model_override: Some(model.clone()),
-                                thinking_override: None,
-                            })
-                        } else {
-                            StateMutation::Config(ConfigMutation::SetModel(model.clone()))
-                        },
+                        StateMutation::Thread(crate::mutations::ThreadMutation::SetOverrides {
+                            model_override: Some(model.clone()),
+                            thinking_override: None,
+                        }),
                         StateMutation::SetActiveThreadOverrides {
-                            model_override: if use_thread_override {
-                                Some(model)
-                            } else {
-                                tui.thread.model_override.clone()
-                            },
+                            model_override: Some(model),
                             thinking_override: None,
                         },
                         StateMutation::Transcript(TranscriptMutation::AppendOrReplaceSwitchNotice(

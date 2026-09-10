@@ -12,7 +12,7 @@ use crate::common::{TaskKind, TaskMeta};
 use crate::effects::UiEffect;
 use crate::events::{SkillUiEvent, ThreadUiEvent, UiEvent};
 use crate::input::{HandoffState, PromptBuilderState};
-use crate::mutations::{ConfigMutation, InputMutation, StateMutation, TranscriptMutation};
+use crate::mutations::{InputMutation, StateMutation, TranscriptMutation};
 use crate::overlays::{self, FilePickerState, Overlay};
 use crate::state::{AgentState, AppState, TabId, TabKind, TuiState};
 use crate::transcript::HistoryCell;
@@ -586,7 +586,6 @@ fn apply_tab_mutations(tui: &mut crate::state::TuiState, mutations: Vec<StateMut
             // Per-tab state: must apply to the owning tab, not just the active one.
             StateMutation::SetLastFollowups(items) => tui.last_followups = items,
             StateMutation::Auth(_)
-            | StateMutation::Config(_)
             | StateMutation::SetRootDisplay { .. }
             | StateMutation::SetActiveThreadOverrides { .. }
             | StateMutation::SetSystemPrompt(_)
@@ -1008,7 +1007,6 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
             StateMutation::Input(mutation) => tui.input.apply(mutation),
             StateMutation::Thread(mutation) => tui.thread.apply(mutation),
             StateMutation::Auth(mutation) => tui.auth.apply(&mutation),
-            StateMutation::Config(mutation) => apply_config_mutation(tui, mutation),
             StateMutation::SetRootDisplay {
                 path,
                 git_branch,
@@ -1043,16 +1041,6 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
             StateMutation::ToggleDebugStatus => {
                 tui.show_debug_status = !tui.show_debug_status;
             }
-        }
-    }
-}
-
-fn apply_config_mutation(tui: &mut TuiState, mutation: ConfigMutation) {
-    match mutation {
-        ConfigMutation::SetModel(model) => {
-            tui.config.apply_model_spec(&model);
-            tui.base_model.clone_from(&tui.config.model);
-            tui.base_thinking_level = tui.config.thinking_level;
         }
     }
 }

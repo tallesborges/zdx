@@ -15,7 +15,6 @@ use zdx_engine::providers::{ProviderKind, resolve_provider};
 
 use super::OverlayUpdate;
 use crate::effects::UiEffect;
-use crate::mutations::{StateMutation, TranscriptMutation};
 use crate::state::TuiState;
 
 /// One selectable row: a registry model, optionally as its `@fast` variant.
@@ -102,7 +101,7 @@ impl ModelPickerState {
         render_model_picker(frame, self, area, input_y);
     }
 
-    pub fn handle_key(&mut self, tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
+    pub fn handle_key(&mut self, _tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -134,17 +133,6 @@ impl ModelPickerState {
                 let model_id = row.spec();
                 let display_name = row_label(row);
 
-                let use_thread_override = tui.thread.thread_handle.is_some()
-                    && (tui.thread.model_override.is_some()
-                        || tui.thread.thinking_override.is_some());
-                if use_thread_override && tui.agent_state.is_running() {
-                    return OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
-                        TranscriptMutation::AppendSystemMessage(
-                            "Stop the current task first before changing this thread's model override."
-                                .to_string(),
-                        ),
-                    )]);
-                }
                 OverlayUpdate::open(super::OverlayRequest::ThinkingPicker {
                     model: model_id,
                     display_name,
@@ -298,6 +286,26 @@ fn model_label(model: &ModelOption) -> String {
     let label = zdx_engine::providers::provider_account_label(model.provider, model.account);
     let name = cleaned_display_name(model, model.provider);
     format!("{label} · {name}")
+}
+
+/// Picker-style label for an arbitrary model spec, used when the thinking
+/// picker is opened directly by `/thinking` instead of being chained from a
+/// selected row. Falls back to the spec itself for models absent from the
+/// registry (custom providers are not resolvable without the providers config).
+pub fn label_for_model_spec(spec: &str) -> String {
+    let target = resolve_provider(spec);
+    let label = available_models()
+        .iter()
+        .find(|model| {
+            let candidate = resolve_provider(model.id);
+            candidate.kind == target.kind && candidate.model == target.model
+        })
+        .map_or_else(|| spec.to_string(), model_label);
+    if target.fast {
+        format!("{label} @fast")
+    } else {
+        label
+    }
 }
 
 /// Row label, tagging the `@fast` variant so it is distinguishable in the list.

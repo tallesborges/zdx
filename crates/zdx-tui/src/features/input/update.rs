@@ -16,7 +16,7 @@ use super::state::{
 };
 use crate::common::{TaskKind, Tasks, sanitize_for_display};
 use crate::effects::UiEffect;
-use crate::mutations::{ConfigMutation, StateMutation, ThreadMutation, TranscriptMutation};
+use crate::mutations::{StateMutation, ThreadMutation, TranscriptMutation};
 use crate::overlays::OverlayRequest;
 use crate::state::{AgentState, TabId};
 use crate::transcript::HistoryCell;
@@ -149,7 +149,7 @@ pub fn handle_main_key(input: &mut InputState, ctx: &InputContext<'_>, key: KeyE
         .or_else(|| handle_word_editing(input, key.code, &mods))
         .or_else(|| handle_navigation(input, key, &mods))
         .or_else(|| handle_control_keys(input, ctx, key.code, &mods))
-        .or_else(|| handle_overlays(input, key.code, &mods))
+        .or_else(|| handle_overlays(input, ctx, key.code, &mods))
         .or_else(|| handle_submission(input, ctx, key.code, &mods))
         .or_else(|| handle_favorites(input, ctx, key.code, &mods))
         .unwrap_or_else(|| handle_default_input(input, key))
@@ -562,7 +562,12 @@ fn handle_voice_hotkey(input: &mut InputState) -> KeyResult {
 // Overlays: command palette and model picker
 // =============================================================================
 
-fn handle_overlays(input: &mut InputState, code: KeyCode, mods: &Modifiers) -> Option<KeyResult> {
+fn handle_overlays(
+    input: &mut InputState,
+    ctx: &InputContext<'_>,
+    code: KeyCode,
+    mods: &Modifiers,
+) -> Option<KeyResult> {
     match code {
         // `/` when input is empty: open command palette
         KeyCode::Char('/') if mods.none() && input.get_text().is_empty() => {
@@ -575,6 +580,22 @@ fn handle_overlays(input: &mut InputState, code: KeyCode, mods: &Modifiers) -> O
         // Ctrl+L: open model picker
         KeyCode::Char('l') if mods.only_ctrl() => {
             Some((vec![], vec![], Some(OverlayRequest::ModelPicker)))
+        }
+        // Ctrl+T: change only the thinking level, keeping the current model
+        // (mirrors `/thinking`).
+        KeyCode::Char('t') if mods.only_ctrl() => {
+            match crate::overlays::thinking_picker::thinking_request_for_model(ctx.model_id) {
+                Some(request) => Some((vec![], vec![], Some(request))),
+                None => Some((
+                    vec![],
+                    vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(
+                            crate::overlays::thinking_picker::NO_REASONING_NOTICE.to_string(),
+                        ),
+                    )],
+                    None,
+                )),
+            }
         }
         // Ctrl+R: open thread TLDR/recap overlay
         KeyCode::Char('r') if mods.only_ctrl() => {
@@ -652,8 +673,9 @@ pub fn submit_current_input(input: &mut InputState, ctx: &InputContext<'_>) -> K
 
 /// Tab / Shift+Tab cycles favorite presets when the composer is empty and
 /// `[[favorites]]` is configured; otherwise returns `None` so Tab falls through
-/// to inserting spaces. Switches model + thinking together, persisting both and
-/// refreshing the system prompt (which depends on the model).
+/// to inserting spaces. Switches model + thinking together for this tab's
+/// session (and the active thread's metadata), never the workspace config, and
+/// refreshes the system prompt (which depends on the model).
 fn handle_favorites(
     input: &InputState,
     ctx: &InputContext<'_>,
@@ -679,20 +701,34 @@ fn handle_favorites(
     );
     let favorite = ctx.config.favorites.get(idx)?;
 
-    let model = favorite.model.clone();
+    // Canonicalize before storing: a suffixless favorite inherits the currently
+    // effective level, and the stored override has to carry that resolved level
+    // or a config reload would re-resolve it against the default instead.
+    let (model, _) =
+        zdx_engine::models::resolve_model_spec(&favorite.model, ctx.config.thinking_level);
     let message = format!("Switched to {}", favorite.alias);
 
+    let mut effects = Vec::new();
+    if ctx.thread_id.is_some() {
+        effects.push(UiEffect::PersistThreadModelOverride {
+            model: model.clone(),
+        });
+    }
+    effects.push(UiEffect::RefreshSystemPrompt {
+        path: ctx.root.to_path_buf(),
+    });
+
     Some((
+        effects,
         vec![
-            UiEffect::PersistModel {
-                model: model.clone(),
+            StateMutation::Thread(ThreadMutation::SetOverrides {
+                model_override: Some(model.clone()),
+                thinking_override: None,
+            }),
+            StateMutation::SetActiveThreadOverrides {
+                model_override: Some(model),
+                thinking_override: None,
             },
-            UiEffect::RefreshSystemPrompt {
-                path: ctx.root.to_path_buf(),
-            },
-        ],
-        vec![
-            StateMutation::Config(ConfigMutation::SetModel(model)),
             StateMutation::Transcript(TranscriptMutation::AppendOrReplaceSwitchNotice(message)),
         ],
         None,
@@ -1612,6 +1648,37 @@ mod tests {
         }
     }
 
+    /// Ctrl+T changes only the level: it must open the picker already pointed
+    /// at the current model, never the model picker.
+    #[test]
+    fn ctrl_t_opens_thinking_picker_on_the_current_model() {
+        let mut input = InputState::default();
+        let tasks = Tasks::default();
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config {
+            model: "anthropic:claude-sonnet-4-6".to_string(),
+            thinking_level: ThinkingLevel::Off,
+            ..Config::default()
+        };
+        let ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
+
+        let (_effects, _mutations, overlay) = handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
+        );
+
+        assert!(
+            matches!(
+                overlay,
+                Some(OverlayRequest::ThinkingPicker { ref model, .. })
+                    if model == "anthropic:claude-sonnet-4-6"
+            ),
+            "got: {overlay:?}"
+        );
+        assert!(input.get_text().is_empty(), "Ctrl+T must not insert text");
+    }
+
     #[test]
     fn empty_enter_retries_when_can_retry() {
         let mut input = InputState::default();
@@ -1754,13 +1821,19 @@ mod tests {
         assert!(input.get_text().is_empty(), "Tab must not insert spaces");
         assert!(mutations.iter().any(|m| matches!(
             m,
-            StateMutation::Config(ConfigMutation::SetModel(model))
+            StateMutation::SetActiveThreadOverrides { model_override: Some(model), .. }
+                if model == "anthropic:claude-sonnet-4-6@high"
+        )));
+        assert!(mutations.iter().any(|m| matches!(
+            m,
+            StateMutation::Thread(ThreadMutation::SetOverrides { model_override: Some(model), .. })
                 if model == "anthropic:claude-sonnet-4-6@high"
         )));
         assert!(
-            effects
+            !effects
                 .iter()
-                .any(|e| matches!(e, UiEffect::PersistModel { .. }))
+                .any(|e| matches!(e, UiEffect::PersistModel { .. })),
+            "cycling a favorite must not write the workspace config"
         );
         assert!(
             effects
@@ -1791,7 +1864,7 @@ mod tests {
         assert!(
             !mutations
                 .iter()
-                .any(|m| matches!(m, StateMutation::Config(ConfigMutation::SetModel(_))))
+                .any(|m| matches!(m, StateMutation::SetActiveThreadOverrides { .. }))
         );
     }
 

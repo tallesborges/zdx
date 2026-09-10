@@ -129,7 +129,21 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "model",
         aliases: &[],
-        description: "Switch model",
+        description: "Switch model (session only)",
+        category: "model",
+        shortcut: None,
+    },
+    Command {
+        name: "thinking",
+        aliases: &["think"],
+        description: "Switch thinking level, keeping the current model",
+        category: "model",
+        shortcut: Some("Ctrl+T"),
+    },
+    Command {
+        name: "model-save",
+        aliases: &["save-model"],
+        description: "Save the current model + thinking to config as the default",
         category: "model",
         shortcut: None,
     },

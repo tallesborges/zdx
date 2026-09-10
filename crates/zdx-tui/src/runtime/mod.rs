@@ -880,11 +880,25 @@ impl TuiRuntime {
                 // Could add an event for error reporting if needed
             }
             UiEffect::PersistModel { model } => {
-                let _ = zdx_engine::config::Config::save_model_for_cwd(
+                // Only `/model-save` reaches here. Picker and favorite switches
+                // stay in session/thread state, so this is the one TUI path
+                // that writes the workspace config.
+                let message = match zdx_engine::config::Config::save_model_for_cwd(
                     &self.state.tui.agent_opts.root,
                     &model,
+                ) {
+                    Ok(()) => {
+                        // Adopt the saved value as this tab's default so a later
+                        // `/new` starts from it instead of the stale one.
+                        self.state.tui.base_model.clone_from(&model);
+                        self.state.tui.base_thinking_level = self.state.tui.config.thinking_level;
+                        format!("Saved {model} as the default model.")
+                    }
+                    Err(e) => format!("Failed to save model: {e}"),
+                };
+                self.state.tui.transcript.apply(
+                    crate::mutations::TranscriptMutation::AppendSystemMessage(message),
                 );
-                // Errors are silently ignored - model is already set in state
             }
             UiEffect::PersistThreadModelOverride { model } => {
                 if let Some(thread_handle) = self.state.tui.thread.thread_handle.as_ref()

@@ -19,7 +19,6 @@ pub enum StateMutation {
     Input(InputMutation),
     Thread(ThreadMutation),
     Auth(AuthMutation),
-    Config(ConfigMutation),
     SetRootDisplay {
         path: PathBuf,
         git_branch: Option<String>,
@@ -119,10 +118,4 @@ pub enum ThreadMutation {
 #[derive(Debug)]
 pub enum AuthMutation {
     RefreshStatus,
-}
-
-/// Config mutations requested by overlays.
-#[derive(Debug)]
-pub enum ConfigMutation {
-    SetModel(String),
 }

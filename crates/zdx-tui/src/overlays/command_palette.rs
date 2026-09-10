@@ -318,6 +318,28 @@ fn execute_command(
             }
         }
         "model" => (Some(OverlayRequest::ModelPicker), vec![], vec![]),
+        "thinking" => match super::thinking_picker::thinking_request_for_model(&tui.config.model) {
+            Some(request) => (Some(request), vec![], vec![]),
+            None => (
+                None,
+                vec![],
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(
+                        super::thinking_picker::NO_REASONING_NOTICE.to_string(),
+                    ),
+                )],
+            ),
+        },
+        "model-save" => (
+            None,
+            vec![UiEffect::PersistModel {
+                model: zdx_engine::models::format_model_thinking(
+                    &tui.config.model,
+                    tui.config.thinking_level,
+                ),
+            }],
+            vec![],
+        ),
         "skills" => (Some(OverlayRequest::SkillPicker), vec![], vec![]),
         "tabs" => (None, vec![UiEffect::CycleTab], vec![]),
         "threads" => {
@@ -834,7 +856,7 @@ mod tests {
         let state = CommandPaletteState::open("claude-haiku-4-5".to_string(), Vec::new());
         let filtered = state.filtered_entries();
         let names: Vec<&str> = filtered.iter().map(PaletteEntry::name).collect();
-        assert!(!names.contains(&"thinking"));
+        assert!(names.contains(&"model"));
     }
 
     #[test]
@@ -852,13 +874,15 @@ mod tests {
         assert!(names.contains(&"timeline"));
     }
 
+    /// `/thinking` changes only the level, so it must stay reachable
+    /// independently of `/model`.
     #[test]
-    fn test_palette_has_no_standalone_thinking_command() {
+    fn test_palette_has_standalone_thinking_command() {
         let model_id = "openai:gpt-4.1";
         let state = CommandPaletteState::open(model_id.to_string(), Vec::new());
         let filtered = state.filtered_entries();
         let names: Vec<&str> = filtered.iter().map(PaletteEntry::name).collect();
-        assert!(!names.contains(&"thinking"));
+        assert!(names.contains(&"thinking"));
     }
 
     #[test]
