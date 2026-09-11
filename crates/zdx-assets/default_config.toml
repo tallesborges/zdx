@@ -124,7 +124,7 @@ agents_project = true
 
 [providers.deepseek]
 enabled = true
-models = ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"]
+models = ["deepseek-flash"]
 websocket = false
 # GitHub repositories containing skills (owner/repo/path)
 # ignored_skills = ["test-*", "wip-*"]

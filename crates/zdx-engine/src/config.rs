@@ -2167,11 +2167,7 @@ fn default_openrouter_provider() -> ProviderConfig {
 fn default_deepseek_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec![
-            "deepseek-v4-pro".to_string(),
-            "deepseek-v4-flash".to_string(),
-            "deepseek-v4-flash-vision-exp".to_string(),
-        ],
+        models: vec!["deepseek-flash".to_string()],
         ..Default::default()
     }
 }

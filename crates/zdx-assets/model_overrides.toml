@@ -71,6 +71,20 @@ output = 0.5
 cache_read = 0.03
 cache_write = 0.0
 
+# DeepSeek-V4.1-Flash (`deepseek-flash`, released 2026-09-10): too new for models.dev.
+# Peak (standard) rates pinned; off-peak is 50% of these. Native vision + thinking mode.
+# https://api-docs.deepseek.com/quick_start/pricing/ — verified 2026-09-11
+[[override]]
+id = "deepseek:deepseek-flash"
+input = 0.3
+output = 1.2
+cache_read = 0.006
+cache_write = 0.0
+context_limit = 1000000
+output_limit = 384000
+reasoning = true
+input_images = true
+
 # Antigravity fixed-tier models bake the reasoning effort into the model id
 # (-low/-medium/-high), so a separate user-selectable thinking level is redundant
 # and misleading in the UI. Flag them non-reasoning to hide the thinking picker/
