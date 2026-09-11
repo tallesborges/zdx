@@ -410,6 +410,24 @@ fn format_user_error_message(message: &str) -> String {
     format!("❌ Request failed.\n\n<pre>{}</pre>", escape_html(&compact))
 }
 
+/// Prefix marking a forum topic as an orchestrator home base, mirroring the
+/// `🛠` prefix a worker's mirror topic carries. Applied to the Telegram topic
+/// name only; the persisted thread title stays clean.
+pub(crate) const ORCHESTRATOR_TOPIC_PREFIX: &str = "🎛️";
+
+/// Decorates a forum topic name for an orchestrator home base.
+///
+/// Idempotent, and tolerant of the prefix without its variation selector, so a
+/// topic renamed by hand or re-titled by the auto-title pass never collects two
+/// icons.
+pub(crate) fn orchestrator_topic_name(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.starts_with('🎛') {
+        return trimmed.to_string();
+    }
+    format!("{ORCHESTRATOR_TOPIC_PREFIX} {trimmed}")
+}
+
 pub(crate) fn thread_id_for_chat(chat_id: i64, message_thread_id: Option<i64>) -> String {
     match message_thread_id {
         Some(topic_id) => format!("telegram-{chat_id}-topic-{topic_id}"),
@@ -453,6 +471,7 @@ mod tests {
 
     use super::commands::format_whereami_message;
     use super::media::{is_audio_path, is_image_path, is_voice_note_path, parse_final_response};
+    use super::orchestrator_topic_name;
 
     #[test]
     fn media_path_routing_classifies_by_extension() {
@@ -591,5 +610,31 @@ mod tests {
         assert!(msg.contains("Profile: <code>zdx</code>"));
         assert!(msg.contains("CWD: <code>/work/zdx</code>"));
         assert!(!msg.contains("Bind this chat"));
+    }
+
+    /// Orchestrator topics carry `🎛️` the way worker mirrors carry `🛠`, and
+    /// decorating an already-marked name is a no-op so the auto-title rename
+    /// (and a hand-renamed topic) never stacks icons.
+    #[test]
+    fn orchestrator_topic_names_are_marked_once() {
+        assert_eq!(
+            orchestrator_topic_name("Add status icon"),
+            "🎛️ Add status icon"
+        );
+        assert_eq!(
+            orchestrator_topic_name("  Handoff 2026-09-11 00:12  "),
+            "🎛️ Handoff 2026-09-11 00:12"
+        );
+        // Already marked, with and without the variation selector.
+        assert_eq!(
+            orchestrator_topic_name("🎛️ Add status icon"),
+            "🎛️ Add status icon"
+        );
+        assert_eq!(
+            orchestrator_topic_name("🎛 Add status icon"),
+            "🎛 Add status icon"
+        );
+        // A worker mirror name is left alone by this helper.
+        assert_eq!(orchestrator_topic_name("🛠 Worker abc"), "🎛️ 🛠 Worker abc");
     }
 }

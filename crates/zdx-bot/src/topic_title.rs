@@ -7,6 +7,7 @@
 use zdx_engine::core::{thread_persistence, title_generation};
 
 use crate::bot::context::BotContext;
+use crate::handlers::message::orchestrator_topic_name;
 
 /// Spawn a fire-and-forget task that generates a topic title via LLM
 /// and renames the Telegram forum topic.
@@ -26,7 +27,24 @@ pub(crate) fn spawn_topic_title_update(
             .await
         {
             Ok(title) => {
-                if let Err(err) = client.edit_forum_topic(chat_id, topic_id, &title).await {
+                // The generated title replaces the whole topic name, so an
+                // orchestrator home base has to be re-marked here or it would
+                // lose the icon it was created with. The persisted thread title
+                // stays undecorated.
+                let is_orchestrator = thread_persistence::read_persistent_profile(&thread_id)
+                    .ok()
+                    .flatten()
+                    .as_deref()
+                    == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME);
+                let topic_name = if is_orchestrator {
+                    orchestrator_topic_name(&title)
+                } else {
+                    title.clone()
+                };
+                if let Err(err) = client
+                    .edit_forum_topic(chat_id, topic_id, &topic_name)
+                    .await
+                {
                     tracing::error!(topic_id, %err, "Failed to rename topic");
                 } else {
                     if let Err(err) =

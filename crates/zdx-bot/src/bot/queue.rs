@@ -7,7 +7,8 @@ use tokio_util::sync::CancellationToken;
 use crate::bot::context::{BotContext, QueueCancelKey, QueuedCancel};
 use crate::commands::{BotCommand, bypasses_queue, is_topic_blocking_command, parse_command};
 use crate::handlers::message::{
-    handle_message, post_thread_header, resolve_effective_thread_id, thread_id_for_chat,
+    handle_message, orchestrator_topic_name, post_thread_header, resolve_effective_thread_id,
+    thread_id_for_chat,
 };
 use crate::staging;
 use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message};
@@ -94,7 +95,16 @@ pub(crate) async fn dispatch_message(
         let queues = Arc::clone(queues);
         let context = Arc::clone(context);
         tokio::spawn(async move {
+            // Orchestrator home bases are marked at creation so the topic list
+            // shows what a topic is before it is opened, the way worker mirrors
+            // carry `🛠`.
+            let is_orchestrator = context.orchestrator_enabled_for_chat(message.chat.id);
             let topic_name = generate_topic_name(message.text.as_deref());
+            let topic_name = if is_orchestrator {
+                orchestrator_topic_name(&topic_name)
+            } else {
+                topic_name
+            };
             match context
                 .client()
                 .create_forum_topic(message.chat.id, &topic_name)
@@ -112,8 +122,7 @@ pub(crate) async fn dispatch_message(
                     // and `/btw` keep the default profile. Fail closed: a topic
                     // that cannot record the profile must not run the default
                     // coding agent.
-                    if context.orchestrator_enabled_for_chat(chat_id)
-                        && let Err(err) = mark_orchestrator_thread(&thread_id, false)
+                    if is_orchestrator && let Err(err) = mark_orchestrator_thread(&thread_id, false)
                     {
                         tracing::error!(
                             thread_id = %thread_id,

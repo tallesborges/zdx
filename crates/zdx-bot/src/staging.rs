@@ -27,7 +27,9 @@ use zdx_engine::core::thread_persistence;
 use crate::bot::context::BotContext;
 use crate::bot::queue::{ChatQueueMap, dispatch_message};
 use crate::commands::{BotCommand, parse_command};
-use crate::handlers::message::{escape_html, post_thread_header, thread_id_for_chat};
+use crate::handlers::message::{
+    escape_html, orchestrator_topic_name, post_thread_header, thread_id_for_chat,
+};
 use crate::telegram::markdown::{to_telegram_html, truncate_telegram_html};
 use crate::telegram::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, TelegramClient};
 use crate::types::IncomingMessage;
@@ -696,18 +698,27 @@ async fn seed_new_topic(
     record: Option<String>,
     inherit_profile: bool,
 ) -> Result<()> {
-    let topic_name = chrono::Utc::now()
-        .format(&format!("{topic_prefix} %Y-%m-%d %H:%M"))
-        .to_string();
-    let new_topic_id = context
-        .client()
-        .create_forum_topic(chat_id, &topic_name)
-        .await?;
-
+    // Resolve the inherited profile first: a successor that continues an
+    // orchestrator home base is marked as one in the topic list too.
     let source_profile = thread_persistence::read_persistent_profile(source_thread_id)
         .ok()
         .flatten();
     let inherited_profile = inherit_profile.then(|| source_profile.clone()).flatten();
+
+    let topic_name = chrono::Utc::now()
+        .format(&format!("{topic_prefix} %Y-%m-%d %H:%M"))
+        .to_string();
+    let topic_name = if inherited_profile.as_deref()
+        == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME)
+    {
+        orchestrator_topic_name(&topic_name)
+    } else {
+        topic_name
+    };
+    let new_topic_id = context
+        .client()
+        .create_forum_topic(chat_id, &topic_name)
+        .await?;
 
     let inherited_model = thread_persistence::read_thread_model_override(source_thread_id)
         .ok()
