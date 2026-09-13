@@ -2895,8 +2895,9 @@ mod tests {
         ));
         assert!(!prompt.contains("for example `rg`, `cargo`, or git)."));
         assert!(prompt.contains(
-            "`glob` for file discovery, `edit`/`write` for edits. Do not route those through `bash`"
+            "Use dedicated tools for file operations; do not reimplement their work through `bash`."
         ));
+        assert!(!prompt.contains("`glob` for file discovery"));
         assert!(!prompt.contains("apply_patch"));
         assert!(prompt.contains("<environment>"));
         assert!(prompt.contains(
@@ -2953,16 +2954,23 @@ mod tests {
         assert!(prompt.contains(
             "The skill `<path>` points to `SKILL.md`; use its parent directory as the source location when applying the Path Resolution rules, unless the skill defines a different base for its own relative references."
         ));
-        assert!(prompt.contains("Available specialized capabilities"));
         assert!(prompt.contains(
             "Use `oracle` for difficult diagnosis, debugging dead ends, architecture tradeoffs, or advisory review."
         ));
         assert!(prompt.contains(
             "Delegation is read-only. Subagents research, read, and analyze; they never edit files or change state, so every implementation step stays in this run."
         ));
-        assert!(!prompt.contains("Task (`task`)"));
-        assert!(prompt.contains("Explorer (`explorer`)"));
-        assert!(prompt.contains("Oracle (`oracle`)"));
+
+        // The capability catalog is observational data: it lives in the
+        // runtime-context snapshot, not the system prompt.
+        let runtime_context = effective
+            .runtime_context
+            .and_then(|context| context.initial)
+            .unwrap_or_default();
+        assert!(runtime_context.contains("# Available Specialized Capabilities"));
+        assert!(!runtime_context.contains("Task (`task`)"));
+        assert!(runtime_context.contains("Explorer (`explorer`)"));
+        assert!(runtime_context.contains("Oracle (`oracle`)"));
     }
 
     #[test]

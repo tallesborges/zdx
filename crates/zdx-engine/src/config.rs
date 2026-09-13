@@ -3244,16 +3244,16 @@ language = "pt"
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
 
-        fs::write(&config_path, "[memory]\nroot = \"  ~/Notes  \"\n").unwrap();
+        fs::write(&config_path, "[memory]\nroot = \"  ~/memory-root  \"\n").unwrap();
 
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(
             config.memory.effective_root_path(),
-            home.join("SecondBrain")
+            home.join("memory-root")
         );
         assert_eq!(
             config.memory.effective_index_file(),
-            home.join("SecondBrain").join("Notes").join("MEMORY.md")
+            home.join("memory-root").join("Notes").join("MEMORY.md")
         );
     }
 

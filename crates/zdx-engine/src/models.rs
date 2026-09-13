@@ -535,7 +535,7 @@ mod tests {
         ));
         assert!(!model_reads_images(
             &ProvidersConfig::default(),
-            "deepseek",
+            "opencode-go",
             "deepseek-v4-flash"
         ));
 
