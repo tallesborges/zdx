@@ -41,7 +41,7 @@ pub(crate) async fn post_thread_header(
             chat_id,
             topic_id,
             message_id = message.id,
-            %err,
+            err = %format!("{err:#}"),
             "Failed to pin thread header"
         );
     }
@@ -72,7 +72,7 @@ pub(crate) async fn refresh_thread_header(context: &BotContext, thread_id: &str)
     }
     .await;
     if let Err(err) = result {
-        tracing::warn!(thread_id, message_id, %err, "Failed to refresh thread header");
+        tracing::warn!(thread_id, message_id, err = %format!("{err:#}"), "Failed to refresh thread header");
     }
 }
 
@@ -118,7 +118,7 @@ pub(crate) async fn handle_callback(
                 .await;
         }
         Err(err) => {
-            tracing::warn!(chat_id, topic_id, %err, "Failed to refresh thread header");
+            tracing::warn!(chat_id, topic_id, err = %format!("{err:#}"), "Failed to refresh thread header");
             let _ = client
                 .answer_callback_query(&callback.id, Some("Couldn't refresh thread status"))
                 .await;

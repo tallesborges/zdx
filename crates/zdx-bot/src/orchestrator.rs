@@ -148,7 +148,7 @@ impl Bridge {
         let pairs = match pairs {
             Ok(Ok(pairs)) => pairs,
             Ok(Err(err)) => {
-                tracing::warn!(%err, "Failed to scan persisted worker mirror topics");
+                tracing::warn!(err = %format!("{err:#}"), "Failed to scan persisted worker mirror topics");
                 return;
             }
             Err(err) => {
@@ -287,7 +287,7 @@ impl Bridge {
                 self.live.insert(worker_thread_id.to_string(), turn);
             }
             Err(err) => {
-                tracing::warn!(worker = %worker_thread_id, %err, "Failed to post live status message");
+                tracing::warn!(worker = %worker_thread_id, err = %format!("{err:#}"), "Failed to post live status message");
             }
         }
         // First activity of a turn: the worker just went queued → running.
@@ -330,7 +330,7 @@ impl Bridge {
             .await
             && !err.to_string().contains("message is not modified")
         {
-            tracing::warn!(message_id = turn.message_id, %err, "Failed to edit live status message");
+            tracing::warn!(message_id = turn.message_id, err = %format!("{err:#}"), "Failed to edit live status message");
         }
     }
 
@@ -346,7 +346,7 @@ impl Bridge {
             .delete_message(turn.mirror.chat, turn.message_id)
             .await
         {
-            tracing::warn!(message_id = turn.message_id, %err, "Failed to delete live status message");
+            tracing::warn!(message_id = turn.message_id, err = %format!("{err:#}"), "Failed to delete live status message");
         }
     }
 }
@@ -393,7 +393,7 @@ pub(crate) async fn handle_callback(
 ) {
     let answer = |text: &'static str| async move {
         if let Err(err) = client.answer_callback_query(&callback.id, Some(text)).await {
-            tracing::warn!(%err, "Failed to answer worker callback");
+            tracing::warn!(err = %format!("{err:#}"), "Failed to answer worker callback");
         }
     };
     if rest != "c" {
@@ -530,7 +530,7 @@ async fn create_mirror_topic(
     if let Err(err) = marked {
         tracing::error!(
             thread_id = %topic_thread_id,
-            %err,
+            err = %format!("{err:#}"),
             "Failed to bind mirror topic to worker; leaving topic unbound"
         );
         return None;
@@ -539,7 +539,7 @@ async fn create_mirror_topic(
     // Same pinned status card as every other topic (model, thinking, root,
     // usage, Open Thread + Refresh), computed for the worker thread itself.
     if let Err(err) = post_thread_header(context, chat, topic_id, worker_thread_id).await {
-        tracing::warn!(worker = %worker_thread_id, %err, "Failed to post mirror topic header");
+        tracing::warn!(worker = %worker_thread_id, err = %format!("{err:#}"), "Failed to post mirror topic header");
     }
     let mirror = MirrorTopic {
         chat,
@@ -691,7 +691,7 @@ async fn post_prompt_message(
         .send_message(mirror.chat, &text, None, Some(mirror.topic))
         .await
     {
-        tracing::warn!(worker = %worker_thread_id, %err, "Failed to post mirror prompt");
+        tracing::warn!(worker = %worker_thread_id, err = %format!("{err:#}"), "Failed to post mirror prompt");
     }
 }
 
@@ -730,7 +730,7 @@ async fn post_mirror_update(
         .send_message_without_preview(mirror.chat, &text, None, Some(mirror.topic))
         .await
     {
-        tracing::warn!(worker = %event.worker_thread_id, %err, "Failed to post mirror update");
+        tracing::warn!(worker = %event.worker_thread_id, err = %format!("{err:#}"), "Failed to post mirror update");
     }
 }
 

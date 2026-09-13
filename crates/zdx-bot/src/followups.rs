@@ -71,7 +71,7 @@ pub(crate) async fn send_followups(
             map.insert((chat_id, message.id), items);
         }
         Err(err) => {
-            tracing::warn!(chat_id, %err, "Failed to send follow-up buttons");
+            tracing::warn!(chat_id, err = %format!("{err:#}"), "Failed to send follow-up buttons");
         }
     }
 }

@@ -683,7 +683,7 @@ impl TuiRuntime {
                         tab.runtime_context = effective.runtime_context;
                     }
                     Err(error) => {
-                        tracing::warn!(%error, "Failed to refresh background tab system prompt");
+                        tracing::warn!(error = %format!("{error:#}"), "Failed to refresh background tab system prompt");
                     }
                 }
                 // Spawn the agent task against the background tab's
@@ -1531,7 +1531,7 @@ pub(crate) fn reload_tab_config(tab: &mut crate::state::TuiState, layers: &[Path
             tab.apply_reloaded_config(config);
         }
         Err(err) => {
-            tracing::warn!(%err, "Failed to reload config; keeping the previous one");
+            tracing::warn!(err = %format!("{err:#}"), "Failed to reload config; keeping the previous one");
         }
     }
     tab.config_watch = watch;

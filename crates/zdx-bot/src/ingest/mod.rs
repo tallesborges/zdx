@@ -260,7 +260,7 @@ async fn push_attachment<T>(
         Ok(Some(item)) => output.push(item),
         Ok(None) => {}
         Err(err) if transcribe::is_operation_cancelled(&err) => return Err(err),
-        Err(err) => tracing::error!(%err, label, "Failed to load attachment"),
+        Err(err) => tracing::error!(err = %format!("{err:#}"), label, "Failed to load attachment"),
     }
     Ok(())
 }
@@ -536,7 +536,7 @@ async fn load_audio_by_id(
         Ok(transcript) => transcript,
         Err(err) if transcribe::is_operation_cancelled(&err) => return Err(err),
         Err(err) => {
-            tracing::error!(error = %err, error_chain = %format!("{err:#}"), "Audio transcription failed");
+            tracing::error!(error = %format!("{err:#}"), "Audio transcription failed");
             None
         }
     };

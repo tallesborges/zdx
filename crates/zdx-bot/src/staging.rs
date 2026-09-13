@@ -281,7 +281,7 @@ async fn process_staged_input(
             .delete_message(incoming.chat_id, message_id)
             .await
     {
-        tracing::warn!(message_id, %err, "Failed to delete previous staging suggestion");
+        tracing::warn!(message_id, err = %format!("{err:#}"), "Failed to delete previous staging suggestion");
     }
 
     let Some(input) = effective_input_text(incoming) else {
@@ -371,7 +371,7 @@ async fn present_generation_result(
                 )
                 .await
             {
-                tracing::warn!(%err, "Failed to show staging suggestion");
+                tracing::warn!(err = %format!("{err:#}"), "Failed to show staging suggestion");
             }
 
             let stale = {
@@ -586,7 +586,7 @@ async fn start_goal(
         )
         .await;
     if let Err(err) = confirmation {
-        tracing::warn!(%err, "Failed to confirm goal");
+        tracing::warn!(err = %format!("{err:#}"), "Failed to confirm goal");
     }
 
     // Re-dispatch the objective as an ordinary turn. Reusing the real
@@ -756,7 +756,7 @@ async fn seed_new_topic(
         if inherited_profile.is_some() {
             return Err(err.context("record the inherited profile on the handoff thread"));
         }
-        tracing::warn!(chat_id, new_topic_id, %err, "Failed to record lineage on new thread");
+        tracing::warn!(chat_id, new_topic_id, err = %format!("{err:#}"), "Failed to record lineage on new thread");
     }
 
     if let Err(err) = post_thread_header(context, chat_id, new_topic_id, &new_thread_id).await {
@@ -764,7 +764,7 @@ async fn seed_new_topic(
             chat_id,
             topic_id = new_topic_id,
             thread_id = %new_thread_id,
-            %err,
+            err = %format!("{err:#}"),
             "Created seeded topic but failed to post thread header"
         );
     }
@@ -778,7 +778,7 @@ async fn seed_new_topic(
         tracing::warn!(
             chat_id,
             topic_id = new_topic_id,
-            %err,
+            err = %format!("{err:#}"),
             "Created seeded topic but failed to post the context record"
         );
     }
@@ -948,12 +948,12 @@ async fn cleanup_session_messages(context: &BotContext, chat_id: i64, session: &
         .chain(session.suggestion_message_id.iter());
     for &message_id in bot_ids {
         if let Err(err) = context.client().delete_message(chat_id, message_id).await {
-            tracing::warn!(message_id, %err, "Failed to delete bot staging message");
+            tracing::warn!(message_id, err = %format!("{err:#}"), "Failed to delete bot staging message");
         }
     }
     for &message_id in &session.user_message_ids {
         if let Err(err) = context.client().delete_message(chat_id, message_id).await {
-            tracing::debug!(message_id, %err, "Could not delete user staging message (needs can_delete_messages)");
+            tracing::debug!(message_id, err = %format!("{err:#}"), "Could not delete user staging message (needs can_delete_messages)");
         }
     }
 }

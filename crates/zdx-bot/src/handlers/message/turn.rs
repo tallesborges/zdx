@@ -68,7 +68,7 @@ pub(super) async fn run_agent_turn(
             // surface a visible error. Only a newly recorded message is
             // written — a retry has nothing new to persist, and the success
             // path below never runs, so nothing is double-written.
-            tracing::error!(%err, "Failed to prepare bot turn");
+            tracing::error!(err = %format!("{err:#}"), "Failed to prepare bot turn");
             if record_user
                 && let Err(persist_err) =
                     agent::record_user_message(&mut thread, &mut messages, &incoming, None)

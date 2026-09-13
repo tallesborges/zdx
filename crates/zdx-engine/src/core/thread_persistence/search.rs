@@ -122,7 +122,7 @@ pub fn search_threads(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchR
     match crate::core::thread_index::search_threads_indexed(options) {
         Ok(results) => Ok(results),
         Err(err) => {
-            tracing::debug!(error = %err, "thread index unavailable; using file-scan search");
+            tracing::debug!(error = %format!("{err:#}"), "thread index unavailable; using file-scan search");
             search_threads_scan(options)
         }
     }
@@ -233,7 +233,7 @@ pub fn search_thread_tools(options: &ThreadToolSearchOptions) -> Result<Vec<Thre
     match crate::core::thread_index::search_thread_tools_indexed(options) {
         Ok(matches) => Ok(matches),
         Err(err) => {
-            tracing::debug!(error = %err, "thread index unavailable; using file-scan tool search");
+            tracing::debug!(error = %format!("{err:#}"), "thread index unavailable; using file-scan tool search");
             search_thread_tools_scan(options)
         }
     }

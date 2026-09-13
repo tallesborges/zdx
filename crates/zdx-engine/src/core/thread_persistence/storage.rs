@@ -862,7 +862,7 @@ pub fn list_threads() -> Result<Vec<ThreadSummary>> {
     match crate::core::thread_index::list_threads_cached() {
         Ok(threads) => Ok(threads),
         Err(err) => {
-            tracing::debug!(error = %err, "thread index unavailable; using file scan");
+            tracing::debug!(error = %format!("{err:#}"), "thread index unavailable; using file scan");
             list_threads_scan()
         }
     }
@@ -880,7 +880,7 @@ pub fn read_thread_summary_cached(id: &str) -> Result<Option<ThreadSummary>> {
         Ok(Some(summary)) => Ok(Some(summary)),
         Ok(None) => read_thread_summary(id),
         Err(err) => {
-            tracing::debug!(error = %err, "thread index unavailable; using file read");
+            tracing::debug!(error = %format!("{err:#}"), "thread index unavailable; using file read");
             read_thread_summary(id)
         }
     }
@@ -897,7 +897,7 @@ pub fn list_all_threads_cached() -> Result<Vec<ThreadSummary>> {
     match crate::core::thread_index::list_all_threads_cached() {
         Ok(threads) => Ok(threads),
         Err(err) => {
-            tracing::debug!(error = %err, "thread index unavailable; using file scan");
+            tracing::debug!(error = %format!("{err:#}"), "thread index unavailable; using file scan");
             list_all_threads()
         }
     }
@@ -914,7 +914,7 @@ pub fn child_runs(parent_id: &str) -> Result<Vec<ThreadSummary>> {
     match crate::core::thread_index::child_runs_cached(parent_id) {
         Ok(threads) => Ok(threads),
         Err(err) => {
-            tracing::debug!(error = %err, "thread index unavailable; using file scan");
+            tracing::debug!(error = %format!("{err:#}"), "thread index unavailable; using file scan");
             Ok(list_all_threads()?
                 .into_iter()
                 .filter(|s| s.parent_thread_id.as_deref() == Some(parent_id))
@@ -935,7 +935,7 @@ pub fn list_recent_threads(limit: usize) -> Result<Vec<ThreadSummary>> {
     match crate::core::thread_index::list_recent_threads_cached(limit) {
         Ok(threads) => Ok(threads),
         Err(err) => {
-            tracing::debug!(error = %err, "thread index unavailable; using file scan");
+            tracing::debug!(error = %format!("{err:#}"), "thread index unavailable; using file scan");
             let mut threads = list_threads_scan()?;
             threads.truncate(limit);
             Ok(threads)

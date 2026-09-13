@@ -2016,7 +2016,7 @@ async fn embed_batch_with_retry(
         match result {
             Ok(response) => return Ok(response),
             Err(err) if attempt < MAX_ATTEMPTS && is_transient_embed_error(&err) => {
-                tracing::warn!(attempt, error = %err, "transient embeddings failure; retrying");
+                tracing::warn!(attempt, error = %format!("{err:#}"), "transient embeddings failure; retrying");
                 tokio::time::sleep(delay).await;
                 delay *= 2;
                 attempt += 1;

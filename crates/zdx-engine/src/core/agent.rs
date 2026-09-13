@@ -1405,7 +1405,7 @@ fn resolve_tools(
             }
             Err(error) => {
                 tracing::warn!(
-                    error = %error,
+                    error = %format!("{error:#}"),
                     "Failed to discover subagents for Invoke_Subagent tool description"
                 );
             }

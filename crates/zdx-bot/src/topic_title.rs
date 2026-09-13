@@ -45,18 +45,18 @@ pub(crate) fn spawn_topic_title_update(
                     .edit_forum_topic(chat_id, topic_id, &topic_name)
                     .await
                 {
-                    tracing::error!(topic_id, %err, "Failed to rename topic");
+                    tracing::error!(topic_id, err = %format!("{err:#}"), "Failed to rename topic");
                 } else {
                     if let Err(err) =
                         thread_persistence::set_thread_title(&thread_id, Some(title.clone()))
                     {
-                        tracing::warn!(topic_id, thread_id = %thread_id, %err, "Renamed topic but failed to update thread title");
+                        tracing::warn!(topic_id, thread_id = %thread_id, err = %format!("{err:#}"), "Renamed topic but failed to update thread title");
                     }
                     tracing::info!(topic_id, title = %title, "Renamed topic");
                 }
             }
             Err(err) => {
-                tracing::error!(topic_id, %err, "Topic title generation failed");
+                tracing::error!(topic_id, err = %format!("{err:#}"), "Topic title generation failed");
             }
         }
     });

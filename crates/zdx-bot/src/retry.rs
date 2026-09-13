@@ -55,7 +55,7 @@ pub(crate) async fn send_retry_buttons(context: &BotContext, chat_id: i64, reque
             map.insert((chat_id, message.id), request);
         }
         Err(err) => {
-            tracing::warn!(chat_id, %err, "Failed to send retry button");
+            tracing::warn!(chat_id, err = %format!("{err:#}"), "Failed to send retry button");
         }
     }
 }
@@ -134,7 +134,7 @@ pub(crate) async fn handle_callback(
         )
         .await
         {
-            tracing::error!(chat_id, %err, "Retry agent turn failed");
+            tracing::error!(chat_id, err = %format!("{err:#}"), "Retry agent turn failed");
         }
     });
 }

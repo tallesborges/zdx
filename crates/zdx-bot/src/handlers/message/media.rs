@@ -104,7 +104,7 @@ pub(super) async fn send_media_responses(
         };
 
         if let Err(err) = send_result {
-            tracing::error!(path = %media_path.display(), %err, "Failed to send media file");
+            tracing::error!(path = %media_path.display(), err = %format!("{err:#}"), "Failed to send media file");
             context
                 .client()
                 .send_message(

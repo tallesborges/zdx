@@ -234,7 +234,7 @@ impl BotContext {
                 // file from being re-parsed on every turn (a fix changes the
                 // stamp again).
                 watch.restamp(&watched_config_layers(&self.root, &self.config()));
-                tracing::warn!(%err, "Failed to reload config; keeping the previous one");
+                tracing::warn!(err = %format!("{err:#}"), "Failed to reload config; keeping the previous one");
             }
         }
     }
@@ -495,7 +495,7 @@ fn load_profile_configs(base: &Config) -> HashMap<i64, Config> {
                 tracing::warn!(
                     profile = %name,
                     root = %root.display(),
-                    %err,
+                    err = %format!("{err:#}"),
                     "Failed to load profile config layers; falling back to bot config",
                 );
             }

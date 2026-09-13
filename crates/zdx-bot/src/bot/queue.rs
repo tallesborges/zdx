@@ -126,7 +126,7 @@ pub(crate) async fn dispatch_message(
                     {
                         tracing::error!(
                             thread_id = %thread_id,
-                            %err,
+                            err = %format!("{err:#}"),
                             "Failed to mark orchestrator profile on new topic; not running the turn"
                         );
                         notify_orchestrator_init_failure(&context, chat_id, Some(topic_id)).await;
@@ -139,7 +139,7 @@ pub(crate) async fn dispatch_message(
                             chat_id,
                             topic_id,
                             thread_id = %thread_id,
-                            %err,
+                            err = %format!("{err:#}"),
                             "Created routed topic but failed to post thread header"
                         );
                     }
@@ -155,7 +155,7 @@ pub(crate) async fn dispatch_message(
                     crate::handlers::message::schedule_launcher_repost(&context, chat_id);
                 }
                 Err(err) => {
-                    tracing::error!(chat_id = message.chat.id, %err, "Failed to create topic");
+                    tracing::error!(chat_id = message.chat.id, err = %format!("{err:#}"), "Failed to create topic");
                     if let Err(send_err) = context
                         .client()
                         .send_message(
@@ -193,7 +193,7 @@ async fn init_dm_orchestrator_thread(context: &Arc<BotContext>, message: &Messag
     if let Err(err) = mark_orchestrator_thread(&thread_id, true) {
         tracing::error!(
             thread_id = %thread_id,
-            %err,
+            err = %format!("{err:#}"),
             "Failed to mark orchestrator profile on DM thread; not running the turn"
         );
         notify_orchestrator_init_failure(context, message.chat.id, message.thread_id).await;
@@ -204,7 +204,7 @@ async fn init_dm_orchestrator_thread(context: &Arc<BotContext>, message: &Messag
     {
         tracing::warn!(
             thread_id = %thread_id,
-            %err,
+            err = %format!("{err:#}"),
             "Failed to post header on new DM orchestrator thread"
         );
     }
@@ -222,7 +222,7 @@ async fn forward_original_into_topic(context: &Arc<BotContext>, message: &Messag
             .forward_message(chat_id, chat_id, message_id, Some(topic_id))
             .await
         {
-            tracing::warn!(chat_id, topic_id, message_id, %err, "Failed to forward General message into topic");
+            tracing::warn!(chat_id, topic_id, message_id, err = %format!("{err:#}"), "Failed to forward General message into topic");
         }
     }
 }
@@ -244,7 +244,7 @@ async fn notify_orchestrator_init_failure(
         )
         .await
     {
-        tracing::error!(chat_id, %err, "Failed to notify orchestrator init failure");
+        tracing::error!(chat_id, err = %format!("{err:#}"), "Failed to notify orchestrator init failure");
     }
 }
 
@@ -368,7 +368,7 @@ fn generate_topic_name(text: Option<&str>) -> String {
 fn spawn_standalone(context: Arc<BotContext>, queues: ChatQueueMap, message: Message) {
     tokio::spawn(async move {
         if let Err(err) = Box::pin(handle_message(&context, &queues, message)).await {
-            tracing::error!(%err, "Standalone message handling error");
+            tracing::error!(err = %format!("{err:#}"), "Standalone message handling error");
         }
     });
 }
@@ -445,7 +445,7 @@ async fn enqueue_message(queues: &ChatQueueMap, context: &Arc<BotContext>, messa
                 }
             }
             Err(err) => {
-                tracing::warn!(%err, "Failed to send queued status");
+                tracing::warn!(err = %format!("{err:#}"), "Failed to send queued status");
             }
         }
     }

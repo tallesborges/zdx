@@ -133,7 +133,7 @@ fn account_variants(
     let cache = match crate::providers::oauth::OAuthCache::load() {
         Ok(cache) => cache,
         Err(err) => {
-            tracing::warn!(%err, "Failed to load OAuth cache; skipping account models");
+            tracing::warn!(err = %format!("{err:#}"), "Failed to load OAuth cache; skipping account models");
             return Vec::new();
         }
     };

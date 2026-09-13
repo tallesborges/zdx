@@ -28,7 +28,7 @@ pub(super) async fn send_final_response(
             .delete_message(incoming.chat_id, msg_id)
             .await
     {
-        tracing::warn!(msg_id, %err, "Failed to delete status message");
+        tracing::warn!(msg_id, err = %format!("{err:#}"), "Failed to delete status message");
     }
 
     if !has_text && parsed.media_paths.is_empty() && parsed.followups.is_empty() {

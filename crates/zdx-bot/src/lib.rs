@@ -89,7 +89,7 @@ pub async fn run_named_with_config_and_root(
     {
         tracing::warn!(
             service = service_name,
-            %err,
+            err = %format!("{err:#}"),
             "Failed to mark service as launchd-supervised"
         );
     }
@@ -164,7 +164,9 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
     let command_specs = crate::commands::telegram_command_specs();
     match client.set_my_commands(&command_specs).await {
         Ok(()) => tracing::info!(count = command_specs.len(), "Telegram command menu updated"),
-        Err(err) => tracing::error!(%err, "Failed to update Telegram command menu"),
+        Err(err) => {
+            tracing::error!(err = %format!("{err:#}"), "Failed to update Telegram command menu");
+        }
     }
     // Worker completions flow back through the bridge task spawned below.
     let (worker_manager, completion_rx) = zdx_engine::core::workers::WorkerManager::new();
@@ -220,7 +222,7 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
                 let updates = match updates {
                     Ok(updates) => updates,
                     Err(err) => {
-                        tracing::error!(%err, "Telegram polling error");
+                        tracing::error!(err = %format!("{err:#}"), "Telegram polling error");
                         tokio::time::sleep(Duration::from_secs(1)).await;
                         continue;
                     }
@@ -338,14 +340,14 @@ async fn handle_callback_query(
                 .answer_callback_query(&callback.id, Some("Cancelling..."))
                 .await
             {
-                tracing::warn!(%err, "Failed to answer cancel callback");
+                tracing::warn!(err = %format!("{err:#}"), "Failed to answer cancel callback");
             }
             tracing::info!(?key, "Cancelled agent turn");
         } else if let Err(err) = client
             .answer_callback_query(&callback.id, Some("Nothing to cancel"))
             .await
         {
-            tracing::warn!(%err, "Failed to answer callback");
+            tracing::warn!(err = %format!("{err:#}"), "Failed to answer callback");
         }
     } else if let Some(key) = parse_queue_cancel_callback(data) {
         handle_queue_cancel(context, client, &callback, key).await;
@@ -383,7 +385,7 @@ async fn handle_callback_query(
         handle_model_callback(context.as_ref(), client, &callback, data).await;
     } else {
         if let Err(err) = client.answer_callback_query(&callback.id, None).await {
-            tracing::warn!(%err, "Failed to answer unknown callback");
+            tracing::warn!(err = %format!("{err:#}"), "Failed to answer unknown callback");
         }
         tracing::warn!(user_id = callback.from.id, ?data, "Unknown callback");
     }
@@ -446,7 +448,7 @@ async fn handle_queue_cancel(
             .answer_callback_query(&callback.id, Some("Already processing"))
             .await
         {
-            tracing::warn!(%err, "Failed to answer callback");
+            tracing::warn!(err = %format!("{err:#}"), "Failed to answer callback");
         }
         return;
     };
@@ -456,7 +458,7 @@ async fn handle_queue_cancel(
         .answer_callback_query(&callback.id, Some("Removed from queue"))
         .await
     {
-        tracing::warn!(%err, "Failed to answer queue cancel callback");
+        tracing::warn!(err = %format!("{err:#}"), "Failed to answer queue cancel callback");
     }
     if let Err(err) = client
         .edit_message_text(
@@ -467,10 +469,10 @@ async fn handle_queue_cancel(
         )
         .await
     {
-        tracing::warn!(status_id = entry.status_message_id, %err, "Failed to edit cancelled queue status");
+        tracing::warn!(status_id = entry.status_message_id, err = %format!("{err:#}"), "Failed to edit cancelled queue status");
     }
     if let Err(err) = client.delete_message(chat_id, user_message_id).await {
-        tracing::warn!(message_id = user_message_id, %err, "Failed to delete user message on queue cancel");
+        tracing::warn!(message_id = user_message_id, err = %format!("{err:#}"), "Failed to delete user message on queue cancel");
     }
     tracing::info!(?key, "Cancelled queued item");
 }
@@ -707,7 +709,7 @@ async fn handle_model_thinking_pick(
                     .await;
             }
             Err(err) => {
-                tracing::error!(chat_id = msg.chat.id, %err, "launcher: failed to create custom topic");
+                tracing::error!(chat_id = msg.chat.id, err = %format!("{err:#}"), "launcher: failed to create custom topic");
                 let _ = client
                     .answer_callback_query(&callback.id, Some("Couldn't create the new thread"))
                     .await;
@@ -716,7 +718,7 @@ async fn handle_model_thinking_pick(
         if let Err(err) =
             crate::handlers::message::render_launcher(context, msg.chat.id, msg.id).await
         {
-            tracing::warn!(chat_id = msg.chat.id, %err, "failed to restore launcher after custom pick");
+            tracing::warn!(chat_id = msg.chat.id, err = %format!("{err:#}"), "failed to restore launcher after custom pick");
         }
         return;
     }
@@ -794,7 +796,7 @@ async fn handle_model_callback(
             if let Err(err) =
                 crate::handlers::message::render_launcher(context, chat_id, message_id).await
             {
-                tracing::warn!(chat_id, %err, "failed to restore launcher after custom cancel");
+                tracing::warn!(chat_id, err = %format!("{err:#}"), "failed to restore launcher after custom cancel");
             }
         } else {
             let current = if scope == ModelPickerScope::General {

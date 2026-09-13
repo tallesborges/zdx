@@ -145,7 +145,7 @@ fn require_creds(
 ) -> Result<OAuthCredentials, QuotaError> {
     loaded
         .map_err(|err| {
-            tracing::debug!(error = %err, "Quota: failed to load OAuth cache");
+            tracing::debug!(error = %format!("{err:#}"), "Quota: failed to load OAuth cache");
             QuotaError::NotAuthenticated
         })?
         .ok_or(QuotaError::NotAuthenticated)
@@ -157,7 +157,10 @@ fn quota_client() -> Result<reqwest::Client, QuotaError> {
         .timeout(REQUEST_TIMEOUT)
         .build()
         .map_err(|err| {
-            tracing::debug!(error = %err, "Quota: failed to build HTTP client");
+            tracing::debug!(
+                error = &err as &dyn std::error::Error,
+                "Quota: failed to build HTTP client"
+            );
             QuotaError::Transport
         })
 }
@@ -220,7 +223,11 @@ pub async fn fetch_claude_quota(account: Option<String>) -> Result<SubscriptionQ
     }
 
     let wire: ClaudeUsageWire = resp.json().await.map_err(|err| {
-        tracing::debug!(provider = "claude", error = %err, "Quota: response decode failed");
+        tracing::debug!(
+            provider = "claude",
+            error = &err as &dyn std::error::Error,
+            "Quota: response decode failed"
+        );
         QuotaError::Incompatible
     })?;
     parse_claude(&wire).ok_or(QuotaError::Incompatible)
@@ -255,7 +262,11 @@ pub async fn fetch_codex_quota(account: Option<String>) -> Result<SubscriptionQu
     }
 
     let wire: CodexUsageWire = resp.json().await.map_err(|err| {
-        tracing::debug!(provider = "codex", error = %err, "Quota: response decode failed");
+        tracing::debug!(
+            provider = "codex",
+            error = &err as &dyn std::error::Error,
+            "Quota: response decode failed"
+        );
         QuotaError::Incompatible
     })?;
     parse_codex(&wire).ok_or(QuotaError::Incompatible)
@@ -290,7 +301,11 @@ pub async fn fetch_antigravity_quota(
     }
 
     let wire: AntigravityUsageWire = resp.json().await.map_err(|err| {
-        tracing::debug!(provider = "google-antigravity", error = %err, "Quota: response decode failed");
+        tracing::debug!(
+            provider = "google-antigravity",
+            error = &err as &dyn std::error::Error,
+            "Quota: response decode failed"
+        );
         QuotaError::Incompatible
     })?;
     parse_antigravity(&wire).ok_or(QuotaError::Incompatible)
@@ -321,7 +336,11 @@ pub async fn fetch_grok_quota(account: Option<String>) -> Result<SubscriptionQuo
     }
 
     let wire: GrokBillingWire = resp.json().await.map_err(|err| {
-        tracing::debug!(provider = "grok", error = %err, "Quota: response decode failed");
+        tracing::debug!(
+            provider = "grok",
+            error = &err as &dyn std::error::Error,
+            "Quota: response decode failed"
+        );
         QuotaError::Incompatible
     })?;
     parse_grok(&wire).ok_or(QuotaError::Incompatible)
@@ -337,7 +356,7 @@ pub async fn fetch_opencode_go_quota(
     let api_key = ProviderKind::OpencodeGo
         .resolve_api_key(None)
         .map_err(|err| {
-            tracing::debug!(provider = "opencode-go", error = %err, "Quota: failed to resolve API key");
+            tracing::debug!(provider = "opencode-go", error = %format!("{err:#}"), "Quota: failed to resolve API key");
             QuotaError::NotAuthenticated
         })?;
 
@@ -354,7 +373,11 @@ pub async fn fetch_opencode_go_quota(
     }
 
     let wire: OpenCodeGoUsageWire = resp.json().await.map_err(|err| {
-        tracing::debug!(provider = "opencode-go", error = %err, "Quota: response decode failed");
+        tracing::debug!(
+            provider = "opencode-go",
+            error = &err as &dyn std::error::Error,
+            "Quota: response decode failed"
+        );
         QuotaError::Incompatible
     })?;
     parse_opencode_go(&wire).ok_or(QuotaError::Incompatible)

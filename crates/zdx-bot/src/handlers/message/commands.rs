@@ -118,7 +118,7 @@ async fn create_empty_topic_from_new(
                     chat_id,
                     topic_id,
                     thread_id = %thread_id,
-                    %err,
+                    err = %format!("{err:#}"),
                     "Created empty topic but failed to mark pending auto-title"
                 );
             }
@@ -127,7 +127,7 @@ async fn create_empty_topic_from_new(
                     chat_id,
                     topic_id,
                     thread_id = %thread_id,
-                    %err,
+                    err = %format!("{err:#}"),
                     "Created empty topic but failed to post thread header"
                 );
             }
@@ -139,7 +139,7 @@ async fn create_empty_topic_from_new(
             );
         }
         Err(err) => {
-            tracing::error!(chat_id, %err, "Failed to create empty topic from /new in General");
+            tracing::error!(chat_id, err = %format!("{err:#}"), "Failed to create empty topic from /new in General");
             context
                 .client()
                 .send_message(
@@ -195,7 +195,7 @@ pub(super) async fn handle_general_forum_commands(
             if let Err(err) =
                 super::launcher::post_launcher(context, incoming.chat_id, reply_to_message_id).await
             {
-                tracing::error!(chat_id = incoming.chat_id, %err, "Failed to post launcher");
+                tracing::error!(chat_id = incoming.chat_id, err = %format!("{err:#}"), "Failed to post launcher");
                 context
                     .client()
                     .send_message(
@@ -360,7 +360,7 @@ fn spawn_queued_restart(context: Arc<BotContext>, chat_id: i64, topic_id: Option
                             .send_message(chat_id, &text, None, topic_id)
                             .await
                         {
-                            tracing::warn!(%err, "Failed to announce queued restart");
+                            tracing::warn!(err = %format!("{err:#}"), "Failed to announce queued restart");
                         }
                         context.request_exit();
                         return;
@@ -375,13 +375,13 @@ fn spawn_queued_restart(context: Arc<BotContext>, chat_id: i64, topic_id: Option
                             .send_message(chat_id, &text, None, topic_id)
                             .await
                         {
-                            tracing::warn!(%err, "Failed to report queued restart failure");
+                            tracing::warn!(err = %format!("{err:#}"), "Failed to report queued restart failure");
                         }
                         context.release_queued_restart();
                         return;
                     }
                     Err(err) => {
-                        tracing::warn!(%err, "Queued restart task failed");
+                        tracing::warn!(err = %format!("{err:#}"), "Queued restart task failed");
                         context.release_queued_restart();
                         return;
                     }

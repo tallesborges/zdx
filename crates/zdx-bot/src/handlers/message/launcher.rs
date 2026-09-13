@@ -92,7 +92,7 @@ pub(crate) async fn create_topic_with_model(
             topic_id,
             thread_id = %thread_id,
             model,
-            %err,
+            err = %format!("{err:#}"),
             "launcher: created topic but failed to apply model override"
         );
     }
@@ -102,7 +102,7 @@ pub(crate) async fn create_topic_with_model(
             chat_id,
             topic_id,
             thread_id = %thread_id,
-            %err,
+            err = %format!("{err:#}"),
             "launcher: created topic but failed to post thread header"
         );
     }
@@ -164,7 +164,7 @@ pub(crate) async fn create_topic_resuming(
             chat_id,
             topic_id,
             source_thread_id,
-            %err,
+            err = %format!("{err:#}"),
             "launcher: created resumed topic but failed to post thread header"
         );
     }
@@ -391,7 +391,7 @@ pub(crate) fn schedule_repost(context: &Arc<BotContext>, chat_id: i64) {
         };
 
         if let Err(err) = context.client().delete_message(chat_id, old_id).await {
-            tracing::warn!(chat_id, old_id, %err, "launcher: failed to delete old launcher");
+            tracing::warn!(chat_id, old_id, err = %format!("{err:#}"), "launcher: failed to delete old launcher");
         }
 
         match send_launcher(context.as_ref(), chat_id, None).await {
@@ -411,7 +411,9 @@ pub(crate) fn schedule_repost(context: &Arc<BotContext>, chat_id: i64) {
                     let _ = context.client().delete_message(chat_id, new_id).await;
                 }
             }
-            Err(err) => tracing::warn!(chat_id, %err, "launcher: failed to repost launcher"),
+            Err(err) => {
+                tracing::warn!(chat_id, err = %format!("{err:#}"), "launcher: failed to repost launcher");
+            }
         }
     });
 }
@@ -451,7 +453,7 @@ pub(crate) async fn handle_callback(
                     .await;
             }
             Err(err) => {
-                tracing::error!(chat_id, mode = name, %err, "launcher: failed to create mode topic");
+                tracing::error!(chat_id, mode = name, err = %format!("{err:#}"), "launcher: failed to create mode topic");
                 let _ = client
                     .answer_callback_query(&callback.id, Some("Couldn't create the topic"))
                     .await;
@@ -470,7 +472,7 @@ pub(crate) async fn handle_callback(
             )
             .await
         {
-            tracing::warn!(chat_id, %err, "launcher: failed to open custom picker");
+            tracing::warn!(chat_id, err = %format!("{err:#}"), "launcher: failed to open custom picker");
         }
         let _ = client.answer_callback_query(&callback.id, None).await;
     } else if rest == "resume" {
@@ -495,7 +497,7 @@ pub(crate) async fn handle_callback(
             .edit_message_text(chat_id, msg.id, "Resume a thread:", Some(&keyboard))
             .await
         {
-            tracing::warn!(chat_id, %err, "launcher: failed to open resume picker");
+            tracing::warn!(chat_id, err = %format!("{err:#}"), "launcher: failed to open resume picker");
         }
         let _ = client.answer_callback_query(&callback.id, None).await;
     } else if let Some(source_id) = rest.strip_prefix("r:") {
@@ -506,18 +508,18 @@ pub(crate) async fn handle_callback(
                     .await;
             }
             Err(err) => {
-                tracing::warn!(chat_id, source_id, %err, "launcher: failed to resume thread");
+                tracing::warn!(chat_id, source_id, err = %format!("{err:#}"), "launcher: failed to resume thread");
                 let _ = client
                     .answer_callback_query(&callback.id, Some("That thread no longer exists"))
                     .await;
             }
         }
         if let Err(err) = render_launcher(context, chat_id, msg.id).await {
-            tracing::warn!(chat_id, %err, "launcher: failed to restore launcher after resume");
+            tracing::warn!(chat_id, err = %format!("{err:#}"), "launcher: failed to restore launcher after resume");
         }
     } else if rest == "back" {
         if let Err(err) = render_launcher(context, chat_id, msg.id).await {
-            tracing::warn!(chat_id, %err, "launcher: failed to restore launcher");
+            tracing::warn!(chat_id, err = %format!("{err:#}"), "launcher: failed to restore launcher");
         }
         let _ = client.answer_callback_query(&callback.id, None).await;
     } else {

@@ -1226,7 +1226,7 @@ async fn load_cached_oauth_credentials(endpoint_url: &str) -> Result<Option<McpO
                     Err(error) => {
                         tracing::warn!(
                             resource = candidate,
-                            error = %error,
+                            error = %format!("{error:#}"),
                             "Failed to refresh cached MCP OAuth credentials; clearing stale entry"
                         );
                         cache.remove(&candidate);

@@ -568,7 +568,7 @@ fn resolve_telegram_link(thread_id: &str) -> Option<String> {
     }
     let mirror_id = thread_index::mirror_thread_id_for_worker(thread_id)
         .inspect_err(|error| {
-            tracing::warn!(thread_id, %error, "Failed to resolve worker mirror topic");
+            tracing::warn!(thread_id, error = %format!("{error:#}"), "Failed to resolve worker mirror topic");
         })
         .ok()
         .flatten()?;
@@ -581,7 +581,7 @@ async fn get_threads() -> Result<Json<ThreadListResponse>, ApiError> {
         let now = SystemTime::now();
         let threads = thread_persistence::list_recent_threads(THREAD_LIST_LIMIT)
             .map_err(|error| {
-                tracing::warn!(%error, "Failed to list Mini App threads");
+                tracing::warn!(error = %format!("{error:#}"), "Failed to list Mini App threads");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Thread list failed")
             })?
             .into_iter()
@@ -631,7 +631,7 @@ async fn get_thread(
         }
 
         let events = load_thread_events(&target_id).map_err(|error| {
-            tracing::warn!(thread_id = target_id, %error, "Failed to load Mini App thread");
+            tracing::warn!(thread_id = target_id, error = %format!("{error:#}"), "Failed to load Mini App thread");
             (StatusCode::NOT_FOUND, "Thread not found")
         })?;
 
@@ -1157,7 +1157,7 @@ async fn get_git(
 ) -> Result<Json<GitResponse>, ApiError> {
     let repository = resolve_git_repository(&state, query.thread_id).await?;
     let status = load_git_status(&repository.root).await.map_err(|error| {
-        tracing::warn!(root = %repository.root.display(), %error, "Failed to read Mini App Git state");
+        tracing::warn!(root = %repository.root.display(), error = %format!("{error:#}"), "Failed to read Mini App Git state");
         (StatusCode::INTERNAL_SERVER_ERROR, "Git state unavailable")
     })?;
     let commits = async {
@@ -1169,7 +1169,7 @@ async fn get_git(
     };
     let (mut worktrees, commits) =
         tokio::try_join!(load_git_worktrees(&repository.root), commits).map_err(|error| {
-            tracing::warn!(root = %repository.root.display(), %error, "Failed to read Mini App Git state");
+            tracing::warn!(root = %repository.root.display(), error = %format!("{error:#}"), "Failed to read Mini App Git state");
             (StatusCode::INTERNAL_SERVER_ERROR, "Git state unavailable")
         })?;
 
@@ -1267,7 +1267,7 @@ async fn get_git_scope(
     };
 
     let mut files = load_scope_files(&repository.root, &kind).await.map_err(|error| {
-        tracing::warn!(root = %repository.root.display(), %error, "Failed to list Mini App Git scope");
+        tracing::warn!(root = %repository.root.display(), error = %format!("{error:#}"), "Failed to list Mini App Git scope");
         (StatusCode::INTERNAL_SERVER_ERROR, "Git scope unavailable")
     })?;
 
@@ -1276,7 +1276,7 @@ async fn get_git_scope(
     let mut untracked = Vec::new();
     if matches!(kind, GitDiffKind::Range(_)) {
         let status = load_git_status(&repository.root).await.map_err(|error| {
-            tracing::warn!(root = %repository.root.display(), %error, "Failed to read Mini App Git state");
+            tracing::warn!(root = %repository.root.display(), error = %format!("{error:#}"), "Failed to read Mini App Git state");
             (StatusCode::INTERNAL_SERVER_ERROR, "Git state unavailable")
         })?;
         untracked = status.files.untracked;
@@ -1329,7 +1329,7 @@ async fn get_git_diff(
     match &kind {
         GitDiffKind::Staged | GitDiffKind::Unstaged | GitDiffKind::Untracked => {
             let status = load_git_status(&repository.root).await.map_err(|error| {
-                tracing::warn!(root = %repository.root.display(), %error, "Failed to validate Mini App Git diff");
+                tracing::warn!(root = %repository.root.display(), error = %format!("{error:#}"), "Failed to validate Mini App Git diff");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Git state unavailable")
             })?;
             let files = match kind {
@@ -1346,7 +1346,7 @@ async fn get_git_diff(
         }
         GitDiffKind::Commit(_) | GitDiffKind::Range(_) => {
             let files = load_scope_files(&repository.root, &kind).await.map_err(|error| {
-                tracing::warn!(root = %repository.root.display(), %error, "Failed to validate Mini App Git diff");
+                tracing::warn!(root = %repository.root.display(), error = %format!("{error:#}"), "Failed to validate Mini App Git diff");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Git scope unavailable")
             })?;
             if !files.iter().any(|file| file.path == query.path) {
@@ -1358,7 +1358,7 @@ async fn get_git_diff(
     let (bytes, truncated) = load_git_diff(&repository.root, &query.path, &kind)
         .await
         .map_err(|error| {
-            tracing::warn!(root = %repository.root.display(), path = query.path, %error, "Failed to read Mini App Git diff");
+            tracing::warn!(root = %repository.root.display(), path = query.path, error = %format!("{error:#}"), "Failed to read Mini App Git diff");
             (StatusCode::INTERNAL_SERVER_ERROR, "Git diff unavailable")
         })?;
     let byte_count = bytes.len().min(GIT_DIFF_LIMIT_BYTES);
@@ -1772,7 +1772,7 @@ async fn get_monitor(
             )
         })?
         .map_err(|error| {
-            tracing::warn!(%error, "Failed to build Mini App monitor snapshot");
+            tracing::warn!(error = %format!("{error:#}"), "Failed to build Mini App monitor snapshot");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Monitor snapshot unavailable",
@@ -1865,7 +1865,7 @@ fn build_monitor_response(root: &FilePath) -> anyhow::Result<MonitorResponse> {
     )
     .map(monitor_usage)
     .map_err(|error| {
-        tracing::warn!(%error, "Mini App monitor usage aggregation failed");
+        tracing::warn!(error = %format!("{error:#}"), "Mini App monitor usage aggregation failed");
         error
     })
     .ok();
@@ -1893,7 +1893,7 @@ async fn load_subscription_quotas(state: &ServerState) -> Vec<MonitorSubscriptio
     let snapshot = match subscription_quota::fetch_snapshot().await {
         Ok(snapshot) => snapshot,
         Err(error) => {
-            tracing::warn!(%error, "Failed to fetch subscription quota snapshot");
+            tracing::warn!(error = %format!("{error:#}"), "Failed to fetch subscription quota snapshot");
             subscription_quota::SubscriptionQuotaSnapshot {
                 providers: Vec::new(),
             }

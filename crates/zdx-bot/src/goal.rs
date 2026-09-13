@@ -215,7 +215,7 @@ async fn report(context: &Arc<BotContext>, site: &TurnSite, outcome: &GoalOutcom
             ts: chrono::Utc::now().to_rfc3339(),
         })
     }) {
-        tracing::warn!(%err, "Failed to persist goal notice");
+        tracing::warn!(err = %format!("{err:#}"), "Failed to persist goal notice");
     }
 
     if let Err(err) = context
@@ -223,7 +223,7 @@ async fn report(context: &Arc<BotContext>, site: &TurnSite, outcome: &GoalOutcom
         .send_message(site.chat, &message, None, site.topic)
         .await
     {
-        tracing::warn!(%err, "Failed to post goal outcome");
+        tracing::warn!(err = %format!("{err:#}"), "Failed to post goal outcome");
     }
 }
 

@@ -42,7 +42,7 @@ pub async fn generate_title(
     tracing::warn!(
         model = title_model,
         fallback = FALLBACK_TITLE_MODEL,
-        error = %err,
+        error = %format!("{err:#}"),
         "title generation failed; retrying with fallback model"
     );
 

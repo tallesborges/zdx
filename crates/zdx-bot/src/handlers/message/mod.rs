@@ -242,7 +242,7 @@ async fn notify_stale_btw_input(
         )
         .await
     {
-        tracing::warn!(%err, "Failed to notify stale btw input");
+        tracing::warn!(err = %format!("{err:#}"), "Failed to notify stale btw input");
     }
 }
 
@@ -293,7 +293,7 @@ async fn route_worker_topic_message(
         )
         .await
     {
-        tracing::warn!(%err, "Failed to acknowledge worker topic message");
+        tracing::warn!(err = %format!("{err:#}"), "Failed to acknowledge worker topic message");
     }
     Ok(true)
 }
