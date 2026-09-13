@@ -1,4 +1,8 @@
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
+
+use super::rich::RichMessage;
 
 #[derive(Debug, Deserialize)]
 pub struct Update {
@@ -92,6 +96,10 @@ pub struct Message {
     #[serde(default)]
     pub media_group_id: Option<String>,
     pub text: Option<String>,
+    /// Content of a rich message (Bot API 10.1). Set instead of `text` when the
+    /// sender used structured formatting (lists, headings, tables).
+    #[serde(default)]
+    pub rich_message: Option<RichMessage>,
     #[serde(default)]
     pub caption: Option<String>,
     #[serde(default)]
@@ -134,6 +142,20 @@ impl Message {
     pub fn effective_thread_id(&self) -> Option<i64> {
         self.thread_id
             .or_else(|| self.reply_to.as_ref().and_then(|m| m.thread_id))
+    }
+
+    /// Plain text the sender wrote, from `text` or from a rich message.
+    ///
+    /// A rich message (Bot API 10.1) leaves `text` unset, so anything reading
+    /// `text` directly sees an empty message and silently drops the content.
+    pub fn plain_text(&self) -> Option<Cow<'_, str>> {
+        if let Some(text) = self.text.as_deref() {
+            return Some(Cow::Borrowed(text));
+        }
+        self.rich_message
+            .as_ref()
+            .and_then(RichMessage::to_text)
+            .map(Cow::Owned)
     }
 }
 

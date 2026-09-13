@@ -14,8 +14,11 @@ use zdx_engine::config::{Config, ResolvedTelegramRuntime};
 
 mod html;
 pub(crate) mod markdown;
+mod rich;
 mod types;
 
+#[allow(unused_imports)]
+pub use rich::RichMessage;
 #[allow(unused_imports)]
 pub use types::{
     Audio, CallbackQuery, Document, InlineKeyboardButton, InlineKeyboardMarkup, Message, PhotoSize,

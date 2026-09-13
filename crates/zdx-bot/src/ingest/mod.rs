@@ -289,7 +289,7 @@ async fn handle_empty_message(
 fn extract_text(message: &Message) -> Option<String> {
     let mut parts = Vec::new();
     for current in std::iter::once(message).chain(message.grouped_messages.iter()) {
-        if let Some(text) = current.text.as_deref() {
+        if let Some(text) = current.plain_text() {
             let trimmed = text.trim();
             if !trimmed.is_empty() {
                 parts.push(trimmed.to_string());
@@ -597,4 +597,71 @@ fn save_media_bytes(
     let path = dir.join(format!("{message_id}_{safe_name}"));
     fs::write(&path, bytes).context("write media file")?;
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::extract_text;
+    use crate::telegram::Message;
+
+    fn message(value: serde_json::Value) -> Message {
+        serde_json::from_value(value).expect("valid message")
+    }
+
+    fn base(id: i64) -> serde_json::Value {
+        json!({
+            "message_id": id,
+            "chat": { "id": 42, "type": "supergroup", "is_forum": true },
+            "from": { "id": 7, "is_bot": false },
+        })
+    }
+
+    fn with(id: i64, fields: serde_json::Value) -> Message {
+        let mut value = base(id);
+        let object = value.as_object_mut().expect("object");
+        for (key, field) in fields.as_object().expect("object") {
+            object.insert(key.clone(), field.clone());
+        }
+        message(value)
+    }
+
+    /// Shape Telegram delivers when the sender pastes a formatted list: no
+    /// `text` at all, everything under `rich_message`.
+    #[test]
+    fn reads_the_text_of_a_rich_message() {
+        let message = with(
+            1,
+            json!({
+                "rich_message": { "blocks": [
+                    { "type": "paragraph", "text": "August:" },
+                    { "type": "list", "items": [
+                        { "label": "•", "blocks": [{ "type": "paragraph", "text": "rent: 460.00" }] },
+                        { "label": "•", "blocks": [{ "type": "paragraph", "text": "lessons: 296.00" }] },
+                    ]},
+                ]},
+            }),
+        );
+
+        assert_eq!(
+            extract_text(&message).as_deref(),
+            Some("August:\n\n• rent: 460.00\n• lessons: 296.00")
+        );
+    }
+
+    #[test]
+    fn plain_text_and_captions_are_unchanged() {
+        let mut album = with(2, json!({ "caption": "first photo" }));
+        album
+            .grouped_messages
+            .push(with(3, json!({ "text": "note" })));
+
+        assert_eq!(extract_text(&album).as_deref(), Some("first photo\n\nnote"));
+    }
+
+    #[test]
+    fn a_message_without_any_text_stays_empty() {
+        assert!(extract_text(&with(4, json!({ "rich_message": { "blocks": [] } }))).is_none());
+    }
 }

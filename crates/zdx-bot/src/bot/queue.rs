@@ -99,7 +99,7 @@ pub(crate) async fn dispatch_message(
             // shows what a topic is before it is opened, the way worker mirrors
             // carry `🛠`.
             let is_orchestrator = context.orchestrator_enabled_for_chat(message.chat.id);
-            let topic_name = generate_topic_name(message.text.as_deref());
+            let topic_name = generate_topic_name(message.plain_text().as_deref());
             let topic_name = if is_orchestrator {
                 orchestrator_topic_name(&topic_name)
             } else {
