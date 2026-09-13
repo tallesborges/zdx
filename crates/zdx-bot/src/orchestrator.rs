@@ -12,7 +12,10 @@
 //!   debounced edits; it is deleted when the result posts.
 //! - `Completed` posts the worker's final text into its mirror topic and
 //!   wakes the owning orchestrator topic with a synthetic queued turn,
-//!   reusing the same dispatch path as `/goal` continuations.
+//!   reusing the same dispatch path as `/goal` continuations. Updates that
+//!   arrive while the orchestrator is busy are merged by the topic queue into
+//!   one turn (see `bot::queue::drain_worker_updates`), so a burst of
+//!   completions is reviewed once with all of them in context.
 //!
 //! Only the live status message carries buttons (`⏹ Cancel worker` = `wk:c`,
 //! `💬 Open Thread`), like a normal turn's status; the cancel callback resolves
@@ -36,7 +39,7 @@ use zdx_engine::core::workers::{CompletionEvent, WorkerActivity, WorkerEvent, Wo
 use crate::agent::{STATUS_WAITING, tool_running_status};
 use crate::bot::context::BotContext;
 use crate::bot::queue::ChatQueueMap;
-use crate::bot::synthetic::dispatch_synthetic_prompt;
+use crate::bot::synthetic::{SyntheticKind, dispatch_synthetic_prompt};
 use crate::handlers::message::{
     append_thread_link, escape_html, mini_app_base_url, parse_topic_thread_id, post_thread_header,
     refresh_thread_header, resolve_effective_thread_id, thread_id_for_chat,
@@ -614,13 +617,20 @@ async fn dispatch_owner_callback(
         .send_message_without_preview(route.chat, &notice, None, route.topic)
         .await
     {
-        tracing::warn!(worker = %event.worker_thread_id, %err, "Failed to post worker update notice");
+        tracing::warn!(worker = %event.worker_thread_id, err = %format!("{err:#}"), "Failed to post worker update notice");
     }
 
     let prompt = build_worker_update_prompt(event);
-    let dispatched =
-        dispatch_synthetic_prompt(context, queues, route.chat, route.topic, route.user, prompt)
-            .await;
+    let dispatched = dispatch_synthetic_prompt(
+        context,
+        queues,
+        route.chat,
+        route.topic,
+        route.user,
+        prompt,
+        SyntheticKind::WorkerUpdate,
+    )
+    .await;
     if dispatched {
         tracing::info!(
             worker = %event.worker_thread_id,

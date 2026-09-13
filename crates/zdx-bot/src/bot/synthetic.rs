@@ -18,6 +18,17 @@ use crate::bot::queue::{ChatQueueMap, dispatch_message};
 /// are keyed by.
 static SYNTHETIC_MESSAGE_ID: AtomicI64 = AtomicI64::new(i64::MAX);
 
+/// What produced a synthetic prompt.
+///
+/// Worker updates are mergeable: several of them waiting behind a running turn
+/// are handled together in one turn instead of one turn each. `/goal`
+/// continuations always run on their own.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SyntheticKind {
+    GoalContinuation,
+    WorkerUpdate,
+}
+
 /// Builds the synthetic Telegram message value. The chat type is derived from
 /// the chat id sign (Telegram group/supergroup ids are negative, private chat
 /// ids positive) so DM-thread callbacks are not misclassified as group
@@ -55,12 +66,14 @@ pub(crate) async fn dispatch_synthetic_prompt(
     topic: Option<i64>,
     user: i64,
     prompt: String,
+    kind: SyntheticKind,
 ) -> bool {
     let message_id = SYNTHETIC_MESSAGE_ID.fetch_sub(1, Ordering::Relaxed);
     let value = build_synthetic_value(chat, topic, user, message_id, &prompt);
 
     match serde_json::from_value::<crate::telegram::Message>(value) {
-        Ok(message) => {
+        Ok(mut message) => {
+            message.synthetic_worker_update = kind == SyntheticKind::WorkerUpdate;
             dispatch_message(queues, context, message).await;
             true
         }

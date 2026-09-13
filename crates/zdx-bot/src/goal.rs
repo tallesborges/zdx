@@ -15,7 +15,7 @@ use zdx_engine::core::thread_persistence::{Thread, ThreadEvent};
 
 use crate::bot::context::BotContext;
 use crate::bot::queue::ChatQueueMap;
-use crate::bot::synthetic::dispatch_synthetic_prompt;
+use crate::bot::synthetic::{SyntheticKind, dispatch_synthetic_prompt};
 use crate::handlers::message::TurnOutcome;
 
 /// Where a finished turn happened, so the loop can answer in the same place.
@@ -234,8 +234,16 @@ async fn dispatch_continuation(
     site: &TurnSite,
     prompt: String,
 ) {
-    let dispatched =
-        dispatch_synthetic_prompt(context, queues, site.chat, site.topic, site.user, prompt).await;
+    let dispatched = dispatch_synthetic_prompt(
+        context,
+        queues,
+        site.chat,
+        site.topic,
+        site.user,
+        prompt,
+        SyntheticKind::GoalContinuation,
+    )
+    .await;
     if !dispatched {
         clear_goal(context.goal_map(), &site.thread);
     }

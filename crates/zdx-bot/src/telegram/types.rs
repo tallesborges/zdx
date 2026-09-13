@@ -117,6 +117,10 @@ pub struct Message {
     /// expired or already used), it is re-dispatched as an ordinary message.
     #[serde(skip)]
     pub routed_as_btw_input: bool,
+    /// Internal marker for a synthetic `[worker update]` prompt. Consecutive
+    /// pending ones are merged into a single orchestrator turn by the queue.
+    #[serde(skip)]
+    pub synthetic_worker_update: bool,
     /// Additional Telegram messages that belong to the same media album.
     #[serde(skip)]
     pub grouped_messages: Vec<Message>,

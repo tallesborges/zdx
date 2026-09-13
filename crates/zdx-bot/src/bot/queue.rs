@@ -480,6 +480,64 @@ async fn enqueue_message(queues: &ChatQueueMap, context: &Arc<BotContext>, messa
     }
 }
 
+/// Pops every worker update already waiting behind `head` so they are handled
+/// in one turn instead of one turn each.
+///
+/// Only drains when `head` is itself a worker update, and stops at the first
+/// item that must run on its own (a user message or a command) — that item is
+/// returned as the carry and processed next, so FIFO order is preserved.
+fn drain_worker_updates(
+    receiver: &mut mpsc::UnboundedReceiver<QueueItem>,
+    head: &Message,
+) -> (Vec<QueueItem>, Option<QueueItem>) {
+    let mut batch = Vec::new();
+    if !head.synthetic_worker_update {
+        return (batch, None);
+    }
+    while let Ok(next) = receiver.try_recv() {
+        if next.message.synthetic_worker_update {
+            batch.push(next);
+        } else {
+            return (batch, Some(next));
+        }
+    }
+    (batch, None)
+}
+
+/// Takes an item's queued-cancel registration and clears its "⏳ Queued"
+/// message. Returns `false` when the item was cancelled and must be dropped.
+///
+/// The entry is taken and the flag read under the same lock the cancel callback
+/// holds, so an in-flight cancel can't be missed.
+async fn claim_queued_item(context: &BotContext, item: &QueueItem) -> bool {
+    let cancelled = {
+        let mut map = context.queue_cancel_map().lock().await;
+        if let Some(status) = item.queued_status.as_ref() {
+            let queue_cancel_key: QueueCancelKey = (status.chat, status.original);
+            map.remove(&queue_cancel_key);
+        }
+        item.cancel_token.is_cancelled()
+    };
+
+    if cancelled {
+        // The cancel callback already edited the status message and deleted
+        // the user's message; just drop the item.
+        return false;
+    }
+
+    // About to process. Delete the "Queued" status message (handle_message
+    // will send its own "Thinking..." status).
+    if let Some(status) = item.queued_status.as_ref()
+        && let Err(err) = context
+            .client()
+            .delete_message(status.chat, status.status)
+            .await
+    {
+        tracing::warn!(status_id = status.status, err = %format!("{err:#}"), "Failed to delete queued status message");
+    }
+    true
+}
+
 fn spawn_queue_worker(
     key: QueueKey,
     mut receiver: mpsc::UnboundedReceiver<QueueItem>,
@@ -487,59 +545,65 @@ fn spawn_queue_worker(
     queues: ChatQueueMap,
 ) {
     tokio::spawn(async move {
-        while let Some(item) = receiver.recv().await {
-            let QueueItem {
-                message,
-                cancel_token,
-                queued_status,
-            } = item;
-
-            // Take the cancel entry and read the flag under the same lock the
-            // cancel callback holds, so an in-flight cancel can't be missed.
-            let cancelled = {
-                let mut map = context.queue_cancel_map().lock().await;
-                if let Some(ref status) = queued_status {
-                    let queue_cancel_key: QueueCancelKey = (status.chat, status.original);
-                    map.remove(&queue_cancel_key);
-                }
-                cancel_token.is_cancelled()
+        // Holds the item that ended a worker-update batch until its own turn.
+        let mut carry: Option<QueueItem> = None;
+        loop {
+            let item = match carry.take() {
+                Some(item) => item,
+                None => match receiver.recv().await {
+                    Some(item) => item,
+                    None => break,
+                },
             };
 
-            if cancelled {
-                // The cancel callback already edited the status message and
-                // deleted the user's message; just drop the item.
+            // Every item taken off the channel owns a pending slot, batched or not.
+            let mut slots = 1usize;
+
+            if !claim_queued_item(&context, &item).await {
                 tracing::debug!(?key, "Skipping cancelled queued message");
-                release_slot(&queues, key).await;
+                release_slots(&queues, key, slots).await;
                 continue;
             }
+            let mut message = item.message;
 
-            // Not cancelled — about to process. Delete the "Queued" status
-            // message (handle_message will send its own "Thinking..." status).
-            if let Some(status) = queued_status
-                && let Err(err) = context
-                    .client()
-                    .delete_message(status.chat, status.status)
-                    .await
-            {
-                tracing::warn!(status_id = status.status, %err, "Failed to delete queued status message");
+            // Worker updates that piled up during the previous turn ride along
+            // as grouped messages: ingest joins their text into one prompt, so
+            // the next turn sees every update at once instead of waking once
+            // per update and re-reading work it already handled.
+            let (batch, next_carry) = drain_worker_updates(&mut receiver, &message);
+            carry = next_carry;
+            slots += batch.len();
+            for queued in batch {
+                if claim_queued_item(&context, &queued).await {
+                    message.grouped_messages.push(queued.message);
+                } else {
+                    tracing::debug!(?key, "Skipping cancelled worker update");
+                }
+            }
+            if !message.grouped_messages.is_empty() {
+                tracing::info!(
+                    ?key,
+                    count = message.grouped_messages.len() + 1,
+                    "Batched pending worker updates into one turn"
+                );
             }
 
             if let Err(err) = Box::pin(handle_message(&context, &queues, message)).await {
-                tracing::error!(?key, %err, "Message handling error");
+                tracing::error!(?key, err = %format!("{err:#}"), "Message handling error");
             }
 
-            release_slot(&queues, key).await;
+            release_slots(&queues, key, slots).await;
         }
     });
 }
 
-/// Mark one queued item as done. When the last item drains, drop the queue
+/// Mark finished queued items as done. When the last one drains, drop the queue
 /// entry so the channel closes and the worker exits instead of leaking a
 /// per-key queue + idle task forever.
-async fn release_slot(queues: &ChatQueueMap, key: QueueKey) {
+async fn release_slots(queues: &ChatQueueMap, key: QueueKey, count: usize) {
     let mut queues = queues.lock().await;
     let drained = if let Some(state) = queues.get_mut(&key) {
-        state.pending = state.pending.saturating_sub(1);
+        state.pending = state.pending.saturating_sub(count);
         state.pending == 0
     } else {
         false
@@ -599,5 +663,60 @@ mod tests {
             dm_thread_needing_orchestrator(&message(chat_id, "private", Some(5), "/status"))
                 .is_none()
         );
+    }
+
+    fn worker_update(text: &str) -> Message {
+        let mut message = message(-100, "supergroup", Some(3), text);
+        message.synthetic_worker_update = true;
+        message
+    }
+
+    fn item(message: Message) -> QueueItem {
+        QueueItem {
+            message,
+            cancel_token: CancellationToken::new(),
+            queued_status: None,
+        }
+    }
+
+    #[test]
+    fn worker_updates_batch_until_a_message_that_runs_alone() {
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let head = worker_update("update 1");
+        for text in ["update 2", "update 3"] {
+            sender.send(item(worker_update(text))).unwrap();
+        }
+        sender
+            .send(item(message(-100, "supergroup", Some(3), "and now this")))
+            .unwrap();
+        sender.send(item(worker_update("update 4"))).unwrap();
+
+        let (batch, carry) = drain_worker_updates(&mut receiver, &head);
+
+        let batched: Vec<_> = batch
+            .iter()
+            .map(|item| item.message.text.as_deref().unwrap())
+            .collect();
+        assert_eq!(batched, ["update 2", "update 3"]);
+        // The user message ends the batch and runs on its own next.
+        assert_eq!(carry.unwrap().message.text.as_deref(), Some("and now this"));
+        // Anything behind it stays queued in order.
+        assert_eq!(
+            receiver.try_recv().unwrap().message.text.as_deref(),
+            Some("update 4")
+        );
+    }
+
+    #[test]
+    fn a_user_message_never_absorbs_pending_worker_updates() {
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        sender.send(item(worker_update("update 1"))).unwrap();
+
+        let head = message(-100, "supergroup", Some(3), "user question");
+        let (batch, carry) = drain_worker_updates(&mut receiver, &head);
+
+        assert!(batch.is_empty());
+        assert!(carry.is_none());
+        assert!(receiver.try_recv().is_ok());
     }
 }
