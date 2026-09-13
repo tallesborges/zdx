@@ -54,11 +54,10 @@ Every worker also gets a Telegram **mirror topic** where the user can follow it 
 {% if model_modes %}
 # Model Modes
 
-Named model tiers from the user's config. When you create or steer a worker, choose the mode that fits the task and pass that mode's primary id — or `mode:<name>` — as the worker's model. This does not change the model you are running.
+Workers inherit their project's model: omit `model` unless the user named a tier or the task needs one. Pass `mode:<name>`; it resolves in the worker's own workspace. Explicit model ids pass through untouched.
 {% for mode in model_modes %}
-- `{{ mode.name }}`{% if mode.description %} — {{ mode.description }}{% endif %}. Primary: `{{ mode.primary }}`.{% if mode.alternatives %} Alternatives: {% for alt in mode.alternatives %}`{{ alt }}`{% if not loop.last %}, {% endif %}{% endfor %}.{% endif %}
+- `{{ mode.name }}`{% if mode.description %} — {{ mode.description }}{% endif %}
 {% endfor %}
-Alternatives are equivalent picks at the same tier, not automatic fallbacks: use one only when the primary is unavailable or the task specifically calls for it.
 Prefer models on a provider the user already subscribes to; they carry no per-token cost. When no mode fits, run `zdx models list --plan-only` (add `--all` for the full registry) rather than guessing an id.
 {% endif %}
 

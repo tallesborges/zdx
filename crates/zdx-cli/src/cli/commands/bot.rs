@@ -53,6 +53,7 @@ pub fn add_profile(config: &Config, name: &str, chat_id: i64, cwd: &Path) -> Res
         chat_id,
         cwd: cwd.display().to_string(),
         orchestrator: false,
+        worker_root: None,
     };
     Config::save_telegram_profile(&name, &profile).context("save telegram profile")?;
 

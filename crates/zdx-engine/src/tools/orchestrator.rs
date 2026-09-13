@@ -11,7 +11,7 @@
 //! Telegram bot — replace them with bound instances via
 //! [`ToolRegistry::register_boxed`](super::ToolRegistry::register_boxed).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -144,7 +144,7 @@ fn definition_for(op: Op) -> ToolDefinition {
                 "properties": {
                     "root": {
                         "type": "string",
-                        "description": "Absolute path to an existing project directory the worker runs in"
+                        "description": "Absolute path to an existing project directory the worker runs in. Pass it for work that belongs to a specific project. Omit it to use your configured default worker root; the resolved root is reported back in the result."
                     },
                     "prompt": {
                         "type": "string",
@@ -159,7 +159,7 @@ fn definition_for(op: Op) -> ToolDefinition {
                         "description": "Optional model override (`provider:model[@thinking][@fast]`, or `mode:<name>` for a configured model mode). Omit to inherit configuration."
                     }
                 },
-                "required": ["root", "prompt"],
+                "required": ["prompt"],
                 "additionalProperties": false
             }),
         },
@@ -375,24 +375,92 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 
 /// Resolves a worker's requested model, substituting a `mode:<name>` reference
 /// with that mode's primary spec. The orchestrator prompt offers mode names, so
-/// a worker must not be started on the literal reference. `None` means "inherit
-/// configuration": either no model was asked for, or the mode is not configured,
-/// which beats starting a worker that cannot reach a provider.
+/// a worker must not be started on the literal reference.
+///
+/// A mode means whatever the worker's *own* workspace says it means: the
+/// layered config at `root` decides, so a project can point `smart` at its own
+/// account or vendor. A workspace overlay replaces the mode list wholesale, so
+/// an empty list there means that workspace defines none and the orchestrator's
+/// own config answers instead.
+///
+/// `None` means "inherit configuration": no model was asked for, or the mode is
+/// not configured anywhere, which beats starting a worker that cannot reach a
+/// provider. An explicit model id passes through untouched.
 fn resolve_worker_model_spec(
-    config: Option<&crate::config::Config>,
+    orchestrator_config: Option<&crate::config::Config>,
+    root: &Path,
     model: &str,
 ) -> Option<String> {
-    match config.and_then(|config| config.resolve_mode_ref(model)) {
-        None => Some(model.to_string()),
-        Some(Ok(primary)) => Some(primary.to_string()),
+    if crate::config::mode_ref_name(model).is_none() {
+        return Some(model.to_string());
+    }
+
+    let workspace_config =
+        crate::config::Config::load_layered(&crate::config::paths::config_layer_paths_for(root))
+            .inspect_err(
+                |err| tracing::warn!(root = %root.display(), %err, "create_thread: failed to read the worker workspace config"),
+            )
+            .ok()
+            .filter(|config| !config.model_modes.is_empty());
+
+    let resolve = |config: &crate::config::Config| {
+        config
+            .resolve_mode_ref(model)
+            .map(|outcome| outcome.map(str::to_string).map_err(str::to_string))
+    };
+    let resolved = match workspace_config.as_ref() {
+        Some(config) => resolve(config),
+        None => orchestrator_config.and_then(resolve),
+    };
+
+    match resolved {
+        Some(Ok(primary)) => Some(primary),
         Some(Err(name)) => {
             tracing::warn!(
-                mode = name,
-                "create_thread: unknown model mode; inheriting configuration instead"
+                mode = %name,
+                root = %root.display(),
+                "create_thread: unknown model mode; inheriting the workspace default instead"
+            );
+            None
+        }
+        None => {
+            tracing::warn!(
+                model,
+                root = %root.display(),
+                "create_thread: no model modes configured; inheriting the workspace default instead"
             );
             None
         }
     }
+}
+
+/// Resolves the root a worker runs in.
+///
+/// An explicit `root` always wins and keeps the handling it has always had: it
+/// is trimmed by [`required_str`] and passed through as given. Only an omitted
+/// `root` falls back to the owning orchestrator's configured default worker
+/// root, so the default never overrides a deliberate project choice.
+fn resolve_worker_root(
+    input: &Value,
+    owner: &str,
+    ctx: &ToolContext,
+) -> Result<(PathBuf, &'static str), ToolOutput> {
+    if let Some(root) = optional_str(input, "root") {
+        return Ok((PathBuf::from(root), "explicit"));
+    }
+    ctx.config
+        .as_ref()
+        .and_then(|config| config.telegram_worker_root_for_thread(owner))
+        .map(|root| (root, "orchestrator_default"))
+        .ok_or_else(|| {
+            ToolOutput::failure(
+                "invalid_input",
+                "Missing required string field: root. This thread has no configured default \
+                 worker root to fall back to, so the project directory must be given explicitly."
+                    .to_string(),
+                None,
+            )
+        })
 }
 
 async fn create_thread(
@@ -401,8 +469,8 @@ async fn create_thread(
     input: &Value,
     ctx: &ToolContext,
 ) -> ToolOutput {
-    let root = match required_str(input, "root") {
-        Ok(value) => value,
+    let (root, root_source) = match resolve_worker_root(input, owner, ctx) {
+        Ok(resolved) => resolved,
         Err(failure) => return failure,
     };
     let prompt = match required_str(input, "prompt") {
@@ -411,7 +479,7 @@ async fn create_thread(
     };
     let title = optional_str(input, "title");
     let (model, thinking_level) = match optional_str(input, "model") {
-        Some(model) => match resolve_worker_model_spec(ctx.config.as_ref(), model) {
+        Some(model) => match resolve_worker_model_spec(ctx.config.as_ref(), &root, model) {
             Some(spec) => {
                 let inherited = ctx.thinking_level.unwrap_or_default();
                 let (model, thinking) = crate::models::resolve_model_spec(&spec, inherited);
@@ -422,14 +490,10 @@ async fn create_thread(
         None => (None, None),
     };
 
-    let worker_id = match manager.create_worker(
-        owner,
-        &PathBuf::from(root),
-        prompt,
-        title,
-        model,
-        thinking_level,
-    ) {
+    // The resolved root is what gets persisted on the worker, so a default is
+    // never invisible: it drives mirror routing and is reported back below.
+    let worker_id = match manager.create_worker(owner, &root, prompt, title, model, thinking_level)
+    {
         Ok(worker_id) => worker_id,
         Err(err) => {
             return ToolOutput::failure("create_thread_failed", format!("{err:#}"), None);
@@ -444,9 +508,16 @@ async fn create_thread(
         Some(snapshot) => ToolOutput::success(json!({
             "thread_id": worker_id,
             "mirror_url": mirror_url,
+            "root": root.display().to_string(),
+            "root_source": root_source,
             "worker": snapshot_json(&snapshot),
         })),
-        None => ToolOutput::success(json!({ "thread_id": worker_id, "mirror_url": mirror_url })),
+        None => ToolOutput::success(json!({
+            "thread_id": worker_id,
+            "mirror_url": mirror_url,
+            "root": root.display().to_string(),
+            "root_source": root_source,
+        })),
     }
 }
 
@@ -666,28 +737,74 @@ mod tests {
     }
 
     /// A worker asked for on `mode:<name>` starts on that mode's primary spec;
-    /// an unknown mode inherits configuration instead of a broken model id.
+    /// an unknown mode inherits configuration instead of a broken model id, and
+    /// an explicit model id passes through untouched.
     #[test]
     fn worker_model_resolves_mode_references() {
+        let _home = crate::test_support::temp_zdx_home();
+        let root = tempfile::tempdir().unwrap();
         let config = mode_config();
+        let resolve = |model: &str| resolve_worker_model_spec(Some(&config), root.path(), model);
+
         assert_eq!(
-            resolve_worker_model_spec(Some(&config), "mode:smart").as_deref(),
+            resolve("mode:smart").as_deref(),
             Some("claude-cli:claude-opus-5@high")
         );
         assert_eq!(
-            resolve_worker_model_spec(Some(&config), "  MODE:Smart ").as_deref(),
+            resolve("  MODE:Smart ").as_deref(),
             Some("claude-cli:claude-opus-5@high")
         );
         assert_eq!(
-            resolve_worker_model_spec(Some(&config), "openai:gpt-5.5@low").as_deref(),
+            resolve("openai:gpt-5.5@low").as_deref(),
             Some("openai:gpt-5.5@low"),
             "a plain spec passes through untouched"
         );
-        assert_eq!(resolve_worker_model_spec(Some(&config), "mode:nope"), None);
+        assert_eq!(resolve("mode:nope"), None);
         assert_eq!(
-            resolve_worker_model_spec(None, "mode:smart").as_deref(),
-            Some("mode:smart"),
-            "without config there is nothing to resolve against"
+            resolve_worker_model_spec(None, root.path(), "openai:gpt-5.5").as_deref(),
+            Some("openai:gpt-5.5"),
+            "an id needs no config to pass through"
+        );
+        assert_eq!(
+            resolve_worker_model_spec(None, root.path(), "mode:smart"),
+            None,
+            "a ref with nothing to resolve against inherits configuration"
+        );
+    }
+
+    /// The worker's own workspace decides what a mode means. Its overlay
+    /// replaces the list wholesale, so a workspace that defines modes answers
+    /// for every name, and one that defines none defers to the orchestrator.
+    #[test]
+    fn worker_model_prefers_the_target_workspace_modes() {
+        let _home = crate::test_support::temp_zdx_home();
+        let orchestrator = mode_config();
+
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(workspace.path().join(".zdx")).unwrap();
+        std::fs::write(
+            workspace.path().join(".zdx/config.toml"),
+            "[[model_modes]]\nname = \"smart\"\nprimary = \"claude-cli@parity:claude-opus-5@high\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_worker_model_spec(Some(&orchestrator), workspace.path(), "mode:smart")
+                .as_deref(),
+            Some("claude-cli@parity:claude-opus-5@high"),
+            "the workspace overlay wins over the orchestrator's own list"
+        );
+        assert_eq!(
+            resolve_worker_model_spec(Some(&orchestrator), workspace.path(), "mode:fast"),
+            None,
+            "a name the overlay drops is unknown there, not inherited from the orchestrator"
+        );
+
+        // A workspace with no modes of its own defers to the orchestrator.
+        let plain = tempfile::tempdir().unwrap();
+        assert_eq!(
+            resolve_worker_model_spec(Some(&orchestrator), plain.path(), "mode:smart").as_deref(),
+            Some("claude-cli:claude-opus-5@high")
         );
     }
 
@@ -917,5 +1034,63 @@ mod tests {
         let output = tool.execute(&json!({}), &ctx).await;
         let (code, _, _) = output.error_info().unwrap();
         assert_eq!(code, "no_thread");
+    }
+
+    /// An explicit `root` wins; omitting it falls back to the owning
+    /// orchestrator's configured default; a non-orchestrator caller with no
+    /// root is an error rather than a guess.
+    #[test]
+    fn worker_root_resolution_prefers_explicit_then_orchestrator_default() {
+        use std::collections::BTreeMap;
+
+        use crate::config::{TelegramConfig, TelegramProfileConfig};
+
+        let config = crate::config::Config {
+            telegram: TelegramConfig {
+                profiles: BTreeMap::from([
+                    (
+                        "control".to_string(),
+                        TelegramProfileConfig {
+                            chat_id: -100_001,
+                            cwd: "/tmp/control".to_string(),
+                            orchestrator: true,
+                            worker_root: Some("/tmp/work".to_string()),
+                        },
+                    ),
+                    (
+                        "commons".to_string(),
+                        TelegramProfileConfig {
+                            chat_id: -100_002,
+                            cwd: "/tmp/work".to_string(),
+                            orchestrator: false,
+                            worker_root: None,
+                        },
+                    ),
+                ]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let ctx = ToolContext::new(std::path::PathBuf::from("."), None).with_config(&config);
+        let owner = "telegram--100001-topic-7";
+
+        let (root, source) =
+            resolve_worker_root(&json!({ "root": "/tmp/work/alpha" }), owner, &ctx).unwrap();
+        assert_eq!(root, PathBuf::from("/tmp/work/alpha"));
+        assert_eq!(source, "explicit");
+
+        let (root, source) = resolve_worker_root(&json!({}), owner, &ctx).unwrap();
+        assert_eq!(root, PathBuf::from("/tmp/work"));
+        assert_eq!(source, "orchestrator_default");
+
+        // A workspace chat has no default to fall back to.
+        let failure =
+            resolve_worker_root(&json!({}), "telegram--100002-topic-7", &ctx).unwrap_err();
+        let (code, message, _) = failure.error_info().unwrap();
+        assert_eq!(code, "invalid_input");
+        assert!(
+            message.contains("no configured default worker root"),
+            "{message}"
+        );
     }
 }

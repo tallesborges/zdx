@@ -364,10 +364,12 @@ impl BotContext {
             .is_some_and(|(_, profile)| profile.orchestrator)
     }
 
-    /// Picks the group chat whose profile `cwd` contains `root` (deepest match)
-    /// for hosting a worker's mirror topic, so project workers surface in
-    /// their project's group even when orchestrated from elsewhere (e.g. a DM
-    /// home). Returns `None` when no group profile covers the root.
+    /// Picks the group chat whose **routable workspace** profile `cwd` contains
+    /// `root` (deepest match) for hosting a worker's mirror topic, so project
+    /// workers surface in their project's group even when orchestrated from
+    /// elsewhere. Orchestrator homes are excluded: a management group and a
+    /// workspace group may share a `cwd`, and only the workspace owns it.
+    /// Returns `None` when no workspace covers the root.
     pub(crate) fn mirror_chat_for_root(&self, root: &std::path::Path) -> Option<i64> {
         let config = self.config.read().expect("bot config lock poisoned");
         config
@@ -375,14 +377,39 @@ impl BotContext {
             .profiles
             .values()
             .filter(|profile| profile.chat_id < 0)
+            .filter(|profile| profile.is_routable_workspace())
             .filter_map(|profile| {
-                let cwd = profile.cwd_path();
-                let cwd = cwd.canonicalize().unwrap_or(cwd);
+                let cwd = zdx_engine::config::canonical_or_self(&profile.cwd_path());
                 root.starts_with(&cwd)
                     .then(|| (cwd.components().count(), profile.chat_id))
             })
             .max_by_key(|(depth, _)| *depth)
             .map(|(_, chat_id)| chat_id)
+    }
+
+    /// Mirror host for a worker whose own root no workspace covers: the
+    /// workspace covering `chat`'s configured default worker root, when `chat`
+    /// is a configured orchestrator group. `None` for any other chat.
+    pub(crate) fn mirror_chat_for_default_worker_root(&self, chat_id: i64) -> Option<i64> {
+        let worker_root = {
+            let config = self.config.read().expect("bot config lock poisoned");
+            let (_, profile) = config.telegram_profile_for_chat(chat_id)?;
+            if profile.is_routable_workspace() {
+                return None;
+            }
+            zdx_engine::config::canonical_or_self(&profile.worker_root_path())
+        };
+        self.mirror_chat_for_root(&worker_root)
+    }
+
+    /// Whether `chat_id` is a configured orchestrator group, which must never
+    /// host worker mirror topics.
+    pub(crate) fn is_orchestrator_group(&self, chat_id: i64) -> bool {
+        self.config
+            .read()
+            .expect("bot config lock poisoned")
+            .telegram_profile_for_chat(chat_id)
+            .is_some_and(|(_, profile)| !profile.is_routable_workspace())
     }
 
     /// Records where an orchestrator thread last ran.
@@ -503,6 +530,7 @@ mod tests {
                         chat_id: -100_123,
                         cwd: profile_root.display().to_string(),
                         orchestrator: false,
+                        worker_root: None,
                     },
                 )]),
                 ..Default::default()
@@ -535,6 +563,7 @@ mod tests {
                             chat_id: -100_500,
                             cwd: umbrella.display().to_string(),
                             orchestrator: false,
+                            worker_root: None,
                         },
                     ),
                     (
@@ -543,6 +572,7 @@ mod tests {
                             chat_id: -100_600,
                             cwd: project.display().to_string(),
                             orchestrator: false,
+                            worker_root: None,
                         },
                     ),
                     (
@@ -551,6 +581,7 @@ mod tests {
                             chat_id: 777,
                             cwd: project.display().to_string(),
                             orchestrator: false,
+                            worker_root: None,
                         },
                     ),
                 ]),
@@ -577,6 +608,82 @@ mod tests {
         );
     }
 
+    /// A management group and a workspace group may share a root. Only the
+    /// workspace owns it for mirror routing, and workers with an unmatched root
+    /// reach that workspace through the orchestrator's default worker root
+    /// rather than landing in the management group.
+    #[test]
+    fn orchestrator_group_never_hosts_mirrors_and_routes_via_worker_root() {
+        let shared = unique_temp_dir("orch-shared");
+        let project = shared.join("alpha");
+        let outside = unique_temp_dir("orch-outside");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+
+        let config = Config {
+            telegram: TelegramConfig {
+                profiles: BTreeMap::from([
+                    (
+                        "control".to_string(),
+                        TelegramProfileConfig {
+                            chat_id: -100_001,
+                            cwd: shared.display().to_string(),
+                            orchestrator: true,
+                            worker_root: Some(shared.display().to_string()),
+                        },
+                    ),
+                    (
+                        "commons".to_string(),
+                        TelegramProfileConfig {
+                            chat_id: -100_002,
+                            cwd: shared.display().to_string(),
+                            orchestrator: false,
+                            worker_root: None,
+                        },
+                    ),
+                    (
+                        "alpha".to_string(),
+                        TelegramProfileConfig {
+                            chat_id: -100_003,
+                            cwd: project.display().to_string(),
+                            orchestrator: false,
+                            worker_root: None,
+                        },
+                    ),
+                ]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let bot_root = unique_temp_dir("orch-shared-bot");
+        fs::create_dir_all(&bot_root).unwrap();
+        let context = test_context(config, bot_root);
+
+        // Deepest workspace wins; the orchestrator sharing `shared` never does.
+        assert_eq!(
+            context.mirror_chat_for_root(&project.canonicalize().unwrap()),
+            Some(-100_003)
+        );
+        assert_eq!(
+            context.mirror_chat_for_root(&shared.canonicalize().unwrap()),
+            Some(-100_002)
+        );
+        // A root no workspace covers routes through the orchestrator's default.
+        assert_eq!(
+            context.mirror_chat_for_root(&outside.canonicalize().unwrap()),
+            None
+        );
+        assert_eq!(
+            context.mirror_chat_for_default_worker_root(-100_001),
+            Some(-100_002)
+        );
+        // Workspace chats have no default of their own to fall back to.
+        assert_eq!(context.mirror_chat_for_default_worker_root(-100_002), None);
+        assert!(context.is_orchestrator_group(-100_001));
+        assert!(!context.is_orchestrator_group(-100_002));
+        assert!(!context.is_orchestrator_group(-100_999));
+    }
+
     #[test]
     fn orchestrator_flag_is_per_chat_opt_in() {
         let root = unique_temp_dir("orch-flag");
@@ -591,6 +698,7 @@ mod tests {
                             chat_id: -100_111,
                             cwd: root.display().to_string(),
                             orchestrator: true,
+                            worker_root: None,
                         },
                     ),
                     (
@@ -599,6 +707,7 @@ mod tests {
                             chat_id: -100_222,
                             cwd: root.display().to_string(),
                             orchestrator: false,
+                            worker_root: None,
                         },
                     ),
                 ]),
@@ -639,6 +748,7 @@ mod tests {
                         chat_id: -100_123,
                         cwd: profile_root.display().to_string(),
                         orchestrator: false,
+                        worker_root: None,
                     },
                 )]),
                 ..Default::default()
@@ -676,6 +786,7 @@ mod tests {
                         chat_id: -100_123,
                         cwd: profile_root.display().to_string(),
                         orchestrator: false,
+                        worker_root: None,
                     },
                 )]),
                 ..Default::default()

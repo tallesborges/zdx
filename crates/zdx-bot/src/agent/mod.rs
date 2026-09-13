@@ -160,9 +160,16 @@ pub(crate) fn prepare_bot_turn(
     root: &Path,
     bot_instruction_layer: Option<&str>,
     persistent_profile: Option<&str>,
+    chat_id: Option<i64>,
 ) -> Result<PreparedBotTurn> {
     if let Some(profile) = persistent_profile {
-        return prepare_persistent_profile_turn(config, root, bot_instruction_layer, profile);
+        return prepare_persistent_profile_turn(
+            config,
+            root,
+            bot_instruction_layer,
+            profile,
+            chat_id,
+        );
     }
 
     let bot_config = config.clone();
@@ -196,6 +203,7 @@ fn prepare_persistent_profile_turn(
     root: &Path,
     bot_instruction_layer: Option<&str>,
     profile: &str,
+    chat_id: Option<i64>,
 ) -> Result<PreparedBotTurn> {
     ensure!(
         profile == zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME,
@@ -207,7 +215,7 @@ fn prepare_persistent_profile_turn(
     // The Telegram workspaces catalog is observational data: it moves into the
     // runtime-context snapshot (attached to the first user message) instead of
     // the system prompt, so it never churns the stable prefix.
-    let workspaces = telegram_workspaces_block(config);
+    let workspaces = telegram_workspaces_block(config, chat_id);
     let (mut prompt, runtime_context) =
         zdx_engine::subagents::render_prompt_with_discovered_skills_and_context(
             config,
@@ -242,36 +250,51 @@ fn prepare_persistent_profile_turn(
     })
 }
 
-/// Telegram project groups bound to the bot, so the orchestrator can pick
+/// Telegram **workspace** groups bound to the bot, so the orchestrator can pick
 /// worker roots deliberately and tell the user where a worker's mirror topic
 /// will appear. Each workspace also lists the project skills its workers
 /// discover there, since the orchestrator's own skill catalog only covers its
-/// home root. `None` when no profiles are configured.
-fn telegram_workspaces_block(config: &Config) -> Option<String> {
-    if config.telegram.profiles.is_empty() {
+/// home root.
+///
+/// Orchestrator homes are not listed: they never host worker mirrors and never
+/// own skills. `chat_id` is the current chat, used to state its configured
+/// default worker root. `None` when no workspace profiles are configured.
+fn telegram_workspaces_block(config: &Config, chat_id: Option<i64>) -> Option<String> {
+    let workspaces: Vec<_> = config
+        .telegram
+        .profiles
+        .iter()
+        .filter(|(_, profile)| profile.is_routable_workspace())
+        .collect();
+    if workspaces.is_empty() {
         return None;
     }
     let home = std::env::var("HOME").unwrap_or_default();
     let skills = workspace_skills(config);
 
     let mut block = String::from(
-        "# Telegram Workspaces\n\nProject groups bound to this bot (profile — root). A worker created inside one of these roots gets its mirror topic in that group (deepest matching root wins); workers in other roots get a topic in the chat you are in. Tell the user where to follow each worker.\n\nWorkers in a root automatically discover that project's skills (listed under it); you do not have them yourself. Use them to know what a workspace can do and to point a worker at the right one by name when the task matches.\n\n",
+        "# Telegram Workspaces\n\nWorkspace groups bound to this bot (profile — root). A worker created inside one of these roots gets its mirror topic in that group (deepest matching root wins). A worker whose root no workspace covers falls back to the workspace covering your default worker root; if neither matches it runs with no mirror topic and you are warned. Your own management group never hosts worker topics. Tell the user where to follow each worker.\n\nWorkers in a root automatically discover that project's skills (listed under it); you do not have them yourself. Use them to know what a workspace can do and to point a worker at the right one by name when the task matches.\n\n",
     );
-    for (name, profile) in &config.telegram.profiles {
+    for (name, profile) in workspaces {
         let root = shorten_home(&profile.cwd_path().display().to_string(), &home);
-        let flag = if profile.orchestrator {
-            " (orchestrator home)"
-        } else {
-            ""
-        };
-        let _ = writeln!(
-            block,
-            "- {name} (chat {}) — `{root}`{flag}",
-            profile.chat_id
-        );
+        let _ = writeln!(block, "- {name} (chat {}) — `{root}`", profile.chat_id);
         for (skill_name, description) in skills.get(name).into_iter().flatten() {
             let _ = writeln!(block, "  - skill `{skill_name}`: {description}");
         }
+    }
+
+    // The default applies when `Create_Thread` is called without a root; state
+    // it so the choice is deliberate rather than implied by the listing.
+    if let Some(worker_root) = chat_id
+        .and_then(|chat_id| config.telegram_profile_for_chat(chat_id))
+        .filter(|(_, profile)| !profile.is_routable_workspace())
+        .map(|(_, profile)| profile.worker_root_path())
+    {
+        let root = shorten_home(&worker_root.display().to_string(), &home);
+        let _ = write!(
+            block,
+            "\nYour default worker root is `{root}`. Omit `root` in `Create_Thread` to use it; pass an explicit `root` for work that belongs to a specific project.\n"
+        );
     }
     Some(block)
 }
@@ -283,6 +306,11 @@ const WORKSPACE_SKILL_DESCRIPTION_CHARS: usize = 140;
 /// by profile name. Only project sources are scanned (user/global skills are
 /// already in the orchestrator's own catalog). A skill reachable from several
 /// nested workspaces is attributed once, to the deepest root that contains it.
+///
+/// Orchestrator homes are skipped: they are not rendered, so letting one win
+/// attribution would drop the skills from the prompt entirely. Equal-depth ties
+/// go to the first profile in name order, so a management group sharing a
+/// workspace's root could otherwise silently claim its skills.
 fn workspace_skills(config: &Config) -> HashMap<String, Vec<(String, String)>> {
     use zdx_engine::config::SkillSourceToggles;
     use zdx_engine::skills::{LoadSkillsOptions, SkillSource, load_skills};
@@ -290,6 +318,9 @@ fn workspace_skills(config: &Config) -> HashMap<String, Vec<(String, String)>> {
     // skill file → (owning profile, depth of that profile's root)
     let mut owner: HashMap<PathBuf, (String, usize, String, String)> = HashMap::new();
     for (name, profile) in &config.telegram.profiles {
+        if !profile.is_routable_workspace() {
+            continue;
+        }
         let root = profile.cwd_path();
         let root = root.canonicalize().unwrap_or(root);
         let depth = root.components().count();
@@ -629,7 +660,7 @@ mod tests {
             agents_project: false,
         };
 
-        let prepared = prepare_bot_turn(&config, &dir, None, None).unwrap();
+        let prepared = prepare_bot_turn(&config, &dir, None, None, None).unwrap();
         let prompt = prepared.system_prompt.unwrap_or_default();
 
         assert!(prompt.contains("Bot project note"));
@@ -658,8 +689,14 @@ mod tests {
             agents_project: false,
         };
 
-        let prepared =
-            prepare_bot_turn(&config, &dir, Some("TELEGRAM LAYER"), Some("orchestrator")).unwrap();
+        let prepared = prepare_bot_turn(
+            &config,
+            &dir,
+            Some("TELEGRAM LAYER"),
+            Some("orchestrator"),
+            None,
+        )
+        .unwrap();
         let prompt = prepared.system_prompt.unwrap_or_default();
 
         // SPEC §18: profile prompt composes project context + Telegram layer.
@@ -683,7 +720,7 @@ mod tests {
     #[test]
     fn unknown_persistent_profile_fails_the_turn() {
         let dir = make_temp_dir();
-        let err = prepare_bot_turn(&Config::default(), &dir, None, Some("mystery"))
+        let err = prepare_bot_turn(&Config::default(), &dir, None, Some("mystery"), None)
             .err()
             .expect("unknown profile must fail");
         assert!(err.to_string().contains("Unknown persistent profile"));
@@ -699,7 +736,7 @@ mod tests {
         // Rendering skills materializes bundled skills into $ZDX_HOME.
         let _home = zdx_engine::test_support::temp_zdx_home();
 
-        assert!(telegram_workspaces_block(&Config::default()).is_none());
+        assert!(telegram_workspaces_block(&Config::default(), None).is_none());
 
         let config = Config {
             telegram: TelegramConfig {
@@ -710,6 +747,7 @@ mod tests {
                             chat_id: -1001,
                             cwd: "/tmp/work/dub".to_string(),
                             orchestrator: false,
+                            worker_root: None,
                         },
                     ),
                     (
@@ -718,6 +756,7 @@ mod tests {
                             chat_id: -1002,
                             cwd: "/tmp/personal/zdx".to_string(),
                             orchestrator: true,
+                            worker_root: None,
                         },
                     ),
                 ]),
@@ -725,11 +764,24 @@ mod tests {
             },
             ..Default::default()
         };
-        let block = telegram_workspaces_block(&config).unwrap();
+        let block = telegram_workspaces_block(&config, None).unwrap();
         assert!(block.starts_with("# Telegram Workspaces"));
         assert!(block.contains("mirror topic in that group"));
         assert!(block.contains("- dub (chat -1001) — `/tmp/work/dub`"));
-        assert!(block.contains("- zdx (chat -1002) — `/tmp/personal/zdx` (orchestrator home)"));
+        // Orchestrator homes never host mirrors, so they are not offered as
+        // workspaces at all.
+        assert!(!block.contains("zdx (chat -1002)"));
+
+        // Rendered for the orchestrator's own chat, the block states the
+        // default root it gets when `Create_Thread` omits one.
+        let block = telegram_workspaces_block(&config, Some(-1002)).unwrap();
+        assert!(block.contains("Your default worker root is `/tmp/personal/zdx`"));
+        // A workspace chat has no default of its own.
+        assert!(
+            !telegram_workspaces_block(&config, Some(-1001))
+                .unwrap()
+                .contains("Your default worker root")
+        );
     }
 
     /// Workers discover a workspace's project skills, the orchestrator does
@@ -768,6 +820,7 @@ mod tests {
                             chat_id: -1001,
                             cwd: project.display().to_string(),
                             orchestrator: false,
+                            worker_root: None,
                         },
                     ),
                     (
@@ -776,6 +829,7 @@ mod tests {
                             chat_id: -1002,
                             cwd: umbrella.display().to_string(),
                             orchestrator: false,
+                            worker_root: None,
                         },
                     ),
                 ]),
@@ -799,7 +853,7 @@ mod tests {
             )]
         );
 
-        let block = telegram_workspaces_block(&config).unwrap();
+        let block = telegram_workspaces_block(&config, None).unwrap();
         assert!(block.contains("  - skill `dub-attest`: Run device attestation end to end."));
         assert_eq!(block.matches("skill `parity-flow`").count(), 1);
     }

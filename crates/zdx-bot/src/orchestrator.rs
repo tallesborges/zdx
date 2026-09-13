@@ -423,12 +423,20 @@ pub(crate) async fn handle_callback(
     }
 }
 
-/// Opens the worker's mirror topic: preferred host is the group whose profile
-/// `cwd` contains the worker's project root (so project workers surface in
-/// their project's group, even when orchestrated from a DM home), falling back
-/// to the orchestrator's own group. Returns `None` (with a log) when no group
-/// can host it or every attempt fails — the worker still runs, just without a
-/// Telegram window.
+/// Opens the worker's mirror topic.
+///
+/// Host resolution, in order:
+/// 1. the routable workspace whose `cwd` contains the worker's root (deepest);
+/// 2. the workspace covering the owning orchestrator group's configured default
+///    worker root;
+/// 3. a Threaded Mode DM home — private chats only, where the DM is the sole
+///    possible host and no workspace group exists.
+///
+/// A configured orchestrator group is **never** a host: keeping the management
+/// space free of worker topics is the point of the split. When no chat can host
+/// the mirror, or every resolved host rejects the topic, the worker still runs
+/// and the owner is warned — with the two cases distinguished — instead of the
+/// topic being dropped into the management group.
 async fn create_mirror_topic(
     context: &Arc<BotContext>,
     owner_thread_id: &str,
@@ -437,21 +445,46 @@ async fn create_mirror_topic(
     title: Option<&str>,
     prompt: &str,
 ) -> Option<MirrorTopic> {
-    let project_chat = context.mirror_chat_for_root(root);
-    // Bots may create topics in Threaded Mode private chats too, so a DM home
-    // is a valid fallback host for workers whose root has no group profile.
     let owner_chat = context
         .orchestrator_route(owner_thread_id)
         .map(|route| route.chat);
+
     let mut candidates: Vec<i64> = Vec::new();
-    candidates.extend(project_chat);
-    if let Some(chat) = owner_chat
+    if let Some(chat) = context.mirror_chat_for_root(root) {
+        candidates.push(chat);
+    }
+    if let Some(chat) =
+        owner_chat.and_then(|chat| context.mirror_chat_for_default_worker_root(chat))
         && !candidates.contains(&chat)
     {
         candidates.push(chat);
     }
+    // Legacy Threaded Mode DM behavior, unchanged: bots may create topics in
+    // private chats, and a DM home has no workspace group backing it. Scoped to
+    // private chats so it cannot become a general escape hatch back into a
+    // group.
+    if let Some(chat) = owner_chat
+        && chat > 0
+        && !candidates.contains(&chat)
+    {
+        candidates.push(chat);
+    }
+    // Defense in depth: the filters above already exclude orchestrator groups.
+    candidates.retain(|chat| !context.is_orchestrator_group(*chat));
+
     if candidates.is_empty() {
-        tracing::info!(worker = %worker_thread_id, "No group can host a mirror topic; skipping");
+        tracing::info!(
+            worker = %worker_thread_id,
+            root = %root.display(),
+            "No workspace can host a mirror topic; worker runs without one"
+        );
+        warn_no_mirror(
+            context,
+            owner_thread_id,
+            title,
+            &MirrorFailure::NoRoute { root },
+        )
+        .await;
         return None;
     }
 
@@ -462,6 +495,7 @@ async fn create_mirror_topic(
     };
 
     let mut created: Option<(i64, i64)> = None;
+    let mut attempts: Vec<(i64, String)> = Vec::new();
     for chat in candidates {
         match context.client().create_forum_topic(chat, &name).await {
             Ok(topic_id) => {
@@ -469,11 +503,24 @@ async fn create_mirror_topic(
                 break;
             }
             Err(err) => {
-                tracing::warn!(worker = %worker_thread_id, chat, %err, "Failed to create mirror topic");
+                let err = format!("{err:#}");
+                tracing::warn!(worker = %worker_thread_id, chat, err = %err, "Failed to create mirror topic");
+                attempts.push((chat, err));
             }
         }
     }
-    let (chat, topic_id) = created?;
+    let Some((chat, topic_id)) = created else {
+        // Routing worked; Telegram refused the topic. Saying the root is
+        // unroutable here would send the user to fix the wrong thing.
+        warn_no_mirror(
+            context,
+            owner_thread_id,
+            title,
+            &MirrorFailure::CreateFailed { attempts },
+        )
+        .await;
+        return None;
+    };
 
     let topic_thread_id = thread_id_for_chat(chat, Some(topic_id));
     let marked = Thread::with_id(topic_thread_id.clone()).and_then(|mut thread| {
@@ -507,6 +554,105 @@ async fn create_mirror_topic(
     )
     .await;
     Some(mirror)
+}
+
+/// Why a worker ended up without a mirror topic. The two cases need different
+/// remedies, so they must not share one message.
+enum MirrorFailure<'a> {
+    /// No chat was eligible to host the topic: a routing/config gap.
+    NoRoute { root: &'a Path },
+    /// Routing resolved hosts, but every `create_forum_topic` call failed.
+    CreateFailed { attempts: Vec<(i64, String)> },
+}
+
+/// Longest per-attempt Telegram error excerpt embedded in a warning.
+const MAX_MIRROR_ERROR_CHARS: usize = 300;
+
+/// Posts an unroutable-worker warning into the orchestrator topic. The worker
+/// runs either way; this keeps the failure visible and actionable instead of
+/// resolving it by putting a worker topic in the management group.
+async fn warn_no_mirror(
+    context: &Arc<BotContext>,
+    owner_thread_id: &str,
+    title: Option<&str>,
+    failure: &MirrorFailure<'_>,
+) {
+    let Some(route) = context.orchestrator_route(owner_thread_id) else {
+        return;
+    };
+    let label = title.map_or_else(
+        || "the worker".to_string(),
+        |title| format!("🛠 {}", escape_html(title)),
+    );
+    let text = match failure {
+        MirrorFailure::NoRoute { root } => {
+            no_mirror_warning_text(&label, &WarningKind::NoRoute(&root.display().to_string()))
+        }
+        MirrorFailure::CreateFailed { attempts } => {
+            let described: Vec<(String, String)> = attempts
+                .iter()
+                .map(|(chat, err)| (describe_chat(context, *chat), err.clone()))
+                .collect();
+            no_mirror_warning_text(&label, &WarningKind::CreateFailed(&described))
+        }
+    };
+
+    if let Err(err) = context
+        .client()
+        .send_message_without_preview(route.chat, &text, None, route.topic)
+        .await
+    {
+        tracing::warn!(err = %format!("{err:#}"), "Failed to post no-mirror warning");
+    }
+}
+
+/// Text-level shape of [`MirrorFailure`], with destinations already rendered.
+enum WarningKind<'a> {
+    NoRoute(&'a str),
+    /// `(described destination, Telegram error)` per failed attempt.
+    CreateFailed(&'a [(String, String)]),
+}
+
+/// Builds the warning body. A routing gap and a rejected topic need different
+/// remedies, so they never share wording: telling the user to add a workspace
+/// profile when routing already worked sends them to fix the wrong thing.
+fn no_mirror_warning_text(label: &str, kind: &WarningKind<'_>) -> String {
+    let still_running =
+        format!("{label} has no mirror topic. It is running and will still report back here.");
+    match kind {
+        WarningKind::NoRoute(root) => format!(
+            "⚠️ No workspace group covers <code>{}</code>, so {still_running} \
+             Add a Telegram workspace profile for that root, or point this orchestrator's \
+             <code>worker_root</code> at a workspace that covers it.",
+            escape_html(root)
+        ),
+        WarningKind::CreateFailed(attempts) => {
+            let mut detail = String::new();
+            for (destination, err) in *attempts {
+                let _ = write!(
+                    detail,
+                    "\n• {destination}: <code>{}</code>",
+                    escape_html(&truncate_chars(err, MAX_MIRROR_ERROR_CHARS))
+                );
+            }
+            format!(
+                "⚠️ Routing resolved, but Telegram refused to create the topic, so \
+                 {still_running}{detail}\n\nThe error above is the actual cause. Check that \
+                 the destination has forum topics enabled and that the bot may manage them; \
+                 a transient Telegram error is also possible. Routing is fine — this is not \
+                 fixed by adding a workspace profile."
+            )
+        }
+    }
+}
+
+/// Human-readable destination for a warning: profile name when the chat is
+/// bound to one, always with the chat id so it can be matched to config.
+fn describe_chat(context: &Arc<BotContext>, chat_id: i64) -> String {
+    match context.root_for_chat(chat_id).profile_name {
+        Some(name) => format!("{} (chat {chat_id})", escape_html(&name)),
+        None => format!("chat {chat_id}"),
+    }
 }
 
 /// Posts an orchestrator-sent follow-up prompt into the worker's mirror topic.
@@ -816,6 +962,40 @@ mod tests {
         // No thread on disk → short id; no mirror → plain text.
         let plain = worker_update_notice(&completion(WorkerStatus::Failed));
         assert_eq!(plain, "❌ Worker 🛠 worker-1 failed · reviewing…");
+    }
+
+    /// A routing gap and a rejected topic get different remedies. Conflating
+    /// them told the user their root was unroutable when routing had worked.
+    #[test]
+    fn no_mirror_warning_separates_routing_gap_from_creation_failure() {
+        let no_route = no_mirror_warning_text("🛠 build", &WarningKind::NoRoute("/tmp/scratch"));
+        assert!(no_route.contains("No workspace group covers <code>/tmp/scratch</code>"));
+        assert!(no_route.contains("Add a Telegram workspace profile"));
+        assert!(no_route.contains("still report back here"));
+
+        let attempts = vec![(
+            "commons (chat -100002)".to_string(),
+            "Telegram API error: CHAT_NOT_MODIFIED".to_string(),
+        )];
+        let failed = no_mirror_warning_text("🛠 build", &WarningKind::CreateFailed(&attempts));
+        // Names the destination that was actually tried and the real error.
+        assert!(failed.contains("commons (chat -100002)"));
+        assert!(failed.contains("CHAT_NOT_MODIFIED"));
+        assert!(failed.contains("Routing resolved"));
+        assert!(failed.contains("still report back here"));
+        // Must not send the user to fix routing, and must not diagnose a cause
+        // the API error did not establish.
+        assert!(!failed.contains("No workspace group covers"));
+        assert!(!failed.contains("Add a Telegram workspace profile"));
+        assert!(failed.contains("actual cause"));
+        assert!(failed.contains("also possible"));
+
+        // Error text is escaped and bounded.
+        let long = vec![("chat 7".to_string(), format!("<b>{}", "x".repeat(400)))];
+        let bounded = no_mirror_warning_text("the worker", &WarningKind::CreateFailed(&long));
+        assert!(bounded.contains("&lt;b&gt;"));
+        assert!(!bounded.contains("<b>"));
+        assert!(bounded.contains('…'));
     }
 
     #[test]

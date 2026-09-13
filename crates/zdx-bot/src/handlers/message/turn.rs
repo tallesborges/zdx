@@ -58,6 +58,7 @@ pub(super) async fn run_agent_turn(
         &worktree_root,
         context.bot_instruction_layer(),
         persistent_profile.as_deref(),
+        Some(incoming.chat_id),
     ) {
         Ok(prepared) => prepared,
         Err(err) => {

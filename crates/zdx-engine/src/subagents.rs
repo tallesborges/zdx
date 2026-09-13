@@ -1331,9 +1331,18 @@ mod tests {
         )
         .unwrap();
         assert!(orchestrator.contains("# Model Modes"));
-        assert!(orchestrator.contains(
-            "- `fast` — quick checks. Primary: `gemini:flash@low`. Alternatives: `openai:mini@low`."
-        ));
+        // Names and descriptions only: model ids belong to the worker's own
+        // workspace, which resolves `mode:<name>` at create_thread time.
+        assert!(orchestrator.contains("- `fast` — quick checks"));
+        assert!(
+            !orchestrator.contains("gemini:flash@low"),
+            "the catalog must not name a model id"
+        );
+        assert!(
+            !orchestrator.contains("openai:mini@low"),
+            "alternatives stay in config, out of the prompt"
+        );
+        assert!(orchestrator.contains("Workers inherit their project's model"));
         assert!(orchestrator.contains("zdx models list --plan-only"));
 
         // The default (non-subagent) prompt path leaves the section out too.
