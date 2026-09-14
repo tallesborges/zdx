@@ -987,7 +987,6 @@ mod tests {
             "create_thread",
             "send_thread_message",
             "get_thread_status",
-            "wait_for_threads",
             "update_thread",
             "remove_thread_prompt",
             "cancel_thread",

@@ -219,10 +219,7 @@ impl Bridge {
             } => {
                 self.handle_activity(&worker_thread_id, activity).await;
             }
-            WorkerEvent::Completed {
-                event,
-                suppress_owner_callback,
-            } => {
+            WorkerEvent::Completed(event) => {
                 self.finish_live_turn(&event).await;
                 post_mirror_update(
                     &self.context,
@@ -230,13 +227,8 @@ impl Bridge {
                     &event,
                 )
                 .await;
-                if !suppress_owner_callback {
-                    dispatch_owner_callback(&self.context, &self.queues, &event).await;
-                }
-                refresh_thread_header(&self.context, &event.owner_thread_id).await;
-            }
-            WorkerEvent::OwnerCallback(event) => {
                 dispatch_owner_callback(&self.context, &self.queues, &event).await;
+                refresh_thread_header(&self.context, &event.owner_thread_id).await;
             }
         }
     }

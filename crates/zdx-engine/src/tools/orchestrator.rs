@@ -1,9 +1,8 @@
 //! Orchestrator thread-control tools.
 //!
-//! Seven controls the reserved `orchestrator` profile uses to manage worker
+//! Six controls the reserved `orchestrator` profile uses to manage worker
 //! threads: `Create_Thread`, `Send_Thread_Message`, `Get_Thread_Status`,
-//! `Wait_For_Threads`, `Update_Thread`, `Remove_Thread_Prompt`, and
-//! `Cancel_Thread`.
+//! `Update_Thread`, `Remove_Thread_Prompt`, and `Cancel_Thread`.
 //!
 //! The registry always contains unbound stubs (so tool-name validation and
 //! schemas work everywhere); surfaces that host a live
@@ -26,9 +25,6 @@ use crate::core::workers::{WorkerManager, WorkerSnapshot};
 const MAX_FINAL_TEXT_CHARS: usize = 4000;
 /// Longest queued-prompt excerpt returned per queue entry.
 const MAX_QUEUED_PROMPT_CHARS: usize = 300;
-/// Default and maximum `wait_for_threads` timeouts.
-const DEFAULT_WAIT_SECS: u64 = 60;
-const MAX_WAIT_SECS: u64 = 600;
 /// How long `create_thread` waits for the surface bridge to open the worker's
 /// mirror before returning without a link. The worker is already queued.
 const MIRROR_LINK_WAIT: Duration = Duration::from_secs(5);
@@ -39,17 +35,15 @@ enum Op {
     Create,
     Send,
     Status,
-    Wait,
     Update,
     RemovePrompt,
     Cancel,
 }
 
-const ALL_OPS: [Op; 7] = [
+const ALL_OPS: [Op; 6] = [
     Op::Create,
     Op::Send,
     Op::Status,
-    Op::Wait,
     Op::Update,
     Op::RemovePrompt,
     Op::Cancel,
@@ -124,7 +118,6 @@ impl Tool for OrchestratorTool {
                         Some(err.to_string()),
                     )
                 }),
-                Op::Wait => wait_for_threads(&manager, &input).await,
                 Op::Update => update_thread(&manager, &input),
                 Op::RemovePrompt => remove_thread_prompt(&manager, &input),
                 Op::Cancel => cancel_thread(&manager, &input),
@@ -194,29 +187,6 @@ fn definition_for(op: Op) -> ToolDefinition {
                     }
                 },
                 "required": [],
-                "additionalProperties": false
-            }),
-        },
-        Op::Wait => ToolDefinition {
-            name: "Wait_For_Threads".to_string(),
-            description: "Wait until all listed workers are idle (no running turn, empty queue) or a bounded timeout expires. Returns each worker's snapshot plus whether the wait timed out. Only one active wait is allowed per owner thread at a time. Prefer short waits — worker completions also wake you automatically.".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "thread_ids": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "minItems": 1,
-                        "description": "Worker thread ids to wait on"
-                    },
-                    "timeout_seconds": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 600,
-                        "description": "Maximum seconds to wait (default: 60, max: 600)"
-                    }
-                },
-                "required": ["thread_ids"],
                 "additionalProperties": false
             }),
         },
@@ -622,47 +592,6 @@ fn get_thread_status(
     ToolOutput::success(json!({ "count": workers.len(), "workers": workers }))
 }
 
-async fn wait_for_threads(manager: &Arc<WorkerManager>, input: &Value) -> ToolOutput {
-    let Some(ids) = input.get("thread_ids").and_then(Value::as_array) else {
-        return ToolOutput::failure(
-            "invalid_input",
-            "Missing required array field: thread_ids",
-            None,
-        );
-    };
-    let thread_ids: Vec<String> = ids
-        .iter()
-        .filter_map(Value::as_str)
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(str::to_string)
-        .collect();
-    if thread_ids.is_empty() {
-        return ToolOutput::failure("invalid_input", "thread_ids cannot be empty", None);
-    }
-
-    let timeout_secs = input
-        .get("timeout_seconds")
-        .and_then(Value::as_u64)
-        .unwrap_or(DEFAULT_WAIT_SECS)
-        .clamp(1, MAX_WAIT_SECS);
-
-    match manager
-        .wait_for(&thread_ids, Duration::from_secs(timeout_secs))
-        .await
-    {
-        Ok((timed_out, snapshots)) => {
-            let workers: Vec<Value> = snapshots.iter().map(snapshot_json).collect();
-            ToolOutput::success(json!({
-                "timed_out": timed_out,
-                "waited_seconds_max": timeout_secs,
-                "workers": workers,
-            }))
-        }
-        Err(err) => ToolOutput::failure("wait_for_threads_failed", format!("{err:#}"), None),
-    }
-}
-
 fn update_thread(manager: &Arc<WorkerManager>, input: &Value) -> ToolOutput {
     let thread_id = match required_str(input, "thread_id") {
         Ok(value) => value,
@@ -948,7 +877,7 @@ mod tests {
     }
 
     #[test]
-    fn definitions_cover_all_seven_controls() {
+    fn definitions_cover_all_six_controls() {
         let names: Vec<String> = OrchestratorTool::stubs()
             .iter()
             .map(|tool| tool.definition().name)
@@ -959,7 +888,6 @@ mod tests {
                 "Create_Thread",
                 "Send_Thread_Message",
                 "Get_Thread_Status",
-                "Wait_For_Threads",
                 "Update_Thread",
                 "Remove_Thread_Prompt",
                 "Cancel_Thread",
