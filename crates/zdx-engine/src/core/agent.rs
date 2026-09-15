@@ -1305,7 +1305,7 @@ fn build_custom_run_turn_setup(
         bare_model.clone(),
         config.max_tokens,
         thread_id.map(str::to_owned),
-        thinking_enabled,
+        thinking_level,
     );
 
     let tool_ctx = ToolContext::new(

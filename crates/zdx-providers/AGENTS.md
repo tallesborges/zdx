@@ -13,7 +13,7 @@ LLM provider implementations extracted from `zdx-core`.
 - `src/gemini/` — Google Gemini API + Antigravity OAuth providers
 - `src/openrouter.rs`, `src/deepseek.rs`, `src/mistral.rs`, `src/moonshot.rs`, `src/stepfun.rs`, `src/xiaomi.rs`, `src/minimax.rs`, `src/zai.rs`, `src/xai.rs` — thin OpenAI-compatible providers
 - `src/grok_build.rs` — Grok Build provider: xAI Grok subscription OAuth over the xAI Responses API (bearer from `oauth::grok_build`, refreshed on demand)
-- `src/openai_compatible.rs` — generic OpenAI-compatible chat-completions client for user-defined "custom" providers (`[providers.custom.<name>]`); carries no `ProviderKind`, built directly by the engine from a resolved base URL + API key
+- `src/openai_compatible.rs` — generic OpenAI-compatible chat-completions client for user-defined "custom" providers (`[providers.custom.<name>]`); carries no `ProviderKind`, built directly by the engine from a resolved base URL + API key. Forwards the model spec's thinking level as a top-level `reasoning_effort` string (`off` omits it) so effort reaches the endpoint instead of being silently dropped.
 - `src/embeddings.rs` — hosted text-embeddings client (OpenAI-compatible `/embeddings`); explicit opt-in corpus/query embedding for native memory — batching, budgets, and persistence live in `zdx-engine`
 - `src/opencode_go.rs` — meta-provider that routes to inner clients based on model registry hints; every route sends `x-opencode-session` using collision-safe encoding of the thread/conversation id, or a client-scoped UUID for one-shot threadless runs. Threadless TUI chats supply a stable conversation id across turns.
 - `src/debug_metrics.rs`, `src/debug_trace.rs` — debug/tracing wrappers for provider streams
