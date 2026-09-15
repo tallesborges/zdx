@@ -337,6 +337,7 @@ Providers are the bridge between the agent and LLM APIs. New providers can be ad
 
 - Each provider may expose `base_url` and `tools` overrides under `[providers.<id>]` in config.
 - Provider implementations live in `zdx-providers`; the models registry (`models.toml`) tracks available models per provider.
+- **Custom providers:** `[providers.custom.<name>]` defines an OpenAI-compatible endpoint (base URL, API key, model allow-list) reached as `<name>:<model>`. A thinking level in the model spec is forwarded to the endpoint as a top-level `reasoning_effort` string carrying the level name (`low`/`medium`/`high`/`xhigh`/`max`); `off` omits the field. Custom endpoints are proxies that pass the value to their backend, so `@max` reaches backends that distinguish it (e.g. a vLLM-hosted DeepSeek V4).
 
 ### Anthropic adaptive thinking
 
@@ -344,7 +345,6 @@ Providers are the bridge between the agent and LLM APIs. New providers can be ad
 - We always send `thinking.display: "summarized"` so visible thinking text is preserved. This is required on Opus 4.7 (where the API default silently became `"omitted"`) and is a no-op on older Claude 4 models where `"summarized"` is already the default.
 
 ---
-- **Custom providers:** `[providers.custom.<name>]` defines an OpenAI-compatible endpoint (base URL, API key, model allow-list) reached as `<name>:<model>`. A thinking level in the model spec is forwarded to the endpoint as a top-level `reasoning_effort` string carrying the level name (`low`/`medium`/`high`/`xhigh`/`max`); `off` omits the field. Custom endpoints are proxies that pass the value to their backend, so `@max` reaches backends that distinguish it (e.g. a vLLM-hosted DeepSeek V4).
 
 ## 11) Environment Variables (Runtime Context)
 
