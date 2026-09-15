@@ -6,7 +6,8 @@
 //! workers run concurrently. All manager state (ownership, queues, status,
 //! completion channel, mirror links) is process-lifetime only by design — on
 //! restart the thread JSONL transcripts survive and workers can be re-attached
-//! with `send_message`, but queued prompts and pending callbacks are lost.
+//! with `send_message` (recovering their root and model override from the
+//! transcript), but queued prompts and pending callbacks are lost.
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
@@ -470,8 +471,8 @@ impl WorkerManager {
     }
 
     /// Queues another prompt on a worker. Unmanaged threads (e.g. after a bot
-    /// restart) are re-attached from their persisted root and owned by the
-    /// calling orchestrator from then on.
+    /// restart) are re-attached from their persisted root and model override,
+    /// and owned by the calling orchestrator from then on.
     ///
     /// # Errors
     /// Returns an error if the thread does not exist or has no usable root.
@@ -501,11 +502,12 @@ impl WorkerManager {
         }
 
         let root = resolve_persisted_root(worker_thread_id)?;
+        let model = resolve_persisted_model(worker_thread_id);
         Ok(self.attach_or_enqueue(
             worker_thread_id,
             Some(owner_thread_id),
             root,
-            None,
+            model,
             None,
             message,
         ))
@@ -535,7 +537,8 @@ impl WorkerManager {
         }
 
         let root = resolve_persisted_root(worker_thread_id)?;
-        Ok(self.attach_or_enqueue(worker_thread_id, None, root, None, None, message))
+        let model = resolve_persisted_model(worker_thread_id);
+        Ok(self.attach_or_enqueue(worker_thread_id, None, root, model, None, message))
     }
 
     /// Enqueues onto an already-managed worker; `None` when unmanaged.
@@ -766,6 +769,25 @@ fn resolve_persisted_root(worker_thread_id: &str) -> Result<PathBuf> {
             root.display()
         )
     })
+}
+
+/// Resolves an existing thread's persisted model override (`provider:model@thinking`)
+/// for re-attachment, so a resumed worker keeps running the model its status
+/// cards report instead of falling back to whatever the project root's config
+/// layers resolve to now. `None` means the worker was never pinned to a model
+/// and follows those layers by design.
+fn resolve_persisted_model(worker_thread_id: &str) -> Option<String> {
+    match thread_persistence::read_thread_model_override(worker_thread_id) {
+        Ok(model) => model,
+        Err(err) => {
+            tracing::debug!(
+                worker = %worker_thread_id,
+                err = %format!("{err:#}"),
+                "Failed to read worker model override"
+            );
+            None
+        }
+    }
 }
 
 /// Default runner: executes one prompt through `zdx --thread <id> exec` in the
@@ -1179,6 +1201,58 @@ mod tests {
         let event = next_completion(&mut completion_rx).await;
         assert_eq!(event.worker_thread_id, existing_id);
         assert_eq!(event.final_text.as_deref(), Some("resumed:continue"));
+    }
+
+    /// A resumed worker must run the model its thread (and every status card
+    /// reading it) reports, not whatever the project root's config layers
+    /// resolve to at resume time.
+    #[tokio::test]
+    async fn reattached_worker_runs_its_persisted_model_override() {
+        let _home = temp_zdx_home();
+        let project = tempfile::tempdir().unwrap();
+
+        let mut orchestrator_resumed =
+            thread_persistence::Thread::new_with_root(project.path()).unwrap();
+        orchestrator_resumed.set_root_path(project.path()).unwrap();
+        orchestrator_resumed
+            .set_model_override(Some("provider:pinned-model@high".to_string()))
+            .unwrap();
+        let orchestrator_resumed_id = orchestrator_resumed.id.clone();
+
+        let mut topic_resumed = thread_persistence::Thread::new_with_root(project.path()).unwrap();
+        topic_resumed.set_root_path(project.path()).unwrap();
+        topic_resumed
+            .set_model_override(Some("provider:other-pinned-model@low".to_string()))
+            .unwrap();
+        let topic_resumed_id = topic_resumed.id.clone();
+
+        let runner: WorkerRunner = Arc::new(|request: WorkerRunRequest| {
+            Box::pin(async move {
+                Ok(request
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| "<unpinned>".to_string()))
+            })
+        });
+        let (manager, mut completion_rx) = WorkerManager::with_runner(runner);
+
+        manager
+            .send_message("new-owner", &orchestrator_resumed_id, "continue")
+            .unwrap();
+        let event = next_completion(&mut completion_rx).await;
+        assert_eq!(
+            event.final_text.as_deref(),
+            Some("provider:pinned-model@high")
+        );
+
+        manager
+            .enqueue_from_topic(&topic_resumed_id, "continue")
+            .unwrap();
+        let event = next_completion(&mut completion_rx).await;
+        assert_eq!(
+            event.final_text.as_deref(),
+            Some("provider:other-pinned-model@low")
+        );
     }
 
     #[tokio::test]
