@@ -11,6 +11,7 @@ pub mod ask_media;
 pub mod background;
 pub mod gh_api;
 pub mod git;
+pub mod list_models;
 pub mod memory_search;
 pub mod orchestrator;
 pub mod read_thread;
@@ -380,6 +381,7 @@ impl ToolRegistry {
         self.register_tool(AskMedia);
         self.register_tool(GhApi);
         self.register_tool(Git);
+        self.register_tool(ListModels);
         self.register_tool(MemorySearch);
         self.register_tool(ReadThread);
         self.register_tool(Telegram);
@@ -578,6 +580,18 @@ impl Tool for Git {
         let input = input.clone();
         let ctx = ctx.clone();
         Box::pin(async move { git::execute(&input, &ctx).await })
+    }
+}
+
+struct ListModels;
+impl Tool for ListModels {
+    fn definition(&self) -> ToolDefinition {
+        list_models::definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { list_models::execute(&input, &ctx) })
     }
 }
 
@@ -997,6 +1011,7 @@ mod tests {
         assert!(names.contains(&"ask_media".to_string()));
         assert!(names.contains(&"gh_api".to_string()));
         assert!(names.contains(&"git".to_string()));
+        assert!(names.contains(&"list_models".to_string()));
         assert!(names.contains(&"telegram".to_string()));
         assert!(names.contains(&"edit".to_string()));
         assert!(names.contains(&"fetch_webpage".to_string()));

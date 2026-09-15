@@ -992,6 +992,7 @@ mod tests {
             "cancel_thread",
             "thread_search",
             "read_thread",
+            "list_models",
             "todo_write",
             "memory_search",
             "web_search",
@@ -1013,6 +1014,17 @@ mod tests {
                 "must not include {excluded}"
             );
         }
+
+        // Turns pin this list through `ToolSelection::Explicit`, which silently
+        // drops names missing from the registry — a typo would drop a tool with
+        // no error anywhere.
+        let resolved = crate::tools::ToolRegistry::builtins()
+            .tools_from_names(tools.iter().map(String::as_str));
+        assert_eq!(
+            resolved.len(),
+            tools.len(),
+            "every declared orchestrator tool must exist in the registry"
+        );
     }
 
     #[test]
@@ -1330,19 +1342,30 @@ mod tests {
         )
         .unwrap();
         assert!(orchestrator.contains("# Model Modes"));
-        // Names and descriptions only: model ids belong to the worker's own
-        // workspace, which resolves `mode:<name>` at create_thread time.
+        // Mode names and descriptions only: model ids belong to the worker's
+        // own workspace, which resolves `mode:<name>` at create_thread time.
         assert!(orchestrator.contains("- `fast` — quick checks"));
         assert!(
             !orchestrator.contains("gemini:flash@low"),
-            "the catalog must not name a model id"
+            "the mode catalog must not name a model id"
         );
         assert!(
             !orchestrator.contains("openai:mini@low"),
             "alternatives stay in config, out of the prompt"
         );
         assert!(orchestrator.contains("Workers inherit their project's model"));
-        assert!(orchestrator.contains("zdx models list --plan-only"));
+
+        // Ids come from the `list_models` tool, not from a registry dump in the
+        // prompt: home-base turns have no shell, and the prompt stays small.
+        assert!(orchestrator.contains("`list_models`"));
+        assert!(
+            !orchestrator.contains("# Available Models"),
+            "the prompt carries a pointer, not the catalog itself"
+        );
+        assert!(
+            !orchestrator.contains("zdx models list --plan-only"),
+            "the dead shell instruction is gone"
+        );
 
         // The default (non-subagent) prompt path leaves the section out too.
         let main = crate::core::context::build_prompt_with_context_and_layers(
