@@ -12,6 +12,7 @@ LLM provider implementations extracted from `zdx-core`.
 - `src/openai/` — OpenAI Responses/Chat Completions/image generation API + Codex OAuth provider
 - `src/gemini/` — Google Gemini API + Antigravity OAuth providers
 - `src/openrouter.rs`, `src/deepseek.rs`, `src/mistral.rs`, `src/moonshot.rs`, `src/stepfun.rs`, `src/xiaomi.rs`, `src/minimax.rs`, `src/zai.rs`, `src/xai.rs` — thin OpenAI-compatible providers
+- `src/zai.rs` — Z.AI GLM. The GLM-5.3 family always reasons: it 400s on `thinking: {"type": "disabled"}` (code 1210) and accepts only `reasoning_effort` `low|high|max`, so that family gets no thinking toggle and carries the level as a top-level effort instead; other GLM models keep the documented enabled/disabled toggle (verified against `api.z.ai` 2026-09-15).
 - `src/grok_build.rs` — Grok Build provider: xAI Grok subscription OAuth over the xAI Responses API (bearer from `oauth::grok_build`, refreshed on demand)
 - `src/openai_compatible.rs` — generic OpenAI-compatible chat-completions client for user-defined "custom" providers (`[providers.custom.<name>]`); carries no `ProviderKind`, built directly by the engine from a resolved base URL + API key. Forwards the model spec's thinking level as a top-level `reasoning_effort` string (`off` omits it) so effort reaches the endpoint instead of being silently dropped.
 - `src/embeddings.rs` — hosted text-embeddings client (OpenAI-compatible `/embeddings`); explicit opt-in corpus/query embedding for native memory — batching, budgets, and persistence live in `zdx-engine`

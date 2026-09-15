@@ -344,6 +344,11 @@ Providers are the bridge between the agent and LLM APIs. New providers can be ad
 - Adaptive thinking (`thinking.type: "adaptive"`) is used on Claude Opus 4.7, Opus 4.6, and Sonnet 4.6.
 - We always send `thinking.display: "summarized"` so visible thinking text is preserved. This is required on Opus 4.7 (where the API default silently became `"omitted"`) and is a no-op on older Claude 4 models where `"summarized"` is already the default.
 
+### Z.AI GLM-5.3 forced thinking
+
+- The GLM-5.3 family (`glm-5.3`, `glm-5.3-flash`) always reasons: it rejects `thinking: {"type": "disabled"}` with HTTP 400 (code 1210), and its `reasoning_effort` vocabulary is `low`/`high`/`max` only (`medium`/`minimal`/`xhigh` are rejected too). Those models therefore receive no `thinking` field (there is nothing to toggle) and carry the level as a top-level `reasoning_effort` (`medium`/`high`/`xhigh` collapse to `high`, `max` stays `max`, `off` omits it). Verified against `api.z.ai` 2026-09-15.
+- Other GLM models keep the documented toggle: `thinking: {"type": "enabled"}` when the model reasons, `{"type": "disabled"}` when it does not.
+
 ---
 
 ## 11) Environment Variables (Runtime Context)
