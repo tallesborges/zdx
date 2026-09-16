@@ -32,19 +32,21 @@ fn supports_max_effort(model: &str) -> bool {
 }
 
 /// Maps a ZDX thinking level to Meta's `reasoning_effort` vocabulary.
-/// Returns `None` when thinking is off (Meta rejects explicit `"none"`
-/// with HTTP 400, so the field is omitted and the model uses its default).
+/// Muse Spark always reasons: `"none"` is HTTP 400 and omitting the field
+/// hands depth to the model (~20x the tokens of `minimal` on trivial turns,
+/// measured 2026-09-16), so `Off` clamps to `minimal` — the lowest accepted
+/// effort — and the caller keeps the summary off so nothing is displayed.
 fn reasoning_effort_from_thinking_level(
     level: zdx_types::ThinkingLevel,
     model: &str,
-) -> Option<&'static str> {
+) -> &'static str {
     match level {
-        zdx_types::ThinkingLevel::Off => None,
-        zdx_types::ThinkingLevel::Low => Some("low"),
-        zdx_types::ThinkingLevel::Medium => Some("medium"),
-        zdx_types::ThinkingLevel::High => Some("high"),
-        zdx_types::ThinkingLevel::Max if supports_max_effort(model) => Some("max"),
-        zdx_types::ThinkingLevel::XHigh | zdx_types::ThinkingLevel::Max => Some("xhigh"),
+        zdx_types::ThinkingLevel::Off => "minimal",
+        zdx_types::ThinkingLevel::Low => "low",
+        zdx_types::ThinkingLevel::Medium => "medium",
+        zdx_types::ThinkingLevel::High => "high",
+        zdx_types::ThinkingLevel::Max if supports_max_effort(model) => "max",
+        zdx_types::ThinkingLevel::XHigh | zdx_types::ThinkingLevel::Max => "xhigh",
     }
 }
 
@@ -56,7 +58,10 @@ pub struct MetaConfig {
     pub model: String,
     pub max_tokens: Option<u32>,
     pub prompt_cache_key: Option<String>,
-    pub reasoning_effort: Option<String>,
+    pub reasoning_effort: String,
+    /// Request a natural-language reasoning summary. Off when thinking is
+    /// `off`: the model still reasons at `minimal`, but nothing is displayed.
+    pub reasoning_summary: bool,
 }
 
 impl MetaConfig {
@@ -78,7 +83,8 @@ impl MetaConfig {
         config_base_url: Option<&str>,
         config_api_key: Option<&str>,
         prompt_cache_key: Option<String>,
-        reasoning_effort: Option<String>,
+        reasoning_effort: String,
+        reasoning_summary: bool,
     ) -> Result<Self> {
         let api_key = ProviderKind::Meta.resolve_api_key(config_api_key)?;
         let base_url = ProviderKind::Meta.resolve_base_url(config_base_url)?;
@@ -90,6 +96,7 @@ impl MetaConfig {
             max_tokens,
             prompt_cache_key,
             reasoning_effort,
+            reasoning_summary,
         })
     }
 }
@@ -120,9 +127,9 @@ impl MetaClient {
     pub fn new(config: MetaConfig) -> Self {
         // A reasoning summary is what makes thinking visible: raw reasoning
         // stays private on Meta's API, so request the compact `auto` summary
-        // whenever reasoning is enabled. Summaries are best-effort — Meta may
+        // whenever thinking is enabled. Summaries are best-effort — Meta may
         // return an empty summary when the model barely reasons.
-        let reasoning_summary = config.reasoning_effort.as_ref().map(|_| "auto".to_string());
+        let reasoning_summary = config.reasoning_summary.then(|| "auto".to_string());
         Self {
             api_key: config.api_key,
             config: ResponsesConfig {
@@ -130,7 +137,7 @@ impl MetaClient {
                 path: RESPONSES_PATH.to_string(),
                 model: config.model,
                 max_output_tokens: config.max_tokens,
-                reasoning_effort: config.reasoning_effort,
+                reasoning_effort: Some(config.reasoning_effort),
                 reasoning_summary,
                 instructions: None,
                 text_verbosity: None,
@@ -183,7 +190,8 @@ pub fn build(
         ctx.base_url,
         ctx.api_key,
         ctx.cache_key.clone(),
-        reasoning_effort_from_thinking_level(ctx.thinking_level, ctx.model).map(str::to_owned),
+        reasoning_effort_from_thinking_level(ctx.thinking_level, ctx.model).to_owned(),
+        ctx.thinking_level.is_enabled(),
     )?)))
 }
 
@@ -194,14 +202,15 @@ mod tests {
     use super::{MetaClient, MetaConfig, RESPONSES_PATH, reasoning_effort_from_thinking_level};
     use crate::{ChatMessage, MessageContent, ProviderKind, resolve_provider};
 
-    fn test_config(model: &str, effort: Option<&str>) -> MetaConfig {
+    fn test_config(model: &str, effort: &str, summary: bool) -> MetaConfig {
         MetaConfig {
             api_key: "test-key".to_string(),
             base_url: "https://api.meta.ai/v1".to_string(),
             model: model.to_string(),
             max_tokens: Some(1024),
             prompt_cache_key: Some("thread-123".to_string()),
-            reasoning_effort: effort.map(str::to_owned),
+            reasoning_effort: effort.to_string(),
+            reasoning_summary: summary,
         }
     }
 
@@ -243,25 +252,26 @@ mod tests {
     #[test]
     fn meta_reasoning_effort_maps_thinking_levels() {
         let model = "muse-spark-1.3";
+        // Muse Spark cannot disable reasoning; `Off` clamps to the cheapest level.
         assert_eq!(
             reasoning_effort_from_thinking_level(ThinkingLevel::Off, model),
-            None
+            "minimal"
         );
         assert_eq!(
             reasoning_effort_from_thinking_level(ThinkingLevel::Low, model),
-            Some("low")
+            "low"
         );
         assert_eq!(
             reasoning_effort_from_thinking_level(ThinkingLevel::Medium, model),
-            Some("medium")
+            "medium"
         );
         assert_eq!(
             reasoning_effort_from_thinking_level(ThinkingLevel::High, model),
-            Some("high")
+            "high"
         );
         assert_eq!(
             reasoning_effort_from_thinking_level(ThinkingLevel::XHigh, model),
-            Some("xhigh")
+            "xhigh"
         );
     }
 
@@ -269,18 +279,18 @@ mod tests {
     fn meta_max_effort_is_standard_tier_only() {
         assert_eq!(
             reasoning_effort_from_thinking_level(ThinkingLevel::Max, "muse-spark-1.3"),
-            Some("max")
+            "max"
         );
         // Prefixed ids resolve to the same bare model.
         assert_eq!(
             reasoning_effort_from_thinking_level(ThinkingLevel::Max, "meta:muse-spark-1.3"),
-            Some("max")
+            "max"
         );
         // Contributor-tier models reject `max`; clamp to `xhigh`.
         for model in ["muse-spark-1.3-contributor", "muse-spark-1.1"] {
             assert_eq!(
                 reasoning_effort_from_thinking_level(ThinkingLevel::Max, model),
-                Some("xhigh"),
+                "xhigh",
                 "{model}"
             );
         }
@@ -288,7 +298,7 @@ mod tests {
 
     #[test]
     fn meta_uses_responses_api_with_encrypted_reasoning() {
-        let client = MetaClient::new(test_config("muse-spark-1.3", Some("high")));
+        let client = MetaClient::new(test_config("muse-spark-1.3", "high", true));
         assert_eq!(client.config.path, RESPONSES_PATH);
         assert_eq!(client.config.model, "muse-spark-1.3");
         assert_eq!(client.config.store, Some(false));
@@ -300,7 +310,7 @@ mod tests {
 
     #[test]
     fn meta_requests_reasoning_summary_when_thinking_enabled() {
-        let client = MetaClient::new(test_config("muse-spark-1.3", Some("high")));
+        let client = MetaClient::new(test_config("muse-spark-1.3", "high", true));
         let body = crate::openai::responses::build_request_body(
             &client.config,
             &[user_message(
@@ -329,8 +339,8 @@ mod tests {
     }
 
     #[test]
-    fn meta_omits_reasoning_when_thinking_off() {
-        let client = MetaClient::new(test_config("muse-spark-1.3", None));
+    fn meta_sends_minimal_effort_without_summary_when_thinking_off() {
+        let client = MetaClient::new(test_config("muse-spark-1.3", "minimal", false));
         let body = crate::openai::responses::build_request_body(
             &client.config,
             &[user_message("Hello.")],
@@ -340,9 +350,16 @@ mod tests {
         )
         .expect("request body should build");
         let value = serde_json::to_value(&body).expect("request body should serialize");
+        let reasoning = value
+            .get("reasoning")
+            .expect("reasoning must be sent: omitting it lets the model pick its own effort");
+        assert_eq!(
+            reasoning.get("effort").and_then(serde_json::Value::as_str),
+            Some("minimal")
+        );
         assert!(
-            value.get("reasoning").is_none(),
-            "reasoning must be omitted when thinking is off, got: {value}"
+            reasoning.get("summary").is_none(),
+            "no summary when thinking is off, got: {reasoning}"
         );
     }
 }
