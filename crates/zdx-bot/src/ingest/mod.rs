@@ -618,7 +618,7 @@ mod tests {
         })
     }
 
-    fn with(id: i64, fields: serde_json::Value) -> Message {
+    fn with(id: i64, fields: &serde_json::Value) -> Message {
         let mut value = base(id);
         let object = value.as_object_mut().expect("object");
         for (key, field) in fields.as_object().expect("object") {
@@ -633,7 +633,7 @@ mod tests {
     fn reads_the_text_of_a_rich_message() {
         let message = with(
             1,
-            json!({
+            &json!({
                 "rich_message": { "blocks": [
                     { "type": "paragraph", "text": "August:" },
                     { "type": "list", "items": [
@@ -652,16 +652,16 @@ mod tests {
 
     #[test]
     fn plain_text_and_captions_are_unchanged() {
-        let mut album = with(2, json!({ "caption": "first photo" }));
+        let mut album = with(2, &json!({ "caption": "first photo" }));
         album
             .grouped_messages
-            .push(with(3, json!({ "text": "note" })));
+            .push(with(3, &json!({ "text": "note" })));
 
         assert_eq!(extract_text(&album).as_deref(), Some("first photo\n\nnote"));
     }
 
     #[test]
     fn a_message_without_any_text_stays_empty() {
-        assert!(extract_text(&with(4, json!({ "rich_message": { "blocks": [] } }))).is_none());
+        assert!(extract_text(&with(4, &json!({ "rich_message": { "blocks": [] } }))).is_none());
     }
 }

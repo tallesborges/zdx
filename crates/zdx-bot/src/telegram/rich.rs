@@ -296,13 +296,13 @@ fn string_at(map: &Map<String, Value>, key: &str) -> String {
 mod tests {
     use super::*;
 
-    fn rich(blocks: Value) -> RichMessage {
+    fn rich(blocks: &Value) -> RichMessage {
         serde_json::from_value(serde_json::json!({ "blocks": blocks })).expect("rich message")
     }
 
     #[test]
     fn renders_paragraph_and_list() {
-        let message = rich(serde_json::json!([
+        let message = rich(&serde_json::json!([
             { "type": "paragraph", "text": "Agosto:" },
             { "type": "list", "items": [
                 { "label": "•", "blocks": [{ "type": "paragraph", "text": "Item one: 460,00" }] },
@@ -318,7 +318,7 @@ mod tests {
 
     #[test]
     fn renders_styled_and_nested_rich_text() {
-        let message = rich(serde_json::json!([
+        let message = rich(&serde_json::json!([
             { "type": "paragraph", "text": [
                 "total ",
                 { "type": "bold", "text": [{ "type": "italic", "text": "1.552,00" }] },
@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn renders_headings_code_quotes_and_tasks() {
-        let message = rich(serde_json::json!([
+        let message = rich(&serde_json::json!([
             { "type": "heading", "text": "Report", "size": 2 },
             { "type": "pre", "text": "cargo test", "language": "bash" },
             { "type": "blockquote", "blocks": [{ "type": "paragraph", "text": "quoted" }], "credit": "author" },
@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn renders_table_with_header_row() {
-        let message = rich(serde_json::json!([
+        let message = rich(&serde_json::json!([
             { "type": "table", "cells": [
                 [{ "text": "Month", "is_header": true }, { "text": "Total", "is_header": true }],
                 [{ "text": "August" }, { "text": "1.552,00" }],
@@ -370,7 +370,7 @@ mod tests {
 
     #[test]
     fn names_media_blocks_instead_of_dropping_them() {
-        let message = rich(serde_json::json!([
+        let message = rich(&serde_json::json!([
             { "type": "photo", "photo": [{ "file_id": "abc" }], "caption": { "text": "the receipt" } },
             { "type": "voice_note", "voice_note": { "file_id": "def" } },
         ]));
@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn keeps_text_of_unknown_block_and_text_types() {
-        let message = rich(serde_json::json!([
+        let message = rich(&serde_json::json!([
             { "type": "future_block", "text": "still readable", "blocks": [
                 { "type": "paragraph", "text": "nested too" },
             ]},
@@ -398,9 +398,9 @@ mod tests {
 
     #[test]
     fn empty_content_is_none() {
-        assert!(rich(serde_json::json!([])).to_text().is_none());
+        assert!(rich(&serde_json::json!([])).to_text().is_none());
         assert!(
-            rich(serde_json::json!([{ "type": "anchor", "name": "top" }]))
+            rich(&serde_json::json!([{ "type": "anchor", "name": "top" }]))
                 .to_text()
                 .is_none()
         );
