@@ -159,6 +159,8 @@ The override layer lives in `update()` (`crates/zdx-cli/src/cli/commands/models.
 
 ## Custom providers (`[providers.custom.<name>]`)
 
+Wire protocol is selected per provider with `api = "chat-completions"` (default, `<base_url>/chat/completions`) or `api = "anthropic"` (Anthropic Messages, reuses `AnthropicClient`, `<base_url>/v1/messages` with `x-api-key`). Keep `base_url` at the `.../v1` root either way: in `anthropic` mode one trailing `/v1` is stripped before the client appends `/v1/messages`.
+
 Custom-provider models never enter the registry. `custom_provider_models()` (`crates/zdx-engine/src/models.rs`) synthesizes picker entries at runtime from the configured `models` list, with zeroed pricing, `reasoning = true`, and **`input_images = false`**.
 
 That default is load-bearing: a model with no image support gets its images replaced by an `ask-media` note instead of being sent bytes the provider rejects. So:

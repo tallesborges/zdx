@@ -165,8 +165,8 @@ mod tests {
             CustomProviderConfig {
                 base_url: "https://example.test/v1".to_string(),
                 api_key: Some("test".to_string()),
-                api_key_env: None,
                 models: models.iter().map(|model| (*model).to_string()).collect(),
+                ..Default::default()
             },
         );
         config

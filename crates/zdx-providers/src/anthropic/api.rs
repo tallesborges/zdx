@@ -275,6 +275,34 @@ pub fn build(
     )?)))
 }
 
+/// Builds an Anthropic Messages client for a user-defined custom provider
+/// (`[providers.custom.<name>]` with `api = "anthropic"`). `base_url` is the
+/// API root; the client appends `/v1/messages`. Thinking budget and effort
+/// derive from `thinking_level` exactly as for the first-party provider.
+#[must_use]
+pub fn build_custom(
+    base_url: String,
+    api_key: String,
+    model: String,
+    max_tokens: u32,
+    thinking_level: zdx_types::ThinkingLevel,
+) -> Box<dyn crate::StreamingProvider> {
+    let thinking_budget_tokens = thinking_level
+        .compute_reasoning_budget(max_tokens)
+        .unwrap_or(0);
+    let thinking_effort = EffortLevel::from_thinking_level(thinking_level, &model);
+    Box::new(AnthropicClient::new(AnthropicConfig {
+        api_key,
+        base_url,
+        model,
+        max_tokens,
+        thinking_enabled: thinking_level.is_enabled(),
+        thinking_budget_tokens,
+        thinking_effort,
+        extra_headers: HeaderMap::new(),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

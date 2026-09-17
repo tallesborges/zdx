@@ -8,6 +8,7 @@ mod fixtures;
 
 mod cli_help;
 mod config_path;
+mod custom_provider_api;
 mod exec_subagent;
 mod login_logout;
 mod memory_embed;

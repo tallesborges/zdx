@@ -18,13 +18,13 @@ use tokio::time::{Duration, timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument as _;
 
-use crate::config::{Config, TextVerbosity, ThinkingLevel};
+use crate::config::{Config, CustomProviderApi, TextVerbosity, ThinkingLevel};
 use crate::core::events::{AgentEvent, ErrorKind, NoticeKind, ToolOutput, TurnStatus};
 use crate::core::interrupt::{self, InterruptedError};
 use crate::providers::{
     ChatContentBlock, ChatMessage, ContentBlockType, ProviderBuildContext, ProviderError,
     ProviderKind, ProviderStream, ReasoningBlock, ReplayToken, StreamEvent, StreamingProvider,
-    resolve_provider,
+    anthropic, resolve_provider,
 };
 use crate::subagents;
 use crate::tools::{ToolContext, ToolDefinition, ToolRegistry, ToolResult, ToolSet};
@@ -1280,8 +1280,10 @@ fn build_run_turn_setup(
     })
 }
 
-/// Builds the run-turn setup for a custom OpenAI-compatible provider
-/// (`[providers.custom.<name>]`): no `ProviderKind`, default tool set.
+/// Builds the run-turn setup for a custom provider
+/// (`[providers.custom.<name>]`): no `ProviderKind`, default tool set. The
+/// provider's `api` picks the client: Chat Completions (default) or Anthropic
+/// Messages.
 fn build_custom_run_turn_setup(
     config: &Config,
     options: &AgentOptions,
@@ -1299,14 +1301,23 @@ fn build_custom_run_turn_setup(
     };
     let base_url = custom_cfg.effective_base_url()?;
     let api_key = custom_cfg.resolve_api_key()?;
-    let client = crate::providers::openai_compatible::build_custom(
-        base_url,
-        api_key,
-        bare_model.clone(),
-        config.max_tokens,
-        thread_id.map(str::to_owned),
-        thinking_level,
-    );
+    let client = match custom_cfg.api {
+        CustomProviderApi::ChatCompletions => crate::providers::openai_compatible::build_custom(
+            base_url,
+            api_key,
+            bare_model.clone(),
+            config.max_tokens,
+            thread_id.map(str::to_owned),
+            thinking_level,
+        ),
+        CustomProviderApi::Anthropic => anthropic::api::build_custom(
+            base_url,
+            api_key,
+            bare_model.clone(),
+            config.effective_max_tokens_for(crate::models::ModelSpec::parse(&config.model).base),
+            thinking_level,
+        ),
+    };
 
     let tool_ctx = ToolContext::new(
         options

@@ -2561,14 +2561,28 @@ impl ProviderConfig {
     }
 }
 
-/// A user-defined OpenAI-compatible provider (`[providers.custom.<name>]`),
-/// e.g. a self-hosted `LiteLLM` proxy. The chat-completions path is appended
-/// to `base_url`, so point it at the OpenAI-compatible root
-/// (e.g. `https://llm.example.com/v1`).
+/// Wire protocol a custom provider speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum CustomProviderApi {
+    /// `OpenAI` Chat Completions (`POST <base_url>/chat/completions`).
+    #[default]
+    ChatCompletions,
+    /// Anthropic Messages (`POST <base_url>/v1/messages`).
+    Anthropic,
+}
+
+/// A user-defined provider (`[providers.custom.<name>]`), e.g. a self-hosted
+/// `LiteLLM` proxy. `api` selects the wire protocol; point `base_url` at the
+/// OpenAI-compatible root (e.g. `https://llm.example.com/v1`). A trailing
+/// `/v1` is dropped for the Anthropic API, whose client appends `/v1/messages`
+/// itself, so the same `base_url` works for either protocol.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct CustomProviderConfig {
     pub base_url: String,
+    /// Wire protocol; defaults to Chat Completions.
+    pub api: CustomProviderApi,
     /// Inline API key; takes precedence over `api_key_env`.
     pub api_key: Option<String>,
     /// Env var to read the API key from when `api_key` is unset.
@@ -2578,12 +2592,17 @@ pub struct CustomProviderConfig {
 }
 
 impl CustomProviderConfig {
-    /// Trimmed base URL without a trailing slash.
+    /// Trimmed base URL without a trailing slash, shaped for the selected
+    /// `api`: the Anthropic client appends `/v1/messages`, so one trailing
+    /// `/v1` is stripped in that mode.
     ///
     /// # Errors
     /// Returns an error if `base_url` is empty.
     pub fn effective_base_url(&self) -> anyhow::Result<String> {
-        let url = self.base_url.trim().trim_end_matches('/');
+        let mut url = self.base_url.trim().trim_end_matches('/');
+        if self.api == CustomProviderApi::Anthropic {
+            url = url.strip_suffix("/v1").unwrap_or(url).trim_end_matches('/');
+        }
         if url.is_empty() {
             anyhow::bail!("custom provider `base_url` must not be empty");
         }
@@ -2678,8 +2697,8 @@ mod tests {
             CustomProviderConfig {
                 base_url: "https://llm.example.com/v1".to_string(),
                 api_key: Some("sk-test".to_string()),
-                api_key_env: None,
                 models: vec!["model-a".to_string()],
+                ..Default::default()
             },
         );
 
@@ -3110,9 +3129,9 @@ models = ["model-a"]
         let cfg = CustomProviderConfig {
             base_url: "https://llm.example.com/v1/".to_string(),
             api_key: Some("  sk-test  ".to_string()),
-            api_key_env: None,
-            models: vec![],
+            ..Default::default()
         };
+        assert_eq!(cfg.api, CustomProviderApi::ChatCompletions);
         assert_eq!(
             cfg.effective_base_url().unwrap(),
             "https://llm.example.com/v1"
@@ -3122,6 +3141,67 @@ models = ["model-a"]
         let empty = CustomProviderConfig::default();
         assert!(empty.effective_base_url().is_err());
         assert!(empty.resolve_api_key().is_err());
+    }
+
+    /// In Anthropic mode the client appends `/v1/messages`, so a base URL
+    /// configured for Chat Completions (`.../v1`) must not double the segment.
+    #[test]
+    fn test_custom_provider_anthropic_base_url_strips_trailing_v1() {
+        let anthropic = |base_url: &str| CustomProviderConfig {
+            base_url: base_url.to_string(),
+            api: CustomProviderApi::Anthropic,
+            ..Default::default()
+        };
+        for base_url in [
+            "https://llm.example.com/v1",
+            "https://llm.example.com/v1/",
+            "https://llm.example.com",
+            "https://llm.example.com/",
+        ] {
+            assert_eq!(
+                anthropic(base_url).effective_base_url().unwrap(),
+                "https://llm.example.com",
+                "base_url = {base_url}"
+            );
+        }
+        // Only a whole trailing `/v1` segment is dropped.
+        assert_eq!(
+            anthropic("https://llm.example.com/av1")
+                .effective_base_url()
+                .unwrap(),
+            "https://llm.example.com/av1"
+        );
+        assert!(anthropic("/v1").effective_base_url().is_err());
+    }
+
+    /// `api` parses from TOML and defaults to Chat Completions when omitted.
+    #[test]
+    fn test_custom_provider_api_selector_parses() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        fs::write(
+            &config_path,
+            r#"[providers.custom.chat]
+base_url = "https://llm.example.com/v1"
+api_key = "sk-test"
+
+[providers.custom.msgs]
+base_url = "https://llm.example.com/v1"
+api = "anthropic"
+api_key = "sk-test"
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(
+            config.providers.custom["chat"].api,
+            CustomProviderApi::ChatCompletions
+        );
+        assert_eq!(
+            config.providers.custom["msgs"].api,
+            CustomProviderApi::Anthropic
+        );
     }
 
     /// Custom providers parse from a real config file.
