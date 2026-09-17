@@ -25,24 +25,38 @@ has been removed.
 - `src/lib/diff.ts`: unified-diff parser with word-level intra-line segmentation
 - `src/lib/highlight.ts`: compact line-local syntax tokenizer + span merger (six `--hljs-*` classes)
 - `src/lib/markdown.ts`: `marked` + allowlist sanitizer (model output is untrusted)
+- `src/lib/workers.ts`: worker roll-up shaping/formatting shared by the thread list, the Agent
+  summary and the Workers pane. `failed` is always its own bucket — folding it into `settled` hides
+  the one state the reader has to act on. Empty buckets are omitted, and a roll-up whose workers are
+  all lineage-only reads `N workers · status unavailable` rather than `N unknown`.
 - `src/lib/demo.ts`: **DEV-only** fixtures behind `?demo=1`; dropped from prod builds
 - `src/components/`: `Collapse`, `Markdown`, `DiffView`, `Drawer`, `TabStrip`, `Icon`,
   `WorkGroup` (the "Worked for 5m" turn divider), `GroupLine` (folded run), `ToolLine` (one call)
 - `src/views/ThreadView.svelte`: thread shell — owns the thread fetch + tab strip, renders one pane.
   Shows a Telegram jump button when the response carries `telegram_link`; the link is built
   server-side from the *resolved* id, so it works for `?id=active` too.
-- `src/views/TranscriptPane.svelte` / `AgentPane.svelte` / `ChangesPane.svelte`: the thread tabs.
+- `src/views/TranscriptPane.svelte` / `AgentPane.svelte` / `ChangesPane.svelte` / `WorkersPane.svelte`: the thread tabs.
   `ChangesPane` owns a scope selector — **All Changes** / **Uncommitted** / a specific commit.
   `uncommitted` renders the status groups already in `GitResponse`; the history scopes fetch
   `/api/git/scope` and render one flat file list. `All Changes` is the branch's contribution over
   the repo's main branch (PR-diff semantics) plus local edits; the selector subtitle names the base
   (`vs master · 3 commits`) so it is obvious that on main it equals Uncommitted. Untracked files
-  keep `kind=untracked` even inside `all`, because they are not part of any diff.
+  keep `kind=untracked` even inside `all`, because they are not part of any diff. The pane takes
+  `sharedRepo` and then says so in the header: the diff is resolved from the *thread's repository
+  root*, so it is not agent-attributed and several workers on one root see each other's edits.
+- `src/views/WorkersPane.svelte`: workers of an orchestrator thread. Rows open the worker in-app;
+  a worker with a mirror topic also gets a Telegram jump button. Rows come from two sources and
+  **must not be rendered alike**: a `live` row is backed by the in-memory `WorkerManager`, while a
+  row with `live: false` was recovered from persisted lineage after a restart and knows only that
+  the worker existed. Those render dashed, as `status unavailable`, never as settled.
 - `src/views/MonitorView.svelte`: section-aware monitor (`overview` renders everything)
 - `src/views/ThreadListView.svelte`: recent-thread browser (`?view=threads`). Each row opens the
   thread in-app; threads bound to a Telegram topic also get a jump button that calls
   `openTelegramLink` with the `t.me/c/<internal_id>/<topic_id>` link built server-side. TUI/CLI
-  threads and plain DMs have no linkable topic, so they show the in-app open only.
+  threads and plain DMs have no linkable topic, so they show the in-app open only. A row whose
+  `workers` roll-up is non-null is an orchestrator: it gets an `orch` badge and a counts line. Keep
+  that line in normal block flow — it is long enough to need two lines on a phone, and `truncate`
+  (or a single flex child, which cannot break) clips it mid-word.
 
 ## Transcript rendering
 
@@ -81,6 +95,12 @@ Thread tabs are data-driven in `ThreadView.svelte` — adding a pane is a one-li
 value in `ThreadTab`/`THREAD_TAB_LABELS` and an icon in `TAB_ICONS`. A "Files" tab is intentionally
 absent: it needs a repo file-listing endpoint that `server.rs` does not expose yet.
 
+**Workers** is conditional: it renders only when `ThreadResponse.worker_count > 0`, and it is placed
+**first** in the strip. The strip scrolls horizontally, so a tab appended last starts offscreen on a
+phone — which for an orchestrator's primary object is the same as not shipping it. A deep link to
+`?tab=workers` on a thread with no workers falls back to the transcript rather than rendering a tab
+that is not in the strip.
+
 `ThreadView` owns **both** the thread and the git fetch. Git lives there rather than in `ChangesPane`
 because the tab strip needs to know the tree is dirty before that pane is ever opened, and `AgentPane`
 shows the working folder and branch; passing it down keeps it to one request either way. `git status`
@@ -118,6 +138,16 @@ design live in `.zdx/design-reference/` — local only, gitignored, not shipped.
 - Keep `src/lib/types.ts` matching `server.rs` exactly — field names are the JSON keys, no renames.
 - The API is read-only and every route is GET. Do not add write calls until the Rust side grows them.
 - Poll only when something is actually live (`tool_running`) and only when `document.visibilityState === "visible"`.
+  **Exception — discovery.** A view whose job is to notice work *appearing* cannot gate its refresh on
+  "something is already running", and must not gate the *first* fetch on a page-load count either: a
+  thread becomes an orchestrator by spawning its first worker, so `worker_count > 0` from the thread
+  load is exactly the condition that is false when discovery matters. `ThreadView` therefore fetches
+  and re-fetches workers whenever the Workers **or** Agent tab is open and the document is visible
+  (4s while a worker is busy, 10s otherwise), and derives "has workers" from the fetched list as well
+  as the count. This reads one small endpoint; it never polls the transcript or shells out to git for
+  worker status. Background refresh failures are swallowed like the transcript poll — only the first
+  load surfaces an error — and the spinner shows only on that first load, so a zero-worker thread
+  keeps reading "No workers yet." instead of blinking.
 - Prefer plain CSS custom properties over new Tailwind config; the token layer is the source of truth.
 - No `dark:` variants — use the `light-dark()` tokens.
 - Syntax highlighting is intentionally line-local and approximate: diff hunks are fragments, so a

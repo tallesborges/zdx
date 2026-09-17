@@ -14,7 +14,7 @@
 import { startParam } from "./telegram";
 
 export type View = "thread" | "threads" | "monitor";
-export type ThreadTab = "agent" | "transcript" | "changes";
+export type ThreadTab = "workers" | "agent" | "transcript" | "changes";
 export type MonitorSection =
   | "overview"
   | "agents"
@@ -30,7 +30,7 @@ export interface Route {
   section: MonitorSection;
 }
 
-const THREAD_TABS: ThreadTab[] = ["agent", "transcript", "changes"];
+const THREAD_TABS: ThreadTab[] = ["workers", "agent", "transcript", "changes"];
 const MONITOR_SECTIONS: MonitorSection[] = [
   "overview",
   "agents",
@@ -41,6 +41,7 @@ const MONITOR_SECTIONS: MonitorSection[] = [
 ];
 
 export const THREAD_TAB_LABELS: Record<ThreadTab, string> = {
+  workers: "Workers",
   agent: "Agent",
   transcript: "Thread",
   changes: "Changes",

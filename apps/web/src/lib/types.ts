@@ -24,7 +24,49 @@ export interface ThreadResponse {
   /** True when `activity` holds only items at or after the requested `after`
    *  cursor, so it must be merged into the existing transcript. */
   partial: boolean;
+  /** Orchestrator that owns this thread as a worker, when it has one. */
+  parent_thread_id: string | null;
+  /** Title of `parent_thread_id`, resolved server-side. */
+  parent_title: string | null;
+  /** Workers owned by this thread (live plus recovered from lineage). Gates the
+   *  Workers tab without fetching the list first. */
+  worker_count: number;
   activity: ThreadActivity[];
+}
+
+export type WorkerStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "unknown";
+
+export interface WorkersResponse {
+  workers: WorkerItem[];
+}
+
+export interface WorkerItem {
+  thread_id: string;
+  title: string;
+  status: WorkerStatus;
+  /** False when the row was recovered from persisted lineage after a restart.
+   *  Those rows know the worker existed and nothing else: `status` is
+   *  "unknown" and every progress field is null. Never render them as settled. */
+  live: boolean;
+  queue_depth: number;
+  root_path: string | null;
+  /** Trailing component of `root_path`, for a compact project label. */
+  project: string | null;
+  current_tool: string | null;
+  current_tool_input: string | null;
+  turn_elapsed_seconds: number | null;
+  seconds_since_last_activity: number | null;
+  last_error: string | null;
+  /** Time since the worker thread's last write ("12m", "3h"), when known. */
+  age: string | null;
+  /** `t.me` link to the worker's mirror topic, when it has one. */
+  telegram_link: string | null;
 }
 
 export interface ThreadListResponse {
@@ -42,6 +84,20 @@ export interface ThreadListItem {
   /** `t.me` link to the bound Telegram topic. Null for TUI/CLI threads and
    *  plain DMs, which have no linkable topic. */
   telegram_link: string | null;
+  /** Worker counts when this thread is an orchestrator, else null. */
+  workers: WorkerRollup | null;
+}
+
+/** Worker counts for one orchestrator. `failed` is its own bucket on purpose:
+ *  it is the state the reader has to act on, so it is never folded into
+ *  `settled`. `unknown` is lineage-discovered with no live state. */
+export interface WorkerRollup {
+  total: number;
+  running: number;
+  queued: number;
+  failed: number;
+  settled: number;
+  unknown: number;
 }
 
 export interface ActivityBase {

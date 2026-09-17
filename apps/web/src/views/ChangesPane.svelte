@@ -9,9 +9,12 @@
     /** Owned by ThreadView, which needs it for the dirty-tree dot. */
     data: GitResponse | null;
     error?: string;
+    /** True when this thread is a worker or owns workers, so the repository
+     *  root is plausibly shared and the diff is not agent-attributed. */
+    sharedRepo?: boolean;
   }
 
-  let { id, data, error = "" }: Props = $props();
+  let { id, data, error = "", sharedRepo = false }: Props = $props();
 
   /** `uncommitted` | `all` | a commit hash. */
   let scope = $state("uncommitted");
@@ -147,6 +150,14 @@
         <p class="m-0 mt-0.5 truncate font-mono text-xxs text-muted-foreground" dir="rtl">
           {data.repository.root}
         </p>
+        {#if sharedRepo}
+          <!-- The diff is resolved from the thread's repository root, not from
+               what this agent edited. Several workers on one root see each
+               other's changes, so say so rather than implying attribution. -->
+          <p class="m-0 mt-1.5 border-t border-border pt-1.5 text-xxs text-muted-foreground">
+            Repository view — includes edits from any other worker sharing this root.
+          </p>
+        {/if}
       </div>
 
       <div class="relative">

@@ -658,6 +658,26 @@ impl WorkerManager {
         workers
     }
 
+    /// Status of every managed worker, grouped by owning thread.
+    ///
+    /// One lock and one pass, for callers that need counts across many owners
+    /// at once (the Mini App thread list) rather than per-owner snapshots.
+    ///
+    /// # Panics
+    /// Panics if the internal worker state lock is poisoned.
+    #[must_use]
+    pub fn statuses_by_owner(&self) -> HashMap<String, Vec<WorkerStatus>> {
+        let map = self.state.lock().expect("worker state lock poisoned");
+        let mut grouped: HashMap<String, Vec<WorkerStatus>> = HashMap::new();
+        for state in map.values() {
+            grouped
+                .entry(state.owner_thread_id.clone())
+                .or_default()
+                .push(state.status);
+        }
+        grouped
+    }
+
     /// Cancels the current turn (if any) and clears all queued prompts. The
     /// worker stays managed and a later `send_message` resumes it.
     ///

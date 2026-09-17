@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::{Component, Path as FilePath, PathBuf};
 use std::process::Stdio;
@@ -27,6 +27,7 @@ use zdx_engine::core::events::NoticeKind;
 use zdx_engine::core::thread_index;
 use zdx_engine::core::thread_persistence::{self, ThreadEvent, load_thread_events};
 use zdx_engine::core::usage_stats::{self, UsageStats};
+use zdx_engine::core::workers::{WorkerManager, WorkerSnapshot, WorkerStatus};
 use zdx_engine::models::ModelOption;
 use zdx_engine::providers::ReplayToken;
 use zdx_engine::providers::subscription_quota::{self, QuotaError, SubscriptionQuota};
@@ -62,12 +63,73 @@ pub struct ThreadResponse {
     /// True when `activity` holds only items at or after the requested `after`
     /// cursor, so the client must merge rather than replace.
     pub partial: bool,
+    /// Orchestrator that owns this thread as a worker, when it has one. Drives
+    /// the breadcrumb back out of a worker thread.
+    pub parent_thread_id: Option<String>,
+    /// Title of `parent_thread_id`, resolved so the client needs no second call.
+    pub parent_title: Option<String>,
+    /// Workers owned by this thread, live plus recovered from lineage. Gates
+    /// the Workers tab without the client having to fetch the list first.
+    pub worker_count: usize,
     pub activity: Vec<ThreadActivity>,
 }
 
 #[derive(Serialize)]
 pub struct ThreadListResponse {
     pub threads: Vec<ThreadListItem>,
+}
+
+#[derive(Serialize)]
+pub struct WorkersResponse {
+    pub workers: Vec<WorkerItem>,
+}
+
+/// One worker of an orchestrator thread.
+///
+/// Rows come from two sources that carry different amounts of truth. A live row
+/// is backed by the in-memory `WorkerManager` and has real status and progress.
+/// A row recovered from persisted lineage after a restart knows only that the
+/// worker existed; `live` is false and `status` is `unknown` for those, and the
+/// progress fields are all `None`. Clients must not render the two the same
+/// way — reporting a stale worker as settled would be a lie.
+#[derive(Serialize)]
+pub struct WorkerItem {
+    pub thread_id: String,
+    pub title: String,
+    /// `queued` | `running` | `completed` | `failed` | `cancelled` | `unknown`.
+    pub status: &'static str,
+    /// Whether runtime state was available for this worker.
+    pub live: bool,
+    pub queue_depth: usize,
+    pub root_path: Option<String>,
+    /// Trailing component of `root_path`, for a compact project label.
+    pub project: Option<String>,
+    pub current_tool: Option<String>,
+    pub current_tool_input: Option<String>,
+    pub turn_elapsed_seconds: Option<u64>,
+    pub seconds_since_last_activity: Option<u64>,
+    pub last_error: Option<String>,
+    /// Time since the worker thread's last write (`12m`, `3h`), when known.
+    pub age: Option<String>,
+    /// `t.me` link to the worker's mirror topic, when it has one.
+    pub telegram_link: Option<String>,
+}
+
+/// Worker counts for one orchestrator, as shown on a thread-list row.
+///
+/// `failed` is deliberately its own bucket rather than part of `settled`: a
+/// failed worker is the one state the reader has to act on, and averaging it
+/// into "settled" is how it gets missed.
+#[derive(Serialize, Default)]
+pub struct WorkerRollup {
+    pub total: usize,
+    pub running: usize,
+    pub queued: usize,
+    pub failed: usize,
+    /// Completed or cancelled — finished, nothing to do.
+    pub settled: usize,
+    /// Known to exist from persisted lineage, with no live state to report.
+    pub unknown: usize,
 }
 
 #[derive(Serialize)]
@@ -84,6 +146,9 @@ pub struct ThreadListItem {
     /// one. `None` for TUI/CLI threads and plain DMs, which have no linkable
     /// topic.
     pub telegram_link: Option<String>,
+    /// Worker counts when this thread is an orchestrator, else `None`. Drives
+    /// the `orch` badge and the roll-up line on the row.
+    pub workers: Option<WorkerRollup>,
 }
 
 #[derive(Serialize)]
@@ -441,16 +506,26 @@ pub(crate) struct ServerState {
     bot_token: String,
     allowlist_user_ids: HashSet<i64>,
     root: PathBuf,
+    /// Live worker state for orchestrator threads. In-memory and
+    /// process-scoped: it is empty for workers that ran before a restart, which
+    /// is why worker listings merge it with persisted lineage.
+    workers: Arc<WorkerManager>,
     monitor_cache: RwLock<Option<CachedMonitor>>,
     subscription_cache: Mutex<Option<CachedSubscriptions>>,
 }
 
 impl ServerState {
-    fn new(bot_token: String, allowlist_user_ids: HashSet<i64>, root: PathBuf) -> Self {
+    fn new(
+        bot_token: String,
+        allowlist_user_ids: HashSet<i64>,
+        root: PathBuf,
+        workers: Arc<WorkerManager>,
+    ) -> Self {
         Self {
             bot_token,
             allowlist_user_ids,
             root,
+            workers,
             monitor_cache: RwLock::new(None),
             subscription_cache: Mutex::new(None),
         }
@@ -467,6 +542,7 @@ pub(crate) fn create_router(state: Arc<ServerState>) -> Router {
     let api = Router::new()
         .route("/threads", get(get_threads))
         .route("/threads/{id}", get(get_thread))
+        .route("/threads/{id}/workers", get(get_thread_workers))
         .route("/monitor", get(get_monitor))
         .route("/git", get(get_git))
         .route("/git/scope", get(get_git_scope))
@@ -576,16 +652,38 @@ fn resolve_telegram_link(thread_id: &str) -> Option<String> {
 }
 
 /// Lists the most recently active top-level threads for the Mini App browser.
-async fn get_threads() -> Result<Json<ThreadListResponse>, ApiError> {
-    tokio::task::spawn_blocking(|| {
+async fn get_threads(
+    State(state): State<Arc<ServerState>>,
+) -> Result<Json<ThreadListResponse>, ApiError> {
+    let manager = Arc::clone(&state.workers);
+    tokio::task::spawn_blocking(move || {
         let now = SystemTime::now();
-        let threads = thread_persistence::list_recent_threads(THREAD_LIST_LIMIT)
-            .map_err(|error| {
+        let summaries =
+            thread_persistence::list_recent_threads(THREAD_LIST_LIMIT).map_err(|error| {
                 tracing::warn!(error = %format!("{error:#}"), "Failed to list Mini App threads");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Thread list failed")
-            })?
+            })?;
+
+        // One indexed lookup for the page being rendered, not a corpus scan:
+        // the id list is bounded by THREAD_LIST_LIMIT.
+        let ids: Vec<&str> = summaries.iter().map(|s| s.id.as_str()).collect();
+        let persisted_counts =
+            thread_index::worker_counts_for_parents(&ids).unwrap_or_else(|error| {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    "Failed to count workers for the Mini App thread list"
+                );
+                HashMap::new()
+            });
+        let live_statuses = manager.statuses_by_owner();
+
+        let threads = summaries
             .into_iter()
             .map(|summary| ThreadListItem {
+                workers: worker_rollup(
+                    live_statuses.get(&summary.id).map(Vec::as_slice),
+                    persisted_counts.get(&summary.id).copied().unwrap_or(0),
+                ),
                 project: summary.root_path.as_deref().and_then(|root| {
                     FilePath::new(root)
                         .file_name()
@@ -613,10 +711,39 @@ async fn get_threads() -> Result<Json<ThreadListResponse>, ApiError> {
     })?
 }
 
+/// Combines live worker statuses with the persisted child count for one thread.
+///
+/// `persisted` can lag a just-created worker (the index syncs on a freshness
+/// window), so the total is whichever source knows about more workers, and
+/// `unknown` is only what live state cannot account for.
+fn worker_rollup(live: Option<&[WorkerStatus]>, persisted: usize) -> Option<WorkerRollup> {
+    let live = live.unwrap_or(&[]);
+    if live.is_empty() && persisted == 0 {
+        return None;
+    }
+
+    let mut rollup = WorkerRollup {
+        total: live.len().max(persisted),
+        ..WorkerRollup::default()
+    };
+    for status in live {
+        match status {
+            WorkerStatus::Running => rollup.running += 1,
+            WorkerStatus::Queued => rollup.queued += 1,
+            WorkerStatus::Failed => rollup.failed += 1,
+            WorkerStatus::Completed | WorkerStatus::Cancelled => rollup.settled += 1,
+        }
+    }
+    rollup.unknown = rollup.total.saturating_sub(live.len());
+    Some(rollup)
+}
+
 async fn get_thread(
+    State(state): State<Arc<ServerState>>,
     Path(id): Path<String>,
     Query(query): Query<ThreadQuery>,
 ) -> Result<Json<ThreadResponse>, ApiError> {
+    let workers = Arc::clone(&state.workers);
     tokio::task::spawn_blocking(move || {
         let target_id = if id == "active" {
             thread_index::latest_thread_id_with_prefix("telegram-")
@@ -636,8 +763,9 @@ async fn get_thread(
         })?;
 
         let telegram_link = resolve_telegram_link(&target_id);
+        let lineage = resolve_lineage(&workers, &target_id);
 
-        let mut response = project_thread(target_id, events, telegram_link);
+        let mut response = project_thread(target_id, events, telegram_link, lineage);
         append_running_tools(&mut response);
 
         // Live polling asks only for what it has not seen. Dropping delivered
@@ -653,6 +781,197 @@ async fn get_thread(
     .map_err(|error| {
         tracing::warn!(%error, "Mini App thread load task failed");
         (StatusCode::INTERNAL_SERVER_ERROR, "Thread load failed")
+    })?
+}
+
+/// Follows a single `alias_to` hop, so an id taken from a Telegram worker
+/// mirror topic resolves to the worker thread it mirrors.
+///
+/// Mini App deep links are built from the *topic session* id
+/// (`?startapp={thread_id}` in the pinned header), and a worker mirror topic is
+/// an alias whose own thread file carries neither lineage nor workers. Without
+/// this hop, opening a worker from its mirror topic looks like a thread with no
+/// orchestrator and no workers. The Git route already resolves the same way.
+fn resolve_alias_id(id: &str) -> String {
+    thread_persistence::read_thread_alias(id)
+        .ok()
+        .flatten()
+        .filter(|alias| valid_thread_id(alias))
+        .unwrap_or_else(|| id.to_string())
+}
+
+/// Lineage and worker counts attached to a single thread response.
+#[derive(Default)]
+struct ThreadLineage {
+    parent_thread_id: Option<String>,
+    parent_title: Option<String>,
+    worker_count: usize,
+}
+
+/// Resolves the orchestrator a thread belongs to and how many workers it owns.
+///
+/// Both halves are indexed lookups: the parent comes off the thread's own
+/// cached summary, and the worker count is the same union the Workers pane
+/// renders, so the tab never appears for a thread with nothing behind it.
+fn resolve_lineage(workers: &WorkerManager, thread_id: &str) -> ThreadLineage {
+    let effective_id = resolve_alias_id(thread_id);
+    let parent_thread_id = thread_persistence::read_thread_summary_cached(&effective_id)
+        .ok()
+        .flatten()
+        .and_then(|summary| summary.parent_thread_id);
+    let parent_title = parent_thread_id.as_deref().map(thread_display_title);
+
+    ThreadLineage {
+        parent_thread_id,
+        parent_title,
+        worker_count: collect_workers(workers, &effective_id).len(),
+    }
+}
+
+/// Best-effort display title for a thread id, falling back to a short id.
+fn thread_display_title(thread_id: &str) -> String {
+    thread_persistence::read_thread_title(thread_id)
+        .ok()
+        .flatten()
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| thread_id.chars().take(8).collect())
+}
+
+/// Ordering rank so active work sorts above anything settled or stale.
+fn status_rank(status: &str) -> u8 {
+    match status {
+        "running" => 0,
+        "queued" => 1,
+        "failed" => 2,
+        "completed" => 3,
+        "cancelled" => 4,
+        _ => 5,
+    }
+}
+
+/// Builds the worker list for an orchestrator thread.
+///
+/// Two sources, deliberately not equivalent:
+///
+/// - `WorkerManager` holds live state, but only for this process. Everything it
+///   knows disappears on restart.
+/// - `thread_meta.parent_thread_id` survives restarts, but records only that a
+///   worker existed. It restores *discovery*, never status.
+///
+/// Persisted children are filtered to `origin_kind IS NULL`, because the same
+/// parent link is used by subagent and helper runs, which are not workers and
+/// must not show up here.
+fn collect_workers(workers: &WorkerManager, owner_thread_id: &str) -> Vec<WorkerItem> {
+    let now = SystemTime::now();
+    let live = workers.list_for_owner(owner_thread_id);
+    let live_ids: HashSet<String> = live.iter().map(|w| w.thread_id.clone()).collect();
+
+    let mut items: Vec<WorkerItem> = live.into_iter().map(live_worker_item).collect();
+
+    let persisted = thread_index::child_runs_cached(owner_thread_id).unwrap_or_else(|error| {
+        tracing::warn!(
+            owner = owner_thread_id,
+            error = %format!("{error:#}"),
+            "Failed to read persisted worker lineage"
+        );
+        Vec::new()
+    });
+    for summary in persisted {
+        if summary.origin_kind.is_some() || live_ids.contains(&summary.id) {
+            continue;
+        }
+        items.push(WorkerItem {
+            title: summary
+                .title
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or_else(|| summary.id.chars().take(8).collect()),
+            status: "unknown",
+            live: false,
+            queue_depth: 0,
+            project: summary.root_path.as_deref().and_then(|root| {
+                FilePath::new(root)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            }),
+            root_path: summary.root_path,
+            current_tool: None,
+            current_tool_input: None,
+            turn_elapsed_seconds: None,
+            seconds_since_last_activity: None,
+            last_error: None,
+            age: summary
+                .modified
+                .and_then(|modified| now.duration_since(modified).ok())
+                .map(service::format_uptime),
+            telegram_link: resolve_telegram_link(&summary.id),
+            thread_id: summary.id,
+        });
+    }
+
+    items.sort_by(|a, b| {
+        status_rank(a.status)
+            .cmp(&status_rank(b.status))
+            .then_with(|| a.title.cmp(&b.title))
+    });
+    items
+}
+
+fn live_worker_item(worker: WorkerSnapshot) -> WorkerItem {
+    let root_path = worker.root.to_string_lossy().into_owned();
+    WorkerItem {
+        title: thread_display_title(&worker.thread_id),
+        status: match worker.status {
+            WorkerStatus::Queued => "queued",
+            WorkerStatus::Running => "running",
+            WorkerStatus::Completed => "completed",
+            WorkerStatus::Failed => "failed",
+            WorkerStatus::Cancelled => "cancelled",
+        },
+        live: true,
+        queue_depth: worker.queue_depth,
+        project: worker
+            .root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned()),
+        root_path: Some(root_path),
+        current_tool: worker.current_tool,
+        current_tool_input: worker.current_tool_input,
+        turn_elapsed_seconds: worker.turn_elapsed_seconds,
+        seconds_since_last_activity: worker.seconds_since_last_activity,
+        last_error: worker.last_error,
+        age: None,
+        telegram_link: worker
+            .mirror_url
+            .or_else(|| resolve_telegram_link(&worker.thread_id)),
+        thread_id: worker.thread_id,
+    }
+}
+
+async fn get_thread_workers(
+    State(state): State<Arc<ServerState>>,
+    Path(id): Path<String>,
+) -> Result<Json<WorkersResponse>, ApiError> {
+    let workers = Arc::clone(&state.workers);
+    tokio::task::spawn_blocking(move || {
+        let target_id = if id == "active" {
+            thread_index::latest_thread_id_with_prefix("telegram-")
+                .ok()
+                .flatten()
+                .unwrap_or(id)
+        } else {
+            id
+        };
+        if !valid_thread_id(&target_id) {
+            return Err((StatusCode::BAD_REQUEST, "Invalid thread ID"));
+        }
+        Ok(Json(WorkersResponse {
+            workers: collect_workers(&workers, &resolve_alias_id(&target_id)),
+        }))
+    })
+    .await
+    .map_err(|error| {
+        tracing::warn!(%error, "Mini App worker list task failed");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Worker list failed")
     })?
 }
 
@@ -698,6 +1017,7 @@ fn project_thread(
     target_id: String,
     events: Vec<ThreadEvent>,
     telegram_link: Option<String>,
+    lineage: ThreadLineage,
 ) -> ThreadResponse {
     let mut title = "Thread Transcript".to_string();
     let mut activity = Vec::new();
@@ -829,6 +1149,9 @@ fn project_thread(
         total_events: activity.len(),
         cursor: activity.len(),
         partial: false,
+        parent_thread_id: lineage.parent_thread_id,
+        parent_title: lineage.parent_title,
+        worker_count: lineage.worker_count,
         activity,
     }
 }
@@ -2033,8 +2356,14 @@ pub(crate) fn spawn_server(
     allowlist_user_ids: HashSet<i64>,
     port: u16,
     root: PathBuf,
+    workers: Arc<WorkerManager>,
 ) {
-    let state = Arc::new(ServerState::new(bot_token, allowlist_user_ids, root));
+    let state = Arc::new(ServerState::new(
+        bot_token,
+        allowlist_user_ids,
+        root,
+        workers,
+    ));
     let app = create_router(state);
 
     tokio::spawn(async move {
@@ -2052,6 +2381,54 @@ pub(crate) fn spawn_server(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_rollup_keeps_failed_out_of_settled() {
+        let rollup = worker_rollup(
+            Some(&[
+                WorkerStatus::Running,
+                WorkerStatus::Queued,
+                WorkerStatus::Failed,
+                WorkerStatus::Completed,
+                WorkerStatus::Cancelled,
+            ]),
+            5,
+        )
+        .expect("workers present");
+
+        assert_eq!(rollup.total, 5);
+        assert_eq!(rollup.running, 1);
+        assert_eq!(rollup.queued, 1);
+        assert_eq!(rollup.failed, 1);
+        // Completed + cancelled only; a failure must stay visible on its own.
+        assert_eq!(rollup.settled, 2);
+        assert_eq!(rollup.unknown, 0);
+    }
+
+    #[test]
+    fn worker_rollup_reports_lineage_only_workers_as_unknown() {
+        let rollup = worker_rollup(None, 3).expect("persisted children present");
+        assert_eq!(rollup.total, 3);
+        assert_eq!(rollup.unknown, 3);
+        assert_eq!(rollup.settled, 0);
+        assert_eq!(rollup.failed, 0);
+    }
+
+    #[test]
+    fn worker_rollup_trusts_live_state_when_the_index_lags_a_new_worker() {
+        // The index syncs on a freshness window, so a just-created worker can be
+        // live while the persisted count is still behind.
+        let rollup = worker_rollup(Some(&[WorkerStatus::Running]), 0).expect("live worker");
+        assert_eq!(rollup.total, 1);
+        assert_eq!(rollup.running, 1);
+        assert_eq!(rollup.unknown, 0);
+    }
+
+    #[test]
+    fn worker_rollup_is_absent_for_a_thread_with_no_workers() {
+        assert!(worker_rollup(None, 0).is_none());
+        assert!(worker_rollup(Some(&[]), 0).is_none());
+    }
 
     const SAMPLE_BOT_TOKEN: &str = "1234567890:TEST-BOT-TOKEN-FOR-UNIT-TESTS-ONLY";
     const SAMPLE_AUTH_DATE: u64 = 1_662_771_648;
@@ -2087,6 +2464,7 @@ mod tests {
             SAMPLE_BOT_TOKEN.to_string(),
             sample_allowlist(),
             PathBuf::from("."),
+            WorkerManager::new().0,
         )));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -2131,6 +2509,7 @@ mod tests {
             SAMPLE_BOT_TOKEN.to_string(),
             sample_allowlist(),
             PathBuf::from("."),
+            WorkerManager::new().0,
         )));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -2195,6 +2574,7 @@ mod tests {
             SAMPLE_BOT_TOKEN.to_string(),
             sample_allowlist(),
             PathBuf::from("."),
+            WorkerManager::new().0,
         )));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -2319,7 +2699,12 @@ mod tests {
             },
         ];
 
-        let response = project_thread("thread-1".to_string(), events, None);
+        let response = project_thread(
+            "thread-1".to_string(),
+            events,
+            None,
+            ThreadLineage::default(),
+        );
         let json = serde_json::to_string(&response).expect("serialize thread activity");
 
         assert_eq!(response.title, "Inspect the agent");
@@ -2362,13 +2747,23 @@ mod tests {
             },
         ];
 
-        let full = project_thread("thread-delta".to_string(), events.clone(), None);
+        let full = project_thread(
+            "thread-delta".to_string(),
+            events.clone(),
+            None,
+            ThreadLineage::default(),
+        );
         assert_eq!(full.activity.len(), 3);
         assert_eq!(full.cursor, 3);
         assert!(!full.partial, "a first load is never partial");
 
         // Simulate the handler's windowing at the cursor the client last saw.
-        let mut delta = project_thread("thread-delta".to_string(), events, None);
+        let mut delta = project_thread(
+            "thread-delta".to_string(),
+            events,
+            None,
+            ThreadLineage::default(),
+        );
         let after = 2;
         delta.activity.retain(|item| item.sequence() >= after);
         delta.partial = true;

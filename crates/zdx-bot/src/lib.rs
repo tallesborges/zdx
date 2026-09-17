@@ -192,7 +192,13 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
 
     // Start embedded Mini App web server if enabled
     if let Some((bot_token, allowlist_user_ids, port)) = miniapp_server {
-        crate::server::spawn_server(bot_token, allowlist_user_ids, port, miniapp_root);
+        crate::server::spawn_server(
+            bot_token,
+            allowlist_user_ids,
+            port,
+            miniapp_root,
+            Arc::clone(&worker_manager),
+        );
     }
 
     let mut offset: Option<i64> = None;

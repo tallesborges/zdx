@@ -289,6 +289,43 @@ pub fn child_runs_cached(parent_id: &str) -> Result<Vec<ThreadSummary>> {
     })
 }
 
+/// Counts worker children for each of `parent_ids`, in one indexed query.
+///
+/// Scoped to the ids handed in — the caller passes the page it is about to
+/// render, so this stays a bounded lookup over `idx_thread_meta_parent` rather
+/// than a corpus scan. Parents with no workers are absent from the map.
+///
+/// Only children with `origin_kind IS NULL` count: subagent and helper runs
+/// share the same `parent_thread_id` link but are not workers.
+///
+/// # Errors
+/// Returns an error when the cache cannot be opened, synced, or read.
+pub fn worker_counts_for_parents(parent_ids: &[&str]) -> Result<HashMap<String, usize>> {
+    if parent_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    with_conn(|conn| {
+        sync_if_stale(conn)?;
+        let placeholders = std::iter::repeat_n("?", parent_ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut stmt = conn.prepare(&format!(
+            "SELECT parent_thread_id, COUNT(*) FROM thread_meta
+             WHERE origin_kind IS NULL AND parent_thread_id IN ({placeholders})
+             GROUP BY parent_thread_id"
+        ))?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(parent_ids), |row| {
+            let count: i64 = row.get(1)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                usize::try_from(count).unwrap_or(0),
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<HashMap<_, _>>>()
+            .map_err(Into::into)
+    })
+}
+
 /// Returns one thread summary by ID from the cache.
 ///
 /// # Errors

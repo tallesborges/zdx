@@ -1,13 +1,15 @@
 <script lang="ts">
   import { api, ApiError } from "$lib/api";
-  import type { ThreadResponse, GitResponse } from "$lib/types";
+  import type { ThreadResponse, GitResponse, WorkerItem } from "$lib/types";
   import { router, THREAD_TAB_LABELS, type ThreadTab } from "$lib/router.svelte";
-  import { haptic, openTelegramLink } from "$lib/telegram";
+  import { haptic, openTelegramLink, selectionChanged } from "$lib/telegram";
+  import { isBusy, needsAttention, rollupFrom } from "$lib/workers";
   import TabStrip from "../components/TabStrip.svelte";
   import type { IconName } from "../components/Icon.svelte";
   import TranscriptPane from "./TranscriptPane.svelte";
   import ChangesPane from "./ChangesPane.svelte";
   import AgentPane from "./AgentPane.svelte";
+  import WorkersPane from "./WorkersPane.svelte";
 
   interface Props {
     id: string;
@@ -33,7 +35,25 @@
   // by `currentGit` rather than cleared by a separate reset effect.
   let gitFor = $state<string | null>(null);
 
+  // Workers are owned here for the same reason git is: the tab strip has to
+  // know whether to show the tab, and AgentPane renders a roll-up, so one
+  // request serves both. `worker_count` on the thread response gates the tab
+  // before this ever runs.
+  let workers = $state<WorkerItem[]>([]);
+  let workersError = $state("");
+  let workersLoading = $state(false);
+  let workersFor = $state<string | null>(null);
+
   let currentGit = $derived(gitFor === id ? git : null);
+  let currentWorkers = $derived(workersFor === id ? workers : []);
+
+  let workerRollup = $derived(rollupFrom(currentWorkers));
+  // Fetched workers win over the count from the thread load: that count is a
+  // snapshot from page load, and the whole point of discovery is that the first
+  // worker can appear after it.
+  let hasWorkers = $derived(currentWorkers.length > 0 || (data?.worker_count ?? 0) > 0);
+  let workersBusy = $derived(isBusy(workerRollup));
+  let workersAttention = $derived(needsAttention(workerRollup));
 
   let live = $derived(data ? data.activity.some((a) => a.type === "tool_running") : false);
 
@@ -99,6 +119,27 @@
     }
   }
 
+  async function loadWorkers(showSpinner = false) {
+    const target = id;
+    const first = workersFor !== target;
+    workersFor = target;
+    workersError = "";
+    if (showSpinner || first) workersLoading = true;
+    try {
+      const response = await api.workers(target);
+      if (workersFor !== target) return;
+      workers = response.workers;
+    } catch (e) {
+      // A failed background refresh is not worth replacing the list with an
+      // error; the next tick retries. Only the first load reports.
+      if (workersFor === target && first) {
+        workersError = e instanceof ApiError ? e.message : String(e);
+      }
+    } finally {
+      if (workersFor === target) workersLoading = false;
+    }
+  }
+
   $effect(() => {
     void id;
     load();
@@ -110,6 +151,30 @@
     if (tab !== "agent" && tab !== "changes") return;
     if (gitFor === id) return;
     loadGit();
+  });
+
+  // Fetch workers whenever a pane that reports them is open — including when
+  // the thread is not known to have any. A thread becomes an orchestrator by
+  // spawning its first worker, so gating the first fetch on `worker_count > 0`
+  // (a page-load snapshot) means that first worker is never discovered.
+  $effect(() => {
+    if (tab !== "workers" && tab !== "agent") return;
+    if (workersFor === id) return;
+    loadWorkers();
+  });
+
+  // Discovery and refresh run on the same timer, and neither is gated on "a
+  // worker is already running": that can never observe a worker appearing, nor
+  // a queued→running flip, because both happen while the client believes there
+  // is nothing to watch. This reads one small endpoint — it never polls the
+  // transcript or shells out to git for worker status.
+  $effect(() => {
+    if (tab !== "workers" && tab !== "agent") return;
+    const period = workersBusy ? 4000 : 10000;
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") loadWorkers();
+    }, period);
+    return () => clearInterval(timer);
   });
 
   // Poll only while a tool is actually executing, and only when visible. The
@@ -134,6 +199,14 @@
     haptic();
     load(false);
     if (gitFor === id) loadGit();
+    if (workersFor === id) loadWorkers();
+  }
+
+  /** Navigates out of a worker thread back to the orchestrator that owns it. */
+  function openParent() {
+    if (!data?.parent_thread_id) return;
+    selectionChanged();
+    router.openThread(data.parent_thread_id, "workers");
   }
 
   // Jumps to the Telegram topic this thread is bound to. The Mini App stays
@@ -146,19 +219,28 @@
 
   // Tabs are data-driven so new panes (Files, Terminal, …) are a one-line add.
   const TAB_ICONS: Record<ThreadTab, IconName> = {
+    workers: "users",
     agent: "bot",
     transcript: "message-square",
     changes: "git-branch",
   };
 
+  // Workers leads on an orchestrator: the strip scrolls horizontally, so a tab
+  // appended last starts offscreen on a phone.
   let tabs = $derived(
-    (["agent", "transcript", "changes"] as ThreadTab[]).map((t) => ({
-      id: t,
-      label: THREAD_TAB_LABELS[t],
-      icon: TAB_ICONS[t],
-      dot: t === "changes" && dirty,
-    })),
+    ([...(hasWorkers ? (["workers"] as ThreadTab[]) : []), "agent", "transcript", "changes"] as ThreadTab[]).map(
+      (t) => ({
+        id: t,
+        label: THREAD_TAB_LABELS[t],
+        icon: TAB_ICONS[t],
+        dot: (t === "changes" && dirty) || (t === "workers" && workersAttention),
+      }),
+    ),
   );
+
+  // A thread with no workers has no Workers pane; a stale deep link to it would
+  // otherwise render an empty tab that is not in the strip.
+  let activeTab = $derived(tab === "workers" && !hasWorkers ? "transcript" : tab);
 </script>
 
 <header
@@ -234,18 +316,59 @@
   </button>
 </header>
 
-<TabStrip {tabs} active={tab} onselect={(t) => router.setTab(t as ThreadTab)} />
+{#if data?.parent_thread_id}
+  <!-- A worker is a normal thread, so without this it is a dead end: nothing
+       on screen says which orchestrator asked for the work. -->
+  <div class="shrink-0 px-2.5 pt-2">
+    <button
+      type="button"
+      onclick={openParent}
+      class="flex max-w-full items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-xxs text-muted-foreground hover:bg-accent"
+    >
+      <svg viewBox="0 0 24 24" class="size-3 shrink-0" aria-hidden="true">
+        <path
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.75"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          d="M15 18l-6-6 6-6"
+        />
+      </svg>
+      <span class="truncate">{data.parent_title ?? "Orchestrator"}</span>
+    </button>
+  </div>
+{/if}
 
-{#if loading && tab !== "changes"}
+<TabStrip {tabs} active={activeTab} onselect={(t) => router.setTab(t as ThreadTab)} />
+{#if loading && activeTab !== "changes"}
   <p class="flex-1 py-8 text-center text-xs text-muted-foreground">Loading…</p>
-{:else if error && tab !== "changes"}
+{:else if error && activeTab !== "changes"}
   <div class="flex-1 px-3 py-3">
     <p class="rounded-md border border-destructive px-3 py-2 text-xs text-destructive">{error}</p>
   </div>
-{:else if tab === "transcript"}
+{:else if activeTab === "workers"}
+  <WorkersPane
+    workers={currentWorkers}
+    rollup={workerRollup}
+    error={workersError}
+    loading={workersLoading}
+  />
+{:else if activeTab === "transcript"}
   <TranscriptPane activity={data?.activity ?? []} />
-{:else if tab === "agent"}
-  <AgentPane thread={data} git={currentGit} />
+{:else if activeTab === "agent"}
+  <AgentPane
+    thread={data}
+    git={currentGit}
+    rollup={workerRollup}
+    hasWorkers={hasWorkers}
+    onopenworkers={() => router.setTab("workers")}
+  />
 {:else}
-  <ChangesPane {id} data={currentGit} error={gitError} />
+  <ChangesPane
+    {id}
+    data={currentGit}
+    error={gitError}
+    sharedRepo={hasWorkers || !!data?.parent_thread_id}
+  />
 {/if}

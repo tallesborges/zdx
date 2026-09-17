@@ -1,14 +1,26 @@
 <script lang="ts">
   import { api, ApiError } from "$lib/api";
-  import type { GitResponse, MonitorResponse, ThreadResponse, UsageActivity } from "$lib/types";
+  import type {
+    GitResponse,
+    MonitorResponse,
+    ThreadResponse,
+    UsageActivity,
+    WorkerRollup,
+  } from "$lib/types";
+  import { formatRollup } from "$lib/workers";
 
   interface Props {
     thread: ThreadResponse | null;
     /** Fetched by ThreadView; supplies the working folder and branch. */
     git: GitResponse | null;
+    /** Rolled up by ThreadView from the same fetch the Workers pane uses, so
+     *  this line refreshes on its own rather than only on a manual reload. */
+    rollup: WorkerRollup;
+    hasWorkers: boolean;
+    onopenworkers: () => void;
   }
 
-  let { thread, git }: Props = $props();
+  let { thread, git, rollup, hasWorkers, onopenworkers }: Props = $props();
 
   let monitor = $state<MonitorResponse | null>(null);
   let error = $state("");
@@ -129,6 +141,38 @@
         </p>
       {/if}
     </div>
+
+    <!-- Workers roll-up: mirrors the Telegram status card, one tap from the
+         full list rather than a section buried under Usage. -->
+    {#if hasWorkers}
+      <section>
+        <h2 class="sec">Workers</h2>
+        <button
+          type="button"
+          onclick={onopenworkers}
+          class="flex w-full items-center gap-2 rounded-md border border-border bg-card px-2.5 py-2 text-left hover:bg-accent"
+        >
+          {#if rollup.running > 0}
+            <span class="size-1.5 shrink-0 animate-pulse rounded-full bg-warning"></span>
+          {:else if rollup.failed > 0}
+            <span class="size-1.5 shrink-0 rounded-full bg-destructive"></span>
+          {/if}
+          <span class="min-w-0 flex-1 truncate font-mono text-xxs text-muted-foreground">
+            {formatRollup(rollup)}
+          </span>
+          <svg viewBox="0 0 24 24" class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true">
+            <path
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.75"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M9 18l6-6-6-6"
+            />
+          </svg>
+        </button>
+      </section>
+    {/if}
 
     <!-- Context occupancy -->
     {#if context}

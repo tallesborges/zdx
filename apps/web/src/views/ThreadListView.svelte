@@ -3,6 +3,7 @@
   import type { ThreadListItem } from "$lib/types";
   import { router } from "$lib/router.svelte";
   import { haptic, openTelegramLink, selectionChanged } from "$lib/telegram";
+  import { formatRollup } from "$lib/workers";
 
   interface Props {
     onmenu: () => void;
@@ -111,6 +112,9 @@
           >
             <div class="flex items-baseline gap-2">
               <span class="min-w-0 flex-1 truncate text-xs font-medium">{thread.title}</span>
+              {#if thread.workers}
+                <span class="badge shrink-0">orch</span>
+              {/if}
               {#if thread.age}
                 <span class="shrink-0 font-mono text-xxs text-muted-foreground">{thread.age}</span>
               {/if}
@@ -118,6 +122,18 @@
             <p class="m-0 truncate font-mono text-xxs text-muted-foreground">
               {thread.project ?? thread.root_path ?? "—"}
             </p>
+            {#if thread.workers}
+              <p class="m-0 mt-0.5 font-mono text-xxs leading-relaxed text-muted-foreground">
+                {#if thread.workers.running > 0}
+                  <span
+                    class="mr-1 inline-block size-1.5 animate-pulse rounded-full bg-warning align-middle"
+                  ></span>
+                {:else if thread.workers.failed > 0}
+                  <span class="mr-1 inline-block size-1.5 rounded-full bg-destructive align-middle"
+                  ></span>
+                {/if}{formatRollup(thread.workers)}
+              </p>
+            {/if}
           </button>
 
           {#if thread.telegram_link}
@@ -145,3 +161,19 @@
     </div>
   {/if}
 </div>
+
+<style>
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 0.3rem;
+    border-radius: 3px;
+    border: 1px solid color-mix(in srgb, var(--color-brand) 40%, transparent);
+    background: color-mix(in srgb, var(--color-brand) 8%, transparent);
+    color: var(--color-brand);
+    font-family: var(--font-mono);
+    font-size: 0.5625rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+</style>
