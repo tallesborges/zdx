@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::Path;
+#[cfg(not(unix))]
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -14,11 +15,17 @@ use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
 use tempfile::{Builder, TempPath};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
-use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
+#[cfg(unix)]
+use zdx_tools::process_supervisor::{SupervisedChild, SupervisedCommand, WaitReason};
 
 use crate::core::agent::EventSender;
 use crate::core::events::{AgentEvent, TurnStatus};
+
+#[cfg(unix)]
+type ExecChild = SupervisedChild;
+#[cfg(not(unix))]
+type ExecChild = tokio::process::Child;
 
 /// Options for a child `zdx exec` subagent run.
 #[derive(Debug, Clone, Default)]
@@ -142,21 +149,29 @@ pub async fn run_exec_subagent_with_cancel(
             .map(TempPromptFile::as_path),
     );
 
-    let mut command = Command::new(exe);
-    command
-        .args(args)
-        .current_dir(root)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    // Run the child in its own process group so cancellation can terminate its
-    // whole descendant tree (bash children etc.), not just the direct child.
     #[cfg(unix)]
-    command.process_group(0);
+    let child = {
+        let mut command = SupervisedCommand::new(exe);
+        command.args(args).current_dir(root);
+        command
+            .spawn(Duration::from_secs(5))
+            .await
+            .map_err(|err| anyhow::anyhow!("Failed to spawn subagent: {err}"))?
+    };
 
-    let child = command
-        .spawn()
-        .map_err(|err| anyhow::anyhow!("Failed to spawn subagent: {err}"))?;
+    #[cfg(not(unix))]
+    let child = {
+        let mut command = tokio::process::Command::new(exe);
+        command
+            .args(args)
+            .current_dir(root)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        command
+            .spawn()
+            .map_err(|err| anyhow::anyhow!("Failed to spawn subagent: {err}"))?
+    };
 
     if let Some(sink) = stream {
         return run_child_streaming(child, cancel, options.timeout, sink).await;
@@ -166,6 +181,7 @@ pub async fn run_exec_subagent_with_cancel(
 }
 
 /// How a supervised child run ended, before output processing.
+#[cfg(not(unix))]
 enum ChildWait {
     Exited(std::process::ExitStatus),
     Cancelled,
@@ -178,8 +194,29 @@ enum ChildWait {
 /// (TERM, short grace, then KILL) and the direct child is reaped before this
 /// returns, so no successor run can race a half-dead child appending to the
 /// same worker thread JSONL.
+#[cfg(unix)]
 async fn wait_child(
-    child: &mut tokio::process::Child,
+    child: &mut ExecChild,
+    cancel: Option<&CancellationToken>,
+    timeout: Option<Duration>,
+) -> Result<std::process::ExitStatus> {
+    let outcome = child
+        .wait_with(cancel, timeout)
+        .await
+        .context("Failed to wait for subagent")?;
+    match outcome.reason {
+        WaitReason::Exited => Ok(outcome.status),
+        WaitReason::Cancelled => bail!("Subagent cancelled"),
+        WaitReason::TimedOut => {
+            let timeout = timeout.expect("timed out only when a timeout was configured");
+            bail!("Subagent timed out after {} seconds", timeout.as_secs())
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_child(
+    child: &mut ExecChild,
     cancel: Option<&CancellationToken>,
     timeout: Option<Duration>,
 ) -> Result<std::process::ExitStatus> {
@@ -213,11 +250,11 @@ async fn wait_child(
     match outcome {
         ChildWait::Exited(status) => Ok(status),
         ChildWait::Cancelled => {
-            terminate_process_group(child).await;
+            terminate_process(child).await;
             bail!("Subagent cancelled")
         }
         ChildWait::TimedOut(timeout) => {
-            terminate_process_group(child).await;
+            terminate_process(child).await;
             bail!("Subagent timed out after {} seconds", timeout.as_secs())
         }
     }
@@ -227,7 +264,8 @@ async fn wait_child(
 ///
 /// TERM first, a short grace period, then KILL. A final group KILL sweeps any
 /// stragglers that detached from the direct child but stayed in the group.
-async fn terminate_process_group(child: &mut tokio::process::Child) {
+#[cfg(not(unix))]
+async fn terminate_process(child: &mut tokio::process::Child) {
     const GRACE: Duration = Duration::from_secs(5);
 
     let Some(pid) = child.id() else {
@@ -235,28 +273,9 @@ async fn terminate_process_group(child: &mut tokio::process::Child) {
         let _ = child.wait().await;
         return;
     };
-    #[cfg(unix)]
-    let group = i32::try_from(pid).unwrap_or_default();
-
-    #[cfg(unix)]
-    // SAFETY: plain kill(2) on a process group we spawned; no memory safety concerns.
-    unsafe {
-        libc::kill(-group, libc::SIGTERM);
-    }
-
     if tokio::time::timeout(GRACE, child.wait()).await.is_err() {
-        #[cfg(unix)]
-        // SAFETY: see above.
-        unsafe {
-            libc::kill(-group, libc::SIGKILL);
-        }
+        let _ = child.kill().await;
         let _ = child.wait().await;
-    }
-
-    #[cfg(unix)]
-    // SAFETY: see above.
-    unsafe {
-        libc::kill(-group, libc::SIGKILL);
     }
     tracing::debug!(pid, "Subagent process group terminated");
 }
@@ -264,7 +283,7 @@ async fn terminate_process_group(child: &mut tokio::process::Child) {
 /// Buffered path: drains stdout/stderr concurrently, waits for the child with
 /// cancellation/timeout supervision, then processes the captured output.
 async fn run_child_buffered(
-    mut child: tokio::process::Child,
+    mut child: ExecChild,
     cancel: Option<CancellationToken>,
     timeout: Option<Duration>,
 ) -> Result<String> {
@@ -356,7 +375,7 @@ struct StreamOutcome {
 /// [`wait_child`], not merely stdout EOF, so a child that closes stdout and
 /// then hangs is still terminated and reaped.
 async fn run_child_streaming(
-    mut child: tokio::process::Child,
+    mut child: ExecChild,
     cancel: Option<CancellationToken>,
     timeout: Option<Duration>,
     sink: SubagentStreamSink,

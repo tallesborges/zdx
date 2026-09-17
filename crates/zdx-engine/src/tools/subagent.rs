@@ -129,8 +129,26 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         _ => None,
     };
 
-    match run_exec_subagent_with_cancel(&ctx.root, &prompt, &options, None, stream).await {
+    let result = run_exec_subagent_with_cancel(
+        &ctx.root,
+        &prompt,
+        &options,
+        ctx.cancel_token.clone(),
+        stream,
+    )
+    .await;
+    subagent_tool_output(
+        result,
+        ctx.cancel_token
+            .as_ref()
+            .is_some_and(tokio_util::sync::CancellationToken::is_cancelled),
+    )
+}
+
+fn subagent_tool_output(result: anyhow::Result<String>, cancelled: bool) -> ToolOutput {
+    match result {
         Ok(response) => ToolOutput::success(Value::String(response)),
+        Err(_) if cancelled => ToolOutput::canceled("Interrupted by user"),
         Err(err) => ToolOutput::failure(
             "execution_failed",
             "Subagent execution failed",
@@ -471,6 +489,12 @@ fn canonical_model_id(model: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelled_subagent_maps_to_cancelled_tool_output() {
+        let output = subagent_tool_output(Err(anyhow::anyhow!("Subagent cancelled")), true);
+        assert!(matches!(output, ToolOutput::Canceled { .. }));
+    }
 
     #[test]
     fn test_build_delegated_prompt_without_thread_id_returns_original_prompt() {

@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 // Re-export path helpers and serde helpers from zdx-tools for backward compat
 pub use zdx_tools::{
     ResolvedPath, expand_env_vars, insert_file_path_fields, resolve_existing_path,
@@ -49,6 +50,9 @@ pub struct ToolContext {
 
     /// Optional timeout for tool execution.
     pub timeout: Option<Duration>,
+
+    /// Cancellation for work owned by the current invocation.
+    pub cancel_token: Option<CancellationToken>,
 
     /// Optional model override for tool subagents.
     pub model: Option<String>,
@@ -87,6 +91,7 @@ impl std::fmt::Debug for ToolContext {
             .field("root", &self.root)
             .field("current_thread_id", &self.current_thread_id)
             .field("timeout", &self.timeout)
+            .field("cancel_token", &self.cancel_token.as_ref().map(|_| ".."))
             .field("model", &self.model)
             .field("read_thread_model", &self.read_thread_model)
             .field("thinking_level", &self.thinking_level)
@@ -106,6 +111,7 @@ impl ToolContext {
             root,
             current_thread_id: None,
             timeout,
+            cancel_token: None,
             model: None,
             read_thread_model: None,
             thinking_level: None,
@@ -147,7 +153,9 @@ impl ToolContext {
     /// Convert to a leaf tool context (for zdx-tools).
     #[must_use]
     pub fn as_leaf(&self) -> zdx_tools::ToolContext {
-        zdx_tools::ToolContext::new(self.root.clone(), self.timeout)
+        let mut ctx = zdx_tools::ToolContext::new(self.root.clone(), self.timeout);
+        ctx.cancel_token.clone_from(&self.cancel_token);
+        ctx
     }
 }
 

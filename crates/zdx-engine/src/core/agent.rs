@@ -2307,6 +2307,7 @@ async fn execute_tools_async(
     let mut join_set: JoinSet<CompletedTool> = JoinSet::new();
     let mut results: Vec<Option<(ToolOutput, ToolResult)>> = vec![None; tool_uses.len()];
     let mut completed: HashSet<usize> = HashSet::new();
+    let tool_cancel = CancellationToken::new();
 
     emit_tool_started_events(tool_uses, sender, run_guard);
 
@@ -2316,6 +2317,7 @@ async fn execute_tools_async(
         let mut ctx = ctx.clone();
         ctx.event_sender = Some(sender.clone());
         ctx.tool_use_id = Some(tu.id.clone());
+        ctx.cancel_token = Some(tool_cancel.clone());
         let enabled_tools = enabled_tools.clone();
         let tool_registry = tool_registry.clone();
 
@@ -2351,7 +2353,8 @@ async fn execute_tools_async(
                     tool_uses,
                     sender,
                     run_guard,
-                );
+                    &tool_cancel,
+                ).await;
                 break;
             }
             () = wait_for_cancel(cancel) => {
@@ -2362,7 +2365,8 @@ async fn execute_tools_async(
                     tool_uses,
                     sender,
                     run_guard,
-                );
+                    &tool_cancel,
+                ).await;
                 break;
             }
             task_result = join_set.join_next() => {
@@ -2441,17 +2445,37 @@ fn record_tool_completion(
     results[tool.idx] = Some((tool.output, tool.result));
 }
 
-fn handle_tool_interrupt(
+async fn handle_tool_interrupt(
     join_set: &mut JoinSet<CompletedTool>,
     completed: &mut HashSet<usize>,
     results: &mut [Option<(ToolOutput, ToolResult)>],
     tool_uses: &[ToolUse],
     sender: &EventSender,
     run_guard: Option<&crate::agent_activity::RunGuard>,
+    tool_cancel: &CancellationToken,
 ) {
-    join_set.abort_all();
+    const TEARDOWN_WAIT: Duration = Duration::from_secs(6);
 
-    while let Some(task_result) = join_set.try_join_next() {
+    tool_cancel.cancel();
+
+    let teardown = tokio::time::sleep(TEARDOWN_WAIT);
+    tokio::pin!(teardown);
+    loop {
+        tokio::select! {
+            biased;
+            task_result = join_set.join_next() => match task_result {
+                Some(Ok(tool)) if !completed.contains(&tool.idx) => {
+                    record_tool_completion(sender, completed, results, tool, run_guard);
+                }
+                Some(_) => {}
+                None => break,
+            },
+            () = &mut teardown => break,
+        }
+    }
+
+    join_set.abort_all();
+    while let Some(task_result) = join_set.join_next().await {
         if let Ok(tool) = task_result
             && !completed.contains(&tool.idx)
         {
@@ -2967,6 +2991,76 @@ mod tests {
             matches!(&received[1], AgentEvent::ToolCompleted { id, result, .. }
             if id == "tool1" && result.is_ok())
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn tool_cancellation_waits_for_foreground_process_cleanup() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let pidfile = temp.path().join("foreground.pid");
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let enabled_tools: HashSet<String> = vec!["bash".to_string()].into_iter().collect();
+        let tool_uses = vec![ToolUse {
+            id: "tool1".to_string(),
+            name: "bash".to_string(),
+            input: serde_json::json!({
+                "command": format!(
+                    "trap '' TERM; echo $$ > {}; while :; do sleep 1; done",
+                    pidfile.display()
+                )
+            }),
+            id_origin: zdx_types::IdOrigin::Synthesized,
+            replay: None,
+        }];
+        let (tx, _rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+        let registry = ToolRegistry::builtins();
+        let cancel = CancellationToken::new();
+        let task_cancel = cancel.clone();
+        let task = tokio::spawn(async move {
+            execute_tools_async(
+                &tool_uses,
+                &ctx,
+                &enabled_tools,
+                &sender,
+                &registry,
+                Some(&task_cancel),
+                None,
+            )
+            .await
+        });
+
+        let pid: i32 = timeout(Duration::from_secs(3), async {
+            loop {
+                if let Ok(raw) = std::fs::read_to_string(&pidfile)
+                    && let Ok(pid) = raw.trim().parse()
+                {
+                    break pid;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("foreground command did not publish its pid");
+
+        cancel.cancel();
+        let results = timeout(Duration::from_secs(3), task)
+            .await
+            .expect("tool teardown did not complete")
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_error);
+        let payload: serde_json::Value = serde_json::from_str(
+            results[0]
+                .content
+                .as_text()
+                .expect("canceled tool result should be text"),
+        )
+        .expect("canceled tool result should be JSON");
+        assert_eq!(payload["error"]["code"], "canceled");
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
     }
 
     #[tokio::test]

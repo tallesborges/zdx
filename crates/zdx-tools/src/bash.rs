@@ -15,6 +15,8 @@ use tokio::io::{AsyncBufReadExt, AsyncRead};
 use uuid::Uuid;
 
 use super::{ToolContext, ToolDefinition, ToolOutput};
+#[cfg(unix)]
+use crate::process_supervisor::{SupervisedCommand, WaitReason};
 
 /// Maximum bytes per output stream (stdout/stderr) before truncation.
 const MAX_OUTPUT_BYTES: usize = 40 * 1024; // 40KB
@@ -265,107 +267,6 @@ pub fn spawn_background(
     Ok(BackgroundSpawn { child, pid })
 }
 
-/// Kills all processes in the given process group.
-///
-/// Sends SIGTERM first, waits briefly, then SIGKILL if processes remain.
-/// This ensures child processes (python, curl, gcloud, etc.) spawned by
-/// the shell are also terminated on interrupt/timeout.
-#[cfg(unix)]
-fn kill_process_group(pgid: i32) {
-    unsafe {
-        libc::killpg(pgid, libc::SIGTERM);
-    }
-    std::thread::sleep(Duration::from_millis(100));
-    unsafe {
-        libc::killpg(pgid, libc::SIGKILL);
-    }
-}
-
-/// RAII guard that kills the process group on drop.
-///
-/// Ensures all child processes are cleaned up even if the future is
-/// cancelled (e.g., by tokio task abort on user interrupt).
-#[cfg(unix)]
-struct ProcessGroupGuard {
-    pgid: i32,
-    disarmed: bool,
-}
-
-#[cfg(unix)]
-impl ProcessGroupGuard {
-    fn new(pgid: i32) -> Self {
-        Self {
-            pgid,
-            disarmed: false,
-        }
-    }
-
-    /// Disarm the guard (process completed normally, no cleanup needed).
-    fn disarm(&mut self) {
-        self.disarmed = true;
-    }
-}
-
-#[cfg(unix)]
-impl Drop for ProcessGroupGuard {
-    fn drop(&mut self) {
-        if !self.disarmed {
-            kill_process_group(self.pgid);
-        }
-    }
-}
-
-/// Whether the process group still has any members. Treats `EPERM` (members
-/// exist but we can't signal them) as present.
-#[cfg(unix)]
-fn group_exists(pgid: i32) -> bool {
-    if unsafe { libc::killpg(pgid, 0) } == 0 {
-        return true;
-    }
-    matches!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(libc::EPERM)
-    )
-}
-
-/// Async TERM → short grace → KILL for a process group.
-///
-/// Used on the await-able completion/timeout paths so we never block a runtime
-/// worker with a synchronous sleep (the sync [`kill_process_group`] remains for
-/// `ProcessGroupGuard`'s `Drop`, which cannot be async).
-#[cfg(unix)]
-async fn kill_group_graceful(pgid: i32) {
-    unsafe {
-        libc::killpg(pgid, libc::SIGTERM);
-    }
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
-    loop {
-        if !group_exists(pgid) {
-            return;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(30)).await;
-    }
-    unsafe {
-        libc::killpg(pgid, libc::SIGKILL);
-    }
-}
-
-/// After a foreground shell exits, terminate any process-group members it left
-/// behind (`cmd &`, `nohup cmd &`, `disown`). Returns `true` if leftovers were
-/// found — so `background: true` stays the only way to leave a process running.
-#[cfg(unix)]
-async fn cleanup_foreground_leftovers(pgid: i32) -> bool {
-    if group_exists(pgid) {
-        kill_group_graceful(pgid).await;
-        true
-    } else {
-        false
-    }
-}
-
 /// Shared buffer type for stream reader tasks.
 type StreamBuffer = Arc<Mutex<Vec<u8>>>;
 
@@ -439,56 +340,51 @@ async fn run_command(
     timeout: Option<Duration>,
     output_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
 ) -> Result<BashOutput, ToolOutput> {
-    let mut cmd = tokio::process::Command::new("sh");
-    cmd.arg("-c")
-        .arg(command)
-        .current_dir(&ctx.root)
-        // Signal to programs that we are a non-interactive, dumb terminal.
-        // This suppresses ANSI escape sequences, color output, and progress bars
-        // in most well-behaved CLI tools (e.g. gcloud, npm, pip).
-        .env("TERM", "dumb")
-        .env("NO_COLOR", "1")
-        // Force non-interactive stdin so child processes do not block waiting
-        // for user input or keep client/daemon sessions alive (for example,
-        // `gradlew` under piped exec environments).
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    // On Unix: spawn in a new process group so we can kill all children at once.
-    // Without this, interrupting only kills the shell, leaving python/curl/etc orphaned.
     #[cfg(unix)]
-    unsafe {
-        cmd.pre_exec(|| {
-            // Create a new process group with this process as the leader.
-            // All child processes inherit this group. Fail the spawn if this
-            // doesn't take: every cleanup path below assumes the child's pid
-            // is also its pgid, so a silent failure would make `killpg` signal
-            // the wrong group (or none) and leave descendants running.
-            if libc::setpgid(0, 0) == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    let mut child = {
+        let mut cmd = SupervisedCommand::new("/bin/sh");
+        cmd.args(["-c", command])
+            .current_dir(&ctx.root)
+            .env("TERM", "dumb")
+            .env("NO_COLOR", "1")
+            .stdin_null();
+        cmd.spawn(Duration::from_millis(300)).await.map_err(|e| {
+            ToolOutput::failure(
+                "spawn_error",
+                format!("Failed to execute command '{command}'"),
+                Some(format!("Error: {e}")),
+            )
+        })?
+    };
 
-    // On non-Unix, fall back to kill_on_drop (kills direct child only).
     #[cfg(not(unix))]
-    cmd.kill_on_drop(true);
+    let mut child = {
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c")
+            .arg(command)
+            .current_dir(&ctx.root)
+            // Signal to programs that we are a non-interactive, dumb terminal.
+            // This suppresses ANSI escape sequences, color output, and progress bars
+            // in most well-behaved CLI tools (e.g. gcloud, npm, pip).
+            .env("TERM", "dumb")
+            .env("NO_COLOR", "1")
+            // Force non-interactive stdin so child processes do not block waiting
+            // for user input or keep client/daemon sessions alive (for example,
+            // `gradlew` under piped exec environments).
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
-    let mut child = cmd.spawn().map_err(|e| {
-        ToolOutput::failure(
-            "spawn_error",
-            format!("Failed to execute command '{command}'"),
-            Some(format!("Error: {e}")),
-        )
-    })?;
+        cmd.kill_on_drop(true);
 
-    // Set up process group guard for cleanup on cancel/drop (Unix only).
-    #[cfg(unix)]
-    let child_pid = child.id().unwrap_or(0) as i32;
-    #[cfg(unix)]
-    let mut pg_guard = ProcessGroupGuard::new(child_pid);
+        cmd.spawn().map_err(|e| {
+            ToolOutput::failure(
+                "spawn_error",
+                format!("Failed to execute command '{command}'"),
+                Some(format!("Error: {e}")),
+            )
+        })?
+    };
 
     // Take stdout/stderr handles before waiting so we can read incrementally.
     let child_stdout = child.stdout.take();
@@ -506,42 +402,46 @@ async fn run_command(
     // Wait for child exit, with optional timeout.
     // Reader tasks run independently — they'll see EOF after the process exits
     // (or is killed on timeout).
-    let (timed_out, exit_code) = match timeout {
+    #[cfg(unix)]
+    let (timed_out, cancelled, exit_code, left_leftovers) = {
+        let outcome = child
+            .wait_with(ctx.cancel_token.as_ref(), timeout)
+            .await
+            .map_err(|err| {
+                ToolOutput::failure(
+                    "wait_error",
+                    "Failed to wait for command",
+                    Some(err.to_string()),
+                )
+            })?;
+        (
+            outcome.reason == WaitReason::TimedOut,
+            outcome.reason == WaitReason::Cancelled,
+            outcome.status.code().unwrap_or(-1),
+            outcome.cleaned_leftovers,
+        )
+    };
+
+    #[cfg(not(unix))]
+    let (timed_out, cancelled, exit_code, left_leftovers) = match timeout {
         Some(dur) => {
             match tokio::time::timeout(dur, child.wait()).await {
-                Ok(Ok(status)) => (false, status.code().unwrap_or(-1)),
-                Ok(Err(_)) => (false, -1),
+                Ok(Ok(status)) => (false, false, status.code().unwrap_or(-1), false),
+                Ok(Err(_)) => (false, false, -1, false),
                 Err(_) => {
-                    // Timeout: kill the process group / child.
-                    #[cfg(unix)]
-                    kill_group_graceful(child_pid).await;
-                    #[cfg(not(unix))]
                     let _ = child.kill().await;
 
                     // Reap the child to avoid zombies.
                     let _ = child.wait().await;
-                    (true, -1)
+                    (true, false, -1, false)
                 }
             }
         }
         None => match child.wait().await {
-            Ok(status) => (false, status.code().unwrap_or(-1)),
-            Err(_) => (false, -1),
+            Ok(status) => (false, false, status.code().unwrap_or(-1), false),
+            Err(_) => (false, false, -1, false),
         },
     };
-
-    // Disarm the guard now that the child has exited (normal, timeout, or error).
-    #[cfg(unix)]
-    pg_guard.disarm();
-
-    // Foreground cleanup: kill any process-group members the shell left behind
-    // (e.g. `cmd &`, `nohup cmd &`) BEFORE draining the readers, so an orphan
-    // holding the pipes open can't stall us. `background: true` is the only
-    // sanctioned way to leave a process running.
-    #[cfg(unix)]
-    let left_leftovers = cleanup_foreground_leftovers(child_pid).await;
-    #[cfg(not(unix))]
-    let left_leftovers = false;
 
     // Finish readers with a bounded grace period and extract their buffers.
     // This applies on every exit path — even normal completion can leave pipes
@@ -566,6 +466,10 @@ async fn run_command(
     } else {
         None
     };
+
+    if cancelled {
+        return Err(ToolOutput::canceled("Interrupted by user"));
+    }
 
     if timed_out {
         let timeout_msg = format!(
@@ -654,6 +558,41 @@ mod tests {
             !alive,
             "backgrounded child (pid {pid}) should have been killed"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn foreground_command_honors_invocation_cancellation() {
+        let temp = TempDir::new().unwrap();
+        let pidfile = temp.path().join("foreground.pid");
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        ctx.cancel_token = Some(cancel.clone());
+        let input = json!({
+            "command": format!(
+                "trap '' TERM; echo $$ > {}; while :; do sleep 1; done",
+                pidfile.display()
+            ),
+        });
+
+        let task = tokio::spawn(async move { execute(&input, &ctx, None, None).await });
+        let pid: i32 = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let Ok(raw) = std::fs::read_to_string(&pidfile)
+                    && let Ok(pid) = raw.trim().parse()
+                {
+                    break pid;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("foreground command did not publish its pid");
+
+        cancel.cancel();
+        let result = task.await.unwrap();
+        assert!(matches!(result, ToolOutput::Canceled { .. }));
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
     }
 
     #[test]

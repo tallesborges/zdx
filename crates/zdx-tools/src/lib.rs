@@ -11,6 +11,8 @@ pub mod file_lock;
 pub mod glob;
 pub mod grep;
 mod parallel;
+#[cfg(unix)]
+pub mod process_supervisor;
 pub mod read;
 mod walk;
 pub mod web_search;
@@ -21,6 +23,7 @@ use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
+use tokio_util::sync::CancellationToken;
 pub use zdx_types::{
     ImageContent, ToolDefinition, ToolOutput, ToolResult, ToolResultBlock, ToolResultContent,
 };
@@ -36,11 +39,17 @@ pub struct ToolContext {
     pub root: PathBuf,
     /// Optional timeout for tool execution.
     pub timeout: Option<Duration>,
+    /// Cancellation for work owned by the current invocation.
+    pub cancel_token: Option<CancellationToken>,
 }
 
 impl ToolContext {
     pub fn new(root: PathBuf, timeout: Option<Duration>) -> Self {
-        Self { root, timeout }
+        Self {
+            root,
+            timeout,
+            cancel_token: None,
+        }
     }
 }
 

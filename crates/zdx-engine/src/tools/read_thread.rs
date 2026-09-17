@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::{ToolContext, ToolDefinition};
 use crate::core::events::ToolOutput;
-use crate::core::subagent::{ExecSubagentOptions, run_exec_subagent};
+use crate::core::subagent::{ExecSubagentOptions, run_exec_subagent_with_cancel};
 use crate::core::thread_persistence as tp;
 use crate::prompts::READ_THREAD_PROMPT_TEMPLATE;
 use crate::zdx_context::build_zdx_context;
@@ -96,6 +96,14 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
             };
             ToolOutput::success(Value::String(output))
         }
+        Err(_)
+            if ctx
+                .cancel_token
+                .as_ref()
+                .is_some_and(tokio_util::sync::CancellationToken::is_cancelled) =>
+        {
+            ToolOutput::canceled("Interrupted by user")
+        }
         Err(err) => ToolOutput::failure("execution_failed", "Read thread failed", Some(err)),
     }
 }
@@ -130,7 +138,7 @@ async fn run_subagent(prompt: String, ctx: &ToolContext) -> Result<String, Strin
         ..Default::default()
     };
 
-    run_exec_subagent(&ctx.root, &prompt, &options)
+    run_exec_subagent_with_cancel(&ctx.root, &prompt, &options, ctx.cancel_token.clone(), None)
         .await
         .map_err(|err| format!("Read thread failed: {err}"))
 }
