@@ -970,7 +970,7 @@ impl TuiRuntime {
                 self.dispatch_event(prompt_event);
 
                 self.spawn_task(TaskKind::ThreadCreate, TaskMeta::None, false, move |_| {
-                    handlers::thread_create(config, root, None, None)
+                    handlers::thread_create(config, root, None, None, None)
                 });
             }
             UiEffect::ForkThread {
@@ -1089,7 +1089,7 @@ impl TuiRuntime {
                 self.dispatch_event(prompt_event);
 
                 self.spawn_task(TaskKind::ThreadCreate, TaskMeta::None, false, move |_| {
-                    handlers::thread_create(config, root, None, None)
+                    handlers::thread_create(config, root, None, None, None)
                 });
             }
             UiEffect::ResolveRootDisplay { path } => {
@@ -1146,14 +1146,22 @@ impl TuiRuntime {
             UiEffect::HandoffSubmit {
                 prompt,
                 handoff_from,
+                model_override,
             } => {
                 let root = self.state.tui.agent_opts.root.clone();
-                let config = self.state.tui.config.clone();
+                let mut config = self.state.tui.config.clone();
+                // A model picked during the handoff belongs to the thread it
+                // opens: apply it here so the new thread's system prompt and
+                // pinned override use it, leaving the source tab untouched.
+                let pinned_model = model_override.map(|model| {
+                    config.apply_model_spec(&model);
+                    config.model.clone()
+                });
                 let prompt_event = handlers::refresh_system_prompt(&config, &root);
                 self.dispatch_event(prompt_event);
 
                 self.spawn_task(TaskKind::ThreadCreate, TaskMeta::None, false, move |_| {
-                    handlers::thread_create(config, root, handoff_from, Some(prompt))
+                    handlers::thread_create(config, root, handoff_from, Some(prompt), pinned_model)
                 });
             }
 

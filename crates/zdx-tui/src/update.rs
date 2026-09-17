@@ -748,7 +748,7 @@ fn handle_task_started_event(
     match kind {
         TaskKind::Handoff => {
             if matches!(&started.meta, TaskMeta::Handoff { .. }) {
-                app.tui.input.handoff = HandoffState::Generating;
+                app.tui.input.set_handoff(HandoffState::Generating);
             }
         }
         TaskKind::PromptBuilder => {
@@ -1732,13 +1732,21 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         zdx_engine::core::thread_persistence::last_attached_context_key_from_messages(
             &app.tui.thread.messages,
         );
+    // While a handoff is staged, the model keys (Ctrl+L / Ctrl+T / model modes)
+    // target the thread it will open, so they start from the staged model.
+    let model_id = app
+        .tui
+        .input
+        .handoff_model
+        .clone()
+        .unwrap_or_else(|| app.tui.config.model.clone());
     let ctx = input::InputContext {
         agent_state: &app.tui.agent_state,
         tasks: &app.tui.tasks,
         thread_id,
         thread_title: app.tui.thread.title.as_deref(),
         config: &app.tui.config,
-        model_id: &app.tui.config.model,
+        model_id: &model_id,
         active_thread_ids: &active_thread_ids,
         root: app.tui.agent_opts.root.as_path(),
         can_retry,
@@ -2197,6 +2205,7 @@ mod tests {
                 UiEffect::HandoffSubmit {
                     prompt,
                     handoff_from,
+                    ..
                 } => Some((prompt.clone(), handoff_from.clone())),
                 _ => None,
             })
@@ -2241,5 +2250,93 @@ mod tests {
         assert!(app.tui.transcript.cells().is_empty());
         assert!(app.tui.input.get_text().is_empty());
         assert!(matches!(app.tui.input.handoff, HandoffState::Idle));
+    }
+
+    /// A model picked while the handoff composer is open belongs to the thread
+    /// the handoff opens: it rides along on submit, and the source tab's model
+    /// and thread override are never touched.
+    #[test]
+    fn staged_handoff_model_travels_with_the_submission_only() {
+        use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
+
+        use crate::input::HandoffState;
+
+        let _home = zdx_engine::test_support::temp_zdx_home();
+        let config = zdx_engine::config::Config::default();
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
+
+        let source_thread_id = unique_thread_id("handoff-source");
+        app.tui.thread.thread_handle = Some(Thread::with_id(source_thread_id.clone()).unwrap());
+        let source_model = app.tui.config.model.clone();
+
+        app.tui.input.handoff = HandoffState::Ready;
+        app.tui.input.handoff_model = Some("openai:gpt-5.1-codex@high".to_string());
+        app.tui.input.set_text("Generated handoff prompt body.");
+        let source_tab_id = app.tui.tab_id;
+
+        let effects = update(
+            &mut app,
+            UiEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            ))),
+        );
+
+        let staged = effects
+            .iter()
+            .find_map(|effect| match effect {
+                UiEffect::HandoffSubmit { model_override, .. } => Some(model_override.clone()),
+                _ => None,
+            })
+            .expect("expected HandoffSubmit effect");
+        assert_eq!(staged.as_deref(), Some("openai:gpt-5.1-codex@high"));
+
+        let source = app
+            .background_tabs
+            .iter()
+            .find(|t| t.tab_id == source_tab_id)
+            .expect("source tab should be in background");
+        assert_eq!(
+            source.config.model, source_model,
+            "source tab must keep its own model"
+        );
+        assert!(
+            source.thread.model_override.is_none(),
+            "source thread must keep no model override"
+        );
+        assert_eq!(
+            zdx_engine::core::thread_persistence::read_thread_model_override(&source_thread_id)
+                .unwrap(),
+            None,
+            "source thread metadata must be untouched"
+        );
+    }
+
+    /// Cancelling the handoff drops the staged model, so the next handoff (and
+    /// the current thread) start from the tab's own model again.
+    #[test]
+    fn cancelling_a_handoff_drops_the_staged_model() {
+        use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
+
+        use crate::input::HandoffState;
+
+        let config = zdx_engine::config::Config::default();
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
+        let model = app.tui.config.model.clone();
+
+        app.tui.input.handoff = HandoffState::Pending;
+        app.tui.input.handoff_model = Some("openai:gpt-5.1-codex@high".to_string());
+
+        update(
+            &mut app,
+            UiEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+                KeyCode::Esc,
+                KeyModifiers::NONE,
+            ))),
+        );
+
+        assert!(matches!(app.tui.input.handoff, HandoffState::Idle));
+        assert!(app.tui.input.handoff_model.is_none());
+        assert_eq!(app.tui.config.model, model);
     }
 }

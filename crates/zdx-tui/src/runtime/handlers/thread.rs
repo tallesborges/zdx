@@ -318,6 +318,7 @@ pub async fn thread_create(
     root: PathBuf,
     handoff_from: Option<String>,
     initial_input: Option<String>,
+    pinned_model: Option<String>,
 ) -> UiEvent {
     tokio::task::spawn_blocking(move || {
         let thread_result = match &handoff_from {
@@ -335,10 +336,16 @@ pub async fn thread_create(
             }
         };
 
-        // Inherit the source thread's effective selection, folding any legacy
-        // standalone thinking override into one new model spec.
-        let (model_override, thinking_override) = match &handoff_from {
-            Some(source_thread_id) => {
+        // A model picked during the handoff wins: it was chosen for this new
+        // thread. Otherwise inherit the source thread's effective selection,
+        // folding any legacy standalone thinking override into one new model
+        // spec.
+        let (model_override, thinking_override) = match (pinned_model, &handoff_from) {
+            (Some(model), _) => {
+                let _ = thread_handle.set_model_override(Some(model.clone()));
+                (Some(model), None)
+            }
+            (None, Some(source_thread_id)) => {
                 let model_override = tp::read_thread_model_override(source_thread_id)
                     .ok()
                     .flatten();
@@ -357,7 +364,7 @@ pub async fn thread_create(
                     (None, None)
                 }
             }
-            None => (None, None),
+            (None, None) => (None, None),
         };
 
         // Load project context file paths and skills

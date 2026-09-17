@@ -461,23 +461,31 @@ fn render_handoff_input(
     area: Rect,
     show_cursor: bool,
 ) {
-    // Handoff mode title - varies based on state
-    let (title, border_color) = if state.input.handoff.is_generating() {
-        (" handoff (generating prompt...) ", Color::Cyan)
+    // Handoff mode title - varies based on state, and names the picked model
+    // when one was staged for the new thread (Ctrl+L / Ctrl+T while staging).
+    let (body, border_color) = if state.input.handoff.is_generating() {
+        ("generating prompt...", Color::Cyan)
     } else if state.input.handoff.is_ready() {
         // Generated prompt is ready for review
         (
-            " handoff (review and Enter to open in new tab, Esc to cancel) ",
+            "review and Enter to open in new tab, Esc to cancel",
             Color::Green,
         )
     } else {
         // Waiting for next-message input (Pending)
         (
-            " handoff (type your first message for the new chat, Esc to cancel) ",
+            "type your first message for the new chat, Esc to cancel",
             Color::Yellow,
         )
     };
-    render_status_input(state, frame, area, show_cursor, title, border_color);
+    let title = match state.input.handoff_model.as_deref() {
+        Some(model) => format!(
+            " handoff → {} ({body}) ",
+            crate::overlays::model_picker::label_for_model_spec(model)
+        ),
+        None => format!(" handoff ({body}) "),
+    };
+    render_status_input(state, frame, area, show_cursor, &title, border_color);
 }
 
 /// Renders the input area in prompt-builder mode with special styling.

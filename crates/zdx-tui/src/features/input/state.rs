@@ -220,6 +220,12 @@ pub struct InputState {
     /// Handoff feature state.
     pub handoff: HandoffState,
 
+    /// Model the handoff's new thread will start with, when one was picked
+    /// while the handoff composer was open. It belongs to that thread only:
+    /// the current tab, its thread, and the workspace config keep their model,
+    /// and cancelling the handoff drops it (see [`InputState::set_handoff`]).
+    pub handoff_model: Option<String>,
+
     /// Prompt-builder feature state.
     pub prompt_builder: PromptBuilderState,
 
@@ -259,6 +265,7 @@ impl InputState {
             history_index: None,
             draft: None,
             handoff: HandoffState::Idle,
+            handoff_model: None,
             prompt_builder: PromptBuilderState::Idle,
             queued: std::collections::VecDeque::new(),
             pending_pastes: Vec::new(),
@@ -272,6 +279,15 @@ impl InputState {
     /// Gets the current input text.
     pub fn get_text(&self) -> String {
         self.textarea.lines().join("\n")
+    }
+
+    /// Moves the handoff state machine. Leaving the flow drops the staged
+    /// model, so a cancelled handoff never changes which model anything uses.
+    pub fn set_handoff(&mut self, state: HandoffState) {
+        if !state.is_active() {
+            self.handoff_model = None;
+        }
+        self.handoff = state;
     }
 
     /// Gets the current input text with pending paste placeholders expanded.
@@ -880,8 +896,9 @@ impl InputState {
             InputMutation::ClearQueue => self.queued.clear(),
             InputMutation::SetHandoffState(state) => {
                 self.handoff.cancel();
-                self.handoff = state;
+                self.set_handoff(state);
             }
+            InputMutation::SetHandoffModel(model) => self.handoff_model = model,
             InputMutation::SetPromptBuilderState(state) => {
                 self.prompt_builder.cancel();
                 self.prompt_builder = state;

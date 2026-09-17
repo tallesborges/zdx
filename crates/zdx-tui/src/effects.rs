@@ -161,6 +161,10 @@ pub enum UiEffect {
         prompt: String,
         /// The source thread ID this handoff originated from.
         handoff_from: Option<String>,
+        /// Model picked while the handoff composer was open. It applies to the
+        /// new thread only; without one, the source thread's model is
+        /// inherited.
+        model_override: Option<String>,
     },
 
     /// Open the thread picker overlay (loads thread list via I/O).

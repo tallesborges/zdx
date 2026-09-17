@@ -76,6 +76,8 @@ pub enum InputMutation {
     ClearHistory,
     ClearQueue,
     SetHandoffState(HandoffState),
+    /// Stage (or clear) the model the handoff's new thread will start with.
+    SetHandoffModel(Option<String>),
     SetPromptBuilderState(PromptBuilderState),
     /// Attach an image (`mime_type`, `base64_data`, `source_path`).
     AttachImage {

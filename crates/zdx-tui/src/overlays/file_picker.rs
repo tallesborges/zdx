@@ -602,7 +602,8 @@ mod tests {
             InputMutation::InsertChar(ch) => input.textarea.insert_char(ch),
             InputMutation::ClearHistory => input.clear_history(),
             InputMutation::ClearQueue => input.queued.clear(),
-            InputMutation::SetHandoffState(state) => input.handoff = state,
+            InputMutation::SetHandoffState(state) => input.set_handoff(state),
+            InputMutation::SetHandoffModel(model) => input.handoff_model = model,
             InputMutation::SetPromptBuilderState(state) => input.prompt_builder = state,
             InputMutation::AttachImage {
                 mime_type,

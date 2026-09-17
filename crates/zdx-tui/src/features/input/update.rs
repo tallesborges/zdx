@@ -477,7 +477,7 @@ fn handle_esc_voice(input: &mut InputState) -> Option<KeyResult> {
 /// Idle. Returns `Some` when one of the modals matched.
 fn handle_esc_modals(input: &mut InputState) -> Option<KeyResult> {
     if input.handoff.is_generating() {
-        input.handoff = HandoffState::Idle;
+        input.set_handoff(HandoffState::Idle);
         input.clear();
         return Some((
             vec![UiEffect::CancelTask {
@@ -489,7 +489,7 @@ fn handle_esc_modals(input: &mut InputState) -> Option<KeyResult> {
         ));
     }
     if input.handoff.is_active() {
-        input.handoff = HandoffState::Idle;
+        input.set_handoff(HandoffState::Idle);
         input.clear();
         return Some((vec![], vec![], None));
     }
@@ -693,10 +693,15 @@ fn handle_model_modes(
     }
 
     let forward = code == KeyCode::Tab && !mods.shift();
+    // During a handoff the selection targets the thread it will open, so cycle
+    // from the staged model rather than this tab's.
+    let current_level = zdx_engine::models::ModelSpec::parse(ctx.model_id)
+        .thinking
+        .unwrap_or(ctx.config.thinking_level);
     let idx = next_mode_index(
         &ctx.config.model_modes,
-        &ctx.config.model,
-        ctx.config.thinking_level,
+        ctx.model_id,
+        current_level,
         forward,
     );
     let selected = ctx.config.model_modes.get(idx)?;
@@ -704,35 +709,19 @@ fn handle_model_modes(
     // Canonicalize before storing: a suffixless primary inherits the currently
     // effective level, and the stored override has to carry that resolved level
     // or a config reload would re-resolve it against the default instead.
-    let (model, _) =
-        zdx_engine::models::resolve_model_spec(&selected.primary, ctx.config.thinking_level);
-    let message = format!("Switched to {}", selected.name);
+    let (model, _) = zdx_engine::models::resolve_model_spec(&selected.primary, current_level);
 
-    let mut effects = Vec::new();
-    if ctx.thread_id.is_some() {
-        effects.push(UiEffect::PersistThreadModelOverride {
-            model: model.clone(),
-        });
-    }
-    effects.push(UiEffect::RefreshSystemPrompt {
-        path: ctx.root.to_path_buf(),
-    });
+    let (effects, mutations) = crate::overlays::thinking_picker::model_selection_updates(
+        crate::overlays::thinking_picker::ModelSelection {
+            model,
+            label: selected.name.clone(),
+            staged_for_handoff: input.handoff.is_active(),
+            thread_exists: ctx.thread_id.is_some(),
+            root: ctx.root,
+        },
+    );
 
-    Some((
-        effects,
-        vec![
-            StateMutation::Thread(ThreadMutation::SetOverrides {
-                model_override: Some(model.clone()),
-                thinking_override: None,
-            }),
-            StateMutation::SetActiveThreadOverrides {
-                model_override: Some(model),
-                thinking_override: None,
-            },
-            StateMutation::Transcript(TranscriptMutation::AppendOrReplaceSwitchNotice(message)),
-        ],
-        None,
-    ))
+    Some((effects, mutations, None))
 }
 
 /// Index of the mode to switch to: the next/previous entry from the one
@@ -1143,12 +1132,15 @@ fn handle_handoff_submission(
                 None,
             ));
         }
-        input.handoff = HandoffState::Idle;
+        // Taken before the state reset, which drops the staged model.
+        let model_override = input.handoff_model.clone();
+        input.set_handoff(HandoffState::Idle);
         input.clear();
         return Some((
             vec![UiEffect::HandoffSubmit {
                 prompt: text.to_string(),
                 handoff_from: thread_id.map(std::string::ToString::to_string),
+                model_override,
             }],
             vec![],
             None,
@@ -1358,7 +1350,7 @@ pub fn handle_handoff_result(
             input.set_text(&generated_prompt);
 
             // Transition to Ready state
-            input.handoff = HandoffState::Ready;
+            input.set_handoff(HandoffState::Ready);
 
             vec![]
         }
@@ -1372,14 +1364,14 @@ pub fn handle_handoff_result(
             // Restore the user's next-message draft for retry (spec requirement)
             if was_generating {
                 input.set_text(next_message);
-                input.handoff = HandoffState::Pending;
+                input.set_handoff(HandoffState::Pending);
                 mutations.push(StateMutation::Transcript(
                     TranscriptMutation::AppendSystemMessage(
                         "Press Enter to retry, or Esc to cancel.".to_string(),
                     ),
                 ));
             } else {
-                input.handoff = HandoffState::Idle;
+                input.set_handoff(HandoffState::Idle);
             }
 
             mutations
