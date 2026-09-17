@@ -579,6 +579,11 @@ When the Telegram bot is used in a forum-enabled supergroup:
   - Discard (or `/cancel`) deletes the staging messages — the bot's own always, the user's best-effort (needs `can_delete_messages`) — and leaves the source thread untouched
   - `/handoff` outside a forum topic (DM or `General`) does not start staging; the bot explains it needs a topic
   - stale staging sessions expire; a message after expiry runs as a normal agent turn
+- The model of a topic opened by `/handoff` or `/btw`:
+  - by default it continues the **source thread's** effective model and thinking level (its own `/model` override, not the chat default)
+  - the staged command's card carries a `🎛 Model` button next to Discard (only for the commands that open a topic — not `/prompt_builder` or `/goal`). It opens the provider → model → thinking picker in place, and returns to the card showing the pick; `← Back` / `✖ Cancel` return without changing it
+  - a pick is resolved against the source thread's effective config (so a suffixless model keeps the current thinking level) and is written only to the new thread when it is created — the current thread's model is never touched, and the pick lasts for that one command
+  - the picker is in-memory like the rest of staging: after a bot restart the buttons report the expired session instead of acting
 - `/commands` (inside a topic or DM) posts a context-dependent command picker:
   - lists only the custom `.md` commands the TUI would show for the chat's bound project (bundled + `$ZDX_HOME/commands` + project `.zdx/commands`); agent built-ins live in the native `/` menu instead
   - custom `.md` commands are picker-only on the bot: they are not typed commands and are not registered in the native `/` menu

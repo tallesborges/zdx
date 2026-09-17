@@ -834,6 +834,9 @@ pub(crate) enum ModelPickerScope {
     Topic,
     /// Launcher `🎛 Custom` — creates a new topic pre-set to the picked model.
     NewThread,
+    /// A staged `/handoff` / `/btw` `🎛 Model` tap — sets the model the command's
+    /// new topic will start with, leaving the current topic alone.
+    Staging,
 }
 
 impl ModelPickerScope {
@@ -842,6 +845,7 @@ impl ModelPickerScope {
             Self::General => "general",
             Self::Topic => "topic",
             Self::NewThread => "newthread",
+            Self::Staging => "staging",
         }
     }
 
@@ -850,6 +854,7 @@ impl ModelPickerScope {
             "general" => Some(Self::General),
             "topic" => Some(Self::Topic),
             "newthread" => Some(Self::NewThread),
+            "staging" => Some(Self::Staging),
             _ => None,
         }
     }
@@ -863,9 +868,13 @@ pub(crate) fn build_provider_keyboard(
     scope: ModelPickerScope,
 ) -> InlineKeyboardMarkup {
     let models = context.config_for_chat(chat_id).subagent_available_models();
-    // The launcher's Custom flow returns to the launcher menu, so label its
-    // exit "← Back"; the standalone `/model` flow keeps "✖ Cancel".
-    let exit_label = if scope == ModelPickerScope::NewThread {
+    // The launcher's Custom flow and a staged command's Model tap both return to
+    // the card they came from, so label their exit "← Back"; the standalone
+    // `/model` flow keeps "✖ Cancel".
+    let exit_label = if matches!(
+        scope,
+        ModelPickerScope::NewThread | ModelPickerScope::Staging
+    ) {
         "← Back"
     } else {
         "✖ Cancel"

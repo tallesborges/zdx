@@ -567,7 +567,7 @@ fn set_topic_model(
     }
 }
 
-fn model_picker_header(
+pub(crate) fn model_picker_header(
     context: &BotContext,
     chat_id: i64,
     thread_id: Option<i64>,
@@ -580,6 +580,14 @@ fn model_picker_header(
             format!(
                 "Pick a model for a new thread. Default: <code>{}</code>",
                 config.model
+            )
+        }
+        ModelPickerScope::Staging => {
+            let picked = crate::staging::session_model_override(context, chat_id, thread_id)
+                .map_or_else(String::new, |m| format!("\nPicked: <code>{m}</code>"));
+            format!(
+                "Pick the model for the new topic (this thread keeps its own). Inherited: <code>{}</code>{picked}",
+                current_topic_model(context, chat_id, thread_id)
             )
         }
         ModelPickerScope::Topic => {
@@ -613,8 +621,9 @@ fn resolve_model_pick(
             Err(err) => format!("❌ Failed to save model: {err}"),
         },
         ModelPickerScope::Topic => set_topic_model(context, chat_id, thread_id, model_id),
-        ModelPickerScope::NewThread => {
-            // Handled directly in handle_model_callback to keep the launcher interactive.
+        ModelPickerScope::NewThread | ModelPickerScope::Staging => {
+            // Handled directly in handle_model_callback: the launcher stays
+            // interactive, and a staged pick belongs to its command's card.
             String::new()
         }
     }
@@ -658,7 +667,7 @@ async fn handle_model_pick(
         return;
     };
 
-    let current = if scope == ModelPickerScope::Topic {
+    let current = if matches!(scope, ModelPickerScope::Topic | ModelPickerScope::Staging) {
         current_topic_thinking(context, chat_id, msg.thread_id)
     } else {
         context.config_for_chat(chat_id).thinking_level
@@ -725,6 +734,43 @@ async fn handle_model_thinking_pick(
             crate::handlers::message::render_launcher(context, msg.chat.id, msg.id).await
         {
             tracing::warn!(chat_id = msg.chat.id, err = %format!("{err:#}"), "failed to restore launcher after custom pick");
+        }
+        return;
+    }
+
+    if scope == ModelPickerScope::Staging {
+        // A staged `/handoff` / `/btw` pick applies to the topic that command
+        // will create, so it is resolved against the source thread's effective
+        // config and kept on the staging session — never written to this thread.
+        let topic_id = msg.effective_thread_id();
+        let mut config = current_topic_config(context, msg.chat.id, topic_id);
+        config.apply_model_spec(&model);
+        let resolved = config.model;
+        if staging::finish_model_pick(
+            context,
+            client,
+            msg.chat.id,
+            topic_id,
+            msg.id,
+            Some(resolved.clone()),
+        )
+        .await
+        {
+            let _ = client
+                .answer_callback_query(&callback.id, Some(&format!("New topic: {resolved}")))
+                .await;
+        } else {
+            let _ = client
+                .edit_message_text(
+                    msg.chat.id,
+                    msg.id,
+                    "⚠️ Session expired — re-run the command.",
+                    None,
+                )
+                .await;
+            let _ = client
+                .answer_callback_query(&callback.id, Some("Session expired — re-run the command"))
+                .await;
         }
         return;
     }
@@ -803,6 +849,22 @@ async fn handle_model_callback(
                 crate::handlers::message::render_launcher(context, chat_id, message_id).await
             {
                 tracing::warn!(chat_id, err = %format!("{err:#}"), "failed to restore launcher after custom cancel");
+            }
+        } else if scope == ModelPickerScope::Staging {
+            // Launched from a staged command's card — restore it unchanged.
+            let topic_id = msg.effective_thread_id();
+            if !staging::finish_model_pick(context, client, chat_id, topic_id, message_id, None)
+                .await
+                && let Err(err) = client
+                    .edit_message_text(
+                        chat_id,
+                        message_id,
+                        "⚠️ Session expired — re-run the command.",
+                        None,
+                    )
+                    .await
+            {
+                tracing::warn!(chat_id, err = %format!("{err:#}"), "failed to clear expired staging model picker");
             }
         } else {
             let current = if scope == ModelPickerScope::General {

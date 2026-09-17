@@ -28,7 +28,8 @@ use crate::bot::context::BotContext;
 use crate::bot::queue::{ChatQueueMap, dispatch_message};
 use crate::commands::{BotCommand, parse_command};
 use crate::handlers::message::{
-    escape_html, orchestrator_topic_name, post_thread_header, thread_id_for_chat,
+    ModelPickerScope, build_provider_keyboard, escape_html, orchestrator_topic_name,
+    post_thread_header, resolve_effective_thread_id, thread_id_for_chat,
 };
 use crate::telegram::markdown::{to_telegram_html, truncate_telegram_html};
 use crate::telegram::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, TelegramClient};
@@ -63,6 +64,9 @@ pub(crate) struct StagingSession {
     /// `message_id` of the slash command that opened the session. Messages that
     /// predate it (e.g. one already sitting in the queue) are not its input.
     command_message_id: i64,
+    /// Fully resolved model the new topic starts with, picked from the card's
+    /// `🎛 Model` button. `None` means it inherits the source thread's model.
+    model_override: Option<String>,
     /// Full generated suggestion (the preview message may be truncated).
     suggestion_text: Option<String>,
     /// The bot's current suggestion message (deleted/replaced on regenerate).
@@ -219,34 +223,21 @@ async fn start_staging(
         cleanup_session_messages(context, incoming.chat_id, &previous).await;
     }
 
-    let ask_text = match command {
-        StagingCommand::Handoff => {
-            "🔀 <b>Handoff</b>\nSend the message (text or voice) to start the new topic with — I'll generate the context and open it straight away. Send /cancel to abort."
-        }
-        StagingCommand::Btw => {
-            "💬 <b>Side question</b>\nSend your question (text or voice) — I'll answer it in a new topic that reads this thread, leaving this one untouched. Send /cancel to abort."
-        }
-        StagingCommand::PromptBuilder => {
-            "🛠 <b>Prompt builder</b>\nSend your intent (text or voice) — I'll draft a prompt you can accept to run here, or discard. Send /cancel to abort."
-        }
-        StagingCommand::Goal => {
-            "🎯 <b>Goal</b>\nSend the objective (text or voice) — I'll keep working on it here until a verifier agent confirms it's done, or the continuation limit is hit. Send /cancel to abort."
-        }
-    };
     let ask = context
         .client()
         .send_message_with_markup(
             incoming.chat_id,
-            ask_text,
+            &ask_text(command, None),
             reply_to_message_id,
             topic_id,
-            &discard_only_keyboard(),
+            &staging_keyboard(command),
         )
         .await?;
 
     let session = StagingSession {
         command,
         command_message_id: incoming.message_id,
+        model_override: None,
         suggestion_text: None,
         suggestion_message_id: None,
         bot_message_ids: vec![ask.id],
@@ -306,7 +297,7 @@ async fn process_staged_input(
                 hint_text,
                 Some(incoming.message_id),
                 topic_id,
-                &discard_only_keyboard(),
+                &staging_keyboard(command),
             )
             .await?;
         track_bot_message(context, thread_id, hint.id);
@@ -443,8 +434,9 @@ async fn run_prompt_builder_generation(
     .await
 }
 
-/// Handles `stg:{action}` callbacks: `a` accepts the staged suggestion, `d`
-/// discards the session and deletes its messages.
+/// Handles `stg:{action}` callbacks: `a` accepts the staged suggestion, `m`
+/// opens the model picker for the topic the command will create, `d` discards
+/// the session and deletes its messages.
 pub(crate) async fn handle_callback(
     context: &Arc<BotContext>,
     queues: &ChatQueueMap,
@@ -460,7 +452,14 @@ pub(crate) async fn handle_callback(
     };
     let chat_id = message.chat.id;
     let topic_id = message.effective_thread_id();
-    let thread_id = thread_id_for_chat(chat_id, topic_id);
+    let thread_id = session_thread_id(chat_id, topic_id);
+
+    // The model picker keeps the session alive, so it is handled before the
+    // session is taken below.
+    if data == "m" {
+        open_model_picker(context, client, callback, chat_id, topic_id, &thread_id).await;
+        return;
+    }
 
     let session = {
         let mut map = context.staging_map().lock().expect("staging lock poisoned");
@@ -626,6 +625,9 @@ async fn start_btw_topic(
         let mut map = context.staging_map().lock().expect("staging lock poisoned");
         map.remove(thread_id)
     };
+    let model_override = session
+        .as_ref()
+        .and_then(|session| session.model_override.clone());
 
     match seed_new_topic(
         context,
@@ -637,6 +639,7 @@ async fn start_btw_topic(
         seed,
         None,
         false,
+        model_override,
     )
     .await
     {
@@ -661,7 +664,7 @@ async fn start_btw_topic(
                     &text,
                     Some(incoming.message_id),
                     topic_id,
-                    &discard_only_keyboard(),
+                    &staging_keyboard(StagingCommand::Btw),
                 )
                 .await?;
             track_bot_message(context, thread_id, sent.id);
@@ -678,7 +681,9 @@ async fn start_btw_topic(
 /// The new thread is pre-created so its meta records the `handoff_from` lineage
 /// and a pending auto-title before the first turn opens it, and it inherits the
 /// source thread's model/thinking overrides so it continues with the same
-/// effective model and thinking level. Shared by `/handoff` and `/btw`.
+/// effective model and thinking level. `model_override` (picked with the card's
+/// `🎛 Model` button) replaces that inheritance for this new thread only.
+/// Shared by `/handoff` and `/btw`.
 ///
 /// `inherit_profile` continues the source thread's *mode*: `/handoff` copies a
 /// persistent profile (the reserved `orchestrator` home base) onto the
@@ -697,6 +702,7 @@ async fn seed_new_topic(
     seed_text: String,
     record: Option<String>,
     inherit_profile: bool,
+    model_override: Option<String>,
 ) -> Result<()> {
     // Resolve the inherited profile first: a successor that continues an
     // orchestrator home base is marked as one in the topic list too.
@@ -726,7 +732,9 @@ async fn seed_new_topic(
     let inherited_thinking = thread_persistence::read_thread_thinking_override(source_thread_id)
         .ok()
         .flatten();
-    let inherited_model = if inherited_model.is_some() || inherited_thinking.is_some() {
+    let new_model = if let Some(picked) = model_override {
+        Some(picked)
+    } else if inherited_model.is_some() || inherited_thinking.is_some() {
         let mut config = context.config_for_chat(chat_id);
         if source_profile.as_deref() == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME) {
             zdx_engine::subagents::apply_orchestrator_override(&mut config);
@@ -743,7 +751,7 @@ async fn seed_new_topic(
             if let Some(profile) = inherited_profile.as_deref() {
                 thread.set_persistent_profile(profile)?;
             }
-            if let Some(model) = inherited_model {
+            if let Some(model) = new_model {
                 thread.set_model_override(Some(model))?;
             }
             thread.set_pending_topic_title(true)
@@ -822,6 +830,12 @@ async fn start_handoff_topic(
         .await?;
     track_bot_message(context, thread_id, generating.id);
 
+    let model_override = {
+        let map = context.staging_map().lock().expect("staging lock poisoned");
+        map.get(thread_id)
+            .and_then(|session| session.model_override.clone())
+    };
+
     let seeded = match run_handoff_generation(context, incoming, thread_id, input).await {
         Ok(suggestion) => {
             let record = handoff_record(&suggestion);
@@ -835,6 +849,7 @@ async fn start_handoff_topic(
                 suggestion,
                 Some(record),
                 true,
+                model_override,
             )
             .await
         }
@@ -862,7 +877,7 @@ async fn start_handoff_topic(
                     incoming.chat_id,
                     generating.id,
                     &text,
-                    Some(&discard_only_keyboard()),
+                    Some(&staging_keyboard(StagingCommand::Handoff)),
                 )
                 .await
             {
@@ -986,22 +1001,151 @@ fn accept_discard_keyboard() -> InlineKeyboardMarkup {
     }
 }
 
-fn discard_only_keyboard() -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup {
-        inline_keyboard: vec![vec![InlineKeyboardButton::callback("🗑 Discard", "stg:d")]],
+/// The staged command's own card. Commands that open a new topic also offer the
+/// model that topic will start with; the others only run in the current thread,
+/// where `/model` already applies.
+fn staging_keyboard(command: StagingCommand) -> InlineKeyboardMarkup {
+    let mut row = Vec::new();
+    if command.opens_new_topic() {
+        row.push(InlineKeyboardButton::callback("🎛 Model", "stg:m"));
     }
+    row.push(InlineKeyboardButton::callback("🗑 Discard", "stg:d"));
+    InlineKeyboardMarkup {
+        inline_keyboard: vec![row],
+    }
+}
+
+/// The prompt asking for the command's input, including the picked model when
+/// the command opens a new topic and one was chosen.
+fn ask_text(command: StagingCommand, model_override: Option<&str>) -> String {
+    let base = match command {
+        StagingCommand::Handoff => {
+            "🔀 <b>Handoff</b>\nSend the message (text or voice) to start the new topic with — I'll generate the context and open it straight away. Send /cancel to abort."
+        }
+        StagingCommand::Btw => {
+            "💬 <b>Side question</b>\nSend your question (text or voice) — I'll answer it in a new topic that reads this thread, leaving this one untouched. Send /cancel to abort."
+        }
+        StagingCommand::PromptBuilder => {
+            "🛠 <b>Prompt builder</b>\nSend your intent (text or voice) — I'll draft a prompt you can accept to run here, or discard. Send /cancel to abort."
+        }
+        StagingCommand::Goal => {
+            "🎯 <b>Goal</b>\nSend the objective (text or voice) — I'll keep working on it here until a verifier agent confirms it's done, or the continuation limit is hit. Send /cancel to abort."
+        }
+    };
+    match model_override {
+        Some(model) if command.opens_new_topic() => format!(
+            "{base}\n\nNew topic model: <code>{}</code>",
+            escape_html(model)
+        ),
+        _ => base.to_string(),
+    }
+}
+
+/// Staging state is keyed by the same effective thread id message intake uses,
+/// so a resumed topic finds its session.
+fn session_thread_id(chat_id: i64, topic_id: Option<i64>) -> String {
+    resolve_effective_thread_id(&thread_id_for_chat(chat_id, topic_id))
+}
+
+/// Opens the model picker on the staged command's own card (`🎛 Model`).
+async fn open_model_picker(
+    context: &BotContext,
+    client: &TelegramClient,
+    callback: &CallbackQuery,
+    chat_id: i64,
+    topic_id: Option<i64>,
+    thread_id: &str,
+) {
+    let Some(message) = callback.message.as_ref() else {
+        return;
+    };
+    let live = {
+        let map = context.staging_map().lock().expect("staging lock poisoned");
+        map.get(thread_id)
+            .is_some_and(|session| session.command.opens_new_topic())
+    };
+    if !live {
+        let _ = client
+            .answer_callback_query(&callback.id, Some("Session expired — re-run the command"))
+            .await;
+        return;
+    }
+
+    let keyboard = build_provider_keyboard(context, chat_id, ModelPickerScope::Staging);
+    let header = crate::model_picker_header(context, chat_id, topic_id, ModelPickerScope::Staging);
+    if let Err(err) = client
+        .edit_message_text(chat_id, message.id, &header, Some(&keyboard))
+        .await
+    {
+        tracing::warn!(err = %format!("{err:#}"), "Failed to open staging model picker");
+    }
+    let _ = client.answer_callback_query(&callback.id, None).await;
+}
+
+/// The model a live staged command will give its new topic, if one was picked.
+pub(crate) fn session_model_override(
+    context: &BotContext,
+    chat_id: i64,
+    topic_id: Option<i64>,
+) -> Option<String> {
+    let thread_id = session_thread_id(chat_id, topic_id);
+    let map = context.staging_map().lock().expect("staging lock poisoned");
+    map.get(&thread_id)
+        .and_then(|session| session.model_override.clone())
+}
+
+/// Closes the staging model picker and restores the command's card in place.
+/// `model` is the fully resolved pick, or `None` when the picker was cancelled.
+/// Returns `false` when no staging session is live any more.
+pub(crate) async fn finish_model_pick(
+    context: &BotContext,
+    client: &TelegramClient,
+    chat_id: i64,
+    topic_id: Option<i64>,
+    message_id: i64,
+    model: Option<String>,
+) -> bool {
+    let thread_id = session_thread_id(chat_id, topic_id);
+    let card = {
+        let mut map = context.staging_map().lock().expect("staging lock poisoned");
+        map.get_mut(&thread_id).map(|session| {
+            if model.is_some() {
+                session.model_override = model;
+            }
+            (session.command, session.model_override.clone())
+        })
+    };
+    let Some((command, model_override)) = card else {
+        return false;
+    };
+    if let Err(err) = client
+        .edit_message_text(
+            chat_id,
+            message_id,
+            &ask_text(command, model_override.as_deref()),
+            Some(&staging_keyboard(command)),
+        )
+        .await
+    {
+        tracing::warn!(err = %format!("{err:#}"), "Failed to restore staging card after model pick");
+    }
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{STAGING_TTL, StagingCommand, StagingSession, handoff_record, suggestion_preview};
+    use super::{
+        STAGING_TTL, StagingCommand, StagingSession, ask_text, handoff_record, staging_keyboard,
+        suggestion_preview,
+    };
 
     fn session_created_at(created_at: Instant) -> StagingSession {
         StagingSession {
             command: StagingCommand::Handoff,
             command_message_id: 1,
+            model_override: None,
             suggestion_text: None,
             suggestion_message_id: None,
             bot_message_ids: vec![],
@@ -1052,6 +1196,38 @@ mod tests {
         assert!(StagingCommand::Handoff.opens_new_topic());
         assert!(StagingCommand::Btw.opens_new_topic());
         assert!(!StagingCommand::PromptBuilder.opens_new_topic());
+    }
+
+    /// Only the commands that open a new topic offer a model for it; the others
+    /// run in the current thread, where `/model` already applies.
+    #[test]
+    fn model_button_is_offered_only_by_topic_seeding_commands() {
+        let labels = |command| {
+            staging_keyboard(command)
+                .inline_keyboard
+                .into_iter()
+                .flatten()
+                .map(|button| button.text)
+                .collect::<Vec<_>>()
+        };
+        for command in [StagingCommand::Handoff, StagingCommand::Btw] {
+            assert!(labels(command).iter().any(|text| text.contains("Model")));
+        }
+        for command in [StagingCommand::PromptBuilder, StagingCommand::Goal] {
+            assert_eq!(labels(command), vec!["🗑 Discard".to_string()]);
+        }
+    }
+
+    /// A picked model is shown on the card it was picked from, so the user can
+    /// see what the new topic will start with before sending the input.
+    #[test]
+    fn picked_model_shows_on_the_card_of_topic_seeding_commands() {
+        let text = ask_text(StagingCommand::Btw, Some("openai:gpt-6@high"));
+        assert!(text.contains("New topic model: <code>openai:gpt-6@high</code>"));
+        assert!(!ask_text(StagingCommand::Btw, None).contains("New topic model"));
+        assert!(
+            !ask_text(StagingCommand::Goal, Some("openai:gpt-6@high")).contains("New topic model")
+        );
     }
 
     #[test]

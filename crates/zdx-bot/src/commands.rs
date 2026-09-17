@@ -392,6 +392,7 @@ mod tests {
             ModelPickerScope::General,
             ModelPickerScope::Topic,
             ModelPickerScope::NewThread,
+            ModelPickerScope::Staging,
         ] {
             assert_eq!(ModelPickerScope::from_data(scope.as_str()), Some(scope));
         }
