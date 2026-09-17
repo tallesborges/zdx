@@ -1282,8 +1282,8 @@ fn build_run_turn_setup(
 
 /// Builds the run-turn setup for a custom provider
 /// (`[providers.custom.<name>]`): no `ProviderKind`, default tool set. The
-/// provider's `api` picks the client: Chat Completions (default) or Anthropic
-/// Messages.
+/// wire protocol comes from an explicit per-model `api` in
+/// `model_overrides.toml` when present, else the provider's `api`.
 fn build_custom_run_turn_setup(
     config: &Config,
     options: &AgentOptions,
@@ -1299,9 +1299,18 @@ fn build_custom_run_turn_setup(
     } else {
         ThinkingLevel::Off
     };
-    let base_url = custom_cfg.effective_base_url()?;
+    let api = match crate::models::user_model_api_override(&provider_name, &bare_model) {
+        Some(id) => CustomProviderApi::from_id(&id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "model override `{provider_name}:{bare_model}` has unsupported api `{id}` \
+                 (expected `chat-completions`/`openai-completions` or `anthropic`/`anthropic-messages`)"
+            )
+        })?,
+        None => custom_cfg.api,
+    };
+    let base_url = custom_cfg.effective_base_url(api)?;
     let api_key = custom_cfg.resolve_api_key()?;
-    let client = match custom_cfg.api {
+    let client = match api {
         CustomProviderApi::ChatCompletions => crate::providers::openai_compatible::build_custom(
             base_url,
             api_key,

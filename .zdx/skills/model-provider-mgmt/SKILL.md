@@ -159,7 +159,7 @@ The override layer lives in `update()` (`crates/zdx-cli/src/cli/commands/models.
 
 ## Custom providers (`[providers.custom.<name>]`)
 
-Wire protocol is selected per provider with `api = "chat-completions"` (default, `<base_url>/chat/completions`) or `api = "anthropic"` (Anthropic Messages, reuses `AnthropicClient`, `<base_url>/v1/messages` with `x-api-key`). Keep `base_url` at the `.../v1` root either way: in `anthropic` mode one trailing `/v1` is stripped before the client appends `/v1/messages`.
+Wire protocol is selected per provider with `api = "chat-completions"` (default, `<base_url>/chat/completions`) or `api = "anthropic"` (Anthropic Messages, reuses `AnthropicClient`, `<base_url>/v1/messages` with `x-api-key`); `openai-completions`/`anthropic-messages` are accepted aliases. A per-model `api = "..."` on a `[[override]]` in `model_overrides.toml` outranks the provider value, so one provider can mix protocols per model. Keep `base_url` at the `.../v1` root either way: in `anthropic` mode one trailing `/v1` is stripped before the client appends `/v1/messages`. `@off` sends `reasoning_effort = "none"` (chat-completions) or `thinking.type = "disabled"` (anthropic); both are what a LiteLLM-fronted DeepSeek honors.
 
 Custom-provider models never enter the registry. `custom_provider_models()` (`crates/zdx-engine/src/models.rs`) synthesizes picker entries at runtime from the configured `models` list, with zeroed pricing, `reasoning = true`, and **`input_images = false`**.
 

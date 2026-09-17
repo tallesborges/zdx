@@ -141,6 +141,7 @@ impl OpencodeGoClient {
                     thinking_enabled: config.thinking_enabled,
                     thinking_budget_tokens: config.thinking_budget_tokens,
                     thinking_effort: config.thinking_effort,
+                    explicit_thinking_off: false,
                     extra_headers: session_headers,
                 }))
             }

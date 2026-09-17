@@ -46,9 +46,10 @@ pub fn build_custom(
     thinking_level: ThinkingLevel,
 ) -> Box<dyn crate::StreamingProvider> {
     let mut extra_body = HashMap::new();
-    if let Some(effort) = reasoning_effort_from_thinking_level(thinking_level) {
-        extra_body.insert("reasoning_effort".to_string(), json!(effort));
-    }
+    extra_body.insert(
+        "reasoning_effort".to_string(),
+        json!(reasoning_effort_from_thinking_level(thinking_level)),
+    );
     Box::new(OpenAICompatibleClient {
         inner: OpenAIChatCompletionsClient::with_extra_body(
             OpenAIChatCompletionsConfig {
@@ -76,15 +77,19 @@ pub fn build_custom(
 /// endpoint. The level name passes through unchanged: custom providers front
 /// models with their own effort vocabulary (a vLLM-hosted `DeepSeek` V4
 /// distinguishes `max` from `xhigh`), so collapsing levels here would silently
-/// downgrade the request. `off` omits the field and leaves the server default.
-fn reasoning_effort_from_thinking_level(level: ThinkingLevel) -> Option<&'static str> {
+/// downgrade the request. `off` sends `none`: reasoning backends behind these
+/// proxies (e.g. `DeepSeek`) think by default, so omitting the field would
+/// leave thinking on, and `none` is the disable spelling a `LiteLLM`-style
+/// proxy translates for its backend (`DeepSeek`'s own `thinking.type =
+/// "disabled"` is dropped by such proxies; verified live 2026-09-17).
+fn reasoning_effort_from_thinking_level(level: ThinkingLevel) -> &'static str {
     match level {
-        ThinkingLevel::Off => None,
-        ThinkingLevel::Low => Some("low"),
-        ThinkingLevel::Medium => Some("medium"),
-        ThinkingLevel::High => Some("high"),
-        ThinkingLevel::XHigh => Some("xhigh"),
-        ThinkingLevel::Max => Some("max"),
+        ThinkingLevel::Off => "none",
+        ThinkingLevel::Low => "low",
+        ThinkingLevel::Medium => "medium",
+        ThinkingLevel::High => "high",
+        ThinkingLevel::XHigh => "xhigh",
+        ThinkingLevel::Max => "max",
     }
 }
 
@@ -95,30 +100,16 @@ mod tests {
     use super::reasoning_effort_from_thinking_level;
 
     #[test]
-    fn custom_reasoning_effort_passes_levels_through() {
-        assert_eq!(
-            reasoning_effort_from_thinking_level(ThinkingLevel::Off),
-            None
-        );
-        assert_eq!(
-            reasoning_effort_from_thinking_level(ThinkingLevel::Low),
-            Some("low")
-        );
-        assert_eq!(
-            reasoning_effort_from_thinking_level(ThinkingLevel::Medium),
-            Some("medium")
-        );
-        assert_eq!(
-            reasoning_effort_from_thinking_level(ThinkingLevel::High),
-            Some("high")
-        );
-        assert_eq!(
-            reasoning_effort_from_thinking_level(ThinkingLevel::XHigh),
-            Some("xhigh")
-        );
-        assert_eq!(
-            reasoning_effort_from_thinking_level(ThinkingLevel::Max),
-            Some("max")
-        );
+    fn custom_reasoning_effort_passes_levels_through_and_disables_with_none() {
+        for (level, expected) in [
+            (ThinkingLevel::Off, "none"),
+            (ThinkingLevel::Low, "low"),
+            (ThinkingLevel::Medium, "medium"),
+            (ThinkingLevel::High, "high"),
+            (ThinkingLevel::XHigh, "xhigh"),
+            (ThinkingLevel::Max, "max"),
+        ] {
+            assert_eq!(reasoning_effort_from_thinking_level(level), expected);
+        }
     }
 }

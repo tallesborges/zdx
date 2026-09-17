@@ -182,6 +182,38 @@ fn expand_accounts(
 }
 static CUSTOM_MODELS: OnceLock<Mutex<HashMap<String, &'static [ModelOption]>>> = OnceLock::new();
 
+/// The `api` a user explicitly set for `provider:model` in
+/// `model_overrides.toml`; `None` means the user did not choose one. Registry
+/// and synthesized entries carry an implicit `capabilities.api` default, so
+/// callers deciding a wire protocol must not read that field for
+/// custom-provider models; this is the explicit signal. The last matching
+/// entry wins, matching how overrides are applied.
+#[must_use]
+pub fn user_model_api_override(provider: &str, model: &str) -> Option<String> {
+    let (overrides, _) = load_user_model_overrides();
+    explicit_api_override(&overrides, provider, model)
+}
+
+fn explicit_api_override(
+    overrides: &[UserModelOverride],
+    provider: &str,
+    model: &str,
+) -> Option<String> {
+    let qualified = format!("{}:{}", provider.trim(), model.trim());
+    overrides
+        .iter()
+        .rev()
+        .filter(|entry| {
+            let id = entry.id.trim();
+            id.eq_ignore_ascii_case(&qualified)
+                || (!id.contains(':') && id.eq_ignore_ascii_case(model.trim()))
+        })
+        .filter_map(|entry| entry.api.as_deref())
+        .map(str::trim)
+        .find(|api| !api.is_empty())
+        .map(str::to_string)
+}
+
 /// Synthesizes picker entries for custom providers (`[providers.custom.<name>]`)
 /// so their configured models show up. Pricing/context are zeroed (not in the
 /// registry).
@@ -452,12 +484,50 @@ pub fn wildcard_match(pattern: &str, text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ModelCapabilities, ModelOption, ModelPricing, UserModelOverride,
-        apply_user_model_overrides, bare_model_id, custom_provider_models, fast_variant,
-        find_model, format_model_thinking, model_id_matches_patterns, model_reads_images,
-        resolve_model_spec, wildcard_match,
+        ModelCapabilities, ModelOption, ModelPricing, UserModelOverride, UserModelOverridesFile,
+        apply_user_model_overrides, bare_model_id, custom_provider_models, explicit_api_override,
+        fast_variant, find_model, format_model_thinking, model_id_matches_patterns,
+        model_reads_images, resolve_model_spec, wildcard_match,
     };
     use crate::config::{CustomProviderConfig, ProvidersConfig, ThinkingLevel};
+
+    /// Only an `api` the user wrote counts; qualified ids win over bare ids
+    /// only by order, and the last matching entry wins.
+    #[test]
+    fn explicit_api_override_ignores_entries_without_api() {
+        let file: UserModelOverridesFile = toml::from_str(
+            r#"
+[[override]]
+id = "acme:flash"
+input = 1.0
+
+[[override]]
+id = "acme:pro"
+api = "anthropic"
+
+[[override]]
+id = "ACME:Pro"
+api = " anthropic-messages "
+
+[[override]]
+id = "bare-model"
+api = "openai-completions"
+"#,
+        )
+        .unwrap();
+        let overrides = file.overrides;
+
+        assert_eq!(explicit_api_override(&overrides, "acme", "flash"), None);
+        assert_eq!(
+            explicit_api_override(&overrides, "acme", "pro").as_deref(),
+            Some("anthropic-messages")
+        );
+        assert_eq!(
+            explicit_api_override(&overrides, "other", "bare-model").as_deref(),
+            Some("openai-completions")
+        );
+        assert_eq!(explicit_api_override(&overrides, "acme", "unknown"), None);
+    }
 
     fn providers_with(name: &str, models: &[&str]) -> ProvidersConfig {
         let mut providers = ProvidersConfig::default();

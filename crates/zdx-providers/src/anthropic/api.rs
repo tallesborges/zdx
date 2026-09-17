@@ -10,7 +10,7 @@ use super::shared::{
     should_enable_interleaved_thinking_beta,
 };
 use super::types::{
-    CountTokensRequest, CountTokensResponse, EffortLevel, StreamingMessagesRequest,
+    CountTokensRequest, CountTokensResponse, EffortLevel, StreamingMessagesRequest, ThinkingConfig,
 };
 use crate::ProviderKind;
 use crate::shared::{ChatMessage, ProviderStream};
@@ -31,6 +31,12 @@ pub struct AnthropicConfig {
     pub thinking_budget_tokens: u32,
     /// Optional effort level for supported models
     pub thinking_effort: Option<EffortLevel>,
+    /// Send `thinking: {"type": "disabled"}` instead of omitting the field
+    /// when thinking is off. Anthropic-compatible backends whose models
+    /// think by default (e.g. `DeepSeek`) treat omission as enabled; only
+    /// custom providers opt in, since not every proxied backend accepts the
+    /// explicit value.
+    pub explicit_thinking_off: bool,
     /// Extra headers sent with every request (e.g. proxy routing headers).
     pub extra_headers: HeaderMap,
 }
@@ -73,6 +79,7 @@ impl AnthropicConfig {
             thinking_enabled,
             thinking_budget_tokens,
             thinking_effort,
+            explicit_thinking_off: false,
             extra_headers: HeaderMap::new(),
         })
     }
@@ -231,12 +238,15 @@ impl AnthropicClient {
 
         let system_blocks = build_system_blocks(system, None);
 
-        let (thinking, output_config) = build_thinking_and_output_config(
+        let (mut thinking, output_config) = build_thinking_and_output_config(
             &self.config.model,
             self.config.thinking_enabled,
             self.config.thinking_budget_tokens,
             self.config.thinking_effort,
         )?;
+        if !self.config.thinking_enabled && self.config.explicit_thinking_off {
+            thinking = Some(ThinkingConfig::Disabled);
+        }
 
         let request = StreamingMessagesRequest {
             model: &self.config.model,
@@ -278,7 +288,8 @@ pub fn build(
 /// Builds an Anthropic Messages client for a user-defined custom provider
 /// (`[providers.custom.<name>]` with `api = "anthropic"`). `base_url` is the
 /// API root; the client appends `/v1/messages`. Thinking budget and effort
-/// derive from `thinking_level` exactly as for the first-party provider.
+/// derive from `thinking_level` exactly as for the first-party provider;
+/// `off` is sent explicitly because proxied backends may think by default.
 #[must_use]
 pub fn build_custom(
     base_url: String,
@@ -299,6 +310,7 @@ pub fn build_custom(
         thinking_enabled: thinking_level.is_enabled(),
         thinking_budget_tokens,
         thinking_effort,
+        explicit_thinking_off: true,
         extra_headers: HeaderMap::new(),
     }))
 }
@@ -319,6 +331,7 @@ mod tests {
             thinking_enabled: true,
             thinking_budget_tokens: 2048,
             thinking_effort: Some(EffortLevel::High),
+            explicit_thinking_off: false,
             extra_headers: HeaderMap::new(),
         };
         let client = AnthropicClient::new(config);
@@ -345,6 +358,7 @@ mod tests {
             thinking_enabled: true,
             thinking_budget_tokens: 1024,
             thinking_effort: Some(EffortLevel::Medium),
+            explicit_thinking_off: false,
             extra_headers: HeaderMap::new(),
         };
         let client = AnthropicClient::new(config);
@@ -359,5 +373,32 @@ mod tests {
             json!({"type": "enabled", "budget_tokens": 1024})
         );
         assert_eq!(payload["output_config"], json!({"effort": "medium"}));
+    }
+
+    /// Thinking off is omitted for first-party clients but sent as an
+    /// explicit `disabled` by the custom-provider client.
+    #[test]
+    fn thinking_off_is_explicit_only_when_opted_in() {
+        let request_for = |explicit_thinking_off: bool| {
+            let client = AnthropicClient::new(AnthropicConfig {
+                api_key: "test-key".to_string(),
+                base_url: "http://mock-server".to_string(),
+                model: "some-proxied-model".to_string(),
+                max_tokens: 4096,
+                thinking_enabled: false,
+                thinking_budget_tokens: 0,
+                thinking_effort: None,
+                explicit_thinking_off,
+                extra_headers: HeaderMap::new(),
+            });
+            let request = client
+                .build_streaming_request(&[ChatMessage::user("hi")], &[], None)
+                .unwrap();
+            serde_json::to_value(&request).unwrap()
+        };
+
+        assert!(request_for(false).get("thinking").is_none());
+        assert_eq!(request_for(true)["thinking"], json!({"type": "disabled"}));
+        assert!(request_for(true).get("output_config").is_none());
     }
 }

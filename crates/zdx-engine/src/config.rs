@@ -2562,14 +2562,31 @@ impl ProviderConfig {
 }
 
 /// Wire protocol a custom provider speaks.
+///
+/// Accepts the registry `api` vocabulary as aliases (`openai-completions`,
+/// `anthropic-messages`) so a `model_overrides.toml` entry and a
+/// `[providers.custom.<name>]` entry can use either spelling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "kebab-case")]
 pub enum CustomProviderApi {
     /// `OpenAI` Chat Completions (`POST <base_url>/chat/completions`).
     #[default]
+    #[serde(rename = "chat-completions", alias = "openai-completions")]
     ChatCompletions,
     /// Anthropic Messages (`POST <base_url>/v1/messages`).
+    #[serde(rename = "anthropic", alias = "anthropic-messages")]
     Anthropic,
+}
+
+impl CustomProviderApi {
+    /// Parses a protocol id using the same spellings TOML accepts.
+    #[must_use]
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id.trim() {
+            "chat-completions" | "openai-completions" => Some(Self::ChatCompletions),
+            "anthropic" | "anthropic-messages" => Some(Self::Anthropic),
+            _ => None,
+        }
+    }
 }
 
 /// A user-defined provider (`[providers.custom.<name>]`), e.g. a self-hosted
@@ -2581,7 +2598,8 @@ pub enum CustomProviderApi {
 #[serde(default)]
 pub struct CustomProviderConfig {
     pub base_url: String,
-    /// Wire protocol; defaults to Chat Completions.
+    /// Wire protocol; defaults to Chat Completions. A per-model `api` in
+    /// `model_overrides.toml` takes precedence over this.
     pub api: CustomProviderApi,
     /// Inline API key; takes precedence over `api_key_env`.
     pub api_key: Option<String>,
@@ -2592,15 +2610,15 @@ pub struct CustomProviderConfig {
 }
 
 impl CustomProviderConfig {
-    /// Trimmed base URL without a trailing slash, shaped for the selected
+    /// Trimmed base URL without a trailing slash, shaped for the resolved
     /// `api`: the Anthropic client appends `/v1/messages`, so one trailing
     /// `/v1` is stripped in that mode.
     ///
     /// # Errors
     /// Returns an error if `base_url` is empty.
-    pub fn effective_base_url(&self) -> anyhow::Result<String> {
+    pub fn effective_base_url(&self, api: CustomProviderApi) -> anyhow::Result<String> {
         let mut url = self.base_url.trim().trim_end_matches('/');
-        if self.api == CustomProviderApi::Anthropic {
+        if api == CustomProviderApi::Anthropic {
             url = url.strip_suffix("/v1").unwrap_or(url).trim_end_matches('/');
         }
         if url.is_empty() {
@@ -3133,13 +3151,13 @@ models = ["model-a"]
         };
         assert_eq!(cfg.api, CustomProviderApi::ChatCompletions);
         assert_eq!(
-            cfg.effective_base_url().unwrap(),
+            cfg.effective_base_url(cfg.api).unwrap(),
             "https://llm.example.com/v1"
         );
         assert_eq!(cfg.resolve_api_key().unwrap(), "sk-test");
 
         let empty = CustomProviderConfig::default();
-        assert!(empty.effective_base_url().is_err());
+        assert!(empty.effective_base_url(empty.api).is_err());
         assert!(empty.resolve_api_key().is_err());
     }
 
@@ -3147,10 +3165,12 @@ models = ["model-a"]
     /// configured for Chat Completions (`.../v1`) must not double the segment.
     #[test]
     fn test_custom_provider_anthropic_base_url_strips_trailing_v1() {
-        let anthropic = |base_url: &str| CustomProviderConfig {
-            base_url: base_url.to_string(),
-            api: CustomProviderApi::Anthropic,
-            ..Default::default()
+        let anthropic = |base_url: &str| {
+            CustomProviderConfig {
+                base_url: base_url.to_string(),
+                ..Default::default()
+            }
+            .effective_base_url(CustomProviderApi::Anthropic)
         };
         for base_url in [
             "https://llm.example.com/v1",
@@ -3159,19 +3179,34 @@ models = ["model-a"]
             "https://llm.example.com/",
         ] {
             assert_eq!(
-                anthropic(base_url).effective_base_url().unwrap(),
+                anthropic(base_url).unwrap(),
                 "https://llm.example.com",
                 "base_url = {base_url}"
             );
         }
         // Only a whole trailing `/v1` segment is dropped.
         assert_eq!(
-            anthropic("https://llm.example.com/av1")
-                .effective_base_url()
-                .unwrap(),
+            anthropic("https://llm.example.com/av1").unwrap(),
             "https://llm.example.com/av1"
         );
-        assert!(anthropic("/v1").effective_base_url().is_err());
+        assert!(anthropic("/v1").is_err());
+    }
+
+    /// Both the config spelling and the registry `api` vocabulary resolve.
+    #[test]
+    fn test_custom_provider_api_accepts_registry_aliases() {
+        for (id, expected) in [
+            ("chat-completions", CustomProviderApi::ChatCompletions),
+            ("openai-completions", CustomProviderApi::ChatCompletions),
+            ("anthropic", CustomProviderApi::Anthropic),
+            (" anthropic-messages ", CustomProviderApi::Anthropic),
+        ] {
+            assert_eq!(CustomProviderApi::from_id(id), Some(expected), "{id}");
+            let cfg: CustomProviderConfig =
+                toml::from_str(&format!("api = \"{}\"", id.trim())).unwrap();
+            assert_eq!(cfg.api, expected, "{id}");
+        }
+        assert_eq!(CustomProviderApi::from_id("openai-responses"), None);
     }
 
     /// `api` parses from TOML and defaults to Chat Completions when omitted.
