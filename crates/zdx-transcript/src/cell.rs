@@ -909,6 +909,14 @@ impl HistoryCell {
                 // For finalized: render everything
                 use crate::markdown::{render_markdown, render_markdown_streaming};
 
+                // Some providers emit a whitespace-only text block next to tool
+                // calls. Markdown rendering turns it into a single blank line,
+                // which defeats the empty-cell gap suppression and leaves the
+                // surrounding blank lines stacked. Render nothing instead.
+                if !*is_streaming && !*is_interrupted && content.trim().is_empty() {
+                    return Vec::new();
+                }
+
                 let mut lines = if *is_streaming {
                     // Streaming: only render committed content (complete lines/blocks)
                     let committed = render_markdown_streaming(content, width);
@@ -1509,6 +1517,29 @@ mod tests {
 
         // The last cell keeps a trailing blank above the input box.
         assert_eq!(gap_after(&tool, None), 1);
+    }
+
+    #[test]
+    fn whitespace_only_assistant_cell_renders_nothing() {
+        // Some providers emit a whitespace-only text block between reasoning and
+        // a tool call; it must not stack extra blank lines in the transcript.
+        assert!(
+            HistoryCell::assistant("\n\n")
+                .display_lines(80, 0)
+                .is_empty()
+        );
+        assert!(HistoryCell::assistant("").display_lines(80, 0).is_empty());
+
+        // Real prose still renders, and so does an interrupted empty response.
+        assert!(!HistoryCell::assistant("hi").display_lines(80, 0).is_empty());
+        let interrupted = HistoryCell::Assistant {
+            id: CellId::new(),
+            created_at: Utc::now(),
+            content: String::new(),
+            is_streaming: false,
+            is_interrupted: true,
+        };
+        assert_eq!(interrupted.display_lines(80, 0).len(), 1);
     }
 
     #[test]
