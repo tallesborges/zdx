@@ -10,6 +10,7 @@ pub mod fetch_webpage;
 pub mod file_lock;
 pub mod glob;
 pub mod grep;
+pub mod image_downscale;
 mod parallel;
 #[cfg(unix)]
 pub mod process_supervisor;

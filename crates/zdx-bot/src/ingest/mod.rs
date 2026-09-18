@@ -344,6 +344,12 @@ async fn load_photo_attachment(
     let filename =
         file_name_from_path(&file_path).unwrap_or_else(|| format!("photo_{message_id}.bin"));
     let local_path = save_media_bytes(chat_id, message_id, &filename, &bytes)?;
+    // The saved file keeps full resolution; only the provider-bound copy is
+    // clamped, since vision APIs reject images over their pixel cap.
+    let (bytes, mime_type) = match zdx_engine::images::downscale_for_provider(&bytes) {
+        Some((resized, resized_mime)) => (resized, resized_mime.to_string()),
+        None => (bytes, mime_type),
+    };
     let data = BASE64.encode(&bytes);
 
     Ok(Some(IncomingImage {
@@ -382,6 +388,12 @@ async fn load_document_image(
         .or_else(|| file_name_from_path(&file_path))
         .unwrap_or_else(|| format!("image_{message_id}.bin"));
     let local_path = save_media_bytes(chat_id, message_id, &filename, &bytes)?;
+    // The saved file keeps full resolution; only the provider-bound copy is
+    // clamped, since vision APIs reject images over their pixel cap.
+    let (bytes, mime_type) = match zdx_engine::images::downscale_for_provider(&bytes) {
+        Some((resized, resized_mime)) => (resized, resized_mime.to_string()),
+        None => (bytes, mime_type),
+    };
     let data = BASE64.encode(&bytes);
 
     Ok(Some(IncomingImage {

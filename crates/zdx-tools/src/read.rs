@@ -201,12 +201,19 @@ fn read_image(display_path: &str, path: &Path, mime_type: &str) -> ToolOutput {
     };
 
     // Base64 encode
-    let base64_data = BASE64.encode(&data);
-
     // Trust the actual bytes over the file extension: a mismatched declared
     // media type (e.g. JPEG bytes in a `.png` file) makes providers reject the
     // resulting `tool_result` image block.
     let mime_type = sniff_image_mime(&data).unwrap_or(mime_type);
+
+    // An oversized `tool_result` image is rejected outright rather than
+    // downscaled by the provider, which fails the whole turn.
+    let (data, mime_type) = match crate::image_downscale::downscale_for_provider(&data) {
+        Some((resized, resized_mime)) => (resized, resized_mime),
+        None => (data, mime_type),
+    };
+
+    let base64_data = BASE64.encode(&data);
 
     let image = ImageContent {
         mime_type: mime_type.to_string(),
@@ -937,6 +944,40 @@ mod tests {
         assert_eq!(data["mime_type"], "image/jpeg");
         let image = result.image().expect("should have image content");
         assert_eq!(image.mime_type, "image/jpeg");
+    }
+
+    #[test]
+    fn test_read_image_downscales_oversized_dimensions() {
+        // A tall screenshot compresses to a tiny file but blows the provider's
+        // pixel cap, which rejects an oversized tool_result image instead of
+        // downscaling it.
+        use std::io::Cursor;
+
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("tall.png");
+
+        let tall = image::DynamicImage::ImageRgb8(image::RgbImage::new(500, 6000));
+        let mut png = Vec::new();
+        tall.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        fs::write(&path, &png).unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"file_path": "tall.png"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+
+        let image = result.image().expect("should have image content");
+        let decoded = BASE64.decode(&image.data).expect("should be valid base64");
+        let (width, height) = image::ImageReader::new(Cursor::new(&decoded))
+            .with_guessed_format()
+            .unwrap()
+            .into_dimensions()
+            .unwrap();
+
+        assert_eq!(height, crate::image_downscale::MAX_PROVIDER_IMAGE_EDGE);
+        assert!(width < 500);
     }
 
     #[test]

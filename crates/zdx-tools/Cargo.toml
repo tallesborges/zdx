@@ -16,6 +16,7 @@ base64.workspace = true
 globset.workspace = true
 grep-regex.workspace = true
 grep-searcher.workspace = true
+image.workspace = true
 regex.workspace = true
 ignore.workspace = true
 reqwest.workspace = true

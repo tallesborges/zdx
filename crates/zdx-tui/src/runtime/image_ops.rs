@@ -25,14 +25,21 @@ pub(crate) fn read_and_encode_image(path: &str) -> anyhow::Result<(String, Strin
     }
 
     let data = std::fs::read(&path)?;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
 
     let mime_type =
         zdx_engine::images::path_mime::mime_type_for_extension(path.to_str().unwrap_or(""))
-            .unwrap_or("image/png")
-            .to_string();
+            .unwrap_or("image/png");
 
-    Ok((mime_type, encoded))
+    // Vision APIs cap pixel dimensions independently of byte size, so the byte
+    // check above does not cover a large-but-well-compressed screenshot.
+    let (data, mime_type) = match zdx_engine::images::downscale_for_provider(&data) {
+        Some((resized, resized_mime)) => (resized, resized_mime),
+        None => (data, mime_type),
+    };
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+
+    Ok((mime_type.to_string(), encoded))
 }
 
 /// Decodes an image file for Kitty preview (base64 PNG + original dimensions).
