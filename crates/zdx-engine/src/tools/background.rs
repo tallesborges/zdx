@@ -171,15 +171,21 @@ async fn kill_failed_spawn(mut spawn: zdx_tools::bash::BackgroundSpawn, pid: u32
 
 /// Builds the auto-background handoff for a foreground bash command.
 ///
-/// Returns `None` when auto-backgrounding is disabled (`bash_foreground_bound_secs = 0`)
-/// or the registry directories are unusable, in which case the command simply
-/// keeps waiting in the foreground as before.
+/// Returns `None` when the command must keep waiting in the foreground:
+/// - the run is on a one-shot surface (`zdx exec`, and therefore every
+///   `invoke_subagent` child), where adopting a job would kill it at process
+///   exit — see [`crate::tools::surface_keeps_background_jobs`];
+/// - auto-backgrounding is disabled (`bash_foreground_bound_secs = 0`);
+/// - the registry directories are unusable.
 ///
 /// The `bg_id` and log paths are reserved up front but nothing is written until
 /// the command actually outruns its bound, so ordinary fast commands leave no
 /// trace in the registry.
 #[cfg(unix)]
 pub fn prepare_handoff(command: &str, ctx: &ToolContext) -> Option<zdx_tools::bash::Handoff> {
+    if !ctx.background_handoff {
+        return None;
+    }
     let bound = ctx.config.as_ref()?.bash_foreground_bound()?;
     background_activity::ensure_dirs().ok()?;
 
@@ -452,6 +458,7 @@ mod handoff_registry_tests {
             ..Config::default()
         };
         let mut ctx = ToolContext::new(root.clone(), None);
+        ctx.background_handoff = true;
         ctx.current_thread_id = Some("thread-handoff".to_string());
         ctx.config = Some(config);
 
@@ -502,6 +509,41 @@ mod handoff_registry_tests {
         assert!(!background_activity::get(&bg_id).unwrap().is_running());
     }
 
+    /// A one-shot run must keep the unbounded foreground wait. `zdx exec` is
+    /// also how every `invoke_subagent` child runs, and it exits as soon as its
+    /// turn ends — adopting a job there would close the lease and kill the
+    /// command precisely because it was slow (e.g. a >120s `git clone`).
+    #[tokio::test]
+    async fn one_shot_surfaces_never_relocate() {
+        let home = crate::test_support::temp_zdx_home();
+        let config = Config {
+            bash_foreground_bound_secs: 1,
+            ..Config::default()
+        };
+
+        for surface in [Some("exec"), Some("unknown-surface"), None] {
+            let mut ctx = ToolContext::new(home.path().to_path_buf(), None);
+            ctx.config = Some(config.clone());
+            ctx.background_handoff = crate::tools::surface_keeps_background_jobs(surface);
+
+            assert!(
+                prepare_handoff("sleep 1", &ctx).is_none(),
+                "surface {surface:?} outlives no job and must keep waiting"
+            );
+        }
+    }
+
+    /// The surfaces that do outlive a run get the handoff.
+    #[test]
+    fn long_lived_surfaces_keep_background_jobs() {
+        use crate::tools::surface_keeps_background_jobs as keeps;
+
+        assert!(keeps(Some("chat")), "interactive TUI outlives the run");
+        assert!(keeps(Some("telegram")), "bot daemon outlives the run");
+        assert!(!keeps(Some("exec")));
+        assert!(!keeps(None));
+    }
+
     #[tokio::test]
     async fn zero_bound_disables_auto_backgrounding() {
         let home = crate::test_support::temp_zdx_home();
@@ -510,6 +552,7 @@ mod handoff_registry_tests {
             ..Config::default()
         };
         let mut ctx = ToolContext::new(home.path().to_path_buf(), None);
+        ctx.background_handoff = true;
         ctx.config = Some(config);
 
         assert!(prepare_handoff("sleep 1", &ctx).is_none());
@@ -528,6 +571,7 @@ mod handoff_registry_tests {
             ..Config::default()
         };
         let mut ctx = ToolContext::new(root, None);
+        ctx.background_handoff = true;
         ctx.config = Some(config);
 
         let result =

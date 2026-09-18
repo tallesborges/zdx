@@ -48,7 +48,7 @@ fn write_temp_file(bytes: &[u8], stream_name: &str) -> Option<String> {
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Bash".to_string(),
-        description: "Run shell and CLI workflows whose capability no dedicated tool provides: builds, tests, version control, package managers, other CLIs, and work on those commands' own output. Reading, discovering, and searching files is covered by the dedicated tools, which return structured, ignore-aware, paginated results; scoping or limiting such a result is part of that same capability. A foreground command that is still running after the foreground bound is not killed: it is moved to the background and the result comes back with backgrounded: true and a bg_id to poll with background_output. Long-lived commands use background mode, and truncated output can be inspected with Read."
+        description: "Run shell and CLI workflows whose capability no dedicated tool provides: builds, tests, version control, package managers, other CLIs, and work on those commands' own output. Reading, discovering, and searching files is covered by the dedicated tools, which return structured, ignore-aware, paginated results; scoping or limiting such a result is part of that same capability. A long-running foreground command is never killed for being slow: on surfaces that support it, one still running after the foreground bound is moved to the background and the result comes back with backgrounded: true and a bg_id to poll with background_output instead of an exit code. Long-lived commands use background mode, and truncated output can be inspected with Read."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -134,6 +134,28 @@ pub struct Handoff {
     pub on_exit: crate::adopted::OnExit,
 }
 
+/// What a handoff could not set up. The job keeps running regardless — losing
+/// bookkeeping is never a reason to kill work the user asked for.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HandoffDegradation {
+    /// The registry marker could not be written, so `background_output` and
+    /// `background_kill` cannot find the job by id.
+    pub registry_failed: bool,
+    /// The output logs could not be opened, so anything the command writes
+    /// after the handoff is lost.
+    pub logging_failed: bool,
+}
+
+#[cfg(unix)]
+impl HandoffDegradation {
+    /// Whether the job is less than fully manageable.
+    #[must_use]
+    pub fn any(self) -> bool {
+        self.registry_failed || self.logging_failed
+    }
+}
+
 /// Result of a command that outran its foreground bound and was moved to the
 /// background. The command is still running.
 #[cfg(unix)]
@@ -153,8 +175,7 @@ pub struct BackgroundedOutput {
     pub stderr_file: Option<String>,
     pub stdout_log: String,
     pub stderr_log: String,
-    /// The job runs and is killable, but could not be recorded in the registry.
-    pub tracking_failed: bool,
+    pub degraded: HandoffDegradation,
 }
 
 /// How a foreground command ended.
@@ -181,6 +202,8 @@ impl CommandOutcome {
 #[cfg(unix)]
 impl BackgroundedOutput {
     fn message(&self) -> String {
+        use std::fmt::Write as _;
+
         let mut message = format!(
             "Command did not complete within its {}s foreground bound and was moved to the \
              background ({}). It is still running — do NOT re-run it. Read its output with \
@@ -188,13 +211,19 @@ impl BackgroundedOutput {
              with no new output does NOT mean it is stuck or finished.",
             self.elapsed_secs, self.bg_id, self.bg_id
         );
-        if self.tracking_failed {
-            message.push_str(
+        if self.degraded.registry_failed {
+            let _ = write!(
+                message,
                 " Note: this job could not be recorded in the background registry, so \
-                 background_output and background_kill will not find it; it is running as pid ",
+                 background_output and background_kill will not find it; it is running as pid {}.",
+                self.pid
             );
-            message.push_str(&self.pid.to_string());
-            message.push('.');
+        }
+        if self.degraded.logging_failed {
+            message.push_str(
+                " Note: its output logs could not be opened, so anything it writes from now on \
+                 is not captured — the output above is all you will get.",
+            );
         }
         message
     }
@@ -203,6 +232,7 @@ impl BackgroundedOutput {
     #[must_use]
     pub fn into_tool_output(self) -> ToolOutput {
         let message = self.message();
+        let degraded = self.degraded;
         let mut data = json!({
             "backgrounded": true,
             "bg_id": self.bg_id,
@@ -222,8 +252,11 @@ impl BackgroundedOutput {
             "stderr_log": self.stderr_log,
             "message": message,
         });
-        if self.tracking_failed {
+        if degraded.any() {
             data["tracking_failed"] = json!(true);
+        }
+        if degraded.logging_failed {
+            data["logging_failed"] = json!(true);
         }
         if let Some(path) = self.stdout_file {
             data["stdout_file"] = json!(path);
@@ -449,9 +482,10 @@ fn new_sink(tx: Option<tokio::sync::mpsc::UnboundedSender<String>>) -> StreamSin
 fn push_line(sink: &StreamSink, line: &str) {
     let Ok(mut state) = sink.lock() else { return };
     if state.handed_off {
-        // After handoff the in-memory tail is frozen; lines go to the log when
-        // one could be opened, and are dropped otherwise rather than growing
-        // unbounded for a job nobody is waiting on.
+        // After handoff the in-memory tail is frozen and lines go to the log.
+        // If no log could be opened they are dropped rather than growing
+        // unbounded for a job nobody is waiting on; the handoff result reports
+        // that as `logging_failed` so the loss is never silent.
         if let Some(log) = state.log.as_mut() {
             let _ = log.write_all(line.as_bytes());
         }
@@ -463,25 +497,31 @@ fn push_line(sink: &StreamSink, line: &str) {
     state.buf.extend_from_slice(line.as_bytes());
 }
 
-/// Flips a sink to log-file capture and returns everything captured so far.
+/// Flips a sink to log-file capture and returns everything captured so far,
+/// plus whether the log is actually receiving output.
 ///
 /// The pre-handoff bytes are flushed into the log first, so the log holds the
 /// complete stream, and are also returned for the tool result so partial output
 /// survives the handoff.
+///
+/// A `log` of `None` means the file could not be opened. The handoff still
+/// proceeds — the job keeps running either way — but everything the command
+/// writes from here on is unreadable, so the caller must report that rather
+/// than leaving a job that looks healthy behind an empty log.
 #[cfg(unix)]
-fn hand_off_sink(sink: &StreamSink, log: Option<File>) -> Vec<u8> {
+fn hand_off_sink(sink: &StreamSink, log: Option<File>) -> (Vec<u8>, bool) {
     let Ok(mut state) = sink.lock() else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
     let captured = std::mem::take(&mut state.buf);
+    let mut logging = false;
     if let Some(mut log) = log {
-        let _ = log.write_all(&captured);
-        let _ = log.flush();
+        logging = log.write_all(&captured).and_then(|()| log.flush()).is_ok();
         state.log = Some(log);
     }
     state.tx = None;
     state.handed_off = true;
-    captured
+    (captured, logging)
 }
 
 /// Spawns a line-buffered reader task that feeds `sink`.
@@ -789,10 +829,10 @@ fn hand_off_to_background(
             .open(path)
             .ok()
     };
-    let stdout_buf = hand_off_sink(stdout_sink, open_log(&stdout_log));
-    let stderr_buf = hand_off_sink(stderr_sink, open_log(&stderr_log));
+    let (stdout_buf, stdout_logging) = hand_off_sink(stdout_sink, open_log(&stdout_log));
+    let (stderr_buf, stderr_logging) = hand_off_sink(stderr_sink, open_log(&stderr_log));
 
-    let tracking_failed = !on_adopt(identity);
+    let registry_failed = !on_adopt(identity);
     crate::adopted::adopt(bg_id.clone(), child, on_exit);
 
     let (stdout, stdout_truncated, stdout_total_bytes) =
@@ -819,7 +859,12 @@ fn hand_off_to_background(
             .flatten(),
         stdout_log: stdout_log.to_string_lossy().into_owned(),
         stderr_log: stderr_log.to_string_lossy().into_owned(),
-        tracking_failed,
+        degraded: HandoffDegradation {
+            registry_failed,
+            // Either stream losing its log means output is going missing from
+            // here on, which the caller must be told about.
+            logging_failed: !stdout_logging || !stderr_logging,
+        },
     };
 
     // Surfaces streaming this tool's output see why it stopped. Sent before the
@@ -1513,6 +1558,41 @@ mod handoff_tests {
         );
 
         let pid = recorder.pid();
+        assert!(crate::adopted::terminate(data["bg_id"].as_str().unwrap()).await);
+        wait_until_gone(pid).await;
+    }
+
+    /// A log we cannot open means every later line is lost. The job still runs
+    /// — losing output is never a reason to kill work — but the result must say
+    /// so instead of showing a healthy job behind a permanently empty log.
+    #[tokio::test]
+    async fn unusable_log_is_reported_not_silently_dropped() {
+        let recorder = Recorder::new();
+        let temp = TempDir::new().unwrap();
+        let mut handoff = recorder.handoff(Duration::from_millis(300));
+        // A directory can never be opened as an append-mode log file.
+        let blocked = recorder.dir.path().join("blocked");
+        std::fs::create_dir(&blocked).unwrap();
+        handoff.stdout_log = blocked;
+
+        let input = json!({"command": "echo before; sleep 30"});
+        let result = run(&input, temp.path(), Some(handoff)).await;
+
+        assert!(result.is_ok(), "a lost log must not fail the handoff");
+        let data = result.data().expect("should have data");
+        assert_eq!(data["backgrounded"], true);
+        assert_eq!(data["logging_failed"], true);
+        assert_eq!(data["tracking_failed"], true);
+        assert!(
+            data["message"].as_str().unwrap().contains("not captured"),
+            "message must explain the loss: {}",
+            data["message"]
+        );
+        // Output captured before the handoff is still returned.
+        assert!(data["stdout"].as_str().unwrap().contains("before"));
+
+        let pid = recorder.pid();
+        assert!(process_exists(pid), "the job keeps running regardless");
         assert!(crate::adopted::terminate(data["bg_id"].as_str().unwrap()).await);
         wait_until_gone(pid).await;
     }

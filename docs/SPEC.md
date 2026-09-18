@@ -206,14 +206,24 @@ Three intents, each with its own input and lifetime. They never silently substit
 - **`background: true`.** Detached at spawn in its own session; outlives the turn and the zdx process. Rejects a positive `timeout_secs`. Unchanged by the foreground bound.
 - **`timeout_secs > 0`.** An explicit hard kill deadline. The command is killed at the deadline and the result carries `timed_out: true`. This is the only way to ask for a kill, and it takes precedence over the foreground bound.
 
-**Auto-background handoff (Unix).** A foreground command with no explicit `timeout_secs` runs under `bash_foreground_bound_secs` (default 120; `0` disables it and restores an unbounded wait). The bound is a relocation bound, not a deadline: when it expires the command **keeps running and is moved to the background**, never killed. A command that is finishing exactly at the bound is reported as completed rather than relocated.
+**Auto-background handoff (Unix).** A foreground command runs under `bash_foreground_bound_secs` (default 120; `0` disables it and restores an unbounded wait). The bound is a relocation bound, not a deadline: when it expires the command **keeps running and is moved to the background**, never killed.
+
+The handoff applies only when no kill deadline is in force and the run is on a surface that outlives it:
+
+- Any resolved tool timeout suppresses it, whether it came from the call's `timeout_secs` or from config-level `tool_timeout_secs`. Setting `tool_timeout_secs > 0` therefore disables auto-backgrounding globally and restores kill-at-deadline for every foreground command: a kill the operator asked for is never silently converted into a relocation.
+- Only long-lived surfaces relocate: the interactive TUI and the Telegram bot daemon. One-shot runs — `zdx exec`, and therefore every `invoke_subagent` child — keep the unbounded foreground wait. An adopted job is held by its owning process's lease, so relocating inside a process that is about to exit would kill the command precisely because it was slow. Unknown surfaces are treated as one-shot.
+
+Behavior at the boundary:
+
+- Completion is resolved before the bound, so a command that finishes at the bound is reported as completed rather than relocated.
+- That race is settled on observation, not wall-clock truth: a command finishing microseconds before the bound may still be reported as `backgrounded` with `exit_code: null`. It is not lost — the job is registered, its exit is recorded, and the real exit code and full output surface on the first `background_output` poll, which will show `status: "exited"`.
 
 - The handoff retains the invocation's existing supervisor, session, process group, and lease — nothing is re-parented, re-spawned, or signalled — so a long build or test run completes unharmed. Only the owner of the handle moves.
 - The tool call returns a **success** carrying `backgrounded: true`, a `bg_id`, `pid`, `pgid`, `status: "running"`, `exit_code: null`, `elapsed_secs`, the output captured before the handoff, `stdout_log`/`stderr_log`, and a message instructing the model not to re-run the command.
 - Output capture continues into the background logs. Bytes captured before the handoff are flushed into the log first, so the log holds the complete stream and the partial output appears in both places. Streaming deltas stop at the handoff, so no output event can arrive after the tool result.
 - The job is registered with `mode: "adopted"` and is visible to `background_output` and `background_kill` like any other background job. Killing it closes its lease, which runs the supervisor's TERM → grace → KILL → group-sweep path; the lease is authoritative about identity, so no PID-reuse guard applies.
 - Adopted jobs are **session-scoped**: they are terminated when the owning zdx process exits, unlike `background: true`. A job whose owner died is reaped to a tombstone by the registry's normal liveness scan.
-- Registry bookkeeping failure never kills the command: the job keeps running and the result adds `tracking_failed: true` alongside its `pid`.
+- Degraded bookkeeping never kills the command. If the registry marker cannot be written, or the output logs cannot be opened, the job keeps running and the result reports `tracking_failed: true` (plus `logging_failed: true` when output is no longer being captured) alongside its `pid`.
 - `background_output` stamps every read with a strictly increasing `read_seq`, so polling an unchanged job never looks like a repeated identical tool call to the turn's loop detector.
 - Non-Unix builds have no supervisor or lease; auto-backgrounding does not apply there and `timeout_secs` remains the only bound.
 

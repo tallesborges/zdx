@@ -83,6 +83,15 @@ pub struct ToolContext {
 
     /// Tool use ID for the current execution (needed for `ToolOutputDelta` events).
     pub tool_use_id: Option<String>,
+
+    /// Whether this run may move a long-running foreground `Bash` command to
+    /// the background instead of waiting for it.
+    ///
+    /// Only true on surfaces that outlive a single agent run. An adopted job is
+    /// held by this process's supervisor lease, so a one-shot process would
+    /// kill it on exit — exactly the work the handoff is meant to preserve.
+    /// See [`surface_keeps_background_jobs`].
+    pub background_handoff: bool,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -101,8 +110,29 @@ impl std::fmt::Debug for ToolContext {
             .field("allowed_subagents", &self.allowed_subagents)
             .field("event_sender", &self.event_sender.as_ref().map(|_| ".."))
             .field("tool_use_id", &self.tool_use_id)
+            .field("background_handoff", &self.background_handoff)
             .finish()
     }
+}
+
+/// Whether a run on `surface` outlives the run itself, so a job adopted during
+/// it still has an owner once the turn ends.
+///
+/// An adopted background job is held by its owning process's supervisor lease:
+/// when that process exits, the lease closes and the supervisor terminates the
+/// job. That is correct for the interactive TUI and the bot daemon, which keep
+/// running and can poll or kill the job afterwards.
+///
+/// It is wrong for one-shot runs. `zdx exec` — which is also how every
+/// `invoke_subagent` child runs — exits as soon as its turn finishes, which
+/// would kill a command mid-flight precisely because it was slow. Those runs
+/// keep the unbounded foreground wait instead.
+///
+/// Unknown and absent surfaces are treated as one-shot: the failure direction
+/// is "wait like before", never "kill work that used to finish".
+#[must_use]
+pub fn surface_keeps_background_jobs(surface: Option<&str>) -> bool {
+    matches!(surface, Some("chat" | "telegram"))
 }
 
 impl ToolContext {
@@ -121,6 +151,7 @@ impl ToolContext {
             allowed_subagents: None,
             event_sender: None,
             tool_use_id: None,
+            background_handoff: false,
         }
     }
 
@@ -138,6 +169,14 @@ impl ToolContext {
     #[must_use]
     pub fn with_allowed_subagents(mut self, allowed: Option<Vec<String>>) -> Self {
         self.allowed_subagents = allowed;
+        self
+    }
+
+    /// Enables auto-backgrounding of foreground `Bash` commands for runs on a
+    /// surface that outlives the run itself.
+    #[must_use]
+    pub fn with_background_handoff(mut self, enabled: bool) -> Self {
+        self.background_handoff = enabled;
         self
     }
 

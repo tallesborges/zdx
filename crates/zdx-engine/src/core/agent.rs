@@ -27,7 +27,9 @@ use crate::providers::{
     StreamingProvider, anthropic, resolve_provider,
 };
 use crate::subagents;
-use crate::tools::{ToolContext, ToolDefinition, ToolRegistry, ToolResult, ToolSet};
+use crate::tools::{
+    ToolContext, ToolDefinition, ToolRegistry, ToolResult, ToolSet, surface_keeps_background_jobs,
+};
 
 /// Options for agent execution.
 #[derive(Debug, Clone)]
@@ -1597,7 +1599,8 @@ fn build_run_turn_setup(
     )
     .with_current_thread_id(thread_id)
     .with_config(config)
-    .with_allowed_subagents(options.tool_config.allowed_subagents.clone());
+    .with_allowed_subagents(options.tool_config.allowed_subagents.clone())
+    .with_background_handoff(surface_keeps_background_jobs(options.surface.as_deref()));
     let tool_registry = options.tool_config.registry.clone();
     let tools = resolve_tools(
         config,
@@ -1686,7 +1689,8 @@ fn build_custom_run_turn_setup(
     )
     .with_current_thread_id(thread_id)
     .with_config(config)
-    .with_allowed_subagents(options.tool_config.allowed_subagents.clone());
+    .with_allowed_subagents(options.tool_config.allowed_subagents.clone())
+    .with_background_handoff(surface_keeps_background_jobs(options.surface.as_deref()));
     let tool_registry = options.tool_config.registry.clone();
     let provider_config = crate::config::ProviderConfig::default();
     let tools = resolve_tools(config, options, &provider_config, false, &tool_registry);

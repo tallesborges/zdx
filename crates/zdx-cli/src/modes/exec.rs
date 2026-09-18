@@ -377,6 +377,34 @@ mod tests {
 
     use super::sanitize_exec_event;
 
+    /// `zdx exec` is one-shot, and is also how every `invoke_subagent` child
+    /// runs. Its surface must never enable the Bash auto-background handoff:
+    /// an adopted job is held by this process's supervisor lease, so exiting
+    /// would kill a slow-but-healthy command mid-flight.
+    #[test]
+    fn exec_surface_does_not_enable_background_handoff() {
+        use zdx_engine::core::agent::AgentOptions;
+        use zdx_engine::tools::surface_keeps_background_jobs;
+
+        let opts = super::ExecOptions {
+            root: std::path::PathBuf::from("."),
+            tool_config: zdx_engine::core::agent::ToolConfig::default(),
+            event_filter: Vec::new(),
+            stream: false,
+            effective_system_prompt: None,
+            no_system_prompt: false,
+            activity_kind: None,
+            activity_parent_thread_id: None,
+            activity_subagent_name: None,
+        };
+        let agent_opts = AgentOptions::from(&opts);
+
+        assert_eq!(agent_opts.surface.as_deref(), Some("exec"));
+        assert!(!surface_keeps_background_jobs(
+            agent_opts.surface.as_deref()
+        ));
+    }
+
     #[test]
     fn sanitize_exec_event_drops_empty_reasoning() {
         let event = AgentEvent::ReasoningCompleted {
