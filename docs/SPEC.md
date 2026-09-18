@@ -210,7 +210,7 @@ Three intents, each with its own input and lifetime. They never silently substit
 
 The handoff applies only when no kill deadline is in force and the run is on a surface that outlives it:
 
-- Any resolved tool timeout suppresses it, whether it came from the call's `timeout_secs` or from config-level `tool_timeout_secs`. Setting `tool_timeout_secs > 0` therefore disables auto-backgrounding globally and restores kill-at-deadline for every foreground command: a kill the operator asked for is never silently converted into a relocation.
+- A per-call `timeout_secs` suppresses it: a kill the caller asked for is never silently converted into a relocation. There is no global tool-timeout setting; the only other source of a tool-call deadline is an automation's `timeout_secs` frontmatter, which bounds tool calls for that automation run only.
 - Only long-lived surfaces relocate: the interactive TUI and the Telegram bot daemon. One-shot runs — `zdx exec`, and therefore every `invoke_subagent` child — keep the unbounded foreground wait. An adopted job is held by its owning process's lease, so relocating inside a process that is about to exit would kill the command precisely because it was slow. Unknown surfaces are treated as one-shot.
 
 Behavior at the boundary:
@@ -317,7 +317,7 @@ Behavior at the boundary:
 - Timeout behavior:
   - connect: 10s
   - discovery (`tools/list`): 15s
-  - tool call: `tool_timeout_secs` when configured, otherwise 30s for MCP tools
+  - tool call: 30s
 
 ### Envelope
 

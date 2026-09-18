@@ -426,7 +426,6 @@ struct MonitorConfig {
     model: String,
     thinking: String,
     max_tokens: Option<u32>,
-    tool_timeout_secs: u32,
     subagents_enabled: bool,
     mode_count: usize,
     helper_models: Vec<MonitorConfigModel>,
@@ -2284,7 +2283,6 @@ fn monitor_config(config: &Config) -> MonitorConfig {
         model: config.model.clone(),
         thinking: config.thinking_level.display_name().to_string(),
         max_tokens: config.max_tokens,
-        tool_timeout_secs: config.tool_timeout_secs,
         subagents_enabled: config.subagents.enabled,
         mode_count: config.model_modes.len(),
         helper_models: vec![

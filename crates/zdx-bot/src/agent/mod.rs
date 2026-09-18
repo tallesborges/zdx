@@ -453,6 +453,7 @@ pub(crate) fn spawn_agent_turn(
         activity_kind: Some("telegram".to_string()),
         activity_parent_thread_id: None,
         activity_subagent_name: None,
+        tool_timeout: None,
     };
 
     // Create channels: agent -> broadcaster -> [bot, persist]

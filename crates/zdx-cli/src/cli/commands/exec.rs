@@ -61,9 +61,6 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
         if let Some(model) = options.model_override {
             c.apply_model_spec(model);
         }
-        if let Some(timeout_secs) = options.tool_timeout_override {
-            c.tool_timeout_secs = timeout_secs;
-        }
         if options.no_skills {
             c.skills.enabled = false;
         }
@@ -123,6 +120,9 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
             .activity_subagent_name
             .or(subagent.as_ref().map(|definition| definition.name.as_str()))
             .map(std::string::ToString::to_string),
+        tool_timeout: options
+            .tool_timeout_override
+            .map(|secs| std::time::Duration::from_secs(u64::from(secs))),
     };
 
     // Use streaming variant - response is printed incrementally, final newline added at end

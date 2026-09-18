@@ -11,9 +11,6 @@ model = "claude-haiku-4-5"
 # Providers that require a limit use an internal fallback derived from model metadata.
 # max_tokens = 12288
 
-# Timeout for tool execution in seconds (0 disables timeout)
-tool_timeout_secs = 0
-
 # Thinking level is part of the model spec: append `@<level>` to any model
 # string, e.g. model = "provider:id@high".
 # Options: off, low, medium, high, xhigh, max

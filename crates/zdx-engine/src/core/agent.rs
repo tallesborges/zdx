@@ -53,6 +53,11 @@ pub struct AgentOptions {
     pub activity_parent_thread_id: Option<String>,
     /// For `invoke_subagent`: the named subagent invoked.
     pub activity_subagent_name: Option<String>,
+    /// Per-run cap on a single tool call, set by an automation's `timeout_secs`
+    /// frontmatter. `None` (the default everywhere else) means tool calls are
+    /// not bounded by the runner; the `Bash` tool's own `timeout_secs`
+    /// parameter is separate and unaffected.
+    pub tool_timeout: Option<Duration>,
 }
 
 /// Tool configuration for agent execution.
@@ -1595,7 +1600,7 @@ fn build_run_turn_setup(
             .root
             .canonicalize()
             .unwrap_or_else(|_| options.root.clone()),
-        config.tool_timeout(),
+        options.tool_timeout,
     )
     .with_current_thread_id(thread_id)
     .with_config(config)
@@ -1685,7 +1690,7 @@ fn build_custom_run_turn_setup(
             .root
             .canonicalize()
             .unwrap_or_else(|_| options.root.clone()),
-        config.tool_timeout(),
+        options.tool_timeout,
     )
     .with_current_thread_id(thread_id)
     .with_config(config)
@@ -3055,6 +3060,7 @@ mod tests {
             activity_kind: None,
             activity_parent_thread_id: None,
             activity_subagent_name: None,
+            tool_timeout: None,
         };
         for (suffix, expected) in [
             ("@high", ThinkingLevel::High),

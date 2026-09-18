@@ -240,7 +240,6 @@ export interface MonitorConfig {
   model: string;
   thinking: string;
   max_tokens: number | null;
-  tool_timeout_secs: number;
   subagents_enabled: boolean;
   mode_count: number;
   helper_models: MonitorConfigModel[];

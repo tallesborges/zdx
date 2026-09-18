@@ -156,18 +156,13 @@ async fn test_bash_runs_in_root_directory() {
 }
 
 #[tokio::test]
-async fn test_bash_times_out_when_configured() {
+async fn test_bash_times_out_with_per_call_timeout() {
     if !can_bind_localhost() {
         eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
         return;
     }
     let temp_dir = TempDir::new().unwrap();
-    let zdx_home = TempDir::new().unwrap();
-    std::fs::write(
-        zdx_home.path().join("config.toml"),
-        "tool_timeout_secs = 1\n",
-    )
-    .unwrap();
+    let zdx_home = temp_zdx_home();
 
     let mock_server = MockServer::start().await;
 
@@ -176,7 +171,13 @@ async fn test_bash_times_out_when_configured() {
     let second_request_body = Arc::new(std::sync::Mutex::new(String::new()));
     let second_request_body_clone = Arc::clone(&second_request_body);
 
-    let first_response = tool_use_sse("toolu_bash_timeout", "bash", r#"{"command": "sleep 2"}"#);
+    // The per-call `timeout_secs` is the explicit kill deadline: the command is
+    // killed at the bound and the group torn down, rather than relocated.
+    let first_response = tool_use_sse(
+        "toolu_bash_timeout",
+        "bash",
+        r#"{"command": "sleep 2", "timeout_secs": 1}"#,
+    );
     let second_response = fixtures::text_sse("Done.");
 
     Mock::given(method("POST"))

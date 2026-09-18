@@ -959,9 +959,6 @@ pub struct Config {
     /// Optional path to a file containing the system prompt
     pub system_prompt_file: Option<String>,
 
-    /// Timeout for tool execution in seconds (0 disables)
-    pub tool_timeout_secs: u32,
-
     /// Seconds a foreground `Bash` command may run before it is moved to the
     /// background instead of being waited on (0 disables auto-backgrounding).
     ///
@@ -1082,8 +1079,6 @@ impl Config {
     /// Floor for the context clamp, so an over-full window still produces a
     /// well-formed request instead of `max_tokens: 0`.
     const MIN_REQUEST_MAX_TOKENS: u32 = 1_024;
-    /// Default is disabled
-    const DEFAULT_TOOL_TIMEOUT_SECS: u32 = 0;
     /// Foreground commands are relocated, not killed, so this can be a short
     /// bound: it only decides how long the model waits inline.
     const DEFAULT_BASH_FOREGROUND_BOUND_SECS: u32 = 120;
@@ -1842,14 +1837,6 @@ impl Config {
         Ok((!trimmed.is_empty()).then(|| trimmed.to_string()))
     }
 
-    pub fn tool_timeout(&self) -> Option<Duration> {
-        if self.tool_timeout_secs == 0 {
-            None
-        } else {
-            Some(Duration::from_secs(u64::from(self.tool_timeout_secs)))
-        }
-    }
-
     /// How long a foreground `Bash` command waits before being moved to the
     /// background. `None` disables auto-backgrounding, restoring an unbounded
     /// foreground wait.
@@ -2067,7 +2054,6 @@ impl Default for Config {
             max_tokens: None,
             system_prompt: None,
             system_prompt_file: None,
-            tool_timeout_secs: Self::DEFAULT_TOOL_TIMEOUT_SECS,
             bash_foreground_bound_secs: Self::DEFAULT_BASH_FOREGROUND_BOUND_SECS,
             providers: ProvidersConfig::default(),
             goals: GoalsConfig::default(),
@@ -3579,16 +3565,6 @@ language = "pt"
         );
     }
 
-    /// Timeout: zero disables timeout (SPEC §6).
-    #[test]
-    fn test_tool_timeout_zero_disables() {
-        let config = Config {
-            tool_timeout_secs: 0,
-            ..Default::default()
-        };
-        assert_eq!(config.tool_timeout(), None);
-    }
-
     /// Base URL: loaded from config file.
     #[test]
     fn test_anthropic_base_url_loaded_from_config() {
@@ -3731,7 +3707,7 @@ language = "pt"
             &config_path,
             r#"model = "old-model"
 max_tokens = 2048
-tool_timeout_secs = 60
+bash_foreground_bound_secs = 60
 "#,
         )
         .unwrap();
@@ -3741,7 +3717,7 @@ tool_timeout_secs = 60
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.model, "new-model");
         assert_eq!(config.max_tokens, Some(2048)); // preserved
-        assert_eq!(config.tool_timeout_secs, 60); // preserved
+        assert_eq!(config.bash_foreground_bound_secs, 60); // preserved
     }
 
     /// `save_model`: uses template structure but preserves user values.

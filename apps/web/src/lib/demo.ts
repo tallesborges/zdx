@@ -357,7 +357,6 @@ export const demoMonitor: MonitorResponse = {
     model: "claude-sonnet-4-6",
     thinking: "medium",
     max_tokens: 64000,
-    tool_timeout_secs: 120,
     subagents_enabled: true,
     mode_count: 3,
     helper_models: [{ role: "title", model: "claude-haiku-4-5" }],

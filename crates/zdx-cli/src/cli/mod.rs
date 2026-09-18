@@ -735,7 +735,7 @@ enum ConfigCommands {
     },
     /// Set a configuration value (persists to ~/.zdx/config.toml, or workspace with --local)
     Set {
-        /// Configuration key (e.g. `model`, `tool_timeout_secs`)
+        /// Configuration key (e.g. `model`, `max_tokens`)
         key: String,
         /// New value
         #[arg(allow_hyphen_values = true)]

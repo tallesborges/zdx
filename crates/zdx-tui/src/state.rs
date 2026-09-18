@@ -448,6 +448,7 @@ impl TuiState {
             activity_kind: Some("chat".to_string()),
             activity_parent_thread_id: None,
             activity_subagent_name: None,
+            tool_timeout: None,
         };
 
         // Cache display values at startup (avoids I/O during render)

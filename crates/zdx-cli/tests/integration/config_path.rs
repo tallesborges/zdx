@@ -95,11 +95,11 @@ fn test_config_get_set_unset() {
     config_cmd(
         &zdx_home,
         &isolated_cwd,
-        &["config", "unset", "tool_timeout_secs"],
+        &["config", "unset", "bash_foreground_bound_secs"],
     )
     .assert()
     .success()
-    .stdout(predicate::str::contains("Unset tool_timeout_secs"));
+    .stdout(predicate::str::contains("Unset bash_foreground_bound_secs"));
 
     // Set array elements generically (e.g. model modes)
     config_cmd(
@@ -199,7 +199,12 @@ fn test_config_set_rejects_removed_keys() {
     config_cmd(
         &zdx_home,
         &isolated_cwd,
-        &["config", "set", "tool_timeout_secs", "not_a_number"],
+        &[
+            "config",
+            "set",
+            "bash_foreground_bound_secs",
+            "not_a_number",
+        ],
     )
     .assert()
     .failure()

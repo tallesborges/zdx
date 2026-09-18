@@ -47,6 +47,8 @@ pub struct ExecOptions {
     pub activity_parent_thread_id: Option<String>,
     /// Named subagent invoked when this is a `invoke_subagent` child.
     pub activity_subagent_name: Option<String>,
+    /// Per-run cap on a single tool call, from an automation's `timeout_secs`.
+    pub tool_timeout: Option<std::time::Duration>,
 }
 
 impl From<&ExecOptions> for AgentOptions {
@@ -61,6 +63,7 @@ impl From<&ExecOptions> for AgentOptions {
             activity_kind: opts.activity_kind.clone(),
             activity_parent_thread_id: opts.activity_parent_thread_id.clone(),
             activity_subagent_name: opts.activity_subagent_name.clone(),
+            tool_timeout: opts.tool_timeout,
         }
     }
 }
@@ -377,6 +380,33 @@ mod tests {
 
     use super::sanitize_exec_event;
 
+    /// An automation's `timeout_secs` frontmatter is the only remaining source
+    /// of a tool-call deadline besides the per-call `timeout_secs` Bash
+    /// parameter. It used to travel by mutating the global config field; it now
+    /// rides on the run options, so it must survive the conversion.
+    #[test]
+    fn exec_options_carry_the_per_run_tool_timeout() {
+        use zdx_engine::core::agent::AgentOptions;
+
+        let opts = super::ExecOptions {
+            root: std::path::PathBuf::from("."),
+            tool_config: zdx_engine::core::agent::ToolConfig::default(),
+            event_filter: Vec::new(),
+            stream: false,
+            effective_system_prompt: None,
+            no_system_prompt: false,
+            activity_kind: None,
+            activity_parent_thread_id: None,
+            activity_subagent_name: None,
+            tool_timeout: Some(std::time::Duration::from_secs(45)),
+        };
+
+        assert_eq!(
+            AgentOptions::from(&opts).tool_timeout,
+            Some(std::time::Duration::from_secs(45))
+        );
+    }
+
     /// `zdx exec` is one-shot, and is also how every `invoke_subagent` child
     /// runs. Its surface must never enable the Bash auto-background handoff:
     /// an adopted job is held by this process's supervisor lease, so exiting
@@ -396,6 +426,7 @@ mod tests {
             activity_kind: None,
             activity_parent_thread_id: None,
             activity_subagent_name: None,
+            tool_timeout: None,
         };
         let agent_opts = AgentOptions::from(&opts);
 
