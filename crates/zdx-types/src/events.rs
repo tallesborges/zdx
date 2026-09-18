@@ -204,6 +204,13 @@ pub enum NoticeKind {
     /// Generation stopped due to context window exhaustion
     /// (Anthropic `stop_reason=model_context_window_exceeded`).
     ContextWindowExceeded,
+    /// Generation stopped at the output token limit, so the response is
+    /// incomplete (`stop_reason=max_tokens`).
+    OutputLimit,
+    /// The engine aborted a turn whose model kept repeating itself — in
+    /// reasoning, in the answer, or by re-issuing the same tool call — instead
+    /// of finishing it. `details` carries which loop was detected.
+    OutputLoop,
     /// Terminal outcome of a goal run: completion, continuation limit,
     /// verifier failure, manual clear, or cancellation.
     Goal,

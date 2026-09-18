@@ -27,9 +27,16 @@ pub(crate) fn build_beta_header(base_headers: &[&str], include_interleaved: bool
 }
 
 pub(crate) fn build_api_messages_with_cache_control(messages: &[ChatMessage]) -> Vec<ApiMessage> {
+    // Only the in-flight turn's reasoning is replayed. See `ReasoningReplay`
+    // for why, and for the one exception (redacted thinking).
+    let replay = zdx_types::ReasoningReplay::for_messages(messages);
     let mut api_messages: Vec<ApiMessage> = messages
         .iter()
-        .map(|m| ApiMessage::from_chat_message(m, false))
+        .enumerate()
+        .map(|(index, message)| {
+            ApiMessage::from_chat_message(message, false, replay.allows(index, message))
+        })
+        .filter(|message| !message.has_empty_blocks())
         .collect();
 
     sanitize_tool_use_ids(&mut api_messages);
@@ -276,7 +283,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::shared::{ChatContentBlock, MessageContent};
+    use crate::shared::{ChatContentBlock, MessageContent, ReasoningBlock, ReplayToken};
 
     #[test]
     fn thinking_and_effort_opus_46_uses_adaptive_and_allows_max() {
@@ -691,6 +698,91 @@ mod tests {
             },
             other @ ApiMessageContent::Text(_) => panic!("expected blocks content, got {other:?}"),
         }
+    }
+
+    fn assistant_reasoning_message(text: &str, signature: &str) -> ChatMessage {
+        ChatMessage::assistant_blocks(vec![ChatContentBlock::Reasoning(ReasoningBlock {
+            text: Some(text.to_string()),
+            replay: Some(ReplayToken::Anthropic {
+                signature: signature.to_string(),
+            }),
+        })])
+    }
+
+    /// Reasoning from turns before the last user message is not replayed.
+    /// On a proxy backend that does not filter prior-turn thinking
+    /// server-side, replaying it grows the request without bound.
+    #[test]
+    fn prior_turn_reasoning_is_dropped_from_the_request() {
+        let messages = vec![
+            ChatMessage::user("first question"),
+            assistant_reasoning_message("old thinking", "sig_old"),
+            ChatMessage::user("second question"),
+        ];
+
+        let api_messages = build_api_messages_with_cache_control(&messages);
+
+        assert_eq!(
+            api_messages.len(),
+            2,
+            "reasoning-only prior turn is dropped"
+        );
+        assert!(
+            !serde_json::to_string(&api_messages)
+                .unwrap()
+                .contains("old thinking"),
+            "prior-turn reasoning must not reach the wire"
+        );
+    }
+
+    /// The in-flight turn's reasoning is still replayed: the API requires the
+    /// thinking block on the assistant turn being continued.
+    #[test]
+    fn current_turn_reasoning_is_replayed() {
+        let messages = vec![
+            ChatMessage::user("first question"),
+            assistant_reasoning_message("old thinking", "sig_old"),
+            ChatMessage::user("second question"),
+            assistant_reasoning_message("current thinking", "sig_new"),
+        ];
+
+        let api_messages = build_api_messages_with_cache_control(&messages);
+
+        assert!(
+            serde_json::to_string(&api_messages)
+                .unwrap()
+                .contains("current thinking"),
+            "current-turn reasoning must be replayed"
+        );
+    }
+
+    /// A prior-turn `redacted_thinking` block is opaque server-side state and
+    /// must be echoed back even though its turn's visible reasoning is dropped.
+    #[test]
+    fn prior_turn_redacted_thinking_is_still_replayed() {
+        let redacted = ChatMessage::assistant_blocks(vec![
+            ChatContentBlock::Reasoning(ReasoningBlock {
+                text: None,
+                replay: Some(ReplayToken::AnthropicRedacted {
+                    data: "opaque_blob".to_string(),
+                }),
+            }),
+            ChatContentBlock::text("done"),
+        ]);
+        let messages = vec![
+            ChatMessage::user("first question"),
+            redacted,
+            ChatMessage::user("second question"),
+        ];
+
+        let api_messages = build_api_messages_with_cache_control(&messages);
+
+        assert!(
+            serde_json::to_string(&api_messages)
+                .unwrap()
+                .contains("opaque_blob"),
+            "redacted thinking must round-trip on prior turns too"
+        );
     }
 
     #[test]

@@ -167,14 +167,18 @@ pub(crate) fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Vec
         ));
     }
 
-    for msg in messages {
-        append_input_for_message(msg, &mut input);
+    // Only the in-flight turn's reasoning is replayed; see `ReasoningReplay`.
+    // This matches OpenAI's own guidance to pass reasoning items back "since
+    // the last `user` message"; earlier turns' items are ignored upstream.
+    let replay = zdx_types::ReasoningReplay::for_messages(messages);
+    for (index, msg) in messages.iter().enumerate() {
+        append_input_for_message(msg, replay.allows(index, msg), &mut input);
     }
 
     input
 }
 
-fn append_input_for_message(msg: &ChatMessage, input: &mut Vec<InputItem>) {
+fn append_input_for_message(msg: &ChatMessage, replay_reasoning: bool, input: &mut Vec<InputItem>) {
     use crate::MessageContent;
 
     match (&msg.role[..], &msg.content) {
@@ -193,7 +197,7 @@ fn append_input_for_message(msg: &ChatMessage, input: &mut Vec<InputItem>) {
             ));
         }
         ("assistant", MessageContent::Blocks(blocks)) => {
-            append_assistant_blocks(blocks, msg.phase.as_deref(), input);
+            append_assistant_blocks(blocks, msg.phase.as_deref(), replay_reasoning, input);
         }
         ("user", MessageContent::Blocks(blocks)) => append_user_blocks(blocks, input),
         _ => {}
@@ -203,6 +207,7 @@ fn append_input_for_message(msg: &ChatMessage, input: &mut Vec<InputItem>) {
 fn append_assistant_blocks(
     blocks: &[ChatContentBlock],
     explicit_phase: Option<&str>,
+    replay_reasoning: bool,
     input: &mut Vec<InputItem>,
 ) {
     let phase = explicit_phase.unwrap_or_else(|| assistant_phase_for_blocks(blocks));
@@ -216,6 +221,9 @@ fn append_assistant_blocks(
                 ));
             }
             ChatContentBlock::Reasoning(ReasoningBlock { text, replay }) => {
+                if !replay_reasoning {
+                    continue;
+                }
                 if let Some(item) = reasoning_replay_item(text.as_deref(), replay.as_ref()) {
                     input.push(item);
                 }
@@ -390,6 +398,64 @@ fn non_empty_owned(value: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::{ChatContentBlock, ChatMessage, MessageContent};
+
+    fn reasoning_message(text: &str, id: &str) -> ChatMessage {
+        ChatMessage::assistant_blocks(vec![ChatContentBlock::Reasoning(ReasoningBlock {
+            text: Some(text.to_string()),
+            replay: Some(ReplayToken::OpenAI {
+                id: id.to_string(),
+                encrypted_content: "enc".to_string(),
+            }),
+        })])
+    }
+
+    /// Prior turns' encrypted reasoning items are not replayed. OpenAI scopes
+    /// the requirement to "since the last `user` message" and discards
+    /// earlier items upstream.
+    #[test]
+    fn prior_turn_reasoning_items_are_dropped() {
+        let messages = vec![
+            ChatMessage::user("first"),
+            reasoning_message("prior reasoning", "rs_1"),
+            ChatMessage::user("second"),
+            reasoning_message("current reasoning", "rs_2"),
+        ];
+
+        let input = build_input(&messages, None);
+        let reasoning: Vec<&InputItem> = input
+            .iter()
+            .filter(|item| item.item_type == "reasoning")
+            .collect();
+
+        assert_eq!(reasoning.len(), 1, "only the current turn's item survives");
+        assert_eq!(reasoning[0].id.as_deref(), Some("rs_2"));
+    }
+
+    /// A tool loop inside one turn keeps its reasoning items: that is the
+    /// continuation OpenAI requires them for.
+    #[test]
+    fn reasoning_item_survives_a_tool_loop_in_the_same_turn() {
+        use zdx_types::{ToolResult, ToolResultContent};
+
+        let messages = vec![
+            ChatMessage::user("go"),
+            reasoning_message("step reasoning", "rs_step"),
+            ChatMessage::tool_results(vec![ToolResult {
+                tool_use_id: "call_1".to_string(),
+                content: ToolResultContent::Text("ok".to_string()),
+                is_error: false,
+            }]),
+        ];
+
+        let input = build_input(&messages, None);
+
+        assert!(
+            input
+                .iter()
+                .any(|item| item.item_type == "reasoning" && item.id.as_deref() == Some("rs_step")),
+            "the in-flight turn's reasoning item must survive its tool round trip"
+        );
+    }
 
     #[test]
     fn assistant_text_messages_are_marked_as_final_answer() {

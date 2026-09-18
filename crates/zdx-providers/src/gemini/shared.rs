@@ -226,8 +226,12 @@ pub const SYNTHETIC_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator"
 /// image handling).
 pub fn build_contents(messages: &[ChatMessage], model: &str) -> Vec<Value> {
     let mut builder = GeminiContentsBuilder::new(model);
-    for msg in messages {
-        builder.append_message(msg);
+    // Only the in-flight turn's reasoning is replayed; see `ReasoningReplay`.
+    // Gemini validates thought signatures for the current turn only, so a
+    // prior turn's `thought` parts are dropped rather than re-sent.
+    let replay = zdx_types::ReasoningReplay::for_messages(messages);
+    for (index, msg) in messages.iter().enumerate() {
+        builder.append_message(msg, replay.allows(index, msg));
     }
     builder.contents
 }
@@ -256,7 +260,7 @@ impl GeminiContentsBuilder {
         }
     }
 
-    fn append_message(&mut self, msg: &ChatMessage) {
+    fn append_message(&mut self, msg: &ChatMessage, replay_reasoning: bool) {
         match (&msg.role[..], &msg.content) {
             ("user", MessageContent::Text(text)) => {
                 let parts = vec![text_part(text)];
@@ -267,7 +271,7 @@ impl GeminiContentsBuilder {
                 self.push_message("model", &parts);
             }
             ("assistant", MessageContent::Blocks(blocks)) => {
-                self.append_assistant_blocks(blocks);
+                self.append_assistant_blocks(blocks, replay_reasoning);
             }
             ("user", MessageContent::Blocks(blocks)) => self.append_user_blocks(blocks),
             _ => {}
@@ -277,19 +281,23 @@ impl GeminiContentsBuilder {
     /// Walks assistant blocks in original order, emitting one Gemini part per
     /// block. Per-part `thoughtSignature` comes from the block's own
     /// `replay` field — never moved across parts. `Reasoning` blocks are
-    /// re-emitted with `thought: true` only when the model gate passes and
-    /// the signature is valid base64; otherwise dropped. `ToolUse` blocks
+    /// re-emitted with `thought: true` only for the in-flight turn
+    /// (`replay_reasoning`), when the model gate passes, and when the
+    /// signature is valid base64; otherwise dropped. `ToolUse` blocks
     /// fall back to `SYNTHETIC_THOUGHT_SIGNATURE` only on Gemini 3 and only
     /// when no valid real signature is available. `Text` blocks never get
     /// the synthetic sentinel. `functionCall.id` is emitted only when
     /// `id_origin == Real`; the matching `functionResponse.id` mirrors that
     /// decision via `tool_meta_map`.
-    fn append_assistant_blocks(&mut self, blocks: &[ChatContentBlock]) {
+    fn append_assistant_blocks(&mut self, blocks: &[ChatContentBlock], replay_reasoning: bool) {
         let mut parts = Vec::new();
 
         for block in blocks {
             match block {
                 ChatContentBlock::Reasoning(reasoning) => {
+                    if !replay_reasoning {
+                        continue;
+                    }
                     let Some(sig) = gemini_replay_signature(reasoning.replay.as_ref(), &self.model)
                     else {
                         // Model mismatch or invalid signature — drop the block.
@@ -1212,6 +1220,96 @@ mod tests {
         assert_eq!(parts[0]["thought"], true);
         assert_eq!(parts[0]["text"], "hmm");
         assert_eq!(parts[0]["thoughtSignature"], "FFFFFFFFFFFFFFFF");
+    }
+
+    /// A prior turn's `thought` parts are not replayed: Gemini validates
+    /// thought signatures for the current turn only, and re-sending earlier
+    /// turns' reasoning is unpaid input cost.
+    #[test]
+    fn test_prior_turn_thought_is_dropped() {
+        use crate::ReasoningBlock;
+
+        let thought = |text: &str| ChatMessage {
+            role: "assistant".to_string(),
+            phase: None,
+            context: None,
+            context_key: None,
+            content: MessageContent::Blocks(vec![ChatContentBlock::Reasoning(ReasoningBlock {
+                text: Some(text.to_string()),
+                replay: Some(ReplayToken::Gemini {
+                    signature: "FFFFFFFFFFFFFFFF".to_string(),
+                    model: "gemini-3-pro-preview".to_string(),
+                }),
+            })]),
+        };
+
+        let messages = vec![
+            ChatMessage::user("first"),
+            thought("prior reasoning"),
+            ChatMessage::user("second"),
+            thought("current reasoning"),
+        ];
+        let contents = build_contents(&messages, "gemini-3-pro-preview");
+
+        assert!(
+            !serde_json::to_string(&contents)
+                .unwrap()
+                .contains("prior reasoning"),
+            "prior-turn thought must not be replayed"
+        );
+        assert!(
+            serde_json::to_string(&contents)
+                .unwrap()
+                .contains("current reasoning"),
+            "current-turn thought must be replayed"
+        );
+    }
+
+    /// A tool loop inside one turn keeps emitting its `thought` parts:
+    /// Gemini requires the signature of the current turn's function calls.
+    #[test]
+    fn test_thought_survives_a_tool_loop_in_the_same_turn() {
+        use zdx_types::{ToolResult, ToolResultContent};
+
+        use crate::ReasoningBlock;
+
+        let messages = vec![
+            ChatMessage::user("go"),
+            ChatMessage {
+                role: "assistant".to_string(),
+                phase: None,
+                context: None,
+                context_key: None,
+                content: MessageContent::Blocks(vec![ChatContentBlock::Reasoning(
+                    ReasoningBlock {
+                        text: Some("step reasoning".to_string()),
+                        replay: Some(ReplayToken::Gemini {
+                            signature: "FFFFFFFFFFFFFFFF".to_string(),
+                            model: "gemini-3-pro-preview".to_string(),
+                        }),
+                    },
+                )]),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                phase: None,
+                context: None,
+                context_key: None,
+                content: MessageContent::Blocks(vec![ChatContentBlock::ToolResult(ToolResult {
+                    tool_use_id: "call_1".to_string(),
+                    content: ToolResultContent::Text("ok".to_string()),
+                    is_error: false,
+                })]),
+            },
+        ];
+        let contents = build_contents(&messages, "gemini-3-pro-preview");
+
+        assert!(
+            serde_json::to_string(&contents)
+                .unwrap()
+                .contains("step reasoning"),
+            "the in-flight turn's thought must survive its tool round trip"
+        );
     }
 
     /// `Reasoning` blocks are dropped entirely when the captured model does

@@ -1062,6 +1062,18 @@ impl Config {
 
     const DEFAULT_MODEL: &str = "claude-haiku-4-5";
     const DEFAULT_MAX_TOKENS: u32 = 12288;
+    /// Ceiling for the `max_tokens` derived from a model's output limit. The
+    /// registry value is a ceiling on one response, not a sensible per-request
+    /// size: a 384k-output model would otherwise be asked for 384k tokens on
+    /// every turn.
+    const DERIVED_MAX_TOKENS_CAP: u32 = 64_000;
+    /// Headroom kept free when clamping `max_tokens` against the context
+    /// window, covering the system prompt, tool definitions, and the error in
+    /// the caller's input-token estimate.
+    const CONTEXT_HEADROOM_TOKENS: u32 = 65_536;
+    /// Floor for the context clamp, so an over-full window still produces a
+    /// well-formed request instead of `max_tokens: 0`.
+    const MIN_REQUEST_MAX_TOKENS: u32 = 1_024;
     /// Default is disabled
     const DEFAULT_TOOL_TIMEOUT_SECS: u32 = 0;
     const DEFAULT_HANDOFF_MODEL: &str = "gemini:gemini-3-flash-preview";
@@ -1874,11 +1886,35 @@ impl Config {
     ///
     /// Resolution order:
     /// 1) Explicit config `max_tokens` (if set)
-    /// 2) Model output limit from the registry (exclusive, minus 1)
+    /// 2) Model output limit from the registry (exclusive, minus 1), capped at
+    ///    [`Self::DERIVED_MAX_TOKENS_CAP`]
     /// 3) Fallback default
     ///
     /// Callers may still omit max tokens for providers that support provider-side defaults.
+    /// Prefer [`Self::effective_max_tokens_for_request`] where the request's
+    /// input size is known.
     pub fn effective_max_tokens_for(&self, model_id: &str) -> u32 {
+        self.effective_max_tokens_for_request(model_id, None)
+    }
+
+    /// Returns the effective `max_tokens` for a model, clamped so the request
+    /// fits the model's context window.
+    ///
+    /// A model's declared output limit is a ceiling, not a per-request size:
+    /// deriving `max_tokens` from it asks for the whole window's worth of
+    /// output on every turn, which turns a stalled generation into minutes of
+    /// billed tokens and pushes the request over the context limit. The
+    /// derived fallback is therefore capped at [`Self::DERIVED_MAX_TOKENS_CAP`],
+    /// and when `estimated_input_tokens` is known the result is further
+    /// clamped to the space actually left in the window.
+    ///
+    /// The clamp never raises a value, so an explicit config `max_tokens` is
+    /// only ever reduced to keep the request inside the context window.
+    pub fn effective_max_tokens_for_request(
+        &self,
+        model_id: &str,
+        estimated_input_tokens: Option<u64>,
+    ) -> u32 {
         let configured = self.max_tokens;
         let model = crate::models::ModelOption::find_by_id(model_id);
         let output_limit = model
@@ -1905,16 +1941,28 @@ impl Config {
                 if suspicious_output_limit {
                     Some(Self::DEFAULT_MAX_TOKENS)
                 } else {
-                    output_limit_exclusive
+                    output_limit_exclusive.map(|limit| limit.min(Self::DERIVED_MAX_TOKENS_CAP))
                 }
             })
             .unwrap_or(Self::DEFAULT_MAX_TOKENS);
 
         // Clamp to output limit if available
-        if let Some(limit) = output_limit_exclusive {
-            max_tokens.min(limit)
-        } else {
-            max_tokens
+        let max_tokens = match output_limit_exclusive {
+            Some(limit) => max_tokens.min(limit),
+            None => max_tokens,
+        };
+
+        // Leave room for the system prompt, tool definitions, and the error in
+        // the caller's input estimate. Without a context limit there is nothing
+        // to clamp against.
+        match (context_limit_exclusive, estimated_input_tokens) {
+            (Some(context), Some(input)) => {
+                let available = context
+                    .saturating_sub(u32::try_from(input).unwrap_or(u32::MAX))
+                    .saturating_sub(Self::CONTEXT_HEADROOM_TOKENS);
+                max_tokens.min(available.max(Self::MIN_REQUEST_MAX_TOKENS))
+            }
+            _ => max_tokens,
         }
     }
 
@@ -3841,6 +3889,63 @@ max_tokens = 2048
             .unwrap_or(Config::DEFAULT_MAX_TOKENS);
 
         assert_eq!(config.effective_max_tokens_for(model_id), expected);
+    }
+
+    /// The derived fallback is capped: a model whose registry output limit is
+    /// far larger than any sane per-request size must not be asked for it.
+    #[test]
+    fn test_effective_max_tokens_caps_derived_default() {
+        let config = Config {
+            max_tokens: None,
+            thinking_level: ThinkingLevel::Off,
+            ..Default::default()
+        };
+
+        // deepseek-flash declares output_limit = 384000.
+        assert_eq!(
+            config.effective_max_tokens_for("deepseek:deepseek-flash"),
+            Config::DERIVED_MAX_TOKENS_CAP
+        );
+    }
+
+    /// With the request's input size known, the derived fallback is clamped to
+    /// the space left in the context window.
+    #[test]
+    fn test_effective_max_tokens_clamps_derived_default_to_remaining_context() {
+        let config = Config {
+            max_tokens: None,
+            thinking_level: ThinkingLevel::Off,
+            ..Default::default()
+        };
+
+        // context_limit 1000000 -> exclusive 999999; 999999 - 900000 input
+        // - 65536 headroom leaves 34463.
+        assert_eq!(
+            config.effective_max_tokens_for_request("deepseek:deepseek-flash", Some(900_000)),
+            34_463
+        );
+    }
+
+    /// An explicit `max_tokens` is only ever reduced by the context clamp, and
+    /// never below the floor that keeps the request well-formed.
+    #[test]
+    fn test_effective_max_tokens_context_clamp_reduces_configured_value() {
+        let config = Config {
+            max_tokens: Some(20_000),
+            thinking_level: ThinkingLevel::Off,
+            ..Default::default()
+        };
+
+        // claude-haiku-4-5 has a 200000-token window; a 180000-token input
+        // leaves nothing once the headroom is reserved.
+        assert_eq!(
+            config.effective_max_tokens_for_request("claude-haiku-4-5", Some(180_000)),
+            Config::MIN_REQUEST_MAX_TOKENS
+        );
+        assert_eq!(
+            config.effective_max_tokens_for_request("claude-haiku-4-5", Some(10_000)),
+            20_000
+        );
     }
 
     /// Thinking: the level comes from the main model's `@<level>` suffix.

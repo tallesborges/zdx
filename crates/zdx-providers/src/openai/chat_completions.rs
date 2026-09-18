@@ -273,8 +273,10 @@ impl ChatCompletionRequest {
     ) -> Self {
         let mut out_messages = Vec::new();
         push_system_message(system, &mut out_messages);
-        for msg in messages {
-            append_chat_message(config, msg, &mut out_messages);
+        // Only the in-flight turn's reasoning is replayed; see `ReasoningReplay`.
+        let replay = zdx_types::ReasoningReplay::for_messages(messages);
+        for (index, msg) in messages.iter().enumerate() {
+            append_chat_message(config, msg, &mut out_messages, replay.allows(index, msg));
         }
 
         Self {
@@ -314,6 +316,7 @@ fn append_chat_message(
     config: &OpenAIChatCompletionsConfig,
     msg: &ChatMessage,
     out_messages: &mut Vec<ChatCompletionMessage>,
+    replay_reasoning: bool,
 ) {
     match (&msg.role[..], &msg.content) {
         ("user", MessageContent::Text(text)) => {
@@ -330,7 +333,7 @@ fn append_chat_message(
         }
         ("assistant", MessageContent::Blocks(blocks)) => {
             if let Some(message) =
-                assistant_blocks_message(blocks, config.include_reasoning_content)
+                assistant_blocks_message(blocks, config.include_reasoning_content, replay_reasoning)
             {
                 out_messages.push(message);
             }
@@ -355,6 +358,7 @@ fn simple_message(role: &str, content: ChatMessageContent) -> ChatCompletionMess
 fn assistant_blocks_message(
     blocks: &[ChatContentBlock],
     include_reasoning_content: bool,
+    replay_reasoning: bool,
 ) -> Option<ChatCompletionMessage> {
     let mut text = String::new();
     let mut reasoning_content = String::new();
@@ -377,7 +381,10 @@ fn assistant_blocks_message(
                 });
             }
             ChatContentBlock::Reasoning(reasoning) => {
-                if include_reasoning_content && let Some(text) = &reasoning.text {
+                if include_reasoning_content
+                    && replay_reasoning
+                    && let Some(text) = &reasoning.text
+                {
                     reasoning_content.push_str(text);
                 }
             }
@@ -394,7 +401,9 @@ fn assistant_blocks_message(
     // DeepSeek (and Moonshot/Kimi) require `reasoning_content` to be present
     // on assistant tool-call messages when thinking is enabled — otherwise they
     // reject the next turn with HTTP 400. Emit an empty string when the
-    // captured reasoning was empty but a tool call is present.
+    // captured reasoning was empty but a tool call is present. This also holds
+    // for prior turns, whose reasoning text is dropped: the field stays, the
+    // tokens do not.
     let reasoning_content =
         if include_reasoning_content && (has_tool_calls || !reasoning_content.is_empty()) {
             Some(reasoning_content)
@@ -1157,8 +1166,11 @@ mod tests {
         );
     }
 
+    /// A prior-turn assistant message whose only content was reasoning is
+    /// dropped: its reasoning is not replayed, and an assistant message with
+    /// nothing else to say carries no information for the next request.
     #[test]
-    fn test_reasoning_only_assistant_message_emits_empty_content() {
+    fn test_reasoning_only_prior_turn_assistant_message_is_dropped() {
         use crate::{ChatContentBlock, ChatMessage, ReasoningBlock};
 
         let config = test_config(true);
@@ -1173,14 +1185,52 @@ mod tests {
 
         let request = ChatCompletionRequest::new(&config, &HashMap::new(), &messages, &[], None);
         let value = serde_json::to_value(&request).expect("request should serialize");
-        let assistant = assistant_message(&value);
+        let roles: Vec<&str> = value["messages"]
+            .as_array()
+            .expect("messages array")
+            .iter()
+            .map(|m| m["role"].as_str().unwrap_or_default())
+            .collect();
 
-        assert_eq!(assistant.get("content"), Some(&json!("")));
-        assert_eq!(
-            assistant.get("reasoning_content"),
-            Some(&json!("I should inspect the project first"))
+        assert_eq!(roles, vec!["user", "user"]);
+        assert!(
+            !value.to_string().contains("inspect the project first"),
+            "prior-turn reasoning must not reach the wire"
         );
-        assert!(assistant.get("tool_calls").is_none());
+    }
+
+    /// The in-flight turn's reasoning is replayed, and the empty-string
+    /// fallback still applies to its tool-call messages.
+    #[test]
+    fn test_current_turn_reasoning_is_replayed() {
+        use crate::{ChatContentBlock, ChatMessage, ReasoningBlock};
+
+        let config = test_config(true);
+        let messages = vec![
+            ChatMessage::user("first"),
+            ChatMessage::assistant_blocks(vec![ChatContentBlock::Reasoning(ReasoningBlock {
+                text: Some("old thinking".to_string()),
+                replay: None,
+            })]),
+            ChatMessage::user("second"),
+            ChatMessage::assistant_blocks(vec![ChatContentBlock::Reasoning(ReasoningBlock {
+                text: Some("current thinking".to_string()),
+                replay: None,
+            })]),
+        ];
+
+        let request = ChatCompletionRequest::new(&config, &HashMap::new(), &messages, &[], None);
+        let value = serde_json::to_value(&request).expect("request should serialize");
+        let serialized = value.to_string();
+
+        assert!(
+            serialized.contains("current thinking"),
+            "current-turn reasoning must be replayed"
+        );
+        assert!(
+            !serialized.contains("old thinking"),
+            "prior-turn reasoning must be dropped"
+        );
     }
 
     /// Text-only assistant turn (no tool call, no captured reasoning) should

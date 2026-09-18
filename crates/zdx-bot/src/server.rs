@@ -1120,6 +1120,8 @@ fn project_thread(
                 let kind = match kind {
                     NoticeKind::Refusal => "refusal",
                     NoticeKind::ContextWindowExceeded => "context_window_exceeded",
+                    NoticeKind::OutputLimit => "output_limit",
+                    NoticeKind::OutputLoop => "output_loop",
                     NoticeKind::Goal => "goal",
                 };
                 activity.push(ThreadActivity::Notice {

@@ -22,9 +22,9 @@ use crate::config::{Config, CustomProviderApi, TextVerbosity, ThinkingLevel};
 use crate::core::events::{AgentEvent, ErrorKind, NoticeKind, ToolOutput, TurnStatus};
 use crate::core::interrupt::{self, InterruptedError};
 use crate::providers::{
-    ChatContentBlock, ChatMessage, ContentBlockType, ProviderBuildContext, ProviderError,
-    ProviderKind, ProviderStream, ReasoningBlock, ReplayToken, StreamEvent, StreamingProvider,
-    anthropic, resolve_provider,
+    ChatContentBlock, ChatMessage, ContentBlockType, MessageContent, ProviderBuildContext,
+    ProviderError, ProviderKind, ProviderStream, ReasoningBlock, ReplayToken, StreamEvent,
+    StreamingProvider, anthropic, resolve_provider,
 };
 use crate::subagents;
 use crate::tools::{ToolContext, ToolDefinition, ToolRegistry, ToolResult, ToolSet};
@@ -394,12 +394,23 @@ impl AssistantTurnBuilder {
 
         for part in self.parts {
             match part {
-                AssistantPart::Reasoning(tb) => {
+                AssistantPart::Reasoning(mut tb) => {
                     if tb.text.is_empty() && tb.replay.is_none() {
                         // Drop empty reasoning placeholders that never received
                         // any deltas or replay metadata; they would otherwise
                         // serialize as `{ "type": "reasoning" }` with no body.
                         continue;
+                    }
+                    if tb.text.len() > MAX_PERSISTED_REASONING_CHARS {
+                        // A runaway reasoning block is persisted truncated so
+                        // the thread stays loadable. The replay token goes with
+                        // the dropped text: a truncated block no longer matches
+                        // its signature, and replaying the mismatch would be
+                        // rejected upstream.
+                        tb.text = truncate_middle(&tb.text, MAX_PERSISTED_REASONING_CHARS);
+                        tb.replay = None;
+                        tb.signature.clear();
+                        tb.signature_provider = None;
                     }
                     let text = (!tb.text.is_empty()).then_some(tb.text);
                     blocks.push(ChatContentBlock::Reasoning(ReasoningBlock {
@@ -776,6 +787,241 @@ fn truncate_for_error(s: &str, max_len: usize) -> String {
     }
 }
 
+/// Keeps the head and tail of an over-long string, replacing the middle with a
+/// marker. Both ends are preserved because a degenerate block's opening and
+/// closing lines are what tell a reader (or a later turn) what happened.
+fn truncate_middle(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        return s.to_string();
+    }
+    let half = max_len / 2;
+    let head_end = floor_char_boundary(s, half);
+    let tail_start = floor_char_boundary(s, s.len() - half);
+    format!(
+        "{}\n\n... ({} bytes truncated) ...\n\n{}",
+        &s[..head_end],
+        s.len() - head_end - (s.len() - tail_start),
+        &s[tail_start..]
+    )
+}
+
+/// Detects a text tail made of the same few short lines repeated.
+///
+/// A model that has degenerated into filler emits lines like `Let me run.`
+/// over and over; a genuine deliberation tail has either longer lines or more
+/// variety than the window allows.
+fn reasoning_repeats(text: &str) -> bool {
+    repeats_short_lines(text, REASONING_REPETITION)
+}
+
+/// Shape of a degenerate tail: a trailing window containing nothing but short
+/// lines, nearly all of them the same one.
+#[derive(Debug, Clone, Copy)]
+struct RepetitionThresholds {
+    /// Trailing characters examined.
+    window_chars: usize,
+    /// Longest line still considered filler.
+    max_line_chars: usize,
+    /// Lines required before a window can be judged.
+    min_lines: usize,
+    /// Distinct lines allowed in the window.
+    max_distinct_lines: usize,
+    /// Occurrences of the most frequent line required to call it a loop.
+    min_top_repeats: usize,
+}
+
+/// Reasoning thresholds. Validated against every reasoning block in the 400
+/// most recent real threads (4,678 blocks, zero false positives) and all three
+/// known runaway turns (all caught).
+const REASONING_REPETITION: RepetitionThresholds = RepetitionThresholds {
+    window_chars: 2_000,
+    max_line_chars: 40,
+    min_lines: 8,
+    max_distinct_lines: 6,
+    min_top_repeats: 4,
+};
+
+/// Answer-text thresholds, deliberately stricter than the reasoning ones: an
+/// aborted answer is user-visible, and legitimately repetitive output (tables,
+/// similar log lines, generated code) is common. `min_top_repeats` is what
+/// keeps those safe — a table or a log dump has no line repeated ten times —
+/// while any long line or real variety in the window clears the check.
+/// Validated against every assistant message in the 400 most recent real
+/// threads (2,163 messages): the only flagged one is a genuine 1.3 MB filler
+/// loop.
+const TEXT_REPETITION: RepetitionThresholds = RepetitionThresholds {
+    window_chars: 4_000,
+    max_line_chars: 40,
+    min_lines: 20,
+    max_distinct_lines: 6,
+    min_top_repeats: 10,
+};
+
+/// Returns whether `text`'s tail is the same few short lines repeated.
+fn repeats_short_lines(text: &str, thresholds: RepetitionThresholds) -> bool {
+    if text.len() < thresholds.window_chars {
+        return false;
+    }
+    let start = floor_char_boundary(text, text.len() - thresholds.window_chars);
+    // The window can begin mid-line; that fragment is not a real line and
+    // would otherwise read as one more distinct entry.
+    let window = match text[start..].find('\n') {
+        Some(offset) => &text[start + offset + 1..],
+        None => "",
+    };
+    let mut lines: Vec<&str> = Vec::new();
+    for line in window.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.len() > thresholds.max_line_chars {
+            return false;
+        }
+        lines.push(line);
+    }
+    if lines.len() < thresholds.min_lines {
+        return false;
+    }
+    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for line in &lines {
+        *counts.entry(line).or_insert(0) += 1;
+    }
+    counts.len() <= thresholds.max_distinct_lines
+        && counts.values().copied().max().unwrap_or(0) >= thresholds.min_top_repeats
+}
+
+/// Largest byte index <= `index` that is a UTF-8 character boundary.
+fn floor_char_boundary(s: &str, index: usize) -> usize {
+    let mut index = index.min(s.len());
+    while index > 0 && !s.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+/// Counts identical tool calls within one turn, so a model that keeps
+/// re-issuing the same call and getting the same result back can be stopped
+/// instead of grinding until the turn budget runs out.
+///
+/// The signature covers the tool name, its input, and the result, so a
+/// legitimate retry loop (run the tests, fix, run again) never matches: its
+/// results change.
+#[derive(Default)]
+struct ToolLoopTracker {
+    counts: std::collections::HashMap<u64, usize>,
+}
+
+impl ToolLoopTracker {
+    /// Records the tool calls and results appended by the most recent tool
+    /// turn, returning true once any identical call has repeated enough times.
+    fn record(&mut self, messages: &[ChatMessage]) -> bool {
+        let Some(calls) = messages.iter().rev().find_map(tool_call_inputs) else {
+            return false;
+        };
+        let Some(results) = messages.iter().rev().find_map(tool_result_texts) else {
+            return false;
+        };
+
+        let mut tripped = false;
+        for (id, (name, input)) in &calls {
+            let Some(result) = results.get(id) else {
+                continue;
+            };
+            let count = self
+                .counts
+                .entry(tool_call_signature(name, input, result))
+                .or_insert(0);
+            *count += 1;
+            if *count >= MAX_IDENTICAL_TOOL_CALLS {
+                tripped = true;
+            }
+        }
+        tripped
+    }
+}
+
+/// Extracts `tool_use_id -> (name, input)` from an assistant message.
+fn tool_call_inputs(message: &ChatMessage) -> Option<Vec<(String, (String, String))>> {
+    let MessageContent::Blocks(blocks) = &message.content else {
+        return None;
+    };
+    let calls: Vec<(String, (String, String))> = blocks
+        .iter()
+        .filter_map(|block| match block {
+            ChatContentBlock::ToolUse {
+                id, name, input, ..
+            } => Some((id.clone(), (name.clone(), input.to_string()))),
+            _ => None,
+        })
+        .collect();
+    (!calls.is_empty()).then_some(calls)
+}
+
+/// Extracts `tool_use_id -> result text` from a tool-result message.
+fn tool_result_texts(message: &ChatMessage) -> Option<std::collections::HashMap<String, String>> {
+    let MessageContent::Blocks(blocks) = &message.content else {
+        return None;
+    };
+    let results: std::collections::HashMap<String, String> = blocks
+        .iter()
+        .filter_map(|block| match block {
+            ChatContentBlock::ToolResult(result) => Some((
+                result.tool_use_id.clone(),
+                result.content.as_text().unwrap_or_default().to_string(),
+            )),
+            _ => None,
+        })
+        .collect();
+    (!results.is_empty()).then_some(results)
+}
+
+fn tool_call_signature(name: &str, input: &str, result: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    name.hash(&mut hasher);
+    input.hash(&mut hasher);
+    result.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Closes a turn early without an error: the loop guard stopped the model, and
+/// the user gets a notice plus a thread they can continue from.
+fn finish_turn_early(
+    messages: Vec<ChatMessage>,
+    sender: &EventSender,
+    prior_message_count: usize,
+) -> (String, Vec<ChatMessage>) {
+    let final_text = String::new();
+    sender.send(AgentEvent::TurnFinished {
+        status: TurnStatus::Completed,
+        final_text: final_text.clone(),
+        messages: messages.clone(),
+        prior_message_count,
+    });
+    (final_text, messages)
+}
+
+/// Rebuilds the run setup one thinking level down, for the single retry the
+/// loop guard attempts. Returns `None` when there is nothing left to lower or
+/// the rebuild fails; the caller then closes the turn with a notice.
+fn rebuild_for_lower_thinking(
+    setup: &RunTurnSetup,
+    config: &Config,
+    options: &AgentOptions,
+    thread_id: Option<&str>,
+    messages: &[ChatMessage],
+) -> Option<RunTurnSetup> {
+    let lower = lowered_thinking_level(setup.thinking_level)?;
+    match build_run_turn_setup(config, options, thread_id, messages, Some(lower)) {
+        Ok(rebuilt) => Some(rebuilt),
+        Err(err) => {
+            tracing::warn!(error = %err, "Failed to rebuild setup for lower thinking level");
+            None
+        }
+    }
+}
+
 fn merge_tool_defs(
     mut base: Vec<ToolDefinition>,
     include: &[String],
@@ -809,6 +1055,25 @@ const MALFORMED_TOOL_LOOP_ABORT_MESSAGE: &str =
 const MAX_RETRIES: u32 = 3;
 /// Base delay for exponential backoff (milliseconds).
 const RETRY_BASE_DELAY_MS: u64 = 2000;
+
+/// Reasoning budget for a single assistant turn that has produced no tool call
+/// and no visible text. A model stuck emitting filler ("Let me run." repeated
+/// until the output limit) otherwise burns the whole `max_tokens` budget over
+/// many minutes and, once persisted, inflates every later request. Set well
+/// above any legitimate thinking block — the largest observed in real threads
+/// is ~26k characters — so it only fires on a degenerate turn.
+const RUNAWAY_REASONING_CHARS: usize = 160_000;
+/// Reasoning kept per block when the guard trips: enough to show what the
+/// model was doing, small enough to keep the thread file usable.
+const RUNAWAY_REASONING_KEEP_CHARS: usize = 4_000;
+/// Answer text kept when the guard trips on the visible answer.
+const RUNAWAY_TEXT_KEEP_CHARS: usize = 4_000;
+/// How many times one identical tool call (same tool, same input, same result)
+/// may repeat within a turn before the turn is stopped.
+const MAX_IDENTICAL_TOOL_CALLS: usize = 3;
+/// Reasoning kept per block when persisting. Blocks above this are truncated
+/// head-and-tail so a degenerate turn cannot make the thread unloadable.
+const MAX_PERSISTED_REASONING_CHARS: usize = 128_000;
 
 /// Runs a single turn of the agent using async channels.
 ///
@@ -911,7 +1176,7 @@ async fn run_turn_inner(
     sender: &EventSender,
     cancel: Option<&CancellationToken>,
 ) -> RunTurnResult {
-    let setup = build_run_turn_setup(config, options, thread_id)
+    let mut setup = build_run_turn_setup(config, options, thread_id, &messages, None)
         .map_err(|e| (TurnError::from_anyhow(e), messages.clone()))?;
     let span = tracing::Span::current();
     span.record("model", setup.model.as_str());
@@ -941,6 +1206,10 @@ async fn run_turn_inner(
     let mut messages = messages;
     let initial_message_count = messages.len();
     let mut consecutive_malformed_tool_turns = 0usize;
+    // The output-loop guard retries once at a lower thinking level before it
+    // closes the turn with a notice.
+    let mut thinking_retry_used = false;
+    let mut tool_loop_tracker = ToolLoopTracker::default();
     // One iteration of the outer loop = one model completion (plus any tool
     // round it requests). Tracked only for logging; nothing else needs it.
     let mut model_turn: u32 = 0;
@@ -1110,6 +1379,36 @@ async fn run_turn_inner(
         };
 
         emit_stop_reason_notice(stream_state.stop_reason.as_deref(), sender);
+        if let Some(loop_kind) = stream_state.output_loop {
+            if !thinking_retry_used
+                && let Some(rebuilt) =
+                    rebuild_for_lower_thinking(&setup, config, options, thread_id, &messages)
+            {
+                thinking_retry_used = true;
+                tracing::warn!(
+                    model_turn,
+                    reason = ?loop_kind,
+                    thinking = rebuilt.thinking_level.display_name(),
+                    "Output loop detected; retrying once at a lower thinking level"
+                );
+                sender.send(AgentEvent::Notice {
+                    kind: NoticeKind::OutputLoop,
+                    message: format!(
+                        "{} Retrying once at thinking level \"{}\".",
+                        loop_kind.message(),
+                        rebuilt.thinking_level.display_name()
+                    ),
+                    details: Some(loop_kind.details().to_string()),
+                });
+                setup = rebuilt;
+                continue;
+            }
+            sender.send(AgentEvent::Notice {
+                kind: NoticeKind::OutputLoop,
+                message: loop_kind.message().to_string(),
+                details: Some(loop_kind.details().to_string()),
+            });
+        }
 
         if stream_state.needs_tool_execution() {
             let stats = process_tool_turn(
@@ -1145,6 +1444,41 @@ async fn run_turn_inner(
                 }
             } else {
                 consecutive_malformed_tool_turns = 0;
+            }
+            if tool_loop_tracker.record(&messages) {
+                if !thinking_retry_used
+                    && let Some(rebuilt) =
+                        rebuild_for_lower_thinking(&setup, config, options, thread_id, &messages)
+                {
+                    thinking_retry_used = true;
+                    tracing::warn!(
+                        model_turn,
+                        thinking = rebuilt.thinking_level.display_name(),
+                        "Identical tool call repeated; retrying once at a lower thinking level"
+                    );
+                    sender.send(AgentEvent::Notice {
+                        kind: NoticeKind::OutputLoop,
+                        message: format!(
+                            "{} Retrying once at thinking level \"{}\".",
+                            OutputLoop::ToolRepetition.message(),
+                            rebuilt.thinking_level.display_name()
+                        ),
+                        details: Some(OutputLoop::ToolRepetition.details().to_string()),
+                    });
+                    setup = rebuilt;
+                    continue;
+                }
+                tracing::warn!(
+                    model_turn,
+                    calls = MAX_IDENTICAL_TOOL_CALLS,
+                    "Aborting turn: identical tool call repeated with an unchanged result"
+                );
+                sender.send(AgentEvent::Notice {
+                    kind: NoticeKind::OutputLoop,
+                    message: OutputLoop::ToolRepetition.message().to_string(),
+                    details: Some(OutputLoop::ToolRepetition.details().to_string()),
+                });
+                return Ok(finish_turn_early(messages, sender, initial_message_count));
             }
             continue;
         }
@@ -1182,6 +1516,8 @@ fn build_run_turn_setup(
     config: &Config,
     options: &AgentOptions,
     thread_id: Option<&str>,
+    messages: &[ChatMessage],
+    thinking_override: Option<ThinkingLevel>,
 ) -> Result<RunTurnSetup> {
     let spec = crate::models::ModelSpec::parse(&config.model);
     if let Some((custom_cfg, bare_model)) = config.providers.custom_provider_for_model(spec.base) {
@@ -1198,14 +1534,19 @@ fn build_run_turn_setup(
             custom_cfg,
             bare_model,
             provider_name,
+            messages,
+            thinking_override,
         );
     }
 
     let selection = resolve_provider(&config.model);
     let provider = selection.kind;
-    let max_tokens = config.effective_max_tokens_for(spec.base);
+    let max_tokens = config.effective_max_tokens_for_request(
+        spec.base,
+        Some(zdx_types::estimated_input_tokens(messages)),
+    );
     let thinking_level = if crate::models::model_supports_reasoning(spec.base) {
-        config.thinking_level
+        thinking_override.unwrap_or(config.thinking_level)
     } else {
         ThinkingLevel::Off
     };
@@ -1284,6 +1625,7 @@ fn build_run_turn_setup(
 /// (`[providers.custom.<name>]`): no `ProviderKind`, default tool set. The
 /// wire protocol comes from an explicit per-model `api` in
 /// `model_overrides.toml` when present, else the provider's `api`.
+#[allow(clippy::too_many_arguments)]
 fn build_custom_run_turn_setup(
     config: &Config,
     options: &AgentOptions,
@@ -1291,11 +1633,15 @@ fn build_custom_run_turn_setup(
     custom_cfg: &crate::config::CustomProviderConfig,
     bare_model: String,
     provider_name: String,
+    messages: &[ChatMessage],
+    thinking_override: Option<ThinkingLevel>,
 ) -> Result<RunTurnSetup> {
     let thinking_enabled = crate::models::model_supports_reasoning(&config.model)
-        && config.thinking_level.is_enabled();
+        && thinking_override
+            .unwrap_or(config.thinking_level)
+            .is_enabled();
     let thinking_level = if thinking_enabled {
-        config.thinking_level
+        thinking_override.unwrap_or(config.thinking_level)
     } else {
         ThinkingLevel::Off
     };
@@ -1323,7 +1669,10 @@ fn build_custom_run_turn_setup(
             base_url,
             api_key,
             bare_model.clone(),
-            config.effective_max_tokens_for(crate::models::ModelSpec::parse(&config.model).base),
+            config.effective_max_tokens_for_request(
+                crate::models::ModelSpec::parse(&config.model).base,
+                Some(zdx_types::estimated_input_tokens(messages)),
+            ),
             thinking_level,
         ),
     };
@@ -1479,6 +1828,67 @@ struct StreamState {
     /// When the first content token (text/reasoning/tool) arrived, for
     /// time-to-first-token. `None` if no content arrived this attempt.
     first_token_at: Option<Instant>,
+    /// Set when the output-loop guard aborted this stream: the model was
+    /// repeating itself instead of finishing the turn. The turn still
+    /// completes (after at most one retry at a lower thinking level); the
+    /// caller surfaces a notice and the repeated content is truncated before
+    /// it reaches the thread file.
+    output_loop: Option<OutputLoop>,
+}
+
+/// Why the output-loop guard stopped a turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputLoop {
+    /// Reasoning passed the per-turn character budget without producing text
+    /// or a tool call.
+    ReasoningBudget,
+    /// Reasoning degenerated into the same few short lines.
+    ReasoningRepetition,
+    /// The visible answer degenerated into the same few short lines.
+    TextRepetition,
+    /// The turn kept re-issuing an identical tool call and getting an
+    /// identical result back.
+    ToolRepetition,
+}
+
+impl OutputLoop {
+    fn message(self) -> &'static str {
+        match self {
+            Self::ReasoningBudget => {
+                "Generation stopped: the model spent its whole reasoning budget without answering or calling a tool."
+            }
+            Self::ReasoningRepetition => {
+                "Generation stopped: the model was repeating itself in reasoning without answering or calling a tool."
+            }
+            Self::TextRepetition => {
+                "Generation stopped: the model was repeating itself in the answer."
+            }
+            Self::ToolRepetition => {
+                "Generation stopped: the model kept repeating the same tool call with the same result."
+            }
+        }
+    }
+
+    fn details(self) -> &'static str {
+        match self {
+            Self::ReasoningBudget => "output_loop=reasoning_budget",
+            Self::ReasoningRepetition => "output_loop=reasoning_repetition",
+            Self::TextRepetition => "output_loop=text_repetition",
+            Self::ToolRepetition => "output_loop=tool_repetition",
+        }
+    }
+}
+
+/// One step down the thinking ladder, for the single retry attempted after the
+/// output-loop guard trips. `None` when there is nothing left to lower.
+fn lowered_thinking_level(level: ThinkingLevel) -> Option<ThinkingLevel> {
+    match level {
+        ThinkingLevel::Max => Some(ThinkingLevel::XHigh),
+        ThinkingLevel::XHigh => Some(ThinkingLevel::High),
+        ThinkingLevel::High => Some(ThinkingLevel::Medium),
+        ThinkingLevel::Medium => Some(ThinkingLevel::Low),
+        ThinkingLevel::Low | ThinkingLevel::Off => None,
+    }
 }
 
 impl StreamState {
@@ -1492,6 +1902,7 @@ impl StreamState {
             provider: String::new(),
             request_started_at: Instant::now(),
             first_token_at: None,
+            output_loop: None,
         }
     }
 
@@ -1506,6 +1917,68 @@ impl StreamState {
             self.first_token_at = Some(Instant::now());
         }
         self.emitted_visible_content = true;
+    }
+
+    /// Whether the turn has committed to something the caller asked for:
+    /// visible text or a tool call. Reasoning alone does not count, so a model
+    /// that only thinks has not answered anything yet.
+    fn has_committed_output(&self) -> bool {
+        self.turn.parts.iter().any(|part| match part {
+            AssistantPart::Text(text) => !text.text.is_empty(),
+            AssistantPart::ToolUse(_) => true,
+            AssistantPart::Reasoning(_) => false,
+        })
+    }
+
+    /// Runs the reasoning half of the output-loop guard, returning the reason
+    /// it tripped.
+    ///
+    /// Both checks are deliberately blind to a turn that has produced text or
+    /// a tool call: a long deliberation that ends in an answer is not a
+    /// runaway.
+    fn check_output_loop(&self) -> Option<OutputLoop> {
+        if self.has_committed_output() {
+            return None;
+        }
+        let mut total = 0usize;
+        let mut tail: Option<&str> = None;
+        for part in &self.turn.parts {
+            if let AssistantPart::Reasoning(reasoning) = part {
+                total += reasoning.text.len();
+                tail = Some(&reasoning.text);
+            }
+        }
+        if total > RUNAWAY_REASONING_CHARS {
+            return Some(OutputLoop::ReasoningBudget);
+        }
+        reasoning_repeats(tail?).then_some(OutputLoop::ReasoningRepetition)
+    }
+
+    /// Shrinks whatever the guard caught to a readable head and tail.
+    ///
+    /// A truncated reasoning block also loses its replay token: the signature
+    /// no longer matches the surviving text, and a mismatch is worse than no
+    /// replay at all.
+    fn truncate_looped_output(&mut self) {
+        for part in &mut self.turn.parts {
+            match part {
+                AssistantPart::Reasoning(reasoning) => {
+                    if reasoning.text.len() > RUNAWAY_REASONING_KEEP_CHARS {
+                        reasoning.text =
+                            truncate_middle(&reasoning.text, RUNAWAY_REASONING_KEEP_CHARS);
+                    }
+                    reasoning.replay = None;
+                    reasoning.signature.clear();
+                    reasoning.signature_provider = None;
+                }
+                AssistantPart::Text(text) => {
+                    if text.text.len() > RUNAWAY_TEXT_KEEP_CHARS {
+                        text.text = truncate_middle(&text.text, RUNAWAY_TEXT_KEEP_CHARS);
+                    }
+                }
+                AssistantPart::ToolUse(_) => {}
+            }
+        }
     }
 
     /// Emits one combined `AgentEvent::UsageUpdate` for any buffered usage
@@ -1665,6 +2138,20 @@ async fn consume_stream(
         if let Err(err) = handle_stream_event(event, sender, &mut state) {
             return Err((err, state));
         }
+        if let Some(reason) = state.output_loop {
+            // The model was repeating itself instead of finishing. Stop
+            // reading the stream and keep what arrived; the caller decides
+            // whether to retry once at a lower thinking level or close the
+            // turn with a notice.
+            tracing::warn!(
+                elapsed_ms = request_started_at.elapsed().as_millis(),
+                reason = ?reason,
+                "Aborting turn: output loop detected"
+            );
+            state.truncate_looped_output();
+            state.flush_final_usage(sender);
+            return Ok(state);
+        }
     }
 }
 
@@ -1680,11 +2167,18 @@ fn handle_stream_event(
 ) -> TurnResult<()> {
     match event {
         StreamEvent::TextDelta { index, text } if !text.is_empty() => {
-            let part = state.turn.ensure_text_part_mut(index);
-            part.text.push_str(&text);
+            state.turn.ensure_text_part_mut(index).text.push_str(&text);
             state.flush_pending_usage(sender);
             sender.send(AgentEvent::AssistantDelta { text });
             state.mark_visible_content();
+            if state.output_loop.is_none()
+                && state
+                    .turn
+                    .find_text_mut(index)
+                    .is_some_and(|part| repeats_short_lines(&part.text, TEXT_REPETITION))
+            {
+                state.output_loop = Some(OutputLoop::TextRepetition);
+            }
         }
         StreamEvent::ContentBlockStart {
             index,
@@ -1760,6 +2254,9 @@ fn handle_stream_event(
                 state.flush_pending_usage(sender);
                 sender.send(event);
                 state.mark_visible_content();
+            }
+            if state.output_loop.is_none() {
+                state.output_loop = state.check_output_loop();
             }
         }
         StreamEvent::ReasoningSignatureDelta {
@@ -2288,6 +2785,11 @@ fn emit_stop_reason_notice(stop_reason: Option<&str>, sender: &EventSender) {
             "Generation stopped: model context window exceeded. Start a new thread or trim history.",
             "stop_reason=model_context_window_exceeded",
         ),
+        Some("max_tokens") => (
+            NoticeKind::OutputLimit,
+            "Generation stopped at the output token limit. The response is incomplete; continue or retry for the rest.",
+            "stop_reason=max_tokens",
+        ),
         _ => return,
     };
     sender.send(AgentEvent::Notice {
@@ -2563,7 +3065,7 @@ mod tests {
             let mut config = Config::load_from(&path).unwrap();
             config.providers.anthropic.api_key = Some("test-key".to_string());
             config.subagents.enabled = false;
-            let setup = build_run_turn_setup(&config, &options, None).unwrap();
+            let setup = build_run_turn_setup(&config, &options, None, &[], None).unwrap();
             assert_eq!(setup.thinking_level, expected);
             assert_eq!(setup.model, "claude-sonnet-4-6");
             assert_eq!(setup.tool_ctx.thinking_level, Some(expected));
@@ -2605,6 +3107,23 @@ mod tests {
     }
 
     #[test]
+    fn stop_reason_notice_emits_for_output_limit() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let sender = EventSender::new(tx);
+
+        emit_stop_reason_notice(Some("max_tokens"), &sender);
+
+        let evt = rx.try_recv().expect("expected an event");
+        match &*evt {
+            AgentEvent::Notice { kind, message, .. } => {
+                assert_eq!(*kind, NoticeKind::OutputLimit);
+                assert!(message.contains("output token limit"), "got: {message}");
+            }
+            other => panic!("expected Notice, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn stop_reason_notice_is_silent_for_normal_reasons() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = EventSender::new(tx);
@@ -2612,6 +3131,264 @@ mod tests {
         emit_stop_reason_notice(Some("tool_use"), &sender);
         emit_stop_reason_notice(None, &sender);
         assert!(rx.try_recv().is_err(), "no event should be emitted");
+    }
+
+    /// Builds `count` distinct lines for repetition-detector fixtures.
+    fn distinct_lines(count: usize, line: impl Fn(usize) -> String) -> String {
+        (0..count).fold(String::new(), |mut acc, i| {
+            acc.push_str(&line(i));
+            acc
+        })
+    }
+
+    fn reasoning_state(text: &str) -> StreamState {
+        let mut state = StreamState::new("test-model".to_string());
+        state.turn.push_reasoning(ThinkingBuilder {
+            index: 0,
+            text: text.to_string(),
+            signature: String::new(),
+            signature_provider: None,
+            replay: None,
+            had_delta: true,
+        });
+        state
+    }
+
+    #[test]
+    fn reasoning_repetition_detects_the_filler_loop() {
+        let loop_text =
+            "Let me run.\n\nLet me go.\n\nLet me do it.\n\nLet me execute.\n\n".repeat(40);
+
+        assert!(reasoning_repeats(&loop_text));
+    }
+
+    #[test]
+    fn reasoning_repetition_ignores_genuine_deliberation() {
+        let text = "The store module owns the registry, so the uninstall path has to \
+                    update it before the SPA reloads.\n\
+                    That means the bridge needs a snapshot call after the write.\n\
+                    Let me check whether the existing test covers the empty case.\n"
+            .repeat(20);
+
+        assert!(!reasoning_repeats(&text));
+    }
+
+    #[test]
+    fn reasoning_repetition_needs_a_full_window() {
+        assert!(!reasoning_repeats("Let me run.\n\nLet me go.\n\n"));
+    }
+
+    #[test]
+    fn text_repetition_detects_the_filler_loop() {
+        assert!(repeats_short_lines(
+            &"Let me run.\n\nLet me go.\n\nLet me do it.\n\nLet me execute.\n\n".repeat(200),
+            TEXT_REPETITION
+        ));
+    }
+
+    /// The answer guard must not fire on output that is repetitive but real:
+    /// tables, similar log lines, generated code, and prose that merely shares
+    /// a shape. No line repeats ten times in any of these.
+    #[test]
+    fn text_repetition_ignores_legitimately_repetitive_output() {
+        let table = format!(
+            "| id | name | status |\n|---|---|---|\n{}",
+            distinct_lines(200, |i| format!("| {i} | row{i} | ok |\n"))
+        );
+        let log_lines = distinct_lines(200, |i| {
+            format!(
+                "2026-09-18T10:{:02}:00Z INFO handler={i} processed=ok\n",
+                i % 60
+            )
+        });
+        let code = distinct_lines(200, |i| format!(".c{i} {{ color: red; }}\n"));
+        let prose_lines = distinct_lines(80, |i| {
+            format!("A fairly long line of prose number {i} exceeding forty chars.\n")
+        });
+        // Nine repeats is below the repeat threshold even though the window is
+        // full of short lines.
+        let nine_repeats = format!(
+            "{}distinct filler content to fill the window out to four thousand characters\n",
+            "same short line\n".repeat(9)
+        )
+        .repeat(40);
+
+        for (name, text) in [
+            ("table", table),
+            ("log lines", log_lines),
+            ("code", code),
+            ("long lines", prose_lines),
+            ("nine repeats", nine_repeats),
+        ] {
+            assert!(
+                !repeats_short_lines(&text, TEXT_REPETITION),
+                "{name} must not be flagged as a loop"
+            );
+        }
+    }
+
+    #[test]
+    fn lowered_thinking_level_steps_down_and_stops_at_low() {
+        assert_eq!(
+            lowered_thinking_level(ThinkingLevel::Max),
+            Some(ThinkingLevel::XHigh)
+        );
+        assert_eq!(
+            lowered_thinking_level(ThinkingLevel::High),
+            Some(ThinkingLevel::Medium)
+        );
+        assert_eq!(
+            lowered_thinking_level(ThinkingLevel::Medium),
+            Some(ThinkingLevel::Low)
+        );
+        assert_eq!(lowered_thinking_level(ThinkingLevel::Low), None);
+        assert_eq!(lowered_thinking_level(ThinkingLevel::Off), None);
+    }
+
+    fn tool_turn(name: &str, input: &str, result: &str) -> Vec<ChatMessage> {
+        vec![
+            ChatMessage::assistant_blocks(vec![ChatContentBlock::ToolUse {
+                id: "toolu_1".to_string(),
+                name: name.to_string(),
+                input: serde_json::json!({ "arg": input }),
+                id_origin: zdx_types::IdOrigin::Real,
+                replay: None,
+            }]),
+            ChatMessage::tool_results(vec![ToolResult::from_output(
+                "toolu_1".to_string(),
+                &ToolOutput::success(serde_json::json!({ "out": result })),
+            )]),
+        ]
+    }
+
+    #[test]
+    fn tool_loop_tracker_trips_after_three_identical_calls() {
+        let mut tracker = ToolLoopTracker::default();
+
+        assert!(!tracker.record(&tool_turn("read", "a.txt", "same")));
+        assert!(!tracker.record(&tool_turn("read", "a.txt", "same")));
+        assert!(tracker.record(&tool_turn("read", "a.txt", "same")));
+    }
+
+    /// A real retry loop changes the result each time, so it never trips.
+    #[test]
+    fn tool_loop_tracker_ignores_changing_results() {
+        let mut tracker = ToolLoopTracker::default();
+
+        assert!(!tracker.record(&tool_turn("bash", "cargo test", "fail")));
+        assert!(!tracker.record(&tool_turn("bash", "cargo test", "fail")));
+        assert!(!tracker.record(&tool_turn("bash", "cargo test", "pass")));
+        assert!(!tracker.record(&tool_turn("bash", "cargo test", "pass")));
+    }
+
+    #[test]
+    fn tool_loop_tracker_distinguishes_inputs_and_tools() {
+        let mut tracker = ToolLoopTracker::default();
+
+        assert!(!tracker.record(&tool_turn("read", "a.txt", "same")));
+        assert!(!tracker.record(&tool_turn("read", "b.txt", "same")));
+        assert!(!tracker.record(&tool_turn("grep", "a.txt", "same")));
+    }
+
+    #[test]
+    fn truncate_looped_output_shrinks_text_too() {
+        let mut state = StreamState::new("test-model".to_string());
+        let body = "Let me run.\n\n".repeat(2_000);
+        state.turn.ensure_text_part_mut(0).text = body.clone();
+
+        state.truncate_looped_output();
+
+        let text = &state.turn.find_text_mut(0).expect("text part").text;
+        assert!(text.len() < body.len());
+        assert!(text.starts_with("Let me run."));
+        assert!(text.contains("bytes truncated"));
+    }
+
+    #[test]
+    fn runaway_guard_trips_on_budget_without_committed_output() {
+        let state = reasoning_state(&"x".repeat(RUNAWAY_REASONING_CHARS + 1));
+
+        assert_eq!(state.check_output_loop(), Some(OutputLoop::ReasoningBudget));
+    }
+
+    #[test]
+    fn runaway_guard_stands_down_once_text_is_emitted() {
+        let mut state = reasoning_state(&"x".repeat(RUNAWAY_REASONING_CHARS + 1));
+        state.turn.ensure_text_part_mut(1).text = "here is the answer".to_string();
+
+        assert_eq!(state.check_output_loop(), None);
+    }
+
+    #[test]
+    fn runaway_guard_stands_down_once_a_tool_call_starts() {
+        let mut state = reasoning_state(&"x".repeat(RUNAWAY_REASONING_CHARS + 1));
+        state.turn.push_tool_use(ToolUseBuilder {
+            index: 1,
+            id: "toolu_1".to_string(),
+            name: "read".to_string(),
+            input_json: "{}".to_string(),
+            input_preview_len: 0,
+            id_origin: zdx_types::IdOrigin::Real,
+            replay: None,
+        });
+
+        assert_eq!(state.check_output_loop(), None);
+    }
+
+    /// A truncated runaway keeps both ends and drops the replay token, which
+    /// no longer matches the surviving text.
+    #[test]
+    fn truncate_runaway_reasoning_keeps_head_and_tail_and_clears_replay() {
+        let mut state = StreamState::new("test-model".to_string());
+        let body = "Let me run.\n\n".repeat(2_000);
+        state.turn.push_reasoning(ThinkingBuilder {
+            index: 0,
+            text: body.clone(),
+            signature: "sig".to_string(),
+            signature_provider: Some(crate::providers::SignatureProvider::Anthropic),
+            replay: Some(ReplayToken::Anthropic {
+                signature: "sig".to_string(),
+            }),
+            had_delta: true,
+        });
+
+        state.truncate_looped_output();
+
+        let finalized = state.turn.finalize();
+        let Some(ChatContentBlock::Reasoning(reasoning)) = finalized.blocks.first() else {
+            panic!("expected a reasoning block");
+        };
+        let text = reasoning.text.as_deref().expect("reasoning text");
+        assert!(text.len() < body.len());
+        assert!(text.starts_with("Let me run."));
+        assert!(text.ends_with("Let me run.\n\n"));
+        assert!(text.contains("bytes truncated"));
+        assert!(
+            reasoning.replay.is_none(),
+            "stale signature must be dropped"
+        );
+    }
+
+    #[test]
+    fn finalize_truncates_an_oversized_reasoning_block() {
+        let mut turn = AssistantTurnBuilder::new("test-model".to_string());
+        turn.push_reasoning(ThinkingBuilder {
+            index: 0,
+            text: "y".repeat(MAX_PERSISTED_REASONING_CHARS + 1),
+            signature: String::new(),
+            signature_provider: None,
+            replay: None,
+            had_delta: true,
+        });
+
+        let finalized = turn.finalize();
+
+        let Some(ChatContentBlock::Reasoning(reasoning)) = finalized.blocks.first() else {
+            panic!("expected a reasoning block");
+        };
+        let text = reasoning.text.as_deref().expect("reasoning text");
+        assert!(text.len() < MAX_PERSISTED_REASONING_CHARS + 200);
+        assert!(text.contains("bytes truncated"));
     }
 
     #[test]

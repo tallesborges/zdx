@@ -5,7 +5,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::tools::ToolResult;
+use crate::tools::{ToolResult, ToolResultBlock, ToolResultContent};
 
 /// Provider-specific replay token for reasoning/thinking blocks.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -329,6 +329,37 @@ impl ChatMessage {
         }
     }
 
+    /// Whether this message carries tool results.
+    ///
+    /// Tool results ride the `user` role, so a `user` message is only a
+    /// genuine user turn when it carries no `ToolResult` block.
+    #[must_use]
+    pub fn has_tool_results(&self) -> bool {
+        matches!(
+            &self.content,
+            MessageContent::Blocks(blocks)
+                if blocks
+                    .iter()
+                    .any(|block| matches!(block, ChatContentBlock::ToolResult(_)))
+        )
+    }
+
+    /// Rough input-token estimate for this message (~4 characters per token).
+    ///
+    /// Approximate by design: it only sizes the `max_tokens` clamp, and the
+    /// caller keeps headroom for the system prompt, tool definitions, and the
+    /// error in this estimate. Image payloads are counted as a flat cost
+    /// rather than by their base64 length, which bears no relation to how the
+    /// model tokenizes them.
+    #[must_use]
+    pub fn estimated_tokens(&self) -> u64 {
+        let chars = match &self.content {
+            MessageContent::Text(text) => text.len(),
+            MessageContent::Blocks(blocks) => blocks.iter().map(block_char_cost).sum(),
+        };
+        u64::try_from(chars).unwrap_or(u64::MAX).div_ceil(4)
+    }
+
     /// Creates a user message with tool results.
     ///
     /// # Errors
@@ -345,6 +376,120 @@ impl ChatMessage {
             context_key: None,
             content: MessageContent::Blocks(blocks),
         }
+    }
+}
+
+/// Index at which the in-flight turn begins: one past the last genuine user
+/// turn.
+///
+/// Tool results also use the `user` role, so a tool-result carrier does not
+/// start a turn. Request builders use this boundary to decide which assistant
+/// reasoning may be replayed: only the current turn's reasoning is required
+/// back on the wire, and older reasoning is dead weight that grows the request
+/// without bound on providers that do not filter it server-side.
+#[must_use]
+pub fn current_turn_start(messages: &[ChatMessage]) -> usize {
+    messages
+        .iter()
+        .rposition(|message| message.role == "user" && !message.has_tool_results())
+        .map_or(0, |index| index + 1)
+}
+
+/// Which messages' reasoning a request may replay.
+///
+/// Only the in-flight turn's reasoning goes back on the wire. Every provider
+/// that documents the requirement scopes it the same way:
+///
+/// - `OpenAI`'s Responses guide: "pass back all reasoning items, function call
+///   items, and function call output items, **since the last `user`
+///   message**", and reasoning items from earlier turns are "ignored and
+///   removed".
+/// - Gemini's thought-signature rules: "strict validation is enforced for all
+///   function calls within the current turn. **Only current turn is
+///   required; we don't validate on previous turns**", where a turn begins at
+///   "the most recent user message that is not a `functionResponse`".
+/// - Anthropic's extended-thinking guide: "you can omit `thinking` blocks from
+///   prior `assistant` role turns".
+///
+/// A turn therefore begins at the last genuine user message. Tool results also
+/// use the `user` role and do not start one, so a tool loop inside a turn
+/// keeps replaying its reasoning — which is what the providers validate.
+///
+/// Replaying earlier turns' reasoning is dead weight: it grows a request
+/// without bound as a thread accumulates turns, and on a backend that does not
+/// filter prior-turn thinking server-side every later request pays for it
+/// again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReasoningReplay {
+    turn_start: usize,
+}
+
+impl ReasoningReplay {
+    /// Computes the replay scope for a request's message list.
+    #[must_use]
+    pub fn for_messages(messages: &[ChatMessage]) -> Self {
+        Self {
+            turn_start: current_turn_start(messages),
+        }
+    }
+
+    /// Whether the message at `index` may replay its reasoning.
+    ///
+    /// A message carrying a redacted reasoning payload is exempt on every
+    /// turn: that payload is opaque server-side verification state rather than
+    /// reasoning text, and the Anthropic wire requires it echoed back
+    /// unmodified. The exemption is inert for the other wires, which ignore
+    /// foreign replay tokens.
+    #[must_use]
+    pub fn allows(self, index: usize, message: &ChatMessage) -> bool {
+        index >= self.turn_start || carries_redacted_reasoning(message)
+    }
+}
+
+/// Whether the message carries an opaque `redacted_thinking` payload.
+fn carries_redacted_reasoning(message: &ChatMessage) -> bool {
+    let MessageContent::Blocks(blocks) = &message.content else {
+        return false;
+    };
+    blocks.iter().any(|block| {
+        matches!(
+            block,
+            ChatContentBlock::Reasoning(ReasoningBlock {
+                replay: Some(ReplayToken::AnthropicRedacted { .. }),
+                ..
+            })
+        )
+    })
+}
+
+/// Rough input-token estimate for a whole message list. See
+/// [`ChatMessage::estimated_tokens`].
+#[must_use]
+pub fn estimated_input_tokens(messages: &[ChatMessage]) -> u64 {
+    messages.iter().map(ChatMessage::estimated_tokens).sum()
+}
+
+/// Character cost of one content block, for [`ChatMessage::estimated_tokens`].
+fn block_char_cost(block: &ChatContentBlock) -> usize {
+    /// A single image costs roughly 1600 tokens regardless of its encoded
+    /// size, so count it as a fixed 4x1600 characters.
+    const IMAGE_CHAR_COST: usize = 6_400;
+
+    match block {
+        ChatContentBlock::Text { text, .. } => text.len(),
+        ChatContentBlock::Reasoning(reasoning) => reasoning.text.as_ref().map_or(0, String::len),
+        ChatContentBlock::ToolUse { input, .. } => input.to_string().len(),
+        ChatContentBlock::ToolResult(result) => match &result.content {
+            ToolResultContent::Text(text) => text.len(),
+            ToolResultContent::Blocks(blocks) => blocks
+                .iter()
+                .map(|block| match block {
+                    ToolResultBlock::Text { text } => text.len(),
+                    ToolResultBlock::Image { .. } => IMAGE_CHAR_COST,
+                })
+                .sum(),
+        },
+        ChatContentBlock::Image { .. } => IMAGE_CHAR_COST,
     }
 }
 
@@ -374,6 +519,95 @@ pub fn strip_voice_transcript(text: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assistant_reasoning(text: &str) -> ChatMessage {
+        ChatMessage::assistant_blocks(vec![ChatContentBlock::Reasoning(ReasoningBlock {
+            text: Some(text.to_string()),
+            replay: None,
+        })])
+    }
+
+    fn assistant_tool_call(id: &str) -> ChatMessage {
+        ChatMessage::assistant_blocks(vec![ChatContentBlock::ToolUse {
+            id: id.to_string(),
+            name: "read".to_string(),
+            input: serde_json::json!({"file_path": "a.txt"}),
+            id_origin: IdOrigin::Real,
+            replay: None,
+        }])
+    }
+
+    /// Reasoning is replayed for the in-flight turn and dropped for everything
+    /// before it. This is the one rule every request builder applies.
+    #[test]
+    fn reasoning_replay_allows_only_the_current_turn() {
+        let messages = vec![
+            ChatMessage::user("first"),
+            assistant_reasoning("old"),
+            ChatMessage::user("second"),
+            assistant_reasoning("new"),
+        ];
+        let replay = ReasoningReplay::for_messages(&messages);
+
+        assert!(!replay.allows(1, &messages[1]), "prior-turn reasoning");
+        assert!(replay.allows(3, &messages[3]), "current-turn reasoning");
+    }
+
+    /// A tool loop inside one turn is not a new turn: tool-result carriers use
+    /// the `user` role, so the assistant turns they answer keep replaying.
+    #[test]
+    fn tool_result_carriers_do_not_start_a_turn() {
+        let messages = vec![
+            ChatMessage::user("go"),
+            assistant_reasoning("step one"),
+            ChatMessage::tool_results(vec![ToolResult {
+                tool_use_id: "call_1".to_string(),
+                content: ToolResultContent::Text("ok".to_string()),
+                is_error: false,
+            }]),
+            assistant_tool_call("call_2"),
+        ];
+        let replay = ReasoningReplay::for_messages(&messages);
+
+        assert!(
+            replay.allows(1, &messages[1]),
+            "reasoning for the in-flight turn's tool step must survive"
+        );
+        assert!(replay.allows(3, &messages[3]));
+    }
+
+    /// A redacted reasoning payload is opaque server-side state, not text, so
+    /// it is echoed back on every turn regardless of the boundary.
+    #[test]
+    fn redacted_reasoning_is_replayed_on_prior_turns() {
+        let redacted =
+            ChatMessage::assistant_blocks(vec![ChatContentBlock::Reasoning(ReasoningBlock {
+                text: None,
+                replay: Some(ReplayToken::AnthropicRedacted {
+                    data: "opaque".to_string(),
+                }),
+            })]);
+        let messages = vec![
+            ChatMessage::user("first"),
+            redacted.clone(),
+            ChatMessage::user("second"),
+        ];
+        let replay = ReasoningReplay::for_messages(&messages);
+
+        assert!(replay.allows(1, &messages[1]));
+        assert!(replay.allows(1, &redacted));
+    }
+
+    /// A conversation with no genuine user turn yet (a fresh thread, or a
+    /// resumed one) replays everything: there is no prior turn to drop.
+    #[test]
+    fn replay_allows_everything_without_a_user_turn() {
+        let messages = vec![assistant_reasoning("a"), assistant_reasoning("b")];
+        let replay = ReasoningReplay::for_messages(&messages);
+
+        assert!(replay.allows(0, &messages[0]));
+        assert!(replay.allows(1, &messages[1]));
+    }
 
     /// The voice-transcript wrapper round-trips: the exact string handed to
     /// the model strips back to the original words for display. Both the TUI

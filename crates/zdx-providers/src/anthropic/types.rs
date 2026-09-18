@@ -305,7 +305,18 @@ impl ApiMessage {
     /// Handles thinking blocks with missing signatures (aborted thinking) by
     /// converting them to plain text blocks, matching pi-mono's Anthropic
     /// replay fallback behavior.
-    pub(crate) fn from_chat_message(msg: &ChatMessage, use_cache_control: bool) -> Self {
+    ///
+    /// `replay_reasoning` comes from `ReasoningReplay::allows`: false for
+    /// assistant messages that predate the current turn, whose reasoning is
+    /// dropped rather than replayed. The API only requires thinking blocks for
+    /// the assistant turn being continued, and providers that do not filter
+    /// prior-turn thinking server-side would otherwise count every earlier
+    /// turn's reasoning as input tokens.
+    pub(crate) fn from_chat_message(
+        msg: &ChatMessage,
+        use_cache_control: bool,
+        replay_reasoning: bool,
+    ) -> Self {
         match &msg.content {
             MessageContent::Text(text) => ApiMessage {
                 role: msg.role.clone(),
@@ -314,7 +325,9 @@ impl ApiMessage {
             MessageContent::Blocks(blocks) => {
                 let api_blocks = blocks
                     .iter()
-                    .filter_map(|block| api_content_block(block, use_cache_control))
+                    .filter_map(|block| {
+                        api_content_block(block, use_cache_control, replay_reasoning)
+                    })
                     .collect();
                 ApiMessage {
                     role: msg.role.clone(),
@@ -323,11 +336,24 @@ impl ApiMessage {
             }
         }
     }
+
+    /// Whether this message carries an assistant content array that ended up
+    /// empty. Anthropic rejects an empty `content` array, so an assistant
+    /// turn whose only content was prior-turn reasoning must be dropped
+    /// entirely rather than sent as `[]`.
+    pub(crate) fn has_empty_blocks(&self) -> bool {
+        self.role == "assistant"
+            && matches!(&self.content, ApiMessageContent::Blocks(blocks) if blocks.is_empty())
+    }
 }
 
-fn api_content_block(block: &ChatContentBlock, use_cache_control: bool) -> Option<ApiContentBlock> {
+fn api_content_block(
+    block: &ChatContentBlock,
+    use_cache_control: bool,
+    replay_reasoning: bool,
+) -> Option<ApiContentBlock> {
     match block {
-        ChatContentBlock::Reasoning(reasoning) => api_reasoning_block(reasoning),
+        ChatContentBlock::Reasoning(reasoning) => api_reasoning_block(reasoning, replay_reasoning),
         ChatContentBlock::Text { text, .. } => Some(ApiContentBlock::Text {
             text: text.clone(),
             cache_control: use_cache_control.then(CacheControl::ephemeral),
@@ -352,8 +378,21 @@ fn api_content_block(block: &ChatContentBlock, use_cache_control: bool) -> Optio
     }
 }
 
-fn api_reasoning_block(reasoning: &ReasoningBlock) -> Option<ApiContentBlock> {
+fn api_reasoning_block(
+    reasoning: &ReasoningBlock,
+    replay_reasoning: bool,
+) -> Option<ApiContentBlock> {
     match reasoning.replay.as_ref() {
+        // A redacted replay MUST be sent back verbatim as a
+        // `redacted_thinking` block. The `data` blob IS the block and
+        // there is no plain-text fallback — dropping or rewriting it
+        // would break Anthropic's server-side reasoning verification on
+        // the next turn. This holds for prior turns too, so it is
+        // deliberately not gated on `replay_reasoning`.
+        Some(ReplayToken::AnthropicRedacted { data }) => {
+            Some(ApiContentBlock::RedactedThinking { data: data.clone() })
+        }
+        _ if !replay_reasoning => None,
         Some(ReplayToken::Anthropic { signature }) => {
             let thinking = reasoning.text.as_deref().unwrap_or_default();
             if signature.is_empty() {
@@ -364,14 +403,6 @@ fn api_reasoning_block(reasoning: &ReasoningBlock) -> Option<ApiContentBlock> {
                     signature: signature.clone(),
                 })
             }
-        }
-        // A redacted replay MUST be sent back verbatim as a
-        // `redacted_thinking` block. The `data` blob IS the block and
-        // there is no plain-text fallback — dropping or rewriting it
-        // would break Anthropic's server-side reasoning verification on
-        // the next turn.
-        Some(ReplayToken::AnthropicRedacted { data }) => {
-            Some(ApiContentBlock::RedactedThinking { data: data.clone() })
         }
         Some(ReplayToken::OpenAI { .. } | ReplayToken::Gemini { .. }) => None,
         None => reasoning
@@ -552,12 +583,15 @@ mod tests {
 
     #[test]
     fn missing_anthropic_signature_falls_back_to_plain_text() {
-        let block = api_reasoning_block(&ReasoningBlock {
-            text: Some("I was thinking".to_string()),
-            replay: Some(ReplayToken::Anthropic {
-                signature: String::new(),
-            }),
-        });
+        let block = api_reasoning_block(
+            &ReasoningBlock {
+                text: Some("I was thinking".to_string()),
+                replay: Some(ReplayToken::Anthropic {
+                    signature: String::new(),
+                }),
+            },
+            true,
+        );
 
         assert!(matches!(
             block,
@@ -567,10 +601,13 @@ mod tests {
 
     #[test]
     fn reasoning_without_replay_falls_back_to_plain_text() {
-        let block = api_reasoning_block(&ReasoningBlock {
-            text: Some("temporary reasoning".to_string()),
-            replay: None,
-        });
+        let block = api_reasoning_block(
+            &ReasoningBlock {
+                text: Some("temporary reasoning".to_string()),
+                replay: None,
+            },
+            true,
+        );
 
         assert!(matches!(
             block,
@@ -580,24 +617,30 @@ mod tests {
 
     #[test]
     fn empty_reasoning_without_signature_is_dropped() {
-        let block = api_reasoning_block(&ReasoningBlock {
-            text: Some(String::new()),
-            replay: Some(ReplayToken::Anthropic {
-                signature: String::new(),
-            }),
-        });
+        let block = api_reasoning_block(
+            &ReasoningBlock {
+                text: Some(String::new()),
+                replay: Some(ReplayToken::Anthropic {
+                    signature: String::new(),
+                }),
+            },
+            true,
+        );
 
         assert!(block.is_none());
     }
 
     #[test]
     fn signature_only_reasoning_block_is_preserved() {
-        let block = api_reasoning_block(&ReasoningBlock {
-            text: Some(String::new()),
-            replay: Some(ReplayToken::Anthropic {
-                signature: "sig_123".to_string(),
-            }),
-        });
+        let block = api_reasoning_block(
+            &ReasoningBlock {
+                text: Some(String::new()),
+                replay: Some(ReplayToken::Anthropic {
+                    signature: "sig_123".to_string(),
+                }),
+            },
+            true,
+        );
 
         assert!(matches!(
             block,
@@ -613,12 +656,15 @@ mod tests {
     /// field is the opaque blob, with no `thinking` or `signature`.
     #[test]
     fn redacted_replay_token_serializes_to_redacted_thinking_block() {
-        let block = api_reasoning_block(&ReasoningBlock {
-            text: None,
-            replay: Some(ReplayToken::AnthropicRedacted {
-                data: "encrypted_blob".to_string(),
-            }),
-        });
+        let block = api_reasoning_block(
+            &ReasoningBlock {
+                text: None,
+                replay: Some(ReplayToken::AnthropicRedacted {
+                    data: "encrypted_blob".to_string(),
+                }),
+            },
+            true,
+        );
 
         assert!(matches!(
             block,
@@ -633,12 +679,15 @@ mod tests {
     /// for reconstructing the previous turn's reasoning.
     #[test]
     fn redacted_replay_token_never_falls_back_to_plain_text() {
-        let block = api_reasoning_block(&ReasoningBlock {
-            text: Some("stray visible text".to_string()),
-            replay: Some(ReplayToken::AnthropicRedacted {
-                data: "blob".to_string(),
-            }),
-        });
+        let block = api_reasoning_block(
+            &ReasoningBlock {
+                text: Some("stray visible text".to_string()),
+                replay: Some(ReplayToken::AnthropicRedacted {
+                    data: "blob".to_string(),
+                }),
+            },
+            true,
+        );
 
         assert!(matches!(
             block,
@@ -669,7 +718,7 @@ mod tests {
             })]),
         };
 
-        let api = ApiMessage::from_chat_message(&msg, false);
+        let api = ApiMessage::from_chat_message(&msg, false, true);
         let json = serde_json::to_string(&api).unwrap();
         assert!(
             json.contains(r#""type":"redacted_thinking""#),

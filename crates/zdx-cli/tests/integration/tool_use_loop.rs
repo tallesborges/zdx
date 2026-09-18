@@ -906,3 +906,688 @@ async fn exec_persists_the_assistant_answer_once() {
         "the persisted assistant message should carry the answer text; got:\n{jsonl}"
     );
 }
+
+/// SSE fixture: one assistant turn that thinks visibly and then answers.
+fn thinking_first_turn_sse(reasoning: &str, answer: &str) -> String {
+    let template = r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_think","type":"message","role":"assistant","content":[],"model":"claude-sonnet-5","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"__REASONING__"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig_roundtrip"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"__ANSWER__"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#;
+    template
+        .replace("__REASONING__", reasoning)
+        .replace("__ANSWER__", answer)
+}
+
+/// Runs one `zdx exec --thread <id>` against the mock endpoint with an
+/// explicit model spec (so thinking can be enabled).
+fn run_exec_turn_with_model(
+    zdx_home: &TempDir,
+    temp_dir: &TempDir,
+    mock_uri: &str,
+    thread_id: &str,
+    model: &str,
+    prompt: &str,
+) {
+    crate::fixtures::zdx_cmd()
+        .env("ZDX_HOME", zdx_home.path())
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_uri)
+        .args([
+            "--root",
+            temp_dir.path().to_str().unwrap(),
+            "--thread",
+            thread_id,
+            "exec",
+            "-m",
+            model,
+            "-p",
+            prompt,
+        ])
+        .assert()
+        .success();
+}
+
+/// A previous turn's thinking must not be replayed on the next request.
+///
+/// Replaying it is dead weight: the API does not need prior-turn thinking,
+/// and a proxy backend that does not filter it server-side counts every
+/// earlier turn's reasoning as input tokens, which is what drove a real
+/// thread past its context limit after a degenerate reasoning turn.
+#[tokio::test]
+async fn prior_turn_thinking_is_not_replayed() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
+    let zdx_home = temp_zdx_home();
+    let temp_dir = TempDir::new().unwrap();
+    let thread_id = "thinking-replay";
+    let reasoning = "Prior-turn reasoning that must not come back.";
+    let answer = "first answer";
+
+    let mock_server = MockServer::start().await;
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let call_count_clone = Arc::clone(&call_count);
+    let second_request_body = Arc::new(std::sync::Mutex::new(String::new()));
+    let second_request_body_clone = Arc::clone(&second_request_body);
+
+    let first_sse = thinking_first_turn_sse(reasoning, answer);
+    let second_sse = text_sse("second answer");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(header("x-api-key", "test-api-key"))
+        .respond_with(move |req: &Request| {
+            let count = call_count_clone.fetch_add(1, Ordering::SeqCst);
+            if count == 0 {
+                fixtures::sse_response(&first_sse)
+            } else {
+                *second_request_body_clone.lock().unwrap() =
+                    String::from_utf8_lossy(&req.body).to_string();
+                fixtures::sse_response(&second_sse)
+            }
+        })
+        .expect(2)
+        .mount(&mock_server)
+        .await;
+
+    run_exec_turn_with_model(
+        &zdx_home,
+        &temp_dir,
+        &mock_server.uri(),
+        thread_id,
+        "anthropic:claude-sonnet-5@high",
+        "first prompt",
+    );
+    run_exec_turn_with_model(
+        &zdx_home,
+        &temp_dir,
+        &mock_server.uri(),
+        thread_id,
+        "anthropic:claude-sonnet-5@high",
+        "second prompt",
+    );
+
+    let body = second_request_body.lock().unwrap().clone();
+    assert!(
+        !body.contains(reasoning),
+        "prior-turn thinking must not be replayed; body={body}"
+    );
+    assert!(
+        body.contains(answer),
+        "the prior assistant text must still be replayed; body={body}"
+    );
+}
+
+/// SSE fixture: one assistant turn that repeats the same filler lines.
+fn repeating_text_sse() -> String {
+    let body = "Let me run.\n\nLet me go.\n\nLet me do it.\n\nLet me execute.\n\n".repeat(200);
+    let mut sse = String::from(
+        "event: message_start\n\
+         data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_loop\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-5\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}}\n\n\
+         event: content_block_start\n\
+         data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+    );
+    for chunk in body.as_bytes().chunks(400) {
+        let text = String::from_utf8_lossy(chunk);
+        sse.push_str(&format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":{}}}}}\n\n",
+            serde_json::Value::String(text.to_string())
+        ));
+    }
+    sse.push_str(
+        "event: content_block_stop\n\
+         data: {\"type\":\"content_block_stop\",\"index\":0}\n\n\
+         event: message_delta\n\
+         data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":5}}\n\n\
+         event: message_stop\n\
+         data: {\"type\":\"message_stop\"}\n\n",
+    );
+    sse
+}
+
+/// A model that loops in its answer is stopped, reported, and retried once at
+/// a lower thinking level — not failed.
+#[tokio::test]
+async fn repeated_answer_text_is_stopped_and_retried_at_a_lower_thinking_level() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
+    let zdx_home = temp_zdx_home();
+    let temp_dir = TempDir::new().unwrap();
+    let thread_id = "text-loop-retry";
+
+    let mock_server = MockServer::start().await;
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let call_count_clone = Arc::clone(&call_count);
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let bodies_clone = Arc::clone(&bodies);
+
+    let looping_sse = repeating_text_sse();
+    let final_sse = text_sse("Recovered answer.");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(header("x-api-key", "test-api-key"))
+        .respond_with(move |req: &Request| {
+            let count = call_count_clone.fetch_add(1, Ordering::SeqCst);
+            bodies_clone
+                .lock()
+                .unwrap()
+                .push(String::from_utf8_lossy(&req.body).to_string());
+            if count == 0 {
+                fixtures::sse_response(&looping_sse)
+            } else {
+                fixtures::sse_response(&final_sse)
+            }
+        })
+        .expect(2)
+        .mount(&mock_server)
+        .await;
+
+    // `@high` leaves room to retry one level down.
+    run_exec_turn_with_model(
+        &zdx_home,
+        &temp_dir,
+        &mock_server.uri(),
+        thread_id,
+        "anthropic:claude-sonnet-5@high",
+        "write the thing",
+    );
+
+    let captured = bodies.lock().unwrap().clone();
+    assert_eq!(
+        captured.len(),
+        2,
+        "the looping attempt must be retried once"
+    );
+    assert!(
+        captured[0].contains(r#""effort":"high""#),
+        "first attempt should use the configured level; body={}",
+        captured[0]
+    );
+    assert!(
+        captured[1].contains(r#""effort":"medium""#),
+        "the retry should step one thinking level down; body={}",
+        captured[1]
+    );
+
+    // The turn completes (exit status is asserted by the runner) and the
+    // loop is reported in the thread so the user can see what happened.
+    let jsonl = fs::read_to_string(
+        zdx_home
+            .path()
+            .join("threads")
+            .join(format!("{thread_id}.jsonl")),
+    )
+    .expect("thread JSONL should exist");
+    assert!(
+        jsonl.contains(r#""kind":"output_loop""#)
+            && jsonl.contains("repeating itself in the answer"),
+        "the loop must be persisted as a notice; got:\n{jsonl}"
+    );
+    assert!(
+        jsonl.contains("Recovered answer."),
+        "the retry's answer should be what persists; got:\n{jsonl}"
+    );
+}
+
+/// A model that keeps re-issuing the same tool call against an unchanged
+/// result is stopped, reported, and retried once at a lower thinking level.
+#[tokio::test]
+async fn repeated_identical_tool_call_is_stopped_and_retried() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
+    let zdx_home = temp_zdx_home();
+    let temp_dir = TempDir::new().unwrap();
+    let thread_id = "tool-loop-retry";
+    fs::write(temp_dir.path().join("test.txt"), "Stable content.").unwrap();
+
+    let mock_server = MockServer::start().await;
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let call_count_clone = Arc::clone(&call_count);
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let bodies_clone = Arc::clone(&bodies);
+
+    // Every attempt asks for the same read of the same unchanged file, so the
+    // tool call and its result are identical each round.
+    let looping_sse = tool_use_sse("toolu_same", "read", r#"{"file_path": "test.txt"}"#);
+    let final_sse = text_sse("Recovered answer.");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(header("x-api-key", "test-api-key"))
+        .respond_with(move |req: &Request| {
+            let count = call_count_clone.fetch_add(1, Ordering::SeqCst);
+            bodies_clone
+                .lock()
+                .unwrap()
+                .push(String::from_utf8_lossy(&req.body).to_string());
+            if count < 3 {
+                fixtures::sse_response(&looping_sse)
+            } else {
+                fixtures::sse_response(&final_sse)
+            }
+        })
+        .expect(4)
+        .mount(&mock_server)
+        .await;
+
+    run_exec_turn_with_model(
+        &zdx_home,
+        &temp_dir,
+        &mock_server.uri(),
+        thread_id,
+        "anthropic:claude-sonnet-5@high",
+        "read it",
+    );
+
+    let captured = bodies.lock().unwrap().clone();
+    assert_eq!(
+        captured.len(),
+        4,
+        "three identical tool turns then one retry"
+    );
+    assert!(
+        captured[3].contains(r#""effort":"medium""#),
+        "the retry should step one thinking level down; body={}",
+        captured[3]
+    );
+
+    let jsonl = fs::read_to_string(
+        zdx_home
+            .path()
+            .join("threads")
+            .join(format!("{thread_id}.jsonl")),
+    )
+    .expect("thread JSONL should exist");
+    assert!(
+        jsonl.contains(r#""kind":"output_loop""#) && jsonl.contains("same tool call"),
+        "the tool loop must be persisted as a notice; got:\n{jsonl}"
+    );
+}
+
+/// With no lower thinking level to retry to, a loop closes the turn normally
+/// with a notice instead of failing it.
+#[tokio::test]
+async fn tool_loop_without_a_lower_level_closes_the_turn_with_a_notice() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
+    let zdx_home = temp_zdx_home();
+    let temp_dir = TempDir::new().unwrap();
+    let thread_id = "tool-loop-no-retry";
+    fs::write(temp_dir.path().join("test.txt"), "Stable content.").unwrap();
+
+    let mock_server = MockServer::start().await;
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let call_count_clone = Arc::clone(&call_count);
+    let looping_sse = tool_use_sse("toolu_same", "read", r#"{"file_path": "test.txt"}"#);
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(header("x-api-key", "test-api-key"))
+        .respond_with(move |_req: &Request| {
+            call_count_clone.fetch_add(1, Ordering::SeqCst);
+            fixtures::sse_response(&looping_sse)
+        })
+        .mount(&mock_server)
+        .await;
+
+    // `@low` is the bottom of the ladder: the guard has nothing to lower to.
+    run_exec_turn_with_model(
+        &zdx_home,
+        &temp_dir,
+        &mock_server.uri(),
+        thread_id,
+        "anthropic:claude-sonnet-5@low",
+        "read it",
+    );
+
+    assert_eq!(
+        call_count.load(Ordering::SeqCst),
+        3,
+        "the turn should stop after the third identical tool call"
+    );
+
+    let jsonl = fs::read_to_string(
+        zdx_home
+            .path()
+            .join("threads")
+            .join(format!("{thread_id}.jsonl")),
+    )
+    .expect("thread JSONL should exist");
+    assert!(
+        jsonl.contains(r#""kind":"output_loop""#) && jsonl.contains("same tool call"),
+        "the loop must be persisted as a notice; got:\n{jsonl}"
+    );
+}
+
+/// Real runaway content captured from live threads, trimmed to the prefix up to
+/// just past the point where the guard fires.
+///
+/// Each fixture comes from an observed turn where the model ran to its full
+/// output-token limit producing nothing but filler: three reasoning loops and
+/// one answer-text loop. The degenerate filler tail ("Let me run." / "Let me
+/// go." / "Emit." ...) is the real model output, byte for byte. Only the varied
+/// preamble ahead of it is rewritten: each line is replaced by a synthetic
+/// ASCII line of the *same byte length*, so the fixture reproduces the real trip
+/// dynamics (an identical trip offset) without carrying the surrounding
+/// project content. Each cut ends shortly past the guard's trip point, since
+/// nothing beyond it is ever read.
+struct LoopFixture {
+    /// Fixture file name under `fixtures/loop`.
+    file: &'static str,
+    /// Streamed as a reasoning block, or as visible answer text.
+    as_reasoning: bool,
+    /// Byte offset at which the guard fires on the real record, and therefore
+    /// on this fixture.
+    trip_bytes: usize,
+    /// Distinguishes which guard fired, via the notice message.
+    notice_fragment: &'static str,
+}
+
+const LOOP_FIXTURES: &[LoopFixture] = &[
+    LoopFixture {
+        file: "reasoning_loop_a",
+        as_reasoning: true,
+        trip_bytes: 7_475,
+        notice_fragment: "repeating itself in reasoning",
+    },
+    LoopFixture {
+        file: "reasoning_loop_b",
+        as_reasoning: true,
+        trip_bytes: 7_288,
+        notice_fragment: "repeating itself in reasoning",
+    },
+    LoopFixture {
+        file: "reasoning_loop_c",
+        as_reasoning: true,
+        trip_bytes: 7_914,
+        notice_fragment: "repeating itself in reasoning",
+    },
+    LoopFixture {
+        file: "answer_loop_d",
+        as_reasoning: false,
+        trip_bytes: 7_694,
+        notice_fragment: "repeating itself in the answer",
+    },
+];
+
+/// Delta size the fixture is streamed in. The guard is evaluated per delta, so
+/// the trip lands on the first chunk boundary at or after the real offset.
+const LOOP_FIXTURE_CHUNK: usize = 256;
+
+/// Chunks a fixture on character boundaries, so a multi-byte character is never
+/// split across two deltas.
+fn chunk_on_char_boundaries(text: &str, chunk: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        current.push(ch);
+        if current.len() >= chunk {
+            out.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+/// SSE that streams `content` as one reasoning or text block, in deltas.
+fn looping_content_sse(content: &str, as_reasoning: bool) -> String {
+    let (start, delta_type, field) = if as_reasoning {
+        ("thinking", "thinking_delta", "thinking")
+    } else {
+        ("text", "text_delta", "text")
+    };
+    let mut sse = format!(
+        "event: message_start\n\
+         data: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_loop\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-5\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{{\"input_tokens\":10,\"output_tokens\":1}}}}}}\n\n\
+         event: content_block_start\n\
+         data: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"{start}\"}}}}\n\n"
+    );
+    for piece in chunk_on_char_boundaries(content, LOOP_FIXTURE_CHUNK) {
+        sse.push_str(&format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"{delta_type}\",\"{field}\":{}}}}}\n\n",
+            serde_json::Value::String(piece)
+        ));
+    }
+    sse.push_str(
+        "event: content_block_stop\n\
+         data: {\"type\":\"content_block_stop\",\"index\":0}\n\n\
+         event: message_delta\n\
+         data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":5}}\n\n\
+         event: message_stop\n\
+         data: {\"type\":\"message_stop\"}\n\n",
+    );
+    sse
+}
+
+fn loop_fixture(fixture: &LoopFixture) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/integration/fixtures/loop")
+        .join(format!("{}.txt", fixture.file));
+    fs::read_to_string(&path).unwrap_or_else(|e| panic!("read fixture {}: {e}", path.display()))
+}
+
+/// Recovers how much content had streamed when the guard fired, from the
+/// truncation marker the engine leaves in the persisted block.
+fn truncated_byte_count(thread_jsonl: &str) -> Option<usize> {
+    for line in thread_jsonl.lines() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if event.get("type").and_then(|v| v.as_str()) != Some("reasoning")
+            && event.get("role").and_then(|v| v.as_str()) != Some("assistant")
+        {
+            continue;
+        }
+        let Some(text) = event.get("text").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(rest) = text.split("... (").nth(1) else {
+            continue;
+        };
+        let Some(count) = rest.split(" bytes truncated)").next() else {
+            continue;
+        };
+        if let Ok(n) = count.parse::<usize>() {
+            // `truncate_middle` keeps a 2k head and a 2k tail, so the marker
+            // reports `total - 4000`.
+            return Some(n + 4_000);
+        }
+    }
+    None
+}
+
+/// Each real runaway is stopped by the guard within its first ~8 KB — a few
+/// seconds of generation — rather than running to the 160k-byte budget (or the
+/// model's full 384k-token output limit). Run at `@low`, the bottom of the
+/// thinking ladder, so no retry is available and the truncated block is what
+/// persists.
+#[tokio::test]
+async fn real_runaway_content_trips_the_guard_early() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
+
+    for fixture in LOOP_FIXTURES {
+        let zdx_home = temp_zdx_home();
+        let temp_dir = TempDir::new().unwrap();
+        let thread_id = format!("loop-{}", fixture.file);
+        let content = loop_fixture(fixture);
+        let looping_sse = looping_content_sse(&content, fixture.as_reasoning);
+
+        let mock_server = MockServer::start().await;
+        let final_sse = text_sse("Recovered.");
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("x-api-key", "test-api-key"))
+            .respond_with(move |_req: &Request| fixtures::sse_response(&looping_sse))
+            .mount(&mock_server)
+            .await;
+        let _ = final_sse;
+
+        run_exec_turn_with_model(
+            &zdx_home,
+            &temp_dir,
+            &mock_server.uri(),
+            &thread_id,
+            "anthropic:claude-sonnet-5@low",
+            "keep going",
+        );
+
+        let jsonl = fs::read_to_string(
+            zdx_home
+                .path()
+                .join("threads")
+                .join(format!("{thread_id}.jsonl")),
+        )
+        .unwrap_or_else(|e| panic!("thread JSONL for {}: {e}", fixture.file));
+
+        assert!(
+            jsonl.contains(r#""kind":"output_loop""#) && jsonl.contains(fixture.notice_fragment),
+            "{} should close with an output_loop notice; got:\n{jsonl}",
+            fixture.file
+        );
+
+        let streamed = truncated_byte_count(&jsonl).unwrap_or_else(|| {
+            panic!(
+                "{} should persist a truncated block; got:\n{jsonl}",
+                fixture.file
+            )
+        });
+
+        // The guard fires on the first chunk boundary at or after the real
+        // offset, and never on the 160k-byte budget.
+        assert!(
+            streamed >= fixture.trip_bytes && streamed < fixture.trip_bytes + LOOP_FIXTURE_CHUNK,
+            "{} tripped at {streamed} bytes, expected [{}, {})",
+            fixture.file,
+            fixture.trip_bytes,
+            fixture.trip_bytes + LOOP_FIXTURE_CHUNK
+        );
+        assert!(
+            streamed < 160_000,
+            "{} must trip on the repetition pattern, not the budget",
+            fixture.file
+        );
+    }
+}
+
+/// The same real content, with a retry available, is retried once one thinking
+/// level down — reasoning loop and answer loop both.
+#[tokio::test]
+async fn real_runaway_content_is_retried_at_a_lower_thinking_level() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
+
+    for fixture in [&LOOP_FIXTURES[0], &LOOP_FIXTURES[3]] {
+        let zdx_home = temp_zdx_home();
+        let temp_dir = TempDir::new().unwrap();
+        let thread_id = format!("loop-retry-{}", fixture.file);
+        let content = loop_fixture(fixture);
+        let looping_sse = looping_content_sse(&content, fixture.as_reasoning);
+        let final_sse = text_sse("Recovered.");
+
+        let mock_server = MockServer::start().await;
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let call_count_clone = Arc::clone(&call_count);
+        let bodies = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let bodies_clone = Arc::clone(&bodies);
+
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("x-api-key", "test-api-key"))
+            .respond_with(move |req: &Request| {
+                let n = call_count_clone.fetch_add(1, Ordering::SeqCst);
+                bodies_clone
+                    .lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&req.body).to_string());
+                if n == 0 {
+                    fixtures::sse_response(&looping_sse)
+                } else {
+                    fixtures::sse_response(&final_sse)
+                }
+            })
+            .expect(2)
+            .mount(&mock_server)
+            .await;
+
+        run_exec_turn_with_model(
+            &zdx_home,
+            &temp_dir,
+            &mock_server.uri(),
+            &thread_id,
+            "anthropic:claude-sonnet-5@high",
+            "keep going",
+        );
+
+        let captured = bodies.lock().unwrap().clone();
+        assert_eq!(
+            captured.len(),
+            2,
+            "{} should be retried exactly once",
+            fixture.file
+        );
+        assert!(
+            captured[0].contains(r#""effort":"high""#)
+                && captured[1].contains(r#""effort":"medium""#),
+            "{} retry should step one level down; second body={}",
+            fixture.file,
+            captured[1]
+        );
+
+        let jsonl = fs::read_to_string(
+            zdx_home
+                .path()
+                .join("threads")
+                .join(format!("{thread_id}.jsonl")),
+        )
+        .unwrap_or_else(|e| panic!("thread JSONL for {}: {e}", fixture.file));
+        assert!(
+            jsonl.contains(r#""kind":"output_loop""#)
+                && jsonl.contains("Retrying once at thinking level")
+                && jsonl.contains("Recovered."),
+            "{} should announce the retry and persist its answer; got:\n{jsonl}",
+            fixture.file
+        );
+    }
+}
