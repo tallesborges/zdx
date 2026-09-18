@@ -443,6 +443,15 @@ impl Tool for Bash {
                 return background::run_background(&input, &ctx).await;
             }
 
+            // Foreground commands are auto-backgrounded rather than killed when
+            // they outrun their bound; this supplies the registry hooks needed
+            // if that happens.
+            #[cfg(unix)]
+            let handoff = input
+                .get("command")
+                .and_then(Value::as_str)
+                .and_then(|command| background::prepare_handoff(command, &ctx));
+
             let event_sender = ctx.event_sender.clone();
             let tool_use_id = ctx.tool_use_id.clone();
 
@@ -453,7 +462,14 @@ impl Tool for Bash {
                 let timeout = ctx.timeout;
 
                 tokio::join!(
-                    bash::execute(&input, &leaf, timeout, Some(output_tx)),
+                    bash::execute(
+                        &input,
+                        &leaf,
+                        timeout,
+                        Some(output_tx),
+                        #[cfg(unix)]
+                        handoff
+                    ),
                     async {
                         while let Some(chunk) = output_rx.recv().await {
                             sender.send(AgentEvent::ToolOutputDelta {
@@ -465,7 +481,15 @@ impl Tool for Bash {
                 )
                 .0
             } else {
-                bash::execute(&input, &ctx.as_leaf(), ctx.timeout, None).await
+                bash::execute(
+                    &input,
+                    &ctx.as_leaf(),
+                    ctx.timeout,
+                    None,
+                    #[cfg(unix)]
+                    handoff,
+                )
+                .await
             }
         })
     }

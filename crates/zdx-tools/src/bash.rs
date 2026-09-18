@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use super::{ToolContext, ToolDefinition, ToolOutput};
 #[cfg(unix)]
-use crate::process_supervisor::{SupervisedCommand, WaitReason};
+use crate::process_supervisor::{BoundedWait, SupervisedChild, SupervisedCommand, WaitReason};
 
 /// Maximum bytes per output stream (stdout/stderr) before truncation.
 const MAX_OUTPUT_BYTES: usize = 40 * 1024; // 40KB
@@ -48,7 +48,7 @@ fn write_temp_file(bytes: &[u8], stream_name: &str) -> Option<String> {
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Bash".to_string(),
-        description: "Run shell and CLI workflows whose capability no dedicated tool provides: builds, tests, version control, package managers, other CLIs, and work on those commands' own output. Reading, discovering, and searching files is covered by the dedicated tools, which return structured, ignore-aware, paginated results; scoping or limiting such a result is part of that same capability. Long-lived commands use background mode, and truncated output can be inspected with Read."
+        description: "Run shell and CLI workflows whose capability no dedicated tool provides: builds, tests, version control, package managers, other CLIs, and work on those commands' own output. Reading, discovering, and searching files is covered by the dedicated tools, which return structured, ignore-aware, paginated results; scoping or limiting such a result is part of that same capability. A foreground command that is still running after the foreground bound is not killed: it is moved to the background and the result comes back with backgrounded: true and a bg_id to poll with background_output. Long-lived commands use background mode, and truncated output can be inspected with Read."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -60,7 +60,7 @@ pub fn definition() -> ToolDefinition {
                 "timeout_secs": {
                     "type": "integer",
                     "minimum": 0,
-                    "description": "Optional timeout in seconds. Omit it for no timeout. For a command that never exits, use background: true instead."
+                    "description": "Optional hard kill deadline in seconds. Omit it unless the command must be killed rather than allowed to finish: without it, a command that outruns the foreground bound keeps running in the background instead of being terminated. For a command that never exits, use background: true instead."
                 },
                 "background": {
                     "type": "boolean",
@@ -111,6 +111,130 @@ pub struct BashOutput {
     pub stderr_file: Option<String>,
 }
 
+/// Auto-background handoff parameters for a foreground command.
+///
+/// Supplied by the engine, which owns the background registry, its log paths,
+/// and the marker lifecycle. When `bound` elapses with the command still
+/// running, the command is **moved to the background, never killed**.
+#[cfg(unix)]
+pub struct Handoff {
+    /// How long the command may run in the foreground before being handed off.
+    /// This is a relocation bound, not a deadline.
+    pub bound: Duration,
+    /// Background id the adopted job is registered under.
+    pub bg_id: String,
+    /// Append-mode log the command's stdout continues into after handoff.
+    pub stdout_log: std::path::PathBuf,
+    /// Append-mode log the command's stderr continues into after handoff.
+    pub stderr_log: std::path::PathBuf,
+    /// Registers the now-background job. Returns `false` when bookkeeping
+    /// failed, which is reported as `tracking_failed` and never kills the job.
+    pub on_adopt: Box<dyn FnOnce(crate::process_supervisor::TargetIdentity) -> bool + Send>,
+    /// Records the job's exit once it ends.
+    pub on_exit: crate::adopted::OnExit,
+}
+
+/// Result of a command that outran its foreground bound and was moved to the
+/// background. The command is still running.
+#[cfg(unix)]
+#[derive(Debug)]
+pub struct BackgroundedOutput {
+    pub bg_id: String,
+    pub pid: u32,
+    pub pgid: i32,
+    pub elapsed_secs: u64,
+    pub stdout: String,
+    pub stderr: String,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
+    pub stdout_total_bytes: usize,
+    pub stderr_total_bytes: usize,
+    pub stdout_file: Option<String>,
+    pub stderr_file: Option<String>,
+    pub stdout_log: String,
+    pub stderr_log: String,
+    /// The job runs and is killable, but could not be recorded in the registry.
+    pub tracking_failed: bool,
+}
+
+/// How a foreground command ended.
+pub enum CommandOutcome {
+    /// The command reached a terminal state (exit, timeout kill, …).
+    Completed(BashOutput),
+    /// The command outran its foreground bound and is still running in the
+    /// background.
+    #[cfg(unix)]
+    Backgrounded(Box<BackgroundedOutput>),
+}
+
+impl CommandOutcome {
+    #[must_use]
+    pub fn into_tool_output(self) -> ToolOutput {
+        match self {
+            Self::Completed(output) => output.into_tool_output(),
+            #[cfg(unix)]
+            Self::Backgrounded(output) => output.into_tool_output(),
+        }
+    }
+}
+
+#[cfg(unix)]
+impl BackgroundedOutput {
+    fn message(&self) -> String {
+        let mut message = format!(
+            "Command did not complete within its {}s foreground bound and was moved to the \
+             background ({}). It is still running — do NOT re-run it. Read its output with \
+             background_output (bg_id \"{}\") and stop it with background_kill. Status \"running\" \
+             with no new output does NOT mean it is stuck or finished.",
+            self.elapsed_secs, self.bg_id, self.bg_id
+        );
+        if self.tracking_failed {
+            message.push_str(
+                " Note: this job could not be recorded in the background registry, so \
+                 background_output and background_kill will not find it; it is running as pid ",
+            );
+            message.push_str(&self.pid.to_string());
+            message.push('.');
+        }
+        message
+    }
+
+    /// Converts to structured envelope format.
+    #[must_use]
+    pub fn into_tool_output(self) -> ToolOutput {
+        let message = self.message();
+        let mut data = json!({
+            "backgrounded": true,
+            "bg_id": self.bg_id,
+            "pid": self.pid,
+            "pgid": self.pgid,
+            "status": "running",
+            "exit_code": Value::Null,
+            "timed_out": false,
+            "elapsed_secs": self.elapsed_secs,
+            "stdout": self.stdout,
+            "stderr": self.stderr,
+            "stdout_truncated": self.stdout_truncated,
+            "stderr_truncated": self.stderr_truncated,
+            "stdout_total_bytes": self.stdout_total_bytes,
+            "stderr_total_bytes": self.stderr_total_bytes,
+            "stdout_log": self.stdout_log,
+            "stderr_log": self.stderr_log,
+            "message": message,
+        });
+        if self.tracking_failed {
+            data["tracking_failed"] = json!(true);
+        }
+        if let Some(path) = self.stdout_file {
+            data["stdout_file"] = json!(path);
+        }
+        if let Some(path) = self.stderr_file {
+            data["stderr_file"] = json!(path);
+        }
+        ToolOutput::success(data)
+    }
+}
+
 impl BashOutput {
     /// Converts to structured envelope format.
     pub fn into_tool_output(self) -> ToolOutput {
@@ -142,11 +266,18 @@ impl BashOutput {
 /// If `output_tx` is provided, stdout/stderr lines are streamed through the
 /// channel as they arrive. Ownership is taken so the channel closes when this
 /// function completes.
+///
+/// `handoff` enables auto-backgrounding: when the command outruns its
+/// foreground bound it is moved to the background instead of being killed, and
+/// the returned envelope carries `backgrounded: true` plus a `bg_id`. An
+/// explicit `timeout_secs` is a kill deadline and takes precedence, so the two
+/// never both apply.
 pub async fn execute(
     input: &Value,
     ctx: &ToolContext,
     timeout: Option<Duration>,
     output_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    #[cfg(unix)] handoff: Option<Handoff>,
 ) -> ToolOutput {
     let input: BashInput = match serde_json::from_value(input.clone()) {
         Ok(i) => i,
@@ -165,8 +296,22 @@ pub async fn execute(
 
     let timeout = resolve_timeout(input.timeout_secs, timeout);
 
-    match run_command(&input.command, ctx, timeout, output_tx).await {
-        Ok(output) => output.into_tool_output(),
+    // An explicit kill deadline and a relocation bound are different intents;
+    // the deadline the caller asked for wins.
+    #[cfg(unix)]
+    let handoff = if timeout.is_some() { None } else { handoff };
+
+    match run_command(
+        &input.command,
+        ctx,
+        timeout,
+        output_tx,
+        #[cfg(unix)]
+        handoff,
+    )
+    .await
+    {
+        Ok(outcome) => outcome.into_tool_output(),
         Err(e) => e,
     }
 }
@@ -174,7 +319,8 @@ pub async fn execute(
 /// Executes a bash command directly (convenience wrapper).
 ///
 /// This is a simpler API that takes the command string directly,
-/// useful for direct user invocation (e.g., `$` shortcut).
+/// useful for direct user invocation (e.g., `$` shortcut). Such commands are
+/// user-driven and are never auto-backgrounded.
 ///
 /// If `output_tx` is provided, stdout/stderr lines are streamed through the
 /// channel as they arrive.
@@ -190,8 +336,17 @@ pub async fn run(
 
     let timeout = resolve_timeout(None, timeout);
 
-    match run_command(command, ctx, timeout, output_tx).await {
-        Ok(output) => output.into_tool_output(),
+    match run_command(
+        command,
+        ctx,
+        timeout,
+        output_tx,
+        #[cfg(unix)]
+        None,
+    )
+    .await
+    {
+        Ok(outcome) => outcome.into_tool_output(),
         Err(e) => e,
     }
 }
@@ -267,19 +422,75 @@ pub fn spawn_background(
     Ok(BackgroundSpawn { child, pid })
 }
 
-/// Shared buffer type for stream reader tasks.
-type StreamBuffer = Arc<Mutex<Vec<u8>>>;
-
-/// Spawns a line-buffered reader task that appends lines to `buf` and forwards
-/// each line through `tx` (if set).
+/// Where one stream's lines go.
 ///
-/// The task owns its share of `buf` and `tx`; both are released on task exit,
-/// which lets bridges waiting on channel closure see EOF.
-fn spawn_stream_reader<H>(
-    handle: Option<H>,
+/// During the foreground wait a sink accumulates an in-memory tail and forwards
+/// each line to the engine's delta channel. An auto-background handoff flips it
+/// to append-mode log-file capture and stops the delta stream, so no output
+/// event can arrive after the tool call has completed.
+#[derive(Default)]
+struct SinkState {
+    buf: Vec<u8>,
     tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
-    buf: StreamBuffer,
-) -> tokio::task::JoinHandle<()>
+    log: Option<File>,
+    handed_off: bool,
+}
+
+/// Shared handle to one stream's sink.
+type StreamSink = Arc<Mutex<SinkState>>;
+
+fn new_sink(tx: Option<tokio::sync::mpsc::UnboundedSender<String>>) -> StreamSink {
+    Arc::new(Mutex::new(SinkState {
+        tx,
+        ..SinkState::default()
+    }))
+}
+
+fn push_line(sink: &StreamSink, line: &str) {
+    let Ok(mut state) = sink.lock() else { return };
+    if state.handed_off {
+        // After handoff the in-memory tail is frozen; lines go to the log when
+        // one could be opened, and are dropped otherwise rather than growing
+        // unbounded for a job nobody is waiting on.
+        if let Some(log) = state.log.as_mut() {
+            let _ = log.write_all(line.as_bytes());
+        }
+        return;
+    }
+    if let Some(tx) = state.tx.as_ref() {
+        let _ = tx.send(line.to_string());
+    }
+    state.buf.extend_from_slice(line.as_bytes());
+}
+
+/// Flips a sink to log-file capture and returns everything captured so far.
+///
+/// The pre-handoff bytes are flushed into the log first, so the log holds the
+/// complete stream, and are also returned for the tool result so partial output
+/// survives the handoff.
+#[cfg(unix)]
+fn hand_off_sink(sink: &StreamSink, log: Option<File>) -> Vec<u8> {
+    let Ok(mut state) = sink.lock() else {
+        return Vec::new();
+    };
+    let captured = std::mem::take(&mut state.buf);
+    if let Some(mut log) = log {
+        let _ = log.write_all(&captured);
+        let _ = log.flush();
+        state.log = Some(log);
+    }
+    state.tx = None;
+    state.handed_off = true;
+    captured
+}
+
+/// Spawns a line-buffered reader task that feeds `sink`.
+///
+/// The task owns its share of `sink`, which is released on task exit; that lets
+/// bridges waiting on channel closure see EOF. The task is deliberately not
+/// tied to the tool call: after a handoff its `JoinHandle` is dropped and the
+/// task keeps draining the pipe into the adopted job's log.
+fn spawn_stream_reader<H>(handle: Option<H>, sink: StreamSink) -> tokio::task::JoinHandle<()>
 where
     H: AsyncRead + Unpin + Send + 'static,
 {
@@ -291,14 +502,7 @@ where
             line.clear();
             match reader.read_line(&mut line).await {
                 Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    if let Some(ref tx) = tx {
-                        let _ = tx.send(line.clone());
-                    }
-                    if let Ok(mut guard) = buf.lock() {
-                        guard.extend_from_slice(line.as_bytes());
-                    }
-                }
+                Ok(_) => push_line(&sink, &line),
             }
         }
     })
@@ -311,7 +515,7 @@ where
 /// This prevents hangs when an orphan descendant inherits the pipe FDs and
 /// keeps the write-end open indefinitely. Partial output is preserved; only
 /// any unterminated fragment still inside `BufReader` is lost on abort.
-async fn finish_reader(mut task: tokio::task::JoinHandle<()>, buf: StreamBuffer) -> Vec<u8> {
+async fn finish_reader(mut task: tokio::task::JoinHandle<()>, sink: StreamSink) -> Vec<u8> {
     // Use select! with a sleep so we keep ownership of the JoinHandle on
     // expiry and can abort it — unlike tokio::time::timeout which consumes it.
     tokio::select! {
@@ -324,12 +528,9 @@ async fn finish_reader(mut task: tokio::task::JoinHandle<()>, buf: StreamBuffer)
         }
     }
 
-    // Extract the buffer. try_unwrap succeeds when no other Arc clones remain
-    // (normal case after the task ended); fall back to cloning under the lock.
-    Arc::try_unwrap(buf).map_or_else(
-        |arc| arc.lock().map(|g| g.clone()).unwrap_or_default(),
-        |m| m.into_inner().unwrap_or_default(),
-    )
+    sink.lock()
+        .map(|mut state| std::mem::take(&mut state.buf))
+        .unwrap_or_default()
 }
 
 /// Runs a shell command in the context's root directory.
@@ -339,7 +540,10 @@ async fn run_command(
     ctx: &ToolContext,
     timeout: Option<Duration>,
     output_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
-) -> Result<BashOutput, ToolOutput> {
+    #[cfg(unix)] handoff: Option<Handoff>,
+) -> Result<CommandOutcome, ToolOutput> {
+    let started = std::time::Instant::now();
+
     #[cfg(unix)]
     let mut child = {
         let mut cmd = SupervisedCommand::new("/bin/sh");
@@ -390,22 +594,24 @@ async fn run_command(
     let child_stdout = child.stdout.take();
     let child_stderr = child.stderr.take();
 
-    // Spawn stdout/stderr reader tasks. Shared Arc<Mutex<Vec<u8>>> buffers
-    // let us extract partial output even if we have to abort a task that's
-    // stuck on a pipe held open by an orphan descendant.
-    let stdout_buf: StreamBuffer = Arc::new(Mutex::new(Vec::new()));
-    let stderr_buf: StreamBuffer = Arc::new(Mutex::new(Vec::new()));
+    // Spawn stdout/stderr reader tasks. Shared sinks let us extract partial
+    // output even if we have to abort a task that's stuck on a pipe held open
+    // by an orphan descendant, and let an auto-background handoff redirect the
+    // still-running readers to log files.
+    let stdout_sink = new_sink(output_tx.clone());
+    let stderr_sink = new_sink(output_tx.clone());
 
-    let stdout_task = spawn_stream_reader(child_stdout, output_tx.clone(), Arc::clone(&stdout_buf));
-    let stderr_task = spawn_stream_reader(child_stderr, output_tx.clone(), Arc::clone(&stderr_buf));
+    let stdout_task = spawn_stream_reader(child_stdout, Arc::clone(&stdout_sink));
+    let stderr_task = spawn_stream_reader(child_stderr, Arc::clone(&stderr_sink));
 
-    // Wait for child exit, with optional timeout.
+    // Wait for child exit, with optional timeout and optional foreground bound.
     // Reader tasks run independently — they'll see EOF after the process exits
     // (or is killed on timeout).
     #[cfg(unix)]
     let (timed_out, cancelled, exit_code, left_leftovers) = {
+        let bound = handoff.as_ref().map(|handoff| handoff.bound);
         let outcome = child
-            .wait_with(ctx.cancel_token.as_ref(), timeout)
+            .wait_bounded(ctx.cancel_token.as_ref(), timeout, bound)
             .await
             .map_err(|err| {
                 ToolOutput::failure(
@@ -414,6 +620,28 @@ async fn run_command(
                     Some(err.to_string()),
                 )
             })?;
+
+        let outcome = match outcome {
+            BoundedWait::Finished(outcome) => outcome,
+            BoundedWait::Bounded => {
+                // The command keeps running: hand it off instead of killing it.
+                // Reader tasks are detached here and keep draining into logs.
+                drop(stdout_task);
+                drop(stderr_task);
+                let handoff = handoff.expect("a bound is only set alongside a handoff");
+                return Ok(CommandOutcome::Backgrounded(Box::new(
+                    hand_off_to_background(
+                        child,
+                        handoff,
+                        &stdout_sink,
+                        &stderr_sink,
+                        output_tx.as_ref(),
+                        started.elapsed(),
+                    ),
+                )));
+            }
+        };
+
         (
             outcome.reason == WaitReason::TimedOut,
             outcome.reason == WaitReason::Cancelled,
@@ -446,8 +674,8 @@ async fn run_command(
     // Finish readers with a bounded grace period and extract their buffers.
     // This applies on every exit path — even normal completion can leave pipes
     // open if a descendant inherited stdout/stderr and escaped the process group.
-    let stdout_buf = finish_reader(stdout_task, stdout_buf).await;
-    let stderr_buf = finish_reader(stderr_task, stderr_buf).await;
+    let stdout_buf = finish_reader(stdout_task, stdout_sink).await;
+    let stderr_buf = finish_reader(stderr_task, stderr_sink).await;
 
     // Apply truncation to accumulated buffers.
     let (stdout, stdout_truncated, stdout_total_bytes) =
@@ -484,7 +712,7 @@ async fn run_command(
         } else {
             format!("{stderr_text}\n{timeout_msg}")
         };
-        return Ok(BashOutput {
+        return Ok(CommandOutcome::Completed(BashOutput {
             stdout,
             stderr,
             exit_code: -1,
@@ -495,7 +723,7 @@ async fn run_command(
             stderr_total_bytes,
             stdout_file,
             stderr_file,
-        });
+        }));
     }
 
     let stderr = if left_leftovers {
@@ -509,7 +737,7 @@ async fn run_command(
         stderr_text
     };
 
-    Ok(BashOutput {
+    Ok(CommandOutcome::Completed(BashOutput {
         stdout,
         stderr,
         exit_code,
@@ -520,7 +748,87 @@ async fn run_command(
         stderr_total_bytes,
         stdout_file,
         stderr_file,
-    })
+    }))
+}
+
+/// Moves a still-running foreground command to the background.
+///
+/// The command is never signalled: the live supervised handle (lease,
+/// completion, process group) moves into the adopted-jobs registry, the stream
+/// sinks flip from the in-memory tail to append-mode logs, and the delta stream
+/// stops so no output event can follow the tool result.
+///
+/// Bookkeeping failures are non-fatal by design — a job we failed to record is
+/// still a job the user asked for, so it keeps running and is reported with
+/// `tracking_failed`.
+#[cfg(unix)]
+fn hand_off_to_background(
+    child: SupervisedChild,
+    handoff: Handoff,
+    stdout_sink: &StreamSink,
+    stderr_sink: &StreamSink,
+    output_tx: Option<&tokio::sync::mpsc::UnboundedSender<String>>,
+    elapsed: Duration,
+) -> BackgroundedOutput {
+    let Handoff {
+        bound: _,
+        bg_id,
+        stdout_log,
+        stderr_log,
+        on_adopt,
+        on_exit,
+    } = handoff;
+    let identity = child.identity;
+
+    let open_log = |path: &std::path::Path| {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(path)
+            .ok()
+    };
+    let stdout_buf = hand_off_sink(stdout_sink, open_log(&stdout_log));
+    let stderr_buf = hand_off_sink(stderr_sink, open_log(&stderr_log));
+
+    let tracking_failed = !on_adopt(identity);
+    crate::adopted::adopt(bg_id.clone(), child, on_exit);
+
+    let (stdout, stdout_truncated, stdout_total_bytes) =
+        super::truncate_bytes_to_byte_limit(&stdout_buf, MAX_OUTPUT_BYTES);
+    let (stderr, stderr_truncated, stderr_total_bytes) =
+        super::truncate_bytes_to_byte_limit(&stderr_buf, MAX_OUTPUT_BYTES);
+
+    let output = BackgroundedOutput {
+        bg_id,
+        pid: identity.pid,
+        pgid: identity.pgid,
+        elapsed_secs: elapsed.as_secs(),
+        stdout,
+        stderr,
+        stdout_truncated,
+        stderr_truncated,
+        stdout_total_bytes,
+        stderr_total_bytes,
+        stdout_file: stdout_truncated
+            .then(|| write_temp_file(&stdout_buf, "stdout"))
+            .flatten(),
+        stderr_file: stderr_truncated
+            .then(|| write_temp_file(&stderr_buf, "stderr"))
+            .flatten(),
+        stdout_log: stdout_log.to_string_lossy().into_owned(),
+        stderr_log: stderr_log.to_string_lossy().into_owned(),
+        tracking_failed,
+    };
+
+    // Surfaces streaming this tool's output see why it stopped. Sent before the
+    // tool result, so it cannot arrive after the call completes.
+    if let Some(tx) = output_tx {
+        let _ = tx.send(format!("{}\n", output.message()));
+    }
+
+    output
 }
 
 #[cfg(test)]
@@ -528,6 +836,24 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    /// `execute` with auto-backgrounding off, which is what every test that
+    /// isn't about the handoff wants.
+    async fn execute_plain(
+        input: &Value,
+        ctx: &ToolContext,
+        timeout: Option<Duration>,
+    ) -> ToolOutput {
+        execute(
+            input,
+            ctx,
+            timeout,
+            None,
+            #[cfg(unix)]
+            None,
+        )
+        .await
+    }
 
     #[cfg(unix)]
     #[tokio::test]
@@ -542,7 +868,7 @@ mod tests {
             "command": format!("sleep 30 & echo $! > {}", pidfile.display()),
         });
 
-        let result = execute(&input, &ctx, None, None).await;
+        let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
 
         let pid: i32 = std::fs::read_to_string(&pidfile)
@@ -575,7 +901,7 @@ mod tests {
             ),
         });
 
-        let task = tokio::spawn(async move { execute(&input, &ctx, None, None).await });
+        let task = tokio::spawn(async move { execute_plain(&input, &ctx, None).await });
         let pid: i32 = tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 if let Ok(raw) = std::fs::read_to_string(&pidfile)
@@ -623,7 +949,7 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"command": "echo hello"});
 
-        let result = execute(&input, &ctx, None, None).await;
+        let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
         assert!(data["stdout"].as_str().unwrap().contains("hello"));
@@ -639,7 +965,7 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"command": "echo error >&2"});
 
-        let result = execute(&input, &ctx, None, None).await;
+        let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
         assert!(data["stderr"].as_str().unwrap().contains("error"));
@@ -651,7 +977,7 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"command": "exit 42"});
 
-        let result = execute(&input, &ctx, None, None).await;
+        let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
         assert_eq!(data["exit_code"], 42);
@@ -665,7 +991,7 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"command": "ls"});
 
-        let result = execute(&input, &ctx, None, None).await;
+        let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
         assert!(data["stdout"].as_str().unwrap().contains("test.txt"));
@@ -677,7 +1003,7 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"command": "sleep 5"});
 
-        let result = execute(&input, &ctx, Some(Duration::from_millis(100)), None).await;
+        let result = execute_plain(&input, &ctx, Some(Duration::from_millis(100))).await;
         assert!(result.is_ok()); // timed_out is success with timed_out=true
         let data = result.data().expect("should have data");
         assert_eq!(data["timed_out"], true);
@@ -701,7 +1027,7 @@ mod tests {
         // LLMs sometimes pass timeout_secs as a string ("1" instead of 1).
         let input = json!({"command": "sleep 5", "timeout_secs": "1"});
 
-        let result = execute(&input, &ctx, None, None).await;
+        let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
         assert_eq!(data["timed_out"], true);
@@ -714,7 +1040,7 @@ mod tests {
         // "0" must disable the timeout the same way 0 does.
         let input = json!({"command": "echo ok", "timeout_secs": "0"});
 
-        let result = execute(&input, &ctx, Some(Duration::from_millis(1)), None).await;
+        let result = execute_plain(&input, &ctx, Some(Duration::from_millis(1))).await;
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
         assert_eq!(data["timed_out"], false);
@@ -728,7 +1054,7 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"wrong_field": "ls"});
 
-        let result = execute(&input, &ctx, None, None).await;
+        let result = execute_plain(&input, &ctx, None).await;
         assert!(!result.is_ok());
         let json_str = result.to_json_string();
         assert!(json_str.contains(r#""code":"invalid_input""#));
@@ -740,7 +1066,7 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"command": "   "});
 
-        let result = execute(&input, &ctx, None, None).await;
+        let result = execute_plain(&input, &ctx, None).await;
         assert!(!result.is_ok());
         let payload = serde_json::to_value(result).unwrap();
         assert_eq!(payload["error"]["code"], "invalid_input");
@@ -766,7 +1092,7 @@ mod tests {
         // Generate more than 40KB of output (50KB of 'x' characters)
         let input = json!({"command": "head -c 51200 /dev/zero | tr '\\0' 'x'"});
 
-        let result = execute(&input, &ctx, None, None).await;
+        let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
 
@@ -793,7 +1119,7 @@ mod tests {
         // Generate more than 40KB of stderr output (50KB)
         let input = json!({"command": "head -c 51200 /dev/zero | tr '\\0' 'y' >&2"});
 
-        let result = execute(&input, &ctx, None, None).await;
+        let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
 
@@ -820,7 +1146,7 @@ mod tests {
         // Generate less than 40KB of output (1KB)
         let input = json!({"command": "head -c 1024 /dev/zero | tr '\\0' 'z'"});
 
-        let result = execute(&input, &ctx, None, None).await;
+        let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
 
@@ -843,5 +1169,398 @@ mod tests {
 
         // Clean up
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// Auto-background handoff: a foreground command that outruns its bound is
+/// relocated, never killed.
+#[cfg(all(test, unix))]
+mod handoff_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use serde_json::{Value, json};
+    use tempfile::TempDir;
+
+    use super::*;
+
+    const UNSET: i64 = i64::MIN;
+
+    /// Captures what the engine would record, so tests can assert on the
+    /// registry hooks without depending on the engine crate.
+    struct Recorder {
+        dir: TempDir,
+        adopted: Arc<AtomicUsize>,
+        exit_code: Arc<AtomicI64>,
+        identity: Arc<Mutex<Option<crate::process_supervisor::TargetIdentity>>>,
+    }
+
+    impl Recorder {
+        fn new() -> Self {
+            Self {
+                dir: TempDir::new().unwrap(),
+                adopted: Arc::new(AtomicUsize::new(0)),
+                exit_code: Arc::new(AtomicI64::new(UNSET)),
+                identity: Arc::new(Mutex::new(None)),
+            }
+        }
+
+        fn stdout_log(&self) -> std::path::PathBuf {
+            self.dir.path().join("job.out")
+        }
+
+        fn stderr_log(&self) -> std::path::PathBuf {
+            self.dir.path().join("job.err")
+        }
+
+        fn handoff(&self, bound: Duration) -> Handoff {
+            let adopted = Arc::clone(&self.adopted);
+            let identity = Arc::clone(&self.identity);
+            let exit_code = Arc::clone(&self.exit_code);
+            Handoff {
+                bound,
+                bg_id: format!("bg-{}", Uuid::new_v4()),
+                stdout_log: self.stdout_log(),
+                stderr_log: self.stderr_log(),
+                on_adopt: Box::new(move |target| {
+                    *identity.lock().unwrap() = Some(target);
+                    adopted.fetch_add(1, Ordering::SeqCst);
+                    true
+                }),
+                on_exit: Box::new(move |code| {
+                    exit_code.store(code.map_or(-1, i64::from), Ordering::SeqCst);
+                }),
+            }
+        }
+
+        fn pid(&self) -> u32 {
+            self.identity.lock().unwrap().expect("adopted").pid
+        }
+
+        async fn await_exit(&self, budget: Duration) -> i64 {
+            tokio::time::timeout(budget, async {
+                loop {
+                    let code = self.exit_code.load(Ordering::SeqCst);
+                    if code != UNSET {
+                        return code;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("adopted job never reported an exit")
+        }
+    }
+
+    fn process_exists(pid: u32) -> bool {
+        if unsafe { libc::kill(pid as i32, 0) } == 0 {
+            return true;
+        }
+        std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+
+    async fn wait_until_gone(pid: u32) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while process_exists(pid) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("backgrounded target survived cleanup");
+    }
+
+    async fn run(input: &Value, root: &std::path::Path, handoff: Option<Handoff>) -> ToolOutput {
+        let ctx = ToolContext::new(root.to_path_buf(), None);
+        execute(input, &ctx, None, None, handoff).await
+    }
+
+    /// The core contract: at the bound the command is relocated, the result is
+    /// a success carrying a `bg_id` and the output captured so far, and the
+    /// process is still alive.
+    #[tokio::test]
+    async fn bound_moves_command_to_background_with_partial_output() {
+        let recorder = Recorder::new();
+        let temp = TempDir::new().unwrap();
+        let input = json!({"command": "echo first; echo early >&2; sleep 30"});
+
+        let result = run(
+            &input,
+            temp.path(),
+            Some(recorder.handoff(Duration::from_millis(300))),
+        )
+        .await;
+
+        assert!(result.is_ok(), "handoff is a success, not a failure");
+        let data = result.data().expect("should have data");
+        assert_eq!(data["backgrounded"], true);
+        assert_eq!(data["status"], "running");
+        assert_eq!(data["exit_code"], Value::Null);
+        assert_eq!(data["timed_out"], false);
+        assert!(data["bg_id"].as_str().unwrap().starts_with("bg-"));
+        assert!(data.get("tracking_failed").is_none());
+
+        // Output produced before the handoff survives into the result...
+        assert!(data["stdout"].as_str().unwrap().contains("first"));
+        assert!(data["stderr"].as_str().unwrap().contains("early"));
+        // ...and the model is told not to re-run it.
+        let message = data["message"].as_str().unwrap();
+        assert!(message.contains("moved to the background"), "{message}");
+        assert!(message.contains("do NOT re-run"), "{message}");
+        assert!(message.contains("background_output"), "{message}");
+
+        assert_eq!(recorder.adopted.load(Ordering::SeqCst), 1);
+        let pid = recorder.pid();
+        assert!(process_exists(pid), "handoff must not kill the command");
+
+        // The same bytes are also flushed to the log, so a later poll sees them.
+        let logged = std::fs::read_to_string(recorder.stdout_log()).unwrap();
+        assert!(
+            logged.contains("first"),
+            "log should hold pre-handoff output"
+        );
+
+        assert!(crate::adopted::terminate(data["bg_id"].as_str().unwrap()).await);
+        wait_until_gone(pid).await;
+    }
+
+    /// A command that keeps streaming past its bound must finish normally:
+    /// relocation moves the wait, not the work. This is the Cargo-build case.
+    #[tokio::test]
+    async fn streaming_command_completes_unharmed_after_handoff() {
+        let recorder = Recorder::new();
+        let temp = TempDir::new().unwrap();
+        // Emits well before, across, and after the bound, then exits non-zero
+        // so both the completion and its real status have to survive.
+        let input = json!({
+            "command": "for i in 1 2 3 4 5 6; do echo line-$i; sleep 0.2; done; exit 5"
+        });
+
+        let result = run(
+            &input,
+            temp.path(),
+            Some(recorder.handoff(Duration::from_millis(400))),
+        )
+        .await;
+        let data = result.data().expect("should have data");
+        assert_eq!(data["backgrounded"], true);
+
+        assert_eq!(recorder.await_exit(Duration::from_secs(15)).await, 5);
+
+        // Every line is in the log: the ones captured before the handoff were
+        // flushed into it, and the rest were appended by the same readers.
+        let logged = std::fs::read_to_string(recorder.stdout_log()).unwrap();
+        for i in 1..=6 {
+            assert!(logged.contains(&format!("line-{i}")), "log was: {logged}");
+        }
+        wait_until_gone(recorder.pid()).await;
+    }
+
+    /// Killing an adopted job routes through the lease and leaves nothing
+    /// behind, even for a target that ignores SIGTERM.
+    #[tokio::test]
+    async fn adopted_job_is_cancellable_and_leaves_no_orphan() {
+        let recorder = Recorder::new();
+        let temp = TempDir::new().unwrap();
+        let input = json!({"command": "trap '' TERM; echo up; while :; do sleep 1; done"});
+
+        let result = run(
+            &input,
+            temp.path(),
+            Some(recorder.handoff(Duration::from_millis(300))),
+        )
+        .await;
+        let data = result.data().expect("should have data");
+        let bg_id = data["bg_id"].as_str().unwrap();
+        let pid = recorder.pid();
+
+        assert!(crate::adopted::terminate(bg_id).await);
+        wait_until_gone(pid).await;
+        assert!(!crate::adopted::is_adopted(bg_id));
+        // The exit is still recorded, so the registry can be tombstoned.
+        recorder.await_exit(Duration::from_secs(5)).await;
+    }
+
+    /// An explicit `timeout_secs` is a kill deadline and must keep killing:
+    /// the bound never silently converts it into a relocation.
+    #[tokio::test]
+    async fn explicit_timeout_still_kills_and_never_backgrounds() {
+        let recorder = Recorder::new();
+        let temp = TempDir::new().unwrap();
+        let input = json!({"command": "sleep 30", "timeout_secs": 1});
+
+        let result = run(
+            &input,
+            temp.path(),
+            // A bound far shorter than the timeout: if precedence were wrong
+            // this would background instead of killing.
+            Some(recorder.handoff(Duration::from_millis(200))),
+        )
+        .await;
+
+        let data = result.data().expect("should have data");
+        assert_eq!(data["timed_out"], true);
+        assert!(data.get("backgrounded").is_none());
+        assert_eq!(recorder.adopted.load(Ordering::SeqCst), 0);
+        assert!(
+            data["stderr"]
+                .as_str()
+                .unwrap()
+                .contains("background: true"),
+            "timeout should still recommend background: true"
+        );
+    }
+
+    /// Without a handoff the foreground wait is unbounded, as before.
+    #[tokio::test]
+    async fn no_handoff_keeps_waiting_in_the_foreground() {
+        let temp = TempDir::new().unwrap();
+        let input = json!({"command": "sleep 0.5; echo done"});
+
+        let result = run(&input, temp.path(), None).await;
+        let data = result.data().expect("should have data");
+        assert!(data.get("backgrounded").is_none());
+        assert_eq!(data["exit_code"], 0);
+        assert!(data["stdout"].as_str().unwrap().contains("done"));
+    }
+
+    /// A command that finishes inside its bound is completely unaffected.
+    #[tokio::test]
+    async fn fast_command_is_not_backgrounded() {
+        let recorder = Recorder::new();
+        let temp = TempDir::new().unwrap();
+        let input = json!({"command": "echo quick"});
+
+        let result = run(
+            &input,
+            temp.path(),
+            Some(recorder.handoff(Duration::from_secs(30))),
+        )
+        .await;
+
+        let data = result.data().expect("should have data");
+        assert!(data.get("backgrounded").is_none());
+        assert_eq!(data["exit_code"], 0);
+        assert!(data["stdout"].as_str().unwrap().contains("quick"));
+        assert_eq!(recorder.adopted.load(Ordering::SeqCst), 0);
+        assert!(
+            !recorder.stdout_log().exists(),
+            "a command that never backgrounds must not create a log"
+        );
+    }
+
+    /// Bookkeeping failure must never cost the user their running command.
+    #[tokio::test]
+    async fn failed_registration_keeps_the_job_running() {
+        let recorder = Recorder::new();
+        let temp = TempDir::new().unwrap();
+        let mut handoff = recorder.handoff(Duration::from_millis(300));
+        handoff.on_adopt = Box::new(|_| false);
+
+        let input = json!({"command": "sleep 30"});
+        let result = run(&input, temp.path(), Some(handoff)).await;
+
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+        assert_eq!(data["backgrounded"], true);
+        assert_eq!(data["tracking_failed"], true);
+        let pid = u32::try_from(data["pid"].as_u64().unwrap()).unwrap();
+        assert!(
+            process_exists(pid),
+            "a job we failed to record must live on"
+        );
+
+        assert!(crate::adopted::terminate(data["bg_id"].as_str().unwrap()).await);
+        wait_until_gone(pid).await;
+    }
+
+    /// After a handoff the delta channel must close, or the engine's streaming
+    /// bridge would wait forever on a tool call that already returned. The
+    /// relocation notice is the last chunk, sent before the result.
+    #[tokio::test]
+    async fn handoff_closes_the_streaming_channel() {
+        let recorder = Recorder::new();
+        let temp = TempDir::new().unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"command": "echo streamed; sleep 30"});
+
+        let (result, chunks) = tokio::join!(
+            execute(
+                &input,
+                &ctx,
+                None,
+                Some(tx),
+                Some(recorder.handoff(Duration::from_millis(300))),
+            ),
+            async {
+                let mut chunks = Vec::new();
+                // Returns only once every sender is dropped.
+                while let Some(chunk) = rx.recv().await {
+                    chunks.push(chunk);
+                }
+                chunks
+            }
+        );
+
+        let data = result.data().expect("should have data");
+        assert_eq!(data["backgrounded"], true);
+        let joined = chunks.join("");
+        assert!(joined.contains("streamed"), "streamed lines: {joined}");
+        assert!(
+            joined.contains("moved to the background"),
+            "surfaces should be told why streaming stopped: {joined}"
+        );
+
+        let pid = recorder.pid();
+        assert!(crate::adopted::terminate(data["bg_id"].as_str().unwrap()).await);
+        wait_until_gone(pid).await;
+    }
+
+    /// Regression for the 2026-09-18 incident: an unscoped recursive grep whose
+    /// `head -20` never caps the scan blocked a turn for 487s. Reproduced on an
+    /// isolated fixture only — never against a real workspace.
+    ///
+    /// The fixture mirrors the incident's shape (a heavy build-output directory
+    /// that `--include=*` drags in) and adds a FIFO so the walk cannot finish,
+    /// which makes "outruns the bound" deterministic instead of load-dependent.
+    #[tokio::test]
+    async fn unscoped_recursive_grep_is_relocated_not_killed() {
+        let recorder = Recorder::new();
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        std::fs::write(root.join("spec.md"), "FR-005 must hold\n").unwrap();
+        let build = root.join("target/debug/deps");
+        std::fs::create_dir_all(&build).unwrap();
+        for i in 0..64 {
+            std::fs::write(build.join(format!("lib-{i}.rlib")), b"\0\0FR-005\0\0").unwrap();
+        }
+
+        // Blocks the walk indefinitely: grep opens the FIFO and waits on a
+        // writer that never comes.
+        let fifo = std::ffi::CString::new(root.join("pipe.sock").to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+
+        let input = json!({
+            "command": r#"grep -rn "FR-005" --include=* . 2>/dev/null | grep -v "/build/" | head -20"#
+        });
+        let result = run(
+            &input,
+            root,
+            Some(recorder.handoff(Duration::from_millis(500))),
+        )
+        .await;
+
+        let data = result.data().expect("should have data");
+        assert_eq!(
+            data["backgrounded"], true,
+            "an unscoped grep that outruns the bound must be relocated"
+        );
+        let pid = recorder.pid();
+        assert!(process_exists(pid), "relocation must not kill the scan");
+
+        assert!(crate::adopted::terminate(data["bg_id"].as_str().unwrap()).await);
+        wait_until_gone(pid).await;
     }
 }

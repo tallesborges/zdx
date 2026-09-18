@@ -29,6 +29,20 @@ use crate::proc_liveness::{Liveness, current_birth, current_pgid, liveness};
 /// output / exit-code reads still work after the process ends.
 const TOMBSTONE_RETENTION: Duration = Duration::from_mins(5);
 
+/// How a background process is owned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundMode {
+    /// Spawned detached via `background: true`. Has no lease and intentionally
+    /// outlives the zdx process that started it.
+    #[default]
+    Detached,
+    /// A foreground command moved to the background when its foreground bound
+    /// expired. Still held by this process's supervisor lease, so it is
+    /// session-scoped and is terminated when zdx exits.
+    Adopted,
+}
+
 /// One background-process record, persisted as a marker JSON file.
 ///
 /// `exited_at.is_none()` means the process is considered running; once set it
@@ -47,6 +61,9 @@ pub struct BackgroundProcess {
     pub command: String,
     pub cwd: String,
     pub started_at: String,
+    /// How the process is owned; decides which termination path applies.
+    #[serde(default)]
+    pub mode: BackgroundMode,
     /// RFC 3339 exit timestamp; `None` while running.
     #[serde(default)]
     pub exited_at: Option<String>,
@@ -241,11 +258,17 @@ pub fn mark_exited(bg_id: &str, code: Option<i32>) {
     }
 }
 
-/// Terminates a background process by id, with a PID-reuse identity guard.
+/// Terminates a background process by id.
 ///
-/// Only signals when the live process still matches the recorded
-/// `pid + birth_id + pgid`. Sends `SIGTERM`, waits a short grace, then
-/// `SIGKILL`, and tombstones the record on confirmed exit.
+/// An adopted job (a foreground command moved to the background) is stopped by
+/// closing its supervisor lease, which is authoritative about target identity —
+/// no PID-reuse guard is needed, and the supervisor performs the TERM → grace →
+/// KILL → group sweep itself.
+///
+/// Otherwise the process is detached and is signalled directly, with a
+/// PID-reuse identity guard: we only signal when the live process still matches
+/// the recorded `pid + birth_id + pgid`. Sends `SIGTERM`, waits a short grace,
+/// then `SIGKILL`, and tombstones the record on confirmed exit.
 pub async fn kill_background(bg_id: &str) -> KillOutcome {
     tracing::debug!(bg_id, "Background kill requested");
     let Some(mut rec) = get(bg_id) else {
@@ -253,6 +276,14 @@ pub async fn kill_background(bg_id: &str) -> KillOutcome {
     };
     if !rec.is_running() {
         return KillOutcome::AlreadyExited;
+    }
+
+    // Adopted jobs are only adopted in the process that owns their lease; in
+    // any other process this falls through to the signalling path below.
+    #[cfg(unix)]
+    if zdx_tools::adopted::terminate(bg_id).await {
+        tombstone(&mut rec);
+        return KillOutcome::Killed;
     }
 
     match ownership(&rec) {
@@ -393,9 +424,29 @@ mod tests {
             command: "npm run dev".to_string(),
             cwd: "/tmp/proj".to_string(),
             started_at: now_rfc3339(),
+            mode: BackgroundMode::Detached,
             exited_at: None,
             exit_code: None,
         }
+    }
+
+    #[test]
+    fn mode_defaults_to_detached_when_absent() {
+        // Markers written before adopted jobs existed have no `mode`.
+        let json = r#"{"bg_id":"bg-1","pid":1,"pgid":1,"birth_id":null,"thread_id":null,
+            "command":"x","cwd":"/tmp","started_at":"2026-01-01T00:00:00Z"}"#;
+        let rec: BackgroundProcess = serde_json::from_str(json).unwrap();
+        assert_eq!(rec.mode, BackgroundMode::Detached);
+    }
+
+    #[test]
+    fn adopted_mode_round_trips() {
+        let mut rec = sample("bg-adopted");
+        rec.mode = BackgroundMode::Adopted;
+        let json = serde_json::to_string(&rec).unwrap();
+        assert!(json.contains(r#""mode":"adopted""#));
+        let back: BackgroundProcess = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.mode, BackgroundMode::Adopted);
     }
 
     #[test]

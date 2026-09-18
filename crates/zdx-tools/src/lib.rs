@@ -3,6 +3,8 @@
 //! This crate contains pure/leaf tools that only need a root directory
 //! and optional timeout — no engine, config, or thread state.
 
+#[cfg(unix)]
+pub mod adopted;
 pub mod apply_patch;
 pub mod bash;
 pub mod edit;

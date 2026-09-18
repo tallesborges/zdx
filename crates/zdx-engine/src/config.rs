@@ -962,6 +962,14 @@ pub struct Config {
     /// Timeout for tool execution in seconds (0 disables)
     pub tool_timeout_secs: u32,
 
+    /// Seconds a foreground `Bash` command may run before it is moved to the
+    /// background instead of being waited on (0 disables auto-backgrounding).
+    ///
+    /// This is a relocation bound, not a deadline: the command keeps running.
+    /// An explicit `timeout_secs` on the tool call is a kill deadline and takes
+    /// precedence over it.
+    pub bash_foreground_bound_secs: u32,
+
     /// Provider configuration (base URLs, etc.).
     #[serde(default)]
     pub providers: ProvidersConfig,
@@ -1076,6 +1084,9 @@ impl Config {
     const MIN_REQUEST_MAX_TOKENS: u32 = 1_024;
     /// Default is disabled
     const DEFAULT_TOOL_TIMEOUT_SECS: u32 = 0;
+    /// Foreground commands are relocated, not killed, so this can be a short
+    /// bound: it only decides how long the model waits inline.
+    const DEFAULT_BASH_FOREGROUND_BOUND_SECS: u32 = 120;
     const DEFAULT_HANDOFF_MODEL: &str = "gemini:gemini-3-flash-preview";
     const DEFAULT_TITLE_MODEL: &str = "gemini:gemini-3.1-flash-lite-preview";
     const DEFAULT_READ_THREAD_MODEL: &str = "gemini:gemini-3.1-flash-lite-preview";
@@ -1839,6 +1850,20 @@ impl Config {
         }
     }
 
+    /// How long a foreground `Bash` command waits before being moved to the
+    /// background. `None` disables auto-backgrounding, restoring an unbounded
+    /// foreground wait.
+    #[must_use]
+    pub fn bash_foreground_bound(&self) -> Option<Duration> {
+        if self.bash_foreground_bound_secs == 0 {
+            None
+        } else {
+            Some(Duration::from_secs(u64::from(
+                self.bash_foreground_bound_secs,
+            )))
+        }
+    }
+
     /// Returns the path to the models file.
     /// Defaults to `<base>/models.toml`.
     pub fn models_path(&self) -> std::path::PathBuf {
@@ -2043,6 +2068,7 @@ impl Default for Config {
             system_prompt: None,
             system_prompt_file: None,
             tool_timeout_secs: Self::DEFAULT_TOOL_TIMEOUT_SECS,
+            bash_foreground_bound_secs: Self::DEFAULT_BASH_FOREGROUND_BOUND_SECS,
             providers: ProvidersConfig::default(),
             goals: GoalsConfig::default(),
             handoff_model: Self::DEFAULT_HANDOFF_MODEL.to_string(),

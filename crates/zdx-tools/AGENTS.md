@@ -5,8 +5,9 @@ Leaf tool implementations that only need a root directory and optional timeout â
 ## Layout
 
 - `src/lib.rs`: minimal `ToolContext`, serde helpers (`string_or_vec`, `bool_or_string`, `i64_or_string`, `u64_or_string`), path resolution helpers, image path helpers
-- `src/bash.rs`: shell command execution
-- `src/process_supervisor.rs`: Unix lifetime supervision for invocation-owned process groups (owner lease + external supervisor with TERM/KILL/reaping)
+- `src/bash.rs`: shell command execution, including the auto-background handoff (a foreground command that outruns its bound is relocated, never killed)
+- `src/adopted.rs`: Unix process-global registry of handed-off jobs; holds each job's lease for the life of the process, so adopted jobs are session-scoped and are terminated by closing that lease
+- `src/process_supervisor.rs`: Unix lifetime supervision for invocation-owned process groups (owner lease + external supervisor with TERM/KILL/reaping, target identity reported at startup, bound-aware waits)
 - `src/edit.rs`: exact string replacement in files
 - `src/file_lock.rs`: per-canonical-path in-process mutex; `edit`, `write`, and `apply_patch` hold it across their readâ†’write so concurrent tool calls on the same file serialize (different files stay parallel)
 - `src/write.rs`: file writing

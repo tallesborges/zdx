@@ -28,12 +28,43 @@ const TARGET_STDIN_FD: RawFd = 10;
 const FIRST_UNUSED_FD: RawFd = 11;
 const POLL_INTERVAL_MS: i32 = 25;
 
+/// Startup frame tags written on `EXEC_ERROR_FD`.
+///
+/// The supervisor reports the target's identity once it is forked and grouped;
+/// either side reports a startup failure as an errno. Frames are tagged because
+/// both processes hold the descriptor until the target execs.
+const STARTUP_ERROR: u8 = 0;
+const STARTUP_READY: u8 = 1;
+const STARTUP_ERROR_LEN: usize = 5;
+const STARTUP_READY_LEN: usize = 9;
+
 /// Why a supervised wait ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaitReason {
     Exited,
     Cancelled,
     TimedOut,
+}
+
+/// OS identity of a supervised target, reported by the supervisor at startup.
+///
+/// The target is its own process-group leader, so `pgid == pid`. Callers need
+/// both to register the process outside this handle (liveness, identity guards,
+/// group signalling).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TargetIdentity {
+    pub pid: u32,
+    pub pgid: i32,
+}
+
+/// Result of a wait that carries a non-lethal foreground bound.
+#[derive(Debug)]
+pub enum BoundedWait {
+    /// The target reached a terminal state.
+    Finished(WaitOutcome),
+    /// The bound elapsed. The target is untouched and still supervised: this
+    /// handle keeps its lease and completion, so it can be handed off.
+    Bounded,
 }
 
 /// Result of waiting for a supervised target and its final group sweep.
@@ -109,6 +140,8 @@ impl SupervisedCommand {
 pub struct SupervisedChild {
     pub stdout: Option<tokio::process::ChildStdout>,
     pub stderr: Option<tokio::process::ChildStderr>,
+    /// OS identity of the target, for registering it outside this handle.
+    pub identity: TargetIdentity,
     lease: Option<StdUnixStream>,
     completion: Option<JoinHandle<io::Result<CompletionRecord>>>,
 }
@@ -116,6 +149,7 @@ pub struct SupervisedChild {
 impl std::fmt::Debug for SupervisedChild {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SupervisedChild")
+            .field("identity", &self.identity)
             .field("lease_held", &self.lease.is_some())
             .field("completion_pending", &self.completion.is_some())
             .finish_non_exhaustive()
@@ -146,53 +180,83 @@ impl SupervisedChild {
         cancel: Option<&CancellationToken>,
         timeout: Option<Duration>,
     ) -> io::Result<WaitOutcome> {
+        match self.wait_bounded(cancel, timeout, None).await? {
+            BoundedWait::Finished(outcome) => Ok(outcome),
+            // `bound: None` never elapses.
+            BoundedWait::Bounded => Err(io::Error::other("unbounded wait reported a bound")),
+        }
+    }
+
+    /// Waits like [`Self::wait_with`], plus a non-lethal foreground `bound`.
+    ///
+    /// The bound is not a deadline: when it elapses the target keeps running
+    /// untouched and this handle keeps its lease, completion, and pipes, so the
+    /// caller can hand the job off to the background. Completion is polled
+    /// first, so a target finishing right at the bound is reported as finished.
+    ///
+    /// # Errors
+    /// Returns an error if the supervisor fails or cannot be reaped.
+    pub async fn wait_bounded(
+        &mut self,
+        cancel: Option<&CancellationToken>,
+        timeout: Option<Duration>,
+        bound: Option<Duration>,
+    ) -> io::Result<BoundedWait> {
         let mut completion = self
             .completion
             .take()
             .ok_or_else(|| io::Error::other("supervised child was already waited"))?;
 
-        let reason = match (cancel, timeout) {
-            (Some(cancel), Some(timeout)) => {
-                tokio::select! {
-                    result = &mut completion => {
-                        let record = join_completion(result)?;
-                        self.lease.take();
-                        return Ok(record.into_outcome(WaitReason::Exited));
-                    }
-                    () = cancel.cancelled() => WaitReason::Cancelled,
-                    () = tokio::time::sleep(timeout) => WaitReason::TimedOut,
-                }
-            }
-            (Some(cancel), None) => {
-                tokio::select! {
-                    result = &mut completion => {
-                        let record = join_completion(result)?;
-                        self.lease.take();
-                        return Ok(record.into_outcome(WaitReason::Exited));
-                    }
-                    () = cancel.cancelled() => WaitReason::Cancelled,
-                }
-            }
-            (None, Some(timeout)) => {
-                tokio::select! {
-                    result = &mut completion => {
-                        let record = join_completion(result)?;
-                        self.lease.take();
-                        return Ok(record.into_outcome(WaitReason::Exited));
-                    }
-                    () = tokio::time::sleep(timeout) => WaitReason::TimedOut,
-                }
-            }
-            (None, None) => {
-                let record = join_completion(completion.await)?;
-                self.lease.take();
-                return Ok(record.into_outcome(WaitReason::Exited));
-            }
+        let step = tokio::select! {
+            biased;
+            result = &mut completion => WaitStep::Finished(join_completion(result)?),
+            () = cancelled_or_pending(cancel) => WaitStep::Interrupted(WaitReason::Cancelled),
+            () = elapsed_or_pending(timeout) => WaitStep::Interrupted(WaitReason::TimedOut),
+            () = elapsed_or_pending(bound) => WaitStep::Bounded,
         };
 
-        self.cancel();
-        let record = join_completion(completion.await)?;
-        Ok(record.into_outcome(reason))
+        match step {
+            WaitStep::Finished(record) => {
+                self.lease.take();
+                Ok(BoundedWait::Finished(
+                    record.into_outcome(WaitReason::Exited),
+                ))
+            }
+            WaitStep::Bounded => {
+                // The target is untouched, so hand the handle back intact: the
+                // caller can keep waiting on it or adopt it as it stands.
+                self.completion = Some(completion);
+                Ok(BoundedWait::Bounded)
+            }
+            WaitStep::Interrupted(reason) => {
+                self.cancel();
+                let record = join_completion(completion.await)?;
+                Ok(BoundedWait::Finished(record.into_outcome(reason)))
+            }
+        }
+    }
+}
+
+/// How one pass of [`SupervisedChild::wait_bounded`]'s select ended.
+enum WaitStep {
+    Finished(CompletionRecord),
+    Interrupted(WaitReason),
+    Bounded,
+}
+
+/// Resolves when `cancel` is cancelled, or never when there is no token.
+async fn cancelled_or_pending(cancel: Option<&CancellationToken>) {
+    match cancel {
+        Some(token) => token.cancelled().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Resolves after `duration`, or never when there is none.
+async fn elapsed_or_pending(duration: Option<Duration>) {
+    match duration {
+        Some(duration) => tokio::time::sleep(duration).await,
+        None => std::future::pending().await,
     }
 }
 
@@ -377,11 +441,14 @@ async fn spawn(
     let startup = tokio::task::spawn_blocking(move || read_startup(exec_error_owner))
         .await
         .map_err(|err| io::Error::other(format!("process startup task failed: {err}")))?;
-    if let Err(err) = startup {
-        drop(lease_owner);
-        let _ = completion.await;
-        return Err(err);
-    }
+    let identity = match startup {
+        Ok(identity) => identity,
+        Err(err) => {
+            drop(lease_owner);
+            let _ = completion.await;
+            return Err(err);
+        }
+    };
 
     let stdout = tokio::process::ChildStdout::from_std(std::process::ChildStdout::from(
         OwnedFd::from(stdout_owner),
@@ -393,6 +460,7 @@ async fn spawn(
     Ok(SupervisedChild {
         stdout: Some(stdout),
         stderr: Some(stderr),
+        identity,
         lease: Some(lease_owner),
         completion: Some(completion),
     })
@@ -425,17 +493,39 @@ fn max_open_fd() -> RawFd {
     }
 }
 
-fn read_startup(mut stream: StdUnixStream) -> io::Result<()> {
+/// Parses the startup frames written on `EXEC_ERROR_FD`.
+///
+/// Both the supervisor and the target hold the write end until the target
+/// execs, so the stream can carry a ready frame followed by the target's own
+/// failure. Any error frame wins; otherwise the reported identity is returned.
+#[allow(clippy::similar_names)] // pid / pgid are the real domain names here
+fn read_startup(mut stream: StdUnixStream) -> io::Result<TargetIdentity> {
     let mut bytes = Vec::new();
     stream.read_to_end(&mut bytes)?;
-    if bytes.is_empty() {
-        return Ok(());
+
+    let mut identity = None;
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        let rest = &bytes[cursor..];
+        match rest[0] {
+            STARTUP_ERROR if rest.len() >= STARTUP_ERROR_LEN => {
+                let errno = i32::from_ne_bytes(rest[1..5].try_into().expect("length checked"));
+                return Err(io::Error::from_raw_os_error(errno));
+            }
+            STARTUP_READY if rest.len() >= STARTUP_READY_LEN => {
+                let pid = i32::from_ne_bytes(rest[1..5].try_into().expect("length checked"));
+                let pgid = i32::from_ne_bytes(rest[5..9].try_into().expect("length checked"));
+                identity = Some(TargetIdentity {
+                    pid: pid.unsigned_abs(),
+                    pgid,
+                });
+                cursor += STARTUP_READY_LEN;
+            }
+            _ => return Err(io::Error::other("invalid process startup response")),
+        }
     }
-    if bytes.len() != 4 {
-        return Err(io::Error::other("invalid process startup response"));
-    }
-    let errno = i32::from_ne_bytes(bytes.try_into().expect("length checked"));
-    Err(io::Error::from_raw_os_error(errno))
+
+    identity.ok_or_else(|| io::Error::other("process supervisor did not report target identity"))
 }
 
 fn read_completion_and_reap(
@@ -531,6 +621,20 @@ unsafe fn run_supervisor(
         }
     }
     if unsafe { write_all_fd(GATE_WRITE_FD, &[1]) } == -1 {
+        let errno = last_errno();
+        unsafe {
+            libc::kill(-target_pid, libc::SIGKILL);
+            reap_target(target_pid);
+            report_errno_and_exit(EXEC_ERROR_FD, errno);
+        }
+    }
+    // The target is forked and is its own group leader, so `pgid == pid`.
+    // Report it before the gated target can exec away from this descriptor.
+    let mut ready = [0_u8; STARTUP_READY_LEN];
+    ready[0] = STARTUP_READY;
+    ready[1..5].copy_from_slice(&target_pid.to_ne_bytes());
+    ready[5..].copy_from_slice(&target_pid.to_ne_bytes());
+    if unsafe { write_all_fd(EXEC_ERROR_FD, &ready) } == -1 {
         let errno = last_errno();
         unsafe {
             libc::kill(-target_pid, libc::SIGKILL);
@@ -821,8 +925,11 @@ unsafe fn reset_target_signal_state(old_signal_mask: libc::sigset_t) {
 }
 
 unsafe fn report_errno_and_exit(fd: RawFd, errno: i32) -> ! {
+    let mut frame = [0_u8; STARTUP_ERROR_LEN];
+    frame[0] = STARTUP_ERROR;
+    frame[1..].copy_from_slice(&errno.to_ne_bytes());
     unsafe {
-        let _ = write_all_fd(fd, &errno.to_ne_bytes());
+        let _ = write_all_fd(fd, &frame);
         libc::_exit(127);
     }
 }
@@ -990,6 +1097,62 @@ mod tests {
         let outcome = child.wait().await.unwrap();
         assert_eq!(outcome.status.signal(), Some(libc::SIGPIPE));
         assert_eq!(outcome.status.code(), None);
+    }
+
+    #[tokio::test]
+    async fn reports_the_target_identity() {
+        let temp = TempDir::new().unwrap();
+        let pidfile = temp.path().join("target.pid");
+        let mut command = shell_command("echo $$ > \"$1\"; sleep 0.2", &pidfile);
+        command.stdin_null();
+        let mut child = command.spawn(Duration::from_millis(100)).await.unwrap();
+        let pid = wait_for_pid(&pidfile).await;
+
+        assert_eq!(child.identity.pid, pid as u32);
+        // The target leads its own process group.
+        assert_eq!(child.identity.pgid, pid);
+        assert!(child.wait().await.unwrap().status.success());
+    }
+
+    #[tokio::test]
+    async fn bound_leaves_the_target_running_and_waitable() {
+        let temp = TempDir::new().unwrap();
+        let pidfile = temp.path().join("target.pid");
+        let mut command = shell_command("echo $$ > \"$1\"; sleep 1; exit 9", &pidfile);
+        command.stdin_null();
+        let mut child = command.spawn(Duration::from_millis(100)).await.unwrap();
+        let pid = wait_for_pid(&pidfile).await;
+
+        let bounded = child
+            .wait_bounded(None, None, Some(Duration::from_millis(100)))
+            .await
+            .unwrap();
+        assert!(matches!(bounded, BoundedWait::Bounded));
+        assert!(process_exists(pid), "a bound must not touch the target");
+
+        // The handle is intact, so the same child can still be waited on.
+        let outcome = child.wait().await.unwrap();
+        assert_eq!(outcome.reason, WaitReason::Exited);
+        assert_eq!(outcome.status.code(), Some(9));
+    }
+
+    #[tokio::test]
+    async fn completion_wins_a_bound_that_expires_at_the_same_time() {
+        let mut command = SupervisedCommand::new("/bin/sh");
+        command.args(["-c", "exit 3"]);
+        let mut child = command.spawn(Duration::from_millis(100)).await.unwrap();
+
+        // Zero bound: the biased select must still report the finished target
+        // rather than relocating a command that already exited.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let bounded = child
+            .wait_bounded(None, None, Some(Duration::ZERO))
+            .await
+            .unwrap();
+        match bounded {
+            BoundedWait::Finished(outcome) => assert_eq!(outcome.status.code(), Some(3)),
+            BoundedWait::Bounded => panic!("a finished target must not be reported as bounded"),
+        }
     }
 
     #[tokio::test]

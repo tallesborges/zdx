@@ -4,18 +4,31 @@
 //!   it spawns a detached process (via [`zdx_tools::bash::spawn_background`]),
 //!   registers it in [`crate::background_activity`], starts a reaping waiter,
 //!   and returns a `bg_id`.
+//! - [`prepare_handoff`] is invoked by the `Bash` tool for every *foreground*
+//!   command: it supplies the registry hooks and log paths the tool needs to
+//!   move the command to the background if it outruns its foreground bound.
 //! - [`BackgroundOutput`] and [`BackgroundKill`] are agent tools that read a
 //!   background process's output / stop it, scoped to the caller's thread.
+
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{Tool, ToolContext, ToolDefinition, ToolFuture};
-use crate::background_activity::{self, BackgroundProcess, KillOutcome};
+use crate::background_activity::{self, BackgroundMode, BackgroundProcess, KillOutcome};
 use crate::core::events::ToolOutput;
 
 /// Max bytes returned per stream by `background_output`.
 const OUTPUT_TAIL_BYTES: usize = 8 * 1024;
+
+/// Strictly increasing sequence stamped on every `background_output` result.
+///
+/// Polling a background job that has not produced new output otherwise returns
+/// a byte-identical result, which the turn's identical-tool-call detector would
+/// abort as a loop. Making each read distinct keeps legitimate polling legal
+/// while leaving genuinely repeated work detectable.
+static READ_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Background-mode subset of the `Bash` tool input.
 ///
@@ -105,6 +118,7 @@ pub async fn run_background(input: &Value, ctx: &ToolContext) -> ToolOutput {
         command: command.to_string(),
         cwd: cwd.to_string_lossy().into_owned(),
         started_at: chrono::Utc::now().to_rfc3339(),
+        mode: BackgroundMode::Detached,
         exited_at: None,
         exit_code: None,
     };
@@ -155,6 +169,63 @@ async fn kill_failed_spawn(mut spawn: zdx_tools::bash::BackgroundSpawn, pid: u32
     let _ = spawn.child.wait().await;
 }
 
+/// Builds the auto-background handoff for a foreground bash command.
+///
+/// Returns `None` when auto-backgrounding is disabled (`bash_foreground_bound_secs = 0`)
+/// or the registry directories are unusable, in which case the command simply
+/// keeps waiting in the foreground as before.
+///
+/// The `bg_id` and log paths are reserved up front but nothing is written until
+/// the command actually outruns its bound, so ordinary fast commands leave no
+/// trace in the registry.
+#[cfg(unix)]
+pub fn prepare_handoff(command: &str, ctx: &ToolContext) -> Option<zdx_tools::bash::Handoff> {
+    let bound = ctx.config.as_ref()?.bash_foreground_bound()?;
+    background_activity::ensure_dirs().ok()?;
+
+    let bg_id = format!("bg-{}", uuid::Uuid::new_v4());
+    let stdout_log = background_activity::stdout_log_path(&bg_id);
+    let stderr_log = background_activity::stderr_log_path(&bg_id);
+
+    let adopt_id = bg_id.clone();
+    let exit_id = bg_id.clone();
+    let command = command.to_string();
+    let cwd = ctx.root.to_string_lossy().into_owned();
+    let thread_id = ctx.current_thread_id.clone();
+    // The command starts now, so uptime stays honest across the handoff.
+    let started_at = chrono::Utc::now().to_rfc3339();
+
+    Some(zdx_tools::bash::Handoff {
+        bound,
+        bg_id,
+        stdout_log,
+        stderr_log,
+        on_adopt: Box::new(move |identity| {
+            let rec = BackgroundProcess {
+                bg_id: adopt_id,
+                pid: identity.pid,
+                pgid: identity.pgid,
+                // Identity guard for any process that has to fall back to
+                // signalling, e.g. the monitor or a later zdx run.
+                birth_id: background_activity::capture_identity(identity.pid).0,
+                thread_id,
+                command,
+                cwd,
+                started_at,
+                mode: BackgroundMode::Adopted,
+                exited_at: None,
+                exit_code: None,
+            };
+            let registered = background_activity::write_marker(&rec).is_ok();
+            if registered {
+                background_activity::log_spawned(&rec);
+            }
+            registered
+        }),
+        on_exit: Box::new(move |code| background_activity::mark_exited(&exit_id, code)),
+    })
+}
+
 /// Loads the record for the request's `bg_id` and enforces thread ownership.
 /// On any failure returns the `ToolOutput` the tool should return directly.
 fn resolve_owned(input: &Value, ctx: &ToolContext) -> Result<BackgroundProcess, ToolOutput> {
@@ -191,13 +262,16 @@ impl Tool for BackgroundOutput {
             name: "background_output".to_string(),
             description:
                 "Read the recent output (stdout + stderr tail) and status of a background \
-                process started with the Bash tool's background: true. Status \"running\" with no \
-                new output does NOT mean the process is done or ready — check the status field."
+                process started with the Bash tool's background: true, or of a foreground \
+                command that was moved to the background after exceeding its foreground \
+                bound. Status \"running\" with no new output does NOT mean the process is done \
+                or ready — check the status field. Polling the same bg_id repeatedly is \
+                expected and allowed; each read returns a new read_seq."
                     .to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "bg_id": {"type": "string", "description": "The bg_id returned when the process was started."}
+                    "bg_id": {"type": "string", "description": "The bg_id returned when the process was started or backgrounded."}
                 },
                 "required": ["bg_id"],
                 "additionalProperties": false
@@ -225,6 +299,7 @@ impl Tool for BackgroundOutput {
                 "status": status,
                 "exit_code": rec.exit_code,
                 "uptime": rec.uptime(),
+                "read_seq": READ_SEQ.fetch_add(1, Ordering::Relaxed) + 1,
                 "stdout": background_activity::read_log_tail(&background_activity::stdout_log_path(&rec.bg_id), OUTPUT_TAIL_BYTES),
                 "stderr": background_activity::read_log_tail(&background_activity::stderr_log_path(&rec.bg_id), OUTPUT_TAIL_BYTES),
             }))
@@ -239,8 +314,8 @@ impl Tool for BackgroundKill {
         ToolDefinition {
             name: "background_kill".to_string(),
             description:
-                "Stop a background process started with the Bash tool's background: true, \
-                by its bg_id."
+                "Stop a background process started with the Bash tool's background: true, or a \
+                foreground command that was moved to the background, by its bg_id."
                     .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -331,5 +406,145 @@ mod tests {
                 "expected {value:?} to conflict with background, got {secs:?}"
             );
         }
+    }
+
+    /// Polling an unchanged job must not produce identical results, or the
+    /// turn's identical-tool-call detector aborts legitimate polling as a loop.
+    #[test]
+    fn each_background_output_read_is_distinct() {
+        use std::sync::atomic::Ordering;
+
+        use super::READ_SEQ;
+
+        let first = READ_SEQ.fetch_add(1, Ordering::Relaxed);
+        let second = READ_SEQ.fetch_add(1, Ordering::Relaxed);
+        assert!(second > first);
+    }
+}
+
+/// End-to-end over the real registry: a foreground command that outruns its
+/// bound is registered as an adopted job and killed through its lease.
+#[cfg(all(test, unix))]
+mod handoff_registry_tests {
+    use std::time::Duration;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::background_activity::{self, BackgroundMode, KillOutcome};
+    use crate::config::Config;
+
+    fn process_exists(pid: u32) -> bool {
+        if unsafe { libc::kill(pid as i32, 0) } == 0 {
+            return true;
+        }
+        std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+
+    #[tokio::test]
+    async fn backgrounded_command_is_registered_adopted_and_killable() {
+        let home = crate::test_support::temp_zdx_home();
+        let root = home.path().join("work");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let config = Config {
+            bash_foreground_bound_secs: 1,
+            ..Config::default()
+        };
+        let mut ctx = ToolContext::new(root.clone(), None);
+        ctx.current_thread_id = Some("thread-handoff".to_string());
+        ctx.config = Some(config);
+
+        let command = "echo warming; sleep 60";
+        let handoff = prepare_handoff(command, &ctx).expect("bound is configured");
+        let leaf = ctx.as_leaf();
+        let result = zdx_tools::bash::execute(
+            &json!({ "command": command }),
+            &leaf,
+            None,
+            None,
+            Some(handoff),
+        )
+        .await;
+
+        let data = result.data().expect("should have data");
+        assert_eq!(data["backgrounded"], true);
+        let bg_id = data["bg_id"].as_str().unwrap().to_string();
+        let pid = u32::try_from(data["pid"].as_u64().unwrap()).unwrap();
+
+        let rec = background_activity::get(&bg_id).expect("adopted job is registered");
+        assert_eq!(rec.mode, BackgroundMode::Adopted);
+        assert_eq!(rec.pid, pid);
+        assert_eq!(rec.command, command);
+        assert_eq!(rec.thread_id.as_deref(), Some("thread-handoff"));
+        assert!(rec.is_running());
+        assert!(process_exists(pid));
+
+        // Pre-handoff output reached the registry log, so a poll can read it.
+        let logged = background_activity::read_log_tail(
+            &background_activity::stdout_log_path(&bg_id),
+            8 * 1024,
+        );
+        assert!(logged.contains("warming"), "log was: {logged}");
+
+        assert_eq!(
+            background_activity::kill_background(&bg_id).await,
+            KillOutcome::Killed
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while process_exists(pid) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("adopted job survived background_kill");
+
+        assert!(!background_activity::get(&bg_id).unwrap().is_running());
+    }
+
+    #[tokio::test]
+    async fn zero_bound_disables_auto_backgrounding() {
+        let home = crate::test_support::temp_zdx_home();
+        let config = Config {
+            bash_foreground_bound_secs: 0,
+            ..Config::default()
+        };
+        let mut ctx = ToolContext::new(home.path().to_path_buf(), None);
+        ctx.config = Some(config);
+
+        assert!(prepare_handoff("sleep 1", &ctx).is_none());
+    }
+
+    /// `background: true` keeps its own semantics: detached at spawn, never
+    /// adopted, and unaffected by the foreground bound.
+    #[tokio::test]
+    async fn explicit_background_is_still_detached() {
+        let home = crate::test_support::temp_zdx_home();
+        let root = home.path().join("work");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let config = Config {
+            bash_foreground_bound_secs: 1,
+            ..Config::default()
+        };
+        let mut ctx = ToolContext::new(root, None);
+        ctx.config = Some(config);
+
+        let result =
+            run_background(&json!({ "command": "sleep 60", "background": true }), &ctx).await;
+        let data = result.data().expect("should have data");
+        let bg_id = data["bg_id"].as_str().unwrap().to_string();
+
+        let rec = background_activity::get(&bg_id).expect("registered");
+        assert_eq!(rec.mode, BackgroundMode::Detached);
+        assert!(
+            !zdx_tools::adopted::is_adopted(&bg_id),
+            "a detached process must not hold an invocation lease"
+        );
+
+        assert_eq!(
+            background_activity::kill_background(&bg_id).await,
+            KillOutcome::Killed
+        );
     }
 }
