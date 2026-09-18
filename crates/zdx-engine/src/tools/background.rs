@@ -157,6 +157,46 @@ pub async fn run_background(input: &Value, ctx: &ToolContext) -> ToolOutput {
     }))
 }
 
+/// Waits for adopted background jobs to finish before a one-shot process exits.
+///
+/// `zdx exec` relocates a slow foreground command instead of killing it, but it
+/// holds the job's supervisor lease, so exiting would kill exactly the work the
+/// handoff preserved. This waits the job out with the lease held; its reader
+/// tasks keep appending to the job's logs throughout.
+///
+/// It never kills a job on its own and has no deadline, so a legitimately long
+/// build is waited out in full. An interrupt during the wait is the operator
+/// asking to stop: the jobs are torn down through their leases, so nothing is
+/// orphaned. A second Ctrl-C force-exits and the supervisor's own lease cleanup
+/// handles the rest.
+///
+/// Callers must await this **inside** the tokio runtime. Dropping the runtime
+/// drops the task that holds the lease, which terminates the job.
+pub async fn drain_adopted_jobs() {
+    #[cfg(unix)]
+    {
+        use crate::core::interrupt;
+
+        if zdx_tools::adopted::live_jobs().is_empty() {
+            return;
+        }
+
+        // The turn was already cancelled, so the operator has asked to stop:
+        // tear the jobs down rather than waiting them out.
+        if interrupt::is_interrupted() {
+            zdx_tools::adopted::terminate_all().await;
+            return;
+        }
+
+        tokio::select! {
+            () = zdx_tools::adopted::drain() => {}
+            () = interrupt::wait_for_interrupt() => {
+                zdx_tools::adopted::terminate_all().await;
+            }
+        }
+    }
+}
+
 /// Best-effort teardown of a spawn that failed to register.
 async fn kill_failed_spawn(mut spawn: zdx_tools::bash::BackgroundSpawn, pid: u32) {
     #[cfg(unix)]
@@ -509,38 +549,41 @@ mod handoff_registry_tests {
         assert!(!background_activity::get(&bg_id).unwrap().is_running());
     }
 
-    /// A one-shot run must keep the unbounded foreground wait. `zdx exec` is
-    /// also how every `invoke_subagent` child runs, and it exits as soon as its
-    /// turn ends — adopting a job there would close the lease and kill the
-    /// command precisely because it was slow (e.g. a >120s `git clone`).
+    /// A surface that neither outlives its runs nor drains must keep the
+    /// unbounded foreground wait: adopting there would close the lease at exit
+    /// and kill the command precisely because it was slow.
     #[tokio::test]
-    async fn one_shot_surfaces_never_relocate() {
+    async fn unsupported_surfaces_never_relocate() {
         let home = crate::test_support::temp_zdx_home();
         let config = Config {
             bash_foreground_bound_secs: 1,
             ..Config::default()
         };
 
-        for surface in [Some("exec"), Some("unknown-surface"), None] {
+        for surface in [Some("unknown-surface"), None] {
             let mut ctx = ToolContext::new(home.path().to_path_buf(), None);
             ctx.config = Some(config.clone());
             ctx.background_handoff = crate::tools::surface_keeps_background_jobs(surface);
 
             assert!(
                 prepare_handoff("sleep 1", &ctx).is_none(),
-                "surface {surface:?} outlives no job and must keep waiting"
+                "surface {surface:?} cannot keep a job alive and must keep waiting"
             );
         }
     }
 
-    /// The surfaces that do outlive a run get the handoff.
+    /// Every real surface relocates, by one of two mechanisms: `chat` and
+    /// `telegram` outlive the run, while `exec` drains adopted jobs before the
+    /// process exits. `exec` is also how subagents and orchestrator workers
+    /// run, which is the case the handoff most needs to cover.
     #[test]
-    fn long_lived_surfaces_keep_background_jobs() {
+    fn supported_surfaces_keep_background_jobs() {
         use crate::tools::surface_keeps_background_jobs as keeps;
 
         assert!(keeps(Some("chat")), "interactive TUI outlives the run");
         assert!(keeps(Some("telegram")), "bot daemon outlives the run");
-        assert!(!keeps(Some("exec")));
+        assert!(keeps(Some("exec")), "exec drains before exiting");
+        assert!(!keeps(Some("unknown-surface")));
         assert!(!keeps(None));
     }
 

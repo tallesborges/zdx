@@ -4827,6 +4827,7 @@ dependencies = [
  "assert_cmd",
  "chrono",
  "clap",
+ "libc",
  "open",
  "predicates",
  "reqwest",

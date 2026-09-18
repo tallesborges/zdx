@@ -407,12 +407,12 @@ mod tests {
         );
     }
 
-    /// `zdx exec` is one-shot, and is also how every `invoke_subagent` child
-    /// runs. Its surface must never enable the Bash auto-background handoff:
-    /// an adopted job is held by this process's supervisor lease, so exiting
-    /// would kill a slow-but-healthy command mid-flight.
+    /// `zdx exec` is also how every `invoke_subagent` child and orchestrator
+    /// worker runs, so it must enable the Bash auto-background handoff. It is
+    /// safe there because the exec command drains adopted jobs before the
+    /// process exits rather than dropping their leases.
     #[test]
-    fn exec_surface_does_not_enable_background_handoff() {
+    fn exec_surface_enables_background_handoff() {
         use zdx_engine::core::agent::AgentOptions;
         use zdx_engine::tools::surface_keeps_background_jobs;
 
@@ -431,9 +431,7 @@ mod tests {
         let agent_opts = AgentOptions::from(&opts);
 
         assert_eq!(agent_opts.surface.as_deref(), Some("exec"));
-        assert!(!surface_keeps_background_jobs(
-            agent_opts.surface.as_deref()
-        ));
+        assert!(surface_keeps_background_jobs(agent_opts.surface.as_deref()));
     }
 
     #[test]

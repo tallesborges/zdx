@@ -126,9 +126,16 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
     };
 
     // Use streaming variant - response is printed incrementally, final newline added at end
-    modes::exec::run_exec(options.prompt, &config, thread, &exec_opts)
-        .await
-        .context("execute prompt")?;
+    let result = modes::exec::run_exec(options.prompt, &config, thread, &exec_opts).await;
+
+    // A foreground command that outran its bound was moved to the background
+    // rather than killed; this process owns its lease, so it must wait for the
+    // job to finish before exiting. Draining runs on every exit path, including
+    // a failed turn, and must complete inside the runtime: dropping the runtime
+    // would drop the task holding the lease and kill the job.
+    zdx_engine::tools::background::drain_adopted_jobs().await;
+
+    result.context("execute prompt")?;
 
     Ok(())
 }

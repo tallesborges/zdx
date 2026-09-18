@@ -48,7 +48,7 @@ fn write_temp_file(bytes: &[u8], stream_name: &str) -> Option<String> {
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Bash".to_string(),
-        description: "Run shell and CLI workflows whose capability no dedicated tool provides: builds, tests, version control, package managers, other CLIs, and work on those commands' own output. Reading, discovering, and searching files is covered by the dedicated tools, which return structured, ignore-aware, paginated results; scoping or limiting such a result is part of that same capability. A long-running foreground command is never killed for being slow: on surfaces that support it, one still running after the foreground bound is moved to the background and the result comes back with backgrounded: true and a bg_id to poll with background_output instead of an exit code. Long-lived commands use background mode, and truncated output can be inspected with Read."
+        description: "Run shell and CLI workflows whose capability no dedicated tool provides: builds, tests, version control, package managers, other CLIs, and work on those commands' own output. Reading, discovering, and searching files is covered by the dedicated tools, which return structured, ignore-aware, paginated results; scoping or limiting such a result is part of that same capability. A long-running foreground command is never killed for being slow: one still running after the foreground bound is moved to the background and the result comes back with backgrounded: true and a bg_id to poll with background_output instead of an exit code. Long-lived commands use background mode, and truncated output can be inspected with Read."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -665,16 +665,18 @@ async fn run_command(
             BoundedWait::Finished(outcome) => outcome,
             BoundedWait::Bounded => {
                 // The command keeps running: hand it off instead of killing it.
-                // Reader tasks are detached here and keep draining into logs.
-                drop(stdout_task);
-                drop(stderr_task);
+                // The reader tasks go with it and keep draining into the logs.
                 let handoff = handoff.expect("a bound is only set alongside a handoff");
                 return Ok(CommandOutcome::Backgrounded(Box::new(
                     hand_off_to_background(
                         child,
                         handoff,
-                        &stdout_sink,
-                        &stderr_sink,
+                        command,
+                        HandoffStreams {
+                            stdout_sink: &stdout_sink,
+                            stderr_sink: &stderr_sink,
+                            readers: [stdout_task, stderr_task],
+                        },
                         output_tx.as_ref(),
                         started.elapsed(),
                     ),
@@ -791,6 +793,15 @@ async fn run_command(
     }))
 }
 
+/// The live stream plumbing handed over with a backgrounded command: the two
+/// sinks to flip to log capture, and the reader tasks that keep feeding them.
+#[cfg(unix)]
+struct HandoffStreams<'a> {
+    stdout_sink: &'a StreamSink,
+    stderr_sink: &'a StreamSink,
+    readers: [tokio::task::JoinHandle<()>; 2],
+}
+
 /// Moves a still-running foreground command to the background.
 ///
 /// The command is never signalled: the live supervised handle (lease,
@@ -805,11 +816,16 @@ async fn run_command(
 fn hand_off_to_background(
     child: SupervisedChild,
     handoff: Handoff,
-    stdout_sink: &StreamSink,
-    stderr_sink: &StreamSink,
+    command: &str,
+    streams: HandoffStreams<'_>,
     output_tx: Option<&tokio::sync::mpsc::UnboundedSender<String>>,
     elapsed: Duration,
 ) -> BackgroundedOutput {
+    let HandoffStreams {
+        stdout_sink,
+        stderr_sink,
+        readers,
+    } = streams;
     let Handoff {
         bound: _,
         bg_id,
@@ -833,7 +849,7 @@ fn hand_off_to_background(
     let (stderr_buf, stderr_logging) = hand_off_sink(stderr_sink, open_log(&stderr_log));
 
     let registry_failed = !on_adopt(identity);
-    crate::adopted::adopt(bg_id.clone(), child, on_exit);
+    crate::adopted::adopt(bg_id.clone(), child, command.to_string(), readers, on_exit);
 
     let (stdout, stdout_truncated, stdout_total_bytes) =
         super::truncate_bytes_to_byte_limit(&stdout_buf, MAX_OUTPUT_BYTES);

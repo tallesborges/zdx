@@ -115,24 +115,26 @@ impl std::fmt::Debug for ToolContext {
     }
 }
 
-/// Whether a run on `surface` outlives the run itself, so a job adopted during
-/// it still has an owner once the turn ends.
+/// Whether a run on `surface` can keep an adopted background job alive past
+/// the end of the run.
 ///
-/// An adopted background job is held by its owning process's supervisor lease:
-/// when that process exits, the lease closes and the supervisor terminates the
-/// job. That is correct for the interactive TUI and the bot daemon, which keep
-/// running and can poll or kill the job afterwards.
+/// An adopted job is held by its owning process's supervisor lease, so the
+/// process must not exit while the job is still running. A surface qualifies in
+/// one of two ways:
 ///
-/// It is wrong for one-shot runs. `zdx exec` — which is also how every
-/// `invoke_subagent` child runs — exits as soon as its turn finishes, which
-/// would kill a command mid-flight precisely because it was slow. Those runs
-/// keep the unbounded foreground wait instead.
+/// - it outlives the run: the interactive TUI (`chat`) and the bot daemon
+///   (`telegram`) keep running and can poll or kill the job afterwards;
+/// - it drains before exiting: `zdx exec` — which is also how every
+///   `invoke_subagent` child and orchestrator worker runs — waits for adopted
+///   jobs to finish at the end of the command, holding the lease throughout.
+///   See `zdx_tools::adopted::drain`.
 ///
-/// Unknown and absent surfaces are treated as one-shot: the failure direction
-/// is "wait like before", never "kill work that used to finish".
+/// Unknown and absent surfaces are excluded: an embedder that neither outlives
+/// its runs nor drains would kill relocated work at exit, so the failure
+/// direction stays "wait in the foreground like before".
 #[must_use]
 pub fn surface_keeps_background_jobs(surface: Option<&str>) -> bool {
-    matches!(surface, Some("chat" | "telegram"))
+    matches!(surface, Some("chat" | "telegram" | "exec"))
 }
 
 impl ToolContext {
