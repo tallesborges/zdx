@@ -409,7 +409,7 @@ mod tests {
         })])
     }
 
-    /// Prior turns' encrypted reasoning items are not replayed. OpenAI scopes
+    /// Prior turns' encrypted reasoning items are not replayed. `OpenAI` scopes
     /// the requirement to "since the last `user` message" and discards
     /// earlier items upstream.
     #[test]
@@ -432,7 +432,7 @@ mod tests {
     }
 
     /// A tool loop inside one turn keeps its reasoning items: that is the
-    /// continuation OpenAI requires them for.
+    /// continuation `OpenAI` requires them for.
     #[test]
     fn reasoning_item_survives_a_tool_loop_in_the_same_turn() {
         use zdx_types::{ToolResult, ToolResultContent};
