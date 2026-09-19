@@ -207,8 +207,9 @@ impl BackgroundedOutput {
         let mut message = format!(
             "Command did not complete within its {}s foreground bound and was moved to the \
              background ({}). It is still running — do NOT re-run it. Read its output with \
-             background_output (bg_id \"{}\") and stop it with background_kill. Status \"running\" \
-             with no new output does NOT mean it is stuck or finished.",
+             background_output (bg_id \"{}\"), passing wait_secs to wait for it rather than \
+             reading it repeatedly, and stop it with background_kill. Status \"running\" with no \
+             new output does NOT mean it is stuck or finished.",
             self.elapsed_secs, self.bg_id, self.bg_id
         );
         if self.degraded.registry_failed {

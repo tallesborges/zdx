@@ -133,6 +133,13 @@ pub fn read_log_tail(path: &Path, max_bytes: usize) -> String {
     String::from_utf8_lossy(&bytes[start..]).into_owned()
 }
 
+/// Total bytes written to a background log so far, for cheap change detection.
+/// A missing/unreadable file reads as 0 (the stream may not exist yet).
+#[must_use]
+pub fn log_len(path: &Path) -> u64 {
+    fs::metadata(path).map_or(0, |meta| meta.len())
+}
+
 /// Ensures the registry + logs directories exist with user-only permissions.
 ///
 /// # Errors
