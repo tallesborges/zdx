@@ -6,6 +6,7 @@
 //!
 //! Verifies that the second request includes `tool_result` block.
 
+use std::fmt::Write as _;
 use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1057,10 +1058,12 @@ fn repeating_text_sse() -> String {
     );
     for chunk in body.as_bytes().chunks(400) {
         let text = String::from_utf8_lossy(chunk);
-        sse.push_str(&format!(
+        write!(
+            sse,
             "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":{}}}}}\n\n",
             serde_json::Value::String(text.to_string())
-        ));
+        )
+        .unwrap();
     }
     sse.push_str(
         "event: content_block_stop\n\
@@ -1380,10 +1383,12 @@ fn looping_content_sse(content: &str, as_reasoning: bool) -> String {
          data: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"{start}\"}}}}\n\n"
     );
     for piece in chunk_on_char_boundaries(content, LOOP_FIXTURE_CHUNK) {
-        sse.push_str(&format!(
+        write!(
+            sse,
             "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"{delta_type}\",\"{field}\":{}}}}}\n\n",
             serde_json::Value::String(piece)
-        ));
+        )
+        .unwrap();
     }
     sse.push_str(
         "event: content_block_stop\n\
