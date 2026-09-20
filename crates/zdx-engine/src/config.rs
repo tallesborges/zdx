@@ -2390,15 +2390,12 @@ fn default_meta_provider() -> ProviderConfig {
 
 /// Muse Code (Meta subscription) defaults.
 ///
-/// Same Muse Spark catalogue as the API-key `meta` provider; the difference is
-/// the credential, which is minted by `zdx login --muse-code`.
+/// Contributor tier is intentionally excluded; the difference from the API-key
+/// `meta` provider is the credential, which is minted by `zdx login --muse-code`.
 fn default_muse_code_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec![
-            "muse-spark-1.3".to_string(),
-            "muse-spark-1.3-contributor".to_string(),
-        ],
+        models: vec!["muse-spark-1.3".to_string()],
         ..Default::default()
     }
 }
