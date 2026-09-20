@@ -65,6 +65,12 @@ pub enum AgentEvent {
         /// that did not execute a real tool.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         duration_ms: Option<u64>,
+        /// Explicit wall-clock boundaries for trajectory/overlap views.
+        /// Absent on synthetic results and events produced by older builds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        started_at: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        completed_at: Option<String>,
     },
 
     /// An error occurred during execution.
@@ -167,6 +173,12 @@ pub enum AgentEvent {
         /// arrived; `None` otherwise.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ttft_ms: Option<u64>,
+        /// Explicit wall-clock boundaries for the successful provider request.
+        /// Absent on interim/failed usage and events produced by older builds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        started_at: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        completed_at: Option<String>,
     },
 }
 

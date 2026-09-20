@@ -1060,6 +1060,8 @@ mod tests {
                 id: "tu1".to_string(),
                 result: crate::core::events::ToolOutput::success(serde_json::json!("ok")),
                 duration_ms: Some(1),
+                started_at: None,
+                completed_at: None,
             },
             AgentEvent::TurnFinished {
                 status: crate::core::events::TurnStatus::Completed,

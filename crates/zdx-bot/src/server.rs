@@ -157,6 +157,7 @@ pub enum ThreadActivity {
     Message {
         sequence: usize,
         time: String,
+        ts: String,
         role: String,
         speaker: &'static str,
         text: String,
@@ -166,12 +167,14 @@ pub enum ThreadActivity {
     Reasoning {
         sequence: usize,
         time: String,
+        ts: String,
         text: String,
         redacted: bool,
     },
     ToolUse {
         sequence: usize,
         time: String,
+        ts: String,
         id: String,
         name: String,
         input: Value,
@@ -181,6 +184,8 @@ pub enum ThreadActivity {
     ToolRunning {
         sequence: usize,
         time: String,
+        ts: String,
+        started_at: String,
         id: String,
         name: String,
         summary: String,
@@ -195,15 +200,21 @@ pub enum ThreadActivity {
     ToolResult {
         sequence: usize,
         time: String,
+        ts: String,
         tool_use_id: String,
         ok: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         duration_ms: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        started_at: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        completed_at: Option<String>,
         output: Value,
     },
     Usage {
         sequence: usize,
         time: String,
+        ts: String,
         input_tokens: u64,
         output_tokens: u64,
         cache_read_tokens: u64,
@@ -216,6 +227,10 @@ pub enum ThreadActivity {
         duration_ms: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         ttft_ms: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        started_at: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        completed_at: Option<String>,
         /// Context window of the model that served this request, so clients can
         /// show usage as a percentage without their own model registry.
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -224,12 +239,14 @@ pub enum ThreadActivity {
     Notice {
         sequence: usize,
         time: String,
+        ts: String,
         kind: &'static str,
         message: String,
     },
     Interrupted {
         sequence: usize,
         time: String,
+        ts: String,
         role: String,
         text: String,
     },
@@ -992,15 +1009,18 @@ fn append_running_tools(response: &mut ThreadResponse) {
             _ => None,
         })
         .collect();
-    let mut sequence = response.total_events;
+    let mut sequence = response.cursor;
     for tool in record.current_tools {
         if persisted.contains(&tool.id) {
             continue;
         }
+        let started_at = tool.started_at;
         response.activity.push(ThreadActivity::ToolRunning {
             sequence,
-            time: event_time(&tool.started_at),
-            running_for: agent_activity::uptime_since(&tool.started_at),
+            time: event_time(&started_at),
+            ts: started_at.clone(),
+            started_at: started_at.clone(),
+            running_for: agent_activity::uptime_since(&started_at),
             id: tool.id,
             name: tool.name.to_ascii_lowercase(),
             summary: tool.summary,
@@ -1018,6 +1038,7 @@ fn project_thread(
     telegram_link: Option<String>,
     lineage: ThreadLineage,
 ) -> ThreadResponse {
+    let cursor = events.len();
     let mut title = "Thread Transcript".to_string();
     let mut activity = Vec::new();
     let mut total_messages = 0;
@@ -1040,6 +1061,7 @@ fn project_thread(
                     activity.push(ThreadActivity::Message {
                         sequence,
                         time: event_time(&ts),
+                        ts,
                         role,
                         speaker,
                         text: clean_text,
@@ -1056,6 +1078,7 @@ fn project_thread(
                     activity.push(ThreadActivity::Reasoning {
                         sequence,
                         time: event_time(&ts),
+                        ts,
                         text: visible.unwrap_or_default(),
                         redacted,
                     });
@@ -1070,6 +1093,7 @@ fn project_thread(
             } => activity.push(ThreadActivity::ToolUse {
                 sequence,
                 time: event_time(&ts),
+                ts,
                 id,
                 name,
                 input,
@@ -1079,13 +1103,18 @@ fn project_thread(
                 output,
                 ok,
                 duration_ms,
+                started_at,
+                completed_at,
                 ts,
             } => activity.push(ThreadActivity::ToolResult {
                 sequence,
                 time: event_time(&ts),
+                ts,
                 tool_use_id,
                 ok,
                 duration_ms,
+                started_at,
+                completed_at,
                 output,
             }),
             ThreadEvent::Usage {
@@ -1097,10 +1126,13 @@ fn project_thread(
                 provider,
                 duration_ms,
                 ttft_ms,
+                started_at,
+                completed_at,
                 ts,
             } => activity.push(ThreadActivity::Usage {
                 sequence,
                 time: event_time(&ts),
+                ts,
                 input_tokens,
                 output_tokens,
                 cache_read_tokens,
@@ -1114,6 +1146,8 @@ fn project_thread(
                 provider,
                 duration_ms,
                 ttft_ms,
+                started_at,
+                completed_at,
             }),
             ThreadEvent::Notice { kind, message, ts } => {
                 let kind = match kind {
@@ -1126,6 +1160,7 @@ fn project_thread(
                 activity.push(ThreadActivity::Notice {
                     sequence,
                     time: event_time(&ts),
+                    ts,
                     kind,
                     message,
                 });
@@ -1134,6 +1169,7 @@ fn project_thread(
                 activity.push(ThreadActivity::Interrupted {
                     sequence,
                     time: event_time(&ts),
+                    ts,
                     role,
                     text,
                 });
@@ -1148,7 +1184,7 @@ fn project_thread(
         title,
         total_messages,
         total_events: activity.len(),
-        cursor: activity.len(),
+        cursor,
         partial: false,
         parent_thread_id: lineage.parent_thread_id,
         parent_title: lineage.parent_title,
@@ -2675,6 +2711,8 @@ mod tests {
                 output: serde_json::json!({"ok": true, "data": "fn main() {}"}),
                 ok: true,
                 duration_ms: Some(12),
+                started_at: Some("2026-08-24T10:00:02.100Z".to_string()),
+                completed_at: Some("2026-08-24T10:00:02.112Z".to_string()),
                 ts: "2026-08-24T10:00:03Z".to_string(),
             },
             ThreadEvent::Usage {
@@ -2686,6 +2724,8 @@ mod tests {
                 provider: Some("test-provider".to_string()),
                 duration_ms: Some(500),
                 ttft_ms: Some(100),
+                started_at: Some("2026-08-24T10:00:03.500Z".to_string()),
+                completed_at: Some("2026-08-24T10:00:04.000Z".to_string()),
                 ts: "2026-08-24T10:00:04Z".to_string(),
             },
             ThreadEvent::Message {
@@ -2710,11 +2750,15 @@ mod tests {
         assert_eq!(response.title, "Inspect the agent");
         assert_eq!(response.total_messages, 1);
         assert_eq!(response.total_events, 5);
+        assert_eq!(response.cursor, 6, "cursor counts hidden source events too");
         assert!(json.contains("\"type\":\"reasoning\""));
         assert!(json.contains("\"redacted\":true"));
         assert!(json.contains("\"type\":\"tool_use\""));
         assert!(json.contains("\"type\":\"tool_result\""));
         assert!(json.contains("\"type\":\"usage\""));
+        assert!(json.contains("\"ts\":\"2026-08-24T10:00:02Z\""));
+        assert!(json.contains("\"started_at\":\"2026-08-24T10:00:02.100Z\""));
+        assert!(json.contains("\"completed_at\":\"2026-08-24T10:00:04.000Z\""));
         assert!(!json.contains("/private/project"));
         assert!(!json.contains("private-replay-blob"));
         assert!(!json.contains("private-tool-signature"));

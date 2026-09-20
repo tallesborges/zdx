@@ -424,6 +424,8 @@ mod tests {
                 output: json!({ "content": "noise" }),
                 ok: true,
                 duration_ms: None,
+                started_at: None,
+                completed_at: None,
                 ts: "2026-05-10T00:00:00Z".to_string(),
             },
             ThreadEvent::assistant_message("answer   with\nspaces"),

@@ -185,6 +185,12 @@ pub enum ThreadEvent {
         /// synthetic results that did not execute a real tool.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         duration_ms: Option<u64>,
+        /// Explicit client-observed execution boundaries. Absent on older
+        /// threads and synthetic results without an honest execution span.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        started_at: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        completed_at: Option<String>,
         ts: String,
     },
 
@@ -229,6 +235,12 @@ pub enum ThreadEvent {
         /// usage event when content arrived. `None` on older transcripts.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ttft_ms: Option<u64>,
+        /// Explicit boundaries for the successful provider request. Absent on
+        /// interim/failed usage and older transcripts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        started_at: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        completed_at: Option<String>,
         ts: String,
     },
 
@@ -372,6 +384,8 @@ impl ThreadEvent {
             output,
             ok,
             duration_ms: None,
+            started_at: None,
+            completed_at: None,
             ts: chrono_timestamp(),
         }
     }
@@ -403,6 +417,20 @@ impl ThreadEvent {
         duration_ms: Option<u64>,
         ttft_ms: Option<u64>,
     ) -> Self {
+        Self::usage_with_span(usage, model, provider, duration_ms, ttft_ms, None, None)
+    }
+
+    /// Creates a usage event with optional model/provider attribution,
+    /// latency, and explicit request boundaries.
+    pub fn usage_with_span(
+        usage: Usage,
+        model: Option<String>,
+        provider: Option<String>,
+        duration_ms: Option<u64>,
+        ttft_ms: Option<u64>,
+        started_at: Option<String>,
+        completed_at: Option<String>,
+    ) -> Self {
         Self::Usage {
             input_tokens: usage.input,
             output_tokens: usage.output,
@@ -412,6 +440,8 @@ impl ThreadEvent {
             provider,
             duration_ms,
             ttft_ms,
+            started_at,
+            completed_at,
             ts: chrono_timestamp(),
         }
     }
@@ -469,7 +499,7 @@ fn default_interrupted_text() -> String {
 
 /// Returns an RFC3339 UTC timestamp string.
 pub(crate) fn chrono_timestamp() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 pub(crate) fn normalize_title(title: impl Into<String>) -> Option<String> {

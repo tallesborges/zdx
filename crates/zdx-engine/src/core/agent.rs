@@ -1254,7 +1254,10 @@ async fn run_turn_inner(
                     StreamState,
                     (TurnError, bool, Option<StreamState>),
                 > = {
-                    let request_started_at = Instant::now();
+                    let request_start = RequestSpanStart {
+                        instant: Instant::now(),
+                        wall: crate::core::thread_persistence::chrono_timestamp(),
+                    };
                     tracing::debug!(model_turn, attempt, "Provider request attempt");
                     // Project each user message's persisted runtime-context
                     // block onto its wire text. Deterministic and idempotent,
@@ -1275,14 +1278,14 @@ async fn run_turn_inner(
                     .await
                     {
                         Ok(stream) => {
-                            match consume_stream(
+                            match consume_stream_with_start(
                                 stream,
                                 &messages,
                                 sender,
                                 cancel,
                                 &setup.model,
                                 &setup.provider,
-                                request_started_at,
+                                request_start,
                             )
                             .await
                             {
@@ -1795,6 +1798,11 @@ fn resolve_tools(
     tools
 }
 
+struct RequestSpanStart {
+    instant: Instant,
+    wall: String,
+}
+
 struct StreamState {
     turn: AssistantTurnBuilder,
     stop_reason: Option<String>,
@@ -1834,6 +1842,9 @@ struct StreamState {
     /// event. Defaults to construction time; `consume_stream` overrides it
     /// with the pre-request timestamp.
     request_started_at: Instant,
+    /// Wall-clock counterpart to `request_started_at`, persisted so clients
+    /// can place requests against concurrently executing spans.
+    request_started_at_wall: String,
     /// When the first content token (text/reasoning/tool) arrived, for
     /// time-to-first-token. `None` if no content arrived this attempt.
     first_token_at: Option<Instant>,
@@ -1910,6 +1921,7 @@ impl StreamState {
             emitted_visible_content: false,
             provider: String::new(),
             request_started_at: Instant::now(),
+            request_started_at_wall: crate::core::thread_persistence::chrono_timestamp(),
             first_token_at: None,
             output_loop: None,
         }
@@ -1996,18 +2008,15 @@ impl StreamState {
     /// exec) are additive, so a single combined event is equivalent to
     /// emitting each accumulated delta separately.
     fn flush_pending_usage(&mut self, sender: &EventSender) {
-        self.emit_pending_usage(sender, None, None);
+        self.emit_pending_usage(sender, None, None, None, None);
     }
 
     /// Terminal flush for a successful request: attaches per-request latency
     /// (wall-clock duration + time-to-first-token) to the emitted usage
     /// event. Used only on the `consume_stream` EOF-success path so timing
-    /// rides exactly one usage event per request (no double counting across
-    /// fragmented flushes).
+    /// is emitted exactly once per request. `UsagePersistor` merges a
+    /// timing-only terminal update with any earlier token-bearing fragment.
     fn flush_final_usage(&mut self, sender: &EventSender) {
-        if self.pending_usage.is_empty() {
-            return;
-        }
         let now = Instant::now();
         let duration_ms = u64::try_from(
             now.saturating_duration_since(self.request_started_at)
@@ -2021,7 +2030,13 @@ impl StreamState {
             )
             .unwrap_or(u64::MAX)
         });
-        self.emit_pending_usage(sender, Some(duration_ms), ttft_ms);
+        self.emit_pending_usage(
+            sender,
+            Some(duration_ms),
+            ttft_ms,
+            Some(self.request_started_at_wall.clone()),
+            Some(crate::core::thread_persistence::chrono_timestamp()),
+        );
     }
 
     fn emit_pending_usage(
@@ -2029,8 +2044,10 @@ impl StreamState {
         sender: &EventSender,
         duration_ms: Option<u64>,
         ttft_ms: Option<u64>,
+        started_at: Option<String>,
+        completed_at: Option<String>,
     ) {
-        if self.pending_usage.is_empty() {
+        if self.pending_usage.is_empty() && duration_ms.is_none() {
             return;
         }
         let usage = std::mem::take(&mut self.pending_usage);
@@ -2043,6 +2060,8 @@ impl StreamState {
             provider: self.provider.clone(),
             duration_ms,
             ttft_ms,
+            started_at,
+            completed_at,
         });
     }
 }
@@ -2096,18 +2115,23 @@ async fn wait_for_retry_delay(
 /// Consumes a provider stream. On error, returns the accumulated `StreamState`
 /// alongside the error so the caller can decide whether a transparent retry is
 /// safe (i.e. nothing externally visible or persisted has been emitted yet).
-async fn consume_stream(
+async fn consume_stream_with_start(
     mut stream: ProviderStream,
     prior_messages: &[ChatMessage],
     sender: &EventSender,
     cancel: Option<&CancellationToken>,
     model: &str,
     provider: &str,
-    request_started_at: Instant,
+    request_start: RequestSpanStart,
 ) -> std::result::Result<StreamState, (TurnError, StreamState)> {
+    let RequestSpanStart {
+        instant: request_started_at,
+        wall: request_started_at_wall,
+    } = request_start;
     let mut state = StreamState::new(model.to_string());
     state.provider = provider.to_string();
     state.request_started_at = request_started_at;
+    state.request_started_at_wall = request_started_at_wall;
 
     loop {
         if interrupt::is_interrupted() || cancel.is_some_and(CancellationToken::is_cancelled) {
@@ -2162,6 +2186,31 @@ async fn consume_stream(
             return Ok(state);
         }
     }
+}
+
+#[cfg(test)]
+async fn consume_stream(
+    stream: ProviderStream,
+    prior_messages: &[ChatMessage],
+    sender: &EventSender,
+    cancel: Option<&CancellationToken>,
+    model: &str,
+    provider: &str,
+    request_started_at: Instant,
+) -> std::result::Result<StreamState, (TurnError, StreamState)> {
+    consume_stream_with_start(
+        stream,
+        prior_messages,
+        sender,
+        cancel,
+        model,
+        provider,
+        RequestSpanStart {
+            instant: request_started_at,
+            wall: crate::core::thread_persistence::chrono_timestamp(),
+        },
+    )
+    .await
 }
 
 fn can_transparently_retry_stream(state: &StreamState) -> bool {
@@ -2774,6 +2823,8 @@ fn emit_malformed_tool_events(
             id,
             result: error_output,
             duration_ms: None,
+            started_at: None,
+            completed_at: None,
         });
     }
 }
@@ -2814,6 +2865,13 @@ struct CompletedTool {
     output: ToolOutput,
     result: ToolResult,
     duration_ms: Option<u64>,
+    started_at: String,
+    completed_at: String,
+}
+
+#[derive(Clone)]
+struct ToolSpanStart {
+    wall: String,
 }
 
 /// Executes all tool uses in parallel and emits events via async channel.
@@ -2839,8 +2897,14 @@ async fn execute_tools_async(
     let mut results: Vec<Option<(ToolOutput, ToolResult)>> = vec![None; tool_uses.len()];
     let mut completed: HashSet<usize> = HashSet::new();
     let tool_cancel = CancellationToken::new();
+    let tool_starts: Vec<_> = tool_uses
+        .iter()
+        .map(|_| ToolSpanStart {
+            wall: crate::core::thread_persistence::chrono_timestamp(),
+        })
+        .collect();
 
-    emit_tool_started_events(tool_uses, sender, run_guard);
+    emit_tool_started_events(tool_uses, &tool_starts, sender, run_guard);
 
     for (i, tu) in tool_uses.iter().enumerate() {
         // Clone for 'static requirement
@@ -2851,6 +2915,7 @@ async fn execute_tools_async(
         ctx.cancel_token = Some(tool_cancel.clone());
         let enabled_tools = enabled_tools.clone();
         let tool_registry = tool_registry.clone();
+        let tool_start = tool_starts[i].clone();
 
         // Tokio tasks do not inherit the current span, so attach it explicitly
         // or every tool log line loses its turn/thread context.
@@ -2866,6 +2931,8 @@ async fn execute_tools_async(
                     output,
                     result,
                     duration_ms,
+                    started_at: tool_start.wall,
+                    completed_at: crate::core::thread_persistence::chrono_timestamp(),
                 }
             }
             .instrument(tool_span),
@@ -2885,6 +2952,7 @@ async fn execute_tools_async(
                     sender,
                     run_guard,
                     &tool_cancel,
+                    &tool_starts,
                 ).await;
                 break;
             }
@@ -2897,6 +2965,7 @@ async fn execute_tools_async(
                     sender,
                     run_guard,
                     &tool_cancel,
+                    &tool_starts,
                 ).await;
                 break;
             }
@@ -2938,6 +3007,7 @@ async fn wait_for_cancel(cancel: Option<&CancellationToken>) {
 
 fn emit_tool_started_events(
     tool_uses: &[ToolUse],
+    starts: &[ToolSpanStart],
     sender: &EventSender,
     run_guard: Option<&crate::agent_activity::RunGuard>,
 ) {
@@ -2951,7 +3021,13 @@ fn emit_tool_started_events(
         guard.set_tools_started(
             tool_uses
                 .iter()
-                .map(|tu| crate::agent_activity::ActiveToolCall::new(&tu.id, &tu.name, &tu.input))
+                .zip(starts)
+                .map(|(tu, start)| {
+                    let mut active =
+                        crate::agent_activity::ActiveToolCall::new(&tu.id, &tu.name, &tu.input);
+                    active.started_at.clone_from(&start.wall);
+                    active
+                })
                 .collect(),
         );
     }
@@ -2972,10 +3048,13 @@ fn record_tool_completion(
         id: tool.id,
         result: tool.output.clone(),
         duration_ms: tool.duration_ms,
+        started_at: Some(tool.started_at),
+        completed_at: Some(tool.completed_at),
     });
     results[tool.idx] = Some((tool.output, tool.result));
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_tool_interrupt(
     join_set: &mut JoinSet<CompletedTool>,
     completed: &mut HashSet<usize>,
@@ -2984,6 +3063,7 @@ async fn handle_tool_interrupt(
     sender: &EventSender,
     run_guard: Option<&crate::agent_activity::RunGuard>,
     tool_cancel: &CancellationToken,
+    tool_starts: &[ToolSpanStart],
 ) {
     const TEARDOWN_WAIT: Duration = Duration::from_secs(6);
 
@@ -3028,6 +3108,8 @@ async fn handle_tool_interrupt(
                     output: abort_output,
                     result: abort_result,
                     duration_ms: None,
+                    started_at: tool_starts[i].wall.clone(),
+                    completed_at: crate::core::thread_persistence::chrono_timestamp(),
                 },
                 run_guard,
             );
@@ -5161,8 +5243,10 @@ mod tests {
     /// Simulates a transparent retry at the `consume_stream` layer:
     /// the first attempt buffers usage and fails retryably (state is
     /// discarded by the retry loop). The second attempt streams text and
-    /// commits its own usage. End-to-end, the channel observes exactly ONE
-    /// `UsageUpdate` — the discarded attempt left no leak.
+    /// commits its own usage. End-to-end, the channel observes one token-bearing
+    /// `UsageUpdate` plus the successful attempt's timing-only terminal update;
+    /// the discarded attempt leaves no leak.
+    #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn usage_emitted_once_after_transparent_retry_success() {
         use futures_util::stream;
@@ -5214,9 +5298,8 @@ mod tests {
         let r2 = consume_stream(s2, &[], &sender, None, "", "", std::time::Instant::now()).await;
         assert!(r2.is_ok(), "attempt 2 should succeed");
 
-        // Drain rx and pin the strict ordering: exactly one UsageUpdate
-        // (from attempt 2) emitted BEFORE the AssistantDelta, and nothing
-        // else carrying usage data.
+        // Drain rx and pin the strict ordering: attempt 2's token-bearing usage
+        // arrives before visible output, then EOF emits one timing-only update.
         let mut events = Vec::new();
         while let Ok(e) = rx.try_recv() {
             events.push(e);
@@ -5225,25 +5308,60 @@ mod tests {
             .iter()
             .enumerate()
             .filter_map(|(i, e)| match &**e {
-                AgentEvent::UsageUpdate { input_tokens, .. } => Some((i, *input_tokens)),
+                AgentEvent::UsageUpdate {
+                    input_tokens,
+                    output_tokens,
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
+                    duration_ms,
+                    started_at,
+                    completed_at,
+                    ..
+                } => Some((
+                    i,
+                    *input_tokens,
+                    *output_tokens,
+                    *cache_read_input_tokens,
+                    *cache_creation_input_tokens,
+                    *duration_ms,
+                    started_at.clone(),
+                    completed_at.clone(),
+                )),
                 _ => None,
             })
             .collect();
+        assert_eq!(usage_positions.len(), 2, "got {usage_positions:?}");
+        let token_updates: Vec<_> = usage_positions
+            .iter()
+            .filter(|(_, input, output, cache_read, cache_write, ..)| {
+                input + output + cache_read + cache_write > 0
+            })
+            .collect();
         assert_eq!(
-            usage_positions.len(),
+            token_updates.len(),
             1,
-            "exactly one UsageUpdate must reach the channel; got {usage_positions:?}"
+            "discarded attempt must not leak token usage: {usage_positions:?}"
         );
-        let (usage_idx, usage_input) = usage_positions[0];
-        assert_eq!(usage_input, 10, "UsageUpdate must carry attempt 2's input");
+        let (usage_idx, usage_input, ..) = token_updates[0];
+        assert_eq!(*usage_input, 10, "UsageUpdate must carry attempt 2's input");
         let delta_idx = events
             .iter()
             .position(|e| matches!(&**e, AgentEvent::AssistantDelta { text } if text == "ok"))
             .expect("attempt 2's AssistantDelta must reach the channel");
         assert!(
-            usage_idx < delta_idx,
+            *usage_idx < delta_idx,
             "UsageUpdate (idx {usage_idx}) must precede AssistantDelta (idx {delta_idx})"
         );
+        let timing = usage_positions
+            .iter()
+            .find(
+                |(_, input, output, cache_read, cache_write, duration, ..)| {
+                    input + output + cache_read + cache_write == 0 && duration.is_some()
+                },
+            )
+            .expect("successful attempt must emit terminal timing");
+        assert!(timing.0 > delta_idx);
+        assert!(timing.6.is_some() && timing.7.is_some());
     }
 
     #[tokio::test]

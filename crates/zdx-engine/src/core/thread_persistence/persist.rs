@@ -7,6 +7,13 @@ use super::replay::emit_message_events;
 use super::storage::Thread;
 use crate::core::agent::AgentEventRx;
 
+#[derive(Debug)]
+struct ToolTimingMetadata {
+    duration_ms: Option<u64>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+}
+
 /// Spawns a thread persistence task that consumes events from a channel.
 ///
 /// The task owns the `Thread` and persists relevant events until the channel closes.
@@ -63,7 +70,7 @@ pub(crate) struct UsagePersistor {
     last_persisted_index: usize,
     /// Completion metadata arrives before checkpoint snapshots. Keep it keyed
     /// by tool id until the canonical, request-ordered result is flushed.
-    tool_durations: HashMap<String, VecDeque<Option<u64>>>,
+    tool_timings: HashMap<String, VecDeque<ToolTimingMetadata>>,
 }
 
 impl UsagePersistor {
@@ -71,6 +78,7 @@ impl UsagePersistor {
         Self::default()
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handle_event(&mut self, event: &crate::core::events::AgentEvent) -> Vec<ThreadEvent> {
         use crate::core::events::AgentEvent;
 
@@ -86,6 +94,8 @@ impl UsagePersistor {
                 provider,
                 duration_ms,
                 ttft_ms,
+                started_at,
+                completed_at,
             } => {
                 self.current_model = (!model.is_empty()).then(|| model.clone());
                 self.current_provider = (!provider.is_empty()).then(|| provider.clone());
@@ -106,23 +116,49 @@ impl UsagePersistor {
                 if *output_tokens > 0 {
                     if let Some(mut usage) = self.pending.take() {
                         usage.output += *output_tokens;
-                        events.push(self.usage_event(usage, *duration_ms, *ttft_ms));
+                        events.push(self.usage_event(
+                            usage,
+                            *duration_ms,
+                            *ttft_ms,
+                            started_at.clone(),
+                            completed_at.clone(),
+                        ));
                     } else {
                         events.push(self.usage_event(
                             Usage::new(0, *output_tokens, 0, 0),
                             *duration_ms,
                             *ttft_ms,
+                            started_at.clone(),
+                            completed_at.clone(),
                         ));
                     }
+                } else if duration_ms.is_some() || (started_at.is_some() && completed_at.is_some())
+                {
+                    let usage = self.pending.take().unwrap_or_default();
+                    events.push(self.usage_event(
+                        usage,
+                        *duration_ms,
+                        *ttft_ms,
+                        started_at.clone(),
+                        completed_at.clone(),
+                    ));
                 }
             }
             AgentEvent::ToolCompleted {
-                id, duration_ms, ..
+                id,
+                duration_ms,
+                started_at,
+                completed_at,
+                ..
             } => {
-                self.tool_durations
+                self.tool_timings
                     .entry(id.clone())
                     .or_default()
-                    .push_back(*duration_ms);
+                    .push_back(ToolTimingMetadata {
+                        duration_ms: *duration_ms,
+                        started_at: started_at.clone(),
+                        completed_at: completed_at.clone(),
+                    });
             }
             AgentEvent::TurnCheckpoint {
                 messages,
@@ -176,13 +212,19 @@ impl UsagePersistor {
                 if let ThreadEvent::ToolResult {
                     tool_use_id,
                     duration_ms,
+                    started_at,
+                    completed_at,
                     ..
                 } = event
-                    && let Some(queue) = self.tool_durations.get_mut(tool_use_id)
+                    && let Some(queue) = self.tool_timings.get_mut(tool_use_id)
                 {
-                    *duration_ms = queue.pop_front().flatten();
+                    if let Some(timing) = queue.pop_front() {
+                        *duration_ms = timing.duration_ms;
+                        *started_at = timing.started_at;
+                        *completed_at = timing.completed_at;
+                    }
                     if queue.is_empty() {
-                        self.tool_durations.remove(tool_use_id);
+                        self.tool_timings.remove(tool_use_id);
                     }
                 }
             }
@@ -195,7 +237,7 @@ impl UsagePersistor {
         if let Some(usage) = self.pending.take()
             && usage.total() > 0
         {
-            events.push(self.usage_event(usage, None, None));
+            events.push(self.usage_event(usage, None, None, None, None));
         }
     }
 
@@ -206,13 +248,17 @@ impl UsagePersistor {
         usage: Usage,
         duration_ms: Option<u64>,
         ttft_ms: Option<u64>,
+        started_at: Option<String>,
+        completed_at: Option<String>,
     ) -> ThreadEvent {
-        ThreadEvent::usage(
+        ThreadEvent::usage_with_span(
             usage,
             self.current_model.clone(),
             self.current_provider.clone(),
             duration_ms,
             ttft_ms,
+            started_at,
+            completed_at,
         )
     }
 

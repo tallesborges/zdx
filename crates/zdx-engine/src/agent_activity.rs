@@ -78,7 +78,7 @@ impl ActiveToolCall {
             summary,
             input: stored_input,
             output_tail: String::new(),
-            started_at: chrono::Utc::now().to_rfc3339(),
+            started_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         }
     }
 }
@@ -228,7 +228,7 @@ pub fn start(params: StartParams<'_>) -> Option<RunGuard> {
     fs::create_dir_all(&dir).ok()?;
 
     let pid = std::process::id();
-    let started_at = chrono::Utc::now().to_rfc3339();
+    let started_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let record = RunRecord {
         pid,
         started_at,

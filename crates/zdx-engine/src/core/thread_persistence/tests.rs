@@ -1274,6 +1274,8 @@ async fn test_persist_task_records_latency_on_terminal_usage() {
         provider: "p".to_string(),
         duration_ms: None,
         ttft_ms: None,
+        started_at: None,
+        completed_at: None,
     }))
     .unwrap();
     // Terminal usage (output) carries per-request latency.
@@ -1286,6 +1288,8 @@ async fn test_persist_task_records_latency_on_terminal_usage() {
         provider: "p".to_string(),
         duration_ms: Some(1234),
         ttft_ms: Some(56),
+        started_at: Some("2026-09-20T10:00:00.000Z".to_string()),
+        completed_at: Some("2026-09-20T10:00:01.234Z".to_string()),
     }))
     .unwrap();
     tx.send(Arc::new(AgentEvent::TurnFinished {
@@ -1310,12 +1314,101 @@ async fn test_persist_task_records_latency_on_terminal_usage() {
                 output_tokens,
                 duration_ms,
                 ttft_ms,
+                started_at,
+                completed_at,
                 ..
-            } => Some((*input_tokens, *output_tokens, *duration_ms, *ttft_ms)),
+            } => Some((
+                *input_tokens,
+                *output_tokens,
+                *duration_ms,
+                *ttft_ms,
+                started_at.clone(),
+                completed_at.clone(),
+            )),
             _ => None,
         })
         .expect("expected a persisted usage event");
-    assert_eq!(usage, (100, 50, Some(1234), Some(56)));
+    assert_eq!(
+        usage,
+        (
+            100,
+            50,
+            Some(1234),
+            Some(56),
+            Some("2026-09-20T10:00:00.000Z".to_string()),
+            Some("2026-09-20T10:00:01.234Z".to_string()),
+        )
+    );
+}
+
+#[tokio::test]
+async fn test_persist_task_merges_timing_only_terminal_usage() {
+    let _temp = setup_temp_zdx_home();
+    let thread = Thread::with_id(unique_thread_id("usage-timing-only")).unwrap();
+    let (tx, rx) = create_event_channel();
+    let persist_handle = spawn_thread_persist_task(thread.clone(), rx);
+
+    tx.send(Arc::new(AgentEvent::UsageUpdate {
+        input_tokens: 100,
+        output_tokens: 0,
+        cache_read_input_tokens: 25,
+        cache_creation_input_tokens: 0,
+        model: "m".to_string(),
+        provider: "p".to_string(),
+        duration_ms: None,
+        ttft_ms: None,
+        started_at: None,
+        completed_at: None,
+    }))
+    .unwrap();
+    tx.send(Arc::new(AgentEvent::UsageUpdate {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        model: "m".to_string(),
+        provider: "p".to_string(),
+        duration_ms: Some(900),
+        ttft_ms: Some(120),
+        started_at: Some("2026-09-20T10:00:00.000Z".to_string()),
+        completed_at: Some("2026-09-20T10:00:00.900Z".to_string()),
+    }))
+    .unwrap();
+    drop(tx);
+    persist_handle.await.unwrap();
+
+    let usages: Vec<_> = thread
+        .read_events()
+        .unwrap()
+        .into_iter()
+        .filter_map(|event| match event {
+            ThreadEvent::Usage {
+                input_tokens,
+                cache_read_tokens,
+                duration_ms,
+                started_at,
+                completed_at,
+                ..
+            } => Some((
+                input_tokens,
+                cache_read_tokens,
+                duration_ms,
+                started_at,
+                completed_at,
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        usages,
+        vec![(
+            100,
+            25,
+            Some(900),
+            Some("2026-09-20T10:00:00.000Z".to_string()),
+            Some("2026-09-20T10:00:00.900Z".to_string()),
+        )]
+    );
 }
 
 #[tokio::test]
@@ -1332,6 +1425,8 @@ async fn test_persist_task_attaches_tool_durations_in_request_order() {
             id: id.to_string(),
             result: crate::core::events::ToolOutput::success(json!({"id": id})),
             duration_ms: Some(duration_ms),
+            started_at: Some(format!("2026-09-20T10:00:00.{duration_ms:03}Z")),
+            completed_at: Some(format!("2026-09-20T10:00:01.{duration_ms:03}Z")),
         }))
         .unwrap();
     }
@@ -1378,14 +1473,29 @@ async fn test_persist_task_attaches_tool_durations_in_request_order() {
             ThreadEvent::ToolResult {
                 tool_use_id,
                 duration_ms,
+                started_at,
+                completed_at,
                 ..
-            } => Some((tool_use_id, duration_ms)),
+            } => Some((tool_use_id, duration_ms, started_at, completed_at)),
             _ => None,
         })
         .collect();
     assert_eq!(
         persisted,
-        vec![("t1".to_string(), Some(10)), ("t2".to_string(), Some(20))]
+        vec![
+            (
+                "t1".to_string(),
+                Some(10),
+                Some("2026-09-20T10:00:00.010Z".to_string()),
+                Some("2026-09-20T10:00:01.010Z".to_string()),
+            ),
+            (
+                "t2".to_string(),
+                Some(20),
+                Some("2026-09-20T10:00:00.020Z".to_string()),
+                Some("2026-09-20T10:00:01.020Z".to_string()),
+            ),
+        ]
     );
 }
 
@@ -1406,6 +1516,8 @@ async fn test_persist_task_saves_completed_usage_from_agent_events() {
         provider: String::new(),
         duration_ms: None,
         ttft_ms: None,
+        started_at: None,
+        completed_at: None,
     }))
     .unwrap();
     tx.send(Arc::new(AgentEvent::UsageUpdate {
@@ -1417,6 +1529,8 @@ async fn test_persist_task_saves_completed_usage_from_agent_events() {
         provider: String::new(),
         duration_ms: None,
         ttft_ms: None,
+        started_at: None,
+        completed_at: None,
     }))
     .unwrap();
     tx.send(Arc::new(AgentEvent::TurnFinished {
@@ -1460,6 +1574,8 @@ async fn test_persist_task_records_model_and_provider_on_usage() {
         provider: "claude-cli".to_string(),
         duration_ms: None,
         ttft_ms: None,
+        started_at: None,
+        completed_at: None,
     }))
     .unwrap();
     drop(tx);
@@ -1497,6 +1613,8 @@ async fn test_persist_task_flushes_partial_usage_on_interrupted_turn() {
         provider: String::new(),
         duration_ms: None,
         ttft_ms: None,
+        started_at: None,
+        completed_at: None,
     }))
     .unwrap();
     tx.send(Arc::new(AgentEvent::TurnFinished {
@@ -1556,6 +1674,8 @@ async fn test_persist_task_flushes_pending_usage_on_channel_close() {
         provider: String::new(),
         duration_ms: None,
         ttft_ms: None,
+        started_at: None,
+        completed_at: None,
     }))
     .unwrap();
     drop(tx);
@@ -1751,9 +1871,18 @@ fn test_old_tool_result_loads_without_duration() {
         event,
         ThreadEvent::ToolResult {
             duration_ms: None,
+            started_at: None,
+            completed_at: None,
             ..
         }
     ));
+}
+
+#[test]
+fn test_new_timestamps_keep_millisecond_precision() {
+    let timestamp = chrono_timestamp();
+    assert!(timestamp.ends_with('Z'));
+    assert_eq!(timestamp.split('.').nth(1).map(str::len), Some(4));
 }
 
 /// Streaming `ToolInputCompleted` followed by `TurnFinished` produces

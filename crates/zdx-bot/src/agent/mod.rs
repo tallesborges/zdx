@@ -634,6 +634,8 @@ mod tests {
                 id: "1".to_string(),
                 result: ToolOutput::success(json!({ "ok": true })),
                 duration_ms: Some(1),
+                started_at: None,
+                completed_at: None,
             }),
             Some(STATUS_WAITING.to_string())
         );

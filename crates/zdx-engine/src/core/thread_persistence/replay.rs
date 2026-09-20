@@ -150,6 +150,8 @@ pub(crate) fn emit_message_events(
                             output,
                             ok: !tr.is_error,
                             duration_ms: None,
+                            started_at: None,
+                            completed_at: None,
                             ts: chrono_timestamp(),
                         });
                     }

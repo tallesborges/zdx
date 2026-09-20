@@ -866,6 +866,8 @@ mod tests {
                 id: "tool-1".to_string(),
                 result: expected_result.clone(),
                 duration_ms: Some(1),
+                started_at: None,
+                completed_at: None,
             },
         );
         handle_agent_event(

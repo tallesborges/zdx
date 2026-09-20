@@ -279,6 +279,8 @@ mod tests {
                 output: json!({}),
                 ok: true,
                 duration_ms: Some(30),
+                started_at: None,
+                completed_at: None,
                 ts: "2026-01-01T00:00:00Z".to_string(),
             },
             ThreadEvent::user_message("second"),
@@ -288,6 +290,8 @@ mod tests {
                 output: json!({}),
                 ok: false,
                 duration_ms: Some(40),
+                started_at: None,
+                completed_at: None,
                 ts: "2026-01-01T00:00:01Z".to_string(),
             },
         ];
