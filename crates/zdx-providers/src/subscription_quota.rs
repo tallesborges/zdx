@@ -1323,7 +1323,7 @@ mod tests {
     #[test]
     fn claude_plan_is_absent_when_the_profile_says_nothing() {
         for body in [
-            r#"{}"#,
+            r"{}",
             r#"{"organization":{}}"#,
             r#"{"organization":{"rate_limit_tier":""}}"#,
         ] {
