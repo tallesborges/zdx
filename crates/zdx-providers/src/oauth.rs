@@ -1579,8 +1579,21 @@ pub mod muse_code {
     const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
     /// Builds the HTTP client used by every Muse Code auth call.
+    ///
+    /// Two settings are load-bearing, not cosmetic:
+    ///
+    /// - **User agent.** `auth.meta.com` answers a request without one with a
+    ///   302 to `facebook.com/unsupportedbrowser`. reqwest sends no user agent
+    ///   by default, so both device-code endpoints need this explicitly.
+    /// - **No redirect following.** Without it that 302 is followed to an HTML
+    ///   page which then arrives as a successful response, turning a rejected
+    ///   request into a confusing JSON parse failure. Refusing redirects makes
+    ///   the status itself the error. The reference implementations likewise
+    ///   send these requests with redirects disabled.
     fn http_client() -> Result<reqwest::Client> {
         reqwest::Client::builder()
+            .user_agent(crate::shared::USER_AGENT)
+            .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
             .build()
@@ -1593,6 +1606,17 @@ pub mod muse_code {
     const DEFAULT_EXPIRES_IN_SECS: u64 = 900;
     /// Extra delay added when the server answers `slow_down`.
     const SLOW_DOWN_STEP_SECS: u64 = 5;
+
+    /// Explains a redirect status, which means the request was turned away
+    /// before it reached the API (Meta bounces unrecognized clients to an
+    /// "unsupported browser" page) rather than being answered.
+    pub(super) fn redirect_hint(status: reqwest::StatusCode) -> &'static str {
+        if status.is_redirection() {
+            "; the request was redirected away from the API, which usually means Meta rejected the client"
+        } else {
+            ""
+        }
+    }
 
     /// A pending device authorization the user must approve in a browser.
     #[derive(Debug, Clone)]
@@ -1687,7 +1711,10 @@ pub mod muse_code {
 
         if !response.status().is_success() {
             let status = response.status();
-            anyhow::bail!("Muse Code device authorization failed (HTTP {status})");
+            anyhow::bail!(
+                "Muse Code device authorization failed (HTTP {status}){}",
+                redirect_hint(status)
+            );
         }
 
         let wire: DeviceAuthorizationWire = response
@@ -1760,9 +1787,18 @@ pub mod muse_code {
             // exchange — connect, send and body read — by the time left.
             let exchange = async {
                 let response = request.await.ok()?;
+                let status = response.status();
                 // The token endpoint answers pending approval with an HTTP
-                // error status, so classify the payload, not the status.
-                Some(response.json::<DeviceTokenWire>().await.unwrap_or_default())
+                // error status, so classify the payload, not the status — but a
+                // redirect never carries one, so surface it rather than letting
+                // the empty body read as "no token".
+                if status.is_redirection() {
+                    return Some(Err(status));
+                }
+                Some(Ok(response
+                    .json::<DeviceTokenWire>()
+                    .await
+                    .unwrap_or_default()))
             };
 
             let Ok(outcome) = tokio::time::timeout(remaining, exchange).await else {
@@ -1774,6 +1810,13 @@ pub mod muse_code {
             // deadline above bounds how long that can continue.
             let Some(wire) = outcome else {
                 continue;
+            };
+            let wire = match wire {
+                Ok(wire) => wire,
+                Err(status) => anyhow::bail!(
+                    "Muse Code login failed (HTTP {status}){}",
+                    redirect_hint(status)
+                ),
             };
 
             match wire.error.as_deref() {
@@ -2144,6 +2187,21 @@ mod muse_code_tests {
             interval_secs,
             expires_in_secs,
         }
+    }
+
+    /// `auth.meta.com` bounces clients it does not recognize with a 302 to an
+    /// "unsupported browser" page. The client refuses to follow redirects so
+    /// that arrives as a status, and the message has to say what it means
+    /// instead of surfacing as an unexplained failure.
+    #[test]
+    fn redirect_statuses_are_explained() {
+        use reqwest::StatusCode;
+        assert!(!super::muse_code::redirect_hint(StatusCode::FOUND).is_empty());
+        assert!(!super::muse_code::redirect_hint(StatusCode::TEMPORARY_REDIRECT).is_empty());
+        // Real API answers explain themselves; no hint should be appended.
+        assert!(super::muse_code::redirect_hint(StatusCode::BAD_REQUEST).is_empty());
+        assert!(super::muse_code::redirect_hint(StatusCode::UNAUTHORIZED).is_empty());
+        assert!(super::muse_code::redirect_hint(StatusCode::INTERNAL_SERVER_ERROR).is_empty());
     }
 
     #[test]

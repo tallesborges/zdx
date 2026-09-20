@@ -421,6 +421,10 @@ pub async fn fetch_muse_code_quota(
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .header("x-api-version", "1.0.0")
+        // Meta's auth host turns away clients with no user agent; the mint
+        // host currently does not, but send one so this path does not start
+        // failing if that gating is extended.
+        .header("user-agent", crate::shared::USER_AGENT)
         .body("{}")
         .send()
         .await

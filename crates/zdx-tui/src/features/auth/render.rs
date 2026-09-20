@@ -90,10 +90,7 @@ fn render_login_overlay_lines(login_state: &LoginState, inner_width: u16) -> Vec
             ];
             if let Some(error) = error {
                 lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    error.clone(),
-                    Style::default().fg(Color::Red),
-                )));
+                lines.extend(error_lines(error, inner_width));
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -195,10 +192,7 @@ fn render_device_approval_lines(
     ];
     if let Some(error) = error {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            error.to_string(),
-            Style::default().fg(Color::Red),
-        )));
+        lines.extend(error_lines(error, inner_width));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
@@ -258,6 +252,46 @@ fn render_awaiting_code_lines(
         Style::default().fg(Color::DarkGray),
     )));
     lines
+}
+
+/// Wraps text to `width`, breaking on whitespace where possible.
+///
+/// Login errors carry the provider's own explanation; rendering them as one
+/// clipped line hides exactly the part that says what went wrong.
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(20);
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if current.is_empty() {
+            current.push_str(word);
+        } else if current.chars().count() + 1 + word.chars().count() <= width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current.push_str(word);
+        }
+        // A single token longer than the line (a URL, say) still has to land.
+        while current.chars().count() > width {
+            let head: String = current.chars().take(width).collect();
+            let tail: String = current.chars().skip(width).collect();
+            lines.push(head);
+            current = tail;
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// Renders an error as wrapped red lines.
+fn error_lines(error: &str, inner_width: u16) -> Vec<Line<'static>> {
+    wrap_text(error, inner_width.saturating_sub(2) as usize)
+        .into_iter()
+        .map(|line| Line::from(Span::styled(line, Style::default().fg(Color::Red))))
+        .collect()
 }
 
 /// Truncates a string in the middle with "..." if it exceeds `max_len`.
@@ -349,4 +383,43 @@ fn render_cli_provider_entries(width: u16, selected: usize) -> Vec<Line<'static>
             Line::from(spans)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrap_text;
+
+    /// A provider error is the only thing that says why a login failed, so it
+    /// must survive rendering instead of being clipped at the overlay edge.
+    #[test]
+    fn long_errors_wrap_instead_of_being_cut_off() {
+        let error = "Muse Code device authorization failed (HTTP 302 Found); the request \
+                     was redirected away from the API, which usually means Meta rejected \
+                     the client";
+        let lines = wrap_text(error, 40);
+
+        assert!(lines.len() > 1, "expected wrapping, got {lines:?}");
+        assert!(lines.iter().all(|l| l.chars().count() <= 40));
+        // Every word survives, including the tail that a clipped line loses.
+        let rejoined = lines.join(" ");
+        for word in ["302", "redirected", "rejected", "client"] {
+            assert!(rejoined.contains(word), "lost {word:?} in {lines:?}");
+        }
+    }
+
+    #[test]
+    fn unbroken_tokens_are_split_rather_than_overflowing() {
+        let lines = wrap_text(&"x".repeat(95), 30);
+        assert!(lines.len() >= 3);
+        assert!(lines.iter().all(|l| l.chars().count() <= 30));
+        assert_eq!(lines.concat().chars().count(), 95);
+    }
+
+    #[test]
+    fn short_errors_stay_on_one_line() {
+        assert_eq!(
+            wrap_text("Meta did not issue a key", 60),
+            vec!["Meta did not issue a key".to_string()]
+        );
+    }
 }
