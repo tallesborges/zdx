@@ -1,6 +1,6 @@
 //! SSE parsing for OpenAI-compatible Responses streaming.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 
 use eventsource_stream::{EventStream, Eventsource};
@@ -30,10 +30,11 @@ impl JsonExt for Value {
     }
 }
 
+/// Kind of the current non-tool block. Tool calls are tracked separately in
+/// `StreamState::tool_calls`, since they may interleave with each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BlockKind {
     Text,
-    Tool,
     Reasoning,
 }
 
@@ -51,15 +52,35 @@ struct ReasoningState {
     summary: String,
 }
 
+/// Per-tool-call argument accumulation. Each registered call owns its own
+/// buffer, so parallel or delayed calls cannot splice arguments into each
+/// other. Entries are retained for the whole response (never removed on
+/// completion) so a duplicate terminal event cannot migrate onto a later call.
+#[derive(Debug)]
+struct ToolCallState {
+    stream_index: usize,
+    /// Everything already emitted downstream for this call. Kept in full
+    /// rather than as a byte count so a final snapshot can be verified to
+    /// extend what was streamed instead of merely being longer than it.
+    arguments: String,
+    closed: bool,
+}
+
 #[derive(Debug)]
 struct StreamState {
     next_index: usize,
     current_index: Option<usize>,
     current_kind: Option<BlockKind>,
-    current_tool_argument_bytes: usize,
     saw_tool: bool,
     /// Tracks reasoning item being streamed (for summary replay)
     current_reasoning: Option<ReasoningState>,
+    /// Tool calls seen this response, keyed by their block index.
+    tool_calls: HashMap<usize, ToolCallState>,
+    /// Responses `output_index` → block index.
+    tool_by_output: HashMap<u64, usize>,
+    /// Responses item id → block index. This is the item id, never `call_id`
+    /// and never the composite replay id sent on `ContentBlockStart`.
+    tool_by_item_id: HashMap<String, usize>,
 }
 
 impl StreamState {
@@ -68,11 +89,131 @@ impl StreamState {
             next_index: 0,
             current_index: None,
             current_kind: None,
-            current_tool_argument_bytes: 0,
             saw_tool: false,
             current_reasoning: None,
+            tool_calls: HashMap::new(),
+            tool_by_output: HashMap::new(),
+            tool_by_item_id: HashMap::new(),
         }
     }
+
+    /// Registers a tool call opened by `response.output_item.added`, together
+    /// with every identifier later events may use to address it.
+    ///
+    /// # Errors
+    /// Returns a parse error if an identifier is already bound to a different
+    /// call; overwriting it would silently redirect another call's arguments.
+    fn open_tool(
+        &mut self,
+        stream_index: usize,
+        item_id: &str,
+        output_index: Option<u64>,
+    ) -> ProviderResult<()> {
+        if let Some(index) = output_index
+            && let Some(previous) = self.tool_by_output.insert(index, stream_index)
+            && previous != stream_index
+        {
+            return Err(tool_identity_error(&format!(
+                "output_index {index} was already bound to tool block {previous}"
+            )));
+        }
+        if !item_id.is_empty()
+            && let Some(previous) = self
+                .tool_by_item_id
+                .insert(item_id.to_string(), stream_index)
+            && previous != stream_index
+        {
+            return Err(tool_identity_error(&format!(
+                "item id {item_id:?} was already bound to tool block {previous}"
+            )));
+        }
+        self.tool_calls.insert(
+            stream_index,
+            ToolCallState {
+                stream_index,
+                arguments: String::new(),
+                closed: false,
+            },
+        );
+        Ok(())
+    }
+
+    /// Resolves which tool call an argument or terminal event addresses.
+    ///
+    /// Identity is never inferred from recency: guessing the latest call is
+    /// exactly what let one call's arguments land on another. Every supplied
+    /// identifier must resolve on its own, and identifiers that both resolve
+    /// must agree; a stale or invented alias cannot ride along on a sibling
+    /// identifier that happens to be valid. An unlabeled event is accepted
+    /// only when a single tool call exists in the whole response, which is
+    /// the only case where it is unambiguous.
+    ///
+    /// # Errors
+    /// Returns a parse error when a supplied identifier is unknown, when the
+    /// identifiers disagree, or when an unlabeled event arrives while several
+    /// calls exist.
+    fn resolve_tool(&self, item_id: &str, output_index: Option<u64>) -> ProviderResult<usize> {
+        let by_item_id = if item_id.is_empty() {
+            None
+        } else {
+            let slot = self.tool_by_item_id.get(item_id).copied();
+            if slot.is_none() {
+                return Err(tool_identity_error(&format!(
+                    "no tool call registered for item id {item_id:?}"
+                )));
+            }
+            slot
+        };
+        let by_output = if let Some(index) = output_index {
+            let slot = self.tool_by_output.get(&index).copied();
+            if slot.is_none() {
+                return Err(tool_identity_error(&format!(
+                    "no tool call registered for output_index {index}"
+                )));
+            }
+            slot
+        } else {
+            None
+        };
+
+        match (by_item_id, by_output) {
+            (Some(from_id), Some(from_index)) if from_id != from_index => {
+                Err(tool_identity_error(&format!(
+                    "item id {item_id:?} resolves to tool block {from_id} but output_index \
+                     {output_index:?} resolves to tool block {from_index}"
+                )))
+            }
+            (Some(slot), _) | (None, Some(slot)) => Ok(slot),
+            (None, None) => match self.tool_calls.len() {
+                1 => Ok(*self
+                    .tool_calls
+                    .keys()
+                    .next()
+                    .expect("map with one entry has a key")),
+                other => Err(tool_identity_error(&format!(
+                    "unidentified tool argument event with {other} tool calls in the response"
+                ))),
+            },
+        }
+    }
+}
+
+/// A tool call could not be addressed unambiguously. This is fatal rather
+/// than retryable: continuing would hand the model's arguments to the wrong
+/// call, or drop them.
+fn tool_identity_error(detail: &str) -> ProviderError {
+    ProviderError::new(
+        ProviderErrorKind::Parse,
+        format!("Responses stream tool-call identity error: {detail}"),
+    )
+}
+
+/// Reads the `item_id`/`output_index` pair that labels a Responses event.
+fn tool_event_labels(value: &Value, item_id_key: &str) -> (String, Option<u64>) {
+    (
+        value.get_string(item_id_key),
+        value.get("output_index").and_then(Value::as_u64),
+    )
 }
 
 fn extract_function_call_arguments(item: &Value) -> Option<String> {
@@ -217,6 +358,97 @@ impl ResponsesEventMapper {
         self.terminal_outcome
     }
 
+    /// Closes a tool call, reconciling its streamed arguments against the
+    /// snapshot on the terminal event.
+    ///
+    /// The snapshot must *extend* what was already streamed. Comparing only
+    /// lengths cannot tell "the model sent more" from "the provider sent
+    /// something else", and appending the tail of a disagreeing snapshot is
+    /// what produced valid JSON followed by a stray suffix. A snapshot that
+    /// is not a continuation fails the stream rather than emitting arguments
+    /// the model never produced.
+    ///
+    /// A second terminal for an already-closed call is idempotent only when
+    /// it says nothing new: no snapshot, or a snapshot identical to what was
+    /// emitted. Anything else is contradictory, including a snapshot that
+    /// would extend the call, since input cannot follow its own
+    /// `ContentBlockCompleted`.
+    ///
+    /// # Errors
+    /// Returns a parse error when the snapshot contradicts the streamed
+    /// prefix, or when a duplicate terminal carries different arguments.
+    fn finish_tool_call(
+        &mut self,
+        slot: usize,
+        final_arguments: Option<String>,
+    ) -> ProviderResult<StreamEvent> {
+        let Some(call) = self.state.tool_calls.get_mut(&slot) else {
+            return Err(tool_identity_error(&format!(
+                "terminal event for unregistered tool block {slot}"
+            )));
+        };
+
+        let index = call.stream_index;
+
+        if call.closed {
+            return match final_arguments {
+                None => Ok(StreamEvent::Ping),
+                Some(final_arguments) if final_arguments == call.arguments => Ok(StreamEvent::Ping),
+                Some(final_arguments) => Err(ProviderError::new(
+                    ProviderErrorKind::Parse,
+                    format!(
+                        "Responses stream tool-call argument mismatch on block {index}: a \
+                         duplicate terminal carries {} bytes that differ from the {} bytes \
+                         already completed",
+                        final_arguments.len(),
+                        call.arguments.len()
+                    ),
+                )),
+            };
+        }
+
+        let mut remainder = String::new();
+
+        if let Some(final_arguments) = final_arguments {
+            if let Some(suffix) = final_arguments.strip_prefix(call.arguments.as_str()) {
+                remainder = suffix.to_string();
+                call.arguments = final_arguments;
+            } else {
+                let streamed_len = call.arguments.len();
+                let final_len = final_arguments.len();
+                let divergence = call
+                    .arguments
+                    .as_bytes()
+                    .iter()
+                    .zip(final_arguments.as_bytes())
+                    .position(|(a, b)| a != b)
+                    .unwrap_or(final_len.min(streamed_len));
+                return Err(ProviderError::new(
+                    ProviderErrorKind::Parse,
+                    format!(
+                        "Responses stream tool-call argument mismatch on block {index}: \
+                             final arguments ({final_len} bytes) do not extend the {streamed_len} \
+                             bytes already streamed (first difference at byte {divergence})"
+                    ),
+                ));
+            }
+        }
+
+        call.closed = true;
+
+        if !remainder.is_empty() {
+            self.pending.push_back(StreamEvent::InputJsonDelta {
+                index,
+                partial_json: remainder,
+            });
+        }
+
+        Ok(StreamEvent::ContentBlockCompleted {
+            index,
+            signature: None,
+        })
+    }
+
     #[allow(
         clippy::too_many_lines,
         clippy::needless_pass_by_value,
@@ -247,9 +479,6 @@ impl ResponsesEventMapper {
                     "function_call" => {
                         let index = self.state.next_index;
                         self.state.next_index += 1;
-                        self.state.current_index = Some(index);
-                        self.state.current_kind = Some(BlockKind::Tool);
-                        self.state.current_tool_argument_bytes = 0;
                         self.state.saw_tool = true;
 
                         let call_id = item.get_str("call_id");
@@ -260,6 +489,14 @@ impl ResponsesEventMapper {
                         } else {
                             format!("{call_id}{id}")
                         };
+
+                        // A tool call owns its own argument buffer rather than
+                        // the shared current-block slot: Responses streams may
+                        // interleave parallel calls, and the slot would then
+                        // splice one call's arguments onto another's.
+                        let output_index = value.get("output_index").and_then(Value::as_u64);
+                        let item_id = item.get_string("id");
+                        self.state.open_tool(index, &item_id, output_index)?;
 
                         Ok(StreamEvent::ContentBlockStart {
                             index,
@@ -305,59 +542,50 @@ impl ResponsesEventMapper {
                 Ok(StreamEvent::TextDelta { index, text: delta })
             }
             "response.function_call_arguments.delta" => {
-                if self.state.current_kind != Some(BlockKind::Tool) {
-                    return Ok(StreamEvent::Ping);
-                }
-                let index = self.state.current_index.unwrap_or(0);
+                let (item_id, output_index) = tool_event_labels(&value, "item_id");
+                let slot = self.state.resolve_tool(&item_id, output_index)?;
                 let delta = value.get_string("delta");
-                self.state.current_tool_argument_bytes += delta.len();
+                let Some(call) = self.state.tool_calls.get_mut(&slot) else {
+                    return Err(tool_identity_error(&format!(
+                        "argument delta for unregistered tool block {slot}"
+                    )));
+                };
+                if call.closed {
+                    // An empty delta adds nothing, so it stays harmless.
+                    // Real bytes after completion cannot be shown to be a
+                    // replay of what was already emitted, and dropping them
+                    // would silently truncate the call's arguments.
+                    if delta.is_empty() {
+                        return Ok(StreamEvent::Ping);
+                    }
+                    return Err(ProviderError::new(
+                        ProviderErrorKind::Parse,
+                        format!(
+                            "Responses stream tool-call argument delta on block {}: {} bytes \
+                             arrived after the call was completed",
+                            call.stream_index,
+                            delta.len()
+                        ),
+                    ));
+                }
+                call.arguments.push_str(&delta);
                 Ok(StreamEvent::InputJsonDelta {
-                    index,
+                    index: call.stream_index,
                     partial_json: delta,
                 })
             }
             "response.function_call_arguments.done" => {
-                if self.state.current_kind != Some(BlockKind::Tool) {
-                    return Ok(StreamEvent::Ping);
-                }
-
+                let (item_id, output_index) = tool_event_labels(&value, "item_id");
+                let slot = self.state.resolve_tool(&item_id, output_index)?;
+                // Without a full snapshot this event carries no more
+                // information than the deltas already did. Closing here would
+                // discard the fuller payload that `response.output_item.done`
+                // still delivers, so always defer to it. Identity is still
+                // resolved above, so a stray event cannot pass unnoticed.
                 let Some(arguments) = extract_function_call_arguments(&value) else {
-                    if self.state.current_tool_argument_bytes == 0 {
-                        // Some providers emit this event without final arguments; wait for
-                        // `response.output_item.done` to avoid completing with empty input.
-                        return Ok(StreamEvent::Ping);
-                    }
-
-                    let index = self.state.current_index.take().unwrap_or(0);
-                    self.state.current_kind = None;
-                    return Ok(StreamEvent::ContentBlockCompleted {
-                        index,
-                        signature: None,
-                    });
+                    return Ok(StreamEvent::Ping);
                 };
-
-                let index = self.state.current_index.take().unwrap_or(0);
-                self.state.current_kind = None;
-
-                let emitted = self.state.current_tool_argument_bytes;
-                let remainder = arguments.get(emitted..).unwrap_or("");
-                self.state.current_tool_argument_bytes = arguments.len();
-
-                if !remainder.is_empty() {
-                    self.pending.push_back(StreamEvent::InputJsonDelta {
-                        index,
-                        partial_json: remainder.to_string(),
-                    });
-                    return Ok(StreamEvent::ContentBlockCompleted {
-                        index,
-                        signature: None,
-                    });
-                }
-
-                Ok(StreamEvent::ContentBlockCompleted {
-                    index,
-                    signature: None,
-                })
+                self.finish_tool_call(slot, Some(arguments))
             }
             "response.reasoning_summary_text.delta" => {
                 // Stream reasoning summary text incrementally
@@ -457,41 +685,14 @@ impl ResponsesEventMapper {
                 }
 
                 if item_type == "function_call" {
-                    if self.state.current_kind != Some(BlockKind::Tool)
-                        && self.state.current_index.is_none()
-                    {
-                        return Ok(StreamEvent::Ping);
-                    }
-
-                    let index = self.state.current_index.take().unwrap_or(0);
-                    self.state.current_kind = None;
-
-                    if let Some(arguments) = extract_function_call_arguments(item) {
-                        let emitted = self.state.current_tool_argument_bytes;
-                        let remainder = arguments.get(emitted..).unwrap_or("");
-                        self.state.current_tool_argument_bytes = arguments.len();
-
-                        if !remainder.is_empty() {
-                            self.pending.push_back(StreamEvent::InputJsonDelta {
-                                index,
-                                partial_json: remainder.to_string(),
-                            });
-                            return Ok(StreamEvent::ContentBlockCompleted {
-                                index,
-                                signature: None,
-                            });
-                        }
-                    }
-
-                    return Ok(StreamEvent::ContentBlockCompleted {
-                        index,
-                        signature: None,
-                    });
+                    let output_index = value.get("output_index").and_then(Value::as_u64);
+                    let item_id = item.get_string("id");
+                    let slot = self.state.resolve_tool(&item_id, output_index)?;
+                    return self.finish_tool_call(slot, extract_function_call_arguments(item));
                 }
 
                 if let Some(index) = self.state.current_index.take() {
                     self.state.current_kind = None;
-                    self.state.current_tool_argument_bytes = 0;
                     Ok(StreamEvent::ContentBlockCompleted {
                         index,
                         signature: None,
@@ -1071,47 +1272,721 @@ mod tests {
         ));
     }
 
+    /// A terminal snapshot that contradicts what was already streamed cannot
+    /// be reconciled: the deltas are downstream already. Previously a shorter
+    /// snapshot was silently ignored and a longer non-prefix one had its tail
+    /// appended, which is the splice shape. Both now fail the stream.
     #[test]
-    fn function_call_done_does_not_reemit_when_done_payload_is_shorter() {
+    fn function_call_done_fails_when_snapshot_contradicts_streamed_prefix() {
+        // Shorter, equal-length-but-different, longer-diverging, and wholly
+        // different snapshots are all contradictions of the streamed "abcd".
+        for snapshot in ["abc", "abxd", "abxyz", "zzzzzz"] {
+            let mut mapper = mapper();
+
+            let _ = mapper
+                .map_event(json!({
+                    "type": "response.output_item.added",
+                    "item": {
+                        "type": "function_call",
+                        "id": "fc_1",
+                        "call_id": "call_1",
+                        "name": "bash"
+                    }
+                }))
+                .unwrap();
+
+            let _ = mapper
+                .map_event(json!({
+                    "type": "response.function_call_arguments.delta",
+                    "delta": "abcd"
+                }))
+                .unwrap();
+
+            let err = mapper
+                .map_event(json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "function_call",
+                        "arguments": snapshot
+                    }
+                }))
+                .expect_err("contradicting snapshot must fail the stream");
+
+            assert_eq!(err.kind, ProviderErrorKind::Parse);
+            assert!(
+                !err.is_retryable(),
+                "argument corruption must not be retried, got {err:?}"
+            );
+            assert!(
+                mapper.pending.is_empty(),
+                "no arguments may be emitted from a contradicting snapshot"
+            );
+        }
+    }
+
+    // ---- Multi-tool-call routing ----------------------------------------
+    //
+    // These drive `push_json`/`pop`, the path production uses. Calling
+    // `map_event` directly misreports ordering: a terminal event queues the
+    // remainder delta *before* the completion is appended, so only the queue
+    // shows what a consumer actually sees.
+
+    /// Ordered record of what a consumer observes for each tool block.
+    #[derive(Debug, Default)]
+    struct ToolTrace {
+        ids: HashMap<usize, String>,
+        args: HashMap<usize, String>,
+        completed: HashMap<usize, usize>,
+        completions: Vec<usize>,
+        late_delta: Option<usize>,
+    }
+
+    impl ToolTrace {
+        /// Accumulated arguments for the block started with `tool_id`.
+        fn args_of(&self, tool_id: &str) -> &str {
+            let index = self
+                .ids
+                .iter()
+                .find(|(_, id)| id.as_str() == tool_id)
+                .map_or_else(
+                    || panic!("no tool block started with id {tool_id:?}"),
+                    |(index, _)| *index,
+                );
+            self.args.get(&index).map_or("", String::as_str)
+        }
+    }
+
+    /// Feeds `events` through the real SSE entry point in order.
+    fn run_script(events: &[Value]) -> ProviderResult<ToolTrace> {
+        let mut mapper = mapper();
+        let mut trace = ToolTrace::default();
+
+        for event in events {
+            mapper.push_json(&event.to_string())?;
+            while let Some(streamed) = mapper.pop() {
+                match streamed {
+                    StreamEvent::ContentBlockStart {
+                        index,
+                        id: Some(id),
+                        ..
+                    } => {
+                        trace.ids.insert(index, id);
+                    }
+                    StreamEvent::InputJsonDelta {
+                        index,
+                        partial_json,
+                    } => {
+                        if trace.completed.contains_key(&index) {
+                            trace.late_delta = Some(index);
+                        }
+                        trace.args.entry(index).or_default().push_str(&partial_json);
+                    }
+                    StreamEvent::ContentBlockCompleted { index, .. } => {
+                        *trace.completed.entry(index).or_default() += 1;
+                        trace.completions.push(index);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        assert_eq!(
+            trace.late_delta, None,
+            "arguments arrived after their block was completed"
+        );
+        for (index, count) in &trace.completed {
+            assert_eq!(*count, 1, "block {index} completed {count} times");
+        }
+        Ok(trace)
+    }
+
+    fn added(output_index: u64, item_id: &str, name: &str) -> Value {
+        json!({
+            "type": "response.output_item.added",
+            "output_index": output_index,
+            "item": {
+                "type": "function_call",
+                "id": item_id,
+                "call_id": format!("call_{item_id}"),
+                "name": name
+            }
+        })
+    }
+
+    fn delta(output_index: u64, item_id: &str, delta: &str) -> Value {
+        json!({
+            "type": "response.function_call_arguments.delta",
+            "output_index": output_index,
+            "item_id": item_id,
+            "delta": delta
+        })
+    }
+
+    fn args_done(output_index: u64, item_id: &str, arguments: &str) -> Value {
+        json!({
+            "type": "response.function_call_arguments.done",
+            "output_index": output_index,
+            "item_id": item_id,
+            "arguments": arguments
+        })
+    }
+
+    fn item_done(output_index: u64, item_id: &str, arguments: &str) -> Value {
+        json!({
+            "type": "response.output_item.done",
+            "output_index": output_index,
+            "item": {
+                "type": "function_call",
+                "id": item_id,
+                "arguments": arguments
+            }
+        })
+    }
+
+    const READ_A: &str = r#"{"file_path":"apps/web/src/views/TranscriptPane.svelte"}"#;
+    const READ_B: &str =
+        r#"{"file_path":"/home/user/.config/agent/skills/frontend-design/SKILL.md"}"#;
+
+    /// Exact reproduction of the reported corruption. `READ_A` is 56 bytes and
+    /// `READ_B` is 72, so slicing B at A's length yielded `esign/SKILL.md"}`,
+    /// which was appended to A: valid JSON plus a stray suffix, reported as
+    /// "trailing characters at line 1 column 57".
+    #[test]
+    fn parallel_read_calls_do_not_splice_arguments() {
+        assert_eq!(READ_A.len(), 56);
+        assert_eq!(READ_B.len(), 72);
+        // The shape the old byte-offset slice produced, reproduced here so the
+        // regression is pinned to the reported payload rather than paraphrased.
+        assert_eq!(&READ_B[READ_A.len()..], r#"esign/SKILL.md"}"#);
+
+        let trace = run_script(&[
+            added(0, "fc_a", "read"),
+            added(1, "fc_b", "read"),
+            delta(1, "fc_b", READ_B),
+            delta(0, "fc_a", READ_A),
+            args_done(0, "fc_a", READ_A),
+            item_done(1, "fc_b", READ_B),
+        ])
+        .expect("well-formed parallel calls must stream cleanly");
+
+        assert_eq!(trace.args_of("call_fc_a|fc_a"), READ_A);
+        assert_eq!(trace.args_of("call_fc_b|fc_b"), READ_B);
+        assert_eq!(trace.completions.len(), 2);
+    }
+
+    /// Interleaved deltas are not required to trigger the bug: a terminal
+    /// event that merely crosses the next call's start is enough, because the
+    /// shared slot had already moved on.
+    #[test]
+    fn delayed_terminal_after_next_call_starts_keeps_its_own_arguments() {
+        let trace = run_script(&[
+            added(0, "fc_a", "read"),
+            delta(0, "fc_a", READ_A),
+            added(1, "fc_b", "read"),
+            delta(1, "fc_b", READ_B),
+            item_done(0, "fc_a", READ_A),
+            item_done(1, "fc_b", READ_B),
+        ])
+        .expect("delayed terminal must resolve to its own call");
+
+        assert_eq!(trace.args_of("call_fc_a|fc_a"), READ_A);
+        assert_eq!(trace.args_of("call_fc_b|fc_b"), READ_B);
+        // The shared slot had already advanced to the second call, so the
+        // first call's terminal completed the wrong block and left the other
+        // one open. Both must complete, each exactly once.
+        assert_eq!(trace.completions, vec![0, 1]);
+    }
+
+    /// Chunked deltas alternating between two calls must each accumulate into
+    /// their own block and remain independently parseable.
+    #[test]
+    fn alternating_partial_deltas_accumulate_per_call() {
+        let trace = run_script(&[
+            added(0, "fc_a", "read"),
+            added(1, "fc_b", "grep"),
+            delta(0, "fc_a", r#"{"file_path":"#),
+            delta(1, "fc_b", r#"{"pattern":"#),
+            delta(0, "fc_a", r#""a.rs"}"#),
+            delta(1, "fc_b", r#""needle"}"#),
+            args_done(0, "fc_a", r#"{"file_path":"a.rs"}"#),
+            args_done(1, "fc_b", r#"{"pattern":"needle"}"#),
+        ])
+        .expect("alternating deltas must stay separated");
+
+        assert_eq!(trace.args_of("call_fc_a|fc_a"), r#"{"file_path":"a.rs"}"#);
+        assert_eq!(trace.args_of("call_fc_b|fc_b"), r#"{"pattern":"needle"}"#);
+        for id in ["call_fc_a|fc_a", "call_fc_b|fc_b"] {
+            serde_json::from_str::<Value>(trace.args_of(id)).expect("valid JSON per call");
+        }
+    }
+
+    /// Completion order need not match start order.
+    #[test]
+    fn reversed_completion_order_preserves_arguments() {
+        let trace = run_script(&[
+            added(0, "fc_a", "read"),
+            added(1, "fc_b", "read"),
+            delta(0, "fc_a", READ_A),
+            delta(1, "fc_b", READ_B),
+            item_done(1, "fc_b", READ_B),
+            item_done(0, "fc_a", READ_A),
+        ])
+        .expect("reversed completion must still route correctly");
+
+        assert_eq!(trace.args_of("call_fc_a|fc_a"), READ_A);
+        assert_eq!(trace.args_of("call_fc_b|fc_b"), READ_B);
+        assert_eq!(trace.completions, vec![1, 0]);
+    }
+
+    /// Both terminal events for both calls: the second is redundant and must
+    /// not re-emit arguments or complete the block twice.
+    #[test]
+    fn duplicate_terminal_events_complete_each_call_once() {
+        let trace = run_script(&[
+            added(0, "fc_a", "read"),
+            added(1, "fc_b", "read"),
+            delta(0, "fc_a", READ_A),
+            delta(1, "fc_b", READ_B),
+            args_done(0, "fc_a", READ_A),
+            item_done(0, "fc_a", READ_A),
+            args_done(1, "fc_b", READ_B),
+            item_done(1, "fc_b", READ_B),
+        ])
+        .expect("duplicate terminals must be idempotent");
+
+        assert_eq!(trace.args_of("call_fc_a|fc_a"), READ_A);
+        assert_eq!(trace.args_of("call_fc_b|fc_b"), READ_B);
+        assert_eq!(trace.completions, vec![0, 1]);
+    }
+
+    /// Partial streaming plus a terminal snapshot: each call receives only the
+    /// remainder of its own arguments.
+    #[test]
+    fn terminal_snapshot_emits_only_its_own_remainder() {
+        let trace = run_script(&[
+            added(0, "fc_a", "read"),
+            added(1, "fc_b", "grep"),
+            delta(1, "fc_b", r#"{"pattern":"needle","#),
+            args_done(0, "fc_a", r#"{"file_path":"a.rs"}"#),
+            args_done(1, "fc_b", r#"{"pattern":"needle","path":"src"}"#),
+        ])
+        .expect("remainders must be per call");
+
+        assert_eq!(trace.args_of("call_fc_a|fc_a"), r#"{"file_path":"a.rs"}"#);
+        assert_eq!(
+            trace.args_of("call_fc_b|fc_b"),
+            r#"{"pattern":"needle","path":"src"}"#
+        );
+    }
+
+    /// Identity resolves from `output_index` alone.
+    #[test]
+    fn index_only_identity_routes_correctly() {
+        let trace = run_script(&[
+            added(0, "fc_a", "read"),
+            added(1, "fc_b", "read"),
+            json!({
+                "type": "response.function_call_arguments.delta",
+                "output_index": 0,
+                "delta": READ_A
+            }),
+            json!({
+                "type": "response.function_call_arguments.done",
+                "output_index": 0,
+                "arguments": READ_A
+            }),
+        ])
+        .expect("output_index alone must identify the call");
+
+        assert_eq!(trace.args_of("call_fc_a|fc_a"), READ_A);
+        assert_eq!(trace.args_of("call_fc_b|fc_b"), "");
+        assert_eq!(trace.completions, vec![0]);
+    }
+
+    /// Identity resolves from `item_id` alone, including when the addressed
+    /// call is not the most recently opened one.
+    #[test]
+    fn id_only_identity_routes_to_the_labeled_call() {
+        let trace = run_script(&[
+            added(0, "fc_a", "read"),
+            added(1, "fc_b", "read"),
+            json!({
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_a",
+                "delta": READ_A
+            }),
+            json!({
+                "type": "response.function_call_arguments.done",
+                "item_id": "fc_a",
+                "arguments": READ_A
+            }),
+        ])
+        .expect("item_id alone must identify the call");
+
+        assert_eq!(trace.args_of("call_fc_a|fc_a"), READ_A);
+        assert_eq!(trace.args_of("call_fc_b|fc_b"), "");
+    }
+
+    /// `output_index: 0` must not be confused with "no index".
+    #[test]
+    fn output_index_zero_is_a_real_identifier() {
+        let trace = run_script(&[
+            added(0, "fc_a", "read"),
+            added(1, "fc_b", "read"),
+            delta(1, "fc_b", READ_B),
+            delta(0, "fc_a", READ_A),
+            item_done(0, "fc_a", READ_A),
+            item_done(1, "fc_b", READ_B),
+        ])
+        .expect("index 0 must resolve");
+
+        assert_eq!(trace.args_of("call_fc_a|fc_a"), READ_A);
+        assert_eq!(trace.args_of("call_fc_b|fc_b"), READ_B);
+    }
+
+    /// An unlabeled argument event is ambiguous once several calls exist.
+    /// Guessing the newest call is what caused the corruption, so this fails.
+    #[test]
+    fn unlabeled_event_with_multiple_calls_is_rejected() {
+        let err = run_script(&[
+            added(0, "fc_a", "read"),
+            added(1, "fc_b", "read"),
+            json!({
+                "type": "response.function_call_arguments.delta",
+                "delta": READ_A
+            }),
+        ])
+        .expect_err("ambiguous identity must fail rather than guess");
+
+        assert_eq!(err.kind, ProviderErrorKind::Parse);
+        assert!(err.message.contains("unidentified tool argument event"));
+    }
+
+    /// Identifiers that resolve to different calls must fail rather than
+    /// letting one silently win.
+    #[test]
+    fn mismatched_identifiers_are_rejected() {
+        let err = run_script(&[
+            added(0, "fc_a", "read"),
+            added(1, "fc_b", "read"),
+            json!({
+                "type": "response.function_call_arguments.delta",
+                "output_index": 1,
+                "item_id": "fc_a",
+                "delta": READ_A
+            }),
+        ])
+        .expect_err("contradicting identifiers must fail");
+
+        assert_eq!(err.kind, ProviderErrorKind::Parse);
+        assert!(err.message.contains("resolves to tool block"));
+    }
+
+    /// An identifier that matches no registered call must not fall back to
+    /// some other call.
+    #[test]
+    fn unknown_identifier_is_rejected() {
+        let err = run_script(&[
+            added(0, "fc_a", "read"),
+            added(1, "fc_b", "read"),
+            json!({
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_ghost",
+                "delta": READ_A
+            }),
+        ])
+        .expect_err("unknown identity must fail");
+
+        assert_eq!(err.kind, ProviderErrorKind::Parse);
+        assert!(err.message.contains("no tool call registered"));
+    }
+
+    /// Rebinding an identifier to a second call would redirect the first
+    /// call's arguments, so registration rejects it.
+    #[test]
+    fn reused_identifier_across_calls_is_rejected() {
+        let err = run_script(&[added(0, "fc_a", "read"), added(1, "fc_a", "read")])
+            .expect_err("a reused item id must fail");
+
+        assert_eq!(err.kind, ProviderErrorKind::Parse);
+        assert!(err.message.contains("already bound"));
+    }
+
+    /// `arguments.done` without a payload must not close a partially streamed
+    /// call: `output_item.done` still carries the full arguments.
+    #[test]
+    fn missing_arguments_done_after_partial_prefix_waits_for_item_done() {
+        let trace = run_script(&[
+            added(0, "fc_a", "read"),
+            delta(0, "fc_a", r#"{"file_path":"#),
+            json!({
+                "type": "response.function_call_arguments.done",
+                "output_index": 0,
+                "item_id": "fc_a"
+            }),
+            item_done(0, "fc_a", r#"{"file_path":"a.rs"}"#),
+        ])
+        .expect("an empty terminal must defer to the full one");
+
+        assert_eq!(trace.args_of("call_fc_a|fc_a"), r#"{"file_path":"a.rs"}"#);
+        assert_eq!(trace.completions, vec![0]);
+    }
+
+    /// Multibyte arguments split mid-character across deltas must reconcile
+    /// against the terminal snapshot without slicing inside a code point.
+    #[test]
+    fn multibyte_arguments_reconcile_against_the_snapshot() {
+        let full = r#"{"query":"café ☕ 日本語"}"#;
+        let split = full.char_indices().nth(12).expect("long enough").0;
+
+        let trace = run_script(&[
+            added(0, "fc_a", "memory_search"),
+            delta(0, "fc_a", &full[..split]),
+            item_done(0, "fc_a", full),
+        ])
+        .expect("multibyte remainder must reconcile");
+
+        assert_eq!(trace.args_of("call_fc_a|fc_a"), full);
+        serde_json::from_str::<Value>(trace.args_of("call_fc_a|fc_a")).expect("valid JSON");
+    }
+
+    /// A snapshot that contradicts one call's streamed prefix fails even when
+    /// routing is correct and another call is open.
+    #[test]
+    fn inconsistent_snapshot_fails_even_with_correct_routing() {
+        let err = run_script(&[
+            added(0, "fc_a", "read"),
+            added(1, "fc_b", "read"),
+            delta(0, "fc_a", READ_A),
+            item_done(0, "fc_a", READ_B),
+        ])
+        .expect_err("a non-extending snapshot must fail");
+
+        assert_eq!(err.kind, ProviderErrorKind::Parse);
+        assert!(err.message.contains("do not extend"));
+    }
+
+    /// Providers that label nothing still work for a single call, which is
+    /// the only unambiguous identifier-free case.
+    #[test]
+    fn single_unlabeled_call_remains_supported() {
+        let trace = run_script(&[
+            json!({
+                "type": "response.output_item.added",
+                "item": { "type": "function_call", "id": "", "call_id": "call_1", "name": "read" }
+            }),
+            json!({
+                "type": "response.function_call_arguments.delta",
+                "delta": r#"{"file_path":"#
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "item": { "type": "function_call", "arguments": r#"{"file_path":"a.rs"}"# }
+            }),
+        ])
+        .expect("identifier-free single-call streams must keep working");
+
+        assert_eq!(trace.args_of("call_1"), r#"{"file_path":"a.rs"}"#);
+        assert_eq!(trace.completions, vec![0]);
+    }
+
+    /// An identifier supplied by the provider must resolve on its own. A
+    /// stale or invented `item_id` previously rode along on a valid
+    /// `output_index`, emitting those bytes under whichever call the index
+    /// named.
+    #[test]
+    fn unknown_item_id_with_known_output_index_is_rejected() {
+        let err = run_script(&[
+            added(0, "fc_a", "read"),
+            json!({
+                "type": "response.function_call_arguments.delta",
+                "output_index": 0,
+                "item_id": "fc_ghost",
+                "delta": READ_A
+            }),
+        ])
+        .expect_err("an unknown item id must not ride along on a valid index");
+
+        assert_eq!(err.kind, ProviderErrorKind::Parse);
+        assert!(err.message.contains("no tool call registered for item id"));
+    }
+
+    /// The mirror case: a known `item_id` cannot excuse an `output_index`
+    /// that matches no registered call.
+    #[test]
+    fn known_item_id_with_unknown_output_index_is_rejected() {
+        let err = run_script(&[
+            added(0, "fc_a", "read"),
+            json!({
+                "type": "response.function_call_arguments.delta",
+                "output_index": 7,
+                "item_id": "fc_a",
+                "delta": READ_A
+            }),
+        ])
+        .expect_err("an unknown output_index must not ride along on a valid id");
+
+        assert_eq!(err.kind, ProviderErrorKind::Parse);
+        assert!(
+            err.message
+                .contains("no tool call registered for output_index 7")
+        );
+    }
+
+    /// A labeled argument delta before any tool call was registered is a
+    /// protocol violation, not something to swallow.
+    #[test]
+    fn argument_delta_before_any_registration_is_rejected() {
+        let err = run_script(&[json!({
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "item_id": "fc_a",
+            "delta": READ_A
+        })])
+        .expect_err("a delta with no registered call must fail");
+
+        assert_eq!(err.kind, ProviderErrorKind::Parse);
+        assert!(err.message.contains("no tool call registered"));
+    }
+
+    /// Likewise for a terminal event carrying a payload.
+    #[test]
+    fn payload_bearing_terminal_before_any_registration_is_rejected() {
+        let err = run_script(&[item_done(0, "fc_a", READ_A)])
+            .expect_err("a terminal with no registered call must fail");
+
+        assert_eq!(err.kind, ProviderErrorKind::Parse);
+        assert!(err.message.contains("no tool call registered"));
+    }
+
+    /// Arguments arriving after completion cannot be shown to be a replay,
+    /// and dropping them would silently truncate the call.
+    #[test]
+    fn nonempty_delta_after_closure_is_rejected() {
+        let err = run_script(&[
+            added(0, "fc_a", "read"),
+            delta(0, "fc_a", READ_A),
+            args_done(0, "fc_a", READ_A),
+            delta(0, "fc_a", r#"{"extra":true}"#),
+        ])
+        .expect_err("late argument bytes must fail the stream");
+
+        assert_eq!(err.kind, ProviderErrorKind::Parse);
+        assert!(err.message.contains("after the call was completed"));
+    }
+
+    /// An empty delta after closure adds nothing and stays tolerated.
+    #[test]
+    fn empty_delta_after_closure_is_tolerated() {
+        let trace = run_script(&[
+            added(0, "fc_a", "read"),
+            delta(0, "fc_a", READ_A),
+            args_done(0, "fc_a", READ_A),
+            delta(0, "fc_a", ""),
+        ])
+        .expect("an empty late delta is harmless");
+
+        assert_eq!(trace.args_of("call_fc_a|fc_a"), READ_A);
+        assert_eq!(trace.completions, vec![0]);
+    }
+
+    /// A duplicate terminal repeating exactly what was completed is an
+    /// idempotent replay and must stay accepted.
+    #[test]
+    fn identical_duplicate_terminal_snapshot_is_accepted() {
+        let trace = run_script(&[
+            added(0, "fc_a", "read"),
+            delta(0, "fc_a", READ_A),
+            args_done(0, "fc_a", READ_A),
+            item_done(0, "fc_a", READ_A),
+        ])
+        .expect("an identical duplicate terminal must be accepted");
+
+        assert_eq!(trace.args_of("call_fc_a|fc_a"), READ_A);
+        assert_eq!(trace.completions, vec![0]);
+    }
+
+    /// A duplicate terminal that changes the arguments is contradictory: the
+    /// original bytes are already downstream.
+    #[test]
+    fn changed_duplicate_terminal_snapshot_is_rejected() {
+        let err = run_script(&[
+            added(0, "fc_a", "read"),
+            delta(0, "fc_a", READ_A),
+            args_done(0, "fc_a", READ_A),
+            item_done(0, "fc_a", READ_B),
+        ])
+        .expect_err("a changed duplicate terminal must fail");
+
+        assert_eq!(err.kind, ProviderErrorKind::Parse);
+        assert!(err.message.contains("duplicate terminal carries"));
+    }
+
+    /// Even a duplicate terminal that *extends* the completed arguments is
+    /// rejected: emitting the suffix would place input after the call's own
+    /// `ContentBlockCompleted`.
+    #[test]
+    fn extending_duplicate_terminal_snapshot_is_rejected() {
+        let extended = format!("{READ_A}  ");
+        let err = run_script(&[
+            added(0, "fc_a", "read"),
+            delta(0, "fc_a", READ_A),
+            args_done(0, "fc_a", READ_A),
+            item_done(0, "fc_a", &extended),
+        ])
+        .expect_err("an extending duplicate terminal must fail");
+
+        assert_eq!(err.kind, ProviderErrorKind::Parse);
+        assert!(err.message.contains("duplicate terminal carries"));
+    }
+
+    /// Equal length is not equality: a same-length snapshot with any byte
+    /// disagreement is contradictory data.
+    #[test]
+    fn equal_length_duplicate_terminal_disagreement_is_rejected() {
+        let mut altered = READ_A.to_string();
+        altered.replace_range(15..16, "X");
+        assert_eq!(altered.len(), READ_A.len());
+        assert_ne!(altered, READ_A);
+
+        let err = run_script(&[
+            added(0, "fc_a", "read"),
+            delta(0, "fc_a", READ_A),
+            args_done(0, "fc_a", READ_A),
+            item_done(0, "fc_a", &altered),
+        ])
+        .expect_err("an equal-length disagreement must fail");
+
+        assert_eq!(err.kind, ProviderErrorKind::Parse);
+        assert!(err.message.contains("duplicate terminal carries"));
+    }
+
+    /// Text streamed alongside an open tool call keeps its own block.
+    #[test]
+    fn tool_call_does_not_consume_the_text_block_slot() {
         let mut mapper = mapper();
 
         let _ = mapper
             .map_event(json!({
                 "type": "response.output_item.added",
-                "item": {
-                    "type": "function_call",
-                    "id": "fc_1",
-                    "call_id": "call_1",
-                    "name": "bash"
-                }
+                "output_index": 0,
+                "item": { "type": "message" }
             }))
             .unwrap();
+        let _ = mapper.map_event(added(1, "fc_a", "read")).unwrap();
 
-        let _ = mapper
+        let event = mapper
             .map_event(json!({
-                "type": "response.function_call_arguments.delta",
-                "delta": "abcd"
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "delta": "hello"
             }))
             .unwrap();
 
-        let done = mapper
-            .map_event(json!({
-                "type": "response.output_item.done",
-                "item": {
-                    "type": "function_call",
-                    "arguments": "abc"
-                }
-            }))
-            .unwrap();
-
-        assert!(matches!(
-            done,
-            StreamEvent::ContentBlockCompleted {
-                index: 0,
-                signature: None
-            }
-        ));
-        assert!(mapper.pending.is_empty());
+        assert!(
+            matches!(event, StreamEvent::TextDelta { index: 0, ref text } if text == "hello"),
+            "text must keep streaming into its own block, got {event:?}"
+        );
     }
 
     #[test]
