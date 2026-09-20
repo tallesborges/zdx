@@ -10,6 +10,7 @@ has been removed.
 
 - `build-cached.mjs`: content-fingerprinted build wrapper for `just web-build`; cache metadata lives in `node_modules/.cache/zdx-web-build.json`, never in embedded `dist`
 - `build-cached.test.mjs`: temporary-fixture tests for no-op builds, input invalidation, output integrity, and failures
+- `trajectory.test.ts`: pure trajectory projection tests for exact overlap, track packing, and legacy timing
 - `src/main.ts`: entrypoint; initializes the Telegram bridge before mounting
 - `src/App.svelte`: framed app shell (shell colour behind, rounded surface panel) + drawer host
 - `src/app.css`: the whole design system — Tailwind v4 `@theme` tokens
@@ -22,6 +23,8 @@ has been removed.
   stays a single-thread link for that reason; only the bare form opens the list.
 - `src/lib/transcript.ts`: projects the flat activity stream into a three-level collapsible tree
   (`work` turn → folded `group` → single `tool`) and derives the one-line summaries
+- `src/lib/trajectory.ts`: projects activity into per-turn model/tool spans, exact overlap tracks,
+  honest legacy timing, and bottleneck rankings
 - `src/lib/diff.ts`: unified-diff parser with word-level intra-line segmentation
 - `src/lib/highlight.ts`: compact line-local syntax tokenizer + span merger (six `--hljs-*` classes)
 - `src/lib/markdown.ts`: `marked` + allowlist sanitizer (model output is untrusted)
@@ -35,7 +38,11 @@ has been removed.
 - `src/views/ThreadView.svelte`: thread shell — owns the thread fetch + tab strip, renders one pane.
   Shows a Telegram jump button when the response carries `telegram_link`; the link is built
   server-side from the *resolved* id, so it works for `?id=active` too.
-- `src/views/TranscriptPane.svelte` / `AgentPane.svelte` / `ChangesPane.svelte` / `WorkersPane.svelte`: the thread tabs.
+- `src/views/TranscriptPane.svelte` / `TrajectoryPane.svelte` / `AgentPane.svelte` / `ChangesPane.svelte` / `WorkersPane.svelte`: the thread tabs.
+  `TrajectoryPane` is mobile-first: the bottleneck summary stays readable at phone width, exact spans
+  use horizontally scrollable Input/Model/Tools lanes with pinned labels, and selected spans open in a
+  bottom sheet. Legacy duration-only events rank as measured durations but are never positioned as
+  inferred overlap.
   `ChangesPane` owns a scope selector — **All Changes** / **Uncommitted** / a specific commit.
   `uncommitted` renders the status groups already in `GitResponse`; the history scopes fetch
   `/api/git/scope` and render one flat file list. `All Changes` is the branch's contribution over
@@ -138,6 +145,9 @@ design live in `.zdx/design-reference/` — local only, gitignored, not shipped.
 - Keep `src/lib/types.ts` matching `server.rs` exactly — field names are the JSON keys, no renames.
 - The API is read-only and every route is GET. Do not add write calls until the Rust side grows them.
 - Poll only when something is actually live (`tool_running`) and only when `document.visibilityState === "visible"`.
+  The thread `cursor` counts source events, not visible `activity` rows: private meta and empty events create
+  sequence gaps. Never derive the next cursor or a live tool's sequence from `activity.length`; a collision
+  makes the delta merge drop the live row.
   **Exception — discovery.** A view whose job is to notice work *appearing* cannot gate its refresh on
   "something is already running", and must not gate the *first* fetch on a page-load count either: a
   thread becomes an orchestrator by spawning its first worker, so `worker_count > 0` from the thread
@@ -160,6 +170,7 @@ design live in `.zdx/design-reference/` — local only, gitignored, not shipped.
 - `just web-dev` — dev server proxying `/api` to a running `zdx bot` on `:4141`
 - `just web-check` — `svelte-check`
 - `just web-build` — production build into `apps/web/dist/`; skips Bun install/Vite when web input contents (including configs, lockfile, `.env*`, Bun version, `VITE_*` and `NODE_ENV`) and the complete dist contents match the last successful build. No-op builds preserve dist timestamps so Cargo stays fresh. `node_modules`, `dist`, `.git`, and `AGENTS.md` are excluded from input hashing.
+- `bun test apps/web/trajectory.test.ts` — exact overlap, bottleneck ranking, and legacy-timing projection tests
 - `bun test apps/web/build-cached.test.mjs` — build cache regression tests (from the workspace root)
 
 Working against the real API in a desktop browser needs signed initData: put a

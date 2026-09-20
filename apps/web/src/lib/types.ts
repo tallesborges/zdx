@@ -105,6 +105,8 @@ export interface ActivityBase {
   sequence: number;
   /** Preformatted local "HH:MM AM/PM", or "--:--". */
   time: string;
+  /** Raw RFC3339 source timestamp. New events retain millisecond precision. */
+  ts: string;
 }
 
 export interface MessageActivity extends ActivityBase {
@@ -130,6 +132,7 @@ export interface ToolUseActivity extends ActivityBase {
 
 export interface ToolRunningActivity extends ActivityBase {
   type: "tool_running";
+  started_at: string;
   id: string;
   name: string;
   summary: string;
@@ -143,6 +146,8 @@ export interface ToolResultActivity extends ActivityBase {
   tool_use_id: string;
   ok: boolean;
   duration_ms?: number;
+  started_at?: string;
+  completed_at?: string;
   output: Json;
 }
 
@@ -156,6 +161,8 @@ export interface UsageActivity extends ActivityBase {
   provider?: string;
   duration_ms?: number;
   ttft_ms?: number;
+  started_at?: string;
+  completed_at?: string;
   /** Context window of the model that served this request. */
   context_limit?: number;
 }

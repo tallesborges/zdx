@@ -17,7 +17,7 @@
 
   let route = $derived(router.current);
 
-  const threadTabs: ThreadTab[] = ["agent", "transcript", "changes"];
+  const threadTabs: ThreadTab[] = ["trajectory", "transcript", "agent", "changes"];
   const monitorSections: MonitorSection[] = [
     "overview",
     "agents",

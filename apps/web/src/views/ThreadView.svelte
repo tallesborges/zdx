@@ -9,6 +9,7 @@
   import TranscriptPane from "./TranscriptPane.svelte";
   import ChangesPane from "./ChangesPane.svelte";
   import AgentPane from "./AgentPane.svelte";
+  import TrajectoryPane from "./TrajectoryPane.svelte";
   import WorkersPane from "./WorkersPane.svelte";
 
   interface Props {
@@ -222,13 +223,14 @@
     workers: "users",
     agent: "bot",
     transcript: "message-square",
+    trajectory: "timer",
     changes: "git-branch",
   };
 
   // Workers leads on an orchestrator: the strip scrolls horizontally, so a tab
   // appended last starts offscreen on a phone.
   let tabs = $derived(
-    ([...(hasWorkers ? (["workers"] as ThreadTab[]) : []), "agent", "transcript", "changes"] as ThreadTab[]).map(
+    ([...(hasWorkers ? (["workers"] as ThreadTab[]) : []), "trajectory", "transcript", "agent", "changes"] as ThreadTab[]).map(
       (t) => ({
         id: t,
         label: THREAD_TAB_LABELS[t],
@@ -356,6 +358,8 @@
   />
 {:else if activeTab === "transcript"}
   <TranscriptPane activity={data?.activity ?? []} />
+{:else if activeTab === "trajectory"}
+  <TrajectoryPane activity={data?.activity ?? []} />
 {:else if activeTab === "agent"}
   <AgentPane
     thread={data}
