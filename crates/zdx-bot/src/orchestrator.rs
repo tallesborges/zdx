@@ -758,7 +758,12 @@ async fn dispatch_owner_callback(
         tracing::warn!(worker = %event.worker_thread_id, err = %format!("{err:#}"), "Failed to post worker update notice");
     }
 
-    let prompt = build_worker_update_prompt(event);
+    let config = context.config_for_chat(route.chat);
+    let worker_context = zdx_engine::tools::orchestrator::thread_context_json(
+        &event.worker_thread_id,
+        Some(&config),
+    );
+    let prompt = build_worker_update_prompt(event, &worker_context);
     let dispatched = dispatch_synthetic_prompt(
         context,
         queues,
@@ -804,7 +809,15 @@ fn worker_update_notice(event: &CompletionEvent) -> String {
 }
 
 /// Compact synthetic prompt describing one finished worker turn.
-fn build_worker_update_prompt(event: &CompletionEvent) -> String {
+///
+/// `worker_context` is the [`zdx_engine::tools::orchestrator::thread_context_json`]
+/// value for the worker: the latest recorded request's input tokens with its
+/// limit and percentage. It is rendered as its own metadata section after the
+/// final message, never merged into it, with no cutoff and no recommendation.
+fn build_worker_update_prompt(
+    event: &CompletionEvent,
+    worker_context: &serde_json::Value,
+) -> String {
     let worker = &event.worker_thread_id;
     let status = event.status.as_str();
 
@@ -829,10 +842,57 @@ fn build_worker_update_prompt(event: &CompletionEvent) -> String {
             }
         }
     }
+    prompt.push_str(&worker_context_section(worker_context));
     prompt.push_str(
         "\nHandle this update: reconcile your todos, follow up on the worker (Send_Thread_Message) or start dependent work if needed, and report the outcome to the user. Use Read_Thread on the worker for full context.",
     );
     prompt
+}
+
+/// Runtime context-usage metadata for a worker completion prompt.
+///
+/// Same basis as `Get_Thread_Status`: the latest recorded request's input
+/// tokens (including cache reads/writes), not cumulative spend, with output
+/// tokens excluded. Unknown usage renders as `unknown`, never `0%`; known
+/// tokens without a resolvable limit keep the tokens with the limit unknown.
+/// Deliberately reports only: no cutoff, no fresh-thread recommendation.
+fn worker_context_section(worker_context: &serde_json::Value) -> String {
+    let input = worker_context
+        .get("input_tokens")
+        .and_then(serde_json::Value::as_u64);
+    let limit = worker_context
+        .get("context_limit")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|limit| *limit > 0);
+    let percent = worker_context
+        .get("percent_used")
+        .and_then(serde_json::Value::as_f64)
+        .filter(|percent| percent.is_finite());
+    match (input, limit, percent) {
+        (Some(input), Some(limit), Some(percent)) => format!(
+            "\nWorker context: ~{:.0}% used ({} / {} tokens)\nBasis: last recorded request input\n",
+            percent,
+            format_compact_tokens(input),
+            format_compact_tokens(limit)
+        ),
+        (Some(input), _, _) => format!(
+            "\nWorker context: {} tokens recorded (limit unknown)\nBasis: last recorded request input\n",
+            format_compact_tokens(input)
+        ),
+        (None, _, _) => "\nWorker context: unknown (no recorded request input)\n".to_string(),
+    }
+}
+
+/// Compact token count for prompts (`120k`, `1M`); an estimate, so whole
+/// units are enough.
+fn format_compact_tokens(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.0}M", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{:.0}k", tokens as f64 / 1_000.0)
+    } else {
+        tokens.to_string()
+    }
 }
 
 fn summarize_worker_error(error: &str) -> String {
@@ -917,28 +977,105 @@ mod tests {
 
     #[test]
     fn completed_prompt_carries_final_text_and_link() {
-        let prompt = build_worker_update_prompt(&CompletionEvent {
-            final_text: Some("all done".to_string()),
-            mirror_url: Some("https://t.me/c/1/2".to_string()),
-            ..completion(WorkerStatus::Completed)
-        });
+        let prompt = build_worker_update_prompt(
+            &CompletionEvent {
+                final_text: Some("all done".to_string()),
+                mirror_url: Some("https://t.me/c/1/2".to_string()),
+                ..completion(WorkerStatus::Completed)
+            },
+            &serde_json::Value::Null,
+        );
         assert!(prompt.starts_with("[worker update]"));
         assert!(prompt.contains("`worker-1`"));
         assert!(prompt.contains("status: completed"));
         assert!(prompt.contains("Mirror topic: https://t.me/c/1/2"));
         assert!(prompt.contains("all done"));
+        assert!(prompt.contains("Worker context: unknown"));
     }
 
     #[test]
     fn failed_prompt_carries_error_and_bounds_length() {
-        let prompt = build_worker_update_prompt(&CompletionEvent {
-            error: Some("x".repeat(10_000)),
-            ..completion(WorkerStatus::Failed)
-        });
+        let prompt = build_worker_update_prompt(
+            &CompletionEvent {
+                error: Some("x".repeat(10_000)),
+                ..completion(WorkerStatus::Failed)
+            },
+            &serde_json::Value::Null,
+        );
         assert!(prompt.contains("status: failed"));
         assert!(!prompt.contains("Mirror topic:"));
         assert!(prompt.contains("[truncated"));
-        assert!(prompt.chars().count() < 3000);
+        assert!(prompt.chars().count() < 3100);
+    }
+
+    #[test]
+    fn worker_context_reports_percent_and_basis() {
+        let prompt = build_worker_update_prompt(
+            &CompletionEvent {
+                final_text: Some("all done".to_string()),
+                ..completion(WorkerStatus::Completed)
+            },
+            &serde_json::json!({
+                "input_tokens": 120_000,
+                "context_limit": 200_000,
+                "percent_used": 60.0,
+                "basis": "last_recorded_request_input",
+            }),
+        );
+        assert!(prompt.contains("Worker context: ~60% used (120k / 200k tokens)"));
+        assert!(prompt.contains("Basis: last recorded request input"));
+    }
+
+    #[test]
+    fn worker_context_unknown_is_never_zero_percent() {
+        let prompt = build_worker_update_prompt(
+            &completion(WorkerStatus::Completed),
+            &serde_json::Value::Null,
+        );
+        assert!(prompt.contains("Worker context: unknown"));
+        assert!(!prompt.contains("0%"));
+    }
+
+    #[test]
+    fn worker_context_keeps_tokens_when_limit_is_unknown() {
+        let prompt = build_worker_update_prompt(
+            &completion(WorkerStatus::Completed),
+            &serde_json::json!({ "input_tokens": 120_000 }),
+        );
+        assert!(prompt.contains("120k tokens recorded (limit unknown)"));
+        assert!(prompt.contains("Basis: last recorded request input"));
+        assert!(!prompt.contains("used ("));
+    }
+
+    /// The metadata is its own section after the final answer: it must not be
+    /// merged into the worker's text, and it reports only with no cutoff or
+    /// fresh-thread recommendation.
+    #[test]
+    fn worker_context_is_separate_metadata_without_recommendation() {
+        let prompt = build_worker_update_prompt(
+            &CompletionEvent {
+                final_text: Some("shipped it".to_string()),
+                ..completion(WorkerStatus::Completed)
+            },
+            &serde_json::json!({
+                "input_tokens": 120_000,
+                "context_limit": 200_000,
+                "percent_used": 60.0,
+                "basis": "last_recorded_request_input",
+            }),
+        );
+        let final_at = prompt.find("Final message:").expect("final answer section");
+        let context_at = prompt
+            .find("Worker context:")
+            .expect("context metadata section");
+        assert!(
+            final_at < context_at,
+            "context metadata follows the final answer, it is not part of it"
+        );
+        assert!(prompt.contains("shipped it"));
+        assert!(!prompt.contains("thread size"));
+        assert!(!prompt.contains("fresh thread"));
+        assert!(!prompt.contains("new thread"));
     }
 
     #[test]

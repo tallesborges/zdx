@@ -507,7 +507,11 @@ fn send_thread_message(manager: &Arc<WorkerManager>, owner: &str, input: &Value)
     }
 }
 
-fn thread_context_json(thread_id: &str, config: Option<&crate::config::Config>) -> Value {
+/// Context usage for a worker thread, shared with the Telegram completion
+/// prompt: the latest recorded request's input tokens (including cache
+/// reads/writes) with its recorded model/provider, context limit, and
+/// percent used. `Null` when no input-bearing usage is found.
+pub fn thread_context_json(thread_id: &str, config: Option<&crate::config::Config>) -> Value {
     let Some(usage) = thread_persistence::read_latest_context_usage(thread_id)
         .ok()
         .flatten()

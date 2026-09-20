@@ -1029,7 +1029,7 @@ pub fn load_thread_events(id: &str) -> Result<Vec<ThreadEvent>> {
 }
 
 #[derive(Debug)]
-pub(crate) struct LatestContextUsage {
+pub struct LatestContextUsage {
     pub input_tokens: u64,
     pub model: Option<String>,
     pub provider: Option<String>,
@@ -1037,7 +1037,10 @@ pub(crate) struct LatestContextUsage {
 }
 
 /// Reads the newest input-bearing usage from at most the final 256 KiB.
-pub(crate) fn read_latest_context_usage(id: &str) -> Result<Option<LatestContextUsage>> {
+///
+/// # Errors
+/// Returns an error if the thread file exists but cannot be read.
+pub fn read_latest_context_usage(id: &str) -> Result<Option<LatestContextUsage>> {
     const TAIL_BYTES: u64 = 256 * 1024;
 
     let path = threads_dir().join(format!("{id}.jsonl"));
