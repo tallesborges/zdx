@@ -7,7 +7,8 @@ use std::time::Duration;
 use anyhow::Result;
 use zdx_engine::providers::oauth::{
     OAuthCache, claude_cli as oauth_claude_cli, google_antigravity as oauth_antigravity,
-    grok_build as oauth_grok_build, normalize_account, openai_codex as oauth_codex,
+    grok_build as oauth_grok_build, muse_code as oauth_muse_code, normalize_account,
+    openai_codex as oauth_codex,
 };
 
 fn account_suffix(account: Option<&str>) -> String {
@@ -389,6 +390,96 @@ pub fn logout_grok_build(account: Option<&str>) -> Result<()> {
         println!("  Credentials removed from: {}", cache_path.display());
     } else {
         println!("Not logged in to Grok Build{suffix} (no credentials found).");
+    }
+
+    Ok(())
+}
+
+/// Logs in to Muse Code using Meta's device-authorization flow.
+///
+/// Unlike every other provider here this shows a user code and polls for
+/// approval: Meta exposes no redirect-based client, so there is no localhost
+/// callback to wait on.
+pub async fn login_muse_code(account: Option<&str>) -> Result<()> {
+    let account = normalize_account(account)?;
+    let account = account.as_deref();
+    let suffix = account_suffix(account);
+    if let Some(existing) = oauth_muse_code::load_credentials(account)? {
+        println!(
+            "Already logged in to Muse Code{suffix} (key: {})",
+            oauth_claude_cli::mask_token(&existing.access)
+        );
+        print!("Do you want to replace the existing credentials? [y/N] ");
+        io::stdout().flush()?;
+
+        let mut response = String::new();
+        io::stdin().lock().read_line(&mut response)?;
+        if !response.trim().eq_ignore_ascii_case("y") {
+            println!("Login cancelled.");
+            return Ok(());
+        }
+    }
+
+    println!("Note: Meta documents the Muse Code subscription as working only");
+    println!("through its own CLI. Whether a key minted here bills to your");
+    println!("subscription or to pay-as-you-go is not established — verify");
+    println!("against your Meta billing and usage records before relying on it.");
+    println!();
+
+    let authorization = oauth_muse_code::start_device_authorization().await?;
+
+    println!("To log in to Muse Code with your Meta account:");
+    println!();
+    println!("  1. A browser window will open (or visit the URL below)");
+    println!("  2. Enter this code when prompted:");
+    println!();
+    println!("       {}", authorization.user_code);
+    println!();
+    println!("  3. Approve the request, then return here — login completes on its own");
+    println!();
+    println!("Verification URL:");
+    println!("  {}", authorization.display_uri());
+    println!();
+
+    if std::env::var("ZDX_NO_BROWSER").is_err() {
+        let _ = open::that(authorization.display_uri());
+    }
+
+    println!("Waiting for approval...");
+    let identity_token = oauth_muse_code::poll_for_identity_token(&authorization).await?;
+
+    println!("Approved. Requesting Model API key...");
+    let payload = oauth_muse_code::request_key(&identity_token, true).await?;
+    let credentials = oauth_muse_code::credentials_from_key_response(&identity_token, &payload)?;
+    oauth_muse_code::save_credentials(account, &credentials)?;
+
+    let cache_path = OAuthCache::cache_path();
+    println!();
+    println!(
+        "✓ Logged in to Muse Code{suffix} (key: {})",
+        oauth_claude_cli::mask_token(&credentials.access)
+    );
+    if let Some(tier) = payload.subs_tier_name.as_deref().filter(|t| !t.is_empty()) {
+        println!("  Plan: {tier}");
+    }
+    println!("  Credentials saved to: {}", cache_path.display());
+    println!("  Check allowance with: zdx quota");
+
+    Ok(())
+}
+
+pub fn logout_muse_code(account: Option<&str>) -> Result<()> {
+    let account = normalize_account(account)?;
+    let account = account.as_deref();
+    let suffix = account_suffix(account);
+    let had_creds = oauth_muse_code::clear_credentials(account)?;
+
+    if had_creds {
+        let cache_path = OAuthCache::cache_path();
+        println!("✓ Logged out from Muse Code{suffix}");
+        println!("  Credentials removed from: {}", cache_path.display());
+    } else {
+        println!("Not logged in to Muse Code{suffix} (no credentials found).");
     }
 
     Ok(())

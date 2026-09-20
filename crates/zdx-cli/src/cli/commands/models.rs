@@ -314,7 +314,7 @@ impl UpdateState {
 }
 
 #[allow(clippy::too_many_lines)]
-fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 21] {
+fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 22] {
     [
         ProviderSpec {
             provider_id: "anthropic",
@@ -429,6 +429,13 @@ fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 21] {
             api_id: "meta",
             prefix: Some("meta"),
             provider_cfg: &config.providers.meta,
+        },
+        ProviderSpec {
+            // Same Muse Spark catalogue as `meta`; only the credential differs.
+            provider_id: "muse-code",
+            api_id: "meta",
+            prefix: Some("muse-code"),
+            provider_cfg: &config.providers.muse_code,
         },
         ProviderSpec {
             provider_id: "alibaba",
@@ -928,6 +935,7 @@ fn lookup_openrouter_model(
         "anthropic" | "claude-cli" => "anthropic",
         "openai" | "openai-codex" => "openai",
         "gemini" | "google-antigravity" => "google",
+        "meta" | "muse-code" => "meta",
         "stepfun" => "stepfun",
         "moonshot" => "moonshotai",
         "zai" => "z-ai",

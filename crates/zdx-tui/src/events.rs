@@ -222,6 +222,16 @@ pub struct RecordedAudio {
 /// With the inbox pattern, async operations send events directly to the runtime's
 /// event inbox. `TaskStarted`/`TaskCompleted` provide a uniform lifecycle for
 /// task state and latest-only gating.
+/// A pending RFC 8628 device authorization surfaced to the login overlay.
+#[derive(Debug, Clone)]
+pub struct LoginDeviceCode {
+    pub user_code: String,
+    pub url: String,
+    pub device_code: String,
+    pub interval_secs: u64,
+    pub expires_in_secs: u64,
+}
+
 #[derive(Debug)]
 pub enum UiEvent {
     /// Timer tick (for animation, polling).
@@ -272,6 +282,11 @@ pub enum UiEvent {
 
     /// Local OAuth callback returned with an optional code.
     LoginCallbackResult(Option<String>),
+
+    /// A device authorization was issued (or failed to start).
+    LoginDeviceCode {
+        result: Result<LoginDeviceCode, String>,
+    },
 
     /// Async handoff generation completed (Ok = generated prompt, Err = error message).
     HandoffResult {

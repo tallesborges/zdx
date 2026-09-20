@@ -22,9 +22,14 @@ pub use zdx_types::{
 
 use crate::ProviderKind;
 pub use crate::oauth::account_cache_key;
-use crate::oauth::{OAuthCredentials, claude_cli, google_antigravity, grok_build, openai_codex};
+use crate::oauth::{
+    OAuthCredentials, claude_cli, google_antigravity, grok_build, muse_code, openai_codex,
+};
 
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+/// Claude's OAuth profile. The usage endpoint carries no plan metadata, so the
+/// plan label is read from here instead (never inferred from utilization).
+const CLAUDE_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const ANTIGRAVITY_QUOTA_URL: &str =
     "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
@@ -41,6 +46,8 @@ pub const PROVIDER_ANTIGRAVITY: &str = google_antigravity::PROVIDER_KEY;
 pub const PROVIDER_GROK: &str = grok_build::PROVIDER_KEY;
 /// Provider id for the `OpenCode` Go subscription.
 pub const PROVIDER_OPENCODE_GO: &str = "opencode-go";
+/// Provider id for the Muse Code (Meta) subscription.
+pub const PROVIDER_MUSE_CODE: &str = muse_code::PROVIDER_KEY;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -59,6 +66,7 @@ pub fn provider_display(provider: &str) -> &str {
         PROVIDER_ANTIGRAVITY => "Antigravity",
         PROVIDER_GROK => "Grok",
         PROVIDER_OPENCODE_GO => "OpenCode Go",
+        PROVIDER_MUSE_CODE => "Muse Code",
         other => other,
     }
 }
@@ -79,6 +87,9 @@ pub const FETCHERS: &[(&str, QuotaFetcher)] = &[
     (PROVIDER_GROK, |account| Box::pin(fetch_grok_quota(account))),
     (PROVIDER_OPENCODE_GO, |account| {
         Box::pin(fetch_opencode_go_quota(account))
+    }),
+    (PROVIDER_MUSE_CODE, |account| {
+        Box::pin(fetch_muse_code_quota(account))
     }),
 ];
 
@@ -206,17 +217,17 @@ pub async fn fetch_claude_quota(account: Option<String>) -> Result<SubscriptionQ
         return Err(QuotaError::Expired);
     }
 
-    let resp = quota_client()?
-        .get(CLAUDE_USAGE_URL)
-        .header("Authorization", format!("Bearer {}", creds.access))
-        .header("anthropic-beta", "oauth-2025-04-20")
-        .header("anthropic-version", "2023-06-01")
-        .header("user-agent", "claude-cli/2.1.2 (external, cli)")
-        .header("anthropic-dangerous-direct-browser-access", "true")
-        .header("x-app", "cli")
-        .send()
-        .await
-        .map_err(|e| classify_send(&e))?;
+    let client = quota_client()?;
+    // Concurrent so the extra metadata call costs no extra latency. The plan
+    // is best-effort: a failed profile read degrades to an unlabelled quota
+    // rather than failing the whole fetch.
+    let (usage, plan) = futures_util::future::join(
+        claude_request(&client, &creds.access, CLAUDE_USAGE_URL).send(),
+        fetch_claude_plan(&client, &creds.access),
+    )
+    .await;
+
+    let resp = usage.map_err(|e| classify_send(&e))?;
 
     if !resp.status().is_success() {
         return Err(error_for_status(resp.status(), resp.headers()));
@@ -230,7 +241,7 @@ pub async fn fetch_claude_quota(account: Option<String>) -> Result<SubscriptionQ
         );
         QuotaError::Incompatible
     })?;
-    parse_claude(&wire).ok_or(QuotaError::Incompatible)
+    parse_claude(&wire, plan).ok_or(QuotaError::Incompatible)
 }
 
 /// Fetches the Codex (openai-codex) subscription quota.
@@ -383,7 +394,212 @@ pub async fn fetch_opencode_go_quota(
     parse_opencode_go(&wire).ok_or(QuotaError::Incompatible)
 }
 
+/// Fetches the Muse Code (Meta) subscription allowance.
+///
+/// Meta publishes no usage endpoint, so allowance is read from the same
+/// `POST /muse-code/key` call used at login, sent with the stored **identity
+/// token** and `onboard: false`. The minted key in the response is discarded:
+/// this path stays read-only and never writes to the OAuth cache.
+///
+/// Unlike the other fetchers this does not short-circuit on
+/// [`OAuthCredentials::is_expired`], because that timestamp tracks the cached
+/// minted key, not the identity token this call actually presents.
+///
+/// The `subs_usage` shape is undocumented by Meta and may change without
+/// notice; an unexpected payload degrades to [`QuotaError::Incompatible`].
+///
+/// # Errors
+/// Returns a bounded [`QuotaError`] on missing creds or endpoint failure.
+pub async fn fetch_muse_code_quota(
+    account: Option<String>,
+) -> Result<SubscriptionQuota, QuotaError> {
+    let creds = require_creds(muse_code::load_credentials(account.as_deref()))?;
+
+    let resp = quota_client()?
+        .post(muse_code::KEY_MINT_URL)
+        .header("Authorization", format!("Bearer {}", creds.refresh))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .header("x-api-version", "1.0.0")
+        .body("{}")
+        .send()
+        .await
+        .map_err(|e| classify_send(&e))?;
+
+    if !resp.status().is_success() {
+        return Err(error_for_status(resp.status(), resp.headers()));
+    }
+
+    let wire: muse_code::MuseCodeKeyResponse = resp.json().await.map_err(|err| {
+        tracing::debug!(
+            provider = "muse-code",
+            error = &err as &dyn std::error::Error,
+            "Quota: response decode failed"
+        );
+        QuotaError::Incompatible
+    })?;
+
+    if wire.is_subs_active == Some(false) {
+        return Err(QuotaError::Unauthorized);
+    }
+    parse_muse_code(&wire).ok_or(QuotaError::Incompatible)
+}
+
+/// Parses Meta's `resets_at`, which is either epoch seconds or an RFC 3339
+/// string depending on the window.
+fn parse_muse_code_reset(value: Option<&serde_json::Value>) -> Option<DateTime<Utc>> {
+    match value? {
+        serde_json::Value::String(s) => parse_rfc3339(Some(s)),
+        serde_json::Value::Number(n) => {
+            let secs = n.as_f64()?;
+            if secs <= 0.0 {
+                return None;
+            }
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "epoch seconds are well within i64"
+            )]
+            Utc.timestamp_opt(secs as i64, 0).single()
+        }
+        _ => None,
+    }
+}
+
+/// Formats a rolling-window label from its duration (`300` mins -> `5h`).
+fn muse_code_window_label(duration_mins: Option<f64>) -> String {
+    match duration_mins {
+        Some(mins) if mins > 0.0 => {
+            let mins = mins.round();
+            if (mins % 60.0).abs() < f64::EPSILON {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "window durations are small"
+                )]
+                let hours = (mins / 60.0) as i64;
+                format!("{hours}h")
+            } else {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "window durations are small"
+                )]
+                let mins = mins as i64;
+                format!("{mins}m")
+            }
+        }
+        _ => "rolling".to_string(),
+    }
+}
+
+fn muse_code_window(
+    window: Option<&muse_code::SubscriptionWindow>,
+    label: Option<&str>,
+) -> Option<QuotaWindow> {
+    let window = window?;
+    let used_percent = window.used_percent?;
+    if !used_percent.is_finite() || used_percent < 0.0 {
+        return None;
+    }
+    Some(QuotaWindow {
+        label: label.map_or_else(
+            || muse_code_window_label(window.window_duration_mins),
+            ToString::to_string,
+        ),
+        used_percent,
+        resets_at: parse_muse_code_reset(window.resets_at.as_ref()),
+        scope: None,
+    })
+}
+
+/// Parses the Muse Code key payload into a neutral snapshot.
+fn parse_muse_code(wire: &muse_code::MuseCodeKeyResponse) -> Option<SubscriptionQuota> {
+    let usage = wire.subs_usage.as_ref()?;
+    let windows: Vec<QuotaWindow> = [
+        muse_code_window(usage.window.as_ref(), None),
+        muse_code_window(usage.weekly.as_ref(), Some("weekly")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
+    if windows.is_empty() {
+        return None;
+    }
+    Some(SubscriptionQuota {
+        plan: wire
+            .subs_tier_name
+            .as_deref()
+            .or(wire.subs_tier_id.as_deref())
+            .map(str::trim)
+            .filter(|tier| !tier.is_empty())
+            .map(ToString::to_string),
+        windows,
+    })
+}
+
+/// Builds a Claude OAuth request carrying the headers the endpoints expect.
+fn claude_request(client: &reqwest::Client, access: &str, url: &str) -> reqwest::RequestBuilder {
+    client
+        .get(url)
+        .header("Authorization", format!("Bearer {access}"))
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .header("anthropic-version", "2023-06-01")
+        .header("user-agent", "claude-cli/2.1.2 (external, cli)")
+        .header("anthropic-dangerous-direct-browser-access", "true")
+        .header("x-app", "cli")
+}
+
+/// Reads the declared plan from Claude's OAuth profile.
+///
+/// Best-effort: any failure yields `None` so the quota still renders.
+async fn fetch_claude_plan(client: &reqwest::Client, access: &str) -> Option<String> {
+    let resp = claude_request(client, access, CLAUDE_PROFILE_URL)
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        tracing::debug!(
+            provider = "claude",
+            status = resp.status().as_u16(),
+            "Quota: profile lookup failed; continuing without a plan label"
+        );
+        return None;
+    }
+    let wire: ClaudeProfileWire = resp.json().await.ok()?;
+    wire.plan_label()
+}
+
 // --- Claude wire shape ---
+
+#[derive(Debug, Deserialize)]
+struct ClaudeProfileWire {
+    organization: Option<ClaudeOrganization>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeOrganization {
+    /// e.g. `default_claude_max_20x` — the only field distinguishing Max 5x
+    /// from Max 20x, so it is preferred over the coarser `organization_type`.
+    rate_limit_tier: Option<String>,
+    /// e.g. `claude_max`, `claude_pro`.
+    organization_type: Option<String>,
+}
+
+impl ClaudeProfileWire {
+    /// The declared plan, preferring the precise tier.
+    ///
+    /// Only the uninformative `default_` prefix is stripped; the rest is kept
+    /// verbatim so a new tier shows up as-is instead of being mapped to a
+    /// stale guess.
+    fn plan_label(&self) -> Option<String> {
+        let org = self.organization.as_ref()?;
+        org.rate_limit_tier
+            .as_deref()
+            .or(org.organization_type.as_deref())
+            .map(str::trim)
+            .filter(|tier| !tier.is_empty())
+            .map(|tier| tier.strip_prefix("default_").unwrap_or(tier).to_string())
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct ClaudeUsageWire {
@@ -439,7 +655,7 @@ fn parse_rfc3339(s: Option<&str>) -> Option<DateTime<Utc>> {
 ///
 /// Prefers the self-describing `limits[]` array (unscoped session + weekly),
 /// falling back to the legacy `five_hour`/`seven_day` fields.
-fn parse_claude(wire: &ClaudeUsageWire) -> Option<SubscriptionQuota> {
+fn parse_claude(wire: &ClaudeUsageWire, plan: Option<String>) -> Option<SubscriptionQuota> {
     let mut windows = Vec::new();
 
     for limit in &wire.limits {
@@ -476,10 +692,7 @@ fn parse_claude(wire: &ClaudeUsageWire) -> Option<SubscriptionQuota> {
     if windows.is_empty() {
         return None;
     }
-    Some(SubscriptionQuota {
-        plan: None,
-        windows,
-    })
+    Some(SubscriptionQuota { plan, windows })
 }
 
 // --- Codex wire shape ---
@@ -775,7 +988,7 @@ mod tests {
     fn parses_claude_limits_array() {
         let wire: ClaudeUsageWire =
             serde_json::from_str(&load_fixture("claude_usage.json")).unwrap();
-        let quota = parse_claude(&wire).expect("claude quota");
+        let quota = parse_claude(&wire, None).expect("claude quota");
         // Session + account-wide weekly + the model-scoped weekly (e.g. "Fable").
         assert_eq!(quota.windows.len(), 3);
         let session = &quota.windows[0];
@@ -806,7 +1019,7 @@ mod tests {
             }),
             limits: Vec::new(),
         };
-        let quota = parse_claude(&wire).expect("fallback quota");
+        let quota = parse_claude(&wire, None).expect("fallback quota");
         assert_eq!(quota.windows.len(), 2);
         assert_eq!(quota.windows[0].label, "5h");
         assert!((quota.windows[0].used_percent - 12.5).abs() < f64::EPSILON);
@@ -986,7 +1199,7 @@ mod tests {
             seven_day: None,
             limits: Vec::new(),
         };
-        assert!(parse_claude(&claude).is_none());
+        assert!(parse_claude(&claude, None).is_none());
         let codex = CodexUsageWire {
             plan_type: None,
             rate_limit: None,
@@ -1025,5 +1238,103 @@ mod tests {
         ] {
             assert!(!e.reason().is_empty());
         }
+    }
+    #[test]
+    fn parses_muse_code_rolling_and_weekly_windows() {
+        // Shape follows oh-my-pi's schema/fixtures: the 5-hour window reports
+        // its duration in minutes and an epoch-seconds reset; the weekly
+        // window reports an RFC 3339 reset.
+        let wire: muse_code::MuseCodeKeyResponse = serde_json::from_str(
+            r#"{
+                "api_key": "LLM|secret",
+                "is_subs_active": true,
+                "subs_tier_name": "Power Usage",
+                "subs_usage": {
+                    "window": {
+                        "used_percent": 42,
+                        "resets_at": 1800000000,
+                        "window_duration_mins": 300
+                    },
+                    "weekly": {
+                        "used_percent": 75,
+                        "resets_at": "2030-01-08T00:00:00.000Z"
+                    }
+                }
+            }"#,
+        )
+        .expect("payload parses");
+
+        let quota = parse_muse_code(&wire).expect("muse code quota");
+        assert_eq!(quota.plan.as_deref(), Some("Power Usage"));
+        assert_eq!(quota.windows.len(), 2);
+
+        let rolling = &quota.windows[0];
+        assert_eq!(rolling.label, "5h");
+        assert!((rolling.used_percent - 42.0).abs() < f64::EPSILON);
+        assert_eq!(
+            rolling.resets_at,
+            Utc.timestamp_opt(1_800_000_000, 0).single()
+        );
+
+        let weekly = &quota.windows[1];
+        assert_eq!(weekly.label, "weekly");
+        assert!((weekly.used_percent - 75.0).abs() < f64::EPSILON);
+        assert!(weekly.resets_at.is_some());
+    }
+
+    #[test]
+    fn muse_code_quota_without_usage_is_incompatible() {
+        // An active subscription that reports no allowance block must not be
+        // rendered as 0% used.
+        let wire: muse_code::MuseCodeKeyResponse =
+            serde_json::from_str(r#"{"api_key":"LLM|k","is_subs_active":true}"#)
+                .expect("payload parses");
+        assert!(parse_muse_code(&wire).is_none());
+    }
+
+    #[test]
+    fn muse_code_window_label_falls_back_when_duration_is_absent() {
+        assert_eq!(muse_code_window_label(Some(300.0)), "5h");
+        assert_eq!(muse_code_window_label(Some(90.0)), "90m");
+        assert_eq!(muse_code_window_label(None), "rolling");
+    }
+    #[test]
+    fn claude_plan_prefers_the_precise_rate_limit_tier() {
+        // Max 5x and Max 20x share organization_type, so the tier must win.
+        let wire: ClaudeProfileWire = serde_json::from_str(
+            r#"{"organization":{"organization_type":"claude_max",
+                 "rate_limit_tier":"default_claude_max_20x"}}"#,
+        )
+        .unwrap();
+        assert_eq!(wire.plan_label().as_deref(), Some("claude_max_20x"));
+    }
+
+    #[test]
+    fn claude_plan_falls_back_to_organization_type() {
+        let wire: ClaudeProfileWire =
+            serde_json::from_str(r#"{"organization":{"organization_type":"claude_pro"}}"#).unwrap();
+        assert_eq!(wire.plan_label().as_deref(), Some("claude_pro"));
+    }
+
+    #[test]
+    fn claude_plan_is_absent_when_the_profile_says_nothing() {
+        for body in [
+            r#"{}"#,
+            r#"{"organization":{}}"#,
+            r#"{"organization":{"rate_limit_tier":""}}"#,
+        ] {
+            let wire: ClaudeProfileWire = serde_json::from_str(body).unwrap();
+            assert_eq!(wire.plan_label(), None, "{body}");
+        }
+    }
+
+    #[test]
+    fn claude_quota_carries_the_plan_through() {
+        let wire: ClaudeUsageWire =
+            serde_json::from_str(&load_fixture("claude_usage.json")).unwrap();
+        let quota = parse_claude(&wire, Some("claude_max_20x".to_string())).expect("quota");
+        assert_eq!(quota.plan.as_deref(), Some("claude_max_20x"));
+        // Plan metadata must not disturb the parsed windows.
+        assert_eq!(quota.windows.len(), 3);
     }
 }

@@ -147,6 +147,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         }
         UiEvent::LoginResult { result } => handle_login_result_event(app, result),
         UiEvent::LoginCallbackResult(code) => handle_login_callback_result(app, code),
+        UiEvent::LoginDeviceCode { result } => handle_login_device_code(app, result),
         UiEvent::TaskStarted { kind, started } => handle_task_started_event(app, kind, &started),
         UiEvent::TaskCompleted { kind, completed } => {
             let ok = {
@@ -613,14 +614,58 @@ fn handle_login_result_event(app: &mut AppState, result: Result<(), String>) -> 
     apply_mutations(&mut app.tui, mutations);
 
     match overlay_action {
-        auth::LoginOverlayAction::Close => app.overlay = None,
+        auth::LoginOverlayAction::Close => {
+            app.overlay = None;
+            vec![]
+        }
         auth::LoginOverlayAction::Reopen { error } => {
-            app.overlay = Some(overlays::Overlay::Login(overlays::LoginState::reopen(
-                provider, error,
-            )));
+            // A retry needs its own browser open / callback listener / device
+            // code: the previous attempt's are already spent.
+            let (state, effects) = overlays::LoginState::reopen(provider, error);
+            app.overlay = Some(overlays::Overlay::Login(state));
+            effects
         }
     }
-    vec![]
+}
+
+/// Shows the issued device code and starts polling for approval.
+fn handle_login_device_code(
+    app: &mut AppState,
+    result: Result<crate::events::LoginDeviceCode, String>,
+) -> Vec<UiEffect> {
+    let Some(overlays::Overlay::Login(login_state)) = &mut app.overlay else {
+        return vec![];
+    };
+    let Some(provider) = login_state.selected_provider() else {
+        return vec![];
+    };
+
+    match result {
+        Ok(device) => {
+            *login_state = overlays::LoginState::DeviceAwaitingApproval {
+                provider,
+                user_code: device.user_code,
+                url: device.url.clone(),
+                error: None,
+            };
+            vec![
+                UiEffect::OpenBrowser { url: device.url },
+                UiEffect::PollDeviceAuthorization {
+                    provider,
+                    device_code: device.device_code,
+                    interval_secs: device.interval_secs,
+                    expires_in_secs: device.expires_in_secs,
+                },
+            ]
+        }
+        Err(error) => {
+            *login_state = overlays::LoginState::DeviceStarting {
+                provider,
+                error: Some(error),
+            };
+            vec![]
+        }
+    }
 }
 
 fn handle_login_callback_result(app: &mut AppState, code: Option<String>) -> Vec<UiEffect> {

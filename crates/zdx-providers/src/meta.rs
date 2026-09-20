@@ -36,7 +36,7 @@ fn supports_max_effort(model: &str) -> bool {
 /// hands depth to the model (~20x the tokens of `minimal` on trivial turns,
 /// measured 2026-09-16), so `Off` clamps to `minimal` — the lowest accepted
 /// effort — and the caller keeps the summary off so nothing is displayed.
-fn reasoning_effort_from_thinking_level(
+pub(crate) fn reasoning_effort_from_thinking_level(
     level: zdx_types::ThinkingLevel,
     model: &str,
 ) -> &'static str {
@@ -47,6 +47,42 @@ fn reasoning_effort_from_thinking_level(
         zdx_types::ThinkingLevel::High => "high",
         zdx_types::ThinkingLevel::Max if supports_max_effort(model) => "max",
         zdx_types::ThinkingLevel::XHigh | zdx_types::ThinkingLevel::Max => "xhigh",
+    }
+}
+
+/// Builds the shared Muse Spark Responses configuration.
+///
+/// Shared with the `muse-code` subscription provider, which sends the same
+/// request shape with an OAuth-minted key instead of an API key.
+pub(crate) fn responses_config(
+    base_url: String,
+    model: String,
+    max_tokens: Option<u32>,
+    prompt_cache_key: Option<String>,
+    reasoning_effort: String,
+    reasoning_summary: bool,
+) -> ResponsesConfig {
+    // A reasoning summary is what makes thinking visible: raw reasoning
+    // stays private on Meta's API, so request the compact `auto` summary
+    // whenever thinking is enabled. Summaries are best-effort — Meta may
+    // return an empty summary when the model barely reasons.
+    ResponsesConfig {
+        base_url,
+        path: RESPONSES_PATH.to_string(),
+        model,
+        max_output_tokens: max_tokens,
+        reasoning_effort: Some(reasoning_effort),
+        reasoning_summary: reasoning_summary.then(|| "auto".to_string()),
+        instructions: None,
+        text_verbosity: None,
+        store: Some(false),
+        include: Some(vec!["reasoning.encrypted_content".to_string()]),
+        stream_options: None,
+        prompt_cache_key,
+        parallel_tool_calls: Some(true),
+        tool_choice: Some("auto".to_string()),
+        truncation: None,
+        service_tier: None,
     }
 }
 
@@ -125,31 +161,16 @@ pub struct MetaClient {
 
 impl MetaClient {
     pub fn new(config: MetaConfig) -> Self {
-        // A reasoning summary is what makes thinking visible: raw reasoning
-        // stays private on Meta's API, so request the compact `auto` summary
-        // whenever thinking is enabled. Summaries are best-effort — Meta may
-        // return an empty summary when the model barely reasons.
-        let reasoning_summary = config.reasoning_summary.then(|| "auto".to_string());
         Self {
             api_key: config.api_key,
-            config: ResponsesConfig {
-                base_url: config.base_url,
-                path: RESPONSES_PATH.to_string(),
-                model: config.model,
-                max_output_tokens: config.max_tokens,
-                reasoning_effort: Some(config.reasoning_effort),
-                reasoning_summary,
-                instructions: None,
-                text_verbosity: None,
-                store: Some(false),
-                include: Some(vec!["reasoning.encrypted_content".to_string()]),
-                stream_options: None,
-                prompt_cache_key: config.prompt_cache_key,
-                parallel_tool_calls: Some(true),
-                tool_choice: Some("auto".to_string()),
-                truncation: None,
-                service_tier: None,
-            },
+            config: responses_config(
+                config.base_url,
+                config.model,
+                config.max_tokens,
+                config.prompt_cache_key,
+                config.reasoning_effort,
+                config.reasoning_summary,
+            ),
             http: reqwest::Client::new(),
         }
     }

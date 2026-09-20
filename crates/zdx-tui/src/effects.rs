@@ -70,6 +70,18 @@ pub enum UiEffect {
         redirect_uri: Option<String>,
     },
 
+    /// Start an RFC 8628 device authorization (Muse Code): request the user
+    /// code, then poll for approval.
+    StartDeviceAuthorization { provider: ProviderKind },
+
+    /// Poll an approved device authorization, then mint and save credentials.
+    PollDeviceAuthorization {
+        provider: ProviderKind,
+        device_code: String,
+        interval_secs: u64,
+        expires_in_secs: u64,
+    },
+
     /// Start a local OAuth callback listener (if supported).
     StartLocalAuthCallback {
         provider: ProviderKind,

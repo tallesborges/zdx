@@ -21,7 +21,7 @@ fn test_quota_json_reports_all_providers_not_logged_in() {
 
     let parsed: Value = serde_json::from_slice(&output).unwrap();
     let providers = parsed["providers"].as_array().expect("providers array");
-    assert_eq!(providers.len(), 5);
+    assert_eq!(providers.len(), 6);
     for provider in providers {
         assert!(provider["provider"].is_string());
         assert_eq!(
@@ -38,6 +38,7 @@ fn test_quota_json_reports_all_providers_not_logged_in() {
     assert!(ids.contains(&"google-antigravity"));
     assert!(ids.contains(&"grok-build"));
     assert!(ids.contains(&"opencode-go"));
+    assert!(ids.contains(&"muse-code"));
 }
 
 #[test]

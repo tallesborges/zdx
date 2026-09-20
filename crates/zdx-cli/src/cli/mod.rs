@@ -320,6 +320,9 @@ enum Commands {
         /// Provider to log in to (Grok Build / xAI subscription OAuth)
         #[arg(long = "grok-build")]
         grok_build: bool,
+        /// Provider to log in to (Muse Code / Meta subscription device login)
+        #[arg(long = "muse-code")]
+        muse_code: bool,
         /// Named OAuth account to log in as (omit for the default account)
         #[arg(long)]
         account: Option<String>,
@@ -342,6 +345,9 @@ enum Commands {
         /// Provider to log out from (Grok Build / xAI subscription OAuth)
         #[arg(long = "grok-build")]
         grok_build: bool,
+        /// Provider to log out from (Muse Code / Meta subscription device login)
+        #[arg(long = "muse-code")]
+        muse_code: bool,
         /// Named OAuth account to log out from (omit for the default account)
         #[arg(long)]
         account: Option<String>,
@@ -1279,10 +1285,18 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             openai_codex,
             antigravity,
             grok_build,
+            muse_code,
             account,
         } => {
             dispatch_login(
-                (anthropic, claude_cli, openai_codex, antigravity, grok_build),
+                (
+                    anthropic,
+                    claude_cli,
+                    openai_codex,
+                    antigravity,
+                    grok_build,
+                    muse_code,
+                ),
                 account.as_deref(),
             )
             .await
@@ -1293,9 +1307,17 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             openai_codex,
             antigravity,
             grok_build,
+            muse_code,
             account,
         } => dispatch_logout(
-            (anthropic, claude_cli, openai_codex, antigravity, grok_build),
+            (
+                anthropic,
+                claude_cli,
+                openai_codex,
+                antigravity,
+                grok_build,
+                muse_code,
+            ),
             account.as_deref(),
         ),
         Commands::Models { command } => dispatch_models(command, context).await,
@@ -1547,14 +1569,17 @@ fn dispatch_config(command: &ConfigCommands) -> Result<()> {
 }
 
 async fn dispatch_login(
-    flags: (bool, bool, bool, bool, bool),
+    flags: (bool, bool, bool, bool, bool, bool),
     account: Option<&str>,
 ) -> Result<()> {
     let provider = select_auth_provider(flags)?;
     login_provider(provider, account).await
 }
 
-fn dispatch_logout(flags: (bool, bool, bool, bool, bool), account: Option<&str>) -> Result<()> {
+fn dispatch_logout(
+    flags: (bool, bool, bool, bool, bool, bool),
+    account: Option<&str>,
+) -> Result<()> {
     let provider = select_auth_provider(flags)?;
     logout_provider(provider, account)
 }
@@ -1634,17 +1659,19 @@ enum AuthProvider {
     OpenaiCodex,
     Antigravity,
     GrokBuild,
+    MuseCode,
 }
 
-fn select_auth_provider(flags: (bool, bool, bool, bool, bool)) -> Result<AuthProvider> {
+fn select_auth_provider(flags: (bool, bool, bool, bool, bool, bool)) -> Result<AuthProvider> {
     match flags {
-        (true, false, false, false, false) => Ok(AuthProvider::Anthropic),
-        (false, true, false, false, false) => Ok(AuthProvider::ClaudeCli),
-        (false, false, true, false, false) => Ok(AuthProvider::OpenaiCodex),
-        (false, false, false, true, false) => Ok(AuthProvider::Antigravity),
-        (false, false, false, false, true) => Ok(AuthProvider::GrokBuild),
+        (true, false, false, false, false, false) => Ok(AuthProvider::Anthropic),
+        (false, true, false, false, false, false) => Ok(AuthProvider::ClaudeCli),
+        (false, false, true, false, false, false) => Ok(AuthProvider::OpenaiCodex),
+        (false, false, false, true, false, false) => Ok(AuthProvider::Antigravity),
+        (false, false, false, false, true, false) => Ok(AuthProvider::GrokBuild),
+        (false, false, false, false, false, true) => Ok(AuthProvider::MuseCode),
         _ => anyhow::bail!(
-            "Please specify a provider: --anthropic, --claude-cli, --openai-codex, --antigravity, or --grok-build"
+            "Please specify a provider: --anthropic, --claude-cli, --openai-codex, --antigravity, --grok-build, or --muse-code"
         ),
     }
 }
@@ -1656,6 +1683,7 @@ async fn login_provider(provider: AuthProvider, account: Option<&str>) -> Result
         AuthProvider::OpenaiCodex => commands::auth::login_openai_codex(account).await,
         AuthProvider::Antigravity => commands::auth::login_antigravity(account).await,
         AuthProvider::GrokBuild => commands::auth::login_grok_build(account).await,
+        AuthProvider::MuseCode => commands::auth::login_muse_code(account).await,
     }
 }
 
@@ -1669,6 +1697,7 @@ fn logout_provider(provider: AuthProvider, account: Option<&str>) -> Result<()> 
         AuthProvider::OpenaiCodex => commands::auth::logout_openai_codex(account),
         AuthProvider::Antigravity => commands::auth::logout_antigravity(account),
         AuthProvider::GrokBuild => commands::auth::logout_grok_build(account),
+        AuthProvider::MuseCode => commands::auth::logout_muse_code(account),
     }
 }
 

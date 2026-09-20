@@ -25,6 +25,18 @@ pub enum LoginState {
     Exchanging {
         provider: ProviderKind,
     },
+    /// RFC 8628: requesting the device code from the provider.
+    DeviceStarting {
+        provider: ProviderKind,
+        error: Option<String>,
+    },
+    /// RFC 8628: showing the user code while polling for approval.
+    DeviceAwaitingApproval {
+        provider: ProviderKind,
+        user_code: String,
+        url: String,
+        error: Option<String>,
+    },
     ApiKeyInfo {
         provider: ProviderKind,
         env_var: String,
@@ -42,12 +54,17 @@ impl LoginState {
             ProviderKind::OpenAICodex,
             ProviderKind::GoogleAntigravity,
             ProviderKind::GrokBuild,
+            ProviderKind::MuseCode,
         ]
     }
 
-    pub fn reopen(provider: ProviderKind, error: String) -> Self {
-        let (state, _) = Self::open_with_provider(provider, Some(error));
-        state
+    /// Reopens the overlay after a failed attempt.
+    ///
+    /// Returns the restart effects too: a retry has to re-open the browser and
+    /// re-arm the callback listener (or request a fresh device code), since the
+    /// previous attempt's listener and code are already spent.
+    pub fn reopen(provider: ProviderKind, error: String) -> (Self, Vec<UiEffect>) {
+        Self::open_with_provider(provider, Some(error))
     }
 
     #[allow(clippy::too_many_lines)]
@@ -154,6 +171,10 @@ impl LoginState {
                 ];
                 (state, effects)
             }
+            ProviderKind::MuseCode => (
+                LoginState::DeviceStarting { provider, error },
+                vec![UiEffect::StartDeviceAuthorization { provider }],
+            ),
             _ => {
                 let env_var = provider.api_key_env_var().unwrap_or("API_KEY").to_string();
                 (LoginState::ApiKeyInfo { provider, env_var }, vec![])
@@ -166,6 +187,8 @@ impl LoginState {
             LoginState::SelectProvider { .. } => None,
             LoginState::AwaitingCode { provider, .. }
             | LoginState::Exchanging { provider }
+            | LoginState::DeviceStarting { provider, .. }
+            | LoginState::DeviceAwaitingApproval { provider, .. }
             | LoginState::ApiKeyInfo { provider, .. } => Some(*provider),
         }
     }
@@ -220,7 +243,11 @@ impl LoginState {
                 }
                 _ => OverlayUpdate::stay(),
             },
-            LoginState::Exchanging { .. } => {
+            // Device-code and exchange screens are all "work in flight":
+            // Esc/Ctrl-C cancels the spawned task, anything else is ignored.
+            LoginState::DeviceStarting { .. }
+            | LoginState::DeviceAwaitingApproval { .. }
+            | LoginState::Exchanging { .. } => {
                 if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
                     OverlayUpdate::close().with_ui_effects(vec![
                         UiEffect::CancelTask {
@@ -238,5 +265,61 @@ impl LoginState {
             }
             LoginState::ApiKeyInfo { .. } => OverlayUpdate::close(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LoginState, ProviderKind};
+    use crate::effects::UiEffect;
+
+    #[test]
+    fn muse_code_is_offered_in_the_login_picker() {
+        assert!(LoginState::cli_providers().contains(&ProviderKind::MuseCode));
+    }
+
+    #[test]
+    fn muse_code_starts_a_device_authorization_instead_of_a_browser_redirect() {
+        let (state, effects) = LoginState::open_with_provider(ProviderKind::MuseCode, None);
+
+        assert!(matches!(state, LoginState::DeviceStarting { .. }));
+        // No browser/callback yet: the user code has to be fetched first.
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            effects[0],
+            UiEffect::StartDeviceAuthorization {
+                provider: ProviderKind::MuseCode
+            }
+        ));
+    }
+
+    #[test]
+    fn pkce_providers_still_open_a_browser_and_arm_a_listener() {
+        let (state, effects) = LoginState::open_with_provider(ProviderKind::GrokBuild, None);
+
+        assert!(matches!(state, LoginState::AwaitingCode { .. }));
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, UiEffect::OpenBrowser { .. }))
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, UiEffect::StartLocalAuthCallback { .. }))
+        );
+    }
+
+    #[test]
+    fn reopen_returns_restart_effects() {
+        // A retry must re-arm its side effects; dropping them would leave the
+        // overlay waiting on a device code or callback that never arrives.
+        let (state, effects) = LoginState::reopen(ProviderKind::MuseCode, "denied".to_string());
+
+        assert!(matches!(
+            state,
+            LoginState::DeviceStarting { error: Some(_), .. }
+        ));
+        assert_eq!(effects.len(), 1);
     }
 }

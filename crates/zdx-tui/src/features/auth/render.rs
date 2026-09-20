@@ -4,10 +4,12 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use zdx_engine::providers::oauth::{claude_cli, google_antigravity, grok_build, openai_codex};
+use zdx_engine::providers::oauth::{
+    claude_cli, google_antigravity, grok_build, muse_code, openai_codex,
+};
 
 use crate::overlays::LoginState;
 
@@ -62,6 +64,7 @@ fn login_overlay_title(login_state: &LoginState) -> &'static str {
             zdx_engine::providers::ProviderKind::Xai => "xAI API Key",
             zdx_engine::providers::ProviderKind::GrokBuild => "Grok Build Login",
             zdx_engine::providers::ProviderKind::Meta => "Meta API Key",
+            zdx_engine::providers::ProviderKind::MuseCode => "Muse Code Device Login",
             zdx_engine::providers::ProviderKind::ElevenLabs => "ElevenLabs API Key",
             zdx_engine::providers::ProviderKind::Alibaba => "Alibaba API Key",
             zdx_engine::providers::ProviderKind::QwenCode => "Qwen Code API Key",
@@ -77,6 +80,34 @@ fn render_login_overlay_lines(login_state: &LoginState, inner_width: u16) -> Vec
         LoginState::AwaitingCode { url, error, .. } => {
             render_awaiting_code_lines(url, error.as_deref(), inner_width)
         }
+        LoginState::DeviceStarting { error, .. } => {
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Requesting device code...",
+                    Style::default().fg(Color::Yellow),
+                )),
+            ];
+            if let Some(error) = error {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    error.clone(),
+                    Style::default().fg(Color::Red),
+                )));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Esc to cancel",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines
+        }
+        LoginState::DeviceAwaitingApproval {
+            user_code,
+            url,
+            error,
+            ..
+        } => render_device_approval_lines(user_code, url, error.as_deref(), inner_width),
         LoginState::Exchanging { .. } => vec![
             Line::from(""),
             Line::from(Span::styled(
@@ -121,6 +152,57 @@ fn render_provider_selection_lines(inner_width: u16, selected: usize) -> Vec<Lin
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "Enter to continue, Esc to cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines
+}
+
+/// Device-code screen: the user code is the thing to read off, so it gets its
+/// own emphasized line rather than being folded into the URL.
+fn render_device_approval_lines(
+    user_code: &str,
+    url: &str,
+    error: Option<&str>,
+    inner_width: u16,
+) -> Vec<Line<'static>> {
+    let display_url = truncate_middle(url, inner_width.saturating_sub(2) as usize);
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Enter this code in your browser:",
+            Style::default().fg(Color::Green),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("    {user_code}"),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            display_url,
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Waiting for approval...",
+            Style::default().fg(Color::White),
+        )),
+        Line::from(Span::styled(
+            "Unsupported by Meta; billing attribution unverified.",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    if let Some(error) = error {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            error.to_string(),
+            Style::default().fg(Color::Red),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Esc to cancel",
         Style::default().fg(Color::DarkGray),
     )));
     lines
@@ -193,7 +275,7 @@ fn render_cli_provider_entries(width: u16, selected: usize) -> Vec<Line<'static>
     let status_on = Style::default().fg(Color::Green);
     let pad = " ".repeat(2);
 
-    let providers: [(&str, &str, LoadFn); 4] = [
+    let providers: [(&str, &str, LoadFn); 5] = [
         (
             "Claude CLI",
             claude_cli::PROVIDER_KEY,
@@ -213,6 +295,11 @@ fn render_cli_provider_entries(width: u16, selected: usize) -> Vec<Line<'static>
             "Grok Build",
             grok_build::PROVIDER_KEY,
             grok_build::load_credentials,
+        ),
+        (
+            "Muse Code",
+            muse_code::PROVIDER_KEY,
+            muse_code::load_credentials,
         ),
     ];
     let cache = zdx_engine::providers::oauth::OAuthCache::load().unwrap_or_default();

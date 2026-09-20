@@ -1515,6 +1515,466 @@ pub mod grok_build {
     }
 }
 
+/// Muse Code (Meta subscription) device-authorization helpers.
+///
+/// Muse Code is the only zdx provider using RFC 8628 device authorization: Meta
+/// exposes no redirect-based client, so login shows a user code and polls for
+/// approval instead of running a localhost callback.
+///
+/// Two credentials come out of the flow and both are stored:
+/// - `refresh` holds the Meta **identity token** from the device grant.
+/// - `access` holds the **Model API key** minted from that identity token at
+///   `POST /muse-code/key`.
+///
+/// Meta publishes no lifetime for a minted key, and the reference
+/// implementations disagree about re-minting (oh-my-pi re-reads the endpoint
+/// for usage behind a failure backoff; opencode-muse-auth mints once and warns
+/// that the endpoint is aggressively rate-limited). zdx therefore treats the
+/// key as durable with **no predicted expiry** ([`NO_EXPIRY`]) and re-mints
+/// only when Meta actually rejects it — see [`remint_rejected_key`].
+///
+/// ⚠️ Unsupported by Meta. The docs state a Muse Code subscription "only works
+/// through the Muse Code CLI"; whether a key minted here bills to the
+/// subscription or to pay-as-you-go is **not established**, and no billed
+/// request was made to find out. Protocol shape follows the MIT-licensed
+/// `oh-my-pi` implementation
+/// (`packages/ai/src/registry/oauth/muse-code.ts`). An MIT license covers code
+/// reuse only and grants nothing regarding Meta's terms of service.
+pub mod muse_code {
+    use std::time::{Duration, Instant};
+
+    use serde::Deserialize;
+
+    use super::{CacheLock, Context, OAuthCache, OAuthCredentials, Result};
+
+    /// Provider key for Muse Code in the OAuth cache.
+    pub const PROVIDER_KEY: &str = "muse-code";
+
+    /// Client ID used by the published Muse Code device-authorization flow.
+    ///
+    /// Inferred to belong to Meta's first-party CLI; ownership is not
+    /// independently confirmed, and Meta's enforcement posture toward other
+    /// clients presenting it is unknown.
+    const CLIENT_ID: &str = "1031625952748946";
+
+    const DEVICE_AUTHORIZATION_URL: &str = "https://auth.meta.com/oidc/device/authorization/";
+    const DEVICE_TOKEN_URL: &str = "https://auth.meta.com/oidc/device/token/";
+    /// Mint endpoint. Doubles as the subscription-usage read (see `subs_usage`).
+    pub const KEY_MINT_URL: &str = "https://api.meta.ai/muse-code/key";
+    const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
+    const API_VERSION: &str = "1.0.0";
+
+    /// Sentinel expiry for a credential with no provider-published lifetime.
+    ///
+    /// A minted Muse Code key stays valid until Meta rejects it, so zdx never
+    /// predicts expiry from a timestamp: [`OAuthCredentials::is_expired`] is
+    /// always false here, and re-minting is driven by a real 401/403 through
+    /// [`remint_rejected_key`].
+    pub const NO_EXPIRY: u64 = u64::MAX;
+
+    /// Per-request ceiling. Every auth call is bounded so a stalled socket
+    /// cannot outlive the device-code deadline advertised to the user.
+    const REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
+    /// Connect-phase ceiling, counted inside [`REQUEST_TIMEOUT`].
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+    /// Builds the HTTP client used by every Muse Code auth call.
+    fn http_client() -> Result<reqwest::Client> {
+        reqwest::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .context("Failed to build the Muse Code HTTP client")
+    }
+
+    /// Default device-code poll interval when the server omits one.
+    const DEFAULT_POLL_INTERVAL_SECS: u64 = 5;
+    /// Default device-code lifetime when the server omits one.
+    const DEFAULT_EXPIRES_IN_SECS: u64 = 900;
+    /// Extra delay added when the server answers `slow_down`.
+    const SLOW_DOWN_STEP_SECS: u64 = 5;
+
+    /// A pending device authorization the user must approve in a browser.
+    #[derive(Debug, Clone)]
+    pub struct DeviceAuthorization {
+        pub device_code: String,
+        pub user_code: String,
+        pub verification_uri: String,
+        pub verification_uri_complete: Option<String>,
+        pub interval_secs: u64,
+        pub expires_in_secs: u64,
+    }
+
+    impl DeviceAuthorization {
+        /// The URL to show the user, preferring the pre-filled variant.
+        #[must_use]
+        pub fn display_uri(&self) -> &str {
+            self.verification_uri_complete
+                .as_deref()
+                .unwrap_or(&self.verification_uri)
+        }
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct DeviceAuthorizationWire {
+        device_code: String,
+        user_code: String,
+        verification_uri: String,
+        verification_uri_complete: Option<String>,
+        interval: Option<u64>,
+        expires_in: Option<u64>,
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct DeviceTokenWire {
+        access_token: Option<String>,
+        error: Option<String>,
+        error_description: Option<String>,
+    }
+
+    /// One rolling allowance window reported by the mint endpoint.
+    #[derive(Debug, Clone, Default, Deserialize)]
+    pub struct SubscriptionWindow {
+        pub used_percent: Option<f64>,
+        pub resets_at: Option<serde_json::Value>,
+        pub window_duration_mins: Option<f64>,
+    }
+
+    /// Subscription allowance block: a rolling window plus a weekly window.
+    #[derive(Debug, Clone, Default, Deserialize)]
+    pub struct SubscriptionUsage {
+        pub window: Option<SubscriptionWindow>,
+        pub weekly: Option<SubscriptionWindow>,
+    }
+
+    /// Response shape of `POST /muse-code/key`.
+    ///
+    /// Undocumented by Meta; field names follow the `oh-my-pi` schema and its
+    /// test fixtures, which record that author's observations rather than a
+    /// contract from Meta. Every field is optional so an unexpected payload
+    /// degrades instead of failing the request.
+    #[derive(Debug, Clone, Default, Deserialize)]
+    pub struct MuseCodeKeyResponse {
+        pub api_key: Option<String>,
+        pub is_subs_active: Option<bool>,
+        pub require_payment: Option<bool>,
+        pub action_url: Option<String>,
+        pub require_payment_action_url: Option<String>,
+        pub user_email: Option<String>,
+        pub user_id: Option<String>,
+        pub subs_tier_id: Option<String>,
+        pub subs_tier_name: Option<String>,
+        pub subs_usage: Option<SubscriptionUsage>,
+    }
+
+    /// Starts a device authorization and returns the code to show the user.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or the response is incomplete.
+    pub async fn start_device_authorization() -> Result<DeviceAuthorization> {
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("client_id", CLIENT_ID)
+            .finish();
+
+        let response = http_client()?
+            .post(DEVICE_AUTHORIZATION_URL)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("Accept", "application/json")
+            .body(body)
+            .send()
+            .await
+            .context("Failed to start Muse Code device authorization")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            anyhow::bail!("Muse Code device authorization failed (HTTP {status})");
+        }
+
+        let wire: DeviceAuthorizationWire = response
+            .json()
+            .await
+            .context("Failed to parse Muse Code device authorization response")?;
+
+        Ok(DeviceAuthorization {
+            device_code: wire.device_code,
+            user_code: wire.user_code,
+            verification_uri: wire.verification_uri,
+            verification_uri_complete: wire.verification_uri_complete,
+            interval_secs: wire
+                .interval
+                .filter(|i| *i > 0)
+                .unwrap_or(DEFAULT_POLL_INTERVAL_SECS),
+            expires_in_secs: wire
+                .expires_in
+                .filter(|e| *e > 0)
+                .unwrap_or(DEFAULT_EXPIRES_IN_SECS),
+        })
+    }
+
+    /// Polls the token endpoint until the user approves, denies, or time runs out.
+    ///
+    /// Returns the Meta identity token. `authorization_pending` and `slow_down`
+    /// are part of the normal flow and are not surfaced as errors.
+    ///
+    /// Both the waits *and* each request (including its body read) are bounded
+    /// by the time left on the grant, so the loop cannot outlive the
+    /// device-code deadline advertised to the user, and never accepts a token
+    /// that arrives after the code has expired. [`REQUEST_TIMEOUT`] is only the
+    /// per-request upper bound.
+    ///
+    /// # Errors
+    /// Returns an error if the login is denied, expires, or the endpoint fails.
+    pub async fn poll_for_identity_token(auth: &DeviceAuthorization) -> Result<String> {
+        let client = http_client()?;
+        let mut interval = Duration::from_secs(auth.interval_secs);
+        let deadline = Instant::now() + Duration::from_secs(auth.expires_in_secs);
+
+        loop {
+            let Some(until_deadline) = deadline.checked_duration_since(Instant::now()) else {
+                anyhow::bail!("Muse Code login timed out waiting for approval");
+            };
+            tokio::time::sleep(interval.min(until_deadline)).await;
+
+            // Recomputed after the wait: the exchange must be bounded by what
+            // is actually left, not by what was left before sleeping.
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                anyhow::bail!("Muse Code login timed out waiting for approval");
+            };
+
+            let body = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("grant_type", DEVICE_CODE_GRANT)
+                .append_pair("client_id", CLIENT_ID)
+                .append_pair("device_code", &auth.device_code)
+                .finish();
+
+            let request = client
+                .post(DEVICE_TOKEN_URL)
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .header("Accept", "application/json")
+                .body(body)
+                .send();
+
+            // The client's fixed REQUEST_TIMEOUT is only an upper bound, so a
+            // poll starting near the deadline could otherwise overrun it (or
+            // deliver a token after the code is already dead). Bound the whole
+            // exchange — connect, send and body read — by the time left.
+            let exchange = async {
+                let response = request.await.ok()?;
+                // The token endpoint answers pending approval with an HTTP
+                // error status, so classify the payload, not the status.
+                Some(response.json::<DeviceTokenWire>().await.unwrap_or_default())
+            };
+
+            let Ok(outcome) = tokio::time::timeout(remaining, exchange).await else {
+                anyhow::bail!("Muse Code login timed out waiting for approval");
+            };
+
+            // A dropped or timed-out poll is transient: retry on the next tick
+            // rather than failing a login the user may still be approving. The
+            // deadline above bounds how long that can continue.
+            let Some(wire) = outcome else {
+                continue;
+            };
+
+            match wire.error.as_deref() {
+                None => {
+                    if let Some(token) = wire.access_token.filter(|t| !t.is_empty()) {
+                        return Ok(token);
+                    }
+                    anyhow::bail!("Muse Code login returned no access token");
+                }
+                Some("authorization_pending") => {}
+                Some("slow_down") => {
+                    interval += Duration::from_secs(SLOW_DOWN_STEP_SECS);
+                }
+                Some("access_denied") => anyhow::bail!("Muse Code login was denied"),
+                Some("expired_token") => anyhow::bail!("Muse Code login request expired"),
+                Some(other) => {
+                    let detail = wire.error_description.unwrap_or_default();
+                    if detail.is_empty() {
+                        anyhow::bail!("Muse Code login failed: {other}");
+                    }
+                    anyhow::bail!("Muse Code login failed: {other} ({detail})");
+                }
+            }
+        }
+    }
+
+    /// Calls `POST /muse-code/key` with a Meta identity token.
+    ///
+    /// `onboard` marks an interactive login exchange; it is not a billing-mode
+    /// switch. Also used read-only by the quota fetcher, which passes `false`.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or the response cannot be parsed.
+    pub async fn request_key(identity_token: &str, onboard: bool) -> Result<MuseCodeKeyResponse> {
+        let body = if onboard { "{\"onboard\":true}" } else { "{}" };
+
+        let response = http_client()?
+            .post(KEY_MINT_URL)
+            .header("Authorization", format!("Bearer {identity_token}"))
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .header("x-api-version", API_VERSION)
+            .body(body)
+            .send()
+            .await
+            .context("Failed to call the Muse Code key endpoint")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            if status.as_u16() == 401 || status.as_u16() == 403 {
+                anyhow::bail!(
+                    "Muse Code session expired (HTTP {status}); run `zdx login --muse-code` again"
+                );
+            }
+            anyhow::bail!("Muse Code key request failed (HTTP {status})");
+        }
+
+        response
+            .json()
+            .await
+            .context("Failed to parse the Muse Code key response")
+    }
+
+    /// Turns a key response into credentials, rejecting inactive subscriptions.
+    ///
+    /// # Errors
+    /// Returns an error if the subscription is inactive, payment is required,
+    /// or no API key was issued.
+    pub fn credentials_from_key_response(
+        identity_token: &str,
+        payload: &MuseCodeKeyResponse,
+    ) -> Result<OAuthCredentials> {
+        if payload.is_subs_active == Some(false) {
+            anyhow::bail!("Muse Code subscription is inactive for this account");
+        }
+
+        let Some(api_key) = payload
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+        else {
+            let action = payload
+                .action_url
+                .as_deref()
+                .or(payload.require_payment_action_url.as_deref())
+                .unwrap_or_default();
+            if payload.require_payment == Some(true) || !action.is_empty() {
+                if action.is_empty() {
+                    anyhow::bail!("A Muse Code subscription is required for this account");
+                }
+                anyhow::bail!("A Muse Code subscription is required: {action}");
+            }
+            anyhow::bail!("Meta did not issue a Muse Code API key");
+        };
+
+        Ok(OAuthCredentials {
+            cred_type: "oauth".to_string(),
+            refresh: identity_token.to_string(),
+            access: api_key.to_string(),
+            expires: NO_EXPIRY,
+            account_id: payload
+                .user_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(ToString::to_string)
+                .or_else(|| {
+                    payload
+                        .user_email
+                        .as_deref()
+                        .map(|email| email.trim().to_lowercase())
+                        .filter(|email| !email.is_empty())
+                }),
+        })
+    }
+
+    /// Re-mints the Model API key from the stored identity token.
+    ///
+    /// # Errors
+    /// Returns an error if the identity token is no longer accepted.
+    pub async fn refresh_token(identity_token: &str) -> Result<OAuthCredentials> {
+        let payload = request_key(identity_token, false).await?;
+        credentials_from_key_response(identity_token, &payload)
+    }
+
+    /// Re-mints after Meta rejected `rejected_key`, and persists the result.
+    ///
+    /// Compare-and-swap rather than timestamp-driven, because the key has no
+    /// published lifetime: under the cache lock, a stored key that no longer
+    /// matches the rejected one means another zdx process already re-minted,
+    /// so that result is reused instead of calling the rate-limited mint
+    /// endpoint again.
+    ///
+    /// # Errors
+    /// Returns an error if the lock cannot be taken, no credentials are stored,
+    /// the mint call fails, or the cache cannot be written.
+    pub async fn remint_rejected_key(
+        account: Option<&str>,
+        rejected_key: &str,
+    ) -> Result<OAuthCredentials> {
+        let _lock = CacheLock::acquire().await?;
+
+        let key = super::account_cache_key(PROVIDER_KEY, account);
+        let mut cache = OAuthCache::load()?;
+        let current = cache
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("No Muse Code credentials stored for '{key}'"))?;
+
+        if current.access != rejected_key {
+            return Ok(current);
+        }
+
+        let mut refreshed = refresh_token(&current.refresh).await?;
+        if refreshed.account_id.is_none() {
+            refreshed.account_id = current.account_id;
+        }
+        cache.set(&key, refreshed.clone());
+        cache.save()?;
+
+        Ok(refreshed)
+    }
+
+    /// Loads the Muse Code OAuth credentials for an account from cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn load_credentials(account: Option<&str>) -> Result<Option<OAuthCredentials>> {
+        let cache = OAuthCache::load()?;
+        Ok(cache
+            .get(&super::account_cache_key(PROVIDER_KEY, account))
+            .cloned())
+    }
+
+    /// Saves Muse Code OAuth credentials for an account to cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn save_credentials(account: Option<&str>, creds: &OAuthCredentials) -> Result<()> {
+        OAuthCache::update(|cache| {
+            cache.set(
+                &super::account_cache_key(PROVIDER_KEY, account),
+                creds.clone(),
+            );
+        })
+    }
+
+    /// Removes the Muse Code OAuth credentials for an account from cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn clear_credentials(account: Option<&str>) -> Result<bool> {
+        OAuthCache::update(|cache| {
+            cache
+                .remove(&super::account_cache_key(PROVIDER_KEY, account))
+                .is_some()
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1668,5 +2128,52 @@ mod tests {
         assert!(url.contains("response_type=code"));
         assert!(url.contains("code_challenge="));
         assert!(url.contains("code_challenge_method=S256"));
+    }
+}
+
+#[cfg(test)]
+mod muse_code_tests {
+    use super::muse_code::DeviceAuthorization;
+
+    fn authorization(expires_in_secs: u64, interval_secs: u64) -> DeviceAuthorization {
+        DeviceAuthorization {
+            device_code: "device".to_string(),
+            user_code: "ABCD-EFGH".to_string(),
+            verification_uri: "https://auth.meta.com/device".to_string(),
+            verification_uri_complete: None,
+            interval_secs,
+            expires_in_secs,
+        }
+    }
+
+    #[test]
+    fn display_uri_prefers_the_prefilled_variant() {
+        let mut auth = authorization(900, 5);
+        assert_eq!(auth.display_uri(), "https://auth.meta.com/device");
+        auth.verification_uri_complete =
+            Some("https://auth.meta.com/device?user_code=ABCD-EFGH".to_string());
+        assert_eq!(
+            auth.display_uri(),
+            "https://auth.meta.com/device?user_code=ABCD-EFGH"
+        );
+    }
+
+    /// An already-expired grant must fail on the deadline alone, without
+    /// issuing a request — the guarantee that the poll never outlives the
+    /// advertised lifetime. Hermetic: reaching the network would hang here.
+    #[tokio::test]
+    async fn expired_authorization_never_issues_a_request() {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            super::muse_code::poll_for_identity_token(&authorization(0, 5)),
+        )
+        .await
+        .expect("poll must return immediately for an expired grant");
+
+        let err = result.expect_err("expired grant must not succeed");
+        assert!(
+            err.to_string().contains("timed out"),
+            "unexpected error: {err}"
+        );
     }
 }

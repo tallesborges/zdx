@@ -2120,6 +2120,8 @@ pub struct ProvidersConfig {
     pub grok_build: ProviderConfig,
     #[serde(default = "default_meta_provider")]
     pub meta: ProviderConfig,
+    #[serde(default = "default_muse_code_provider")]
+    pub muse_code: ProviderConfig,
     #[serde(default = "default_elevenlabs_provider")]
     pub elevenlabs: ProviderConfig,
     #[serde(default = "default_alibaba_provider")]
@@ -2159,6 +2161,7 @@ impl ProvidersConfig {
             id if id == ProviderKind::Zai.id() => &self.zai,
             id if id == ProviderKind::Xai.id() => &self.xai,
             id if id == ProviderKind::GrokBuild.id() => &self.grok_build,
+            id if id == ProviderKind::MuseCode.id() => &self.muse_code,
             id if id == ProviderKind::Meta.id() => &self.meta,
             id if id == ProviderKind::ElevenLabs.id() => &self.elevenlabs,
             id if id == ProviderKind::Alibaba.id() => &self.alibaba,
@@ -2192,6 +2195,7 @@ impl ProvidersConfig {
             ProviderKind::Zai => &self.zai,
             ProviderKind::Xai => &self.xai,
             ProviderKind::GrokBuild => &self.grok_build,
+            ProviderKind::MuseCode => &self.muse_code,
             ProviderKind::Meta => &self.meta,
             ProviderKind::ElevenLabs => &self.elevenlabs,
             ProviderKind::Alibaba => &self.alibaba,
@@ -2223,6 +2227,7 @@ impl ProvidersConfig {
             ProviderKind::Zai => &mut self.zai,
             ProviderKind::Xai => &mut self.xai,
             ProviderKind::GrokBuild => &mut self.grok_build,
+            ProviderKind::MuseCode => &mut self.muse_code,
             ProviderKind::Meta => &mut self.meta,
             ProviderKind::ElevenLabs => &mut self.elevenlabs,
             ProviderKind::Alibaba => &mut self.alibaba,
@@ -2274,6 +2279,7 @@ impl Default for ProvidersConfig {
             zai: default_zai_provider(),
             xai: default_xai_provider(),
             grok_build: default_grok_build_provider(),
+            muse_code: default_muse_code_provider(),
             meta: default_meta_provider(),
             elevenlabs: default_elevenlabs_provider(),
             alibaba: default_alibaba_provider(),
@@ -2372,6 +2378,21 @@ fn default_moonshot_provider() -> ProviderConfig {
 }
 
 fn default_meta_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec![
+            "muse-spark-1.3".to_string(),
+            "muse-spark-1.3-contributor".to_string(),
+        ],
+        ..Default::default()
+    }
+}
+
+/// Muse Code (Meta subscription) defaults.
+///
+/// Same Muse Spark catalogue as the API-key `meta` provider; the difference is
+/// the credential, which is minted by `zdx login --muse-code`.
+fn default_muse_code_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![

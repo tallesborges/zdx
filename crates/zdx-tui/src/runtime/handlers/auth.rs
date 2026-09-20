@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::Duration;
 
-use crate::events::UiEvent;
+use crate::events::{LoginDeviceCode, UiEvent};
 
 /// Exchanges an OAuth code for credentials.
 ///
@@ -72,6 +72,75 @@ pub async fn token_exchange(
             }
         }
         _ => Err("OAuth is not supported for this provider.".to_string()),
+    };
+    UiEvent::LoginResult { result }
+}
+
+/// Starts an RFC 8628 device authorization and returns the code to display.
+///
+/// Pure async function - runtime spawns and sends result to inbox.
+pub async fn device_authorization(provider: zdx_engine::providers::ProviderKind) -> UiEvent {
+    use zdx_engine::providers::oauth::muse_code;
+
+    if provider != zdx_engine::providers::ProviderKind::MuseCode {
+        return UiEvent::LoginDeviceCode {
+            result: Err("Device authorization is not supported for this provider.".to_string()),
+        };
+    }
+
+    let result = match muse_code::start_device_authorization().await {
+        Ok(auth) => Ok(LoginDeviceCode {
+            user_code: auth.user_code.clone(),
+            url: auth.display_uri().to_string(),
+            device_code: auth.device_code.clone(),
+            interval_secs: auth.interval_secs,
+            expires_in_secs: auth.expires_in_secs,
+        }),
+        Err(err) => Err(format!("{err:#}")),
+    };
+    UiEvent::LoginDeviceCode { result }
+}
+
+/// Polls a device authorization to completion, then mints and saves credentials.
+///
+/// Pure async function - runtime spawns and sends result to inbox.
+pub async fn device_poll(
+    provider: zdx_engine::providers::ProviderKind,
+    device_code: String,
+    interval_secs: u64,
+    expires_in_secs: u64,
+) -> UiEvent {
+    use zdx_engine::providers::oauth::muse_code;
+
+    if provider != zdx_engine::providers::ProviderKind::MuseCode {
+        return UiEvent::LoginResult {
+            result: Err("Device authorization is not supported for this provider.".to_string()),
+        };
+    }
+
+    // Only `device_code`, `interval_secs` and `expires_in_secs` are needed to
+    // resume polling, so the overlay does not have to hold the whole grant.
+    let authorization = muse_code::DeviceAuthorization {
+        device_code,
+        user_code: String::new(),
+        verification_uri: String::new(),
+        verification_uri_complete: None,
+        interval_secs,
+        expires_in_secs,
+    };
+
+    let result = match muse_code::poll_for_identity_token(&authorization).await {
+        Ok(identity_token) => match muse_code::request_key(&identity_token, true).await {
+            Ok(payload) => {
+                match muse_code::credentials_from_key_response(&identity_token, &payload) {
+                    Ok(creds) => muse_code::save_credentials(None, &creds)
+                        .map_err(|e| format!("Failed to save: {e}")),
+                    Err(err) => Err(format!("{err:#}")),
+                }
+            }
+            Err(err) => Err(format!("{err:#}")),
+        },
+        Err(err) => Err(format!("{err:#}")),
     };
     UiEvent::LoginResult { result }
 }

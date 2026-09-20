@@ -820,6 +820,21 @@ impl TuiRuntime {
                     handlers::token_exchange(provider, code, verifier, redirect_uri)
                 });
             }
+            UiEffect::StartDeviceAuthorization { provider } => {
+                self.spawn_task(TaskKind::LoginExchange, TaskMeta::None, false, move |_| {
+                    handlers::device_authorization(provider)
+                });
+            }
+            UiEffect::PollDeviceAuthorization {
+                provider,
+                device_code,
+                interval_secs,
+                expires_in_secs,
+            } => {
+                self.spawn_task(TaskKind::LoginCallback, TaskMeta::None, false, move |_| {
+                    handlers::device_poll(provider, device_code, interval_secs, expires_in_secs)
+                });
+            }
             UiEffect::StartLocalAuthCallback {
                 provider,
                 state,

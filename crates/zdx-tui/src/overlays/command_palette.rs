@@ -438,7 +438,7 @@ fn execute_command(
 }
 
 fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
-    use zdx_engine::providers::oauth::{claude_cli, grok_build, openai_codex};
+    use zdx_engine::providers::oauth::{claude_cli, grok_build, muse_code, openai_codex};
     use zdx_engine::providers::resolve_provider;
 
     let mut mutations = Vec::new();
@@ -454,6 +454,9 @@ fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
         }
         zdx_engine::providers::ProviderKind::GrokBuild => {
             grok_build::clear_credentials(account).map(|had| (had, "Grok Build"))
+        }
+        zdx_engine::providers::ProviderKind::MuseCode => {
+            muse_code::clear_credentials(account).map(|had| (had, "Muse Code"))
         }
         _ => {
             let message = provider.api_key_env_var().map_or_else(

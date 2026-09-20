@@ -15,6 +15,7 @@ pub mod meta;
 pub mod minimax;
 pub mod mistral;
 pub mod moonshot;
+pub mod muse_code;
 pub mod oauth;
 pub mod openai;
 pub mod openai_compatible;
@@ -99,6 +100,7 @@ impl_streaming_provider!(
     xai::XaiClient,
     grok_build::GrokBuildClient,
     meta::MetaClient,
+    muse_code::MuseCodeClient,
     opencode_go::OpencodeGoClient,
     openai_compatible::OpenAICompatibleClient,
 );
@@ -176,6 +178,7 @@ pub enum ProviderKind {
     Xai,
     GrokBuild,
     Meta,
+    MuseCode,
     ElevenLabs,
     Alibaba,
     QwenCode,
@@ -418,6 +421,18 @@ impl ProviderKind {
                 supports_oauth: false,
                 is_subscription: false,
             },
+            Self::MuseCode => ProviderMeta {
+                id: "muse-code",
+                aliases: &["musecode"],
+                label: "Muse Code",
+                // The subscription credential is minted through device-code
+                // login, never supplied as an API key.
+                api_key_env: None,
+                base_url: "https://api.meta.ai/v1",
+                base_url_env: Some("META_API_BASE"),
+                supports_oauth: true,
+                is_subscription: true,
+            },
             Self::ElevenLabs => ProviderMeta {
                 id: "elevenlabs",
                 aliases: &["11labs", "eleven"],
@@ -474,6 +489,7 @@ impl ProviderKind {
             ProviderKind::Xai,
             ProviderKind::GrokBuild,
             ProviderKind::Meta,
+            ProviderKind::MuseCode,
             ProviderKind::ElevenLabs,
             ProviderKind::Alibaba,
             ProviderKind::QwenCode,
@@ -601,6 +617,7 @@ impl ProviderKind {
             Self::Xai => xai::build(ctx),
             Self::GrokBuild => grok_build::build(ctx),
             Self::Meta => meta::build(ctx),
+            Self::MuseCode => muse_code::build(ctx),
             Self::Alibaba | Self::QwenCode => alibaba::build(ctx),
             // ElevenLabs is a speech-to-text-only provider (Scribe); it is used
             // by the transcription pipeline, not the chat/streaming path.
