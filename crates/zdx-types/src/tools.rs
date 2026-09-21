@@ -73,13 +73,21 @@ pub fn tool_command_text(name: &str, input: &Value) -> String {
             .unwrap_or_default()
             .to_string(),
         "glob" => value_as_string_list(input, "pattern").join("\n"),
-        "grep" => match (
-            value_as_trimmed_str(input, "pattern"),
-            value_as_trimmed_str(input, "path"),
-        ) {
-            (Some(pattern), Some(path)) => format!("{pattern} {path}"),
-            (Some(pattern), None) => pattern.to_string(),
-            _ => String::new(),
+        "grep" => match value_as_trimmed_str(input, "pattern") {
+            Some(pattern) => {
+                let mut paths = value_as_string_list(input, "paths");
+                if let Some(legacy) = value_as_trimmed_str(input, "path")
+                    && !paths.iter().any(|p| p == legacy)
+                {
+                    paths.push(legacy.to_string());
+                }
+                if paths.is_empty() {
+                    pattern.to_string()
+                } else {
+                    format!("{pattern} {}", paths.join(" "))
+                }
+            }
+            None => String::new(),
         },
         "fetch_webpage" => field("url"),
         "read_thread" => field("thread_id"),

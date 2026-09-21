@@ -53,7 +53,7 @@ const WALK_PHASE: std::time::Duration = std::time::Duration::from_secs(3);
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Grep".to_string(),
-        description: "Search file contents with a regular expression within a scoped path; an exact file path is searched directly. Hidden files are included; ignore rules apply by default, and `.git` is searched only when explicitly targeted. Results include source locations and optional context, or just the paths of files that contain a match when locating files is the goal. Result caps can be paginated; an incomplete traversal requires a narrower or split search path. Files over 4MB are skipped and reported."
+        description: "Search file contents with a regular expression within scoped paths; each exact file path is searched directly. Hidden files are included; ignore rules apply by default, and `.git` is searched only when explicitly targeted. Results include source locations and optional context, or just the paths of files that contain a match when locating files is the goal. Result caps can be paginated; an incomplete traversal requires narrower or split search paths. Files over 4MB are skipped and reported."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -62,9 +62,11 @@ pub fn definition() -> ToolDefinition {
                     "type": "string",
                     "description": "Regex pattern to search for"
                 },
-                "path": {
-                    "type": "string",
-                    "description": "Directory or file to search in. Relative paths resolve from the current working directory. Defaults to the current working directory. Supports $VAR/${VAR} env vars."
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "default": ["."],
+                    "description": "List of files or directories to search in. Each entry is a separate file or directory; do not combine multiple paths into one string with commas. Relative paths resolve from the current working directory. Defaults to [\".\"]. Supports $VAR/${VAR} env vars."
                 },
                 "glob": {
                     "type": "string",
@@ -121,7 +123,11 @@ pub fn definition() -> ToolDefinition {
 #[allow(clippy::struct_excessive_bools)]
 struct GrepInput {
     pattern: String,
+    /// Legacy single-path key. Hidden from the model schema (which exposes
+    /// only `paths`) but still accepted so older callers keep working.
     path: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_paths")]
+    paths: Option<Vec<String>>,
     glob: Option<String>,
     #[serde(default, deserialize_with = "crate::bool_or_string::deserialize")]
     include_ignored: bool,
@@ -181,6 +187,69 @@ where
         Some(IntOrString::Int(v)) => Ok(Some(v.max(0) as usize)),
         Some(IntOrString::String(s)) => Ok(s.trim().parse::<usize>().ok()),
         Some(IntOrString::Null) | None => Ok(None),
+    }
+}
+
+/// Deserialize `paths` from an array of strings, a single string, or null.
+///
+/// Accepts a single string for LLM resilience (plus JSON-stringified arrays
+/// from manual tool-entry flows). Trims entries; empty strings are dropped so
+/// a blank `paths` falls back to the default search root downstream.
+fn deserialize_optional_paths<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrVec {
+        String(String),
+        Vec(Vec<String>),
+        Null,
+    }
+
+    let val = Option::<StringOrVec>::deserialize(deserializer)?;
+    match val {
+        None | Some(StringOrVec::Null) => Ok(None),
+        Some(StringOrVec::String(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                match serde_json::from_str::<Vec<String>>(trimmed) {
+                    Ok(values) => {
+                        let normalized: Vec<String> = values
+                            .into_iter()
+                            .map(|v| v.trim().to_string())
+                            .filter(|v| !v.is_empty())
+                            .collect();
+                        if normalized.is_empty() {
+                            Ok(None)
+                        } else {
+                            Ok(Some(normalized))
+                        }
+                    }
+                    Err(_) => Ok(Some(vec![trimmed.to_string()])),
+                }
+            } else {
+                Ok(Some(vec![trimmed.to_string()]))
+            }
+        }
+        Some(StringOrVec::Vec(values)) => {
+            let normalized: Vec<String> = values
+                .into_iter()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .collect();
+            if normalized.is_empty() {
+                Err(Error::custom(
+                    "paths must contain at least one non-empty path",
+                ))
+            } else {
+                Ok(Some(normalized))
+            }
+        }
     }
 }
 
@@ -305,6 +374,52 @@ fn round_robin_select(per_file: Vec<Vec<Match>>, max: usize) -> (Vec<Match>, boo
     (result, truncated)
 }
 
+/// Resolve the search roots from the legacy `path` key plus the new `paths` list.
+///
+/// `paths` is what the model schema exposes; `path` stays accepted so older
+/// callers keep working. Both are merged (trimmed, deduplicated); when neither
+/// is provided the search defaults to the working directory.
+fn resolve_search_paths(
+    legacy_path: Option<&str>,
+    paths: Option<Vec<String>>,
+    root: &Path,
+) -> Result<Vec<PathBuf>, ToolOutput> {
+    let mut raw: Vec<String> = paths.unwrap_or_default();
+    if let Some(p) = legacy_path {
+        raw.push(p.to_string());
+    }
+    if raw.is_empty() {
+        return Ok(vec![root.to_path_buf()]);
+    }
+
+    let mut resolved: Vec<PathBuf> = Vec::with_capacity(raw.len());
+    for entry in raw {
+        let trimmed = entry.trim();
+        // A blank entry (or ".") means the working directory, matching the old
+        // single-`path` behavior where blank fell back to the root.
+        if trimmed.is_empty() || trimmed == "." || trimmed == "./" {
+            resolved.push(root.to_path_buf());
+            continue;
+        }
+        let full = super::resolve_input_path(trimmed, root)?;
+        if full.exists() {
+            resolved.push(full);
+        } else {
+            return Err(ToolOutput::failure(
+                "path_error",
+                format!("Path does not exist: '{}'", full.display()),
+                None,
+            ));
+        }
+    }
+    resolved.sort();
+    resolved.dedup();
+    if resolved.is_empty() {
+        resolved.push(root.to_path_buf());
+    }
+    Ok(resolved)
+}
+
 /// Executes the grep tool and returns structured results.
 pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     let input: GrepInput = match super::parse_tool_input(input, "grep") {
@@ -340,7 +455,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         }
     };
 
-    let search_path = match super::resolve_search_path(input.path.as_deref(), &ctx.root) {
+    let search_paths = match resolve_search_paths(input.path.as_deref(), input.paths, &ctx.root) {
         Ok(p) => p,
         Err(output) => return output,
     };
@@ -375,7 +490,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         return execute_extract_unique(
             &sanitized,
             input.case_insensitive,
-            &search_path,
+            &search_paths,
             &ctx.root,
             glob_matcher.as_ref(),
             &policy,
@@ -388,7 +503,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
 
     if input.files_only {
         return execute_files_only(
-            &search_path,
+            &search_paths,
             &matcher,
             &ctx.root,
             glob_matcher.as_ref(),
@@ -398,7 +513,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     }
 
     execute_matches(
-        &search_path,
+        &search_paths,
         &matcher,
         &ctx.root,
         glob_matcher.as_ref(),
@@ -417,7 +532,7 @@ struct Pagination {
 
 /// Report matching lines with their source locations and optional context.
 fn execute_matches(
-    search_path: &Path,
+    search_paths: &[PathBuf],
     matcher: &grep_regex::RegexMatcher,
     root: &Path,
     glob_matcher: Option<&GlobMatcher>,
@@ -428,7 +543,7 @@ fn execute_matches(
     let Pagination { offset, max_count } = pagination;
 
     let (per_file, skipped_large_files) = collect_matches(
-        search_path,
+        search_paths,
         matcher,
         root,
         glob_matcher,
@@ -486,7 +601,7 @@ fn execute_matches(
 fn execute_extract_unique(
     pattern: &str,
     case_insensitive: bool,
-    search_path: &Path,
+    search_paths: &[PathBuf],
     root: &Path,
     glob_matcher: Option<&GlobMatcher>,
     policy: &WalkPolicy,
@@ -509,7 +624,7 @@ fn execute_extract_unique(
     let has_captures = re.captures_len() > 1;
     let mut unique_values = BTreeSet::new();
 
-    let (files, skipped_large_files) = walk_files(search_path, root, glob_matcher, policy);
+    let (files, skipped_large_files) = walk_files(search_paths, root, glob_matcher, policy);
 
     for path in &files {
         if policy.budget.is_expired() {
@@ -564,63 +679,70 @@ fn execute_extract_unique(
     ToolOutput::success(Value::Object(data))
 }
 
-/// Walk the file tree and return paths to search, respecting glob filters and size limits.
+/// Walk the file trees and return paths to search, respecting glob filters and size limits.
 ///
 /// Traversal is parallel and stops early once `policy`'s budget expires. Results
-/// are sorted so match ordering (and therefore `offset` pagination) stays stable
-/// across calls.
+/// are sorted and deduplicated so match ordering (and therefore `offset`
+/// pagination) stays stable across calls, even when the search roots overlap.
 fn walk_files(
-    search_path: &Path,
+    search_paths: &[PathBuf],
     root: &Path,
     glob_matcher: Option<&GlobMatcher>,
     policy: &WalkPolicy,
 ) -> (Vec<PathBuf>, Vec<String>) {
-    if search_path.is_file() {
-        let too_large = search_path
-            .metadata()
-            .is_ok_and(|meta| meta.len() > MAX_FILE_SIZE);
-        return if too_large {
-            (Vec::new(), vec![display_path(search_path, root)])
-        } else {
-            (vec![search_path.to_path_buf()], Vec::new())
-        };
-    }
-
     let collected = Mutex::new((Vec::new(), Vec::new()));
 
     // Walking only gets part of the budget; the rest belongs to searching.
     let walk_policy = policy.with_phase(WALK_PHASE);
-    walk::walk(search_path, &walk_policy, |entry| {
-        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
-            return WalkState::Continue;
+    for search_path in search_paths {
+        if search_path.is_file() {
+            let too_large = search_path
+                .metadata()
+                .is_ok_and(|meta| meta.len() > MAX_FILE_SIZE);
+            let (files, skipped_large_files) =
+                &mut *collected.lock().unwrap_or_else(PoisonError::into_inner);
+            if too_large {
+                skipped_large_files.push(display_path(search_path, root));
+            } else {
+                files.push(search_path.clone());
+            }
+            continue;
         }
 
-        if let Some(gm) = glob_matcher {
-            let rel = entry.path().strip_prefix(root).unwrap_or(entry.path());
-            if !gm.is_match(rel) {
+        walk::walk(search_path, &walk_policy, |entry| {
+            if !entry.file_type().is_some_and(|ft| ft.is_file()) {
                 return WalkState::Continue;
             }
-        }
 
-        let too_large = entry
-            .metadata()
-            .is_ok_and(|metadata| metadata.len() > MAX_FILE_SIZE);
+            if let Some(gm) = glob_matcher {
+                let rel = entry.path().strip_prefix(root).unwrap_or(entry.path());
+                if !gm.is_match(rel) {
+                    return WalkState::Continue;
+                }
+            }
 
-        let (files, skipped_large_files) =
-            &mut *collected.lock().unwrap_or_else(PoisonError::into_inner);
-        if too_large {
-            skipped_large_files.push(display_path(entry.path(), root));
-        } else {
-            files.push(entry.path().to_path_buf());
-        }
-        WalkState::Continue
-    });
+            let too_large = entry
+                .metadata()
+                .is_ok_and(|metadata| metadata.len() > MAX_FILE_SIZE);
+
+            let (files, skipped_large_files) =
+                &mut *collected.lock().unwrap_or_else(PoisonError::into_inner);
+            if too_large {
+                skipped_large_files.push(display_path(entry.path(), root));
+            } else {
+                files.push(entry.path().to_path_buf());
+            }
+            WalkState::Continue
+        });
+    }
 
     let (mut files, mut skipped_large_files) = collected
         .into_inner()
         .unwrap_or_else(PoisonError::into_inner);
     files.sort();
+    files.dedup();
     skipped_large_files.sort();
+    skipped_large_files.dedup();
 
     (files, skipped_large_files)
 }
@@ -767,7 +889,7 @@ fn timed_out_warning(stats: &GrepOutputStats) -> Option<String> {
     stats.timed_out.then(|| {
         let secs = WALK_BUDGET.as_secs();
         format!(
-            "Search stopped after about {secs}s, so part of the tree was never searched: these results are partial and a missing match is not proof of absence. Walk cost tracks the size of the directory tree, not how narrow the pattern is: re-run against a deeper `path`."
+            "Search stopped after about {secs}s, so part of the tree was never searched: these results are partial and a missing match is not proof of absence. Walk cost tracks the size of the directory tree, not how narrow the pattern is: re-run against deeper `paths`."
         )
     })
 }
@@ -798,7 +920,7 @@ fn build_grep_warning(
     if stats.payload_truncated {
         let next_offset = offset + returned;
         parts.push(format!(
-            "Grep output was capped at ~40KB. Narrow the search with path/glob/context_lines or continue with offset={next_offset}."
+            "Grep output was capped at ~40KB. Narrow the search with paths/glob/context_lines or continue with offset={next_offset}."
         ));
     } else if paginated_or_capped && returned > 0 {
         let next_offset = offset + returned;
@@ -839,12 +961,12 @@ fn build_extract_unique_warning(stats: &GrepOutputStats, total_unique: usize) ->
 
 /// Report the files whose contents match, instead of the matching lines.
 ///
-/// Same search as the default mode, so the same `path`, `glob`, `type`, and
+/// Same search as the default mode, so the same `paths`, `glob`, `type`, and
 /// case options decide what is looked at; only the reporting differs. Each file
 /// stops at its first match, so the cost is bounded by the tree, not by how
 /// often the pattern occurs.
 fn execute_files_only(
-    search_path: &Path,
+    search_paths: &[PathBuf],
     matcher: &grep_regex::RegexMatcher,
     root: &Path,
     glob_matcher: Option<&GlobMatcher>,
@@ -852,7 +974,7 @@ fn execute_files_only(
     pagination: Pagination,
 ) -> ToolOutput {
     let Pagination { offset, max_count } = pagination;
-    let (files, skipped_large_files) = walk_files(search_path, root, glob_matcher, policy);
+    let (files, skipped_large_files) = walk_files(search_paths, root, glob_matcher, policy);
 
     // `walk_files` returns sorted paths, so the result is already stable and
     // `offset` addresses the same file across calls.
@@ -964,7 +1086,7 @@ fn build_files_only_warning(
     if stats.payload_truncated || paginated {
         let next_offset = offset + returned;
         parts.push(format!(
-            "More matching files are available. Continue with offset={next_offset} or narrow the search with path/glob/type."
+            "More matching files are available. Continue with offset={next_offset} or narrow the search with paths/glob/type."
         ));
     }
 
@@ -973,7 +1095,7 @@ fn build_files_only_warning(
 
 /// Collect matches grouped by file for round-robin selection.
 fn collect_matches(
-    search_path: &Path,
+    search_paths: &[PathBuf],
     matcher: &grep_regex::RegexMatcher,
     root: &Path,
     glob_matcher: Option<&GlobMatcher>,
@@ -982,7 +1104,7 @@ fn collect_matches(
 ) -> (Vec<Vec<Match>>, Vec<String>) {
     let mut per_file: Vec<Vec<Match>> = Vec::new();
     let mut total_collected: usize = 0;
-    let (files, skipped_large_files) = walk_files(search_path, root, glob_matcher, policy);
+    let (files, skipped_large_files) = walk_files(search_paths, root, glob_matcher, policy);
 
     for path in files {
         if policy.budget.is_expired() {
@@ -1372,6 +1494,79 @@ mod tests {
         let data = result.data().unwrap();
         assert_eq!(data["total_matches"], 1);
         assert_eq!(data["matches"][0]["file"], "a.txt");
+    }
+
+    #[test]
+    fn test_search_multiple_paths() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join("one")).unwrap();
+        fs::create_dir_all(temp.path().join("two")).unwrap();
+        fs::write(temp.path().join("one/a.txt"), "needle here\n").unwrap();
+        fs::write(temp.path().join("two/b.txt"), "needle here too\n").unwrap();
+        fs::write(temp.path().join("other.txt"), "needle skipped\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({"pattern": "needle", "paths": ["one", "two"]});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        assert_eq!(data["total_matches"], 2);
+        let files: Vec<&str> = data["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["file"].as_str().unwrap())
+            .collect();
+        assert_eq!(files, vec!["one/a.txt", "two/b.txt"]);
+    }
+
+    #[test]
+    fn test_paths_accepts_single_string() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join("sub")).unwrap();
+        fs::write(temp.path().join("sub/nested.txt"), "match here\n").unwrap();
+        fs::write(temp.path().join("root.txt"), "match here too\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({"pattern": "match", "paths": "sub"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        assert_eq!(data["total_matches"], 1);
+        assert_eq!(data["matches"][0]["file"], "sub/nested.txt");
+    }
+
+    #[test]
+    fn test_overlapping_paths_do_not_duplicate_matches() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join("sub")).unwrap();
+        fs::write(temp.path().join("sub/nested.txt"), "hit\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({"pattern": "hit", "paths": [".", "sub"]});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        assert_eq!(data["total_matches"], 1);
+    }
+
+    #[test]
+    fn test_legacy_path_and_paths_are_merged() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join("one")).unwrap();
+        fs::create_dir_all(temp.path().join("two")).unwrap();
+        fs::write(temp.path().join("one/a.txt"), "needle\n").unwrap();
+        fs::write(temp.path().join("two/b.txt"), "needle\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({"pattern": "needle", "path": "one", "paths": ["two"]});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        assert_eq!(result.data().unwrap()["total_matches"], 2);
     }
 
     #[test]
@@ -2319,6 +2514,19 @@ mod type_filter_tests {
     }
 
     #[test]
+    fn test_definition_exposes_paths_not_path() {
+        let schema = definition().input_schema;
+        let props = schema.get("properties").unwrap().as_object().unwrap();
+        assert!(props.contains_key("paths"), "schema must expose `paths`");
+        assert!(
+            !props.contains_key("path"),
+            "schema must hide legacy `path`"
+        );
+        let description = props["paths"].get("description").unwrap().as_str().unwrap();
+        assert!(description.contains("comma"), "{description}");
+    }
+
+    #[test]
     fn test_legacy_file_path_key_is_rejected() {
         // Regression: old callers sending "file_path" must fail with a clear error,
         // not silently fall back to the cwd and search an unintended broad scope.
@@ -2410,7 +2618,7 @@ mod type_filter_tests {
             ..WalkPolicy::for_pattern(None)
         };
 
-        let (files, skipped) = walk_files(temp.path(), temp.path(), None, &policy);
+        let (files, skipped) = walk_files(&[temp.path().to_path_buf()], temp.path(), None, &policy);
 
         assert!(files.is_empty(), "no entries visited past the deadline");
         assert!(skipped.is_empty());
@@ -2446,7 +2654,7 @@ mod type_filter_tests {
         }
 
         let policy = WalkPolicy::for_pattern(None);
-        let (files, _) = walk_files(temp.path(), temp.path(), None, &policy);
+        let (files, _) = walk_files(&[temp.path().to_path_buf()], temp.path(), None, &policy);
 
         let names: Vec<String> = files
             .iter()

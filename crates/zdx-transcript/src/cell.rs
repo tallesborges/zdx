@@ -138,10 +138,18 @@ fn tool_key_arg(name: &str, input: &Value) -> Option<String> {
         }
         "grep" => {
             let pattern = value_as_trimmed_str(input, "pattern")?;
-            if let Some(path) = value_as_trimmed_str(input, "path") {
-                Some(format!("{pattern} {path}"))
-            } else {
+            let mut paths = value_as_string_list(input, "paths");
+            if let Some(legacy) = value_as_trimmed_str(input, "path")
+                && !paths.iter().any(|p| p == legacy)
+            {
+                paths.push(legacy.to_string());
+            }
+            if paths.is_empty() {
                 Some(pattern.to_string())
+            } else if paths.len() == 1 {
+                Some(format!("{} {}", pattern, paths[0]))
+            } else {
+                Some(format!("{} [{}]", pattern, format_compact_list(&paths, 3)))
             }
         }
         "todo_write" => {
