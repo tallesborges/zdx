@@ -6,6 +6,7 @@
 //! - `context`: Project context loading (AGENTS.md files)
 //! - `interrupt`: Signal handling for graceful interruption
 //! - `agent`: Agent loop and event channels
+//! - `artifacts`: Shared thread artifact model (generated + sent files, preview kinds)
 //! - `handoff_generation`: LLM-based handoff context generation
 //! - `prompt_builder_generation`: LLM-based prompt-builder generation
 //! - `recency`: shared recency decay applied to search relevance scores
@@ -22,6 +23,7 @@
 //! - `worktree`: Git worktree management helpers
 
 pub mod agent;
+pub mod artifacts;
 pub mod context;
 pub mod events;
 pub mod fts_query;

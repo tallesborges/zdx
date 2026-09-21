@@ -593,6 +593,18 @@ pub mod paths {
     pub fn artifact_root() -> PathBuf {
         zdx_home().join("artifacts")
     }
+
+    /// Returns the artifact directory for a thread
+    /// (`$ZDX_HOME/artifacts/threads/<id>`, or `.../scratch` when `thread_id`
+    /// is missing/blank). Canonical path helper for the artifact model in
+    /// `core::artifacts`; surfaces resolve through that module instead.
+    pub fn artifact_dir_for_thread(thread_id: Option<&str>) -> PathBuf {
+        let root = artifact_root();
+        match thread_id.map(str::trim).filter(|id| !id.is_empty()) {
+            Some(id) => root.join("threads").join(id),
+            None => root.join("scratch"),
+        }
+    }
 }
 
 /// Default value for serde when `handoff_model` is missing.

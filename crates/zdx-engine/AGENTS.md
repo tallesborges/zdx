@@ -35,6 +35,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - `core/context.rs`: project context loading (`AGENTS.md`/`CLAUDE.md`, memory)
 - `core/interrupt.rs`: signal handling
 - `core/agent.rs`: agent loop + event channels
+- `core/artifacts.rs`: shared thread artifact model — artifact-dir scan merged with transcript `<media>` refs (deduped), preview kinds, download path guard
 - `core/handoff_generation.rs`: LLM-based handoff context generation (shared by TUI + bot)
 - `core/media_fallback.rs`: image fallback for models with `input_images = false` — swaps user/tool-result image blocks for a note pointing at the `ask_media` tool, applied per model turn in `core/agent.rs`
 - `core/prompt_builder_generation.rs`: LLM-based prompt-builder generation (shared by TUI + bot)
