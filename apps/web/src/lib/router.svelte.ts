@@ -3,7 +3,7 @@
  *
  * Canonical shapes:
  *   ?view=threads                  (recent-thread browser)
- *   ?view=thread&id=<id>&tab=agent|transcript|trajectory|changes
+ *   ?view=thread&id=<id>&tab=agent|transcript|artifacts|trajectory|changes
  *   ?view=monitor&section=overview|agents|services|usage|config|automations
  *
  * The bot already publishes `?view=threads&id=…`, `?view=git&id=…` and bare
@@ -14,7 +14,7 @@
 import { startParam } from "./telegram";
 
 export type View = "thread" | "threads" | "monitor";
-export type ThreadTab = "workers" | "agent" | "transcript" | "trajectory" | "changes";
+export type ThreadTab = "workers" | "agent" | "transcript" | "artifacts" | "trajectory" | "changes";
 export type MonitorSection =
   | "overview"
   | "agents"
@@ -30,7 +30,7 @@ export interface Route {
   section: MonitorSection;
 }
 
-const THREAD_TABS: ThreadTab[] = ["workers", "agent", "transcript", "trajectory", "changes"];
+const THREAD_TABS: ThreadTab[] = ["workers", "agent", "transcript", "artifacts", "trajectory", "changes"];
 const MONITOR_SECTIONS: MonitorSection[] = [
   "overview",
   "agents",
@@ -44,6 +44,7 @@ export const THREAD_TAB_LABELS: Record<ThreadTab, string> = {
   workers: "Workers",
   agent: "Agent",
   transcript: "Thread",
+  artifacts: "Artifacts",
   trajectory: "Trajectory",
   changes: "Changes",
 };

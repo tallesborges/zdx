@@ -12,6 +12,7 @@
   import TabStrip from "../components/TabStrip.svelte";
   import type { IconName } from "../components/Icon.svelte";
   import TranscriptPane from "./TranscriptPane.svelte";
+  import ArtifactsPane from "./ArtifactsPane.svelte";
   import ChangesPane from "./ChangesPane.svelte";
   import AgentPane from "./AgentPane.svelte";
   import TrajectoryPane from "./TrajectoryPane.svelte";
@@ -260,6 +261,17 @@
     if (trajectoryFor === id) loadTrajectory(false);
   }
 
+  // Jump target for Artifacts "Go to message". Set to null first so tapping
+  // the same row twice still re-triggers the transcript scroll effect.
+  let artifactJump = $state<number | null>(null);
+
+  function gotoMessage(sequence: number) {
+    artifactJump = null;
+    router.setTab("transcript");
+    setTimeout(() => {
+      artifactJump = sequence;
+    }, 50);
+  }
   /** Navigates out of a worker thread back to the orchestrator that owns it. */
   function openParent() {
     if (!data?.parent_thread_id) return;
@@ -275,11 +287,12 @@
     openTelegramLink(data.telegram_link);
   }
 
-  // Tabs are data-driven so new panes (Files, Terminal, …) are a one-line add.
+  // Tabs are data-driven so new panes (Terminal, …) are a one-line add.
   const TAB_ICONS: Record<ThreadTab, IconName> = {
     workers: "users",
     agent: "bot",
     transcript: "message-square",
+    artifacts: "file",
     trajectory: "timer",
     changes: "git-branch",
   };
@@ -287,7 +300,7 @@
   // Workers leads on an orchestrator: the strip scrolls horizontally, so a tab
   // appended last starts offscreen on a phone.
   let tabs = $derived(
-    ([...(hasWorkers ? (["workers"] as ThreadTab[]) : []), "trajectory", "transcript", "agent", "changes"] as ThreadTab[]).map(
+    ([...(hasWorkers ? (["workers"] as ThreadTab[]) : []), "trajectory", "transcript", "artifacts", "agent", "changes"] as ThreadTab[]).map(
       (t) => ({
         id: t,
         label: THREAD_TAB_LABELS[t],
@@ -414,7 +427,9 @@
     loading={workersLoading}
   />
 {:else if activeTab === "transcript"}
-  <TranscriptPane activity={data?.activity ?? []} />
+  <TranscriptPane activity={data?.activity ?? []} threadId={id} highlight={artifactJump} />
+{:else if activeTab === "artifacts"}
+  <ArtifactsPane threadId={id} ongoto={gotoMessage} />
 {:else if activeTab === "trajectory"}
   {#if trajectoryLoading && !currentTrajectory}
     <p class="flex-1 py-8 text-center text-xs text-muted-foreground">Loading trajectory…</p>

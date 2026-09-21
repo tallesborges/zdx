@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick, untrack } from "svelte";
   import Markdown from "../components/Markdown.svelte";
+  import ArtifactAttachments from "../components/ArtifactAttachments.svelte";
   import WorkGroup from "../components/WorkGroup.svelte";
   import Icon from "../components/Icon.svelte";
   import { buildNodes } from "$lib/transcript";
@@ -9,9 +10,12 @@
 
   interface Props {
     activity: ThreadActivity[];
+    threadId: string;
+    /** Sequence to scroll to (from Artifacts "Go to message"). Flashes once. */
+    highlight?: number | null;
   }
 
-  let { activity }: Props = $props();
+  let { activity, threadId, highlight = null }: Props = $props();
 
   let showWork = $state(true);
 
@@ -25,6 +29,16 @@
   /** New content arrived while the reader was scrolled up. */
   let unseen = $state(false);
   let primed = false;
+  let flashSeq = $state<number | null>(null);
+  let flashTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function flash(sequence: number) {
+    flashSeq = sequence;
+    if (flashTimer) clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => {
+      if (flashSeq === sequence) flashSeq = null;
+    }, 2500);
+  }
 
   /** Within this many px of the end still counts as "following". */
   const BOTTOM_SLACK = 64;
@@ -72,6 +86,23 @@
       }
     });
   });
+
+  // Artifacts "Go to message": jump to the linked message and flash it.
+  $effect(() => {
+    if (highlight === null || highlight === undefined) return;
+    const sequence = highlight;
+    untrack(() => {
+      void tick().then(() => {
+        const target = viewport?.querySelector(`[data-seq="${sequence}"]`);
+        if (target) {
+          target.scrollIntoView({ behavior: "smooth", block: "center" });
+          atBottom = false;
+          unseen = false;
+          flash(sequence);
+        }
+      });
+    });
+  });
 </script>
 
 <div class="flex items-center gap-2 px-3 pt-2">
@@ -96,18 +127,33 @@
           {:else if node.kind === "message"}
             {#if node.activity.speaker === "You"}
               <!-- User turns are right-aligned bubbles, capped so long pastes stay readable. -->
-              <div class="flex justify-end">
+              <div class="flex justify-end" data-seq={node.activity.sequence}>
                 <div
                   class="max-w-[min(85%,42rem)] rounded-xl bg-secondary px-3 py-2 text-secondary-foreground"
+                  class:flash={flashSeq === node.activity.sequence}
                 >
-                  <p class="m-0 text-[0.9375rem] leading-relaxed break-words whitespace-pre-wrap">
-                    {node.activity.text}
-                  </p>
+                  {#if node.activity.text}
+                    <p class="m-0 text-[0.9375rem] leading-relaxed break-words whitespace-pre-wrap">
+                      {node.activity.text}
+                    </p>
+                  {/if}
+                  {#if node.activity.artifacts && node.activity.artifacts.length > 0}
+                    <div class="mt-2">
+                      <ArtifactAttachments threadId={threadId} attachments={node.activity.artifacts} />
+                    </div>
+                  {/if}
                 </div>
               </div>
             {:else}
-              <div class="min-w-0 py-1">
-                <Markdown source={node.activity.text} />
+              <div class="min-w-0 py-1" data-seq={node.activity.sequence} class:flash={flashSeq === node.activity.sequence}>
+                {#if node.activity.text}
+                  <Markdown source={node.activity.text} />
+                {/if}
+                {#if node.activity.artifacts && node.activity.artifacts.length > 0}
+                  <div class="mt-2">
+                    <ArtifactAttachments threadId={threadId} attachments={node.activity.artifacts} />
+                  </div>
+                {/if}
               </div>
             {/if}
           {:else if node.activity.type === "notice"}
@@ -148,6 +194,12 @@
 </div>
 
 <style>
+  .flash {
+    outline: 2px solid var(--color-link);
+    outline-offset: 2px;
+    border-radius: 8px;
+  }
+
   .jump {
     position: absolute;
     right: 0.75rem;

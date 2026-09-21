@@ -115,6 +115,36 @@ export interface MessageActivity extends ActivityBase {
   speaker: "You" | "Z";
   text: string;
   phase?: string;
+  /** Files this message sent. Absent when it sent nothing. */
+  artifacts?: ArtifactAttachment[];
+}
+
+export type ArtifactKind = "image" | "audio" | "html" | "other";
+export type ArtifactSource = "generated" | "sent" | "both";
+
+/** Inline file on a transcript message. `path` is passed back as `?path=`. */
+export interface ArtifactAttachment {
+  name: string;
+  path: string;
+  mime: string;
+  kind: ArtifactKind;
+  size_bytes: number;
+  exists: boolean;
+}
+
+/** One row of the thread Artifacts tab. */
+export interface ArtifactItem extends ArtifactAttachment {
+  /** Relative to the thread artifact dir when inside it, else null. */
+  rel: string | null;
+  source: ArtifactSource;
+  /** Transcript sequences that referenced this file; empty when never sent. */
+  message_sequences: number[];
+  /** RFC3339 mtime, when the file exists. */
+  modified_at?: string;
+}
+
+export interface ArtifactsResponse {
+  artifacts: ArtifactItem[];
 }
 
 export interface ReasoningActivity extends ActivityBase {

@@ -31,11 +31,19 @@ has been removed.
   all lineage-only reads `N workers · status unavailable` rather than `N unknown`.
 - `src/lib/demo.ts`: **DEV-only** fixtures behind `?demo=1`; dropped from prod builds
 - `src/components/`: `Collapse`, `Markdown`, `DiffView`, `Drawer`, `TabStrip`, `Icon`,
-  `WorkGroup` (the "Worked for 5m" turn divider), `GroupLine` (folded run), `ToolLine` (one call)
+  `WorkGroup` (the "Worked for 5m" turn divider), `GroupLine` (folded run), `ToolLine` (one call),
+  `ArtifactAttachments` (inline image/audio/file-card rows under a message),
+  `ArtifactPreview` (full-screen preview overlay; HTML goes through a sandboxed
+  iframe with an opaque origin, never the app's credentials)
 - `src/views/ThreadView.svelte`: thread shell — owns the thread fetch + tab strip, renders one pane.
   Shows a Telegram jump button when the response carries `telegram_link`; the link is built
   server-side from the *resolved* id, so it works for `?id=active` too.
-- `src/views/TranscriptPane.svelte` / `TrajectoryPane.svelte` / `AgentPane.svelte` / `ChangesPane.svelte` / `WorkersPane.svelte`: the thread tabs.
+- `src/views/TranscriptPane.svelte` / `TrajectoryPane.svelte` / `AgentPane.svelte` / `ChangesPane.svelte` / `WorkersPane.svelte` / `ArtifactsPane.svelte`: the thread tabs.
+  `ArtifactsPane` lists the shared `zdx-engine::core::artifacts` projection (`/api/threads/{id}/artifacts`)
+  with preview/open, download, and Go to message; `TranscriptPane` renders the same rows inline
+  (images, audio players, compact file cards) from the message `artifacts`.
+  Artifact bytes come from `/api/threads/{id}/artifacts/file?path=…` as authenticated
+  `Blob`s — never as credentialed iframe URLs.
   `TrajectoryPane` renders the shared `zdx-engine::core::thread_trajectory` projection returned by
   `/api/threads/{id}/trajectory`; it owns presentation only, not timing arithmetic. It is mobile-first:
   the bottleneck summary stays readable at phone width, exact spans
@@ -98,8 +106,9 @@ There is no bottom tab bar. Navigation is a left drawer (shadcn-style
 scrollable `TabStrip` inside the thread view.
 
 Thread tabs are data-driven in `ThreadView.svelte` — adding a pane is a one-line entry there plus a
-value in `ThreadTab`/`THREAD_TAB_LABELS` and an icon in `TAB_ICONS`. A "Files" tab is intentionally
-absent: it needs a repo file-listing endpoint that `server.rs` does not expose yet.
+value in `ThreadTab`/`THREAD_TAB_LABELS` and an icon in `TAB_ICONS`. **Artifacts** sits right after
+the Thread tab: it is secondary, but the strip scrolls horizontally, so anything appended last
+starts offscreen on a phone.
 
 **Workers** is conditional: it renders only when `ThreadResponse.worker_count > 0`, and it is placed
 **first** in the strip. The strip scrolls horizontally, so a tab appended last starts offscreen on a

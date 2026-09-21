@@ -9,6 +9,7 @@
  * bundles entirely.
  */
 import type {
+  ArtifactsResponse,
   GitDiffResponse,
   GitResponse,
   GitScopeResponse,
@@ -269,6 +270,16 @@ export const demoThread: ThreadResponse = {
       role: "assistant",
       speaker: "Z",
       text: "I recovered the **real** token system and verified the palette in parallel.",
+      artifacts: [
+        {
+          name: "provider-comparison.html",
+          path: "/Users/me/.zdx/artifacts/threads/demo/provider-comparison.html",
+          mime: "text/html",
+          kind: "html",
+          size_bytes: 48210,
+          exists: true,
+        },
+      ],
     },
     {
       type: "message",
@@ -685,6 +696,54 @@ export const demoTrajectory: ThreadTrajectoryReport = {
     },
   ],
 };
+
+export const demoArtifacts: ArtifactsResponse = {
+  artifacts: [
+    {
+      name: "provider-comparison.html",
+      path: "/Users/me/.zdx/artifacts/threads/demo/provider-comparison.html",
+      rel: "provider-comparison.html",
+      mime: "text/html",
+      kind: "html",
+      size_bytes: 48210,
+      exists: true,
+      source: "both",
+      message_sequences: [8],
+      modified_at: "2026-09-20T17:12:05.220Z",
+    },
+    {
+      name: "voice-note.ogg",
+      path: "/Users/me/.zdx/artifacts/threads/demo/voice-note.ogg",
+      rel: "voice-note.ogg",
+      mime: "audio/ogg",
+      kind: "audio",
+      size_bytes: 182400,
+      exists: true,
+      source: "generated",
+      message_sequences: [],
+      modified_at: "2026-09-20T17:10:00.000Z",
+    },
+  ],
+};
+
+/** Demo bytes for artifact previews: a tiny SVG image, silence audio, a page. */
+export function demoArtifactBlob(path: string): Blob {
+  if (path.endsWith(".html")) {
+    return new Blob(
+      [`<html><body style="font-family:sans-serif"><h1>Demo artifact</h1><p>${path}</p></body></html>`],
+      { type: "text/html" },
+    );
+  }
+  if (/\.(png|jpg|jpeg|gif|webp|svg)$/.test(path)) {
+    return new Blob(
+      [
+        `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"><rect width="400" height="200" fill="#183323"/><text x="20" y="110" fill="#e9f5ed" font-size="24">Demo image</text></svg>`,
+      ],
+      { type: "image/svg+xml" },
+    );
+  }
+  return new Blob(["demo"], { type: "text/plain" });
+}
 
 export const demoGit: GitResponse = {
   repository: {

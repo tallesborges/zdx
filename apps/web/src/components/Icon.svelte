@@ -13,7 +13,10 @@
     | "timer"
     | "git-branch"
     | "activity"
-    | "arrow-down";
+    | "arrow-down"
+    | "file"
+    | "download"
+    | "x";
 
   const PATHS: Record<IconName, string> = {
     bot: `<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>`,
@@ -23,6 +26,9 @@
     "git-branch": `<path d="M15 6a9 9 0 0 0-9 9V3"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>`,
     activity: `<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>`,
     "arrow-down": `<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>`,
+    file: `<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>`,
+    download: `<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>`,
+    x: `<path d="M18 6 6 18"/><path d="m6 6 12 12"/>`,
   };
 
   export const ICON_PATHS = PATHS;
