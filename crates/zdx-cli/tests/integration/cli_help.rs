@@ -140,7 +140,8 @@ fn test_threads_inspect_help_shows_thread_id() {
         .args(["threads", "inspect", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("THREAD_ID"));
+        .stdout(predicate::str::contains("THREAD_ID"))
+        .stdout(predicate::str::contains("--json"));
 }
 
 #[test]

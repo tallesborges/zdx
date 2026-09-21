@@ -17,6 +17,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 - `src/cli/commands/memory.rs`: native memory indexing/search/read commands (`zdx memory index/status/search/get`)
 - `src/cli/commands/mcp.rs`: MCP helper commands (`servers`, `tools`, `schema`, `call`)
 - `src/cli/commands/stats.rs`: usage/cost summary command handler (`zdx stats`)
+- `src/cli/commands/threads.rs`: saved-thread commands; `threads inspect [--json]` is the agent/script entry point to the shared engine trajectory projection
 - `src/cli/commands/quota.rs`: live subscription-quota command handler (`zdx quota`, `--json`); thin renderer over the shared `subscription_quota::fetch_snapshot()` API
 - `src/cli/commands/service.rs`: launchd service commands (`zdx service install|uninstall|start|stop|restart|status|logs [bot|daemon|all]`; restart supports `--force`); thin wrapper over `zdx_engine::service`
 - `src/cli/commands/telegram.rs`: Telegram utility commands

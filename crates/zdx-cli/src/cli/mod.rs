@@ -472,6 +472,10 @@ enum ThreadCommands {
         /// The ID of the thread to inspect
         #[arg(value_name = "THREAD_ID")]
         id: String,
+
+        /// Emit the shared trajectory projection as machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Resume a previous thread
     Resume {
@@ -1404,7 +1408,7 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
     match command {
         ThreadCommands::List { all } => commands::threads::list(all),
         ThreadCommands::Show { id } => commands::threads::show(&id, context.config),
-        ThreadCommands::Inspect { id } => commands::threads::inspect(&id),
+        ThreadCommands::Inspect { id, json } => commands::threads::inspect(&id, json),
         ThreadCommands::Resume { id } => commands::threads::resume(id, context.config).await,
         ThreadCommands::Rename { id, title } => commands::threads::rename(&id, &title),
         ThreadCommands::Append { id, role, text } => commands::threads::append(&id, &role, &text),

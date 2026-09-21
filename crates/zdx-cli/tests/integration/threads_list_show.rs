@@ -139,6 +139,40 @@ fn test_threads_inspect_reports_request_and_tool_timings() {
 }
 
 #[test]
+fn test_threads_inspect_json_exposes_shared_trajectory() {
+    let temp_dir = TempDir::new().unwrap();
+    create_thread_with_raw_events(
+        &temp_dir,
+        "trajectory-json",
+        Some("Trajectory JSON"),
+        &[
+            json!({"type":"message","role":"user","text":"inspect","context":"private runtime context","ts":"2026-01-01T10:00:00.000Z"}),
+            json!({"type":"tool_use","id":"a","name":"read","input":{"file_path":"a.txt"},"ts":"2026-01-01T10:00:01.000Z"}),
+            json!({"type":"tool_use","id":"b","name":"read","input":{"file_path":"b.txt"},"ts":"2026-01-01T10:00:01.000Z"}),
+            json!({"type":"tool_result","tool_use_id":"a","output":{"ok":true},"ok":true,"duration_ms":1800,"started_at":"2026-01-01T10:00:01.000Z","completed_at":"2026-01-01T10:00:03.000Z","ts":"2026-01-01T10:00:03.000Z"}),
+            json!({"type":"tool_result","tool_use_id":"b","output":{"ok":true},"ok":true,"duration_ms":900,"started_at":"2026-01-01T10:00:01.000Z","completed_at":"2026-01-01T10:00:02.000Z","ts":"2026-01-01T10:00:02.000Z"}),
+        ],
+    );
+
+    let output = crate::fixtures::zdx_cmd()
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["threads", "inspect", "trajectory-json", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["thread_id"], "trajectory-json");
+    assert_eq!(json["title"], "Trajectory JSON");
+    assert_eq!(json["trajectory"]["turns"][0]["tool_tracks"], 2);
+    assert_eq!(json["trajectory"]["active_wall_ms"], 2_000);
+    assert_eq!(json["trajectory"]["span_work_ms"], 3_000);
+    assert_eq!(json["trajectory"]["concurrent_work_ms"], 1_000);
+    assert_eq!(json["trajectory"]["bottlenecks"][0]["duration_ms"], 1_800);
+    let rendered = String::from_utf8(output.stdout).unwrap();
+    assert!(!rendered.contains("private runtime context"));
+}
+
+#[test]
 fn test_threads_inspect_marks_legacy_timings_unavailable() {
     let temp_dir = TempDir::new().unwrap();
     create_thread_with_raw_events(
@@ -161,7 +195,7 @@ fn test_threads_inspect_marks_legacy_timings_unavailable() {
         .stdout(predicate::str::contains("duration —"))
         .stdout(predicate::str::contains("bash · incomplete"))
         .stdout(predicate::str::contains("unavailable (0/2 measured)"))
-        .stdout(predicate::str::contains("no estimates are shown"));
+        .stdout(predicate::str::contains("no boundaries are inferred"));
 }
 
 #[test]

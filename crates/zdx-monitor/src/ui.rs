@@ -251,7 +251,7 @@ mod tests {
             }
             text.push('\n');
         }
-        assert!(text.contains("Timings · thread-1 · Demo"));
+        assert!(text.contains("Trajectory · thread-1 · Demo"));
         assert!(text.contains("unavailable (0/1 measured)"));
     }
 }

@@ -8,7 +8,9 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem};
 use zdx_engine::core::thread_index::{self, ThreadBrowseOptions, ThreadKindFilter};
 use zdx_engine::core::thread_persistence;
-use zdx_engine::core::thread_timing::{format_thread_timing_report, inspect_thread_timings};
+use zdx_engine::core::thread_trajectory::{
+    format_thread_trajectory_report, inspect_thread_trajectory,
+};
 
 use crate::app::{MonitorApp, Section, TargetPickerState, copy_text};
 use crate::tabs::agents::{AgentOverlayState, load_transcript_into, transcript_path};
@@ -385,7 +387,7 @@ pub(crate) fn timing_overlay_from_events(
     );
     TimingOverlayState {
         title,
-        lines: format_thread_timing_report(&inspect_thread_timings(events)),
+        lines: format_thread_trajectory_report(&inspect_thread_trajectory(events)),
         scroll: 0,
     }
 }
@@ -494,7 +496,7 @@ pub(crate) fn render_timing_overlay(f: &mut Frame, state: &TimingOverlayState, a
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .title(format!(" Timings · {} ", state.title))
+        .title(format!(" Trajectory · {} ", state.title))
         .title_bottom(" j/k scroll · gg/G top/bottom · Esc close ");
     f.render_widget(List::new(items).block(block), area);
 }

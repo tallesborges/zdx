@@ -4,11 +4,14 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
+use serde::Serialize;
 use zdx_engine::config;
 use zdx_engine::core::thread_export::{self, ThreadExportOptions};
 use zdx_engine::core::thread_index;
 use zdx_engine::core::thread_persistence::{self};
-use zdx_engine::core::thread_timing::{format_thread_timing_report, inspect_thread_timings};
+use zdx_engine::core::thread_trajectory::{
+    ThreadTrajectoryReport, format_thread_trajectory_report, inspect_thread_trajectory,
+};
 use zdx_engine::core::usage_stats::{self, UsageTotals};
 
 use super::stats::{format_cost, format_tokens};
@@ -120,18 +123,45 @@ pub fn show(id: &str, config: &config::Config) -> Result<()> {
     Ok(())
 }
 
-pub fn inspect(id: &str) -> Result<()> {
+#[derive(Serialize)]
+struct ThreadInspectOutput<'a> {
+    thread_id: &'a str,
+    title: Option<String>,
+    trajectory: ThreadTrajectoryReport,
+}
+
+pub fn inspect(id: &str, json: bool) -> Result<()> {
     let events = thread_persistence::load_thread_events(id)
         .with_context(|| format!("load thread '{id}'"))?;
     if events.is_empty() {
+        if json {
+            let output = ThreadInspectOutput {
+                thread_id: id,
+                title: None,
+                trajectory: inspect_thread_trajectory(&events),
+            };
+            println!("{}", serde_json::to_string_pretty(&output)?);
+            return Ok(());
+        }
         println!("Thread '{id}' is empty or not found.");
         return Ok(());
     }
 
-    let title = thread_persistence::extract_title_from_events(&events)
-        .map_or_else(String::new, |title| format!(" · {title}"));
+    let title = thread_persistence::extract_title_from_events(&events);
+    let trajectory = inspect_thread_trajectory(&events);
+    if json {
+        let output = ThreadInspectOutput {
+            thread_id: id,
+            title,
+            trajectory,
+        };
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    let title = title.map_or_else(String::new, |title| format!(" · {title}"));
     println!("Thread: {id}{title}");
-    for line in format_thread_timing_report(&inspect_thread_timings(&events)) {
+    for line in format_thread_trajectory_report(&trajectory) {
         println!("{line}");
     }
     Ok(())
