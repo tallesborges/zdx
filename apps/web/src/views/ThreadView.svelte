@@ -1,6 +1,11 @@
 <script lang="ts">
   import { api, ApiError } from "$lib/api";
-  import type { ThreadResponse, GitResponse, WorkerItem } from "$lib/types";
+  import type {
+    ThreadResponse,
+    ThreadTrajectoryReport,
+    GitResponse,
+    WorkerItem,
+  } from "$lib/types";
   import { router, THREAD_TAB_LABELS, type ThreadTab } from "$lib/router.svelte";
   import { haptic, openTelegramLink, selectionChanged } from "$lib/telegram";
   import { isBusy, needsAttention, rollupFrom } from "$lib/workers";
@@ -45,8 +50,18 @@
   let workersLoading = $state(false);
   let workersFor = $state<string | null>(null);
 
+  // The trajectory is a shared engine projection fetched only when its pane is
+  // opened. Keeping it separate avoids attaching a full-thread report to every
+  // small transcript delta poll.
+  let trajectory = $state<ThreadTrajectoryReport | null>(null);
+  let trajectoryError = $state("");
+  let trajectoryLoading = $state(false);
+  let trajectoryPolling = false;
+  let trajectoryFor = $state<string | null>(null);
+
   let currentGit = $derived(gitFor === id ? git : null);
   let currentWorkers = $derived(workersFor === id ? workers : []);
+  let currentTrajectory = $derived(trajectoryFor === id ? trajectory : null);
 
   let workerRollup = $derived(rollupFrom(currentWorkers));
   // Fetched workers win over the count from the thread load: that count is a
@@ -92,14 +107,15 @@
       if (target !== id || !data) return;
       if (!delta.partial) {
         data = delta;
-        return;
+      } else {
+        const persisted = data.activity.filter((a) => a.type !== "tool_running");
+        const seen = new Set(persisted.map((a) => a.sequence));
+        data = {
+          ...delta,
+          activity: [...persisted, ...delta.activity.filter((a) => !seen.has(a.sequence))],
+        };
       }
-      const persisted = data.activity.filter((a) => a.type !== "tool_running");
-      const seen = new Set(persisted.map((a) => a.sequence));
-      data = {
-        ...delta,
-        activity: [...persisted, ...delta.activity.filter((a) => !seen.has(a.sequence))],
-      };
+      if (tab === "trajectory") await loadTrajectory(false);
     } catch {
       // A failed poll is not worth surfacing; the next tick retries.
     } finally {
@@ -141,6 +157,29 @@
     }
   }
 
+  async function loadTrajectory(showSpinner = true) {
+    if (trajectoryPolling) return;
+    trajectoryPolling = true;
+    const target = id;
+    const first = trajectoryFor !== target;
+    trajectoryFor = target;
+    trajectoryError = "";
+    if (showSpinner || first) trajectoryLoading = true;
+    try {
+      const response = await api.trajectory(target);
+      if (trajectoryFor !== target || target !== id) return;
+      trajectory = response;
+    } catch (e) {
+      if (trajectoryFor === target && first) {
+        trajectoryError = e instanceof ApiError ? e.message : String(e);
+      }
+    } finally {
+      if (trajectoryFor === target) trajectoryLoading = false;
+      trajectoryPolling = false;
+      if (target !== id && tab === "trajectory") void loadTrajectory();
+    }
+  }
+
   $effect(() => {
     void id;
     load();
@@ -162,6 +201,11 @@
     if (tab !== "workers" && tab !== "agent") return;
     if (workersFor === id) return;
     loadWorkers();
+  });
+
+  $effect(() => {
+    if (tab !== "trajectory" || trajectoryFor === id) return;
+    loadTrajectory();
   });
 
   // Discovery and refresh run on the same timer, and neither is gated on "a
@@ -192,8 +236,20 @@
   // every 4s transcript poll — and only if something already asked for it.
   let wasLive = false;
   $effect(() => {
-    if (wasLive && !live && gitFor === id) loadGit();
+    let reconcile: ReturnType<typeof setTimeout> | undefined;
+    if (wasLive && !live) {
+      if (gitFor === id) loadGit();
+      // Tool markers clear just before checkpoint persistence lands. One
+      // trailing delta closes that handoff even though the regular live timer
+      // has stopped.
+      reconcile = setTimeout(() => {
+        if (document.visibilityState === "visible") poll();
+      }, 1000);
+    }
     wasLive = live;
+    return () => {
+      if (reconcile) clearTimeout(reconcile);
+    };
   });
 
   function refresh() {
@@ -201,6 +257,7 @@
     load(false);
     if (gitFor === id) loadGit();
     if (workersFor === id) loadWorkers();
+    if (trajectoryFor === id) loadTrajectory(false);
   }
 
   /** Navigates out of a worker thread back to the orchestrator that owns it. */
@@ -359,7 +416,17 @@
 {:else if activeTab === "transcript"}
   <TranscriptPane activity={data?.activity ?? []} />
 {:else if activeTab === "trajectory"}
-  <TrajectoryPane activity={data?.activity ?? []} />
+  {#if trajectoryLoading && !currentTrajectory}
+    <p class="flex-1 py-8 text-center text-xs text-muted-foreground">Loading trajectory…</p>
+  {:else if trajectoryError && !currentTrajectory}
+    <div class="flex-1 px-3 py-3">
+      <p class="rounded-md border border-destructive px-3 py-2 text-xs text-destructive">
+        {trajectoryError}
+      </p>
+    </div>
+  {:else if currentTrajectory}
+    <TrajectoryPane trajectory={currentTrajectory} activity={data?.activity ?? []} />
+  {/if}
 {:else if activeTab === "agent"}
   <AgentPane
     thread={data}

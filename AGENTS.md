@@ -62,7 +62,6 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `just build-release` (build release binary; skips the web build when input fingerprints and dist contents match)
 - `just web-demo` / `just web-dev` / `just web-check` / `just web-build` (Svelte Mini App in `apps/web`; requires `bun`)
 - `bun test apps/web/build-cached.test.mjs` (web-build cache/invalidation regression tests)
-- `bun test apps/web/trajectory.test.ts` (Mini App trajectory projection/overlap regression tests)
 
 ## Verification
 

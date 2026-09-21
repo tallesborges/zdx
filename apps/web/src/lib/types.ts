@@ -189,6 +189,92 @@ export type ThreadActivity =
   | NoticeActivity
   | InterruptedActivity;
 
+export type TrajectorySpanKind = "input" | "model" | "tool";
+export type TrajectoryLane = "input" | "model" | "tools";
+export type TrajectoryStatus = "ok" | "failed" | "running" | "unknown";
+export type TimingQuality = "exact" | "duration" | "unavailable";
+export type TurnTimingQuality = "exact" | "partial" | "legacy";
+
+export interface TrajectoryInput {
+  sequence: number;
+  ts: string;
+  text: string;
+}
+
+export interface TrajectorySpan {
+  key: string;
+  kind: TrajectorySpanKind;
+  lane: TrajectoryLane;
+  turn: number;
+  sequence: number;
+  result_sequence?: number;
+  tool_use_id?: string;
+  label: string;
+  detail: string;
+  status: TrajectoryStatus;
+  timing: TimingQuality;
+  started_at?: string;
+  completed_at?: string;
+  start_ms?: number;
+  end_ms?: number;
+  /** Independently recorded request/tool execution duration. */
+  duration_ms?: number;
+  /** Width of explicit wall-clock boundaries; provisional for live spans. */
+  wall_ms?: number;
+  track: number;
+  model?: string;
+  provider?: string;
+  ttft_ms?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  live_input?: Json;
+  live_output_tail?: string;
+}
+
+export interface TrajectoryBottleneck {
+  key: string;
+  kind: TrajectorySpanKind;
+  turn: number;
+  label: string;
+  detail: string;
+  status: TrajectoryStatus;
+  timing: TimingQuality;
+  duration_ms: number;
+}
+
+export interface TrajectoryTurn {
+  index: number;
+  input?: TrajectoryInput;
+  spans: TrajectorySpan[];
+  timing: TurnTimingQuality;
+  measured: number;
+  total: number;
+  domain_start_ms?: number;
+  domain_end_ms?: number;
+  elapsed_ms?: number;
+  active_wall_ms?: number;
+  span_work_ms?: number;
+  concurrent_work_ms?: number;
+  model_tracks: number;
+  tool_tracks: number;
+}
+
+export interface ThreadTrajectoryReport {
+  source_event_count: number;
+  observed_at: string;
+  turns: TrajectoryTurn[];
+  bottlenecks: TrajectoryBottleneck[];
+  measured: number;
+  total: number;
+  exact: number;
+  active_wall_ms?: number;
+  span_work_ms?: number;
+  concurrent_work_ms?: number;
+  has_unavailable: boolean;
+}
+
 /* ---------------------------------- monitor --------------------------------- */
 
 export interface MonitorResponse {

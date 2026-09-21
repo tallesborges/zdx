@@ -1,28 +1,32 @@
 <script lang="ts">
   import { selectionChanged } from "$lib/telegram";
-  import {
-    buildTrajectory,
-    formatTrajectoryDuration,
-    type TrajectorySpan,
-    type TrajectoryTurn,
-  } from "$lib/trajectory";
-  import type { Json, ThreadActivity } from "$lib/types";
+  import type {
+    Json,
+    ThreadActivity,
+    ThreadTrajectoryReport,
+    TrajectoryBottleneck,
+    TrajectorySpan,
+    TrajectoryTurn,
+  } from "$lib/types";
 
   interface Props {
+    trajectory: ThreadTrajectoryReport;
     activity: ThreadActivity[];
   }
 
-  let { activity }: Props = $props();
+  let { trajectory, activity }: Props = $props();
 
   let mode = $state<"timeline" | "bottlenecks">("timeline");
   let selectedKey = $state<string | null>(null);
-  let trajectory = $derived(buildTrajectory(activity));
+  let slowest = $derived(trajectory.bottlenecks[0] ?? null);
   let selected = $derived(
     selectedKey
       ? (trajectory.turns.flatMap((turn) => turn.spans).find((span) => span.key === selectedKey) ??
           null)
       : null,
   );
+  let selectedInput = $derived(selected ? spanInput(selected) : undefined);
+  let selectedOutput = $derived(selected ? spanOutput(selected) : undefined);
 
   function select(span: TrajectorySpan) {
     selectionChanged();
@@ -43,13 +47,13 @@
   }
 
   function domain(turn: TrajectoryTurn): number {
-    return Math.max(1, (turn.domainEndMs ?? 0) - (turn.domainStartMs ?? 0));
+    return Math.max(1, (turn.domain_end_ms ?? 0) - (turn.domain_start_ms ?? 0));
   }
 
   function position(turn: TrajectoryTurn, span: TrajectorySpan): string {
     const range = domain(turn);
-    const left = (((span.startMs ?? turn.domainStartMs ?? 0) - (turn.domainStartMs ?? 0)) / range) * 100;
-    const width = (((span.endMs ?? span.startMs ?? 0) - (span.startMs ?? 0)) / range) * 100;
+    const left = (((span.start_ms ?? turn.domain_start_ms ?? 0) - (turn.domain_start_ms ?? 0)) / range) * 100;
+    const width = (((span.end_ms ?? span.start_ms ?? 0) - (span.start_ms ?? 0)) / range) * 100;
     return `left:${Math.max(0, left)}%;width:max(${Math.max(0, width)}%,2px);top:${span.track * 2 + 0.25}rem`;
   }
 
@@ -58,7 +62,7 @@
   }
 
   function axisLabel(turn: TrajectoryTurn, fraction: number): string {
-    return formatTrajectoryDuration((turn.elapsedMs ?? 0) * fraction);
+    return formatTrajectoryDuration((turn.elapsed_ms ?? 0) * fraction);
   }
 
   function clock(value: string | undefined): string {
@@ -74,16 +78,60 @@
     return rendered.length > 12_000 ? `${rendered.slice(0, 12_000)}\n…` : rendered;
   }
 
-  function share(span: TrajectorySpan): number {
-    const slowest = trajectory.slowest?.durationMs ?? 1;
-    return Math.max(2, ((span.durationMs ?? 0) / slowest) * 100);
+  function share(span: TrajectoryBottleneck): number {
+    const max = slowest?.duration_ms ?? 1;
+    return Math.max(2, (span.duration_ms / max) * 100);
   }
 
-  function timingLabel(span: TrajectorySpan): string {
+  function timingLabel(span: Pick<TrajectorySpan, "status" | "timing">): string {
     if (span.status === "running") return "live span";
     if (span.timing === "exact") return "exact span";
     if (span.timing === "duration") return "duration only";
     return "unavailable";
+  }
+
+  function timedSpans(turn: TrajectoryTurn): TrajectorySpan[] {
+    return turn.spans.filter((span) => span.kind !== "input" && span.timing === "exact");
+  }
+
+  function unanchoredSpans(turn: TrajectoryTurn): TrajectorySpan[] {
+    return turn.spans.filter((span) => span.kind !== "input" && span.timing !== "exact");
+  }
+
+  function spanDuration(span: TrajectorySpan): number | undefined {
+    return span.duration_ms ?? span.wall_ms;
+  }
+
+  function selectBottleneck(bottleneck: TrajectoryBottleneck) {
+    const span = trajectory.turns
+      .flatMap((turn) => turn.spans)
+      .find((candidate) => candidate.key === bottleneck.key);
+    if (span) select(span);
+  }
+
+  function spanInput(span: TrajectorySpan): Json | string | undefined {
+    if (span.live_input !== undefined) return span.live_input;
+    const source = activity.find((item) => item.sequence === span.sequence);
+    if (source?.type === "message") return source.text;
+    if (source?.type === "tool_use") return source.input;
+    return undefined;
+  }
+
+  function spanOutput(span: TrajectorySpan): Json | string | undefined {
+    if (span.live_output_tail !== undefined) return span.live_output_tail;
+    if (span.result_sequence === undefined) return undefined;
+    const result = activity.find((item) => item.sequence === span.result_sequence);
+    return result?.type === "tool_result" ? result.output : undefined;
+  }
+
+  function formatTrajectoryDuration(ms: number | undefined): string {
+    if (ms === undefined) return "—";
+    if (ms < 1_000) return `${Math.round(ms)}ms`;
+    if (ms < 10_000) return `${(ms / 1_000).toFixed(1)}s`;
+    if (ms < 60_000) return `${Math.round(ms / 1_000)}s`;
+    const minutes = Math.floor(ms / 60_000);
+    const seconds = Math.round((ms % 60_000) / 1_000);
+    return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
   }
 </script>
 
@@ -93,14 +141,14 @@
   <div class="summary">
     <div class="summary-copy">
       <p class="eyebrow">Trajectory</p>
-      {#if trajectory.slowest}
+      {#if slowest}
         <h2>
           <span>Slowest</span>
-          {trajectory.slowest.label}
-          <strong>{formatTrajectoryDuration(trajectory.slowest.durationMs)}</strong>
+          {slowest.label}
+          <strong>{formatTrajectoryDuration(slowest.duration_ms)}</strong>
         </h2>
         <p>
-          Turn {trajectory.slowest.turn} · {trajectory.slowest.detail} · {timingLabel(trajectory.slowest)}
+          Turn {slowest.turn} · {slowest.detail} · {timingLabel(slowest)}
         </p>
       {:else}
         <h2>No measured spans yet</h2>
@@ -111,15 +159,15 @@
     <div class="metrics" aria-label="Trajectory summary">
       <div>
         <span>Active wall</span>
-        <strong>{formatTrajectoryDuration(trajectory.activeWallMs)}</strong>
+        <strong>{formatTrajectoryDuration(trajectory.active_wall_ms)}</strong>
       </div>
       <div>
         <span>Span work</span>
-        <strong>{formatTrajectoryDuration(trajectory.workMs)}</strong>
+        <strong>{formatTrajectoryDuration(trajectory.span_work_ms)}</strong>
       </div>
       <div>
-        <span>Overlap</span>
-        <strong>{formatTrajectoryDuration(trajectory.overlapMs)}</strong>
+        <span>Concurrent</span>
+        <strong>{formatTrajectoryDuration(trajectory.concurrent_work_ms)}</strong>
       </div>
     </div>
 
@@ -155,7 +203,7 @@
               <span class:legacy={turn.timing === "legacy"} class="quality">{turn.timing}</span>
             </div>
             <span class="turn-duration">
-              {turn.elapsedMs !== undefined ? `${formatTrajectoryDuration(turn.elapsedMs)} elapsed` : `${turn.measured}/${turn.total} measured`}
+              {turn.elapsed_ms !== undefined ? `${formatTrajectoryDuration(turn.elapsed_ms)} elapsed` : `${turn.measured}/${turn.total} measured`}
             </span>
           </header>
 
@@ -163,7 +211,7 @@
             <p class="prompt">{turn.input.text}</p>
           {/if}
 
-          {#if turn.timedSpans.length > 0}
+          {#if timedSpans(turn).length > 0}
             <div class="timeline-scroll">
               <div class="timeline-canvas">
                 <div class="axis-row">
@@ -178,11 +226,11 @@
                 <div class="lane-row">
                   <span class="lane-label">Input</span>
                   <div class="lane input-lane">
-                    {#each turn.spans.filter((span) => span.kind === "input" && span.startMs !== undefined) as span (span.key)}
+                    {#each turn.spans.filter((span) => span.kind === "input" && span.start_ms !== undefined) as span (span.key)}
                       <button
                         type="button"
                         class="input-point"
-                        style={`left:${(((span.startMs ?? 0) - (turn.domainStartMs ?? 0)) / domain(turn)) * 100}%`}
+                        style={`left:${(((span.start_ms ?? 0) - (turn.domain_start_ms ?? 0)) / domain(turn)) * 100}%`}
                         aria-label={`Open input details for turn ${turn.index}`}
                         onclick={() => select(span)}
                       ></button>
@@ -192,14 +240,14 @@
 
                 <div class="lane-row">
                   <span class="lane-label">Model</span>
-                  <div class="lane" style={laneHeight(turn.modelTracks)}>
-                    {#each turn.timedSpans.filter((span) => span.lane === "model") as span (span.key)}
+                  <div class="lane" style={laneHeight(turn.model_tracks)}>
+                    {#each timedSpans(turn).filter((span) => span.lane === "model") as span (span.key)}
                       <button
                         type="button"
                         class="span model"
                         class:running={span.status === "running"}
                         style={position(turn, span)}
-                        aria-label={`${span.label}, ${formatTrajectoryDuration(span.durationMs)}`}
+                        aria-label={`${span.label}, ${formatTrajectoryDuration(spanDuration(span))}`}
                         onclick={() => select(span)}
                       >
                         <span>{span.label}</span>
@@ -210,15 +258,15 @@
 
                 <div class="lane-row">
                   <span class="lane-label">Tools</span>
-                  <div class="lane" style={laneHeight(turn.toolTracks)}>
-                    {#each turn.timedSpans.filter((span) => span.lane === "tools") as span (span.key)}
+                  <div class="lane" style={laneHeight(turn.tool_tracks)}>
+                    {#each timedSpans(turn).filter((span) => span.lane === "tools") as span (span.key)}
                       <button
                         type="button"
                         class="span tool"
                         class:failed={span.status === "failed"}
                         class:running={span.status === "running"}
                         style={position(turn, span)}
-                        aria-label={`${span.label}, ${formatTrajectoryDuration(span.durationMs)}`}
+                        aria-label={`${span.label}, ${formatTrajectoryDuration(spanDuration(span))}`}
                         onclick={() => select(span)}
                       >
                         <span>{span.label}</span>
@@ -230,27 +278,27 @@
             </div>
           {/if}
 
-          {#if turn.unanchoredSpans.length > 0}
+          {#if unanchoredSpans(turn).length > 0}
             <div class="unanchored">
               <p>
-                {turn.timedSpans.length > 0 ? "Outside exact timeline" : "Exact overlap unavailable"}
+                {timedSpans(turn).length > 0 ? "Outside exact timeline" : "Exact overlap unavailable"}
                 <span>Older or incomplete events are never positioned from inferred timestamps.</span>
               </p>
-              {#each turn.unanchoredSpans as span (span.key)}
+              {#each unanchoredSpans(turn) as span (span.key)}
                 <button type="button" onclick={() => select(span)}>
                   <span class="kind">{span.kind === "model" ? "Model" : span.label}</span>
                   <span class="subject">{span.detail}</span>
-                  <strong>{formatTrajectoryDuration(span.durationMs)}</strong>
+                  <strong>{formatTrajectoryDuration(spanDuration(span))}</strong>
                 </button>
               {/each}
             </div>
           {/if}
 
-          {#if turn.timedSpans.length > 0}
+          {#if timedSpans(turn).length > 0}
             <footer class="turn-stats">
-              <span>wall {formatTrajectoryDuration(turn.activeWallMs)}</span>
-              <span>work {formatTrajectoryDuration(turn.workMs)}</span>
-              <span>overlap {formatTrajectoryDuration(turn.overlapMs)}</span>
+              <span>wall {formatTrajectoryDuration(turn.active_wall_ms)}</span>
+              <span>work {formatTrajectoryDuration(turn.span_work_ms)}</span>
+              <span>concurrent {formatTrajectoryDuration(turn.concurrent_work_ms)}</span>
             </footer>
           {/if}
         </section>
@@ -273,14 +321,14 @@
               type="button"
               class:slowest={index === 0}
               class:failed={span.status === "failed"}
-              onclick={() => select(span)}
+              onclick={() => selectBottleneck(span)}
             >
               <span class="rank">{String(index + 1).padStart(2, "0")}</span>
               <span class="rank-main">
                 <span class="rank-title">
                   <strong>{span.label}</strong>
                   <small>Turn {span.turn} · {timingLabel(span)}</small>
-                  <b>{formatTrajectoryDuration(span.durationMs)}</b>
+                  <b>{formatTrajectoryDuration(span.duration_ms)}</b>
                 </span>
                 <span class="rank-detail">{span.detail}</span>
                 <span class="bar"><i style={`width:${share(span)}%`}></i></span>
@@ -314,12 +362,12 @@
       </header>
 
       <div class="detail-metrics">
-        <div><span>Duration</span><strong>{formatTrajectoryDuration(selected.durationMs)}</strong></div>
+        <div><span>Duration</span><strong>{formatTrajectoryDuration(spanDuration(selected))}</strong></div>
         <div><span>Timing</span><strong>{timingLabel(selected)}</strong></div>
-        <div><span>Started</span><strong>{clock(selected.startedAt)}</strong></div>
-        <div><span>Completed</span><strong>{clock(selected.completedAt)}</strong></div>
-        {#if selected.ttftMs !== undefined}
-          <div><span>TTFT</span><strong>{formatTrajectoryDuration(selected.ttftMs)}</strong></div>
+        <div><span>Started</span><strong>{clock(selected.started_at)}</strong></div>
+        <div><span>Completed</span><strong>{clock(selected.completed_at)}</strong></div>
+        {#if selected.ttft_ms !== undefined}
+          <div><span>TTFT</span><strong>{formatTrajectoryDuration(selected.ttft_ms)}</strong></div>
         {/if}
         <div><span>Status</span><strong class:failed-text={selected.status === "failed"}>{selected.status}</strong></div>
       </div>
@@ -328,23 +376,23 @@
         <div class="model-meta">
           <span>{selected.provider ?? "unknown provider"}</span>
           <span>{selected.model ?? "unknown model"}</span>
-          <span>{(selected.inputTokens ?? 0).toLocaleString()} in</span>
-          <span>{(selected.outputTokens ?? 0).toLocaleString()} out</span>
-          <span>{(selected.cacheReadTokens ?? 0).toLocaleString()} cached</span>
+          <span>{(selected.input_tokens ?? 0).toLocaleString()} in</span>
+          <span>{(selected.output_tokens ?? 0).toLocaleString()} out</span>
+          <span>{(selected.cache_read_tokens ?? 0).toLocaleString()} cached</span>
         </div>
       {/if}
 
-      {#if selected.input !== undefined && text(selected.input)}
+      {#if selectedInput !== undefined && text(selectedInput)}
         <div class="payload">
           <h4>{selected.kind === "input" ? "Message" : "Payload"}</h4>
-          <pre>{text(selected.input)}</pre>
+          <pre>{text(selectedInput)}</pre>
         </div>
       {/if}
 
-      {#if selected.output !== undefined && text(selected.output)}
+      {#if selectedOutput !== undefined && text(selectedOutput)}
         <div class="payload">
           <h4>{selected.status === "running" ? "Output tail" : "Result"}</h4>
-          <pre>{text(selected.output)}</pre>
+          <pre>{text(selectedOutput)}</pre>
         </div>
       {/if}
     </dialog>

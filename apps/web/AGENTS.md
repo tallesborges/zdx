@@ -10,7 +10,6 @@ has been removed.
 
 - `build-cached.mjs`: content-fingerprinted build wrapper for `just web-build`; cache metadata lives in `node_modules/.cache/zdx-web-build.json`, never in embedded `dist`
 - `build-cached.test.mjs`: temporary-fixture tests for no-op builds, input invalidation, output integrity, and failures
-- `trajectory.test.ts`: pure trajectory projection tests for exact overlap, track packing, and legacy timing
 - `src/main.ts`: entrypoint; initializes the Telegram bridge before mounting
 - `src/App.svelte`: framed app shell (shell colour behind, rounded surface panel) + drawer host
 - `src/app.css`: the whole design system — Tailwind v4 `@theme` tokens
@@ -23,8 +22,6 @@ has been removed.
   stays a single-thread link for that reason; only the bare form opens the list.
 - `src/lib/transcript.ts`: projects the flat activity stream into a three-level collapsible tree
   (`work` turn → folded `group` → single `tool`) and derives the one-line summaries
-- `src/lib/trajectory.ts`: projects activity into per-turn model/tool spans, exact overlap tracks,
-  honest legacy timing, and bottleneck rankings
 - `src/lib/diff.ts`: unified-diff parser with word-level intra-line segmentation
 - `src/lib/highlight.ts`: compact line-local syntax tokenizer + span merger (six `--hljs-*` classes)
 - `src/lib/markdown.ts`: `marked` + allowlist sanitizer (model output is untrusted)
@@ -39,7 +36,9 @@ has been removed.
   Shows a Telegram jump button when the response carries `telegram_link`; the link is built
   server-side from the *resolved* id, so it works for `?id=active` too.
 - `src/views/TranscriptPane.svelte` / `TrajectoryPane.svelte` / `AgentPane.svelte` / `ChangesPane.svelte` / `WorkersPane.svelte`: the thread tabs.
-  `TrajectoryPane` is mobile-first: the bottleneck summary stays readable at phone width, exact spans
+  `TrajectoryPane` renders the shared `zdx-engine::core::thread_trajectory` projection returned by
+  `/api/threads/{id}/trajectory`; it owns presentation only, not timing arithmetic. It is mobile-first:
+  the bottleneck summary stays readable at phone width, exact spans
   use horizontally scrollable Input/Model/Tools lanes with pinned labels, and selected spans open in a
   bottom sheet. Legacy duration-only events rank as measured durations but are never positioned as
   inferred overlap.
@@ -170,7 +169,6 @@ design live in `.zdx/design-reference/` — local only, gitignored, not shipped.
 - `just web-dev` — dev server proxying `/api` to a running `zdx bot` on `:4141`
 - `just web-check` — `svelte-check`
 - `just web-build` — production build into `apps/web/dist/`; skips Bun install/Vite when web input contents (including configs, lockfile, `.env*`, Bun version, `VITE_*` and `NODE_ENV`) and the complete dist contents match the last successful build. No-op builds preserve dist timestamps so Cargo stays fresh. `node_modules`, `dist`, `.git`, and `AGENTS.md` are excluded from input hashing.
-- `bun test apps/web/trajectory.test.ts` — exact overlap, bottleneck ranking, and legacy-timing projection tests
 - `bun test apps/web/build-cached.test.mjs` — build cache regression tests (from the workspace root)
 
 Working against the real API in a desktop browser needs signed initData: put a

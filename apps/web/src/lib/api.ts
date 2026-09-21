@@ -7,6 +7,7 @@ import type {
   MonitorResponse,
   ThreadListResponse,
   ThreadResponse,
+  ThreadTrajectoryReport,
   WorkersResponse,
 } from "./types";
 
@@ -84,6 +85,14 @@ export const api = {
     }
     const params = after === undefined ? undefined : { after: String(after) };
     return get<ThreadResponse>(`/api/threads/${encodeURIComponent(id)}`, params);
+  },
+
+  trajectory: async (id: string) => {
+    if (import.meta.env.DEV) {
+      const demo = await import("./demo");
+      if (demo.demoEnabled()) return demo.demoTrajectory;
+    }
+    return get<ThreadTrajectoryReport>(`/api/threads/${encodeURIComponent(id)}/trajectory`);
   },
 
   workers: async (id: string) => {
