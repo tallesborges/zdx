@@ -26,6 +26,9 @@ use zdx_engine::config::{Config, paths};
 use zdx_engine::core::events::NoticeKind;
 use zdx_engine::core::thread_index;
 use zdx_engine::core::thread_persistence::{self, ThreadEvent, load_thread_events};
+use zdx_engine::core::thread_trajectory::{
+    LiveToolSpan, ThreadTrajectoryReport, inspect_thread_trajectory_with_live,
+};
 use zdx_engine::core::usage_stats::{self, UsageStats};
 use zdx_engine::core::workers::{WorkerManager, WorkerSnapshot, WorkerStatus};
 use zdx_engine::models::ModelOption;
@@ -557,6 +560,7 @@ struct InitDataUser {
 pub(crate) fn create_router(state: Arc<ServerState>) -> Router {
     let api = Router::new()
         .route("/threads", get(get_threads))
+        .route("/threads/{id}/trajectory", get(get_thread_trajectory))
         .route("/threads/{id}", get(get_thread))
         .route("/threads/{id}/workers", get(get_thread_workers))
         .route("/monitor", get(get_monitor))
@@ -798,6 +802,71 @@ async fn get_thread(
         tracing::warn!(%error, "Mini App thread load task failed");
         (StatusCode::INTERNAL_SERVER_ERROR, "Thread load failed")
     })?
+}
+
+async fn get_thread_trajectory(
+    State(_state): State<Arc<ServerState>>,
+    Path(id): Path<String>,
+) -> Result<Json<ThreadTrajectoryReport>, ApiError> {
+    tokio::task::spawn_blocking(move || {
+        let target_id = if id == "active" {
+            thread_index::latest_thread_id_with_prefix("telegram-")
+                .ok()
+                .flatten()
+                .unwrap_or(id)
+        } else {
+            id
+        };
+        if !valid_thread_id(&target_id) {
+            return Err((StatusCode::BAD_REQUEST, "Invalid thread ID"));
+        }
+
+        let events = load_thread_events(&target_id).map_err(|error| {
+            tracing::warn!(
+                thread_id = target_id,
+                error = %format!("{error:#}"),
+                "Failed to load Mini App thread trajectory"
+            );
+            (StatusCode::NOT_FOUND, "Thread not found")
+        })?;
+        let live_tools = active_trajectory_tools(&target_id, events.len());
+        Ok(Json(inspect_thread_trajectory_with_live(
+            &events,
+            &live_tools,
+            chrono::Utc::now(),
+        )))
+    })
+    .await
+    .map_err(|error| {
+        tracing::warn!(%error, "Mini App thread trajectory task failed");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Thread trajectory failed",
+        )
+    })?
+}
+
+fn active_trajectory_tools(thread_id: &str, first_sequence: usize) -> Vec<LiveToolSpan> {
+    let Some(record) = agent_activity::list_active()
+        .into_iter()
+        .find(|record| record.thread_id.as_deref() == Some(thread_id))
+    else {
+        return Vec::new();
+    };
+    record
+        .current_tools
+        .into_iter()
+        .enumerate()
+        .map(|(index, tool)| LiveToolSpan {
+            sequence: first_sequence + index,
+            id: tool.id,
+            name: tool.name,
+            summary: tool.summary,
+            input: tool.input,
+            output_tail: tool.output_tail,
+            started_at: tool.started_at,
+        })
+        .collect()
 }
 
 /// Follows a single `alias_to` hop, so an id taken from a Telegram worker
@@ -2514,6 +2583,7 @@ mod tests {
         for path in [
             "/api/threads",
             "/api/threads/active",
+            "/api/threads/active/trajectory",
             "/api/monitor",
             "/api/git?thread_id=active",
             "/api/git/scope?thread_id=active&scope=all",
