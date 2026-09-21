@@ -23,6 +23,7 @@ use tokio::process::Command;
 use tokio::sync::{Mutex, RwLock};
 use tower_http::compression::CompressionLayer;
 use zdx_engine::config::{Config, paths};
+use zdx_engine::core::artifacts::{self, Artifact, ArtifactAttachment};
 use zdx_engine::core::events::NoticeKind;
 use zdx_engine::core::thread_index;
 use zdx_engine::core::thread_persistence::{self, ThreadEvent, load_thread_events};
@@ -85,6 +86,21 @@ pub struct ThreadListResponse {
 #[derive(Serialize)]
 pub struct WorkersResponse {
     pub workers: Vec<WorkerItem>,
+}
+
+/// Thread artifact tab payload. Rows come from the shared engine artifact
+/// model: files in the thread artifact dir plus files the thread sent, merged
+/// on the absolute path. `Artifact` is defined there so other surfaces reuse
+/// the same shape instead of re-deriving it.
+#[derive(Serialize)]
+pub struct ArtifactsResponse {
+    pub artifacts: Vec<Artifact>,
+}
+
+/// Query for the artifact download endpoint: the artifact's `path` as listed.
+#[derive(Deserialize)]
+struct ArtifactFileQuery {
+    path: String,
 }
 
 /// One worker of an orchestrator thread.
@@ -166,6 +182,11 @@ pub enum ThreadActivity {
         text: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         phase: Option<String>,
+        /// Files this message sent (`<media>` paths), resolved through the
+        /// shared artifact model so the Mini App can preview them inline.
+        /// `None` when the message sent nothing.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        artifacts: Option<Vec<ArtifactAttachment>>,
     },
     Reasoning {
         sequence: usize,
@@ -561,6 +582,11 @@ pub(crate) fn create_router(state: Arc<ServerState>) -> Router {
     let api = Router::new()
         .route("/threads", get(get_threads))
         .route("/threads/{id}/trajectory", get(get_thread_trajectory))
+        .route("/threads/{id}/artifacts", get(get_thread_artifacts))
+        .route(
+            "/threads/{id}/artifacts/file",
+            get(get_thread_artifact_file),
+        )
         .route("/threads/{id}", get(get_thread))
         .route("/threads/{id}/workers", get(get_thread_workers))
         .route("/monitor", get(get_monitor))
@@ -1060,6 +1086,90 @@ async fn get_thread_workers(
     })?
 }
 
+/// Resolves a thread path param the way `get_thread` does: `active` means the
+/// most recent Telegram thread. Callers still apply `resolve_alias_id` when
+/// they need the effective thread behind a mirror alias.
+fn resolve_thread_param(id: String) -> String {
+    if id == "active" {
+        thread_index::latest_thread_id_with_prefix("telegram-")
+            .ok()
+            .flatten()
+            .unwrap_or(id)
+    } else {
+        id
+    }
+}
+
+async fn get_thread_artifacts(Path(id): Path<String>) -> Result<Json<ArtifactsResponse>, ApiError> {
+    tokio::task::spawn_blocking(move || {
+        let target_id = resolve_thread_param(id);
+        if !valid_thread_id(&target_id) {
+            return Err((StatusCode::BAD_REQUEST, "Invalid thread ID"));
+        }
+        let effective = resolve_alias_id(&target_id);
+        let artifacts = artifacts::list_thread_artifacts(&effective).map_err(|error| {
+            tracing::warn!(thread_id = effective, error = %format!("{error:#}"), "Failed to list Mini App artifacts");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Artifact list failed")
+        })?;
+        Ok(Json(ArtifactsResponse { artifacts }))
+    })
+    .await
+    .map_err(|error| {
+        tracing::warn!(%error, "Mini App artifact list task failed");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Artifact list failed")
+    })?
+}
+
+async fn get_thread_artifact_file(
+    Path(id): Path<String>,
+    Query(query): Query<ArtifactFileQuery>,
+) -> Result<Response, ApiError> {
+    let target_id = resolve_thread_param(id);
+    if !valid_thread_id(&target_id) {
+        return Err((StatusCode::BAD_REQUEST, "Invalid thread ID"));
+    }
+    if query.path.trim().is_empty() || query.path.contains('\0') {
+        return Err((StatusCode::BAD_REQUEST, "Invalid artifact path"));
+    }
+    let effective = resolve_alias_id(&target_id);
+    let path_param = query.path.clone();
+    let (bytes, mime, filename) = tokio::task::spawn_blocking(move || {
+        let (path, mime) =
+            artifacts::resolve_artifact_for_download(&effective, &path_param).map_err(
+                |error| {
+                    tracing::warn!(thread_id = effective, error = %format!("{error:#}"), "Failed to resolve Mini App artifact");
+                    (StatusCode::NOT_FOUND, "Artifact not found")
+                },
+            )?;
+        let bytes = std::fs::read(&path).map_err(|error| {
+            tracing::warn!(path = %path.display(), error = %format!("{error:#}"), "Failed to read Mini App artifact");
+            (StatusCode::NOT_FOUND, "Artifact not found")
+        })?;
+        let filename = path.file_name().map_or_else(
+            || "artifact".to_string(),
+            |name| name.to_string_lossy().replace('"', "_"),
+        );
+        Ok::<_, ApiError>((bytes, mime, filename))
+    })
+    .await
+    .map_err(|error| {
+        tracing::warn!(%error, "Mini App artifact read task failed");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Artifact read failed")
+    })??;
+
+    let body = axum::body::Body::from(bytes);
+    Response::builder()
+        .header(header::CONTENT_TYPE, mime)
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("inline; filename=\"{filename}\""),
+        )
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .body(body)
+        .map_err(|_build| (StatusCode::INTERNAL_SERVER_ERROR, "Artifact read failed"))
+}
+
 /// Appends a `ToolRunning` record for each in-flight tool from the active-run
 /// marker bound to this thread. Skips ids already persisted as `tool_use`
 /// (a finished round lands in the JSONL just before the marker entry clears).
@@ -1125,8 +1235,10 @@ fn project_thread(
                 ..
             } => {
                 let speaker = if role == "user" { "You" } else { "Z" };
+                let attachments = artifacts::attachments_for_message(&text);
+                let artifacts = (!attachments.is_empty()).then_some(attachments);
                 let clean_text = clean_message_text(&text);
-                if !clean_text.is_empty() {
+                if !clean_text.is_empty() || artifacts.is_some() {
                     activity.push(ThreadActivity::Message {
                         sequence,
                         time: event_time(&ts),
@@ -1135,6 +1247,7 @@ fn project_thread(
                         speaker,
                         text: clean_text,
                         phase,
+                        artifacts,
                     });
                     total_messages += 1;
                 }
@@ -1414,15 +1527,20 @@ fn clean_message_text(text: &str) -> String {
     {
         clean.replace_range(start..end + "</followups>".len(), "");
     }
-    if let Some(start) = clean.find("<medias>")
-        && let Some(end) = clean.find("</medias>")
-    {
-        clean.replace_range(start..end + "</medias>".len(), "");
+    // Attachments render as their own rows (see `artifacts` on the message),
+    // so strip every media tag. The wrapper goes first: it spans the inner
+    // tags, and the second pass removes any stray tag outside a wrapper.
+    while let Some(start) = clean.find("<medias>") {
+        let Some(end_rel) = clean[start..].find("</medias>") else {
+            break;
+        };
+        clean.replace_range(start..start + end_rel + "</medias>".len(), "");
     }
-    if let Some(start) = clean.find("<media>")
-        && let Some(end) = clean.find("</media>")
-    {
-        clean.replace_range(start..end + "</media>".len(), "");
+    while let Some(start) = clean.find("<media>") {
+        let Some(end_rel) = clean[start..].find("</media>") else {
+            break;
+        };
+        clean.replace_range(start..start + end_rel + "</media>".len(), "");
     }
     clean.trim().to_string()
 }
@@ -2584,6 +2702,8 @@ mod tests {
             "/api/threads",
             "/api/threads/active",
             "/api/threads/active/trajectory",
+            "/api/threads/active/artifacts",
+            "/api/threads/active/artifacts/file?path=x",
             "/api/monitor",
             "/api/git?thread_id=active",
             "/api/git/scope?thread_id=active&scope=all",
@@ -2832,6 +2952,43 @@ mod tests {
         assert!(!json.contains("/private/project"));
         assert!(!json.contains("private-replay-blob"));
         assert!(!json.contains("private-tool-signature"));
+    }
+
+    #[test]
+    fn projects_message_media_as_inline_attachments() {
+        let events = vec![ThreadEvent::Message {
+            role: "assistant".to_string(),
+            text:
+                "Full details attached ↓<media>/tmp/definitely-not-here-12345/report.html</media>"
+                    .to_string(),
+            phase: None,
+            context: None,
+            context_key: None,
+            replay: None,
+            ts: "2026-08-24T10:00:05Z".to_string(),
+        }];
+
+        let response = project_thread(
+            "thread-media".to_string(),
+            events,
+            None,
+            ThreadLineage::default(),
+        );
+        assert_eq!(response.activity.len(), 1);
+        let ThreadActivity::Message {
+            text, artifacts, ..
+        } = &response.activity[0]
+        else {
+            panic!("expected a message activity");
+        };
+        assert_eq!(text, "Full details attached ↓");
+        let attachments = artifacts.as_deref().expect("media becomes attachments");
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(
+            attachments[0].path,
+            "/tmp/definitely-not-here-12345/report.html"
+        );
+        assert_eq!(attachments[0].kind, artifacts::ArtifactKind::Html);
     }
 
     /// The live poll asks for a window instead of the whole transcript. The
