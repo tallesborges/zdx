@@ -311,7 +311,17 @@ impl ModelOption {
 
     /// Finds a model by explicit provider + model ID.
     pub fn find_by_provider_and_id(provider: &str, id: &str) -> Option<&'static ModelOption> {
-        available_models()
+        Self::find_in_by_provider_and_id(available_models(), provider, id)
+    }
+
+    /// Finds a model by explicit provider + model ID within an explicit model
+    /// set, so callers that already hold one can resolve without the registry.
+    fn find_in_by_provider_and_id<'a>(
+        models: &'a [ModelOption],
+        provider: &str,
+        id: &str,
+    ) -> Option<&'a ModelOption> {
+        models
             .iter()
             .find(|m| m.provider.eq_ignore_ascii_case(provider) && m.id.eq_ignore_ascii_case(id))
     }
@@ -359,9 +369,26 @@ pub fn model_reads_images(
     provider: &str,
     model: &str,
 ) -> bool {
-    ModelOption::find_by_provider_and_id(provider, model)
+    model_reads_images_in(
+        available_models(),
+        custom_provider_models(providers),
+        provider,
+        model,
+    )
+}
+
+/// Image-capability rule over explicit model sets. The registry wins over the
+/// synthesized custom-provider entries, and an unresolved model stays
+/// permissive.
+fn model_reads_images_in(
+    registry: &[ModelOption],
+    custom: &[ModelOption],
+    provider: &str,
+    model: &str,
+) -> bool {
+    ModelOption::find_in_by_provider_and_id(registry, provider, model)
         .or_else(|| {
-            custom_provider_models(providers)
+            custom
                 .iter()
                 .find(|entry| entry.provider.eq_ignore_ascii_case(provider) && entry.id == model)
         })
@@ -487,7 +514,7 @@ mod tests {
         ModelCapabilities, ModelOption, ModelPricing, UserModelOverride, UserModelOverridesFile,
         apply_user_model_overrides, bare_model_id, custom_provider_models, explicit_api_override,
         fast_variant, find_model, format_model_thinking, model_id_matches_patterns,
-        model_reads_images, resolve_model_spec, wildcard_match,
+        model_reads_images_in, resolve_model_spec, wildcard_match,
     };
     use crate::config::{CustomProviderConfig, ProvidersConfig, ThinkingLevel};
 
@@ -598,32 +625,64 @@ api = "openai-completions"
 
     #[test]
     fn image_capability_covers_registry_and_custom_provider_models() {
-        assert!(model_reads_images(
-            &ProvidersConfig::default(),
-            "gemini",
-            "gemini-3.6-flash"
-        ));
-        assert!(!model_reads_images(
-            &ProvidersConfig::default(),
-            "opencode-go",
-            "deepseek-v4-flash"
-        ));
+        let registry = [
+            model_with_images("gemini", "gemini-vision", true),
+            model_with_images("opencode-go", "text-only", false),
+        ];
+        // Custom-provider models live outside the registry; they are
+        // synthesized separately and default to no image input.
+        let custom = [model_with_images("parity", "vendor/text-only", false)];
 
-        // Custom-provider models live outside `available_models()`; they must
-        // still resolve, and default to no image input.
-        let providers = providers_with("parity", &["openrouter/deepseek/deepseek-v4-flash"]);
-        assert!(!model_reads_images(
-            &providers,
+        assert!(model_reads_images_in(
+            &registry,
+            &custom,
+            "gemini",
+            "gemini-vision"
+        ));
+        assert!(!model_reads_images_in(
+            &registry,
+            &custom,
+            "opencode-go",
+            "text-only"
+        ));
+        assert!(!model_reads_images_in(
+            &registry,
+            &custom,
             "parity",
-            "openrouter/deepseek/deepseek-v4-flash"
+            "vendor/text-only"
         ));
 
         // Unknown models stay permissive.
-        assert!(model_reads_images(
-            &ProvidersConfig::default(),
+        assert!(model_reads_images_in(
+            &registry,
+            &custom,
             "parity",
             "not-configured"
         ));
+    }
+
+    fn model_with_images(
+        provider: &'static str,
+        id: &'static str,
+        input_images: bool,
+    ) -> ModelOption {
+        ModelOption {
+            id,
+            provider,
+            account: None,
+            display_name: id,
+            pricing: ModelPricing {
+                input: 0.0,
+                output: 0.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            context_limit: 0,
+            capabilities: ModelCapabilities {
+                input_images,
+                ..Default::default()
+            },
+        }
     }
 
     fn override_for(id: &str, context_limit: u64) -> UserModelOverride {
