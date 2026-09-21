@@ -79,6 +79,24 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
   - Do not add backward-compatibility shims, defensive fallback logic, or keep dead code paths unless explicitly requested or required by a documented contract in `docs/SPEC.md`.
   - Remove deprecated code immediately rather than marking it deprecated.
 
+## Cross-surface features
+
+ZDX exposes the same capabilities through several surfaces (CLI/exec, TUI, Monitor, bot and Mini
+App, agents and scripts). A feature belongs to the system, not to the surface that first asked for
+it:
+
+- Own the capability once, in the shared layer, derived from canonical sources. Domain logic,
+  derivation, and naming live there; surfaces do not re-derive them from their own display types.
+- Give every capability a machine-readable, programmatic path, not only a human-facing one. Agents
+  and scripts are first-class consumers.
+- Keep surfaces as thin adapters: presentation, layout, and interaction only. A rule implemented
+  twice in two languages is a bug.
+- Preserve uncertainty in the shared layer. Missing or incomplete data stays explicitly unknown;
+  a surface must not infer a stronger claim than the shared layer states.
+- Reuse-ready is not the same as built everywhere. Making the capability directly consumable by
+  another surface is required; building that surface's UI is only in scope when requested.
+- Test behavior once where it lives, then add narrow adapter tests per exposed surface.
+
 ## Derived caches and hot paths
 
 For any disposable store rebuilt from files on disk (SQLite caches, search indexes, generated artifacts):
