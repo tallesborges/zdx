@@ -36,6 +36,23 @@ input_images = true
 output_limit = 128000
 
 [[model]]
+id = "claude-opus-5-5"
+provider = "anthropic"
+display_name = "Claude Opus 5.5"
+context_limit = 1000000
+
+[model.pricing]
+input = 4.0
+output = 20.0
+cache_read = 0.2
+cache_write = 5.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
+[[model]]
 id = "claude-opus-5"
 provider = "anthropic"
 display_name = "Claude Opus 5"
@@ -124,6 +141,23 @@ output_limit = 128000
 id = "claude-cli:claude-fable-5"
 provider = "claude-cli"
 display_name = "Claude Fable 5"
+context_limit = 1000000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
+[[model]]
+id = "claude-cli:claude-opus-5-5"
+provider = "claude-cli"
+display_name = "Claude Opus 5.5"
 context_limit = 1000000
 
 [model.pricing]
