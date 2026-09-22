@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { api, formatBytes, ApiError } from "$lib/api";
   import type { ArtifactItem } from "$lib/types";
   import ArtifactPreview from "../components/ArtifactPreview.svelte";
@@ -15,6 +16,7 @@
   let error = $state("");
   let loading = $state(true);
   let preview = $state<ArtifactItem | null>(null);
+  /** Thread the current `items` belong to; also the in-flight staleness key. */
   let loadedFor = $state<string | null>(null);
 
   function sourceLabel(source: ArtifactItem["source"]): string {
@@ -23,17 +25,17 @@
 
   async function load() {
     const target = threadId;
-    loading = loadedFor !== target;
+    loadedFor = target;
+    loading = true;
     error = "";
     try {
       const response = await api.artifacts(target);
-      if (target !== threadId) return;
+      if (loadedFor !== target) return;
       items = response.artifacts;
-      loadedFor = target;
     } catch (e) {
-      if (target === threadId) error = e instanceof ApiError ? e.message : String(e);
+      if (loadedFor === target) error = e instanceof ApiError ? e.message : String(e);
     } finally {
-      if (target === threadId) loading = false;
+      if (loadedFor === target) loading = false;
     }
   }
 
@@ -49,11 +51,18 @@
     setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
   }
 
+  // Track the thread id and nothing else. `load` reads `loadedFor` before its
+  // first await and then writes it, so calling it tracked makes this effect
+  // depend on its own write: it re-runs, resets `loading` to true, fetches
+  // again, and never settles — the pane sits on "Loading artifacts…" while
+  // hammering the endpoint. `untrack` keeps the dependency set to `threadId`.
   $effect(() => {
-    void threadId;
-    loadedFor = null;
-    items = [];
-    load();
+    const target = threadId;
+    untrack(() => {
+      items = [];
+      void target;
+      void load();
+    });
   });
 </script>
 

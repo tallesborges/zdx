@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { api, formatBytes } from "$lib/api";
   import type { ArtifactAttachment } from "$lib/types";
   import ArtifactPreview from "./ArtifactPreview.svelte";
@@ -15,32 +15,42 @@
   let urls = $state(new Map<string, string>());
   let failed = $state(new Set<string>());
   let preview = $state<ArtifactAttachment | null>(null);
+  /** Paths already requested, so a re-render never re-fetches the same bytes. */
+  const requested = new Set<string>();
 
   function objectUrlFor(path: string): string | null {
     return urls.get(path) ?? null;
   }
 
+  // Depends on the thread and the attachment paths only. The fetch loop reads
+  // and writes `urls`/`failed`, so running it tracked would make this effect
+  // re-run on its own writes and refetch the same files. The transcript poll
+  // hands us a fresh array every few seconds, hence the `requested` guard.
+  let inlinePaths = $derived(
+    attachments
+      .filter((a) => a.exists && (a.kind === "image" || a.kind === "audio"))
+      .map((a) => a.path),
+  );
+
   $effect(() => {
-    const wanted = attachments.filter(
-      (a) => a.exists && (a.kind === "image" || a.kind === "audio") && !urls.has(a.path),
-    );
-    if (wanted.length === 0) return;
-    let cancelled = false;
-    (async () => {
-      for (const item of wanted) {
-        try {
-          const blob = await api.artifactBlob(threadId, item.path);
-          if (cancelled) return;
-          const objectUrl = URL.createObjectURL(blob);
-          urls = new Map(urls).set(item.path, objectUrl);
-        } catch {
-          if (!cancelled) failed = new Set(failed).add(item.path);
+    const target = threadId;
+    const paths = inlinePaths;
+    untrack(() => {
+      const wanted = paths.filter((path) => !requested.has(path));
+      if (wanted.length === 0) return;
+      for (const path of wanted) requested.add(path);
+      void (async () => {
+        for (const path of wanted) {
+          try {
+            const blob = await api.artifactBlob(target, path);
+            const objectUrl = URL.createObjectURL(blob);
+            urls = new Map(urls).set(path, objectUrl);
+          } catch {
+            failed = new Set(failed).add(path);
+          }
         }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+      })();
+    });
   });
 
   onDestroy(() => {

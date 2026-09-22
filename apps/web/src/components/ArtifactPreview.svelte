@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { api, ApiError } from "$lib/api";
   import type { ArtifactAttachment } from "$lib/types";
   import Icon from "./Icon.svelte";
@@ -16,8 +16,10 @@
   let error = $state("");
   let loading = $state(true);
 
-  async function download(): Promise<string | null> {
-    if (url) return url;
+  /** Fetches the bytes once and keeps the blob URL for the open preview. */
+  async function fetchBytes(): Promise<string | null> {
+    const existing = untrack(() => url);
+    if (existing) return existing;
     try {
       const blob = await api.artifactBlob(threadId, artifact.path);
       const objectUrl = URL.createObjectURL(blob);
@@ -32,7 +34,7 @@
   }
 
   async function save() {
-    const objectUrl = await download();
+    const objectUrl = await fetchBytes();
     if (!objectUrl) return;
     const anchor = document.createElement("a");
     anchor.href = objectUrl;
@@ -42,33 +44,43 @@
     anchor.remove();
   }
 
+  // Tracks the artifact identity only; the fetch writes `url`/`loading`/`error`
+  // and must not feed back into this effect's dependency set.
   $effect(() => {
-    void threadId;
-    void artifact.path;
-    loading = true;
-    error = "";
-    // Images, audio and HTML need bytes to render. Other kinds fetch lazily
-    // through the Download button instead.
-    if (artifact.kind === "other" || !artifact.exists) {
-      loading = false;
-      return;
-    }
-    let cancelled = false;
-    api
-      .artifactBlob(threadId, artifact.path)
-      .then((blob) => {
-        if (cancelled) return;
-        url = URL.createObjectURL(blob);
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) error = e instanceof ApiError ? e.message : String(e);
-      })
-      .finally(() => {
-        if (!cancelled) loading = false;
-      });
-    return () => {
-      cancelled = true;
-    };
+    const target = threadId;
+    const path = artifact.path;
+    const kind = artifact.kind;
+    const exists = artifact.exists;
+
+    return untrack(() => {
+      const previous = url;
+      url = null;
+      if (previous) URL.revokeObjectURL(previous);
+      loading = true;
+      error = "";
+      // Images, audio and HTML need bytes to render. Other kinds fetch lazily
+      // through the Download button instead.
+      if (kind === "other" || !exists) {
+        loading = false;
+        return;
+      }
+      let cancelled = false;
+      void api
+        .artifactBlob(target, path)
+        .then((blob) => {
+          if (cancelled) return;
+          url = URL.createObjectURL(blob);
+        })
+        .catch((e: unknown) => {
+          if (!cancelled) error = e instanceof ApiError ? e.message : String(e);
+        })
+        .finally(() => {
+          if (!cancelled) loading = false;
+        });
+      return () => {
+        cancelled = true;
+      };
+    });
   });
 
   onDestroy(() => {
