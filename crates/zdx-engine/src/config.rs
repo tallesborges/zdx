@@ -975,8 +975,9 @@ pub struct Config {
     /// background instead of being waited on (0 disables auto-backgrounding).
     ///
     /// This is a relocation bound, not a deadline: the command keeps running.
-    /// An explicit `timeout_secs` on the tool call is a kill deadline and takes
-    /// precedence over it.
+    /// A per-call `timeout_secs` overrides the duration for that one command
+    /// but cannot make it lethal. Only an automation's `timeout_secs`
+    /// frontmatter kills, and it suppresses the handoff entirely.
     pub bash_foreground_bound_secs: u32,
 
     /// Provider configuration (base URLs, etc.).

@@ -155,8 +155,11 @@ async fn test_bash_runs_in_root_directory() {
     );
 }
 
+/// End-to-end contract: a per-call `timeout_secs` is a foreground wait bound,
+/// not a kill deadline. The command outruns it and is relocated with its work
+/// intact, which `exec` then drains.
 #[tokio::test]
-async fn test_bash_times_out_with_per_call_timeout() {
+async fn test_bash_per_call_timeout_relocates_instead_of_killing() {
     if !can_bind_localhost() {
         eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
         return;
@@ -171,8 +174,8 @@ async fn test_bash_times_out_with_per_call_timeout() {
     let second_request_body = Arc::new(std::sync::Mutex::new(String::new()));
     let second_request_body_clone = Arc::clone(&second_request_body);
 
-    // The per-call `timeout_secs` is the explicit kill deadline: the command is
-    // killed at the bound and the group torn down, rather than relocated.
+    // The per-call `timeout_secs` only bounds the foreground wait: the command
+    // keeps running and is moved to the background rather than being killed.
     let first_response = tool_use_sse(
         "toolu_bash_timeout",
         "bash",
@@ -215,10 +218,14 @@ async fn test_bash_times_out_with_per_call_timeout() {
 
     let body = second_request_body.lock().unwrap().clone();
     // New structured envelope format (escaped in JSON content):
-    // {"ok":true,"data":{"timed_out":true,...}}
+    // {"ok":true,"data":{"backgrounded":true,...}}
     assert!(
-        body.contains(r#"\"timed_out\":true"#),
-        "Tool result should indicate timeout with timed_out field in escaped JSON. Got: {body}"
+        body.contains(r#"\"backgrounded\":true"#),
+        "Tool result should report a relocation, not a kill. Got: {body}"
+    );
+    assert!(
+        !body.contains(r#"\"timed_out\":true"#),
+        "A per-call timeout_secs must never kill the command. Got: {body}"
     );
 }
 

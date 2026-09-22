@@ -60,7 +60,7 @@ pub fn definition() -> ToolDefinition {
                 "timeout_secs": {
                     "type": "integer",
                     "minimum": 0,
-                    "description": "Optional hard kill deadline in seconds. Omit it unless the command must be killed rather than allowed to finish: without it, a command that outruns the foreground bound keeps running in the background instead of being terminated. For a command that never exits, use background: true instead."
+                    "description": "Optional foreground wait budget in seconds, for a command you expect to outrun the default bound. This is NOT a kill switch: when it elapses the command is normally moved to the background and keeps running, exactly as it would be at the default bound. Where backgrounding is unavailable the wait simply continues instead; either way this value never terminates the command. Omit it to use the default; 0 means the same. To stop a running command use background_kill. For a command that never exits, use background: true instead."
                 },
                 "background": {
                     "type": "boolean",
@@ -83,15 +83,22 @@ struct BashInput {
     timeout_secs: Option<u64>,
 }
 
-fn resolve_timeout(
-    requested_secs: Option<u64>,
-    configured_timeout: Option<Duration>,
-) -> Option<Duration> {
-    match requested_secs {
-        Some(0) => None,
-        Some(secs) => Some(Duration::from_secs(secs)),
-        None => configured_timeout,
+/// Applies the caller's `timeout_secs` to the handoff as a foreground wait bound.
+///
+/// `timeout_secs` is not a deadline: it says how long to wait before relocating
+/// the command, never whether to kill it. Omitted and `0` keep the configured
+/// bound; a positive value replaces it.
+///
+/// With no handoff there is no bound to override and nothing to relocate into,
+/// so the command simply keeps waiting in the foreground. A caller's wait
+/// budget must never degrade into a kill.
+#[cfg(unix)]
+fn apply_wait_bound(handoff: Option<Handoff>, requested_secs: Option<u64>) -> Option<Handoff> {
+    let mut handoff = handoff?;
+    if let Some(secs) = requested_secs.filter(|secs| *secs > 0) {
+        handoff.bound = Duration::from_secs(secs);
     }
+    Some(handoff)
 }
 
 /// Output from a bash command execution.
@@ -303,9 +310,13 @@ impl BashOutput {
 ///
 /// `handoff` enables auto-backgrounding: when the command outruns its
 /// foreground bound it is moved to the background instead of being killed, and
-/// the returned envelope carries `backgrounded: true` plus a `bg_id`. An
-/// explicit `timeout_secs` is a kill deadline and takes precedence, so the two
-/// never both apply.
+/// the returned envelope carries `backgrounded: true` plus a `bg_id`. The
+/// caller's `timeout_secs` sets that bound and is never destructive.
+///
+/// `timeout` is the run's configured tool deadline (an automation's
+/// `timeout_secs` frontmatter). It is the only destructive one, it is not
+/// reachable from the tool's arguments, and it suppresses the handoff so an
+/// operator's deadline still kills.
 pub async fn execute(
     input: &Value,
     ctx: &ToolContext,
@@ -328,12 +339,15 @@ pub async fn execute(
         return ToolOutput::failure("invalid_input", "command cannot be empty", None);
     }
 
-    let timeout = resolve_timeout(input.timeout_secs, timeout);
-
-    // An explicit kill deadline and a relocation bound are different intents;
-    // the deadline the caller asked for wins.
+    // Only the run's configured deadline kills. The caller's `timeout_secs`
+    // bounds the foreground wait instead, so a slow command is relocated with
+    // its work intact rather than destroyed.
     #[cfg(unix)]
-    let handoff = if timeout.is_some() { None } else { handoff };
+    let handoff = if timeout.is_some() {
+        None
+    } else {
+        apply_wait_bound(handoff, input.timeout_secs)
+    };
 
     match run_command(
         &input.command,
@@ -367,8 +381,6 @@ pub async fn run(
     if command.trim().is_empty() {
         return ToolOutput::failure("invalid_input", "command cannot be empty", None);
     }
-
-    let timeout = resolve_timeout(None, timeout);
 
     match run_command(
         command,
@@ -744,7 +756,7 @@ async fn run_command(
 
     if timed_out {
         let timeout_msg = format!(
-            "Command timed out after {} seconds. If this is a long-lived process (dev server, watcher, tunnel), it will never exit on its own — re-run it with background: true instead of raising timeout_secs.",
+            "Command was killed after {} seconds by the deadline configured for this run (an automation's timeout_secs). The Bash timeout_secs argument cannot raise or remove it. Report that this run's operator-imposed limit stopped the command and what it needs instead, so the limit can be adjusted with the operator's approval.",
             timeout.map_or(0, |d| d.as_secs())
         );
         if let Some(ref tx) = output_tx {
@@ -983,26 +995,31 @@ mod tests {
         assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
     }
 
+    /// The caller's `timeout_secs` only tunes how long the foreground wait
+    /// lasts. There is no input that turns it into a deadline.
+    #[cfg(unix)]
     #[test]
-    fn test_bash_resolves_timeout() {
-        assert_eq!(resolve_timeout(None, None), None);
-        assert_eq!(
-            resolve_timeout(None, Some(Duration::from_secs(30))),
-            Some(Duration::from_secs(30))
-        );
-        assert_eq!(
-            resolve_timeout(Some(300), Some(Duration::from_secs(30))),
-            Some(Duration::from_mins(5))
-        );
-        assert_eq!(
-            resolve_timeout(Some(0), Some(Duration::from_secs(30))),
-            None
-        );
+    fn test_caller_timeout_only_tunes_the_wait_bound() {
+        fn bound_for(requested: Option<u64>) -> Option<Duration> {
+            let handoff = Handoff {
+                bound: Duration::from_secs(120),
+                bg_id: "bg-test".to_string(),
+                stdout_log: std::path::PathBuf::from("/dev/null"),
+                stderr_log: std::path::PathBuf::from("/dev/null"),
+                on_adopt: Box::new(|_| true),
+                on_exit: Box::new(|_| {}),
+            };
+            apply_wait_bound(Some(handoff), requested).map(|handoff| handoff.bound)
+        }
 
-        assert_eq!(
-            resolve_timeout(Some(3600), Some(Duration::from_secs(30))),
-            Some(Duration::from_hours(1))
-        );
+        // Omitted and 0 both keep the configured bound.
+        assert_eq!(bound_for(None), Some(Duration::from_secs(120)));
+        assert_eq!(bound_for(Some(0)), Some(Duration::from_secs(120)));
+        // A positive value replaces it, in either direction.
+        assert_eq!(bound_for(Some(5)), Some(Duration::from_secs(5)));
+        assert_eq!(bound_for(Some(600)), Some(Duration::from_mins(10)));
+        // With no handoff there is no bound to set and nothing to relocate into.
+        assert!(apply_wait_bound(None, Some(600)).is_none());
     }
 
     #[tokio::test]
@@ -1071,43 +1088,55 @@ mod tests {
         assert_eq!(data["timed_out"], true);
         assert_eq!(data["stdout_truncated"], false);
         assert_eq!(data["stderr_truncated"], false);
-        // A never-exiting command must be pointed at the background path.
+        // The kill is the operator's, so the model is told to report the limit
+        // rather than to retry around it.
         assert!(
             data["stderr"]
                 .as_str()
                 .unwrap_or_default()
+                .contains("operator-imposed limit"),
+            "timeout should name the operator limit, got: {}",
+            data["stderr"]
+        );
+        assert!(
+            !data["stderr"]
+                .as_str()
+                .unwrap_or_default()
                 .contains("background: true"),
-            "timeout should recommend background: true, got: {}",
+            "timeout must not advise bypassing the operator deadline, got: {}",
             data["stderr"]
         );
     }
 
+    /// With no handoff to relocate into, `timeout_secs` has nothing to bound —
+    /// and must still never kill. The command runs to completion.
     #[tokio::test]
-    async fn test_bash_timeout_secs_as_string() {
+    async fn test_bash_timeout_secs_never_kills_without_a_handoff() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        // LLMs sometimes pass timeout_secs as a string ("1" instead of 1).
-        let input = json!({"command": "sleep 5", "timeout_secs": "1"});
+        let input = json!({"command": "sleep 1; echo done", "timeout_secs": 1});
 
         let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
-        assert_eq!(data["timed_out"], true);
-    }
-
-    #[tokio::test]
-    async fn test_bash_timeout_secs_zero_as_string_disables_timeout() {
-        let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        // "0" must disable the timeout the same way 0 does.
-        let input = json!({"command": "echo ok", "timeout_secs": "0"});
-
-        let result = execute_plain(&input, &ctx, Some(Duration::from_millis(1))).await;
-        assert!(result.is_ok());
-        let data = result.data().expect("should have data");
         assert_eq!(data["timed_out"], false);
         assert_eq!(data["exit_code"], 0);
-        assert!(data["stdout"].as_str().unwrap().contains("ok"));
+        assert!(data["stdout"].as_str().unwrap().contains("done"));
+    }
+
+    /// The run's configured deadline is the operator's, so a caller's
+    /// `timeout_secs` cannot switch it off — not even with the `0` that used to
+    /// mean "no timeout".
+    #[tokio::test]
+    async fn test_bash_timeout_secs_zero_cannot_disable_configured_deadline() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"command": "sleep 30", "timeout_secs": "0"});
+
+        let result = execute_plain(&input, &ctx, Some(Duration::from_millis(100))).await;
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+        assert_eq!(data["timed_out"], true);
     }
 
     #[tokio::test]
@@ -1443,19 +1472,88 @@ mod handoff_tests {
         recorder.await_exit(Duration::from_secs(5)).await;
     }
 
-    /// An explicit `timeout_secs` is a kill deadline and must keep killing:
-    /// the bound never silently converts it into a relocation.
+    /// Regression for the lost-build-work incident: a model that volunteers
+    /// `timeout_secs` on a slow build must not destroy it. The value lowers the
+    /// wait, then the command is relocated with its work intact.
     #[tokio::test]
-    async fn explicit_timeout_still_kills_and_never_backgrounds() {
+    async fn caller_timeout_lowers_the_bound_and_relocates_instead_of_killing() {
         let recorder = Recorder::new();
         let temp = TempDir::new().unwrap();
-        let input = json!({"command": "sleep 30", "timeout_secs": 1});
+        // A string, exactly as the incident sent it.
+        let input = json!({"command": "sleep 30", "timeout_secs": "1"});
+
+        let started = std::time::Instant::now();
+        let result = run(
+            &input,
+            temp.path(),
+            // Far longer than the caller's value: relocating promptly proves
+            // the caller lowered the bound rather than being ignored.
+            Some(recorder.handoff(Duration::from_secs(20))),
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        let data = result.data().expect("should have data");
+        assert_eq!(data["backgrounded"], true);
+        assert_eq!(data["timed_out"], false);
+        assert_eq!(recorder.adopted.load(Ordering::SeqCst), 1);
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "caller's 1s bound should apply, waited {elapsed:?}"
+        );
+
+        let pid = recorder.pid();
+        assert!(
+            process_exists(pid),
+            "a caller timeout must never kill the command"
+        );
+
+        assert!(crate::adopted::terminate(data["bg_id"].as_str().unwrap()).await);
+        wait_until_gone(pid).await;
+    }
+
+    /// The same parameter raising the wait: a command the caller expects to be
+    /// slow finishes in the foreground instead of being relocated at the
+    /// default bound.
+    #[tokio::test]
+    async fn caller_timeout_raises_the_bound() {
+        let recorder = Recorder::new();
+        let temp = TempDir::new().unwrap();
+        let input = json!({"command": "sleep 1; echo done", "timeout_secs": 10});
 
         let result = run(
             &input,
             temp.path(),
-            // A bound far shorter than the timeout: if precedence were wrong
-            // this would background instead of killing.
+            Some(recorder.handoff(Duration::from_millis(200))),
+        )
+        .await;
+
+        let data = result.data().expect("should have data");
+        assert!(
+            data.get("backgrounded").is_none(),
+            "the raised bound should keep it in the foreground"
+        );
+        assert_eq!(data["exit_code"], 0);
+        assert_eq!(data["timed_out"], false);
+        assert!(data["stdout"].as_str().unwrap().contains("done"));
+        assert_eq!(recorder.adopted.load(Ordering::SeqCst), 0);
+    }
+
+    /// The operator's deadline (an automation's `timeout_secs` frontmatter) is
+    /// the only destructive one, and it suppresses the handoff so it still
+    /// kills. The caller's `0` must not reach it.
+    #[tokio::test]
+    async fn configured_deadline_still_kills_and_never_backgrounds() {
+        let recorder = Recorder::new();
+        let temp = TempDir::new().unwrap();
+        let input = json!({"command": "sleep 30", "timeout_secs": 0});
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let result = execute(
+            &input,
+            &ctx,
+            Some(Duration::from_secs(1)),
+            None,
             Some(recorder.handoff(Duration::from_millis(200))),
         )
         .await;
@@ -1468,8 +1566,9 @@ mod handoff_tests {
             data["stderr"]
                 .as_str()
                 .unwrap()
-                .contains("background: true"),
-            "timeout should still recommend background: true"
+                .contains("cannot raise or remove it"),
+            "the kill should name the operator deadline, got: {}",
+            data["stderr"]
         );
     }
 

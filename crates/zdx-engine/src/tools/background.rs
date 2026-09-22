@@ -34,7 +34,7 @@ static READ_SEQ: AtomicU64 = AtomicU64::new(0);
 /// Background-mode subset of the `Bash` tool input.
 ///
 /// `timeout_secs` reuses the Bash tool's coercion so `0` and `"0"` mean the
-/// same thing here: no timeout, which is what a background process already is.
+/// same thing here: no wait bound, which is what a detached process already is.
 #[derive(Debug, Deserialize)]
 struct BackgroundInput {
     #[serde(default)]
@@ -64,12 +64,13 @@ pub async fn run_background(input: &Value, ctx: &ToolContext) -> ToolOutput {
     if command.is_empty() {
         return ToolOutput::failure("invalid_input", "command cannot be empty", None);
     }
-    // A background process is never awaited, so only "no timeout" is coherent.
+    // A detached process is never awaited, so there is no foreground wait for
+    // `timeout_secs` to bound.
     if input.timeout_secs.is_some_and(|secs| secs > 0) {
         return ToolOutput::failure(
             "invalid_input",
             "timeout_secs must be omitted or 0 with background: true (a background process is \
-             not awaited and never times out)",
+             not awaited, so there is no foreground wait to bound)",
             None,
         );
     }
@@ -218,6 +219,9 @@ async fn kill_failed_spawn(mut spawn: zdx_tools::bash::BackgroundSpawn, pid: u32
 ///   exit — see [`crate::tools::surface_keeps_background_jobs`];
 /// - auto-backgrounding is disabled (`bash_foreground_bound_secs = 0`);
 /// - the registry directories are unusable.
+///
+/// The returned `bound` is the configured default; a per-call `timeout_secs`
+/// may replace it before the command runs.
 ///
 /// The `bg_id` and log paths are reserved up front but nothing is written until
 /// the command actually outruns its bound, so ordinary fast commands leave no

@@ -55,8 +55,9 @@ pub struct AgentOptions {
     pub activity_subagent_name: Option<String>,
     /// Per-run cap on a single tool call, set by an automation's `timeout_secs`
     /// frontmatter. `None` (the default everywhere else) means tool calls are
-    /// not bounded by the runner; the `Bash` tool's own `timeout_secs`
-    /// parameter is separate and unaffected.
+    /// not bounded by the runner. This is the only deadline that kills a `Bash`
+    /// command, and the model cannot raise, remove, or reach it: the `Bash`
+    /// tool's own `timeout_secs` argument only bounds the foreground wait.
     pub tool_timeout: Option<Duration>,
 }
 
