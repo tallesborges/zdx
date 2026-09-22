@@ -385,8 +385,9 @@ pub enum HistoryCell {
         replay: Option<ReplayToken>,
         is_streaming: bool,
         is_interrupted: bool,
-        /// Whether the finalized block renders as a single summary line.
-        /// Ignored while streaming, which always shows the live tail.
+        /// Whether the block renders compact. Finalized, that is a single
+        /// summary line; while streaming, it is the live tail. Cleared, the
+        /// full reasoning received so far is shown and keeps growing live.
         is_collapsed: bool,
     },
 
@@ -1377,9 +1378,10 @@ fn render_thinking(
         }
     }
 
-    // While streaming, only the tail is shown so a long reasoning block does
-    // not push the rest of the transcript off screen.
-    let truncated = is_streaming && body.len() > THINKING_STREAM_TAIL_LINES;
+    // While streaming and compact, only the tail is shown so a long reasoning
+    // block does not push the rest of the transcript off screen. Expanding
+    // opts into the full text, which then grows with each delta.
+    let truncated = is_streaming && is_collapsed && body.len() > THINKING_STREAM_TAIL_LINES;
     if truncated {
         body.drain(..body.len() - THINKING_STREAM_TAIL_LINES);
     }
@@ -2308,6 +2310,67 @@ mod tests {
 
         let last: String = lines[3].spans.iter().map(|s| s.text.as_str()).collect();
         assert_eq!(last.trim(), "Para 3▌");
+    }
+
+    #[test]
+    fn streaming_thinking_expands_to_full_text_and_back() {
+        let mut cell = HistoryCell::thinking_streaming("Para 1\n\nPara 2\n\nPara 3");
+
+        // Default while streaming: header + 3 tail lines.
+        assert_eq!(cell.display_lines(80, 0).len(), 4);
+
+        // Expanding shows every line received so far, with no elision marker.
+        assert!(cell.toggle_thinking_collapsed());
+        let expanded = cell.display_lines(80, 0);
+        let text: Vec<String> = expanded
+            .iter()
+            .map(|line| line.spans.iter().map(|span| span.text.as_str()).collect())
+            .collect();
+        assert_eq!(text[0], "▼ Thinking", "No `…` once fully expanded");
+        assert_eq!(text[1], "  Para 1");
+        assert_eq!(text[3], "  Para 2");
+        assert_eq!(text[5], "  Para 3▌");
+
+        // Still streaming: later deltas extend the expanded body live.
+        let before = expanded.len();
+        cell.append_thinking_delta("\n\nPara 4");
+        let grown = cell.display_lines(80, 0);
+        assert!(
+            grown.len() > before,
+            "Expanded streaming body grows with new deltas"
+        );
+        let last: String = grown
+            .last()
+            .unwrap()
+            .spans
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect();
+        assert_eq!(last.trim(), "Para 4▌");
+
+        // Clicking again returns to the compact tail preview.
+        assert!(cell.toggle_thinking_collapsed());
+        let recollapsed = cell.display_lines(80, 0);
+        assert_eq!(recollapsed.len(), 4, "Back to header + 3 tail lines");
+        let header: String = recollapsed[0]
+            .spans
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect();
+        assert_eq!(header, "▼ Thinking  …");
+    }
+
+    #[test]
+    fn toggling_collapse_while_streaming_changes_the_cache_key() {
+        let mut cell = HistoryCell::thinking_streaming("Para 1\n\nPara 2\n\nPara 3");
+
+        let collapsed_key = cell.cache_discriminator();
+        cell.toggle_thinking_collapsed();
+        assert_ne!(
+            collapsed_key,
+            cell.cache_discriminator(),
+            "Expanding a streaming block must invalidate the cached render"
+        );
     }
 
     #[test]
