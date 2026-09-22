@@ -26,7 +26,7 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::config::paths;
-use crate::core::thread_persistence;
+use crate::core::{thread_index, thread_persistence};
 use crate::models::ModelOption;
 use crate::providers::{self, ProviderKind};
 
@@ -266,6 +266,35 @@ fn aggregate_scan_all(
     Ok(finalize(raw, daily, threads_scanned, warnings))
 }
 
+/// Lists every thread with its `(mtime_ns, size)` change token.
+///
+/// Prefers the thread index, which already walks the threads directory on its
+/// own freshness window and stores exactly these tokens: re-deriving them here
+/// meant a second `stat()` of the whole corpus on the dashboard path, for
+/// information already in a table. The tokens come from the same
+/// `ThreadFileMeta` fields, so they compare directly against this cache's own.
+///
+/// Falls back to the directory walk when `threads_dir` is not the configured
+/// one (tests point it at a temp dir) or when the index is unavailable.
+fn thread_file_tokens(threads_dir: &Path) -> Result<Vec<thread_index::IndexedThreadFile>> {
+    if threads_dir == paths::threads_dir() {
+        match thread_index::indexed_thread_files() {
+            Ok(files) => return Ok(files),
+            Err(err) => {
+                tracing::debug!("thread index unavailable for usage stats ({err:#}); walking");
+            }
+        }
+    }
+    Ok(thread_persistence::list_thread_files(threads_dir)?
+        .into_iter()
+        .map(|file| thread_index::IndexedThreadFile {
+            id: file.id,
+            mtime_ns: mtime_nanos(file.modified),
+            size: i64_from(file.size),
+        })
+        .collect())
+}
+
 /// Cache-backed aggregation: syncs only changed/new threads into the `SQLite`
 /// cache, then sums all cached per-thread buckets.
 fn aggregate_cached(
@@ -274,7 +303,7 @@ fn aggregate_cached(
     default_model: &str,
     since_day: Option<i32>,
 ) -> Result<UsageStats> {
-    let files = thread_persistence::list_thread_files(threads_dir)?;
+    let files = thread_file_tokens(threads_dir)?;
     let conn = open_cache(cache_path)?;
     ensure_cache_valid(&conn, default_model)?;
 
@@ -286,8 +315,7 @@ fn aggregate_cached(
     let tx = conn.unchecked_transaction()?;
     for file in &files {
         current_ids.insert(file.id.as_str());
-        let mtime_ns = mtime_nanos(file.modified);
-        let size = i64_from(file.size);
+        let (mtime_ns, size) = (file.mtime_ns, file.size);
         let unchanged = cached_meta
             .get(&file.id)
             .is_some_and(|(m, s)| *m == mtime_ns && *s == size);
@@ -295,7 +323,8 @@ fn aggregate_cached(
             threads_scanned += 1;
             continue;
         }
-        match scan_thread_file(&file.path) {
+        let path = threads_dir.join(format!("{}.jsonl", file.id));
+        match scan_thread_file(&path) {
             Ok(scan) => {
                 let buckets = resolve_thread_buckets(&scan, default_model);
                 replace_thread_rows(&tx, &file.id, mtime_ns, size, &buckets)?;

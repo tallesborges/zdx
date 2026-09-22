@@ -20,8 +20,9 @@
 //!   so it stores no transcript copy and hits resolve through
 //!   `thread_meta.doc_id = thread_fts.rowid`; reading a stored FTS column
 //!   would load a document's full text per hit.
-//! - `activity_at` always derives from indexed event timestamps (the file
-//!   scan only did this when date filters were active).
+//! - `activity_at` derives from indexed event timestamps, falling back to file
+//!   modification time (the file scan only did this when date filters were
+//!   active). A metadata-only row has it unset until content is indexed.
 //! - Tool matches use a deterministic `tool_ts DESC, thread_id, tool_use_id`
 //!   ordering instead of the scan's per-thread insertion order for ties.
 
@@ -44,7 +45,7 @@ use crate::core::thread_persistence::{
 };
 use crate::core::{fts_query, recency, thread_export};
 
-const SCHEMA_VERSION: &str = "5";
+const SCHEMA_VERSION: &str = "6";
 
 const CREATE_SQL: &str = "\
 CREATE TABLE IF NOT EXISTS cache_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -63,8 +64,18 @@ CREATE TABLE IF NOT EXISTS thread_meta (
     modified_at TEXT,
     preview TEXT,
     alias_to TEXT,
-    worker_topic INTEGER NOT NULL DEFAULT 0
+    worker_topic INTEGER NOT NULL DEFAULT 0,
+    -- Change token of the revision whose *content* (preview, activity_at, FTS
+    -- text, tool rows) was last indexed. Tracked apart from (mtime_ns,size),
+    -- which tracks the metadata columns, because indexing content re-reads and
+    -- re-tokenizes the whole transcript while metadata costs one line. NULL
+    -- means the row has metadata only and content has never been built.
+    content_mtime_ns INTEGER,
+    content_size INTEGER
 );
+CREATE INDEX IF NOT EXISTS idx_thread_meta_content_stale
+    ON thread_meta(thread_id)
+    WHERE content_mtime_ns IS NOT mtime_ns OR content_size IS NOT size;
 -- Export freshness is derived from the export files themselves, so no table
 -- records it. Dropped in place rather than via a SCHEMA_VERSION bump, which
 -- would cost a full corpus rebuild to delete one unused table.
@@ -125,6 +136,10 @@ pub fn reset_cache_for_test() {
     *conn = None;
     let mut last = LAST_SYNC.lock().unwrap_or_else(PoisonError::into_inner);
     *last = None;
+    let mut meta = LAST_META_SYNC
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    *meta = None;
 }
 
 fn with_conn<T>(f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
@@ -135,14 +150,68 @@ fn with_conn<T>(f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
     f(guard.as_ref().expect("connection opened above"))
 }
 
-/// Runs the incremental sync unless one finished within [`SYNC_INTERVAL`].
-fn sync_if_stale(conn: &Connection) -> Result<()> {
-    let mut last = LAST_SYNC.lock().unwrap_or_else(PoisonError::into_inner);
-    if last.is_some_and(|at| at.elapsed() < SYNC_INTERVAL) {
-        return Ok(());
+/// A sync riding along with a read that takes longer than this is reported at
+/// `info` so it shows up in the default log, since the caller waited for it.
+const SLOW_SYNC: Duration = Duration::from_millis(500);
+
+/// How much of a changed thread a read path needs brought up to date.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncScope {
+    /// Metadata columns only ([`SUMMARY_COLUMNS`]). One line read per changed
+    /// thread. Every listing, lineage and lookup path needs only this.
+    Meta,
+    /// Metadata plus derived content: preview, `activity_at`, FTS text and tool
+    /// rows. Re-reads and re-tokenizes each changed transcript in full, so only
+    /// search and browse — which read those columns — ask for it.
+    Full,
+}
+
+/// Last completed sync per scope, so a cheap metadata sync cannot satisfy the
+/// freshness window of a reader that needs content indexed.
+static LAST_META_SYNC: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Runs the incremental sync unless one of at least `scope` finished within
+/// [`SYNC_INTERVAL`].
+///
+/// The duration is logged because this is the one corpus-sized step on an
+/// otherwise indexed read path: when a caller (the Mini App, the TUI) stalls,
+/// this line is what says whether it was waiting on the index.
+fn sync_if_stale(conn: &Connection, scope: SyncScope) -> Result<()> {
+    let slot = match scope {
+        SyncScope::Meta => &LAST_META_SYNC,
+        SyncScope::Full => &LAST_SYNC,
+    };
+    {
+        let last = slot.lock().unwrap_or_else(PoisonError::into_inner);
+        if last.is_some_and(|at| at.elapsed() < SYNC_INTERVAL) {
+            return Ok(());
+        }
     }
-    sync(conn)?;
-    *last = Some(Instant::now());
+
+    let started = Instant::now();
+    let summary = sync_scoped(conn, scope)?;
+    let elapsed = started.elapsed();
+    let elapsed_ms = elapsed.as_millis();
+    if elapsed >= SLOW_SYNC {
+        tracing::info!(
+            elapsed_ms,
+            scope = ?scope,
+            files = summary.files_enumerated,
+            read = summary.metas_read,
+            content = summary.contents_indexed,
+            "Slow thread index sync on a read path"
+        );
+    } else {
+        tracing::debug!(
+            elapsed_ms,
+            scope = ?scope,
+            files = summary.files_enumerated,
+            read = summary.metas_read,
+            content = summary.contents_indexed,
+            "Thread index sync"
+        );
+    }
+
     Ok(())
 }
 
@@ -157,6 +226,9 @@ pub struct ThreadCacheSyncSummary {
     pub metas_read: usize,
     pub rows_upserted: usize,
     pub rows_removed: usize,
+    /// Threads whose derived content (preview, `activity_at`, FTS, tool rows)
+    /// was rebuilt. Only a full-scope sync does this work.
+    pub contents_indexed: usize,
 }
 
 /// Returns the `threads.sqlite` path.
@@ -179,7 +251,6 @@ pub fn db_path() -> PathBuf {
 pub fn reindex() -> Result<ThreadCacheSyncSummary> {
     with_conn(|conn| {
         let summary = sync(conn).context("sync native thread metadata cache")?;
-        *LAST_SYNC.lock().unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
         // Fold the WAL back into the database. A rebuild writes the whole cache
         // in one transaction, and an unchecked WAL reached 464MB on a
         // 13.6k-thread store — enough that opening a fresh connection cost
@@ -201,7 +272,6 @@ pub fn sync_and_export(
 ) -> Result<(ThreadCacheSyncSummary, thread_export::ThreadExportSummary)> {
     with_conn(|conn| {
         let sync = sync(conn).context("sync native thread metadata cache")?;
-        *LAST_SYNC.lock().unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
         let export =
             export_threads_from_cache(conn, force).context("export changed thread transcripts")?;
         Ok((sync, export))
@@ -237,7 +307,7 @@ fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadSummary> 
 /// Returns an error when the cache cannot be opened, synced, or read.
 pub fn list_threads_cached() -> Result<Vec<ThreadSummary>> {
     with_conn(|conn| {
-        sync_if_stale(conn)?;
+        sync_if_stale(conn, SyncScope::Meta)?;
         let mut stmt = conn.prepare_cached(&format!(
             "SELECT {SUMMARY_COLUMNS} FROM thread_meta WHERE origin_kind IS NULL
              ORDER BY mtime_ns DESC, thread_id ASC"
@@ -258,7 +328,7 @@ pub fn list_threads_cached() -> Result<Vec<ThreadSummary>> {
 /// Returns an error when the cache cannot be opened, synced, or read.
 pub fn list_all_threads_cached() -> Result<Vec<ThreadSummary>> {
     with_conn(|conn| {
-        sync_if_stale(conn)?;
+        sync_if_stale(conn, SyncScope::Meta)?;
         let mut stmt = conn.prepare_cached(&format!(
             "SELECT {SUMMARY_COLUMNS} FROM thread_meta
              ORDER BY mtime_ns DESC, thread_id ASC"
@@ -278,7 +348,7 @@ pub fn list_all_threads_cached() -> Result<Vec<ThreadSummary>> {
 /// Returns an error when the cache cannot be opened, synced, or read.
 pub fn child_runs_cached(parent_id: &str) -> Result<Vec<ThreadSummary>> {
     with_conn(|conn| {
-        sync_if_stale(conn)?;
+        sync_if_stale(conn, SyncScope::Meta)?;
         let mut stmt = conn.prepare_cached(&format!(
             "SELECT {SUMMARY_COLUMNS} FROM thread_meta WHERE parent_thread_id = ?1
              ORDER BY mtime_ns DESC, thread_id ASC"
@@ -305,7 +375,7 @@ pub fn worker_counts_for_parents(parent_ids: &[&str]) -> Result<HashMap<String, 
         return Ok(HashMap::new());
     }
     with_conn(|conn| {
-        sync_if_stale(conn)?;
+        sync_if_stale(conn, SyncScope::Meta)?;
         let placeholders = std::iter::repeat_n("?", parent_ids.len())
             .collect::<Vec<_>>()
             .join(",");
@@ -332,7 +402,7 @@ pub fn worker_counts_for_parents(parent_ids: &[&str]) -> Result<HashMap<String, 
 /// Returns an error when the cache cannot be opened, synced, or read.
 pub fn read_summary_cached(id: &str) -> Result<Option<ThreadSummary>> {
     with_conn(|conn| {
-        sync_if_stale(conn)?;
+        sync_if_stale(conn, SyncScope::Meta)?;
         let mut stmt = conn.prepare_cached(&format!(
             "SELECT {SUMMARY_COLUMNS} FROM thread_meta WHERE thread_id = ?1"
         ))?;
@@ -351,7 +421,7 @@ pub fn read_summary_cached(id: &str) -> Result<Option<ThreadSummary>> {
 /// Returns an error when the cache cannot be opened, synced, or read.
 pub fn mirror_thread_id_for_worker(worker_thread_id: &str) -> Result<Option<String>> {
     with_conn(|conn| {
-        sync_if_stale(conn)?;
+        sync_if_stale(conn, SyncScope::Meta)?;
         let mut stmt = conn.prepare_cached(
             "SELECT thread_id FROM thread_meta
              WHERE worker_topic = 1 AND alias_to = ?1
@@ -359,6 +429,44 @@ pub fn mirror_thread_id_for_worker(worker_thread_id: &str) -> Result<Option<Stri
         )?;
         stmt.query_row([worker_thread_id], |row| row.get(0))
             .optional()
+            .map_err(Into::into)
+    })
+}
+
+/// One thread file's identity and change token, as recorded by the index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedThreadFile {
+    pub id: String,
+    pub mtime_ns: i64,
+    pub size: i64,
+}
+
+/// Returns every known thread file with its `(mtime_ns, size)` change token,
+/// answered from `threads.sqlite` after a metadata sync.
+///
+/// This exists so a second derived cache does not have to `stat()` the whole
+/// corpus just to learn what changed. The index already walks the directory
+/// once per [`SYNC_INTERVAL`] and stores exactly this; re-deriving it costs
+/// ~18k syscalls for information already sitting in a table.
+///
+/// The tokens are byte-identical to what a caller would compute itself: both
+/// sides read `ThreadFileMeta` through [`mtime_nanos`], so a consumer can
+/// compare them against its own stored tokens directly.
+///
+/// # Errors
+/// Returns an error when the cache cannot be opened, synced, or read.
+pub fn indexed_thread_files() -> Result<Vec<IndexedThreadFile>> {
+    with_conn(|conn| {
+        sync_if_stale(conn, SyncScope::Meta)?;
+        let mut stmt = conn.prepare_cached("SELECT thread_id, mtime_ns, size FROM thread_meta")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(IndexedThreadFile {
+                id: row.get(0)?,
+                mtime_ns: row.get(1)?,
+                size: row.get(2)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     })
 }
@@ -375,7 +483,7 @@ pub fn mirror_thread_id_for_worker(worker_thread_id: &str) -> Result<Option<Stri
 pub fn list_recent_threads_cached(limit: usize) -> Result<Vec<ThreadSummary>> {
     let limit = i64::try_from(limit).unwrap_or(i64::MAX);
     with_conn(|conn| {
-        sync_if_stale(conn)?;
+        sync_if_stale(conn, SyncScope::Meta)?;
         let mut stmt = conn.prepare_cached(&format!(
             "SELECT {SUMMARY_COLUMNS} FROM thread_meta WHERE origin_kind IS NULL
              ORDER BY mtime_ns DESC, thread_id ASC LIMIT ?1"
@@ -396,7 +504,7 @@ pub fn list_recent_threads_cached(limit: usize) -> Result<Vec<ThreadSummary>> {
 /// Returns an error when the cache cannot be opened, synced, or queried.
 pub fn latest_thread_id_with_prefix(prefix: &str) -> Result<Option<String>> {
     with_conn(|conn| {
-        sync_if_stale(conn)?;
+        sync_if_stale(conn, SyncScope::Meta)?;
         conn.prepare_cached(
             "SELECT thread_id FROM thread_meta
              WHERE thread_id LIKE ?1 ESCAPE '\\'
@@ -492,7 +600,7 @@ pub struct ThreadBrowseRow {
 /// Returns an error when the cache cannot be opened, synced, or queried.
 pub fn browse_threads(options: &ThreadBrowseOptions) -> Result<Vec<ThreadBrowseRow>> {
     with_conn(|conn| {
-        sync_if_stale(conn)?;
+        sync_if_stale(conn, SyncScope::Full)?;
 
         let mut sql = String::from(
             "SELECT thread_id, mtime_ns, title, root_path, origin_kind,
@@ -559,7 +667,7 @@ pub fn browse_threads(options: &ThreadBrowseOptions) -> Result<Vec<ThreadBrowseR
 /// Returns an error when the cache cannot be opened, synced, or queried.
 pub fn browse_projects() -> Result<Vec<(String, usize)>> {
     with_conn(|conn| {
-        sync_if_stale(conn)?;
+        sync_if_stale(conn, SyncScope::Meta)?;
         let mut stmt = conn.prepare_cached(
             "SELECT root_path, COUNT(*) FROM thread_meta
              WHERE root_path IS NOT NULL AND root_path <> ''
@@ -585,7 +693,7 @@ pub fn browse_projects() -> Result<Vec<(String, usize)>> {
 /// Returns an error when the cache cannot be opened, synced, or queried.
 pub fn search_threads_indexed(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchResult>> {
     with_conn(|conn| {
-        sync_if_stale(conn)?;
+        sync_if_stale(conn, SyncScope::Full)?;
         search_threads_with(conn, options)
     })
 }
@@ -681,7 +789,7 @@ pub fn search_thread_tools_indexed(
     options: &ThreadToolSearchOptions,
 ) -> Result<Vec<ThreadToolMatch>> {
     with_conn(|conn| {
-        sync_if_stale(conn)?;
+        sync_if_stale(conn, SyncScope::Full)?;
         search_thread_tools_with(conn, options)
     })
 }
@@ -826,11 +934,11 @@ pub fn meta_row_count() -> Result<usize> {
 
 /// Incrementally syncs the cache from on-disk thread files.
 ///
-/// Every thread file is enumerated with a cheap stat, but canonical JSONL is
-/// read (meta line + full events for FTS/tool rows) only for new or
-/// `(mtime,size)`-changed threads. Rows for deleted threads are removed and
-/// changed threads mark their export dirty.
-fn sync(conn: &Connection) -> Result<ThreadCacheSyncSummary> {
+/// Every thread file is enumerated with a cheap stat. What is then read from a
+/// new or `(mtime,size)`-changed thread depends on `scope`: [`SyncScope::Meta`]
+/// reads one line, [`SyncScope::Full`] also re-reads and re-tokenizes the whole
+/// transcript. Rows for deleted threads are removed.
+fn sync_scoped(conn: &Connection, scope: SyncScope) -> Result<ThreadCacheSyncSummary> {
     let files = thread_persistence::list_thread_files(&config::paths::threads_dir())
         .context("enumerate thread files for native thread index")?;
     let mut summary = ThreadCacheSyncSummary {
@@ -868,7 +976,7 @@ fn sync(conn: &Connection) -> Result<ThreadCacheSyncSummary> {
             continue;
         }
         summary.metas_read += 1;
-        index_one_thread(&tx, file, mtime_ns, size, previous.map(|c| c.doc_id))?;
+        index_thread_metadata(&tx, file, mtime_ns, size)?;
         summary.rows_upserted += 1;
     }
     for (thread_id, entry) in cached.iter().filter(|(id, _)| !seen.contains(*id)) {
@@ -877,7 +985,62 @@ fn sync(conn: &Connection) -> Result<ThreadCacheSyncSummary> {
     }
     write_meta(&tx, "schema_version", SCHEMA_VERSION)?;
     tx.commit()?;
+
+    if scope == SyncScope::Full {
+        summary.contents_indexed = sync_content(conn)?;
+    }
+
+    // Recorded here, at the single point where a sync actually completes, so no
+    // caller can advance one clock without the other. A full sync refreshed
+    // metadata too, so it satisfies both windows; a metadata sync must never
+    // advance the full one.
+    let now = Instant::now();
+    *LAST_META_SYNC
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(now);
+    if scope == SyncScope::Full {
+        *LAST_SYNC.lock().unwrap_or_else(PoisonError::into_inner) = Some(now);
+    }
     Ok(summary)
+}
+
+/// Rebuilds derived content (preview, `activity_at`, FTS text, tool rows) for
+/// every thread whose content watermark lags its metadata, and returns how many
+/// were rebuilt.
+///
+/// Split out of the metadata pass because this is the only corpus-proportional
+/// work in the index: it re-reads and re-tokenizes an entire transcript, so a
+/// busy multi-megabyte thread costs ~90ms here versus ~1ms for its metadata.
+/// Only search and browse read what it produces, so the read paths that need
+/// just [`SUMMARY_COLUMNS`] must not pay for it.
+fn sync_content(conn: &Connection) -> Result<usize> {
+    let stale: Vec<(String, i64, i64, i64)> = {
+        let mut stmt = conn.prepare(
+            "SELECT thread_id, doc_id, mtime_ns, size FROM thread_meta
+             WHERE content_mtime_ns IS NOT mtime_ns OR content_size IS NOT size",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    if stale.is_empty() {
+        return Ok(0);
+    }
+
+    let tx = conn.unchecked_transaction()?;
+    let mut indexed = 0usize;
+    for (thread_id, doc_id, mtime_ns, size) in &stale {
+        index_thread_content(&tx, thread_id, *doc_id, *mtime_ns, *size)?;
+        indexed += 1;
+    }
+    tx.commit()?;
+    Ok(indexed)
+}
+
+/// Full sync: metadata for changed threads plus any lagging content.
+fn sync(conn: &Connection) -> Result<ThreadCacheSyncSummary> {
+    sync_scoped(conn, SyncScope::Full)
 }
 
 /// Cached identity + change token for one indexed thread.
@@ -887,43 +1050,32 @@ struct CachedThread {
     size: i64,
 }
 
-/// Indexes one new/changed thread: metadata, FTS text, tool rows, dirty mark.
+/// Upserts one thread's metadata columns, reading only its meta line.
 ///
-/// `previous_doc_id` is the thread's existing FTS/document key when it was
-/// already indexed; reusing it keeps `thread_meta.doc_id` and `thread_fts`
-/// rowids aligned across re-indexes, and `None` skips the delete statements
-/// for threads that have no prior rows.
-fn index_one_thread(
+/// Deliberately does not touch `preview`, `activity_at`, FTS or tool rows: all
+/// of those need the whole transcript parsed, and no [`SUMMARY_COLUMNS`] reader
+/// uses them. Leaving the content watermark alone is what marks the row for
+/// [`sync_content`] to pick up later.
+fn index_thread_metadata(
     conn: &Connection,
     file: &thread_persistence::ThreadFileMeta,
     mtime_ns: i64,
     size: i64,
-    previous_doc_id: Option<i64>,
 ) -> Result<()> {
     let thread = thread_persistence::thread_summary_from_file(file);
-    let events = thread_persistence::load_thread_events(&thread.id).unwrap_or_default();
-
     let modified_at = thread.modified.map(format_system_time);
-    let activity_at = thread_persistence::latest_event_timestamp(&events)
-        .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true))
-        .or_else(|| modified_at.clone());
-    let preview = preview_from_events(&events, thread.title.as_deref());
-    let text = searchable_text(&events);
 
-    let doc_id: i64 = conn.query_row(
+    conn.execute(
         "INSERT INTO thread_meta(
             thread_id, mtime_ns, size, title, root_path, handoff_from, origin_kind,
-            parent_thread_id, subagent_name, activity_at, modified_at, preview,
-            alias_to, worker_topic
-         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            parent_thread_id, subagent_name, modified_at, alias_to, worker_topic
+         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT(thread_id) DO UPDATE SET
            mtime_ns=excluded.mtime_ns, size=excluded.size, title=excluded.title,
            root_path=excluded.root_path, handoff_from=excluded.handoff_from,
            origin_kind=excluded.origin_kind, parent_thread_id=excluded.parent_thread_id,
-           subagent_name=excluded.subagent_name, activity_at=excluded.activity_at,
-           modified_at=excluded.modified_at, preview=excluded.preview,
-           alias_to=excluded.alias_to, worker_topic=excluded.worker_topic
-         RETURNING doc_id",
+           subagent_name=excluded.subagent_name, modified_at=excluded.modified_at,
+           alias_to=excluded.alias_to, worker_topic=excluded.worker_topic",
         params![
             thread.id,
             mtime_ns,
@@ -934,22 +1086,52 @@ fn index_one_thread(
             thread.origin_kind,
             thread.parent_thread_id,
             thread.subagent_name,
-            activity_at,
             modified_at,
-            preview,
             thread.alias_to,
             thread.worker_topic,
         ],
+    )?;
+    Ok(())
+}
+
+/// Rebuilds one thread's derived content and advances its content watermark.
+///
+/// This is the expensive half: it parses every event in the transcript, builds
+/// the searchable text and preview, and replaces the thread's FTS document and
+/// tool rows. `doc_id` is reused so `thread_meta.doc_id` and `thread_fts` rowids
+/// stay aligned across re-indexes.
+fn index_thread_content(
+    conn: &Connection,
+    thread_id: &str,
+    doc_id: i64,
+    mtime_ns: i64,
+    size: i64,
+) -> Result<()> {
+    let title: Option<String> = conn.query_row(
+        "SELECT title FROM thread_meta WHERE doc_id = ?1",
+        [doc_id],
         |row| row.get(0),
     )?;
+    let events = thread_persistence::load_thread_events(thread_id).unwrap_or_default();
 
-    if previous_doc_id.is_some() {
-        conn.execute("DELETE FROM thread_fts WHERE rowid = ?1", [doc_id])?;
-        conn.execute("DELETE FROM thread_tool WHERE thread_id = ?1", [&thread.id])?;
-    }
+    let activity_at = thread_persistence::latest_event_timestamp(&events)
+        .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true));
+    let preview = preview_from_events(&events, title.as_deref());
+    let text = searchable_text(&events);
+
+    conn.execute(
+        "UPDATE thread_meta SET
+           activity_at = COALESCE(?2, modified_at), preview = ?3,
+           content_mtime_ns = ?4, content_size = ?5
+         WHERE doc_id = ?1",
+        params![doc_id, activity_at, preview, mtime_ns, size],
+    )?;
+
+    conn.execute("DELETE FROM thread_fts WHERE rowid = ?1", [doc_id])?;
+    conn.execute("DELETE FROM thread_tool WHERE thread_id = ?1", [thread_id])?;
     conn.execute(
         "INSERT INTO thread_fts(rowid, title, text) VALUES(?1, ?2, ?3)",
-        params![doc_id, thread.title.as_deref().unwrap_or(""), text],
+        params![doc_id, title.as_deref().unwrap_or(""), text],
     )?;
 
     {
@@ -961,7 +1143,7 @@ fn index_one_thread(
         )?;
         for row in tool_rows(&events) {
             insert_tool.execute(params![
-                thread.id,
+                thread_id,
                 row.tool_use_id,
                 row.tool_name,
                 row.tool_ts,
@@ -1332,4 +1514,89 @@ fn system_time_from_nanos(nanos: i64) -> Option<SystemTime> {
 fn format_system_time(time: SystemTime) -> String {
     let datetime: DateTime<Utc> = time.into();
     datetime.to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::thread_persistence::ThreadSearchOptions;
+
+    /// A metadata sync deliberately skips FTS/tool indexing, so a search that
+    /// runs afterwards in the same process must still bring content up to date.
+    /// If the two scopes ever shared one freshness clock, the cheap sync would
+    /// satisfy the search's window and silently return no hits.
+    #[test]
+    fn search_indexes_content_even_after_a_metadata_sync() {
+        let _home = crate::test_support::temp_zdx_home();
+
+        let thread_id = format!("scope-split-{}", uuid::Uuid::new_v4());
+        let mut thread = thread_persistence::Thread::with_id(thread_id.clone()).unwrap();
+        thread
+            .append(&ThreadEvent::user_message("findablesentinel token"))
+            .unwrap();
+
+        // Cheap pass: metadata lands, content intentionally does not.
+        let summary = with_conn(|conn| sync_scoped(conn, SyncScope::Meta)).unwrap();
+        assert_eq!(summary.contents_indexed, 0, "meta scope indexes no content");
+        assert!(
+            list_all_threads_cached()
+                .unwrap()
+                .iter()
+                .any(|t| t.id == thread_id),
+            "metadata sync makes the thread listable"
+        );
+
+        // The search path must not be satisfied by the metadata clock.
+        let hits = search_threads_indexed(&ThreadSearchOptions {
+            query: Some("findablesentinel".to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(
+            hits.iter().any(|hit| hit.thread_id == thread_id),
+            "search must index content that the metadata pass skipped"
+        );
+    }
+
+    /// The content watermark is what carries a thread from the cheap pass to
+    /// the expensive one; a row that has never been content-indexed has NULL
+    /// watermarks and must compare as stale.
+    #[test]
+    fn a_never_indexed_row_counts_as_content_stale() {
+        let _home = crate::test_support::temp_zdx_home();
+
+        let thread_id = format!("watermark-{}", uuid::Uuid::new_v4());
+        let mut thread = thread_persistence::Thread::with_id(thread_id.clone()).unwrap();
+        thread.append(&ThreadEvent::user_message("body")).unwrap();
+
+        with_conn(|conn| sync_scoped(conn, SyncScope::Meta)).unwrap();
+        let stale: i64 = with_conn(|conn| {
+            conn.query_row(
+                "SELECT count(*) FROM thread_meta
+                 WHERE thread_id = ?1
+                   AND (content_mtime_ns IS NOT mtime_ns OR content_size IS NOT size)",
+                [&thread_id],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+        })
+        .unwrap();
+        assert_eq!(stale, 1, "NULL watermarks must select as stale");
+
+        let indexed = with_conn(sync_content).unwrap();
+        assert!(indexed >= 1, "content pass picks up the stale row");
+
+        let still_stale: i64 = with_conn(|conn| {
+            conn.query_row(
+                "SELECT count(*) FROM thread_meta
+                 WHERE thread_id = ?1
+                   AND (content_mtime_ns IS NOT mtime_ns OR content_size IS NOT size)",
+                [&thread_id],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+        })
+        .unwrap();
+        assert_eq!(still_stale, 0, "content pass advances the watermark");
+    }
 }
