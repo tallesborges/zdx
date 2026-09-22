@@ -2339,6 +2339,8 @@ fn default_openai_provider() -> ProviderConfig {
         enabled: Some(true),
         models: vec![
             "gpt-6-astra".to_string(),
+            "gpt-6-sol".to_string(),
+            "gpt-6-luna".to_string(),
             "gpt-5.6-sol".to_string(),
             "gpt-5.6-terra".to_string(),
             "gpt-5.6-luna".to_string(),
@@ -2354,6 +2356,8 @@ fn default_openai_codex_provider() -> ProviderConfig {
         enabled: Some(true),
         models: vec![
             "gpt-6-astra".to_string(),
+            "gpt-6-sol".to_string(),
+            "gpt-6-luna".to_string(),
             "gpt-5.6-sol".to_string(),
             "gpt-5.6-terra".to_string(),
             "gpt-5.6-luna".to_string(),
