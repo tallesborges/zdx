@@ -563,9 +563,9 @@ input_images = false
 output_limit = 0
 
 [[model]]
-id = "xiaomi:mimo-v2.5-pro"
+id = "xiaomi:mimo-v2.6-pro"
 provider = "xiaomi"
-display_name = "MiMo-V2.5-Pro"
+display_name = "MiMo-V2.6-Pro"
 context_limit = 1048576
 
 [model.pricing]
@@ -576,13 +576,13 @@ cache_write = 0.0
 
 [model.capabilities]
 reasoning = true
-input_images = false
+input_images = true
 output_limit = 131072
 
 [[model]]
-id = "xiaomi:mimo-v2.5"
+id = "xiaomi:mimo-v2.6-flash"
 provider = "xiaomi"
-display_name = "MiMo-V2.5"
+display_name = "MiMo-V2.6-Flash"
 context_limit = 1048576
 
 [model.pricing]
@@ -597,9 +597,9 @@ input_images = true
 output_limit = 131072
 
 [[model]]
-id = "xiaomi-plan:mimo-v2.5-pro"
+id = "xiaomi-plan:mimo-v2.6-pro"
 provider = "xiaomi-plan"
-display_name = "MiMo-V2.5-Pro"
+display_name = "MiMo-V2.6-Pro"
 context_limit = 1048576
 
 [model.pricing]
@@ -610,13 +610,13 @@ cache_write = 0.0
 
 [model.capabilities]
 reasoning = true
-input_images = false
+input_images = true
 output_limit = 131072
 
 [[model]]
-id = "xiaomi-plan:mimo-v2.5"
+id = "xiaomi-plan:mimo-v2.6-flash"
 provider = "xiaomi-plan"
-display_name = "MiMo-V2.5"
+display_name = "MiMo-V2.6-Flash"
 context_limit = 1048576
 
 [model.pricing]
@@ -1081,9 +1081,9 @@ output_limit = 262144
 api = "openai-completions"
 
 [[model]]
-id = "opencode-go:mimo-v2.5-pro"
+id = "opencode-go:mimo-v2.6-pro"
 provider = "opencode-go"
-display_name = "MiMo V2.5 Pro"
+display_name = "MiMo-V2.6-Pro"
 context_limit = 1048576
 
 [model.pricing]
@@ -1094,15 +1094,15 @@ cache_write = 0.0
 
 [model.capabilities]
 reasoning = true
-input_images = false
-output_limit = 128000
+input_images = true
+output_limit = 131072
 api = "openai-completions"
 
 [[model]]
-id = "opencode-go:mimo-v2.5"
+id = "opencode-go:mimo-v2.6-flash"
 provider = "opencode-go"
-display_name = "MiMo V2.5"
-context_limit = 1000000
+display_name = "MiMo-V2.6-Flash"
+context_limit = 1048576
 
 [model.pricing]
 input = 0.0
@@ -1113,7 +1113,7 @@ cache_write = 0.0
 [model.capabilities]
 reasoning = true
 input_images = true
-output_limit = 128000
+output_limit = 131072
 api = "openai-completions"
 
 [[model]]

@@ -975,8 +975,9 @@ pub struct Config {
     /// background instead of being waited on (0 disables auto-backgrounding).
     ///
     /// This is a relocation bound, not a deadline: the command keeps running.
-    /// An explicit `timeout_secs` on the tool call is a kill deadline and takes
-    /// precedence over it.
+    /// A per-call `timeout_secs` overrides the duration for that one command
+    /// but cannot make it lethal. Only an automation's `timeout_secs`
+    /// frontmatter kills, and it suppresses the handoff entirely.
     pub bash_foreground_bound_secs: u32,
 
     /// Provider configuration (base URLs, etc.).
@@ -2431,7 +2432,7 @@ fn default_lmstudio_provider() -> ProviderConfig {
 fn default_xiaomi_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["mimo-v2.5-pro".to_string(), "mimo-v2.5".to_string()],
+        models: vec!["mimo-v2.6-pro".to_string(), "mimo-v2.6-flash".to_string()],
         ..Default::default()
     }
 }
@@ -2439,7 +2440,7 @@ fn default_xiaomi_provider() -> ProviderConfig {
 fn default_xiaomi_plan_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(false),
-        models: vec!["mimo-v2.5-pro".to_string(), "mimo-v2.5".to_string()],
+        models: vec!["mimo-v2.6-pro".to_string(), "mimo-v2.6-flash".to_string()],
         ..Default::default()
     }
 }
@@ -2525,8 +2526,8 @@ fn default_opencode_go_provider() -> ProviderConfig {
             "kimi-k3".to_string(),
             "kimi-k2.6".to_string(),
             "kimi-k2.7-code".to_string(),
-            "mimo-v2.5-pro".to_string(),
-            "mimo-v2.5".to_string(),
+            "mimo-v2.6-pro".to_string(),
+            "mimo-v2.6-flash".to_string(),
             "minimax-m3".to_string(),
             "qwen3.8-max".to_string(),
             "qwen3.7-max".to_string(),

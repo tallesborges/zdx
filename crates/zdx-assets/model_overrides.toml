@@ -2,19 +2,49 @@
 # and win over fetched values. Matched by exact `id`; only the fields set here are
 # overridden. Keep small and add a source + date — a pin can hide a real price change.
 
-# MiMo V2.5 permanent price cut (2026-05-27); models.dev still serves old tiered pricing.
-# https://platform.xiaomimimo.com/docs/en-US/news/v2.5-price-update — verified 2026-06-08
+# MiMo V2.6 series (released 2026-09-21): not yet in models.dev, whose `xiaomi`
+# provider still stops at V2.5. Values are the official overseas real-time API
+# rates and the documented 1M context / 128K output limits. Both Pro and Flash
+# are natively omni-modal, so input_images is true for each (V2.5-Pro was text-only).
+# https://mimo.mi.com/docs/price/pay-as-you-go
+# https://mimo.mi.com/docs/quick-start/summary/model — verified 2026-09-22
 [[override]]
-id = "xiaomi:mimo-v2.5-pro"
+id = "xiaomi:mimo-v2.6-pro"
 input = 0.435
 output = 0.87
 cache_read = 0.0036
+cache_write = 0.0
+context_limit = 1048576
+output_limit = 131072
+reasoning = true
+input_images = true
 
 [[override]]
-id = "xiaomi:mimo-v2.5"
+id = "xiaomi:mimo-v2.6-flash"
 input = 0.14
 output = 0.28
 cache_read = 0.0028
+cache_write = 0.0
+context_limit = 1048576
+output_limit = 131072
+reasoning = true
+input_images = true
+
+# Token Plan is a fixed-fee subscription, so pricing is zeroed by the updater.
+# Only the capability/limit metadata needs pinning here.
+[[override]]
+id = "xiaomi-plan:mimo-v2.6-pro"
+context_limit = 1048576
+output_limit = 131072
+reasoning = true
+input_images = true
+
+[[override]]
+id = "xiaomi-plan:mimo-v2.6-flash"
+context_limit = 1048576
+output_limit = 131072
+reasoning = true
+input_images = true
 
 # MiniMax-M3 standard tier (≤512K input) with the permanent 50% discount in effect.
 # >512K long-context is double; ZDX uses a single rate, so we pin the ≤512K tier.

@@ -774,24 +774,24 @@ api = "openai-completions"
 
     #[test]
     fn wildcard_match_exact_and_star() {
-        assert!(wildcard_match("mimo-v2.5", "mimo-v2.5"));
+        assert!(wildcard_match("basic-model", "basic-model"));
         assert!(wildcard_match("*", "anything"));
         assert!(wildcard_match("gpt-5*", "gpt-5.5"));
         assert!(wildcard_match("*:exacto", "claude-sonnet-4-5:exacto"));
-        assert!(!wildcard_match("mimo-v2.5", "mimo-v2.5-pro"));
+        assert!(!wildcard_match("basic-model", "basic-model-pro"));
         assert!(!wildcard_match("gpt-5*", "claude-sonnet"));
     }
 
     #[test]
     fn wildcard_match_is_case_insensitive() {
-        assert!(wildcard_match("MiMo-V2.5", "mimo-v2.5"));
+        assert!(wildcard_match("Basic-Model", "basic-model"));
     }
 
     #[test]
     fn bare_model_id_strips_provider_prefix() {
         assert_eq!(
-            bare_model_id("xiaomi-plan", "xiaomi-plan:mimo-v2.5"),
-            "mimo-v2.5"
+            bare_model_id("example-plan", "example-plan:basic-model"),
+            "basic-model"
         );
         assert_eq!(
             bare_model_id("openrouter", "openrouter:xiaomi/mimo-v2-flash:free"),
@@ -803,15 +803,15 @@ api = "openai-completions"
 
     #[test]
     fn model_id_matches_patterns_empty_list_matches_everything() {
-        assert!(model_id_matches_patterns("mimo-v2.5-pro", &[]));
+        assert!(model_id_matches_patterns("basic-model-pro", &[]));
     }
 
     #[test]
     fn model_id_matches_patterns_literal_and_wildcard() {
-        let patterns = vec!["mimo-v2.5-pro".to_string(), "mimo-v2.5".to_string()];
-        assert!(model_id_matches_patterns("mimo-v2.5-pro", &patterns));
-        assert!(model_id_matches_patterns("mimo-v2.5", &patterns));
-        assert!(!model_id_matches_patterns("mimo-v2-flash", &patterns));
+        let patterns = vec!["basic-model-pro".to_string(), "basic-model".to_string()];
+        assert!(model_id_matches_patterns("basic-model-pro", &patterns));
+        assert!(model_id_matches_patterns("basic-model", &patterns));
+        assert!(!model_id_matches_patterns("basic-model-flash", &patterns));
 
         let wildcard = vec!["*:exacto".to_string()];
         assert!(model_id_matches_patterns("anything:exacto", &wildcard));
@@ -824,7 +824,7 @@ api = "openai-completions"
         // Treated as "no usable patterns": only blank entries should not silently match
         // because the empty-list rule already covers the "no filter" case. Blank-only
         // lists are treated like an empty list.
-        assert!(!model_id_matches_patterns("mimo-v2.5", &patterns));
+        assert!(!model_id_matches_patterns("basic-model", &patterns));
     }
 }
 

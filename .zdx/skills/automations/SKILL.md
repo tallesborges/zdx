@@ -168,7 +168,7 @@ Don't hardcode API calls when a skill exists.
 
 - Default: omit `model` (uses system default).
 - Long-context or complex reasoning: `model: "gemini:gemini-3.1-pro-preview"` or similar.
-- Fast/cheap for simple tasks: `model: "stepfun:step-3.5-flash"` or `model: "xiaomi:mimo-v2.5"`.
+- Fast/cheap for simple tasks: `model: "stepfun:step-3.5-flash"` or `model: "xiaomi:mimo-v2.6-flash"`.
 - Only set `model` when the default won't work well for the task.
 
 ### Style rules
