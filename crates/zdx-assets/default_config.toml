@@ -224,7 +224,7 @@ websocket = false
 enabled = true
 # api_key = "sk-..."  # Overrides XIAOMI_API_KEY env var
 # base_url = "https://api.xiaomimimo.com/v1"
-models = ["mimo-v2.6-pro", "mimo-v2.6-flash"]
+models = ["mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed", "mimo-v2.6-flash"]
 websocket = false
 
 [providers.grok_build]

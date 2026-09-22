@@ -2432,7 +2432,11 @@ fn default_lmstudio_provider() -> ProviderConfig {
 fn default_xiaomi_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["mimo-v2.6-pro".to_string(), "mimo-v2.6-flash".to_string()],
+        models: vec![
+            "mimo-v2.6-pro".to_string(),
+            "mimo-v2.6-pro-ultraspeed".to_string(),
+            "mimo-v2.6-flash".to_string(),
+        ],
         ..Default::default()
     }
 }

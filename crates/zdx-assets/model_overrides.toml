@@ -4,8 +4,8 @@
 
 # MiMo V2.6 series (released 2026-09-21): not yet in models.dev, whose `xiaomi`
 # provider still stops at V2.5. Values are the official overseas real-time API
-# rates and the documented 1M context / 128K output limits. Both Pro and Flash
-# are natively omni-modal, so input_images is true for each (V2.5-Pro was text-only).
+# rates and the documented 1M context / 128K output limits. The full V2.6 series
+# is natively omni-modal, so input_images is true for each (V2.5-Pro was text-only).
 # https://mimo.mi.com/docs/price/pay-as-you-go
 # https://mimo.mi.com/docs/quick-start/summary/model — verified 2026-09-22
 [[override]]
@@ -13,6 +13,17 @@ id = "xiaomi:mimo-v2.6-pro"
 input = 0.435
 output = 0.87
 cache_read = 0.0036
+cache_write = 0.0
+context_limit = 1048576
+output_limit = 131072
+reasoning = true
+input_images = true
+
+[[override]]
+id = "xiaomi:mimo-v2.6-pro-ultraspeed"
+input = 4.35
+output = 8.7
+cache_read = 0.036
 cache_write = 0.0
 context_limit = 1048576
 output_limit = 131072
