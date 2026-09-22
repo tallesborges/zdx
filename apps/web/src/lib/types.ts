@@ -316,6 +316,12 @@ export interface MonitorResponse {
   config: MonitorConfig;
   usage: MonitorUsage | null;
   subscriptions: MonitorSubscription[];
+  /**
+   * Quotas are fetched off the request path, so an empty `subscriptions` means
+   * "not fetched yet" under `pending` and "none" only under `ready`/`stale`.
+   */
+  subscriptions_status: "ready" | "pending" | "stale";
+  subscriptions_age: string | null;
 }
 
 export interface MonitorService {

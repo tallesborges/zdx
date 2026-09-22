@@ -883,4 +883,6 @@ export const demoMonitor: MonitorResponse = {
       ],
     },
   ],
+  subscriptions_status: "ready",
+  subscriptions_age: "12s",
 };

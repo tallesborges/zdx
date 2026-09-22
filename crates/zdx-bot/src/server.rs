@@ -47,6 +47,9 @@ const GIT_DIFF_LIMIT_BYTES: usize = 256 * 1024;
 const GIT_COMMIT_LIMIT: usize = 24;
 /// How many recent threads the Mini App browser lists. Applied in SQL.
 const THREAD_LIST_LIMIT: usize = 50;
+/// An API request slower than this is logged at `info` so it reaches the
+/// default log file: this is roughly where a request becomes a visible wait.
+const SLOW_REQUEST: Duration = Duration::from_millis(750);
 
 type HmacSha256 = Hmac<Sha256>;
 type ApiError = (StatusCode, &'static str);
@@ -417,6 +420,13 @@ struct MonitorResponse {
     config: MonitorConfig,
     usage: Option<MonitorUsage>,
     subscriptions: Vec<MonitorSubscription>,
+    /// Freshness of `subscriptions`, which are refreshed off the request path:
+    /// `"ready"`, `"pending"` (never fetched since startup, a refresh is in
+    /// flight) or `"stale"` (older than the refresh window, refresh in flight).
+    /// The client must not read an empty `pending` list as "no subscriptions".
+    subscriptions_status: &'static str,
+    /// Age of the cached quota snapshot, absent while it is `pending`.
+    subscriptions_age: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -552,6 +562,10 @@ pub(crate) struct ServerState {
     workers: Arc<WorkerManager>,
     monitor_cache: RwLock<Option<CachedMonitor>>,
     subscription_cache: Mutex<Option<CachedSubscriptions>>,
+    /// Single-flight guard for the background quota refresh, held for the whole
+    /// fetch. Every open Mini App polls `/api/monitor` every 30s, so without it
+    /// a slow provider would accumulate overlapping refreshes.
+    subscription_refresh: Arc<Mutex<()>>,
 }
 
 impl ServerState {
@@ -568,6 +582,7 @@ impl ServerState {
             workers,
             monitor_cache: RwLock::new(None),
             subscription_cache: Mutex::new(None),
+            subscription_refresh: Arc::new(Mutex::new(())),
         }
     }
 }
@@ -596,7 +611,8 @@ pub(crate) fn create_router(state: Arc<ServerState>) -> Router {
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             authorize_api,
-        ));
+        ))
+        .layer(middleware::from_fn(log_api_timing));
 
     Router::new()
         .route("/app", get(serve_app))
@@ -666,6 +682,29 @@ async fn authorize_api(
 ) -> Result<Response, ApiError> {
     authorize(&headers, &state)?;
     Ok(next.run(request).await)
+}
+
+/// Times every `/api/*` request, including authorization.
+///
+/// The Mini App renders its shell from embedded assets, so a visible "loading"
+/// is always one of these requests still in flight. Without this line a stall
+/// reported from a phone cannot be attributed to a route at all. Slow requests
+/// are logged at `info` so they land in the default log file; the rest are
+/// `debug` because an open thread view polls every few seconds.
+async fn log_api_timing(request: Request, next: Next) -> Response {
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let started = Instant::now();
+    let response = next.run(request).await;
+    let elapsed = started.elapsed();
+    let elapsed_ms = elapsed.as_millis();
+    let status = response.status().as_u16();
+    if elapsed >= SLOW_REQUEST {
+        tracing::info!(%method, path, status, elapsed_ms, "Slow Mini App API request");
+    } else {
+        tracing::debug!(%method, path, status, elapsed_ms, "Mini App API request");
+    }
+    response
 }
 
 /// Builds a `t.me/c/<internal_id>/<topic_id>` link for a Telegram topic thread.
@@ -2300,16 +2339,27 @@ fn short_hash(hash: &str) -> String {
 async fn get_monitor(
     State(state): State<Arc<ServerState>>,
 ) -> Result<Json<MonitorResponse>, ApiError> {
+    let mut response = monitor_snapshot(&state).await?;
+    attach_subscriptions(&state, &mut response).await;
+    Ok(Json(response))
+}
+
+/// Builds (or reuses) the local part of the dashboard: services, agents,
+/// automations, config and usage. Everything here is local state, so it is
+/// cached for [`MONITOR_CACHE_TTL`] and never waits on the network.
+///
+/// Quotas are deliberately *not* cached with it — they are overlaid per request
+/// by [`attach_subscriptions`], so a refresh that lands mid-window is served
+/// immediately instead of waiting for this cache to expire.
+async fn monitor_snapshot(state: &Arc<ServerState>) -> Result<MonitorResponse, ApiError> {
     if let Some(cached) = state.monitor_cache.read().await.as_ref()
         && cached.cached_at.elapsed() < MONITOR_CACHE_TTL
     {
-        return Ok(Json(cached.response.clone()));
+        return Ok(cached.response.clone());
     }
 
     let root = state.root.clone();
-    let snapshot_task = tokio::task::spawn_blocking(move || build_monitor_response(&root));
-    let subscriptions = load_subscription_quotas(&state).await;
-    let mut response = snapshot_task
+    let response = tokio::task::spawn_blocking(move || build_monitor_response(&root))
         .await
         .map_err(|error| {
             tracing::warn!(%error, "Mini App monitor snapshot task failed");
@@ -2325,13 +2375,12 @@ async fn get_monitor(
                 "Monitor snapshot unavailable",
             )
         })?;
-    response.subscriptions = subscriptions;
 
     *state.monitor_cache.write().await = Some(CachedMonitor {
         cached_at: Instant::now(),
         response: response.clone(),
     });
-    Ok(Json(response))
+    Ok(response)
 }
 
 fn build_monitor_response(root: &FilePath) -> anyhow::Result<MonitorResponse> {
@@ -2426,17 +2475,84 @@ fn build_monitor_response(root: &FilePath) -> anyhow::Result<MonitorResponse> {
         config: monitor_config(&config),
         usage,
         subscriptions: Vec::new(),
+        subscriptions_status: "pending",
+        subscriptions_age: None,
     })
 }
 
-async fn load_subscription_quotas(state: &ServerState) -> Vec<MonitorSubscription> {
-    let mut cache = state.subscription_cache.lock().await;
-    if let Some(cached) = cache.as_ref()
-        && cached.cached_at.elapsed() < SUBSCRIPTION_CACHE_TTL
-    {
-        return cached.subscriptions.clone();
-    }
+/// Overlays the last known quota snapshot onto a dashboard response and, when
+/// it is missing or past [`SUBSCRIPTION_CACHE_TTL`], starts a refresh in the
+/// background.
+///
+/// This never awaits a provider call. A quota fetch talks to every stored OAuth
+/// account with a 10s per-request timeout and no shared deadline, so awaiting it
+/// here made a cold dashboard open stall for as long as the slowest provider —
+/// intermittently, since a warm cache hid it. The client polls every 30s and
+/// picks the values up on a later tick; `subscriptions_status` says which of
+/// "not fetched yet" and "no subscriptions" an empty list means.
+async fn attach_subscriptions(state: &Arc<ServerState>, response: &mut MonitorResponse) {
+    let cached = state
+        .subscription_cache
+        .lock()
+        .await
+        .as_ref()
+        .map(|cached| (cached.subscriptions.clone(), cached.cached_at.elapsed()));
 
+    let (status, refresh) = classify_subscriptions(cached.as_ref().map(|(_, age)| *age));
+    if let Some((subscriptions, age)) = cached {
+        response.subscriptions = subscriptions;
+        response.subscriptions_age = Some(service::format_uptime(age));
+    }
+    response.subscriptions_status = status;
+    if refresh {
+        spawn_subscription_refresh(state);
+    }
+}
+
+/// Maps the age of the cached quota snapshot to the status reported to the
+/// client and whether a background refresh is due.
+///
+/// `None` is "never fetched since startup", which must stay distinguishable
+/// from "fetched, and there are no subscriptions" — both are an empty list.
+fn classify_subscriptions(age: Option<Duration>) -> (&'static str, bool) {
+    match age {
+        None => ("pending", true),
+        Some(age) if age < SUBSCRIPTION_CACHE_TTL => ("ready", false),
+        Some(_) => ("stale", true),
+    }
+}
+
+/// Starts one background quota refresh unless one is already running.
+///
+/// The guard is an owned mutex guard rather than a flag so it is released even
+/// if the fetch panics or the task is cancelled; a stuck flag would freeze
+/// quotas for the life of the process.
+fn spawn_subscription_refresh(state: &Arc<ServerState>) {
+    let Ok(guard) = Arc::clone(&state.subscription_refresh).try_lock_owned() else {
+        return;
+    };
+    let state = Arc::clone(state);
+    tokio::spawn(async move {
+        let _guard = guard;
+        let started = Instant::now();
+        let subscriptions = fetch_subscription_quotas().await;
+        tracing::debug!(
+            elapsed_ms = started.elapsed().as_millis(),
+            count = subscriptions.len(),
+            "Refreshed Mini App subscription quotas"
+        );
+        *state.subscription_cache.lock().await = Some(CachedSubscriptions {
+            cached_at: Instant::now(),
+            subscriptions,
+        });
+    });
+}
+
+/// Fetches live quotas for every stored account, sorted by display name.
+///
+/// A provider failure stays attached to its account, and a snapshot error
+/// yields an empty list rather than failing the caller.
+async fn fetch_subscription_quotas() -> Vec<MonitorSubscription> {
     let snapshot = match subscription_quota::fetch_snapshot().await {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -2456,10 +2572,6 @@ async fn load_subscription_quotas(state: &ServerState) -> Vec<MonitorSubscriptio
         })
         .collect();
     subscriptions.sort_by(|a, b| a.name.cmp(&b.name));
-    *cache = Some(CachedSubscriptions {
-        cached_at: Instant::now(),
-        subscriptions: subscriptions.clone(),
-    });
     subscriptions
 }
 
@@ -2651,6 +2763,22 @@ mod tests {
     fn worker_rollup_is_absent_for_a_thread_with_no_workers() {
         assert!(worker_rollup(None, 0).is_none());
         assert!(worker_rollup(Some(&[]), 0).is_none());
+    }
+
+    #[test]
+    fn unfetched_quotas_are_pending_rather_than_an_empty_result() {
+        // The dashboard must never wait on a provider call, so an empty list
+        // before the first refresh lands has to stay distinguishable from
+        // "this user has no subscriptions".
+        assert_eq!(classify_subscriptions(None), ("pending", true));
+        assert_eq!(
+            classify_subscriptions(Some(SUBSCRIPTION_CACHE_TTL / 2)),
+            ("ready", false)
+        );
+        assert_eq!(
+            classify_subscriptions(Some(SUBSCRIPTION_CACHE_TTL * 2)),
+            ("stale", true)
+        );
     }
 
     const SAMPLE_BOT_TOKEN: &str = "1234567890:TEST-BOT-TOKEN-FOR-UNIT-TESTS-ONLY";

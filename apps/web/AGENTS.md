@@ -63,7 +63,7 @@ has been removed.
   **must not be rendered alike**: a `live` row is backed by the in-memory `WorkerManager`, while a
   row with `live: false` was recovered from persisted lineage after a restart and knows only that
   the worker existed. Those render dashed, as `status unavailable`, never as settled.
-- `src/views/MonitorView.svelte`: section-aware monitor (`overview` renders everything)
+- `src/views/MonitorView.svelte`: section-aware monitor (`overview` renders everything). Subscription quotas arrive **after** the rest of the dashboard — the server refreshes them off the request path — so render from `subscriptions_status`, not from list length: `pending` shows the section as loading, `stale` shows the values with their age, and the overview quota tile reads `—` rather than `0%` until real windows exist.
 - `src/views/ThreadListView.svelte`: recent-thread browser (`?view=threads`). Each row opens the
   thread in-app; threads bound to a Telegram topic also get a jump button that calls
   `openTelegramLink` with the `t.me/c/<internal_id>/<topic_id>` link built server-side. TUI/CLI

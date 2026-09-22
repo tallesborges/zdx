@@ -47,12 +47,12 @@
     return String(n);
   }
 
-  let peakQuota = $derived(
-    Math.max(
-      0,
-      ...(data?.subscriptions.flatMap((s) => s.windows.map((w) => w.used_percent)) ?? [0]),
-    ),
-  );
+  // Quotas are fetched off the request path and land on a later poll, so an
+  // unfetched snapshot has to read as unknown rather than as a real 0%.
+  let peakQuota = $derived.by(() => {
+    const used = data?.subscriptions.flatMap((s) => s.windows.map((w) => w.used_percent)) ?? [];
+    return used.length ? `${Math.max(...used).toFixed(0)}%` : "—";
+  });
 </script>
 
 <header
@@ -111,7 +111,7 @@
     <div class="mx-auto flex max-w-3xl flex-col gap-3 pb-6">
       {#if section === "overview"}
         <div class="grid grid-cols-3 gap-2">
-          {#each [{ label: "services", value: `${data.services.filter((s) => s.running).length}/${data.services.length}` }, { label: "agents", value: String(data.active_agents.length) }, { label: "quota", value: `${peakQuota.toFixed(0)}%` }] as m (m.label)}
+          {#each [{ label: "services", value: `${data.services.filter((s) => s.running).length}/${data.services.length}` }, { label: "agents", value: String(data.active_agents.length) }, { label: "quota", value: peakQuota }] as m (m.label)}
             <div class="rounded-lg border border-border bg-card px-2.5 py-2">
               <p class="m-0 font-mono text-xxs uppercase text-muted-foreground">{m.label}</p>
               <p class="m-0 text-lg font-semibold tracking-tight tabular-nums">{m.value}</p>
@@ -198,9 +198,18 @@
       {/if}
 
       {#if show("usage")}
-        {#if data.subscriptions.length}
+        {#if data.subscriptions.length || data.subscriptions_status === "pending"}
           <section>
-            <h2 class="sec">Subscriptions</h2>
+            <h2 class="sec">
+              Subscriptions
+              {#if data.subscriptions_status === "pending"}
+                <span class="font-mono text-xxs font-normal text-muted-foreground">loading…</span>
+              {:else if data.subscriptions_status === "stale"}
+                <span class="font-mono text-xxs font-normal text-muted-foreground">
+                  {data.subscriptions_age} old · refreshing
+                </span>
+              {/if}
+            </h2>
             <div class="flex flex-col gap-1.5">
               {#each data.subscriptions as sub, si (si)}
                 <div class="rounded-md border border-border bg-card px-2.5 py-2">
