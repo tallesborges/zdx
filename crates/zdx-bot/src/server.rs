@@ -2668,6 +2668,39 @@ mod tests {
         HashSet::from([279_058_397])
     }
 
+    /// Builds `initData` the middleware accepts right now, so a route can be
+    /// exercised end to end instead of only its 401 path.
+    fn fresh_init_data(user_id: i64) -> String {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_secs()
+            .to_string();
+        let user = format!("{{\"id\":{user_id}}}");
+        let data_check_string = format!("auth_date={now}\nuser={user}");
+
+        let mut secret_mac = HmacSha256::new_from_slice(b"WebAppData").expect("hmac key");
+        secret_mac.update(SAMPLE_BOT_TOKEN.as_bytes());
+        let secret_key = secret_mac.finalize().into_bytes();
+        let mut data_mac = HmacSha256::new_from_slice(&secret_key).expect("hmac key");
+        data_mac.update(data_check_string.as_bytes());
+        let hash = data_mac
+            .finalize()
+            .into_bytes()
+            .iter()
+            .fold(String::new(), |mut out, byte| {
+                use std::fmt::Write as _;
+                let _ = write!(out, "{byte:02x}");
+                out
+            });
+
+        url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("auth_date", &now)
+            .append_pair("user", &user)
+            .append_pair("hash", &hash)
+            .finish()
+    }
+
     /// Pulls the first content-hashed script URL out of the served shell.
     fn first_script_asset(html: &str) -> String {
         html.split(['"', '\''])
@@ -2727,6 +2760,84 @@ mod tests {
         }
 
         server.abort();
+    }
+
+    /// Exercises the artifact routes over HTTP with accepted `initData`: the
+    /// list must answer once with the thread's files, a listed file must be
+    /// downloadable, and a path the thread never produced must be refused.
+    #[tokio::test]
+    async fn serves_thread_artifacts_and_refuses_foreign_paths() {
+        let home = zdx_engine::test_support::temp_zdx_home();
+        let thread_id = format!("telegram-artifacts-{}", uuid::Uuid::new_v4());
+        let dir = paths::artifact_dir_for_thread(Some(&thread_id));
+        std::fs::create_dir_all(&dir).expect("create artifact dir");
+        std::fs::write(dir.join("report.html"), "<h1>report</h1>").expect("write artifact");
+
+        let mut thread = thread_persistence::Thread::with_id(thread_id.clone()).expect("thread");
+        thread
+            .append(&ThreadEvent::assistant_message(format!(
+                "attached <media>{}</media>",
+                dir.join("report.html").display()
+            )))
+            .expect("append media message");
+
+        let app = create_router(Arc::new(ServerState::new(
+            SAMPLE_BOT_TOKEN.to_string(),
+            sample_allowlist(),
+            PathBuf::from("."),
+            WorkerManager::new().0,
+        )));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("read test server address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve test app");
+        });
+        let client = reqwest::Client::new();
+        let auth = format!("tma {}", fresh_init_data(279_058_397));
+
+        let list = client
+            .get(format!("http://{addr}/api/threads/{thread_id}/artifacts"))
+            .header(AUTHORIZATION, &auth)
+            .send()
+            .await
+            .expect("request artifact list");
+        assert_eq!(list.status(), StatusCode::OK);
+        let body = list.text().await.expect("read artifact list");
+        assert!(body.contains("report.html"), "{body}");
+        assert!(body.contains("\"kind\":\"html\""), "{body}");
+        assert!(body.contains("\"source\":\"both\""), "{body}");
+
+        let file = client
+            .get(format!(
+                "http://{addr}/api/threads/{thread_id}/artifacts/file?path=report.html"
+            ))
+            .header(AUTHORIZATION, &auth)
+            .send()
+            .await
+            .expect("request artifact file");
+        assert_eq!(file.status(), StatusCode::OK);
+        assert_eq!(
+            file.headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/html")
+        );
+        assert_eq!(file.text().await.expect("read artifact"), "<h1>report</h1>");
+
+        let foreign = client
+            .get(format!(
+                "http://{addr}/api/threads/{thread_id}/artifacts/file?path=/etc/hosts"
+            ))
+            .header(AUTHORIZATION, &auth)
+            .send()
+            .await
+            .expect("request foreign path");
+        assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+
+        server.abort();
+        drop(home);
     }
 
     #[tokio::test]
