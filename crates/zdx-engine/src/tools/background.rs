@@ -214,9 +214,9 @@ async fn kill_failed_spawn(mut spawn: zdx_tools::bash::BackgroundSpawn, pid: u32
 /// Builds the auto-background handoff for a foreground bash command.
 ///
 /// Returns `None` when the command must keep waiting in the foreground:
-/// - the run is on a one-shot surface (`zdx exec`, and therefore every
-///   `invoke_subagent` child), where adopting a job would kill it at process
-///   exit — see [`crate::tools::surface_keeps_background_jobs`];
+/// - the run is on a surface that can neither outlive the job nor drain it
+///   (unknown or absent surfaces) — see
+///   [`crate::tools::surface_keeps_background_jobs`];
 /// - auto-backgrounding is disabled (`bash_foreground_bound_secs = 0`);
 /// - the registry directories are unusable.
 ///

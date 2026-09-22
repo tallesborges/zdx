@@ -380,10 +380,10 @@ mod tests {
 
     use super::sanitize_exec_event;
 
-    /// An automation's `timeout_secs` frontmatter is the only remaining source
-    /// of a tool-call deadline besides the per-call `timeout_secs` Bash
-    /// parameter. It used to travel by mutating the global config field; it now
-    /// rides on the run options, so it must survive the conversion.
+    /// An automation's `timeout_secs` frontmatter is the only source of a
+    /// tool-call deadline. It used to travel by mutating the global config
+    /// field; it now rides on the run options, so it must survive the
+    /// conversion.
     #[test]
     fn exec_options_carry_the_per_run_tool_timeout() {
         use zdx_engine::core::agent::AgentOptions;

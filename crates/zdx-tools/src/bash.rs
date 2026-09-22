@@ -48,7 +48,7 @@ fn write_temp_file(bytes: &[u8], stream_name: &str) -> Option<String> {
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Bash".to_string(),
-        description: "Run shell and CLI workflows whose capability no dedicated tool provides: builds, tests, version control, package managers, other CLIs, and work on those commands' own output. Reading, discovering, and searching files is covered by the dedicated tools, which return structured, ignore-aware, paginated results; scoping or limiting such a result is part of that same capability. A long-running foreground command is never killed for being slow: one still running after the foreground bound is moved to the background and the result comes back with backgrounded: true and a bg_id to poll with background_output instead of an exit code. Long-lived commands use background mode, and truncated output can be inspected with Read."
+        description: "Run shell and CLI workflows whose capability no dedicated tool provides: builds, tests, version control, package managers, other CLIs, and work on those commands' own output. Reading, discovering, and searching files is covered by the dedicated tools, which return structured, ignore-aware, paginated results; scoping or limiting such a result is part of that same capability. A long-running foreground command is not killed for being slow: one still running after the foreground bound is moved to the background and the result comes back with backgrounded: true and a bg_id to poll with background_output instead of an exit code. Only a deadline configured for the run by an operator can terminate it. Long-lived commands use background mode, and truncated output can be inspected with Read."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -76,10 +76,15 @@ pub fn definition() -> ToolDefinition {
 #[derive(Debug, Deserialize)]
 struct BashInput {
     command: String,
+    /// Foreground wait budget. It only ever tunes a handoff bound, so on a
+    /// platform with no handoff it is inert — still accepted and validated, so
+    /// the argument stays a contract rather than becoming an unknown field, and
+    /// still never destructive.
     #[serde(
         default,
         deserialize_with = "crate::u64_or_string::deserialize_optional"
     )]
+    #[cfg_attr(not(unix), allow(dead_code))]
     timeout_secs: Option<u64>,
 }
 
@@ -1109,12 +1114,13 @@ mod tests {
     }
 
     /// With no handoff to relocate into, `timeout_secs` has nothing to bound —
-    /// and must still never kill. The command runs to completion.
+    /// and must still never kill. The command outlives the value it was given,
+    /// so the former destructive implementation would have killed it here.
     #[tokio::test]
     async fn test_bash_timeout_secs_never_kills_without_a_handoff() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"command": "sleep 1; echo done", "timeout_secs": 1});
+        let input = json!({"command": "sleep 2; echo done", "timeout_secs": 1});
 
         let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
@@ -1486,9 +1492,11 @@ mod handoff_tests {
         let result = run(
             &input,
             temp.path(),
-            // Far longer than the caller's value: relocating promptly proves
-            // the caller lowered the bound rather than being ignored.
-            Some(recorder.handoff(Duration::from_secs(20))),
+            // Two orders of magnitude above the caller's value, so the two
+            // outcomes are far apart: relocating on the caller's 1s bound
+            // cannot be confused with relocating on this one, however loaded
+            // the machine is.
+            Some(recorder.handoff(Duration::from_secs(120))),
         )
         .await;
         let elapsed = started.elapsed();
@@ -1498,7 +1506,7 @@ mod handoff_tests {
         assert_eq!(data["timed_out"], false);
         assert_eq!(recorder.adopted.load(Ordering::SeqCst), 1);
         assert!(
-            elapsed < Duration::from_secs(10),
+            elapsed < Duration::from_secs(30),
             "caller's 1s bound should apply, waited {elapsed:?}"
         );
 
@@ -1537,6 +1545,62 @@ mod handoff_tests {
         assert_eq!(data["timed_out"], false);
         assert!(data["stdout"].as_str().unwrap().contains("done"));
         assert_eq!(recorder.adopted.load(Ordering::SeqCst), 0);
+    }
+
+    /// `"0"` is the string form of "no override", so with a live handoff it
+    /// must leave the configured bound in force and still relocate.
+    #[tokio::test]
+    async fn zero_string_keeps_the_configured_bound_and_still_relocates() {
+        let recorder = Recorder::new();
+        let temp = TempDir::new().unwrap();
+        let input = json!({"command": "sleep 30", "timeout_secs": "0"});
+
+        let result = run(
+            &input,
+            temp.path(),
+            Some(recorder.handoff(Duration::from_millis(300))),
+        )
+        .await;
+
+        let data = result.data().expect("should have data");
+        assert_eq!(data["backgrounded"], true);
+        assert_eq!(data["timed_out"], false);
+        assert_eq!(recorder.adopted.load(Ordering::SeqCst), 1);
+
+        let pid = recorder.pid();
+        assert!(process_exists(pid));
+        assert!(crate::adopted::terminate(data["bg_id"].as_str().unwrap()).await);
+        wait_until_gone(pid).await;
+    }
+
+    /// An operator deadline outranks the caller's value in both directions: a
+    /// larger one cannot extend past it, and a smaller one cannot pre-empt it
+    /// into a relocation. Either way the operator's deadline is what fires.
+    #[tokio::test]
+    async fn caller_timeout_cannot_escape_an_operator_deadline_either_way() {
+        for caller_secs in [30, 1] {
+            let recorder = Recorder::new();
+            let temp = TempDir::new().unwrap();
+            let input = json!({"command": "sleep 30", "timeout_secs": caller_secs});
+
+            let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+            let result = execute(
+                &input,
+                &ctx,
+                Some(Duration::from_millis(300)),
+                None,
+                Some(recorder.handoff(Duration::from_millis(100))),
+            )
+            .await;
+
+            let data = result.data().expect("should have data");
+            assert_eq!(
+                data["timed_out"], true,
+                "caller timeout_secs={caller_secs} must not displace the operator deadline"
+            );
+            assert!(data.get("backgrounded").is_none());
+            assert_eq!(recorder.adopted.load(Ordering::SeqCst), 0);
+        }
     }
 
     /// The operator's deadline (an automation's `timeout_secs` frontmatter) is

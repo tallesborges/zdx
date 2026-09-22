@@ -176,10 +176,12 @@ async fn test_bash_per_call_timeout_relocates_instead_of_killing() {
 
     // The per-call `timeout_secs` only bounds the foreground wait: the command
     // keeps running and is moved to the background rather than being killed.
+    // The command outlives its bound by several seconds so a loaded machine
+    // cannot let it finish first and hide which path was taken.
     let first_response = tool_use_sse(
         "toolu_bash_timeout",
         "bash",
-        r#"{"command": "sleep 2", "timeout_secs": 1}"#,
+        r#"{"command": "sleep 5", "timeout_secs": 1}"#,
     );
     let second_response = fixtures::text_sse("Done.");
 
