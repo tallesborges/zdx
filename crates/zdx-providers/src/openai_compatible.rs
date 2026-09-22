@@ -52,25 +52,44 @@ pub fn build_custom(
     );
     Box::new(OpenAICompatibleClient {
         inner: OpenAIChatCompletionsClient::with_extra_body(
-            OpenAIChatCompletionsConfig {
-                api_key,
+            chat_completions_config(
                 base_url,
+                api_key,
                 model,
                 max_tokens,
-                max_completion_tokens: None,
-                // Custom endpoints are proxies (e.g. LiteLLM) that expect a
-                // DeepSeek-style top-level `reasoning_effort` string, not
-                // OpenAI's nested `reasoning: {effort}` object.
-                reasoning_effort: None,
                 prompt_cache_key,
-                extra_headers: HeaderMap::new(),
-                include_usage: true,
-                include_reasoning_content: thinking_level.is_enabled(),
-                thinking: None,
-            },
+                thinking_level,
+            ),
             extra_body,
         ),
     })
+}
+
+fn chat_completions_config(
+    base_url: String,
+    api_key: String,
+    model: String,
+    max_tokens: Option<u32>,
+    prompt_cache_key: Option<String>,
+    thinking_level: ThinkingLevel,
+) -> OpenAIChatCompletionsConfig {
+    OpenAIChatCompletionsConfig {
+        api_key,
+        base_url,
+        model,
+        max_tokens,
+        max_completion_tokens: None,
+        // Custom endpoints are proxies (e.g. LiteLLM) that expect a
+        // DeepSeek-style top-level `reasoning_effort` string, not
+        // OpenAI's nested `reasoning: {effort}` object.
+        reasoning_effort: None,
+        prompt_cache_key,
+        extra_headers: HeaderMap::new(),
+        include_usage: true,
+        include_reasoning_content: thinking_level.is_enabled(),
+        replay_historical_tool_turns: false,
+        thinking: None,
+    }
 }
 
 /// Maps a ZDX thinking level to the `reasoning_effort` sent to a custom
@@ -97,7 +116,7 @@ fn reasoning_effort_from_thinking_level(level: ThinkingLevel) -> &'static str {
 mod tests {
     use zdx_types::ThinkingLevel;
 
-    use super::reasoning_effort_from_thinking_level;
+    use super::{chat_completions_config, reasoning_effort_from_thinking_level};
 
     #[test]
     fn custom_reasoning_effort_passes_levels_through_and_disables_with_none() {
@@ -111,5 +130,18 @@ mod tests {
         ] {
             assert_eq!(reasoning_effort_from_thinking_level(level), expected);
         }
+    }
+
+    #[test]
+    fn custom_mimo_name_does_not_enable_historical_replay() {
+        let config = chat_completions_config(
+            "https://example.test/v1".to_string(),
+            "test-key".to_string(),
+            "xiaomi/mimo-v2.6-pro".to_string(),
+            Some(4096),
+            None,
+            ThinkingLevel::High,
+        );
+        assert!(!config.replay_historical_tool_turns);
     }
 }

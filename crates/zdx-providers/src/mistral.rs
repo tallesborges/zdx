@@ -70,6 +70,7 @@ impl MistralClient {
                 extra_headers: HeaderMap::new(),
                 include_usage: true,
                 include_reasoning_content: false,
+                replay_historical_tool_turns: false,
                 thinking: None,
             }),
         }

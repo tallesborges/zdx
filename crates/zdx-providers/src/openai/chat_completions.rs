@@ -34,6 +34,7 @@ pub struct OpenAIChatCompletionsConfig {
     pub extra_headers: HeaderMap,
     pub include_usage: bool,
     pub include_reasoning_content: bool,
+    pub replay_historical_tool_turns: bool,
     pub thinking: Option<ThinkingConfig>,
 }
 
@@ -58,6 +59,11 @@ impl OpenAIChatCompletionsClient {
             extra_body,
             http: reqwest::Client::new(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replays_historical_tool_turns(&self) -> bool {
+        self.config.replay_historical_tool_turns
     }
 
     ///
@@ -273,10 +279,18 @@ impl ChatCompletionRequest {
     ) -> Self {
         let mut out_messages = Vec::new();
         push_system_message(system, &mut out_messages);
-        // Only the in-flight turn's reasoning is replayed; see `ReasoningReplay`.
+        // Most backends need only the in-flight turn; MiMo also validates every
+        // reasoning block from historical turns that used tools.
         let replay = zdx_types::ReasoningReplay::for_messages(messages);
+        let historical_tool_turns = (config.replay_historical_tool_turns
+            && config.include_reasoning_content)
+            .then(|| tool_call_turn_replay(messages));
         for (index, msg) in messages.iter().enumerate() {
-            append_chat_message(config, msg, &mut out_messages, replay.allows(index, msg));
+            let replay_reasoning = replay.allows(index, msg)
+                || historical_tool_turns
+                    .as_ref()
+                    .is_some_and(|turns| turns[index]);
+            append_chat_message(config, msg, &mut out_messages, replay_reasoning);
         }
 
         Self {
@@ -299,6 +313,51 @@ impl ChatCompletionRequest {
             extra_body: extra_body.clone(),
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn request_json_for_test(
+    config: &OpenAIChatCompletionsConfig,
+    messages: &[ChatMessage],
+) -> Value {
+    serde_json::to_value(ChatCompletionRequest::new(
+        config,
+        &HashMap::new(),
+        messages,
+        &[],
+        None,
+    ))
+    .expect("chat completions request should serialize")
+}
+
+fn tool_call_turn_replay(messages: &[ChatMessage]) -> Vec<bool> {
+    let mut replay = vec![false; messages.len()];
+    let mut turn_start = 0;
+    let mut turn_has_tool_call = false;
+
+    for (index, message) in messages.iter().enumerate() {
+        if index > turn_start && message.role == "user" && !message.has_tool_results() {
+            if turn_has_tool_call {
+                replay[turn_start..index].fill(true);
+            }
+            turn_start = index;
+            turn_has_tool_call = false;
+        }
+
+        if let MessageContent::Blocks(blocks) = &message.content
+            && blocks
+                .iter()
+                .any(|block| matches!(block, ChatContentBlock::ToolUse { .. }))
+        {
+            turn_has_tool_call = true;
+        }
+    }
+
+    if turn_has_tool_call {
+        replay[turn_start..].fill(true);
+    }
+
+    replay
 }
 
 fn push_system_message(system: Option<&str>, out_messages: &mut Vec<ChatCompletionMessage>) {
@@ -398,12 +457,11 @@ fn assistant_blocks_message(
 
     let has_tool_calls = !tool_calls.is_empty();
 
-    // DeepSeek (and Moonshot/Kimi) require `reasoning_content` to be present
+    // DeepSeek, Moonshot/Kimi, and MiMo require `reasoning_content` to be present
     // on assistant tool-call messages when thinking is enabled — otherwise they
-    // reject the next turn with HTTP 400. Emit an empty string when the
-    // captured reasoning was empty but a tool call is present. This also holds
-    // for prior turns, whose reasoning text is dropped: the field stays, the
-    // tokens do not.
+    // reject the next turn with HTTP 400. MiMo additionally receives the full
+    // reasoning for every assistant message in historical turns that used a
+    // tool. Emit an empty string when no captured text is available.
     let reasoning_content =
         if include_reasoning_content && (has_tool_calls || !reasoning_content.is_empty()) {
             Some(reasoning_content)
@@ -981,6 +1039,7 @@ mod tests {
     use super::{
         ChatCompletionRequest, ChatCompletionsSseParser, ContentBlockType,
         OpenAIChatCompletionsConfig, StreamEvent, ThinkingConfig, parse_usage,
+        tool_call_turn_replay,
     };
 
     #[test]
@@ -1021,6 +1080,7 @@ mod tests {
             extra_headers: HeaderMap::new(),
             include_usage: true,
             include_reasoning_content: true,
+            replay_historical_tool_turns: false,
             thinking: Some(ThinkingConfig::from(true)),
         };
 
@@ -1034,10 +1094,25 @@ mod tests {
 
     /// Helper: builds a config with a given `include_reasoning_content` flag.
     fn test_config(include_reasoning_content: bool) -> OpenAIChatCompletionsConfig {
+        test_config_for_model("deepseek-v4-pro", include_reasoning_content)
+    }
+
+    fn test_config_for_model(
+        model: &str,
+        include_reasoning_content: bool,
+    ) -> OpenAIChatCompletionsConfig {
+        test_config_with_replay(model, include_reasoning_content, false)
+    }
+
+    fn test_config_with_replay(
+        model: &str,
+        include_reasoning_content: bool,
+        replay_historical_tool_turns: bool,
+    ) -> OpenAIChatCompletionsConfig {
         OpenAIChatCompletionsConfig {
             api_key: "test-key".to_string(),
             base_url: "https://api.example.com/v1".to_string(),
-            model: "deepseek-v4-pro".to_string(),
+            model: model.to_string(),
             max_tokens: Some(4096),
             max_completion_tokens: None,
             reasoning_effort: None,
@@ -1045,6 +1120,7 @@ mod tests {
             extra_headers: HeaderMap::new(),
             include_usage: true,
             include_reasoning_content,
+            replay_historical_tool_turns,
             thinking: Some(ThinkingConfig::from(include_reasoning_content)),
         }
     }
@@ -1059,6 +1135,15 @@ mod tests {
                     .find(|m| m.get("role") == Some(&json!("assistant")))
             })
             .expect("request should contain an assistant message")
+    }
+
+    fn assistant_messages(value: &serde_json::Value) -> Vec<&serde_json::Value> {
+        value["messages"]
+            .as_array()
+            .expect("messages array")
+            .iter()
+            .filter(|message| message["role"] == json!("assistant"))
+            .collect()
     }
 
     /// Regression test for the `DeepSeek` HTTP 400
@@ -1230,6 +1315,175 @@ mod tests {
         assert!(
             !serialized.contains("old thinking"),
             "prior-turn reasoning must be dropped"
+        );
+    }
+
+    fn mixed_historical_transcript() -> Vec<crate::ChatMessage> {
+        use zdx_types::{ToolResult, ToolResultContent};
+
+        use crate::{ChatContentBlock, ChatMessage, ReasoningBlock};
+
+        vec![
+            ChatMessage::user("summarize the project"),
+            ChatMessage::assistant_blocks(vec![
+                ChatContentBlock::Reasoning(ReasoningBlock {
+                    text: Some("This non-tool turn stays private".to_string()),
+                    replay: None,
+                }),
+                ChatContentBlock::text("Project summary"),
+            ]),
+            ChatMessage::user("inspect the project"),
+            ChatMessage::assistant_blocks(vec![
+                ChatContentBlock::Reasoning(ReasoningBlock {
+                    text: Some("I should inspect the files".to_string()),
+                    replay: None,
+                }),
+                ChatContentBlock::ToolUse {
+                    id: "call_1".to_string(),
+                    name: "read".to_string(),
+                    input: json!({"file_path": "src/lib.rs"}),
+                    id_origin: zdx_types::IdOrigin::Synthesized,
+                    replay: None,
+                },
+            ]),
+            ChatMessage::tool_results(vec![ToolResult {
+                tool_use_id: "call_1".to_string(),
+                content: ToolResultContent::Text("file contents".to_string()),
+                is_error: false,
+            }]),
+            ChatMessage::assistant_blocks(vec![
+                ChatContentBlock::Reasoning(ReasoningBlock {
+                    text: Some("The file confirms the behavior".to_string()),
+                    replay: None,
+                }),
+                ChatContentBlock::text("Done"),
+            ]),
+            ChatMessage::user("now inspect the tests"),
+        ]
+    }
+
+    #[test]
+    fn opted_in_provider_replays_exact_historical_tool_turn_reasoning() {
+        let config = test_config_with_replay("mimo-v2.6-pro", true, true);
+        let messages = mixed_historical_transcript();
+
+        let request = ChatCompletionRequest::new(&config, &HashMap::new(), &messages, &[], None);
+        let value = serde_json::to_value(&request).expect("request should serialize");
+        let assistant = assistant_messages(&value);
+
+        assert_eq!(assistant.len(), 3);
+        assert!(assistant[0].get("reasoning_content").is_none());
+        assert_eq!(
+            assistant[1].get("reasoning_content"),
+            Some(&json!("I should inspect the files"))
+        );
+        assert_eq!(
+            assistant[2].get("reasoning_content"),
+            Some(&json!("The file confirms the behavior"))
+        );
+    }
+
+    #[test]
+    fn non_opted_in_providers_do_not_replay_historical_reasoning() {
+        let messages = mixed_historical_transcript();
+
+        for model in ["deepseek-v4-pro", "MiMo-example.gguf"] {
+            let config = test_config_with_replay(model, true, false);
+            let request =
+                ChatCompletionRequest::new(&config, &HashMap::new(), &messages, &[], None);
+            let value = serde_json::to_value(&request).expect("request should serialize");
+            let assistant = assistant_messages(&value);
+
+            assert_eq!(assistant.len(), 3, "{model}");
+            assert!(assistant[0].get("reasoning_content").is_none(), "{model}");
+            assert_eq!(
+                assistant[1].get("reasoning_content"),
+                Some(&json!("")),
+                "{model}"
+            );
+            assert!(assistant[2].get("reasoning_content").is_none(), "{model}");
+        }
+    }
+
+    #[test]
+    fn disabled_reasoning_skips_historical_replay_mask() {
+        let config = test_config_with_replay("mimo-v2.6-pro", false, true);
+        let messages = mixed_historical_transcript();
+
+        let request = ChatCompletionRequest::new(&config, &HashMap::new(), &messages, &[], None);
+        let value = serde_json::to_value(&request).expect("request should serialize");
+        let assistant = assistant_messages(&value);
+
+        assert_eq!(assistant.len(), 3);
+        assert!(
+            assistant
+                .iter()
+                .all(|message| message.get("reasoning_content").is_none())
+        );
+    }
+
+    #[test]
+    fn historical_tool_turn_mask_handles_turn_boundaries() {
+        use zdx_types::{ToolResult, ToolResultContent};
+
+        use crate::{ChatContentBlock, ChatMessage, MessageContent};
+
+        assert!(tool_call_turn_replay(&[]).is_empty());
+
+        let leading = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                phase: None,
+                context: None,
+                context_key: None,
+                content: MessageContent::Text("system".to_string()),
+            },
+            ChatMessage::assistant_blocks(vec![ChatContentBlock::tool_use(
+                "call_1",
+                "read",
+                json!({}),
+            )]),
+            ChatMessage::user("next turn"),
+        ];
+        assert_eq!(tool_call_turn_replay(&leading), vec![true, true, false]);
+
+        let consecutive_users = vec![
+            ChatMessage::user("first"),
+            ChatMessage::user("second"),
+            ChatMessage::assistant_blocks(vec![ChatContentBlock::tool_use(
+                "call_2",
+                "read",
+                json!({}),
+            )]),
+        ];
+        assert_eq!(
+            tool_call_turn_replay(&consecutive_users),
+            vec![false, true, true]
+        );
+
+        let mut mixed_tool_result = ChatMessage::tool_results(vec![ToolResult {
+            tool_use_id: "call_3".to_string(),
+            content: ToolResultContent::Text("result".to_string()),
+            is_error: false,
+        }]);
+        let MessageContent::Blocks(blocks) = &mut mixed_tool_result.content else {
+            unreachable!("tool results use block content");
+        };
+        blocks.insert(0, ChatContentBlock::text("tool result context"));
+        let mixed = vec![
+            ChatMessage::user("inspect"),
+            ChatMessage::assistant_blocks(vec![ChatContentBlock::tool_use(
+                "call_3",
+                "read",
+                json!({}),
+            )]),
+            mixed_tool_result,
+            ChatMessage::assistant_blocks(vec![ChatContentBlock::text("done")]),
+            ChatMessage::user("next turn"),
+        ];
+        assert_eq!(
+            tool_call_turn_replay(&mixed),
+            vec![true, true, true, true, false]
         );
     }
 

@@ -83,6 +83,7 @@ impl MinimaxClient {
                     extra_headers: HeaderMap::new(),
                     include_usage: true,
                     include_reasoning_content: config.thinking_enabled,
+                    replay_historical_tool_turns: false,
                     // MiniMax uses reasoning_split in extra_body, not the thinking parameter.
                     thinking: None,
                 },

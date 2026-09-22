@@ -124,6 +124,7 @@ fn zai_chat_config(config: ZaiConfig) -> (OpenAIChatCompletionsConfig, HashMap<S
             // reasoning round-trips through history the same way an
             // enabled toggle does elsewhere.
             include_reasoning_content: thinking_enabled || forced,
+            replay_historical_tool_turns: false,
             thinking,
         },
         extra_body,

@@ -96,6 +96,7 @@ impl DeepSeekClient {
                     extra_headers: HeaderMap::new(),
                     include_usage: true,
                     include_reasoning_content: config.thinking_enabled,
+                    replay_historical_tool_turns: false,
                     thinking: Some(config.thinking_enabled.into()),
                 },
                 extra_body,

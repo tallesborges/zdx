@@ -77,6 +77,7 @@ impl XiaomiPlanClient {
                 extra_headers: HeaderMap::new(),
                 include_usage: true,
                 include_reasoning_content: config.thinking_enabled,
+                replay_historical_tool_turns: true,
                 thinking: Some(config.thinking_enabled.into()),
             }),
         }
@@ -113,4 +114,22 @@ pub fn build(
         None,
         ctx.thinking_level.is_enabled(),
     )?)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn xiaomi_plan_enables_historical_tool_turn_replay() {
+        let client = XiaomiPlanClient::new(XiaomiPlanConfig {
+            api_key: "test-key".to_string(),
+            base_url: "https://token-plan-sgp.xiaomimimo.com/v1".to_string(),
+            model: "mimo-v2.6-pro".to_string(),
+            max_tokens: Some(4096),
+            prompt_cache_key: None,
+            thinking_enabled: true,
+        });
+        assert!(client.inner.replays_historical_tool_turns());
+    }
 }

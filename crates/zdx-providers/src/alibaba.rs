@@ -97,6 +97,7 @@ impl AlibabaClient {
                     extra_headers: HeaderMap::new(),
                     include_usage: true,
                     include_reasoning_content: config.thinking_enabled,
+                    replay_historical_tool_turns: false,
                     // Qwen uses the top-level `enable_thinking` flag (via extra_body),
                     // not the `thinking: { type }` object.
                     thinking: None,

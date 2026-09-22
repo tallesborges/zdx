@@ -76,6 +76,7 @@ impl LMStudioClient {
                 extra_headers: HeaderMap::new(),
                 include_usage: true,
                 include_reasoning_content: config.thinking_enabled,
+                replay_historical_tool_turns: false,
                 thinking: None,
             }),
         }
@@ -112,4 +113,22 @@ pub fn build(
         ctx.cache_key.clone(),
         ctx.thinking_level.is_enabled(),
     )?)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_mimo_name_does_not_enable_historical_replay() {
+        let client = LMStudioClient::new(LMStudioConfig {
+            api_key: "lm-studio".to_string(),
+            base_url: "http://localhost:1234/v1".to_string(),
+            model: "MiMo-example.gguf".to_string(),
+            max_tokens: Some(4096),
+            prompt_cache_key: None,
+            thinking_enabled: true,
+        });
+        assert!(!client.inner.replays_historical_tool_turns());
+    }
 }

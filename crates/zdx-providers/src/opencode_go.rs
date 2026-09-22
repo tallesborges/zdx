@@ -12,7 +12,9 @@ use crate::anthropic::types::EffortLevel as AnthropicEffortLevel;
 use crate::gemini::api::{GeminiClient, GeminiConfig};
 use crate::gemini::shared::GeminiThinkingConfig;
 use crate::openai::api::{OpenAIClient, OpenAIConfig};
-use crate::openai::chat_completions::{OpenAIChatCompletionsClient, OpenAIChatCompletionsConfig};
+use crate::openai::chat_completions::{
+    OpenAIChatCompletionsClient, OpenAIChatCompletionsConfig, ThinkingConfig,
+};
 use crate::shared::merge_system_prompt;
 use crate::{ProviderKind, ProviderStream, StreamingProvider};
 
@@ -99,6 +101,39 @@ fn resolve_go_route(api_hint: Option<&str>) -> GoRoute {
         .unwrap_or(GoRoute::OpenAICompletions)
 }
 
+fn is_mimo_model(model: &str) -> bool {
+    model.split(['/', ':']).any(|id| {
+        id.get(..5)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("mimo-"))
+    })
+}
+
+fn chat_completions_thinking(model: &str, enabled: bool) -> Option<ThinkingConfig> {
+    (enabled || is_mimo_model(model)).then(|| enabled.into())
+}
+
+fn chat_completions_config(
+    config: OpencodeGoConfig,
+    session_headers: HeaderMap,
+) -> OpenAIChatCompletionsConfig {
+    let is_mimo = is_mimo_model(&config.model);
+    let thinking = chat_completions_thinking(&config.model, config.thinking_enabled);
+    OpenAIChatCompletionsConfig {
+        api_key: config.api_key,
+        base_url: format!("{}/v1", config.base_url),
+        model: config.model,
+        max_tokens: config.max_tokens,
+        max_completion_tokens: None,
+        reasoning_effort: None,
+        prompt_cache_key: None,
+        extra_headers: session_headers,
+        include_usage: true,
+        include_reasoning_content: config.thinking_enabled,
+        replay_historical_tool_turns: is_mimo,
+        thinking,
+    }
+}
+
 /// `OpenCode` Go requires a stable per-conversation id on every request so it
 /// can keep a conversation on one prompt cache; requests without it are rejected.
 const SESSION_HEADER: &str = "x-opencode-session";
@@ -176,23 +211,10 @@ impl OpencodeGoClient {
                 // The OpenCode proxy rejects `reasoning` and `prompt_cache_key`, so omit those.
                 // Reasoning models (e.g. Kimi) need `thinking` + `include_reasoning_content`
                 // so `reasoning_content` round-trips in assistant messages.
-                Box::new(OpenAIChatCompletionsClient::new(
-                    OpenAIChatCompletionsConfig {
-                        api_key: config.api_key,
-                        base_url: format!("{}/v1", config.base_url),
-                        model: config.model,
-                        max_tokens: config.max_tokens,
-                        max_completion_tokens: None,
-                        reasoning_effort: None,
-                        prompt_cache_key: None,
-                        extra_headers: session_headers,
-                        include_usage: true,
-                        include_reasoning_content: config.thinking_enabled,
-                        thinking: config
-                            .thinking_enabled
-                            .then(|| config.thinking_enabled.into()),
-                    },
-                ))
+                Box::new(OpenAIChatCompletionsClient::new(chat_completions_config(
+                    config,
+                    session_headers,
+                )))
             }
         };
 
@@ -248,7 +270,27 @@ pub fn build(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+    use zdx_types::{ToolResult, ToolResultContent};
+
     use super::*;
+
+    fn config(model: &str, thinking_enabled: bool) -> OpencodeGoConfig {
+        OpencodeGoConfig {
+            api_key: "test-key".to_string(),
+            base_url: "https://opencode.ai/zen/go".to_string(),
+            model: model.to_string(),
+            max_tokens: Some(4096),
+            fallback_max_tokens: 4096,
+            thinking_enabled,
+            thinking_budget_tokens: 0,
+            thinking_effort: None,
+            gemini_thinking: None,
+            reasoning_effort: None,
+            cache_key: None,
+            api_hint: Some("openai-completions".to_string()),
+        }
+    }
 
     #[test]
     fn session_encoding_preserves_distinct_thread_ids() {
@@ -284,5 +326,56 @@ mod tests {
     #[test]
     fn test_resolve_route_defaults_to_openai_completions_when_missing_hint() {
         assert_eq!(resolve_go_route(None), GoRoute::OpenAICompletions);
+    }
+
+    #[test]
+    fn mimo_off_sends_explicit_thinking_disable() {
+        let thinking = chat_completions_thinking("mimo-v2.6-pro", false)
+            .expect("MiMo needs an explicit thinking toggle");
+        assert_eq!(thinking.kind, "disabled");
+        assert!(chat_completions_thinking("kimi-k3", false).is_none());
+    }
+
+    #[test]
+    fn mimo_off_serializes_explicit_disable_without_reasoning_history() {
+        let config = chat_completions_config(
+            config("mimo-v2.6-pro", false),
+            session_headers(Some("thread")),
+        );
+        assert!(config.replay_historical_tool_turns);
+        assert!(!config.include_reasoning_content);
+
+        let messages = vec![
+            crate::ChatMessage::user("inspect"),
+            crate::ChatMessage::assistant_blocks(vec![
+                crate::ChatContentBlock::Reasoning(crate::ReasoningBlock {
+                    text: Some("historical thinking".to_string()),
+                    replay: None,
+                }),
+                crate::ChatContentBlock::tool_use("call_1", "read", json!({})),
+            ]),
+            crate::ChatMessage::tool_results(vec![ToolResult {
+                tool_use_id: "call_1".to_string(),
+                content: ToolResultContent::Text("result".to_string()),
+                is_error: false,
+            }]),
+            crate::ChatMessage::user("continue"),
+        ];
+        let request = crate::openai::chat_completions::request_json_for_test(&config, &messages);
+
+        assert_eq!(request["thinking"], json!({"type": "disabled"}));
+        assert!(request["messages"][1].get("reasoning_content").is_none());
+    }
+
+    #[test]
+    fn historical_replay_is_enabled_only_for_mimo_chat_completions() {
+        let mimo = chat_completions_config(
+            config("mimo-v2.6-flash", true),
+            session_headers(Some("mimo")),
+        );
+        let kimi = chat_completions_config(config("kimi-k3", true), session_headers(Some("kimi")));
+
+        assert!(mimo.replay_historical_tool_turns);
+        assert!(!kimi.replay_historical_tool_turns);
     }
 }
