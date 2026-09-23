@@ -1007,7 +1007,7 @@ mod tests {
     fn test_caller_timeout_only_tunes_the_wait_bound() {
         fn bound_for(requested: Option<u64>) -> Option<Duration> {
             let handoff = Handoff {
-                bound: Duration::from_secs(120),
+                bound: Duration::from_mins(2),
                 bg_id: "bg-test".to_string(),
                 stdout_log: std::path::PathBuf::from("/dev/null"),
                 stderr_log: std::path::PathBuf::from("/dev/null"),
@@ -1018,8 +1018,8 @@ mod tests {
         }
 
         // Omitted and 0 both keep the configured bound.
-        assert_eq!(bound_for(None), Some(Duration::from_secs(120)));
-        assert_eq!(bound_for(Some(0)), Some(Duration::from_secs(120)));
+        assert_eq!(bound_for(None), Some(Duration::from_mins(2)));
+        assert_eq!(bound_for(Some(0)), Some(Duration::from_mins(2)));
         // A positive value replaces it, in either direction.
         assert_eq!(bound_for(Some(5)), Some(Duration::from_secs(5)));
         assert_eq!(bound_for(Some(600)), Some(Duration::from_mins(10)));
@@ -1496,7 +1496,7 @@ mod handoff_tests {
             // outcomes are far apart: relocating on the caller's 1s bound
             // cannot be confused with relocating on this one, however loaded
             // the machine is.
-            Some(recorder.handoff(Duration::from_secs(120))),
+            Some(recorder.handoff(Duration::from_mins(2))),
         )
         .await;
         let elapsed = started.elapsed();

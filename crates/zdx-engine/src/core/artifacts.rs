@@ -570,7 +570,7 @@ mod tests {
         assert_eq!(both.source, ArtifactSource::Both);
         assert_eq!(both.kind, ArtifactKind::Html);
         assert_eq!(both.message_sequences, vec![1]);
-        assert!(both.rel.as_deref() == Some("report.html"));
+        assert_eq!(both.rel.as_deref(), Some("report.html"));
 
         let sent = artifacts
             .iter()
