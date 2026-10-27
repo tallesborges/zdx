@@ -223,6 +223,23 @@ input_images = true
 output_limit = 128000
 
 [[model]]
+id = "openai:gpt-6.1-terra"
+provider = "openai"
+display_name = "GPT-6.1 Terra"
+context_limit = 1050000
+
+[model.pricing]
+input = 1.0
+output = 5.0
+cache_read = 0.05
+cache_write = 1.25
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
+[[model]]
 id = "gpt-6-astra"
 provider = "openai-codex"
 display_name = "GPT-6 Astra"
@@ -277,6 +294,23 @@ output_limit = 128000
 id = "gpt-6.1-sol"
 provider = "openai-codex"
 display_name = "GPT-6.1 Sol"
+context_limit = 1050000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
+[[model]]
+id = "gpt-6.1-terra"
+provider = "openai-codex"
+display_name = "GPT-6.1 Terra"
 context_limit = 1050000
 
 [model.pricing]

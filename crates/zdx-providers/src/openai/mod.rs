@@ -43,9 +43,11 @@ fn supports_max_effort(model: &str) -> bool {
 }
 
 /// Models that reject `none`/`minimal` effort because reasoning cannot be
-/// disabled. `gpt-6-astra` only accepts `low`..=`max`.
+/// disabled. `gpt-6-astra` only accepts `low`..=`max`; `gpt-6.1-terra` accepts
+/// `none`.
 fn requires_reasoning(model: &str) -> bool {
-    bare_model_id(model).starts_with("gpt-6")
+    let id = bare_model_id(model);
+    id.starts_with("gpt-6") && !id.starts_with("gpt-6.1-terra")
 }
 
 /// Reasoning effort for the first-party `OpenAI` Responses API (API-key and
@@ -112,6 +114,20 @@ mod tests {
             assert_eq!(
                 responses_reasoning_effort(ThinkingLevel::XHigh, model),
                 Some("xhigh")
+            );
+        }
+    }
+
+    #[test]
+    fn gpt_6_1_terra_accepts_none_and_max() {
+        for model in ["gpt-6.1-terra", "openai:gpt-6.1-terra"] {
+            assert_eq!(
+                responses_reasoning_effort(ThinkingLevel::Off, model),
+                Some("none")
+            );
+            assert_eq!(
+                responses_reasoning_effort(ThinkingLevel::Max, model),
+                Some("max")
             );
         }
     }
