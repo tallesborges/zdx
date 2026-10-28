@@ -1083,9 +1083,14 @@ fn suggestion_preview(suggestion: &str) -> String {
 /// synthetically, so without this the context the turn started from would never
 /// be visible anywhere.
 fn handoff_record(suggestion: &str) -> String {
-    let html = to_telegram_html(suggestion);
+    let quoted = suggestion
+        .lines()
+        .map(|line| format!("> {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let html = to_telegram_html(&quoted);
     let truncated = truncate_telegram_html(&html, SUGGESTION_PREVIEW_MAX_CHARS);
-    format!("🔀 <b>Handoff context</b>\n\n{truncated}")
+    format!("🔀 <b>Handoff context</b>\n{truncated}")
 }
 
 /// The user's `/btw` question posted into the new topic. The seed reaches the
@@ -1415,12 +1420,16 @@ mod tests {
     }
 
     /// The handoff seed is dispatched synthetically, so this record is the only
-    /// place the generated context is ever visible. It carries no Accept hint.
+    /// place the generated context is ever visible. It is quoted like the btw
+    /// question and carries no Accept hint.
     #[test]
-    fn handoff_record_converts_markdown_and_offers_no_action() {
-        let record = handoff_record("**Fix** `<script>` & stuff");
-        assert!(record.contains("Handoff context"));
-        assert!(record.contains("<b>Fix</b> <code>&lt;script&gt;</code> &amp; stuff"));
+    fn handoff_record_quotes_markdown_and_offers_no_action() {
+        let record = handoff_record("## Goal\n\n**Fix** `<script>` & stuff\n\n- one\n- two");
+        assert!(record.starts_with("🔀 <b>Handoff context</b>\n<blockquote>"));
+        assert!(record.contains("<b>Goal</b>"));
+        assert!(record.contains("<b>Fix</b> &lt;script&gt; &amp; stuff"));
+        assert!(record.contains("- one\n- two</blockquote>"));
+        assert_eq!(record.matches("<blockquote>").count(), 1);
         assert!(!record.contains("Accept"));
         assert!(!record.contains("regenerate"));
     }
