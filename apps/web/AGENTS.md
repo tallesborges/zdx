@@ -36,8 +36,9 @@ has been removed.
 - `src/lib/transcript.ts`: projects the flat activity stream into a three-level collapsible tree
   (`work` turn → folded `group` → single `tool`) and derives the one-line summaries
 - `src/lib/diff.ts`: unified-diff parser with word-level intra-line segmentation
-- `src/lib/highlight.ts`: compact line-local syntax tokenizer + span merger (six `--hljs-*` classes)
-- `src/lib/markdown.ts`: `marked` + allowlist sanitizer (model output is untrusted)
+- `src/lib/highlight.ts`: compact line-local syntax tokenizer + span merger (six `--hljs-*` classes), used by the diff view and text artifact previews
+- `src/lib/markdown.ts`: `marked` + allowlist sanitizer (model output and Markdown artifacts are untrusted). It parses with `DOMParser`, never `innerHTML` on a live-document element: that starts image loads and fires their `onerror` before the sanitizer runs (verified in Chromium)
+- `src/lib/textPreview.ts`: text artifact preview limits (fetch up to 10 MiB, render the first 256 KiB, syntax colours up to 3000 lines), UTF-8 decoding of the cut (NUL byte = not text), and line splitting. No `$lib` imports; tested by `text-preview.test.mjs` (`bun test apps/web/text-preview.test.mjs`)
 - `src/lib/time.ts`: quota reset formatting — `resets in 2h 14m` countdown plus a local clock time
   (`today 14:30`, `tomorrow 09:00`, `Thu 14:30`). Both take `now` explicitly.
 - `src/lib/run.ts`: formatting for the shared live run status (`formatSecs`, `runAges`)
@@ -51,11 +52,11 @@ has been removed.
   all lineage-only reads `N workers · status unavailable` rather than `N unknown`.
 - `src/lib/demo.ts`: **DEV-only** fixtures behind `?demo=1`; dropped from prod builds. Artifact bytes can be
   replaced per path from a browser test with `window.__zdxDemoArtifacts = { [path]: Blob }`
-- `src/components/`: `Collapse`, `Markdown`, `DiffView`, `Drawer`, `TabStrip`, `Icon`,
+- `src/components/`: `Collapse`, `Markdown`, `DiffView`, `TextView` (text and code with line numbers, highlighting, and a Wrap toggle that defaults on for plain text), `Drawer`, `TabStrip`, `Icon`,
   `RunStatusLine` (the running turn's label, turn age, last-event and heartbeat ages under the thread header),
   `WorkGroup` (the "Worked for 5m" turn divider), `GroupLine` (folded run), `ToolLine` (one call),
   `ArtifactAttachments` (inline image/audio/file-card rows under a message),
-  `ArtifactPreview` (full-screen preview overlay; HTML goes through a sandboxed
+  `ArtifactPreview` (full-screen preview overlay; the `markdown` kind renders through `Markdown` with a Preview/Source switch, the `text` kind through `TextView`; HTML goes through a sandboxed
   iframe with an opaque origin, never the app's credentials; an image goes to the annotator as its
   canonical copy from `api.artifactImage` (`/artifacts/image`; identity from `X-Zdx-*` headers); a `422`
   (format, or over the 25 MiB / 40 MP limits on originals) shows the original as a passive `<img>` with the

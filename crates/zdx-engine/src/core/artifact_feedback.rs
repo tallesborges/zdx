@@ -456,6 +456,9 @@ pub fn save_feedback(
     match kind {
         ArtifactKind::Html | ArtifactKind::Image => validate_targets_for(kind, submission)?,
         ArtifactKind::Audio => return Err(FeedbackError::UnsupportedArtifact("audio")),
+        ArtifactKind::Markdown | ArtifactKind::Text => {
+            return Err(FeedbackError::UnsupportedArtifact("text"));
+        }
         ArtifactKind::Other => return Err(FeedbackError::UnsupportedArtifact("this kind of")),
     }
     if kind == ArtifactKind::Image {

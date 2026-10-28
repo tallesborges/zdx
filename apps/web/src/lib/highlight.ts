@@ -1,5 +1,5 @@
 /**
- * Compact syntax highlighter for the diff view.
+ * Compact syntax highlighter for the diff view and text artifact previews.
  *
  * Deliberately not a full language parser. Diff hunks are *fragments* — a line
  * can start inside a string or block comment whose opener was never sent — so a
@@ -158,6 +158,11 @@ export function detectLanguage(path: string): LangSpec {
   if (BY_NAME[file]) return BY_NAME[file];
   const ext = file.includes(".") ? file.split(".").pop()! : "";
   return BY_EXT[ext] ?? PLAIN;
+}
+
+/** True when the path has no syntax rules (plain text, logs, CSV). */
+export function isPlainLanguage(lang: LangSpec): boolean {
+  return lang === PLAIN;
 }
 
 const IDENT_START = /[A-Za-z_$]/;

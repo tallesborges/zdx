@@ -803,8 +803,69 @@ export const demoArtifacts: ArtifactsResponse = {
       message_sequences: [],
       modified_at: "2026-09-20T17:10:00.000Z",
     },
+    {
+      key: "5e6f7a8b9c0d1e2f",
+      name: "release-notes.md",
+      path: "/Users/me/.zdx/artifacts/threads/demo/release-notes.md",
+      rel: "release-notes.md",
+      mime: "text/markdown",
+      kind: "markdown",
+      size_bytes: 620,
+      exists: true,
+      source: "generated",
+      message_sequences: [],
+      modified_at: "2026-09-20T17:08:00.000Z",
+    },
+    {
+      key: "6f7a8b9c0d1e2f3a",
+      name: "retry.rs",
+      path: "/Users/me/.zdx/artifacts/threads/demo/retry.rs",
+      rel: "retry.rs",
+      mime: "text/plain",
+      kind: "text",
+      size_bytes: 540,
+      exists: true,
+      source: "generated",
+      message_sequences: [],
+      modified_at: "2026-09-20T17:07:00.000Z",
+    },
   ],
 };
+
+const DEMO_MARKDOWN = `# Release notes
+
+Changes since **v0.4**:
+
+- Text, Markdown, and code artifacts open in the preview.
+- Long files show the first part, with a download for the rest.
+
+| Kind | Preview |
+| --- | --- |
+| Markdown | rendered, with a Source view |
+| Code | line numbers and syntax colours |
+
+\`\`\`rust
+fn main() { println!("hi"); }
+\`\`\`
+
+See [the docs](https://example.com/docs).
+`;
+
+const DEMO_RUST = `use std::time::Duration;
+
+/// Retries \`op\` up to \`attempts\` times with a fixed delay.
+pub fn retry<T, E>(attempts: u32, delay: Duration, mut op: impl FnMut() -> Result<T, E>) -> Result<T, E> {
+    let mut last = op();
+    for _ in 1..attempts {
+        if last.is_ok() {
+            break;
+        }
+        std::thread::sleep(delay);
+        last = op();
+    }
+    last
+}
+`;
 
 /**
  * A page that exercises annotation: a fixed header, an inner scroll container,
@@ -909,8 +970,8 @@ export async function demoArtifactVersion(path: string): Promise<ArtifactVersion
 }
 
 /**
- * Demo bytes for artifact previews: a page, a PNG chart, a passive SVG, and
- * silence audio. A browser test can serve other bytes for a path through
+ * Demo bytes for artifact previews: a page, a PNG chart, a passive SVG,
+ * Markdown and Rust text, and silence audio. A browser test can serve other bytes for a path through
  * `window.__zdxDemoArtifacts`.
  */
 export async function demoArtifactBlob(path: string): Promise<Blob> {
@@ -921,6 +982,8 @@ export async function demoArtifactBlob(path: string): Promise<Blob> {
     return new Blob([demoArtifactPage(path)], { type: "text/html" });
   }
   if (path.endsWith(".png")) return await demoChartPng();
+  if (path.endsWith(".md")) return new Blob([DEMO_MARKDOWN], { type: "text/markdown" });
+  if (path.endsWith(".rs")) return new Blob([DEMO_RUST], { type: "text/plain" });
   if (/\.(png|jpg|jpeg|gif|webp|svg)$/.test(path)) {
     return new Blob(
       [

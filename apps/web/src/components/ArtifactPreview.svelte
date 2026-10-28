@@ -1,11 +1,15 @@
 <script lang="ts">
   import { onDestroy, untrack } from "svelte";
-  import { api, ApiError } from "$lib/api";
+  import { api, ApiError, formatBytes } from "$lib/api";
   import { draftKey, loadDraftRecord } from "$lib/draftStore";
   import { confirmAction, telegramUserId } from "$lib/telegram";
+  import { decodeTextPreview, TEXT_FETCH_LIMIT, TEXT_RENDER_LIMIT } from "$lib/textPreview";
+  import type { TextPreview } from "$lib/textPreview";
   import type { ArtifactAttachment, ArtifactImageCopy } from "$lib/types";
   import ArtifactAnnotator from "./ArtifactAnnotator.svelte";
   import Icon from "./Icon.svelte";
+  import Markdown from "./Markdown.svelte";
+  import TextView from "./TextView.svelte";
 
   interface Props {
     threadId: string;
@@ -23,6 +27,15 @@
   let imageCopy = $state<ArtifactImageCopy | null>(null);
   /** Why an image is shown as a preview only (the server's reason). */
   let passiveReason = $state<string | null>(null);
+  /** Markdown, plain-text, and code files: the decoded start of the file. */
+  let textPreview = $state<TextPreview | null>(null);
+  /** Markdown shows rendered by default; Source shows the file as text. */
+  let markdownSource = $state(false);
+  /** Size of the fetched text file (the listed size can be older). */
+  let textTotal = $state(0);
+  const isText = $derived(artifact.kind === "markdown" || artifact.kind === "text");
+  /** Text files this large are not fetched for a preview, only downloaded. */
+  const textTooLarge = $derived(isText && artifact.size_bytes > TEXT_FETCH_LIMIT);
   let error = $state("");
   let loading = $state(true);
   /** The annotator is shown: HTML, or an image with its canonical copy. */
@@ -99,6 +112,7 @@
     const path = artifact.path;
     const kind = artifact.kind;
     const exists = artifact.exists;
+    const size = artifact.size_bytes;
 
     return untrack(() => {
       const previous = url;
@@ -106,12 +120,15 @@
       htmlBlob = null;
       imageCopy = null;
       passiveReason = null;
+      textPreview = null;
+      markdownSource = false;
       if (previous) URL.revokeObjectURL(previous);
       loading = true;
       error = "";
-      // Images, audio and HTML need bytes to render. Other kinds fetch lazily
-      // through the Download button instead.
-      if (kind === "other" || !exists) {
+      const text = kind === "markdown" || kind === "text";
+      // Images, audio, HTML, and text need bytes to render. Other kinds (and
+      // very large text) fetch lazily through the Download button instead.
+      if (kind === "other" || !exists || (text && size > TEXT_FETCH_LIMIT)) {
         loading = false;
         return;
       }
@@ -121,12 +138,18 @@
           ? loadImage(target, path)
           : api.artifactBlob(target, path).then((blob) => ({ copy: null, reason: null, blob }));
       void load
-        .then(({ copy, reason, blob }) => {
+        .then(async ({ copy, reason, blob }) => {
           if (cancelled) return;
           passiveReason = reason;
           if (copy) imageCopy = copy;
           else if (blob) {
             if (kind === "html") htmlBlob = blob;
+            if (text) {
+              const head = new Uint8Array(await blob.slice(0, TEXT_RENDER_LIMIT + 1).arrayBuffer());
+              if (cancelled) return;
+              textPreview = decodeTextPreview(head);
+              textTotal = blob.size;
+            }
             url = URL.createObjectURL(blob);
           }
         })
@@ -169,10 +192,16 @@
         <p class="m-0 truncate text-sm font-semibold">{artifact.name}</p>
         <p class="m-0 truncate font-mono text-xxs text-muted-foreground">{artifact.mime}</p>
       </div>
-      {#if artifact.kind === "other"}
-        <button type="button" onclick={save} class="preview-btn">
+      {#if artifact.kind === "markdown" && textPreview && !textPreview.binary}
+        <div class="seg" role="group" aria-label="Markdown view">
+          <button type="button" class:on={!markdownSource} aria-pressed={!markdownSource} onclick={() => (markdownSource = false)}>Preview</button>
+          <button type="button" class:on={markdownSource} aria-pressed={markdownSource} onclick={() => (markdownSource = true)}>Source</button>
+        </div>
+      {/if}
+      {#if artifact.kind === "other" || (isText && artifact.exists)}
+        <button type="button" onclick={save} class="preview-btn" aria-label="Download {artifact.name}">
           <Icon name="download" />
-          <span>Download</span>
+          {#if artifact.kind === "other"}<span>Download</span>{/if}
         </button>
       {/if}
       <button type="button" onclick={requestClose} aria-label="Close preview" class="preview-icon-btn">
@@ -202,9 +231,31 @@
         <div class="p-4">
           <audio controls src={url} class="w-full"></audio>
         </div>
+      {:else if isText && textPreview && !textPreview.binary}
+        {#if textPreview.truncated}
+          <p class="passive-note">
+            Showing the first {formatBytes(textPreview.shownBytes)} of {formatBytes(textTotal)}. Download
+            the file to see all of it.
+          </p>
+        {/if}
+        {#if artifact.kind === "markdown" && !markdownSource}
+          <div class="px-4 py-3">
+            <Markdown source={textPreview.text} />
+          </div>
+        {:else}
+          <TextView text={textPreview.text} path={artifact.name} />
+        {/if}
       {:else}
         <div class="flex flex-col items-center gap-2 py-8">
-          <p class="m-0 text-xs text-muted-foreground">No inline preview for this file type.</p>
+          <p class="m-0 text-xs text-muted-foreground">
+            {#if textTooLarge}
+              This file is too large to preview ({formatBytes(artifact.size_bytes)}).
+            {:else if textPreview?.binary}
+              This file does not contain text, so there is no inline preview.
+            {:else}
+              No inline preview for this file type.
+            {/if}
+          </p>
           <button type="button" onclick={save} class="preview-btn">
             <Icon name="download" />
             <span>Download</span>
@@ -270,6 +321,25 @@
     padding: 0.5rem 0.75rem;
     font-size: 0.75rem;
     color: var(--color-muted-foreground);
+  }
+
+  .seg {
+    display: inline-flex;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .seg button {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.6875rem;
+    color: var(--color-muted-foreground);
+  }
+
+  .seg button.on {
+    background: var(--color-accent);
+    color: var(--color-foreground);
+    font-weight: 600;
   }
 
   .preview-btn {

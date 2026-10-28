@@ -1,8 +1,8 @@
 /**
- * Markdown rendering for assistant messages.
+ * Markdown rendering for assistant messages and Markdown artifacts.
  *
- * The API returns model text verbatim, so output is untrusted: we disable
- * marked's raw-HTML passthrough and sanitize the result against a tag/attribute
+ * Both are untrusted, and marked passes raw HTML through, so the result is
+ * parsed in an inert document and sanitized against a tag/attribute
  * allowlist before it reaches {@html}.
  */
 import { marked } from "marked";
@@ -15,6 +15,11 @@ const ALLOWED_TAGS = new Set([
   "table", "thead", "tbody", "tr", "th", "td", "span",
 ]);
 
+/** Removed with their content: unwrapping would show code or CSS as text. */
+const DROPPED_TAGS = new Set([
+  "script", "style", "template", "noscript", "iframe", "object", "embed", "title", "head",
+]);
+
 const ALLOWED_ATTRS: Record<string, Set<string>> = {
   a: new Set(["href", "title"]),
   code: new Set(["class"]),
@@ -24,6 +29,11 @@ const ALLOWED_ATTRS: Record<string, Set<string>> = {
 function sanitize(root: Element): void {
   for (const el of Array.from(root.querySelectorAll("*"))) {
     const tag = el.tagName.toLowerCase();
+
+    if (DROPPED_TAGS.has(tag)) {
+      el.remove();
+      continue;
+    }
 
     if (!ALLOWED_TAGS.has(tag)) {
       el.replaceWith(...Array.from(el.childNodes));
@@ -51,10 +61,10 @@ function sanitize(root: Element): void {
 
 export function renderMarkdown(source: string): string {
   const raw = marked.parse(source, { async: false });
-  const host = document.createElement("div");
-  // marked with sanitize removed still emits inline HTML; parsing into a
-  // detached element lets us strip it structurally rather than by regex.
-  host.innerHTML = raw;
-  sanitize(host);
-  return host.innerHTML;
+  // A DOMParser document is inert: no scripts run and no images load. Parsing
+  // into an element of the live document would start loads (and fire their
+  // `onerror` handlers) before the sanitizer could remove them.
+  const body = new DOMParser().parseFromString(raw, "text/html").body;
+  sanitize(body);
+  return body.innerHTML;
 }

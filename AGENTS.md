@@ -68,6 +68,7 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `bun test apps/web/artifact-link.test.mjs` (`Open artifact` start-parameter parsing and key lookup)
 - `bun test apps/web/artifact-list.test.mjs` (Artifacts tab order and day groups)
 - `bun test apps/web/version-match.test.mjs` (artifact Update: which notes move to a newer version)
+- `bun test apps/web/text-preview.test.mjs` (text artifact preview: UTF-8 cut, binary detection, line splitting)
 
 ## Verification
 

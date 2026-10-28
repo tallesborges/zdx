@@ -30,14 +30,18 @@ const MAX_ARTIFACT_FILES: usize = 500;
 /// Maximum directory depth below the thread artifact dir.
 const MAX_WALK_DEPTH: usize = 6;
 
-/// How an artifact is previewed. `other` covers everything else (PDF, text,
-/// video, archives): the Mini App offers download, not a preview.
+/// How an artifact is previewed. `markdown` renders as a document, `text`
+/// (plain text, data, and source code) as text with line numbers. `other`
+/// covers everything else (PDF, video, archives): the Mini App offers
+/// download, not a preview.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ArtifactKind {
     Image,
     Audio,
     Html,
+    Markdown,
+    Text,
     Other,
 }
 
@@ -49,6 +53,8 @@ impl ArtifactKind {
             Self::Image => "image",
             Self::Audio => "audio",
             Self::Html => "html",
+            Self::Markdown => "markdown",
+            Self::Text => "text",
             Self::Other => "other",
         }
     }
@@ -167,9 +173,23 @@ pub fn mime_for_path(path: &Path) -> &'static str {
         Some("flac") => "audio/flac",
         Some("html" | "htm") => "text/html",
         Some("pdf") => "application/pdf",
-        Some("txt") => "text/plain",
-        Some("md") => "text/markdown",
-        Some("json") => "application/json",
+        Some("md" | "markdown") => "text/markdown",
+        Some("csv") => "text/csv",
+        Some("tsv") => "text/tab-separated-values",
+        Some("json" | "jsonc") => "application/json",
+        Some("jsonl" | "ndjson") => "application/x-ndjson",
+        Some("xml") => "application/xml",
+        Some("yaml" | "yml") => "application/yaml",
+        Some("toml") => "application/toml",
+        Some("js" | "mjs" | "cjs") => "text/javascript",
+        Some("css") => "text/css",
+        Some("diff" | "patch") => "text/x-diff",
+        Some(
+            "txt" | "log" | "rs" | "ts" | "tsx" | "jsx" | "mts" | "cts" | "svelte" | "vue" | "scss"
+            | "less" | "py" | "pyi" | "go" | "sh" | "bash" | "zsh" | "fish" | "sql" | "c" | "h"
+            | "cc" | "cpp" | "hpp" | "java" | "kt" | "swift" | "rb" | "php" | "lua" | "ini" | "cfg"
+            | "conf",
+        ) => "text/plain",
         Some("mp4") => "video/mp4",
         Some("mov") => "video/quicktime",
         Some("webm") => "video/webm",
@@ -178,7 +198,8 @@ pub fn mime_for_path(path: &Path) -> &'static str {
 }
 
 /// Preview kind for a path: images and audio render inline, HTML gets the
-/// sandboxed full-screen preview, everything else is download-only.
+/// sandboxed full-screen preview, Markdown renders as a document, other text
+/// (plain text, data, source code) as text, everything else is download-only.
 pub fn kind_for_path(path: &Path) -> ArtifactKind {
     let mime = mime_for_path(path);
     if mime.starts_with("image/") {
@@ -187,6 +208,19 @@ pub fn kind_for_path(path: &Path) -> ArtifactKind {
         ArtifactKind::Audio
     } else if mime == "text/html" {
         ArtifactKind::Html
+    } else if mime == "text/markdown" {
+        ArtifactKind::Markdown
+    } else if mime.starts_with("text/")
+        || matches!(
+            mime,
+            "application/json"
+                | "application/x-ndjson"
+                | "application/xml"
+                | "application/yaml"
+                | "application/toml"
+        )
+    {
+        ArtifactKind::Text
     } else {
         ArtifactKind::Other
     }
@@ -594,7 +628,14 @@ mod tests {
         assert_eq!(kind_for_path(Path::new("a.ogg")), ArtifactKind::Audio);
         assert_eq!(kind_for_path(Path::new("a.mp3")), ArtifactKind::Audio);
         assert_eq!(kind_for_path(Path::new("a.html")), ArtifactKind::Html);
+        assert_eq!(kind_for_path(Path::new("a.MD")), ArtifactKind::Markdown);
+        for text in [
+            "a.txt", "a.log", "a.csv", "a.json", "a.yaml", "a.rs", "a.ts", "a.py",
+        ] {
+            assert_eq!(kind_for_path(Path::new(text)), ArtifactKind::Text, "{text}");
+        }
         assert_eq!(kind_for_path(Path::new("a.pdf")), ArtifactKind::Other);
+        assert_eq!(kind_for_path(Path::new("a.zip")), ArtifactKind::Other);
         assert_eq!(mime_for_path(Path::new("a.pdf")), "application/pdf");
     }
 
