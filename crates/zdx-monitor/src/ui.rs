@@ -4,7 +4,9 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs};
 use crate::app::{MonitorApp, Section, TargetPickerState};
 use crate::tabs::agents::{render_active_agents, render_agent_overlay};
 use crate::tabs::background::{render_background, render_background_detail};
-use crate::tabs::config::{render_config, render_model_picker};
+use crate::tabs::config::{
+    config_footer_hint, render_config, render_model_picker, render_pending_write,
+};
 use crate::tabs::jobs::render_jobs;
 use crate::tabs::logs::{render_log_overlay, render_logs};
 use crate::tabs::services::render_services;
@@ -73,6 +75,10 @@ pub fn render(f: &mut Frame, app: &MonitorApp) {
     if let Some(picker) = &app.model_picker {
         render_model_picker(f, picker, f.area());
     }
+
+    if app.active_section == Section::Config {
+        render_pending_write(f, app, f.area());
+    }
 }
 
 fn render_tabs(f: &mut Frame, app: &MonitorApp, area: Rect) {
@@ -94,10 +100,12 @@ fn render_footer(f: &mut Frame, app: &MonitorApp, area: Rect) {
             "search: {}\u{2588}  (Enter accept · Esc clear)",
             app.log_query
         )
+    } else if app.active_section == Section::Config && app.config_confirm.is_some() {
+        config_footer_hint(app)
     } else if !app.status_message.is_empty() && app.status_section == app.active_section {
         app.status_message.clone()
     } else {
-        format!("{} • M mouse", footer_hint(app.active_section))
+        format!("{} • M mouse", footer_hint(app))
     };
     let footer = Paragraph::new(text)
         .style(Style::default().fg(Color::DarkGray))
@@ -105,8 +113,8 @@ fn render_footer(f: &mut Frame, app: &MonitorApp, area: Rect) {
     f.render_widget(footer, area);
 }
 
-fn footer_hint(section: Section) -> &'static str {
-    match section {
+fn footer_hint(app: &MonitorApp) -> String {
+    let hint = match app.active_section {
         Section::Services => {
             "↑↓ navigate • Enter toggle • r restart • R force • Tab/⇧Tab switch • q quit"
         }
@@ -115,9 +123,7 @@ fn footer_hint(section: Section) -> &'static str {
         Section::Jobs => {
             "↑↓ navigate • Enter model • d inherit • a archive • Tab/⇧Tab switch • q quit"
         }
-        Section::Config => {
-            "↑↓ select • Enter edit • d reset here / delete mode • D reset modes • p workspace • w target • PgUp/PgDn scroll • q quit"
-        }
+        Section::Config => return config_footer_hint(app),
         Section::Threads => {
             "↑↓ navigate • Enter preview • o raw • i timings • t kind • p project • / search • Esc clear • y copy ID"
         }
@@ -127,7 +133,8 @@ fn footer_hint(section: Section) -> &'static str {
         Section::Logs => {
             "↑↓ select • / search • l level • f target • [ ] file • L tail • Esc clear • Enter open • G follow • Tab switch • q quit"
         }
-    }
+    };
+    hint.to_string()
 }
 
 /// Spinner frame index derived from wall-clock seconds: the monitor redraws

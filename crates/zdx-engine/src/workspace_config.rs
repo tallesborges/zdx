@@ -6,11 +6,15 @@
 //! list comes from Telegram profile bindings (each bound `cwd` is its own
 //! workspace; several profiles may share one) plus the caller's current root.
 //!
-//! Writes name their target explicitly: the global config or the workspace's
-//! own overlay. Resetting removes a key from the target layer, so the value
-//! falls back to what the layers below supply. For a workspace that can be an
-//! ancestor overlay rather than the global config, which is why every setting
-//! carries its inherited value and origin next to the effective one.
+//! Writes go to one named file, the [`Scope`]'s own: the global config, or a
+//! workspace's own overlay. A workspace whose overlay is the global config
+//! file (the home directory, when `$ZDX_HOME` is `~/.zdx`) writes the global
+//! file. Resetting removes a key from that file, so the value falls back to
+//! what the layers below supply. For a workspace that can be an ancestor
+//! overlay rather than the global config, which is why every setting carries
+//! its inherited value and origin next to the effective one. A write also
+//! reaches every other workspace that layers the same file and does not set
+//! the key above it ([`reach`]).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -49,6 +53,9 @@ pub struct Workspace {
     pub overlay_path: PathBuf,
     /// Whether the overlay file exists.
     pub has_overlay: bool,
+    /// Whether the overlay is the global config file itself, so a write
+    /// "to this workspace" changes every workspace.
+    pub overlay_is_global: bool,
 }
 
 impl Workspace {
@@ -60,12 +67,32 @@ impl Workspace {
         let overlay_path = root.join(".zdx").join("config.toml");
         Self {
             has_overlay: overlay_path.is_file(),
+            overlay_is_global: same_file(&overlay_path, &paths::config_path()),
             root,
             name,
             profiles: Vec::new(),
             current,
             overlay_path,
         }
+    }
+}
+
+/// Whether two config paths name the same file, also through symlinks and
+/// when the file does not exist yet.
+fn same_file(a: &Path, b: &Path) -> bool {
+    a == b || canonical_file(a) == canonical_file(b)
+}
+
+/// Canonical form of a file path. A missing file resolves through its parent
+/// directory, so `<dir>/.zdx/config.toml` with `.zdx` linked to `$ZDX_HOME`
+/// matches the global config before either file exists.
+fn canonical_file(path: &Path) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => config::canonical_or_self(parent).join(name),
+        _ => path.to_path_buf(),
     }
 }
 
@@ -215,6 +242,16 @@ impl Setting {
     pub fn overridden_here(&self) -> bool {
         self.source.layer == Layer::Workspace
     }
+
+    /// Whether `scope`'s own file sets the value: what a reset there removes.
+    #[must_use]
+    pub fn set_in_own_file(&self, scope: Scope<'_>) -> bool {
+        if scope.writes_global_file() {
+            self.source.layer == Layer::Global
+        } else {
+            self.overridden_here()
+        }
+    }
 }
 
 /// A workspace with its settings, or the error that prevented loading them.
@@ -234,63 +271,69 @@ pub struct WorkspaceReport {
 pub fn report(current_root: Option<&Path>) -> Result<Vec<WorkspaceReport>> {
     Ok(discover(current_root)?
         .into_iter()
-        .map(|workspace| match load_settings(&workspace) {
-            Ok(settings) => WorkspaceReport {
-                workspace,
-                settings,
-                error: None,
+        .map(
+            |workspace| match load_settings(Scope::Workspace(&workspace)) {
+                Ok(settings) => WorkspaceReport {
+                    workspace,
+                    settings,
+                    error: None,
+                },
+                Err(error) => WorkspaceReport {
+                    workspace,
+                    settings: Vec::new(),
+                    error: Some(format!("{error:#}")),
+                },
             },
-            Err(error) => WorkspaceReport {
-                workspace,
-                settings: Vec::new(),
-                error: Some(format!("{error:#}")),
-            },
-        })
+        )
         .collect())
 }
 
-/// Loads the model settings of `workspace` from its real config layers.
+/// Loads the model settings of `scope` from its real config layers.
 ///
 /// # Errors
 /// Returns an error if a layer cannot be read or parsed.
-pub fn load_settings(workspace: &Workspace) -> Result<Vec<Setting>> {
-    settings_from_layers(
-        workspace,
-        &paths::config_layer_paths_for(&workspace.root),
-        &paths::config_path(),
-    )
+pub fn load_settings(scope: Scope<'_>) -> Result<Vec<Setting>> {
+    settings_from_layers(scope, &scope.layers(), &paths::config_path())
 }
 
-/// Number of model settings that `workspace`'s own overlay sets. Values it
-/// only inherits from global or ancestor overlays are not counted.
+/// Number of model settings that `scope`'s own file sets. Values it only
+/// inherits from other layers are not counted.
 ///
 /// # Errors
 /// Returns an error if a layer cannot be read or parsed.
-pub fn own_override_count(workspace: &Workspace) -> Result<usize> {
-    if !workspace.has_overlay {
+pub fn own_override_count(scope: Scope<'_>) -> Result<usize> {
+    if let Scope::Workspace(workspace) = scope
+        && !workspace.has_overlay
+    {
         return Ok(0);
     }
-    Ok(load_settings(workspace)?
+    Ok(load_settings(scope)?
         .iter()
-        .filter(|setting| setting.overridden_here())
+        .filter(|setting| setting.set_in_own_file(scope))
         .count())
 }
 
-/// Resolves every model setting of `workspace` from an explicit layer list
-/// (lowest precedence first). The inherited view is the same list without the
-/// workspace's own overlay.
+/// Resolves every model setting of `scope` from an explicit layer list
+/// (lowest precedence first). The inherited view is the same list without
+/// the scope's own file.
 ///
 /// # Errors
 /// Returns an error if a layer cannot be read or parsed.
 pub fn settings_from_layers(
-    workspace: &Workspace,
+    scope: Scope<'_>,
     layers: &[PathBuf],
     global: &Path,
 ) -> Result<Vec<Setting>> {
+    let own = match scope {
+        Scope::Workspace(workspace) if !workspace.overlay_is_global => {
+            workspace.overlay_path.as_path()
+        }
+        _ => global,
+    };
     let (config, sources) = Config::load_layered_with_sources(layers)?;
     let inherited_layers: Vec<PathBuf> = layers
         .iter()
-        .filter(|path| **path != workspace.overlay_path)
+        .filter(|path| path.as_path() != own)
         .cloned()
         .collect();
     let (inherited, inherited_sources) = Config::load_layered_with_sources(&inherited_layers)?;
@@ -299,20 +342,12 @@ pub fn settings_from_layers(
     let base = Resolved::new(&inherited, &inherited_sources)?;
 
     let mut settings = Vec::new();
-    for (key, group, label, kind) in setting_defs(workspace, &config, &inherited) {
+    for (key, group, label, kind) in setting_defs(scope, &config, &inherited) {
         settings.push(Setting {
             value: effective.value(&key),
-            source: Source::classify(
-                effective.sources.source(&key),
-                global,
-                &workspace.overlay_path,
-            ),
+            source: Source::classify(effective.sources.source(&key), global, own),
             inherited_value: base.value(&key),
-            inherited_source: Source::classify(
-                base.sources.source(&key),
-                global,
-                &workspace.overlay_path,
-            ),
+            inherited_source: Source::classify(base.sources.source(&key), global, own),
             key,
             group,
             label,
@@ -364,7 +399,7 @@ impl<'a> Resolved<'a> {
 }
 
 fn setting_defs(
-    workspace: &Workspace,
+    scope: Scope<'_>,
     config: &Config,
     inherited: &Config,
 ) -> Vec<(String, &'static str, String, SettingKind)> {
@@ -409,7 +444,8 @@ fn setting_defs(
 
     // Discovered subagents plus any override that names one no longer
     // discovered, so a stale override stays visible where it can be reset.
-    let mut names: Vec<String> = crate::subagents::discover(&workspace.root)
+    let mut names: Vec<String> = scope
+        .subagents()
         .map(|defs| defs.into_iter().map(|def| def.name).collect())
         .unwrap_or_default();
     for name in config
@@ -439,39 +475,160 @@ fn setting_defs(
     defs
 }
 
-/// Where an edit is written.
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum EditTarget {
+/// What a settings view shows and edits: the global config on its own, or
+/// one workspace through all its layers. Writes and resets go to the scope's
+/// own file ([`Scope::file`]), whose chain is also the one shown, so an edit
+/// never starts from values another chain supplied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope<'a> {
+    /// `$ZDX_HOME/config.toml` alone, as every workspace inherits it.
     Global,
-    Workspace,
+    /// A workspace's merged layers; edits go to its own overlay.
+    Workspace(&'a Workspace),
 }
 
-impl EditTarget {
-    /// The config file this target writes for `workspace`.
+impl<'a> Scope<'a> {
+    /// Display name: `global` or the workspace name.
     #[must_use]
-    pub fn path(self, workspace: &Workspace) -> PathBuf {
-        match self {
-            Self::Global => paths::config_path(),
-            Self::Workspace => workspace.overlay_path.clone(),
-        }
-    }
-
-    #[must_use]
-    pub fn toggled(self) -> Self {
-        match self {
-            Self::Global => Self::Workspace,
-            Self::Workspace => Self::Global,
-        }
-    }
-
-    #[must_use]
-    pub fn label(self) -> &'static str {
+    pub fn name(self) -> &'a str {
         match self {
             Self::Global => "global",
-            Self::Workspace => "workspace",
+            Self::Workspace(workspace) => &workspace.name,
         }
     }
+
+    /// Whether writes land in the global config file: the global scope, or
+    /// a workspace whose overlay is that file.
+    #[must_use]
+    pub fn writes_global_file(self) -> bool {
+        match self {
+            Self::Global => true,
+            Self::Workspace(workspace) => workspace.overlay_is_global,
+        }
+    }
+
+    /// The file this scope writes and resets.
+    #[must_use]
+    pub fn file(self) -> PathBuf {
+        match self {
+            Self::Workspace(workspace) if !workspace.overlay_is_global => {
+                workspace.overlay_path.clone()
+            }
+            _ => paths::config_path(),
+        }
+    }
+
+    /// Config layers the scope reads, lowest precedence first.
+    #[must_use]
+    pub fn layers(self) -> Vec<PathBuf> {
+        match self {
+            Self::Global => vec![paths::config_path()],
+            Self::Workspace(workspace) => layer_chain(&workspace.root),
+        }
+    }
+
+    /// Subagents visible in the scope: built-in and global ones, plus the
+    /// workspace's project subagents.
+    ///
+    /// # Errors
+    /// Returns an error if a definition cannot be read or parsed.
+    pub fn subagents(self) -> Result<Vec<crate::subagents::SubagentDefinition>> {
+        match self {
+            Self::Global => crate::subagents::discover_global(),
+            Self::Workspace(workspace) => crate::subagents::discover(&workspace.root),
+        }
+    }
+}
+
+/// Which workspaces read one setting from a config file.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct Reach {
+    /// Workspaces whose effective value comes from the file once it sets
+    /// the key: no layer above the file sets it.
+    pub reads: Vec<String>,
+    /// Workspaces where a layer above the file sets the key, so the file's
+    /// value does not apply there.
+    pub skips: Vec<Skip>,
+    /// Workspaces that layer the file but whose layers failed to load.
+    pub unknown: Vec<String>,
+}
+
+/// A workspace that does not read a file's value for a key.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Skip {
+    pub workspace: String,
+    /// Label of the layer that sets the key above the file.
+    pub by: String,
+}
+
+/// For each of `keys`, which of `workspaces` layer `file` and would read its
+/// value. Only listed workspaces are checked: other directories that layer
+/// the file are not discovered.
+#[must_use]
+pub fn reach(file: &Path, keys: &[String], workspaces: &[Workspace]) -> BTreeMap<String, Reach> {
+    let chains: Vec<(&str, Vec<PathBuf>)> = workspaces
+        .iter()
+        .map(|workspace| (workspace.name.as_str(), layer_chain(&workspace.root)))
+        .collect();
+    reach_in_chains(file, keys, &chains, &paths::config_path())
+}
+
+/// Layers of the workspace at `root`, keeping one entry per file: an
+/// overlay reached through a symlink to `$ZDX_HOME` is the global file.
+fn layer_chain(root: &Path) -> Vec<PathBuf> {
+    let mut chain: Vec<PathBuf> = Vec::new();
+    for layer in paths::config_layer_paths_for(root) {
+        if !chain.iter().any(|seen| same_file(seen, &layer)) {
+            chain.push(layer);
+        }
+    }
+    chain
+}
+
+/// [`reach`] over explicit layer chains (lowest precedence first).
+#[must_use]
+pub fn reach_in_chains(
+    file: &Path,
+    keys: &[String],
+    chains: &[(&str, Vec<PathBuf>)],
+    global: &Path,
+) -> BTreeMap<String, Reach> {
+    let mut out: BTreeMap<String, Reach> = keys
+        .iter()
+        .map(|key| (key.clone(), Reach::default()))
+        .collect();
+    for (name, layers) in chains {
+        let Some(at) = layers.iter().position(|layer| same_file(layer, file)) else {
+            continue;
+        };
+        let Ok((_, sources)) = Config::load_layered_with_sources(layers) else {
+            for reach in out.values_mut() {
+                reach.unknown.push((*name).to_string());
+            }
+            continue;
+        };
+        for (key, reach) in &mut out {
+            let above = sources.source(key).and_then(|source| {
+                layers
+                    .iter()
+                    .position(|layer| layer.as_path() == source)
+                    .filter(|index| *index > at)
+                    .map(|_| source)
+            });
+            match above {
+                Some(source) => reach.skips.push(Skip {
+                    workspace: (*name).to_string(),
+                    by: if source == global {
+                        "global".to_string()
+                    } else {
+                        overlay_label(source)
+                    },
+                }),
+                None => reach.reads.push((*name).to_string()),
+            }
+        }
+    }
+    out
 }
 
 /// A new value for a setting.
@@ -578,7 +735,8 @@ mod tests {
             workspace.overlay_path.clone(),
         ];
 
-        let settings = settings_from_layers(&workspace, &layers, &global).unwrap();
+        let settings =
+            settings_from_layers(Scope::Workspace(&workspace), &layers, &global).unwrap();
 
         let model = setting(&settings, "model");
         assert_eq!(model.value.as_deref(), Some("app:model@medium"));
@@ -605,7 +763,7 @@ mod tests {
         let global = paths::config_path();
         fs::create_dir_all(global.parent().unwrap()).unwrap();
         fs::write(&global, "title_model = \"global:title\"\n").unwrap();
-        assert_eq!(own_override_count(&workspace).unwrap(), 0);
+        assert_eq!(own_override_count(Scope::Workspace(&workspace)).unwrap(), 0);
 
         fs::create_dir_all(workspace.overlay_path.parent().unwrap()).unwrap();
         fs::write(
@@ -614,10 +772,10 @@ mod tests {
         )
         .unwrap();
         let workspace = Workspace::new(workspace.root.clone(), false);
-        assert_eq!(own_override_count(&workspace).unwrap(), 2);
+        assert_eq!(own_override_count(Scope::Workspace(&workspace)).unwrap(), 2);
 
         fs::write(&workspace.overlay_path, "model = [").unwrap();
-        assert!(own_override_count(&workspace).is_err());
+        assert!(own_override_count(Scope::Workspace(&workspace)).is_err());
     }
 
     #[test]
@@ -625,7 +783,7 @@ mod tests {
         let _home = crate::test_support::temp_zdx_home();
         let (_dir, global, parent, workspace) = fixture();
         let layers = vec![global.clone(), parent, workspace.overlay_path.clone()];
-        let target = EditTarget::Workspace.path(&workspace);
+        let target = Scope::Workspace(&workspace).file();
 
         set_setting(&target, "model", SettingValue::Spec("app:model@high")).unwrap();
         set_setting(
@@ -638,7 +796,8 @@ mod tests {
         assert!(!written.contains("# ZDX Configuration"), "{written}");
         assert!(!written.contains("title_model"), "{written}");
 
-        let settings = settings_from_layers(&workspace, &layers, &global).unwrap();
+        let settings =
+            settings_from_layers(Scope::Workspace(&workspace), &layers, &global).unwrap();
         assert!(setting(&settings, "model").overridden_here());
         assert!(setting(&settings, "subagents.overrides.orchestrator.model").overridden_here());
 
@@ -647,7 +806,8 @@ mod tests {
         assert!(!reset_setting(&target, "model").unwrap());
         assert_eq!(fs::read_to_string(&target).unwrap().trim(), "");
 
-        let settings = settings_from_layers(&workspace, &layers, &global).unwrap();
+        let settings =
+            settings_from_layers(Scope::Workspace(&workspace), &layers, &global).unwrap();
         let model = setting(&settings, "model");
         assert_eq!(model.value.as_deref(), Some("parent:model@high"));
         assert_eq!(model.source.layer, Layer::Ancestor);
@@ -698,5 +858,99 @@ mod tests {
         assert_eq!(list[0].name, "current");
         assert_eq!(list[1].profiles, vec!["alpha", "beta"]);
         assert!(!list[1].has_overlay);
+    }
+
+    /// A parent overlay reaches nested workspaces unless a layer above it
+    /// sets the key; the global file reaches every workspace the same way.
+    #[test]
+    fn reach_lists_nested_readers_and_the_layer_that_skips_them() {
+        let (_dir, global, parent, workspace) = fixture();
+        let nested_overlay = workspace.overlay_path.clone();
+        fs::create_dir_all(nested_overlay.parent().unwrap()).unwrap();
+        fs::write(&nested_overlay, "title_model = \"app:title\"\n").unwrap();
+        let chains = vec![
+            ("example", vec![global.clone(), parent.clone()]),
+            ("app", vec![global.clone(), parent.clone(), nested_overlay]),
+            ("other", vec![global.clone()]),
+        ];
+        let keys = vec!["model".to_string(), "title_model".to_string()];
+
+        let from_parent = reach_in_chains(&parent, &keys, &chains, &global);
+        assert_eq!(from_parent["model"].reads, vec!["example", "app"]);
+        assert!(from_parent["model"].skips.is_empty());
+        assert_eq!(from_parent["title_model"].reads, vec!["example"]);
+        assert_eq!(
+            from_parent["title_model"].skips,
+            vec![Skip {
+                workspace: "app".into(),
+                by: "app".into()
+            }]
+        );
+
+        let from_global = reach_in_chains(&global, &keys, &chains, &global);
+        assert_eq!(from_global["model"].reads, vec!["other"]);
+        let skipped: Vec<(&str, &str)> = from_global["model"]
+            .skips
+            .iter()
+            .map(|skip| (skip.workspace.as_str(), skip.by.as_str()))
+            .collect();
+        assert_eq!(skipped, vec![("example", "example"), ("app", "example")]);
+
+        fs::write(&parent, "model = [").unwrap();
+        let broken = reach_in_chains(&global, &keys, &chains, &global);
+        assert_eq!(broken["model"].unknown, vec!["example", "app"]);
+    }
+
+    /// The global scope reads only the global file, and a reset there falls
+    /// back to the built-in default, never to a workspace value.
+    #[test]
+    fn global_scope_reads_only_the_global_file() {
+        let _home = crate::test_support::temp_zdx_home();
+        let (_dir, global, _parent, _workspace) = fixture();
+        let settings =
+            settings_from_layers(Scope::Global, std::slice::from_ref(&global), &global).unwrap();
+        let model = setting(&settings, "model");
+        assert_eq!(model.value.as_deref(), Some("global:model@low"));
+        assert!(model.set_in_own_file(Scope::Global));
+        assert_eq!(model.inherited_value, Some(Config::default().model));
+        assert_eq!(model.inherited_source.layer, Layer::Default);
+        assert!(!setting(&settings, "tldr_model").set_in_own_file(Scope::Global));
+    }
+
+    /// A workspace whose `.zdx` is `$ZDX_HOME` (the home directory in a
+    /// default install) has the global config as its overlay: its scope
+    /// writes the global file and treats global values as its own.
+    #[test]
+    fn workspace_whose_overlay_is_the_global_file_writes_global() {
+        use std::os::unix::fs::symlink;
+
+        let home = crate::test_support::temp_zdx_home();
+        let global = paths::config_path();
+        fs::write(&global, "model = \"global:model@low\"\n").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        symlink(home.path(), root.path().join(".zdx")).unwrap();
+
+        let workspace = workspaces_from(&BTreeMap::new(), Some(root.path())).remove(0);
+        assert!(workspace.overlay_is_global);
+        let scope = Scope::Workspace(&workspace);
+        assert!(scope.writes_global_file());
+        assert_eq!(scope.file(), global);
+
+        let settings = load_settings(scope).unwrap();
+        let model = setting(&settings, "model");
+        assert!(model.set_in_own_file(scope));
+        assert_eq!(model.inherited_source.layer, Layer::Default);
+        assert_eq!(own_override_count(scope).unwrap(), 1);
+
+        fs::remove_file(&global).unwrap();
+        let before_first_write = workspaces_from(&BTreeMap::new(), Some(root.path())).remove(0);
+        assert!(
+            before_first_write.overlay_is_global,
+            "a link to $ZDX_HOME must match before the global config exists"
+        );
+
+        let elsewhere = workspaces_from(&BTreeMap::new(), Some(home.path())).remove(0);
+        assert!(!elsewhere.overlay_is_global);
+        assert!(!Scope::Workspace(&elsewhere).writes_global_file());
     }
 }

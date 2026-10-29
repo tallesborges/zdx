@@ -89,18 +89,18 @@ pub(crate) fn open_job_model_picker(app: &mut MonitorApp) {
         .map(|settings| settings.model.spec.clone())
         .or_else(|| item.declared_model.clone())
         .unwrap_or_default();
-    let mut picker = ModelPickerState::new(
+    let picker = ModelPickerState::new(
         format!("job {}", item.name),
         ModelFieldKind::Chat,
         &current,
         &config.providers,
         &config.model_modes,
+        PickerTarget::Job {
+            name: item.name.clone(),
+            path: item.path.clone(),
+            declared: item.declared_model.clone(),
+        },
     );
-    picker.target = PickerTarget::Job {
-        name: item.name.clone(),
-        path: item.path.clone(),
-        declared: item.declared_model.clone(),
-    };
     app.model_picker = Some(picker);
 }
 

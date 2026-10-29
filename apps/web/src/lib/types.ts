@@ -404,6 +404,8 @@ export interface WorkspaceReport {
   current: boolean;
   overlay_path: string;
   has_overlay: boolean;
+  /** The overlay is the global config file itself. */
+  overlay_is_global: boolean;
   settings: WorkspaceSetting[];
   error: string | null;
 }

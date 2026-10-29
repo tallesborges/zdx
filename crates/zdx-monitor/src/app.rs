@@ -16,7 +16,7 @@ use zdx_engine::core::thread_index::{ThreadBrowseOptions, ThreadKindFilter};
 use zdx_engine::core::usage_stats::UsageStats;
 use zdx_engine::job_daemon::DaemonContextState;
 use zdx_engine::jobs::JobOverview;
-use zdx_engine::workspace_config::{self, EditTarget, Setting, Workspace};
+use zdx_engine::workspace_config::{self, Reach, Scope, Setting, Workspace};
 
 use crate::log_line::{LevelFilter, line_target};
 use crate::tabs::agents::{
@@ -28,9 +28,9 @@ use crate::tabs::background::{
     load_background, open_background_detail, refresh_background_detail,
 };
 use crate::tabs::config::{
-    ConfigLine, ModelPickerState, RowSource, config_max_scroll, config_page_size,
-    handle_config_key, handle_model_picker_key, load_config_view, move_config_selection,
-    open_model_picker, rendered_line_count,
+    ConfigLine, ModelPickerState, PendingWrite, RowSource, config_max_scroll, config_page_size,
+    config_reach_for, handle_config_key, handle_model_picker_key, load_config_view,
+    move_config_selection, open_model_picker, rendered_line_count,
 };
 use crate::tabs::jobs::{apply_snapshot, handle_jobs_key, load_jobs};
 use crate::tabs::logs::{
@@ -63,10 +63,17 @@ pub struct MonitorApp {
     /// Workspaces the Config tab can view: Telegram bindings + the monitor
     /// root. Never empty; the monitor root is always present.
     pub config_workspaces: Vec<Workspace>,
-    /// Index into `config_workspaces` of the viewed workspace.
+    /// Index into `config_workspaces` of the viewed workspace (also the one
+    /// `a` returns to from the global view).
     pub config_workspace_index: usize,
-    /// Where Config edits and resets are written (`w` toggles).
-    pub config_target: EditTarget,
+    /// Whether the Config tab views the global config on its own (`a`, or
+    /// `p` → global) instead of the workspace. Edits always go to the viewed
+    /// scope's own file.
+    pub config_global_view: bool,
+    /// Per setting key, which workspaces read the viewed scope's file.
+    pub config_reach: BTreeMap<String, Reach>,
+    /// A write waiting for `y` (global file, or a side effect to accept).
+    pub config_confirm: Option<PendingWrite>,
     /// Open workspace picker (`p` on the Config tab), if any.
     pub config_workspace_picker: Option<TargetPickerState>,
     pub config_line_count: usize,
@@ -266,9 +273,19 @@ impl Section {
 }
 
 impl MonitorApp {
-    /// The workspace the Config tab is viewing.
+    /// The workspace the Config tab is viewing, or returns to from the
+    /// global view.
     pub(crate) fn config_workspace(&self) -> &Workspace {
         &self.config_workspaces[self.config_workspace_index]
+    }
+
+    /// What the Config tab shows and edits.
+    pub(crate) fn config_scope(&self) -> Scope<'_> {
+        if self.config_global_view {
+            Scope::Global
+        } else {
+            Scope::Workspace(self.config_workspace())
+        }
     }
 
     fn item_count(&self) -> usize {
@@ -404,7 +421,9 @@ fn switch_section(app: &mut MonitorApp, section: Section) {
 pub(crate) fn build_app(root: &Path) -> Result<MonitorApp> {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let config_workspaces = workspace_config::discover(Some(&root)).context("list workspaces")?;
-    let view = load_config_view(&config_workspaces[0]).context("load config")?;
+    let scope = Scope::Workspace(&config_workspaces[0]);
+    let view = load_config_view(scope).context("load config")?;
+    let config_reach = config_reach_for(scope, &view.settings, &config_workspaces);
     let default_model = view.model;
     let config_lines = view.lines;
     let config_line_count = rendered_line_count(&config_lines);
@@ -416,7 +435,9 @@ pub(crate) fn build_app(root: &Path) -> Result<MonitorApp> {
         config_settings: view.settings,
         config_workspaces,
         config_workspace_index: 0,
-        config_target: EditTarget::Global,
+        config_global_view: false,
+        config_reach,
+        config_confirm: None,
         config_workspace_picker: None,
         config_line_count,
         config_scroll: 0,
@@ -516,6 +537,7 @@ const OVERLAY_CLOSE_SCROLL_GUARD: Duration = Duration::from_millis(250);
 /// Whether any modal surface is stacked over the active section.
 fn overlay_open(app: &MonitorApp) -> bool {
     app.model_picker.is_some()
+        || app.config_confirm.is_some()
         || app.config_workspace_picker.is_some()
         || app.timing_overlay.is_some()
         || app.background_detail.is_some()
@@ -538,7 +560,7 @@ fn text_input_active(app: &MonitorApp) -> bool {
 
 /// Key entry point: applies the `g` prefix, dispatches, and arms the scroll
 /// guard when the key closed an overlay.
-fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
+pub(crate) fn handle_key_event(app: &mut MonitorApp, key: KeyEvent) {
     let had_overlay = overlay_open(app);
     let text_input = text_input_active(app);
     if !text_input && key.code == KeyCode::Char('M') {
@@ -713,7 +735,7 @@ pub(crate) fn copy_text(app: &mut MonitorApp, text: &str, done: &str) {
     }
 }
 
-fn handle_mouse_event(app: &mut MonitorApp, mouse: MouseEvent) {
+pub(crate) fn handle_mouse_event(app: &mut MonitorApp, mouse: MouseEvent) {
     if handle_overlay_mouse(app, mouse) {
         return;
     }
@@ -776,6 +798,9 @@ fn handle_mouse_event(app: &mut MonitorApp, mouse: MouseEvent) {
 /// so scrolling never leaks to the list underneath).
 fn handle_overlay_mouse(app: &mut MonitorApp, mouse: MouseEvent) -> bool {
     let kind = mouse.kind;
+    if app.config_confirm.is_some() {
+        return true;
+    }
     if let Some(picker) = app.config_workspace_picker.as_mut() {
         match kind {
             MouseEventKind::ScrollUp => picker.selected = picker.selected.saturating_sub(1),

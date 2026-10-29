@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -9,8 +10,9 @@ use zdx_engine::config;
 use zdx_engine::models::{
     available_models, bare_model_id, custom_provider_models, model_id_matches_patterns,
 };
+use zdx_engine::subagents::SubagentDefinition;
 use zdx_engine::workspace_config::{
-    self, EditTarget, HELPER_MODEL_KEYS, Layer, MODEL_MODES_KEY, SUBAGENTS_ENABLED_KEY, Setting,
+    self, HELPER_MODEL_KEYS, Layer, MODEL_MODES_KEY, Reach, SUBAGENTS_ENABLED_KEY, Scope, Setting,
     SettingValue, Source, Workspace,
 };
 
@@ -44,23 +46,33 @@ pub(crate) struct ConfigView {
     pub settings: Vec<Setting>,
 }
 
-pub(crate) fn load_config_view(workspace: &Workspace) -> anyhow::Result<ConfigView> {
-    let (config, sources) = config::Config::load_layered_with_sources(
-        &config::paths::config_layer_paths_for(&workspace.root),
-    )?;
-    let lines = build_config_lines(&config, &workspace.root);
+/// Loads what `scope` shows: its own layer chain only, so the global view
+/// never mixes in a workspace's values.
+pub(crate) fn load_config_view(scope: Scope<'_>) -> anyhow::Result<ConfigView> {
+    let (config, sources) = config::Config::load_layered_with_sources(&scope.layers())?;
+    let lines = build_config_lines(&config, &scope.subagents().unwrap_or_default());
     let sources = config_source_labels(
         &lines,
         &sources,
         &config::paths::config_path(),
-        &workspace.overlay_path,
+        &scope.file(),
     );
     Ok(ConfigView {
         model: config.model,
         lines,
         sources,
-        settings: workspace_config::load_settings(workspace)?,
+        settings: workspace_config::load_settings(scope)?,
     })
+}
+
+/// Which workspaces read `scope`'s file, for every setting it shows.
+pub(crate) fn config_reach_for(
+    scope: Scope<'_>,
+    settings: &[Setting],
+    workspaces: &[Workspace],
+) -> BTreeMap<String, Reach> {
+    let keys: Vec<String> = settings.iter().map(|setting| setting.key.clone()).collect();
+    workspace_config::reach(&scope.file(), &keys, workspaces)
 }
 
 fn row_source(source: Option<&Path>, global: &Path, overlay: &Path) -> Option<RowSource> {
@@ -206,7 +218,10 @@ fn build_section_lines(section_obj: &serde_json::Map<String, Value>) -> Vec<Conf
 /// Serialize `config` to JSON and flatten it into displayable lines.
 /// Top-level scalars are grouped under a synthetic "core" section.
 /// Top-level objects each become their own named section.
-pub fn build_config_lines(config: &config::Config, root: &Path) -> Vec<ConfigLine> {
+pub fn build_config_lines(
+    config: &config::Config,
+    subagents: &[SubagentDefinition],
+) -> Vec<ConfigLine> {
     let value = match serde_json::to_value(config) {
         Ok(v) => v,
         Err(e) => return vec![ConfigLine::Row("error".to_string(), e.to_string())],
@@ -275,7 +290,7 @@ pub fn build_config_lines(config: &config::Config, root: &Path) -> Vec<ConfigLin
     // Subagents group: every discovered (non-reserved) subagent with its
     // effective model. Config overrides (`[subagents.overrides.<name>]`) win
     // over the live definition; unset rows read `(default)`.
-    let sub_lines = build_subagent_lines(config, root);
+    let sub_lines = build_subagent_lines(config, subagents);
     if !sub_lines.is_empty() {
         sections.push(("subagents".to_string(), sub_lines));
     }
@@ -326,7 +341,7 @@ pub(crate) const SUBAGENTS_ENABLED_PATH: &str = "subagents_enabled";
 /// discovered (non-reserved) subagent showing its effective model (config
 /// override wins over the live definition), or `(default)` when neither sets a
 /// model.
-fn build_subagent_lines(config: &config::Config, root: &Path) -> Vec<ConfigLine> {
+fn build_subagent_lines(config: &config::Config, defs: &[SubagentDefinition]) -> Vec<ConfigLine> {
     let mut out = vec![ConfigLine::Row(
         "enabled".to_string(),
         if config.subagents.enabled {
@@ -335,9 +350,6 @@ fn build_subagent_lines(config: &config::Config, root: &Path) -> Vec<ConfigLine>
             "off".to_string()
         },
     )];
-    let Ok(defs) = zdx_engine::subagents::discover(root) else {
-        return out;
-    };
     for def in defs {
         let over = config.subagents.overrides.get(&def.name);
         let model = over
@@ -359,7 +371,7 @@ fn build_subagent_lines(config: &config::Config, root: &Path) -> Vec<ConfigLine>
             },
             None => SUBAGENT_DEFAULT_LABEL.to_string(),
         };
-        out.push(ConfigLine::Row(def.name, display));
+        out.push(ConfigLine::Row(def.name.clone(), display));
     }
     out
 }
@@ -388,8 +400,12 @@ pub(crate) fn rendered_line_count(config_lines: &[ConfigLine]) -> usize {
 
 /// Visible content rows in the Config panel (terminal height minus chrome).
 pub(crate) fn config_page_size(app: &MonitorApp) -> usize {
-    // layout: 3 (tabs) + content + 3 (footer); panel borders take 2 more rows
-    (app.terminal_height.saturating_sub(8) as usize).max(1)
+    // layout: 3 (tabs) + content + 3 (footer); panel borders take 2 more
+    // rows and the destination strip takes its wrapped height
+    let header = header_lines(app, app.terminal_width.saturating_sub(2)).len();
+    (app.terminal_height.saturating_sub(8) as usize)
+        .saturating_sub(header)
+        .max(1)
 }
 
 /// Maximum valid scroll offset so the last line stays visible.
@@ -559,72 +575,221 @@ pub(crate) fn selected_setting(app: &MonitorApp) -> Option<&Setting> {
         .find(|setting| setting.key == key)
 }
 
-/// Effective config of the viewed workspace (all layers merged).
+/// Merged config of the viewed scope's own chain: also the chain its file
+/// sits in, so edits start from values the destination actually inherits.
 fn effective_config(app: &MonitorApp) -> anyhow::Result<config::Config> {
-    config::Config::load_layered(&config::paths::config_layer_paths_for(
-        &app.config_workspace().root,
-    ))
+    config::Config::load_layered(&app.config_scope().layers())
 }
 
-/// Human name of the current write target (`global` or the workspace name).
-fn target_name(app: &MonitorApp) -> String {
-    match app.config_target {
-        EditTarget::Global => "global".to_string(),
-        EditTarget::Workspace => app.config_workspace().name.clone(),
+/// Destination label: `GLOBAL` for the global config file, else the
+/// workspace name.
+fn destination_label(scope: Scope<'_>) -> String {
+    if scope.writes_global_file() {
+        "GLOBAL".to_string()
+    } else {
+        scope.name().to_string()
     }
 }
 
-/// Status line after a write: where it went and, when a higher layer still
-/// wins in the viewed workspace, which one.
-fn write_outcome(app: &MonitorApp, key: &str, action: &str) -> String {
-    let mut message = format!("{action} {key} in {}", target_name(app));
-    if let Some(setting) = app.config_settings.iter().find(|s| s.key == key) {
-        let shadowed = match app.config_target {
-            EditTarget::Global => {
-                matches!(setting.source.layer, Layer::Workspace | Layer::Ancestor)
-            }
-            EditTarget::Workspace => false,
-        };
-        if shadowed {
-            let _ = write!(
-                message,
-                " · [{}] still overrides it here",
-                setting.source.label
-            );
-        } else {
-            let value = setting.value.as_deref().unwrap_or(SUBAGENT_DEFAULT_LABEL);
-            let _ = write!(message, " · now {value}");
+/// A change to one setting in the viewed scope's own file.
+#[derive(Clone, Debug)]
+pub enum Change {
+    Spec(String),
+    Enabled(bool),
+    Modes(Vec<config::ModelMode>),
+    /// Remove the key, so the value falls back to the layers below.
+    Reset,
+}
+
+/// One write, bound to its file when it is requested. Writes to the global
+/// config file, and writes with a `note`, wait in `config_confirm` for `y`;
+/// the captured `file` is what `y` writes, whatever the view is by then.
+#[derive(Clone, Debug)]
+pub struct PendingWrite {
+    pub file: PathBuf,
+    /// `GLOBAL` or the workspace name.
+    pub dest: String,
+    pub global_file: bool,
+    pub key: String,
+    pub change: Change,
+    /// Verb for the status line (`Set`, `Reset`, `Deleted mode fast from`).
+    pub action: String,
+    /// Value in the destination's chain now.
+    pub old: String,
+    /// Value after the write.
+    pub new: String,
+    /// Which workspaces read the file for this key, when known.
+    pub effect: Option<String>,
+    /// Side effect the user must accept (e.g. copying an inherited list).
+    pub note: Option<String>,
+}
+
+impl PendingWrite {
+    fn needs_confirm(&self) -> bool {
+        self.global_file || self.note.is_some()
+    }
+}
+
+fn value_label(value: Option<&str>) -> String {
+    value.unwrap_or(SUBAGENT_DEFAULT_LABEL).to_string()
+}
+
+/// What a reset in the scope's own file falls back to.
+fn fallback_label(setting: &Setting) -> String {
+    format!(
+        "{} [{}]",
+        value_label(setting.inherited_value.as_deref()),
+        setting.inherited_source.label
+    )
+}
+
+fn modes_label(modes: &[config::ModelMode]) -> String {
+    modes
+        .iter()
+        .map(|mode| {
+            format!(
+                "{} → {}",
+                mode.name,
+                zdx_engine::models::format_model_thinking(&mode.primary, mode.thinking)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Display value of `change` once written.
+fn change_label(change: &Change, setting: Option<&Setting>) -> String {
+    let fallback = || setting.map_or_else(|| SUBAGENT_DEFAULT_LABEL.to_string(), fallback_label);
+    match change {
+        Change::Spec(spec) => spec.clone(),
+        Change::Enabled(enabled) => if *enabled { "on" } else { "off" }.to_string(),
+        Change::Modes(modes) if modes.is_empty() => format!("(no own modes) → {}", fallback()),
+        Change::Modes(modes) => modes_label(modes),
+        Change::Reset => format!("(removed) → {}", fallback()),
+    }
+}
+
+/// Names that read the file, and the ones a higher layer keeps from it.
+fn reach_text(reach: &Reach) -> String {
+    let mut text = if reach.reads.is_empty() {
+        "reaches no listed workspace".to_string()
+    } else {
+        format!("reaches {}", reach.reads.join(", "))
+    };
+    if !reach.skips.is_empty() {
+        let skips: Vec<String> = reach
+            .skips
+            .iter()
+            .map(|skip| {
+                if skip.by == skip.workspace {
+                    format!("{} (own value)", skip.workspace)
+                } else {
+                    format!("{} (via {})", skip.workspace, skip.by)
+                }
+            })
+            .collect();
+        let _ = write!(text, " · skips {}", skips.join(", "));
+    }
+    if !reach.unknown.is_empty() {
+        let _ = write!(text, " · unknown {}", reach.unknown.join(", "));
+    }
+    text
+}
+
+/// Writes or resets `key` in the viewed scope's own file. A write to the
+/// global config file, or one with a `note`, is held in `config_confirm`
+/// until `y`; a reset of a key the file does not set writes nothing.
+fn request_change(
+    app: &mut MonitorApp,
+    key: &str,
+    change: Change,
+    action: &str,
+    note: Option<String>,
+) {
+    app.model_picker = None;
+    let scope = app.config_scope();
+    let setting = app.config_settings.iter().find(|s| s.key == key);
+    if matches!(change, Change::Reset) && !setting.is_some_and(|s| s.set_in_own_file(scope)) {
+        let message = format!(
+            "Nothing to reset: {key} is not set in {}",
+            destination_label(scope)
+        );
+        return app.set_status(message);
+    }
+    let write = PendingWrite {
+        file: scope.file(),
+        dest: destination_label(scope),
+        global_file: scope.writes_global_file(),
+        key: key.to_string(),
+        old: value_label(setting.and_then(|s| s.value.as_deref())),
+        new: change_label(&change, setting),
+        effect: app.config_reach.get(key).map(reach_text),
+        change,
+        action: action.to_string(),
+        note,
+    };
+    if write.needs_confirm() {
+        app.config_confirm = Some(write);
+    } else {
+        apply_write(app, &write);
+    }
+}
+
+/// Writes `write` to its captured file and reloads the tab.
+fn apply_write(app: &mut MonitorApp, write: &PendingWrite) {
+    let (path, key) = (&write.file, write.key.as_str());
+    let result = match &write.change {
+        Change::Spec(spec) => {
+            workspace_config::set_setting(path, key, SettingValue::Spec(spec)).map(|()| true)
+        }
+        Change::Enabled(enabled) => {
+            workspace_config::set_setting(path, key, SettingValue::Enabled(*enabled)).map(|()| true)
+        }
+        Change::Modes(modes) => {
+            workspace_config::set_setting(path, key, SettingValue::Modes(modes)).map(|()| true)
+        }
+        Change::Reset => workspace_config::reset_setting(path, key),
+    };
+    let (dest, action) = (&write.dest, &write.action);
+    match result {
+        Ok(true) => {
+            reload_config_lines(app);
+            let message = write_outcome(app, write);
+            app.set_status(message);
+        }
+        Ok(false) => app.set_status(format!("Nothing to reset: {key} is not set in {dest}")),
+        Err(e) => app.set_status(format!("Failed: {action} {key} in {dest}: {e:#}")),
+    }
+}
+
+/// Status line after a write: where it went, the new value, and who reads it.
+fn write_outcome(app: &MonitorApp, write: &PendingWrite) -> String {
+    let mut message = format!("{} {} in {}", write.action, write.key, write.dest);
+    if app.config_scope().file() == write.file {
+        if let Some(setting) = app.config_settings.iter().find(|s| s.key == write.key) {
+            let _ = write!(message, " · now {}", value_label(setting.value.as_deref()));
+        }
+        if let Some(reach) = app.config_reach.get(&write.key) {
+            let _ = write!(message, " · {}", reach_text(reach));
         }
     }
     message
 }
 
-/// Writes one setting to the current target and reloads the tab.
-fn write_setting(app: &mut MonitorApp, key: &str, value: SettingValue<'_>) {
-    let path = app.config_target.path(app.config_workspace());
-    match workspace_config::set_setting(&path, key, value) {
-        Ok(()) => {
-            app.model_picker = None;
-            reload_config_lines(app);
-            let message = write_outcome(app, key, "Set");
-            app.set_status(message);
+/// Handles a key while a write waits for confirmation. Only `y` writes;
+/// `Enter` does nothing, so a habitual Enter cannot write global.
+fn handle_confirm_key(app: &mut MonitorApp, key: KeyCode) {
+    match key {
+        KeyCode::Char('y') => {
+            if let Some(pending) = app.config_confirm.take() {
+                apply_write(app, &pending);
+            }
         }
-        Err(e) => app.set_status(format!("Failed to set {key}: {e:#}")),
-    }
-}
-
-/// Removes one setting from the current target so it falls back to the
-/// layers below.
-fn reset_setting(app: &mut MonitorApp, key: &str) {
-    let path = app.config_target.path(app.config_workspace());
-    match workspace_config::reset_setting(&path, key) {
-        Ok(true) => {
-            reload_config_lines(app);
-            let message = write_outcome(app, key, "Reset");
-            app.set_status(message);
+        KeyCode::Esc | KeyCode::Char('n') => {
+            app.config_confirm = None;
+            app.set_status("Cancelled: nothing written");
         }
-        Ok(false) => app.set_status(format!("{key} is not set in {}", target_name(app))),
-        Err(e) => app.set_status(format!("Failed to reset {key}: {e:#}")),
+        _ => {}
     }
 }
 
@@ -660,41 +825,76 @@ pub(crate) fn open_model_picker(app: &mut MonitorApp) {
         .split_once(" → ")
         .map_or(current.as_str(), |(head, _)| head)
         .to_string();
+    let target = PickerTarget::Config(config_destination(app, &path));
     app.model_picker = Some(ModelPickerState::new(
         path,
         kind,
         &current,
         &cfg.providers,
         &cfg.model_modes,
+        target,
     ));
 }
 
-/// Flips `subagents.enabled` in the current target and reloads the tab.
+/// Destination shown by the picker for the Config row at `field_path`.
+fn config_destination(app: &MonitorApp, field_path: &str) -> ConfigDestination {
+    let scope = app.config_scope();
+    let key = setting_key(field_path);
+    let inherited_modes = key == MODEL_MODES_KEY
+        && app
+            .config_settings
+            .iter()
+            .find(|s| s.key == key)
+            .is_some_and(|s| s.value.is_some() && !s.set_in_own_file(scope));
+    ConfigDestination {
+        label: destination_label(scope),
+        global_file: scope.writes_global_file(),
+        note: inherited_modes.then(|| {
+            format!(
+                "{} has no own mode list: saving copies the inherited list into its file",
+                scope.name()
+            )
+        }),
+    }
+}
+
+/// Flips `subagents.enabled` in the viewed scope's file, starting from the
+/// value its own chain resolves to.
 fn toggle_subagents_enabled(app: &mut MonitorApp) {
     let Ok(cfg) = effective_config(app) else {
         app.set_status("Failed to load config");
         return;
     };
-    write_setting(
+    request_change(
         app,
         SUBAGENTS_ENABLED_KEY,
-        SettingValue::Enabled(!cfg.subagents.enabled),
+        Change::Enabled(!cfg.subagents.enabled),
+        "Set",
+        None,
     );
 }
 
-/// Reloads config lines from disk after an edit or workspace switch,
-/// clamping selection.
+/// Reloads config lines from disk after an edit or view switch, clamping
+/// selection.
 pub(crate) fn reload_config_lines(app: &mut MonitorApp) {
-    let Ok(view) = load_config_view(app.config_workspace()) else {
+    let index = app.config_workspace_index;
+    if let Some(workspace) = app.config_workspaces.get_mut(index) {
+        workspace.has_overlay = workspace.overlay_path.is_file();
+    }
+    let scope = app.config_scope();
+    let Ok(view) = load_config_view(scope) else {
         app.set_status("Failed to reload config");
         return;
     };
-    if app.config_workspace().current {
+    let reach = config_reach_for(scope, &view.settings, &app.config_workspaces);
+    let current = matches!(scope, Scope::Workspace(workspace) if workspace.current);
+    if current {
         app.default_model = view.model;
     }
     app.config_lines = view.lines;
     app.config_sources = view.sources;
     app.config_settings = view.settings;
+    app.config_reach = reach;
     app.config_line_count = rendered_line_count(&app.config_lines);
     let count = editable_model_fields(&app.config_lines).len();
     if app.config_selected >= count {
@@ -702,15 +902,56 @@ pub(crate) fn reload_config_lines(app: &mut MonitorApp) {
     }
 }
 
-/// Toggles the Config write target between global and the viewed workspace.
-fn toggle_config_target(app: &mut MonitorApp) {
-    app.config_target = app.config_target.toggled();
-    let path = app.config_target.path(app.config_workspace());
-    app.set_status(format!(
-        "Edits now write to {} ({})",
-        target_name(app),
-        path.display()
-    ));
+/// Status after switching what the Config tab views.
+fn viewing_status(app: &MonitorApp) -> String {
+    let scope = app.config_scope();
+    let path = scope.file();
+    match scope {
+        Scope::Global => format!(
+            "Viewing global · edits write {} after y · a back to {}",
+            path.display(),
+            app.config_workspace().name
+        ),
+        Scope::Workspace(workspace) if workspace.overlay_is_global => format!(
+            "Viewing {} · its file is the global config {} · edits ask y",
+            workspace.name,
+            path.display()
+        ),
+        Scope::Workspace(workspace) => {
+            format!(
+                "Viewing {} · edits write {}",
+                workspace.name,
+                path.display()
+            )
+        }
+    }
+}
+
+/// Reloads after a view switch and keeps the same row selected when the new
+/// view has it.
+fn switch_view(app: &mut MonitorApp) {
+    let selected = editable_model_fields(&app.config_lines)
+        .get(app.config_selected)
+        .map(|field| field.path.clone());
+    app.config_scroll = 0;
+    reload_config_lines(app);
+    app.config_selected = selected
+        .and_then(|path| {
+            editable_model_fields(&app.config_lines)
+                .iter()
+                .position(|field| field.path == path)
+        })
+        .unwrap_or(0);
+    ensure_config_selection_visible(app);
+    let message = viewing_status(app);
+    app.set_status(message);
+}
+
+/// `a`: switches between the viewed workspace and the global view, on the
+/// same row.
+fn toggle_global_view(app: &mut MonitorApp) {
+    app.config_global_view = !app.config_global_view;
+    switch_view(app);
 }
 
 /// Picker label: name and tags first, path last, so a narrow popup trims the
@@ -723,47 +964,86 @@ fn workspace_picker_item(workspace: &Workspace, home: Option<&Path>) -> String {
     if !workspace.profiles.is_empty() {
         let _ = write!(item, "  · {}", workspace.profiles.join(", "));
     }
-    let path = match home.and_then(|home| workspace.root.strip_prefix(home).ok()) {
-        Some(relative) if relative.as_os_str().is_empty() => "~".to_string(),
-        Some(relative) => format!("~/{}", relative.display()),
-        None => workspace.root.display().to_string(),
-    };
-    let _ = write!(item, "  {path}");
+    if workspace.overlay_is_global {
+        item.push_str("  · ⚠ file = global config");
+    }
+    let _ = write!(item, "  {}", home_relative(&workspace.root, home));
     item
 }
 
-/// Re-discovers workspaces and opens the picker.
+fn home_relative(path: &Path, home: Option<&Path>) -> String {
+    match home.and_then(|home| path.strip_prefix(home).ok()) {
+        Some(relative) if relative.as_os_str().is_empty() => "~".to_string(),
+        Some(relative) => format!("~/{}", relative.display()),
+        None => path.display().to_string(),
+    }
+}
+
+/// Re-discovers workspaces and opens the picker. The first entry is the
+/// global view; workspaces follow.
 fn open_workspace_picker(app: &mut MonitorApp) {
     match workspace_config::discover(Some(&app.root)) {
         Ok(list) if !list.is_empty() => {
-            let viewed = app.config_workspace().root.clone();
-            app.config_workspace_index = list.iter().position(|w| w.root == viewed).unwrap_or(0);
+            let viewed = app.config_workspace().clone();
+            let found = list.iter().position(|w| w.root == viewed.root);
+            app.config_workspace_index = found.unwrap_or(0);
             app.config_workspaces = list;
+            // Rows, header, and the next write must describe the same
+            // workspace, even if the picker is then cancelled.
+            if found.is_none() {
+                if !app.config_global_view {
+                    app.config_scroll = 0;
+                    reload_config_lines(app);
+                }
+                let message = format!(
+                    "{} is no longer listed · {} {}",
+                    viewed.name,
+                    if app.config_global_view {
+                        "a now returns to"
+                    } else {
+                        "now viewing"
+                    },
+                    app.config_workspace().name
+                );
+                app.set_status(message);
+            }
         }
         Ok(_) => {}
         Err(e) => app.set_status(format!("Failed to list workspaces: {e:#}")),
     }
     let home = config::paths::home_dir();
-    let items = app
-        .config_workspaces
-        .iter()
-        .map(|workspace| {
-            (
-                workspace_picker_item(workspace, home.as_deref()),
-                workspace_config::own_override_count(workspace).ok(),
-            )
-        })
-        .collect();
+    let global = format!(
+        "global · all workspaces  {}",
+        home_relative(&config::paths::config_path(), home.as_deref())
+    );
+    let mut items = vec![(
+        global,
+        workspace_config::own_override_count(Scope::Global).ok(),
+    )];
+    items.extend(app.config_workspaces.iter().map(|workspace| {
+        (
+            workspace_picker_item(workspace, home.as_deref()),
+            workspace_config::own_override_count(Scope::Workspace(workspace)).ok(),
+        )
+    }));
     let mut picker = TargetPickerState::from_maybe_counted(items);
-    picker.selected = app
-        .config_workspace_index
-        .min(picker.matches.len().saturating_sub(1));
+    let viewed = if app.config_global_view {
+        0
+    } else {
+        app.config_workspace_index + 1
+    };
+    picker.selected = viewed.min(picker.matches.len().saturating_sub(1));
     app.config_workspace_picker = Some(picker);
 }
 
 /// Handles a Config-tab key, including every key while the workspace picker
-/// is open. Returns `true` if the key was consumed.
+/// or a global-write confirmation is open. Returns `true` if the key was
+/// consumed.
 pub(crate) fn handle_config_key(app: &mut MonitorApp, key: KeyCode) -> bool {
+    if app.config_confirm.is_some() {
+        handle_confirm_key(app, key);
+        return true;
+    }
     if app.config_workspace_picker.is_some() {
         handle_workspace_picker_key(app, key);
         return true;
@@ -772,7 +1052,7 @@ pub(crate) fn handle_config_key(app: &mut MonitorApp, key: KeyCode) -> bool {
         KeyCode::Char('d') | KeyCode::Delete => delete_or_reset_selected(app),
         KeyCode::Char('D') => reset_selected_modes(app),
         KeyCode::Char('p') => open_workspace_picker(app),
-        KeyCode::Char('w') => toggle_config_target(app),
+        KeyCode::Char('a') => toggle_global_view(app),
         _ => return false,
     }
     true
@@ -801,28 +1081,39 @@ fn handle_workspace_picker_key(app: &mut MonitorApp, key: KeyCode) {
         KeyCode::Enter => {
             let chosen = picker.matches.get(picker.selected).copied();
             app.config_workspace_picker = None;
-            if let Some(index) = chosen {
-                app.config_workspace_index = index;
-                app.config_scroll = 0;
-                app.config_selected = 0;
-                reload_config_lines(app);
-                app.set_status(format!(
-                    "Viewing {} · edits write to {}",
-                    app.config_workspace().name,
-                    target_name(app)
-                ));
+            match chosen {
+                Some(0) => app.config_global_view = true,
+                Some(index) => {
+                    app.config_global_view = false;
+                    app.config_workspace_index = index - 1;
+                }
+                None => return,
             }
+            switch_view(app);
         }
         _ => {}
     }
 }
 
+/// Where a Config edit goes, as the picker shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConfigDestination {
+    /// `GLOBAL` or the workspace name.
+    pub label: String,
+    /// The global config file: the picker is colored for it and the write
+    /// asks `y`.
+    pub global_file: bool,
+    /// Warning shown above the list (e.g. a first mode edit copies the
+    /// inherited list).
+    pub note: Option<String>,
+}
+
 /// Where a committed model choice is written.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PickerTarget {
-    /// The Config tab field in `ModelPickerState::field`, in the current
-    /// write target.
-    Config,
+    /// The Config tab field in `ModelPickerState::field`, in the viewed
+    /// scope's own file.
+    Config(ConfigDestination),
     /// The `model:` of one job file. `declared` is the value on disk
     /// when the picker opened; the save refuses if it changed since.
     Job {
@@ -873,6 +1164,7 @@ impl ModelPickerState {
         current: &str,
         providers: &config::ProvidersConfig,
         modes: &[config::ModelMode],
+        target: PickerTarget,
     ) -> Self {
         let spec = zdx_engine::models::ModelSpec::parse(current);
         let model_part = spec.without_thinking();
@@ -933,7 +1225,7 @@ impl ModelPickerState {
             chosen_model: model_part.clone(),
             thinking_current,
             thinking_selected,
-            target: PickerTarget::Config,
+            target,
         };
         state.recompute();
         // Preselect the current value (exact `provider:id` or bare `id`).
@@ -983,10 +1275,11 @@ impl ModelPickerState {
 }
 
 /// Applies a mode edit for a `model_modes.<i>`/`model_modes.add` field to the
-/// viewed workspace's effective mode list and writes the whole list to the
-/// current target (arrays replace wholesale across layers). Only the primary
-/// spec is edited here; `description`/`alternatives` stay TOML-only and are
-/// preserved on edit.
+/// mode list of the viewed scope's chain and writes the whole list to its
+/// file (arrays replace wholesale across layers). The global view's chain is
+/// the global file alone, so workspace modes never reach global. Only the
+/// primary spec is edited here; `description`/`alternatives` stay TOML-only
+/// and are preserved on edit.
 fn save_mode(app: &mut MonitorApp, field: &str, model: &str, level: config::ThinkingLevel) {
     let mut cfg = match effective_config(app) {
         Ok(cfg) => cfg,
@@ -1012,12 +1305,37 @@ fn save_mode(app: &mut MonitorApp, field: &str, model: &str, level: config::Thin
     } else {
         return app.set_status(format!("Invalid mode field: {field}"));
     }
-    write_setting(app, MODEL_MODES_KEY, SettingValue::Modes(&cfg.model_modes));
+    request_change(
+        app,
+        MODEL_MODES_KEY,
+        Change::Modes(cfg.model_modes),
+        "Set",
+        None,
+    );
+}
+
+/// Warning for a mode delete when the viewed scope has no mode list of its
+/// own: the remaining `kept` inherited modes become its own list, which stops
+/// following the layer it inherits from.
+fn inherited_modes_note(app: &MonitorApp, kept: usize) -> Option<String> {
+    let scope = app.config_scope();
+    let setting = app
+        .config_settings
+        .iter()
+        .find(|s| s.key == MODEL_MODES_KEY)?;
+    if setting.set_in_own_file(scope) {
+        return None;
+    }
+    Some(format!(
+        "{} has no own mode list: this writes the other {kept} inherited modes into its file, and later mode changes in [{}] stop reaching it",
+        scope.name(),
+        setting.source.label
+    ))
 }
 
 /// Handles `d`/`Del` on the Config tab: removes the selected mode (writing
-/// the remaining list to the target), or resets any other selected setting
-/// in the target layer so it falls back to the layers below.
+/// the remaining list to the viewed scope's file), or resets any other
+/// selected setting in that file so it falls back to the layers below.
 fn delete_or_reset_selected(app: &mut MonitorApp) {
     let fields = editable_model_fields(&app.config_lines);
     let Some(path) = fields.get(app.config_selected).map(|f| f.path.clone()) else {
@@ -1025,7 +1343,7 @@ fn delete_or_reset_selected(app: &mut MonitorApp) {
     };
 
     let Some(suffix) = path.strip_prefix("model_modes.") else {
-        reset_setting(app, &setting_key(&path));
+        request_change(app, &setting_key(&path), Change::Reset, "Reset", None);
         return;
     };
     let Ok(idx) = suffix.parse::<usize>() else {
@@ -1038,23 +1356,31 @@ fn delete_or_reset_selected(app: &mut MonitorApp) {
     if idx >= cfg.model_modes.len() {
         return;
     }
-    cfg.model_modes.remove(idx);
-    write_setting(app, MODEL_MODES_KEY, SettingValue::Modes(&cfg.model_modes));
+    let removed = cfg.model_modes.remove(idx);
+    let note = inherited_modes_note(app, cfg.model_modes.len());
+    request_change(
+        app,
+        MODEL_MODES_KEY,
+        Change::Modes(cfg.model_modes),
+        &format!("Deleted mode {} from", removed.name),
+        note,
+    );
 }
 
-/// Handles `D` on a mode row: resets the whole mode list in the target layer.
+/// Handles `D` on a mode row: resets the whole mode list in the viewed
+/// scope's file.
 fn reset_selected_modes(app: &mut MonitorApp) {
     let fields = editable_model_fields(&app.config_lines);
     if fields
         .get(app.config_selected)
         .is_some_and(|f| f.path.starts_with("model_modes."))
     {
-        reset_setting(app, MODEL_MODES_KEY);
+        request_change(app, MODEL_MODES_KEY, Change::Reset, "Reset", None);
     }
 }
 
 /// Persists the picker's chosen model (+ thinking for chat models) to the
-/// current target.
+/// viewed scope's file.
 fn commit_model_picker(app: &mut MonitorApp) {
     let Some(picker) = app.model_picker.as_ref() else {
         return;
@@ -1081,7 +1407,7 @@ fn commit_model_picker(app: &mut MonitorApp) {
         // Audio (STT/TTS): model only, no thinking.
         ModelFieldKind::Transcription | ModelFieldKind::Speech => model,
     };
-    write_setting(app, &setting_key(&field), SettingValue::Spec(&spec));
+    request_change(app, &setting_key(&field), Change::Spec(spec), "Set", None);
 }
 
 /// Handles a key while the model picker overlay is open.
@@ -1204,37 +1530,187 @@ pub(crate) fn render_config(f: &mut Frame, app: &MonitorApp, area: Rect) {
         .filter(|l| matches!(l, ConfigLine::Row(..)))
         .count();
 
-    let visible_lines = area.height.saturating_sub(2) as usize;
+    let header = header_lines(app, area.width.saturating_sub(2));
+    let header_rows = u16::try_from(header.len()).unwrap_or(MAX_HEADER_ROWS);
+    let visible_lines = area.height.saturating_sub(2 + header_rows) as usize;
     let total_lines = lines.len();
 
-    let scroll_info = if total_lines > visible_lines {
-        let max_scroll = total_lines - visible_lines;
-        let current_scroll = app.config_scroll.min(max_scroll);
-        let percent = (current_scroll * 100)
-            .checked_div(max_scroll)
-            .unwrap_or(100);
-        format!(" [{percent}%]")
-    } else {
-        String::new()
-    };
+    let scroll_info = scroll_percent(app.config_scroll, total_lines, visible_lines);
 
-    let workspace = app.config_workspace();
+    let scope = app.config_scope();
     let title = format!(
-        " Config · {} · edits → {} ({total_fields} fields){scroll_info} ",
-        workspace.name,
-        target_name(app),
+        " Config · {} ({total_fields} fields){scroll_info} ",
+        scope.name()
     );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(destination_color(scope)))
+        .title(title);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(header_rows), Constraint::Min(0)])
+        .split(inner);
+    f.render_widget(Paragraph::new(Text::from(header)), rows[0]);
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).scroll((app.config_scroll as u16, 0)),
+        rows[1],
+    );
+}
 
-    let p = Paragraph::new(Text::from(lines))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .title_bottom(provenance_hint(app)),
-        )
-        .scroll((app.config_scroll as u16, 0));
+/// ` [N%]` scroll position when the list overflows its area.
+fn scroll_percent(scroll: usize, total: usize, visible: usize) -> String {
+    if total <= visible {
+        return String::new();
+    }
+    let max_scroll = total - visible;
+    let percent = (scroll.min(max_scroll) * 100)
+        .checked_div(max_scroll)
+        .unwrap_or(100);
+    format!(" [{percent}%]")
+}
 
-    f.render_widget(p, area);
+/// Most rows the destination strip takes above the config list; a longer
+/// strip ends in `…`.
+const MAX_HEADER_ROWS: u16 = 8;
+
+/// Yellow for a workspace file, magenta for the global config file.
+fn destination_color(scope: Scope<'_>) -> Color {
+    if scope.writes_global_file() {
+        Color::Magenta
+    } else {
+        Color::Yellow
+    }
+}
+
+/// Destination strip, wrapped to `width`: where edits go (and, for the global
+/// file, that writes ask `y`), then the selected row's source and what a reset
+/// falls back to, then which workspaces an edit reaches.
+fn header_lines(app: &MonitorApp, width: u16) -> Vec<Line<'static>> {
+    let scope = app.config_scope();
+    let home = config::paths::home_dir();
+    let path = home_relative(&scope.file(), home.as_deref());
+    let dim = Style::default().fg(Color::DarkGray);
+    let accent = Style::default()
+        .fg(destination_color(scope))
+        .add_modifier(Modifier::BOLD);
+    let mut first = match scope {
+        Scope::Global => vec![Span::styled(" edits → GLOBAL · all workspaces ", accent)],
+        Scope::Workspace(workspace) if workspace.overlay_is_global => vec![Span::styled(
+            format!(" ⚠ {}'s file is the global config ", workspace.name),
+            accent,
+        )],
+        Scope::Workspace(workspace) => {
+            vec![Span::styled(
+                format!(" edits → {} ", workspace.name),
+                accent,
+            )]
+        }
+    };
+    if scope.writes_global_file() {
+        first.push(Span::styled(
+            "· every write asks y ",
+            Style::default().fg(Color::Magenta),
+        ));
+    }
+    first.push(Span::styled(path, dim));
+    if let Scope::Workspace(workspace) = scope
+        && !workspace.overlay_is_global
+        && !workspace.has_overlay
+    {
+        first.push(Span::styled(" (created on first write)", dim));
+    }
+    let mut lines = vec![Line::from(first)];
+    let width = usize::from(width.max(2));
+    for text in selected_row_hint(app) {
+        lines.extend(
+            wrap_words(&text, width - 1)
+                .into_iter()
+                .map(|row| Line::from(Span::styled(format!(" {row}"), dim))),
+        );
+    }
+    let max = usize::from(MAX_HEADER_ROWS);
+    if lines.len() > max {
+        lines.truncate(max);
+        let last = lines[max - 1].to_string();
+        lines[max - 1] = Line::from(Span::styled(
+            truncate_chars(&format!("{last}…"), width),
+            dim,
+        ));
+    }
+    lines
+}
+
+/// Splits `text` into rows of at most `width` chars, breaking at spaces and
+/// splitting longer words. Indents continuation rows by one space.
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let mut rows = Vec::new();
+    let mut row = String::new();
+    for word in text.split(' ').filter(|word| !word.is_empty()) {
+        let mut word: Vec<char> = word.chars().collect();
+        loop {
+            let used = row.chars().count();
+            let gap = usize::from(!row.trim().is_empty());
+            if used + gap + word.len() <= width {
+                if gap == 1 {
+                    row.push(' ');
+                }
+                row.extend(word.iter());
+                break;
+            }
+            if gap == 1 {
+                rows.push(std::mem::replace(&mut row, " ".to_string()));
+                continue;
+            }
+            let room = width.saturating_sub(used).max(1);
+            let rest = word.split_off(room.min(word.len()));
+            row.extend(word.iter());
+            rows.push(std::mem::replace(&mut row, " ".to_string()));
+            if rest.is_empty() {
+                break;
+            }
+            word = rest;
+        }
+    }
+    if row.trim().is_empty() {
+        if rows.is_empty() {
+            rows.push(String::new());
+        }
+    } else {
+        rows.push(row);
+    }
+    rows
+}
+
+/// The selected row: where its value comes from in this view and what a
+/// reset of the view's file falls back to, then who an edit reaches.
+fn selected_row_hint(app: &MonitorApp) -> Vec<String> {
+    let Some(setting) = selected_setting(app) else {
+        return Vec::new();
+    };
+    let scope = app.config_scope();
+    let dest = destination_label(scope);
+    let mut origin = format!("{}: ", setting.label);
+    if setting.set_in_own_file(scope) {
+        let reset_key = if setting.key == MODEL_MODES_KEY {
+            "D"
+        } else {
+            "d"
+        };
+        let _ = write!(
+            origin,
+            "set in {dest} · {reset_key} → {}",
+            fallback_label(setting)
+        );
+    } else {
+        let _ = write!(origin, "from {} · not set in {dest}", setting.source.label);
+    }
+    let mut out = vec![origin];
+    if let Some(reach) = app.config_reach.get(&setting.key) {
+        out.push(format!("edit {}", reach_text(reach)));
+    }
+    out
 }
 
 /// Row tag: overrides set in the viewed workspace stand out; inherited
@@ -1250,25 +1726,108 @@ fn source_span(source: Option<&RowSource>) -> Span<'static> {
     )
 }
 
-/// Bottom-border line for the selected row: where its value comes from and
-/// what `d` would fall back to in the current target.
-fn provenance_hint(app: &MonitorApp) -> Line<'static> {
-    let Some(setting) = selected_setting(app) else {
-        return Line::default();
+/// Confirmation popup for a pending write: the captured file, the old and
+/// new value, who reads it, and any side effect. Only `y` writes.
+pub(crate) fn render_pending_write(f: &mut Frame, app: &MonitorApp, area: Rect) {
+    let Some(pending) = &app.config_confirm else {
+        return;
     };
-    let dim = Style::default().fg(Color::DarkGray);
-    let value = |value: Option<&str>| value.unwrap_or(SUBAGENT_DEFAULT_LABEL).to_string();
-    let text = if setting.overridden_here() {
-        format!(
-            " set in {} · reset → {} [{}] ",
-            setting.source.label,
-            value(setting.inherited_value.as_deref()),
-            setting.inherited_source.label,
-        )
+    let popup = centered_rect(70, 60, area);
+    f.render_widget(Clear, popup);
+    let home = config::paths::home_dir();
+    let file = home_relative(&pending.file, home.as_deref());
+    let label = Style::default().fg(Color::DarkGray);
+    let row = |name: &str, value: String| {
+        Line::from(vec![
+            Span::styled(format!(" {name:<8}"), label),
+            Span::raw(value),
+        ])
+    };
+    let mut lines = vec![
+        row("file", file),
+        row("key", pending.key.clone()),
+        row("now", pending.old.clone()),
+        row("new", pending.new.clone()),
+    ];
+    if let Some(effect) = &pending.effect {
+        lines.push(row("effect", effect.clone()));
+    }
+    if let Some(note) = &pending.note {
+        lines.push(Line::from(Span::styled(
+            format!(" ⚠ {note}"),
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    let color = if pending.global_file {
+        Color::Magenta
     } else {
-        format!(" from {} ", setting.source.label)
+        Color::Yellow
     };
-    Line::from(Span::styled(text, dim))
+    let (title_dest, button) = if pending.global_file {
+        ("GLOBAL config".to_string(), "write global".to_string())
+    } else {
+        (pending.dest.clone(), format!("write {}", pending.dest))
+    };
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        Span::styled(
+            " y ",
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!("{button}   ")),
+        Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(" cancel   (Enter does nothing here)"),
+    ]));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(color))
+        .title(format!(
+            " {} {} in {title_dest}? ",
+            pending.action, pending.key
+        ));
+    f.render_widget(
+        Paragraph::new(Text::from(lines))
+            .wrap(ratatui::widgets::Wrap { trim: false })
+            .block(block),
+        popup,
+    );
+}
+
+/// Footer hint for the Config tab: the keys that apply right now.
+pub(crate) fn config_footer_hint(app: &MonitorApp) -> String {
+    if let Some(pending) = &app.config_confirm {
+        let dest = if pending.global_file {
+            "global"
+        } else {
+            &pending.dest
+        };
+        return format!("y write {dest} • Esc cancel • Enter does nothing here");
+    }
+    let view = if app.config_global_view {
+        format!("a back to {}", app.config_workspace().name)
+    } else {
+        "a global view".to_string()
+    };
+    format!(
+        "↑↓ select • Enter edit • d reset / delete mode • D reset modes • p view • {view} • PgUp/PgDn scroll • q quit"
+    )
+}
+
+/// Picker heading and border color: a Config edit names its destination.
+fn picker_heading(picker: &ModelPickerState) -> (String, Color, &'static str) {
+    match &picker.target {
+        PickerTarget::Config(dest) if dest.global_file => (
+            format!("Set {} in {}", picker.field, dest.label),
+            Color::Magenta,
+            "Enter review",
+        ),
+        PickerTarget::Config(dest) => (
+            format!("Set {} in {}", picker.field, dest.label),
+            Color::Yellow,
+            "Enter save",
+        ),
+        PickerTarget::Job { .. } => (picker.field.clone(), Color::Cyan, "Enter save"),
+    }
 }
 
 /// Build a centered Rect using `percent_x` × `percent_y` of `area`.
@@ -1283,27 +1842,45 @@ pub(crate) fn render_model_picker(f: &mut Frame, picker: &ModelPickerState, area
 }
 
 fn render_picker_models(f: &mut Frame, picker: &ModelPickerState, popup: Rect) {
+    let (heading, color, save) = picker_heading(picker);
     let confirm = if picker.kind == ModelFieldKind::Chat {
         "Enter next"
     } else {
-        "Enter save"
+        save
     };
     let title = format!(
-        " {} · pick model · {} match · {confirm} · Esc cancel ",
-        picker.field,
+        " {heading} · pick model · {} match · {confirm} · Esc cancel ",
         picker.matches.len(),
     );
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(color))
         .title(title);
     let inner = block.inner(popup);
     f.render_widget(block, popup);
 
+    let note = match &picker.target {
+        PickerTarget::Config(dest) => dest.note.clone(),
+        PickerTarget::Job { .. } => None,
+    };
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(u16::from(note.is_some())),
+            Constraint::Min(0),
+        ])
         .split(inner);
+    if let Some(note) = note {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                format!("⚠ {note}"),
+                Style::default().fg(Color::Yellow),
+            )),
+            rows[1],
+        );
+    }
+    let list_area = rows[2];
 
     let filter_line = Line::from(vec![
         Span::styled("filter: ", Style::default().fg(Color::DarkGray)),
@@ -1318,7 +1895,7 @@ fn render_picker_models(f: &mut Frame, picker: &ModelPickerState, popup: Rect) {
     ]);
     f.render_widget(Paragraph::new(filter_line), rows[0]);
 
-    let visible = rows[1].height as usize;
+    let visible = list_area.height as usize;
     let offset = picker.selected.saturating_sub(visible.saturating_sub(1));
     let end = (offset + visible).min(picker.matches.len());
 
@@ -1341,19 +1918,20 @@ fn render_picker_models(f: &mut Frame, picker: &ModelPickerState, popup: Rect) {
         })
         .collect();
 
-    f.render_widget(List::new(items), rows[1]);
+    f.render_widget(List::new(items), list_area);
 }
 
 fn render_picker_thinking(f: &mut Frame, picker: &ModelPickerState, popup: Rect) {
     use zdx_engine::config::ThinkingLevel;
 
+    let (heading, color, save) = picker_heading(picker);
     let title = format!(
-        " {} · thinking for {} · Enter save · Esc back ",
-        picker.field, picker.chosen_model,
+        " {heading} · thinking for {} · {save} · Esc back ",
+        picker.chosen_model,
     );
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(color))
         .title(title);
     let inner = block.inner(popup);
     f.render_widget(block, popup);
@@ -1395,6 +1973,7 @@ mod tests {
             current: true,
             overlay_path: "/home/user/projects/example/.zdx/config.toml".into(),
             has_overlay: true,
+            overlay_is_global: false,
         };
         assert_eq!(
             workspace_picker_item(&workspace, Some(Path::new("/home/user"))),
@@ -1404,6 +1983,10 @@ mod tests {
             workspace_picker_item(&workspace, Some(Path::new("/other"))),
             "example  · monitor root  · alpha, beta  /home/user/projects/example"
         );
+    }
+
+    fn subagent_defs(root: &Path) -> Vec<SubagentDefinition> {
+        zdx_engine::subagents::discover(root).unwrap()
     }
 
     fn label(source: Option<&RowSource>) -> Option<&str> {
@@ -1451,7 +2034,7 @@ mod tests {
         let workspace =
             workspace_config::workspaces_from(&std::collections::BTreeMap::default(), Some(&root))
                 .remove(0);
-        let view = load_config_view(&workspace).unwrap();
+        let view = load_config_view(Scope::Workspace(&workspace)).unwrap();
         let row = row_index(&view.lines, "core", "model");
         assert_eq!(view.model, "selected@high");
         assert_eq!(
@@ -1467,7 +2050,9 @@ mod tests {
         assert!(matches!(&view.lines[row], ConfigLine::Row(_, value) if value == "selected@high"));
         std::fs::write(&overlay, "model = \"changed@medium\"\n").unwrap();
         assert_eq!(
-            load_config_view(&workspace).unwrap().model,
+            load_config_view(Scope::Workspace(&workspace))
+                .unwrap()
+                .model,
             "changed@medium"
         );
     }
@@ -1493,7 +2078,10 @@ mod tests {
                 child.clone(),
             ])
             .unwrap();
-            let lines = build_config_lines(&cfg, child.parent().unwrap().parent().unwrap());
+            let lines = build_config_lines(
+                &cfg,
+                &subagent_defs(child.parent().unwrap().parent().unwrap()),
+            );
             let labels = config_source_labels(&lines, &sources, &global, &child);
             assert_eq!(
                 label(labels[row_index(&lines, "core", "model")].as_ref()),
@@ -1539,7 +2127,7 @@ mod tests {
         .unwrap();
         let (cfg, sources) =
             config::Config::load_layered_with_sources(&[global.clone(), parent]).unwrap();
-        let lines = build_config_lines(&cfg, home.path());
+        let lines = build_config_lines(&cfg, &subagent_defs(home.path()));
         let labels = config_source_labels(
             &lines,
             &sources,
@@ -1591,7 +2179,7 @@ mod tests {
     #[test]
     fn build_config_lines_groups_helper_models() {
         let config = config::Config::default();
-        let lines = build_config_lines(&config, std::path::Path::new("/nonexistent-zdx-test-root"));
+        let lines = build_config_lines(&config, &[]);
 
         let mut section = String::new();
         let mut helper_keys: Vec<String> = Vec::new();
@@ -1713,6 +2301,7 @@ mod tests {
             "mode:fast",
             &providers,
             &modes,
+            PickerTarget::Config(ConfigDestination::default()),
         );
         assert_eq!(
             subagent.items.first().map(String::as_str),
@@ -1734,6 +2323,7 @@ mod tests {
             "",
             &providers,
             &modes,
+            PickerTarget::Config(ConfigDestination::default()),
         );
         assert!(!helper.items.iter().any(|item| is_mode_ref(item)));
         assert!(helper.has_thinking());
@@ -1742,7 +2332,7 @@ mod tests {
     #[test]
     fn build_config_lines_orders_model_sections_first() {
         let config = config::Config::default();
-        let lines = build_config_lines(&config, std::path::Path::new("/nonexistent-zdx-test-root"));
+        let lines = build_config_lines(&config, &[]);
 
         // Collect section names in display order.
         let sections: Vec<&str> = lines
@@ -1791,6 +2381,7 @@ mod tests {
             "no-such-model",
             &providers,
             &[],
+            PickerTarget::Config(ConfigDestination::default()),
         );
         assert!(!p.items.is_empty(), "registry should list models");
         let before = p.matches.len();
@@ -1825,6 +2416,7 @@ mod tests {
             "",
             &providers,
             &[],
+            PickerTarget::Config(ConfigDestination::default()),
         );
         assert!(enabled.items.contains(&model.qualified_id()));
 
@@ -1835,6 +2427,7 @@ mod tests {
             "",
             &providers,
             &[],
+            PickerTarget::Config(ConfigDestination::default()),
         );
         assert!(!disabled.items.contains(&model.qualified_id()));
     }
@@ -1847,6 +2440,7 @@ mod tests {
             "",
             &config::ProvidersConfig::default(),
             &[],
+            PickerTarget::Config(ConfigDestination::default()),
         );
         assert!(!p.has_thinking());
         assert!(p.items.iter().all(|o| o.contains(':')));
@@ -1862,6 +2456,7 @@ mod tests {
             "gemini:some-model@high",
             &providers,
             &[],
+            PickerTarget::Config(ConfigDestination::default()),
         );
         assert_eq!(p.thinking_current, config::ThinkingLevel::High);
         assert_eq!(p.chosen_model, "gemini:some-model");
@@ -1873,7 +2468,576 @@ mod tests {
             "gemini:some-model",
             &providers,
             &[],
+            PickerTarget::Config(ConfigDestination::default()),
         );
         assert_eq!(p2.thinking_current, config::ThinkingLevel::Low);
+    }
+
+    mod scope_edits {
+        use std::fs;
+        use std::os::unix::fs::symlink;
+
+        use ratatui::backend::TestBackend;
+        use zdx_engine::test_support::TestZdxHomeGuard;
+
+        use super::*;
+        use crate::app::Section;
+
+        const GLOBAL: &str = "model = \"global:model@low\"\n\
+            [subagents]\nenabled = true\n\
+            [[model_modes]]\nname = \"base\"\nprimary = \"global:base@low\"\n";
+        const OVERLAY: &str = "model = \"ws:model@high\"\n\
+            [subagents]\nenabled = false\n\
+            [[model_modes]]\nname = \"local\"\nprimary = \"ws:local@high\"\n";
+
+        struct Fixture {
+            home: TestZdxHomeGuard,
+            app: MonitorApp,
+            global: PathBuf,
+            overlay: PathBuf,
+        }
+
+        impl Fixture {
+            fn new() -> Self {
+                let home = zdx_engine::test_support::temp_zdx_home();
+                let global = config::paths::config_path();
+                fs::write(&global, GLOBAL).unwrap();
+                let root = home.path().join("ws");
+                fs::create_dir_all(root.join(".zdx")).unwrap();
+                let overlay = root.join(".zdx/config.toml");
+                fs::write(&overlay, OVERLAY).unwrap();
+                let app = app_at(&root);
+                Self {
+                    home,
+                    app,
+                    global,
+                    overlay,
+                }
+            }
+
+            fn global_config(&self) -> config::Config {
+                config::Config::load_layered(std::slice::from_ref(&self.global)).unwrap()
+            }
+        }
+
+        fn app_at(root: &Path) -> MonitorApp {
+            let mut app = crate::app::build_app(root).unwrap();
+            app.active_section = Section::Config;
+            app.status_section = Section::Config;
+            app
+        }
+
+        fn select(app: &mut MonitorApp, path: &str) {
+            app.config_selected = editable_model_fields(&app.config_lines)
+                .iter()
+                .position(|field| field.path == path)
+                .unwrap();
+        }
+
+        fn selected_path(app: &MonitorApp) -> String {
+            editable_model_fields(&app.config_lines)[app.config_selected]
+                .path
+                .clone()
+        }
+
+        fn pick(app: &mut MonitorApp, path: &str, model: &str) {
+            select(app, path);
+            open_model_picker(app);
+            app.model_picker.as_mut().unwrap().chosen_model = model.to_string();
+            commit_model_picker(app);
+        }
+
+        fn screen(app: &MonitorApp) -> String {
+            let mut terminal = Terminal::new(TestBackend::new(220, 30)).unwrap();
+            terminal.draw(|f| crate::ui::render(f, app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        /// The tab opens on the workspace and writes its overlay without a
+        /// confirmation; the global file is untouched.
+        #[test]
+        fn workspace_view_is_the_default_and_writes_the_overlay() {
+            let mut fx = Fixture::new();
+            assert!(matches!(fx.app.config_scope(), Scope::Workspace(w) if w.name == "ws"));
+
+            pick(&mut fx.app, "tldr_model", "ws:tldr");
+
+            assert!(fx.app.config_confirm.is_none());
+            assert!(
+                fs::read_to_string(&fx.overlay)
+                    .unwrap()
+                    .contains("ws:tldr@low")
+            );
+            assert_eq!(fs::read_to_string(&fx.global).unwrap(), GLOBAL);
+            assert!(fx.app.status_message.starts_with("Set tldr_model in ws"));
+        }
+
+        /// In the global view, mode edits and the subagents toggle start from
+        /// global's own values, and nothing is written before `y`.
+        #[test]
+        fn global_view_edits_start_from_global_values_and_wait_for_y() {
+            let mut fx = Fixture::new();
+            select(&mut fx.app, "model_modes.0");
+            assert!(handle_config_key(&mut fx.app, KeyCode::Char('a')));
+            assert_eq!(fx.app.config_scope(), Scope::Global);
+            assert_eq!(selected_path(&fx.app), "model_modes.0");
+
+            pick(&mut fx.app, "model_modes.0", "global:edited");
+            let text = screen(&fx.app);
+            assert!(text.contains("Set model_modes in GLOBAL config?"), "{text}");
+            assert!(text.contains("base → global:base@low"), "{text}");
+            assert!(handle_config_key(&mut fx.app, KeyCode::Enter));
+            assert!(fx.app.config_confirm.is_some(), "Enter must not confirm");
+            assert_eq!(fs::read_to_string(&fx.global).unwrap(), GLOBAL);
+            assert!(handle_config_key(&mut fx.app, KeyCode::Char('y')));
+            let modes = fx.global_config().model_modes;
+            assert_eq!(modes.len(), 1);
+            assert_eq!(modes[0].name, "base");
+            assert_eq!(modes[0].primary, "global:edited@low");
+
+            select(&mut fx.app, SUBAGENTS_ENABLED_PATH);
+            open_model_picker(&mut fx.app);
+            assert!(fx.global_config().subagents.enabled);
+            handle_config_key(&mut fx.app, KeyCode::Char('y'));
+            assert!(!fx.global_config().subagents.enabled);
+
+            select(&mut fx.app, "model");
+            handle_config_key(&mut fx.app, KeyCode::Char('d'));
+            handle_config_key(&mut fx.app, KeyCode::Esc);
+            assert!(fx.app.config_confirm.is_none());
+            assert_eq!(fx.global_config().model, "global:model@low");
+            assert_eq!(fs::read_to_string(&fx.overlay).unwrap(), OVERLAY);
+
+            handle_config_key(&mut fx.app, KeyCode::Char('a'));
+            assert!(matches!(fx.app.config_scope(), Scope::Workspace(_)));
+        }
+
+        /// The strip names the destination, and the reset hint uses the
+        /// viewed file's own fallback chain.
+        #[test]
+        fn header_names_destination_and_target_correct_reset() {
+            let mut fx = Fixture::new();
+            select(&mut fx.app, "model");
+            let text = screen(&fx.app);
+            assert!(text.contains("edits → ws"), "{text}");
+            assert!(
+                text.contains(" model: set in ws · d → global:model@low [global] "),
+                "{text}"
+            );
+            assert!(text.contains(" edit reaches ws "), "{text}");
+
+            handle_config_key(&mut fx.app, KeyCode::Char('a'));
+            let text = screen(&fx.app);
+            assert!(text.contains("edits → GLOBAL · all workspaces"), "{text}");
+            assert!(text.contains("every write asks y"), "{text}");
+            let default_model = config::Config::default().model;
+            assert!(
+                text.contains(&format!(
+                    " model: set in GLOBAL · d → {default_model} [default] "
+                )),
+                "{text}"
+            );
+            assert!(
+                text.contains(" edit reaches no listed workspace · skips ws (own value) "),
+                "{text}"
+            );
+
+            select(&mut fx.app, "tldr_model");
+            open_model_picker(&mut fx.app);
+            assert!(screen(&fx.app).contains("Set tldr_model in GLOBAL"));
+        }
+
+        /// A workspace whose overlay is the global file (home with
+        /// `$ZDX_HOME` at `~/.zdx`) is labelled as the global config and its
+        /// writes wait for `y`.
+        #[test]
+        fn workspace_aliasing_the_global_file_asks_before_writing() {
+            let home = zdx_engine::test_support::temp_zdx_home();
+            let global = config::paths::config_path();
+            fs::write(&global, GLOBAL).unwrap();
+            let root = home.path().join("home-dir");
+            fs::create_dir_all(&root).unwrap();
+            symlink(home.path(), root.join(".zdx")).unwrap();
+            let mut app = app_at(&root);
+            assert!(app.config_workspace().overlay_is_global);
+
+            let text = screen(&app);
+            assert!(text.contains("file is the global config"), "{text}");
+            assert!(text.contains("every write asks y"), "{text}");
+
+            pick(&mut app, "tldr_model", "home:tldr");
+            assert!(app.config_confirm.is_some());
+            assert_eq!(fs::read_to_string(&global).unwrap(), GLOBAL);
+            handle_config_key(&mut app, KeyCode::Char('y'));
+            assert!(
+                fs::read_to_string(&global)
+                    .unwrap()
+                    .contains("home:tldr@low")
+            );
+        }
+
+        fn alias_app(home: &TestZdxHomeGuard) -> MonitorApp {
+            let root = home.path().join("home-dir");
+            fs::create_dir_all(&root).unwrap();
+            symlink(home.path(), root.join(".zdx")).unwrap();
+            let app = app_at(&root);
+            assert!(app.config_workspace().overlay_is_global);
+            app
+        }
+
+        fn add_profile(global: &Path, name: &str, cwd: &Path) {
+            let mut text = fs::read_to_string(global).unwrap();
+            let _ = write!(
+                text,
+                "\n[telegram.profiles.{name}]\nchat_id = -100\ncwd = \"{}\"\n",
+                cwd.display()
+            );
+            fs::write(global, text).unwrap();
+        }
+
+        fn key(app: &mut MonitorApp, code: KeyCode) {
+            crate::app::handle_key_event(
+                app,
+                crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE),
+            );
+        }
+
+        fn type_text(app: &mut MonitorApp, text: &str) {
+            for c in text.chars() {
+                key(app, KeyCode::Char(c));
+            }
+        }
+
+        /// A link to `$ZDX_HOME` is the global file even before that file
+        /// exists: the first write still waits for `y`.
+        #[test]
+        fn alias_to_missing_global_file_still_asks() {
+            let home = zdx_engine::test_support::temp_zdx_home();
+            let global = config::paths::config_path();
+            let mut app = alias_app(&home);
+            assert!(!global.exists());
+            pick(&mut app, "tldr_model", "home:tldr");
+            assert!(app.config_confirm.as_ref().is_some_and(|w| w.global_file));
+            assert!(!global.exists(), "nothing is written before y");
+        }
+
+        /// `d` and `D` in a workspace whose file is the global config wait
+        /// for `y` like any other global write.
+        #[test]
+        fn alias_workspace_resets_and_mode_deletes_wait_for_y() {
+            let home = zdx_engine::test_support::temp_zdx_home();
+            let global = config::paths::config_path();
+            fs::write(&global, GLOBAL).unwrap();
+            let mut app = alias_app(&home);
+            let global_config = || config::Config::load_layered(std::slice::from_ref(&global));
+
+            select(&mut app, "model");
+            handle_config_key(&mut app, KeyCode::Char('d'));
+            assert!(app.config_confirm.is_some());
+            assert_eq!(fs::read_to_string(&global).unwrap(), GLOBAL);
+            handle_config_key(&mut app, KeyCode::Char('y'));
+            assert_eq!(
+                global_config().unwrap().model,
+                config::Config::default().model
+            );
+
+            select(&mut app, "model_modes.0");
+            handle_config_key(&mut app, KeyCode::Char('d'));
+            let pending = app.config_confirm.as_ref().expect("mode delete asks");
+            assert!(pending.note.is_none(), "the list is the file's own");
+            handle_config_key(&mut app, KeyCode::Esc);
+            assert_eq!(global_config().unwrap().model_modes.len(), 1);
+
+            handle_config_key(&mut app, KeyCode::Char('D'));
+            assert!(app.config_confirm.is_some());
+            assert_eq!(global_config().unwrap().model_modes.len(), 1);
+            handle_config_key(&mut app, KeyCode::Char('y'));
+            assert!(global_config().unwrap().model_modes.is_empty());
+        }
+
+        /// Resetting a key the destination does not set writes nothing and
+        /// asks nothing, in a workspace and in the global view.
+        #[test]
+        fn reset_of_a_key_the_destination_does_not_set_writes_nothing() {
+            let mut fx = Fixture::new();
+            select(&mut fx.app, "tldr_model");
+            handle_config_key(&mut fx.app, KeyCode::Char('d'));
+            assert!(fx.app.config_confirm.is_none());
+            assert_eq!(
+                fx.app.status_message,
+                "Nothing to reset: tldr_model is not set in ws"
+            );
+
+            handle_config_key(&mut fx.app, KeyCode::Char('a'));
+            handle_config_key(&mut fx.app, KeyCode::Char('d'));
+            assert!(fx.app.config_confirm.is_none());
+            assert_eq!(
+                fx.app.status_message,
+                "Nothing to reset: tldr_model is not set in GLOBAL"
+            );
+            assert_eq!(fs::read_to_string(&fx.overlay).unwrap(), OVERLAY);
+            assert_eq!(fs::read_to_string(&fx.global).unwrap(), GLOBAL);
+        }
+
+        /// Deleting a mode a workspace only inherits copies the rest of the
+        /// list into its file: that waits for `y` and says so.
+        #[test]
+        fn deleting_an_inherited_mode_warns_and_waits_for_y() {
+            let fx = Fixture::new();
+            fs::write(
+                &fx.global,
+                format!(
+                    "{GLOBAL}[[model_modes]]\nname = \"second\"\nprimary = \"global:second@low\"\n"
+                ),
+            )
+            .unwrap();
+            fs::write(&fx.overlay, "model = \"ws:model@high\"\n").unwrap();
+            let mut app = app_at(fx.overlay.parent().unwrap().parent().unwrap());
+
+            select(&mut app, "model_modes.0");
+            handle_config_key(&mut app, KeyCode::Char('d'));
+            let pending = app.config_confirm.as_ref().expect("asks before copying");
+            assert!(!pending.global_file);
+            assert!(
+                pending
+                    .note
+                    .as_deref()
+                    .is_some_and(|note| note.contains("ws has no own mode list")),
+                "{:?}",
+                pending.note
+            );
+            assert!(screen(&app).contains("later mode changes in [global] stop reaching it"));
+            assert_eq!(
+                fs::read_to_string(&fx.overlay).unwrap(),
+                "model = \"ws:model@high\"\n"
+            );
+
+            handle_config_key(&mut app, KeyCode::Char('y'));
+            let overlay = fs::read_to_string(&fx.overlay).unwrap();
+            assert!(
+                overlay.contains("second") && !overlay.contains("base"),
+                "{overlay}"
+            );
+            assert_eq!(fx.global_config().model_modes.len(), 2);
+        }
+
+        /// `y` writes the file captured when the write was requested, even
+        /// if the view changed meanwhile.
+        #[test]
+        fn pending_write_keeps_its_destination() {
+            let mut fx = Fixture::new();
+            handle_config_key(&mut fx.app, KeyCode::Char('a'));
+            pick(&mut fx.app, "model", "global:new");
+            fx.app.config_global_view = false;
+            handle_config_key(&mut fx.app, KeyCode::Char('y'));
+            assert_eq!(fx.global_config().model, "global:new@low");
+            assert_eq!(fs::read_to_string(&fx.overlay).unwrap(), OVERLAY);
+        }
+
+        /// While a write waits for `y`, keys and the mouse cannot switch tabs,
+        /// views, rows, or quit.
+        #[test]
+        fn confirmation_blocks_navigation_and_mouse() {
+            use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+            let mut fx = Fixture::new();
+            key(&mut fx.app, KeyCode::Char('a'));
+            select(&mut fx.app, "model");
+            open_model_picker(&mut fx.app);
+            let picker = fx.app.model_picker.as_mut().unwrap();
+            picker.chosen_model = "global:new".into();
+            picker.phase = PickerPhase::Thinking;
+            key(&mut fx.app, KeyCode::Enter);
+            assert!(fx.app.config_confirm.is_some());
+
+            let selected = fx.app.config_selected;
+            for code in [
+                KeyCode::Tab,
+                KeyCode::BackTab,
+                KeyCode::Char('q'),
+                KeyCode::Down,
+                KeyCode::Char('j'),
+                KeyCode::Char('a'),
+                KeyCode::Char('p'),
+                KeyCode::Char('d'),
+                KeyCode::Enter,
+            ] {
+                key(&mut fx.app, code);
+            }
+            for kind in [
+                MouseEventKind::ScrollDown,
+                MouseEventKind::Down(MouseButton::Left),
+            ] {
+                crate::app::handle_mouse_event(
+                    &mut fx.app,
+                    MouseEvent {
+                        kind,
+                        column: 2,
+                        row: 1,
+                        modifiers: KeyModifiers::NONE,
+                    },
+                );
+            }
+            assert!(fx.app.active_section == Section::Config);
+            assert!(!fx.app.should_quit);
+            assert!(fx.app.config_global_view);
+            assert_eq!(fx.app.config_selected, selected);
+            assert_eq!(fx.app.config_scroll, 0);
+            assert!(fx.app.config_workspace_picker.is_none());
+            assert!(fx.app.config_confirm.is_some());
+            assert_eq!(fs::read_to_string(&fx.global).unwrap(), GLOBAL);
+
+            key(&mut fx.app, KeyCode::Char('y'));
+            assert_eq!(fx.global_config().model, "global:new@low");
+        }
+
+        /// The picker lists global first, then workspaces; a filtered pick
+        /// opens the entry that was chosen.
+        #[test]
+        fn picker_maps_global_first_and_filtered_workspaces() {
+            let fx = Fixture::new();
+            let other = fx.home.path().join("zz-other");
+            fs::create_dir_all(other.join(".zdx")).unwrap();
+            fs::write(other.join(".zdx/config.toml"), "model = \"other:m@low\"\n").unwrap();
+            add_profile(&fx.global, "zz-other", &other);
+            let mut app = app_at(fx.overlay.parent().unwrap().parent().unwrap());
+
+            key(&mut app, KeyCode::Char('p'));
+            let picker = app.config_workspace_picker.as_ref().unwrap();
+            assert!(picker.items[0].0.starts_with("global · all workspaces"));
+            assert!(picker.items[1].0.starts_with("ws"));
+            assert!(picker.items[2].0.starts_with("zz-other"));
+            assert_eq!(picker.selected, 1, "the viewed workspace is preselected");
+
+            type_text(&mut app, "zz-oth");
+            key(&mut app, KeyCode::Enter);
+            assert!(matches!(app.config_scope(), Scope::Workspace(w) if w.name == "zz-other"));
+            let model = app
+                .config_settings
+                .iter()
+                .find(|s| s.key == "model")
+                .unwrap();
+            assert_eq!(model.value.as_deref(), Some("other:m@low"));
+
+            key(&mut app, KeyCode::Char('p'));
+            assert_eq!(app.config_workspace_picker.as_ref().unwrap().selected, 2);
+            type_text(&mut app, "all work");
+            key(&mut app, KeyCode::Enter);
+            assert_eq!(app.config_scope(), Scope::Global);
+            assert!(config_footer_hint(&app).contains("a back to zz-other"));
+
+            key(&mut app, KeyCode::Char('p'));
+            assert_eq!(app.config_workspace_picker.as_ref().unwrap().selected, 0);
+            type_text(&mut app, "no-such-entry");
+            key(&mut app, KeyCode::Enter);
+            assert_eq!(app.config_scope(), Scope::Global, "no match keeps the view");
+        }
+
+        /// If the viewed workspace is gone when the picker re-discovers,
+        /// rows, header, and destination switch together, even on Esc.
+        #[test]
+        fn rediscovery_without_the_viewed_workspace_reloads_the_view() {
+            let fx = Fixture::new();
+            let other = fx.home.path().join("zz-other");
+            fs::create_dir_all(other.join(".zdx")).unwrap();
+            fs::write(other.join(".zdx/config.toml"), "model = \"other:m@low\"\n").unwrap();
+            add_profile(&fx.global, "zz-other", &other);
+            let mut app = app_at(fx.overlay.parent().unwrap().parent().unwrap());
+            key(&mut app, KeyCode::Char('p'));
+            type_text(&mut app, "zz-oth");
+            key(&mut app, KeyCode::Enter);
+            assert!(matches!(app.config_scope(), Scope::Workspace(w) if w.name == "zz-other"));
+
+            fs::write(&fx.global, GLOBAL).unwrap();
+            key(&mut app, KeyCode::Char('p'));
+            key(&mut app, KeyCode::Esc);
+
+            assert!(matches!(app.config_scope(), Scope::Workspace(w) if w.name == "ws"));
+            let model = app
+                .config_settings
+                .iter()
+                .find(|s| s.key == "model")
+                .unwrap();
+            assert_eq!(model.value.as_deref(), Some("ws:model@high"));
+            assert!(app.status_message.contains("zz-other is no longer listed"));
+            select(&mut app, "tldr_model");
+            pick(&mut app, "tldr_model", "ws:tldr");
+            assert!(
+                fs::read_to_string(&fx.overlay)
+                    .unwrap()
+                    .contains("ws:tldr@low")
+            );
+            assert_eq!(
+                fs::read_to_string(other.join(".zdx/config.toml")).unwrap(),
+                "model = \"other:m@low\"\n"
+            );
+        }
+
+        /// The footer names what `a` does from the current view.
+        #[test]
+        fn footer_names_the_way_back_from_global() {
+            let mut fx = Fixture::new();
+            assert!(config_footer_hint(&fx.app).contains("a global view"));
+            handle_config_key(&mut fx.app, KeyCode::Char('a'));
+            let hint = config_footer_hint(&fx.app);
+            assert!(
+                hint.contains("a back to ws") && !hint.contains("a global view"),
+                "{hint}"
+            );
+            pick(&mut fx.app, "model", "global:new");
+            assert!(config_footer_hint(&fx.app).starts_with("y write global • Esc cancel"));
+        }
+
+        /// A narrow terminal wraps the origin and reach lines instead of
+        /// cutting them off.
+        #[test]
+        fn narrow_header_wraps_reach_instead_of_cutting_it() {
+            let mut fx = Fixture::new();
+            handle_config_key(&mut fx.app, KeyCode::Char('a'));
+            select(&mut fx.app, "model");
+            let header: Vec<String> = header_lines(&fx.app, 40)
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+            assert!(header.len() > 3, "{header:?}");
+            assert!(
+                header.iter().skip(1).all(|row| row.chars().count() <= 40),
+                "{header:?}"
+            );
+            let joined = header[1..].join(" ");
+            let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(
+                words(&joined).ends_with("edit reaches no listed workspace · skips ws (own value)"),
+                "{joined}"
+            );
+            fx.app.terminal_width = 42;
+            let mut terminal = Terminal::new(TestBackend::new(42, 30)).unwrap();
+            terminal.draw(|f| crate::ui::render(f, &fx.app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let text: String = (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains("(own value)"), "{text}");
+        }
+
+        #[test]
+        fn wrap_words_breaks_at_spaces_and_splits_long_words() {
+            assert_eq!(wrap_words("ab cd ef", 5), vec!["ab cd", " ef"]);
+            assert_eq!(wrap_words("abcdefgh", 3), vec!["abc", " de", " fg", " h"]);
+            assert_eq!(wrap_words("", 3), vec![""]);
+        }
     }
 }

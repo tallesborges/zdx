@@ -1238,6 +1238,7 @@ export const demoWorkspaces: WorkspacesResponse = {
       current: true,
       overlay_path: "/home/user/projects/example-app/.zdx/config.toml",
       has_overlay: true,
+      overlay_is_global: false,
       error: null,
       settings: [
         demoSetting("model", "core", "model", "anthropic:claude-opus@high", src("workspace", "example-app"), [
@@ -1263,6 +1264,7 @@ export const demoWorkspaces: WorkspacesResponse = {
       current: false,
       overlay_path: "/home/user/projects/other/.zdx/config.toml",
       has_overlay: false,
+      overlay_is_global: false,
       error: null,
       settings: [
         demoSetting("model", "core", "model", "anthropic:claude-sonnet@medium", src("ancestor", "projects")),

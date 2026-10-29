@@ -104,6 +104,18 @@ struct SubagentFrontmatter {
 /// # Errors
 /// Returns an error if parsing fails or files cannot be read.
 pub fn discover(root: &Path) -> Result<Vec<SubagentDefinition>> {
+    discover_in(Some(root))
+}
+
+/// Discovers built-in and global subagents only, without any project.
+///
+/// # Errors
+/// Returns an error if parsing fails or files cannot be read.
+pub fn discover_global() -> Result<Vec<SubagentDefinition>> {
+    discover_in(None)
+}
+
+fn discover_in(root: Option<&Path>) -> Result<Vec<SubagentDefinition>> {
     let mut by_name: BTreeMap<String, SubagentDefinition> = BTreeMap::new();
 
     for definition in built_in_definitions()? {
@@ -116,11 +128,13 @@ pub fn discover(root: &Path) -> Result<Vec<SubagentDefinition>> {
         SubagentSource::User,
         &mut entries,
     )?;
-    collect_markdown_files(
-        &root.join(".zdx").join("subagents"),
-        SubagentSource::Project,
-        &mut entries,
-    )?;
+    if let Some(root) = root {
+        collect_markdown_files(
+            &root.join(".zdx").join("subagents"),
+            SubagentSource::Project,
+            &mut entries,
+        )?;
+    }
 
     for (path, source) in entries {
         let definition = parse_subagent_file(&path, source)
