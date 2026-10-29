@@ -263,7 +263,10 @@ pub fn custom_provider_models(
                 continue;
             }
             let qualified_id = format!("{provider}:{id}");
-            if overrides.iter().any(|entry| entry.id == qualified_id) {
+            if overrides
+                .iter()
+                .any(|entry| entry.id == qualified_id && entry.sets_model_metadata())
+            {
                 continue;
             }
             let mut model = ModelOption {
@@ -512,11 +515,147 @@ pub fn wildcard_match(pattern: &str, text: &str) -> bool {
 mod tests {
     use super::{
         ModelCapabilities, ModelOption, ModelPricing, UserModelOverride, UserModelOverridesFile,
-        apply_user_model_overrides, bare_model_id, custom_provider_models, explicit_api_override,
-        fast_variant, find_model, format_model_thinking, model_id_matches_patterns,
-        model_reads_images_in, resolve_model_spec, wildcard_match,
+        apply_user_model_overrides, bare_model_id, custom_provider_models,
+        declared_audio_models_in, embedded_overrides, explicit_api_override, fast_variant,
+        find_model, format_model_thinking, model_id_matches_patterns, model_reads_images_in,
+        resolve_audio_input, resolve_model_spec, wildcard_match,
     };
     use crate::config::{CustomProviderConfig, ProvidersConfig, ThinkingLevel};
+
+    fn overrides(toml_text: &str) -> Vec<UserModelOverride> {
+        toml::from_str::<UserModelOverridesFile>(toml_text)
+            .unwrap()
+            .overrides
+    }
+
+    /// Embedded defaults come first, the user file second; each field takes
+    /// the last matching entry, so a user entry can change one field and keep
+    /// the rest.
+    #[test]
+    fn audio_input_merges_layers_per_field() {
+        let embedded = overrides(
+            r#"
+[[override]]
+id = "stepfun:model-a"
+input_audio = true
+audio_formats = ["mp3"]
+
+[[override]]
+id = "stepfun:model-b"
+input_audio = true
+"#,
+        );
+        let user = overrides(
+            r#"
+[[override]]
+id = "stepfun:model-a"
+audio_formats = ["wav", "mp3"]
+
+[[override]]
+id = "stepfun:model-b"
+input_audio = false
+
+[[override]]
+id = "stepfun:model-c"
+input_audio = true
+"#,
+        );
+        let layers: [&[UserModelOverride]; 2] = [&embedded, &user];
+
+        let a = resolve_audio_input(&layers, "stepfun", "model-a").unwrap();
+        assert_eq!(a.formats, Some(vec!["wav".to_string(), "mp3".to_string()]));
+        assert!(resolve_audio_input(&layers, "stepfun", "model-b").is_none());
+        let c = resolve_audio_input(&layers, "stepfun", "MODEL-C").unwrap();
+        assert_eq!(c.formats, None);
+        assert!(resolve_audio_input(&layers, "xiaomi", "model-c").is_none());
+        assert!(resolve_audio_input(&layers, "stepfun", "model-d").is_none());
+
+        assert_eq!(
+            declared_audio_models_in(&layers),
+            vec!["stepfun:model-a", "stepfun:model-c"]
+        );
+    }
+
+    /// Bare ids never enable audio; aliases and named accounts resolve to the
+    /// provider kind.
+    #[test]
+    fn audio_input_needs_a_provider_qualified_id() {
+        let user = overrides(
+            r#"
+[[override]]
+id = "model-a"
+input_audio = true
+
+[[override]]
+id = "qwen:model-b"
+input_audio = true
+
+[[override]]
+id = "muse-code@work:model-c"
+input_audio = true
+
+[[override]]
+id = "Acme-Audio:model-d"
+input_audio = true
+"#,
+        );
+        let layers: [&[UserModelOverride]; 1] = [&user];
+        assert!(resolve_audio_input(&layers, "stepfun", "model-a").is_none());
+        assert!(resolve_audio_input(&layers, "alibaba", "model-b").is_some());
+        assert!(resolve_audio_input(&layers, "muse-code", "model-c").is_some());
+        // Any other prefix is a custom provider name, matched case-insensitively.
+        assert!(resolve_audio_input(&layers, "acme-audio", "model-d").is_some());
+        assert!(resolve_audio_input(&layers, "acme", "model-d").is_none());
+        assert_eq!(
+            declared_audio_models_in(&layers),
+            vec!["alibaba:model-b", "muse-code:model-c", "acme-audio:model-d"]
+        );
+    }
+
+    /// The shipped defaults parse, and every model they enable belongs to a
+    /// provider with shipped audio settings, so a default never points at a
+    /// provider `ask_media` cannot reach.
+    #[test]
+    fn embedded_audio_defaults_have_provider_settings() {
+        let layers: [&[UserModelOverride]; 1] = [embedded_overrides()];
+        let declared = declared_audio_models_in(&layers);
+        assert!(
+            declared.contains(&"xiaomi:mimo-v2.6-flash".to_string()),
+            "{declared:?}"
+        );
+        assert!(
+            declared.contains(&"muse-code:muse-wonder-1.0".to_string()),
+            "{declared:?}"
+        );
+        for id in &declared {
+            let kind = crate::providers::resolve_provider(id).kind;
+            assert!(
+                crate::config::shipped_provider_audio(kind).is_some(),
+                "{id} has no shipped provider audio settings"
+            );
+        }
+    }
+
+    /// An entry that only declares audio input neither adds a chat model to
+    /// the registry nor hides a configured custom-provider model.
+    #[test]
+    fn audio_only_override_does_not_change_the_model_list() {
+        let user = overrides(
+            r#"
+[[override]]
+id = "stepfun:audio-only"
+input_audio = true
+
+[[override]]
+id = "proxy:model-a"
+input_audio = true
+"#,
+        );
+        let mut models = Vec::new();
+        apply_user_model_overrides(&mut models, &user);
+        assert!(models.is_empty());
+        assert!(!super::UserModelOverride::sets_model_metadata(&user[1]));
+    }
 
     /// Only an `api` the user wrote counts; qualified ids win over bare ids
     /// only by order, and the last matching entry wins.
@@ -698,6 +837,8 @@ api = "openai-completions"
             reasoning: None,
             input_images: None,
             api: None,
+            input_audio: None,
+            audio_formats: None,
         }
     }
 
@@ -902,6 +1043,141 @@ struct UserModelOverride {
     input_images: Option<bool>,
     #[serde(default)]
     api: Option<String>,
+    /// `ask_media` audio input through the provider's audio settings. Read at
+    /// call time from the override files only; never written to `models.toml`.
+    #[serde(default)]
+    input_audio: Option<bool>,
+    /// Formats this model takes as-is, replacing the provider's `formats`.
+    #[serde(default)]
+    audio_formats: Option<Vec<String>>,
+}
+
+impl UserModelOverride {
+    /// Whether the entry sets picker/registry metadata. An entry that only
+    /// declares audio input must not create or hide a chat model entry.
+    fn sets_model_metadata(&self) -> bool {
+        self.display_name.is_some()
+            || self.input.is_some()
+            || self.output.is_some()
+            || self.cache_read.is_some()
+            || self.cache_write.is_some()
+            || self.context_limit.is_some()
+            || self.output_limit.is_some()
+            || self.reasoning.is_some()
+            || self.input_images.is_some()
+            || self.api.is_some()
+    }
+}
+
+/// Audio input declared for a model in `model_overrides.toml`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioInput {
+    /// Formats the model takes as-is; `None` means the provider's `formats`.
+    /// Values are not validated here.
+    pub formats: Option<Vec<String>>,
+}
+
+/// Audio-input declaration for `provider:model`, or `None` when no entry
+/// enables it. `provider` is a built-in provider id (`muse-code`) or a custom
+/// provider name (`[providers.custom.<name>]`).
+///
+/// Layers: the embedded `model_overrides.toml`, then
+/// `$ZDX_HOME/model_overrides.toml`; per field, the last matching entry wins.
+/// Only provider-qualified ids count (`provider:model`; built-in aliases and
+/// `provider@account:` accepted), so one bare id never enables audio on every
+/// provider that serves the name. The user file is read on every call.
+#[must_use]
+pub fn model_audio_input(provider: &str, model: &str) -> Option<AudioInput> {
+    let (user, _) = load_user_model_overrides();
+    resolve_audio_input(&[embedded_overrides(), &user], provider, model)
+}
+
+/// Every `provider:model` with audio input enabled after merging the layers,
+/// in first-declared order.
+#[must_use]
+pub fn declared_audio_models() -> Vec<String> {
+    let (user, _) = load_user_model_overrides();
+    declared_audio_models_in(&[embedded_overrides(), &user])
+}
+
+fn embedded_overrides() -> &'static [UserModelOverride] {
+    static EMBEDDED: OnceLock<Vec<UserModelOverride>> = OnceLock::new();
+    EMBEDDED.get_or_init(|| {
+        match toml::from_str::<UserModelOverridesFile>(default_model_overrides_toml()) {
+            Ok(file) => file.overrides,
+            Err(err) => {
+                tracing::warn!(%err, "Failed to parse embedded model overrides");
+                Vec::new()
+            }
+        }
+    })
+}
+
+/// Canonical `(provider, model)` for an override id. Built-in providers
+/// resolve aliases to their id; any other prefix is kept as a custom provider
+/// name. A named account is dropped: audio support belongs to the model.
+fn audio_entry_target(id: &str) -> Option<(String, String)> {
+    let (provider, model) = id.trim().split_once(':')?;
+    let provider = provider
+        .split_once('@')
+        .map_or(provider, |(name, _)| name)
+        .trim();
+    let model = model.trim();
+    if provider.is_empty() || model.is_empty() {
+        return None;
+    }
+    Some((canonical_audio_provider(provider), model.to_string()))
+}
+
+fn canonical_audio_provider(provider: &str) -> String {
+    crate::providers::provider_kind_from_id(provider.trim()).map_or_else(
+        || provider.trim().to_ascii_lowercase(),
+        |kind| kind.id().to_string(),
+    )
+}
+
+fn resolve_audio_input(
+    layers: &[&[UserModelOverride]],
+    provider: &str,
+    model: &str,
+) -> Option<AudioInput> {
+    let provider = canonical_audio_provider(provider);
+    let mut enabled = None;
+    let mut formats = None;
+    for entry in layers.iter().flat_map(|layer| layer.iter()) {
+        let Some((entry_provider, entry_model)) = audio_entry_target(&entry.id) else {
+            continue;
+        };
+        if entry_provider != provider || !entry_model.eq_ignore_ascii_case(model.trim()) {
+            continue;
+        }
+        if let Some(value) = entry.input_audio {
+            enabled = Some(value);
+        }
+        if let Some(value) = &entry.audio_formats {
+            formats = Some(value.clone());
+        }
+    }
+    (enabled == Some(true)).then_some(AudioInput { formats })
+}
+
+fn declared_audio_models_in(layers: &[&[UserModelOverride]]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for entry in layers.iter().flat_map(|layer| layer.iter()) {
+        if entry.input_audio.is_none() {
+            continue;
+        }
+        let Some((provider, model)) = audio_entry_target(&entry.id) else {
+            continue;
+        };
+        if seen.insert((provider.clone(), model.to_ascii_lowercase()))
+            && resolve_audio_input(layers, &provider, &model).is_some()
+        {
+            out.push(format!("{provider}:{model}"));
+        }
+    }
+    out
 }
 
 fn load_user_model_overrides() -> (Vec<UserModelOverride>, String) {
@@ -928,7 +1204,10 @@ fn apply_user_model_overrides(models: &mut Vec<ModelOption>, overrides: &[UserMo
                 matched = true;
             }
         }
-        if !matched && let Some(mut model) = model_from_override(entry) {
+        if !matched
+            && entry.sets_model_metadata()
+            && let Some(mut model) = model_from_override(entry)
+        {
             apply_override(&mut model, entry);
             models.push(model);
         }

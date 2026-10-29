@@ -248,7 +248,7 @@ enum Commands {
         list_models: bool,
     },
 
-    /// Ask a Gemini model about a local audio/video/PDF/image file (one-shot)
+    /// Ask a model about a local audio/video/PDF/image file (one-shot)
     AskMedia {
         /// Path to the media file (PDF, image, audio, or video)
         file: Option<String>,
@@ -257,7 +257,7 @@ enum Commands {
         #[arg(short, long)]
         prompt: String,
 
-        /// Model: a Gemini `provider:model` id (default: `gemini:gemini-3.5-flash-lite`)
+        /// Model: a Gemini `provider:model` id for any media, or, for audio files, another provider's model with audio input declared in `model_overrides.toml` (default: `gemini:gemini-3.5-flash-lite`)
         #[arg(short, long, value_name = "MODEL")]
         model: Option<String>,
 

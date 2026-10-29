@@ -82,6 +82,10 @@ pub const DEFAULT_MODELS_TOML: &str = include_str!("../default_models.toml");
 /// Embedded `model_overrides.toml`: post-fetch overrides for `zdx models update`.
 pub const MODEL_OVERRIDES_TOML: &str = include_str!("../model_overrides.toml");
 
+/// Embedded `audio_providers.toml`: shipped `ask_media` audio request settings
+/// for built-in providers, keyed by config section name.
+pub const AUDIO_PROVIDERS_TOML: &str = include_str!("../audio_providers.toml");
+
 // ---------------------------------------------------------------------------
 // Built-in subagent definitions
 // ---------------------------------------------------------------------------

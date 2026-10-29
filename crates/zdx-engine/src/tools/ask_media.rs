@@ -19,7 +19,7 @@ use crate::media::{DEFAULT_ASK_MEDIA_MODEL, ask_media};
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Ask_Media".to_string(),
-        description: "Understand a local image, PDF, audio, or video file: describe, summarize, transcribe, extract, or answer questions about its contents. Use when the user points at a media file and asks what is in it, or when the file's content did not reach you (for example an attachment the active model cannot read, or a voice note whose transcript is not enough). You write the `prompt`, so ask for exactly what you need — a targeted question like `read the stack trace and the failing file path` beats `describe this image`. Supported inputs: PDF, plain text, images (png/jpg/webp/gif/heic), audio (mp3/wav/ogg/m4a/aac/flac), and video (mp4/mov/mpeg/webm/flv/wmv/3gp), up to 15 MiB. Read-only: it reads the file and returns text, and never modifies it. Stateless — each call re-sends the file, so ask a follow-up question by calling again. Do not use it for media already visible to you, and prefer the transcription tooling for plain verbatim speech-to-text. Requires a configured Gemini provider; it fails clearly when the model is not Gemini."
+        description: "Understand a local image, PDF, audio, or video file: describe, summarize, transcribe, extract, or answer questions about its contents. Use when the user points at a media file and asks what is in it, or when the file's content did not reach you (for example an attachment the active model cannot read, or a voice note whose transcript is not enough). You write the `prompt`, so ask for exactly what you need — a targeted question like `read the stack trace and the failing file path` beats `describe this image`. Supported inputs: PDF, plain text, images (png/jpg/webp/gif/heic), audio (mp3/wav/ogg/m4a/aac/flac), and video (mp4/mov/mpeg/webm/flv/wmv/3gp), up to 15 MiB. Read-only: it reads the file and returns text, and never modifies it. Stateless — each call re-sends the file, so ask a follow-up question by calling again. Do not use it for media already visible to you, and prefer the transcription tooling for plain verbatim speech-to-text. Gemini models take every listed type. For audio only, `model` can also name another provider's model that has audio input declared, including a configured custom provider (for example `xiaomi:mimo-v2.6-flash` or `meta:muse-wonder-1.0`); any other model fails with the list of declared ones."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -34,7 +34,7 @@ pub fn definition() -> ToolDefinition {
                 },
                 "model": {
                     "type": "string",
-                    "description": "Optional Gemini model override (e.g. `gemini:gemini-3.6-flash` for harder reasoning over the file). Defaults to a fast, cheap document-parsing model. Must be a Gemini model."
+                    "description": "Optional model override as an exact `provider:model` id. Defaults to a fast, cheap Gemini document-parsing model. Any Gemini model takes every media type; other providers take audio only, and only models with audio input declared."
                 }
             },
             "required": ["file", "prompt"],
@@ -142,7 +142,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_a_non_gemini_model() {
+    async fn rejects_a_model_without_a_media_route() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("sample.png");
         std::fs::write(&file, b"not a real png").unwrap();

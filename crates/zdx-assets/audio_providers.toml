@@ -1,0 +1,58 @@
+# Shipped `ask_media` audio request settings for built-in providers.
+#
+# Keys are config section names: `[stepfun]` here is the default for
+# `[providers.stepfun.audio]` in config.toml. Each field set in config replaces
+# that one value; fields not set keep the value here. This file is the only
+# source of these defaults (it is not copied into default_config.toml).
+#
+# Add a built-in provider here only when its chat-completions endpoint takes an
+# `input_audio` part and accepts its usual credential as a Bearer token (or it
+# is Muse Code). Other OpenAI-compatible endpoints can be added without a
+# release as `[providers.custom.<name>]` with an `audio` block.
+#
+# Fields:
+#   payload          "data-uri" | "data-uri-with-format" | "base64-with-format" | "base64"
+#   formats          formats sent without conversion; must include "wav"
+#   max_base64_bytes provider limit on the encoded audio (optional)
+#   max_tokens       max_tokens sent with the request (optional)
+#   text_modalities  send modalities = ["text"] (default false)
+#
+# Sources checked 2026-10-28; each request shape was confirmed with a synthetic clip.
+
+# https://mimo.mi.com/docs/en-US/usage-guide/multimodal-understanding/audio-understanding
+[xiaomi]
+payload = "data-uri"
+formats = ["mp3", "wav", "flac", "m4a", "ogg"]
+max_base64_bytes = 52428800
+
+# https://docs.modelstudio.console.alibabacloud.com/en/model-studio/qwen-omni
+[alibaba]
+payload = "data-uri-with-format"
+formats = ["wav", "mp3", "aac"]
+max_base64_bytes = 10000000
+
+# https://platform.stepfun.ai/docs/en/guides/models/stepaudio-2.5-chat
+# StepAudio rejects requests that ask for audio output.
+[stepfun]
+payload = "data-uri"
+formats = ["mp3", "wav"]
+text_modalities = true
+
+# https://dev.meta.ai/docs/video-understanding
+# Muse models reason inside max_tokens; a small budget returns an empty answer.
+[meta]
+payload = "base64-with-format"
+formats = ["mp3", "wav"]
+max_tokens = 8000
+
+# Same request shape as `meta`, with the Muse Code subscription key.
+[muse_code]
+payload = "base64-with-format"
+formats = ["mp3", "wav"]
+max_tokens = 8000
+
+# https://docs.mistral.ai/studio/audio/audio-in-chat
+# The docs say part of an MP3 may not be read, so only WAV is sent as-is.
+[mistral]
+payload = "base64"
+formats = ["wav"]

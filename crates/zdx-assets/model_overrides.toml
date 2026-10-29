@@ -1,6 +1,8 @@
 # Post-fetch overrides for `zdx models update`. Applied after models.dev/OpenRouter
 # and win over fetched values. Matched by exact `id`; only the fields set here are
 # overridden. Keep small and add a source + date — a pin can hide a real price change.
+# Exception: the audio entries at the end are read at runtime by `ask_media`, not by
+# the updater (see that section).
 
 # MiMo V2.6 series (released 2026-09-21): not yet in models.dev, whose `xiaomi`
 # provider still stops at V2.5. Values are the official overseas real-time API
@@ -196,3 +198,62 @@ context_limit = 1048576
 output_limit = 131072
 reasoning = true
 input_images = true
+
+# Audio input for `ask_media` (`input_audio`, optional `audio_formats`).
+# These fields are read at call time from this file and then
+# `$ZDX_HOME/model_overrides.toml`; `zdx models update` never writes them to
+# `models.toml`, so regeneration cannot drop them. Add a model only when its
+# provider documents audio input on Chat Completions and a synthetic clip
+# works; the provider must have audio settings (an entry in audio_providers.toml,
+# or a `[providers.custom.<name>.audio]` block for custom providers).
+# Not listed: `mistral:voxtral-mini-latest` (400 `Invalid model` on chat) and
+# `meta:muse-spark-1.3` (Meta documents degraded audio quality).
+# Sources, verified 2026-10-28 with a synthetic clip:
+# https://mimo.mi.com/docs/en-US/usage-guide/multimodal-understanding/audio-understanding
+# https://docs.modelstudio.console.alibabacloud.com/en/model-studio/qwen-omni
+# https://platform.stepfun.ai/docs/en/guides/models/stepaudio-2.5-chat
+# https://dev.meta.ai/docs/video-understanding
+# https://docs.mistral.ai/studio/audio/audio-in-chat
+[[override]]
+id = "xiaomi:mimo-v2.6-flash"
+input_audio = true
+
+[[override]]
+id = "xiaomi:mimo-v2.6-pro"
+input_audio = true
+
+[[override]]
+id = "xiaomi:mimo-v2.6-pro-ultraspeed"
+input_audio = true
+
+[[override]]
+id = "alibaba:qwen3.8-omni-flash"
+input_audio = true
+
+[[override]]
+id = "stepfun:stepaudio-2.5-chat"
+input_audio = true
+
+[[override]]
+id = "meta:muse-wonder-1.0"
+input_audio = true
+
+[[override]]
+id = "meta:muse-spark-1.2"
+input_audio = true
+
+[[override]]
+id = "muse-code:muse-wonder-1.0"
+input_audio = true
+
+[[override]]
+id = "muse-code:muse-wonder-full-1.0"
+input_audio = true
+
+[[override]]
+id = "muse-code:muse-spark-1.2"
+input_audio = true
+
+[[override]]
+id = "mistral:voxtral-small-latest"
+input_audio = true

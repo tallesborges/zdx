@@ -336,12 +336,49 @@ Behavior at the boundary:
 
 ### `ask_media`
 
-- One-shot understanding of a local image, PDF, audio, or video file: takes a `file` path and a `prompt`, sends the file inline to a Gemini model, and returns the model's text answer.
+- One-shot understanding of a local image, PDF, audio, or video file: takes a `file` path and a `prompt`, sends the file inline to a model, and returns the model's text answer. The default model is `gemini:gemini-3.5-flash-lite`.
 - Read-only: it reads one file and returns text. It never modifies the file and needs no shell, so agents without `bash` (including the orchestrator profile) can use it.
 - Stateless — each call re-sends the file; a follow-up question is another call.
-- Optional `model` override must be a Gemini model; anything else fails clearly. Inline size cap is 15 MiB.
+- Optional `model` override is an exact `provider:model` id. Any Gemini model takes every supported media type. For audio files only, it can also be another provider's model when both hold:
+  - the provider has audio settings. A built-in provider has them when it is listed in the embedded `audio_providers.toml` (today Xiaomi, Alibaba, StepFun, Meta, Muse Code, Mistral); its credential is the provider's usual API key as a Bearer token, or Muse Code's minted key. A custom provider (`[providers.custom.<name>]`, protocol `chat-completions`) has them when it has an `audio` block; it uses its `base_url` and `api_key`/`api_key_env`. A built-in provider not in `audio_providers.toml` is refused even with an `audio` block in config, because built-in providers use their own auth schemes; add another OpenAI-compatible endpoint as a custom provider instead. A different request protocol or auth scheme needs code.
+  - the model has `input_audio = true` on a provider-qualified `[[override]]` entry in `model_overrides.toml` (see §Models registry). Shipped defaults: Xiaomi `mimo-v2.6-flash`/`-pro`/`-pro-ultraspeed`, Alibaba `qwen3.8-omni-flash`, StepFun `stepaudio-2.5-chat`, Meta and Muse Code `muse-wonder-1.0` and `muse-spark-1.2` (plus `muse-wonder-full-1.0` on Muse Code), Mistral `voxtral-small-latest`.
+  Audio support is never inferred from a model name, OpenAI compatibility, or upstream modality data. Any other provider or model, a declaration for a provider without audio settings, and any non-audio file sent to one of those models fail with an error that names the declared models and how to declare one.
+- Audio in a format the model does not take is converted with `ffmpeg` to mono 16-bit PCM WAV at the decoder's sample rate (48 kHz for Telegram's OGG/Opus voice notes, which every shipped provider except Xiaomi gets converted). Only the container and codec change; stereo is mixed to mono. How a provider resamples the audio after it arrives is not documented. A missing `ffmpeg` fails clearly. Gemini always gets the original file.
+- Inline size cap is 15 MiB, for the file and for converted audio (about 2.5 minutes of 48 kHz PCM); a provider's own base64 limit (Alibaba 10 MB, about 75 s of PCM) is checked before sending.
+- Provider audio settings: `[providers.<name>.audio]` (built-in) or `[providers.custom.<name>.audio]` in `config.toml` (global or workspace layer, merged like other config):
+  - `payload`: the `input_audio` shape. `data-uri` sends `{"data": "data:<mime>;base64,…"}`; `data-uri-with-format` adds `"format"`; `base64-with-format` sends `{"data": "<base64>", "format": "<fmt>"}`; `base64` sends the bare base64 string.
+  - `formats`: formats sent without conversion; must include `wav`. Other audio is converted to WAV.
+  - `max_base64_bytes` (optional, > 0): the provider's limit on the encoded audio, checked before sending.
+  - `max_tokens` (optional, > 0): sent as `max_tokens`.
+  - `text_modalities` (default `false`): sends `modalities = ["text"]`.
+  - Built-in defaults live only in `crates/zdx-assets/audio_providers.toml`, embedded in the binary; they are not copied into `default_config.toml` or the user's config. Each field resolves as: the config value if any layer sets it, else that shipped default. An explicit `false` overrides a shipped `true`. A custom provider has no defaults: `payload` and `formats` are required.
+  - Values are checked before the request; an unknown payload or format, a list without `wav`, a zero limit, missing settings, a non-chat-completions custom provider, or a missing credential fails that call with the section or provider name.
+  - `zdx ask-media` reads config on each run. The bot reloads changed config files before a turn, so a change applies to its next turn; other long-running processes use the config they loaded at start. A change to `audio_providers.toml` needs a release.
+  - Example, built-in field override (StepFun without `modalities`, and a smaller output budget):
+    ```toml
+    [providers.stepfun.audio]
+    text_modalities = false
+    max_tokens = 2000
+    ```
+  - Example, a new OpenAI-compatible audio provider and model, with no code change (`config.toml`, then `model_overrides.toml`):
+    ```toml
+    [providers.custom.acme-audio]
+    base_url = "https://llm.example.com/v1"
+    api_key_env = "ACME_AUDIO_API_KEY"
+    models = []                      # chat models for the picker; not needed for audio
+
+    [providers.custom.acme-audio.audio]
+    payload = "base64-with-format"
+    formats = ["wav", "mp3"]
+    max_tokens = 4000
+    ```
+    ```toml
+    [[override]]
+    id = "acme-audio:listen-1"
+    input_audio = true
+    ```
 - Paths resolve like other file tools (relative to the working root, with `$VAR`/`~` expansion).
-- Shares its implementation with the `zdx ask-media` CLI, which is unchanged.
+- Shares its implementation with the `zdx ask-media` CLI.
 - Models with `input_images = false` have image blocks replaced by a note pointing at this tool (see §Image fallback).
 
 ### `list_models`
@@ -455,7 +492,7 @@ Providers are the bridge between the agent and LLM APIs. New providers can be ad
 
 - Each provider may expose `base_url` and `tools` overrides under `[providers.<id>]` in config.
 - Provider implementations live in `zdx-providers`; the models registry (`models.toml`) tracks available models per provider.
-- **Custom providers:** `[providers.custom.<name>]` defines a user endpoint (base URL, API key, model allow-list) reached as `<name>:<model>`. The wire protocol is `chat-completions` (default; OpenAI-compatible, `<base_url>/chat/completions`) or `anthropic` (Anthropic Messages via the same client as the first-party provider, `<base_url>/v1/messages`, `x-api-key` auth); the registry spellings `openai-completions`/`anthropic-messages` are accepted aliases. Resolution: an explicit `api` on a matching `[[override]]` in `model_overrides.toml` wins, else the provider's `api`; a model entry's implicit metadata default never counts as a selection, and an unsupported override value fails the turn with a clear error. Both protocols accept the same `base_url` convention (`https://llm.example.com/v1`): in `anthropic` mode one trailing `/v1` is dropped before the client appends `/v1/messages`, so switching protocols never produces `/v1/v1/messages`. Thinking levels: in `chat-completions` mode the level is forwarded as a top-level `reasoning_effort` string carrying the level name (`low`/`medium`/`high`/`xhigh`/`max`), and `off` sends `none` because proxied reasoning backends think by default when the field is omitted. Custom endpoints are proxies that pass the value to their backend, so `@max` reaches backends that distinguish it (e.g. a vLLM-hosted DeepSeek V4). In `anthropic` mode non-off levels map exactly as for the first-party Anthropic provider (adaptive thinking + `output_config.effort` for non-legacy model ids), and `off` sends an explicit `thinking: {"type": "disabled"}`; first-party Anthropic clients keep omitting the field.
+- **Custom providers:** `[providers.custom.<name>]` defines a user endpoint (base URL, API key, model allow-list) reached as `<name>:<model>`. An optional `audio` block lets `ask_media` send audio to it (see `ask_media`). The wire protocol is `chat-completions` (default; OpenAI-compatible, `<base_url>/chat/completions`) or `anthropic` (Anthropic Messages via the same client as the first-party provider, `<base_url>/v1/messages`, `x-api-key` auth); the registry spellings `openai-completions`/`anthropic-messages` are accepted aliases. Resolution: an explicit `api` on a matching `[[override]]` in `model_overrides.toml` wins, else the provider's `api`; a model entry's implicit metadata default never counts as a selection, and an unsupported override value fails the turn with a clear error. Both protocols accept the same `base_url` convention (`https://llm.example.com/v1`): in `anthropic` mode one trailing `/v1` is dropped before the client appends `/v1/messages`, so switching protocols never produces `/v1/v1/messages`. Thinking levels: in `chat-completions` mode the level is forwarded as a top-level `reasoning_effort` string carrying the level name (`low`/`medium`/`high`/`xhigh`/`max`), and `off` sends `none` because proxied reasoning backends think by default when the field is omitted. Custom endpoints are proxies that pass the value to their backend, so `@max` reaches backends that distinguish it (e.g. a vLLM-hosted DeepSeek V4). In `anthropic` mode non-off levels map exactly as for the first-party Anthropic provider (adaptive thinking + `output_config.effort` for non-legacy model ids), and `off` sends an explicit `thinking: {"type": "disabled"}`; first-party Anthropic clients keep omitting the field.
 
 ### Anthropic adaptive thinking
 
@@ -562,7 +599,19 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 ### Models registry
 
 - Path: `<base>/models.toml` (falls back to `default_models.toml` when missing).
-- Persistent user metadata overrides live at `<base>/model_overrides.toml`. `[[override]]` entries use a provider-qualified `id` and may override display name, pricing, context/output limits, reasoning, image input, and API routing metadata. An override may also define metadata for a custom-provider model absent from `models.toml`; it survives `zdx models update` because the generated registry and user overrides are separate files.
+- Persistent user metadata overrides live at `<base>/model_overrides.toml`. `[[override]]` entries use a provider-qualified `id` and may override display name, pricing, context/output limits, reasoning, image input, and API routing metadata. An override may also define metadata for a custom-provider model absent from `models.toml`; it survives `zdx models update` because the generated registry and user overrides are separate files. `models.toml` is generated: edits to it are lost on the next update, so durable changes go in `model_overrides.toml`.
+- Audio input for `ask_media` is declared only in override files, never in `models.toml`:
+  - `input_audio = true|false` enables or disables the model for audio through its provider's audio settings. `audio_formats = ["wav", "mp3", …]` (optional; known: wav, mp3, ogg, flac, m4a, aac; must include `wav`, the conversion target) replaces the provider's `formats` for that model.
+  - Layers: the embedded `model_overrides.toml` shipped in the binary, then `<base>/model_overrides.toml`. For each field the last matching entry wins, so a user entry can change one field and keep the rest, or set `input_audio = false` to turn off a shipped default. Only provider-qualified ids count (aliases and `provider@account:` accepted); a bare id never enables audio.
+  - The user file is read on each `ask_media` call: a change applies to the next call with no rebuild or restart. A new shipped default needs a release.
+  - `zdx models update` ignores these fields and never writes them, so regeneration cannot drop them. An entry that only declares audio does not add a model to the picker or `zdx models list`, and does not hide a custom-provider model.
+  - Example: to use a new StepFun audio model that StepFun documents for audio input:
+    ```toml
+    [[override]]
+    id = "stepfun:<model-id>"
+    input_audio = true
+    # audio_formats = ["wav"]   # only if the model takes fewer formats than the provider's `formats`
+    ```
 - Tracks available models per provider. Entries support `*` wildcards for `zdx models update`.
 - `zdx models list` prints models from enabled providers as `provider:model` ids (the exact value accepted by `-m`), with `--all` to include disabled providers, `--provider <id>` to filter by provider, `--plan-only` to keep only providers covered by a subscription plan, and `--json` for machine-readable output (each entry carries a `subscription` flag).
 

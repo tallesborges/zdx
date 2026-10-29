@@ -6,6 +6,7 @@ pub mod thinking_parser;
 
 pub mod alibaba;
 pub mod anthropic;
+pub mod audio_chat;
 pub mod deepseek;
 pub mod embeddings;
 pub mod gemini;

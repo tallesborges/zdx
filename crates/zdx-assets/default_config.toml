@@ -158,6 +158,17 @@ websocket = false
 # Default tool sets:
 #   - default:       ["bash", "edit", "fetch_webpage", "invoke_subagent", "read", "read_thread", "thread_search", "web_search", "write"]
 #   - openai_codex:  ["bash", "apply_patch", "fetch_webpage", "invoke_subagent", "read", "read_thread", "thread_search", "web_search"]
+#
+# [providers.<name>.audio] / [providers.custom.<name>.audio]: how ask_media sends audio
+# to that provider over chat completions. Shipped defaults for built-in providers live in
+# the embedded audio_providers.toml; each field you set replaces that one default.
+# A custom provider has no defaults and needs payload and formats.
+#   payload: "data-uri" | "data-uri-with-format" | "base64-with-format" | "base64"
+#   formats: formats sent without conversion (must include "wav"; others become WAV)
+#   max_base64_bytes: provider size limit for the encoded audio
+#   max_tokens: max_tokens sent with the request
+#   text_modalities: send modalities = ["text"]
+# Which models take audio is set per model with input_audio in model_overrides.toml.
 
 [providers.anthropic]
 enabled = true

@@ -2136,15 +2136,26 @@ impl ProvidersConfig {
         &'a self,
         model: &str,
     ) -> Option<(&'a CustomProviderConfig, String)> {
+        self.named_custom_provider_for_model(model)
+            .map(|(_, cfg, rest)| (cfg, rest))
+    }
+
+    /// Like [`Self::custom_provider_for_model`], also returning the provider
+    /// name as written in the config.
+    #[must_use]
+    pub fn named_custom_provider_for_model<'a>(
+        &'a self,
+        model: &str,
+    ) -> Option<(&'a str, &'a CustomProviderConfig, String)> {
         let trimmed = model.trim();
         for sep in [':', '/'] {
             if let Some((prefix, rest)) = trimmed.split_once(sep) {
                 let prefix = prefix.trim();
                 let rest = rest.trim();
                 if !rest.is_empty()
-                    && let Some(cfg) = self.custom.get(prefix)
+                    && let Some((name, cfg)) = self.custom.get_key_value(prefix)
                 {
-                    return Some((cfg, rest.to_string()));
+                    return Some((name.as_str(), cfg, rest.to_string()));
                 }
             }
         }
@@ -2480,6 +2491,104 @@ pub struct ProviderConfig {
     /// Use the persistent WebSocket transport for the `OpenAI` Responses API.
     #[serde(default)]
     pub websocket: bool,
+    /// `ask_media` audio request settings (`[providers.<name>.audio]`).
+    /// Boxed: `Config` is held across many awaits, and an inline block in
+    /// every provider grows those futures past the `large_futures` lint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio: Option<Box<ProviderAudioConfig>>,
+}
+
+/// `ask_media` audio request settings for one provider. Every field is
+/// optional: a value set in a config layer replaces the shipped default for
+/// that field only (see [`effective_provider_audio`]). Values stay raw here and
+/// are validated when `ask_media` uses them, so a typo fails that call instead
+/// of the whole config.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct ProviderAudioConfig {
+    /// `input_audio` shape: `data-uri`, `data-uri-with-format`,
+    /// `base64-with-format`, or `base64`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<String>,
+    /// Formats sent without conversion; must include `wav`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formats: Option<Vec<String>>,
+    /// Provider limit on the base64 string, in bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_base64_bytes: Option<u64>,
+    /// `max_tokens` to send.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    /// Send `modalities = ["text"]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_modalities: Option<bool>,
+}
+
+impl ProviderAudioConfig {
+    /// `self` with every unset field taken from `base`.
+    #[must_use]
+    pub fn over(&self, base: &Self) -> Self {
+        Self {
+            payload: self.payload.clone().or_else(|| base.payload.clone()),
+            formats: self.formats.clone().or_else(|| base.formats.clone()),
+            max_base64_bytes: self.max_base64_bytes.or(base.max_base64_bytes),
+            max_tokens: self.max_tokens.or(base.max_tokens),
+            text_modalities: self.text_modalities.or(base.text_modalities),
+        }
+    }
+}
+
+/// Audio settings for `kind`: the configured `[providers.<name>.audio]` fields
+/// over the shipped defaults from `audio_providers.toml`.
+///
+/// Field by field, so a config that sets only `max_tokens` keeps the shipped
+/// payload and formats. `None` means neither the shipped file nor the config
+/// define an audio block for the provider.
+#[must_use]
+pub fn effective_provider_audio(
+    providers: &ProvidersConfig,
+    kind: crate::providers::ProviderKind,
+) -> Option<ProviderAudioConfig> {
+    let shipped = shipped_provider_audio(kind);
+    let configured = providers.get(kind).audio.as_deref().cloned();
+    match (configured, shipped) {
+        (Some(configured), Some(shipped)) => Some(configured.over(&shipped)),
+        (configured, shipped) => configured.or(shipped),
+    }
+}
+
+/// Shipped audio defaults for `kind`, from the embedded `audio_providers.toml`.
+#[must_use]
+pub fn shipped_provider_audio(kind: crate::providers::ProviderKind) -> Option<ProviderAudioConfig> {
+    shipped_audio_table()
+        .get(&provider_config_section(kind))
+        .cloned()
+}
+
+/// The `[providers.<section>]` name for `kind` (`muse_code`, not `muse-code`).
+#[must_use]
+pub fn provider_config_section(kind: crate::providers::ProviderKind) -> String {
+    kind.id().replace('-', "_")
+}
+
+/// Parsed `audio_providers.toml`, keyed by config section name. A parse
+/// failure is a build defect (a unit test parses the file), so it logs and
+/// leaves every built-in provider without shipped audio.
+fn shipped_audio_table() -> &'static std::collections::BTreeMap<String, ProviderAudioConfig> {
+    static TABLE: std::sync::OnceLock<std::collections::BTreeMap<String, ProviderAudioConfig>> =
+        std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        toml::from_str(zdx_assets::AUDIO_PROVIDERS_TOML).unwrap_or_else(|err| {
+            tracing::error!(%err, "Failed to parse embedded audio_providers.toml");
+            std::collections::BTreeMap::new()
+        })
+    })
+}
+
+/// Section names in the embedded `audio_providers.toml`, for tests and docs.
+#[must_use]
+pub fn shipped_audio_sections() -> Vec<String> {
+    shipped_audio_table().keys().cloned().collect()
 }
 
 impl ProviderConfig {
@@ -2575,6 +2684,10 @@ pub struct CustomProviderConfig {
     pub api_key_env: Option<String>,
     /// Model allow-list shown in the picker (supports `*`).
     pub models: Vec<String>,
+    /// `ask_media` audio request settings (`[providers.custom.<name>.audio]`).
+    /// No shipped defaults: `payload` and `formats` are required here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio: Option<Box<ProviderAudioConfig>>,
 }
 
 impl CustomProviderConfig {

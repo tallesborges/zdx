@@ -14,7 +14,8 @@ Scope: embedded asset content (prompts, instruction layers, default TOMLs, bundl
 - `instruction_layers/telegram_instruction_layer.md`: Telegram bot output rules
 - `default_config.toml`: default configuration template (generated output; do not edit by hand)
 - `default_models.toml`: default model registry fallback
-- `model_overrides.toml`: pinned post-fetch overrides applied by `zdx models update` (corrects stale/promo upstream pricing and limits)
+- `model_overrides.toml`: pinned post-fetch overrides applied by `zdx models update` (corrects stale/promo upstream pricing and limits). Exception: `input_audio`/`audio_formats` entries are shipped `ask_media` audio defaults, read at runtime and ignored by the updater (contract: `docs/SPEC.md` §Models registry)
+- `audio_providers.toml`: shipped `ask_media` audio request settings per built-in provider (payload shape, formats, limits), the only source of those defaults; loaded by `zdx-engine` `config::shipped_provider_audio`
 - `bundled_skills/*/`: built-in bundled skill fallbacks; `build.rs` embeds every file under this tree
 - `bundled_skills/model-dispatch/`: named-model dispatch, fan-out, and reasoning-level comparisons
 - `bundled_skills/frontend-design/`: product-UI design skill adapted from `anthropics/skills` (Apache-2.0; keep `LICENSE.txt` with its modification notice there, not in `SKILL.md`); also auto-loaded by `html-artifact-specialist` for visual craft

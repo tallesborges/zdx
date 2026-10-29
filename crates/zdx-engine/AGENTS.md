@@ -17,7 +17,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - `src/config.rs`: config loading + paths (embeds `zdx_assets::DEFAULT_CONFIG_TOML`)
 - `src/custom_commands.rs`: custom slash command discovery + frontmatter parsing (`<ZDX_HOME>/commands` + ancestor/current `.zdx/commands`, plus bundled commands from `zdx_assets::bundled_command_assets()`)
 - `src/followups.rs`: shared `<followups>` suggestion-block parsing (surfaces strip + render their own way)
-- `src/models.rs`: model registry for model picker (embeds `zdx_assets::DEFAULT_MODELS_TOML`)
+- `src/models.rs`: model registry for model picker (embeds `zdx_assets::DEFAULT_MODELS_TOML`); also resolves `ask_media` audio declarations (`model_audio_input`, `declared_audio_models`) from the embedded then user `model_overrides.toml`, never from `models.toml`
 - `src/mcp.rs`: MCP config loading, server discovery, helper workspace/runtime, and MCP tool-call execution helpers
 - `src/prompts.rs`: prompt template helpers/re-exports of `zdx_assets` prompt constants.
 - `src/skills.rs`: skills discovery + parsing (materializes bundled skills from `zdx_assets::bundled_skill_assets()`)
@@ -25,7 +25,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - `src/images/mod.rs`: shared image utilities module exports
 - `src/images/decode.rs`: generic image decode/resize/PNG encode helpers
 - `src/images/path_mime.rs`: path normalization + extension MIME helpers
-- `src/media.rs`: one-shot media understanding (audio/video/PDF/image + prompt → Gemini text); shared by the `ask_media` tool and `zdx ask-media`
+- `src/media.rs`: one-shot media understanding (audio/video/PDF/image + prompt → text); shared by the `ask_media` tool and `zdx ask-media`. Gemini takes every type; other providers take audio only, when the provider has audio settings (built-in: `config::effective_provider_audio`, `[providers.<name>.audio]` over the embedded `zdx-assets/audio_providers.toml`, field by field; custom: `[providers.custom.<name>.audio]`, chat-completions only; no per-provider branch, only credential resolution differs) and the model has `input_audio = true` in an override file (`models::model_audio_input`). `zdx_providers::audio_chat` sends the request. Audio in a format the model does not take is converted with `ffmpeg` to mono PCM WAV at the decoder's sample rate
 - `src/pidfile.rs`: PID file management
 - `src/proc_liveness.rs`: process liveness and identity primitives shared by the PID file, agent-activity, and background-process trackers
 - `src/service.rs`: launchd-backed control for the long-lived `bot`/`daemon` services — plist rendering, `install`/`uninstall`/`start`/`stop`/`restart`, and combined launchd+PID-file `state()`. Also owns the queued restart: one persisted request at `run/restart-queue.json` (`queue_restart` merges into a pending one and refuses unless a supervised bot is running to perform it; `QueuedRestart::is_fulfilled` compares service PID-file start times against `requested_at`). Agents run `~/.local/bin/zdx` (never `current_exe()`) so restart picks up the installed binary, launched via `zsh -c 'exec …'` so `~/.zshenv` (provider API keys, PATH) is sourced. Plists set `ZDX_SERVICE_SUPERVISOR=launchd` and capture output to `~/.zdx/run/logs/{name}.{out,err}`. macOS-only.

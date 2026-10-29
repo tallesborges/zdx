@@ -6,6 +6,7 @@
 
 mod fixtures;
 
+mod ask_media_audio;
 mod background_subagent;
 mod cli_help;
 mod config_path;
