@@ -544,8 +544,29 @@ pub(crate) fn tool_running_status(name: &str) -> String {
     format!("{emoji} Running `{name}`...")
 }
 
+/// The replied-to message, placed before the user's words.
+fn reply_to_block(reply: &crate::types::RepliedTo) -> String {
+    let sender = if reply.from_bot {
+        "the bot (or another run posting through it)"
+    } else {
+        "a user"
+    };
+    let what = if reply.quoted {
+        "quotes this part of"
+    } else {
+        "replies to"
+    };
+    format!(
+        "<reply_to>\nThe user's message below {what} message {} in this chat, sent by {sender}:\n{}\n</reply_to>",
+        reply.message_id, reply.text
+    )
+}
+
 pub(crate) fn build_user_text(incoming: &IncomingMessage) -> String {
     let mut parts = Vec::new();
+    if let Some(reply) = incoming.replied_to.as_ref() {
+        parts.push(reply_to_block(reply));
+    }
     if let Some(text) = incoming.text.as_ref()
         && !text.trim().is_empty()
     {
@@ -1046,6 +1067,7 @@ mod tests {
             notices: Vec::new(),
             message_thread_id: Some(7),
             is_forum: true,
+            replied_to: None,
         };
         super::record_user_message(&mut thread, &mut messages, &incoming, None, Some(&note))
             .expect("record");
@@ -1101,6 +1123,7 @@ mod tests {
             notices: Vec::new(),
             message_thread_id: Some(69),
             is_forum: true,
+            replied_to: None,
         };
         super::record_user_message(&mut thread, &mut messages, &incoming, None, Some(&note))
             .expect("record");

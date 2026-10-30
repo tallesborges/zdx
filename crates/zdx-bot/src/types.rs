@@ -16,6 +16,20 @@ pub struct IncomingMessage {
     pub message_thread_id: Option<i64>,
     /// Whether the group is a forum-enabled supergroup.
     pub is_forum: bool,
+    /// The message this one explicitly replies to, when it has text.
+    pub replied_to: Option<RepliedTo>,
+}
+
+/// Text of the message a user replied to, so a short answer ("how much?")
+/// keeps its subject even when that message is not in this thread's history.
+pub struct RepliedTo {
+    pub message_id: i64,
+    /// Sent by a bot (this bot, or a job posting through its account).
+    pub from_bot: bool,
+    /// The part the user quoted, else the message text or caption.
+    pub text: String,
+    /// `text` is the part the user selected, not the whole message.
+    pub quoted: bool,
 }
 
 /// A file already saved on the bot host by a surface other than Telegram

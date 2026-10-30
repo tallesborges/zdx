@@ -186,6 +186,7 @@ pub(crate) async fn retry_agent_turn(
         notices: Vec::new(),
         message_thread_id: topic_id,
         is_forum: topic_id.is_some(),
+        replied_to: None,
     };
     let reply_ctx = ReplyContext {
         reply_to_message_id,
@@ -493,6 +494,7 @@ mod reply_target_tests {
             notices: Vec::new(),
             message_thread_id: topic,
             is_forum: true,
+            replied_to: None,
         }
     }
 

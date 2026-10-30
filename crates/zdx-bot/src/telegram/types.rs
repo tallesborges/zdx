@@ -131,6 +131,9 @@ pub struct Message {
     /// Original message this message replies to.
     #[serde(default, rename = "reply_to_message")]
     pub reply_to: Option<Box<Message>>,
+    /// The part of `reply_to` the sender selected to quote, if any.
+    #[serde(default)]
+    pub quote: Option<TextQuote>,
     /// Inline keyboard of a message the bot sent, as Telegram returns it on a
     /// callback query. Kept raw: an unknown button type must not fail the
     /// update. Read through [`Message::link_rows`].
@@ -211,6 +214,12 @@ impl Message {
             .and_then(RichMessage::to_text)
             .map(Cow::Owned)
     }
+}
+
+/// Telegram `TextQuote`: the quoted part of a replied-to message.
+#[derive(Debug, Deserialize)]
+pub struct TextQuote {
+    pub text: String,
 }
 
 /// Telegram `PaidMediaInfo`. Items are counted but never kept, so nothing

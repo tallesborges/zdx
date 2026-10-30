@@ -181,7 +181,56 @@ pub(crate) async fn parse_incoming_message(
         notices,
         message_thread_id: target.thread,
         is_forum: message.chat.is_forum_enabled(),
+        replied_to: replied_to(message),
     }))
+}
+
+/// Longest replied-to text kept in the prompt, in characters.
+const MAX_REPLIED_TO_CHARS: usize = 3000;
+
+/// The message this one explicitly replies to, when it has text to show.
+///
+/// In a forum topic Telegram sets `reply_to_message` on every message to the
+/// topic's creation message (whose id is the topic id), reply or not; that
+/// one is not a reply.
+fn replied_to(message: &Message) -> Option<crate::types::RepliedTo> {
+    let reply = message.reply_to.as_deref()?;
+    if message.effective_thread_id() == Some(reply.id) {
+        return None;
+    }
+    let quote = message
+        .quote
+        .as_ref()
+        .map(|quote| quote.text.trim())
+        .filter(|text| !text.is_empty());
+    let text = match quote {
+        Some(quote) => quote.to_string(),
+        None => reply
+            .plain_text()
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty())
+            .or_else(|| {
+                reply
+                    .caption
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|caption| !caption.is_empty())
+                    .map(str::to_string)
+            })?,
+    };
+    let text = if text.chars().count() > MAX_REPLIED_TO_CHARS {
+        let mut cut: String = text.chars().take(MAX_REPLIED_TO_CHARS).collect();
+        cut.push_str("\n[…cut]");
+        cut
+    } else {
+        text
+    };
+    Some(crate::types::RepliedTo {
+        message_id: reply.id,
+        from_bot: reply.from.as_ref().is_some_and(|user| user.is_bot),
+        text,
+        quoted: quote.is_some(),
+    })
 }
 
 async fn validate_access(
@@ -1008,6 +1057,61 @@ mod tests {
     #[test]
     fn a_message_without_any_text_stays_empty() {
         assert!(extract_text(&with(4, &json!({ "rich_message": { "blocks": [] } }))).is_none());
+    }
+
+    /// In a forum topic every message points at the topic's creation message;
+    /// only an explicit reply (or quote) brings the replied-to text along, and
+    /// it comes before the user's words in the prompt.
+    #[tokio::test]
+    async fn explicit_replies_carry_the_replied_to_text() {
+        let alert = json!({
+            "message_id": 70,
+            "message_thread_id": 69,
+            "chat": { "id": 42, "type": "supergroup", "is_forum": true },
+            "from": { "id": 99, "is_bot": true },
+            "text": "⏰ Pay the cleaner: due 30/10 at 15:00",
+        });
+        let topic_root = json!({
+            "message_id": 69,
+            "chat": { "id": 42, "type": "supergroup", "is_forum": true },
+            "from": { "id": 99, "is_bot": true },
+        });
+        let no_server = || "http://127.0.0.1:9".to_string();
+
+        let plain = with(
+            71,
+            &json!({ "message_thread_id": 69, "text": "how much?", "reply_to_message": topic_root }),
+        );
+        let incoming = ingest(no_server(), plain).await.expect("turn runs");
+        assert!(incoming.replied_to.is_none());
+        assert_eq!(build_user_text(&incoming), "how much?");
+
+        let reply = with(
+            72,
+            &json!({ "message_thread_id": 69, "text": "how much?", "reply_to_message": alert }),
+        );
+        let incoming = ingest(no_server(), reply).await.expect("turn runs");
+        assert_eq!(
+            build_user_text(&incoming),
+            "<reply_to>\nThe user's message below replies to message 70 in this chat, sent by the bot (or another run posting through it):\n⏰ Pay the cleaner: due 30/10 at 15:00\n</reply_to>\n\nhow much?"
+        );
+
+        let quoted = with(
+            73,
+            &json!({
+                "message_thread_id": 69,
+                "text": "why?",
+                "reply_to_message": alert,
+                "quote": { "text": "due 30/10", "position": 21 },
+            }),
+        );
+        let prompt = build_user_text(&ingest(no_server(), quoted).await.expect("turn runs"));
+        assert!(
+            prompt.starts_with(
+                "<reply_to>\nThe user's message below quotes this part of message 70 in this chat, sent by the bot (or another run posting through it):\ndue 30/10\n</reply_to>"
+            ),
+            "{prompt}"
+        );
     }
 
     const TOKEN: &str = "test-token";

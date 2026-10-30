@@ -780,6 +780,7 @@ mod tests {
             notices: Vec::new(),
             message_thread_id: Some(7),
             is_forum: true,
+            replied_to: None,
         };
         let reply_ctx = super::ReplyContext {
             reply_to_message_id: Some(42),
@@ -1425,6 +1426,7 @@ mod tests {
             notices: Vec::new(),
             message_thread_id: Some(7),
             is_forum: true,
+            replied_to: None,
         };
         let reply_ctx = super::ReplyContext {
             reply_to_message_id: Some(42),

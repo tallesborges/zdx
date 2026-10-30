@@ -440,6 +440,7 @@ mod tests {
             notices: Vec::new(),
             message_thread_id: Some(7),
             is_forum: true,
+            replied_to: None,
         }
     }
 
