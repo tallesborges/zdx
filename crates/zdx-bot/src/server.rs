@@ -1977,6 +1977,13 @@ fn project_thread(
                     });
                 }
             }
+            ThreadEvent::Posted { post, ts } => activity.push(ThreadActivity::Notice {
+                sequence,
+                time: event_time(&ts),
+                ts,
+                kind: "posted",
+                message: zdx_engine::core::posted::notice_text(&post),
+            }),
             ThreadEvent::Notice { kind, message, ts } => {
                 let kind = match kind {
                     NoticeKind::Refusal => "refusal",

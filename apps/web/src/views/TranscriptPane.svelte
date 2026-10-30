@@ -158,12 +158,15 @@
             {/if}
           {:else if node.activity.type === "notice"}
             {@const n = node.activity}
+            {@const warn = n.kind !== "refusal" && n.kind !== "posted"}
             <div
               class="rounded-md border px-2.5 py-1.5 text-xs"
-              class:border-warning-border={n.kind !== "refusal"}
-              class:text-warning={n.kind !== "refusal"}
+              class:border-warning-border={warn}
+              class:text-warning={warn}
               class:border-destructive={n.kind === "refusal"}
               class:text-destructive={n.kind === "refusal"}
+              class:border-border={n.kind === "posted"}
+              class:text-muted-foreground={n.kind === "posted"}
             >
               <span class="font-mono text-xxs uppercase opacity-70"
                 >{n.kind.replace(/_/g, " ")}</span

@@ -434,10 +434,7 @@ pub(crate) fn orchestrator_topic_name(name: &str) -> String {
 }
 
 pub(crate) fn thread_id_for_chat(chat_id: i64, message_thread_id: Option<i64>) -> String {
-    match message_thread_id {
-        Some(topic_id) => format!("telegram-{chat_id}-topic-{topic_id}"),
-        None => format!("telegram-{chat_id}"),
-    }
+    zdx_engine::telegram::conversation_thread_id(chat_id, message_thread_id)
 }
 
 /// Inverse of [`thread_id_for_chat`] for topic threads: `(chat_id, topic_id)`

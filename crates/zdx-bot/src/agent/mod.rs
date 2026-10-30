@@ -24,17 +24,17 @@ pub(crate) const STATUS_TRANSCRIBING: &str = "🎤 Transcribing audio...";
 ///
 /// # Errors
 /// Returns an error if the operation fails.
-/// Opens a thread and replays its history. The third value is the delivery
-/// note for undelivered parts of the last reply; pass it to
-/// [`record_user_message`] so the new user message carries it, exactly as
-/// replay will rebuild it.
+/// Opens a thread and replays its history. The third value is the runtime
+/// note (undelivered parts of the last reply, messages other runs posted
+/// here); pass it to [`record_user_message`] so the new user message carries
+/// it, exactly as replay will rebuild it.
 pub(crate) fn load_thread_state(
     thread_id: &str,
 ) -> Result<(Thread, Vec<ChatMessage>, Option<String>)> {
     let thread = Thread::with_id(thread_id.to_string()).context("open thread log")?;
     let replay =
         thread_persistence::load_thread_replay(thread_id).context("load thread history")?;
-    Ok((thread, replay.messages, replay.trailing_delivery_note))
+    Ok((thread, replay.messages, replay.trailing_note))
 }
 
 ///
@@ -60,7 +60,7 @@ pub(crate) fn record_user_message(
     messages: &mut Vec<ChatMessage>,
     incoming: &IncomingMessage,
     runtime_context: Option<&RuntimeContext>,
-    delivery_note: Option<&str>,
+    runtime_note: Option<&str>,
 ) -> Result<()> {
     let text = build_user_text(incoming);
     let last_key = thread_persistence::last_attached_context_key_from_messages(messages);
@@ -82,7 +82,7 @@ pub(crate) fn record_user_message(
         .iter()
         .filter_map(IncomingImage::inline)
         .collect();
-    if inline.is_empty() && delivery_note.is_none() {
+    if inline.is_empty() && runtime_note.is_none() {
         messages.push(ChatMessage::user(text).with_runtime_context(block, key));
         return Ok(());
     }
@@ -95,8 +95,8 @@ pub(crate) fn record_user_message(
             data: data.to_string(),
         });
     }
-    let content = match delivery_note {
-        Some(note) => thread_persistence::user_message_with_delivery_note(note, blocks),
+    let content = match runtime_note {
+        Some(note) => thread_persistence::user_message_with_note(note, blocks),
         None => MessageContent::Blocks(blocks),
     };
 
@@ -1051,10 +1051,74 @@ mod tests {
             .expect("record");
 
         let replayed = thread_persistence::load_thread_replay(&id).expect("replay");
-        assert_eq!(replayed.trailing_delivery_note, None);
+        assert_eq!(replayed.trailing_note, None);
         assert_eq!(
             format!("{:?}", replayed.messages.last().map(|m| &m.content)),
             format!("{:?}", messages.last().map(|m| &m.content)),
         );
+    }
+
+    /// A job posts an alert into a topic the bot never ran in. The user's
+    /// first ordinary message there runs with the alert, its source thread,
+    /// and the sender's context, and replay rebuilds the same message.
+    #[test]
+    fn a_post_by_another_run_reaches_the_next_user_message() {
+        use zdx_engine::core::thread_persistence;
+        use zdx_engine::telegram::{PostDetails, SentMessage, record_post};
+
+        let _home = zdx_engine::test_support::temp_zdx_home();
+        let sent = SentMessage {
+            chat_id: -1_001_234_567_890,
+            message_thread_id: Some(69),
+            message_id: 70,
+            url: Some("https://t.me/c/1234567890/69/70".to_string()),
+        };
+        let recorded = record_post(
+            &sent,
+            PostDetails {
+                text: Some("⏰ Pay the cleaner: due 30/10 at 15:00"),
+                context: Some("Expected net amount: R$ 100,00, to be confirmed by the user."),
+                source_thread_id: Some("job-example-20260101-080000"),
+                ..PostDetails::default()
+            },
+        )
+        .expect("record");
+        let id = crate::handlers::message::thread_id_for_chat(-1_001_234_567_890, Some(69));
+        assert_eq!(recorded.as_deref(), Some(id.as_str()));
+
+        let (mut thread, mut messages, note) = super::load_thread_state(&id).expect("load");
+        assert!(messages.is_empty(), "a post is not a conversation turn");
+        let note = note.expect("posted note");
+        let incoming = crate::types::IncomingMessage {
+            chat_id: -1_001_234_567_890,
+            message_id: 71,
+            user_id: 1,
+            text: Some("how much?".to_string()),
+            images: Vec::new(),
+            audios: Vec::new(),
+            documents: Vec::new(),
+            videos: Vec::new(),
+            notices: Vec::new(),
+            message_thread_id: Some(69),
+            is_forum: true,
+        };
+        super::record_user_message(&mut thread, &mut messages, &incoming, None, Some(&note))
+            .expect("record");
+
+        assert_eq!(messages.len(), 1);
+        let live = format!("{:?}", messages[0].content);
+        for expected in [
+            "<posted_messages>",
+            "Message 70 posted at",
+            "by thread job-example-20260101-080000",
+            "⏰ Pay the cleaner: due 30/10 at 15:00",
+            "Expected net amount: R$ 100,00, to be confirmed by the user.",
+            "how much?",
+        ] {
+            assert!(live.contains(expected), "missing {expected:?} in {live}");
+        }
+        let replayed = thread_persistence::load_thread_replay(&id).expect("replay");
+        assert_eq!(replayed.trailing_note, None);
+        assert_eq!(format!("{:?}", replayed.messages[0].content), live);
     }
 }

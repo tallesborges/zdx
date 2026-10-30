@@ -22,7 +22,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 - `src/cli/commands/threads.rs`: saved-thread commands; `threads inspect [--json]` is the agent/script entry point to the shared engine trajectory projection; `threads list --workers` is the programmatic worker filter (engine `list_recent_workers`, never a CLI-side rule)
 - `src/cli/commands/quota.rs`: live subscription-quota command handler (`zdx quota`, `--json`); thin renderer over the shared `subscription_quota::fetch_snapshot()` API
 - `src/cli/commands/service.rs`: launchd service commands (`zdx service install|uninstall|start|stop|restart|status|logs [bot|daemon|all]`; restart supports `--force`, or `--queue` to hand the restart to the bot once no agent run is active — safe from inside an agent run; `status` reports a pending queued restart); thin wrapper over `zdx_engine::service`
-- `src/cli/commands/telegram.rs`: Telegram utility commands (`create-topic`, `send-message [--json]`, `send-document [--json]`); sends print the engine's `SentMessage` receipt
+- `src/cli/commands/telegram.rs`: Telegram utility commands (`create-topic`, `send-message [--context] [--json]`, `send-document [--context] [--json]`); sends print the engine's `SentMessage` receipt and record the post with `telegram::record_post` (sender thread from `ZDX_THREAD_ID`; a record failure is a stderr warning, never a command failure)
 - `src/cli/commands/worktree.rs`: worktree command handler
 - `src/modes/exec.rs`: non-interactive streaming mode
 - `src/modes/mod.rs`: mode exports (exec + feature-gated TUI)

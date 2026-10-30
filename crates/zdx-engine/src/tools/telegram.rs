@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 use super::{ToolContext, ToolDefinition, resolve_existing_path};
 use crate::core::events::ToolOutput;
 use crate::telegram::{
-    MAX_CAPTION_CHARS, MAX_MESSAGE_CHARS, ParseMode, SentMessage, TelegramOutbound,
-    resolve_bot_token,
+    MAX_CAPTION_CHARS, MAX_MESSAGE_CHARS, ParseMode, PostDetails, SentMessage, TelegramOutbound,
+    record_post, resolve_bot_token,
 };
 
 /// Returns the tool definition for the telegram tool.
@@ -21,7 +21,7 @@ pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Telegram".to_string(),
         description: format!(
-            "Post into a Telegram chat or forum topic other than the current conversation: send a message, send a file, or create a forum topic. Use when the user asks to send something to another topic, group, or chat (\"manda isso pro tópico X\", \"post this summary in group Z\", \"create a new topic with the trip info\"). Do NOT use it to reply in the current conversation — that is just your normal answer.\n\nResolving `chat_id`: never guess it. Prefer a named profile in the Telegram Workspaces block or `$ZDX_HOME/config.toml` `[telegram.profiles.<name>]`; otherwise read it off an attachment path (`$ZDX_HOME/telegram/<chat_id>/...`); otherwise ask the user. Supergroup ids are negative (`-100...`) — keep the minus sign. `message_thread_id` is the forum topic id; omit it to post in the group's General topic.\n\nFormatting: `parse_mode` defaults to `html`, and the text is sent raw — the Markdown conversion used on the normal reply path does not run here, and one unsupported tag rejects the whole message. Supported tags: b, strong, i, em, u, s, code, pre, a href, blockquote, tg-spoiler. Not supported: headings, ul/ol/li, tables, br, div, span. Use plain newlines and bullet characters, and escape literal &, <, and >. Use `parse_mode: \"plain\"` when the text is not marked up. If the content is a table, a diagram, or longer than a couple of screens, write a file and use `send_document` instead of fighting the markup.\n\nLimits: message body {MAX_MESSAGE_CHARS} characters, caption {MAX_CAPTION_CHARS}. Split long content by section into several calls rather than truncating it.\n\nA send returns the posted `message_id` and, in a supergroup, its `url` (a `t.me/c` message link). Use that link when you need to point at the post; never build one from the topic id.\n\nWhat this actually creates: `create_topic` plus `send_message` produces a topic containing text, not a resumable agent conversation. The posted content is not part of any thread history, and a user replying there starts a fresh thread with no context. Say so plainly instead of implying continuity.\n\nPosting is externally visible and cannot be cleanly unsent. Send without confirming only when the user named the destination in the current turn; otherwise confirm the target chat and topic first, especially for chats with other people in them."
+            "Post into a Telegram chat or forum topic other than the current conversation: send a message, send a file, or create a forum topic. Use when the user asks to send something to another topic, group, or chat (\"manda isso pro tópico X\", \"post this summary in group Z\", \"create a new topic with the trip info\"). Do NOT use it to reply in the current conversation — that is just your normal answer.\n\nResolving `chat_id`: never guess it. Prefer a named profile in the Telegram Workspaces block or `$ZDX_HOME/config.toml` `[telegram.profiles.<name>]`; otherwise read it off an attachment path (`$ZDX_HOME/telegram/<chat_id>/...`); otherwise ask the user. Supergroup ids are negative (`-100...`) — keep the minus sign. `message_thread_id` is the forum topic id; omit it to post in the group's General topic.\n\nFormatting: `parse_mode` defaults to `html`, and the text is sent raw — the Markdown conversion used on the normal reply path does not run here, and one unsupported tag rejects the whole message. Supported tags: b, strong, i, em, u, s, code, pre, a href, blockquote, tg-spoiler. Not supported: headings, ul/ol/li, tables, br, div, span. Use plain newlines and bullet characters, and escape literal &, <, and >. Use `parse_mode: \"plain\"` when the text is not marked up. If the content is a table, a diagram, or longer than a couple of screens, write a file and use `send_document` instead of fighting the markup.\n\nLimits: message body {MAX_MESSAGE_CHARS} characters, caption {MAX_CAPTION_CHARS}. Split long content by section into several calls rather than truncating it.\n\nA send returns the posted `message_id` and, in a supergroup, its `url` (a `t.me/c` message link). Use that link when you need to point at the post; never build one from the topic id.\n\nWhat happens when the user answers there: each delivered message or file is recorded in the destination chat or topic's own thread, with this thread's id and the optional `context`. A later message there, a reply or an ordinary one, runs with that record, so the agent knows what was posted and where it came from. Put in `context` what a later answer needs and the message does not show (amounts, source notes, ids); it is not posted. That thread does not see this thread's history beyond the record; say so instead of implying more.\n\nPosting is externally visible and cannot be cleanly unsent. Send without confirming only when the user named the destination in the current turn; otherwise confirm the target chat and topic first, especially for chats with other people in them."
         ),
         input_schema: json!({
             "type": "object",
@@ -56,6 +56,10 @@ pub fn definition() -> ToolDefinition {
                     "type": "string",
                     "description": "Optional caption for `send_document`. Keep detail in a preceding message instead."
                 },
+                "context": {
+                    "type": "string",
+                    "description": "Optional background for `send_message` and `send_document`, recorded with the post in the destination thread but not posted. Give what a later answer there needs and the message does not show."
+                },
                 "name": {
                     "type": "string",
                     "description": "Topic name. Required for `create_topic`. Returns the new topic id."
@@ -87,6 +91,7 @@ struct TelegramInput {
     parse_mode: Option<String>,
     path: Option<String>,
     caption: Option<String>,
+    context: Option<String>,
     name: Option<String>,
     bot_token: Option<String>,
 }
@@ -151,7 +156,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
                 .send_message(input.chat_id, text, input.message_thread_id, parse_mode)
                 .await
             {
-                Ok(sent) => ToolOutput::success(sent_json(&sent, None)),
+                Ok(sent) => delivered(&sent, &input, ctx, Some(text), None),
                 Err(err) => failure(&err),
             }
         }
@@ -163,23 +168,21 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
                 Ok(resolved) => resolved,
                 Err(output) => return output,
             };
+            let caption = input
+                .caption
+                .as_deref()
+                .filter(|caption| !caption.trim().is_empty());
 
             match client
                 .send_document(
                     input.chat_id,
                     &resolved.resolved_path,
-                    input
-                        .caption
-                        .as_deref()
-                        .filter(|caption| !caption.trim().is_empty()),
+                    caption,
                     input.message_thread_id,
                 )
                 .await
             {
-                Ok(sent) => ToolOutput::success(sent_json(
-                    &sent,
-                    Some(resolved.resolved_path.display().to_string()),
-                )),
+                Ok(sent) => delivered(&sent, &input, ctx, caption, Some(&resolved.resolved_path)),
                 Err(err) => failure(&err),
             }
         }
@@ -205,7 +208,38 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     }
 }
 
-fn sent_json(sent: &SentMessage, file: Option<String>) -> Value {
+/// Records a delivered send in the destination conversation's thread and
+/// builds the result.
+fn delivered(
+    sent: &SentMessage,
+    input: &TelegramInput,
+    ctx: &ToolContext,
+    text: Option<&str>,
+    file: Option<&std::path::Path>,
+) -> ToolOutput {
+    let recorded = record_post(
+        sent,
+        PostDetails {
+            text,
+            file,
+            context: input.context.as_deref(),
+            source_thread_id: ctx.current_thread_id.as_deref(),
+        },
+    );
+    ToolOutput::success(sent_json(
+        sent,
+        file.map(|file| file.display().to_string()),
+        &recorded,
+    ))
+}
+
+/// The receipt plus where the post was recorded. A record failure does not
+/// fail the call: the message is already in the chat and must not be resent.
+fn sent_json(
+    sent: &SentMessage,
+    file: Option<String>,
+    recorded: &anyhow::Result<Option<String>>,
+) -> Value {
     let mut value = json!({
         "sent": true,
         "chat_id": sent.chat_id,
@@ -215,6 +249,14 @@ fn sent_json(sent: &SentMessage, file: Option<String>) -> Value {
     });
     if let Some(file) = file {
         value["file"] = file.into();
+    }
+    match recorded {
+        Ok(thread_id) => value["recorded_in_thread"] = json!(thread_id),
+        Err(err) => {
+            tracing::warn!(error = %format!("{err:#}"), "Recording posted Telegram message failed");
+            value["recorded_in_thread"] = Value::Null;
+            value["record_error"] = format!("{err:#}").into();
+        }
     }
     value
 }
@@ -333,6 +375,31 @@ mod tests {
         )
         .await;
         assert!(!output.is_ok());
+    }
+
+    #[test]
+    fn result_reports_where_the_post_was_recorded() {
+        let sent = SentMessage {
+            chat_id: -1_001_234_567_890,
+            message_thread_id: Some(17),
+            message_id: 42,
+            url: Some("https://t.me/c/1234567890/17/42".to_string()),
+        };
+        let ok = sent_json(
+            &sent,
+            None,
+            &Ok(Some("telegram--1001234567890-topic-17".to_string())),
+        );
+        assert_eq!(ok["sent"], true);
+        assert_eq!(ok["recorded_in_thread"], "telegram--1001234567890-topic-17");
+        assert!(ok.get("record_error").is_none());
+
+        let own = sent_json(&sent, None, &Ok(None));
+        assert_eq!(own["recorded_in_thread"], Value::Null);
+
+        let failed = sent_json(&sent, None, &Err(anyhow::anyhow!("disk full")));
+        assert_eq!(failed["sent"], true, "the message was still delivered");
+        assert_eq!(failed["record_error"], "disk full");
     }
 
     #[test]

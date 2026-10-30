@@ -41,6 +41,7 @@ Detailed guidance for job delivery channels, shell reliability, and multi-step d
   1. Create the topic (capture the topic ID).
   2. Send the message to that topic ID.
   3. If topic creation fails, report the error clearly.
+- Replies: each delivered message is recorded in the destination topic's thread, with the job's thread id. When the user answers there, the bot's agent sees it. Pass what an answer needs and the message does not show (amounts, source notes, ids) with `--context` (CLI) or `context` (tool); it is not posted. Write long context to a file and pass `--context "$(cat <file>)"` to avoid quoting problems.
 
 Example delivery block:
 

@@ -22,7 +22,7 @@ pub(crate) fn spawn_topic_title_update(
     let root = context.root_for_chat(chat_id).root;
 
     tokio::spawn(async move {
-        let thread_id = format!("telegram-{chat_id}-topic-{topic_id}");
+        let thread_id = zdx_engine::telegram::conversation_thread_id(chat_id, Some(topic_id));
         match title_generation::generate_title(&message_text, &title_model, &root, Some(&thread_id))
             .await
         {

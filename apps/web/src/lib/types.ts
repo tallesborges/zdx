@@ -282,7 +282,7 @@ export interface UsageActivity extends ActivityBase {
 
 export interface NoticeActivity extends ActivityBase {
   type: "notice";
-  kind: "refusal" | "context_window_exceeded" | "output_limit" | "output_loop" | "delivery";
+  kind: "refusal" | "context_window_exceeded" | "output_limit" | "output_loop" | "delivery" | "posted";
   message: string;
 }
 

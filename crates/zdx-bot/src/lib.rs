@@ -575,10 +575,7 @@ fn parse_queue_cancel_callback(data: &str) -> Option<QueueCancelKey> {
 }
 
 fn telegram_thread_id(chat_id: i64, thread_id: Option<i64>) -> String {
-    match thread_id {
-        Some(thread_id) => format!("telegram-{chat_id}-topic-{thread_id}"),
-        None => format!("telegram-{chat_id}"),
-    }
+    zdx_engine::telegram::conversation_thread_id(chat_id, thread_id)
 }
 
 fn current_topic_model(context: &BotContext, chat_id: i64, thread_id: Option<i64>) -> String {

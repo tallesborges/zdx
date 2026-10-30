@@ -9,6 +9,7 @@
 //! - `artifacts`: Shared thread artifact model (generated + sent files, preview kinds)
 //! - `artifact_feedback`: User annotations on an artifact → validated bundle + agent prompt
 //! - `delivery`: Delivery records for replies sent to chat surfaces (sent/failed/unknown)
+//! - `posted`: Messages another run posted into a chat conversation (replayed as a note)
 //! - `handoff_generation`: LLM-based handoff context generation
 //! - `prompt_builder_generation`: LLM-based prompt-builder generation
 //! - `recency`: shared recency decay applied to search relevance scores
@@ -35,6 +36,7 @@ pub mod handoff_generation;
 pub mod interrupt;
 pub mod media_fallback;
 pub mod native_memory;
+pub mod posted;
 pub mod prompt_builder_generation;
 pub mod recency;
 pub mod subagent;

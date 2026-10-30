@@ -243,6 +243,14 @@ fn render_event(event: &ThreadEvent) -> Option<Block> {
             let notice = crate::core::delivery::notice_text(record)?;
             writeln!(text, "### Notice\n⚠ {notice}\n").expect("write");
         }
+        ThreadEvent::Posted { post, .. } => {
+            writeln!(
+                text,
+                "### Posted\n{}",
+                crate::core::posted::transcript_text(post)
+            )
+            .expect("write");
+        }
         ThreadEvent::Usage { .. } => return None,
     }
     Some(Block {

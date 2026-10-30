@@ -114,6 +114,78 @@ struct SentResult {
     is_topic_message: bool,
 }
 
+/// Thread id of the bot conversation for a chat or forum topic:
+/// `telegram-{chat_id}-topic-{topic_id}` in a topic, `telegram-{chat_id}`
+/// otherwise. The bot runs every message there through this id.
+#[must_use]
+pub fn conversation_thread_id(chat_id: i64, topic_id: Option<i64>) -> String {
+    match topic_id {
+        Some(topic_id) => format!("telegram-{chat_id}-topic-{topic_id}"),
+        None => format!("telegram-{chat_id}"),
+    }
+}
+
+/// What one send carried, for [`record_post`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PostDetails<'a> {
+    /// Message text, or a document's caption.
+    pub text: Option<&'a str>,
+    /// Path of a sent document.
+    pub file: Option<&'a Path>,
+    /// Background for later replies, not shown in the chat.
+    pub context: Option<&'a str>,
+    /// Thread of the run that sent it.
+    pub source_thread_id: Option<&'a str>,
+}
+
+/// Records a delivered message in the destination conversation's thread, so
+/// a later message there (a reply or an ordinary one) runs with it as
+/// context. Follows one `alias_to` hop, like the bot. Returns the thread it
+/// was written to, or `None` when the destination is the sender's own thread,
+/// which already holds the send as a tool call.
+///
+/// # Errors
+/// Returns an error if the thread cannot be written. The message is already
+/// delivered then; callers report the error and must not resend.
+pub fn record_post(sent: &SentMessage, details: PostDetails<'_>) -> Result<Option<String>> {
+    use crate::core::posted::PostedMessage;
+    use crate::core::thread_persistence::{Thread, ThreadEvent, read_thread_alias};
+
+    let effective = |id: &str| match read_thread_alias(id) {
+        Ok(Some(source)) => source,
+        _ => id.to_string(),
+    };
+    let target = effective(&conversation_thread_id(
+        sent.chat_id,
+        sent.message_thread_id,
+    ));
+    let source_thread_id = details
+        .source_thread_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    if source_thread_id.is_some_and(|source| effective(source) == target) {
+        return Ok(None);
+    }
+
+    let post = PostedMessage {
+        surface: "telegram".to_string(),
+        chat_id: sent.chat_id,
+        topic_id: sent.message_thread_id,
+        message_id: sent.message_id,
+        url: sent.url.clone(),
+        text: details.text.map(str::to_string),
+        file: details.file.map(|path| path.display().to_string()),
+        context: details.context.map(str::to_string),
+        source_thread_id: source_thread_id.map(str::to_string),
+    }
+    .normalized();
+    let event = ThreadEvent::posted(post);
+    Thread::with_id(target.clone())
+        .and_then(|mut thread| thread.append(&event))
+        .with_context(|| format!("record posted message in thread {target}"))?;
+    Ok(Some(target))
+}
+
 /// Builds the `t.me/c` link to one message in a supergroup:
 /// `https://t.me/c/<internal_id>/<topic_id>/<message_id>` inside a forum
 /// topic, `https://t.me/c/<internal_id>/<message_id>` otherwise.
@@ -460,7 +532,9 @@ mod tests {
 
     /// Serves one canned Telegram answer on a local port and returns the raw
     /// request it received.
-    fn one_shot_server(response_body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+    pub(super) fn one_shot_server(
+        response_body: &'static str,
+    ) -> (String, std::thread::JoinHandle<String>) {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let base_url = format!("http://{}", listener.local_addr().expect("addr"));
@@ -602,5 +676,153 @@ mod tests {
             .expect_err("missing message_id must fail");
         assert!(matches!(flood::classify(&err), FailureClass::Unknown));
         server.join().expect("server");
+    }
+}
+
+#[cfg(test)]
+mod record_tests {
+    use super::*;
+    use crate::core::posted::PostedMessage;
+    use crate::core::thread_persistence::{
+        Thread, ThreadEvent, load_thread_events, load_thread_replay,
+    };
+
+    fn posts(thread_id: &str) -> Vec<(String, PostedMessage)> {
+        load_thread_events(thread_id)
+            .expect("events")
+            .into_iter()
+            .filter_map(|event| match event {
+                ThreadEvent::Posted { post, ts } => Some((ts, post)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn sent(topic: Option<i64>, message_id: i64) -> SentMessage {
+        SentMessage {
+            chat_id: -1_001_234_567_890,
+            message_thread_id: topic,
+            message_id,
+            url: message_link(-1_001_234_567_890, topic, message_id),
+        }
+    }
+
+    /// The shared path behind the CLI and the tool: a delivered message lands
+    /// in the destination conversation's thread with its context and sender,
+    /// and replay turns it into the note for the next user message.
+    #[tokio::test]
+    async fn a_delivered_message_is_recorded_in_the_destination_thread() {
+        let _home = crate::test_support::temp_zdx_home();
+        let (base_url, server) = super::tests::one_shot_server(
+            r#"{"ok":true,"result":{"message_id":70,"message_thread_id":69,"is_topic_message":true,"chat":{"id":-1001234567890}}}"#,
+        );
+        let client = TelegramOutbound {
+            base_url,
+            ..TelegramOutbound::new("123:test-token".to_string())
+        };
+        let text = "⏰ Pay the cleaner: due 30/10";
+        let sent = client
+            .send_message(-1_001_234_567_890, text, Some(69), ParseMode::Html)
+            .await
+            .expect("send");
+        server.join().expect("server");
+
+        let recorded = record_post(
+            &sent,
+            PostDetails {
+                text: Some(text),
+                context: Some("  Expected: R$ 100,00 (to be confirmed)  "),
+                source_thread_id: Some("job-example-1"),
+                ..PostDetails::default()
+            },
+        )
+        .expect("record");
+        let thread_id = "telegram--1001234567890-topic-69";
+        assert_eq!(recorded.as_deref(), Some(thread_id));
+
+        let posts = posts(thread_id);
+        assert_eq!(posts.len(), 1);
+        let post = &posts[0].1;
+        assert_eq!(post.message_id, 70);
+        assert_eq!(post.topic_id, Some(69));
+        assert_eq!(post.text.as_deref(), Some(text));
+        assert_eq!(
+            post.context.as_deref(),
+            Some("Expected: R$ 100,00 (to be confirmed)")
+        );
+        assert_eq!(post.source_thread_id.as_deref(), Some("job-example-1"));
+        assert_eq!(post.url.as_deref(), Some("https://t.me/c/1234567890/69/70"));
+
+        let replay = load_thread_replay(thread_id).expect("replay");
+        assert!(replay.messages.is_empty());
+        let note = replay.trailing_note.expect("note");
+        assert!(note.contains("by thread job-example-1"), "{note}");
+        assert!(
+            note.contains("Expected: R$ 100,00 (to be confirmed)"),
+            "{note}"
+        );
+    }
+
+    #[test]
+    fn a_send_into_the_senders_own_thread_is_not_recorded() {
+        let _home = crate::test_support::temp_zdx_home();
+        let own = conversation_thread_id(-1_001_234_567_890, Some(5));
+        let recorded = record_post(
+            &sent(Some(5), 9),
+            PostDetails {
+                text: Some("hi"),
+                source_thread_id: Some(&own),
+                ..PostDetails::default()
+            },
+        )
+        .expect("record");
+        assert_eq!(recorded, None);
+        assert!(posts(&own).is_empty());
+    }
+
+    /// A resumed topic reads its history from the source thread, so the post
+    /// goes there; a sender running in that source thread is the same thread.
+    #[test]
+    fn records_follow_one_alias_hop() {
+        let _home = crate::test_support::temp_zdx_home();
+        let topic = conversation_thread_id(-1_001_234_567_890, Some(8));
+        Thread::with_id(topic.clone())
+            .expect("thread")
+            .set_alias(Some("source-thread".to_string()))
+            .expect("alias");
+
+        let recorded = record_post(
+            &sent(Some(8), 3),
+            PostDetails {
+                text: Some("hi"),
+                ..PostDetails::default()
+            },
+        )
+        .expect("record");
+        assert_eq!(recorded.as_deref(), Some("source-thread"));
+        assert_eq!(posts("source-thread").len(), 1);
+
+        let skipped = record_post(
+            &sent(Some(8), 4),
+            PostDetails {
+                text: Some("again"),
+                source_thread_id: Some("source-thread"),
+                ..PostDetails::default()
+            },
+        )
+        .expect("record");
+        assert_eq!(skipped, None);
+    }
+
+    #[test]
+    fn general_topic_posts_use_the_chat_thread() {
+        assert_eq!(
+            conversation_thread_id(-1_001_234_567_890, None),
+            "telegram--1001234567890"
+        );
+        assert_eq!(
+            conversation_thread_id(-1_001_234_567_890, Some(7)),
+            "telegram--1001234567890-topic-7"
+        );
     }
 }

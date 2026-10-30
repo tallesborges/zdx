@@ -941,6 +941,11 @@ enum TelegramCommands {
         )]
         parse_mode: String,
 
+        /// Background recorded with the message in the destination chat's
+        /// thread (not posted), for when the user answers there
+        #[arg(long, value_name = "TEXT")]
+        context: Option<String>,
+
         /// Bot token override
         #[arg(long, value_name = "TOKEN")]
         bot_token: Option<String>,
@@ -967,6 +972,11 @@ enum TelegramCommands {
         /// Optional forum topic thread ID
         #[arg(long, value_name = "THREAD_ID")]
         message_thread_id: Option<i64>,
+
+        /// Background recorded with the document in the destination chat's
+        /// thread (not posted), for when the user answers there
+        #[arg(long, value_name = "TEXT")]
+        context: Option<String>,
 
         /// Bot token override
         #[arg(long, value_name = "TOKEN")]
@@ -1759,6 +1769,7 @@ async fn dispatch_telegram(command: TelegramCommands, context: &DispatchContext<
             text,
             message_thread_id,
             parse_mode,
+            context: post_context,
             bot_token,
             json,
         } => {
@@ -1769,6 +1780,7 @@ async fn dispatch_telegram(command: TelegramCommands, context: &DispatchContext<
                 message_thread_id,
                 &text,
                 &parse_mode,
+                post_context.as_deref(),
                 json,
             )
             .await
@@ -1778,6 +1790,7 @@ async fn dispatch_telegram(command: TelegramCommands, context: &DispatchContext<
             path,
             caption,
             message_thread_id,
+            context: post_context,
             bot_token,
             json,
         } => {
@@ -1788,6 +1801,7 @@ async fn dispatch_telegram(command: TelegramCommands, context: &DispatchContext<
                 message_thread_id,
                 &path,
                 caption.as_deref(),
+                post_context.as_deref(),
                 json,
             )
             .await

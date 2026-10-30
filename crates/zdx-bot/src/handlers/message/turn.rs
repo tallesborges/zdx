@@ -41,7 +41,7 @@ pub(super) async fn run_agent_turn(
         model_override.as_deref(),
         thinking_override,
     );
-    let (mut thread, mut messages, delivery_note) = agent::load_thread_state(thread_id)?;
+    let (mut thread, mut messages, runtime_note) = agent::load_thread_state(thread_id)?;
     // Bot threads are opened by id, so their meta has no root until now. Record
     // the chat's project root so they group by project like CLI/TUI threads.
     if stored_root.is_none() {
@@ -73,7 +73,7 @@ pub(super) async fn run_agent_turn(
                     &mut messages,
                     &incoming,
                     None,
-                    delivery_note.as_deref(),
+                    runtime_note.as_deref(),
                 )
             {
                 tracing::error!(
@@ -110,7 +110,7 @@ pub(super) async fn run_agent_turn(
             &mut messages,
             &incoming,
             prepared.runtime_context.as_ref(),
-            delivery_note.as_deref(),
+            runtime_note.as_deref(),
         )?;
     }
 

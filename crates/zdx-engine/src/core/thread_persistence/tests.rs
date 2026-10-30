@@ -473,7 +473,7 @@ fn undelivered_items_reach_the_next_user_message() {
     ];
 
     let replay = thread_events_to_replay(events);
-    assert_eq!(replay.trailing_delivery_note, None);
+    assert_eq!(replay.trailing_note, None);
     let messages = replay.messages;
     assert_eq!(messages.len(), 5, "delivery adds no turn of its own");
 
@@ -493,6 +493,53 @@ fn undelivered_items_reach_the_next_user_message() {
 }
 
 #[test]
+fn posts_by_other_runs_reach_the_next_user_message_once() {
+    // The incident this protects: a job alerted in a topic, the user asked
+    // "how much?" there, and the topic's thread had never seen the alert.
+    let post = crate::core::posted::PostedMessage {
+        surface: "telegram".to_string(),
+        chat_id: -100,
+        topic_id: Some(7),
+        message_id: 70,
+        url: None,
+        text: Some("Pay the cleaner: due 30/10".to_string()),
+        file: None,
+        context: Some("Expected: R$ 100,00 (to be confirmed)".to_string()),
+        source_thread_id: Some("job-example-1".to_string()),
+    };
+    let pending = pending_delivery();
+    let events = vec![
+        ThreadEvent::user_message("go"),
+        ThreadEvent::assistant_message("done <media>/tmp/out/report.html</media>"),
+        ThreadEvent::delivery(failed_file_delivery(&pending)),
+        ThreadEvent::posted(post.clone()),
+        ThreadEvent::user_message("how much?"),
+        ThreadEvent::assistant_message("R$ 100,00, not confirmed yet"),
+        ThreadEvent::user_message("thanks"),
+    ];
+    let replay = thread_events_to_replay(events);
+    assert_eq!(replay.messages.len(), 5, "a post adds no turn of its own");
+    let asked = content_texts(&replay.messages[2]);
+    assert_eq!(asked.len(), 2);
+    assert!(asked[0].starts_with("<delivery_status>"), "{}", asked[0]);
+    let posted_at = asked[0].find("<posted_messages>").expect("posted note");
+    assert!(posted_at > asked[0].find("</delivery_status>").expect("end"));
+    assert!(asked[0].contains("by thread job-example-1"));
+    assert!(asked[0].contains("Expected: R$ 100,00 (to be confirmed)"));
+    assert_eq!(asked[1], "how much?");
+    assert_eq!(content_texts(&replay.messages[4]), ["thanks"]);
+
+    let replay = thread_events_to_replay(vec![ThreadEvent::posted(post)]);
+    assert!(replay.messages.is_empty());
+    assert!(
+        replay
+            .trailing_note
+            .expect("trailing note")
+            .starts_with("<posted_messages>")
+    );
+}
+
+#[test]
 fn delivery_after_the_last_user_message_is_returned_as_trailing_note() {
     let pending = pending_delivery();
     let events = vec![
@@ -502,7 +549,7 @@ fn delivery_after_the_last_user_message_is_returned_as_trailing_note() {
     ];
     let replay = thread_events_to_replay(events);
     assert_eq!(replay.messages.len(), 2);
-    let note = replay.trailing_delivery_note.expect("trailing note");
+    let note = replay.trailing_note.expect("trailing note");
     assert!(note.contains("report.html: not delivered"));
 
     // A pending record with no outcome (process stopped mid-send) is unknown.
@@ -512,7 +559,7 @@ fn delivery_after_the_last_user_message_is_returned_as_trailing_note() {
         ThreadEvent::delivery(pending_delivery()),
     ];
     let note = thread_events_to_replay(events)
-        .trailing_delivery_note
+        .trailing_note
         .expect("trailing note");
     assert!(note.contains("still running or was interrupted"));
 }
@@ -548,7 +595,7 @@ fn fully_delivered_replies_add_nothing_to_replay() {
     ];
     let replay = thread_events_to_replay(events);
     assert_eq!(content_texts(&replay.messages[2]), ["next"]);
-    assert_eq!(replay.trailing_delivery_note, None);
+    assert_eq!(replay.trailing_note, None);
 }
 
 #[test]

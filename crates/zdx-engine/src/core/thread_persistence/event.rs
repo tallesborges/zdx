@@ -265,6 +265,15 @@ pub enum ThreadEvent {
         record: crate::core::delivery::DeliveryRecord,
         ts: String,
     },
+
+    /// A message another run posted into this chat conversation (see
+    /// `crate::core::posted`). Never a conversation turn: replay projects it
+    /// into the next user message as a note.
+    Posted {
+        #[serde(flatten)]
+        post: crate::core::posted::PostedMessage,
+        ts: String,
+    },
 }
 
 impl ThreadEvent {
@@ -413,6 +422,14 @@ impl ThreadEvent {
     pub fn delivery(record: crate::core::delivery::DeliveryRecord) -> Self {
         Self::Delivery {
             record,
+            ts: chrono_timestamp(),
+        }
+    }
+
+    /// Creates an event for a message another run posted into this chat.
+    pub fn posted(post: crate::core::posted::PostedMessage) -> Self {
+        Self::Posted {
+            post,
             ts: chrono_timestamp(),
         }
     }
