@@ -140,7 +140,9 @@ pub struct PostDetails<'a> {
 
 /// Records a delivered message in the destination conversation's thread, so
 /// a later message there (a reply or an ordinary one) runs with it as
-/// context. Follows one `alias_to` hop, like the bot. Returns the thread it
+/// context, and links it to the sender's thread (`core::posted::PostLink`)
+/// so the sender's later runs find that conversation. Follows one `alias_to`
+/// hop, like the bot. Returns the thread it
 /// was written to, or `None` when the destination is the sender's own thread,
 /// which already holds the send as a tool call.
 ///
@@ -183,6 +185,17 @@ pub fn record_post(sent: &SentMessage, details: PostDetails<'_>) -> Result<Optio
     Thread::with_id(target.clone())
         .and_then(|mut thread| thread.append(&event))
         .with_context(|| format!("record posted message in thread {target}"))?;
+    if let (Some(source), ThreadEvent::Posted { post, ts }) = (source_thread_id, &event) {
+        let link = crate::core::posted::PostLink::new(ts, &target, post);
+        if let Err(err) =
+            crate::core::posted::append_link(&crate::config::paths::zdx_home(), source, &link)
+        {
+            tracing::warn!(
+                error = %format!("{err:#}"),
+                "Linking posted Telegram message to its sender failed"
+            );
+        }
+    }
     Ok(Some(target))
 }
 
@@ -752,6 +765,14 @@ mod record_tests {
         );
         assert_eq!(post.source_thread_id.as_deref(), Some("job-example-1"));
         assert_eq!(post.url.as_deref(), Some("https://t.me/c/1234567890/69/70"));
+
+        let links =
+            crate::core::posted::links_from(&crate::config::paths::zdx_home(), "job-example-1")
+                .expect("links");
+        assert_eq!(links.len(), 1, "the sender's later runs can find the post");
+        assert_eq!(links[0].target_thread_id, thread_id);
+        assert_eq!(links[0].message_id, 70);
+        assert_eq!(links[0].ts, posts[0].0);
 
         let replay = load_thread_replay(thread_id).expect("replay");
         assert!(replay.messages.is_empty());

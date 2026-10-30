@@ -599,6 +599,35 @@ pub struct RuntimeContext {
 }
 
 impl RuntimeContext {
+    /// Adds an observational section to the initial snapshot only, so it
+    /// reaches the first user turn without moving the change key. Used for
+    /// data one run needs once (a job's previous runs).
+    pub fn add_initial_section(&mut self, section: &str) {
+        let section = section.trim();
+        if section.is_empty() {
+            return;
+        }
+        self.initial = Some(match self.initial.take() {
+            Some(block) => match block.strip_suffix("\n</runtime_context>") {
+                Some(head) => format!("{head}\n\n{section}\n</runtime_context>"),
+                None => format!("{block}\n\n{}", wrap_runtime_context_block(section)),
+            },
+            None => wrap_runtime_context_block(section),
+        });
+    }
+
+    /// A snapshot holding only `section`, for a prompt built without one.
+    #[must_use]
+    pub fn with_section(root: &Path, section: &str) -> Self {
+        let mut context = Self {
+            initial: None,
+            update: None,
+            root: root.display().to_string(),
+        };
+        context.add_initial_section(section);
+        context
+    }
+
     /// Stable change key: SHA-256 over the execution root and the
     /// update-eligible sections. Tree and memory-index content are excluded,
     /// so ambient filesystem/memory churn never moves the key.

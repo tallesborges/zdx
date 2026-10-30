@@ -16,7 +16,9 @@
 //! thread, and the sender's context is data, not instructions.
 
 use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 /// Longest sender context kept per post, in characters.
@@ -156,6 +158,102 @@ pub fn transcript_text(post: &PostedMessage) -> String {
     out
 }
 
+/// Where one post went, kept per sender thread so the sender's later runs
+/// can find the conversation without scanning threads:
+/// `$ZDX_HOME/state/posted/<source_thread_id>.jsonl`, one line per post.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PostLink {
+    /// When the post was recorded (the `Posted` event's `ts`).
+    pub ts: String,
+    /// Conversation thread the post was recorded in.
+    pub target_thread_id: String,
+    pub chat_id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic_id: Option<i64>,
+    pub message_id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Name of a sent document; `None` for a text message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_name: Option<String>,
+}
+
+impl PostLink {
+    #[must_use]
+    pub fn new(ts: &str, target_thread_id: &str, post: &PostedMessage) -> Self {
+        Self {
+            ts: ts.to_string(),
+            target_thread_id: target_thread_id.to_string(),
+            chat_id: post.chat_id,
+            topic_id: post.topic_id,
+            message_id: post.message_id,
+            url: post.url.clone(),
+            file_name: post.file.as_deref().map(|file| {
+                std::path::Path::new(file)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(file)
+                    .to_string()
+            }),
+        }
+    }
+}
+
+/// Link file for a sender thread; `None` when the id cannot be a file name.
+fn links_path(zdx_home: &Path, source_thread_id: &str) -> Option<PathBuf> {
+    let safe = !source_thread_id.is_empty()
+        && !source_thread_id.starts_with('.')
+        && source_thread_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    safe.then(|| {
+        zdx_home
+            .join("state")
+            .join("posted")
+            .join(format!("{source_thread_id}.jsonl"))
+    })
+}
+
+/// Appends one link for `source_thread_id`.
+///
+/// # Errors
+/// Returns an error when the id cannot be a file name or the write fails.
+pub fn append_link(zdx_home: &Path, source_thread_id: &str, link: &PostLink) -> Result<()> {
+    let path = links_path(zdx_home, source_thread_id)
+        .with_context(|| format!("thread id {source_thread_id:?} cannot name a link file"))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    }
+    let mut bytes = serde_json::to_vec(link).context("serialize post link")?;
+    bytes.push(b'\n');
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, &bytes))
+        .with_context(|| format!("append {}", path.display()))
+}
+
+/// Posts recorded for `source_thread_id`, oldest first. Unreadable lines are
+/// skipped; a missing file means none.
+///
+/// # Errors
+/// Returns an error when the file exists but cannot be read.
+pub fn links_from(zdx_home: &Path, source_thread_id: &str) -> Result<Vec<PostLink>> {
+    let Some(path) = links_path(zdx_home, source_thread_id) else {
+        return Ok(Vec::new());
+    };
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err).with_context(|| format!("read {}", path.display())),
+    };
+    Ok(raw
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect())
+}
+
 fn non_empty(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
@@ -242,6 +340,26 @@ mod tests {
             post.context.as_deref().map(|c| c.chars().count()),
             Some(MAX_CONTEXT_CHARS)
         );
+    }
+
+    #[test]
+    fn links_round_trip_per_sender_and_refuse_unsafe_ids() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let link = PostLink::new("2026-01-01T08:00:00.000Z", "telegram--100-topic-7", &post());
+        append_link(home.path(), "job-example-20260101-080000", &link).expect("append");
+        append_link(home.path(), "job-example-20260101-080000", &link).expect("append");
+        assert_eq!(
+            links_from(home.path(), "job-example-20260101-080000").expect("read"),
+            vec![link.clone(), link.clone()]
+        );
+        assert!(
+            links_from(home.path(), "job-other")
+                .expect("read")
+                .is_empty()
+        );
+        assert!(append_link(home.path(), "../escape", &link).is_err());
+        assert!(append_link(home.path(), ".hidden", &link).is_err());
+        assert!(links_from(home.path(), "a/b").expect("read").is_empty());
     }
 
     #[test]

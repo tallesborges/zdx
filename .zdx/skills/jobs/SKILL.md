@@ -74,6 +74,7 @@ For Telegram topics, shell reliability, and multi-channel fallback, see `referen
 | `zdx jobs validate` | Check every job file; reports all problems |
 | `zdx jobs run <name> [--keep]` | Run one job now. `--keep` tests a once job without using it up |
 | `zdx jobs runs [name]` | Run history (`--date`, `--date-start`, `--date-end`, `--json`). Outcomes: `succeeded`, `failed`, `retrying`, `missed`, `interrupted` |
+| `zdx jobs history <name> [--limit N] [--json]` | The job's recent runs (retries grouped), each with its thread and what it posted. Every run gets this list (last 10) in its runtime context, so a prompt can say "check what earlier runs sent" without extra setup |
 | `zdx jobs set-model <name> (<spec>\|--clear)` | Change only the `model:` line |
 | `zdx jobs daemon` | The scheduler (normally run by the `daemon` service) |
 

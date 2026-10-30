@@ -4,9 +4,11 @@
 //! A job is one markdown file in `$ZDX_HOME/jobs/` with YAML frontmatter and a
 //! prompt body. This module parses and resolves definitions; [`schedule`]
 //! owns schedules and occurrences, [`store`] the durable state, [`plan`] the
-//! scheduler's per-tick decisions, and [`migrate`] the move from the old
+//! scheduler's per-tick decisions, [`history`] a job's recent runs (grouped
+//! attempts plus what each run posted), and [`migrate`] the move from the old
 //! `automations` layout.
 
+pub mod history;
 pub mod migrate;
 pub mod plan;
 pub mod schedule;

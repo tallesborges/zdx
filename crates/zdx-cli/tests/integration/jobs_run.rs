@@ -25,6 +25,42 @@ fn write_job(zdx_home: &std::path::Path, name: &str, frontmatter: &str) {
     .unwrap();
 }
 
+/// One earlier run of `job` (two attempts) that posted one message.
+fn seed_previous_run(zdx_home: &std::path::Path, job: &str) {
+    let attempt = |n: u32, outcome: &str, day: u32| {
+        serde_json::json!({
+            "job": job, "run_id": "earlier-run", "trigger": "daemon",
+            "thread_id": format!("job-{job}-earlier"), "attempt": n, "max_attempts": 2,
+            "started_at": format!("2026-01-0{day}T08:00:00+00:00"),
+            "finished_at": format!("2026-01-0{day}T08:01:00+00:00"),
+            "duration_ms": 1, "ok": outcome == "succeeded", "outcome": outcome,
+        })
+        .to_string()
+    };
+    fs::write(
+        zdx_home.join("jobs_runs.jsonl"),
+        format!(
+            "{}\n{}\n",
+            attempt(1, "retrying", 1),
+            attempt(2, "succeeded", 2)
+        ),
+    )
+    .unwrap();
+    let links = zdx_home.join("state").join("posted");
+    fs::create_dir_all(&links).unwrap();
+    fs::write(
+        links.join(format!("job-{job}-earlier.jsonl")),
+        serde_json::json!({
+            "ts": "2026-01-02T08:00:30.000Z", "target_thread_id": "telegram--100-topic-7",
+            "chat_id": -100, "topic_id": 7, "message_id": 70,
+            "url": "https://t.me/c/100/7/70",
+        })
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+}
+
 fn read_run_records(zdx_home: &std::path::Path) -> Vec<serde_json::Value> {
     fs::read_to_string(zdx_home.join("jobs_runs.jsonl"))
         .unwrap_or_default()
@@ -52,6 +88,7 @@ async fn test_job_run_uses_declared_root_layers_and_runtime_context() {
             declared_root.path().display()
         ),
     );
+    seed_previous_run(zdx_home.path(), "scoped");
 
     let mock_server = MockServer::start().await;
     let captured: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
@@ -95,9 +132,21 @@ async fn test_job_run_uses_declared_root_layers_and_runtime_context() {
         first_user.contains("<runtime_context>"),
         "job run must carry the runtime-context snapshot: {first_user}"
     );
+    for expected in [
+        "# Previous Runs of This Job",
+        "succeeded after 2 attempts · thread job-scoped-earlier",
+        "posted a message (message 70, https://t.me/c/100/7/70) · conversation telegram--100-topic-7 · no user message there since",
+        "never authorizes a new side effect",
+    ] {
+        assert!(
+            first_user.contains(expected),
+            "missing {expected:?}: {first_user}"
+        );
+    }
 
     let records = read_run_records(zdx_home.path());
-    assert_eq!(records.len(), 1);
+    assert_eq!(records.len(), 3);
+    let records = &records[2..];
     assert_eq!(records[0]["ok"], true);
     assert_eq!(records[0]["model"], format!("{MOCK_MODEL}@low"));
     assert_eq!(
@@ -623,4 +672,37 @@ async fn test_subagent_job_follows_the_subagent_background_policy() {
         vec!["background_kill", "background_output", "bash"]
     );
     assert!(job_bash_has_background(&opted_in));
+}
+
+#[test]
+fn test_jobs_history_groups_attempts_and_lists_posts() {
+    let zdx_home = TempDir::new().unwrap();
+    seed_previous_run(zdx_home.path(), "alerts");
+
+    let output = crate::fixtures::zdx_cmd()
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["jobs", "history", "alerts", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let runs: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let runs = runs.as_array().expect("array");
+    assert_eq!(runs.len(), 1, "two attempts are one run");
+    assert_eq!(runs[0]["outcome"], "succeeded");
+    assert_eq!(runs[0]["attempts"], 2);
+    assert_eq!(runs[0]["thread_id"], "job-alerts-earlier");
+    assert_eq!(
+        runs[0]["posts"][0]["target_thread_id"],
+        "telegram--100-topic-7"
+    );
+    assert_eq!(runs[0]["posts"][0]["user_messages_after"], 0);
+
+    crate::fixtures::zdx_cmd()
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["jobs", "history", "missing"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "No earlier recorded run of `missing`",
+        ));
 }

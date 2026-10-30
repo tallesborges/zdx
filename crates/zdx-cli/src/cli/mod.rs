@@ -699,6 +699,22 @@ enum JobCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Show a job's recent runs, newest first: retries grouped into one
+    /// run, with each run's thread and what it posted to chats. This is the
+    /// list a job run gets in its runtime context
+    History {
+        /// Job name (file stem)
+        #[arg(value_name = "NAME")]
+        name: String,
+
+        /// How many runs to show
+        #[arg(long, default_value_t = zdx_engine::jobs::history::DEFAULT_RECENT_RUNS)]
+        limit: usize,
+
+        /// Output JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Set or clear the `model` of one job file (other keys, comments,
     /// and the prompt stay unchanged)
     SetModel {
@@ -1660,6 +1676,7 @@ async fn dispatch_jobs(command: JobCommands, context: &DispatchContext<'_>) -> R
             date_end,
             json,
         }),
+        JobCommands::History { name, limit, json } => commands::jobs::history(&name, limit, json),
         JobCommands::SetModel { name, spec, clear } => {
             commands::jobs::set_model(&name, spec.as_deref(), clear)
         }

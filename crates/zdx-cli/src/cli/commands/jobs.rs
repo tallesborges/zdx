@@ -142,6 +142,20 @@ pub fn runs(options: RunsOptions) -> Result<()> {
     Ok(())
 }
 
+/// Prints a job's recent runs (`zdx_engine::jobs::history`), newest first.
+pub fn history(name: &str, limit: usize, json: bool) -> Result<()> {
+    let runs = jobs::history::recent_runs(&JobsHome::current(), name.trim(), limit, None)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&runs).context("serialize job history")?
+        );
+    } else {
+        println!("{}", jobs::history::prompt_section(name.trim(), &runs));
+    }
+    Ok(())
+}
+
 /// Lists jobs. `json` prints the shared overview (schedule, status, next
 /// run, last outcome, declared and effective root/model).
 pub fn list(caller: &Caller<'_>, json: bool) -> Result<()> {
@@ -606,6 +620,7 @@ async fn run_attempts(
     let home = JobsHome::current();
     let attempts = job.max_retries.saturating_add(1);
     let effective_thread_opts = resolve_job_thread_opts(thread_opts, &job.name, Utc::now());
+    let history = previous_runs_section(&home, &job.name, context.run_id);
 
     for attempt in 1..=attempts {
         let started_at = Utc::now();
@@ -615,7 +630,8 @@ async fn run_attempts(
         // recorded as failed and not retried: nothing transient can fix it,
         // and it must never fall back to another root.
         let (result, settings) = match prepare_job_run(caller, job) {
-            Ok(prepared) => {
+            Ok(mut prepared) => {
+                add_previous_runs(&mut prepared, history.as_deref());
                 let root_string = prepared.settings.root.path.to_string_lossy().to_string();
                 let result = Box::pin(exec::run(exec::ExecRunOptions {
                     root: &root_string,
@@ -749,6 +765,39 @@ fn attempt_record(
         root: result
             .settings
             .map(|s| s.root.path.to_string_lossy().to_string()),
+    }
+}
+
+/// What the run is told about the job's earlier runs; `None` when the run
+/// log cannot be read (the run goes on without it).
+fn previous_runs_section(home: &JobsHome, job: &str, run_id: &str) -> Option<String> {
+    match jobs::history::recent_runs(home, job, jobs::history::DEFAULT_RECENT_RUNS, Some(run_id)) {
+        Ok(runs) => Some(jobs::history::prompt_section(job, &runs)),
+        Err(err) => {
+            tracing::warn!(
+                err = format!("{err:#}"),
+                "Reading the job's previous runs failed"
+            );
+            None
+        }
+    }
+}
+
+/// Adds the previous-runs section to the run's first runtime context, on
+/// both the default and the `subagent:` path.
+fn add_previous_runs(prepared: &mut PreparedJobRun, section: Option<&str>) {
+    let Some(section) = section else {
+        return;
+    };
+    match prepared.effective_prompt.runtime_context.as_mut() {
+        Some(context) => context.add_initial_section(section),
+        None => {
+            prepared.effective_prompt.runtime_context =
+                Some(zdx_engine::core::context::RuntimeContext::with_section(
+                    &prepared.settings.root.path,
+                    section,
+                ));
+        }
     }
 }
 
@@ -1093,6 +1142,49 @@ mod tests {
             initial_context(&prepared).contains("<runtime_context>"),
             "runtime context (skills, memory index) must reach the run"
         );
+    }
+
+    /// Both prompt paths get the job's previous runs in the first runtime
+    /// context, after the usual snapshot, and a prompt without a snapshot
+    /// gets one holding just that section.
+    #[test]
+    fn previous_runs_reach_the_runtime_context() {
+        let _home = zdx_engine::test_support::temp_zdx_home();
+        let dir = tempdir().unwrap();
+        let mut config = Config {
+            model: "anthropic:claude-opus-4-6".to_string(),
+            ..Default::default()
+        };
+        config.skills.sources = no_skill_sources();
+        let job = JobDefinition {
+            name: "demo".to_string(),
+            path: dir.path().join("demo.md"),
+            source: JobSource::User,
+            schedule: JobSchedule::Manual,
+            grace_secs: None,
+            model: None,
+            subagent: None,
+            root: None,
+            timeout_secs: None,
+            max_retries: 0,
+            prompt: "Do the thing".to_string(),
+        };
+        let home = JobsHome::current();
+        let section = previous_runs_section(&home, "demo", "current").expect("section");
+        assert!(section.contains("No earlier recorded run of `demo`"));
+
+        let mut prepared = prepare_job_run(&test_caller(&config, dir.path()), &job).unwrap();
+        add_previous_runs(&mut prepared, Some(&section));
+        let initial = initial_context(&prepared);
+        assert!(initial.starts_with("<runtime_context>"));
+        assert!(initial.ends_with(
+            "No earlier recorded run of `demo` (`zdx jobs history demo`).\n</runtime_context>"
+        ));
+        assert_eq!(initial.matches("<runtime_context>").count(), 1);
+
+        prepared.effective_prompt.runtime_context = None;
+        add_previous_runs(&mut prepared, Some(&section));
+        assert!(initial_context(&prepared).contains("# Previous Runs of This Job"));
     }
 
     fn test_caller<'a>(config: &'a Config, root: &'a Path) -> Caller<'a> {
