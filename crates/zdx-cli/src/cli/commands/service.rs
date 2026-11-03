@@ -42,13 +42,21 @@ pub fn start(target: &str) -> Result<()> {
     Ok(())
 }
 
-/// `zdx service stop <target>`.
+/// `zdx service stop <target> [--force]`.
 ///
 /// # Errors
-/// Returns an error if the target is unknown or launchd control fails.
-pub fn stop(target: &str) -> Result<()> {
+/// Returns an error if the target is unknown, work would be lost (without
+/// `--force`), or launchd control fails.
+pub fn stop(target: &str, force: bool) -> Result<()> {
     for svc in Service::parse_target(target)? {
-        println!("{}", service::stop(svc)?);
+        let status = service::stop(svc, force).map_err(|err| {
+            if err.downcast_ref::<service::RestartBlocked>().is_some() {
+                anyhow!("{err}; wait for it to finish, or retry with `--force` to drop it")
+            } else {
+                err
+            }
+        })?;
+        println!("{status}");
     }
     Ok(())
 }

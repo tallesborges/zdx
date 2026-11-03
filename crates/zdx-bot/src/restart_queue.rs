@@ -27,8 +27,8 @@ pub(crate) enum RestartAttempt {
     /// Daemon (and orchestrator service, when installed) restarted (status
     /// text, HTML-escaped); the bot should exit.
     Restarting(String),
-    /// Refused because this many agent runs are active.
-    Blocked(usize),
+    /// Refused because work would be lost (the guard's explanation).
+    Blocked(String),
     /// A restart failed (error text, HTML-escaped); the bot stays up.
     Failed(String),
 }
@@ -50,7 +50,7 @@ async fn restart_services(services: Vec<Service>, force: bool) -> Result<Restart
     Ok(match outcome {
         Ok(status) => RestartAttempt::Restarting(escape_html(&status.join(", "))),
         Err(err) => match err.downcast_ref::<service::RestartBlocked>() {
-            Some(blocked) => RestartAttempt::Blocked(blocked.active_runs()),
+            Some(blocked) => RestartAttempt::Blocked(escape_html(&blocked.to_string())),
             None => RestartAttempt::Failed(escape_html(&format!("{err:#}"))),
         },
     })

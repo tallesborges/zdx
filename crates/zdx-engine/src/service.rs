@@ -108,10 +108,15 @@ impl fmt::Display for Service {
     }
 }
 
-/// Restart refusal caused by active agent work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Restart or stop refused because work would be lost: active agent runs,
+/// or (when the orchestrator service is a target) its in-memory workers,
+/// queues, and undelivered results.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestartBlocked {
+    action: &'static str,
     active_runs: usize,
+    /// What the orchestrator service would lose, when it is a target.
+    orchestrator: Option<String>,
 }
 
 impl RestartBlocked {
@@ -123,16 +128,26 @@ impl RestartBlocked {
 
 impl fmt::Display for RestartBlocked {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (noun, verb) = if self.active_runs == 1 {
-            ("run", "is")
-        } else {
-            ("runs", "are")
-        };
-        write!(
-            f,
-            "restart blocked: {} active agent {noun} {verb} still running",
-            self.active_runs
-        )
+        write!(f, "{} blocked: ", self.action)?;
+        if self.active_runs > 0 {
+            let (noun, verb) = if self.active_runs == 1 {
+                ("run", "is")
+            } else {
+                ("runs", "are")
+            };
+            write!(
+                f,
+                "{} active agent {noun} {verb} still running",
+                self.active_runs
+            )?;
+            if self.orchestrator.is_some() {
+                f.write_str("; ")?;
+            }
+        }
+        if let Some(lost) = &self.orchestrator {
+            write!(f, "the orchestrator service would lose {lost}")?;
+        }
+        Ok(())
     }
 }
 
@@ -447,9 +462,12 @@ pub fn start(service: Service) -> Result<String> {
 /// Boots the agent out so it stays stopped until an explicit start.
 ///
 /// # Errors
-/// Returns an error if the agent is not installed or `launchctl` fails.
-pub fn stop(service: Service) -> Result<String> {
+/// Returns an error if the agent is not installed, work would be lost and
+/// `force` is false (the same check as [`restart_many`]), or `launchctl`
+/// fails.
+pub fn stop(service: Service, force: bool) -> Result<String> {
     require_installed(service)?;
+    ensure_restart_allowed("stop", &[service], force)?;
     launchctl(&["bootout".into(), service_target(service)])?;
     Ok(format!("Stopped {service}"))
 }
@@ -465,14 +483,16 @@ pub fn restart(service: Service, force: bool) -> Result<String> {
 }
 
 /// Restarts multiple agents after one shared preflight: every service is
-/// installed, and (unless `force`) no agent run is active.
+/// installed, and (unless `force`) nothing would be lost — no agent run is
+/// active and, when the orchestrator service is a target, it has no work in
+/// flight.
 ///
 /// # Errors
 /// Returns an error before changing any service if one is not installed, or
-/// if active agent work exists and `force` is false. Also returns an error if
+/// if work would be lost and `force` is false. Also returns an error if
 /// `launchctl` fails.
 pub fn restart_many(services: &[Service], force: bool) -> Result<Vec<String>> {
-    ensure_restart_allowed(force)?;
+    ensure_restart_allowed("restart", services, force)?;
     // Fail before any restart: restarting the bot onto a build that needs a
     // missing service would leave it half deployed.
     for service in services {
@@ -481,15 +501,97 @@ pub fn restart_many(services: &[Service], force: bool) -> Result<Vec<String>> {
     services.iter().copied().map(restart_unchecked).collect()
 }
 
-fn ensure_restart_allowed(force: bool) -> Result<()> {
+/// The one guard for restarting or stopping services. Active agent runs
+/// count everywhere. The orchestrator service also loses what only lives in
+/// its memory: queued worker prompts, worker processes still starting,
+/// worker results not yet delivered, and queued or undelivered orchestrator
+/// turns. None of those has an agent run yet, so they are asked of the
+/// service itself.
+fn ensure_restart_allowed(action: &'static str, services: &[Service], force: bool) -> Result<()> {
     if force {
         return Ok(());
     }
     let active_runs = agent_activity::list_active().len();
-    if active_runs > 0 {
-        return Err(RestartBlocked { active_runs }.into());
+    let orchestrator = services
+        .contains(&Service::Orchestrator)
+        .then(orchestrator_in_flight)
+        .flatten();
+    if active_runs > 0 || orchestrator.is_some() {
+        return Err(RestartBlocked {
+            action,
+            active_runs,
+            orchestrator,
+        }
+        .into());
     }
     Ok(())
+}
+
+/// What a restart of the running orchestrator service would lose, or `None`
+/// when it is not running or reports itself settled. A running service that
+/// does not answer counts as busy: its state is unknown.
+fn orchestrator_in_flight() -> Option<String> {
+    use crate::orchestration::OrchestratorClient;
+    use crate::orchestration::protocol::{Reply, Request};
+
+    if !matches!(
+        pidfile::status(Service::Orchestrator.name()),
+        ServiceStatus::Running { .. }
+    ) {
+        return None;
+    }
+    let client = OrchestratorClient::new();
+    let report = match client.request(&Request::Status { thread_id: None }) {
+        Ok(Reply::Status { report }) => report,
+        Ok(_) => return Some("unknown work (unexpected status reply)".to_string()),
+        Err(err) => return Some(format!("unknown work (status unavailable: {err:#})")),
+    };
+    if report.settled {
+        return None;
+    }
+    // Every worker, not only those listed under a thread of this service run.
+    let workers = match client.request(&Request::Workers {
+        owner_thread_id: None,
+    }) {
+        Ok(Reply::Workers { workers }) => workers,
+        _ => Vec::new(),
+    };
+    Some(in_flight_summary(&report, &workers))
+}
+
+/// Human summary of the work in flight in an unsettled service: busy
+/// threads and busy workers.
+fn in_flight_summary(
+    report: &crate::orchestration::protocol::StatusReport,
+    workers: &[crate::core::workers::WorkerSnapshot],
+) -> String {
+    use crate::orchestration::protocol::ThreadState;
+
+    let mut parts = Vec::new();
+    for thread in &report.threads {
+        if thread.state != ThreadState::Idle || thread.queued_inputs > 0 {
+            let state = serde_json::to_value(thread.state)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_string))
+                .unwrap_or_default();
+            parts.push(format!(
+                "thread {} ({state}, {} queued)",
+                thread.thread_id, thread.queued_inputs
+            ));
+        }
+    }
+    for worker in workers.iter().filter(|worker| !worker.is_idle()) {
+        parts.push(format!(
+            "worker {} ({}, {} queued)",
+            worker.thread_id,
+            worker.status.as_str(),
+            worker.queue_depth
+        ));
+    }
+    if parts.is_empty() {
+        parts.push("a worker result not yet delivered".to_string());
+    }
+    parts.join(", ")
 }
 
 fn restart_unchecked(service: Service) -> Result<String> {
@@ -789,6 +891,8 @@ mod tests {
 
     #[test]
     fn bot_plist_runs_installed_binary_with_root() {
+        // The plist embeds ZDX_HOME, which other tests change.
+        let _home = crate::test_support::temp_zdx_home();
         let plist = render_plist(
             Service::Bot,
             Path::new("/Users/x/.local/bin/zdx"),
@@ -810,6 +914,8 @@ mod tests {
 
     #[test]
     fn daemon_plist_runs_jobs_daemon() {
+        // The plist embeds ZDX_HOME, which other tests change.
+        let _home = crate::test_support::temp_zdx_home();
         let plist = render_plist(
             Service::Daemon,
             Path::new("/Users/x/.local/bin/zdx"),
@@ -824,6 +930,8 @@ mod tests {
 
     #[test]
     fn orchestrator_plist_runs_the_service() {
+        // The plist embeds ZDX_HOME, which other tests change.
+        let _home = crate::test_support::temp_zdx_home();
         let plist = render_plist(
             Service::Orchestrator,
             Path::new("/Users/x/.local/bin/zdx"),
@@ -843,6 +951,8 @@ mod tests {
 
     #[test]
     fn parse_launch_reads_back_rendered_plist() {
+        // The plist embeds ZDX_HOME, which other tests change.
+        let _home = crate::test_support::temp_zdx_home();
         let plist = render_plist(
             Service::Daemon,
             Path::new("/Users/x/.local/bin/zdx"),
@@ -887,15 +997,16 @@ mod tests {
         })
         .expect("active run marker");
 
-        let err = ensure_restart_allowed(false).expect_err("restart must be blocked");
+        let err = ensure_restart_allowed("restart", &Service::ALL, false)
+            .expect_err("restart must be blocked");
         let blocked = err
             .downcast_ref::<RestartBlocked>()
             .expect("typed restart refusal");
         assert_eq!(blocked.active_runs(), 1);
-        assert!(ensure_restart_allowed(true).is_ok());
+        assert!(ensure_restart_allowed("restart", &Service::ALL, true).is_ok());
 
         drop(run);
-        assert!(ensure_restart_allowed(false).is_ok());
+        assert!(ensure_restart_allowed("restart", &Service::ALL, false).is_ok());
     }
 
     #[test]
@@ -943,5 +1054,99 @@ mod tests {
         assert!(!request.is_fulfilled());
         let _bot = pidfile::write("bot").unwrap();
         assert!(request.is_fulfilled());
+    }
+
+    /// The guard asks a running orchestrator service what it would lose: a
+    /// worker busy in it blocks a restart or stop of that service (but not of
+    /// the others), names the worker, and `force` still overrides it. Once
+    /// the work is delivered, the restart is allowed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_guard_counts_work_in_flight_in_the_orchestrator_service() {
+        use std::sync::Arc;
+
+        use tokio::sync::Notify;
+
+        use crate::core::events::{AgentEvent, TurnStatus};
+        use crate::core::workers::{WorkerManager, WorkerRunRequest};
+        use crate::orchestration::protocol::socket_path;
+        use crate::orchestration::runtime::{TurnRequest, TurnRunner};
+        use crate::orchestration::{Orchestrator, server};
+
+        let home = crate::test_support::temp_zdx_home();
+        let gate = Arc::new(Notify::new());
+        let held = Arc::clone(&gate);
+        let (workers, events) = WorkerManager::with_runner(Arc::new(move |_: WorkerRunRequest| {
+            let gate = Arc::clone(&held);
+            Box::pin(async move {
+                gate.notified().await;
+                Ok("done".to_string())
+            })
+        }));
+        let runner: TurnRunner = Arc::new(|request: TurnRequest| {
+            Box::pin(async move {
+                let _ = request.events.send(Arc::new(AgentEvent::TurnFinished {
+                    status: TurnStatus::Completed,
+                    final_text: String::new(),
+                    messages: Vec::new(),
+                    prior_message_count: 0,
+                }));
+            })
+        });
+        let orchestrator = Orchestrator::start_with(Arc::clone(&workers), events, runner);
+        let _pid = pidfile::write(Service::Orchestrator.name()).unwrap();
+        let socket = socket_path();
+        tokio::spawn(server::serve(Arc::clone(&orchestrator), socket.clone()));
+        while !socket.exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let worker = workers
+            .create_worker("owner", home.path(), "go", None, None, None)
+            .unwrap();
+
+        let check = |services: Vec<Service>, force: bool| {
+            tokio::task::spawn_blocking(move || ensure_restart_allowed("restart", &services, force))
+        };
+        let err = check(vec![Service::Orchestrator], false)
+            .await
+            .unwrap()
+            .expect_err("a busy worker blocks the restart");
+        let blocked = err
+            .downcast_ref::<RestartBlocked>()
+            .expect("RestartBlocked");
+        assert_eq!(blocked.active_runs(), 0);
+        let text = blocked.to_string();
+        assert!(
+            text.starts_with("restart blocked: the orchestrator service would lose"),
+            "{text}"
+        );
+        assert!(text.contains(&format!("worker {worker}")), "{text}");
+        assert!(
+            tokio::task::spawn_blocking(|| ensure_restart_allowed(
+                "stop",
+                &[Service::Orchestrator],
+                false
+            ))
+            .await
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .starts_with("stop blocked:")
+        );
+        check(vec![Service::Daemon], false).await.unwrap().unwrap();
+        check(vec![Service::Orchestrator], true)
+            .await
+            .unwrap()
+            .unwrap();
+
+        gate.notify_one();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !orchestrator.settled(None).await {
+            assert!(tokio::time::Instant::now() < deadline, "never settled");
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        check(vec![Service::Orchestrator], false)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }

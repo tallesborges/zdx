@@ -502,6 +502,11 @@ enum ServiceCommands {
         /// Service to stop: bot, daemon, orchestrator, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
+
+        /// Stop even when agent runs are active or the orchestrator service
+        /// has work in flight (that work is lost)
+        #[arg(long)]
+        force: bool,
     },
     /// Restart a service, picking up the currently installed binary
     Restart {
@@ -509,7 +514,8 @@ enum ServiceCommands {
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
 
-        /// Restart even when agent runs are active
+        /// Restart even when agent runs are active or the orchestrator service
+        /// has work in flight (that work is lost)
         #[arg(long, conflicts_with = "queue")]
         force: bool,
 
@@ -1602,7 +1608,7 @@ fn dispatch_service(command: ServiceCommands, context: &DispatchContext<'_>) -> 
         }
         ServiceCommands::Uninstall { target } => commands::service::uninstall(&target),
         ServiceCommands::Start { target } => commands::service::start(&target),
-        ServiceCommands::Stop { target } => commands::service::stop(&target),
+        ServiceCommands::Stop { target, force } => commands::service::stop(&target, force),
         ServiceCommands::Restart {
             target,
             queue: true,

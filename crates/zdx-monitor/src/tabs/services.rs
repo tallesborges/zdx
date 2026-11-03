@@ -50,7 +50,7 @@ pub(crate) fn load_services() -> Vec<ServiceInfo> {
 
 fn toggle_service(info: &ServiceInfo) -> Result<String> {
     if info.status == "running" {
-        service::stop(info.service)
+        service::stop(info.service, false)
     } else {
         service::start(info.service)
     }
@@ -134,9 +134,7 @@ pub(crate) fn poll_restart_result(app: &mut MonitorApp) {
 
 fn restart_error_message(name: &str, err: &anyhow::Error) -> String {
     if let Some(blocked) = err.downcast_ref::<service::RestartBlocked>() {
-        let active_runs = blocked.active_runs();
-        let suffix = if active_runs == 1 { "" } else { "s" };
-        format!("Restart blocked: {active_runs} active agent run{suffix}; wait or press R to force")
+        format!("{blocked}; wait or press R to force")
     } else {
         format!("Failed to restart {name}: {err}")
     }

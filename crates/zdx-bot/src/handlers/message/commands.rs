@@ -286,10 +286,9 @@ pub(super) async fn handle_restart_command(
                     .await?;
                     context.request_exit();
                 }
-                RestartAttempt::Blocked(active_runs) => {
-                    let suffix = if active_runs == 1 { "" } else { "s" };
+                RestartAttempt::Blocked(reason) => {
                     reply(format!(
-                        "⚠️ Restart blocked: <b>{active_runs}</b> active agent run{suffix}.\n\n<code>/restart q</code> — restart automatically once they finish\n<code>/restart f</code> — interrupt them and restart now"
+                        "⚠️ {reason}.\n\n<code>/restart q</code> — restart automatically once it finishes\n<code>/restart f</code> — interrupt it and restart now"
                     ))
                     .await?;
                 }
