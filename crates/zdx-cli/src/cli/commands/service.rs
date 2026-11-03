@@ -145,6 +145,7 @@ pub fn status(json: bool) -> Result<()> {
     }
 
     println!("Services");
+    let name_width = Service::name_width();
     for s in &states {
         let launchd = if s.installed {
             "launchd"
@@ -158,7 +159,7 @@ pub fn status(json: bool) -> Result<()> {
             (Some(pid), None) => format!("running · PID {pid}"),
             (None, _) => "stopped".to_string(),
         };
-        println!("  {:<8} {detail}  [{launchd}]", s.service.name());
+        println!("  {:<name_width$} {detail}  [{launchd}]", s.service.name());
     }
     if let Some(request) = queued {
         println!(

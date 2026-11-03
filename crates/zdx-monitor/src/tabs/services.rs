@@ -147,6 +147,7 @@ pub(crate) fn restart_force_for_key(key: KeyCode) -> bool {
 }
 
 pub(crate) fn render_services(f: &mut Frame, app: &MonitorApp, area: Rect) {
+    let name_width = Service::name_width();
     let items: Vec<ListItem> = app
         .services
         .iter()
@@ -166,9 +167,12 @@ pub(crate) fn render_services(f: &mut Frame, app: &MonitorApp, area: Rect) {
             let line = {
                 let display_details = &s.details;
                 if display_details.is_empty() {
-                    format!(" {:<10} {icon} {status}", s.name)
+                    format!(" {:<name_width$} {icon} {status}", s.name)
                 } else {
-                    format!(" {:<10} {icon} {status:<10} {display_details}", s.name)
+                    format!(
+                        " {:<name_width$} {icon} {status:<10} {display_details}",
+                        s.name
+                    )
                 }
             };
             let style = if i == app.selected_index && app.active_section == Section::Services {

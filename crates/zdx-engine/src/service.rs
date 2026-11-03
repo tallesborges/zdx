@@ -45,6 +45,15 @@ impl Service {
         }
     }
 
+    /// Length of the longest service name, for aligning name columns.
+    pub fn name_width() -> usize {
+        Self::ALL
+            .into_iter()
+            .map(|s| s.name().len())
+            .max()
+            .unwrap_or(0)
+    }
+
     /// launchd label for this service.
     pub fn label(self) -> String {
         format!("dev.zdx.{}", self.name())
