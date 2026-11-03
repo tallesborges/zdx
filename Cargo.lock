@@ -4789,7 +4789,7 @@ checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 
 [[package]]
 name = "xtask"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4821,7 +4821,7 @@ dependencies = [
 
 [[package]]
 name = "zdx"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -4849,11 +4849,11 @@ dependencies = [
 
 [[package]]
 name = "zdx-assets"
-version = "0.13.0"
+version = "0.14.0"
 
 [[package]]
 name = "zdx-bot"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4880,7 +4880,7 @@ dependencies = [
 
 [[package]]
 name = "zdx-engine"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -4922,7 +4922,7 @@ dependencies = [
 
 [[package]]
 name = "zdx-monitor"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4938,7 +4938,7 @@ dependencies = [
 
 [[package]]
 name = "zdx-providers"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -4963,7 +4963,7 @@ dependencies = [
 
 [[package]]
 name = "zdx-tools"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "base64",
  "globset",
@@ -4986,7 +4986,7 @@ dependencies = [
 
 [[package]]
 name = "zdx-transcript"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "arboard",
  "base64",
@@ -5003,7 +5003,7 @@ dependencies = [
 
 [[package]]
 name = "zdx-tui"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -5038,7 +5038,7 @@ dependencies = [
 
 [[package]]
 name = "zdx-types"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "chrono",
  "futures-util",
