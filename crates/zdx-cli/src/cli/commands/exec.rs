@@ -41,6 +41,9 @@ pub struct ExecRunOptions<'a> {
 }
 
 pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
+    if let Some(thread_id) = options.thread_opts.thread_id.as_deref() {
+        zdx_engine::orchestration::ensure_direct_run_allowed(thread_id)?;
+    }
     let root_path = PathBuf::from(options.root);
     let thread = options
         .thread_opts

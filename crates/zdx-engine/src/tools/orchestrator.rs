@@ -6,8 +6,8 @@
 //!
 //! The registry always contains unbound stubs (so tool-name validation and
 //! schemas work everywhere); surfaces that host a live
-//! [`WorkerManager`](crate::core::workers::WorkerManager) — currently the
-//! Telegram bot — replace them with bound instances via
+//! [`WorkerManager`](crate::core::workers::WorkerManager) — the orchestrator
+//! service (`crate::orchestration`) — replace them with bound instances via
 //! [`ToolRegistry::register_boxed`](super::ToolRegistry::register_boxed).
 
 use std::path::{Path, PathBuf};
@@ -90,7 +90,10 @@ impl Tool for OrchestratorTool {
                 return ToolOutput::failure(
                     "orchestrator_unavailable",
                     "Orchestrator thread controls are not available on this surface",
-                    Some("These tools require the Telegram bot's worker manager.".to_string()),
+                    Some(
+                        "These tools run only in turns of the orchestrator service (`zdx orchestrator send`)."
+                            .to_string(),
+                    ),
                 );
             };
             let Some(owner) = ctx.current_thread_id.clone() else {

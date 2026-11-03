@@ -13,6 +13,7 @@ pub mod jobs;
 pub mod mcp;
 pub mod media;
 pub mod models;
+pub mod orchestration;
 pub mod pidfile;
 pub mod proc_liveness;
 pub mod prompts;

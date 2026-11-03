@@ -60,6 +60,12 @@ pub async fn thread_load(thread_id: String, root: PathBuf) -> UiEvent {
 
 /// Synchronous thread loading (runs in blocking task).
 fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
+    // A persistent-profile thread is written only by the orchestrator service.
+    if let Err(err) = zdx_engine::orchestration::ensure_direct_run_allowed(thread_id) {
+        return UiEvent::Thread(ThreadUiEvent::LoadFailed {
+            error: format!("{err:#}"),
+        });
+    }
     let is_active_elsewhere = agent_activity::list_active()
         .into_iter()
         .filter_map(|run| run.thread_id)

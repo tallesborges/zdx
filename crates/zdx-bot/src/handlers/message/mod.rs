@@ -31,6 +31,7 @@ pub(crate) use response::{append_thread_link, worker_link};
 pub(crate) use thread_header::{
     handle_callback as handle_thread_header_callback, post_thread_header, refresh_thread_header,
 };
+pub(crate) use turn::render_started_turn;
 
 /// Groups the reply-targeting fields that travel together through the turn pipeline.
 struct ReplyContext {
@@ -263,11 +264,19 @@ async fn route_worker_topic_message(
     let worker_thread_id = resolve_effective_thread_id(&topic_thread_id);
 
     let prompt = crate::agent::build_user_text(incoming);
+    let request = zdx_engine::orchestration::protocol::Request::EnqueueFromTopic {
+        worker_thread_id,
+        prompt,
+    };
     let reply = match context
-        .worker_manager()
-        .enqueue_from_topic(&worker_thread_id, &prompt)
+        .orchestrator()
+        .call(&request)
+        .await
+        .and_then(zdx_engine::orchestration::client::ok)
     {
-        Ok(snapshot) => {
+        Ok(zdx_engine::orchestration::protocol::Reply::Worker {
+            worker: Some(snapshot),
+        }) => {
             if snapshot.status == zdx_engine::core::workers::WorkerStatus::Running
                 || snapshot.queue_depth > 1
             {
@@ -279,6 +288,7 @@ async fn route_worker_topic_message(
                 "📨 Queued to the worker.".to_string()
             }
         }
+        Ok(_) => "❌ Couldn't queue to the worker: unexpected reply".to_string(),
         Err(err) => format!("❌ Couldn't queue to the worker: {err:#}"),
     };
     if let Err(err) = context
@@ -298,7 +308,7 @@ async fn route_worker_topic_message(
 }
 
 /// Where a reply goes. `synthetic_prompt` marks a bot-generated prompt
-/// (`Message::synthetic`, e.g. a `[worker update]`): its message id is an
+/// (`Message::synthetic`, e.g. Mini App feedback): its message id is an
 /// internal counter, not a Telegram message, so the reply quotes nothing.
 /// `synthetic_topic_routed_from_general` is different: a real user message
 /// from General, answered in its new topic with a cross-topic quote.
@@ -396,7 +406,7 @@ struct SpawnRequest<'a> {
     thread_id: &'a str,
     thread: &'a zdx_engine::core::thread_persistence::Thread,
     messages: Vec<zdx_engine::providers::ChatMessage>,
-    /// Fully prepared turn (config, system prompt, tool overrides).
+    /// Fully prepared turn (config, system prompt).
     prepared: crate::agent::PreparedBotTurn,
 }
 
@@ -441,9 +451,7 @@ pub(crate) fn thread_id_for_chat(chat_id: i64, message_thread_id: Option<i64>) -
 /// Inverse of [`thread_id_for_chat`] for topic threads: `(chat_id, topic_id)`
 /// from a `telegram-{chat_id}-topic-{topic_id}` id, `None` for anything else.
 pub(crate) fn parse_topic_thread_id(thread_id: &str) -> Option<(i64, i64)> {
-    let rest = thread_id.strip_prefix("telegram-")?;
-    let (chat, topic) = rest.rsplit_once("-topic-")?;
-    Some((chat.parse().ok()?, topic.parse().ok()?))
+    zdx_engine::telegram::parse_topic_conversation_id(thread_id)
 }
 
 /// Follow a single `alias_to` hop so a resumed topic reads history from and
@@ -558,8 +566,9 @@ mod reply_target_tests {
         (fake.seen(), items)
     }
 
-    /// The production failure: a `[worker update]` carries an internal id
-    /// near `i64::MAX`. Its reply must quote nothing, so the text and the
+    /// The production failure: a turn the orchestrator service starts on its
+    /// own (a `[worker update]`) is rendered with an internal id near
+    /// `i64::MAX`. Its reply must quote nothing, so the text and the
     /// document are accepted in the right topic.
     #[tokio::test]
     async fn a_synthetic_update_reply_quotes_nothing() {

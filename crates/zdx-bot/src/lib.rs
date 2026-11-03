@@ -108,21 +108,6 @@ pub async fn run_named_with_config_and_root(
     Box::pin(run_bot(config, settings, root)).await
 }
 
-/// Builds the shared bot tool config: the default registry with the six
-/// orchestrator thread-control tools rebound to the live worker manager.
-fn orchestrator_tool_config(
-    worker_manager: &Arc<zdx_engine::core::workers::WorkerManager>,
-) -> ToolConfig {
-    let mut tool_registry = zdx_engine::tools::ToolRegistry::builtins();
-    for tool in zdx_engine::tools::orchestrator::OrchestratorTool::bound(worker_manager) {
-        tool_registry.register_boxed(Arc::new(tool));
-    }
-    ToolConfig::new(
-        tool_registry,
-        zdx_engine::core::agent::ToolSelection::default(),
-    )
-}
-
 /// Builds the shared bot context with all per-process maps initialized.
 fn build_bot_context(
     client: TelegramClient,
@@ -130,7 +115,7 @@ fn build_bot_context(
     settings: TelegramSettings,
     root: PathBuf,
     tool_config: ToolConfig,
-    worker_manager: Arc<zdx_engine::core::workers::WorkerManager>,
+    orchestrator: zdx_engine::orchestration::OrchestratorClient,
 ) -> Arc<BotContext> {
     let trimmed_instruction_layer = TELEGRAM_INSTRUCTION_LAYER.trim();
     let bot_instruction_layer =
@@ -144,7 +129,7 @@ fn build_bot_context(
             root,
             bot_instruction_layer,
             tool_config,
-            worker_manager,
+            orchestrator,
             cancel_map: new_cancel_map(),
             queue_cancel_map: new_queue_cancel_map(),
             followup_map: followups::new_followup_map(),
@@ -167,35 +152,28 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
             tracing::error!(err = %format!("{err:#}"), "Failed to update Telegram command menu");
         }
     }
-    // Worker completions flow back through the bridge task spawned below.
-    let (worker_manager, completion_rx) = zdx_engine::core::workers::WorkerManager::new();
-    let tool_config = orchestrator_tool_config(&worker_manager);
+    // Orchestrator topics run in the orchestrator service; this process
+    // renders their turns and worker notices from its event stream.
+    let tool_config = ToolConfig::new(
+        zdx_engine::tools::ToolRegistry::builtins(),
+        zdx_engine::core::agent::ToolSelection::default(),
+    );
     let context = build_bot_context(
         client.clone(),
         config,
         settings,
         root,
         tool_config,
-        Arc::clone(&worker_manager),
+        zdx_engine::orchestration::OrchestratorClient::new(),
     );
     let chat_queues = new_chat_queues();
     let pending_media_groups: PendingMediaGroups = Arc::new(Mutex::new(MediaGroups::default()));
 
-    // Worker completions wake the owning orchestrator topic (best-effort).
-    crate::orchestrator::spawn_completion_bridge(
-        Arc::clone(&context),
-        Arc::clone(&chat_queues),
-        completion_rx,
-    );
+    crate::orchestrator::spawn_service_bridge(Arc::clone(&context));
+    crate::restart_queue::spawn_poller(Arc::clone(&context), Arc::clone(&chat_queues));
 
     if let Some(settings) = miniapp_server {
-        spawn_miniapp_server(
-            settings,
-            miniapp_root,
-            &worker_manager,
-            &context,
-            &chat_queues,
-        );
+        spawn_miniapp_server(settings, miniapp_root, &context, &chat_queues);
     }
 
     let mut offset: Option<i64> = None;
@@ -269,7 +247,6 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
 fn spawn_miniapp_server(
     (bot_token, allowlist_user_ids, port): (String, HashSet<i64>, u16),
     root: PathBuf,
-    worker_manager: &Arc<zdx_engine::core::workers::WorkerManager>,
     context: &Arc<BotContext>,
     chat_queues: &ChatQueueMap,
 ) {
@@ -278,7 +255,7 @@ fn spawn_miniapp_server(
         allowlist_user_ids,
         port,
         root,
-        Arc::clone(worker_manager),
+        context.orchestrator().clone(),
         context.active_deliveries().clone(),
         Arc::new(crate::artifact_feedback::BotFeedbackSink::new(
             Arc::clone(context),

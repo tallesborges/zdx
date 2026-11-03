@@ -288,6 +288,7 @@ pub async fn resume(id: Option<String>, config: &config::Config) -> Result<()> {
             .context("find latest thread id")?
             .context("No threads found to resume")?,
     };
+    zdx_engine::orchestration::ensure_direct_run_allowed(&thread_id)?;
 
     let history = thread_persistence::load_thread_as_messages(&thread_id)
         .with_context(|| format!("load history for '{thread_id}'"))?;

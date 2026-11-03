@@ -148,10 +148,9 @@ pub struct Message {
     /// expired or already used), it is re-dispatched as an ordinary message.
     #[serde(skip)]
     pub routed_as_btw_input: bool,
-    /// Internal marker for a bot-generated prompt (worker update, Mini App
-    /// artifact feedback). Staged commands wait for the user, so these never
-    /// start or complete one. Consecutive pending worker updates are merged
-    /// into a single orchestrator turn by the queue.
+    /// Internal marker for a bot-generated prompt (Mini App artifact
+    /// feedback). Staged commands wait for the user, so these never start or
+    /// complete one.
     #[serde(skip)]
     pub(crate) synthetic: Option<crate::bot::synthetic::SyntheticKind>,
     /// Files already on the bot host that ride along with a synthetic prompt

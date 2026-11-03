@@ -6,7 +6,7 @@ use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
 use zdx_engine::config::{Config, TelegramProfileConfig};
 use zdx_engine::core::agent::ToolConfig;
-use zdx_engine::core::workers::WorkerManager;
+use zdx_engine::orchestration::OrchestratorClient;
 
 use crate::command_picker::CommandPickerMap;
 use crate::delivery_tracker::ActiveDeliveries;
@@ -46,15 +46,6 @@ pub(crate) fn new_queue_cancel_map() -> QueueCancelMap {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
-/// Where an orchestrator thread last ran, so worker completion callbacks can be
-/// dispatched into the same chat/topic. Process-lifetime only by design.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct OrchestratorRoute {
-    pub chat: i64,
-    pub topic: Option<i64>,
-    pub user: i64,
-}
-
 pub(crate) struct BotContext {
     client: TelegramClient,
     config: RwLock<Config>,
@@ -78,12 +69,9 @@ pub(crate) struct BotContext {
     staging_map: StagingMap,
     command_picker_map: CommandPickerMap,
     launcher_map: LauncherMap,
-    /// Shared worker manager (also bound into the tool registry); used to
-    /// route mirror-topic messages into worker FIFOs.
-    worker_manager: Arc<WorkerManager>,
-    /// Owner-thread → Telegram route for orchestrator completion callbacks.
-    /// Populated on every orchestrator turn; lost on restart by design.
-    orchestrator_routes: RwLock<HashMap<String, OrchestratorRoute>>,
+    /// Client of the orchestrator service, which runs persistent-profile
+    /// threads and owns their workers.
+    orchestrator: OrchestratorClient,
     /// Thread id → (chat, message id) of the pinned header posted this
     /// process, so worker events can refresh an orchestrator's card in place.
     thread_headers: RwLock<HashMap<String, ThreadHeader>>,
@@ -105,7 +93,7 @@ pub(crate) struct BotContextDeps {
     pub root: PathBuf,
     pub bot_instruction_layer: Option<String>,
     pub tool_config: ToolConfig,
-    pub worker_manager: Arc<WorkerManager>,
+    pub orchestrator: OrchestratorClient,
     pub cancel_map: CancelMap,
     pub queue_cancel_map: QueueCancelMap,
     pub followup_map: FollowupMap,
@@ -123,7 +111,7 @@ impl BotContext {
             root,
             bot_instruction_layer,
             tool_config,
-            worker_manager,
+            orchestrator,
             cancel_map,
             queue_cancel_map,
             followup_map,
@@ -147,7 +135,7 @@ impl BotContext {
             root,
             bot_instruction_layer,
             tool_config,
-            worker_manager,
+            orchestrator,
             exit_signal: Notify::new(),
             cancel_map,
             queue_cancel_map,
@@ -156,7 +144,6 @@ impl BotContext {
             staging_map,
             command_picker_map,
             launcher_map,
-            orchestrator_routes: RwLock::new(HashMap::new()),
             thread_headers: RwLock::new(HashMap::new()),
             active_deliveries: ActiveDeliveries::default(),
             send_files: crate::file_card::SendFileState::default(),
@@ -171,8 +158,8 @@ impl BotContext {
         &self.send_files
     }
 
-    pub(crate) fn worker_manager(&self) -> &Arc<WorkerManager> {
-        &self.worker_manager
+    pub(crate) fn orchestrator(&self) -> &OrchestratorClient {
+        &self.orchestrator
     }
 
     pub(crate) fn client(&self) -> &TelegramClient {
@@ -353,23 +340,6 @@ impl BotContext {
             .is_some_and(|(_, profile)| profile.orchestrator)
     }
 
-    /// Records where an orchestrator thread last ran.
-    pub(crate) fn record_orchestrator_route(&self, thread_id: &str, route: OrchestratorRoute) {
-        self.orchestrator_routes
-            .write()
-            .expect("orchestrator route lock poisoned")
-            .insert(thread_id.to_string(), route);
-    }
-
-    /// Latest known Telegram route for an orchestrator thread, if any.
-    pub(crate) fn orchestrator_route(&self, thread_id: &str) -> Option<OrchestratorRoute> {
-        self.orchestrator_routes
-            .read()
-            .expect("orchestrator route lock poisoned")
-            .get(thread_id)
-            .copied()
-    }
-
     /// Remembers where a thread's pinned header lives and what it last showed
     /// (process-lifetime).
     pub(crate) fn record_thread_header(&self, thread_id: &str, header: ThreadHeader) {
@@ -391,6 +361,12 @@ impl BotContext {
 
 #[cfg(test)]
 impl BotContext {
+    /// Points the context at a test orchestrator service.
+    pub(crate) fn with_orchestrator(mut self, orchestrator: OrchestratorClient) -> Self {
+        self.orchestrator = orchestrator;
+        self
+    }
+
     /// A context with empty per-process maps, for tests that need a whole
     /// context (for example with a client pointed at a fake Bot API).
     pub(crate) fn for_test(client: TelegramClient, config: Config, root: PathBuf) -> Self {
@@ -415,7 +391,11 @@ impl BotContext {
                 root,
                 bot_instruction_layer: None,
                 tool_config: ToolConfig::default(),
-                worker_manager: WorkerManager::new().0,
+                // Points at a socket nothing listens on: tests see no
+                // service, as when it is stopped.
+                orchestrator: OrchestratorClient::at(
+                    std::env::temp_dir().join(format!("zdx-test-{}.sock", uuid::Uuid::new_v4())),
+                ),
                 cancel_map: new_cancel_map(),
                 queue_cancel_map: new_queue_cancel_map(),
                 followup_map: crate::followups::new_followup_map(),
@@ -500,7 +480,6 @@ fn load_profile_configs(base: &Config) -> HashMap<i64, Config> {
 mod tests {
     use std::collections::BTreeMap;
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     use zdx_engine::config::{TelegramConfig, ThinkingLevel};
 
@@ -508,6 +487,9 @@ mod tests {
 
     #[test]
     fn test_root_for_chat_uses_matching_profile_cwd() {
+        // Profile configs layer over the global config: keep it off the
+        // developer's real `ZDX_HOME`.
+        let _home = zdx_engine::test_support::temp_zdx_home();
         let temp_root = unique_temp_dir("fallback");
         let profile_root = unique_temp_dir("profile");
         fs::create_dir_all(&temp_root).unwrap();
@@ -541,6 +523,9 @@ mod tests {
 
     #[test]
     fn orchestrator_flag_is_per_chat_opt_in() {
+        // Profile configs layer over the global config: keep it off the
+        // developer's real `ZDX_HOME`.
+        let _home = zdx_engine::test_support::temp_zdx_home();
         let root = unique_temp_dir("orch-flag");
         fs::create_dir_all(&root).unwrap();
 
@@ -585,6 +570,9 @@ mod tests {
     /// assertion holds regardless of the developer's real global config.
     #[test]
     fn test_profile_config_applies_workspace_layer() {
+        // Profile configs layer over the global config: keep it off the
+        // developer's real `ZDX_HOME`.
+        let _home = zdx_engine::test_support::temp_zdx_home();
         let fallback_root = unique_temp_dir("layer-fallback");
         let profile_root = unique_temp_dir("layer-profile");
         fs::create_dir_all(&fallback_root).unwrap();
@@ -628,6 +616,9 @@ mod tests {
     /// leaves every other chat (and the bot-level config) alone.
     #[test]
     fn test_set_chat_model_is_scoped_to_the_profile() {
+        // Profile configs layer over the global config: keep it off the
+        // developer's real `ZDX_HOME`.
+        let _home = zdx_engine::test_support::temp_zdx_home();
         let fallback_root = unique_temp_dir("set-model-fallback");
         let profile_root = unique_temp_dir("set-model-profile");
         fs::create_dir_all(&fallback_root).unwrap();
@@ -761,10 +752,6 @@ mod tests {
     }
 
     fn unique_temp_dir(label: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("zdx-bot-profile-{label}-{nanos}"))
+        std::env::temp_dir().join(format!("zdx-bot-profile-{label}-{}", uuid::Uuid::new_v4()))
     }
 }

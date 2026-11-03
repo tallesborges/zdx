@@ -3,8 +3,8 @@ use serde_json::Value;
 use tempfile::tempdir;
 
 /// On a clean ZDX home with no launchd agents installed, `zdx service status
-/// --json` reports both services as stopped and not installed, without touching
-/// launchd.
+/// --json` reports every service as stopped and not installed, without
+/// touching launchd.
 #[test]
 fn test_service_status_json_reports_stopped_and_not_installed() {
     let dir = tempdir().unwrap();
@@ -21,13 +21,13 @@ fn test_service_status_json_reports_stopped_and_not_installed() {
 
     let parsed: Value = serde_json::from_slice(&output).unwrap();
     let services = parsed["services"].as_array().expect("services array");
-    assert_eq!(services.len(), 2);
+    assert_eq!(services.len(), 3);
 
     let names: Vec<&str> = services
         .iter()
         .filter_map(|s| s["service"].as_str())
         .collect();
-    assert_eq!(names, vec!["bot", "daemon"]);
+    assert_eq!(names, vec!["bot", "daemon", "orchestrator"]);
 
     for service in services {
         assert_eq!(service["status"], Value::String("stopped".to_string()));
@@ -36,6 +36,7 @@ fn test_service_status_json_reports_stopped_and_not_installed() {
     }
     assert_eq!(services[0]["label"], "dev.zdx.bot");
     assert_eq!(services[1]["label"], "dev.zdx.daemon");
+    assert_eq!(services[2]["label"], "dev.zdx.orchestrator");
 }
 
 /// Lifecycle commands reject unknown service targets instead of guessing.
@@ -111,6 +112,23 @@ fn test_service_restart_blocks_active_agent_unless_forced() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("not installed"));
+}
+
+/// `restart all` checks that every service is installed before it restarts
+/// any, and names the install command for the missing one.
+#[test]
+fn test_service_restart_all_names_the_missing_install() {
+    let dir = tempdir().unwrap();
+
+    crate::fixtures::zdx_cmd()
+        .env("ZDX_HOME", dir.path())
+        .env("HOME", dir.path())
+        .args(["service", "restart", "all", "--force"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "run `zdx service install bot` first",
+        ));
 }
 
 /// Writes PID and supervision markers for a "bot" that is this test process,

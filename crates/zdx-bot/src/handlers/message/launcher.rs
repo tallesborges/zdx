@@ -418,6 +418,17 @@ pub(crate) fn schedule_repost(context: &Arc<BotContext>, chat_id: i64) {
     });
 }
 
+/// Threads the orchestrator service runs as workers right now.
+async fn managed_worker_ids(context: &BotContext) -> std::collections::HashSet<String> {
+    context
+        .orchestrator()
+        .workers(None)
+        .await
+        .into_iter()
+        .map(|worker| worker.thread_id)
+        .collect()
+}
+
 /// Handle `nt:` launcher callbacks. `rest` is the callback data after `nt:`.
 pub(crate) async fn handle_callback(
     context: &BotContext,
@@ -481,9 +492,10 @@ pub(crate) async fn handle_callback(
         // Managed workers must not be offered for resume: an in-process turn
         // on a worker thread would race its child process writing the same
         // JSONL. Steering happens in the worker's mirror topic instead.
+        let managed = managed_worker_ids(context).await;
         let all: Vec<_> = all
             .into_iter()
-            .filter(|t| context.worker_manager().snapshot(&t.id).is_none())
+            .filter(|t| !managed.contains(&t.id))
             .collect();
         let threads = resumable_threads(all, &root, 8);
         if threads.is_empty() {

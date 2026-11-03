@@ -1,18 +1,15 @@
-use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
 use zdx_engine::config::{Config, TextVerbosity};
-use zdx_engine::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig, ToolSelection};
+use zdx_engine::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig};
 use zdx_engine::core::context::{
     PromptContextInclusion, RuntimeContext, build_prompt_with_context_and_layers,
-    resolve_context_to_attach,
 };
 use zdx_engine::core::events::AgentEvent;
-use zdx_engine::core::thread_persistence::{self, Thread, ThreadEvent};
-use zdx_engine::providers::{ChatContentBlock, ChatMessage, MessageContent};
+use zdx_engine::core::thread_persistence::{self, Thread};
+use zdx_engine::providers::ChatMessage;
 
 use crate::types::{ImageDelivery, IncomingImage, IncomingMessage, VideoStatus};
 
@@ -41,17 +38,11 @@ pub(crate) fn load_thread_state(
 /// # Errors
 /// Returns an error if the operation fails.
 pub(crate) fn clear_thread_history(thread_id: &str) -> Result<()> {
-    let thread = Thread::with_id(thread_id.to_string()).context("resolve thread log")?;
-    let path = thread.path();
-    if path.exists() {
-        std::fs::remove_file(path).context("clear thread history")?;
-    }
-    Ok(())
+    thread_persistence::remove_thread_file(thread_id).context("clear thread history")
 }
 
-/// Appends the incoming user message to the thread and the in-memory messages,
-/// attaching the advisory runtime-context block per the last-attached dedup
-/// rule (attach only when the candidate differs from the last attached one).
+/// Appends the incoming user message to the thread and the in-memory messages
+/// (see `zdx_engine::orchestration::updates::record_user_input`).
 ///
 /// # Errors
 /// Returns an error if the operation fails.
@@ -62,52 +53,31 @@ pub(crate) fn record_user_message(
     runtime_context: Option<&RuntimeContext>,
     runtime_note: Option<&str>,
 ) -> Result<()> {
-    let text = build_user_text(incoming);
-    let last_key = thread_persistence::last_attached_context_key_from_messages(messages);
-    let attach = resolve_context_to_attach(runtime_context, last_key.as_deref());
-    let (block, key) = match attach {
-        Some(attach) => (Some(attach.block), Some(attach.key)),
-        None => (None, None),
-    };
-    thread
-        .append(&ThreadEvent::user_message_with_context(
-            text.clone(),
-            block.clone(),
-            key.clone(),
-        ))
-        .context("append user message")?;
+    zdx_engine::orchestration::updates::record_user_input(
+        thread,
+        messages,
+        build_user_text(incoming),
+        &inline_images(incoming),
+        runtime_context,
+        runtime_note,
+    )
+}
 
-    let inline: Vec<_> = incoming
+/// The images of a message the model sees inline.
+pub(crate) fn inline_images(
+    incoming: &IncomingMessage,
+) -> Vec<zdx_engine::orchestration::updates::InputImage> {
+    incoming
         .images
         .iter()
         .filter_map(IncomingImage::inline)
-        .collect();
-    if inline.is_empty() && runtime_note.is_none() {
-        messages.push(ChatMessage::user(text).with_runtime_context(block, key));
-        return Ok(());
-    }
-
-    let mut blocks = Vec::with_capacity(1 + inline.len());
-    blocks.push(ChatContentBlock::text(text));
-    for (mime_type, data) in inline {
-        blocks.push(ChatContentBlock::Image {
-            mime_type: mime_type.to_string(),
-            data: data.to_string(),
-        });
-    }
-    let content = match runtime_note {
-        Some(note) => thread_persistence::user_message_with_note(note, blocks),
-        None => MessageContent::Blocks(blocks),
-    };
-
-    messages.push(ChatMessage {
-        role: "user".to_string(),
-        phase: None,
-        context: block,
-        context_key: key,
-        content,
-    });
-    Ok(())
+        .map(
+            |(mime_type, data)| zdx_engine::orchestration::updates::InputImage {
+                mime_type: mime_type.to_string(),
+                data: data.to_string(),
+            },
+        )
+        .collect()
 }
 
 /// Handle to a running agent turn with streaming events.
@@ -153,10 +123,6 @@ pub(crate) struct PreparedBotTurn {
     /// (initial on first attach, update-eligible replacement on a meaningful
     /// change), or `None` when there is nothing to snapshot.
     pub(crate) runtime_context: Option<RuntimeContext>,
-    /// Explicit tool allowlist for persistent-profile turns (orchestrator).
-    pub(crate) tools_override: Option<Vec<String>>,
-    /// Subagents `invoke_subagent` may reach on this turn; `None` is unrestricted.
-    pub(crate) allowed_subagents: Option<Vec<String>>,
 }
 
 fn bot_prompt_context() -> PromptContextInclusion {
@@ -175,19 +141,7 @@ pub(crate) fn prepare_bot_turn(
     config: &Config,
     root: &Path,
     bot_instruction_layer: Option<&str>,
-    persistent_profile: Option<&str>,
-    chat_id: Option<i64>,
 ) -> Result<PreparedBotTurn> {
-    if let Some(profile) = persistent_profile {
-        return prepare_persistent_profile_turn(
-            config,
-            root,
-            bot_instruction_layer,
-            profile,
-            chat_id,
-        );
-    }
-
     let bot_config = config.clone();
     let instruction_layers = collect_bot_instruction_layers(bot_instruction_layer);
     let effective = build_prompt_with_context_and_layers(
@@ -204,233 +158,7 @@ pub(crate) fn prepare_bot_turn(
         root: root.to_path_buf(),
         system_prompt: effective.prompt,
         runtime_context: effective.runtime_context,
-        tools_override: None,
-        allowed_subagents: None,
     })
-}
-
-/// Builds the system prompt and tool allowlist for a persistent top-level
-/// profile thread. Only the reserved built-in `orchestrator` profile exists;
-/// unknown profile names fail the turn instead of silently loading the default
-/// coding toolset.
-fn prepare_persistent_profile_turn(
-    config: &Config,
-    root: &Path,
-    bot_instruction_layer: Option<&str>,
-    profile: &str,
-    chat_id: Option<i64>,
-) -> Result<PreparedBotTurn> {
-    ensure!(
-        profile == zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME,
-        "Unknown persistent profile '{profile}' on this thread"
-    );
-
-    let definition = zdx_engine::subagents::load_builtin_orchestrator()
-        .context("load built-in orchestrator profile")?;
-    // The Telegram workspaces catalog is observational data: it moves into the
-    // runtime-context snapshot (attached to the first user message) instead of
-    // the system prompt, so it never churns the stable prefix.
-    let workspaces = telegram_workspaces_block(config, chat_id);
-    let (mut prompt, runtime_context) =
-        zdx_engine::subagents::render_prompt_with_discovered_skills_and_context(
-            config,
-            root,
-            &definition,
-            &config.model,
-            bot_prompt_context(),
-            workspaces.as_deref(),
-        )
-        .context("render orchestrator prompt")?;
-    let overlay_path = zdx_engine::config::paths::zdx_home().join("orchestrator.md");
-    if let Some(overlay) = load_orchestrator_overlay(&overlay_path) {
-        prompt = format!("{prompt}\n\n# Personal Orchestrator Rules\n\n{overlay}");
-    }
-    if let Some(layer) = bot_instruction_layer {
-        prompt = format!("{prompt}\n\n{layer}");
-    }
-
-    let tools = definition.tools.clone().unwrap_or_default();
-    ensure!(
-        !tools.is_empty(),
-        "Orchestrator profile declares no tools; refusing to fall back to the default toolset"
-    );
-
-    Ok(PreparedBotTurn {
-        config: config.clone(),
-        root: root.to_path_buf(),
-        system_prompt: Some(prompt),
-        runtime_context,
-        tools_override: Some(tools),
-        allowed_subagents: definition.allowed_subagents.clone(),
-    })
-}
-
-/// Telegram **workspace** groups bound to the bot, so the orchestrator can pick
-/// worker roots deliberately. Each workspace also lists the project skills its workers
-/// discover there, since the orchestrator's own skill catalog only covers its
-/// home root.
-///
-/// Orchestrator homes are not listed: they are not worker destinations and
-/// never own skills. `chat_id` is the current chat, used to state its configured
-/// default worker root. `None` when no workspace profiles are configured.
-fn telegram_workspaces_block(config: &Config, chat_id: Option<i64>) -> Option<String> {
-    let workspaces: Vec<_> = config
-        .telegram
-        .profiles
-        .iter()
-        .filter(|(_, profile)| profile.is_routable_workspace())
-        .collect();
-    if workspaces.is_empty() {
-        return None;
-    }
-    let home = std::env::var("HOME").unwrap_or_default();
-    let skills = workspace_skills(config);
-
-    let mut block = String::from(
-        "# Telegram Workspaces\n\nWorkspace groups bound to this bot (profile — root), the project roots workers usually run in.\n\nWorkers in a root automatically discover that project's skills (listed under it); you do not have them yourself. Use them to know what a workspace can do and to point a worker at the right one by name when the task matches.\n\n",
-    );
-    for (name, profile) in workspaces {
-        let root = shorten_home(&profile.cwd_path().display().to_string(), &home);
-        let _ = writeln!(block, "- {name} (chat {}) — `{root}`", profile.chat_id);
-        for (skill_name, description) in skills.get(name).into_iter().flatten() {
-            let _ = writeln!(block, "  - skill `{skill_name}`: {description}");
-        }
-    }
-
-    // The default applies when `Create_Thread` is called without a root; state
-    // it so the choice is deliberate rather than implied by the listing.
-    if let Some(worker_root) = chat_id
-        .and_then(|chat_id| config.telegram_profile_for_chat(chat_id))
-        .filter(|(_, profile)| !profile.is_routable_workspace())
-        .map(|(_, profile)| profile.worker_root_path())
-    {
-        let root = shorten_home(&worker_root.display().to_string(), &home);
-        let _ = write!(
-            block,
-            "\nYour default worker root is `{root}`. Omit `root` in `Create_Thread` to use it; pass an explicit `root` for work that belongs to a specific project.\n"
-        );
-    }
-    Some(block)
-}
-
-/// Longest skill description shown per workspace skill line.
-const WORKSPACE_SKILL_DESCRIPTION_CHARS: usize = 140;
-
-/// Project-level skills each Telegram workspace's workers will discover, keyed
-/// by profile name. Only project sources are scanned (user/global skills are
-/// already in the orchestrator's own catalog). A skill reachable from several
-/// nested workspaces is attributed once, to the deepest root that contains it,
-/// and listed under every workspace bound to that root.
-///
-/// Orchestrator homes are skipped: they are not rendered, so letting one win
-/// attribution would drop the skills from the prompt entirely.
-fn workspace_skills(config: &Config) -> HashMap<String, Vec<(String, String)>> {
-    use zdx_engine::config::SkillSourceToggles;
-    use zdx_engine::skills::{LoadSkillsOptions, SkillSource, load_skills};
-
-    // skill file → (owning root, its depth, skill name, description)
-    let mut owner: HashMap<PathBuf, (PathBuf, usize, String, String)> = HashMap::new();
-    let mut profiles_by_root: HashMap<PathBuf, Vec<String>> = HashMap::new();
-    for (name, profile) in &config.telegram.profiles {
-        if !profile.is_routable_workspace() {
-            continue;
-        }
-        let root = profile.cwd_path();
-        let root = root.canonicalize().unwrap_or(root);
-        let sharing = profiles_by_root.entry(root.clone()).or_default();
-        sharing.push(name.clone());
-        if sharing.len() > 1 {
-            // Same root, same skills: already scanned for an earlier profile.
-            continue;
-        }
-        let depth = root.components().count();
-        let options = LoadSkillsOptions {
-            sources: SkillSourceToggles {
-                zdx_project: true,
-                claude_project: true,
-                agents_project: true,
-                ..SkillSourceToggles::default()
-            },
-            ..LoadSkillsOptions::new(root.clone())
-        };
-        // Bundled skills ignore the toggles; keep project sources only.
-        let project_skills = load_skills(&options).skills.into_iter().filter(|skill| {
-            matches!(
-                skill.source,
-                SkillSource::ZdxProject | SkillSource::ClaudeProject | SkillSource::AgentsProject
-            )
-        });
-        for skill in project_skills {
-            let contains = skill.base_dir.starts_with(&root);
-            // Prefer the deepest root that actually contains the skill; a
-            // skill inherited from an ancestor without a profile goes to
-            // whichever workspace saw it first.
-            let rank = if contains { depth } else { 0 };
-            let replace = owner
-                .get(&skill.file_path)
-                .is_none_or(|(_, existing, _, _)| rank > *existing);
-            if replace {
-                owner.insert(
-                    skill.file_path.clone(),
-                    (
-                        root.clone(),
-                        rank,
-                        skill.name.clone(),
-                        truncate_description(&skill.description, WORKSPACE_SKILL_DESCRIPTION_CHARS),
-                    ),
-                );
-            }
-        }
-    }
-
-    let mut by_profile: HashMap<String, Vec<(String, String)>> = HashMap::new();
-    for (root, _, skill_name, description) in owner.into_values() {
-        for profile in profiles_by_root.get(&root).into_iter().flatten() {
-            by_profile
-                .entry(profile.clone())
-                .or_default()
-                .push((skill_name.clone(), description.clone()));
-        }
-    }
-    for skills in by_profile.values_mut() {
-        skills.sort();
-    }
-    by_profile
-}
-
-fn truncate_description(text: &str, max_chars: usize) -> String {
-    let first_line = text.lines().next().unwrap_or_default().trim();
-    if first_line.chars().count() <= max_chars {
-        return first_line.to_string();
-    }
-    let head: String = first_line.chars().take(max_chars).collect();
-    format!("{}…", head.trim_end())
-}
-
-/// Loads the user's personal orchestrator overlay (`$ZDX_HOME/orchestrator.md`):
-/// free-form manager rules appended only to orchestrator turns, editable
-/// without rebuilding. A missing file is a no-op; other read failures are
-/// logged and skipped so a broken overlay never blocks the home base.
-fn load_orchestrator_overlay(path: &Path) -> Option<String> {
-    match std::fs::read_to_string(path) {
-        Ok(content) => {
-            let trimmed = content.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => {
-            tracing::warn!(path = %path.display(), %err, "Failed to read orchestrator overlay");
-            None
-        }
-    }
-}
-
-fn shorten_home(path: &str, home: &str) -> String {
-    if !home.is_empty() && path.starts_with(home) {
-        format!("~{}", &path[home.len()..])
-    } else {
-        path.to_string()
-    }
 }
 
 /// Spawns an agent turn and returns a handle with streaming events.
@@ -450,21 +178,8 @@ pub(crate) fn spawn_agent_turn(
         root,
         system_prompt,
         runtime_context: _,
-        tools_override,
-        allowed_subagents,
     } = prepared;
-
-    // Persistent-profile turns pin the exact tool selection from the profile
-    // definition; the shared registry (with bound orchestrator tools) is kept.
-    let tool_config = match tools_override {
-        Some(tools) => ToolConfig {
-            registry: tool_config.registry.clone(),
-            selection: ToolSelection::Explicit(tools),
-            allowed_subagents,
-            background_commands: tool_config.background_commands,
-        },
-        None => tool_config.clone(),
-    };
+    let tool_config = tool_config.clone();
 
     let agent_opts = AgentOptions {
         conversation_id: None,
@@ -670,8 +385,7 @@ mod tests {
     use zdx_engine::core::events::{AgentEvent, ToolOutput};
 
     use super::{
-        STATUS_THINKING, STATUS_WAITING, STATUS_WRITING, event_to_status,
-        load_orchestrator_overlay, prepare_bot_turn, telegram_workspaces_block, workspace_skills,
+        STATUS_THINKING, STATUS_WAITING, STATUS_WRITING, event_to_status, prepare_bot_turn,
     };
 
     fn make_temp_dir() -> std::path::PathBuf {
@@ -758,264 +472,10 @@ mod tests {
             agents_project: false,
         };
 
-        let prepared = prepare_bot_turn(&config, &dir, None, None, None).unwrap();
+        let prepared = prepare_bot_turn(&config, &dir, None).unwrap();
         let prompt = prepared.system_prompt.unwrap_or_default();
 
         assert!(prompt.contains("Bot project note"));
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn orchestrator_turn_renders_project_context_and_pins_tools() {
-        // The orchestrator renders its profile prompt with an isolated home so
-        // the test never runs against the developer's real ~/.zdx or rebuilds
-        // their live thread index.
-        let _home = zdx_engine::test_support::temp_zdx_home();
-        let dir = make_temp_dir();
-        std::fs::write(dir.join("AGENTS.md"), "Orchestrator project note").unwrap();
-
-        let mut config = Config::default();
-        config.subagents.enabled = false;
-        config.skills.sources = SkillSourceToggles {
-            zdx_user: false,
-            zdx_project: false,
-            codex_user: false,
-            claude_user: false,
-            claude_project: false,
-            agents_user: false,
-            agents_project: false,
-        };
-
-        let prepared = prepare_bot_turn(
-            &config,
-            &dir,
-            Some("TELEGRAM LAYER"),
-            Some("orchestrator"),
-            None,
-        )
-        .unwrap();
-        let prompt = prepared.system_prompt.unwrap_or_default();
-
-        // SPEC §18: profile prompt composes project context + Telegram layer.
-        assert!(prompt.contains("ZDX Orchestrator"));
-        assert!(prompt.contains("Orchestrator project note"));
-        assert!(prompt.contains("TELEGRAM LAYER"));
-
-        // Exact profile tool surface, no default-toolset fallback.
-        let tools = prepared.tools_override.expect("orchestrator pins tools");
-        assert!(tools.contains(&"create_thread".to_string()));
-        assert!(!tools.contains(&"write".to_string()));
-        assert!(!tools.contains(&"bash".to_string()));
-        assert!(!tools.contains(&"invoke_subagent".to_string()));
-
-        // SPEC §18: the home base delegates to visible workers, not subagents.
-        assert_eq!(prepared.allowed_subagents, None);
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn unknown_persistent_profile_fails_the_turn() {
-        let dir = make_temp_dir();
-        let err = prepare_bot_turn(&Config::default(), &dir, None, Some("mystery"), None)
-            .err()
-            .expect("unknown profile must fail");
-        assert!(err.to_string().contains("Unknown persistent profile"));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn telegram_workspaces_block_lists_profiles_with_routing_rule() {
-        use std::collections::BTreeMap;
-
-        use zdx_engine::config::{TelegramConfig, TelegramProfileConfig};
-
-        // Rendering skills materializes bundled skills into $ZDX_HOME.
-        let _home = zdx_engine::test_support::temp_zdx_home();
-
-        assert!(telegram_workspaces_block(&Config::default(), None).is_none());
-
-        let config = Config {
-            telegram: TelegramConfig {
-                profiles: BTreeMap::from([
-                    (
-                        "dub".to_string(),
-                        TelegramProfileConfig {
-                            chat_id: -1001,
-                            cwd: "/tmp/work/dub".to_string(),
-                            orchestrator: false,
-                            worker_root: None,
-                        },
-                    ),
-                    (
-                        "zdx".to_string(),
-                        TelegramProfileConfig {
-                            chat_id: -1002,
-                            cwd: "/tmp/personal/zdx".to_string(),
-                            orchestrator: true,
-                            worker_root: None,
-                        },
-                    ),
-                ]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let block = telegram_workspaces_block(&config, None).unwrap();
-        assert!(block.starts_with("# Telegram Workspaces"));
-        assert!(block.contains("the project roots workers usually run in"));
-        assert!(block.contains("- dub (chat -1001) — `/tmp/work/dub`"));
-        // Orchestrator homes are not worker destinations, so they are not
-        // offered as workspaces at all.
-        assert!(!block.contains("zdx (chat -1002)"));
-
-        // Rendered for the orchestrator's own chat, the block states the
-        // default root it gets when `Create_Thread` omits one.
-        let block = telegram_workspaces_block(&config, Some(-1002)).unwrap();
-        assert!(block.contains("Your default worker root is `/tmp/personal/zdx`"));
-        // A workspace chat has no default of its own.
-        assert!(
-            !telegram_workspaces_block(&config, Some(-1001))
-                .unwrap()
-                .contains("Your default worker root")
-        );
-    }
-
-    /// Workers discover a workspace's project skills, the orchestrator does
-    /// not, so the workspace list names them. A skill living in an umbrella
-    /// root is attributed to that umbrella, not repeated under nested roots.
-    #[test]
-    fn telegram_workspaces_block_lists_project_skills_once_under_their_root() {
-        use std::collections::BTreeMap;
-
-        use zdx_engine::config::{TelegramConfig, TelegramProfileConfig};
-
-        // Rendering skills materializes bundled skills into $ZDX_HOME.
-        let _home = zdx_engine::test_support::temp_zdx_home();
-
-        let umbrella = make_temp_dir();
-        let project = umbrella.join("dub");
-        std::fs::create_dir_all(umbrella.join(".zdx/skills/parity-flow")).unwrap();
-        std::fs::write(
-            umbrella.join(".zdx/skills/parity-flow/SKILL.md"),
-            "---\nname: parity-flow\ndescription: ExampleCo release flow.\n---\nbody\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(project.join(".zdx/skills/dub-attest")).unwrap();
-        std::fs::write(
-            project.join(".zdx/skills/dub-attest/SKILL.md"),
-            "---\nname: dub-attest\ndescription: Run device attestation end to end.\n---\nbody\n",
-        )
-        .unwrap();
-
-        let config = Config {
-            telegram: TelegramConfig {
-                profiles: BTreeMap::from([
-                    (
-                        "dub".to_string(),
-                        TelegramProfileConfig {
-                            chat_id: -1001,
-                            cwd: project.display().to_string(),
-                            orchestrator: false,
-                            worker_root: None,
-                        },
-                    ),
-                    (
-                        "parity".to_string(),
-                        TelegramProfileConfig {
-                            chat_id: -1002,
-                            cwd: umbrella.display().to_string(),
-                            orchestrator: false,
-                            worker_root: None,
-                        },
-                    ),
-                ]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let skills = workspace_skills(&config);
-        assert_eq!(
-            skills.get("dub").unwrap(),
-            &vec![(
-                "dub-attest".to_string(),
-                "Run device attestation end to end.".to_string()
-            )]
-        );
-        assert_eq!(
-            skills.get("parity").unwrap(),
-            &vec![(
-                "parity-flow".to_string(),
-                "ExampleCo release flow.".to_string()
-            )]
-        );
-
-        let block = telegram_workspaces_block(&config, None).unwrap();
-        assert!(block.contains("  - skill `dub-attest`: Run device attestation end to end."));
-        assert_eq!(block.matches("skill `parity-flow`").count(), 1);
-    }
-
-    /// Two workspace groups may share one root. Neither silently claims the
-    /// root's skills: both list them.
-    #[test]
-    fn workspaces_sharing_a_root_both_list_its_skills() {
-        use std::collections::BTreeMap;
-
-        use zdx_engine::config::{TelegramConfig, TelegramProfileConfig};
-
-        let _home = zdx_engine::test_support::temp_zdx_home();
-
-        let root = make_temp_dir();
-        std::fs::create_dir_all(root.join(".zdx/skills/shared-flow")).unwrap();
-        std::fs::write(
-            root.join(".zdx/skills/shared-flow/SKILL.md"),
-            "---\nname: shared-flow\ndescription: Shared flow.\n---\nbody\n",
-        )
-        .unwrap();
-        let workspace = |chat_id: i64| TelegramProfileConfig {
-            chat_id,
-            cwd: root.display().to_string(),
-            orchestrator: false,
-            worker_root: None,
-        };
-        let config = Config {
-            telegram: TelegramConfig {
-                profiles: BTreeMap::from([
-                    ("alpha".to_string(), workspace(-1001)),
-                    ("beta".to_string(), workspace(-1002)),
-                ]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let expected = vec![("shared-flow".to_string(), "Shared flow.".to_string())];
-        let skills = workspace_skills(&config);
-        assert_eq!(skills.get("alpha"), Some(&expected));
-        assert_eq!(skills.get("beta"), Some(&expected));
-
-        let block = telegram_workspaces_block(&config, None).unwrap();
-        assert_eq!(block.matches("skill `shared-flow`").count(), 2);
-    }
-
-    #[test]
-    fn orchestrator_overlay_loads_only_when_present_and_non_empty() {
-        let dir = make_temp_dir();
-        let path = dir.join("orchestrator.md");
-
-        // Missing file is a silent no-op.
-        assert_eq!(load_orchestrator_overlay(&path), None);
-
-        // Whitespace-only content is treated as absent.
-        std::fs::write(&path, "  \n\t\n").unwrap();
-        assert_eq!(load_orchestrator_overlay(&path), None);
-
-        std::fs::write(&path, "\n- Reply in English\n- dub first\n").unwrap();
-        assert_eq!(
-            load_orchestrator_overlay(&path).as_deref(),
-            Some("- Reply in English\n- dub first")
-        );
 
         std::fs::remove_dir_all(dir).unwrap();
     }

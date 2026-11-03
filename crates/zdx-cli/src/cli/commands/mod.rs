@@ -13,6 +13,7 @@ pub mod jobs;
 pub mod mcp;
 pub mod memory;
 pub mod models;
+pub mod orchestrator;
 pub mod quota;
 pub mod service;
 pub mod speak;

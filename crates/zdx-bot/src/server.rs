@@ -35,8 +35,9 @@ use zdx_engine::core::thread_trajectory::{
     LiveToolSpan, ThreadTrajectoryReport, inspect_thread_trajectory_with_live,
 };
 use zdx_engine::core::usage_stats::{self, UsageStats};
-use zdx_engine::core::workers::{WorkerManager, WorkerSnapshot, WorkerStatus};
+use zdx_engine::core::workers::{WorkerSnapshot, WorkerStatus};
 use zdx_engine::models::ModelOption;
+use zdx_engine::orchestration::OrchestratorClient;
 use zdx_engine::providers::ReplayToken;
 use zdx_engine::providers::subscription_quota::{self, QuotaError, SubscriptionQuota};
 use zdx_engine::service::{self, Service};
@@ -147,7 +148,8 @@ struct ArtifactFileQuery {
 /// One worker of an orchestrator thread.
 ///
 /// Rows come from two sources that carry different amounts of truth. A live row
-/// is backed by the in-memory `WorkerManager` and has real status and progress.
+/// is backed by the orchestrator service's in-memory worker state and has real
+/// status and progress.
 /// A row recovered from persisted lineage after a restart knows only that the
 /// worker existed; `live` is false and `status` is `unknown` for those, and the
 /// progress fields are all `None`. Clients must not render the two the same
@@ -617,10 +619,11 @@ pub(crate) struct ServerState {
     bot_token: String,
     allowlist_user_ids: HashSet<i64>,
     root: PathBuf,
-    /// Live worker state for orchestrator threads. In-memory and
-    /// process-scoped: it is empty for workers that ran before a restart, which
-    /// is why worker listings merge it with persisted lineage.
-    workers: Arc<WorkerManager>,
+    /// Live worker state for orchestrator threads, read from the
+    /// orchestrator service. In-memory there and process-scoped: it is empty
+    /// for workers that ran before the service restarted (or while it is
+    /// down), which is why worker listings merge it with persisted lineage.
+    workers: Arc<LiveWorkers>,
     monitor_cache: RwLock<Option<CachedMonitor>>,
     /// Single-flight guard for building `monitor_cache`; see `monitor_snapshot`.
     monitor_build: Mutex<()>,
@@ -650,13 +653,13 @@ impl ServerState {
         bot_token: String,
         allowlist_user_ids: HashSet<i64>,
         root: PathBuf,
-        workers: Arc<WorkerManager>,
+        workers: OrchestratorClient,
     ) -> Self {
         Self {
             bot_token,
             allowlist_user_ids,
             root,
-            workers,
+            workers: Arc::new(LiveWorkers { client: workers }),
             monitor_cache: RwLock::new(None),
             monitor_build: Mutex::new(()),
             subscription_cache: Mutex::new(None),
@@ -1127,12 +1130,36 @@ struct ThreadLineage {
     worker_count: usize,
 }
 
+/// Blocking reads of live worker state from the orchestrator service, for
+/// handlers that already run on the blocking pool. An unreachable service
+/// reads as no live workers.
+pub(crate) struct LiveWorkers {
+    client: OrchestratorClient,
+}
+
+impl LiveWorkers {
+    fn list_for_owner(&self, owner_thread_id: &str) -> Vec<WorkerSnapshot> {
+        self.client.workers_blocking(Some(owner_thread_id))
+    }
+
+    fn statuses_by_owner(&self) -> HashMap<String, Vec<WorkerStatus>> {
+        let mut grouped: HashMap<String, Vec<WorkerStatus>> = HashMap::new();
+        for worker in self.client.workers_blocking(None) {
+            grouped
+                .entry(worker.owner_thread_id)
+                .or_default()
+                .push(worker.status);
+        }
+        grouped
+    }
+}
+
 /// Resolves the orchestrator a thread belongs to and how many workers it owns.
 ///
 /// Both halves are indexed lookups: the parent comes off the thread's own
 /// cached summary, and the worker count is the same union the Workers pane
 /// renders, so the tab never appears for a thread with nothing behind it.
-fn resolve_lineage(workers: &WorkerManager, thread_id: &str) -> ThreadLineage {
+fn resolve_lineage(workers: &LiveWorkers, thread_id: &str) -> ThreadLineage {
     let effective_id = resolve_alias_id(thread_id);
     let parent_thread_id = thread_persistence::read_thread_summary_cached(&effective_id)
         .ok()
@@ -1172,15 +1199,15 @@ fn status_rank(status: &str) -> u8 {
 ///
 /// Two sources, deliberately not equivalent:
 ///
-/// - `WorkerManager` holds live state, but only for this process. Everything it
-///   knows disappears on restart.
+/// - The orchestrator service holds live state, but only for its own process.
+///   Everything it knows disappears when it restarts.
 /// - `thread_meta.parent_thread_id` survives restarts, but records only that a
 ///   worker existed. It restores *discovery*, never status.
 ///
 /// Persisted children are filtered by the canonical worker rule
 /// (`ThreadSummary::is_worker`), because the same parent link is used by
 /// subagent and helper runs, which are not workers and must not show up here.
-fn collect_workers(workers: &WorkerManager, owner_thread_id: &str) -> Vec<WorkerItem> {
+fn collect_workers(workers: &LiveWorkers, owner_thread_id: &str) -> Vec<WorkerItem> {
     let now = SystemTime::now();
     let live = workers.list_for_owner(owner_thread_id);
     let live_ids: HashSet<String> = live.iter().map(|w| w.thread_id.clone()).collect();
@@ -3353,7 +3380,7 @@ pub(crate) fn spawn_server(
     allowlist_user_ids: HashSet<i64>,
     port: u16,
     root: PathBuf,
-    workers: Arc<WorkerManager>,
+    workers: OrchestratorClient,
     deliveries: ActiveDeliveries,
     feedback: Arc<dyn FeedbackSink>,
 ) {
@@ -3379,6 +3406,13 @@ pub(crate) fn spawn_server(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A client of a service that is not running: no live workers.
+    fn test_workers() -> OrchestratorClient {
+        OrchestratorClient::at(
+            std::env::temp_dir().join(format!("zdx-test-{}.sock", uuid::Uuid::new_v4())),
+        )
+    }
 
     #[test]
     fn a_delivery_outcome_for_a_seen_record_forces_a_full_poll() {
@@ -3526,7 +3560,7 @@ mod tests {
             SAMPLE_BOT_TOKEN.to_string(),
             sample_allowlist(),
             PathBuf::from("."),
-            WorkerManager::new().0,
+            test_workers(),
         )));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -3592,7 +3626,7 @@ mod tests {
             SAMPLE_BOT_TOKEN.to_string(),
             sample_allowlist(),
             PathBuf::from("."),
-            WorkerManager::new().0,
+            test_workers(),
         )));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -3665,7 +3699,7 @@ mod tests {
             SAMPLE_BOT_TOKEN.to_string(),
             sample_allowlist(),
             PathBuf::from("."),
-            WorkerManager::new().0,
+            test_workers(),
         )));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -3854,7 +3888,7 @@ mod tests {
                 SAMPLE_BOT_TOKEN.to_string(),
                 sample_allowlist(),
                 PathBuf::from("."),
-                WorkerManager::new().0,
+                test_workers(),
             )
             .with_feedback(sink),
         ));
@@ -4159,7 +4193,7 @@ mod tests {
                 SAMPLE_BOT_TOKEN.to_string(),
                 sample_allowlist(),
                 PathBuf::from("."),
-                WorkerManager::new().0,
+                test_workers(),
             )
             .with_feedback(Arc::new(GatedSink {
                 entered: std::sync::Mutex::new(entered_tx),
@@ -4535,7 +4569,7 @@ mod tests {
                 SAMPLE_BOT_TOKEN.to_string(),
                 sample_allowlist(),
                 PathBuf::from("."),
-                WorkerManager::new().0,
+                test_workers(),
             )
             .with_deliveries(deliveries.clone()),
         ));
@@ -4655,7 +4689,7 @@ mod tests {
                 SAMPLE_BOT_TOKEN.to_string(),
                 sample_allowlist(),
                 PathBuf::from("."),
-                WorkerManager::new().0,
+                test_workers(),
             )
             .with_deliveries(deliveries.clone()),
         ));
@@ -4774,7 +4808,7 @@ mod tests {
             SAMPLE_BOT_TOKEN.to_string(),
             sample_allowlist(),
             PathBuf::from("."),
-            WorkerManager::new().0,
+            test_workers(),
         )));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -4837,7 +4871,7 @@ mod tests {
             SAMPLE_BOT_TOKEN.to_string(),
             sample_allowlist(),
             PathBuf::from("."),
-            WorkerManager::new().0,
+            test_workers(),
         )));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -4902,7 +4936,7 @@ mod tests {
             SAMPLE_BOT_TOKEN.to_string(),
             sample_allowlist(),
             PathBuf::from("."),
-            WorkerManager::new().0,
+            test_workers(),
         )));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -5577,7 +5611,7 @@ mod tests {
             SAMPLE_BOT_TOKEN.to_string(),
             sample_allowlist(),
             PathBuf::from("."),
-            WorkerManager::new().0,
+            test_workers(),
         ));
         let builds = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let requests = (0..4).map(|_| {

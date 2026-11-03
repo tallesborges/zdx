@@ -71,17 +71,7 @@ const TELEGRAM_CONNECT_TIMEOUT_SECS: u64 = 2;
 const TELEGRAM_HTTP_TIMEOUT_SECS: u64 = 35;
 const TELEGRAM_PHOTO_MAX_BYTES: usize = 10 * 1024 * 1024;
 
-/// Builds a `t.me/c/<internal_id>/<topic_id>` link for a forum topic.
-///
-/// Supergroup chat ids carry the `-100` prefix that `t.me/c` links omit. A
-/// forum topic id is the id of the service message that opened the topic, so
-/// the message-link form resolves to the topic itself. Private chats (positive
-/// ids, including Threaded Mode DMs) have no linkable topic form.
-pub(crate) fn topic_link(chat_id: i64, topic_id: i64) -> Option<String> {
-    let internal = chat_id.to_string();
-    let internal = internal.strip_prefix("-100")?;
-    (!internal.is_empty() && topic_id > 0).then(|| format!("https://t.me/c/{internal}/{topic_id}"))
-}
+pub(crate) use zdx_engine::telegram::topic_link;
 const TELEGRAM_DOCUMENT_MAX_BYTES: usize = 50 * 1024 * 1024;
 const TELEGRAM_PHOTO_MAX_LONG_EDGE: u32 = 1920;
 const TELEGRAM_PHOTO_MAX_ASPECT_RATIO: f64 = 20.0;
@@ -260,7 +250,7 @@ fn is_photo_aspect_ratio_invalid(width: u32, height: u32) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SendMode {
     /// Never waits. Skipped locally while the chat is in a flood wait.
-    /// Default, so callers on the polling loop or the worker bridge never
+    /// Default, so callers on the polling loop or the service bridge never
     /// stall on one busy chat.
     Immediate,
     /// Waits for the chat's flood wait and, for new messages, for the pacing

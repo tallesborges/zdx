@@ -1,4 +1,5 @@
-//! launchd-backed control for the long-lived `bot` and `daemon` services.
+//! launchd-backed control for the long-lived `bot`, `daemon`, and
+//! `orchestrator` services.
 //!
 //! launchd owns process lifetime (start at login, restart on crash, restart
 //! after the bot's `/restart`); this module owns the ergonomics. Status still comes
@@ -26,17 +27,21 @@ pub const SUPERVISOR_ENV: &str = "ZDX_SERVICE_SUPERVISOR";
 pub enum Service {
     Bot,
     Daemon,
+    /// Hosts persistent-profile threads and their workers
+    /// (`zdx orchestrator serve`).
+    Orchestrator,
 }
 
 impl Service {
     /// Every managed service, in display order.
-    pub const ALL: [Self; 2] = [Self::Bot, Self::Daemon];
+    pub const ALL: [Self; 3] = [Self::Bot, Self::Daemon, Self::Orchestrator];
 
     /// PID-file / log-file base name, also the user-facing service name.
     pub fn name(self) -> &'static str {
         match self {
             Self::Bot => "bot",
             Self::Daemon => "daemon",
+            Self::Orchestrator => "orchestrator",
         }
     }
 
@@ -65,12 +70,15 @@ impl Service {
         match self {
             Self::Bot => vec!["--root".into(), root, "bot".into()],
             Self::Daemon => vec!["--root".into(), root, "jobs".into(), "daemon".into()],
+            Self::Orchestrator => {
+                vec!["--root".into(), root, "orchestrator".into(), "serve".into()]
+            }
         }
     }
 
     /// Resolves a CLI target into the services it refers to.
     ///
-    /// Accepts `bot`, `daemon`, or `all`.
+    /// Accepts `bot`, `daemon`, `orchestrator`, or `all`.
     ///
     /// # Errors
     /// Returns an error for any other value.
@@ -79,7 +87,8 @@ impl Service {
             "all" => Ok(Self::ALL.to_vec()),
             "bot" => Ok(vec![Self::Bot]),
             "daemon" => Ok(vec![Self::Daemon]),
-            other => bail!("unknown service '{other}' (expected: bot, daemon, all)"),
+            "orchestrator" => Ok(vec![Self::Orchestrator]),
+            other => bail!("unknown service '{other}' (expected: bot, daemon, orchestrator, all)"),
         }
     }
 }
@@ -446,14 +455,20 @@ pub fn restart(service: Service, force: bool) -> Result<String> {
     Ok(messages.remove(0))
 }
 
-/// Restarts multiple agents after one shared active-work preflight.
+/// Restarts multiple agents after one shared preflight: every service is
+/// installed, and (unless `force`) no agent run is active.
 ///
 /// # Errors
-/// Returns an error before changing any service if active agent work exists
-/// and `force` is false. Also returns an error if an agent is not installed or
+/// Returns an error before changing any service if one is not installed, or
+/// if active agent work exists and `force` is false. Also returns an error if
 /// `launchctl` fails.
 pub fn restart_many(services: &[Service], force: bool) -> Result<Vec<String>> {
     ensure_restart_allowed(force)?;
+    // Fail before any restart: restarting the bot onto a build that needs a
+    // missing service would leave it half deployed.
+    for service in services {
+        require_installed(*service)?;
+    }
     services.iter().copied().map(restart_unchecked).collect()
 }
 
@@ -655,7 +670,7 @@ fn require_installed(service: Service) -> Result<()> {
     if service.plist_path().is_file() {
         Ok(())
     } else {
-        bail!("{service} is not installed — run `zdx service install` first")
+        bail!("{service} is not installed — run `zdx service install {service}` first")
     }
 }
 
@@ -749,6 +764,10 @@ mod tests {
             Service::parse_target("daemon").unwrap(),
             vec![Service::Daemon]
         );
+        assert_eq!(
+            Service::parse_target("orchestrator").unwrap(),
+            vec![Service::Orchestrator]
+        );
         assert_eq!(Service::parse_target("all").unwrap(), Service::ALL.to_vec());
         assert!(Service::parse_target("monitor").is_err());
     }
@@ -792,6 +811,20 @@ mod tests {
             "<string>exec '/Users/x/.local/bin/zdx' '--root' '/Users/x/projects/zdx' 'jobs' 'daemon'</string>"
         ));
         assert!(plist.contains("daemon.err"));
+    }
+
+    #[test]
+    fn orchestrator_plist_runs_the_service() {
+        let plist = render_plist(
+            Service::Orchestrator,
+            Path::new("/Users/x/.local/bin/zdx"),
+            Path::new("/Users/x/projects/zdx"),
+        );
+        assert!(plist.contains("<string>dev.zdx.orchestrator</string>"));
+        assert!(plist.contains(
+            "<string>exec '/Users/x/.local/bin/zdx' '--root' '/Users/x/projects/zdx' 'orchestrator' 'serve'</string>"
+        ));
+        assert!(plist.contains("orchestrator.err"));
     }
 
     #[test]
@@ -876,7 +909,7 @@ mod tests {
 
         let second = queue_restart(&[Service::Bot], None).unwrap();
         assert!(second.already_pending);
-        assert_eq!(second.request.services, Service::ALL.to_vec());
+        assert_eq!(second.request.services, vec![Service::Bot, Service::Daemon]);
         assert_eq!(
             second.request.thread_id.as_deref(),
             Some("telegram--100-topic-1")

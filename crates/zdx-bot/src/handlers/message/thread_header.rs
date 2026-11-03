@@ -57,11 +57,11 @@ pub(crate) async fn post_thread_header(
 }
 
 /// Re-renders a thread's pinned header in place, when this process posted
-/// it. Used by the worker bridge so an orchestrator's card tracks its workers
+/// it. Used by the service bridge so an orchestrator's card tracks its workers
 /// without a manual Refresh. Best-effort: unknown headers are no-ops, and a
 /// render identical to the last one Telegram accepted sends no edit. Runs on
 /// the immediate client, so a flood wait skips it (the next refresh catches
-/// up) instead of stalling the worker bridge.
+/// up) instead of stalling the service bridge.
 pub(crate) async fn refresh_thread_header(context: &BotContext, thread_id: &str) {
     let Some(header) = context.thread_header(thread_id) else {
         return;

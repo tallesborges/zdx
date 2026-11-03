@@ -16,6 +16,9 @@ pub async fn run(
     config: &config::Config,
     model_override: Option<&str>,
 ) -> Result<()> {
+    if let Some(thread_id) = thread_opts.thread_id.as_deref() {
+        zdx_engine::orchestration::ensure_direct_run_allowed(thread_id)?;
+    }
     // If stdin is piped, run exec mode instead
     if !std::io::stdin().is_terminal() {
         let mut prompt = String::new();

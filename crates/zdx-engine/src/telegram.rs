@@ -125,6 +125,25 @@ pub fn conversation_thread_id(chat_id: i64, topic_id: Option<i64>) -> String {
     }
 }
 
+/// Inverse of [`conversation_thread_id`] for topic threads: `(chat_id,
+/// topic_id)` from a `telegram-{chat_id}-topic-{topic_id}` id, `None` for
+/// anything else.
+#[must_use]
+pub fn parse_topic_conversation_id(thread_id: &str) -> Option<(i64, i64)> {
+    let rest = thread_id.strip_prefix("telegram-")?;
+    let (chat, topic) = rest.rsplit_once("-topic-")?;
+    Some((chat.parse().ok()?, topic.parse().ok()?))
+}
+
+/// `t.me/c/<internal_id>/<topic_id>` link to a supergroup forum topic. `None`
+/// for private chats and basic groups, which have no such link.
+#[must_use]
+pub fn topic_link(chat_id: i64, topic_id: i64) -> Option<String> {
+    let internal = chat_id.to_string();
+    let internal = internal.strip_prefix("-100")?;
+    (!internal.is_empty() && topic_id > 0).then(|| format!("https://t.me/c/{internal}/{topic_id}"))
+}
+
 /// What one send carried, for [`record_post`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PostDetails<'a> {

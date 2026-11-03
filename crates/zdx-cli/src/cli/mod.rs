@@ -278,7 +278,7 @@ enum Commands {
         #[command(subcommand)]
         command: BgCommands,
     },
-    /// Manage the long-lived `bot` and `daemon` services under launchd (macOS)
+    /// Manage the long-lived `bot`, `daemon`, and `orchestrator` services under launchd (macOS)
     Service {
         #[command(subcommand)]
         command: ServiceCommands,
@@ -298,6 +298,11 @@ enum Commands {
     Jobs {
         #[command(subcommand)]
         command: JobCommands,
+    },
+    /// Run the orchestrator service, or send to and inspect its threads
+    Orchestrator {
+        #[command(subcommand)]
+        command: OrchestratorCommands,
     },
     /// Inspect and call MCP servers through the internal helper CLI
     Mcp {
@@ -383,6 +388,76 @@ enum Commands {
 }
 
 #[derive(clap::Subcommand)]
+enum OrchestratorCommands {
+    /// Run the service: it owns persistent-profile threads and their workers,
+    /// and continues a thread when one of its workers finishes
+    Serve,
+    /// Send a message to a persistent-profile thread (created when missing)
+    Send {
+        /// Thread to continue or create (default: a new thread)
+        #[arg(long, value_name = "ID")]
+        thread: Option<String>,
+
+        /// The message
+        #[arg(
+            short,
+            long,
+            conflicts_with = "prompt_file",
+            required_unless_present = "prompt_file"
+        )]
+        prompt: Option<String>,
+
+        /// Read the message from a file
+        #[arg(long = "prompt-file", conflicts_with = "prompt")]
+        prompt_file: Option<PathBuf>,
+
+        /// Profile of a new thread: `orchestrator` (default) or a subagent file
+        /// in `<root>/.zdx/subagents` or `$ZDX_HOME/subagents`
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
+
+        /// Model of a new thread (`provider:model[@thinking][@fast]`), kept for
+        /// every later turn
+        #[arg(short, long)]
+        model: Option<String>,
+
+        /// Print the thread's events as JSON lines until it settles: no turn
+        /// queued or running and no worker still working for it
+        #[arg(long)]
+        wait: bool,
+    },
+    /// Show threads, queues, and workers of the running service
+    Status {
+        /// Only this thread
+        #[arg(long, value_name = "ID")]
+        thread: Option<String>,
+
+        /// Emit JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop a thread's running turn and drop its waiting messages, or stop one worker
+    Cancel {
+        /// Orchestrator thread to cancel
+        #[arg(
+            long,
+            value_name = "ID",
+            conflicts_with = "worker",
+            required_unless_present = "worker"
+        )]
+        thread: Option<String>,
+
+        /// Worker thread to cancel
+        #[arg(long, value_name = "ID")]
+        worker: Option<String>,
+
+        /// Keep the thread's waiting messages
+        #[arg(long, requires = "thread")]
+        keep_queue: bool,
+    },
+}
+
+#[derive(clap::Subcommand)]
 enum BgCommands {
     /// List background processes (running + recently exited)
     List {
@@ -402,7 +477,7 @@ enum BgCommands {
 enum ServiceCommands {
     /// Write the launchd plists and start the services
     Install {
-        /// Service to install: bot, daemon, or all
+        /// Service to install: bot, daemon, orchestrator, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
 
@@ -412,25 +487,25 @@ enum ServiceCommands {
     },
     /// Stop the services and remove their launchd plists
     Uninstall {
-        /// Service to uninstall: bot, daemon, or all
+        /// Service to uninstall: bot, daemon, orchestrator, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
     },
     /// Start a stopped service
     Start {
-        /// Service to start: bot, daemon, or all
+        /// Service to start: bot, daemon, orchestrator, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
     },
     /// Stop a service until it is explicitly started again
     Stop {
-        /// Service to stop: bot, daemon, or all
+        /// Service to stop: bot, daemon, orchestrator, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
     },
     /// Restart a service, picking up the currently installed binary
     Restart {
-        /// Service to restart: bot, daemon, or all
+        /// Service to restart: bot, daemon, orchestrator, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
 
@@ -451,7 +526,7 @@ enum ServiceCommands {
     },
     /// Show the tail of a service's captured output
     Logs {
-        /// Service to inspect: bot, daemon, or all
+        /// Service to inspect: bot, daemon, orchestrator, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
 
@@ -1410,6 +1485,9 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
         }
         Commands::Memory { command } => dispatch_memory(command, context).await,
         Commands::Jobs { command } => Box::pin(dispatch_jobs(command, context)).await,
+        Commands::Orchestrator { command } => {
+            Box::pin(dispatch_orchestrator(command, context)).await
+        }
         Commands::Mcp { command } => dispatch_mcp(command, context).await,
         Commands::Config { command } => dispatch_config(&command),
         Commands::Login {
@@ -1630,6 +1708,43 @@ async fn dispatch_memory(command: MemoryCommands, context: &DispatchContext<'_>)
             )
             .await
         }
+    }
+}
+
+async fn dispatch_orchestrator(
+    command: OrchestratorCommands,
+    context: &DispatchContext<'_>,
+) -> Result<()> {
+    let root_path = resolve_root(context.root, context.worktree_id)?;
+    match command {
+        OrchestratorCommands::Serve => commands::orchestrator::serve(&root_path).await,
+        OrchestratorCommands::Send {
+            thread,
+            prompt,
+            prompt_file,
+            profile,
+            model,
+            wait,
+        } => {
+            let prompt = resolve_exec_prompt(prompt, prompt_file.as_deref())?;
+            commands::orchestrator::send(commands::orchestrator::SendOptions {
+                root: root_path,
+                thread_id: thread.as_deref(),
+                profile: profile.as_deref(),
+                model: model.as_deref(),
+                prompt,
+                wait,
+            })
+            .await
+        }
+        OrchestratorCommands::Status { thread, json } => {
+            commands::orchestrator::status(thread.as_deref(), json).await
+        }
+        OrchestratorCommands::Cancel {
+            thread,
+            worker,
+            keep_queue,
+        } => commands::orchestrator::cancel(thread.as_deref(), worker.as_deref(), keep_queue).await,
     }
 }
 

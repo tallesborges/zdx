@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail, ensure};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{Notify, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -31,7 +32,8 @@ use crate::core::subagent::{
 use crate::core::thread_persistence;
 
 /// Lifecycle status of a managed worker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum WorkerStatus {
     /// Prompts are queued but none has started yet.
     Queued,
@@ -59,7 +61,7 @@ impl WorkerStatus {
 }
 
 /// Emitted after every finished worker prompt (one event per worker turn).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompletionEvent {
     /// Orchestrator that queued this turn; may differ from the current owner.
     pub owner_thread_id: String,
@@ -73,7 +75,8 @@ pub struct CompletionEvent {
 
 /// One live tool-activity update from a running worker turn, decoded from the
 /// child runner's stream chunks (`{"t":"start"|"input"|"done"|"error", ...}`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorkerActivity {
     ToolStarted { id: String, name: String },
     ToolInput { id: String, arg: String },
@@ -106,7 +109,8 @@ impl WorkerActivity {
 /// `Completed` for every turn: `Created` is sent before the FIFO task exists,
 /// and the runner drains all `Activity` for a turn before that turn's
 /// `Completed` is emitted.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorkerEvent {
     /// A brand-new worker thread was created via `create_worker` (re-attached
     /// workers do not re-emit this).
@@ -128,11 +132,14 @@ pub enum WorkerEvent {
     },
     /// A worker prompt finished (any terminal status).
     Completed(CompletionEvent),
+    /// Waiting prompts were removed without running (cancel, remove), so an
+    /// orchestrator may now be owed nothing more. No turn follows.
+    QueueChanged { worker_thread_id: String },
 }
 
 /// A prompt waiting in a worker's FIFO. Ids are unique per manager process
 /// and are how the orchestrator names one queued prompt to remove it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueuedPrompt {
     pub id: u64,
     pub text: String,
@@ -141,7 +148,7 @@ pub struct QueuedPrompt {
 }
 
 /// Point-in-time view of a managed worker.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerSnapshot {
     pub thread_id: String,
     pub owner_thread_id: String,
@@ -217,6 +224,8 @@ struct WorkerState {
     /// Last time this worker was created/attached, prompted, started a turn,
     /// or finished one. Orders `list_for_owner` newest first.
     touched_at: Instant,
+    /// Orchestrator that queued the running prompt; its result goes there.
+    running_requester: Option<String>,
 }
 
 impl WorkerState {
@@ -578,6 +587,7 @@ impl WorkerManager {
                         last_activity_at: None,
                         turn_started_at: None,
                         touched_at: Instant::now(),
+                        running_requester: None,
                     });
                     (state.snapshot(worker_thread_id, mirror_url), Some(wake))
                 }
@@ -611,36 +621,29 @@ impl WorkerManager {
     /// Panics if the internal worker state lock is poisoned.
     #[must_use]
     pub fn list_for_owner(&self, owner_thread_id: &str) -> Vec<WorkerSnapshot> {
+        self.list_where(|state| state.owner_thread_id == owner_thread_id)
+    }
+
+    /// Every managed worker, most recently touched first.
+    ///
+    /// # Panics
+    /// Panics if the internal worker state lock is poisoned.
+    #[must_use]
+    pub fn list_all(&self) -> Vec<WorkerSnapshot> {
+        self.list_where(|_| true)
+    }
+
+    fn list_where(&self, keep: impl Fn(&WorkerState) -> bool) -> Vec<WorkerSnapshot> {
         let map = self.state.lock().expect("worker state lock poisoned");
         let mut workers: Vec<(Instant, WorkerSnapshot)> = map
             .iter()
-            .filter(|(_, state)| state.owner_thread_id == owner_thread_id)
+            .filter(|(_, state)| keep(state))
             .map(|(id, state)| (state.touched_at, state.snapshot(id, self.mirror_url(id))))
             .collect();
         workers.sort_by(|(a_at, a), (b_at, b)| {
             b_at.cmp(a_at).then_with(|| a.thread_id.cmp(&b.thread_id))
         });
         workers.into_iter().map(|(_, snapshot)| snapshot).collect()
-    }
-
-    /// Status of every managed worker, grouped by owning thread.
-    ///
-    /// One lock and one pass, for callers that need counts across many owners
-    /// at once (the Mini App thread list) rather than per-owner snapshots.
-    ///
-    /// # Panics
-    /// Panics if the internal worker state lock is poisoned.
-    #[must_use]
-    pub fn statuses_by_owner(&self) -> HashMap<String, Vec<WorkerStatus>> {
-        let map = self.state.lock().expect("worker state lock poisoned");
-        let mut grouped: HashMap<String, Vec<WorkerStatus>> = HashMap::new();
-        for state in map.values() {
-            grouped
-                .entry(state.owner_thread_id.clone())
-                .or_default()
-                .push(state.status);
-        }
-        grouped
     }
 
     /// True when no worker is running a prompt or has one queued.
@@ -656,6 +659,26 @@ impl WorkerManager {
         let map = self.state.lock().expect("worker state lock poisoned");
         map.values()
             .all(|state| state.status != WorkerStatus::Running && state.queue.is_empty())
+    }
+
+    /// True when no prompt queued by `requester_thread_id` is waiting or
+    /// running on any worker, so no result is still owed to that thread
+    /// except one already in the event channel (completions are sent under
+    /// the lock that clears the running prompt, as for [`Self::all_idle`]).
+    /// Results route by requester, not by the current owner.
+    ///
+    /// # Panics
+    /// Panics if the internal worker state lock is poisoned.
+    #[must_use]
+    pub fn idle_for_requester(&self, requester_thread_id: &str) -> bool {
+        let map = self.state.lock().expect("worker state lock poisoned");
+        map.values().all(|state| {
+            state.running_requester.as_deref() != Some(requester_thread_id)
+                && !state
+                    .queue
+                    .iter()
+                    .any(|prompt| prompt.requester_thread_id == requester_thread_id)
+        })
     }
 
     /// Cancels the current turn (if any) and clears all queued prompts. The
@@ -682,7 +705,19 @@ impl WorkerManager {
             }
             state.snapshot(worker_thread_id, self.mirror_url(worker_thread_id))
         };
+        self.queue_changed(worker_thread_id);
         Ok(snapshot)
+    }
+
+    /// Sent after the state change, so a reader that sees the old state
+    /// still gets this event to check again.
+    fn queue_changed(&self, worker_thread_id: &str) {
+        let event = WorkerEvent::QueueChanged {
+            worker_thread_id: worker_thread_id.to_string(),
+        };
+        if self.events_tx.send(event).is_err() {
+            tracing::debug!(worker = %worker_thread_id, "Worker event channel closed");
+        }
     }
 
     /// Removes one prompt that is still waiting in a worker's FIFO. The
@@ -715,6 +750,7 @@ impl WorkerManager {
                 state.snapshot(worker_thread_id, self.mirror_url(worker_thread_id)),
             )
         };
+        self.queue_changed(worker_thread_id);
         Ok(removed)
     }
 
@@ -875,6 +911,7 @@ fn spawn_worker_task(manager: Arc<WorkerManager>, worker_thread_id: String, wake
                 state.queue.pop_front().map(|prompt| {
                     let cancel = CancellationToken::new();
                     state.current_cancel = Some(cancel.clone());
+                    state.running_requester = Some(prompt.requester_thread_id.clone());
                     state.status = WorkerStatus::Running;
                     let now = Instant::now();
                     state.turn_started_at = Some(now);
@@ -911,6 +948,7 @@ fn spawn_worker_task(manager: Arc<WorkerManager>, worker_thread_id: String, wake
                 break;
             };
             state.current_cancel = None;
+            state.running_requester = None;
             state.turn_started_at = None;
             state.touched_at = Instant::now();
             state.last_activity_at = None;
@@ -972,7 +1010,8 @@ mod tests {
                 WorkerEvent::Completed(event) => return event,
                 WorkerEvent::Created { .. }
                 | WorkerEvent::Prompted { .. }
-                | WorkerEvent::Activity { .. } => {}
+                | WorkerEvent::Activity { .. }
+                | WorkerEvent::QueueChanged { .. } => {}
             }
         }
     }
@@ -1563,6 +1602,7 @@ mod tests {
                     break;
                 }
                 WorkerEvent::Prompted { .. } => kinds.push("prompted"),
+                WorkerEvent::QueueChanged { .. } => kinds.push("queue_changed"),
             }
         }
         assert_eq!(

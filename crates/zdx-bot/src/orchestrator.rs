@@ -1,16 +1,17 @@
-//! Orchestrator worker bridge.
+//! Orchestrator service bridge.
 //!
-//! Consumes [`WorkerEvent`]s from the engine's `WorkerManager`. Workers are
-//! **silent**: a new worker gets no Telegram topic and posts nothing. The user
-//! reaches it through Mini App deep links (`?startapp=<worker_id>`) on the
-//! orchestrator's reply, pinned card, and completion notice.
+//! Orchestrator topics run in the orchestrator service (`zdx orchestrator
+//! serve`), which owns their workers and turns. This task subscribes to the
+//! service as its renderer and turns its events into Telegram output:
 //!
-//! - `Created` refreshes the owner's pinned card.
-//! - `Completed` posts a one-line notice in the orchestrator topic and wakes
-//!   it with a synthetic queued turn. Updates that arrive while the orchestrator is busy
-//!   are merged by the topic queue into one turn (see
-//!   `bot::queue::drain_worker_updates`), so a burst of completions is
-//!   reviewed once with all of them in context.
+//! - A turn the service starts on its own (a `[worker update]`, several
+//!   results batched) is rendered in the thread's route like any other turn:
+//!   status line, cancel, reply. The service holds the thread until the reply
+//!   is delivered (`Release`). Turns the bot submits itself are followed and
+//!   rendered by the message handler instead.
+//! - Workers are **silent**: a new worker gets no Telegram topic. `Created`,
+//!   `Prompted`, and `Completed` refresh the owner's pinned card; `Completed`
+//!   also posts a one-line notice in the owner's topic, linked to the worker.
 //!
 //! **Legacy mirror topics.** Workers created before silent workers may still
 //! have a mirror topic (aliased to the worker and marked `worker_topic`). The
@@ -18,38 +19,37 @@
 //! for those workers only the bridge keeps the old feed: orchestrator prompts
 //! (`Prompted`), one debounced live status line per running turn (`Activity`,
 //! carrying `⏹ Cancel worker` = `wk:c` and `💬 Open Thread`), and the final
-//! result. Messages typed in such a topic are still queued into the worker
-//! FIFO by the message handler. No new mirror topics are ever opened.
+//! result. Messages typed in such a topic are queued into the worker FIFO by
+//! the message handler. No new mirror topics are ever opened.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 use zdx_engine::core::thread_persistence;
 use zdx_engine::core::workers::{CompletionEvent, WorkerActivity, WorkerEvent, WorkerStatus};
+use zdx_engine::orchestration::client::ReplyStream;
+use zdx_engine::orchestration::protocol::{Event, Reply, Request, Route};
+use zdx_engine::orchestration::updates::truncate_chars;
 
 use crate::agent::{STATUS_WAITING, tool_running_status};
 use crate::bot::context::BotContext;
-use crate::bot::queue::ChatQueueMap;
-use crate::bot::synthetic::{SyntheticKind, dispatch_synthetic_prompt};
 use crate::handlers::message::{
     append_thread_link, escape_html, mini_app_base_url, parse_topic_thread_id,
-    refresh_thread_header, resolve_effective_thread_id, thread_id_for_chat, worker_link,
+    refresh_thread_header, render_started_turn, resolve_effective_thread_id, thread_id_for_chat,
+    worker_link,
 };
 use crate::telegram::markdown::{to_telegram_html, truncate_telegram_html};
-use crate::telegram::{
-    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, TelegramClient, topic_link,
-};
+use crate::telegram::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, TelegramClient};
 
-/// Longest worker final-text excerpt embedded in the callback prompt; the
-/// orchestrator is told to use `Read_Thread` for anything longer.
-const MAX_CALLBACK_TEXT_CHARS: usize = 2000;
 /// Longest final-text excerpt posted into a mirror topic message.
 const MAX_MIRROR_TEXT_CHARS: usize = 3500;
 /// Minimum spacing between edits of one live status message.
 const LIVE_EDIT_INTERVAL: Duration = Duration::from_secs(3);
+/// Wait before reconnecting to the orchestrator service.
+const RECONNECT_DELAY: Duration = Duration::from_secs(3);
 
 const CANCEL_CALLBACK: &str = "wk:c";
 
@@ -94,65 +94,51 @@ impl LiveTurn {
 
 struct Bridge {
     context: Arc<BotContext>,
-    queues: ChatQueueMap,
     mirrors: HashMap<String, MirrorTopic>,
     live: HashMap<String, LiveTurn>,
+    /// Turns the service started on its own and this process renders, by
+    /// turn id: where their events go.
+    turns: HashMap<u64, mpsc::UnboundedSender<Event>>,
 }
 
-/// Spawns the process-lifetime bridge task. It also performs queued restarts
-/// (see `restart_queue`), since it alone knows no completion is in flight.
-pub(crate) fn spawn_completion_bridge(
-    context: Arc<BotContext>,
-    queues: ChatQueueMap,
-    mut events_rx: UnboundedReceiver<WorkerEvent>,
-) {
+/// Spawns the process-lifetime bridge task. It reconnects whenever the
+/// service restarts or is not running yet.
+pub(crate) fn spawn_service_bridge(context: Arc<BotContext>) {
     tokio::spawn(async move {
         let mut bridge = Bridge {
             context,
-            queues,
             mirrors: HashMap::new(),
             live: HashMap::new(),
+            turns: HashMap::new(),
         };
         bridge.recover_mirrors().await;
-        let mut restart_poll = tokio::time::interval(crate::restart_queue::POLL);
-
+        let mut reported_down = false;
         loop {
-            let next_flush = bridge.next_flush_at();
-            tokio::select! {
-                event = events_rx.recv() => {
-                    let Some(event) = event else { break };
-                    bridge.handle(event).await;
+            let subscribe = Request::Subscribe { renderer: true };
+            match bridge.context.orchestrator().open(&subscribe).await {
+                Ok(stream) => {
+                    tracing::info!("Connected to the orchestrator service");
+                    reported_down = false;
+                    bridge.run(stream).await;
+                    // Turns in flight cannot finish without the service.
+                    bridge.turns.clear();
+                    tracing::warn!("Lost the connection to the orchestrator service");
                 }
-                _ = restart_poll.tick() => {
-                    // Checked on this task, between events, so a worker
-                    // completion is never half-delivered when a queued restart
-                    // fires. Order matters: idle workers have already sent their
-                    // completion, so an empty channel after that means none is
-                    // pending; a non-empty chat queue means an orchestrator turn
-                    // (including a `[worker update]`) is still queued or running.
-                    let settled = bridge.context.worker_manager().all_idle()
-                        && events_rx.is_empty()
-                        && bridge.queues.lock().await.is_empty();
-                    if settled {
-                        crate::restart_queue::tick(&bridge.context).await;
-                    }
+                Err(err) if !reported_down => {
+                    reported_down = true;
+                    tracing::warn!(err = %format!("{err:#}"), "Orchestrator service unavailable; orchestrator topics will not answer until it runs");
                 }
-                () = async {
-                    match next_flush {
-                        Some(at) => tokio::time::sleep_until(at).await,
-                        None => std::future::pending().await,
-                    }
-                } => {
-                    bridge.flush_due().await;
-                }
+                Err(_) => {}
             }
+            tokio::time::sleep(RECONNECT_DELAY).await;
         }
     });
 }
 
 impl Bridge {
     /// Rebuilds the worker→mirror map from persisted mirror-topic metadata so
-    /// feeds resume after a restart, and registers each link on the manager.
+    /// feeds resume after a restart. (The service registers the links on its
+    /// workers itself.)
     async fn recover_mirrors(&mut self) {
         let pairs = tokio::task::spawn_blocking(thread_persistence::list_worker_topics).await;
         let pairs = match pairs {
@@ -170,27 +156,93 @@ impl Bridge {
             let Some((chat, topic)) = parse_topic_thread_id(&topic_thread_id) else {
                 continue;
             };
-            let mirror = MirrorTopic { chat, topic };
-            if let Some(link) = topic_link(chat, topic) {
-                self.context
-                    .worker_manager()
-                    .set_mirror_url(&worker_thread_id, link);
-            }
-            self.mirrors.insert(worker_thread_id, mirror);
+            self.mirrors
+                .insert(worker_thread_id, MirrorTopic { chat, topic });
         }
         if !self.mirrors.is_empty() {
             tracing::info!(count = self.mirrors.len(), "Recovered worker mirror topics");
         }
     }
 
-    async fn handle(&mut self, event: WorkerEvent) {
+    async fn run(&mut self, mut stream: ReplyStream) {
+        loop {
+            let next_flush = self.next_flush_at();
+            tokio::select! {
+                reply = stream.next() => {
+                    match reply {
+                        Ok(Some(Reply::Event { event })) => self.handle(event).await,
+                        Ok(Some(_)) => {}
+                        Ok(None) => return,
+                        Err(err) => {
+                            tracing::warn!(err = %format!("{err:#}"), "Bad message from the orchestrator service");
+                            return;
+                        }
+                    }
+                }
+                () = async {
+                    match next_flush {
+                        Some(at) => tokio::time::sleep_until(at).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    self.flush_due().await;
+                }
+            }
+        }
+    }
+
+    async fn handle(&mut self, event: Event) {
         match event {
-            WorkerEvent::Created {
-                owner_thread_id, ..
+            Event::TurnStarted {
+                thread_id,
+                turn_id,
+                route: Some(route),
+                followed: false,
+                ..
             } => {
+                let (tx, rx) = mpsc::unbounded_channel();
+                self.turns.insert(turn_id, tx);
+                tokio::spawn(render_started_turn(
+                    Arc::clone(&self.context),
+                    thread_id,
+                    turn_id,
+                    route,
+                    rx,
+                ));
+            }
+            Event::Agent { turn_id, .. } => {
+                if let Some(tx) = self.turns.get(&turn_id) {
+                    let _ = tx.send(event);
+                }
+            }
+            Event::TurnEnded { turn_id, .. } => {
+                if let Some(tx) = self.turns.remove(&turn_id) {
+                    let _ = tx.send(event);
+                }
+            }
+            Event::Worker {
+                owner_thread_id,
+                route,
+                event,
+            } => {
+                self.handle_worker(owner_thread_id.as_deref(), route, event)
+                    .await;
+            }
+            Event::TurnStarted { .. } | Event::InputsDropped { .. } | Event::Settled { .. } => {}
+        }
+    }
+
+    async fn handle_worker(
+        &mut self,
+        owner: Option<&str>,
+        route: Option<Route>,
+        event: WorkerEvent,
+    ) {
+        match event {
+            WorkerEvent::Created { .. } | WorkerEvent::QueueChanged { .. } => {
                 // Workers are silent: no Telegram topic is opened for them.
                 // Only the owner's pinned card changes.
-                refresh_thread_header(&self.context, &owner_thread_id).await;
+                self.refresh_owner_header(owner).await;
             }
             WorkerEvent::Prompted {
                 worker_thread_id,
@@ -203,13 +255,17 @@ impl Bridge {
                     &prompt,
                 )
                 .await;
-                self.refresh_owner_header_of(&worker_thread_id).await;
+                self.refresh_owner_header(owner).await;
             }
             WorkerEvent::Activity {
                 worker_thread_id,
                 activity,
             } => {
-                self.handle_activity(&worker_thread_id, activity).await;
+                if self.handle_activity(&worker_thread_id, activity).await {
+                    // First activity of a turn: the worker just went queued →
+                    // running.
+                    self.refresh_owner_header(owner).await;
+                }
             }
             WorkerEvent::Completed(event) => {
                 self.finish_live_turn(&event).await;
@@ -219,30 +275,38 @@ impl Bridge {
                     &event,
                 )
                 .await;
-                dispatch_owner_callback(&self.context, &self.queues, &event).await;
+                // Self-owned workers (re-attached from a mirror topic) have no
+                // orchestrator to wake; the mirror post is the whole delivery.
+                if event.owner_thread_id != event.worker_thread_id
+                    && let Some(route) = route
+                {
+                    post_update_notice(&self.context, route, &event).await;
+                }
                 refresh_thread_header(&self.context, &event.owner_thread_id).await;
             }
         }
     }
 
-    /// Refreshes the pinned card of whichever orchestrator owns `worker` (the
+    /// Refreshes the pinned card of the orchestrator that owns a worker (the
     /// card carries the live worker summary).
-    async fn refresh_owner_header_of(&self, worker_thread_id: &str) {
-        if let Some(snapshot) = self.context.worker_manager().snapshot(worker_thread_id) {
-            refresh_thread_header(&self.context, &snapshot.owner_thread_id).await;
+    async fn refresh_owner_header(&self, owner: Option<&str>) {
+        if let Some(owner) = owner {
+            refresh_thread_header(&self.context, owner).await;
         }
     }
 
-    async fn handle_activity(&mut self, worker_thread_id: &str, activity: WorkerActivity) {
+    /// Feeds a legacy mirror topic's live status line. Returns whether this
+    /// is the first activity seen for the worker's current turn.
+    async fn handle_activity(&mut self, worker_thread_id: &str, activity: WorkerActivity) -> bool {
         if let Some(turn) = self.live.get_mut(worker_thread_id) {
             if turn.apply(&activity) && turn.last_edit.elapsed() >= LIVE_EDIT_INTERVAL {
                 self.flush(worker_thread_id).await;
             }
-            return;
+            return false;
         }
 
         let Some(mirror) = self.mirrors.get(worker_thread_id).copied() else {
-            return;
+            return false;
         };
         let mut turn = LiveTurn {
             mirror,
@@ -274,8 +338,7 @@ impl Bridge {
                 tracing::warn!(worker = %worker_thread_id, err = %format!("{err:#}"), "Failed to post live status message");
             }
         }
-        // First activity of a turn: the worker just went queued → running.
-        self.refresh_owner_header_of(worker_thread_id).await;
+        true
     }
 
     fn next_flush_at(&self) -> Option<Instant> {
@@ -398,12 +461,15 @@ pub(crate) async fn handle_callback(
         return;
     }
     let worker_thread_id = resolve_effective_thread_id(&topic_thread_id);
-    match context.worker_manager().cancel(&worker_thread_id) {
-        Ok(_) => {
+    let request = Request::CancelWorker {
+        thread_id: worker_thread_id.clone(),
+    };
+    match context.orchestrator().call(&request).await {
+        Ok(Reply::Worker { .. }) => {
             tracing::info!(worker = %worker_thread_id, chat_id, topic_id, "Worker cancelled from mirror topic");
             answer("Cancelling worker…").await;
         }
-        Err(_) => answer("Worker is idle; nothing to cancel").await,
+        _ => answer("Worker is idle; nothing to cancel").await,
     }
 }
 
@@ -469,29 +535,10 @@ async fn post_mirror_update(
     }
 }
 
-/// Wakes the owning orchestrator topic with a synthetic `[worker update]` turn.
-async fn dispatch_owner_callback(
-    context: &Arc<BotContext>,
-    queues: &ChatQueueMap,
-    event: &CompletionEvent,
-) {
-    // Self-owned workers (re-attached from a mirror topic) have no
-    // orchestrator to wake; the mirror post is the whole delivery.
-    if event.owner_thread_id == event.worker_thread_id {
-        return;
-    }
-    let Some(route) = context.orchestrator_route(&event.owner_thread_id) else {
-        tracing::warn!(
-            worker = %event.worker_thread_id,
-            owner = %event.owner_thread_id,
-            "No orchestrator route for worker completion; dropping callback"
-        );
-        return;
-    };
-
-    // The synthetic prompt itself is invisible in chat, so post a one-line
-    // notice first: the user sees which worker woke the orchestrator and can
-    // open it.
+/// Posts the one-line notice for a finished worker in its orchestrator's
+/// topic. The review turn that follows is started by the service and
+/// rendered from its events, so the user sees which worker woke it.
+async fn post_update_notice(context: &BotContext, route: Route, event: &CompletionEvent) {
     let link = worker_link(
         event.mirror_url.clone(),
         mini_app_base_url(context, route.chat).as_deref(),
@@ -504,35 +551,6 @@ async fn dispatch_owner_callback(
         .await
     {
         tracing::warn!(worker = %event.worker_thread_id, err = %format!("{err:#}"), "Failed to post worker update notice");
-    }
-
-    let config = context.config_for_chat(route.chat);
-    let worker_context = zdx_engine::tools::orchestrator::thread_context_json(
-        &event.worker_thread_id,
-        Some(&config),
-    );
-    let prompt = build_worker_update_prompt(event, &worker_context);
-    let dispatched = dispatch_synthetic_prompt(
-        context,
-        queues,
-        route.chat,
-        route.topic,
-        route.user,
-        prompt,
-        SyntheticKind::WorkerUpdate,
-    )
-    .await;
-    if dispatched {
-        tracing::info!(
-            worker = %event.worker_thread_id,
-            status = event.status.as_str(),
-            "Dispatched worker completion callback"
-        );
-    } else {
-        tracing::warn!(
-            worker = %event.worker_thread_id,
-            "Failed to dispatch worker completion callback"
-        );
     }
 }
 
@@ -554,87 +572,6 @@ fn worker_update_notice(event: &CompletionEvent, link: Option<&str>) -> String {
         _ => ("❌", "failed"),
     };
     format!("{glyph} Worker 🛠 {worker} {verb} · reviewing…")
-}
-
-/// Compact synthetic prompt describing one finished worker turn.
-///
-/// `worker_context` is the [`zdx_engine::tools::orchestrator::thread_context_json`]
-/// value for the worker: the latest recorded request's input tokens with its
-/// limit and percentage. It is rendered as its own metadata section after the
-/// final message, never merged into it, with no cutoff and no recommendation.
-fn build_worker_update_prompt(
-    event: &CompletionEvent,
-    worker_context: &serde_json::Value,
-) -> String {
-    let worker = &event.worker_thread_id;
-    let status = event.status.as_str();
-
-    let mut prompt = format!(
-        "[worker update] Worker thread `{worker}` finished a turn with status: {status}.\n"
-    );
-    match event.status {
-        WorkerStatus::Completed => {
-            let text = event.final_text.as_deref().unwrap_or_default();
-            prompt.push_str("\nFinal message:\n");
-            prompt.push_str(&truncate_chars(text, MAX_CALLBACK_TEXT_CHARS));
-            prompt.push('\n');
-        }
-        _ => {
-            if let Some(error) = event.error.as_deref() {
-                prompt.push_str("\nError:\n");
-                prompt.push_str(&truncate_chars(error, MAX_CALLBACK_TEXT_CHARS));
-                prompt.push('\n');
-            }
-        }
-    }
-    prompt.push_str(&worker_context_section(worker_context));
-    prompt
-}
-
-/// Runtime context-usage metadata for a worker completion prompt.
-///
-/// Same basis as `Get_Thread_Status`: the latest recorded request's input
-/// tokens (including cache reads/writes), not cumulative spend, with output
-/// tokens excluded. Unknown usage renders as `unknown`, never `0%`; known
-/// tokens without a resolvable limit keep the tokens with the limit unknown.
-/// Deliberately reports only: no cutoff, no fresh-thread recommendation.
-fn worker_context_section(worker_context: &serde_json::Value) -> String {
-    let input = worker_context
-        .get("input_tokens")
-        .and_then(serde_json::Value::as_u64);
-    let limit = worker_context
-        .get("context_limit")
-        .and_then(serde_json::Value::as_u64)
-        .filter(|limit| *limit > 0);
-    let percent = worker_context
-        .get("percent_used")
-        .and_then(serde_json::Value::as_f64)
-        .filter(|percent| percent.is_finite());
-    match (input, limit, percent) {
-        (Some(input), Some(limit), Some(percent)) => format!(
-            "\nWorker context: ~{:.0}% used ({} / {} tokens)\nBasis: last recorded request input\n",
-            percent,
-            format_compact_tokens(input),
-            format_compact_tokens(limit)
-        ),
-        (Some(input), _, _) => format!(
-            "\nWorker context: {} tokens recorded (limit unknown)\nBasis: last recorded request input\n",
-            format_compact_tokens(input)
-        ),
-        (None, _, _) => "\nWorker context: unknown (no recorded request input)\n".to_string(),
-    }
-}
-
-/// Compact token count for prompts (`120k`, `1M`); an estimate, so whole
-/// units are enough.
-fn format_compact_tokens(tokens: u64) -> String {
-    if tokens >= 1_000_000 {
-        format!("{:.0}M", tokens as f64 / 1_000_000.0)
-    } else if tokens >= 1_000 {
-        format!("{:.0}k", tokens as f64 / 1_000.0)
-    } else {
-        tokens.to_string()
-    }
 }
 
 fn summarize_worker_error(error: &str) -> String {
@@ -694,14 +631,6 @@ fn strip_ansi_escapes(s: &str) -> String {
     out
 }
 
-fn truncate_chars(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-    let head: String = text.chars().take(max_chars).collect();
-    format!("{head}… [truncated — use Read_Thread for the rest]")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -715,108 +644,6 @@ mod tests {
             error: None,
             mirror_url: None,
         }
-    }
-
-    #[test]
-    fn completed_prompt_carries_final_text_without_topic_link() {
-        let prompt = build_worker_update_prompt(
-            &CompletionEvent {
-                final_text: Some("all done".to_string()),
-                mirror_url: Some("https://t.me/c/1/2".to_string()),
-                ..completion(WorkerStatus::Completed)
-            },
-            &serde_json::Value::Null,
-        );
-        assert!(prompt.starts_with("[worker update]"));
-        assert!(prompt.contains("`worker-1`"));
-        assert!(prompt.contains("status: completed"));
-        assert!(!prompt.contains("https://t.me/c/1/2"));
-        assert!(prompt.contains("all done"));
-        assert!(prompt.contains("Worker context: unknown"));
-    }
-
-    #[test]
-    fn failed_prompt_carries_error_and_bounds_length() {
-        let prompt = build_worker_update_prompt(
-            &CompletionEvent {
-                error: Some("x".repeat(10_000)),
-                ..completion(WorkerStatus::Failed)
-            },
-            &serde_json::Value::Null,
-        );
-        assert!(prompt.contains("status: failed"));
-        assert!(prompt.contains("[truncated"));
-        assert!(prompt.chars().count() < 3100);
-    }
-
-    #[test]
-    fn worker_context_reports_percent_and_basis() {
-        let prompt = build_worker_update_prompt(
-            &CompletionEvent {
-                final_text: Some("all done".to_string()),
-                ..completion(WorkerStatus::Completed)
-            },
-            &serde_json::json!({
-                "input_tokens": 120_000,
-                "context_limit": 200_000,
-                "percent_used": 60.0,
-                "basis": "last_recorded_request_input",
-            }),
-        );
-        assert!(prompt.contains("Worker context: ~60% used (120k / 200k tokens)"));
-        assert!(prompt.contains("Basis: last recorded request input"));
-    }
-
-    #[test]
-    fn worker_context_unknown_is_never_zero_percent() {
-        let prompt = build_worker_update_prompt(
-            &completion(WorkerStatus::Completed),
-            &serde_json::Value::Null,
-        );
-        assert!(prompt.contains("Worker context: unknown"));
-        assert!(!prompt.contains("0%"));
-    }
-
-    #[test]
-    fn worker_context_keeps_tokens_when_limit_is_unknown() {
-        let prompt = build_worker_update_prompt(
-            &completion(WorkerStatus::Completed),
-            &serde_json::json!({ "input_tokens": 120_000 }),
-        );
-        assert!(prompt.contains("120k tokens recorded (limit unknown)"));
-        assert!(prompt.contains("Basis: last recorded request input"));
-        assert!(!prompt.contains("used ("));
-    }
-
-    /// The metadata is its own section after the final answer: it must not be
-    /// merged into the worker's text, and it reports only with no cutoff or
-    /// fresh-thread recommendation.
-    #[test]
-    fn worker_context_is_separate_metadata_without_recommendation() {
-        let prompt = build_worker_update_prompt(
-            &CompletionEvent {
-                final_text: Some("shipped it".to_string()),
-                ..completion(WorkerStatus::Completed)
-            },
-            &serde_json::json!({
-                "input_tokens": 120_000,
-                "context_limit": 200_000,
-                "percent_used": 60.0,
-                "basis": "last_recorded_request_input",
-            }),
-        );
-        let final_at = prompt.find("Final message:").expect("final answer section");
-        let context_at = prompt
-            .find("Worker context:")
-            .expect("context metadata section");
-        assert!(
-            final_at < context_at,
-            "context metadata follows the final answer, it is not part of it"
-        );
-        assert!(prompt.contains("shipped it"));
-        assert!(!prompt.contains("thread size"));
-        assert!(!prompt.contains("fresh thread"));
-        assert!(!prompt.contains("new thread"));
     }
 
     #[test]

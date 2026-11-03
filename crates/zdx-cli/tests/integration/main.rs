@@ -18,6 +18,7 @@ mod login_logout;
 mod memory_embed;
 mod memory_relevance;
 mod opencode_go_headers;
+mod orchestrator;
 mod quota;
 mod responses_usage;
 mod service;

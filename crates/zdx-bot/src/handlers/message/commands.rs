@@ -263,10 +263,10 @@ pub(super) async fn handle_restart_command(
             .context("join queue restart task")?;
             let text = match outcome {
                 Ok(outcome) if outcome.already_pending => format!(
-                    "⏳ A restart is already queued; it fires once no agent run, worker, or pending worker update is left ({active} agent runs active now) and will be announced here."
+                    "⏳ A restart is already queued; it fires once no agent run, worker, or pending orchestrator turn is left ({active} agent runs active now) and will be announced here."
                 ),
                 Ok(_) => format!(
-                    "⏳ Restart queued. I'll restart once no agent run, worker, or pending worker update is left ({active} agent runs active now).\n\n<code>/restart f</code> restarts immediately instead."
+                    "⏳ Restart queued. I'll restart once no agent run, worker, or pending orchestrator turn is left ({active} agent runs active now).\n\n<code>/restart f</code> restarts immediately instead."
                 ),
                 Err(err) => format!(
                     "⚠️ Couldn't queue the restart.\n<code>{}</code>",
@@ -295,7 +295,7 @@ pub(super) async fn handle_restart_command(
                 }
                 RestartAttempt::Failed(error) => {
                     reply(format!(
-                        "⚠️ Daemon restart failed, so I left the bot running.\n<code>{error}</code>"
+                        "⚠️ Service restart failed, so I left the bot running.\n<code>{error}</code>"
                     ))
                     .await?;
                 }
@@ -913,6 +913,20 @@ async fn handle_thread_commands(
                     .send_message(
                         incoming.chat_id,
                         "/new is not allowed in topics.",
+                        reply_to_message_id,
+                        topic_id,
+                    )
+                    .await?;
+                return Ok(true);
+            }
+            // The orchestrator service owns this thread; deleting it under a
+            // running service turn or worker review would lose its profile.
+            if zdx_engine::core::thread_persistence::read_persistent_profile(thread_id)?.is_some() {
+                context
+                    .client()
+                    .send_message(
+                        incoming.chat_id,
+                        "/new is not available in an orchestrator thread. Start a new thread instead.",
                         reply_to_message_id,
                         topic_id,
                     )

@@ -429,7 +429,11 @@ async fn current_status_message_with_heading(
     let events = thread_persistence::load_thread_events(thread_id)?;
     let (cumulative_usage, latest_usage) =
         thread_persistence::extract_usage_from_thread_events(&events);
-    let workers = is_orchestrator.then(|| context.worker_manager().list_for_owner(thread_id));
+    let workers = if is_orchestrator {
+        Some(context.orchestrator().workers(Some(thread_id)).await)
+    } else {
+        None
+    };
     let mini_app_url = super::mini_app_base_url(context, chat_id);
     Ok(format_status_message_with_heading(
         &StatusSnapshot {

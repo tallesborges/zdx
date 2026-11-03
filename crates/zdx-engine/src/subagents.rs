@@ -537,24 +537,71 @@ pub fn load_builtin_orchestrator() -> Result<SubagentDefinition> {
 /// profile runs — and reports — a real model id; an unknown mode is logged and
 /// leaves the chat's model in place.
 pub fn apply_orchestrator_override(config: &mut crate::config::Config) {
-    let Some(over) = config
+    let model = config
         .subagents
         .overrides
         .get(ORCHESTRATOR_SUBAGENT_NAME)
-        .cloned()
-    else {
-        return;
+        .and_then(|over| over.model.clone());
+    if let Some(model) = model {
+        apply_model_ref(config, &model);
+    }
+}
+
+/// Loads a persistent top-level profile: the reserved built-in `orchestrator`,
+/// or a user/project subagent file with that name. A profile must declare its
+/// tools, so a typo or a missing list never falls back to the default coding
+/// toolset.
+///
+/// # Errors
+/// Returns an error if the profile cannot be found or parsed, or declares no
+/// tools.
+pub fn load_persistent_profile(root: &Path, name: &str) -> Result<SubagentDefinition> {
+    let definition = if name.trim() == ORCHESTRATOR_SUBAGENT_NAME {
+        load_builtin_orchestrator()?
+    } else {
+        resolve_named(root, name, None).with_context(|| format!("load profile '{name}'"))?
     };
-    let Some(model) = over.model else {
-        return;
-    };
-    let spec = match config.resolve_mode_ref(&model) {
-        None => model.clone(),
+    if definition.tools.as_ref().is_none_or(Vec::is_empty) {
+        bail!(
+            "Profile '{}' declares no tools; refusing to fall back to the default toolset",
+            definition.name
+        );
+    }
+    Ok(definition)
+}
+
+/// Applies a persistent profile's model choice on top of the base config:
+/// the profile's own `model`, then `[subagents.overrides.<name>]`. For the
+/// built-in orchestrator, which declares no model, this is exactly
+/// [`apply_orchestrator_override`].
+pub fn apply_persistent_profile_model(
+    config: &mut crate::config::Config,
+    definition: &SubagentDefinition,
+) {
+    if let Some(model) = definition.model.clone() {
+        apply_model_ref(config, &model);
+    }
+    let model = config
+        .subagents
+        .overrides
+        .get(&definition.name)
+        .and_then(|over| over.model.clone());
+    if let Some(model) = model {
+        apply_model_ref(config, &model);
+    }
+}
+
+/// Applies a model spec or `mode:<name>` reference. A mode resolves to its
+/// primary spec first, so the profile runs (and reports) a real model id; an
+/// unknown mode is logged and leaves the current model in place.
+fn apply_model_ref(config: &mut crate::config::Config, model: &str) {
+    let spec = match config.resolve_mode_ref(model) {
+        None => model.to_string(),
         Some(Ok(primary)) => primary.to_string(),
         Some(Err(name)) => {
             tracing::warn!(
                 mode = name,
-                "orchestrator override names an unknown model mode; keeping the chat's model"
+                "profile model names an unknown model mode; keeping the current model"
             );
             return;
         }

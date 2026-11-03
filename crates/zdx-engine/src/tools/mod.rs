@@ -188,8 +188,10 @@ impl BackgroundExecution {
 /// process must not exit while the job is still running. A surface qualifies in
 /// one of two ways:
 ///
-/// - it outlives the run: the interactive TUI (`chat`) and the bot daemon
-///   (`telegram`) keep running and can poll or kill the job afterwards;
+/// - it outlives the run: the interactive TUI (`chat`), the bot daemon
+///   (`telegram`), and the orchestrator service (`orchestrator`, which also
+///   runs Telegram-routed turns as `telegram`) keep running and can poll or
+///   kill the job afterwards;
 /// - it drains before exiting: `zdx exec` — which is also how orchestrator
 ///   workers and the `invoke_subagent` children that opt into background
 ///   commands run — waits for adopted jobs to finish at the end of the
@@ -200,7 +202,7 @@ impl BackgroundExecution {
 /// direction stays "wait in the foreground like before".
 #[must_use]
 pub fn surface_keeps_background_jobs(surface: Option<&str>) -> bool {
-    matches!(surface, Some("chat" | "telegram" | "exec"))
+    matches!(surface, Some("chat" | "telegram" | "exec" | "orchestrator"))
 }
 
 impl ToolContext {
@@ -511,8 +513,8 @@ impl ToolRegistry {
         self.register_tool(Grep);
         self.register_tool(Glob);
         // Orchestrator thread controls: unbound stubs so schemas and tool-name
-        // validation exist everywhere; the bot rebinds them to a live
-        // WorkerManager via `register_boxed`.
+        // validation exist everywhere; the orchestrator service rebinds them
+        // to its live WorkerManager via `register_boxed`.
         for tool in orchestrator::OrchestratorTool::stubs() {
             self.register_tool(tool);
         }

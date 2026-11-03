@@ -23,6 +23,10 @@ monitor:
 bot:
     cargo run -p zdx -- bot
 
+# Run the orchestrator service (orchestrator topics in the bot need it)
+orchestrator:
+    cargo run -p zdx -- orchestrator serve
+
 # Run jobs commands (pass extra args: just jobs list)
 jobs *ARGS:
     cargo run -p zdx -- jobs {{ARGS}}

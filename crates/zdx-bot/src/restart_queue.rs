@@ -2,9 +2,10 @@
 //! `/restart q` or `zdx service restart --queue`) once the machine is idle.
 //!
 //! The bot owns this because a queued restart must outlive the agent run that
-//! asked for it, and the bot is the process that restarts by exiting. The
-//! worker bridge drives it, because only that task can tell that no worker
-//! completion is still waiting to reach its orchestrator.
+//! asked for it, and the bot is the process that restarts by exiting. It acts
+//! only once the orchestrator service reports itself settled (no worker
+//! running or queued, no worker result waiting, no orchestrator turn queued,
+//! running, or being delivered) and the bot's own chat queues are empty.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -12,35 +13,85 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use zdx_engine::agent_activity;
+use zdx_engine::orchestration::protocol::{Reply, Request};
 use zdx_engine::service::{self, QueuedRestart, Service};
 
 use crate::bot::context::BotContext;
+use crate::bot::queue::ChatQueueMap;
 use crate::handlers::message::{escape_html, parse_topic_thread_id};
 
-/// How often the worker bridge checks for a queued restart.
-pub(crate) const POLL: Duration = Duration::from_secs(3);
+/// How often the poller checks for a queued restart.
+const POLL: Duration = Duration::from_secs(3);
 
 pub(crate) enum RestartAttempt {
-    /// Daemon restarted (status text, HTML-escaped); the bot should exit.
+    /// Daemon (and orchestrator service, when installed) restarted (status
+    /// text, HTML-escaped); the bot should exit.
     Restarting(String),
     /// Refused because this many agent runs are active.
     Blocked(usize),
-    /// Daemon restart failed (error text, HTML-escaped); the bot stays up.
+    /// A restart failed (error text, HTML-escaped); the bot stays up.
     Failed(String),
 }
 
-/// Restarts the daemon (gated unless `force`) without exiting the bot.
+/// Restarts the daemon and the orchestrator service when it is installed
+/// (gated unless `force`), without exiting the bot.
 pub(crate) async fn attempt_restart(force: bool) -> Result<RestartAttempt> {
-    let outcome = tokio::task::spawn_blocking(move || service::restart(Service::Daemon, force))
+    let mut services = vec![Service::Daemon];
+    if service::state(Service::Orchestrator).installed {
+        services.push(Service::Orchestrator);
+    }
+    restart_services(services, force).await
+}
+
+async fn restart_services(services: Vec<Service>, force: bool) -> Result<RestartAttempt> {
+    let outcome = tokio::task::spawn_blocking(move || service::restart_many(&services, force))
         .await
-        .context("join daemon restart task")?;
+        .context("join service restart task")?;
     Ok(match outcome {
-        Ok(status) => RestartAttempt::Restarting(escape_html(&status)),
+        Ok(status) => RestartAttempt::Restarting(escape_html(&status.join(", "))),
         Err(err) => match err.downcast_ref::<service::RestartBlocked>() {
             Some(blocked) => RestartAttempt::Blocked(blocked.active_runs()),
             None => RestartAttempt::Failed(escape_html(&format!("{err:#}"))),
         },
     })
+}
+
+/// Checks for a queued restart every few seconds, acting only when nothing
+/// could be lost: the orchestrator service is settled (or not running) and no
+/// chat queue holds a message or a running turn.
+pub(crate) fn spawn_poller(context: Arc<BotContext>, queues: ChatQueueMap) {
+    tokio::spawn(async move {
+        let mut poll = tokio::time::interval(POLL);
+        loop {
+            poll.tick().await;
+            if orchestrator_settled(&context).await && queues.lock().await.is_empty() {
+                tick(&context).await;
+            }
+        }
+    });
+}
+
+/// Whether the orchestrator service has nothing in flight. A service that is
+/// not running has nothing to lose.
+async fn orchestrator_settled(context: &BotContext) -> bool {
+    if !context.orchestrator().socket().exists() {
+        return true;
+    }
+    match context
+        .orchestrator()
+        .call(&Request::Status { thread_id: None })
+        .await
+    {
+        Ok(Reply::Status { report }) => report.settled,
+        Ok(_) => false,
+        Err(err) => {
+            tracing::debug!(err = %format!("{err:#}"), "Orchestrator service status unavailable");
+            !matches!(
+                zdx_engine::pidfile::status(Service::Orchestrator.name()),
+                zdx_engine::pidfile::ServiceStatus::Running { .. }
+            )
+        }
+    }
 }
 
 enum Pending {
@@ -74,10 +125,10 @@ fn check_pending() -> Pending {
 
 /// Performs a pending queued restart when no agent run is active.
 ///
-/// Called only by the worker bridge (`orchestrator.rs`) once it has seen no
-/// running or queued worker, no undelivered completion, and no queued or
-/// running bot turn; this adds the cross-process `agent_activity` check.
-pub(crate) async fn tick(context: &Arc<BotContext>) {
+/// Called only by the poller once the orchestrator service is settled and no
+/// bot turn is queued or running; this adds the cross-process
+/// `agent_activity` check.
+async fn tick(context: &Arc<BotContext>) {
     if let Err(err) = try_tick(context).await {
         tracing::warn!(err = %format!("{err:#}"), "Queued restart check failed");
     }
@@ -107,9 +158,15 @@ async fn try_tick(context: &Arc<BotContext>) -> Result<()> {
         return Ok(());
     }
 
+    let services: Vec<Service> = [Service::Daemon, Service::Orchestrator]
+        .into_iter()
+        .filter(|svc| request.includes(*svc))
+        // `all` includes the orchestrator; skip it where it is not installed.
+        .filter(|svc| *svc != Service::Orchestrator || service::state(*svc).installed)
+        .collect();
     let mut status = None;
-    if request.includes(Service::Daemon) {
-        match attempt_restart(false).await? {
+    if !services.is_empty() {
+        match restart_services(services, false).await? {
             RestartAttempt::Restarting(text) => status = Some(text),
             // A run started after the idle check; the gate caught it, so wait again.
             RestartAttempt::Blocked(_) => return Ok(()),

@@ -1340,8 +1340,9 @@ mod tests {
         HashMap::from([(THREAD.to_string(), session_for(command, 50, Instant::now()))])
     }
 
-    /// Regression: a worker update arriving while `/handoff` (or any staged
-    /// command) waits for the user's input must not be taken as that input.
+    /// Regression: a bot-generated prompt (Mini App feedback) arriving while
+    /// `/handoff` (or any staged command) waits for the user's input must not
+    /// be taken as that input.
     /// Synthetic ids count down from `i64::MAX`, so the id check alone passes.
     #[test]
     fn synthetic_prompt_is_never_staged_input() {
@@ -1381,8 +1382,8 @@ mod tests {
         assert!(sessions.is_empty());
     }
 
-    /// A worker update must stay in the topic queue, not skip it as the
-    /// question a live `/btw` session is waiting for.
+    /// A bot-generated prompt must stay in the topic queue, not skip it as
+    /// the question a live `/btw` session is waiting for.
     #[test]
     fn synthetic_prompt_does_not_route_as_btw_input() {
         let sessions = live_sessions(StagingCommand::Btw);

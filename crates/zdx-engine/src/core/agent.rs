@@ -1221,6 +1221,14 @@ async fn run_turn_inner(
     sender: &EventSender,
     cancel: Option<&CancellationToken>,
 ) -> RunTurnResult {
+    // A persistent-profile thread has one writer: the orchestrator service.
+    // Any other run on it would interleave with the service's turns.
+    if let Some(thread_id) = thread_id
+        && options.activity_kind.as_deref() != Some(crate::orchestration::ACTIVITY_KIND)
+        && let Err(err) = crate::orchestration::ensure_direct_run_allowed(thread_id)
+    {
+        return Err((TurnError::from_anyhow(err), messages));
+    }
     let mut setup = build_run_turn_setup(config, options, thread_id, &messages, None)
         .map_err(|e| (TurnError::from_anyhow(e), messages.clone()))?;
     // Background work started by this turn's tool calls is stopped when the

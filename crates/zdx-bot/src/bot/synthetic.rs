@@ -1,17 +1,12 @@
 //! Synthetic Telegram messages.
 //!
 //! Bot-generated prompts dispatched through a topic's normal per-topic queue,
-//! exactly like a real user message. Used by orchestrator worker-completion
-//! callbacks and Mini App artifact feedback, with one id counter and one
-//! dispatch path.
+//! exactly like a real user message (Mini App artifact feedback), and the id
+//! counter shared with orchestrator turns the service starts on its own.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use serde_json::json;
-
-use crate::bot::context::BotContext;
-use crate::bot::queue::{ChatQueueMap, dispatch_message};
 
 /// Message ids for synthetic continuations. Counted down from `i64::MAX` so
 /// they cannot collide with real Telegram ids, which the status and cancel maps
@@ -19,15 +14,17 @@ use crate::bot::queue::{ChatQueueMap, dispatch_message};
 static SYNTHETIC_MESSAGE_ID: AtomicI64 = AtomicI64::new(i64::MAX);
 
 /// What produced a synthetic prompt.
-///
-/// Worker updates are mergeable: several of them waiting behind a running turn
-/// are handled together in one turn instead of one turn each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SyntheticKind {
-    WorkerUpdate,
     /// Annotations the user sent from the Mini App artifact preview. Runs as
     /// its own turn, like a user message.
     ArtifactFeedback,
+}
+
+/// A fresh synthetic message id: never a real Telegram id, so status and
+/// cancel maps keyed by it cannot collide with a user's message.
+pub(crate) fn next_synthetic_id() -> i64 {
+    SYNTHETIC_MESSAGE_ID.fetch_sub(1, Ordering::Relaxed)
 }
 
 /// Builds the synthetic Telegram message value. The chat type is derived from
@@ -67,7 +64,7 @@ pub(crate) fn build_synthetic_message(
     prompt: &str,
     kind: SyntheticKind,
 ) -> Option<crate::telegram::Message> {
-    let message_id = SYNTHETIC_MESSAGE_ID.fetch_sub(1, Ordering::Relaxed);
+    let message_id = next_synthetic_id();
     let value = build_synthetic_value(chat, topic, user, message_id, prompt);
     match serde_json::from_value::<crate::telegram::Message>(value) {
         Ok(mut message) => {
@@ -79,24 +76,6 @@ pub(crate) fn build_synthetic_message(
             None
         }
     }
-}
-
-/// Builds a synthetic user message and dispatches it through the topic's
-/// existing queue. Returns `false` when the message could not be built.
-pub(crate) async fn dispatch_synthetic_prompt(
-    context: &Arc<BotContext>,
-    queues: &ChatQueueMap,
-    chat: i64,
-    topic: Option<i64>,
-    user: i64,
-    prompt: String,
-    kind: SyntheticKind,
-) -> bool {
-    let Some(message) = build_synthetic_message(chat, topic, user, &prompt, kind) else {
-        return false;
-    };
-    dispatch_message(queues, context, message).await;
-    true
 }
 
 #[cfg(test)]

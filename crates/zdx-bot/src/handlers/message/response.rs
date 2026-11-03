@@ -42,7 +42,7 @@ pub(super) async fn send_final_response(
     status_message_id: Option<i64>,
     final_text: &str,
     thread_id: &str,
-    touched_workers: &[String],
+    touched_workers: &[TouchedWorker],
     thread: &mut Thread,
 ) -> Result<()> {
     let parsed = parse_final_response(final_text);
@@ -571,25 +571,28 @@ pub(crate) fn worker_link(
 /// Appends one `🛠 <title>` link per worker this turn created or messaged, so
 /// the user can follow the work without relying on the model to mention it.
 /// See [`worker_link`] for where each link points.
+/// A worker an orchestrator turn created or messaged, with its legacy mirror
+/// topic link when it has one.
+pub(super) struct TouchedWorker {
+    pub(super) id: String,
+    pub(super) mirror_url: Option<String>,
+}
+
 fn with_worker_links(
     context: &BotContext,
     chat_id: i64,
-    touched_workers: &[String],
+    touched_workers: &[TouchedWorker],
     text: &str,
 ) -> String {
     let mini_app = super::mini_app_base_url(context, chat_id);
     let links: Vec<(String, String)> = touched_workers
         .iter()
         .filter_map(|worker| {
-            let url = worker_link(
-                context.worker_manager().mirror_url(worker),
-                mini_app.as_deref(),
-                worker,
-            )?;
-            let title = thread_persistence::read_thread_title(worker)
+            let url = worker_link(worker.mirror_url.clone(), mini_app.as_deref(), &worker.id)?;
+            let title = thread_persistence::read_thread_title(&worker.id)
                 .ok()
                 .flatten()
-                .unwrap_or_else(|| worker.chars().take(8).collect());
+                .unwrap_or_else(|| worker.id.chars().take(8).collect());
             Some((title, url))
         })
         .collect();
