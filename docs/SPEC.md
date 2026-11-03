@@ -199,6 +199,8 @@ Threads are append-only **JSONL** event logs (thread events are never modified o
 
 The `meta` line (first line only) may be rewritten atomically to update thread metadata (e.g., `title`). This uses write-to-temp-then-rename for safety. Thread events after the meta line are never modified.
 
+Every write to a thread file (an append, a meta rewrite, writing the meta line of a new thread) holds an exclusive per-thread lock shared by all processes (`$ZDX_HOME/run/thread-locks/<id>.jsonl.lock`). A rewrite in one process therefore never drops lines another process appended, and two processes creating the same thread write one meta line.
+
 ### Jobs
 
 A job is a saved prompt that runs unattended: by hand, on a recurring schedule, or once at a set time.

@@ -3313,3 +3313,79 @@ fn test_search_threads_exclusion_does_not_underfill_limit() {
         "current thread must not appear in results"
     );
 }
+
+/// Two writers on one thread, as the orchestrator service (appending a turn)
+/// and the bot (renaming the thread, `/model`) are: every append survives the
+/// metadata rewrites, and the last rewrite wins. Each writer opens its own
+/// handle, so the lock is exercised between separate open files, as between
+/// processes.
+#[test]
+fn concurrent_appends_survive_metadata_rewrites() {
+    const APPENDS: usize = 400;
+    const REWRITES: usize = 200;
+
+    let _home = crate::test_support::temp_zdx_home();
+    let id = format!("test-concurrent-{}", uuid::Uuid::new_v4());
+    Thread::with_id(id.clone())
+        .unwrap()
+        .append(&ThreadEvent::user_message("start"))
+        .unwrap();
+
+    let start = Arc::new(std::sync::Barrier::new(2));
+    let appender = {
+        let id = id.clone();
+        let start = Arc::clone(&start);
+        std::thread::spawn(move || {
+            let mut thread = Thread::with_id(id).unwrap();
+            start.wait();
+            for n in 0..APPENDS {
+                thread
+                    .append(&ThreadEvent::user_message(format!("line {n}")))
+                    .unwrap();
+            }
+        })
+    };
+    let rewriter = {
+        let id = id.clone();
+        let start = Arc::clone(&start);
+        std::thread::spawn(move || {
+            let mut thread = Thread::with_id(id).unwrap();
+            start.wait();
+            for n in 0..REWRITES {
+                if n % 2 == 0 {
+                    thread.set_title(Some(format!("title {n}"))).unwrap();
+                } else {
+                    thread
+                        .set_model_override(Some(format!("example:model-{n}")))
+                        .unwrap();
+                }
+            }
+        })
+    };
+    appender.join().unwrap();
+    rewriter.join().unwrap();
+
+    let events = load_thread_events(&id).unwrap();
+    let texts: Vec<String> = events
+        .iter()
+        .filter_map(|event| match event {
+            ThreadEvent::Message { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    for n in 0..APPENDS {
+        assert!(
+            texts.contains(&format!("line {n}")),
+            "line {n} lost; {} of {APPENDS} appends survived",
+            texts.len() - 1
+        );
+    }
+    assert_eq!(
+        read_thread_title(&id).unwrap().as_deref(),
+        Some(format!("title {}", REWRITES - 2).as_str())
+    );
+    assert_eq!(
+        read_thread_model_override(&id).unwrap().as_deref(),
+        Some(format!("example:model-{}", REWRITES - 1).as_str())
+    );
+}

@@ -419,6 +419,10 @@ impl Drop for ForegroundGuard {
 /// still holds nothing but its meta line. A thread the child already wrote to
 /// is kept: it is real history.
 pub(super) fn remove_unused_child_thread(path: &Path) {
+    // The check and the removal under one lock, so no append lands between.
+    let Ok(_lock) = crate::core::thread_persistence::ThreadFileLock::acquire(path) else {
+        return;
+    };
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
     };

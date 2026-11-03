@@ -186,8 +186,16 @@ impl Thread {
     }
 
     /// Ensures the meta event is written for new threads.
+    ///
+    /// The check and the write happen under the thread lock, so a thread
+    /// another process created meanwhile does not get a second meta line.
     fn ensure_meta(&mut self) -> Result<()> {
         if self.is_new {
+            let _lock = ThreadFileLock::acquire(&self.path)?;
+            if fs::metadata(&self.path).is_ok_and(|meta| meta.len() > 0) {
+                self.is_new = false;
+                return Ok(());
+            }
             let mut meta = ThreadEvent::meta_with_lineage(
                 self.root_path.clone(),
                 self.handoff_from.clone(),
@@ -203,7 +211,7 @@ impl Thread {
             {
                 *worker_topic = true;
             }
-            self.append_raw(&meta)?;
+            self.write_line(&meta)?;
             self.is_new = false;
         }
         Ok(())
@@ -211,6 +219,12 @@ impl Thread {
 
     /// Appends an event to the thread file (internal, no meta check).
     fn append_raw(&self, event: &ThreadEvent) -> Result<()> {
+        let _lock = ThreadFileLock::acquire(&self.path)?;
+        self.write_line(event)
+    }
+
+    /// Writes one event line; the caller holds the thread lock.
+    fn write_line(&self, event: &ThreadEvent) -> Result<()> {
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -334,6 +348,58 @@ impl Thread {
     }
 }
 
+/// Exclusive advisory lock on one thread file, shared by every process.
+///
+/// Every write takes it: appends, and the meta rewrites (read, write a temp
+/// file, rename). Without it, a rewrite in one process (the bot renaming a
+/// thread) renames away lines another process (the orchestrator service)
+/// appended after the rewrite read the file. The lock is a separate file under
+/// `$ZDX_HOME/run/thread-locks/`, not the thread file itself: the rename
+/// replaces the thread file's inode, and a child run's `ChildThreadLock`
+/// already holds the thread file for the child's whole run. Lock files are
+/// never removed (removing one under contention would let two writers hold
+/// different locks for the same thread). Released on drop or process exit.
+pub(crate) struct ThreadFileLock {
+    _file: fs::File,
+}
+
+impl ThreadFileLock {
+    /// Blocks until the lock for the thread at `path` is held.
+    ///
+    /// # Errors
+    /// Returns an error if the lock file cannot be created or locked.
+    pub(crate) fn acquire(path: &Path) -> Result<Self> {
+        let lock_path = thread_lock_path(path);
+        if let Some(dir) = lock_path.parent() {
+            fs::create_dir_all(dir).context("Failed to create thread lock directory")?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .context("Failed to open thread lock")?;
+        file.lock().context("Failed to lock thread")?;
+        Ok(Self { _file: file })
+    }
+}
+
+/// `$ZDX_HOME/run/thread-locks/<file name>.lock` for `$ZDX_HOME/threads/<file
+/// name>`. Derived from the thread path, so every holder of the same thread
+/// file agrees on the lock.
+fn thread_lock_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .map_or_else(|| "thread".into(), std::ffi::OsStr::to_os_string);
+    let home = path
+        .parent()
+        .and_then(Path::parent)
+        .unwrap_or_else(|| Path::new("."));
+    let mut lock_name = file_name;
+    lock_name.push(".lock");
+    home.join("run").join("thread-locks").join(lock_name)
+}
+
 /// Reads thread events from a file path, with backward compatibility.
 fn read_thread_events(path: &PathBuf) -> Result<Vec<ThreadEvent>> {
     if !path.exists() {
@@ -361,6 +427,7 @@ fn read_thread_events(path: &PathBuf) -> Result<Vec<ThreadEvent>> {
 
 /// Rewrites the meta event with an updated title, preserving the rest of the file.
 fn rewrite_meta_with_title(path: &PathBuf, title: Option<String>) -> Result<()> {
+    let _lock = ThreadFileLock::acquire(path)?;
     let file = fs::File::open(path).context("Failed to open thread file")?;
     let reader = BufReader::new(file);
 
@@ -402,6 +469,7 @@ fn rewrite_meta_with_title(path: &PathBuf, title: Option<String>) -> Result<()> 
 
 /// Rewrites the meta event with an updated root path, preserving the rest of the file.
 fn rewrite_meta_with_root(path: &PathBuf, root_path: Option<String>) -> Result<()> {
+    let _lock = ThreadFileLock::acquire(path)?;
     let file = fs::File::open(path).context("Failed to open thread file")?;
     let reader = BufReader::new(file);
 
@@ -445,6 +513,7 @@ fn rewrite_meta_with_root(path: &PathBuf, root_path: Option<String>) -> Result<(
 /// of the file. A new unified model spec supersedes and clears the legacy
 /// standalone thinking override atomically.
 fn rewrite_meta_with_model_override(path: &PathBuf, model_override: Option<String>) -> Result<()> {
+    let _lock = ThreadFileLock::acquire(path)?;
     let file = fs::File::open(path).context("Failed to open thread file")?;
     let reader = BufReader::new(file);
 
@@ -491,6 +560,7 @@ fn rewrite_meta_with_thinking_override(
     path: &PathBuf,
     thinking_override: Option<crate::config::ThinkingLevel>,
 ) -> Result<()> {
+    let _lock = ThreadFileLock::acquire(path)?;
     let file = fs::File::open(path).context("Failed to open thread file")?;
     let reader = BufReader::new(file);
 
@@ -532,6 +602,7 @@ fn rewrite_meta_with_thinking_override(
 
 /// Rewrites the meta event with an updated pending topic-title flag, preserving the rest of the file.
 fn rewrite_meta_with_pending_topic_title(path: &PathBuf, pending_topic_title: bool) -> Result<()> {
+    let _lock = ThreadFileLock::acquire(path)?;
     let file = fs::File::open(path).context("Failed to open thread file")?;
     let reader = BufReader::new(file);
 
@@ -573,6 +644,7 @@ fn rewrite_meta_with_pending_topic_title(path: &PathBuf, pending_topic_title: bo
 
 /// Rewrites the meta event with an updated alias, preserving the rest of the file.
 fn rewrite_meta_with_alias(path: &PathBuf, alias_to: Option<String>) -> Result<()> {
+    let _lock = ThreadFileLock::acquire(path)?;
     let file = fs::File::open(path).context("Failed to open thread file")?;
     let reader = BufReader::new(file);
 
@@ -619,6 +691,7 @@ fn rewrite_meta_with_persistent_profile(
     path: &PathBuf,
     subagent_name: Option<String>,
 ) -> Result<()> {
+    let _lock = ThreadFileLock::acquire(path)?;
     let file = fs::File::open(path).context("Failed to open thread file")?;
     let reader = BufReader::new(file);
 
@@ -1264,6 +1337,22 @@ pub fn read_persistent_profile(id: &str) -> Result<Option<String>> {
     Ok(read_meta(&path)?
         .filter(|meta| meta.origin_kind.is_none())
         .and_then(|meta| meta.subagent_name))
+}
+
+/// Deletes a thread's file under the thread lock, so a concurrent writer
+/// either finishes before it or starts a new file after it. A missing file is
+/// not an error.
+///
+/// # Errors
+/// Returns an error if the lock cannot be taken or the file not removed.
+pub fn remove_thread_file(id: &str) -> Result<()> {
+    let path = threads_dir().join(format!("{id}.jsonl"));
+    let _lock = ThreadFileLock::acquire(&path)?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).context("Failed to remove thread file"),
+    }
 }
 
 /// Returns whether a thread file exists for the given ID.
