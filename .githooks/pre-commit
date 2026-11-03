@@ -2,6 +2,12 @@
 # Auto-format staged Rust files before committing so commits match CI's
 # `cargo +nightly fmt --check`. Uses nightly rustfmt to match the CI toolchain.
 #
+# Only staged files are touched. A file whose whole change is staged is
+# formatted and re-staged. A file that also has unstaged changes (partial
+# staging, or another agent editing the same checkout) is never re-staged:
+# `git add` would sweep the unstaged changes into this commit. Its staged
+# content is checked instead, and the commit fails if it is not formatted.
+#
 # Enable with: just install-hooks   (sets core.hooksPath to .githooks)
 # Skip once with: git commit --no-verify
 set -e
@@ -9,10 +15,32 @@ set -e
 staged=$(git diff --cached --name-only --diff-filter=ACM -- '*.rs')
 [ -z "$staged" ] && exit 0
 
-cargo +nightly fmt
+fmt() {
+    # skip_children: format only the named file, not the modules it declares.
+    rustfmt +nightly --config skip_children=true "$@"
+}
 
-# Re-stage only the files that were already staged, so formatting fixes land in
-# this commit without sweeping in unrelated working-tree changes.
-echo "$staged" | while IFS= read -r file; do
-    [ -f "$file" ] && git add -- "$file"
+# `rustfmt --check` exits 0 on stdin even when it would reformat, so the
+# staged content is formatted and compared instead.
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+failed=""
+for file in $staged; do
+    if git diff --quiet -- "$file"; then
+        fmt "$file"
+        git add -- "$file"
+        continue
+    fi
+    git show ":$file" > "$tmp/staged.rs"
+    if ! fmt --emit stdout < "$tmp/staged.rs" > "$tmp/formatted.rs" 2>/dev/null \
+        || ! cmp -s "$tmp/staged.rs" "$tmp/formatted.rs"; then
+        failed="$failed $file"
+    fi
 done
+
+if [ -n "$failed" ]; then
+    echo "pre-commit: these staged files are not formatted, and they also have unstaged changes:" >&2
+    for file in $failed; do echo "  $file" >&2; done
+    echo "Format the staged changes (cargo +nightly fmt, then stage again), or skip with --no-verify." >&2
+    exit 1
+fi
