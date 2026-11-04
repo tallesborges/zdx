@@ -517,11 +517,32 @@ fn duplicate_high(fd: RawFd) -> io::Result<OwnedFd> {
 
 fn max_open_fd() -> RawFd {
     let value = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
-    if value <= 0 {
+    let value = if value <= 0 {
         65_536
     } else {
         value.min(i64::from(i32::MAX)) as RawFd
-    }
+    };
+    #[cfg(target_os = "macos")]
+    let value = max_files_per_proc().map_or(value, |cap| value.min(cap));
+    value
+}
+
+/// xnu never allocates a descriptor at or above `kern.maxfilesperproc`, even
+/// when `RLIMIT_NOFILE` is unlimited and `_SC_OPEN_MAX` reports `i64::MAX`.
+#[cfg(target_os = "macos")]
+fn max_files_per_proc() -> Option<RawFd> {
+    let mut value: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>();
+    let result = unsafe {
+        libc::sysctlbyname(
+            c"kern.maxfilesperproc".as_ptr(),
+            (&raw mut value).cast(),
+            &raw mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (result == 0 && value > 0).then_some(value)
 }
 
 /// Parses the startup frames written on `EXEC_ERROR_FD`.
@@ -891,9 +912,30 @@ unsafe fn close_unrelated_fds(max_fd: RawFd) {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    let max_fd = unsafe { fd_table_len() }.unwrap_or(max_fd);
+
     for fd in FIRST_UNUSED_FD..max_fd {
         unsafe { libc::close(fd) };
     }
+}
+
+/// Returns a bound above every open descriptor without walking the rlimit,
+/// which can be effectively unlimited. With a null buffer, xnu answers
+/// `PROC_PIDLISTFDS` from the fd table length (plus slack) in one syscall, so
+/// this is safe in the post-fork child.
+#[cfg(target_os = "macos")]
+unsafe fn fd_table_len() -> Option<RawFd> {
+    let bytes = unsafe {
+        libc::proc_pidinfo(
+            libc::getpid(),
+            libc::PROC_PIDLISTFDS,
+            0,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (bytes > 0).then_some(bytes / libc::PROC_PIDLISTFD_SIZE)
 }
 
 fn block_signals() -> io::Result<libc::sigset_t> {
@@ -1343,6 +1385,52 @@ mod tests {
         let escaped_pid = wait_for_pid(&ready).await;
         unsafe { libc::kill(escaped_pid, libc::SIGKILL) };
         wait_until_gone(escaped_pid).await;
+    }
+
+    #[tokio::test]
+    async fn spawn_stays_fast_with_unlimited_fd_limit() {
+        let mut owner = tokio::process::Command::new(std::env::current_exe().unwrap());
+        owner
+            .args([
+                "process_supervisor::tests::high_fd_limit_fixture",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+            ])
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit());
+        // SAFETY: getrlimit/setrlimit are async-signal-safe.
+        unsafe {
+            owner.pre_exec(|| {
+                let mut limit = std::mem::zeroed::<libc::rlimit>();
+                if libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                limit.rlim_cur = limit.rlim_max;
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &raw const limit) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut owner = owner.spawn().unwrap();
+        let owner_pgid = owner.id().unwrap() as i32;
+
+        let status = tokio::time::timeout(Duration::from_secs(10), owner.wait()).await;
+        unsafe { libc::kill(-owner_pgid, libc::SIGKILL) };
+        let status = status.expect("spawn under a raised fd limit hung").unwrap();
+        assert!(status.success());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "process fixture invoked by spawn_stays_fast_with_unlimited_fd_limit"]
+    async fn high_fd_limit_fixture() {
+        let mut command = SupervisedCommand::new("/usr/bin/true");
+        command.stdin_null();
+        let mut child = command.spawn(Duration::from_millis(150)).await.unwrap();
+        assert!(child.wait().await.unwrap().status.success());
     }
 
     #[tokio::test]
