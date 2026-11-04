@@ -561,6 +561,38 @@ pub struct Skip {
     pub by: String,
 }
 
+/// Skips that share the layer setting the key: the layer's label, then the
+/// other listed workspaces that inherit its value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkipGroup<'a> {
+    pub by: &'a str,
+    pub via: Vec<&'a str>,
+}
+
+impl Reach {
+    /// Skips grouped by the layer that sets the key, in first-seen order.
+    #[must_use]
+    pub fn skip_groups(&self) -> Vec<SkipGroup<'_>> {
+        let mut groups: Vec<SkipGroup<'_>> = Vec::new();
+        for skip in &self.skips {
+            let index = groups
+                .iter()
+                .position(|group| group.by == skip.by)
+                .unwrap_or_else(|| {
+                    groups.push(SkipGroup {
+                        by: &skip.by,
+                        via: Vec::new(),
+                    });
+                    groups.len() - 1
+                });
+            if skip.workspace != skip.by {
+                groups[index].via.push(&skip.workspace);
+            }
+        }
+        groups
+    }
+}
+
 /// For each of `keys`, which of `workspaces` layer `file` and would read its
 /// value. Only listed workspaces are checked: other directories that layer
 /// the file are not discovered.
@@ -895,6 +927,13 @@ mod tests {
             .map(|skip| (skip.workspace.as_str(), skip.by.as_str()))
             .collect();
         assert_eq!(skipped, vec![("example", "example"), ("app", "example")]);
+        assert_eq!(
+            from_global["model"].skip_groups(),
+            vec![SkipGroup {
+                by: "example",
+                via: vec!["app"]
+            }]
+        );
 
         fs::write(&parent, "model = [").unwrap();
         let broken = reach_in_chains(&global, &keys, &chains, &global);

@@ -30,13 +30,12 @@ pub enum ConfigLine {
     Row(String, String),
 }
 
-/// Overlay tag shown next to a row whose value comes from a workspace layer.
-/// Global and default values stay untagged.
+/// Where a row's value comes from in the viewed scope. Every value row has
+/// one; workspace and ancestor layers also get a `[label]` tag.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RowSource {
+    pub layer: Layer,
     pub label: String,
-    /// Set in the viewed workspace's own overlay (not inherited).
-    pub here: bool,
 }
 
 pub(crate) struct ConfigView {
@@ -75,14 +74,11 @@ pub(crate) fn config_reach_for(
     workspace_config::reach(&scope.file(), &keys, workspaces)
 }
 
-fn row_source(source: Option<&Path>, global: &Path, overlay: &Path) -> Option<RowSource> {
+fn row_source(source: Option<&Path>, global: &Path, overlay: &Path) -> RowSource {
     let source = Source::classify(source, global, overlay);
-    match source.layer {
-        Layer::Default | Layer::Global => None,
-        Layer::Workspace | Layer::Ancestor => Some(RowSource {
-            label: source.label,
-            here: source.layer == Layer::Workspace,
-        }),
+    RowSource {
+        layer: source.layer,
+        label: source.label,
     }
 }
 
@@ -104,14 +100,16 @@ fn config_source_labels(
             };
             let path = match section {
                 "subagents" if key == "enabled" => SUBAGENTS_ENABLED_KEY.to_string(),
-                "subagents" if value == SUBAGENT_DEFAULT_LABEL => return None,
+                "subagents" if value == SUBAGENT_DEFAULT_LABEL => {
+                    return Some(row_source(None, global, overlay));
+                }
                 "subagents" => format!("subagents.overrides.{key}.model"),
                 "core" | "helper models" => key.clone(),
                 "model modes" if key == ADD_MODE_LABEL => return None,
                 "model modes" => MODEL_MODES_KEY.to_string(),
                 _ => format!("{section}.{key}"),
             };
-            row_source(sources.source(&path), global, overlay)
+            Some(row_source(sources.source(&path), global, overlay))
         })
         .collect()
 }
@@ -1458,11 +1456,20 @@ pub(crate) fn handle_model_picker_key(app: &mut MonitorApp, key: KeyCode) {
 
 pub(crate) fn render_config(f: &mut Frame, app: &MonitorApp, area: Rect) {
     let inner_width = area.width.saturating_sub(2) as usize;
-    let key_col = 30usize;
 
-    let selected_line = editable_model_fields(&app.config_lines)
-        .get(app.config_selected)
-        .map(|f| f.line_index);
+    let fields = editable_model_fields(&app.config_lines);
+    let selected_line = fields.get(app.config_selected).map(|f| f.line_index);
+    let row_keys: BTreeMap<usize, String> = fields
+        .iter()
+        .map(|field| (field.line_index, setting_key(&field.path)))
+        .filter(|(_, key)| key != MODEL_MODES_KEY)
+        .collect();
+    let badge_for = |key: &str| {
+        app.config_reach
+            .get(key)
+            .and_then(override_badge)
+            .map(|badge| truncate_chars(&badge, inner_width / 3))
+    };
 
     let mut lines: Vec<Line> = Vec::new();
     let mut is_first = true;
@@ -1475,12 +1482,16 @@ pub(crate) fn render_config(f: &mut Frame, app: &MonitorApp, area: Rect) {
                 }
                 is_first = false;
 
-                lines.push(Line::from(vec![Span::styled(
+                let header = Span::styled(
                     format!(" ── {} ", name.to_uppercase()),
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
-                )]));
+                );
+                let badge = (name == "model modes")
+                    .then(|| badge_for(MODEL_MODES_KEY))
+                    .flatten();
+                lines.push(with_badge(vec![header], badge, inner_width));
             }
             ConfigLine::Separator => {
                 let dashes = "─".repeat(inner_width.saturating_sub(4));
@@ -1490,36 +1501,16 @@ pub(crate) fn render_config(f: &mut Frame, app: &MonitorApp, area: Rect) {
                 )));
             }
             ConfigLine::Row(key, value) => {
-                let is_selected = selected_line == Some(idx);
-                let val_style = if value == "***" || value.starts_with("***") {
-                    Style::default().fg(Color::DarkGray)
-                } else {
-                    Style::default()
-                };
-                let marker = if is_selected { "  ▸ " } else { "    " };
-                let key_style = if is_selected {
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                };
-                let key_span = Span::styled(format!("{marker}{key:<key_col$} "), key_style);
                 let source = app.config_sources.get(idx).and_then(Option::as_ref);
-                let source_span = source_span(source);
-                let value = if source.is_some() {
-                    truncate_chars(
-                        value,
-                        inner_width.saturating_sub(key_span.width() + source_span.width()),
-                    )
-                } else {
-                    value.clone()
-                };
-                lines.push(Line::from(vec![
-                    key_span,
-                    Span::styled(value, val_style),
-                    source_span,
-                ]));
+                let badge = row_keys.get(&idx).and_then(|key| badge_for(key));
+                lines.push(value_row(
+                    key,
+                    value,
+                    source,
+                    selected_line == Some(idx),
+                    badge,
+                    inner_width,
+                ));
             }
         }
     }
@@ -1545,7 +1536,8 @@ pub(crate) fn render_config(f: &mut Frame, app: &MonitorApp, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(destination_color(scope)))
-        .title(title);
+        .title(title)
+        .title_top(legend(scope).right_aligned());
     let inner = block.inner(area);
     f.render_widget(block, area);
     let rows = Layout::default()
@@ -1557,6 +1549,51 @@ pub(crate) fn render_config(f: &mut Frame, app: &MonitorApp, area: Rect) {
         Paragraph::new(Text::from(lines)).scroll((app.config_scroll as u16, 0)),
         rows[1],
     );
+}
+
+/// One value row: layer mark, selection marker and key, value (dim when it
+/// is the built-in default or a secret), workspace tag, and override badge.
+fn value_row(
+    key: &str,
+    value: &str,
+    source: Option<&RowSource>,
+    selected: bool,
+    badge: Option<String>,
+    width: usize,
+) -> Line<'static> {
+    const KEY_COL: usize = 30;
+    let custom = source.is_some_and(|source| source.layer != Layer::Default);
+    let val_style = if value.starts_with("***") || !custom {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default()
+    };
+    let marker = if selected { "▸ " } else { "  " };
+    let key_style = if selected {
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let mark_span = mark_span(source.map(|source| source.layer));
+    let key_span = Span::styled(format!("{marker}{key:<KEY_COL$} "), key_style);
+    let tag_span = source_span(source);
+    let badge_width = badge.as_ref().map_or(0, |badge| badge.chars().count() + 1);
+    let value = truncate_chars(
+        value,
+        width.saturating_sub(mark_span.width() + key_span.width() + tag_span.width() + badge_width),
+    );
+    with_badge(
+        vec![
+            mark_span,
+            key_span,
+            Span::styled(value, val_style),
+            tag_span,
+        ],
+        badge,
+        width,
+    )
 }
 
 /// ` [N%]` scroll position when the list overflows its area.
@@ -1623,13 +1660,7 @@ fn header_lines(app: &MonitorApp, width: u16) -> Vec<Line<'static>> {
     }
     let mut lines = vec![Line::from(first)];
     let width = usize::from(width.max(2));
-    for text in selected_row_hint(app) {
-        lines.extend(
-            wrap_words(&text, width - 1)
-                .into_iter()
-                .map(|row| Line::from(Span::styled(format!(" {row}"), dim))),
-        );
-    }
+    lines.extend(selected_row_hint(app, width));
     let max = usize::from(MAX_HEADER_ROWS);
     if lines.len() > max {
         lines.truncate(max);
@@ -1642,88 +1673,231 @@ fn header_lines(app: &MonitorApp, width: u16) -> Vec<Line<'static>> {
     lines
 }
 
-/// Splits `text` into rows of at most `width` chars, breaking at spaces and
-/// splitting longer words. Indents continuation rows by one space.
-fn wrap_words(text: &str, width: usize) -> Vec<String> {
-    let mut rows = Vec::new();
-    let mut row = String::new();
-    for word in text.split(' ').filter(|word| !word.is_empty()) {
-        let mut word: Vec<char> = word.chars().collect();
-        loop {
-            let used = row.chars().count();
-            let gap = usize::from(!row.trim().is_empty());
-            if used + gap + word.len() <= width {
-                if gap == 1 {
-                    row.push(' ');
+/// Words of `parts`, each keeping its part's style, wrapped to rows of at
+/// most `width` chars. The first row starts with one space; continuation
+/// rows are indented by `indent`. Words longer than a row are split.
+fn wrap_styled(parts: &[(String, Style)], width: usize, indent: usize) -> Vec<Line<'static>> {
+    let width = width.max(2);
+    let indent = indent.clamp(1, width - 1);
+    let mut lines = Vec::new();
+    let mut row = vec![Span::raw(" ")];
+    let mut used = 1;
+    let mut has_word = false;
+    for (text, style) in parts {
+        for word in text.split(' ').filter(|word| !word.is_empty()) {
+            let mut word: Vec<char> = word.chars().collect();
+            loop {
+                let gap = usize::from(has_word);
+                if used + gap + word.len() <= width {
+                    if has_word {
+                        row.push(Span::raw(" "));
+                    }
+                    used += gap + word.len();
+                    row.push(Span::styled(word.iter().collect::<String>(), *style));
+                    has_word = true;
+                    break;
                 }
-                row.extend(word.iter());
-                break;
+                if !has_word {
+                    let rest = word.split_off((width - used).max(1).min(word.len()));
+                    row.push(Span::styled(word.iter().collect::<String>(), *style));
+                    word = rest;
+                }
+                lines.push(Line::from(std::mem::replace(
+                    &mut row,
+                    vec![Span::raw(" ".repeat(indent))],
+                )));
+                used = indent;
+                has_word = false;
+                if word.is_empty() {
+                    break;
+                }
             }
-            if gap == 1 {
-                rows.push(std::mem::replace(&mut row, " ".to_string()));
-                continue;
-            }
-            let room = width.saturating_sub(used).max(1);
-            let rest = word.split_off(room.min(word.len()));
-            row.extend(word.iter());
-            rows.push(std::mem::replace(&mut row, " ".to_string()));
-            if rest.is_empty() {
-                break;
-            }
-            word = rest;
         }
     }
-    if row.trim().is_empty() {
-        if rows.is_empty() {
-            rows.push(String::new());
-        }
-    } else {
-        rows.push(row);
+    if has_word || lines.is_empty() {
+        lines.push(Line::from(row));
     }
-    rows
+    lines
 }
 
-/// The selected row: where its value comes from in this view and what a
-/// reset of the view's file falls back to, then who an edit reaches.
-fn selected_row_hint(app: &MonitorApp) -> Vec<String> {
+/// The selected row: its mark, where its value comes from in this view and
+/// what a reset of the view's file falls back to, then who an edit reaches.
+fn selected_row_hint(app: &MonitorApp, width: usize) -> Vec<Line<'static>> {
     let Some(setting) = selected_setting(app) else {
         return Vec::new();
     };
     let scope = app.config_scope();
     let dest = destination_label(scope);
-    let mut origin = format!("{}: ", setting.label);
+    let dim = Style::default().fg(Color::DarkGray);
+    let (mark, mark_style) = layer_mark(Some(setting.source.layer));
+    let mut origin = vec![
+        (mark.to_string(), mark_style),
+        (
+            setting.label.clone(),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
     if setting.set_in_own_file(scope) {
         let reset_key = if setting.key == MODEL_MODES_KEY {
             "D"
         } else {
             "d"
         };
-        let _ = write!(
-            origin,
-            "set in {dest} · {reset_key} → {}",
-            fallback_label(setting)
-        );
+        origin.push((format!("set in {dest}"), Style::default()));
+        origin.push((format!("· {reset_key} → {}", fallback_label(setting)), dim));
     } else {
-        let _ = write!(origin, "from {} · not set in {dest}", setting.source.label);
+        origin.push((format!("from {}", setting.source.label), Style::default()));
+        origin.push((format!("· not set in {dest}"), dim));
     }
-    let mut out = vec![origin];
+    let mut out = wrap_styled(&origin, width, 3);
     if let Some(reach) = app.config_reach.get(&setting.key) {
-        out.push(format!("edit {}", reach_text(reach)));
+        for parts in reach_parts(reach) {
+            out.extend(wrap_styled(&parts, width, 3));
+        }
     }
     out
 }
 
-/// Row tag: overrides set in the viewed workspace stand out; inherited
-/// ancestor values stay dim.
+/// Header rows for who an edit of the selected setting reaches: readers,
+/// then skips grouped by the layer that sets the key, then workspaces whose
+/// layers failed to load.
+fn reach_parts(reach: &Reach) -> Vec<Vec<(String, Style)>> {
+    let dim = Style::default().fg(Color::DarkGray);
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let yellow = Style::default().fg(Color::Yellow);
+    let mut rows = Vec::new();
+    if reach.reads.is_empty() {
+        rows.push(vec![
+            ("✓".to_string(), dim),
+            ("reaches no listed workspace".to_string(), dim),
+        ]);
+    } else {
+        rows.push(vec![
+            ("✓".to_string(), Style::default().fg(Color::Green)),
+            ("reaches".to_string(), dim),
+            (reach.reads.len().to_string(), bold),
+            (reach.reads.join(", "), Style::default()),
+        ]);
+    }
+    if !reach.skips.is_empty() {
+        let mut skips = vec![
+            ("≠".to_string(), yellow),
+            ("skips".to_string(), dim),
+            (reach.skips.len().to_string(), bold),
+        ];
+        for (index, group) in reach.skip_groups().iter().enumerate() {
+            if index > 0 {
+                skips.push(("·".to_string(), dim));
+            }
+            skips.push((group.by.to_string(), yellow.add_modifier(Modifier::BOLD)));
+            if !group.via.is_empty() {
+                skips.push(("→".to_string(), dim));
+                skips.push((group.via.join(", "), yellow));
+            }
+        }
+        rows.push(skips);
+    }
+    if !reach.unknown.is_empty() {
+        rows.push(vec![
+            ("?".to_string(), Style::default().fg(Color::Red)),
+            ("unknown".to_string(), dim),
+            (reach.unknown.len().to_string(), bold),
+            (reach.unknown.join(", "), Style::default()),
+        ]);
+    }
+    rows
+}
+
+/// Row badge for a setting some listed workspaces do not read from the
+/// viewed file: each layer that sets it, plus how many inherit from it.
+fn override_badge(reach: &Reach) -> Option<String> {
+    let groups = reach.skip_groups();
+    if groups.is_empty() {
+        return None;
+    }
+    let owners: Vec<String> = groups
+        .iter()
+        .map(|group| {
+            if group.via.is_empty() {
+                group.by.to_string()
+            } else {
+                format!("{} +{}", group.by, group.via.len())
+            }
+        })
+        .collect();
+    Some(format!("≠ {}", owners.join(", ")))
+}
+
+/// `spans`, then `badge` right-aligned in yellow when it fits in `width`.
+fn with_badge(mut spans: Vec<Span<'static>>, badge: Option<String>, width: usize) -> Line<'static> {
+    if let Some(badge) = badge {
+        let used: usize = spans.iter().map(Span::width).sum();
+        let room = width.saturating_sub(used + 1);
+        if room > 1 {
+            let badge = truncate_chars(&badge, room);
+            let pad = width - used - badge.chars().count();
+            spans.push(Span::raw(" ".repeat(pad)));
+            spans.push(Span::styled(badge, Style::default().fg(Color::Yellow)));
+        }
+    }
+    Line::from(spans)
+}
+
+/// Mark for the layer a value comes from: `●` in the layer's color when a
+/// config file sets it, a dim `·` for the built-in default.
+fn layer_mark(layer: Option<Layer>) -> (&'static str, Style) {
+    match layer {
+        None => (" ", Style::default()),
+        Some(Layer::Default) => ("·", Style::default().fg(Color::DarkGray)),
+        Some(Layer::Global) => ("●", Style::default().fg(Color::Magenta)),
+        Some(Layer::Workspace) => ("●", Style::default().fg(Color::Yellow)),
+        Some(Layer::Ancestor) => ("●", Style::default().fg(Color::DarkGray)),
+    }
+}
+
+fn mark_span(layer: Option<Layer>) -> Span<'static> {
+    let (mark, style) = layer_mark(layer);
+    Span::styled(format!(" {mark} "), style)
+}
+
+/// Key for the row marks and badges, in the panel's top border.
+fn legend(scope: Scope<'_>) -> Line<'static> {
+    let mut items = Vec::new();
+    if !scope.writes_global_file() {
+        items.push((Some(Layer::Workspace), "here"));
+        items.push((Some(Layer::Ancestor), "ancestor"));
+    }
+    items.push((Some(Layer::Global), "global"));
+    items.push((Some(Layer::Default), "default"));
+    let dim = Style::default().fg(Color::DarkGray);
+    let mut spans = Vec::new();
+    for (layer, label) in items {
+        let (mark, style) = layer_mark(layer);
+        spans.push(Span::styled(format!(" {mark}"), style));
+        spans.push(Span::styled(format!(" {label} "), dim));
+    }
+    spans.push(Span::styled(" ≠", Style::default().fg(Color::Yellow)));
+    spans.push(Span::styled(" overridden ", dim));
+    Line::from(spans)
+}
+
+/// Row tag naming a workspace layer: yellow when set in the viewed
+/// workspace, dim when inherited from an ancestor. Global and default values
+/// carry only the row mark.
 fn source_span(source: Option<&RowSource>) -> Span<'static> {
-    Span::styled(
-        source.map_or_else(String::new, |source| format!(" [{}]", source.label)),
-        if source.is_some_and(|source| source.here) {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        },
-    )
+    match source {
+        Some(source) if source.layer == Layer::Workspace => Span::styled(
+            format!(" [{}]", source.label),
+            Style::default().fg(Color::Yellow),
+        ),
+        Some(source) if source.layer == Layer::Ancestor => Span::styled(
+            format!(" [{}]", source.label),
+            Style::default().fg(Color::DarkGray),
+        ),
+        _ => Span::raw(""),
+    }
 }
 
 /// Confirmation popup for a pending write: the captured file, the old and
@@ -2040,8 +2214,8 @@ mod tests {
         assert_eq!(
             view.sources[row],
             Some(RowSource {
+                layer: Layer::Workspace,
                 label: "selected-root".into(),
-                here: true
             })
         );
         let model = view.settings.iter().find(|s| s.key == "model").unwrap();
@@ -2087,7 +2261,14 @@ mod tests {
                 label(labels[row_index(&lines, "core", "model")].as_ref()),
                 Some(expected)
             );
-            assert_eq!(labels[row_index(&lines, "core", "max_tokens")], None);
+            assert_eq!(
+                label(labels[row_index(&lines, "core", "max_tokens")].as_ref()),
+                Some("global")
+            );
+            assert_eq!(
+                label(labels[row_index(&lines, "core", "system_prompt")].as_ref()),
+                Some("default")
+            );
             assert_eq!(
                 label(labels[row_index(&lines, "model modes", "work")].as_ref()),
                 Some("parity")
@@ -2629,10 +2810,10 @@ mod tests {
             let text = screen(&fx.app);
             assert!(text.contains("edits → ws"), "{text}");
             assert!(
-                text.contains(" model: set in ws · d → global:model@low [global] "),
+                text.contains(" ● model set in ws · d → global:model@low [global] "),
                 "{text}"
             );
-            assert!(text.contains(" edit reaches ws "), "{text}");
+            assert!(text.contains(" ✓ reaches 1 ws "), "{text}");
 
             handle_config_key(&mut fx.app, KeyCode::Char('a'));
             let text = screen(&fx.app);
@@ -2641,14 +2822,12 @@ mod tests {
             let default_model = config::Config::default().model;
             assert!(
                 text.contains(&format!(
-                    " model: set in GLOBAL · d → {default_model} [default] "
+                    " ● model set in GLOBAL · d → {default_model} [default] "
                 )),
                 "{text}"
             );
-            assert!(
-                text.contains(" edit reaches no listed workspace · skips ws (own value) "),
-                "{text}"
-            );
+            assert!(text.contains(" ✓ reaches no listed workspace "), "{text}");
+            assert!(text.contains(" ≠ skips 1 ws "), "{text}");
 
             select(&mut fx.app, "tldr_model");
             open_model_picker(&mut fx.app);
@@ -2981,6 +3160,52 @@ mod tests {
             );
         }
 
+        /// In the global view every value row is marked global or default,
+        /// and settings a workspace overrides carry a badge naming it.
+        #[test]
+        fn global_view_marks_custom_rows_and_badges_overrides() {
+            let mut fx = Fixture::new();
+            handle_config_key(&mut fx.app, KeyCode::Char('a'));
+            let mut terminal = Terminal::new(TestBackend::new(160, 120)).unwrap();
+            terminal.draw(|f| crate::ui::render(f, &fx.app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let rows: Vec<String> = (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                        .collect::<String>()
+                })
+                .collect();
+            let text = rows.join("\n");
+            let row = |key: &str| {
+                rows.iter()
+                    .find(|line| {
+                        line.trim_start_matches('│')
+                            .trim_start_matches([' ', '●', '·', '▸'])
+                            .starts_with(&format!("{key}  "))
+                    })
+                    .unwrap_or_else(|| panic!("no {key} row:\n{text}"))
+                    .clone()
+            };
+
+            assert!(rows[3].contains("● global") && rows[3].contains("≠ overridden"));
+            let model = row("model");
+            assert!(model.starts_with("│ ● ▸ model "), "{model}");
+            assert!(
+                model.trim_end_matches('│').trim_end().ends_with("≠ ws"),
+                "{model}"
+            );
+            let max_tokens = row("max_tokens");
+            assert!(max_tokens.starts_with("│ ·   max_tokens "), "{max_tokens}");
+            assert!(!max_tokens.contains('≠'), "{max_tokens}");
+            let modes = rows
+                .iter()
+                .find(|line| line.contains("── MODEL MODES"))
+                .unwrap();
+            assert!(modes.contains("≠ ws"), "{modes}");
+            assert!(!row("base").contains('≠'), "{}", row("base"));
+        }
+
         /// The footer names what `a` does from the current view.
         #[test]
         fn footer_names_the_way_back_from_global() {
@@ -3015,7 +3240,7 @@ mod tests {
             let joined = header[1..].join(" ");
             let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
             assert!(
-                words(&joined).ends_with("edit reaches no listed workspace · skips ws (own value)"),
+                words(&joined).ends_with("✓ reaches no listed workspace ≠ skips 1 ws"),
                 "{joined}"
             );
             fx.app.terminal_width = 42;
@@ -3030,14 +3255,21 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            assert!(text.contains("(own value)"), "{text}");
+            assert!(text.contains("≠ skips 1 ws"), "{text}");
         }
 
         #[test]
-        fn wrap_words_breaks_at_spaces_and_splits_long_words() {
-            assert_eq!(wrap_words("ab cd ef", 5), vec!["ab cd", " ef"]);
-            assert_eq!(wrap_words("abcdefgh", 3), vec!["abc", " de", " fg", " h"]);
-            assert_eq!(wrap_words("", 3), vec![""]);
+        fn wrap_styled_breaks_at_spaces_and_splits_long_words() {
+            let wrap = |text: &str, width: usize, indent: usize| -> Vec<String> {
+                wrap_styled(&[(text.to_string(), Style::default())], width, indent)
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect()
+            };
+            assert_eq!(wrap("ab cd ef", 6, 1), vec![" ab cd", " ef"]);
+            assert_eq!(wrap("ab cd ef", 6, 3), vec![" ab cd", "   ef"]);
+            assert_eq!(wrap("abcdefgh", 4, 1), vec![" abc", " def", " gh"]);
+            assert_eq!(wrap("", 3, 1), vec![" "]);
         }
     }
 }
