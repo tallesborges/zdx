@@ -175,7 +175,7 @@ fn definition_for(op: Op) -> ToolDefinition {
         },
         Op::Status => ToolDefinition {
             name: "Get_Thread_Status".to_string(),
-            description: "Report a worker thread's status (queued/running/completed/failed/cancelled), queue depth, and the waiting prompts (`queue`: `prompt_id` + a bounded excerpt, in run order; the running prompt is not listed). The worker's last answer is left out by default because its `[worker update]` already delivered it; pass `include_last_answer: true` to get it as `latest_final_text` (held in memory by this process, so null after a restart or for an unmanaged thread). It is cut at 4000 characters: when `latest_final_text_truncated` is true, `latest_final_text_file` is a temp file with the exact full text (`latest_final_text_total_chars` characters); use Read on it, not Read_Thread, which only summarizes. Use Read_Thread for anything older. Every result includes `run`, read from the shared live run file of a turn running in any process (null when no turn runs): `state` (`tool`, `waiting`, `thinking`, `answering`, `retrying`), `label` (e.g. `bash: cargo test (+1 more)`), `turn_elapsed_secs`, `seconds_since_activity` (any agent event, including model streaming), `seconds_since_heartbeat` (the run's process is alive; this does not prove progress), and running/finished tool counts. Managed workers also report `current_tool`, `current_tool_input` (a one-line command/path/pattern preview, at most 200 characters), `seconds_since_last_activity` (tool events only), and `turn_elapsed_seconds`. The name and input belong to the same tool-use id; with concurrent tools, they describe the most recently started unfinished call. Inspect the preview before judging a long wait: a build can be quiet, and activity age alone does not prove a hang. Input is null until available or when the tool has no primary argument. A thread this process does not manage also reports `seconds_since_last_write` from the file mtime. Both paths include `context`: the latest recorded request's input tokens INCLUDING cache reads/writes, its recorded model/provider, context_limit, percent_used, and recorded_at. This estimates context occupancy, not cumulative spend; output tokens are excluded, and it is not an exact count of the next resumed request. Context is null when no input-bearing usage is found in the last 256 KiB or the file cannot be read. Unknown model/provider/limit leaves tokens visible but limit and percentage null. Use percent_used to decide whether to move work to a fresh thread. Omit thread_id to list every worker owned by this orchestrator in the current process.".to_string(),
+            description: "Report a worker thread's status (queued/running/completed/failed/cancelled), queue depth, and the waiting prompts (`queue`: `prompt_id` + a bounded excerpt, in run order; the running prompt is not listed). The worker's last answer is left out by default because its `[worker update]` already delivered it; pass `include_last_answer: true` to get it as `latest_final_text` (held in memory by this process, so null after a restart or for an unmanaged thread). It is cut at 8000 characters: when `latest_final_text_truncated` is true, `latest_final_text_file` is a temp file with the exact full text (`latest_final_text_total_chars` characters) and the inline text ends in line `latest_final_text_file_resume_line` of that file; use Read on the file with that line as `offset` for the rest, not Read_Thread, which only summarizes. Use Read_Thread for anything older. Every result includes `run`, read from the shared live run file of a turn running in any process (null when no turn runs): `state` (`tool`, `waiting`, `thinking`, `answering`, `retrying`), `label` (e.g. `bash: cargo test (+1 more)`), `turn_elapsed_secs`, `seconds_since_activity` (any agent event, including model streaming), `seconds_since_heartbeat` (the run's process is alive; this does not prove progress), and running/finished tool counts. Managed workers also report `current_tool`, `current_tool_input` (a one-line command/path/pattern preview, at most 200 characters), `seconds_since_last_activity` (tool events only), and `turn_elapsed_seconds`. The name and input belong to the same tool-use id; with concurrent tools, they describe the most recently started unfinished call. Inspect the preview before judging a long wait: a build can be quiet, and activity age alone does not prove a hang. Input is null until available or when the tool has no primary argument. A thread this process does not manage also reports `seconds_since_last_write` from the file mtime. Both paths include `context`: the latest recorded request's input tokens INCLUDING cache reads/writes, its recorded model/provider, context_limit, percent_used, and recorded_at. This estimates context occupancy, not cumulative spend; output tokens are excluded, and it is not an exact count of the next resumed request. Context is null when no input-bearing usage is found in the last 256 KiB or the file cannot be read. Unknown model/provider/limit leaves tokens visible but limit and percentage null. Use percent_used to decide whether to move work to a fresh thread. Omit thread_id to list every worker owned by this orchestrator in the current process.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -353,6 +353,9 @@ fn set_last_answer(worker: &mut Value, bounded: Option<&BoundedWorkerText>) {
     worker["latest_final_text_file"] = json!(bounded.file);
     if bounded.truncated {
         worker["latest_final_text_total_chars"] = json!(bounded.total_chars);
+        if bounded.file.is_some() {
+            worker["latest_final_text_file_resume_line"] = json!(bounded.resume_line);
+        }
     }
 }
 
@@ -1035,7 +1038,7 @@ mod tests {
     #[tokio::test]
     async fn long_last_answer_points_at_a_file_with_the_full_text() {
         let home = crate::test_support::temp_zdx_home();
-        let answer = format!("{}END", "a".repeat(5000));
+        let answer = format!("{}\nline two\nEND", "a".repeat(8500));
         let runner_answer = answer.clone();
         let (manager, _events) = WorkerManager::with_runner(Arc::new(move |_| {
             let text = runner_answer.clone();
@@ -1060,10 +1063,11 @@ mod tests {
         );
         let worker = &status.data().unwrap()["worker"];
         let inline = worker["latest_final_text"].as_str().unwrap();
-        assert_eq!(inline.chars().count(), 4001);
+        assert_eq!(inline.chars().count(), 8001);
         assert!(!inline.contains("END"));
         assert_eq!(worker["latest_final_text_truncated"], true);
-        assert_eq!(worker["latest_final_text_total_chars"], 5003);
+        assert_eq!(worker["latest_final_text_total_chars"], 8513);
+        assert_eq!(worker["latest_final_text_file_resume_line"], 1);
         let path = worker["latest_final_text_file"].as_str().unwrap();
         assert_eq!(std::fs::read_to_string(path).unwrap(), answer);
         let _ = std::fs::remove_file(path);

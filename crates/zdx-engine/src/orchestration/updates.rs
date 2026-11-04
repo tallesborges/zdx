@@ -8,10 +8,11 @@ use crate::core::thread_persistence::{self, Thread, ThreadEvent};
 use crate::core::workers::{CompletionEvent, WorkerStatus};
 use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
 
-/// Longest worker final text or error kept inline in a `[worker update]` and
-/// in `get_thread_status`'s `latest_final_text`. Longer text is spilled whole
-/// to a temp file that the orchestrator reads with `Read`.
-pub const MAX_WORKER_TEXT_CHARS: usize = 4000;
+/// Longest worker final text or error, in Unicode characters, kept inline in
+/// a `[worker update]` and in `get_thread_status`'s `latest_final_text`.
+/// Longer text is spilled whole to a temp file that the orchestrator reads
+/// with `Read`.
+pub const MAX_WORKER_TEXT_CHARS: usize = 8000;
 
 /// A worker's final text or error, cut to [`MAX_WORKER_TEXT_CHARS`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +25,10 @@ pub struct BoundedWorkerText {
     /// Temp file holding the exact full text; set only when `truncated` and
     /// the file was written.
     pub file: Option<String>,
+    /// 1-indexed line of the full text that holds the cut point, for `Read`'s
+    /// line-based `offset`; set only when `truncated`. Reading from it repeats
+    /// the part of that line already shown inline, so nothing is skipped.
+    pub resume_line: Option<usize>,
 }
 
 /// Cuts worker text to [`MAX_WORKER_TEXT_CHARS`] and, when it is longer,
@@ -37,13 +42,17 @@ pub fn bound_worker_text(text: &str) -> BoundedWorkerText {
             total_chars,
             truncated: false,
             file: None,
+            resume_line: None,
         };
     }
+    let head: String = text.chars().take(MAX_WORKER_TEXT_CHARS).collect();
+    let resume_line = head.matches('\n').count() + 1;
     BoundedWorkerText {
-        head: text.chars().take(MAX_WORKER_TEXT_CHARS).collect(),
+        head,
         total_chars,
         truncated: true,
         file: zdx_tools::write_spill_file("worker-text", text.as_bytes()),
+        resume_line: Some(resume_line),
     }
 }
 
@@ -60,8 +69,10 @@ fn worker_text_for_prompt(text: &str) -> String {
     );
     match bounded.file {
         Some(path) => format!(
-            "{}…\n[truncated: {shown}. The exact full text is in `{path}`; use Read on it to see the rest.]",
-            bounded.head
+            "{}…\n[truncated: {shown}. The exact full text is in `{path}`. The inline text ends in line {}; use Read on that file with offset {} for the rest.]",
+            bounded.head,
+            bounded.resume_line.unwrap_or(1),
+            bounded.resume_line.unwrap_or(1),
         ),
         None => format!(
             "{}…\n[truncated: {shown}. The full text could not be saved to a file; Read_Thread gives a summary of the rest.]",
@@ -272,7 +283,8 @@ mod tests {
             &serde_json::Value::Null,
         );
         assert!(prompt.contains("status: failed"));
-        assert!(prompt.contains("[truncated: showing the first 4000 of 10000 characters"));
+        assert!(prompt.contains("[truncated: showing the first 8000 of 10000 characters"));
+        assert!(prompt.contains("ends in line 1; use Read on that file with offset 1"));
         assert!(prompt.chars().count() < MAX_WORKER_TEXT_CHARS + 1100);
         let path = spill_path(&prompt);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "x".repeat(10_000));
@@ -288,7 +300,7 @@ mod tests {
 
     #[test]
     fn long_final_text_is_spilled_whole_to_a_readable_file() {
-        let text = format!("{}é tail marker", "report line\n".repeat(400));
+        let text = format!("{}é tail marker", "report line\n".repeat(800));
         let prompt = worker_update_prompt(
             &CompletionEvent {
                 final_text: Some(text.clone()),
@@ -297,10 +309,45 @@ mod tests {
             &serde_json::Value::Null,
         );
         assert!(!prompt.contains("tail marker"));
-        assert!(prompt.contains("use Read on it"));
+        // 8000 chars of 12-char lines: 666 full lines, then the cut lands
+        // inside line 667.
+        assert!(
+            prompt.contains(
+                "The inline text ends in line 667; use Read on that file with offset 667"
+            )
+        );
         let path = spill_path(&prompt);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
         let _ = std::fs::remove_file(path);
+    }
+
+    /// Text a line-based `Read` returns from `offset` (1-indexed) to the end.
+    fn read_from_line(text: &str, offset: usize) -> String {
+        text.split('\n')
+            .skip(offset - 1)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn resume_line_covers_everything_after_the_cut() {
+        // Cut inside a line: the resume line repeats the shown part of it.
+        let mid_line = format!("{}\n{}", "a".repeat(MAX_WORKER_TEXT_CHARS - 2), "bcd\nrest");
+        // Cut right after a line break: the resume line starts at the cut.
+        let at_break = format!("{}\nnext\nrest", "a".repeat(MAX_WORKER_TEXT_CHARS - 1));
+        for text in [mid_line, at_break] {
+            let bounded = bound_worker_text(&text);
+            let rest = &text[bounded.head.len()..];
+            let resumed = read_from_line(&text, bounded.resume_line.expect("truncated"));
+            assert!(
+                resumed.ends_with(rest),
+                "{resumed:?} must end with {rest:?}"
+            );
+            if bounded.head.ends_with('\n') {
+                assert_eq!(resumed, rest);
+            }
+            let _ = std::fs::remove_file(bounded.file.expect("spill file"));
+        }
     }
 
     #[test]
