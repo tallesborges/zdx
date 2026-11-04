@@ -605,6 +605,17 @@ pub(crate) fn truncate_bytes_to_byte_limit(
     (truncated, true, total_bytes)
 }
 
+/// Writes the full text behind a truncated result to a new file in the
+/// system temp directory (`zdx-<label>-<uuid>.txt`) and returns its path, so
+/// the caller can point the model at it for the `Read` tool. Returns `None`
+/// when the file cannot be written.
+#[must_use]
+pub fn write_spill_file(label: &str, bytes: &[u8]) -> Option<String> {
+    let path = std::env::temp_dir().join(format!("zdx-{label}-{}.txt", uuid::Uuid::new_v4()));
+    std::fs::write(&path, bytes).ok()?;
+    Some(path.to_string_lossy().into_owned())
+}
+
 /// Truncates a string at a valid UTF-8 character boundary at or before
 /// `max_bytes`.
 ///

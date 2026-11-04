@@ -8,9 +8,67 @@ use crate::core::thread_persistence::{self, Thread, ThreadEvent};
 use crate::core::workers::{CompletionEvent, WorkerStatus};
 use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
 
-/// Longest worker final-text excerpt embedded in an update; the orchestrator
-/// is told to use `Read_Thread` for anything longer.
-const MAX_UPDATE_TEXT_CHARS: usize = 2000;
+/// Longest worker final text or error kept inline in a `[worker update]` and
+/// in `get_thread_status`'s `latest_final_text`. Longer text is spilled whole
+/// to a temp file that the orchestrator reads with `Read`.
+pub const MAX_WORKER_TEXT_CHARS: usize = 4000;
+
+/// A worker's final text or error, cut to [`MAX_WORKER_TEXT_CHARS`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundedWorkerText {
+    /// The first [`MAX_WORKER_TEXT_CHARS`] characters, or all of the text.
+    pub head: String,
+    /// Character count of the full text.
+    pub total_chars: usize,
+    pub truncated: bool,
+    /// Temp file holding the exact full text; set only when `truncated` and
+    /// the file was written.
+    pub file: Option<String>,
+}
+
+/// Cuts worker text to [`MAX_WORKER_TEXT_CHARS`] and, when it is longer,
+/// writes the exact full text to a temp file.
+#[must_use]
+pub fn bound_worker_text(text: &str) -> BoundedWorkerText {
+    let total_chars = text.chars().count();
+    if total_chars <= MAX_WORKER_TEXT_CHARS {
+        return BoundedWorkerText {
+            head: text.to_string(),
+            total_chars,
+            truncated: false,
+            file: None,
+        };
+    }
+    BoundedWorkerText {
+        head: text.chars().take(MAX_WORKER_TEXT_CHARS).collect(),
+        total_chars,
+        truncated: true,
+        file: zdx_tools::write_spill_file("worker-text", text.as_bytes()),
+    }
+}
+
+/// Inline worker text for the update prompt, with a notice that names the
+/// spill file when the text was cut.
+fn worker_text_for_prompt(text: &str) -> String {
+    let bounded = bound_worker_text(text);
+    if !bounded.truncated {
+        return bounded.head;
+    }
+    let shown = format!(
+        "showing the first {MAX_WORKER_TEXT_CHARS} of {} characters",
+        bounded.total_chars
+    );
+    match bounded.file {
+        Some(path) => format!(
+            "{}…\n[truncated: {shown}. The exact full text is in `{path}`; use Read on it to see the rest.]",
+            bounded.head
+        ),
+        None => format!(
+            "{}…\n[truncated: {shown}. The full text could not be saved to a file; Read_Thread gives a summary of the rest.]",
+            bounded.head
+        ),
+    }
+}
 
 /// Compact prompt describing one finished worker turn.
 ///
@@ -30,13 +88,13 @@ pub fn worker_update_prompt(event: &CompletionEvent, worker_context: &serde_json
         WorkerStatus::Completed => {
             let text = event.final_text.as_deref().unwrap_or_default();
             prompt.push_str("\nFinal message:\n");
-            prompt.push_str(&truncate_chars(text, MAX_UPDATE_TEXT_CHARS));
+            prompt.push_str(&worker_text_for_prompt(text));
             prompt.push('\n');
         }
         _ => {
             if let Some(error) = event.error.as_deref() {
                 prompt.push_str("\nError:\n");
-                prompt.push_str(&truncate_chars(error, MAX_UPDATE_TEXT_CHARS));
+                prompt.push_str(&worker_text_for_prompt(error));
                 prompt.push('\n');
             }
         }
@@ -214,8 +272,54 @@ mod tests {
             &serde_json::Value::Null,
         );
         assert!(prompt.contains("status: failed"));
-        assert!(prompt.contains("[truncated"));
-        assert!(prompt.chars().count() < 3100);
+        assert!(prompt.contains("[truncated: showing the first 4000 of 10000 characters"));
+        assert!(prompt.chars().count() < MAX_WORKER_TEXT_CHARS + 1100);
+        let path = spill_path(&prompt);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "x".repeat(10_000));
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// The path between the backticks of the truncation notice.
+    fn spill_path(prompt: &str) -> String {
+        let notice = prompt.find("full text is in `").expect("spill notice") + 17;
+        let end = prompt[notice..].find('`').expect("closing backtick");
+        prompt[notice..notice + end].to_string()
+    }
+
+    #[test]
+    fn long_final_text_is_spilled_whole_to_a_readable_file() {
+        let text = format!("{}é tail marker", "report line\n".repeat(400));
+        let prompt = worker_update_prompt(
+            &CompletionEvent {
+                final_text: Some(text.clone()),
+                ..completion(WorkerStatus::Completed)
+            },
+            &serde_json::Value::Null,
+        );
+        assert!(!prompt.contains("tail marker"));
+        assert!(prompt.contains("use Read on it"));
+        let path = spill_path(&prompt);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn final_text_at_the_cap_stays_inline_without_a_file() {
+        let text = "y".repeat(MAX_WORKER_TEXT_CHARS);
+        let bounded = bound_worker_text(&text);
+        assert!(!bounded.truncated);
+        assert_eq!(bounded.head, text);
+        assert!(bounded.file.is_none());
+
+        let prompt = worker_update_prompt(
+            &CompletionEvent {
+                final_text: Some(text.clone()),
+                ..completion(WorkerStatus::Completed)
+            },
+            &serde_json::Value::Null,
+        );
+        assert!(prompt.contains(&text));
+        assert!(!prompt.contains("[truncated"));
     }
 
     #[test]

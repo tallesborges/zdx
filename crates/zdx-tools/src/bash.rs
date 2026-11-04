@@ -12,7 +12,6 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncRead};
-use uuid::Uuid;
 
 use super::{ToolContext, ToolDefinition, ToolOutput};
 #[cfg(unix)]
@@ -28,21 +27,6 @@ const MAX_OUTPUT_BYTES: usize = 40 * 1024; // 40KB
 /// `setsid`), it can keep the pipes open. After this grace expires, readers
 /// are aborted so `bash_handler` isn't held hostage by orphan processes.
 const READER_GRACE: Duration = Duration::from_millis(500);
-
-/// Writes full output to a temp file and returns the file path.
-///
-/// Used when output is truncated so the AI can use the Read tool to access
-/// the complete data with offset/limit parameters.
-fn write_temp_file(bytes: &[u8], stream_name: &str) -> Option<String> {
-    let temp_dir = std::env::temp_dir();
-    let filename = format!("zdx-bash-{}-{}.txt", Uuid::new_v4(), stream_name);
-    let path = temp_dir.join(filename);
-
-    let mut file = File::create(&path).ok()?;
-    file.write_all(bytes).ok()?;
-
-    Some(path.to_string_lossy().into_owned())
-}
 
 /// What the `Bash` tool is for, shared by both execution modes' descriptions.
 const PURPOSE: &str = "Run shell and CLI workflows whose capability no dedicated tool provides: builds, tests, version control, package managers, other CLIs, and work on those commands' own output. Reading, discovering, and searching files is covered by the dedicated tools, which return structured, ignore-aware, paginated results; scoping or limiting such a result is part of that same capability.";
@@ -911,12 +895,12 @@ async fn run_command(
 
     // Write full output to temp files when truncated
     let stdout_file = if stdout_truncated {
-        write_temp_file(&stdout_buf, "stdout")
+        super::write_spill_file("bash-stdout", &stdout_buf)
     } else {
         None
     };
     let stderr_file = if stderr_truncated {
-        write_temp_file(&stderr_buf, "stderr")
+        super::write_spill_file("bash-stderr", &stderr_buf)
     } else {
         None
     };
@@ -1053,10 +1037,10 @@ fn hand_off_to_background(
         stdout_total_bytes,
         stderr_total_bytes,
         stdout_file: stdout_truncated
-            .then(|| write_temp_file(&stdout_buf, "stdout"))
+            .then(|| super::write_spill_file("bash-stdout", &stdout_buf))
             .flatten(),
         stderr_file: stderr_truncated
-            .then(|| write_temp_file(&stderr_buf, "stderr"))
+            .then(|| super::write_spill_file("bash-stderr", &stderr_buf))
             .flatten(),
         stdout_log: stdout_log.to_string_lossy().into_owned(),
         stderr_log: stderr_log.to_string_lossy().into_owned(),
@@ -1517,8 +1501,7 @@ mod tests {
         let stdout_file = data["stdout_file"]
             .as_str()
             .expect("should have stdout_file");
-        assert!(stdout_file.contains("zdx-bash-"));
-        assert!(stdout_file.contains("-stdout.txt"));
+        assert!(stdout_file.contains("zdx-bash-stdout-"));
 
         // File should exist and contain full output
         let file_contents = std::fs::read_to_string(stdout_file).expect("should read temp file");
@@ -1544,8 +1527,7 @@ mod tests {
         let stderr_file = data["stderr_file"]
             .as_str()
             .expect("should have stderr_file");
-        assert!(stderr_file.contains("zdx-bash-"));
-        assert!(stderr_file.contains("-stderr.txt"));
+        assert!(stderr_file.contains("zdx-bash-stderr-"));
 
         // File should exist and contain full output
         let file_contents = std::fs::read_to_string(stderr_file).expect("should read temp file");
@@ -1570,22 +1552,6 @@ mod tests {
         // Should NOT have stdout_file or stderr_file
         assert!(data.get("stdout_file").is_none());
         assert!(data.get("stderr_file").is_none());
-    }
-
-    #[test]
-    fn test_write_temp_file() {
-        let content = b"Hello, temp file!";
-        let path = write_temp_file(content, "test").expect("should write temp file");
-
-        assert!(path.contains("zdx-bash-"));
-        assert!(path.contains("-test.txt"));
-
-        // Verify file contents
-        let read_content = std::fs::read_to_string(&path).expect("should read temp file");
-        assert_eq!(read_content.as_bytes(), content);
-
-        // Clean up
-        let _ = std::fs::remove_file(&path);
     }
 }
 
@@ -1637,7 +1603,7 @@ mod handoff_tests {
             let exit_code = Arc::clone(&self.exit_code);
             Handoff {
                 bound,
-                bg_id: format!("bg-{}", Uuid::new_v4()),
+                bg_id: format!("bg-{}", uuid::Uuid::new_v4()),
                 stdout_log: self.stdout_log(),
                 stderr_log: self.stderr_log(),
                 on_adopt: Box::new(move |target| {

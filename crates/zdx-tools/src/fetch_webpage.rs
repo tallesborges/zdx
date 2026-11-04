@@ -5,7 +5,6 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use uuid::Uuid;
 
 use super::{ToolContext, ToolDefinition, ToolOutput};
 
@@ -263,15 +262,8 @@ fn cap_full_content(result: &mut ExtractResult) {
     if truncated {
         result.full_content_truncated = true;
         result.full_content_total_bytes = Some(total_bytes);
-        result.full_content_file = write_temp_file(content.as_bytes());
+        result.full_content_file = super::write_spill_file("fetch", content.as_bytes());
     }
-}
-
-/// Writes the untruncated page body to a temp file for follow-up `Read` calls.
-fn write_temp_file(bytes: &[u8]) -> Option<String> {
-    let path = std::env::temp_dir().join(format!("zdx-fetch-{}.txt", Uuid::new_v4()));
-    std::fs::write(&path, bytes).ok()?;
-    Some(path.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
