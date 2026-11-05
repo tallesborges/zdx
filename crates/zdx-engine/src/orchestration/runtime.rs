@@ -195,16 +195,18 @@ impl Drop for Subscription {
 }
 
 impl Orchestrator {
-    /// Starts a runtime whose workers run as `zdx --thread <id> exec` and whose
-    /// turns run the thread's persistent profile. Must run inside a Tokio
-    /// runtime.
-    #[must_use]
-    pub fn start() -> Arc<Self> {
-        let (workers, worker_events) = WorkerManager::new();
+    /// Starts a runtime whose workers run through the configured runner
+    /// (`[workers]`: `zdx --thread <id> exec` by default) and whose turns run
+    /// the thread's persistent profile. Must run inside a Tokio runtime.
+    ///
+    /// # Errors
+    /// Returns an error when the worker runner is not validly configured.
+    pub fn start(workers: &crate::config::WorkersConfig) -> anyhow::Result<Arc<Self>> {
+        let (workers, worker_events) = WorkerManager::from_config(workers)?;
         let runner: TurnRunner = Arc::new(|request| Box::pin(run_profile_turn(request)));
         let orchestrator = Self::start_with(workers, worker_events, runner);
         orchestrator.recover_mirrors();
-        orchestrator
+        Ok(orchestrator)
     }
 
     /// Starts a runtime over an existing worker manager and turn runner

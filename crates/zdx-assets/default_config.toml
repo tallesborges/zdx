@@ -322,3 +322,15 @@ websocket = false
 
 [notifications]
 osc = true
+
+# Where the orchestrator service runs worker turns (read when it starts).
+# "local": a child `zdx exec` in the worker's root (default).
+# "external": the launcher in [workers.external] runs each turn elsewhere
+# (container, VM, sandbox). Contract: docs/SPEC.md §18, External worker runner.
+[workers]
+runner = "local"
+
+# [workers.external]
+# command = ["/abs/path/to/launcher", "--profile", "sandbox"]  # argv, no shell
+# timeout_secs = 0         # deadline for one worker turn (0: none)
+# cancel_grace_secs = 60   # time the launcher gets after SIGTERM to clean up

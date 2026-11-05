@@ -2,8 +2,9 @@
 //!
 //! Workers are ordinary visible ZDX threads bound to one project root. The
 //! manager owns one FIFO per worker: prompts for a single worker run strictly
-//! serially through a child `zdx --thread <id> exec` process, while different
-//! workers run concurrently. All manager state (ownership, queues, status,
+//! serially through the configured runner (by default a child
+//! `zdx --thread <id> exec` process; see `external_worker` for the launcher
+//! runner), while different workers run concurrently. All manager state (ownership, queues, status,
 //! completion channel, mirror links) is process-lifetime only by design — on
 //! restart the thread JSONL transcripts survive and workers can be re-attached
 //! with `send_message` (recovering their root and model override from the
@@ -85,7 +86,10 @@ pub enum WorkerActivity {
 
 impl WorkerActivity {
     fn from_stream_chunk(chunk: &str) -> Option<Self> {
-        let value: Value = serde_json::from_str(chunk).ok()?;
+        Self::from_chunk_value(&serde_json::from_str(chunk).ok()?)
+    }
+
+    pub(crate) fn from_chunk_value(value: &Value) -> Option<Self> {
         let id = value.get("id")?.as_str()?.to_string();
         match value.get("t")?.as_str()? {
             "start" => Some(Self::ToolStarted {
@@ -263,6 +267,9 @@ pub struct WorkerManager {
     mirrors: Mutex<HashMap<String, String>>,
     events_tx: mpsc::UnboundedSender<WorkerEvent>,
     runner: WorkerRunner,
+    /// Local runners need the worker root to exist on this host; an external
+    /// runner maps it to a remote workspace, so it only has to be absolute.
+    local_roots: bool,
 }
 
 impl WorkerManager {
@@ -276,6 +283,40 @@ impl WorkerManager {
         })
     }
 
+    /// Creates a manager for the configured runner (`[workers]`): the local
+    /// default, or the external launcher.
+    ///
+    /// # Errors
+    /// Returns an error when the external runner is selected but not validly
+    /// configured, or on a platform without process supervision.
+    pub fn from_config(
+        config: &crate::config::WorkersConfig,
+    ) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<WorkerEvent>)> {
+        match config.runner {
+            crate::config::WorkerRunnerKind::Local => Ok(Self::new()),
+            #[cfg(unix)]
+            crate::config::WorkerRunnerKind::External => {
+                let external = config.external.as_ref().context(
+                    "[workers] runner = \"external\" needs a [workers.external] section",
+                )?;
+                let runner = Arc::new(crate::core::external_worker::ExternalRunner::from_config(
+                    external,
+                )?);
+                Ok(Self::build(false, |manager| {
+                    Arc::new(move |request| {
+                        let runner = Arc::clone(&runner);
+                        let manager = Weak::clone(&manager);
+                        Box::pin(async move { runner.run(request, manager).await })
+                    })
+                }))
+            }
+            #[cfg(not(unix))]
+            crate::config::WorkerRunnerKind::External => {
+                bail!("The external worker runner needs a Unix host")
+            }
+        }
+    }
+
     /// Creates a manager with a custom prompt runner (used by tests).
     #[must_use]
     pub fn with_runner(runner: WorkerRunner) -> (Arc<Self>, mpsc::UnboundedReceiver<WorkerEvent>) {
@@ -286,6 +327,13 @@ impl WorkerManager {
     fn with_runner_cyclic(
         make_runner: impl FnOnce(Weak<Self>) -> WorkerRunner,
     ) -> (Arc<Self>, mpsc::UnboundedReceiver<WorkerEvent>) {
+        Self::build(true, make_runner)
+    }
+
+    fn build(
+        local_roots: bool,
+        make_runner: impl FnOnce(Weak<Self>) -> WorkerRunner,
+    ) -> (Arc<Self>, mpsc::UnboundedReceiver<WorkerEvent>) {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let mut make_runner = Some(make_runner);
         let manager = Arc::new_cyclic(|weak| Self {
@@ -294,6 +342,7 @@ impl WorkerManager {
             mirrors: Mutex::new(HashMap::new()),
             events_tx,
             runner: (make_runner.take().expect("runner factory runs once"))(Weak::clone(weak)),
+            local_roots,
         });
         (manager, events_rx)
     }
@@ -376,14 +425,7 @@ impl WorkerManager {
         thinking_level: Option<ThinkingLevel>,
     ) -> Result<String> {
         ensure!(!prompt.trim().is_empty(), "Worker prompt cannot be empty");
-        let root = root
-            .canonicalize()
-            .with_context(|| format!("Project root does not exist: {}", root.display()))?;
-        ensure!(
-            root.is_dir(),
-            "Project root is not a directory: {}",
-            root.display()
-        );
+        let root = self.worker_root(root)?;
 
         let mut thread = thread_persistence::Thread::new_with_root(&root)
             .context("Failed to create worker thread")?;
@@ -468,7 +510,7 @@ impl WorkerManager {
             return Ok(snapshot);
         }
 
-        let root = resolve_persisted_root(worker_thread_id)?;
+        let root = self.worker_root(&persisted_root(worker_thread_id)?)?;
         let model = resolve_persisted_model(worker_thread_id);
         Ok(self.attach_or_enqueue(
             worker_thread_id,
@@ -503,7 +545,7 @@ impl WorkerManager {
             return Ok(snapshot);
         }
 
-        let root = resolve_persisted_root(worker_thread_id)?;
+        let root = self.worker_root(&persisted_root(worker_thread_id)?)?;
         let model = resolve_persisted_model(worker_thread_id);
         Ok(self.attach_or_enqueue(worker_thread_id, None, root, model, None, message))
     }
@@ -789,23 +831,44 @@ impl WorkerManager {
     }
 }
 
-/// Resolves an existing thread's persisted project root for re-attachment.
-fn resolve_persisted_root(worker_thread_id: &str) -> Result<PathBuf> {
+impl WorkerManager {
+    /// Validates a worker root for this manager's runner. Local runners need
+    /// an existing directory on this host. An external runner needs only an
+    /// absolute path without `..`: it is the host-side identity the launcher
+    /// maps to a remote workspace, and it is canonicalized when it does exist.
+    fn worker_root(&self, root: &Path) -> Result<PathBuf> {
+        if self.local_roots {
+            let root = root
+                .canonicalize()
+                .with_context(|| format!("Project root does not exist: {}", root.display()))?;
+            ensure!(
+                root.is_dir(),
+                "Project root is not a directory: {}",
+                root.display()
+            );
+            return Ok(root);
+        }
+        ensure!(
+            root.is_absolute()
+                && !root
+                    .components()
+                    .any(|part| matches!(part, std::path::Component::ParentDir)),
+            "Project root must be an absolute path without `..`: {}",
+            root.display()
+        );
+        Ok(root.canonicalize().unwrap_or_else(|_| root.to_path_buf()))
+    }
+}
+
+/// An existing thread's persisted project root, for re-attachment.
+fn persisted_root(worker_thread_id: &str) -> Result<PathBuf> {
     ensure!(
         thread_persistence::thread_exists(worker_thread_id),
         "Thread '{worker_thread_id}' not found"
     );
-    let root = thread_persistence::read_thread_root_path(worker_thread_id)?
+    thread_persistence::read_thread_root_path(worker_thread_id)?
         .map(PathBuf::from)
-        .ok_or_else(|| {
-            anyhow::anyhow!("Thread '{worker_thread_id}' has no recorded project root")
-        })?;
-    root.canonicalize().with_context(|| {
-        format!(
-            "Recorded project root for '{worker_thread_id}' no longer exists: {}",
-            root.display()
-        )
-    })
+        .ok_or_else(|| anyhow::anyhow!("Thread '{worker_thread_id}' has no recorded project root"))
 }
 
 /// Resolves an existing thread's persisted model override (`provider:model@thinking`)

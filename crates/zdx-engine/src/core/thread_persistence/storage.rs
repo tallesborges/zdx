@@ -1361,6 +1361,120 @@ pub fn thread_exists(id: &str) -> bool {
     threads_dir().join(format!("{id}.jsonl")).exists()
 }
 
+/// Copies a thread file to `dest` under the thread lock, so a runner that
+/// resumes the thread elsewhere starts from a consistent copy.
+///
+/// # Errors
+/// Returns an error if the thread does not exist or the copy fails.
+pub fn snapshot_thread_file(id: &str, dest: &Path) -> Result<()> {
+    let path = threads_dir().join(format!("{id}.jsonl"));
+    if !path.exists() {
+        bail!("Thread '{id}' not found");
+    }
+    let _lock = ThreadFileLock::acquire(&path)?;
+    fs::copy(&path, dest).context("Failed to copy thread file")?;
+    Ok(())
+}
+
+/// Appends to thread `id` the events a runner added after `sent`.
+///
+/// `sent` is the snapshot the runner received ([`snapshot_thread_file`]);
+/// `returned` is the runner's copy of the thread after its turn. `returned`
+/// must start with a meta line (the runner's own, never imported), followed by
+/// every event line of `sent` after its meta line, unchanged and in order.
+/// Each later line must be a non-meta [`ThreadEvent`]; those lines are
+/// appended verbatim in one write under the thread lock. Nothing is written
+/// when a check fails. Returns the number of appended events.
+///
+/// # Errors
+/// Returns an error if a file cannot be read, `returned` does not extend
+/// `sent`, a new line is not a valid event, or the append fails.
+pub fn import_runner_events(id: &str, sent: &Path, returned: &Path) -> Result<usize> {
+    fn non_empty_lines(path: &Path) -> Result<Vec<String>> {
+        let file = fs::File::open(path)
+            .with_context(|| format!("Failed to open transcript {}", path.display()))?;
+        let mut lines = Vec::new();
+        for line in BufReader::new(file).lines() {
+            let line = line.context("Failed to read transcript line")?;
+            if !line.trim().is_empty() {
+                lines.push(line);
+            }
+        }
+        Ok(lines)
+    }
+    fn same_line(a: &str, b: &str) -> bool {
+        a == b
+            || matches!(
+                (serde_json::from_str::<serde_json::Value>(a), serde_json::from_str::<serde_json::Value>(b)),
+                (Ok(x), Ok(y)) if x == y
+            )
+    }
+
+    let sent_lines = non_empty_lines(sent)?;
+    let returned_lines = non_empty_lines(returned)?;
+    let sent_events = sent_lines
+        .get(1..)
+        .ok_or_else(|| anyhow!("The transcript sent has no meta line"))?;
+    let returned_meta = returned_lines
+        .first()
+        .ok_or_else(|| anyhow!("The returned transcript is empty"))?;
+    if !matches!(
+        serde_json::from_str::<ThreadEvent>(returned_meta),
+        Ok(ThreadEvent::Meta { .. })
+    ) {
+        bail!("The returned transcript does not start with a meta line");
+    }
+    let returned_events = &returned_lines[1..];
+    if returned_events.len() < sent_events.len() {
+        bail!(
+            "The returned transcript has {} events, fewer than the {} sent",
+            returned_events.len(),
+            sent_events.len()
+        );
+    }
+    if let Some(index) = sent_events
+        .iter()
+        .zip(returned_events)
+        .position(|(a, b)| !same_line(a, b))
+    {
+        bail!(
+            "The returned transcript differs from the one sent at event {}",
+            index + 1
+        );
+    }
+
+    let new_lines = &returned_events[sent_events.len()..];
+    let mut buffer = String::new();
+    for (offset, line) in new_lines.iter().enumerate() {
+        let number = sent_events.len() + offset + 1;
+        match serde_json::from_str::<ThreadEvent>(line) {
+            Ok(ThreadEvent::Meta { .. }) => {
+                bail!("The returned transcript has a second meta line at event {number}")
+            }
+            Ok(_) => {}
+            Err(err) => bail!("The returned transcript has an invalid event at {number}: {err}"),
+        }
+        buffer.push_str(line.trim());
+        buffer.push('\n');
+    }
+    if buffer.is_empty() {
+        return Ok(0);
+    }
+
+    let path = threads_dir().join(format!("{id}.jsonl"));
+    if !path.exists() {
+        bail!("Thread '{id}' not found");
+    }
+    let _lock = ThreadFileLock::acquire(&path)?;
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .context("Failed to open thread file")?;
+    file.write_all(buffer.as_bytes())
+        .context("Failed to append runner events")?;
+    Ok(new_lines.len())
+}
+
 /// Updates a thread's title by ID.
 ///
 /// # Errors

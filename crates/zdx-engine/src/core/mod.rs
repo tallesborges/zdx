@@ -16,6 +16,7 @@
 //! - `media_fallback`: image-to-`ask-media` fallback for models without image input
 //! - `native_memory`: native SQLite-backed memory index/search
 //! - `subagent`: Child `zdx exec` subagent runner
+//! - `external_worker`: Worker turns run by a configured external launcher
 //! - `thread_export`: Thread transcript exports
 //! - `thread_index`: derived `threads.sqlite` cache (metadata, FTS, tool rows, export dirty state)
 //! - `thread_persistence`: Thread persistence
@@ -31,6 +32,8 @@ pub mod artifacts;
 pub mod context;
 pub mod delivery;
 pub mod events;
+#[cfg(unix)]
+pub mod external_worker;
 pub mod fts_query;
 pub mod handoff_generation;
 pub mod interrupt;

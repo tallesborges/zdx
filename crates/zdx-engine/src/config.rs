@@ -674,6 +674,51 @@ impl Default for NotificationsConfig {
     }
 }
 
+/// Where the orchestrator service runs worker turns. Read once when the
+/// service starts.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkersConfig {
+    /// `local` (default): a child `zdx --thread <id> exec` in the worker's
+    /// root. `external`: the `[workers.external]` launcher (SPEC §18).
+    pub runner: WorkerRunnerKind,
+    /// External launcher settings; required when `runner = "external"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external: Option<ExternalWorkerConfig>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerRunnerKind {
+    #[default]
+    Local,
+    External,
+}
+
+/// External worker launcher (SPEC §18, External worker runner).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ExternalWorkerConfig {
+    /// Launcher argv. The first item is an absolute path; no shell runs it.
+    /// ZDX appends `run <request.json>` or `cleanup <request.json>`.
+    pub command: Vec<String>,
+    /// Deadline for one worker turn, in seconds (0: none).
+    pub timeout_secs: u64,
+    /// Seconds the launcher gets after `SIGTERM` (cancel or timeout), and the
+    /// bound for the `cleanup` call, before ZDX kills it.
+    pub cancel_grace_secs: u64,
+}
+
+impl Default for ExternalWorkerConfig {
+    fn default() -> Self {
+        Self {
+            command: Vec::new(),
+            timeout_secs: 0,
+            cancel_grace_secs: 60,
+        }
+    }
+}
+
 /// Memory system configuration.
 ///
 /// Configures the root directory for memory storage.
@@ -1030,6 +1075,10 @@ pub struct Config {
     /// Turn-completion notification configuration for the interactive TUI.
     #[serde(default)]
     pub notifications: NotificationsConfig,
+
+    /// Orchestrator worker runner configuration.
+    #[serde(default)]
+    pub workers: WorkersConfig,
 
     /// Telegram bot configuration
     #[serde(default)]
@@ -1966,6 +2015,7 @@ impl Default for Config {
             transcription: TranscriptionConfig::default(),
             speech: SpeechConfig::default(),
             notifications: NotificationsConfig::default(),
+            workers: WorkersConfig::default(),
             telegram: TelegramConfig::default(),
         }
     }

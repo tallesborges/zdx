@@ -29,8 +29,16 @@ pub async fn serve(root: &Path) -> Result<()> {
         tracing::warn!(err = %format!("{err:#}"), "Failed to mark orchestrator as launchd-supervised");
     }
     let socket = socket_path();
-    tracing::info!(root = %root.display(), "Orchestrator service started");
-    let orchestrator = Orchestrator::start();
+    let config = zdx_engine::config::Config::load_layered(
+        &zdx_engine::config::paths::config_layer_paths_for(root),
+    )
+    .context("load config")?;
+    let orchestrator = Orchestrator::start(&config.workers).context("start worker runner")?;
+    tracing::info!(
+        root = %root.display(),
+        runner = ?config.workers.runner,
+        "Orchestrator service started"
+    );
     let result = tokio::select! {
         result = server::serve(orchestrator, socket.clone()) => result,
         () = interrupt::wait_for_interrupt() => {
