@@ -10,6 +10,12 @@ doctest = false
 
 [lints]
 workspace = true
+
+[features]
+default = ["microphone"]
+# Microphone capture for voice input (cpal; links ALSA `libasound` on Linux).
+microphone = ["dep:cpal", "dep:hound"]
+
 [dependencies]
 zdx-engine = { path = "../zdx-engine" }
 zdx-transcript = { path = "../zdx-transcript" }
@@ -18,14 +24,14 @@ zdx-types = { path = "../zdx-types" }
 anyhow.workspace = true
 base64.workspace = true
 chrono.workspace = true
-cpal.workspace = true
+cpal = { workspace = true, optional = true }
 crossterm.workspace = true
 enum-map.workspace = true
 fast_image_resize.workspace = true
 futures-util.workspace = true
 ignore.workspace = true
 image.workspace = true
-hound.workspace = true
+hound = { workspace = true, optional = true }
 nucleo-matcher.workspace = true
 open.workspace = true
 pulldown-cmark.workspace = true

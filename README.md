@@ -25,6 +25,8 @@ cd zdx
 cargo install --path crates/zdx-cli
 ```
 
+On Linux, the default build needs ALSA headers (`libasound2-dev`) for TUI microphone input. Without them, or for a headless host, build without it: `cargo install --path crates/zdx-cli --no-default-features --features tui`. The released Linux binary is built this way and needs glibc 2.35 or newer and OpenSSL 3 (`libssl3`).
+
 ### Run
 
 ```bash

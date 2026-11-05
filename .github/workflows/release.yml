@@ -36,15 +36,17 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
+            features: ""
+          # Linux baseline: glibc 2.35 (Ubuntu 22.04; Debian 12 has 2.36).
+          # The binary links against the builder's glibc, so the builder pins
+          # the baseline. No microphone feature: no ALSA (libasound.so.2).
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-22.04
+            features: "--no-default-features --features tui"
+            glibc_max: "2.35"
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
       - name: Install toolchain (pinned)
         uses: dtolnay/rust-toolchain@stable
@@ -66,7 +68,22 @@ jobs:
         run: cd apps/web && bun install --frozen-lockfile && bun run build
 
       - name: Build
-        run: cargo build -p zdx --release --locked --target ${{ matrix.target }}
+        run: cargo build -p zdx --release --locked --target ${{ matrix.target }} ${{ matrix.features }}
+
+      - name: Check Linux baseline
+        if: runner.os == 'Linux'
+        run: |
+          bin=target/${{ matrix.target }}/release/zdx
+          readelf -d "$bin" | grep NEEDED
+          if readelf -d "$bin" | grep -q libasound; then
+            echo "::error::zdx links libasound"; exit 1
+          fi
+          need=$(objdump -T "$bin" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
+          echo "Highest glibc symbol version: $need (baseline ${{ matrix.glibc_max }})"
+          if [ "$(printf '%s\n%s\n' "$need" "${{ matrix.glibc_max }}" | sort -V | tail -1)" != "${{ matrix.glibc_max }}" ]; then
+            echo "::error::zdx needs glibc $need, above the ${{ matrix.glibc_max }} baseline"; exit 1
+          fi
+          "$bin" --version
 
       - name: Package
         run: tar -czf zdx-${{ inputs.tag }}-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release zdx

@@ -18,7 +18,7 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 - `runtime/mod.rs`: runtime event loop and dispatcher
 - `runtime/inbox.rs`: runtime inbox channel types
 - `runtime/image_ops.rs`: shared image loading/transform helpers (preview + attachments)
-- `runtime/handlers/voice.rs`: microphone capture + voice transcription task handlers
+- `runtime/handlers/voice.rs`: microphone capture + voice transcription task handlers. Capture (`cpal`, ALSA on Linux) is behind the default `microphone` feature; without it `voice_record` returns an error event. Check both builds: `cargo clippy -p zdx --bins --no-default-features --features tui`.
 - `runtime/handlers/`: side-effect handlers (thread ops, agent spawn, auth, skills, bash, file picker)
 - `runtime/context_analyze.rs`: context analysis handler
 - `runtime/handoff.rs`: handoff generation handlers (thin adapter over `zdx_engine::core::handoff_generation`)
