@@ -13,6 +13,7 @@ pub fn extension_for_mime_type(mime: &str) -> Option<&'static str> {
         "image/jpeg" => Some("jpg"),
         "image/gif" => Some("gif"),
         "image/webp" => Some("webp"),
+        "image/svg+xml" => Some("svg"),
         _ => None,
     }
 }
@@ -27,6 +28,7 @@ mod tests {
         assert_eq!(extension_for_mime_type("image/jpeg"), Some("jpg"));
         assert_eq!(extension_for_mime_type("image/gif"), Some("gif"));
         assert_eq!(extension_for_mime_type("image/webp"), Some("webp"));
+        assert_eq!(extension_for_mime_type("image/svg+xml"), Some("svg"));
         assert_eq!(extension_for_mime_type("application/pdf"), None);
     }
 }

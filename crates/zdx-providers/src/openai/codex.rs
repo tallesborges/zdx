@@ -9,14 +9,9 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use zdx_assets::IDENTITY_PROMPT_TEMPLATE;
 use zdx_types::{TextVerbosity, ToolDefinition};
 
-use super::image_generation::{
-    OpenAIGenerateImageResponse, OpenAIImageGenerationOptions, build_image_generation_request,
-    parse_image_generation_sse_response,
-};
 use crate::oauth::openai_codex as oauth_codex;
 use crate::openai::responses::{ResponsesConfig, send_responses_stream};
 use crate::openai::responses_ws::{OpenAIResponsesWsClient, WsHeaderFactory};
-use crate::shared::classify_reqwest_error;
 use crate::{ProviderKind, ProviderStream};
 
 const RESPONSES_PATH: &str = "/codex/responses";
@@ -174,60 +169,6 @@ impl OpenAICodexClient {
         // Keep `system` input empty here to avoid duplication in `input`.
         send_responses_stream("codex", &self.http, &config, headers, messages, tools, None).await
     }
-
-    /// Generate image content using the hosted Responses API `image_generation` tool.
-    ///
-    /// The Responses API uses a mainline model for tool orchestration; when callers pass
-    /// `gpt-image-2` as the selected model, use the current Codex-capable default model
-    /// and force the hosted image generation tool. The subscription backend manages the
-    /// image engine itself: probes showed it ignores the requested image model, size, and
-    /// quality, and it does not report which model ran.
-    ///
-    /// # Errors
-    /// Returns an error if the request fails or the response cannot be parsed.
-    pub async fn generate_images(
-        &self,
-        prompt: &str,
-        options: &OpenAIImageGenerationOptions,
-    ) -> Result<OpenAIGenerateImageResponse> {
-        let creds = resolve_credentials(self.config.account.as_deref()).await?;
-        let headers = build_headers(
-            &creds.account_id,
-            &creds.access,
-            self.config.prompt_cache_key.as_deref(),
-        )?;
-
-        let request = build_image_generation_request(
-            &self.config.model,
-            prompt,
-            options,
-            self.config.reasoning_effort.as_deref(),
-            self.config.text_verbosity.unwrap_or_default().as_str(),
-            self.config.service_tier.as_deref(),
-        );
-        let url = format!(
-            "{}{}",
-            ProviderKind::OpenAICodex.default_base_url(),
-            RESPONSES_PATH
-        );
-        crate::shared::log_request("codex-image", &url);
-        let response = self
-            .http
-            .post(url)
-            .headers(headers)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| classify_reqwest_error(&e))?;
-
-        let body = crate::shared::check_response_status("codex-image", response)
-            .await?
-            .text()
-            .await
-            .unwrap_or_default();
-
-        parse_image_generation_sse_response(&body)
-    }
 }
 
 fn effective_codex_instructions(system: Option<&str>) -> Option<String> {
@@ -324,6 +265,14 @@ fn build_headers(
     {
         headers.insert(HEADER_SESSION_ID, header_value);
     }
+    Ok(headers)
+}
+
+/// Headers for the Codex Images endpoints, which take and return plain JSON.
+/// Matches the live-probed request: bearer, account id, originator, user agent.
+pub(super) fn build_json_headers(account_id: &str, access_token: &str) -> Result<HeaderMap> {
+    let mut headers = build_headers(account_id, access_token, None)?;
+    headers.insert("accept", HeaderValue::from_static("application/json"));
     Ok(headers)
 }
 

@@ -181,7 +181,7 @@ enum Commands {
         #[arg(short, long, value_name = "PATH")]
         out: Option<String>,
 
-        /// Model to use (Gemini API model, openai:gpt-image-2, openai:gpt-image-2.5-flare, openai:gpt-image-2.5-sunburst, or openai-codex:gpt-image-2; Codex model and size are server-managed)
+        /// Model to use (Gemini API model, openai:gpt-image-2.6-flare, openai:gpt-image-2.6-sunburst, alibaba:qwen-image-3.0-pro, or openai-codex:gpt-image-2; Codex picks the image model, size, and quality itself)
         #[arg(long, value_name = "MODEL")]
         model: Option<String>,
 
@@ -196,6 +196,30 @@ enum Commands {
         /// Source image(s) for editing (can be repeated for multi-image composition)
         #[arg(short = 's', long, value_name = "IMAGE")]
         source: Vec<String>,
+
+        /// Output format (openai: only; svg is generation-only; gif and svg may need API preview access)
+        #[arg(long, value_name = "FORMAT", value_parser = ["png", "jpeg", "webp", "gif", "svg"])]
+        format: Option<String>,
+
+        /// Rendering quality (openai: only)
+        #[arg(long, value_name = "QUALITY", value_parser = ["low", "medium", "high", "xhigh", "max", "auto"])]
+        quality: Option<String>,
+
+        /// Planning effort before rendering (openai: only; API default high, low suits quick edits)
+        #[arg(long, value_name = "LEVEL", value_parser = ["low", "medium", "high"])]
+        complexity: Option<String>,
+
+        /// GIF frame count, 2-64 (openai: only, needs --format gif; the API reference documents 2-16)
+        #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(2..=64))]
+        frames: Option<u32>,
+
+        /// GIF delay per frame in milliseconds (openai: only, needs --format gif)
+        #[arg(long = "frame-ms", value_name = "MS", value_parser = clap::value_parser!(u32).range(20..=2000))]
+        frame_ms: Option<u32>,
+
+        /// Transparent PNG annotation layer that marks where to edit the first --source image (openai: only)
+        #[arg(long, value_name = "PNG", requires = "source")]
+        markup: Option<String>,
     },
 
     /// Synthesize speech audio from text with `OpenAI` or Mistral TTS
@@ -1266,6 +1290,12 @@ struct ImagineCommandInput {
     aspect: Option<String>,
     size: Option<String>,
     source: Vec<String>,
+    format: Option<String>,
+    quality: Option<String>,
+    complexity: Option<String>,
+    frames: Option<u32>,
+    frame_ms: Option<u32>,
+    markup: Option<String>,
 }
 
 struct SpeakCommandInput {
@@ -1344,6 +1374,12 @@ async fn run_imagine_command(
         aspect: input.aspect.as_deref(),
         size: input.size.as_deref(),
         source: &input.source,
+        format: input.format.as_deref(),
+        quality: input.quality.as_deref(),
+        complexity: input.complexity.as_deref(),
+        frames: input.frames,
+        frame_ms: input.frame_ms,
+        markup: input.markup.as_deref(),
         config: context.config,
     })
     .await
@@ -1418,6 +1454,12 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             aspect,
             size,
             source,
+            format,
+            quality,
+            complexity,
+            frames,
+            frame_ms,
+            markup,
         } => {
             run_imagine_command(
                 context,
@@ -1428,6 +1470,12 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
                     aspect,
                     size,
                     source,
+                    format,
+                    quality,
+                    complexity,
+                    frames,
+                    frame_ms,
+                    markup,
                 },
             )
             .await

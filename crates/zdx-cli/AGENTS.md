@@ -13,7 +13,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 - `src/cli/commands/bg.rs`: background-process commands (`zdx bg list [--json]`, `zdx bg kill <bg_id>`); thin wrapper over `zdx_engine::background_activity`
 - `src/cli/commands/bot.rs`: Telegram bot setup/init command handler (`zdx bot init`)
 - `src/cli/commands/daemon.rs`: jobs scheduler loop (`zdx jobs daemon`): plans each tick with `jobs::plan::plan_tick`, starts due occurrences as child `zdx jobs run --occurrence` processes (max 3, one per job), records missed/interrupted occurrences under the job lock (a missed summary that cannot be recorded holds the tick back), repairs stale `last.json` from claims on its rescan, writes the daemon context record
-- `src/cli/commands/imagine.rs`: image generation command handler (`zdx imagine`)
+- `src/cli/commands/imagine.rs`: image generation command handler (`zdx imagine`); `tests/integration/imagine.rs` covers the OpenAI Images API route (endpoint, saved file type, flag errors) against a mock server
 - `src/cli/commands/speak.rs`: text-to-speech command handler (`zdx speak`); thin wrapper over `zdx_engine::audio::speak::synthesize_speech`
 - `src/cli/commands/transcribe.rs`: speech-to-text command handler (`zdx transcribe <file>`; `--model`, `--language`, `--diarize`, `--json`, `--list-models`); wraps `zdx_engine::audio::transcribe::transcribe_audio_detailed` + `supported_models`
 - `src/cli/commands/memory.rs`: native memory indexing/search/read commands (`zdx memory index/status/search/get`)
@@ -38,7 +38,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 
 ## Checks
 
-- Follow the root verification rules. Scoped tests: `cargo test -p zdx-cli --lib --bins --tests`.
+- Follow the root verification rules. Scoped tests: `cargo test -p zdx --bins --tests` (the package is named `zdx` and has no lib target).
 
 ## Maintenance
 

@@ -5,7 +5,7 @@ use zdx_types::config::ThinkingLevel;
 pub mod api;
 pub mod chat_completions;
 pub mod codex;
-pub mod image_generation;
+pub mod images_api;
 pub mod responses;
 mod responses_sse;
 mod responses_types;
@@ -13,9 +13,9 @@ pub mod responses_ws;
 
 pub use api::{OpenAIClient, OpenAIConfig};
 pub use codex::{OpenAICodexClient, OpenAICodexConfig};
-pub use image_generation::{
-    OpenAIGenerateImageResponse, OpenAIGeneratedImage, OpenAIImageGenerationOptions,
-    OpenAIImageInput,
+pub use images_api::{
+    OpenAIGeneratedImage, OpenAIImageFormat, OpenAIImageInput, OpenAIImageUsage,
+    OpenAIImagesClient, OpenAIImagesRequest, OpenAIImagesResponse, OpenAISvgUsage,
 };
 pub use responses_ws::OpenAIResponsesWsClient;
 

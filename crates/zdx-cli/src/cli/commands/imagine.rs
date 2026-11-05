@@ -14,14 +14,16 @@ use zdx_engine::providers::gemini::{
     GeminiClient, GeminiConfig, GeminiImageGenerationOptions, ImageUsage, SourceImage,
 };
 use zdx_engine::providers::openai::{
-    OpenAIClient, OpenAICodexClient, OpenAICodexConfig, OpenAIConfig, OpenAIImageGenerationOptions,
-    OpenAIImageInput, responses_reasoning_effort,
+    OpenAIImageFormat, OpenAIImageInput, OpenAIImagesClient, OpenAIImagesRequest,
+    OpenAIImagesResponse,
 };
 use zdx_engine::providers::{ProviderKind, ProviderSelection, resolve_provider};
 
 const DEFAULT_IMAGINE_MODEL: &str = "gemini:gemini-3.1-flash-image-preview";
-const DEFAULT_OPENAI_RESPONSES_IMAGE_SIZE: &str = "1024x1024";
-const CODEX_IMAGE_NOTICE: &str = "warning: OpenAI Codex subscription image generation is server-managed. The requested image model or variant (for example gpt-image-2.5-flare) cannot be guaranteed, the reported model is not verifiable, and the requested --size and quality were not honored in probes. Use 'openai:<model>' with an API key for explicit model selection.";
+/// The only model name the Codex subscription Images endpoint was probed with.
+/// It is a backend alias: the response does not say which image model ran.
+const CODEX_IMAGE_MODEL: &str = "gpt-image-2";
+const CODEX_IMAGE_NOTICE: &str = "warning: OpenAI Codex subscription image generation is server-managed. zdx sends the model alias gpt-image-2 with automatic size and quality; the backend picks the image engine and does not report which model ran. Use 'openai:gpt-image-2.6-flare' or 'openai:gpt-image-2.6-sunburst' with an API key for explicit model selection, size, and the newer controls.";
 
 pub struct ImagineRunOptions<'a> {
     pub root: &'a Path,
@@ -31,12 +33,43 @@ pub struct ImagineRunOptions<'a> {
     pub aspect: Option<&'a str>,
     pub size: Option<&'a str>,
     pub source: &'a [String],
+    /// Images API settings; `openai:` only.
+    pub format: Option<&'a str>,
+    pub quality: Option<&'a str>,
+    pub complexity: Option<&'a str>,
+    pub frames: Option<u32>,
+    pub frame_ms: Option<u32>,
+    pub markup: Option<&'a str>,
     pub config: &'a config::Config,
+}
+
+impl ImagineRunOptions<'_> {
+    fn images_api_flags(&self) -> Vec<&'static str> {
+        [
+            ("--format", self.format.is_some()),
+            ("--quality", self.quality.is_some()),
+            ("--complexity", self.complexity.is_some()),
+            ("--frames", self.frames.is_some()),
+            ("--frame-ms", self.frame_ms.is_some()),
+            ("--markup", self.markup.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(flag, set)| set.then_some(flag))
+        .collect()
+    }
 }
 
 pub async fn run(options: ImagineRunOptions<'_>) -> Result<()> {
     let model_input = options.model_override.unwrap_or(DEFAULT_IMAGINE_MODEL);
     let provider_selection = resolve_provider(model_input);
+
+    let images_api_flags = options.images_api_flags();
+    if provider_selection.kind != ProviderKind::OpenAI && !images_api_flags.is_empty() {
+        bail!(
+            "These flags only work with OpenAI Images API models ('openai:gpt-image-2.6-flare' or 'openai:gpt-image-2.6-sunburst'): {}",
+            images_api_flags.join(", ")
+        );
+    }
 
     let response = match provider_selection.kind {
         ProviderKind::Gemini => generate_gemini_images(&provider_selection.model, &options).await?,
@@ -46,7 +79,7 @@ pub async fn run(options: ImagineRunOptions<'_>) -> Result<()> {
             generate_alibaba_images(&provider_selection.model, &options).await?
         }
         _ => bail!(
-            "zdx imagine supports Gemini, OpenAI, OpenAI Codex, and Alibaba (Qwen-Image) image generation. Use 'gemini:', 'openai:gpt-image-2', 'openai:gpt-image-2.5-flare', 'openai-codex:gpt-image-2', or 'alibaba:qwen-image-3.0-pro'"
+            "zdx imagine supports Gemini, OpenAI, OpenAI Codex, and Alibaba (Qwen-Image) image generation. Use 'gemini:', 'openai:gpt-image-2.6-flare', 'openai:gpt-image-2.6-sunburst', 'openai-codex:gpt-image-2', or 'alibaba:qwen-image-3.0-pro'"
         ),
     };
 
@@ -212,62 +245,124 @@ async fn generate_codex_images(
     selection: &ProviderSelection,
     options: &ImagineRunOptions<'_>,
 ) -> Result<GenerateImageResponse> {
-    let image_options = openai_family_image_options("OpenAI Codex", options)?;
+    validate_codex_image_options(selection, options)?;
     eprintln!("{CODEX_IMAGE_NOTICE}");
-    let codex_config = OpenAICodexConfig::new(
-        selection.model.clone(),
-        image_reasoning_effort(selection),
-        options
-            .config
-            .providers
-            .openai_codex
-            .effective_text_verbosity(),
-        None,
-        selection.fast.then(|| "priority".to_string()),
-        false,
-        selection.account.clone(),
-    );
-    let response = OpenAICodexClient::new(codex_config)
-        .generate_images(options.prompt, &image_options)
-        .await
-        .context("generate image with OpenAI Codex")?;
+    let request = OpenAIImagesRequest {
+        size: Some("auto".to_string()),
+        quality: Some("auto".to_string()),
+        background: Some("opaque".to_string()),
+        source_images: load_openai_images(options.source)?,
+        ..Default::default()
+    };
+    let response =
+        OpenAIImagesClient::codex(CODEX_IMAGE_MODEL.to_string(), selection.account.clone())
+            .generate(options.prompt, &request)
+            .await
+            .context("generate image with OpenAI Codex")?;
+    Ok(openai_image_response(response))
+}
 
-    Ok(GenerateImageResponse {
-        images: response
-            .images
-            .into_iter()
-            .map(|image| GeneratedImage {
-                mime_type: image.mime_type,
-                data: image.data,
-            })
-            .collect(),
-        text_parts: response.text_parts,
-        usage_note: None,
-    })
+/// The Codex Images endpoint is verified only for the probed baseline (alias
+/// model, automatic size and quality). Reject settings it was never shown to honor.
+fn validate_codex_image_options(
+    selection: &ProviderSelection,
+    options: &ImagineRunOptions<'_>,
+) -> Result<()> {
+    if !selection.model.eq_ignore_ascii_case(CODEX_IMAGE_MODEL) {
+        bail!(
+            "OpenAI Codex image generation accepts only 'openai-codex:{CODEX_IMAGE_MODEL}'; the subscription backend picks the image model. Use 'openai:{}' with an API key to select a model",
+            selection.model
+        );
+    }
+    if selection.thinking.is_some() || selection.fast {
+        bail!("OpenAI Codex image generation takes no @thinking or @fast modifier");
+    }
+    if options.aspect.is_some() || options.size.is_some() {
+        bail!(
+            "OpenAI Codex image generation picks its own size; omit --aspect and --size, or use an 'openai:' model with an API key"
+        );
+    }
+    Ok(())
 }
 
 async fn generate_openai_images(
     selection: &ProviderSelection,
     options: &ImagineRunOptions<'_>,
 ) -> Result<GenerateImageResponse> {
-    let image_options = openai_family_image_options("OpenAI", options)?;
-    let openai_config = OpenAIConfig::from_env(
+    if options.aspect.is_some() {
+        bail!("OpenAI image generation does not support --aspect; use --size instead");
+    }
+    if selection.thinking.is_some() || selection.fast {
+        bail!(
+            "OpenAI Images API models take no @thinking or @fast modifier; use --complexity and --quality instead"
+        );
+    }
+
+    let markup = options
+        .markup
+        .map(load_image)
+        .transpose()?
+        .map(OpenAIImageInput::from);
+    let request = OpenAIImagesRequest {
+        size: options.size.map(openai_image_size).transpose()?,
+        quality: options.quality.map(str::to_owned),
+        complexity: options.complexity.map(str::to_owned),
+        output_format: options
+            .format
+            .map(|format| {
+                OpenAIImageFormat::parse(format)
+                    .with_context(|| format!("unsupported OpenAI image format: {format}"))
+            })
+            .transpose()?,
+        frame_count: options.frames,
+        frame_duration_ms: options.frame_ms,
+        source_images: load_openai_images(options.source)?,
+        markup,
+        ..Default::default()
+    };
+
+    let client = OpenAIImagesClient::from_env(
         selection.model.clone(),
-        None,
         options.config.providers.openai.effective_base_url(),
         options.config.providers.openai.effective_api_key(),
-        image_reasoning_effort(selection),
-        options.config.providers.openai.effective_text_verbosity(),
-        None,
-        selection.fast.then(|| "priority".to_string()),
-        false,
     )?;
-    let response = OpenAIClient::new(openai_config)
-        .generate_images(options.prompt, &image_options)
+    let response = client
+        .generate(options.prompt, &request)
         .await
         .context("generate image with OpenAI")?;
+    if let Some(requested) = request.output_format
+        && let Some(image) = response.images.first()
+        && image.mime_type != requested.mime_type()
+    {
+        eprintln!(
+            "warning: requested --format {} but the API returned {} bytes; saving them as {}",
+            requested.as_str(),
+            image.mime_type,
+            image.mime_type
+        );
+    }
+    Ok(openai_image_response(response))
+}
 
-    Ok(GenerateImageResponse {
+fn load_openai_images(source: &[String]) -> Result<Vec<OpenAIImageInput>> {
+    Ok(load_source_images(source)?
+        .into_iter()
+        .map(OpenAIImageInput::from)
+        .collect())
+}
+
+impl From<LoadedSourceImage> for OpenAIImageInput {
+    fn from(image: LoadedSourceImage) -> Self {
+        Self {
+            mime_type: image.mime_type,
+            data: image.data,
+        }
+    }
+}
+
+fn openai_image_response(response: OpenAIImagesResponse) -> GenerateImageResponse {
+    let usage_note = format_openai_usage(&response);
+    GenerateImageResponse {
         images: response
             .images
             .into_iter()
@@ -276,44 +371,28 @@ async fn generate_openai_images(
                 data: image.data,
             })
             .collect(),
-        text_parts: response.text_parts,
-        usage_note: None,
-    })
-}
-
-// Omit reasoning without an explicit `@<level>` so the API applies its default.
-fn image_reasoning_effort(selection: &ProviderSelection) -> Option<String> {
-    selection
-        .thinking
-        .and_then(|level| responses_reasoning_effort(level, &selection.model))
-        .map(str::to_owned)
-}
-
-fn openai_family_image_options(
-    provider_label: &str,
-    options: &ImagineRunOptions<'_>,
-) -> Result<OpenAIImageGenerationOptions> {
-    if options.aspect.is_some() {
-        bail!(
-            "{provider_label} image generation does not support --aspect yet; use --size instead"
-        );
+        text_parts: Vec::new(),
+        usage_note,
     }
+}
 
-    let source_images = load_source_images(options.source)?
-        .into_iter()
-        .map(|image| OpenAIImageInput {
-            mime_type: image.mime_type,
-            data: image.data,
-        })
-        .collect();
-
-    Ok(OpenAIImageGenerationOptions {
-        size: Some(options.size.map_or_else(
-            || Ok(DEFAULT_OPENAI_RESPONSES_IMAGE_SIZE.to_string()),
-            openai_family_image_size,
-        )?),
-        source_images,
-    })
+fn format_openai_usage(response: &OpenAIImagesResponse) -> Option<String> {
+    let image = response.usage.as_ref().map(|usage| {
+        format!(
+            "tokens: input {}, output {}, total {}",
+            usage.input_tokens, usage.output_tokens, usage.total_tokens
+        )
+    });
+    let svg = response.svg_usage.as_ref().map(|usage| {
+        format!(
+            "svg author {}: input {}, output {} (reasoning {})",
+            usage.model, usage.input_tokens, usage.output_tokens, usage.reasoning_tokens
+        )
+    });
+    match (image, svg) {
+        (Some(image), Some(svg)) => Some(format!("{image}; {svg}")),
+        (image, svg) => image.or(svg),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -323,23 +402,22 @@ struct LoadedSourceImage {
 }
 
 fn load_source_images(source: &[String]) -> Result<Vec<LoadedSourceImage>> {
-    source
-        .iter()
-        .map(|path_str| {
-            let path = path_mime::normalize_input_path(path_str);
-            let mime_type = path_mime::mime_type_for_extension(path_str)
-                .context(format!("unsupported image format: {path_str}"))?;
-            let data = fs::read(&path)
-                .with_context(|| format!("read source image '{}'", path.display()))?;
-            Ok(LoadedSourceImage {
-                mime_type: mime_type.to_string(),
-                data,
-            })
-        })
-        .collect()
+    source.iter().map(|path| load_image(path)).collect()
 }
 
-fn openai_family_image_size(size: &str) -> Result<String> {
+fn load_image(path_str: &str) -> Result<LoadedSourceImage> {
+    let path = path_mime::normalize_input_path(path_str);
+    let mime_type = path_mime::mime_type_for_extension(path_str)
+        .context(format!("unsupported image format: {path_str}"))?;
+    let data =
+        fs::read(&path).with_context(|| format!("read source image '{}'", path.display()))?;
+    Ok(LoadedSourceImage {
+        mime_type: mime_type.to_string(),
+        data,
+    })
+}
+
+fn openai_image_size(size: &str) -> Result<String> {
     match size {
         "1K" => Ok("1024x1024".to_string()),
         "2K" => Ok("2048x2048".to_string()),
@@ -382,6 +460,6 @@ fn resolve_output_path(
     }
 
     let ts = Utc::now().format("%Y%m%d-%H%M%S");
-    let ext = path_mime::extension_for_mime_type(&image.mime_type).unwrap_or("png");
+    let ext = path_mime::extension_for_mime_type(&image.mime_type).unwrap_or("bin");
     default_dir.join(format!("image-{ts}.{ext}"))
 }

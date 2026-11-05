@@ -18,10 +18,16 @@ Options:
   -o, --out <PATH>        Output path — written exactly as given (default: $ZDX_HOME/artifacts/image-<timestamp>.<ext>)
       --model <MODEL>     Model override (default: gemini:gemini-3.1-flash-image-preview)
       --aspect <RATIO>    Aspect ratio (Gemini only; see table below)
-      --size <SIZE>       512px | 1K (default) | 2K | 4K
+      --size <SIZE>       512px | 1K | 2K | 4K (Gemini default 1K; openai: lets the API pick; Codex rejects it)
+      --format <FORMAT>   png | jpeg | webp | gif | svg (openai: only)
+      --quality <Q>       low | medium | high | xhigh | max | auto (openai: only)
+      --complexity <L>    low | medium | high (openai: only; API default high)
+      --frames <N>        GIF frame count (openai: only, with --format gif)
+      --frame-ms <MS>     GIF delay per frame, 20-2000 (openai: only, with --format gif)
+      --markup <PNG>      Transparent PNG annotation layer for the first --source (openai: only)
 ```
 
-Output: prints the exact saved file path(s) to stdout. `--out` is honored literally; the model picks the image format (often JPEG for Gemini), so a file named `.png` may actually hold JPEG bytes. That is fine — zdx reads images by content, not extension. Use `--out` to control the path and always view/attach the printed path.
+Output: prints the exact saved file path(s) to stdout. `--out` is honored literally; the model picks the image format (often JPEG for Gemini), so a file named `.png` may actually hold JPEG bytes. That is fine — zdx reads images by content, not extension. Use `--out` to control the path and always view/attach the printed path. For `openai:` output, zdx detects the real type from the bytes. Without `--out` it picks the matching extension. A warning on stderr means the API returned a different type than `--format` asked for (for example PNG instead of GIF); tell the user, and do not rename the file to the requested type.
 
 When running inside zdx (TUI, bot, or CLI), `$ZDX_ARTIFACT_DIR` is the preferred output location. Pass it via `--out`:
 
@@ -34,43 +40,53 @@ If no `--out` is given, images default to `$ZDX_HOME/artifacts/`.
 ## Provider guidance
 
 - **Default:** If you do not pass `--model`, `zdx imagine` uses `gemini:gemini-3.1-flash-image-preview`.
-- **OpenAI support:** `zdx imagine` also supports both `openai:gpt-image-2` and `openai-codex:gpt-image-2`.
-- **Preferred OpenAI path:** When using OpenAI, prefer `openai-codex:gpt-image-2` unless the user explicitly asks for plain `openai:gpt-image-2` or for GPT Image 2.5.
-- **GPT Image 2.5 (explicit selection, API key):** `openai:gpt-image-2.5-flare` (fast, the default choice for most work) and `openai:gpt-image-2.5-sunburst` (higher precision for detailed edits, slower). Dated snapshots such as `openai:gpt-image-2.5-flare-2026-09-08` also work. Use them only when the user asks for GPT Image 2.5 or the newest OpenAI image model. Requires `OPENAI_API_KEY`.
-- **Codex is server-managed:** `openai-codex:*` image requests run on the ChatGPT subscription, and the backend picks the image engine, size, and quality itself. Probes showed it ignores the requested image model, `--size`, and quality, and it never reports which model ran. `openai-codex:gpt-image-2.5-*` is accepted but not honored as a selection; `zdx imagine` prints a warning on stderr. Do not tell the user Codex gave them Image 2 or Image 2.5 specifically. For an explicit variant, use `openai:gpt-image-2.5-flare` or `-sunburst`.
+- **OpenAI API key path (`openai:`):** `openai:gpt-image-2.6-flare` (fast iteration, the default choice) and `openai:gpt-image-2.6-sunburst` (detailed work, more consistent edits). Calls the OpenAI Images API, billed per token. Requires `OPENAI_API_KEY`. This is the only path with model selection, `--format`, `--quality`, `--complexity`, GIF frames, and `--markup`. Older OpenAI image models (`gpt-image-2`, `gpt-image-2.5-*`) are no longer documented for `openai:`.
+- **OpenAI Codex path (`openai-codex:gpt-image-2`):** runs on the ChatGPT subscription, no per-request cost. `gpt-image-2` is the only accepted model name, and it is a backend alias: the backend picks the image engine, size, and quality, and never reports which model ran. Do not tell the user which model Codex used. `--size`, `--aspect`, `@thinking`/`@fast`, other model IDs (including 2.6), and all `openai:`-only flags fail on this path. `zdx imagine` prints a warning on stderr. Generation was live-verified; edits with `-s` follow upstream Codex CLI and are not live-tested.
 - **Alibaba (Qwen-Image) support:** `zdx imagine` supports `alibaba:qwen-image-3.0-pro`, `alibaba:qwen-image-3.0`, and `alibaba:qwen-image-2.0-pro` — combined text-to-image + editing models on Alibaba DashScope. Requires `ALIBABA_API_KEY`. Use them when the user asks for Qwen/Alibaba image generation.
 - **Preferred Alibaba path:** Use `alibaba:qwen-image-3.0-pro`. It is the strongest of the three at dense layouts, small text (~10px), and multilingual typography. Fall back to `alibaba:qwen-image-3.0` for cheaper/faster runs, and to `alibaba:qwen-image-2.0-pro` only when explicitly asked.
-- **Gemini vs OpenAI/Alibaba:** `--aspect` currently works with Gemini only; OpenAI, OpenAI Codex, and Alibaba require `--size` instead.
-- **OpenAI size support:** `openai:` passes `1K`, `2K`, or `4K` to the image tool (only `1K` was checked live). `openai-codex:` accepts the flag but the backend chooses its own output size (e.g. 1536x1024 for `--size 1K`). `512px` is Gemini-only.
+- **Gemini vs OpenAI/Alibaba:** `--aspect` currently works with Gemini only; `openai:` and Alibaba take `--size` instead, and OpenAI Codex takes neither.
+- **OpenAI size support:** `openai:` sends `1K`=1024x1024, `2K`=2048x2048, `4K`=3840x2160, and omits size without `--size` so the API picks it. GPT Image 2.6 size limits are not documented, so 2K and 4K can fail. `openai-codex:` rejects `--size`; the backend picks the size (a probe got 1536x1024). `512px` is Gemini-only.
 - **Alibaba size support:** All Alibaba Qwen-Image models support `512px`, `1K`, and `2K` (not `4K`).
 
 ### Recommended model selection
 
 - Use **Gemini** by default unless the user asks for OpenAI or there is a specific reason to use it.
-- Use **`openai-codex:gpt-image-2`** as the preferred OpenAI model path.
-- Use **`openai:gpt-image-2`** only when the user explicitly asks for the non-Codex OpenAI provider, needs a guaranteed size, or needs a specific model. Use **`openai:gpt-image-2.5-flare`/`-sunburst`** when the user asks for GPT Image 2.5.
+- Use **`openai-codex:gpt-image-2`** for plain OpenAI requests on the subscription, when the exact model and settings do not matter.
+- Use **`openai:gpt-image-2.6-flare`** (or `-sunburst` for detailed edits) when the user asks for GPT Image 2.6, an explicit model or size, a GIF, an SVG, a markup-guided edit, or `--complexity`/`--quality` control. It costs money per request. zdx sends what you ask for but does not check which model ran or the output size, and this path is tested only offline.
 
 ### OpenAI examples
 
-**Preferred OpenAI Codex usage:**
+**Subscription (Codex):**
 ```bash
-zdx imagine -p "A cinematic photo of a red fox in falling snow" --model openai-codex:gpt-image-2 --size 1K
+zdx imagine -p "A cinematic photo of a red fox in falling snow" --model openai-codex:gpt-image-2
 ```
 
-**GPT Image 2.5 (API key; cost-bearing, guaranteed model):**
+**GPT Image 2.6 (API key; billed, explicit model):**
 ```bash
-zdx imagine -p "A cinematic photo of a red fox in falling snow" --model openai:gpt-image-2.5-flare --size 1K
+zdx imagine -p "A cinematic photo of a red fox in falling snow" --model openai:gpt-image-2.6-flare --quality low --size 1K
 ```
 
-**Plain OpenAI usage:**
+**Quick edit:** low complexity suits focused edits; use medium or high for scenes with many elements or dense text.
 ```bash
-zdx imagine -p "A cinematic photo of a red fox in falling snow" --model openai:gpt-image-2 --size 1K
+zdx imagine -p "Add a neon sign above the doorway, keep the rest unchanged" -s street.png --model openai:gpt-image-2.6-flare --complexity low
 ```
 
-**OpenAI editing:**
+**Markup-guided edit:** draw circles or sketches on a separate transparent PNG with the same size as the first source image. Do not flatten it onto the photo.
 ```bash
-zdx imagine -p "Add a neon sign above the doorway, keep the rest unchanged" -s street.png --model openai-codex:gpt-image-2 --size 2K
+zdx imagine -p "Make the circled vase blue, keep everything else the same" -s kitchen.png --markup circle-overlay.png --model openai:gpt-image-2.6-flare
 ```
+
+**Animated GIF:** describe the subject, the motion, and the loop. `--size` is the size of each frame.
+```bash
+zdx imagine -p "A small owl blinks and waves one wing, then returns to the first pose for a seamless loop" --model openai:gpt-image-2.6-sunburst --format gif --frames 6 --frame-ms 150 --out "$ZDX_ARTIFACT_DIR/owl.gif"
+```
+
+**SVG (generation only, no --source):** for icons, logos, and flat illustrations.
+```bash
+zdx imagine -p "A flat bakery logo: a golden loaf above the words Field & Flour" --model openai:gpt-image-2.6-flare --format svg --out "$ZDX_ARTIFACT_DIR/logo.svg"
+```
+
+**Unverified OpenAI limits:** GIF and SVG output may need preview access on the API organization. The docs disagree on the GIF frame range (2-16 or 2-64) and on GIF output for edits. If the API rejects a request, report its error; do not retry with guessed values. The SVG is static vector XML: `Read` cannot show it as an image.
 
 ### Alibaba (Qwen-Image) examples
 

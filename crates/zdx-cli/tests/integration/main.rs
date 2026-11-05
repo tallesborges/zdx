@@ -12,6 +12,7 @@ mod cli_help;
 mod config_path;
 mod custom_provider_api;
 mod exec_subagent;
+mod imagine;
 mod jobs_run;
 mod jobs_schedule;
 mod login_logout;

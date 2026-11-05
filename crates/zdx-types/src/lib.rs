@@ -6,6 +6,7 @@
 //! runtime service wiring.
 
 pub mod events;
+pub mod images;
 pub mod logging;
 pub mod messages;
 pub mod providers;
@@ -32,4 +33,5 @@ pub use tools::{
 };
 pub mod config;
 pub use config::{TextVerbosity, ThinkingLevel};
+pub use images::sniff_raster_image_mime;
 pub use logging::log_field;

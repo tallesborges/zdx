@@ -71,26 +71,6 @@ fn image_mime_type(path: &Path) -> Option<&'static str> {
     crate::mime_type_for_extension(path.to_string_lossy().as_ref())
 }
 
-/// Detects a supported image MIME type from the leading magic bytes of the file.
-///
-/// Extensions lie: image generators (e.g. `zdx imagine`) can write JPEG bytes to
-/// a `.png` path, and providers like Anthropic reject a `tool_result` image whose
-/// declared `media_type` disagrees with the actual bytes. Sniffing the content and
-/// declaring the true type keeps the request valid regardless of the file name.
-fn sniff_image_mime(data: &[u8]) -> Option<&'static str> {
-    if data.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
-        Some("image/png")
-    } else if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        Some("image/jpeg")
-    } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
-        Some("image/gif")
-    } else if data.len() >= 12 && data.starts_with(b"RIFF") && &data[8..12] == b"WEBP" {
-        Some("image/webp")
-    } else {
-        None
-    }
-}
-
 /// Returns the tool definition for the read tool.
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
@@ -204,7 +184,7 @@ fn read_image(display_path: &str, path: &Path, mime_type: &str) -> ToolOutput {
     // Trust the actual bytes over the file extension: a mismatched declared
     // media type (e.g. JPEG bytes in a `.png` file) makes providers reject the
     // resulting `tool_result` image block.
-    let mime_type = sniff_image_mime(&data).unwrap_or(mime_type);
+    let mime_type = zdx_types::sniff_raster_image_mime(&data).unwrap_or(mime_type);
 
     // An oversized `tool_result` image is rejected outright rather than
     // downscaled by the provider, which fails the whole turn.
