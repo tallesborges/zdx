@@ -63,7 +63,8 @@ pub fn bundled_skills_dir() -> PathBuf {
 /// missing or differs from the embedded manifest hash.
 ///
 /// # Errors
-/// Returns an error if the materialized bundled skill directory cannot be created.
+/// Returns an error if the materialized bundled skill directory cannot be
+/// created or refreshed. The error names the path that failed.
 ///
 /// # Panics
 /// Panics if the bundled skill materialization lock is poisoned.
@@ -160,28 +161,64 @@ fn materialize_bundled_skills_into(
         return Ok(root);
     }
 
-    fs::create_dir_all(zdx_home)?;
+    fs::create_dir_all(zdx_home).map_err(at_path(zdx_home))?;
     match fs::symlink_metadata(&root) {
-        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(&root)?,
-        Ok(_) => fs::remove_file(&root)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
+        // Clear the existing directory in place: its parent may be read-only
+        // for this user (shared or sandboxed homes), and the root's own owner
+        // and mode belong to whoever set it up.
+        Ok(metadata) if metadata.is_dir() => clear_dir_contents(&root)?,
+        Ok(_) => {
+            fs::remove_file(&root).map_err(at_path(&root))?;
+            fs::create_dir(&root).map_err(at_path(&root))?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(&root).map_err(at_path(&root))?;
+        }
+        Err(error) => return Err(at_path(&root)(error)),
     }
 
-    fs::create_dir_all(&root)?;
     for asset in bundled_skill_assets() {
         let path = root.join(asset.relative_path);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).map_err(at_path(parent))?;
         }
-        fs::write(&path, asset.bytes)?;
+        fs::write(&path, asset.bytes).map_err(at_path(&path))?;
     }
 
-    fs::write(
-        root.join(BUNDLED_SKILLS_STAMP_FILE),
-        format!("{expected_hash}\n"),
-    )?;
+    let stamp_path = root.join(BUNDLED_SKILLS_STAMP_FILE);
+    fs::write(&stamp_path, format!("{expected_hash}\n")).map_err(at_path(&stamp_path))?;
     Ok(root)
+}
+
+/// Removes every entry inside `dir` without removing `dir` itself.
+///
+/// The stamp goes first, so a clear that fails midway never leaves a bundle
+/// that looks current. Symlinks are removed as links; their targets are never
+/// followed.
+fn clear_dir_contents(dir: &Path) -> Result<(), std::io::Error> {
+    let stamp_path = dir.join(BUNDLED_SKILLS_STAMP_FILE);
+    match fs::remove_file(&stamp_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(at_path(&stamp_path)(error)),
+    }
+
+    for entry in fs::read_dir(dir).map_err(at_path(dir))? {
+        let entry = entry.map_err(at_path(dir))?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(at_path(&path))?;
+        let removed = if file_type.is_dir() {
+            fs::remove_dir_all(&path)
+        } else {
+            fs::remove_file(&path)
+        };
+        removed.map_err(at_path(&path))?;
+    }
+    Ok(())
+}
+
+fn at_path(path: &Path) -> impl FnOnce(std::io::Error) -> std::io::Error + '_ {
+    move |error| std::io::Error::new(error.kind(), format!("{}: {error}", path.display()))
 }
 
 fn bundled_skill_assets() -> &'static [BundledSkillAsset] {
@@ -991,6 +1028,147 @@ mod tests {
 
         assert_eq!(rematerialized_root, root);
         assert!(script_path.is_file());
+    }
+
+    #[cfg(unix)]
+    fn set_mode(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// Permission checks do not apply to root; skip those tests there.
+    #[cfg(unix)]
+    fn can_write_into(dir: &Path) -> bool {
+        let probe = dir.join(format!(".probe-{}", uuid::Uuid::new_v4()));
+        let writable = fs::write(&probe, "").is_ok();
+        let _ = fs::remove_file(probe);
+        writable
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_materialize_bundled_skills_refreshes_in_place_under_read_only_home() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let home = tempdir().unwrap();
+        let root = home.path().join(BUNDLED_SKILLS_DIR_NAME);
+        fs::create_dir(&root).unwrap();
+        set_mode(&root, 0o770);
+        fs::write(root.join(BUNDLED_SKILLS_STAMP_FILE), "stale\n").unwrap();
+        fs::write(root.join("stale.txt"), "old").unwrap();
+        fs::create_dir_all(root.join("removed-skill").join("scripts")).unwrap();
+        fs::write(root.join("removed-skill").join("SKILL.md"), "old").unwrap();
+        let before = fs::metadata(&root).unwrap();
+
+        set_mode(home.path(), 0o550);
+        if can_write_into(home.path()) {
+            set_mode(home.path(), 0o700);
+            return;
+        }
+        let result = materialize_bundled_skills_into(home.path(), bundled_skills_manifest_hash());
+        set_mode(home.path(), 0o700);
+
+        assert_eq!(result.unwrap(), root);
+        let after = fs::metadata(&root).unwrap();
+        assert_eq!(after.ino(), before.ino());
+        assert_eq!(after.permissions().mode(), before.permissions().mode());
+        assert!(!root.join("stale.txt").exists());
+        assert!(!root.join("removed-skill").exists());
+        assert!(bundled_skills_are_current(
+            &root,
+            bundled_skills_manifest_hash()
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_materialize_bundled_skills_fails_with_path_when_root_cannot_be_created() {
+        let home = tempdir().unwrap();
+        set_mode(home.path(), 0o550);
+        if can_write_into(home.path()) {
+            set_mode(home.path(), 0o700);
+            return;
+        }
+        let result = materialize_bundled_skills_into(home.path(), bundled_skills_manifest_hash());
+        set_mode(home.path(), 0o700);
+
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            error.to_string().contains(
+                &home
+                    .path()
+                    .join(BUNDLED_SKILLS_DIR_NAME)
+                    .display()
+                    .to_string()
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_materialize_bundled_skills_failed_clear_is_not_current() {
+        let home = tempdir().unwrap();
+        let root =
+            materialize_bundled_skills_into(home.path(), bundled_skills_manifest_hash()).unwrap();
+        fs::write(root.join(BUNDLED_SKILLS_STAMP_FILE), "stale\n").unwrap();
+        let locked = root.join("locked");
+        fs::create_dir(&locked).unwrap();
+        fs::write(locked.join("file"), "x").unwrap();
+        set_mode(&locked, 0o550);
+        if can_write_into(&locked) {
+            set_mode(&locked, 0o700);
+            return;
+        }
+
+        let result = materialize_bundled_skills_into(home.path(), bundled_skills_manifest_hash());
+        set_mode(&locked, 0o700);
+
+        assert!(result.is_err());
+        assert!(!root.join(BUNDLED_SKILLS_STAMP_FILE).exists());
+        assert!(!bundled_skills_are_current(
+            &root,
+            bundled_skills_manifest_hash()
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_materialize_bundled_skills_never_follows_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let home = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        fs::write(outside.path().join("keep.txt"), "user data").unwrap();
+
+        // Root is a symlink: replace the link, leave the target alone.
+        let root = home.path().join(BUNDLED_SKILLS_DIR_NAME);
+        symlink(outside.path(), &root).unwrap();
+        materialize_bundled_skills_into(home.path(), bundled_skills_manifest_hash()).unwrap();
+        assert!(
+            !fs::symlink_metadata(&root)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read_dir(outside.path()).unwrap().count(),
+            1,
+            "symlink target must not be modified"
+        );
+
+        // Links inside the root: remove the links, keep their targets.
+        symlink(outside.path(), root.join("linked-dir")).unwrap();
+        symlink(outside.path().join("keep.txt"), root.join("linked-file")).unwrap();
+        fs::write(root.join(BUNDLED_SKILLS_STAMP_FILE), "stale\n").unwrap();
+        materialize_bundled_skills_into(home.path(), bundled_skills_manifest_hash()).unwrap();
+
+        assert!(fs::symlink_metadata(root.join("linked-dir")).is_err());
+        assert!(fs::symlink_metadata(root.join("linked-file")).is_err());
+        assert_eq!(
+            fs::read_to_string(outside.path().join("keep.txt")).unwrap(),
+            "user data"
+        );
     }
 
     #[test]
