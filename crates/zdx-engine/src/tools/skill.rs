@@ -394,24 +394,8 @@ async fn run(object: &Map<String, Value>, ctx: &ToolContext) -> ToolOutput {
 fn plan_run(ctx: &ToolContext, object: &Map<String, Value>) -> Result<RunPlan, ToolOutput> {
     let name = required_string(object, "name")?;
     let file = required_string(object, "file")?;
-    let args = match object.get("args") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(|item| {
-                item.as_str()
-                    .map(str::to_string)
-                    .ok_or_else(|| invalid_input("Every item in `args` must be a string."))
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-        Some(_) => return Err(invalid_input("`args` must be an array of strings.")),
-    };
-    let timeout_secs = match object.get("timeout_secs") {
-        None | Some(Value::Null) => None,
-        Some(value) => Some(value.as_u64().ok_or_else(|| {
-            invalid_input("`timeout_secs` must be a whole number of seconds, 0 or more.")
-        })?),
-    };
+    let args = parse_args(object.get("args"))?;
+    let timeout_secs = whole_number(object, "timeout_secs")?;
     let stdin = match object.get("stdin") {
         None | Some(Value::Null) => None,
         Some(Value::String(text)) => Some(text.clone()),
@@ -884,13 +868,9 @@ fn read_saved_output(ctx: &ToolContext, object: &Map<String, Value>) -> ToolOutp
         );
     }
 
-    let number = |key: &str| match object.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_u64()
-            .and_then(|n| usize::try_from(n).ok())
-            .map(Some)
-            .ok_or_else(|| invalid_input(format!("`{key}` must be a whole number."))),
+    let number = |key: &str| {
+        whole_number(object, key)
+            .map(|value| value.map(|n| usize::try_from(n).unwrap_or(usize::MAX)))
     };
     let (offset, limit, byte_offset) =
         match (number("offset"), number("limit"), number("byte_offset")) {
@@ -1126,6 +1106,53 @@ fn paging_fields(object: &Map<String, Value>) -> Map<String, Value> {
                 .map(|value| (key.to_string(), value.clone()))
         })
         .collect()
+}
+
+/// Reads `args`. Besides a JSON array of strings, it takes the same array
+/// sent as one string (`"[\"comment\"]"`), which models sometimes produce;
+/// the `grep` and `web_search` list fields accept that form too.
+fn parse_args(value: Option<&Value>) -> Result<Vec<String>, ToolOutput> {
+    let items = match value {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(items)) => items.clone(),
+        Some(Value::String(text)) => match serde_json::from_str::<Value>(text.trim()) {
+            Ok(Value::Array(items)) => items,
+            _ => {
+                return Err(invalid_input(format!(
+                    "`args` must be an array of strings, one item per argument, like [\"comment\", \"--label\", \"two words\"]. It was the string {}.",
+                    Value::String(text.clone())
+                )));
+            }
+        },
+        Some(other) => {
+            return Err(invalid_input(format!(
+                "`args` must be an array of strings, like [\"comment\"]. It was {other}."
+            )));
+        }
+    };
+    items
+        .into_iter()
+        .map(|item| match item {
+            Value::String(text) => Ok(text),
+            other => Err(invalid_input(format!(
+                "Every item in `args` must be a string; one was {other}. Quote numbers too, like [\"--count\", \"3\"]."
+            ))),
+        })
+        .collect()
+}
+
+/// Reads an optional whole number that may also come as a numeric string
+/// (`"30"`), as the other tools accept.
+fn whole_number(object: &Map<String, Value>, key: &str) -> Result<Option<u64>, ToolOutput> {
+    let parsed = match object.get(key) {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Number(number)) => number.as_u64(),
+        Some(Value::String(text)) => text.trim().parse::<u64>().ok(),
+        Some(_) => None,
+    };
+    parsed
+        .map(Some)
+        .ok_or_else(|| invalid_input(format!("`{key}` must be a whole number, 0 or more.")))
 }
 
 fn required_string(object: &Map<String, Value>, key: &str) -> Result<String, ToolOutput> {
@@ -1565,6 +1592,50 @@ mod tests {
         assert_eq!(data["output_saved"], false);
         assert!(data.get("output").is_none());
         assert!(data.get("stdout_file").is_none());
+    }
+
+    /// Models sometimes send `args` as a string that holds the JSON array, and
+    /// numbers as strings. Both forms run; any other string is refused with an
+    /// error that shows the expected shape.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn args_sent_as_a_json_string_still_run() {
+        let fx = Fixture::new();
+        let dir = fx.add_skill("demo");
+        write_script(
+            &dir,
+            "echo.sh",
+            "#!/bin/sh\nfor arg in \"$@\"; do printf '[%s]\\n' \"$arg\"; done\n",
+            true,
+        );
+        let ctx = fx.ctx(None);
+
+        let output = execute_skill_exec(
+            &json!({
+                "action": "run", "name": "demo", "file": "scripts/echo.sh",
+                "args": "[\"comment\", \"two words\"]", "timeout_secs": "30"
+            }),
+            &ctx,
+        )
+        .await;
+        assert_eq!(output.data().unwrap()["stdout"], "[comment]\n[two words]\n");
+
+        let output = execute_skill_exec(
+            &json!({"action": "run", "name": "demo", "file": "scripts/echo.sh", "args": "comment --help"}),
+            &ctx,
+        )
+        .await;
+        assert_eq!(error_code(&output), "invalid_input");
+        let message = error_message(&output);
+        assert!(message.contains("like [\"comment\""), "{message}");
+        assert!(message.contains("\"comment --help\""), "{message}");
+
+        let output = execute_skill_exec(
+            &json!({"action": "run", "name": "demo", "file": "scripts/echo.sh", "args": ["--count", 3]}),
+            &ctx,
+        )
+        .await;
+        assert!(error_message(&output).contains("Quote numbers too"));
     }
 
     #[test]
