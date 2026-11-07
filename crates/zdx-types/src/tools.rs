@@ -94,6 +94,26 @@ pub fn tool_command_text(name: &str, input: &Value) -> String {
         "thread_search" => field("query"),
         "apply_patch" => field("patch"),
         "invoke_subagent" => field("prompt"),
+        "skill" => match value_as_trimmed_str(input, "file") {
+            Some(file) => format!("{} {file}", field("name")),
+            None => field("name"),
+        },
+        "skill_exec" => {
+            if value_as_trimmed_str(input, "action") == Some("read") {
+                format!("read {}", field("output"))
+            } else {
+                let mut parts = vec![field("name"), field("file")];
+                parts.extend(value_as_string_list(input, "args").iter().map(|arg| {
+                    if arg.contains(char::is_whitespace) || arg.contains('\'') {
+                        format!("'{}'", arg.replace('\'', r"'\''"))
+                    } else {
+                        arg.clone()
+                    }
+                }));
+                parts.retain(|part| !part.is_empty());
+                parts.join(" ")
+            }
+        }
         "web_search" => {
             let queries = value_as_string_list(input, "search_queries");
             if queries.is_empty() {
@@ -123,6 +143,7 @@ pub fn primary_input_key(name: &str) -> Option<&'static str> {
         "apply_patch" => Some("patch"),
         "invoke_subagent" => Some("prompt"),
         "web_search" => Some("objective"),
+        "skill" | "skill_exec" => Some("name"),
         _ => None,
     }
 }

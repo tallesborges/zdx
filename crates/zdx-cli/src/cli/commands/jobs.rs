@@ -30,6 +30,9 @@ struct PreparedJobRun {
     /// Background execution for the run: off when the job's subagent does
     /// not opt in.
     background_commands: bool,
+    /// Skills the run's `skill` and `skill_exec` tools may reach: a job
+    /// subagent's declared skills, else the configured catalog.
+    skill_scope: zdx_engine::skills::SkillScope,
 }
 
 /// Jobs are one-shot non-interactive runs, so they carry the exec layer and
@@ -607,6 +610,36 @@ struct FinishedRun {
     thread_id: Option<String>,
 }
 
+/// The `exec` options one attempt of a prepared job runs with.
+fn job_exec_options<'a>(
+    prepared: &'a PreparedJobRun,
+    root: &'a str,
+    thread_opts: &'a ThreadPersistenceOptions,
+    job: &'a JobDefinition,
+) -> exec::ExecRunOptions<'a> {
+    exec::ExecRunOptions {
+        root,
+        thread_opts,
+        prompt: &job.prompt,
+        config: &prepared.config,
+        model_override: Some(prepared.settings.model.spec.as_str()),
+        effective_prompt_override: Some(&prepared.effective_prompt),
+        tool_timeout_override: job.timeout_secs,
+        event_filter_override: None,
+        stream: false,
+        tools_override: prepared.tools_override.as_deref(),
+        no_tools: false,
+        no_system_prompt: false,
+        no_skills: false,
+        no_background_commands: !prepared.background_commands,
+        subagent: None,
+        skill_scope: Some(prepared.skill_scope.clone()),
+        activity_kind: Some("job"),
+        activity_parent_thread_id: None,
+        activity_subagent_name: None,
+    }
+}
+
 /// Runs up to `max_retries + 1` attempts, appending one record per attempt.
 /// Failed attempts wait [`retry_delay`] before the next one. A run that
 /// cannot be prepared (missing root, bad subagent) is not retried, and an
@@ -633,26 +666,12 @@ async fn run_attempts(
             Ok(mut prepared) => {
                 add_previous_runs(&mut prepared, history.as_deref());
                 let root_string = prepared.settings.root.path.to_string_lossy().to_string();
-                let result = Box::pin(exec::run(exec::ExecRunOptions {
-                    root: &root_string,
-                    thread_opts: &effective_thread_opts,
-                    prompt: &job.prompt,
-                    config: &prepared.config,
-                    model_override: Some(prepared.settings.model.spec.as_str()),
-                    effective_prompt_override: Some(&prepared.effective_prompt),
-                    tool_timeout_override: job.timeout_secs,
-                    event_filter_override: None,
-                    stream: false,
-                    tools_override: prepared.tools_override.as_deref(),
-                    no_tools: false,
-                    no_system_prompt: false,
-                    no_skills: false,
-                    no_background_commands: !prepared.background_commands,
-                    subagent: None,
-                    activity_kind: Some("job"),
-                    activity_parent_thread_id: None,
-                    activity_subagent_name: None,
-                }))
+                let result = Box::pin(exec::run(job_exec_options(
+                    &prepared,
+                    &root_string,
+                    &effective_thread_opts,
+                    job,
+                )))
                 .await;
                 (result, Some(prepared.settings))
             }
@@ -814,6 +833,11 @@ fn prepare_job_run(caller: &Caller<'_>, job: &JobDefinition) -> Result<PreparedJ
         .subagent
         .as_ref()
         .is_none_or(|definition| definition.background_commands);
+    let skill_scope = resolved
+        .subagent
+        .as_ref()
+        .map(|definition| definition.skill_scope(false))
+        .unwrap_or_default();
     let (effective_prompt, tools_override) = match resolved.subagent.as_ref() {
         Some(definition) => {
             let (prompt, runtime_context) = subagents::render_prompt_with_layers(
@@ -852,6 +876,7 @@ fn prepare_job_run(caller: &Caller<'_>, job: &JobDefinition) -> Result<PreparedJ
         effective_prompt,
         tools_override,
         background_commands,
+        skill_scope,
     })
 }
 

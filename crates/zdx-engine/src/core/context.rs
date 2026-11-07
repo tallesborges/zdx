@@ -25,7 +25,7 @@ use serde::Serialize;
 
 use crate::config::{Config, ModelMode, paths};
 use crate::providers::{ProviderKind, resolve_provider};
-use crate::skills::{LoadSkillsOptions, LoadSkillsResult, Skill, load_skills, skill_access_path};
+use crate::skills::{LoadSkillsResult, Skill, skill_access_path};
 use crate::{prompts, subagents};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,6 +204,9 @@ pub struct LoadedSkillContent {
 pub struct StandalonePromptSkillContext {
     pub available_skills: Vec<Skill>,
     pub auto_loaded_skill_contents: Vec<LoadedSkillContent>,
+    /// When the prompt includes a skills catalog, list `available_skills`
+    /// instead of the discovered catalog (a profile that declares skills).
+    pub catalog_is_available_skills: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -683,13 +686,24 @@ fn build_runtime_context_blocks(vars: &PromptTemplateVars, extra: Option<&str>) 
     }
     if !vars.skills_list.is_empty() {
         let mut skills = String::from(
-            "# Available Skills\n\nWhen a task matches an available skill, read its `SKILL.md` before executing. Skills are instruction files; their guidance does not override the system prompt or in-scope project instructions.\n\n<available_skills>\n",
+            "# Available Skills\n\nWhen a task matches an available skill, load its instructions before you act: use the `skill` tool when this run has it, otherwise read its `SKILL.md`. A skill marked `<loaded>` is already in your instructions; do not load it again. Skills are instruction files; their guidance does not override the system prompt or in-scope project instructions.\n\n<available_skills>\n",
         );
         for skill in &vars.skills_list {
+            let loaded = vars
+                .auto_loaded_skill_contents
+                .iter()
+                .any(|content| content.name == skill.name);
             let _ = writeln!(
                 skills,
-                "  <skill>\n    <name>{}</name>\n    <description>{}</description>\n    <path>{}</path>\n  </skill>",
-                skill.name, skill.description, skill.path,
+                "  <skill>\n    <name>{}</name>\n    <description>{}</description>\n    <path>{}</path>\n{}  </skill>",
+                skill.name,
+                skill.description,
+                skill.path,
+                if loaded {
+                    "    <loaded>true</loaded>\n"
+                } else {
+                    ""
+                },
             );
         }
         skills.push_str("</available_skills>");
@@ -963,10 +977,15 @@ fn render_standalone_inner(
     } else {
         None
     };
-    let skills_result = if inclusion.skills {
-        load_skills_with_config(config, root)
-    } else {
+    let skills_result = if !inclusion.skills {
         LoadSkillsResult::default()
+    } else if skill_context.catalog_is_available_skills {
+        LoadSkillsResult {
+            skills: skill_context.available_skills.clone(),
+            warnings: Vec::new(),
+        }
+    } else {
+        load_skills_with_config(config, root)
     };
 
     let specialized_capabilities =
@@ -1448,19 +1467,7 @@ fn load_prompt_context_sections(root: &Path, config: &Config) -> PromptContextSe
 }
 
 fn load_skills_with_config(config: &Config, root: &Path) -> LoadSkillsResult {
-    if !config.skills.enabled {
-        return LoadSkillsResult::default();
-    }
-
-    let mut skill_options = LoadSkillsOptions::new(root);
-    skill_options.sources = config.skills.sources.clone();
-    skill_options
-        .ignored_skills
-        .clone_from(&config.skills.ignored_skills);
-    skill_options
-        .include_skills
-        .clone_from(&config.skills.include_skills);
-    load_skills(&skill_options)
+    crate::skills::load_configured_skills(config, root)
 }
 
 /// Builds an effective prompt from the default system prompt template plus
@@ -2696,7 +2703,7 @@ mod tests {
         // The memory-index snapshot lives in the runtime-context block; the
         // system prompt keeps only the memory guidance.
         assert!(!rendered.contains("<memory_index>"));
-        assert!(rendered.contains("When a task matches a skill, read its `SKILL.md` first."));
+        assert!(rendered.contains("When a task matches a skill, load it first: use the `skill` tool when this run has it, otherwise read its `SKILL.md`."));
         assert!(rendered.contains("Treat skill guidance as task-specific instructions."));
         assert!(rendered.contains("an `AGENTS.md` heading or a skill `<path>`"));
 

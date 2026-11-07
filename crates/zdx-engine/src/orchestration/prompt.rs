@@ -24,6 +24,9 @@ pub struct PreparedTurn {
     pub tools: Vec<String>,
     /// Subagents `invoke_subagent` may reach; `None` is unrestricted.
     pub allowed_subagents: Option<Vec<String>>,
+    /// Skills the `skill` and `skill_exec` tools may reach: the profile's
+    /// declared skills, else the discovered catalog the prompt lists.
+    pub skill_scope: crate::skills::SkillScope,
 }
 
 /// Model config a persistent-profile turn runs with: the base config, then
@@ -97,6 +100,7 @@ pub fn prepare_turn(
         runtime_context,
         tools: definition.tools.clone().unwrap_or_default(),
         allowed_subagents: definition.allowed_subagents.clone(),
+        skill_scope: definition.skill_scope(true),
     })
 }
 

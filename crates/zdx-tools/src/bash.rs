@@ -18,7 +18,7 @@ use super::{ToolContext, ToolDefinition, ToolOutput};
 use crate::process_supervisor::{BoundedWait, SupervisedChild, SupervisedCommand, WaitReason};
 
 /// Maximum bytes per output stream (stdout/stderr) before truncation.
-const MAX_OUTPUT_BYTES: usize = 40 * 1024; // 40KB
+pub const MAX_OUTPUT_BYTES: usize = 40 * 1024; // 40KB
 
 /// Grace period to wait for reader tasks to drain after the child exits.
 ///
@@ -629,7 +629,10 @@ fn new_sink(tx: Option<tokio::sync::mpsc::UnboundedSender<String>>) -> StreamSin
     }))
 }
 
-fn push_line(sink: &StreamSink, line: &str) {
+/// Records one line of raw output. The buffer and the log keep the bytes as
+/// they came; the live stream gets them decoded, with invalid UTF-8 shown as
+/// U+FFFD, so binary output never stops the reader.
+fn push_line(sink: &StreamSink, line: &[u8]) {
     let Ok(mut state) = sink.lock() else { return };
     if state.handed_off {
         // After handoff the in-memory tail is frozen and lines go to the log.
@@ -637,14 +640,14 @@ fn push_line(sink: &StreamSink, line: &str) {
         // unbounded for a job nobody is waiting on; the handoff result reports
         // that as `logging_failed` so the loss is never silent.
         if let Some(log) = state.log.as_mut() {
-            let _ = log.write_all(line.as_bytes());
+            let _ = log.write_all(line);
         }
         return;
     }
     if let Some(tx) = state.tx.as_ref() {
-        let _ = tx.send(line.to_string());
+        let _ = tx.send(String::from_utf8_lossy(line).into_owned());
     }
-    state.buf.extend_from_slice(line.as_bytes());
+    state.buf.extend_from_slice(line);
 }
 
 /// Flips a sink to log-file capture and returns everything captured so far,
@@ -687,10 +690,10 @@ where
     tokio::spawn(async move {
         let Some(handle) = handle else { return };
         let mut reader = tokio::io::BufReader::new(handle);
-        let mut line = String::new();
+        let mut line = Vec::new();
         loop {
             line.clear();
-            match reader.read_line(&mut line).await {
+            match reader.read_until(b'\n', &mut line).await {
                 Ok(0) | Err(_) => break,
                 Ok(_) => push_line(&sink, &line),
             }
@@ -893,6 +896,11 @@ async fn run_command(
     let (stderr_text, stderr_truncated, stderr_total_bytes) =
         super::truncate_bytes_to_byte_limit(&stderr_buf, MAX_OUTPUT_BYTES);
 
+    // A cancelled call returns no output, so it must not leave spill files.
+    if cancelled {
+        return Err(ToolOutput::canceled("Interrupted by user"));
+    }
+
     // Write full output to temp files when truncated
     let stdout_file = if stdout_truncated {
         super::write_spill_file("bash-stdout", &stdout_buf)
@@ -904,10 +912,6 @@ async fn run_command(
     } else {
         None
     };
-
-    if cancelled {
-        return Err(ToolOutput::canceled("Interrupted by user"));
-    }
 
     if timed_out {
         let timeout_msg = deadline.map(Deadline::message).unwrap_or_default();
@@ -1484,6 +1488,36 @@ mod tests {
         let payload = serde_json::to_value(result).unwrap();
         assert_eq!(payload["error"]["code"], "invalid_input");
         assert_eq!(payload["error"]["message"], "command cannot be empty");
+    }
+
+    /// Invalid UTF-8 must not stop the reader: the command keeps its pipe,
+    /// finishes normally, and the result shows the bytes as U+FFFD while the
+    /// spill file keeps them unchanged.
+    #[tokio::test]
+    async fn test_bash_binary_output_is_drained() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"command": "printf 'before\\n\\377\\376\\n'; i=0; while [ $i -lt 2000 ]; do echo \"line $i\"; i=$((i+1)); done; echo done >&2"});
+
+        let result = execute_plain(&input, &ctx, None).await;
+        let data = result.data().expect("should have data");
+        assert_eq!(data["exit_code"], 0, "{data}");
+        let stdout = data["stdout"].as_str().unwrap();
+        assert!(
+            stdout.starts_with("before\n\u{fffd}\u{fffd}\nline 0\n"),
+            "{stdout}"
+        );
+        assert!(stdout.ends_with("line 1999\n"));
+        assert_eq!(data["stderr"], "done\n");
+
+        let big = json!({"command": "printf '\\377'; head -c 50000 /dev/zero | tr '\\\\0' 'x'"});
+        let result = execute_plain(&big, &ctx, None).await;
+        let data = result.data().expect("should have data");
+        let stdout_file = data["stdout_file"].as_str().expect("spill file");
+        let raw = std::fs::read(stdout_file).unwrap();
+        assert_eq!(raw.len(), 50001);
+        assert_eq!(raw[0], 0xFF);
+        let _ = std::fs::remove_file(stdout_file);
     }
 
     #[tokio::test]

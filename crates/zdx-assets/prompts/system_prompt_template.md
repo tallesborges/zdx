@@ -97,7 +97,7 @@ Tool arguments expand `$VAR` directly. Do not use a shell to resolve them.
 
 # Skills
 
-When a runtime context is attached, it lists the available skills. When a task matches a skill, read its `SKILL.md` first. Treat skill guidance as task-specific instructions.
+When a runtime context is attached, it lists the available skills. When a task matches a skill, load it first: use the `skill` tool when this run has it, otherwise read its `SKILL.md`. Treat skill guidance as task-specific instructions.
 
 # Memory
 

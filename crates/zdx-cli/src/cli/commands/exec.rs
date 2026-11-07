@@ -7,6 +7,7 @@ use zdx_engine::config;
 use zdx_engine::core::agent::{ToolConfig, ToolSelection};
 use zdx_engine::core::context::{EffectivePrompt, PromptContextInclusion};
 use zdx_engine::core::thread_persistence::ThreadPersistenceOptions;
+use zdx_engine::skills::SkillScope;
 use zdx_engine::subagents::{self, SubagentDefinition};
 use zdx_engine::tools::ToolRegistry;
 
@@ -35,6 +36,10 @@ pub struct ExecRunOptions<'a> {
     pub no_system_prompt: bool,
     pub no_skills: bool,
     pub subagent: Option<&'a str>,
+    /// Skills the `skill` and `skill_exec` tools may reach. `None` derives it
+    /// from `subagent` (its declared skills, else none) or, without one, the
+    /// configured catalog.
+    pub skill_scope: Option<SkillScope>,
     pub activity_kind: Option<&'a str>,
     pub activity_parent_thread_id: Option<&'a str>,
     pub activity_subagent_name: Option<&'a str>,
@@ -117,7 +122,8 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
                 ToolSelection::default()
             },
         )
-        .with_background_commands(background_commands),
+        .with_background_commands(background_commands)
+        .with_skill_scope(run_skill_scope(&options, subagent.as_ref())),
         event_filter: options
             .event_filter_override
             .map(parse_event_filter)
@@ -152,6 +158,20 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
     result.context("execute prompt")?;
 
     Ok(())
+}
+
+/// Skills the run's `skill` and `skill_exec` tools may reach: the caller's
+/// explicit scope, else the subagent's declared skills (none when it declares
+/// none, matching its prompt), else the configured catalog.
+fn run_skill_scope(
+    options: &ExecRunOptions<'_>,
+    subagent: Option<&SubagentDefinition>,
+) -> SkillScope {
+    options
+        .skill_scope
+        .clone()
+        .or_else(|| subagent.map(|definition| definition.skill_scope(false)))
+        .unwrap_or_default()
 }
 
 /// Resolves an explicit `--subagent` name into a definition.

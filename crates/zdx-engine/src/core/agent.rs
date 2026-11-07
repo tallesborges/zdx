@@ -74,6 +74,10 @@ pub struct ToolConfig {
     /// default; off for a subagent unless its definition opts in. The run's
     /// [`BackgroundExecution`] is resolved from it.
     pub background_commands: bool,
+    /// Skills the `skill` and `skill_exec` tools may reach. The run's
+    /// configured catalog by default; a subagent or profile that declares
+    /// skills narrows it to those.
+    pub skill_scope: crate::skills::SkillScope,
 }
 
 impl ToolConfig {
@@ -83,7 +87,14 @@ impl ToolConfig {
             selection,
             allowed_subagents: None,
             background_commands: true,
+            skill_scope: crate::skills::SkillScope::default(),
         }
+    }
+
+    #[must_use]
+    pub fn with_skill_scope(mut self, scope: crate::skills::SkillScope) -> Self {
+        self.skill_scope = scope;
+        self
     }
 
     #[must_use]
@@ -1666,6 +1677,7 @@ fn build_run_turn_setup(
     .with_current_thread_id(thread_id)
     .with_config(config)
     .with_allowed_subagents(options.tool_config.allowed_subagents.clone())
+    .with_skill_scope(options.tool_config.skill_scope.clone())
     .with_background_execution(background_execution(config, options));
     let tool_registry = options.tool_config.registry.clone();
     let tools = resolve_tools(
@@ -1756,6 +1768,7 @@ fn build_custom_run_turn_setup(
     .with_current_thread_id(thread_id)
     .with_config(config)
     .with_allowed_subagents(options.tool_config.allowed_subagents.clone())
+    .with_skill_scope(options.tool_config.skill_scope.clone())
     .with_background_execution(background_execution(config, options));
     let tool_registry = options.tool_config.registry.clone();
     let provider_config = crate::config::ProviderConfig::default();

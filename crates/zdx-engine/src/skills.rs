@@ -398,6 +398,66 @@ pub fn load_skills_from_dir(dir: &Path, source: SkillSource) -> LoadSkillsResult
     }
 }
 
+/// Which skills the `skill` and `skill_exec` tools may reach in one run.
+///
+/// It mirrors the skills the run's prompt can list, so a tool never reaches a
+/// skill the run was not shown.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum SkillScope {
+    /// The run's configured catalog: enabled sources and the
+    /// `include_skills`/`ignored_skills` filters. Empty when skills are
+    /// disabled for the run.
+    #[default]
+    Discovered,
+    /// Exactly these names, resolved from the enabled sources without the
+    /// global filters (a subagent or profile's declared skills). An empty
+    /// list reaches no skill.
+    Named(Vec<String>),
+}
+
+/// Loads the run's configured skill catalog: enabled sources plus the
+/// `include_skills`/`ignored_skills` filters, or nothing when skills are off.
+#[must_use]
+pub fn load_configured_skills(config: &crate::config::Config, root: &Path) -> LoadSkillsResult {
+    if !config.skills.enabled {
+        return LoadSkillsResult::default();
+    }
+
+    let mut options = LoadSkillsOptions::new(root);
+    options.sources = config.skills.sources.clone();
+    options
+        .ignored_skills
+        .clone_from(&config.skills.ignored_skills);
+    options
+        .include_skills
+        .clone_from(&config.skills.include_skills);
+    load_skills(&options)
+}
+
+/// Resolves the skills in `scope` for a run rooted at `root`.
+#[must_use]
+pub fn skills_in_scope(
+    config: &crate::config::Config,
+    root: &Path,
+    scope: &SkillScope,
+) -> Vec<Skill> {
+    match scope {
+        SkillScope::Discovered => load_configured_skills(config, root).skills,
+        SkillScope::Named(names) => {
+            if names.is_empty() {
+                return Vec::new();
+            }
+            let mut options = LoadSkillsOptions::new(root);
+            options.sources = config.skills.sources.clone();
+            load_skills(&options)
+                .skills
+                .into_iter()
+                .filter(|skill| names.contains(&skill.name))
+                .collect()
+        }
+    }
+}
+
 /// Returns the project-level `.zdx/skills/` directories to scan, walking from
 /// `cwd` up through its ancestors.
 ///

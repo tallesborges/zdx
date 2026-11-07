@@ -1354,6 +1354,7 @@ async fn run_exec_command(context: &DispatchContext<'_>, input: ExecCommandInput
         no_system_prompt: input.no_system_prompt,
         no_skills: input.no_skills,
         subagent: input.subagent.as_deref(),
+        skill_scope: None,
         activity_kind: input.activity_kind.as_deref(),
         activity_parent_thread_id: input.activity_parent_thread_id.as_deref(),
         activity_subagent_name: input.activity_subagent_name.as_deref(),

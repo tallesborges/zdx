@@ -565,13 +565,21 @@ pub(crate) fn truncate_bytes_to_byte_limit(
     max_bytes: usize,
 ) -> (String, bool, usize) {
     let total_bytes = bytes.len();
+    let end = utf8_cut_point(bytes, max_bytes);
+    (
+        String::from_utf8_lossy(&bytes[..end]).into_owned(),
+        end < total_bytes,
+        total_bytes,
+    )
+}
 
-    if total_bytes <= max_bytes {
-        return (
-            String::from_utf8_lossy(bytes).into_owned(),
-            false,
-            total_bytes,
-        );
+/// The byte length of the prefix of `bytes` that a `max_bytes` limit keeps:
+/// all of `bytes` when it fits, otherwise at most `max_bytes`, never ending
+/// inside a multi-byte UTF-8 character.
+#[must_use]
+pub fn utf8_cut_point(bytes: &[u8], max_bytes: usize) -> usize {
+    if bytes.len() <= max_bytes {
+        return bytes.len();
     }
 
     let truncated_bytes = &bytes[..max_bytes];
@@ -600,9 +608,7 @@ pub(crate) fn truncate_bytes_to_byte_limit(
             end -= 1;
         }
     }
-
-    let truncated = String::from_utf8_lossy(&bytes[..end]).into_owned();
-    (truncated, true, total_bytes)
+    end
 }
 
 /// Writes the full text behind a truncated result to a new file in the

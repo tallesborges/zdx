@@ -1065,6 +1065,7 @@ async fn run_profile_turn(request: TurnRequest) {
         system_prompt,
         tools,
         allowed_subagents,
+        skill_scope,
         thread,
         messages,
     } = prepared;
@@ -1077,6 +1078,7 @@ async fn run_profile_turn(request: TurnRequest) {
             selection: ToolSelection::Explicit(tools),
             allowed_subagents,
             background_commands: true,
+            skill_scope,
         },
         surface: Some(
             if route.is_some() {
@@ -1119,6 +1121,7 @@ struct ReadyTurn {
     system_prompt: String,
     tools: Vec<String>,
     allowed_subagents: Option<Vec<String>>,
+    skill_scope: crate::skills::SkillScope,
     thread: Thread,
     messages: Vec<crate::providers::ChatMessage>,
 }
@@ -1182,6 +1185,7 @@ fn prepare_profile_turn(
         system_prompt: prepared.system_prompt,
         tools: prepared.tools,
         allowed_subagents: prepared.allowed_subagents,
+        skill_scope: prepared.skill_scope,
         thread,
         messages,
     })

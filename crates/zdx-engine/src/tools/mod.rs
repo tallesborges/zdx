@@ -15,6 +15,7 @@ pub mod list_models;
 pub mod memory_search;
 pub mod orchestrator;
 pub mod read_thread;
+pub mod skill;
 pub mod subagent;
 pub mod subagent_job;
 pub mod telegram;
@@ -94,6 +95,9 @@ pub struct ToolContext {
     /// ends. `None` outside an engine turn, where nothing may be started that
     /// needs an owner.
     pub turn_tasks: Option<Arc<subagent_job::TurnTasks>>,
+
+    /// Skills the `skill` and `skill_exec` tools may reach in this run.
+    pub skill_scope: crate::skills::SkillScope,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -114,6 +118,7 @@ impl std::fmt::Debug for ToolContext {
             .field("tool_use_id", &self.tool_use_id)
             .field("background_execution", &self.background_execution)
             .field("turn_tasks", &self.turn_tasks.is_some())
+            .field("skill_scope", &self.skill_scope)
             .finish()
     }
 }
@@ -225,6 +230,7 @@ impl ToolContext {
                 handoff_bound: None,
             },
             turn_tasks: None,
+            skill_scope: crate::skills::SkillScope::default(),
         }
     }
 
@@ -249,6 +255,12 @@ impl ToolContext {
     #[must_use]
     pub fn with_background_execution(mut self, background_execution: BackgroundExecution) -> Self {
         self.background_execution = background_execution;
+        self
+    }
+
+    #[must_use]
+    pub fn with_skill_scope(mut self, scope: crate::skills::SkillScope) -> Self {
+        self.skill_scope = scope;
         self
     }
 
@@ -503,6 +515,8 @@ impl ToolRegistry {
         self.register_tool(ListModels);
         self.register_tool(MemorySearch);
         self.register_tool(ReadThread);
+        self.register_tool(SkillTool);
+        self.register_tool(SkillExec);
         self.register_tool(Telegram);
         self.register_tool(TodoWrite);
         self.register_tool(ThreadSearch);
@@ -585,25 +599,31 @@ impl Tool for Bash {
                 }
             };
 
-            let event_sender = ctx.event_sender.clone();
-            let tool_use_id = ctx.tool_use_id.clone();
-
-            if let (Some(sender), Some(id)) = (event_sender, tool_use_id) {
-                let (output_tx, mut output_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-                tokio::join!(run(Some(output_tx)), async {
-                    while let Some(chunk) = output_rx.recv().await {
-                        sender.send(AgentEvent::ToolOutputDelta {
-                            id: id.clone(),
-                            chunk,
-                        });
-                    }
-                })
-                .0
-            } else {
-                run(None).await
-            }
+            run_with_output_deltas(&ctx, run).await
         })
     }
+}
+
+/// Runs `run`, forwarding the output lines it sends to the agent as
+/// `ToolOutputDelta` events when the engine provided a sender for this call.
+pub(crate) async fn run_with_output_deltas<F, Fut>(ctx: &ToolContext, run: F) -> ToolOutput
+where
+    F: FnOnce(Option<tokio::sync::mpsc::UnboundedSender<String>>) -> Fut,
+    Fut: Future<Output = ToolOutput>,
+{
+    let (Some(sender), Some(id)) = (ctx.event_sender.clone(), ctx.tool_use_id.clone()) else {
+        return run(None).await;
+    };
+    let (output_tx, mut output_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    tokio::join!(run(Some(output_tx)), async {
+        while let Some(chunk) = output_rx.recv().await {
+            sender.send(AgentEvent::ToolOutputDelta {
+                id: id.clone(),
+                chunk,
+            });
+        }
+    })
+    .0
 }
 
 /// The result of `background: true` in a run without background execution.
@@ -616,6 +636,30 @@ fn background_disabled_output() -> ToolOutput {
          command that might hang.",
         None,
     )
+}
+
+struct SkillTool;
+impl Tool for SkillTool {
+    fn definition(&self) -> ToolDefinition {
+        skill::skill_definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { skill::execute_skill(&input, &ctx).await })
+    }
+}
+
+struct SkillExec;
+impl Tool for SkillExec {
+    fn definition(&self) -> ToolDefinition {
+        skill::skill_exec_definition()
+    }
+    fn execute(&self, input: &Value, ctx: &ToolContext) -> ToolFuture {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        Box::pin(async move { skill::execute_skill_exec(&input, &ctx).await })
+    }
 }
 
 struct ApplyPatch;

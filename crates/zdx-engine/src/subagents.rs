@@ -11,7 +11,9 @@ use crate::config::{ThinkingLevel, paths};
 use crate::core::context::{
     LoadedSkillContent, PromptContextInclusion, StandalonePromptSkillContext,
 };
-use crate::skills::{LoadSkillsOptions, Skill, load_skills, read_skill_content, skill_access_path};
+use crate::skills::{
+    LoadSkillsOptions, Skill, SkillScope, load_skills, read_skill_content, skill_access_path,
+};
 
 pub const EXPLORER_SUBAGENT_NAME: &str = "explorer";
 pub const ORACLE_SUBAGENT_NAME: &str = "oracle";
@@ -75,6 +77,42 @@ pub struct SubagentDefinition {
     pub background_commands: bool,
     /// Standalone prompt body used as the child subagent system prompt.
     pub prompt_body: String,
+}
+
+impl SubagentDefinition {
+    /// Whether the definition declares `skills` or `auto_loaded_skills`.
+    #[must_use]
+    pub fn declares_skills(&self) -> bool {
+        self.skills.is_some() || self.auto_loaded_skills.is_some()
+    }
+
+    /// Skills the `skill` and `skill_exec` tools may reach in a run of this
+    /// definition: its declared `skills` plus `auto_loaded_skills`. Without
+    /// declared skills, a persistent profile (`lists_catalog`) reaches the
+    /// discovered catalog its prompt lists, and any other run reaches none,
+    /// since its prompt lists none.
+    #[must_use]
+    pub fn skill_scope(&self, lists_catalog: bool) -> SkillScope {
+        if !self.declares_skills() {
+            return if lists_catalog {
+                SkillScope::Discovered
+            } else {
+                SkillScope::Named(Vec::new())
+            };
+        }
+        let mut names: Vec<String> = Vec::new();
+        for name in self
+            .skills
+            .iter()
+            .flatten()
+            .chain(self.auto_loaded_skills.iter().flatten())
+        {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        SkillScope::Named(names)
+    }
 }
 
 /// Lightweight summary for listings and tool descriptions.
@@ -302,17 +340,20 @@ pub fn render_prompt_with_layers(
         &StandalonePromptSkillContext {
             available_skills: subagent_skills.allowed,
             auto_loaded_skill_contents: subagent_skills.auto_loaded,
+            catalog_is_available_skills: false,
         },
         instruction_layers,
     )
     .with_context(|| format!("render subagent '{}'", definition.name))
 }
 
-/// Renders a subagent prompt with the full discovered skills catalog exposed
-/// as the `skills_list` template var, instead of forcing skills off.
+/// Renders a subagent prompt with a skills catalog exposed as the
+/// `skills_list` template var, instead of forcing skills off.
 ///
-/// Used by the reserved orchestrator profile, whose home-base role should see
-/// every enabled skill rather than a declared allowlist.
+/// Used by persistent profiles. A profile without declared skills (the
+/// reserved orchestrator) sees every enabled skill; a profile that declares
+/// `skills` or `auto_loaded_skills` sees only those, the same set its `skill`
+/// and `skill_exec` tools may reach.
 ///
 /// # Errors
 /// Returns an error if rendering fails or produces an empty prompt.
@@ -365,6 +406,7 @@ fn render_prompt_inner(
         &StandalonePromptSkillContext {
             available_skills: subagent_skills.allowed,
             auto_loaded_skill_contents: subagent_skills.auto_loaded,
+            catalog_is_available_skills: definition.declares_skills(),
         },
         extra_context,
     )
@@ -1279,6 +1321,114 @@ mod tests {
         )
         .unwrap();
         assert!(!plain.contains("team-mgmt"));
+    }
+
+    /// A persistent profile that declares skills lists only those, marks the
+    /// auto-loaded ones, and limits the skill tools to the same set.
+    #[test]
+    fn profile_with_declared_skills_lists_and_reaches_only_those() {
+        let _home = crate::test_support::temp_zdx_home();
+        let root = tempdir().unwrap();
+        write_project_skill(root.path(), "flow", "Run the flow.", "# Flow");
+        write_project_skill(root.path(), "notes", "Shape notes.", "# Notes");
+        write_project_skill(root.path(), "other", "Unrelated.", "# Other");
+
+        let mut config = crate::config::Config::default();
+        config.skills.sources = crate::config::SkillSourceToggles {
+            zdx_project: true,
+            ..Default::default()
+        };
+        let definition = SubagentDefinition {
+            name: "coordinator".to_string(),
+            description: "desc".to_string(),
+            path: root.path().join("coordinator.md"),
+            source: SubagentSource::Project,
+            allowed_subagents: None,
+            model: None,
+            thinking_level: None,
+            tools: Some(vec!["skill".to_string()]),
+            skills: Some(vec!["flow".to_string()]),
+            auto_loaded_skills: Some(vec!["notes".to_string()]),
+            background_commands: false,
+            prompt_body: "body".to_string(),
+        };
+        let inclusion = PromptContextInclusion {
+            project_context: false,
+            memory_index: false,
+            skills: true,
+        };
+        let (_, runtime_context) = render_prompt_with_discovered_skills_and_context(
+            &config,
+            root.path(),
+            &definition,
+            "anthropic:claude-opus-4-6",
+            inclusion,
+            None,
+        )
+        .unwrap();
+        let catalog = runtime_context.unwrap().update.unwrap_or_default();
+        assert!(catalog.contains("<name>flow</name>"));
+        assert!(!catalog.contains("<name>other</name>"));
+        assert!(catalog.contains("use the `skill` tool when this run has it"));
+
+        assert_eq!(
+            definition.skill_scope(true),
+            SkillScope::Named(vec!["flow".to_string(), "notes".to_string()])
+        );
+        let undeclared = SubagentDefinition {
+            skills: None,
+            auto_loaded_skills: None,
+            ..definition
+        };
+        assert_eq!(undeclared.skill_scope(true), SkillScope::Discovered);
+        assert_eq!(undeclared.skill_scope(false), SkillScope::Named(Vec::new()));
+    }
+
+    /// An auto-loaded skill in the catalog is marked, so the model does not
+    /// load it again.
+    #[test]
+    fn auto_loaded_skill_is_marked_loaded_in_catalog() {
+        let _home = crate::test_support::temp_zdx_home();
+        let root = tempdir().unwrap();
+        write_project_skill(root.path(), "notes", "Shape notes.", "# Notes");
+        let mut config = crate::config::Config::default();
+        config.skills.sources = crate::config::SkillSourceToggles {
+            zdx_project: true,
+            ..Default::default()
+        };
+        let definition = SubagentDefinition {
+            name: "coordinator".to_string(),
+            description: "desc".to_string(),
+            path: root.path().join("coordinator.md"),
+            source: SubagentSource::Project,
+            allowed_subagents: None,
+            model: None,
+            thinking_level: None,
+            tools: Some(vec!["skill".to_string()]),
+            skills: None,
+            auto_loaded_skills: Some(vec!["notes".to_string()]),
+            background_commands: false,
+            prompt_body: "body".to_string(),
+        };
+        let inclusion = PromptContextInclusion {
+            project_context: false,
+            memory_index: false,
+            skills: true,
+        };
+        let (_, runtime_context) = render_prompt_with_discovered_skills_and_context(
+            &config,
+            root.path(),
+            &definition,
+            "anthropic:claude-opus-4-6",
+            inclusion,
+            None,
+        )
+        .unwrap();
+        let catalog = runtime_context.unwrap().update.unwrap_or_default();
+        assert!(
+            catalog.contains("<name>notes</name>\n    <description>Shape notes.</description>")
+        );
+        assert!(catalog.contains("<loaded>true</loaded>"));
     }
 
     #[test]

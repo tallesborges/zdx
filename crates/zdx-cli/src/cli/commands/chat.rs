@@ -43,6 +43,7 @@ pub async fn run(
             no_skills: false,
             no_background_commands: false,
             subagent: None,
+            skill_scope: None,
             activity_kind: Some("exec"),
             activity_parent_thread_id: None,
             activity_subagent_name: None,

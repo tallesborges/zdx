@@ -156,6 +156,10 @@ fn tool_key_arg(name: &str, input: &Value) -> Option<String> {
             // Show first todo content if available
             None
         }
+        "skill" | "skill_exec" => {
+            let text = tool_command_text(name, input);
+            (!text.trim().is_empty()).then(|| truncate_with_ellipsis(&text, 72))
+        }
         "invoke_subagent" => value_as_trimmed_str(input, "subagent")
             .map(str::to_string)
             .or_else(|| value_as_trimmed_str(input, "model").map(|m| format!("model={m}"))),
@@ -1503,6 +1507,22 @@ mod tests {
             "TODO src"
         );
         assert!(tool_command_text("todo_write", &serde_json::json!({})).is_empty());
+        assert_eq!(
+            tool_command_text(
+                "skill_exec",
+                &serde_json::json!({
+                    "action": "run", "name": "demo", "file": "scripts/x", "args": ["a", "two words"]
+                })
+            ),
+            "demo scripts/x a 'two words'"
+        );
+        assert_eq!(
+            tool_command_text(
+                "skill_exec",
+                &serde_json::json!({ "action": "read", "output": "run-2" })
+            ),
+            "read run-2"
+        );
     }
 
     #[test]
