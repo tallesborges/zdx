@@ -190,7 +190,7 @@ pub(crate) async fn create_topic_with_model(
     });
     if let Err(err) = init {
         if role == LaunchRole::Orchestrator {
-            abandon_orchestrator_topic(context, chat_id, topic_id).await;
+            abandon_orchestrator_topic(context, chat_id, topic_id, &thread_id).await;
             return Err(err.context("set up launcher orchestrator topic"));
         }
         tracing::warn!(
@@ -223,27 +223,70 @@ pub(crate) async fn create_topic_with_model(
     Ok(topic_id)
 }
 
-/// Remove a launcher orchestrator topic whose profile or model could not be
-/// saved, so no message can run there on the wrong agent or model. When
-/// Telegram refuses the delete (the bot lacks `can_delete_messages`), the topic
-/// gets a warning not to use it.
-async fn abandon_orchestrator_topic(context: &BotContext, chat_id: i64, topic_id: i64) {
+/// Close off a launcher orchestrator topic whose profile or model could not be
+/// saved, so no message runs there on the wrong agent or model. The topic is
+/// first blocked ([`orchestrator_setup_failed`]), which holds even when
+/// Telegram refuses the delete (the bot lacks `can_delete_messages`); the topic
+/// is then deleted, or gets a warning when that is refused.
+async fn abandon_orchestrator_topic(
+    context: &BotContext,
+    chat_id: i64,
+    topic_id: i64,
+    thread_id: &str,
+) {
+    block_unsetup_topic(context, thread_id);
     let Err(err) = context.client().delete_forum_topic(chat_id, topic_id).await else {
         return;
     };
     tracing::warn!(chat_id, topic_id, err = %format!("{err:#}"), "launcher: failed to delete orchestrator topic after init failure");
     if let Err(send_err) = context
         .client()
-        .send_message(
-            chat_id,
-            "⚠️ I couldn't set up this topic as an orchestrator on the picked model. Don't use it; open a new one from /launcher.",
-            None,
-            Some(topic_id),
-        )
+        .send_message(chat_id, UNSETUP_TOPIC_NOTICE, None, Some(topic_id))
         .await
     {
         tracing::warn!(chat_id, topic_id, err = %format!("{send_err:#}"), "launcher: failed to warn about orchestrator init failure");
     }
+}
+
+pub(crate) const UNSETUP_TOPIC_NOTICE: &str = "⚠️ I couldn't set up this topic as an orchestrator on the picked model, so I won't run messages here. Open a new one from /launcher.";
+
+/// Where blocked topics are recorded, one empty file per thread id. Kept
+/// apart from the thread file, whose write is what failed.
+fn unsetup_marker(thread_id: &str) -> std::path::PathBuf {
+    zdx_engine::config::paths::zdx_home()
+        .join("telegram")
+        .join("unsetup-topics")
+        .join(thread_id)
+}
+
+/// Block turns in `thread_id`: in this process, and on disk so it survives a
+/// restart. Either one is enough to refuse a turn.
+fn block_unsetup_topic(context: &BotContext, thread_id: &str) {
+    context
+        .unsetup_topics()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(thread_id.to_string());
+    let marker = unsetup_marker(thread_id);
+    let written = marker
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&marker, b""));
+    if let Err(err) = written {
+        tracing::error!(thread_id, path = %marker.display(), err = %format!("{err:#}"), "launcher: failed to record blocked orchestrator topic; blocked until restart only");
+    }
+}
+
+/// Whether `thread_id` is a launcher orchestrator topic whose setup failed.
+/// Checked before every turn: such a topic has no orchestrator profile, so a
+/// turn would otherwise run the default coding agent.
+pub(crate) fn orchestrator_setup_failed(context: &BotContext, thread_id: &str) -> bool {
+    context
+        .unsetup_topics()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(thread_id)
+        || unsetup_marker(thread_id).exists()
 }
 
 /// Create a new forum topic that *resumes* an existing source thread: the topic
@@ -1245,7 +1288,7 @@ mod tests {
         let fake = FakeTelegram::start().await;
         let (context, _client) = fake_context(&fake);
 
-        abandon_orchestrator_topic(&context, -1001, 77).await;
+        abandon_orchestrator_topic(&context, -1001, 77, &thread_id_for_chat(-1001, Some(77))).await;
 
         let delete = fake
             .seen()
@@ -1257,9 +1300,11 @@ mod tests {
         assert!(!fake.methods().iter().any(|m| m == "sendMessage"));
     }
 
-    /// When Telegram refuses to delete it, the topic gets a warning instead.
+    /// When setup fails and Telegram refuses to delete the topic, the topic
+    /// gets a warning and every turn there is refused, also after a restart,
+    /// instead of running the default coding agent.
     #[tokio::test]
-    async fn abandoned_orchestrator_topic_is_warned_when_it_cannot_be_deleted() {
+    async fn orchestrator_topic_that_cannot_be_set_up_or_deleted_runs_no_turn() {
         use crate::telegram::fake::{FakeTelegram, Reply};
 
         let _home = zdx_engine::test_support::temp_zdx_home();
@@ -1273,16 +1318,39 @@ mod tests {
             )],
         );
         let (context, _client) = fake_context(&fake);
+        // The fake's first topic is 101. A directory where its thread file
+        // goes makes the profile write fail.
+        let thread_id = thread_id_for_chat(-1001, Some(101));
+        std::fs::create_dir_all(
+            zdx_engine::config::paths::threads_dir().join(format!("{thread_id}.jsonl")),
+        )
+        .expect("block thread file");
 
-        abandon_orchestrator_topic(&context, -1001, 77).await;
+        let created = create_topic_with_model(
+            &context,
+            -1001,
+            "anthropic:claude-opus-4-8@high",
+            LaunchRole::Orchestrator,
+        )
+        .await;
+        assert!(created.is_err(), "setup must fail");
 
-        let warning = fake
+        // A fresh context stands for a restarted bot: only the disk marker is left.
+        let (restarted, _client) = fake_context(&fake);
+        for ctx in [&context, &restarted] {
+            super::super::retry_agent_turn(ctx, -1001, 5, &thread_id, Some(101), None)
+                .await
+                .expect("turn refused, not failed");
+        }
+
+        let notices = fake
             .seen()
             .into_iter()
-            .find(|seen| seen.method == "sendMessage")
-            .expect("warning sent");
-        let body: serde_json::Value = serde_json::from_str(&warning.body).expect("json");
-        assert_eq!(body["message_thread_id"], 77);
+            .filter(|seen| seen.method == "sendMessage")
+            .map(|seen| serde_json::from_str::<serde_json::Value>(&seen.body).expect("json"))
+            .filter(|body| body["message_thread_id"] == 101 && body["text"] == UNSETUP_TOPIC_NOTICE)
+            .count();
+        assert_eq!(notices, 3, "{:?}", fake.methods());
     }
 
     #[test]

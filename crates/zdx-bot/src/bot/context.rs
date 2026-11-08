@@ -79,6 +79,10 @@ pub(crate) struct BotContext {
     active_deliveries: ActiveDeliveries,
     /// `⬇ Send file` uploads running and recent stale-tap notices.
     send_files: crate::file_card::SendFileState,
+    /// Thread ids of launcher orchestrator topics whose setup failed and that
+    /// could not be deleted. Turns there are refused. Backs up the on-disk
+    /// marker for when that write fails too.
+    unsetup_topics: std::sync::Mutex<HashSet<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -147,7 +151,12 @@ impl BotContext {
             thread_headers: RwLock::new(HashMap::new()),
             active_deliveries: ActiveDeliveries::default(),
             send_files: crate::file_card::SendFileState::default(),
+            unsetup_topics: std::sync::Mutex::new(HashSet::new()),
         }
+    }
+
+    pub(crate) fn unsetup_topics(&self) -> &std::sync::Mutex<HashSet<String>> {
+        &self.unsetup_topics
     }
 
     pub(crate) fn active_deliveries(&self) -> &ActiveDeliveries {

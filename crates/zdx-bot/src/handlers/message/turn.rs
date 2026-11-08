@@ -31,6 +31,25 @@ pub(super) async fn run_agent_turn(
     // config layers here too: this is what feeds model, thinking level, and
     // subagent overrides into the run.
     context.reload_config_if_changed();
+    // A launcher orchestrator topic whose setup failed has no profile, so a
+    // turn would run the default coding agent. Refuse it instead.
+    if super::launcher::orchestrator_setup_failed(context, thread_id) {
+        super::cleanup_provisional_status(context, Some(incoming.chat_id), provisional_status)
+            .await;
+        if let Err(err) = context
+            .client()
+            .send_message(
+                incoming.chat_id,
+                super::launcher::UNSETUP_TOPIC_NOTICE,
+                reply_ctx.reply_to_message_id,
+                reply_ctx.topic_id,
+            )
+            .await
+        {
+            tracing::warn!(thread_id, err = %format!("{err:#}"), "Failed to refuse a turn in an orchestrator topic whose setup failed");
+        }
+        return Ok(());
+    }
     // Persistent-profile threads (orchestrator home bases) run in the
     // orchestrator service, their only writer; this process renders them.
     if thread_persistence::read_persistent_profile(thread_id)?.is_some() {
