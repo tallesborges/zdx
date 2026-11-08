@@ -1,16 +1,25 @@
 <script lang="ts">
-  import { renderMarkdown } from "$lib/markdown";
+  import DiffView from "./DiffView.svelte";
+  import { renderMarkdownBlocks } from "$lib/markdown";
 
   interface Props {
     source: string;
   }
 
   let { source }: Props = $props();
-  let html = $derived(renderMarkdown(source));
+  let blocks = $derived(renderMarkdownBlocks(source));
 </script>
 
 <div class="zdx-prose">
-  {@html html}
+  {#each blocks as block, i (i)}
+    {#if block.kind === "diff"}
+      <div class="md-diff">
+        <DiffView content={block.diff} path={block.path} />
+      </div>
+    {:else}
+      {@html block.html}
+    {/if}
+  {/each}
 </div>
 
 <style>
@@ -103,7 +112,12 @@
     margin: 1.25em 0;
   }
 
-  .zdx-prose :global(table) {
+  .md-diff {
+    margin: 0.75em 0;
+  }
+
+  /* Prose tables only: the diff view is a table too and owns its own styling. */
+  .zdx-prose :global(table:not(.md-diff *)) {
     display: block;
     width: max-content;
     max-width: 100%;
@@ -111,13 +125,13 @@
     border-collapse: collapse;
     font-size: 0.8125rem;
   }
-  .zdx-prose :global(th),
-  .zdx-prose :global(td) {
+  .zdx-prose :global(th:not(.md-diff *)),
+  .zdx-prose :global(td:not(.md-diff *)) {
     border: 1px solid var(--color-border);
     padding: 0.35em 0.6em;
     text-align: left;
   }
-  .zdx-prose :global(th) {
+  .zdx-prose :global(th:not(.md-diff *)) {
     background: var(--color-accent);
     font-weight: 600;
   }

@@ -6,6 +6,8 @@
  * allowlist before it reaches {@html}.
  */
 import { marked } from "marked";
+import type { Token, Tokens } from "marked";
+import { diffPath } from "./diff";
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -59,12 +61,45 @@ function sanitize(root: Element): void {
   }
 }
 
-export function renderMarkdown(source: string): string {
-  const raw = marked.parse(source, { async: false });
+function renderHtml(tokens: Token[]): string {
+  const raw = marked.parser(tokens);
   // A DOMParser document is inert: no scripts run and no images load. Parsing
   // into an element of the live document would start loads (and fire their
   // `onerror` handlers) before the sanitizer could remove them.
   const body = new DOMParser().parseFromString(raw, "text/html").body;
   sanitize(body);
   return body.innerHTML;
+}
+
+export type MarkdownBlock =
+  | { kind: "html"; html: string }
+  /** A top-level ```diff or ```patch fence, shown by the diff view instead of as plain code. */
+  | { kind: "diff"; diff: string; path: string };
+
+const DIFF_FENCES = new Set(["diff", "patch"]);
+
+function isDiffFence(token: Token): token is Tokens.Code {
+  if (token.type !== "code") return false;
+  const lang = ((token as Tokens.Code).lang ?? "").trim().split(/\s+/)[0].toLowerCase();
+  return DIFF_FENCES.has(lang);
+}
+
+export function renderMarkdownBlocks(source: string): MarkdownBlock[] {
+  const blocks: MarkdownBlock[] = [];
+  let pending: Token[] = [];
+  const flush = () => {
+    if (pending.length) blocks.push({ kind: "html", html: renderHtml(pending) });
+    pending = [];
+  };
+
+  for (const token of marked.lexer(source)) {
+    if (isDiffFence(token)) {
+      flush();
+      blocks.push({ kind: "diff", diff: token.text, path: diffPath(token.text) });
+    } else {
+      pending.push(token);
+    }
+  }
+  flush();
+  return blocks;
 }

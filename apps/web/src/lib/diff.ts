@@ -159,6 +159,22 @@ function diffWords(before: string, after: string): [Range[], Range[]] {
   return [range(a, start, endA, before), range(b, start, endB, after)];
 }
 
+/**
+ * Path named by the file headers before the first hunk (new side first), or ""
+ * when there are none. Lines after `@@` are content, even when they start with `---`.
+ */
+export function diffPath(raw: string): string {
+  let oldPath = "";
+  for (const line of raw.split("\n")) {
+    if (line.startsWith("@@")) break;
+    const header = /^(\+\+\+|---) (?:[ab]\/)?([^\t]*?)\s*(?:\t.*)?$/.exec(line);
+    if (!header || !header[2] || header[2] === "/dev/null") continue;
+    if (header[1] === "+++") return header[2];
+    oldPath ||= header[2];
+  }
+  return oldPath;
+}
+
 export interface DiffStats {
   additions: number;
   deletions: number;

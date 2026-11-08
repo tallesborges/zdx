@@ -1,6 +1,6 @@
 <script lang="ts">
   import { parseDiff, diffStats } from "$lib/diff";
-  import { buildSpans, detectLanguage, tokenize } from "$lib/highlight";
+  import { buildSpans, detectLanguage, isPlainLanguage, tokenize } from "$lib/highlight";
   import type { Span } from "$lib/highlight";
 
   interface Props {
@@ -15,6 +15,10 @@
   let lines = $derived(parseDiff(content));
   let stats = $derived(diffStats(lines));
   let lang = $derived(detectLanguage(path));
+  // Prose (Markdown, plain text) reads best wrapped on a phone; code keeps its
+  // layout until the reader flips the toggle. Same rule as TextView.
+  let wrapChoice = $state<boolean | null>(null);
+  let wrap = $derived(wrapChoice ?? isPlainLanguage(lang));
 
   // Very large diffs are rare but real (the API caps at 256 KiB); skip
   // highlighting rather than tokenizing thousands of lines on the main thread.
@@ -46,6 +50,12 @@
         >truncated at {(limitBytes / 1024).toFixed(0)} KiB</span
       >
     {/if}
+    {#if lines.length > 0}
+      <label class="wrap-toggle font-sans text-muted-foreground" class:ml-auto={!truncated}>
+        <input type="checkbox" checked={wrap} onchange={(e) => (wrapChoice = e.currentTarget.checked)} />
+        <span>Wrap</span>
+      </label>
+    {/if}
   </div>
 
   {#if lines.length === 0}
@@ -54,7 +64,7 @@
     </p>
   {:else}
     <div class="diff-scroll">
-      <table class="diff" style="--gutter: {gutterWidth}ch">
+      <table class="diff" class:wrap style="--gutter: {gutterWidth}ch">
         <tbody>
           {#each lines as line, i (i)}
             <tr class="row {line.type}">
@@ -111,9 +121,10 @@
     /* Line numbers stay pinned while long lines scroll horizontally. */
     position: sticky;
     left: 0;
-    width: var(--gutter);
-    min-width: var(--gutter);
+    width: calc(var(--gutter) + 0.8em);
+    min-width: calc(var(--gutter) + 0.8em);
     padding: 0 0.4em;
+    vertical-align: top;
     text-align: right;
     color: var(--color-muted-foreground);
     background: inherit;
@@ -129,6 +140,7 @@
   .mark {
     width: 1.2em;
     padding-left: 0.4em;
+    vertical-align: top;
     text-align: center;
     user-select: none;
   }
@@ -143,6 +155,21 @@
     padding: 0 0.75em 0 0.3em;
     white-space: pre;
     color: var(--color-foreground);
+  }
+
+  .diff.wrap {
+    width: 100%;
+    table-layout: fixed;
+  }
+  .wrap .code {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .wrap-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
   }
 
   /* The six syntax classes. */
