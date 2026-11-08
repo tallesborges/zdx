@@ -9,8 +9,8 @@ The user describes a problem: a PR to understand, options to weigh, a workflow t
 
 ## What the user values
 
-- Visual over prose. The user learns by seeing and trying, so show it when it can be shown.
-- Little prose. Short text at the point of use (on a control, beside a figure, in a status) helps; long paragraphs do not. A page that answers a question leads with the answer. A page to operate opens in a working state. Keep evidence, method, and caveats available but out of the way.
+- Visual over prose. The user learns by seeing and trying, so show it when it can be shown. Choose the form that helps the user see or try the subject. Do not mistake arranging text into cards or tables for a visual explanation. Apply visual explanation across the page, not only to its main topic. Do not leave the remaining substantive points as a report below one strong visual. Use text where it explains more clearly, rather than forcing a visual.
+- A small reading load by default. The page as it loads (everything visible without a tap, including headings, labels, diagram text, and text drawn by scripts) holds at most about 600 words. That default view gives the whole picture: the answer, each part the user asked about, and every qualification that changes the answer. Views, states, and details the user opens to go deeper are not counted, but each stays short. The limit is on reading, not on figures or behavior. Do not meet it by shrinking type, by moving prose into diagram labels, or by hiding the answer itself. A page that answers a question leads with the answer. A page to operate opens in a working state.
 - Plain language, per the global Writing Style rule, in the user's language.
 - A page that works well on a phone and on a desktop.
 - The user's explicit requests win over anything here. When they ask for a format, a library, a layout, or Mermaid, use it.
@@ -18,7 +18,7 @@ The user describes a problem: a PR to understand, options to weigh, a workflow t
 ## Stay true to the sources
 
 - Read the sources the task names (threads, files, diffs, notes) instead of working from a summary. Read the thread the task came from when context is missing.
-- Show what the sources support. Keep what is measured, inferred, and assumed distinguishable, and do not drop important facts to make the page shorter.
+- Show what the sources support. Keep what is measured, inferred, and assumed distinguishable, and do not drop important facts to make the page shorter. A fact one tap away is kept, not dropped.
 - Use the user's own text verbatim when you show it.
 
 ## Judgment that tends to work
@@ -28,8 +28,8 @@ These are observations, not rules. Choose what fits the problem.
 - A visual earns its place when it shows a space, a structure, a flow, a quantity, or something to try. When a sentence is faster, write the sentence.
 - Let what the user wants to do with the page pick its form and interaction, not the topic. A page can hold the right information and still miss if it does not support the way they asked to explore it. The same PR can need the new request path for "how does this work now" and a before/after for "what did this change".
 - Draw the mechanism, not its name. For options, draw what differs between them.
-- An answer that does not depend on the reader's input is often a diagram. A question about amounts is often a chart, a single number, or a table. "What happens if I do X" or "how does this feel" is often a working prototype.
-- When the real system has a control, the figure can have it too. Interaction is for exploring the content. A control earns its place when each action shows a clear effect, ideally everywhere that effect matters (the result, the code or message it produces, the state it changes). An empty state says what to try next.
+- An answer that does not depend on the reader's input is often a diagram. A question about amounts is often a chart or a single number, with a table when exact values matter. "What happens if I do X" or "how does this feel" is often a working prototype. A plan, workflow, or feature that people use through screens is often clearer as a mockup the user steps through than as a diagram or a description of it.
+- When the real system has a control, the figure can have it too. Interaction is for exploring the content. Use disclosure to keep detail available. When interaction helps explain the subject, let the user explore its behavior rather than only reveal more text. A control earns its place when each action shows a clear effect, ideally everywhere that effect matters (the result, the code or message it produces, the state it changes). An empty state says what to try next.
 - The page is useful when it loads: the main answer is visible, or the tool is already in a realistic working state with sample data. Nothing important appears only on hover or after an animation.
 - A prototype proves the core interaction. When the real mechanism is the point and cheap to run in the page (a browser boundary, a parser, a state rule), run it for real. Simulate the supporting parts (data, network, other screens) and say on the page what is simulated. A mockup of an existing product starts from that product's real source and values.
 - SVG is the default for diagrams. Use Mermaid when the user asks for it; a pinned Mermaid library from a CDN renders it in the page.
