@@ -144,7 +144,7 @@ const COMMAND_DEFS: &[CommandDef] = &[
         blocks_topic_autocreate: true,
         telegram_spec: TelegramCommandSpec {
             command: "launcher",
-            description: "Show the model launcher (General only)",
+            description: "New agent or orchestrator thread on a chosen model (General only)",
         },
     },
 ];

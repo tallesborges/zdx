@@ -708,6 +708,9 @@ pub(crate) enum ModelPickerScope {
     Topic,
     /// Launcher `🎛 Custom` — creates a new topic pre-set to the picked model.
     NewThread,
+    /// Launcher `🎛 Custom` with `New as: 🧭 Orchestrator` — creates a new
+    /// orchestrator topic pinned to the picked model.
+    NewOrchestrator,
     /// A staged `/handoff` / `/btw` `🎛 Model` tap — sets the model the command's
     /// new topic will start with, leaving the current topic alone.
     Staging,
@@ -719,6 +722,7 @@ impl ModelPickerScope {
             Self::General => "general",
             Self::Topic => "topic",
             Self::NewThread => "newthread",
+            Self::NewOrchestrator => "neworch",
             Self::Staging => "staging",
         }
     }
@@ -728,8 +732,19 @@ impl ModelPickerScope {
             "general" => Some(Self::General),
             "topic" => Some(Self::Topic),
             "newthread" => Some(Self::NewThread),
+            "neworch" => Some(Self::NewOrchestrator),
             "staging" => Some(Self::Staging),
             _ => None,
+        }
+    }
+
+    /// The launcher role a pick in this scope creates a topic for, when the
+    /// picker was opened from the launcher.
+    pub(crate) fn launch_role(self) -> Option<super::LaunchRole> {
+        match self {
+            Self::NewThread => Some(super::LaunchRole::Agent),
+            Self::NewOrchestrator => Some(super::LaunchRole::Orchestrator),
+            Self::General | Self::Topic | Self::Staging => None,
         }
     }
 }
@@ -747,7 +762,7 @@ pub(crate) fn build_provider_keyboard(
     // `/model` flow keeps "✖ Cancel".
     let exit_label = if matches!(
         scope,
-        ModelPickerScope::NewThread | ModelPickerScope::Staging
+        ModelPickerScope::NewThread | ModelPickerScope::NewOrchestrator | ModelPickerScope::Staging
     ) {
         "← Back"
     } else {

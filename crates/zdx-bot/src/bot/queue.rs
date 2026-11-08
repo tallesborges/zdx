@@ -123,7 +123,7 @@ pub(crate) async fn dispatch_message(
                     // the persistent orchestrator home base only in chats that
                     // opted in via `telegram.profiles.<name>.orchestrator`
                     // (SPEC §orchestrator). `/new`, the launcher, `/handoff`,
-                    // and `/btw` keep the default profile. Fail closed: a topic
+                    // and `/btw` decide their own profile. Fail closed: a topic
                     // that cannot record the profile must not run the default
                     // coding agent.
                     if is_orchestrator && let Err(err) = mark_orchestrator_thread(&thread_id, false)

@@ -1128,6 +1128,22 @@ impl TelegramClient {
         Ok(())
     }
 
+    /// Delete a forum topic with all its messages. Needs the
+    /// `can_delete_messages` admin right.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub async fn delete_forum_topic(&self, chat_id: i64, message_thread_id: i64) -> Result<()> {
+        let request = DeleteForumTopicRequest {
+            chat_id,
+            message_thread_id,
+        };
+        let _: bool = self
+            .post(CallSpec::update("deleteForumTopic", chat_id), &request)
+            .await?;
+        Ok(())
+    }
+
     ///
     /// # Errors
     /// Returns an error if the operation fails.
@@ -1596,6 +1612,12 @@ struct EditForumTopicRequest<'a> {
     chat_id: i64,
     message_thread_id: i64,
     name: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct DeleteForumTopicRequest {
+    chat_id: i64,
+    message_thread_id: i64,
 }
 
 #[derive(Debug, Deserialize)]

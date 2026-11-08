@@ -625,6 +625,17 @@ pub(crate) fn model_picker_header(
                 config.model
             )
         }
+        ModelPickerScope::NewOrchestrator => {
+            format!(
+                "Pick a model for a new 🧭 orchestrator (other topics keep theirs). Default: <code>{}</code>",
+                crate::handlers::message::launch_config(
+                    context,
+                    chat_id,
+                    crate::handlers::message::LaunchRole::Orchestrator
+                )
+                .model
+            )
+        }
         ModelPickerScope::Staging => {
             let picked = crate::staging::session_model_override(context, chat_id, thread_id)
                 .map_or_else(String::new, |m| format!("\nPicked: <code>{m}</code>"));
@@ -664,7 +675,9 @@ fn resolve_model_pick(
             Err(err) => format!("❌ Failed to save model: {err}"),
         },
         ModelPickerScope::Topic => set_topic_model(context, chat_id, thread_id, model_id),
-        ModelPickerScope::NewThread | ModelPickerScope::Staging => {
+        ModelPickerScope::NewThread
+        | ModelPickerScope::NewOrchestrator
+        | ModelPickerScope::Staging => {
             // Handled directly in handle_model_callback: the launcher stays
             // interactive, and a staged pick belongs to its command's card.
             String::new()
@@ -718,6 +731,14 @@ async fn handle_model_pick(
         ModelPickerScope::General | ModelPickerScope::NewThread => {
             context.config_for_chat(chat_id).thinking_level
         }
+        ModelPickerScope::NewOrchestrator => {
+            crate::handlers::message::launch_config(
+                context,
+                chat_id,
+                crate::handlers::message::LaunchRole::Orchestrator,
+            )
+            .thinking_level
+        }
     };
     let keyboard = build_model_thinking_keyboard(provider, index, scope, current);
     let reply = format!(
@@ -762,23 +783,13 @@ async fn handle_model_thinking_pick(
     };
     let model = zdx_engine::models::format_model_thinking(model, level);
 
-    if scope == ModelPickerScope::NewThread {
-        match crate::handlers::message::create_topic_with_model(context, msg.chat.id, &model).await
-        {
-            Ok(_) => {
-                let _ = client
-                    .answer_callback_query(&callback.id, Some("New thread ready ✓"))
-                    .await;
-            }
-            Err(err) => {
-                tracing::error!(chat_id = msg.chat.id, err = %format!("{err:#}"), "launcher: failed to create custom topic");
-                let _ = client
-                    .answer_callback_query(&callback.id, Some("Couldn't create the new thread"))
-                    .await;
-            }
-        }
+    if let Some(role) = scope.launch_role() {
+        let created =
+            crate::handlers::message::create_topic_with_model(context, msg.chat.id, &model, role)
+                .await;
+        crate::handlers::message::answer_topic_created(client, callback, created, role).await;
         if let Err(err) =
-            crate::handlers::message::render_launcher(context, msg.chat.id, msg.id).await
+            crate::handlers::message::render_launcher(context, msg.chat.id, msg.id, role).await
         {
             tracing::warn!(chat_id = msg.chat.id, err = %format!("{err:#}"), "failed to restore launcher after custom pick");
         }
@@ -890,10 +901,10 @@ async fn handle_model_callback(
         let Some(scope) = ModelPickerScope::from_data(scope) else {
             return;
         };
-        if scope == ModelPickerScope::NewThread {
+        if let Some(role) = scope.launch_role() {
             // Launched from the launcher — return to the launcher menu.
             if let Err(err) =
-                crate::handlers::message::render_launcher(context, chat_id, message_id).await
+                crate::handlers::message::render_launcher(context, chat_id, message_id, role).await
             {
                 tracing::warn!(chat_id, err = %format!("{err:#}"), "failed to restore launcher after custom cancel");
             }

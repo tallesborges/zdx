@@ -15,7 +15,8 @@ pub(crate) const TOKEN: &str = "123456:test-secret";
 /// One scripted answer for a method.
 #[derive(Clone)]
 pub(crate) enum Reply {
-    /// `ok: true`: a fresh message for `send*`/`forwardMessage`, else `true`.
+    /// `ok: true`: a fresh message for `send*`/`forwardMessage`, a fresh topic
+    /// for `createForumTopic`, else `true`.
     Ok,
     /// `ok: false` with this code, description, and optional `retry_after`.
     Error(u16, &'static str, Option<u64>),
@@ -128,6 +129,14 @@ fn answer(state: &Mutex<State>, method: &str, body: &[u8]) -> Response {
             }
         });
     match reply {
+        Reply::Ok if method == "createForumTopic" => {
+            state.next_id += 1;
+            axum::Json(json!({
+                "ok": true,
+                "result": { "message_thread_id": state.next_id, "name": "topic", "icon_color": 0 },
+            }))
+            .into_response()
+        }
         Reply::Ok if !(method.starts_with("send") || method == "forwardMessage") => {
             axum::Json(json!({ "ok": true, "result": true })).into_response()
         }
