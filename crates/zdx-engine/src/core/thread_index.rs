@@ -417,6 +417,38 @@ pub fn read_summary_cached(id: &str) -> Result<Option<ThreadSummary>> {
     })
 }
 
+/// Returns cached summaries for `ids`, keyed by thread id, in indexed lookups.
+///
+/// Ids the index does not know are absent from the map; callers must treat
+/// them as unknown rather than guess.
+///
+/// # Errors
+/// Returns an error when the cache cannot be opened, synced, or read.
+pub fn summaries_for_ids(ids: &[&str]) -> Result<HashMap<String, ThreadSummary>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    with_conn(|conn| {
+        sync_if_stale(conn, SyncScope::Meta)?;
+        let mut out = HashMap::with_capacity(ids.len());
+        // Below SQLite's default host-parameter limit.
+        for chunk in ids.chunks(500) {
+            let placeholders = std::iter::repeat_n("?", chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {SUMMARY_COLUMNS} FROM thread_meta WHERE thread_id IN ({placeholders})"
+            ))?;
+            let rows = stmt.query_map(params_from_iter(chunk), summary_from_row)?;
+            for row in rows {
+                let summary = row?;
+                out.insert(summary.id.clone(), summary);
+            }
+        }
+        Ok(out)
+    })
+}
+
 /// Resolves the mirror topic thread that mirrors `worker_thread_id`.
 ///
 /// Replaces a full-corpus `list_worker_topics()` scan with one indexed lookup

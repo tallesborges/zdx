@@ -35,7 +35,7 @@ use crate::models::ModelOption;
 use crate::providers::{self, ProviderKind};
 
 /// One aggregated row (a provider total, or a single provider+model total).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct UsageRow {
     /// Provider id (e.g. `anthropic`, `claude-cli`).
     pub provider: String,
@@ -66,7 +66,7 @@ impl UsageRow {
 }
 
 /// Overall totals across all scanned threads.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct UsageTotals {
     pub requests: u64,
     pub input: u64,
@@ -88,7 +88,7 @@ impl UsageTotals {
 }
 
 /// Total tokens on a single UTC day, for the daily usage chart.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DailyUsage {
     /// UTC day number (days since the Unix epoch).
     pub day: i32,
@@ -97,7 +97,7 @@ pub struct DailyUsage {
 }
 
 /// Aggregated usage statistics ready for display.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct UsageStats {
     pub totals: UsageTotals,
     /// Per-provider rows, sorted by total tokens (descending).
@@ -182,6 +182,48 @@ pub fn aggregate_usage(default_model: &str, since_day: Option<i32>) -> Result<Us
     )
 }
 
+/// One thread's usage for one `(provider, model)` within the requested window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadUsageRow {
+    pub thread_id: String,
+    pub provider: String,
+    pub model: String,
+    pub requests: u64,
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+}
+
+impl ThreadUsageRow {
+    /// Total tokens across all token classes.
+    pub fn tokens(&self) -> u64 {
+        self.input + self.output + self.cache_read + self.cache_write
+    }
+}
+
+/// Like [`aggregate_usage`], plus the same usage split per thread.
+///
+/// Both halves come from one cache sync and one read snapshot, so the
+/// per-thread rows sum exactly to the returned totals. Every usage event lives
+/// in the thread file of the run that made the request (a child run's usage is
+/// never copied into its parent), so the rows never count a request twice.
+///
+/// # Errors
+/// Same as [`aggregate_usage`].
+pub fn aggregate_usage_by_thread(
+    default_model: &str,
+    since_day: Option<i32>,
+) -> Result<(UsageStats, Vec<ThreadUsageRow>)> {
+    aggregate_at(
+        &paths::threads_dir(),
+        &cache_path(),
+        default_model,
+        since_day,
+        true,
+    )
+}
+
 /// UTC day number (days since the Unix epoch) for the current time.
 #[must_use]
 pub fn today_utc() -> i32 {
@@ -232,11 +274,23 @@ fn aggregate_usage_at(
     default_model: &str,
     since_day: Option<i32>,
 ) -> Result<UsageStats> {
-    match aggregate_cached(threads_dir, cache_path, default_model, since_day) {
-        Ok(stats) => Ok(stats),
+    aggregate_at(threads_dir, cache_path, default_model, since_day, false).map(|(stats, _)| stats)
+}
+
+/// Shared entry: cache first, full scan as the fallback. Per-thread rows are
+/// collected only when `by_thread` is set; otherwise the list is empty.
+fn aggregate_at(
+    threads_dir: &Path,
+    cache_path: &Path,
+    default_model: &str,
+    since_day: Option<i32>,
+    by_thread: bool,
+) -> Result<(UsageStats, Vec<ThreadUsageRow>)> {
+    match aggregate_cached(threads_dir, cache_path, default_model, since_day, by_thread) {
+        Ok(result) => Ok(result),
         Err(err) => {
             tracing::debug!("usage cache unavailable ({err:#}); falling back to full scan");
-            aggregate_scan_all(threads_dir, default_model, since_day)
+            aggregate_scan_all(threads_dir, default_model, since_day, by_thread)
         }
     }
 }
@@ -247,9 +301,11 @@ fn aggregate_scan_all(
     threads_dir: &Path,
     default_model: &str,
     since_day: Option<i32>,
-) -> Result<UsageStats> {
+    by_thread: bool,
+) -> Result<(UsageStats, Vec<ThreadUsageRow>)> {
     let files = thread_persistence::list_thread_files(threads_dir)?;
     let mut all_days: BTreeMap<(String, String, i32), RawBucket> = BTreeMap::new();
+    let mut thread_rows = Vec::new();
     let mut warnings = Vec::new();
     let mut threads_scanned = 0usize;
 
@@ -257,8 +313,14 @@ fn aggregate_scan_all(
         match scan_thread_file(&file.path) {
             Ok(scan) => {
                 threads_scanned += 1;
-                for (key, bucket) in resolve_thread_buckets(&scan, Some(default_model)) {
-                    all_days.entry(key).or_default().merge(&bucket);
+                let buckets = resolve_thread_buckets(&scan, Some(default_model));
+                for (key, bucket) in &buckets {
+                    all_days.entry(key.clone()).or_default().merge(bucket);
+                }
+                if by_thread {
+                    for ((provider, model), bucket) in collapse_days(buckets, since_day) {
+                        thread_rows.push(thread_row(file.id.clone(), provider, model, &bucket));
+                    }
                 }
             }
             Err(err) => warnings.push(format!("skipped thread {}: {err}", file.id)),
@@ -267,7 +329,25 @@ fn aggregate_scan_all(
 
     let daily = daily_from_buckets(&all_days, since_day);
     let raw = collapse_days(all_days, since_day);
-    Ok(finalize(raw, daily, threads_scanned, warnings))
+    Ok((finalize(raw, daily, threads_scanned, warnings), thread_rows))
+}
+
+fn thread_row(
+    thread_id: String,
+    provider: String,
+    model: String,
+    bucket: &RawBucket,
+) -> ThreadUsageRow {
+    ThreadUsageRow {
+        thread_id,
+        provider,
+        model,
+        requests: bucket.requests,
+        input: bucket.input,
+        output: bucket.output,
+        cache_read: bucket.cache_read,
+        cache_write: bucket.cache_write,
+    }
 }
 
 /// Lists every thread with its `(mtime_ns, size)` change token.
@@ -306,7 +386,8 @@ fn aggregate_cached(
     cache_path: &Path,
     default_model: &str,
     since_day: Option<i32>,
-) -> Result<UsageStats> {
+    by_thread: bool,
+) -> Result<(UsageStats, Vec<ThreadUsageRow>)> {
     let files = thread_file_tokens(threads_dir)?;
     let conn = open_cache(cache_path)?;
     ensure_cache_valid(&conn)?;
@@ -385,10 +466,16 @@ fn aggregate_cached(
     // One read transaction, so totals and the daily series come from the same
     // snapshot even while another caller commits.
     let tx = conn.unchecked_transaction()?;
-    let raw = load_all_buckets(&tx, since_day, &default_attribution(default_model))?;
+    let default_key = default_attribution(default_model);
+    let raw = load_all_buckets(&tx, since_day, &default_key)?;
     let daily = load_daily(&tx, since_day)?;
+    let thread_rows = if by_thread {
+        load_thread_rows(&tx, since_day, &default_key)?
+    } else {
+        Vec::new()
+    };
     tx.commit()?;
-    Ok(finalize(raw, daily, threads_scanned, warnings))
+    Ok((finalize(raw, daily, threads_scanned, warnings), thread_rows))
 }
 
 /// Changed threads parsed and written per write transaction during a sync.
@@ -744,6 +831,59 @@ fn load_all_buckets(
     Ok(map)
 }
 
+/// Loads per-thread `(provider, model)` totals on or after `since_day`, summed
+/// in SQL. Unattributed rows are credited to `default_key`, as in
+/// [`load_all_buckets`].
+fn load_thread_rows(
+    conn: &Connection,
+    since_day: Option<i32>,
+    default_key: &(String, String),
+) -> Result<Vec<ThreadUsageRow>> {
+    let min_day = since_day.unwrap_or(i32::MIN);
+    let mut stmt = conn.prepare(
+        "SELECT thread_id, provider, model, SUM(requests), SUM(input), SUM(output), \
+         SUM(cache_read), SUM(cache_write) \
+         FROM thread_usage WHERE day >= ?1 GROUP BY thread_id, provider, model",
+    )?;
+    let rows = stmt.query_map([min_day], |r| {
+        Ok((
+            (
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ),
+            RawBucket {
+                requests: u64_from(r.get::<_, i64>(3)?),
+                input: u64_from(r.get::<_, i64>(4)?),
+                output: u64_from(r.get::<_, i64>(5)?),
+                cache_read: u64_from(r.get::<_, i64>(6)?),
+                cache_write: u64_from(r.get::<_, i64>(7)?),
+                estimated: false,
+            },
+        ))
+    })?;
+
+    let mut merged: BTreeMap<(String, String, String), RawBucket> = BTreeMap::new();
+    for row in rows {
+        let ((thread_id, provider, model), bucket) = row?;
+        let (provider, model) = if provider == UNATTRIBUTED_PROVIDER {
+            default_key.clone()
+        } else {
+            (provider, model)
+        };
+        merged
+            .entry((thread_id, provider, model))
+            .or_default()
+            .merge(&bucket);
+    }
+    Ok(merged
+        .into_iter()
+        .map(|((thread_id, provider, model), bucket)| {
+            thread_row(thread_id, provider, model, &bucket)
+        })
+        .collect())
+}
+
 /// Loads the per-day token series from the cache, keeping only days on or after
 /// `since_day` and excluding unknown-day usage. Sorted ascending by day.
 fn load_daily(conn: &Connection, since_day: Option<i32>) -> Result<Vec<DailyUsage>> {
@@ -1074,6 +1214,77 @@ mod tests {
     }
 
     #[test]
+    fn per_thread_rows_match_totals_in_cache_and_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let threads = dir.path().join("threads");
+        std::fs::create_dir_all(&threads).unwrap();
+        let cache = dir.path().join("cache/usage.sqlite");
+
+        write_thread(
+            &threads,
+            "a",
+            &[
+                usage_line_at(
+                    100,
+                    50,
+                    Some("gpt-5.5"),
+                    Some("openai-codex"),
+                    &ts_days_ago(1),
+                ),
+                // No attribution: credited to the caller's default model.
+                usage_line_at(10, 5, None, None, &ts_days_ago(1)),
+                // Outside the window.
+                usage_line_at(
+                    1000,
+                    0,
+                    Some("gpt-5.5"),
+                    Some("openai-codex"),
+                    &ts_days_ago(20),
+                ),
+            ],
+        );
+        write_thread(
+            &threads,
+            "b",
+            &[usage_line_at(
+                7,
+                3,
+                Some("gpt-5.5"),
+                Some("openai-codex"),
+                &ts_days_ago(0),
+            )],
+        );
+
+        let since = Some(today_utc() - 6);
+        let (cached_stats, mut cached) =
+            aggregate_cached(&threads, &cache, "claude-opus-4-8", since, true).unwrap();
+        let (scanned_stats, mut scanned) =
+            aggregate_scan_all(&threads, "claude-opus-4-8", since, true).unwrap();
+        cached.sort_by(|x, y| (&x.thread_id, &x.model).cmp(&(&y.thread_id, &y.model)));
+        scanned.sort_by(|x, y| (&x.thread_id, &x.model).cmp(&(&y.thread_id, &y.model)));
+        assert_eq!(cached, scanned);
+
+        let default = default_attribution("claude-opus-4-8");
+        assert_eq!(cached.len(), 3);
+        assert!(cached.iter().any(|row| row.thread_id == "a"
+            && (row.provider.as_str(), row.model.as_str())
+                == (default.0.as_str(), default.1.as_str())
+            && row.tokens() == 15));
+        for stats in [&cached_stats, &scanned_stats] {
+            assert_eq!(stats.totals.tokens(), 175);
+            assert_eq!(
+                cached.iter().map(ThreadUsageRow::tokens).sum::<u64>(),
+                stats.totals.tokens()
+            );
+        }
+
+        // Without `by_thread` no rows are collected.
+        let (_, none) =
+            aggregate_cached(&threads, &cache, "claude-opus-4-8", since, false).unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
     fn cache_incremental_reflects_new_changed_and_deleted_threads() {
         let dir = tempfile::tempdir().unwrap();
         let threads = dir.path().join("threads");
@@ -1300,7 +1511,7 @@ mod tests {
                         barrier.wait();
                         // Not `aggregate_usage_at`: a fallback scan would hide a
                         // cache failure behind a correct result.
-                        let stats = aggregate_cached(threads, cache, model, None)
+                        let (stats, _) = aggregate_cached(threads, cache, model, None, false)
                             .unwrap_or_else(|err| panic!("{model}: {err:#}"));
                         (
                             stats.totals.input,
@@ -1575,9 +1786,18 @@ mod tests {
                             barrier.wait();
                             std::thread::sleep(std::time::Duration::from_secs(delay));
                             let start = std::time::Instant::now();
-                            let result =
-                                aggregate_cached(threads, cache, model, Some(today_utc() - 29));
-                            (model, start.elapsed(), result.map(|s| s.totals.tokens()))
+                            let result = aggregate_cached(
+                                threads,
+                                cache,
+                                model,
+                                Some(today_utc() - 29),
+                                false,
+                            );
+                            (
+                                model,
+                                start.elapsed(),
+                                result.map(|(s, _)| s.totals.tokens()),
+                            )
                         })
                     })
                     .collect();

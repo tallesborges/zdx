@@ -34,7 +34,7 @@ use zdx_engine::core::thread_persistence::{self, ThreadEvent, load_thread_events
 use zdx_engine::core::thread_trajectory::{
     LiveToolSpan, ThreadTrajectoryReport, inspect_thread_trajectory_with_live,
 };
-use zdx_engine::core::usage_stats::{self, UsageStats};
+use zdx_engine::core::usage_report::{self, ProjectUsage, RunUsage, UsageReport};
 use zdx_engine::core::workers::{WorkerSnapshot, WorkerStatus};
 use zdx_engine::models::ModelOption;
 use zdx_engine::orchestration::OrchestratorClient;
@@ -490,7 +490,6 @@ struct MonitorResponse {
     /// Set when jobs could not be listed at all.
     jobs_error: Option<String>,
     config: MonitorConfig,
-    usage: Option<MonitorUsage>,
     subscriptions: Vec<MonitorSubscription>,
     /// Freshness of `subscriptions`, which are refreshed off the request path:
     /// `"ready"`, `"pending"` (never fetched since startup, a refresh is in
@@ -553,9 +552,11 @@ struct MonitorConfigModel {
     model: String,
 }
 
+/// `GET /api/usage`: recorded usage in a day window, from the shared
+/// `zdx_engine::core::usage_report`.
 #[derive(Clone, Serialize)]
-struct MonitorUsage {
-    span: &'static str,
+struct UsageResponse {
+    days: u32,
     requests: u64,
     tokens: u64,
     input: u64,
@@ -569,6 +570,22 @@ struct MonitorUsage {
     by_provider: Vec<MonitorUsageRow>,
     by_model: Vec<MonitorUsageRow>,
     daily: Vec<MonitorDailyUsage>,
+    by_project: Vec<ProjectUsage>,
+    by_run: Vec<RunUsage>,
+    unindexed_threads: usize,
+}
+
+#[derive(Deserialize)]
+struct UsageQuery {
+    days: Option<u32>,
+}
+
+/// Longest window `GET /api/usage` accepts.
+const MAX_USAGE_DAYS: u32 = 365;
+
+struct CachedUsage {
+    cached_at: Instant,
+    response: UsageResponse,
 }
 
 #[derive(Clone, Serialize)]
@@ -627,6 +644,9 @@ pub(crate) struct ServerState {
     monitor_cache: RwLock<Option<CachedMonitor>>,
     /// Single-flight guard for building `monitor_cache`; see `monitor_snapshot`.
     monitor_build: Mutex<()>,
+    /// Usage reports per window, held for [`MONITOR_CACHE_TTL`]. The lock is
+    /// held across a build, so concurrent requests share one usage-cache sync.
+    usage_cache: Mutex<HashMap<u32, CachedUsage>>,
     subscription_cache: Mutex<Option<CachedSubscriptions>>,
     /// Single-flight guard for the background quota refresh, held for the whole
     /// fetch. Every open Mini App polls `/api/monitor` every 30s, so without it
@@ -662,6 +682,7 @@ impl ServerState {
             workers: Arc::new(LiveWorkers { client: workers }),
             monitor_cache: RwLock::new(None),
             monitor_build: Mutex::new(()),
+            usage_cache: Mutex::new(HashMap::new()),
             subscription_cache: Mutex::new(None),
             subscription_refresh: Arc::new(Mutex::new(())),
             deliveries: ActiveDeliveries::default(),
@@ -722,6 +743,7 @@ pub(crate) fn create_router(state: Arc<ServerState>) -> Router {
         .route("/threads/{id}/workers", get(get_thread_workers))
         .route("/monitor", get(get_monitor))
         .route("/workspaces", get(get_workspaces))
+        .route("/usage", get(get_usage))
         .route("/git", get(get_git))
         .route("/git/scope", get(get_git_scope))
         .route("/git/diff", get(get_git_diff))
@@ -3005,6 +3027,50 @@ async fn get_workspaces(
         })
 }
 
+/// Recorded usage for the last `?days=` days (default
+/// [`usage_report::DEFAULT_DAYS`]), split by project and run kind. A thin
+/// adapter over `zdx_engine::core::usage_report`; cached per window for
+/// [`MONITOR_CACHE_TTL`] because a build syncs the usage cache.
+async fn get_usage(
+    State(state): State<Arc<ServerState>>,
+    Query(query): Query<UsageQuery>,
+) -> Result<Json<UsageResponse>, ApiError> {
+    let days = query.days.unwrap_or(usage_report::DEFAULT_DAYS);
+    if !(1..=MAX_USAGE_DAYS).contains(&days) {
+        return Err((StatusCode::BAD_REQUEST, "days must be between 1 and 365"));
+    }
+    let mut cache = state.usage_cache.lock().await;
+    if let Some(cached) = cache
+        .get(&days)
+        .filter(|cached| cached.cached_at.elapsed() < MONITOR_CACHE_TTL)
+    {
+        return Ok(Json(cached.response.clone()));
+    }
+    let root = state.root.clone();
+    let response = tokio::task::spawn_blocking(move || {
+        let config = Config::load_layered(&paths::config_layer_paths_for(&root))?;
+        usage_report::report(&config.model, Some(days))
+    })
+    .await
+    .map_err(|error| {
+        tracing::warn!(%error, "Mini App usage task failed");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Usage unavailable")
+    })?
+    .map(|report| usage_response(days, report))
+    .map_err(|error| {
+        tracing::warn!(error = %format!("{error:#}"), "Mini App usage aggregation failed");
+        (StatusCode::INTERNAL_SERVER_ERROR, "Usage unavailable")
+    })?;
+    cache.insert(
+        days,
+        CachedUsage {
+            cached_at: Instant::now(),
+            response: response.clone(),
+        },
+    );
+    Ok(Json(response))
+}
+
 async fn get_monitor(
     State(state): State<Arc<ServerState>>,
 ) -> Result<Json<MonitorResponse>, ApiError> {
@@ -3044,9 +3110,10 @@ fn active_monitor_agents() -> Vec<MonitorAgent> {
         .collect()
 }
 
-/// Builds (or reuses) the local part of the dashboard: services, jobs,
-/// config and usage. Everything here is local state, so it is
-/// cached for [`MONITOR_CACHE_TTL`] and never waits on the network.
+/// Builds (or reuses) the local part of the dashboard: services, jobs, and
+/// config (usage has its own route, `get_usage`). Everything here is local
+/// state, so it is cached for [`MONITOR_CACHE_TTL`] and never waits on the
+/// network.
 ///
 /// Quotas are deliberately *not* cached with it — they are overlaid per request
 /// by [`attach_subscriptions`], so a refresh that lands mid-window is served
@@ -3064,7 +3131,7 @@ async fn cached_monitor_or_build(
         return Ok(cached);
     }
     // Single-flight: the Mini App opens several views on `/api/monitor` at
-    // once, and each build may sync the usage cache. Later callers wait for
+    // once, and each build lists jobs and services. Later callers wait for
     // the first build and reuse it.
     let _build = state.monitor_build.lock().await;
     if let Some(cached) = fresh_monitor(state).await {
@@ -3141,17 +3208,6 @@ fn build_monitor_response(root: &FilePath) -> anyhow::Result<MonitorResponse> {
         Err(error) => (Vec::new(), Some(format!("{error:#}"))),
     };
 
-    let usage = usage_stats::aggregate_usage(
-        &config.model,
-        Some(usage_stats::today_utc().saturating_sub(29)),
-    )
-    .map(monitor_usage)
-    .map_err(|error| {
-        tracing::warn!(error = %format!("{error:#}"), "Mini App monitor usage aggregation failed");
-        error
-    })
-    .ok();
-
     Ok(MonitorResponse {
         generated_at: chrono::Utc::now().to_rfc3339(),
         services,
@@ -3162,7 +3218,6 @@ fn build_monitor_response(root: &FilePath) -> anyhow::Result<MonitorResponse> {
         jobs,
         jobs_error,
         config: monitor_config(&config),
-        usage,
         subscriptions: Vec::new(),
         subscriptions_status: "pending",
         subscriptions_age: None,
@@ -3336,7 +3391,7 @@ fn monitor_config(config: &Config) -> MonitorConfig {
     }
 }
 
-fn monitor_usage(stats: UsageStats) -> MonitorUsage {
+fn usage_response(days: u32, report: UsageReport) -> UsageResponse {
     let row = |item: zdx_engine::core::usage_stats::UsageRow| {
         let tokens = item.tokens();
         MonitorUsageRow {
@@ -3349,8 +3404,9 @@ fn monitor_usage(stats: UsageStats) -> MonitorUsage {
             estimated: item.estimated,
         }
     };
-    MonitorUsage {
-        span: "30 days",
+    let stats = report.stats;
+    UsageResponse {
+        days,
         requests: stats.totals.requests,
         tokens: stats.totals.tokens(),
         input: stats.totals.input,
@@ -3371,6 +3427,9 @@ fn monitor_usage(stats: UsageStats) -> MonitorUsage {
                 tokens: day.tokens,
             })
             .collect(),
+        by_project: report.by_project,
+        by_run: report.by_run,
+        unindexed_threads: report.unindexed_threads,
     }
 }
 
@@ -3579,6 +3638,7 @@ mod tests {
             "/api/threads/active/artifacts/file?path=x",
             "/api/monitor",
             "/api/workspaces",
+            "/api/usage",
             "/api/git?thread_id=active",
             "/api/git/scope?thread_id=active&scope=all",
             "/api/git/diff?thread_id=active&kind=unstaged&path=README.md",
@@ -3676,6 +3736,84 @@ mod tests {
             .await
             .expect("request foreign path");
         assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+
+        server.abort();
+        drop(home);
+    }
+
+    /// The usage route serves the shared report: a subagent run counts toward
+    /// the project of the thread that started it, and the window is checked.
+    #[tokio::test]
+    async fn usage_route_splits_by_project_and_run() {
+        let home = zdx_engine::test_support::temp_zdx_home();
+        let threads = paths::threads_dir();
+        std::fs::create_dir_all(&threads).expect("create threads dir");
+        let parent = format!("usage-parent-{}", uuid::Uuid::new_v4());
+        let child = format!("usage-child-{}", uuid::Uuid::new_v4());
+        let ts = chrono::Utc::now().to_rfc3339();
+        let usage = |input: u64| {
+            format!(
+                r#"{{"type":"usage","input_tokens":{input},"output_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"model":"m","provider":"p","ts":"{ts}"}}"#
+            )
+        };
+        std::fs::write(
+            threads.join(format!("{parent}.jsonl")),
+            format!(
+                "{{\"type\":\"meta\",\"schema_version\":1,\"root_path\":\"/p/app\",\"ts\":\"{ts}\"}}\n{}\n",
+                usage(100)
+            ),
+        )
+        .expect("write parent");
+        std::fs::write(
+            threads.join(format!("{child}.jsonl")),
+            format!(
+                "{{\"type\":\"meta\",\"schema_version\":1,\"root_path\":\"/tmp/artifacts\",\"origin_kind\":\"subagent\",\"parent_thread_id\":\"{parent}\",\"subagent_name\":\"html-artifact-specialist\",\"ts\":\"{ts}\"}}\n{}\n",
+                usage(30)
+            ),
+        )
+        .expect("write child");
+
+        let app = create_router(Arc::new(ServerState::new(
+            SAMPLE_BOT_TOKEN.to_string(),
+            sample_allowlist(),
+            PathBuf::from("."),
+            test_workers(),
+        )));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("read test server address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve test app");
+        });
+        let client = reqwest::Client::new();
+        let auth = format!("tma {}", fresh_init_data(279_058_397));
+
+        let response = client
+            .get(format!("http://{addr}/api/usage"))
+            .header(AUTHORIZATION, &auth)
+            .send()
+            .await
+            .expect("request usage");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = response.json().await.expect("read usage");
+        assert_eq!(body["days"], 7);
+        assert_eq!(body["tokens"], 130);
+        assert_eq!(body["by_project"][0]["project"], "/p/app");
+        assert_eq!(body["by_project"][0]["tokens"], 130);
+        assert_eq!(body["by_project"][0]["threads"], 2);
+        assert_eq!(body["by_run"][0]["kind"], "agent");
+        assert_eq!(body["by_run"][1]["kind"], "subagent");
+        assert_eq!(body["by_run"][1]["name"], "html-artifact-specialist");
+        assert_eq!(body["by_run"][1]["tokens"], 30);
+
+        let invalid = client
+            .get(format!("http://{addr}/api/usage?days=0"))
+            .header(AUTHORIZATION, &auth)
+            .send()
+            .await
+            .expect("request invalid window");
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
 
         server.abort();
         drop(home);
@@ -5628,7 +5766,6 @@ mod tests {
                         jobs: Vec::new(),
                         jobs_error: None,
                         config: monitor_config(&Config::default()),
-                        usage: None,
                         subscriptions: Vec::new(),
                         subscriptions_status: "pending",
                         subscriptions_age: None,

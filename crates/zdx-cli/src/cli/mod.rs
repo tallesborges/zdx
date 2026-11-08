@@ -295,8 +295,15 @@ enum Commands {
         #[command(subcommand)]
         command: ThreadCommands,
     },
-    /// Show usage and cost totals per provider and model, across saved threads
-    Stats,
+    /// Show recorded usage per provider, model, project, and run kind
+    Stats {
+        /// Only the last N days (today included, UTC). Default: all time
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+        days: Option<u32>,
+        /// Emit machine-readable JSON instead of a text summary
+        #[arg(long)]
+        json: bool,
+    },
     /// List or stop background processes started by the agent (`background: true`)
     Bg {
         #[command(subcommand)]
@@ -1444,7 +1451,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             .await
         }
         Commands::Threads { command } => dispatch_threads(command, context).await,
-        Commands::Stats => commands::stats::run(context.config),
+        Commands::Stats { days, json } => commands::stats::run(context.config, days, json),
         Commands::Quota { json } => commands::quota::run(json).await,
         Commands::Bg { command } => dispatch_bg(command).await,
         Commands::Service { command } => dispatch_service(command, context),

@@ -14,6 +14,7 @@ import type {
   ThreadListResponse,
   ThreadResponse,
   ThreadTrajectoryReport,
+  UsageResponse,
   WorkersResponse,
   WorkspacesResponse,
 } from "./types";
@@ -226,6 +227,14 @@ export const api = {
       if (demo.demoEnabled()) return demo.demoWorkspaces;
     }
     return get<WorkspacesResponse>("/api/workspaces");
+  },
+
+  usage: async (days: number) => {
+    if (import.meta.env.DEV) {
+      const demo = await import("./demo");
+      if (demo.demoEnabled()) return demo.demoUsage(days);
+    }
+    return get<UsageResponse>("/api/usage", { days: String(days) });
   },
 
   git: async (threadId: string) => {

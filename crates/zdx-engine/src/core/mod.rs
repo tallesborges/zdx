@@ -24,6 +24,7 @@
 //! - `title_generation`: LLM-based title generation
 //! - `tldr_generation`: LLM-based thread TLDR/recap generation
 //! - `usage_stats`: Usage/cost aggregation over saved threads
+//! - `usage_report`: Usage in a day window split by project and run kind
 //! - `worktree`: Git worktree management helpers
 
 pub mod agent;
@@ -49,6 +50,7 @@ pub mod thread_persistence;
 pub mod thread_trajectory;
 pub mod title_generation;
 pub mod tldr_generation;
+pub mod usage_report;
 pub mod usage_stats;
 pub mod workers;
 pub mod worktree;

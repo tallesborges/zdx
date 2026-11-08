@@ -447,7 +447,6 @@ export interface MonitorResponse {
   /** Set when jobs could not be listed at all (for example before `zdx jobs migrate`). */
   jobs_error: string | null;
   config: MonitorConfig;
-  usage: MonitorUsage | null;
   subscriptions: MonitorSubscription[];
   /**
    * Quotas are fetched off the request path, so an empty `subscriptions` means
@@ -556,8 +555,36 @@ export interface MonitorDailyUsage {
   tokens: number;
 }
 
-export interface MonitorUsage {
-  span: string;
+/** Token counts of one usage group. */
+export interface UsageCounts {
+  threads: number;
+  tokens: number;
+  requests: number;
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+}
+
+/** Usage of one project (thread root). `project` is null when unknown. */
+export interface ProjectUsage extends UsageCounts {
+  project: string | null;
+}
+
+export type RunKind = "agent" | "profile" | "worker" | "subagent" | "helper" | "other" | "unknown";
+
+/** Usage of one run kind; `name` is the profile, subagent, or helper name. */
+export interface RunUsage extends UsageCounts {
+  kind: RunKind;
+  name: string | null;
+}
+
+/**
+ * `GET /api/usage?days=N`: recorded tokens in the last N days (UTC), from
+ * `zdx_engine::core::usage_report`. Recorded tokens, not provider quota.
+ */
+export interface UsageResponse {
+  days: number;
   requests: number;
   tokens: number;
   input: number;
@@ -571,6 +598,12 @@ export interface MonitorUsage {
   by_provider: MonitorUsageRow[];
   by_model: MonitorUsageRow[];
   daily: MonitorDailyUsage[];
+  /** Sorted by tokens, descending. */
+  by_project: ProjectUsage[];
+  /** Sorted by tokens, descending. */
+  by_run: RunUsage[];
+  /** Threads with usage that the thread index does not know. */
+  unindexed_threads: number;
 }
 
 export interface MonitorQuotaWindow {

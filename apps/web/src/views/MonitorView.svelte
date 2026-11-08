@@ -7,6 +7,7 @@
   import { runAges } from "$lib/run";
   import { jobFailed, peakQuota as peakQuotaOf, servicesLabel } from "$lib/monitorSummary";
   import WorkspacesPane from "./WorkspacesPane.svelte";
+  import UsagePane from "./UsagePane.svelte";
 
   interface Props {
     section: MonitorSection;
@@ -19,6 +20,9 @@
   let workspaces = $state<WorkspacesResponse | null>(null);
   let error = $state("");
   let loading = $state(true);
+  // Bumped by the refresh button; the usage report reloads only then or when
+  // its window changes, never on the 30s poll.
+  let usageRefresh = $state(0);
   // Reset countdowns are measured against this, not against the snapshot time.
   let now = $state(Date.now());
 
@@ -58,12 +62,6 @@
 
   // Overview renders every dashboard section; workspaces is its own view.
   let show = $derived((s: MonitorSection) => section === "overview" || section === s);
-
-  function tokens(n: number): string {
-    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-    return String(n);
-  }
 
   // Jobs: presentation only; status, next run, and outcome come from the
   // shared engine summary.
@@ -114,6 +112,7 @@
     type="button"
     onclick={() => {
       haptic();
+      usageRefresh++;
       load(false);
     }}
     aria-label="Refresh"
@@ -296,30 +295,7 @@
           </section>
         {/if}
 
-        {#if data.usage}
-          <section>
-            <h2 class="sec">Usage · {data.usage.span}</h2>
-            <div class="rounded-md border border-border bg-card px-2.5 py-2">
-              <div class="flex items-baseline gap-3 font-mono text-xxs">
-                <span>{tokens(data.usage.tokens)} tokens</span>
-                <span class="text-muted-foreground">{data.usage.requests} req</span>
-                <span class="ml-auto">${data.usage.billed_usd.toFixed(2)}</span>
-              </div>
-              {#if data.usage.daily.length}
-                {@const peak = Math.max(...data.usage.daily.map((d) => d.tokens), 1)}
-                <div class="mt-2 flex h-10 items-end gap-px">
-                  {#each data.usage.daily as d (d.day)}
-                    <div
-                      class="flex-1 rounded-t-xs bg-foreground/25"
-                      style="height: {Math.max(2, (d.tokens / peak) * 100)}%"
-                      title="{d.tokens.toLocaleString()} tokens"
-                    ></div>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          </section>
-        {/if}
+        <UsagePane refresh={usageRefresh} />
       {/if}
 
       {#if show("config")}

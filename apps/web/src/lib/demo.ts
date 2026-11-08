@@ -18,9 +18,12 @@ import type {
   GitResponse,
   GitScopeResponse,
   MonitorResponse,
+  ProjectUsage,
+  RunUsage,
   ThreadListResponse,
   ThreadResponse,
   ThreadTrajectoryReport,
+  UsageResponse,
   WorkersResponse,
   WorkspaceSetting,
   WorkspacesResponse,
@@ -1158,25 +1161,6 @@ export const demoMonitor: MonitorResponse = {
     server_enabled: true,
     server_port: 4141,
   },
-  usage: {
-    span: "30 days",
-    requests: 1842,
-    tokens: 48_200_000,
-    input: 41_000_000,
-    output: 7_200_000,
-    cache_read: 33_000_000,
-    cache_write: 5_100_000,
-    billed_usd: 12.44,
-    subscription_tokens: 44_000_000,
-    unknown_pricing_rows: 0,
-    threads_scanned: 312,
-    by_provider: [],
-    by_model: [],
-    daily: Array.from({ length: 30 }, (_, i) => ({
-      day: i + 1,
-      tokens: Math.round(400_000 + Math.sin(i / 2.5) * 300_000 + Math.random() * 400_000),
-    })),
-  },
   subscriptions: [
     {
       provider: "anthropic",
@@ -1272,3 +1256,67 @@ export const demoWorkspaces: WorkspacesResponse = {
     },
   ],
 };
+
+/** Usage fixture: the window scales the same shape so 7d and 30d differ. */
+export function demoUsage(days: number): UsageResponse {
+  const k = days / 7;
+  const counts = (tokens: number, threads: number, requests: number) => ({
+    threads: Math.round(threads * k),
+    requests: Math.round(requests * k),
+    tokens: Math.round(tokens * k),
+    input: Math.round(tokens * k * 0.02),
+    output: Math.round(tokens * k * 0.01),
+    cache_read: Math.round(tokens * k * 0.92),
+    cache_write: Math.round(tokens * k * 0.05),
+  });
+  const by_project: ProjectUsage[] = [
+    { project: "/Users/demo/projects/work/acme/signing-host", ...counts(2_250_000_000, 170, 14126) },
+    { project: "/Users/demo/projects/work/acme/os", ...counts(1_610_000_000, 97, 8902) },
+    { project: "/Users/demo/Documents", ...counts(936_000_000, 356, 6219) },
+    { project: "/Users/demo/projects/work/acme", ...counts(710_000_000, 101, 4834) },
+    { project: "/Users/demo/projects/personal/zdx", ...counts(378_000_000, 70, 3029) },
+    { project: "/Users/demo/.zdx/artifacts/threads/bde5d119/prompt-review", ...counts(9_600_000, 3, 63) },
+    { project: "/Users/demo/projects/personal/notes-app", ...counts(2_800_000, 1, 78) },
+    { project: null, ...counts(62_000, 2, 3) },
+  ];
+  const by_run: RunUsage[] = [
+    { kind: "worker", name: null, ...counts(5_300_000_000, 136, 33498) },
+    { kind: "profile", name: "orchestrator", ...counts(697_000_000, 48, 4058) },
+    { kind: "subagent", name: "html-artifact-specialist", ...counts(189_000_000, 54, 2670) },
+    { kind: "helper", name: "read_thread", ...counts(113_000_000, 437, 437) },
+    { kind: "agent", name: null, ...counts(19_800_000, 73, 510) },
+    { kind: "subagent", name: "explorer", ...counts(18_800_000, 48, 500) },
+    { kind: "subagent", name: "oracle", ...counts(10_900_000, 15, 153) },
+    { kind: "helper", name: "handoff", ...counts(3_800_000, 18, 36) },
+    { kind: "helper", name: "title", ...counts(10_900, 47, 47) },
+  ];
+  const total = by_run.reduce(
+    (acc, r) => ({
+      tokens: acc.tokens + r.tokens,
+      requests: acc.requests + r.requests,
+      input: acc.input + r.input,
+      output: acc.output + r.output,
+      cache_read: acc.cache_read + r.cache_read,
+      cache_write: acc.cache_write + r.cache_write,
+    }),
+    { tokens: 0, requests: 0, input: 0, output: 0, cache_read: 0, cache_write: 0 },
+  );
+  const today = Math.floor(Date.now() / 86_400_000);
+  return {
+    days,
+    ...total,
+    billed_usd: 0.58,
+    subscription_tokens: total.tokens,
+    unknown_pricing_rows: 0,
+    threads_scanned: 14_800,
+    by_provider: [],
+    by_model: [],
+    daily: Array.from({ length: days }, (_, i) => ({
+      day: today - days + 1 + i,
+      tokens: Math.round((total.tokens / days) * (0.6 + 0.8 * Math.abs(Math.sin(i * 1.7)))),
+    })),
+    by_project,
+    by_run,
+    unindexed_threads: 0,
+  };
+}

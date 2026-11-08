@@ -18,7 +18,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 - `src/cli/commands/transcribe.rs`: speech-to-text command handler (`zdx transcribe <file>`; `--model`, `--language`, `--diarize`, `--json`, `--list-models`); wraps `zdx_engine::audio::transcribe::transcribe_audio_detailed` + `supported_models`
 - `src/cli/commands/memory.rs`: native memory indexing/search/read commands (`zdx memory index/status/search/get`)
 - `src/cli/commands/mcp.rs`: MCP helper commands (`servers`, `tools`, `schema`, `call`)
-- `src/cli/commands/stats.rs`: usage/cost summary command handler (`zdx stats`)
+- `src/cli/commands/stats.rs`: usage/cost summary command handler (`zdx stats [--days N] [--json]`; text or the shared `usage_report::UsageReport` as JSON)
 - `src/cli/commands/threads.rs`: saved-thread commands; `threads inspect [--json]` is the agent/script entry point to the shared engine trajectory projection; `threads list --workers` is the programmatic worker filter (engine `list_recent_workers`, never a CLI-side rule)
 - `src/cli/commands/quota.rs`: live subscription-quota command handler (`zdx quota`, `--json`); thin renderer over the shared `subscription_quota::fetch_snapshot()` API
 - `src/cli/commands/orchestrator.rs`: `zdx orchestrator serve|send|status|cancel` — the orchestrator service (PID file, socket, Ctrl+C removes the socket) and its client (`send --wait` prints JSON event lines until the thread settles); thin wrappers over `zdx_engine::orchestration`
