@@ -2,18 +2,21 @@
 
 use std::fmt::Write as _;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use zdx_engine::audio::transcribe::{
-    Transcript, is_provider_configured, supported_models, transcribe_audio_detailed,
+    Transcript, TranscriptionOptions, is_provider_configured, supported_models,
+    transcribe_audio_detailed,
 };
+use zdx_engine::audio::vocabulary;
 use zdx_engine::config::{self, TranscriptionConfig};
 
 pub struct TranscribeRunOptions<'a> {
     pub file: Option<&'a str>,
     pub model: Option<&'a str>,
     pub language: Option<&'a str>,
+    pub vocabulary: &'a [PathBuf],
     pub diarize: bool,
     pub json: bool,
     pub config: &'a config::Config,
@@ -43,14 +46,18 @@ pub async fn run(options: TranscribeRunOptions<'_>) -> Result<()> {
             .map(str::to_string)
             .or_else(|| base.language.clone()),
     };
+    let vocabulary = vocabulary::load(options.vocabulary)?;
 
     let transcript = transcribe_audio_detailed(
         options.config,
-        &transcription,
+        TranscriptionOptions {
+            transcription: &transcription,
+            vocabulary: &vocabulary,
+            diarize: options.diarize,
+        },
         bytes,
         filename,
         mime,
-        options.diarize,
         None,
     )
     .await?;
@@ -86,6 +93,7 @@ pub fn list_models(config: &config::Config, json: bool) -> Result<()> {
                     "model": m.model,
                     "api_key_env": m.api_key_env,
                     "diarize": m.diarize,
+                    "vocabulary_limit": m.vocabulary_limit,
                     "configured": is_provider_configured(config, m.provider),
                 })
             })
@@ -102,12 +110,17 @@ pub fn list_models(config: &config::Config, json: bool) -> Result<()> {
             "no key"
         };
         let diarize = if m.diarize { " · diarize" } else { "" };
+        let vocabulary = m
+            .vocabulary_limit
+            .map(|limit| format!(" · vocabulary ({limit})"))
+            .unwrap_or_default();
         println!(
-            "  {:<28} {:<18} [{}]{}",
+            "  {:<28} {:<18} [{}]{}{}",
             m.id,
             m.api_key_env.unwrap_or("-"),
             status,
-            diarize
+            diarize,
+            vocabulary
         );
     }
     Ok(())

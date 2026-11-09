@@ -18,6 +18,7 @@ Options:
       --model <MODEL>     provider:model id (e.g. elevenlabs:scribe_v2, mistral:voxtral-mini-latest)
                           or a bare provider name (openai, mistral, xai, elevenlabs) for its default
       --language <LANG>   Language hint, ISO 639-1 (e.g. en, pt)
+      --vocabulary <FILE> Extra vocabulary file for this run, added before the global one (repeatable)
       --diarize           Label speakers (Mistral/Voxtral or ElevenLabs only)
       --json              Emit JSON (text + diarized segments) instead of plain text
       --list-models       List the supported transcription models (with --json for machine output)
@@ -39,6 +40,10 @@ zdx transcribe "$ZDX_ARTIFACT_DIR/note.ogg"
 - Run `zdx transcribe --list-models` to see the supported models and which have an API key configured.
 - To pick a specific provider, pass `--model <provider>` (default model) or `--model <provider>:<model>` (exact model). There is no separate `--provider` flag.
 - Voxtral and ElevenLabs Scribe v2 both support **speaker diarization** (`--diarize`); OpenAI `whisper-1` and xAI do not. ElevenLabs Scribe v2 is state-of-the-art accuracy across 90+ languages; `whisper-1` is a solid general default.
+
+## Custom vocabulary
+
+Names and jargon the model misspells go in `$ZDX_HOME/vocabulary.txt`, one term or phrase per line (`#` comments allowed). Only Mistral uses it (up to 100 entries). Edits apply to the next transcription, including bot voice notes. For one run, add terms with `--vocabulary FILE`.
 
 ## Diarization & JSON
 

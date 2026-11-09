@@ -15,7 +15,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 - `src/cli/commands/daemon.rs`: jobs scheduler loop (`zdx jobs daemon`): plans each tick with `jobs::plan::plan_tick`, starts due occurrences as child `zdx jobs run --occurrence` processes (max 3, one per job), records missed/interrupted occurrences under the job lock (a missed summary that cannot be recorded holds the tick back), repairs stale `last.json` from claims on its rescan, writes the daemon context record
 - `src/cli/commands/imagine.rs`: image generation command handler (`zdx imagine`); `tests/integration/imagine.rs` covers the OpenAI Images API route (endpoint, saved file type, flag errors) against a mock server
 - `src/cli/commands/speak.rs`: text-to-speech command handler (`zdx speak`); thin wrapper over `zdx_engine::audio::speak::synthesize_speech`
-- `src/cli/commands/transcribe.rs`: speech-to-text command handler (`zdx transcribe <file>`; `--model`, `--language`, `--diarize`, `--json`, `--list-models`); wraps `zdx_engine::audio::transcribe::transcribe_audio_detailed` + `supported_models`
+- `src/cli/commands/transcribe.rs`: speech-to-text command handler (`zdx transcribe <file>`; `--model`, `--language`, `--vocabulary`, `--diarize`, `--json`, `--list-models`); wraps `zdx_engine::audio::transcribe::transcribe_audio_detailed` + `supported_models` and `zdx_engine::audio::vocabulary::load`
 - `src/cli/commands/memory.rs`: native memory indexing/search/read commands (`zdx memory index/status/search/get`)
 - `src/cli/commands/mcp.rs`: MCP helper commands (`servers`, `tools`, `schema`, `call`)
 - `src/cli/commands/stats.rs`: usage/cost summary command handler (`zdx stats [--days N] [--json]`; text or the shared `usage_report::UsageReport` as JSON)

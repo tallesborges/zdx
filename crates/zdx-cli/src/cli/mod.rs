@@ -259,6 +259,11 @@ enum Commands {
         #[arg(long, value_name = "LANG")]
         language: Option<String>,
 
+        /// Extra vocabulary file for this run, added before the global
+        /// `$ZDX_HOME/vocabulary.txt` (repeatable)
+        #[arg(long, value_name = "FILE")]
+        vocabulary: Vec<PathBuf>,
+
         /// Label speakers in the transcript (Mistral/Voxtral or `ElevenLabs` only)
         #[arg(long)]
         diarize: bool,
@@ -1516,6 +1521,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             file,
             model,
             language,
+            vocabulary,
             diarize,
             json,
             list_models: false,
@@ -1524,6 +1530,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
                 file: file.as_deref(),
                 model: model.as_deref(),
                 language: language.as_deref(),
+                vocabulary: &vocabulary,
                 diarize,
                 json,
                 config: context.config,

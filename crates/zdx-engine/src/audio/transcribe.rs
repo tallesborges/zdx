@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, anyhow};
 use tokio_util::sync::CancellationToken;
 
-use crate::audio::send_checked;
 pub use crate::audio::{OperationCancelled, is_operation_cancelled};
+use crate::audio::{send_checked, vocabulary};
 use crate::config::{Config, TranscriptionConfig};
 use crate::providers::{ProviderKind, resolve_provider};
 
@@ -18,7 +18,8 @@ enum SttAuth {
 /// Static descriptor for a supported speech-to-text provider.
 ///
 /// This is the single source of truth for STT provider metadata: default model,
-/// diarization capability, auth scheme, and auto-detect priority (list order).
+/// diarization and custom-vocabulary capability, auth scheme, and auto-detect
+/// priority (list order).
 /// Wire-format details (endpoint, multipart fields, response shape) stay in the
 /// explicit `build_stt_form`/`parse_transcript` matches since they diverge too
 /// much to table-drive cleanly.
@@ -26,8 +27,15 @@ struct SttProvider {
     kind: ProviderKind,
     default_model: &'static str,
     diarize: bool,
+    /// Most vocabulary entries the provider takes as `context_bias`; `None`
+    /// when it takes no custom vocabulary.
+    vocabulary_limit: Option<usize>,
     auth: SttAuth,
 }
+
+/// Mistral's documented `context_bias` limit for Voxtral Mini Transcribe 2
+/// (`voxtral-mini-latest`): up to 100 words or phrases.
+const MISTRAL_VOCABULARY_LIMIT: usize = 100;
 
 /// Supported transcription providers, in auto-detect priority order.
 const STT_PROVIDERS: &[SttProvider] = &[
@@ -35,24 +43,28 @@ const STT_PROVIDERS: &[SttProvider] = &[
         kind: ProviderKind::OpenAI,
         default_model: "whisper-1",
         diarize: false,
+        vocabulary_limit: None,
         auth: SttAuth::Bearer,
     },
     SttProvider {
         kind: ProviderKind::Mistral,
         default_model: "voxtral-mini-latest",
         diarize: true,
+        vocabulary_limit: Some(MISTRAL_VOCABULARY_LIMIT),
         auth: SttAuth::Bearer,
     },
     SttProvider {
         kind: ProviderKind::Xai,
         default_model: "grok-stt",
         diarize: false,
+        vocabulary_limit: None,
         auth: SttAuth::Bearer,
     },
     SttProvider {
         kind: ProviderKind::ElevenLabs,
         default_model: "scribe_v2",
         diarize: true,
+        vocabulary_limit: None,
         auth: SttAuth::XiApiKey,
     },
 ];
@@ -134,6 +146,9 @@ pub struct TranscriptionModel {
     pub api_key_env: Option<&'static str>,
     /// Whether the provider supports `--diarize`.
     pub diarize: bool,
+    /// Most custom vocabulary entries the provider takes; `None` when it
+    /// takes none.
+    pub vocabulary_limit: Option<usize>,
 }
 
 /// Returns the transcription models zdx supports, in auto-detect priority order.
@@ -148,6 +163,7 @@ pub fn supported_models() -> Vec<TranscriptionModel> {
             model: p.default_model,
             api_key_env: p.kind.api_key_env_var(),
             diarize: p.diarize,
+            vocabulary_limit: p.vocabulary_limit,
         })
         .collect()
 }
@@ -191,7 +207,8 @@ struct VoxtralSegment {
     text: String,
 }
 
-/// Transcribes audio if a supported provider is configured.
+/// Transcribes audio if a supported provider is configured, with the global
+/// custom vocabulary (`$ZDX_HOME/vocabulary.txt`, read on every call).
 ///
 /// Returns `Ok(None)` if no transcription provider is available.
 ///
@@ -205,17 +222,29 @@ pub async fn transcribe_audio_if_configured(
     mime_type: Option<&str>,
     cancel_token: Option<&CancellationToken>,
 ) -> Result<Option<String>> {
-    let result = transcribe_audio_detailed(
-        config,
+    let vocabulary = vocabulary::load(&[]).unwrap_or_else(|err| {
+        tracing::warn!(error = %format!("{err:#}"), "Transcribing without custom vocabulary");
+        Vec::new()
+    });
+    let options = TranscriptionOptions {
         transcription,
-        bytes,
-        filename,
-        mime_type,
-        false,
-        cancel_token,
-    )
-    .await?;
+        vocabulary: &vocabulary,
+        diarize: false,
+    };
+    let result =
+        transcribe_audio_detailed(config, options, bytes, filename, mime_type, cancel_token)
+            .await?;
     Ok(result.map(|transcript| transcript.text))
+}
+
+/// What a transcription uses besides the audio: model and language settings,
+/// the custom vocabulary, and whether to label speakers.
+#[derive(Debug, Clone, Copy)]
+pub struct TranscriptionOptions<'a> {
+    pub transcription: &'a TranscriptionConfig,
+    /// Custom vocabulary entries (see [`vocabulary::load`]).
+    pub vocabulary: &'a [String],
+    pub diarize: bool,
 }
 
 /// Transcribes audio, optionally with speaker diarization, returning the full
@@ -228,13 +257,17 @@ pub async fn transcribe_audio_if_configured(
 /// provider that does not support it.
 pub async fn transcribe_audio_detailed(
     config: &Config,
-    transcription: &TranscriptionConfig,
+    options: TranscriptionOptions<'_>,
     bytes: Vec<u8>,
     filename: &str,
     mime_type: Option<&str>,
-    diarize: bool,
     cancel_token: Option<&CancellationToken>,
 ) -> Result<Option<Transcript>> {
+    let TranscriptionOptions {
+        transcription,
+        vocabulary,
+        diarize,
+    } = options;
     let Some((provider, model)) = resolve_model(config, transcription)? else {
         return Ok(None);
     };
@@ -257,6 +290,8 @@ pub async fn transcribe_audio_detailed(
         .map(str::trim)
         .filter(|s| !s.is_empty());
 
+    let context_bias = vocabulary_terms(provider, descriptor, vocabulary);
+
     let transcript = transcribe_audio(TranscriptionRequest {
         provider,
         provider_name: provider.label(),
@@ -268,6 +303,7 @@ pub async fn transcribe_audio_detailed(
         filename,
         mime_type,
         language,
+        context_bias: &context_bias,
         diarize,
         cancel_token,
     })
@@ -278,6 +314,36 @@ pub async fn transcribe_audio_detailed(
     } else {
         Ok(Some(transcript))
     }
+}
+
+/// The vocabulary entries sent to `provider`: the first ones up to its limit.
+/// Dropped entries and an unsupported provider are logged, never an error.
+fn vocabulary_terms<'a>(
+    provider: ProviderKind,
+    descriptor: &SttProvider,
+    vocabulary: &'a [String],
+) -> Vec<&'a str> {
+    if vocabulary.is_empty() {
+        return Vec::new();
+    }
+    let Some(limit) = descriptor.vocabulary_limit else {
+        tracing::debug!(
+            provider = provider.id(),
+            entries = vocabulary.len(),
+            "Provider takes no custom vocabulary; not sent"
+        );
+        return Vec::new();
+    };
+    let (sent, dropped) = vocabulary.split_at(limit.min(vocabulary.len()));
+    if !dropped.is_empty() {
+        tracing::warn!(
+            provider = provider.id(),
+            limit,
+            dropped = %dropped.join(", "),
+            "Vocabulary over the provider limit; dropped the last entries"
+        );
+    }
+    sent.iter().map(String::as_str).collect()
 }
 
 /// Resolves the transcription provider and model.
@@ -323,6 +389,7 @@ struct TranscriptionRequest<'a> {
     filename: &'a str,
     mime_type: Option<&'a str>,
     language: Option<&'a str>,
+    context_bias: &'a [&'a str],
     diarize: bool,
     cancel_token: Option<&'a CancellationToken>,
 }
@@ -339,6 +406,7 @@ async fn transcribe_audio(request: TranscriptionRequest<'_>) -> Result<Transcrip
         filename,
         mime_type,
         language,
+        context_bias,
         diarize,
         cancel_token,
     } = request;
@@ -351,7 +419,15 @@ async fn transcribe_audio(request: TranscriptionRequest<'_>) -> Result<Transcrip
         part = part.mime_str(mime)?;
     }
 
-    let (url, form) = build_stt_form(provider, base_url, model, language, diarize, part);
+    let (url, form) = build_stt_form(
+        provider,
+        base_url,
+        model,
+        language,
+        context_bias,
+        diarize,
+        part,
+    );
 
     let post = client.post(&url);
     let post = match auth {
@@ -380,13 +456,15 @@ async fn transcribe_audio(request: TranscriptionRequest<'_>) -> Result<Transcrip
 /// last and gates `format=true` behind a language hint. `ElevenLabs` Scribe uses
 /// `/v1/speech-to-text` with a `model_id` field; diarization is opt-in via
 /// `diarize=true`. Mistral Voxtral needs segment timestamps enabled alongside
-/// `diarize`. OpenAI/Mistral otherwise use the OpenAI-compatible
+/// `diarize`, and takes custom vocabulary as one `context_bias` field per
+/// entry. OpenAI/Mistral otherwise use the OpenAI-compatible
 /// `/audio/transcriptions` shape.
 fn build_stt_form(
     provider: ProviderKind,
     base_url: &str,
     model: &str,
     language: Option<&str>,
+    context_bias: &[&str],
     diarize: bool,
     part: reqwest::multipart::Part,
 ) -> (String, reqwest::multipart::Form) {
@@ -426,6 +504,9 @@ fn build_stt_form(
                 form = form
                     .text("diarize", "true")
                     .text("timestamp_granularities[]", "segment");
+            }
+            for term in context_bias {
+                form = form.text("context_bias", (*term).to_string());
             }
             (format!("{base}/audio/transcriptions"), form)
         }

@@ -1,5 +1,6 @@
 pub mod speak;
 pub mod transcribe;
+pub mod vocabulary;
 
 use anyhow::{Context, Result, anyhow};
 use tokio_util::sync::CancellationToken;
