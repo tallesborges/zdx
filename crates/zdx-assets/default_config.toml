@@ -69,8 +69,8 @@ stream_idle_timeout_secs = 300
 #        or a bare provider name ("openai", "mistral", "xai", "elevenlabs") for its default model.
 #        Omit to auto-detect from available API keys (OpenAI, then Mistral, xAI, ElevenLabs).
 # language: Optional language hint (ISO 639-1 code like "en", "pt", "es") for better accuracy
-# Custom vocabulary is not set here: put one term or phrase per line in $ZDX_HOME/vocabulary.txt.
-# Mistral only (up to 100 entries); read on every transcription.
+# Custom vocabulary is not set here: put one entry per line in $ZDX_HOME/vocabulary.txt.
+# Mistral only (up to 100 entries); voxtral-mini-latest takes single words only. Read on every transcription.
 [transcription]
 # model = "elevenlabs:scribe_v2"
 # language = "en"

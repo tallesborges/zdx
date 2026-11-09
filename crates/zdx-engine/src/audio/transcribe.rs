@@ -290,7 +290,7 @@ pub async fn transcribe_audio_detailed(
         .map(str::trim)
         .filter(|s| !s.is_empty());
 
-    let context_bias = vocabulary_terms(provider, descriptor, vocabulary);
+    let context_bias = vocabulary_terms(provider, descriptor, &model, vocabulary);
 
     let transcript = transcribe_audio(TranscriptionRequest {
         provider,
@@ -316,11 +316,13 @@ pub async fn transcribe_audio_detailed(
     }
 }
 
-/// The vocabulary entries sent to `provider`: the first ones up to its limit.
-/// Dropped entries and an unsupported provider are logged, never an error.
+/// The vocabulary entries sent to `provider` and `model`: the entries the
+/// model accepts, the first ones up to the provider limit. Skipped entries
+/// and an unsupported provider are logged, never an error.
 fn vocabulary_terms<'a>(
     provider: ProviderKind,
     descriptor: &SttProvider,
+    model: &str,
     vocabulary: &'a [String],
 ) -> Vec<&'a str> {
     if vocabulary.is_empty() {
@@ -334,7 +336,22 @@ fn vocabulary_terms<'a>(
         );
         return Vec::new();
     };
-    let (sent, dropped) = vocabulary.split_at(limit.min(vocabulary.len()));
+
+    let phrases = accepts_phrases(provider, model);
+    let (usable, rejected): (Vec<&str>, Vec<&str>) = vocabulary
+        .iter()
+        .map(String::as_str)
+        .partition(|entry| phrases || !entry.contains(|c: char| c.is_whitespace() || c == ','));
+    if !rejected.is_empty() {
+        tracing::warn!(
+            provider = provider.id(),
+            model,
+            skipped = %rejected.join(" | "),
+            "Skipped vocabulary entries with spaces or commas: this model takes single words only"
+        );
+    }
+
+    let (sent, dropped) = usable.split_at(limit.min(usable.len()));
     if !dropped.is_empty() {
         tracing::warn!(
             provider = provider.id(),
@@ -343,7 +360,18 @@ fn vocabulary_terms<'a>(
             "Vocabulary over the provider limit; dropped the last entries"
         );
     }
-    sent.iter().map(String::as_str).collect()
+    sent.to_vec()
+}
+
+/// Whether `model` takes vocabulary entries with spaces or commas.
+///
+/// Voxtral Transcribe 2 (`voxtral-mini-latest`, `voxtral-mini-2602`) reads
+/// `context_bias` as single words and rejects the whole request with a 400
+/// when one entry has a space or a comma. Voxtral Transcribe 3
+/// (`voxtral-*-transcribe-3*`) takes phrases. Other models are treated as
+/// single-word only, so an unknown model never fails on a phrase.
+fn accepts_phrases(provider: ProviderKind, model: &str) -> bool {
+    provider == ProviderKind::Mistral && model.contains("-transcribe-3")
 }
 
 /// Resolves the transcription provider and model.
@@ -585,4 +613,59 @@ fn group_elevenlabs_words(words: Vec<ElevenLabsWord>) -> Vec<TranscriptSegment> 
     }
     segments.retain(|seg| !seg.text.is_empty());
     segments
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mistral() -> &'static SttProvider {
+        stt_provider(ProviderKind::Mistral).unwrap()
+    }
+
+    fn entries(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| (*item).to_string()).collect()
+    }
+
+    #[test]
+    fn transcribe_2_skips_entries_with_spaces_or_commas() {
+        let vocabulary = entries(&["TermA", "Two Words", "a,b", "post-quantum", "dot.li"]);
+        assert_eq!(
+            vocabulary_terms(
+                ProviderKind::Mistral,
+                mistral(),
+                "voxtral-mini-latest",
+                &vocabulary
+            ),
+            ["TermA", "post-quantum", "dot.li"]
+        );
+    }
+
+    #[test]
+    fn transcribe_3_keeps_phrases() {
+        let vocabulary = entries(&["TermA", "Two Words"]);
+        assert_eq!(
+            vocabulary_terms(
+                ProviderKind::Mistral,
+                mistral(),
+                "voxtral-mini-transcribe-3",
+                &vocabulary
+            ),
+            ["TermA", "Two Words"]
+        );
+    }
+
+    #[test]
+    fn skipped_entries_do_not_use_the_limit() {
+        let mut vocabulary = entries(&["Two Words"]);
+        vocabulary.extend((0..MISTRAL_VOCABULARY_LIMIT).map(|i| format!("Term{i}")));
+        let sent = vocabulary_terms(
+            ProviderKind::Mistral,
+            mistral(),
+            "voxtral-mini-latest",
+            &vocabulary,
+        );
+        assert_eq!(sent.len(), MISTRAL_VOCABULARY_LIMIT);
+        assert_eq!(sent[0], "Term0");
+    }
 }

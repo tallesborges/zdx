@@ -43,7 +43,7 @@ zdx transcribe "$ZDX_ARTIFACT_DIR/note.ogg"
 
 ## Custom vocabulary
 
-Names and jargon the model misspells go in `$ZDX_HOME/vocabulary.txt`, one term or phrase per line (`#` comments allowed). Only Mistral uses it (up to 100 entries). Edits apply to the next transcription, including bot voice notes. For one run, add terms with `--vocabulary FILE`.
+Names and jargon the model misspells go in `$ZDX_HOME/vocabulary.txt`, one entry per line (`#` comments allowed). Only Mistral uses it (up to 100 entries). The default `voxtral-mini-latest` takes single words only (hyphens and dots are fine); entries with spaces or commas are skipped with a warning. Voxtral Transcribe 3 models (`mistral:voxtral-mini-transcribe-3`) also take phrases. Edits apply to the next transcription, including bot voice notes. For one run, add terms with `--vocabulary FILE`.
 
 ## Diarization & JSON
 
