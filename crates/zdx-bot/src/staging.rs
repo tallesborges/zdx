@@ -657,13 +657,32 @@ async fn start_btw_topic(
         thread_id,
         "Btw",
         seed,
-        Some(btw_record(input)),
+        Some(btw_record(
+            input,
+            source_topic_url(incoming.chat_id, topic_id).as_deref(),
+        )),
         None,
         model_override,
     )
     .await
     {
-        Ok(()) => {
+        Ok(topic) => {
+            if let Err(err) = context
+                .client()
+                .send_message_without_preview(
+                    incoming.chat_id,
+                    &topic_created_text(
+                        "💬 <b>Side question created</b>",
+                        incoming.chat_id,
+                        &topic,
+                    ),
+                    None,
+                    topic_id,
+                )
+                .await
+            {
+                tracing::warn!(err = %format!("{err:#}"), "Failed to post the side question link");
+            }
             if let Some(session) = session {
                 cleanup_session_messages(context, incoming.chat_id, &session).await;
             }
@@ -724,7 +743,7 @@ async fn seed_new_topic(
     record: Option<String>,
     profile: Option<&str>,
     model_override: Option<String>,
-) -> Result<()> {
+) -> Result<SeededTopic> {
     let topic_name = chrono::Utc::now()
         .format(&format!("{topic_prefix} %Y-%m-%d %H:%M"))
         .to_string();
@@ -771,7 +790,7 @@ async fn seed_new_topic(
     if let Some(record) = record
         && let Err(err) = context
             .client()
-            .send_message(chat_id, &record, None, Some(new_topic_id))
+            .send_message_without_preview(chat_id, &record, None, Some(new_topic_id))
             .await
     {
         tracing::warn!(
@@ -790,7 +809,16 @@ async fn seed_new_topic(
         "message_thread_id": new_topic_id,
     }))?;
     dispatch_message(queues, context, synthetic).await;
-    Ok(())
+    Ok(SeededTopic {
+        topic_id: new_topic_id,
+        name: topic_name,
+    })
+}
+
+/// The forum topic `seed_new_topic` opened.
+struct SeededTopic {
+    topic_id: i64,
+    name: String,
 }
 
 /// Pre-creates a seeded topic's thread: `handoff_from` lineage, the persistent
@@ -893,6 +921,8 @@ pub(crate) fn staged_topic_config(
 ///
 /// The generated context is posted into the new topic as its visible record:
 /// the seed itself is dispatched synthetically and never appears in the chat.
+/// On success the staging messages are deleted and the source topic gets a
+/// `Handoff created` link to the new topic instead.
 /// On failure the staging session is kept so the next message retries.
 async fn start_handoff_topic(
     context: &Arc<BotContext>,
@@ -928,7 +958,10 @@ async fn start_handoff_topic(
 
     let seeded = match run_handoff_generation(context, incoming, thread_id, input).await {
         Ok(suggestion) => {
-            let record = handoff_record(&suggestion);
+            let record = handoff_record(
+                &suggestion,
+                source_topic_url(incoming.chat_id, topic_id).as_deref(),
+            );
             seed_new_topic(
                 context,
                 queues,
@@ -947,11 +980,23 @@ async fn start_handoff_topic(
     };
 
     match seeded {
-        Ok(()) => {
+        Ok(topic) => {
             let session = {
                 let mut map = context.staging_map().lock().expect("staging lock poisoned");
                 map.remove(thread_id)
             };
+            if let Err(err) = context
+                .client()
+                .send_message_without_preview(
+                    incoming.chat_id,
+                    &topic_created_text("🔀 <b>Handoff created</b>", incoming.chat_id, &topic),
+                    None,
+                    topic_id,
+                )
+                .await
+            {
+                tracing::warn!(err = %format!("{err:#}"), "Failed to post the handoff link");
+            }
             if let Some(session) = session {
                 cleanup_session_messages(context, incoming.chat_id, &session).await;
             }
@@ -1081,8 +1126,9 @@ fn suggestion_preview(suggestion: &str) -> String {
 
 /// The handoff context posted into the new topic. The seed reaches the agent
 /// synthetically, so without this the context the turn started from would never
-/// be visible anywhere.
-fn handoff_record(suggestion: &str) -> String {
+/// be visible anywhere. `source_url` links back to the topic the handoff came
+/// from.
+fn handoff_record(suggestion: &str, source_url: Option<&str>) -> String {
     let quoted = suggestion
         .lines()
         .map(|line| format!("> {line}"))
@@ -1090,15 +1136,44 @@ fn handoff_record(suggestion: &str) -> String {
         .join("\n");
     let html = to_telegram_html(&quoted);
     let truncated = truncate_telegram_html(&html, SUGGESTION_PREVIEW_MAX_CHARS);
-    format!("🔀 <b>Handoff context</b>\n{truncated}")
+    format!(
+        "🔀 <b>Handoff context</b>\n{truncated}{}",
+        back_link(source_url)
+    )
+}
+
+/// What stays in the source topic after `/handoff` or `/btw`: the staging
+/// messages (and the user's input) are deleted, and this link to the new topic
+/// marks where the command ran.
+fn topic_created_text(heading: &str, chat_id: i64, topic: &SeededTopic) -> String {
+    let name = escape_html(&topic.name);
+    match crate::telegram::topic_link(chat_id, topic.topic_id) {
+        Some(url) => format!("{heading} → <a href=\"{url}\">{name}</a>"),
+        None => format!("{heading} → {name}"),
+    }
+}
+
+/// The source topic's link, for the record posted into the new topic.
+fn source_topic_url(chat_id: i64, topic_id: Option<i64>) -> Option<String> {
+    topic_id.and_then(|topic_id| crate::telegram::topic_link(chat_id, topic_id))
+}
+
+fn back_link(source_url: Option<&str>) -> String {
+    source_url.map_or_else(String::new, |url| {
+        format!("\n↩ <a href=\"{url}\">Back to the source topic</a>")
+    })
 }
 
 /// The user's `/btw` question posted into the new topic. The seed reaches the
 /// agent synthetically, so without this the prompt never shows up in the chat.
-fn btw_record(question: &str) -> String {
+/// `source_url` links back to the topic the question came from.
+fn btw_record(question: &str, source_url: Option<&str>) -> String {
     let quoted = format!("<blockquote>{}</blockquote>", escape_html(question));
     let truncated = truncate_telegram_html(&quoted, SUGGESTION_PREVIEW_MAX_CHARS);
-    format!("💬 <b>Side question</b>\n{truncated}")
+    format!(
+        "💬 <b>Side question</b>\n{truncated}{}",
+        back_link(source_url)
+    )
 }
 
 fn accept_discard_keyboard() -> InlineKeyboardMarkup {
@@ -1307,10 +1382,42 @@ mod tests {
     use zdx_engine::core::thread_persistence;
 
     use super::{
-        HandoffRole, STAGING_TTL, SessionInput, StagingCommand, StagingSession, ask_text,
-        btw_awaits_input, btw_record, classify_session_input, handoff_record,
-        layer_new_topic_model, record_seeded_thread, staging_keyboard, suggestion_preview,
+        HandoffRole, STAGING_TTL, SeededTopic, SessionInput, StagingCommand, StagingSession,
+        ask_text, btw_awaits_input, btw_record, classify_session_input, handoff_record,
+        layer_new_topic_model, record_seeded_thread, source_topic_url, staging_keyboard,
+        suggestion_preview, topic_created_text,
     };
+
+    /// The source topic keeps only a link to the new topic, never the user's
+    /// handoff text or question.
+    #[test]
+    fn topic_created_text_links_the_new_topic() {
+        let topic = SeededTopic {
+            topic_id: 42,
+            name: "Handoff <a> & b".to_string(),
+        };
+        assert_eq!(
+            topic_created_text("🔀 <b>Handoff created</b>", -1_001_234_567_890, &topic),
+            "🔀 <b>Handoff created</b> → <a href=\"https://t.me/c/1234567890/42\">Handoff &lt;a&gt; &amp; b</a>"
+        );
+        assert_eq!(
+            topic_created_text("🔀 <b>Handoff created</b>", 5_678, &topic),
+            "🔀 <b>Handoff created</b> → Handoff &lt;a&gt; &amp; b"
+        );
+    }
+
+    /// The record posted into the new topic links back to the source topic.
+    #[test]
+    fn records_link_back_to_the_source_topic() {
+        let source = source_topic_url(-1_001_234_567_890, Some(7));
+        assert_eq!(source.as_deref(), Some("https://t.me/c/1234567890/7"));
+        let back = "\n↩ <a href=\"https://t.me/c/1234567890/7\">Back to the source topic</a>";
+        assert!(handoff_record("ctx", source.as_deref()).ends_with(back));
+        assert!(btw_record("why?", source.as_deref()).ends_with(back));
+        assert!(!btw_record("why?", None).contains("Back to"));
+        assert_eq!(source_topic_url(5_678, Some(7)), None);
+        assert_eq!(source_topic_url(-1_001_234_567_890, None), None);
+    }
 
     fn session_created_at(created_at: Instant) -> StagingSession {
         session_for(StagingCommand::Handoff, 1, created_at)
@@ -1425,7 +1532,10 @@ mod tests {
     /// question and carries no Accept hint.
     #[test]
     fn handoff_record_quotes_markdown_and_offers_no_action() {
-        let record = handoff_record("## Goal\n\n**Fix** `<script>` & stuff\n\n- one\n- two");
+        let record = handoff_record(
+            "## Goal\n\n**Fix** `<script>` & stuff\n\n- one\n- two",
+            None,
+        );
         assert!(record.starts_with("🔀 <b>Handoff context</b>\n<blockquote>"));
         assert!(record.contains("<b>Goal</b>"));
         assert!(record.contains("<b>Fix</b> &lt;script&gt; &amp; stuff"));
@@ -1439,7 +1549,7 @@ mod tests {
     /// the new topic as an escaped quote.
     #[test]
     fn btw_record_quotes_the_question_escaped() {
-        let record = btw_record("what does <T> & `x` mean?");
+        let record = btw_record("what does <T> & `x` mean?", None);
         assert!(record.contains("Side question"));
         assert!(record.contains("<blockquote>what does &lt;T&gt; &amp; `x` mean?</blockquote>"));
     }
@@ -1651,7 +1761,7 @@ mod tests {
         let long = "x".repeat(10_000);
         assert!(suggestion_preview(&long).chars().count() < 3_500);
         assert!(suggestion_preview(&long).contains('…'));
-        assert!(handoff_record(&long).chars().count() < 3_500);
-        assert!(handoff_record(&long).contains('…'));
+        assert!(handoff_record(&long, None).chars().count() < 3_500);
+        assert!(handoff_record(&long, None).contains('…'));
     }
 }
