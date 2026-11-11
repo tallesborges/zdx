@@ -328,17 +328,20 @@ async fn handle_model_command(
     match subcmd {
         ModelSubcommand::Show | ModelSubcommand::List => {
             let (current, has_override) = if is_general {
-                (bot_config.model.clone(), false)
+                (bot_config.model_label(), false)
             } else {
-                let (resolved, overridden) =
-                    resolve_topic_model_config(bot_config.clone(), thread_id)?;
-                (resolved.model, overridden)
+                match crate::topic_config(context, incoming.chat_id, thread_id)
+                    .and_then(|config| resolve_topic_model_config(config, thread_id))
+                {
+                    Ok((_, overridden, label)) => (label, overridden),
+                    Err(err) => (format!("⚠️ {err:#}; turns are refused"), false),
+                }
             };
 
             let header = if has_override {
                 format!(
                     "Current model: <code>{current}</code> (topic override)\nDefault: <code>{}</code>",
-                    bot_config.model
+                    bot_config.model_label()
                 )
             } else {
                 format!("Current model: <code>{current}</code>")
@@ -347,6 +350,7 @@ async fn handle_model_command(
             let keyboard = build_provider_keyboard(
                 context,
                 incoming.chat_id,
+                topic_id,
                 if is_general {
                     ModelPickerScope::General
                 } else {
@@ -365,31 +369,19 @@ async fn handle_model_command(
                 .await?;
         }
         ModelSubcommand::Set(model_id) => {
-            let available = bot_config.subagent_available_models();
-            // Compare the bare spec so `@fast` / `@<thinking>` modifiers are accepted.
-            let base = zdx_engine::models::ModelSpec::parse(&model_id)
-                .base
-                .to_string();
-            let msg = if !available.iter().any(|m| m == &base) {
-                format!(
-                    "Unknown model: <code>{model_id}</code>\n\nUse /model list to see available models."
-                )
-            } else if is_general {
-                context.set_chat_model(incoming.chat_id, &model_id)?;
-                format!("✅ Default model set to <code>{model_id}</code>.")
-            } else {
-                set_topic_model_override(bot_config.clone(), thread_id, &model_id)?
-            };
+            let msg = model_set_reply(context, incoming.chat_id, thread_id, is_general, &model_id)?;
             context
                 .client()
                 .send_message(incoming.chat_id, &msg, reply_to_message_id, topic_id)
                 .await?;
         }
         ModelSubcommand::Reset => {
-            let msg = if is_general {
+            let msg = if let Err(err) = context.checked_config_for_chat(incoming.chat_id) {
+                format!("❌ {}", escape_html(&format!("{err:#}")))
+            } else if is_general {
                 format!(
                     "Default model: <code>{}</code>\n\nUse /model set &lt;id&gt; to change.",
-                    bot_config.model
+                    bot_config.model_label()
                 )
             } else {
                 let mut thread =
@@ -398,7 +390,7 @@ async fn handle_model_command(
                 thread.set_model_override(None)?;
                 format!(
                     "✅ Model reset to default: <code>{}</code>",
-                    bot_config.model
+                    bot_config.model_label()
                 )
             };
             context
@@ -411,20 +403,66 @@ async fn handle_model_command(
     Ok(true)
 }
 
+/// Applies `/model set <id>` (a spec or `mode:<name>`) to the chat default in
+/// General or to the topic, and returns the reply.
+fn model_set_reply(
+    context: &BotContext,
+    chat_id: i64,
+    thread_id: &str,
+    is_general: bool,
+    model_id: &str,
+) -> Result<String> {
+    // A chat whose workspace config does not load takes no model writes:
+    // they would resolve against the bot-level config. A topic validates
+    // against the modes of the root it runs in.
+    let checked = if is_general {
+        context.checked_config_for_chat(chat_id)
+    } else {
+        crate::topic_config(context, chat_id, thread_id)
+    };
+    let bot_config = match checked {
+        Ok(config) => config,
+        Err(err) => return Ok(format!("❌ {}", escape_html(&format!("{err:#}")))),
+    };
+    let available = bot_config.subagent_available_models();
+    // Compare the bare spec so `@fast` / `@<thinking>` modifiers are accepted.
+    let base = zdx_engine::models::ModelSpec::parse(model_id)
+        .base
+        .to_string();
+    let known = match bot_config.find_mode(model_id) {
+        Some(found) => found.is_ok(),
+        None => available.iter().any(|m| m == &base),
+    };
+    Ok(if !known {
+        format!(
+            "Unknown model: <code>{model_id}</code>\n\nUse /model list to see available models."
+        )
+    } else if is_general {
+        match context.set_chat_model(chat_id, model_id) {
+            Ok(()) => format!("✅ Default model set to <code>{model_id}</code>."),
+            Err(err) => format!("❌ {}", escape_html(&format!("{err:#}"))),
+        }
+    } else {
+        set_topic_model_override(bot_config, thread_id, model_id)?
+    })
+}
+
+/// The topic's effective config, whether the topic has its own selection, and
+/// that selection's label (see [`crate::apply_topic_selection`]).
 fn resolve_topic_model_config(
     mut config: zdx_engine::config::Config,
     thread_id: &str,
-) -> Result<(zdx_engine::config::Config, bool)> {
+) -> Result<(zdx_engine::config::Config, bool, String)> {
     if thread_persistence::read_persistent_profile(thread_id)?.as_deref()
         == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME)
     {
-        zdx_engine::subagents::apply_orchestrator_override(&mut config);
+        zdx_engine::subagents::apply_orchestrator_override(&mut config)?;
     }
     let model = thread_persistence::read_thread_model_override(thread_id)?;
     let thinking = thread_persistence::read_thread_thinking_override(thread_id)?;
     let overridden = model.is_some() || thinking.is_some();
-    config.apply_thread_model_override(model.as_deref(), thinking);
-    Ok((config, overridden))
+    let label = crate::apply_topic_selection(&mut config, model.as_deref(), thinking);
+    Ok((config, overridden, label))
 }
 
 fn set_topic_model_override(
@@ -432,14 +470,21 @@ fn set_topic_model_override(
     thread_id: &str,
     model_id: &str,
 ) -> Result<String> {
-    let (mut resolved, _) = resolve_topic_model_config(config, thread_id)?;
-    resolved.apply_model_spec(model_id);
+    // A topic whose profile model does not resolve takes no write: it would
+    // be derived from a fallback config.
+    let mut resolved = match resolve_topic_model_config(config, thread_id) {
+        Ok((resolved, _, _)) => resolved,
+        Err(err) => return Ok(format!("❌ {}", escape_html(&format!("{err:#}")))),
+    };
+    if let Err(err) = resolved.apply_model_selection(model_id) {
+        return Ok(format!("❌ {}", escape_html(&err.to_string())));
+    }
     let mut thread = zdx_engine::core::thread_persistence::Thread::with_id(thread_id.to_string())
         .context("open thread")?;
-    thread.set_model_override(Some(resolved.model.clone()))?;
+    thread.set_model_override(Some(resolved.model_selection()))?;
     Ok(format!(
         "✅ Model set to <code>{}</code> for this topic.",
-        resolved.model
+        resolved.model_label()
     ))
 }
 
@@ -754,6 +799,7 @@ impl ModelPickerScope {
 pub(crate) fn build_provider_keyboard(
     context: &BotContext,
     chat_id: i64,
+    topic_id: Option<i64>,
     scope: ModelPickerScope,
 ) -> InlineKeyboardMarkup {
     let models = context.config_for_chat(chat_id).subagent_available_models();
@@ -768,6 +814,25 @@ pub(crate) fn build_provider_keyboard(
     } else {
         "✖ Cancel"
     };
+    // Modes lead where a pick changes an existing selection (the launcher's
+    // Custom flow already sits under its own mode buttons). A mode pick keeps
+    // the `mode:<name>` reference.
+    let mode_row: Vec<InlineKeyboardButton> = if matches!(
+        scope,
+        ModelPickerScope::General | ModelPickerScope::Topic | ModelPickerScope::Staging
+    ) {
+        crate::picker_modes(context, chat_id, topic_id, scope)
+            .iter()
+            .map(|mode| {
+                InlineKeyboardButton::callback(
+                    format!("⚡ {}", mode.name),
+                    format!("model_mode:{}:{}", mode.name, scope.as_str()),
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let scope = scope.as_str();
 
     // Extract unique providers (part before ':')
@@ -779,20 +844,21 @@ pub(crate) fn build_provider_keyboard(
         }
     }
 
-    let mut rows: Vec<Vec<InlineKeyboardButton>> = providers
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = mode_row
         .chunks(3)
-        .map(|chunk| {
-            chunk
-                .iter()
-                .map(|p| {
-                    InlineKeyboardButton::callback(
-                        zdx_engine::providers::provider_key_label(p),
-                        format!("model_provider:{p}:{scope}"),
-                    )
-                })
-                .collect()
-        })
+        .map(<[InlineKeyboardButton]>::to_vec)
         .collect();
+    rows.extend(providers.chunks(3).map(|chunk| {
+        chunk
+            .iter()
+            .map(|p| {
+                InlineKeyboardButton::callback(
+                    zdx_engine::providers::provider_key_label(p),
+                    format!("model_provider:{p}:{scope}"),
+                )
+            })
+            .collect()
+    }));
 
     rows.push(vec![InlineKeyboardButton::callback(
         exit_label,
@@ -1028,4 +1094,91 @@ async fn handle_thread_commands(
         )
         .await?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use zdx_engine::config::{Config, ModelMode, ThinkingLevel};
+
+    use super::*;
+
+    /// A topic resolves its modes in the root its thread runs in, not the
+    /// chat's current root.
+    #[test]
+    fn topic_config_uses_the_stored_root_modes() {
+        let home = zdx_engine::test_support::temp_zdx_home();
+        std::fs::write(
+            home.path().join("config.toml"),
+            "[[model_modes]]\nname = \"smart\"\nprimary = \"personal:big@high\"\n",
+        )
+        .unwrap();
+        let temp = |label: &str| {
+            let dir =
+                std::env::temp_dir().join(format!("zdx-bot-{label}-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(dir.join(".zdx")).unwrap();
+            dir
+        };
+        let chat_root = temp("chat-root");
+        let work_root = temp("work-root");
+        std::fs::write(
+            work_root.join(".zdx/config.toml"),
+            "[[model_modes]]\nname = \"smart\"\nprimary = \"work:big@high\"\n",
+        )
+        .unwrap();
+        let context = BotContext::for_test(
+            crate::telegram::TelegramClient::with_base_url(
+                crate::telegram::fake::TOKEN.to_string(),
+                "http://127.0.0.1:9".to_string(),
+            ),
+            Config::load_layered(&[home.path().join("config.toml")]).unwrap(),
+            chat_root,
+        );
+        let mut thread = thread_persistence::Thread::with_id("topic-root".to_string()).unwrap();
+        thread.set_root_path(&work_root).unwrap();
+        thread
+            .set_model_override(Some("mode:smart".to_string()))
+            .unwrap();
+
+        let (config, _, label) = resolve_topic_model_config(
+            crate::topic_config(&context, -1001, "topic-root").unwrap(),
+            "topic-root",
+        )
+        .unwrap();
+        assert_eq!(config.model, "work:big@high");
+        assert_eq!(label, "mode:smart → work:big@high");
+    }
+
+    /// `/model set mode:<name>` in a topic stores the reference, not the
+    /// primary it resolves to today; a concrete spec stays a concrete pin.
+    #[test]
+    fn topic_model_set_keeps_mode_references() {
+        let _home = zdx_engine::test_support::temp_zdx_home();
+        let config = Config {
+            model_modes: vec![ModelMode {
+                name: "smart".to_string(),
+                description: String::new(),
+                primary: "openai:big@high".to_string(),
+                alternatives: Vec::new(),
+                thinking: ThinkingLevel::High,
+            }],
+            ..Config::default()
+        };
+
+        let reply = set_topic_model_override(config.clone(), "topic-mode", "Mode:Smart").unwrap();
+        assert!(reply.contains("mode:smart → openai:big@high"), "{reply}");
+        assert_eq!(
+            thread_persistence::read_thread_model_override("topic-mode")
+                .unwrap()
+                .as_deref(),
+            Some("mode:smart")
+        );
+
+        set_topic_model_override(config, "topic-mode", "openai:small@low").unwrap();
+        assert_eq!(
+            thread_persistence::read_thread_model_override("topic-mode")
+                .unwrap()
+                .as_deref(),
+            Some("openai:small@low")
+        );
+    }
 }

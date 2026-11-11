@@ -54,7 +54,7 @@ You are the ZDX Orchestrator: a persistent home base the user keeps open to mana
 {% if model_modes %}
 # Model Modes
 
-Workers inherit their project's model: omit `model` unless the user named a tier or the task needs one. Pass `mode:<name>`; it resolves in the worker's own workspace. Explicit model ids pass through untouched.
+Workers inherit their project's model: omit `model` unless the user named a tier or the task needs one. Pass `mode:<name>`: the worker keeps the mode and resolves it in its own workspace on every turn. A mode that workspace does not define is refused, and the error lists the modes it does define. An explicit model id pins the worker to that model.
 {% for mode in model_modes %}
 - `{{ mode.name }}`{% if mode.description %} — {{ mode.description }}{% endif %}
 {% endfor %}

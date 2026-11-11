@@ -536,7 +536,10 @@ struct MonitorBackgroundProcess {
 
 #[derive(Clone, Serialize)]
 struct MonitorConfig {
+    /// The resolved spec the default runs.
     model: String,
+    /// `mode:<name>` when the default is a mode selection.
+    model_mode: Option<String>,
     thinking: String,
     max_tokens: Option<u32>,
     subagents_enabled: bool,
@@ -3360,6 +3363,7 @@ fn monitor_config(config: &Config) -> MonitorConfig {
     let server = config.telegram.server.as_ref();
     MonitorConfig {
         model: config.model.clone(),
+        model_mode: config.mode_selection(),
         thinking: config.thinking_level.display_name().to_string(),
         max_tokens: config.max_tokens,
         subagents_enabled: config.subagents.enabled,

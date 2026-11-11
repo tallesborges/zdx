@@ -430,6 +430,7 @@ async fn handle_callback_query(
         .await;
     } else if data.starts_with("model_provider:")
         || data.starts_with("model_pick:")
+        || data.starts_with("model_mode:")
         || data.starts_with("model_thinking:")
         || data.starts_with("model_back:")
         || data.starts_with("model_cancel:")
@@ -555,6 +556,12 @@ fn telegram_thread_id(chat_id: i64, thread_id: Option<i64>) -> String {
     zdx_engine::telegram::conversation_thread_id(chat_id, thread_id)
 }
 
+/// The thread a topic's model selection lives on: its conversation thread, or
+/// the source thread a resumed topic aliases to (the one its turns use).
+fn effective_topic_thread_id(chat_id: i64, thread_id: Option<i64>) -> String {
+    crate::handlers::message::resolve_effective_thread_id(&telegram_thread_id(chat_id, thread_id))
+}
+
 fn current_topic_model(context: &BotContext, chat_id: i64, thread_id: Option<i64>) -> String {
     current_topic_config(context, chat_id, thread_id).model
 }
@@ -567,16 +574,107 @@ fn current_topic_thinking(
     current_topic_config(context, chat_id, thread_id).thinking_level
 }
 
+/// The config a topic's model selection resolves against: the chat's checked
+/// config, with the model modes of the root the topic's thread runs in (its
+/// stored root, which can differ from the chat's current root).
+///
+/// # Errors
+/// Fails when the chat's config does not load (see
+/// [`BotContext::checked_config_for_chat`]) or the stored root's does not.
+pub(crate) fn topic_config(
+    context: &BotContext,
+    chat_id: i64,
+    thread_id: &str,
+) -> anyhow::Result<Config> {
+    let mut config = context.checked_config_for_chat(chat_id)?;
+    if let Some(stored) = zdx_engine::core::thread_persistence::read_thread_root_path(thread_id)? {
+        config.use_modes_of(
+            &context.root_for_chat(chat_id).root,
+            std::path::Path::new(&stored),
+        )?;
+    }
+    Ok(config)
+}
+
+/// The modes a picker of `scope` offers: for a topic, the modes of the root
+/// its thread runs in (none when that config does not load); otherwise the
+/// chat's.
+pub(crate) fn picker_modes(
+    context: &BotContext,
+    chat_id: i64,
+    topic_id: Option<i64>,
+    scope: ModelPickerScope,
+) -> Vec<zdx_engine::config::ModelMode> {
+    if scope != ModelPickerScope::Topic {
+        return crate::handlers::message::bot_visible_modes(context, chat_id);
+    }
+    topic_config(
+        context,
+        chat_id,
+        &effective_topic_thread_id(chat_id, topic_id),
+    )
+    .map_or_else(
+        |_| Vec::new(),
+        |config| {
+            crate::handlers::message::filter_available_modes(
+                &config.model_modes,
+                &config.subagent_available_models(),
+            )
+        },
+    )
+}
+
+/// Applies a topic's stored selection for display and returns its label. A
+/// selection naming a mode this config lacks leaves the config on its default
+/// and says so in the label, so a surface never shows the default as what
+/// runs there (turns in that topic are refused).
+pub(crate) fn apply_topic_selection(
+    config: &mut Config,
+    model: Option<&str>,
+    thinking: Option<zdx_engine::config::ThinkingLevel>,
+) -> String {
+    match config.apply_thread_model_override(model, thinking) {
+        Ok(()) => config.model_label(),
+        Err(err) => format!(
+            "{} (mode not configured here; turns are refused)",
+            err.selection
+        ),
+    }
+}
+
 fn current_topic_config(context: &BotContext, chat_id: i64, thread_id: Option<i64>) -> Config {
-    let id = telegram_thread_id(chat_id, thread_id);
-    let mut config = context.config_for_chat(chat_id);
+    current_topic_selection(context, chat_id, thread_id).0
+}
+
+/// The topic's effective config plus the label of its stored selection, for
+/// display: when the topic cannot resolve, the chat's config and the reason.
+fn current_topic_selection(
+    context: &BotContext,
+    chat_id: i64,
+    thread_id: Option<i64>,
+) -> (Config, String) {
+    resolved_topic(context, chat_id, thread_id)
+        .unwrap_or_else(|reason| (context.config_for_chat(chat_id), reason))
+}
+
+/// The topic's effective config and selection label. `Err` (with the reason)
+/// when the topic's config or its profile model does not resolve: nothing may
+/// be written from a fallback config then.
+fn resolved_topic(
+    context: &BotContext,
+    chat_id: i64,
+    thread_id: Option<i64>,
+) -> std::result::Result<(Config, String), String> {
+    let id = effective_topic_thread_id(chat_id, thread_id);
+    let mut config = topic_config(context, chat_id, &id).map_err(|err| format!("⚠️ {err:#}"))?;
     if zdx_engine::core::thread_persistence::read_persistent_profile(&id)
         .ok()
         .flatten()
         .as_deref()
         == Some(zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME)
+        && let Err(err) = zdx_engine::subagents::apply_orchestrator_override(&mut config)
     {
-        zdx_engine::subagents::apply_orchestrator_override(&mut config);
+        return Err(format!("⚠️ {err:#}; turns are refused"));
     }
     let model = zdx_engine::core::thread_persistence::read_thread_model_override(&id)
         .ok()
@@ -584,8 +682,8 @@ fn current_topic_config(context: &BotContext, chat_id: i64, thread_id: Option<i6
     let thinking = zdx_engine::core::thread_persistence::read_thread_thinking_override(&id)
         .ok()
         .flatten();
-    config.apply_thread_model_override(model.as_deref(), thinking);
-    config
+    let label = apply_topic_selection(&mut config, model.as_deref(), thinking);
+    Ok((config, label))
 }
 
 fn set_topic_model(
@@ -594,15 +692,19 @@ fn set_topic_model(
     thread_id: Option<i64>,
     model_id: &str,
 ) -> String {
-    let mut resolved = current_topic_config(context, chat_id, thread_id);
-    resolved.apply_model_spec(model_id);
-    match zdx_engine::core::thread_persistence::Thread::with_id(telegram_thread_id(
-        chat_id, thread_id,
-    )) {
-        Ok(mut thread) => match thread.set_model_override(Some(resolved.model.clone())) {
+    let id = effective_topic_thread_id(chat_id, thread_id);
+    let mut resolved = match resolved_topic(context, chat_id, thread_id) {
+        Ok((config, _)) => config,
+        Err(reason) => return format!("❌ {}", reason.trim_start_matches("⚠️ ")),
+    };
+    if let Err(err) = resolved.apply_model_selection(model_id) {
+        return format!("❌ {err}");
+    }
+    match zdx_engine::core::thread_persistence::Thread::with_id(id) {
+        Ok(mut thread) => match thread.set_model_override(Some(resolved.model_selection())) {
             Ok(()) => format!(
                 "✅ Model set to <code>{}</code> for this topic.",
-                resolved.model
+                resolved.model_label()
             ),
             Err(err) => format!("❌ Failed to set override: {err}"),
         },
@@ -618,11 +720,13 @@ pub(crate) fn model_picker_header(
 ) -> String {
     let config = context.config_for_chat(chat_id);
     match scope {
-        ModelPickerScope::General => format!("Current model: <code>{}</code>", config.model),
+        ModelPickerScope::General => {
+            format!("Current model: <code>{}</code>", config.model_label())
+        }
         ModelPickerScope::NewThread => {
             format!(
                 "Pick a model for a new thread. Default: <code>{}</code>",
-                config.model
+                config.model_label()
             )
         }
         ModelPickerScope::NewOrchestrator => {
@@ -633,7 +737,7 @@ pub(crate) fn model_picker_header(
                     chat_id,
                     crate::handlers::message::LaunchRole::Orchestrator
                 )
-                .model
+                .map_or_else(|err| format!("⚠️ {err}"), |config| config.model_label())
             )
         }
         ModelPickerScope::Staging => {
@@ -641,12 +745,12 @@ pub(crate) fn model_picker_header(
                 .map_or_else(String::new, |m| format!("\nPicked: <code>{m}</code>"));
             format!(
                 "Pick the model for the new topic (this thread keeps its own). Starts on: <code>{}</code>{picked}",
-                crate::staging::staged_topic_config(context, chat_id, thread_id).model
+                crate::staging::staged_topic_label(context, chat_id, thread_id)
             )
         }
         ModelPickerScope::Topic => {
             let override_info = zdx_engine::core::thread_persistence::read_thread_model_override(
-                &telegram_thread_id(chat_id, thread_id),
+                &effective_topic_thread_id(chat_id, thread_id),
             )
             .ok()
             .flatten()
@@ -655,7 +759,7 @@ pub(crate) fn model_picker_header(
             });
             format!(
                 "Current model: <code>{}</code>{override_info}",
-                config.model
+                current_topic_selection(context, chat_id, thread_id).1
             )
         }
     }
@@ -737,6 +841,7 @@ async fn handle_model_pick(
                 chat_id,
                 crate::handlers::message::LaunchRole::Orchestrator,
             )
+            .unwrap_or_else(|_| context.config_for_chat(chat_id))
             .thinking_level
         }
     };
@@ -782,10 +887,64 @@ async fn handle_model_thinking_pick(
         return;
     };
     let model = zdx_engine::models::format_model_thinking(model, level);
+    apply_picked_model(context, client, callback, msg, scope, &model).await;
+}
 
+/// `model_mode:{name}:{scope}`: pick a model mode. The `mode:<name>`
+/// reference is what gets kept, so the choice follows later edits to the mode.
+async fn handle_model_mode_pick(
+    context: &BotContext,
+    client: &TelegramClient,
+    callback: &CallbackQuery,
+    msg: &crate::telegram::Message,
+    rest: &str,
+) {
+    let Some((name, scope)) = rest.rsplit_once(':') else {
+        return;
+    };
+    let Some(scope) = ModelPickerScope::from_data(scope) else {
+        return;
+    };
+    let Some(mode) = picker_modes(context, msg.chat.id, msg.thread_id, scope)
+        .into_iter()
+        .find(|mode| mode.name.trim().eq_ignore_ascii_case(name.trim()))
+    else {
+        let _ = client
+            .answer_callback_query(&callback.id, Some("Mode no longer configured"))
+            .await;
+        return;
+    };
+    let reference = mode.as_ref_spec();
+    apply_picked_model(context, client, callback, msg, scope, &reference).await;
+}
+
+/// Applies a finished model pick (a spec or a `mode:<name>` reference) to
+/// what the picker's `scope` targets.
+async fn apply_picked_model(
+    context: &BotContext,
+    client: &TelegramClient,
+    callback: &CallbackQuery,
+    msg: &crate::telegram::Message,
+    scope: ModelPickerScope,
+    model: &str,
+) {
+    // A chat whose workspace config does not load takes no model writes:
+    // they would resolve against the bot-level config.
+    if let Err(err) = context.checked_config_for_chat(msg.chat.id) {
+        let _ = client
+            .answer_callback_query(&callback.id, Some(&format!("{err:#}")))
+            .await;
+        return;
+    }
+    if let Some(role) = scope.launch_role()
+        && let Err(err) = crate::handlers::message::launch_config(context, msg.chat.id, role)
+    {
+        let _ = client.answer_callback_query(&callback.id, Some(&err)).await;
+        return;
+    }
     if let Some(role) = scope.launch_role() {
         let created =
-            crate::handlers::message::create_topic_with_model(context, msg.chat.id, &model, role)
+            crate::handlers::message::create_topic_with_model(context, msg.chat.id, model, role)
                 .await;
         crate::handlers::message::answer_topic_created(client, callback, created, role).await;
         if let Err(err) =
@@ -802,8 +961,13 @@ async fn handle_model_thinking_pick(
         // with and kept on the staging session — never written to this thread.
         let topic_id = msg.effective_thread_id();
         let mut config = staging::staged_topic_config(context, msg.chat.id, topic_id);
-        config.apply_model_spec(&model);
-        let resolved = config.model;
+        if let Err(err) = config.apply_model_selection(model) {
+            let _ = client
+                .answer_callback_query(&callback.id, Some(&err.to_string()))
+                .await;
+            return;
+        }
+        let resolved = config.model_selection();
         if staging::finish_model_pick(
             context,
             client,
@@ -833,7 +997,7 @@ async fn handle_model_thinking_pick(
         return;
     }
 
-    let reply = resolve_model_pick(context, scope, msg.chat.id, msg.thread_id, &model);
+    let reply = resolve_model_pick(context, scope, msg.chat.id, msg.thread_id, model);
     if let Err(err) = client
         .edit_message_text(msg.chat.id, msg.id, &reply, None)
         .await
@@ -881,6 +1045,9 @@ async fn handle_model_callback(
     } else if let Some(rest) = data.strip_prefix("model_pick:") {
         handle_model_pick(context, client, callback, msg, rest).await;
         return;
+    } else if let Some(rest) = data.strip_prefix("model_mode:") {
+        handle_model_mode_pick(context, client, callback, msg, rest).await;
+        return;
     } else if let Some(rest) = data.strip_prefix("model_thinking:") {
         handle_model_thinking_pick(context, client, callback, msg, rest).await;
         return;
@@ -888,7 +1055,7 @@ async fn handle_model_callback(
         let Some(scope) = ModelPickerScope::from_data(scope) else {
             return;
         };
-        let keyboard = build_provider_keyboard(context, chat_id, scope);
+        let keyboard = build_provider_keyboard(context, chat_id, msg.thread_id, scope);
         let header = model_picker_header(context, chat_id, msg.thread_id, scope);
 
         if let Err(err) = client
@@ -951,6 +1118,62 @@ mod tests {
 
     use super::{callback_is_allowed, parse_cancel_callback, parse_queue_cancel_callback};
     use crate::telegram::CallbackQuery;
+
+    /// A resumed topic aliases to its source thread: the picker's label and
+    /// a picked model use the source thread and the modes of its root, as its
+    /// turns do.
+    #[test]
+    fn resumed_topic_selection_follows_the_alias() {
+        use zdx_engine::core::thread_persistence::{Thread, read_thread_model_override};
+
+        let home = zdx_engine::test_support::temp_zdx_home();
+        std::fs::write(
+            home.path().join("config.toml"),
+            "[[model_modes]]\nname = \"smart\"\nprimary = \"personal:big@high\"\n",
+        )
+        .unwrap();
+        let dir = |label: &str| {
+            let dir =
+                std::env::temp_dir().join(format!("zdx-bot-{label}-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(dir.join(".zdx")).unwrap();
+            dir
+        };
+        let (chat_root, work_root) = (dir("alias-chat"), dir("alias-work"));
+        std::fs::write(
+            work_root.join(".zdx/config.toml"),
+            "[[model_modes]]\nname = \"smart\"\nprimary = \"work:big@high\"\n",
+        )
+        .unwrap();
+        let context = crate::bot::context::BotContext::for_test(
+            crate::telegram::TelegramClient::with_base_url(
+                crate::telegram::fake::TOKEN.to_string(),
+                "http://127.0.0.1:9".to_string(),
+            ),
+            zdx_engine::config::Config::load_layered(&[home.path().join("config.toml")]).unwrap(),
+            chat_root,
+        );
+        let source = format!("alias-source-{}", uuid::Uuid::new_v4());
+        let mut source_thread = Thread::with_id(source.clone()).unwrap();
+        source_thread.set_root_path(&work_root).unwrap();
+        source_thread
+            .set_model_override(Some("mode:smart".to_string()))
+            .unwrap();
+        Thread::with_id(super::telegram_thread_id(-1001, Some(7)))
+            .unwrap()
+            .set_alias(Some(source.clone()))
+            .unwrap();
+
+        let (_, label) = super::current_topic_selection(&context, -1001, Some(7));
+        assert_eq!(label, "mode:smart → work:big@high");
+
+        let reply = super::set_topic_model(&context, -1001, Some(7), "work:other@low");
+        assert!(reply.starts_with('✅'), "{reply}");
+        assert_eq!(
+            read_thread_model_override(&source).unwrap().as_deref(),
+            Some("work:other@low"),
+            "the pick lands on the source thread its turns read"
+        );
+    }
 
     fn test_callback(user_id: i64, chat_id: i64, chat_type: &str) -> CallbackQuery {
         serde_json::from_value(json!({

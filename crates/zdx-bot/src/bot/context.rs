@@ -53,6 +53,10 @@ pub(crate) struct BotContext {
     /// Rebuilt whenever a config layer changes on disk (see
     /// [`BotContext::reload_config_if_changed`]).
     profile_configs: RwLock<HashMap<i64, Config>>,
+    /// Profiles whose config names a model mode it does not define, keyed by
+    /// `chat_id`, with the load error. Turns there are refused rather than run
+    /// on the bot-level config, which may use another account.
+    profile_errors: RwLock<HashMap<i64, String>>,
     /// Size + mtime of every config layer feeding `config`/`profile_configs`,
     /// so a turn can detect on-disk edits without re-parsing every time.
     config_watch: std::sync::Mutex<zdx_engine::config::ConfigWatch>,
@@ -125,7 +129,7 @@ impl BotContext {
             launcher_map,
         } = deps;
         let root = root.canonicalize().unwrap_or(root);
-        let profile_configs = load_profile_configs(&config);
+        let (profile_configs, profile_errors) = load_profile_configs(&config);
         let config_stamps = std::sync::Mutex::new(zdx_engine::config::ConfigWatch::new(
             &watched_config_layers(&root, &config),
         ));
@@ -133,6 +137,7 @@ impl BotContext {
             client,
             config: RwLock::new(config),
             profile_configs: RwLock::new(profile_configs),
+            profile_errors: RwLock::new(profile_errors),
             config_watch: config_stamps,
             allowlist_user_ids,
             allowlist_chat_ids,
@@ -197,6 +202,27 @@ impl BotContext {
         self.config()
     }
 
+    /// Config a turn in `chat_id` may run with. Fails for a profile whose own
+    /// config does not load because it names an undefined model mode: running
+    /// the bot-level config there could use another provider or account.
+    ///
+    /// # Errors
+    /// Returns the profile's config load error.
+    pub(crate) fn checked_config_for_chat(&self, chat_id: i64) -> anyhow::Result<Config> {
+        if let Some(err) = self
+            .profile_errors
+            .read()
+            .expect("bot profile error lock poisoned")
+            .get(&chat_id)
+        {
+            anyhow::bail!(
+                "This chat's workspace config does not load, so turns here are refused \
+                 instead of running another config's model: {err}"
+            );
+        }
+        Ok(self.config_for_chat(chat_id))
+    }
+
     /// Re-reads the config layers when any of them changed on disk, so edits
     /// made outside this process (monitor Config tab, an editor) apply to the
     /// next turn instead of waiting for a restart.
@@ -220,7 +246,7 @@ impl BotContext {
             &self.root,
         )) {
             Ok(config) => {
-                let profile_configs = load_profile_configs(&config);
+                let (profile_configs, profile_errors) = load_profile_configs(&config);
                 // Restamp from the reloaded config: the same edit may have
                 // added, removed, or repointed a profile.
                 watch.restamp(&watched_config_layers(&self.root, &config));
@@ -229,6 +255,10 @@ impl BotContext {
                     .profile_configs
                     .write()
                     .expect("bot profile config lock poisoned") = profile_configs;
+                *self
+                    .profile_errors
+                    .write()
+                    .expect("bot profile error lock poisoned") = profile_errors;
                 *self.config.write().expect("bot config lock poisoned") = config;
             }
             Err(err) => {
@@ -247,9 +277,12 @@ impl BotContext {
     /// profile cwd, else the bot's own cwd) and applied to that chat's config
     /// only, so bound projects keep independent defaults.
     pub(crate) fn set_chat_model(&self, chat_id: i64, model_id: &str) -> anyhow::Result<()> {
-        let mut resolved = self.config_for_chat(chat_id);
-        resolved.apply_model_spec(model_id);
-        Config::save_model_for_cwd(&self.root_for_chat(chat_id).root, &resolved.model)?;
+        let mut resolved = self.checked_config_for_chat(chat_id)?;
+        resolved.apply_model_selection(model_id)?;
+        Config::save_model_for_cwd(
+            &self.root_for_chat(chat_id).root,
+            &resolved.model_selection(),
+        )?;
         self.update_config_for_chat(chat_id, |cfg| cfg.apply_model_spec(model_id));
         Ok(())
     }
@@ -453,9 +486,12 @@ fn watched_config_layers(root: &Path, base: &Config) -> Vec<PathBuf> {
 /// Runs at startup and again whenever [`BotContext::reload_config_if_changed`]
 /// sees a layer change on disk. A profile whose layers fail to load is skipped
 /// and falls back to the bot-level config, so one broken workspace file cannot
-/// take the whole bot down.
-fn load_profile_configs(base: &Config) -> HashMap<i64, Config> {
+/// take the whole bot down. A profile that fails because its config names an
+/// undefined model mode is returned in the error map instead: that chat fails
+/// closed, since the fallback could run another account's model.
+fn load_profile_configs(base: &Config) -> (HashMap<i64, Config>, HashMap<i64, String>) {
     let mut configs = HashMap::new();
+    let mut errors = HashMap::new();
 
     for (name, profile) in &base.telegram.profiles {
         let root = profile_root_path(profile);
@@ -471,6 +507,15 @@ fn load_profile_configs(base: &Config) -> HashMap<i64, Config> {
                 );
                 configs.insert(profile.chat_id, config);
             }
+            Err(err) if zdx_engine::config::UnknownModeError::is_in(&err) => {
+                tracing::warn!(
+                    profile = %name,
+                    root = %root.display(),
+                    err = %format!("{err:#}"),
+                    "Profile config names an undefined model mode; refusing turns in its chat",
+                );
+                errors.insert(profile.chat_id, format!("{err:#}"));
+            }
             Err(err) => {
                 tracing::warn!(
                     profile = %name,
@@ -482,7 +527,7 @@ fn load_profile_configs(base: &Config) -> HashMap<i64, Config> {
         }
     }
 
-    configs
+    (configs, errors)
 }
 
 #[cfg(test)]
@@ -754,6 +799,58 @@ mod tests {
             context.config_for_chat(-100_123).thinking_level,
             ThinkingLevel::High
         );
+    }
+
+    /// A profile whose layered config names a mode it does not define fails
+    /// closed: its turns are refused instead of running the bot-level config,
+    /// which may use another account. A fix applies on reload.
+    #[test]
+    fn profile_with_an_undefined_mode_fails_closed() {
+        let home = zdx_engine::test_support::temp_zdx_home();
+        let fallback_root = unique_temp_dir("mode-fallback");
+        let profile_root = unique_temp_dir("mode-profile");
+        fs::create_dir_all(&fallback_root).unwrap();
+        fs::create_dir_all(profile_root.join(".zdx")).unwrap();
+
+        // The overlay replaces the mode list without `smart`, which the
+        // global default names.
+        let overlay = profile_root.join(".zdx").join("config.toml");
+        fs::write(
+            &overlay,
+            "[[model_modes]]\nname = \"fast\"\nprimary = \"work:small@low\"\n",
+        )
+        .unwrap();
+        let global = home.path().join("config.toml");
+        fs::write(
+            &global,
+            format!(
+                "model = \"mode:smart\"\n[[model_modes]]\nname = \"smart\"\nprimary = \"personal:big@high\"\n\n[telegram.profiles.work]\nchat_id = -100123\ncwd = \"{}\"\n",
+                profile_root.display()
+            ),
+        )
+        .unwrap();
+
+        let context = test_context(
+            Config::load_layered(std::slice::from_ref(&global)).unwrap(),
+            fallback_root,
+        );
+        let err = context.checked_config_for_chat(-100_123).unwrap_err();
+        assert!(format!("{err:#}").contains("`mode:smart`"), "{err:#}");
+        assert!(
+            context.set_chat_model(-100_123, "work:other@low").is_err(),
+            "no write may resolve against the bot-level config either"
+        );
+        assert!(context.checked_config_for_chat(-100_999).is_ok());
+
+        fs::write(
+            &overlay,
+            "model = \"mode:fast\"\n[[model_modes]]\nname = \"fast\"\nprimary = \"work:small@low\"\n",
+        )
+        .unwrap();
+        context.reload_config_if_changed();
+        let fixed = context.checked_config_for_chat(-100_123).unwrap();
+        assert_eq!(fixed.model, "work:small@low");
+        assert_eq!(fixed.model_selection(), "mode:fast");
     }
 
     fn test_context(config: Config, root: PathBuf) -> BotContext {

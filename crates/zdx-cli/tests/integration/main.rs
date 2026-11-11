@@ -18,6 +18,7 @@ mod jobs_schedule;
 mod login_logout;
 mod memory_embed;
 mod memory_relevance;
+mod model_selection;
 mod opencode_go_headers;
 mod orchestrator;
 mod quota;

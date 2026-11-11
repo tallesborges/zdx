@@ -609,8 +609,10 @@ fn resolve_execution_model(
     if let Some(model) = normalize_optional(ctx.model.clone()) {
         resolved.apply_model_spec(&model);
     }
-    // Each layer may name a `mode:<name>` instead of a spec; an unknown mode
-    // falls through to the layer below it rather than failing the delegation.
+    // Each layer may name a `mode:<name>` instead of a spec, resolved against
+    // this run's config at every invocation. An absent layer inherits; an
+    // explicit mode that is not configured fails the delegation instead of
+    // running another layer's model (and possibly another account).
     for (source, model) in [
         ("definition", definition.model.as_deref()),
         (
@@ -629,10 +631,18 @@ fn resolve_execution_model(
         ),
     ] {
         let Some(model) = model else { continue };
-        let Some(model) = resolve_mode_layer(config, &definition.name, source, model) else {
-            continue;
-        };
-        resolved.apply_model_spec(model);
+        if let Err(err) =
+            subagents::apply_subagent_model(&mut resolved, &definition.name, source, model)
+        {
+            return Err(ToolOutput::failure(
+                "unknown_model_mode",
+                format!("{err:#}"),
+                Some(
+                    "Use a configured mode or a model id, or fix the subagent's model setting."
+                        .to_string(),
+                ),
+            ));
+        }
         requires_validation = true;
     }
     let thinking_level = resolved.thinking_level;
@@ -650,30 +660,6 @@ fn resolve_execution_model(
     }
 
     Ok((model, thinking_level))
-}
-
-/// Resolves one model layer, substituting a `mode:<name>` reference with that
-/// mode's primary spec. Returns `None` for a reference naming a mode that is
-/// not configured, so the caller skips the layer.
-fn resolve_mode_layer<'a>(
-    config: &'a crate::config::Config,
-    subagent: &str,
-    source: &str,
-    model: &'a str,
-) -> Option<&'a str> {
-    match config.resolve_mode_ref(model) {
-        None => Some(model),
-        Some(Ok(primary)) => Some(primary),
-        Some(Err(name)) => {
-            tracing::warn!(
-                subagent,
-                source,
-                mode = name,
-                "invoke_subagent: unknown model mode, falling back to the next layer"
-            );
-            None
-        }
-    }
 }
 
 fn build_system_prompt(
@@ -1088,28 +1074,100 @@ mod tests {
         ));
     }
 
-    /// An unknown mode falls through to the layer below instead of failing.
+    /// An explicit layer naming an undefined mode fails the delegation with
+    /// an actionable error instead of running another layer's model, in every
+    /// layer. An absent layer still inherits.
     #[test]
-    fn test_unknown_mode_ref_falls_through_to_definition() {
+    fn test_unknown_mode_ref_fails_instead_of_falling_through() {
         let mut ctx = ToolContext::new(std::path::PathBuf::from("."), None);
         ctx.subagent_available_models = vec!["openai:gpt-5.5".to_string()];
+        ctx.model = Some("openai:gpt-5.5@high".to_string());
+        let config = mode_config("fast", "gemini:gemini-3.8-flash@low");
+        let with_override = |model: &str| {
+            let mut config = config.clone();
+            config.subagents.overrides.insert(
+                "explorer".to_string(),
+                crate::config::SubagentOverride {
+                    model: Some(model.to_string()),
+                    thinking_level: None,
+                },
+            );
+            config
+        };
+        let failure = |result: Result<(String, crate::config::ThinkingLevel), ToolOutput>| {
+            serde_json::to_string(&result.unwrap_err()).unwrap()
+        };
+
+        let text = failure(resolve_execution_model(
+            &explorer_definition(Some("openai:gpt-5.5@medium")),
+            &with_override("mode:nope"),
+            &ctx,
+            None,
+        ));
+        assert!(text.contains("unknown_model_mode"), "{text}");
+        assert!(
+            text.contains("subagent 'explorer' override model"),
+            "{text}"
+        );
+        assert!(text.contains("configured: fast"), "{text}");
+
+        let text = failure(resolve_execution_model(
+            &explorer_definition(Some("mode:gone")),
+            &config,
+            &ctx,
+            None,
+        ));
+        assert!(
+            text.contains("subagent 'explorer' definition model"),
+            "{text}"
+        );
+
+        let text = failure(resolve_execution_model(
+            &explorer_definition(None),
+            &config,
+            &ctx,
+            Some("mode:typo"),
+        ));
+        assert!(
+            text.contains("subagent 'explorer' invocation model"),
+            "{text}"
+        );
+
+        // No layer at all: the parent's model is inherited.
+        assert_eq!(
+            resolve_execution_model(&explorer_definition(None), &config, &ctx, None).unwrap(),
+            (
+                "openai:gpt-5.5@high".to_string(),
+                crate::config::ThinkingLevel::High
+            )
+        );
+    }
+
+    /// A mode override is resolved from the config at each invocation, so an
+    /// edited mode applies to the next one.
+    #[test]
+    fn test_mode_ref_override_follows_mode_edits() {
+        let mut ctx = ToolContext::new(std::path::PathBuf::from("."), None);
+        ctx.subagent_available_models = vec![
+            "gemini:gemini-3.8-flash".to_string(),
+            "openai:gpt-5.5".to_string(),
+        ];
         let mut config = mode_config("fast", "gemini:gemini-3.8-flash@low");
         config.subagents.overrides.insert(
             "explorer".to_string(),
             crate::config::SubagentOverride {
-                model: Some("mode:nope".to_string()),
+                model: Some("mode:fast".to_string()),
                 thinking_level: None,
             },
         );
+        let first = resolve_execution_model(&explorer_definition(None), &config, &ctx, None);
+        assert_eq!(first.unwrap().0, "gemini:gemini-3.8-flash@low");
 
+        config.model_modes[0].primary = "openai:gpt-5.5@medium".to_string();
+        config.model_modes[0].thinking = crate::config::ThinkingLevel::Medium;
+        let next = resolve_execution_model(&explorer_definition(None), &config, &ctx, None);
         assert_eq!(
-            resolve_execution_model(
-                &explorer_definition(Some("openai:gpt-5.5@medium")),
-                &config,
-                &ctx,
-                None
-            )
-            .unwrap(),
+            next.unwrap(),
             (
                 "openai:gpt-5.5@medium".to_string(),
                 crate::config::ThinkingLevel::Medium

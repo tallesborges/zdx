@@ -180,6 +180,7 @@ impl TuiRuntime {
         system_prompt: Option<String>,
         runtime_context: Option<zdx_engine::core::context::RuntimeContext>,
         thread_handle: Option<Thread>,
+        model_selection: Option<String>,
     ) -> Result<Self> {
         Self::with_history(
             config,
@@ -188,6 +189,7 @@ impl TuiRuntime {
             runtime_context,
             thread_handle,
             Vec::new(),
+            model_selection,
         )
     }
 
@@ -202,21 +204,29 @@ impl TuiRuntime {
         runtime_context: Option<zdx_engine::core::context::RuntimeContext>,
         thread_handle: Option<Thread>,
         history: Vec<ChatMessage>,
+        model_selection: Option<String>,
     ) -> Result<Self> {
-        let model_override = thread_handle
+        let mut model_override = thread_handle
             .as_ref()
             .map(|handle| {
                 zdx_engine::core::thread_persistence::read_thread_model_override(&handle.id)
             })
             .transpose()?
             .flatten();
-        let thinking_override = thread_handle
+        let mut thinking_override = thread_handle
             .as_ref()
             .map(|handle| {
                 zdx_engine::core::thread_persistence::read_thread_thinking_override(&handle.id)
             })
             .transpose()?
             .flatten();
+        // An explicit `-m` beats a resumed thread's stored selection for this
+        // session (the stored one stays on disk), and survives config reloads
+        // without a thread too.
+        if model_selection.is_some() {
+            model_override = model_selection;
+            thinking_override = None;
+        }
         // Set up panic hook BEFORE entering alternate screen
         terminal::install_panic_hook();
         interrupt::set_restore_hook(|| {
@@ -904,8 +914,15 @@ impl TuiRuntime {
                     Ok(()) => {
                         // Adopt the saved value as this tab's default so a later
                         // `/new` starts from it instead of the stale one.
-                        self.state.tui.base_model.clone_from(&model);
+                        self.state
+                            .tui
+                            .base_model
+                            .clone_from(&self.state.tui.config.model);
                         self.state.tui.base_thinking_level = self.state.tui.config.thinking_level;
+                        self.state
+                            .tui
+                            .base_model_mode
+                            .clone_from(&self.state.tui.config.model_mode);
                         format!("Saved {model} as the default model.")
                     }
                     Err(e) => format!("Failed to save model: {e}"),
@@ -1167,10 +1184,14 @@ impl TuiRuntime {
                 // A model picked during the handoff belongs to the thread it
                 // opens: apply it here so the new thread's system prompt and
                 // pinned override use it, leaving the source tab untouched.
-                let pinned_model = model_override.map(|model| {
-                    config.apply_model_spec(&model);
-                    config.model.clone()
-                });
+                // A staged mode this config no longer defines is handed on as
+                // given, so the new thread is refused instead of running the
+                // default.
+                let pinned_model =
+                    model_override.map(|model| match config.apply_model_selection(&model) {
+                        Ok(()) => config.model_selection(),
+                        Err(err) => err.selection,
+                    });
                 let prompt_event = handlers::refresh_system_prompt(&config, &root);
                 self.dispatch_event(prompt_event);
 

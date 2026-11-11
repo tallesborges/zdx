@@ -14,6 +14,33 @@ pub fn interrupt_agent(tui: &TuiState) {
     }
 }
 
+/// Why the tab's stored selection cannot run with its config: it names a mode
+/// the config does not define. The turn is refused then; running the default
+/// in its place could use another provider or account.
+fn selection_error(tui: &TuiState) -> Option<String> {
+    let selection = tui.thread.model_override.as_deref()?;
+    tui.config
+        .check_model_selection(selection)
+        .err()
+        .map(|err| format!("{err}. Pick another model with /model or Tab."))
+}
+
+/// A turn that failed before it started; it carries no messages, so the
+/// thread keeps the user's input for a retry.
+fn refused_turn(message: String) -> std::sync::Arc<zdx_engine::core::events::AgentEvent> {
+    use zdx_engine::core::events::{AgentEvent, ErrorKind, TurnStatus};
+    std::sync::Arc::new(AgentEvent::TurnFinished {
+        status: TurnStatus::Failed {
+            kind: ErrorKind::Internal,
+            message,
+            details: None,
+        },
+        final_text: String::new(),
+        messages: Vec::new(),
+        prior_message_count: 0,
+    })
+}
+
 /// Spawns an agent turn for the active tab.
 ///
 /// For btw tabs, this seeds a parent-thread pointer and creates a persistent
@@ -33,6 +60,7 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
 
     let messages = tui.thread.messages.clone();
     let config = tui.config.clone();
+    let refused = selection_error(tui);
     let mut agent_opts = tui.agent_opts.clone();
     agent_opts.conversation_id = Some(tui.thread.conversation_id.clone());
     let system_prompt = tui.system_prompt.clone();
@@ -51,6 +79,10 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
 
     // Spawn the agent task - it will send TurnFinished when done
     tokio::spawn(async move {
+        if let Some(message) = refused {
+            let _ = agent_tx.send(refused_turn(message));
+            return;
+        }
         let _ = zdx_engine::core::agent::run_turn_with_cancel(
             messages,
             &config,
@@ -93,6 +125,7 @@ fn spawn_btw_tab_turn(tui: &TuiState, parent_thread_id: Option<&str>) -> UiEvent
     let run_cancel = cancel.clone();
 
     let config = tui.config.clone();
+    let refused = selection_error(tui);
     let agent_opts = tui.agent_opts.clone();
     let system_prompt = tui.system_prompt.clone();
     let thread_id = prepared.thread_handle.id.clone();
@@ -106,6 +139,10 @@ fn spawn_btw_tab_turn(tui: &TuiState, parent_thread_id: Option<&str>) -> UiEvent
 
     let run_messages = prepared.run_messages;
     tokio::spawn(async move {
+        if let Some(message) = refused {
+            let _ = agent_tx.send(refused_turn(message));
+            return;
+        }
         let _ = zdx_engine::core::agent::run_turn_with_cancel(
             run_messages,
             &config,
@@ -154,11 +191,10 @@ fn prepare_btw_tab_thread(
         let mut thread_handle = thread_persistence::Thread::new_with_root(&tui.agent_opts.root)
             .context("Failed to create btw thread")?;
 
-        // Persist the effective selection as one model spec.
-        let model =
-            zdx_engine::models::format_model_thinking(&tui.config.model, tui.config.thinking_level);
+        // Persist the effective selection: one model spec, or the
+        // `mode:<name>` reference it came from.
         thread_handle
-            .set_model_override(Some(model))
+            .set_model_override(Some(tui.current_selection()))
             .context("Failed to persist btw thread model override")?;
 
         // Find the last user message (the one the user just typed) from thread.messages
@@ -195,5 +231,43 @@ fn prepare_btw_tab_thread(
             thread_update: Some(thread_handle),
             messages_update: Some(full_messages),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use zdx_engine::config::{Config, ModelMode, ThinkingLevel};
+
+    use super::selection_error;
+    use crate::state::AppState;
+
+    /// A tab kept on a mode its config does not define is refused at turn
+    /// start; a defined mode and a concrete pin run.
+    #[test]
+    fn turns_on_an_undefined_mode_are_refused() {
+        let config = Config {
+            model_modes: vec![ModelMode {
+                name: "smart".to_string(),
+                description: String::new(),
+                primary: "openai:big@high".to_string(),
+                alternatives: Vec::new(),
+                thinking: ThinkingLevel::High,
+            }],
+            ..Config::default()
+        };
+        let mut tui = AppState::new(config, PathBuf::new(), None, None).tui;
+        assert_eq!(selection_error(&tui), None);
+
+        tui.thread.model_override = Some("mode:smart".to_string());
+        assert_eq!(selection_error(&tui), None);
+        tui.thread.model_override = Some("openai:other@low".to_string());
+        assert_eq!(selection_error(&tui), None);
+
+        tui.thread.model_override = Some("mode:gone".to_string());
+        let refused = selection_error(&tui).expect("refused");
+        assert!(refused.contains("`mode:gone`"), "{refused}");
+        assert!(refused.contains("configured: smart"), "{refused}");
     }
 }

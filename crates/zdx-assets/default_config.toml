@@ -88,7 +88,9 @@ stream_idle_timeout_secs = 300
 
 # Named model tiers, referenced everywhere as `mode:<name>`.
 # Cycled with Tab in the TUI, listed by the Telegram launcher, rendered into the
-# system prompt, and usable in `[subagents.overrides]`. Thinking rides in the
+# system prompt, and usable as `model` and in `[subagents.overrides]`. A thread,
+# worker, or default set to `mode:<name>` keeps the reference and resolves it
+# from the workspace's modes on each turn. Thinking rides in the
 # `@<level>` suffix of `primary`; `alternatives` are equivalent picks at the same
 # tier and are never selected automatically.
 #

@@ -37,6 +37,14 @@
     selectedRoot = root;
   }
 
+  // A mode value names the tier and what it runs here now; the shared layer
+  // reports `resolves_to`, null when the mode is not configured.
+  function settingValueText(s: WorkspaceSetting): string {
+    if (s.value === null) return "(default)";
+    if (!s.value.trim().toLowerCase().startsWith("mode:")) return s.value;
+    return s.resolves_to ? `${s.value} → ${s.resolves_to}` : `${s.value} (mode not configured)`;
+  }
+
   function sourceText(source: ConfigSource): string {
     switch (source.layer) {
       case "workspace":
@@ -109,7 +117,7 @@
                   : 'text-muted-foreground'}">{sourceText(s.source)}</span
               >
             </div>
-            <p class="m-0 font-mono text-xxs break-all">{s.value ?? "(default)"}</p>
+            <p class="m-0 font-mono text-xxs break-all">{settingValueText(s)}</p>
             {#if s.source.layer === "workspace"}
               <p class="m-0 font-mono text-xxs text-muted-foreground break-all">
                 reset → {s.inherited_value ?? "(default)"} · {sourceText(s.inherited_source)}

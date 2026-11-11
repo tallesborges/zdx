@@ -1153,6 +1153,7 @@ export const demoMonitor: MonitorResponse = {
   jobs_error: null,
   config: {
     model: "claude-sonnet-4-6",
+    model_mode: "mode:smart",
     thinking: "medium",
     max_tokens: 64000,
     subagents_enabled: true,
@@ -1207,6 +1208,7 @@ function demoSetting(
     label,
     kind: "chat",
     value,
+    resolves_to: null,
     source,
     inherited_value: inherited[0],
     inherited_source: inherited[1],

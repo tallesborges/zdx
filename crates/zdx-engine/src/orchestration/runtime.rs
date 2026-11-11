@@ -995,6 +995,14 @@ fn open_profile_thread(
     let profile = profile.unwrap_or(ORCHESTRATOR_SUBAGENT_NAME);
     // Fail before anything is written when the profile cannot run.
     subagents::load_persistent_profile(root, profile)?;
+    if let Some(model) = model
+        && crate::config::mode_ref_name(model).is_some()
+    {
+        // Refuse a mode the thread's root does not define before anything is
+        // written, instead of failing every later turn.
+        let mut config = load_config(root)?;
+        config.apply_model_selection(model)?;
+    }
     let mut thread = match thread_id {
         Some(id) => Thread::with_id(id.to_string())?,
         None => Thread::new_with_root(root)?,
@@ -1153,12 +1161,16 @@ fn prepare_profile_turn(
         let profile = thread_persistence::read_persistent_profile(thread_id)?
             .context("thread has no persistent profile")?;
         let definition = subagents::load_persistent_profile(&run_root, &profile)?;
+        // Modes mean what the thread's own run root defines, whichever root
+        // submitted this turn.
+        let mut config = load_config(config_root)?;
+        config.use_modes_of(config_root, &run_root)?;
         let config = turn_config(
-            load_config(config_root)?,
+            config,
             &definition,
             thread_persistence::read_thread_model_override(thread_id)?.as_deref(),
             thread_persistence::read_thread_thinking_override(thread_id)?,
-        );
+        )?;
         crate::core::context::set_runtime_env(&config, Some(thread_id));
         prepare_turn(&config, &run_root, &definition, route)
     })();

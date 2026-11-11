@@ -371,6 +371,8 @@ pub struct TuiState {
     pub base_model: String,
     /// User/default thinking preference (without per-thread overrides applied).
     pub base_thinking_level: zdx_engine::config::ThinkingLevel,
+    /// Mode the default model came from, when the default is `mode:<name>`.
+    pub base_model_mode: Option<String>,
     /// Last selected skill repository in this session.
     pub last_skill_repo: Option<String>,
     /// Skills currently loaded into the active thread/context.
@@ -495,6 +497,7 @@ impl TuiState {
             auth,
             base_model: config.model.clone(),
             base_thinking_level: config.thinking_level,
+            base_model_mode: config.model_mode.clone(),
             config,
             config_watch: zdx_engine::config::ConfigWatch::default(),
             last_skill_repo: None,
@@ -541,18 +544,30 @@ impl TuiState {
                 .is_some_and(|m| m.role == "user")
     }
 
+    /// The selection this tab runs on, as it is stored: the config's
+    /// effective selection (`mode:<name>` or a spec), or the thread's own
+    /// selection as given when it names a mode this config lacks, so it is
+    /// never replaced by the default it fell back to.
+    #[must_use]
+    pub fn current_selection(&self) -> String {
+        match self.thread.model_override.as_deref() {
+            Some(selection) if self.config.check_model_selection(selection).is_err() => {
+                selection.to_string()
+            }
+            _ => self.config.model_selection(),
+        }
+    }
+
     /// Adopts a freshly loaded [`Config`] as this tab's defaults, keeping the
     /// per-thread model/thinking overrides that are currently in effect.
     pub fn apply_reloaded_config(&mut self, config: Config) {
-        // A new btw tab pins its inherited selection when its first turn
-        // creates the thread. Until then, that selection only lives in config.
+        // A new btw tab carries its inherited selection on the thread state
+        // (`create_btw_tab`) and pins it when its first turn creates the
+        // thread; keep it as given across reloads until then.
         let pending_btw =
             matches!(self.tab_kind, TabKind::Btw { .. }) && self.thread.thread_handle.is_none();
         let (model_override, thinking_override) = if pending_btw {
-            (
-                Some(self.config.model.clone()),
-                Some(self.config.thinking_level),
-            )
+            (Some(self.current_selection()), None)
         } else {
             (
                 self.thread.model_override.clone(),
@@ -562,9 +577,14 @@ impl TuiState {
 
         self.base_model.clone_from(&config.model);
         self.base_thinking_level = config.thinking_level;
+        self.base_model_mode.clone_from(&config.model_mode);
         self.config = config;
 
-        self.config
+        // A stored mode this config lacks leaves the default in place; the
+        // status line shows it and the next turn is refused
+        // (`handlers::agent::selection_error`).
+        let _ = self
+            .config
             .apply_thread_model_override(model_override.as_deref(), thinking_override);
     }
 

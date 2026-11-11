@@ -286,6 +286,46 @@ pub fn calculate_input_height(state: &TuiState, terminal_height: u16) -> u16 {
     desired_height.max(INPUT_HEIGHT_MIN).min(max_height)
 }
 
+/// Top-left title: the model, with the mode name for a mode selection and a
+/// thinking badge.
+fn model_title_spans(
+    state: &TuiState,
+    base_style: Style,
+    thinking_style: Style,
+) -> Vec<Span<'static>> {
+    // Show the mode name alongside the actual model id for a mode selection
+    // only; a concrete pin equal to a mode's primary is not that mode. A
+    // stored mode this config lacks is flagged: turns there are refused.
+    let unresolved = state
+        .thread
+        .model_override
+        .as_deref()
+        .filter(|selection| state.config.check_model_selection(selection).is_err());
+    let mut title_spans = match (unresolved, state.config.active_mode_name()) {
+        (Some(selection), _) => vec![Span::styled(
+            format!(" {selection} · mode not configured here; turns are refused"),
+            Style::default().fg(Color::Red),
+        )],
+        (None, Some(name)) => vec![Span::styled(
+            format!(" {name} · {}", state.config.model),
+            base_style,
+        )],
+        (None, None) => vec![Span::styled(format!(" {}", state.config.model), base_style)],
+    };
+
+    if unresolved.is_none()
+        && state.config.thinking_level != ThinkingLevel::Off
+        && model_supports_reasoning(&state.config.model)
+    {
+        title_spans.push(Span::styled(
+            format!(" [{}]", state.config.thinking_level.display_name()),
+            thinking_style,
+        ));
+    }
+
+    title_spans
+}
+
 /// Renders the input area with model info on top border and path on bottom border.
 pub fn render_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect) {
     render_input_with_cursor(state, frame, area, true);
@@ -311,23 +351,7 @@ pub fn render_input_with_cursor(
         .fg(Color::DarkGray)
         .add_modifier(Modifier::DIM);
 
-    // Show the mode name alongside the actual model id when one matches.
-    let mode_name = state.config.active_mode_name();
-    let label = match mode_name {
-        Some(name) => format!(" {name} · {}", state.config.model),
-        None => format!(" {}", state.config.model),
-    };
-    let mut title_spans = vec![Span::styled(label, base_style)];
-
-    if state.config.thinking_level != ThinkingLevel::Off
-        && model_supports_reasoning(&state.config.model)
-    {
-        title_spans.push(Span::styled(
-            format!(" [{}]", state.config.thinking_level.display_name()),
-            thinking_style,
-        ));
-    }
-
+    let mut title_spans = model_title_spans(state, base_style, thinking_style);
     title_spans.push(Span::styled(" ", base_style));
 
     // Build top-right title: AMP-style usage display
@@ -703,6 +727,51 @@ fn build_token_breakdown(usage: &ThreadUsage) -> Vec<Span<'static>> {
 mod tests {
     use super::*;
     use crate::input::CursorMove;
+
+    /// The title names a mode only for a mode selection: a concrete pin equal
+    /// to a mode's primary shows the model alone, and a stored mode the config
+    /// lacks is flagged as refused.
+    #[test]
+    fn model_title_distinguishes_modes_from_concrete_pins() {
+        let config = zdx_engine::config::Config {
+            model: "openai:big@high".to_string(),
+            thinking_level: ThinkingLevel::High,
+            model_modes: vec![zdx_engine::config::ModelMode {
+                name: "smart".to_string(),
+                description: String::new(),
+                primary: "openai:big@high".to_string(),
+                alternatives: Vec::new(),
+                thinking: ThinkingLevel::High,
+            }],
+            ..zdx_engine::config::Config::default()
+        };
+        let mut tui =
+            crate::state::AppState::new(config, std::path::PathBuf::new(), None, None).tui;
+        let title = |tui: &TuiState| -> String {
+            model_title_spans(tui, Style::default(), Style::default())
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect()
+        };
+
+        tui.thread.model_override = Some("openai:big@high".to_string());
+        assert_eq!(title(&tui), " openai:big@high [high]");
+
+        tui.thread.model_override = Some("mode:smart".to_string());
+        tui.config.apply_model_selection("mode:smart").unwrap();
+        assert!(
+            title(&tui).starts_with(" smart · openai:big@high"),
+            "{}",
+            title(&tui)
+        );
+
+        tui.thread.model_override = Some("mode:gone".to_string());
+        assert!(
+            title(&tui).contains("mode:gone · mode not configured here"),
+            "{}",
+            title(&tui)
+        );
+    }
 
     #[test]
     // Decomposed "éé" (e + combining accent) is intentional: it exercises

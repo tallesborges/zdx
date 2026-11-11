@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use zdx_engine::config;
 use zdx_engine::core::agent::{ToolConfig, ToolSelection};
 use zdx_engine::core::context::{EffectivePrompt, PromptContextInclusion};
-use zdx_engine::core::thread_persistence::ThreadPersistenceOptions;
+use zdx_engine::core::thread_persistence::{self, ThreadPersistenceOptions};
 use zdx_engine::skills::SkillScope;
 use zdx_engine::subagents::{self, SubagentDefinition};
 use zdx_engine::tools::ToolRegistry;
@@ -45,6 +45,56 @@ pub struct ExecRunOptions<'a> {
     pub activity_subagent_name: Option<&'a str>,
 }
 
+/// The config this run uses: the loaded layers, then the subagent's model and
+/// override, then the resumed thread's stored selection, then `-m`.
+fn run_config(
+    options: &ExecRunOptions<'_>,
+    subagent: Option<&SubagentDefinition>,
+) -> Result<config::Config> {
+    let mut c = options.config.clone();
+    // The config was loaded from the process cwd; a mode means what the
+    // workspace this run's `--root` defines.
+    let cwd = std::env::current_dir().context("determine current directory")?;
+    c.use_modes_of(&cwd, std::path::Path::new(options.root))?;
+    // An explicit subagent layer naming an undefined mode fails the run; an
+    // absent one inherits.
+    if let Some(definition) = subagent {
+        if let Some(model) = definition.model.as_deref() {
+            subagents::apply_subagent_model(&mut c, &definition.name, "definition", model)?;
+        }
+        if let Some(model) = c
+            .subagents
+            .overrides
+            .get(&definition.name)
+            .and_then(|over| over.model.clone())
+        {
+            subagents::apply_subagent_model(&mut c, &definition.name, "override", &model)?;
+        }
+    }
+    // A resumed thread runs the selection stored on it (a concrete pin, or a
+    // `mode:<name>` resolved against this root's config now), the same as the
+    // bot, TUI, and workers; `-m` still wins for this run.
+    if options.model_override.is_none()
+        && let Some(thread_id) = options.thread_opts.thread_id.as_deref()
+    {
+        let model = thread_persistence::read_thread_model_override(thread_id)
+            .context("read thread model override")?;
+        let thinking = thread_persistence::read_thread_thinking_override(thread_id)
+            .context("read thread thinking override")?;
+        c.apply_thread_model_override(model.as_deref(), thinking)
+            .with_context(|| format!("thread {thread_id} model"))?;
+    }
+    // An explicit `-m mode:<name>` that names no mode here fails rather than
+    // running the default (a worker's stored mode arrives this way too).
+    if let Some(model) = options.model_override {
+        c.apply_model_selection(model).context("-m")?;
+    }
+    if options.no_skills {
+        c.skills.enabled = false;
+    }
+    Ok(c)
+}
+
 pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
     if let Some(thread_id) = options.thread_opts.thread_id.as_deref() {
         zdx_engine::orchestration::ensure_direct_run_allowed(thread_id)?;
@@ -57,28 +107,7 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
 
     let subagent = resolve_subagent(&root_path, options.subagent)?;
 
-    // Apply overrides if provided
-    let config = {
-        let mut c = options.config.clone();
-        if let Some(model) = subagent.as_ref().and_then(|d| d.model.as_deref()) {
-            c.apply_model_spec(model);
-        }
-        if let Some(model) = subagent
-            .as_ref()
-            .and_then(|d| c.subagents.overrides.get(&d.name))
-            .and_then(|over| over.model.as_deref())
-        {
-            let model = model.to_string();
-            c.apply_model_spec(&model);
-        }
-        if let Some(model) = options.model_override {
-            c.apply_model_spec(model);
-        }
-        if options.no_skills {
-            c.skills.enabled = false;
-        }
-        c
-    };
+    let config = run_config(&options, subagent.as_ref())?;
 
     let effective_prompt = match subagent.as_ref() {
         Some(definition) => Some(EffectivePrompt {

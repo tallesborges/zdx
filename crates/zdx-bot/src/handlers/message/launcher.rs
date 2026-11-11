@@ -45,7 +45,7 @@ pub(crate) fn bot_visible_modes(context: &BotContext, chat_id: i64) -> Vec<Model
 
 /// Pure filter: keep modes whose primary resolves to an available model id.
 /// Logs each skipped mode so a misconfigured tier is visible in the logs.
-fn filter_available_modes(modes: &[ModelMode], available: &[String]) -> Vec<ModelMode> {
+pub(crate) fn filter_available_modes(modes: &[ModelMode], available: &[String]) -> Vec<ModelMode> {
     modes
         .iter()
         .filter(|mode| {
@@ -141,12 +141,21 @@ pub(crate) fn default_role(context: &BotContext, chat_id: i64) -> LaunchRole {
 /// The config a new topic of `role` starts with before any model is pinned:
 /// the chat's config, plus `[subagents.overrides.orchestrator]` for an
 /// orchestrator. Shown as the launcher's and the picker's default.
-pub(crate) fn launch_config(context: &BotContext, chat_id: i64, role: LaunchRole) -> Config {
+///
+/// # Errors
+/// Returns the reason when the orchestrator override names an undefined
+/// mode: orchestrator turns are refused then, so there is no default to show.
+pub(crate) fn launch_config(
+    context: &BotContext,
+    chat_id: i64,
+    role: LaunchRole,
+) -> std::result::Result<Config, String> {
     let mut config = context.config_for_chat(chat_id);
     if role == LaunchRole::Orchestrator {
-        zdx_engine::subagents::apply_orchestrator_override(&mut config);
+        zdx_engine::subagents::apply_orchestrator_override(&mut config)
+            .map_err(|err| format!("{err:#}"))?;
     }
-    config
+    Ok(config)
 }
 
 /// Create a new forum topic of `role` pre-set to a unified `model` spec, mark
@@ -355,23 +364,32 @@ pub(crate) async fn create_topic_resuming(
 /// topics start as and that role's default model, then lists each mode, what
 /// it is for, and the model (+ thinking) it maps to, so the buttons can stay
 /// short (name only).
-fn launcher_header(
-    modes: &[ModelMode],
-    role: LaunchRole,
-    default_model: &str,
-    default_thinking: ThinkingLevel,
-) -> String {
-    let default_id = default_model.rsplit(':').next().unwrap_or(default_model);
-    let thinking = if default_thinking == ThinkingLevel::Off {
+fn launcher_header(modes: &[ModelMode], role: LaunchRole, default: &Config) -> String {
+    // The level is shown on its own, so the id drops its `@<level>`.
+    let default_model = zdx_engine::models::ModelSpec::parse(&default.model).without_thinking();
+    let default_id = default_model
+        .rsplit(':')
+        .next()
+        .unwrap_or(&default_model)
+        .to_string();
+    let thinking = if default.thinking_level == ThinkingLevel::Off {
         String::new()
     } else {
-        format!(" · {}", default_thinking.display_name())
+        format!(" · {}", default.thinking_level.display_name())
     };
     let role_line = format!("New topics start as: <b>{}</b>", role.label());
-    let default_line = format!(
-        "Default: <code>{}</code>{thinking}",
-        escape_html(default_id)
-    );
+    // A `mode:<name>` default names the tier first: new topics follow it.
+    let default_line = match default.mode_selection() {
+        Some(reference) => format!(
+            "Default: <code>{}</code> → <code>{}</code>{thinking}",
+            escape_html(&reference),
+            escape_html(&default_id)
+        ),
+        None => format!(
+            "Default: <code>{}</code>{thinking}",
+            escape_html(&default_id)
+        ),
+    };
 
     if modes.is_empty() {
         return format!(
@@ -445,8 +463,18 @@ fn launcher_view(
     role: LaunchRole,
 ) -> (String, InlineKeyboardMarkup) {
     let modes = bot_visible_modes(context, chat_id);
-    let config = launch_config(context, chat_id, role);
-    let header = launcher_header(&modes, role, &config.model, config.thinking_level);
+    let header = match launch_config(context, chat_id, role) {
+        Ok(config) => launcher_header(&modes, role, &config),
+        // A broken orchestrator override leaves no default: say so instead of
+        // showing the chat's model, which those topics would not run.
+        Err(err) => {
+            let header = launcher_header(&modes, role, &context.config_for_chat(chat_id));
+            format!(
+                "{header}\n\n⚠️ {}; new topics of this role are refused until it is fixed.",
+                escape_html(&err)
+            )
+        }
+    };
     (header, build_launcher_keyboard(&modes, role))
 }
 
@@ -655,8 +683,7 @@ async fn managed_worker_ids(context: &BotContext) -> std::collections::HashSet<S
         .collect()
 }
 
-/// `nt:p:{name}` / `nt:op:{name}`: open a new topic of `role` pre-set to the
-/// mode's primary model (which carries its thinking level).
+/// `nt:p:{name}` / `nt:op:{name}`: open a new topic of `role` on that mode.
 async fn open_mode_topic(
     context: &BotContext,
     client: &TelegramClient,
@@ -665,6 +692,12 @@ async fn open_mode_topic(
     name: &str,
     role: LaunchRole,
 ) {
+    if let Err(err) = context.checked_config_for_chat(chat_id) {
+        let _ = client
+            .answer_callback_query(&callback.id, Some(&format!("{err:#}")))
+            .await;
+        return;
+    }
     // Resolve the mode from current config at click time so stale buttons
     // (e.g. after a restart or config edit) fail gracefully.
     let mode = bot_visible_modes(context, chat_id)
@@ -686,11 +719,11 @@ async fn open_mode_topic(
     .await;
 }
 
-/// The thread override a mode button pins. A suffixless mode primary means
-/// thinking `off`, but a suffixless thread override inherits the chat's or the
-/// orchestrator override's level, so the level is written out.
+/// The thread selection a mode button pins: the `mode:<name>` reference, so
+/// each turn runs what the mode means in the topic's config at that time
+/// (its primary and that primary's thinking level).
 fn mode_model(mode: &ModelMode) -> String {
-    zdx_engine::models::format_model_thinking(&mode.primary, mode.thinking)
+    mode.as_ref_spec()
 }
 
 /// Answer a launcher tap that created (or failed to create) a topic of `role`.
@@ -755,7 +788,7 @@ pub(crate) async fn handle_callback(
         };
         // Open the provider → model picker targeting a brand-new topic.
         let scope = role.picker_scope();
-        let keyboard = super::build_provider_keyboard(context, chat_id, scope);
+        let keyboard = super::build_provider_keyboard(context, chat_id, None, scope);
         let header = crate::model_picker_header(context, chat_id, None, scope);
         if let Err(err) = client
             .edit_message_text(chat_id, msg.id, &header, Some(&keyboard))
@@ -923,11 +956,16 @@ mod tests {
 
     #[test]
     fn launcher_header_names_the_role_and_its_default() {
+        let concrete = Config {
+            model: "anthropic:claude-opus-4-8@high".to_string(),
+            thinking_level: ThinkingLevel::High,
+            ..Config::default()
+        };
+        // A plain spec default is shown as that model.
         let header = launcher_header(
             &[mode("fast", "gemini:gemini-3.5-flash")],
             LaunchRole::Orchestrator,
-            "anthropic:claude-opus-4-8",
-            ThinkingLevel::High,
+            &concrete,
         );
         assert!(
             header.contains("New topics start as: <b>🧭 Orchestrator</b>"),
@@ -938,13 +976,20 @@ mod tests {
             "{header}"
         );
         assert!(
-            launcher_header(
-                &[],
-                LaunchRole::Agent,
-                "anthropic:claude-opus-4-8",
-                ThinkingLevel::Off
-            )
-            .contains("<b>🤖 Agent</b>")
+            launcher_header(&[], LaunchRole::Agent, &Config::default()).contains("<b>🤖 Agent</b>")
+        );
+
+        // A mode default is shown as the mode, not as a concrete pin.
+        let mut by_mode = Config {
+            model_modes: vec![mode("fast", "gemini:gemini-3.5-flash@low")],
+            ..Config::default()
+        };
+        by_mode.apply_model_selection("mode:fast").unwrap();
+        let header = launcher_header(&by_mode.model_modes, LaunchRole::Agent, &by_mode);
+        assert!(
+            header
+                .contains("Default: <code>mode:fast</code> → <code>gemini-3.5-flash</code> · low"),
+            "{header}"
         );
     }
 
@@ -972,6 +1017,32 @@ mod tests {
             std::env::temp_dir(),
         );
         (context, client)
+    }
+
+    /// An orchestrator override naming an undefined mode leaves orchestrator
+    /// topics no default to show (their turns are refused); agent topics keep
+    /// the chat's default.
+    #[test]
+    fn broken_orchestrator_mode_override_has_no_launch_default() {
+        let mut config = Config::default();
+        config.subagents.overrides.insert(
+            zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME.to_string(),
+            zdx_engine::config::SubagentOverride {
+                model: Some("mode:gone".to_string()),
+                thinking_level: None,
+            },
+        );
+        let context = BotContext::for_test(
+            TelegramClient::with_base_url(
+                crate::telegram::fake::TOKEN.to_string(),
+                "http://127.0.0.1:9".to_string(),
+            ),
+            config,
+            std::env::temp_dir(),
+        );
+        let err = launch_config(&context, -1001, LaunchRole::Orchestrator).unwrap_err();
+        assert!(err.contains("`mode:gone`"), "{err}");
+        assert!(launch_config(&context, -1001, LaunchRole::Agent).is_ok());
     }
 
     /// Dismiss deletes the launcher and stops tracking it, so a later General
@@ -1124,7 +1195,8 @@ mod tests {
             &definition,
             model_override.as_deref(),
             None,
-        );
+        )
+        .expect("resolved");
         assert!(
             resolved.model.contains("claude-opus-4-8"),
             "{}",
@@ -1252,30 +1324,32 @@ mod tests {
         assert_eq!(ids, vec!["uuid-keep-1", "uuid-keep-2"]);
     }
 
-    /// A mode without a thinking suffix means `off`; the pinned override says
-    /// so, or the new topic would inherit the orchestrator override's level.
+    /// A mode button stores the `mode:<name>` reference. The topic then runs
+    /// the mode's own thinking level (suffixless means `off`), never the level
+    /// the chat or the orchestrator override would pass on.
     #[test]
-    fn mode_model_writes_out_the_mode_thinking_level() {
-        let mode = |primary: &str, thinking| ModelMode {
+    fn mode_model_keeps_the_mode_reference() {
+        let mode = ModelMode {
             name: "fast".to_string(),
             description: String::new(),
-            primary: primary.to_string(),
+            primary: "anthropic:claude-haiku".to_string(),
             alternatives: Vec::new(),
-            thinking,
+            thinking: ThinkingLevel::Off,
         };
-        assert_eq!(
-            mode_model(&mode("anthropic:claude-haiku", ThinkingLevel::Off)),
-            "anthropic:claude-haiku@off"
-        );
-        assert_eq!(
-            mode_model(&mode("anthropic:claude-opus@high", ThinkingLevel::High)),
-            "anthropic:claude-opus@high"
-        );
-        let (_, inherited) = zdx_engine::models::resolve_model_spec(
-            &mode_model(&mode("anthropic:claude-haiku", ThinkingLevel::Off)),
-            ThinkingLevel::High,
-        );
-        assert_eq!(inherited, ThinkingLevel::Off);
+        let reference = mode_model(&mode);
+        assert_eq!(reference, "mode:fast");
+
+        let mut config = Config {
+            model: "anthropic:claude-opus@high".to_string(),
+            thinking_level: ThinkingLevel::High,
+            model_modes: vec![mode],
+            ..Config::default()
+        };
+        config
+            .apply_thread_model_override(Some(&reference), None)
+            .unwrap();
+        assert_eq!(config.model, "anthropic:claude-haiku@off");
+        assert_eq!(config.thinking_level, ThinkingLevel::Off);
     }
 
     /// An orchestrator topic that could not be set up is deleted, so nothing

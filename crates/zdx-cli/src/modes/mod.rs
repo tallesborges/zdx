@@ -13,6 +13,7 @@ pub async fn run_interactive_chat(
     _config: &zdx_engine::config::Config,
     _thread_log: Option<zdx_engine::core::thread_persistence::Thread>,
     _root: std::path::PathBuf,
+    _model_selection: Option<&str>,
 ) -> anyhow::Result<()> {
     anyhow::bail!("TUI support is disabled in this build (feature \"tui\").");
 }

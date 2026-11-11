@@ -51,15 +51,19 @@ pub async fn run(
         .await;
     }
 
+    let root_path = PathBuf::from(root);
     let mut config = config.clone();
+    // Loaded from the process cwd; a mode means what `--root` defines, the
+    // layers the TUI reloads from.
+    let cwd = std::env::current_dir().context("determine current directory")?;
+    config.use_modes_of(&cwd, &root_path)?;
     if let Some(model) = model_override {
-        config.apply_model_spec(model);
+        config.apply_model_selection(model).context("-m")?;
     }
 
-    let root_path = PathBuf::from(root);
     let thread = thread_opts.resolve(&root_path).context("resolve thread")?;
 
-    modes::run_interactive_chat(&config, thread, root_path)
+    modes::run_interactive_chat(&config, thread, root_path, model_override)
         .await
         .context("interactive chat failed")?;
 

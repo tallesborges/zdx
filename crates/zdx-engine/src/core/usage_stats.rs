@@ -510,7 +510,13 @@ fn resolve_thread_buckets(
     scan: &ThreadUsageScan,
     default_model: Option<&str>,
 ) -> BTreeMap<(String, String, i32), RawBucket> {
-    let fallback_key = match (scan.model_override.as_deref(), default_model) {
+    // A `mode:<name>` override names no model: what it meant when the usage
+    // was recorded is unknown, so it gives no attribution of its own.
+    let thread_model = scan
+        .model_override
+        .as_deref()
+        .filter(|model| crate::config::mode_ref_name(model).is_none());
+    let fallback_key = match (thread_model, default_model) {
         (Some(model), _) | (None, Some(model)) => default_attribution(model),
         (None, None) => (UNATTRIBUTED_PROVIDER.to_string(), String::new()),
     };

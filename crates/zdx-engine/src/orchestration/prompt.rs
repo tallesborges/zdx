@@ -32,16 +32,19 @@ pub struct PreparedTurn {
 /// Model config a persistent-profile turn runs with: the base config, then
 /// the profile's model and `[subagents.overrides.<profile>]`, then the
 /// thread's own override (the bot's `/model`, or `--model` at creation).
-#[must_use]
+///
+/// # Errors
+/// Fails when the thread is kept on a mode the config does not define, so the
+/// turn never runs on another model in its place.
 pub fn turn_config(
     mut config: Config,
     definition: &SubagentDefinition,
     model_override: Option<&str>,
     thinking_override: Option<crate::config::ThinkingLevel>,
-) -> Config {
-    subagents::apply_persistent_profile_model(&mut config, definition);
-    config.apply_thread_model_override(model_override, thinking_override);
-    config
+) -> Result<Config> {
+    subagents::apply_persistent_profile_model(&mut config, definition)?;
+    config.apply_thread_model_override(model_override, thinking_override)?;
+    Ok(config)
 }
 
 /// Builds the system prompt and tool allowlist for one turn of `definition`.
@@ -367,7 +370,7 @@ mod tests {
         );
         assert_eq!(prepared.tools, vec!["read", "create_thread"]);
 
-        let config = turn_config(Config::default(), &definition, None, None);
+        let config = turn_config(Config::default(), &definition, None, None).unwrap();
         assert!(config.model.starts_with("sentinel:triage-model"));
         // The thread's own override wins.
         let config = turn_config(
@@ -375,8 +378,29 @@ mod tests {
             &definition,
             Some("sentinel:picked"),
             None,
-        );
+        )
+        .unwrap();
         assert!(config.model.starts_with("sentinel:picked"));
+        let err = turn_config(Config::default(), &definition, Some("mode:gone"), None).unwrap_err();
+        assert!(
+            crate::config::UnknownModeError::is_in(&err),
+            "a missing mode fails the turn: {err:#}"
+        );
+        // An explicit profile override naming an undefined mode fails too,
+        // instead of running the base config's model.
+        let mut config = Config::default();
+        config.subagents.overrides.insert(
+            definition.name.clone(),
+            crate::config::SubagentOverride {
+                model: Some("mode:gone".to_string()),
+                thinking_level: None,
+            },
+        );
+        let err = turn_config(config, &definition, None, None).unwrap_err();
+        assert!(
+            format!("{err:#}").contains(&format!("subagent '{}' override model", definition.name)),
+            "{err:#}"
+        );
     }
 
     #[test]

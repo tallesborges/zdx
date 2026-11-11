@@ -836,6 +836,44 @@ pub fn mode_ref_name(value: &str) -> Option<&str> {
         .then(|| trimmed[MODE_REF_PREFIX.len()..].trim())
 }
 
+/// A `mode:<name>` selection naming no configured `[[model_modes]]` entry.
+///
+/// Explicit selections (a config `model`, a thread's or worker's stored
+/// selection, `-m`, a job's `model:`) fail with this instead of running the
+/// default, which may be another provider or account.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownModeError {
+    /// The selection as given, e.g. `mode:smart`.
+    pub selection: String,
+    /// Mode names configured where it was resolved.
+    pub configured: Vec<String>,
+}
+
+impl std::fmt::Display for UnknownModeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "`{}` names no configured model mode", self.selection)?;
+        if self.configured.is_empty() {
+            write!(f, " (no modes are configured here)")?;
+        } else {
+            write!(f, " (configured: {})", self.configured.join(", "))?;
+        }
+        write!(
+            f,
+            "; pick a configured mode or a model id, or define the mode in [[model_modes]]"
+        )
+    }
+}
+
+impl std::error::Error for UnknownModeError {}
+
+impl UnknownModeError {
+    /// Whether `err`, or any error it wraps, is an [`UnknownModeError`].
+    #[must_use]
+    pub fn is_in(err: &anyhow::Error) -> bool {
+        err.chain().any(<dyn std::error::Error>::is::<Self>)
+    }
+}
+
 /// A named model tier (`fast`, `smart`, `ultra`, …) referenced across surfaces.
 ///
 /// `primary` is the spec actually run; `alternatives` are equivalent picks at
@@ -881,7 +919,7 @@ impl ModelMode {
     /// This mode as a `mode:<name>` reference.
     #[must_use]
     pub fn as_ref_spec(&self) -> String {
-        format!("{MODE_REF_PREFIX}{}", self.name)
+        format!("{MODE_REF_PREFIX}{}", self.name.trim())
     }
 }
 
@@ -1043,6 +1081,12 @@ pub struct Config {
     #[serde(skip)]
     pub thinking_level: ThinkingLevel,
 
+    /// Name of the `[[model_modes]]` entry `model` was resolved from, when the
+    /// selection is a `mode:<name>` reference. Not a config key: TOML holds
+    /// the reference in `model`, and `model` here holds the resolved spec.
+    #[serde(skip)]
+    pub model_mode: Option<String>,
+
     /// Named model tiers (`fast`, `smart`, `ultra`, …) cycled with Tab in the
     /// TUI and referenced elsewhere as `mode:<name>`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1086,30 +1130,184 @@ pub struct Config {
 }
 
 impl Config {
-    /// Applies a runtime model override while keeping the model string and its
-    /// parsed thinking projection in sync. A suffixless override inherits the
-    /// currently effective thinking level.
+    /// Applies a runtime model selection while keeping the model string and
+    /// its parsed thinking projection in sync. A suffixless spec inherits the
+    /// currently effective thinking level. A `mode:<name>` reference resolves
+    /// against this config's `[[model_modes]]` and records the mode, so the
+    /// selection can be persisted as the reference; an unknown mode is logged
+    /// and leaves the current selection in place.
     pub fn apply_model_spec(&mut self, model: &str) {
-        let (model, thinking_level) = crate::models::resolve_model_spec(model, self.thinking_level);
+        if let Err(err) = self.apply_model_selection(model) {
+            tracing::warn!(err = %err, "keeping the current model");
+        }
+    }
+
+    /// Applies an explicit model selection: a spec, or a `mode:<name>`
+    /// reference that must name a configured mode. Unlike
+    /// [`Self::apply_model_spec`], an unknown mode is an error, so a selection
+    /// never silently runs some other model (and so another account).
+    ///
+    /// # Errors
+    /// Returns [`UnknownModeError`] when the reference names no configured
+    /// mode; the config is left unchanged then.
+    pub fn apply_model_selection(&mut self, model: &str) -> Result<(), UnknownModeError> {
+        match self.apply_mode_ref(model) {
+            Some(Ok(())) => Ok(()),
+            Some(Err(_)) => Err(self.unknown_mode(model)),
+            None => {
+                let (model, thinking_level) =
+                    crate::models::resolve_model_spec(model, self.thinking_level);
+                self.model = model;
+                self.thinking_level = thinking_level;
+                self.model_mode = None;
+                Ok(())
+            }
+        }
+    }
+
+    /// Makes `mode:<name>` mean what the workspace at `run_root` defines, when
+    /// this config was loaded from the layers of `loaded_from` and the two
+    /// differ (a thread stored in one project and resumed from another chat,
+    /// cwd, or submitter). Only the mode list changes, plus a default that is
+    /// itself a mode, which is resolved again against the new list.
+    ///
+    /// # Errors
+    /// Fails when the run root's layers do not load, or when a mode default
+    /// names a mode the run root does not define.
+    pub fn use_modes_of(&mut self, loaded_from: &Path, run_root: &Path) -> Result<()> {
+        let layers = paths::config_layer_paths_for(run_root);
+        if layers == paths::config_layer_paths_for(loaded_from) {
+            return Ok(());
+        }
+        let run_config = Self::load_layered(&layers)
+            .with_context(|| format!("load the model modes of {}", run_root.display()))?;
+        self.model_modes = run_config.model_modes;
+        if let Some(reference) = self.mode_selection() {
+            self.apply_model_selection(&reference)
+                .map_err(anyhow::Error::new)
+                .with_context(|| format!("default model for {}", run_root.display()))?;
+        }
+        Ok(())
+    }
+
+    /// The concrete spec (thinking inline) a selection runs with this config:
+    /// a mode resolves to its primary. `None` for a mode it does not define.
+    #[must_use]
+    pub fn selection_spec(&self, selection: &str) -> Option<String> {
+        let mut probe = self.clone();
+        probe.apply_model_selection(selection).ok()?;
+        Some(crate::models::format_model_thinking(
+            &probe.model,
+            probe.thinking_level,
+        ))
+    }
+
+    /// Checks that a selection can run with this config without applying it:
+    /// a `mode:<name>` must name a configured mode; a spec always passes.
+    ///
+    /// # Errors
+    /// Returns [`UnknownModeError`] for a reference to an undefined mode.
+    pub fn check_model_selection(&self, model: &str) -> Result<(), UnknownModeError> {
+        match self.find_mode(model) {
+            Some(Err(_)) => Err(self.unknown_mode(model)),
+            _ => Ok(()),
+        }
+    }
+
+    fn unknown_mode(&self, selection: &str) -> UnknownModeError {
+        UnknownModeError {
+            selection: selection.trim().to_string(),
+            configured: self
+                .model_modes
+                .iter()
+                .map(|mode| mode.name.trim().to_string())
+                .collect(),
+        }
+    }
+
+    /// Resolves a `mode:<name>` reference to that mode's primary and makes it
+    /// the active selection. The mode's own `@<level>` sets the thinking level
+    /// (suffixless means `off`), never the level currently in effect.
+    ///
+    /// Returns `None` when `value` is not a reference, `Some(Err(name))` when
+    /// no configured mode has that name (nothing changes then).
+    fn apply_mode_ref(&mut self, value: &str) -> Option<Result<(), String>> {
+        let mode = match self.find_mode(value)? {
+            Ok(mode) => mode,
+            Err(name) => return Some(Err(name.to_string())),
+        };
+        let (model, thinking_level) =
+            crate::models::resolve_model_spec(&mode.primary, mode.thinking);
+        let mode_name = mode.name.trim().to_string();
         self.model = model;
         self.thinking_level = thinking_level;
+        self.model_mode = Some(mode_name);
+        Some(Ok(()))
+    }
+
+    /// The active selection as it is persisted: `mode:<name>` when it came
+    /// from a mode reference, otherwise the concrete spec with its thinking
+    /// level inline.
+    #[must_use]
+    pub fn model_selection(&self) -> String {
+        self.mode_selection().unwrap_or_else(|| {
+            crate::models::format_model_thinking(&self.model, self.thinking_level)
+        })
+    }
+
+    /// The active selection as a `mode:<name>` reference, when it is one.
+    #[must_use]
+    pub fn mode_selection(&self) -> Option<String> {
+        self.model_mode
+            .as_deref()
+            .map(|name| format!("{MODE_REF_PREFIX}{name}"))
+    }
+
+    /// The active model for display: `mode:<name> → <spec>` for a mode
+    /// selection, so a surface shows both the tier and what it runs now.
+    #[must_use]
+    pub fn model_label(&self) -> String {
+        match self.mode_selection() {
+            Some(reference) => format!("{reference} → {}", self.model),
+            None => self.model.clone(),
+        }
+    }
+
+    /// Serializes the config as JSON with `model` holding the selection as
+    /// written (`mode:<name>` for a mode selection), not the resolved spec.
+    ///
+    /// # Errors
+    /// Returns an error if serialization fails.
+    pub fn to_json_value(&self) -> serde_json::Result<serde_json::Value> {
+        let mut json = serde_json::to_value(self)?;
+        if let (Some(reference), Some(object)) = (self.mode_selection(), json.as_object_mut()) {
+            object.insert("model".to_string(), serde_json::Value::String(reference));
+        }
+        Ok(json)
     }
 
     /// Applies persisted thread selection fields. `thinking_override` is a
     /// legacy transcript field and remains authoritative when present so old
     /// threads resume with their historical behavior.
+    ///
+    /// # Errors
+    /// Returns [`UnknownModeError`] when the thread is kept on a mode this
+    /// config does not define; the config is left unchanged then, and a turn
+    /// must not run on it.
     pub fn apply_thread_model_override(
         &mut self,
         model_override: Option<&str>,
         thinking_override: Option<ThinkingLevel>,
-    ) {
+    ) -> Result<(), UnknownModeError> {
         if let Some(model) = model_override {
-            self.apply_model_spec(model);
+            self.apply_model_selection(model)?;
         }
         if let Some(level) = thinking_override {
             self.model = crate::models::format_model_thinking(&self.model, level);
             self.thinking_level = level;
+            self.model_mode = None;
         }
+        Ok(())
     }
 
     const DEFAULT_MODEL: &str = "claude-haiku-5-5";
@@ -1147,13 +1345,12 @@ impl Config {
         Self::load_layered(&paths::config_layer_paths())
     }
 
-    /// Name of the mode whose primary matches the active model + thinking.
+    /// Name of the active mode: set only when the selection is a
+    /// `mode:<name>` reference. A concrete pin that happens to equal a mode's
+    /// primary is not that mode: it does not follow later edits to it.
     #[must_use]
     pub fn active_mode_name(&self) -> Option<&str> {
-        self.model_modes
-            .iter()
-            .find(|mode| mode.matches(&self.model, self.thinking_level))
-            .map(|mode| mode.name.as_str())
+        self.model_mode.as_deref()
     }
 
     /// Resolves a `mode:<name>` reference to that mode's primary spec.
@@ -1162,12 +1359,21 @@ impl Config {
     /// it references a mode that is not configured.
     #[must_use]
     pub fn resolve_mode_ref<'a>(&'a self, value: &'a str) -> Option<Result<&'a str, &'a str>> {
+        self.find_mode(value)
+            .map(|found| found.map(|mode| mode.primary.as_str()))
+    }
+
+    /// The configured mode a `mode:<name>` reference names.
+    ///
+    /// Returns `None` when `value` is not a reference, `Some(Err(name))` when
+    /// it references a mode that is not configured.
+    #[must_use]
+    pub fn find_mode<'a>(&'a self, value: &'a str) -> Option<Result<&'a ModelMode, &'a str>> {
         let name = mode_ref_name(value)?;
         Some(
             self.model_modes
                 .iter()
                 .find(|mode| mode.name.trim().eq_ignore_ascii_case(name))
-                .map(|mode| mode.primary.as_str())
                 .ok_or(name),
         )
     }
@@ -1420,7 +1626,7 @@ impl Config {
     /// Returns an error if a layer cannot be read or parsed, or if the merged
     /// document does not deserialize into a valid config.
     pub fn load_layered(layers: &[PathBuf]) -> Result<Self> {
-        Self::load_layered_impl(layers, None)
+        Self::load_layered_impl(layers, None, true)
     }
 
     /// Loads the same config as [`Self::load_layered`], also recording explicit
@@ -1431,13 +1637,29 @@ impl Config {
     /// document does not deserialize into a valid config.
     pub fn load_layered_with_sources(layers: &[PathBuf]) -> Result<(Self, ConfigSources)> {
         let mut sources = ConfigSources::default();
-        let config = Self::load_layered_impl(layers, Some(&mut sources))?;
+        let config = Self::load_layered_impl(layers, Some(&mut sources), true)?;
+        Ok((config, sources))
+    }
+
+    /// Like [`Self::load_layered_with_sources`] but leaves a `mode:<name>`
+    /// default unresolved (`model` keeps the reference) instead of failing
+    /// when the layers do not define that mode. Only for reporting what a
+    /// subset of layers says, never for running a turn.
+    ///
+    /// # Errors
+    /// As [`Self::load_layered_with_sources`], minus the undefined-mode check.
+    pub fn load_layered_with_sources_unresolved(
+        layers: &[PathBuf],
+    ) -> Result<(Self, ConfigSources)> {
+        let mut sources = ConfigSources::default();
+        let config = Self::load_layered_impl(layers, Some(&mut sources), false)?;
         Ok((config, sources))
     }
 
     fn load_layered_impl(
         layers: &[PathBuf],
         mut sources: Option<&mut ConfigSources>,
+        resolve_mode_default: bool,
     ) -> Result<Self> {
         use toml_edit::DocumentMut;
 
@@ -1468,10 +1690,15 @@ impl Config {
 
         tracing::debug!(layers = %applied.join(", "), "Loaded config layers");
 
-        Self::parse_config(&merged.to_string()).context("Failed to parse merged config")
+        Self::parse_config_with(&merged.to_string(), resolve_mode_default)
+            .context("Failed to parse merged config")
     }
 
     fn parse_config(contents: &str) -> Result<Self> {
+        Self::parse_config_with(contents, true)
+    }
+
+    fn parse_config_with(contents: &str, resolve_mode_default: bool) -> Result<Self> {
         let document: toml::Value = toml::from_str(contents)?;
         reject_removed_thinking_keys(&document)?;
         reject_removed_favorites(&document)?;
@@ -1486,10 +1713,22 @@ impl Config {
                 .as_deref()
                 .and_then(|model| crate::models::ModelSpec::parse(model).thinking);
         }
-        for mode in &mut config.model_modes {
+        for (index, mode) in config.model_modes.iter_mut().enumerate() {
+            if mode_ref_name(&mode.primary).is_some() {
+                bail!(
+                    "model_modes[{index}].primary must name a model, not another mode: {:?}",
+                    mode.primary
+                );
+            }
             mode.thinking = crate::models::ModelSpec::parse(&mode.primary)
                 .thinking
                 .unwrap_or_default();
+        }
+        // A `mode:<name>` default resolves against the merged mode list, so a
+        // workspace that redefines a mode runs its own model for it.
+        let selection = config.model.clone();
+        if resolve_mode_default && let Some(Err(_)) = config.apply_mode_ref(&selection) {
+            return Err(anyhow::Error::new(config.unknown_mode(&selection)).context("model"));
         }
         Ok(config)
     }
@@ -2007,6 +2246,7 @@ impl Default for Config {
             tldr_model: Self::DEFAULT_TLDR_MODEL.to_string(),
             prompt_builder_model: Self::DEFAULT_PROMPT_BUILDER_MODEL.to_string(),
             thinking_level: ThinkingLevel::default(),
+            model_mode: None,
             model_modes: Vec::new(),
             skills: SkillsConfig::default(),
             subagents: SubagentsConfig::default(),
@@ -4180,40 +4420,28 @@ primary = "anthropic:claude-opus-4-6"
         }
     }
 
-    /// Modes: `active_mode_name` matches the active model + thinking, treating
-    /// bare and prefixed model ids as equivalent.
+    /// Modes: `active_mode_name` names a mode only for a `mode:<name>`
+    /// selection. A concrete pin equal to a mode's primary (bare or prefixed)
+    /// is not that mode.
     #[test]
     fn test_active_mode_name() {
-        let config = Config {
+        let mut config = Config {
             model: "anthropic:claude-sonnet-4-6".to_string(),
             thinking_level: ThinkingLevel::High,
-            model_modes: vec![
-                ModelMode {
-                    name: "smart".to_string(),
-                    description: "deep work".to_string(),
-                    // bare id should still match the prefixed active model
-                    primary: "claude-sonnet-4-6".to_string(),
-                    alternatives: Vec::new(),
-                    thinking: ThinkingLevel::High,
-                },
-                ModelMode {
-                    name: "ultra".to_string(),
-                    description: "hardest tasks".to_string(),
-                    primary: "anthropic:claude-opus-4-6".to_string(),
-                    alternatives: Vec::new(),
-                    thinking: ThinkingLevel::Off,
-                },
-            ],
+            model_modes: vec![ModelMode {
+                name: "smart".to_string(),
+                description: "deep work".to_string(),
+                primary: "claude-sonnet-4-6@high".to_string(),
+                alternatives: Vec::new(),
+                thinking: ThinkingLevel::High,
+            }],
             ..Default::default()
         };
-        assert_eq!(config.active_mode_name(), Some("smart"));
-
-        // Same model but a different thinking level matches no mode.
-        let config = Config {
-            thinking_level: ThinkingLevel::Off,
-            ..config
-        };
+        assert!(config.model_modes[0].matches(&config.model, config.thinking_level));
         assert_eq!(config.active_mode_name(), None);
+
+        config.apply_model_selection("mode:smart").unwrap();
+        assert_eq!(config.active_mode_name(), Some("smart"));
     }
 
     /// `resolve_mode_ref`: only `mode:` values are refs; lookup is
@@ -4241,6 +4469,158 @@ primary = "anthropic:claude-opus-4-6"
             Some(Ok("gemini:flash@low"))
         );
         assert_eq!(config.resolve_mode_ref("mode:nope"), Some(Err("nope")));
+    }
+
+    /// A `mode:<name>` default resolves against the merged mode list, so a
+    /// workspace overlay that redefines the mode runs its own primary, while
+    /// `model` still reports the reference.
+    #[test]
+    fn mode_default_resolves_against_the_workspace_modes() {
+        let dir = tempdir().unwrap();
+        let global = dir.path().join("global.toml");
+        let overlay = dir.path().join("overlay.toml");
+        fs::write(
+            &global,
+            "model = \"mode:smart\"\n[[model_modes]]\nname = \"smart\"\nprimary = \"global:big@high\"\n",
+        )
+        .unwrap();
+        fs::write(
+            &overlay,
+            "[[model_modes]]\nname = \"Smart\"\nprimary = \"work:big\"\n",
+        )
+        .unwrap();
+
+        let config = Config::load_layered(std::slice::from_ref(&global)).unwrap();
+        assert_eq!(config.model, "global:big@high");
+        assert_eq!(config.thinking_level, ThinkingLevel::High);
+        assert_eq!(config.model_selection(), "mode:smart");
+        assert_eq!(config.model_label(), "mode:smart → global:big@high");
+        assert_eq!(config.to_json_value().unwrap()["model"], "mode:smart");
+
+        let config = Config::load_layered(&[global, overlay]).unwrap();
+        assert_eq!(
+            config.model, "work:big@off",
+            "a suffixless mode primary means off, not the level in effect"
+        );
+        assert_eq!(config.model_selection(), "mode:Smart");
+    }
+
+    /// `use_modes_of` makes a mode mean what the run root's workspace defines
+    /// when the config came from other layers; a mode only the loading
+    /// workspace defines does not resolve there.
+    #[test]
+    fn use_modes_of_resolves_modes_in_the_run_root() {
+        let home = crate::test_support::temp_zdx_home();
+        let personal = tempdir().unwrap();
+        let work = tempdir().unwrap();
+        fs::write(
+            home.path().join("config.toml"),
+            "[[model_modes]]\nname = \"smart\"\nprimary = \"personal:big@high\"\n\
+             [[model_modes]]\nname = \"fast\"\nprimary = \"personal:small@low\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(work.path().join(".zdx")).unwrap();
+        fs::write(
+            work.path().join(".zdx/config.toml"),
+            "[[model_modes]]\nname = \"smart\"\nprimary = \"work:big@high\"\n",
+        )
+        .unwrap();
+
+        let mut config =
+            Config::load_layered(&paths::config_layer_paths_for(personal.path())).unwrap();
+        config
+            .use_modes_of(personal.path(), personal.path())
+            .unwrap();
+        config
+            .apply_thread_model_override(Some("mode:smart"), None)
+            .unwrap();
+        assert_eq!(config.model, "personal:big@high");
+
+        let mut config =
+            Config::load_layered(&paths::config_layer_paths_for(personal.path())).unwrap();
+        config.use_modes_of(personal.path(), work.path()).unwrap();
+        config
+            .apply_thread_model_override(Some("mode:smart"), None)
+            .unwrap();
+        assert_eq!(config.model, "work:big@high");
+        assert!(
+            config
+                .apply_thread_model_override(Some("mode:fast"), None)
+                .is_err(),
+            "the work root defines no `fast`"
+        );
+    }
+
+    /// A default naming no configured mode fails loudly instead of running
+    /// some other model.
+    #[test]
+    fn mode_default_naming_no_mode_fails_to_load() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "model = \"mode:missing\"\n").unwrap();
+        let err = Config::load_layered(&[path]).unwrap_err();
+        assert!(UnknownModeError::is_in(&err), "{err:#}");
+        assert!(format!("{err:#}").contains("`mode:missing`"), "{err:#}");
+    }
+
+    /// Selections: a mode reference records the mode and its own level; a
+    /// later concrete spec clears it; an unknown mode changes nothing.
+    #[test]
+    fn apply_model_spec_tracks_mode_selections() {
+        let mut config = Config {
+            model: "base:model@medium".to_string(),
+            thinking_level: ThinkingLevel::Medium,
+            model_modes: vec![ModelMode {
+                name: "fast".to_string(),
+                description: String::new(),
+                primary: "quick:model@low".to_string(),
+                alternatives: Vec::new(),
+                thinking: ThinkingLevel::Low,
+            }],
+            ..Default::default()
+        };
+
+        config.apply_model_spec("mode:nope");
+        assert_eq!(config.model, "base:model@medium");
+        assert_eq!(config.model_mode, None);
+        let err = config.apply_model_selection(" mode:nope ").unwrap_err();
+        assert_eq!(err.selection, "mode:nope");
+        assert_eq!(err.configured, vec!["fast".to_string()]);
+        assert!(err.to_string().contains("configured: fast"), "{err}");
+        let err = config
+            .apply_thread_model_override(Some("mode:nope"), None)
+            .unwrap_err();
+        assert_eq!(err.selection, "mode:nope");
+        assert_eq!(
+            config.model, "base:model@medium",
+            "a failed selection changes nothing"
+        );
+
+        config
+            .apply_thread_model_override(Some("MODE:Fast"), None)
+            .unwrap();
+        assert_eq!(config.model, "quick:model@low");
+        assert_eq!(config.thinking_level, ThinkingLevel::Low);
+        assert_eq!(config.model_selection(), "mode:fast");
+        assert_eq!(config.active_mode_name(), Some("fast"));
+
+        config.apply_model_spec("other:model");
+        assert_eq!(config.model_mode, None);
+        assert_eq!(config.model_selection(), "other:model@low");
+    }
+
+    /// A mode primary must name a model; a reference there cannot resolve.
+    #[test]
+    fn mode_primary_cannot_reference_a_mode() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            "[[model_modes]]\nname = \"a\"\nprimary = \"mode:b\"\n",
+        )
+        .unwrap();
+        let err = format!("{:#}", Config::load_from(&path).unwrap_err());
+        assert!(err.contains("model_modes[0].primary"), "{err}");
     }
 
     #[test]

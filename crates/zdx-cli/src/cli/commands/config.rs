@@ -48,7 +48,19 @@ pub fn workspaces(json: bool) -> Result<()> {
             println!("  error: {error}");
         }
         for setting in &report.settings {
-            let value = setting.value.as_deref().unwrap_or("(default)");
+            let mut value = setting.value.as_deref().unwrap_or("(default)").to_string();
+            if setting
+                .value
+                .as_deref()
+                .is_some_and(|value| config::mode_ref_name(value).is_some())
+            {
+                match &setting.resolves_to {
+                    Some(spec) => {
+                        let _ = write!(value, " → {spec}");
+                    }
+                    None => value.push_str(" (mode not configured)"),
+                }
+            }
             let mut line = format!("  {:<40} {value}  [{}]", setting.key, setting.source.label);
             if setting.overridden_here() {
                 let inherited = setting.inherited_value.as_deref().unwrap_or("(default)");
@@ -77,7 +89,12 @@ fn resolve_target_path(local: bool) -> Result<PathBuf> {
 
 pub fn get(key: Option<&str>, json: bool) -> Result<()> {
     let config = config::Config::load().context("load configuration")?;
-    let toml_val = toml::Value::try_from(&config).context("serialize configuration to toml")?;
+    let mut toml_val = toml::Value::try_from(&config).context("serialize configuration to toml")?;
+    // `model` reports the selection as written: a `mode:<name>` default stays
+    // the reference instead of the spec it resolves to today.
+    if let (Some(reference), Some(table)) = (config.mode_selection(), toml_val.as_table_mut()) {
+        table.insert("model".to_string(), toml::Value::String(reference));
+    }
 
     if let Some(raw_key) = key {
         let parts = parse_key_path(raw_key)?;
@@ -134,7 +151,7 @@ pub fn get(key: Option<&str>, json: bool) -> Result<()> {
             }
         }
     } else if json {
-        let json_val = serde_json::to_value(&config)?;
+        let json_val = config.to_json_value()?;
         println!("{}", serde_json::to_string_pretty(&json_val)?);
     } else {
         let s = toml::to_string_pretty(&toml_val)?;

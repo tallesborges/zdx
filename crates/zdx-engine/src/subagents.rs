@@ -575,18 +575,42 @@ pub fn load_builtin_orchestrator() -> Result<SubagentDefinition> {
 /// never sees this entry; surfaces that run the profile call this instead.
 /// Same semantics as other overrides: the model replaces the chat's model and
 /// the thinking level follows the override's `@level` suffix when present.
-/// A `mode:<name>` override resolves to that mode's primary spec first, so the
-/// profile runs — and reports — a real model id; an unknown mode is logged and
-/// leaves the chat's model in place.
-pub fn apply_orchestrator_override(config: &mut crate::config::Config) {
+/// A `mode:<name>` override resolves to that mode's primary (and its level).
+///
+/// # Errors
+/// Fails when the override names a mode the config does not define; the
+/// config is left unchanged then, and the profile must not run on it.
+pub fn apply_orchestrator_override(config: &mut crate::config::Config) -> Result<()> {
     let model = config
         .subagents
         .overrides
         .get(ORCHESTRATOR_SUBAGENT_NAME)
         .and_then(|over| over.model.clone());
-    if let Some(model) = model {
-        apply_model_ref(config, &model);
+    match model {
+        Some(model) => apply_subagent_model(config, ORCHESTRATOR_SUBAGENT_NAME, "override", &model),
+        None => Ok(()),
     }
+}
+
+/// Applies one explicit subagent model layer (frontmatter `model:`,
+/// `[subagents.overrides.<name>].model`, or a per-call model): a spec, or a
+/// `mode:<name>` that must name a configured mode. An absent layer is simply
+/// not applied by the caller, so it inherits; an invalid one is an error that
+/// names the subagent and the layer, never a fall-through to another model.
+///
+/// # Errors
+/// Returns [`crate::config::UnknownModeError`] (with context) for a mode the
+/// config does not define.
+pub fn apply_subagent_model(
+    config: &mut crate::config::Config,
+    subagent: &str,
+    source: &str,
+    model: &str,
+) -> Result<()> {
+    config
+        .apply_model_selection(model)
+        .map_err(anyhow::Error::new)
+        .with_context(|| format!("subagent '{subagent}' {source} model"))
 }
 
 /// Loads a persistent top-level profile: the reserved built-in `orchestrator`,
@@ -616,12 +640,15 @@ pub fn load_persistent_profile(root: &Path, name: &str) -> Result<SubagentDefini
 /// the profile's own `model`, then `[subagents.overrides.<name>]`. For the
 /// built-in orchestrator, which declares no model, this is exactly
 /// [`apply_orchestrator_override`].
+///
+/// # Errors
+/// Fails when either layer names a mode the config does not define.
 pub fn apply_persistent_profile_model(
     config: &mut crate::config::Config,
     definition: &SubagentDefinition,
-) {
+) -> Result<()> {
     if let Some(model) = definition.model.clone() {
-        apply_model_ref(config, &model);
+        apply_subagent_model(config, &definition.name, "definition", &model)?;
     }
     let model = config
         .subagents
@@ -629,26 +656,9 @@ pub fn apply_persistent_profile_model(
         .get(&definition.name)
         .and_then(|over| over.model.clone());
     if let Some(model) = model {
-        apply_model_ref(config, &model);
+        apply_subagent_model(config, &definition.name, "override", &model)?;
     }
-}
-
-/// Applies a model spec or `mode:<name>` reference. A mode resolves to its
-/// primary spec first, so the profile runs (and reports) a real model id; an
-/// unknown mode is logged and leaves the current model in place.
-fn apply_model_ref(config: &mut crate::config::Config, model: &str) {
-    let spec = match config.resolve_mode_ref(model) {
-        None => model.to_string(),
-        Some(Ok(primary)) => primary.to_string(),
-        Some(Err(name)) => {
-            tracing::warn!(
-                mode = name,
-                "profile model names an unknown model mode; keeping the current model"
-            );
-            return;
-        }
-    };
-    config.apply_model_spec(&spec);
+    Ok(())
 }
 
 fn oracle_capability(root: &Path) -> Result<CapabilityDescriptor> {
@@ -1134,12 +1144,12 @@ mod tests {
             "claude-cli:fable@low",
             Some(ThinkingLevel::Low),
         );
-        apply_orchestrator_override(&mut config);
+        apply_orchestrator_override(&mut config).unwrap();
         assert_eq!(config.model, "claude-cli:fable@low");
         assert_eq!(config.thinking_level, ThinkingLevel::Low);
 
         let mut config = with_override(ORCHESTRATOR_SUBAGENT_NAME, "claude-cli:fable", None);
-        apply_orchestrator_override(&mut config);
+        apply_orchestrator_override(&mut config).unwrap();
         assert_eq!(config.model, "claude-cli:fable@high");
         assert_eq!(
             config.thinking_level,
@@ -1148,15 +1158,16 @@ mod tests {
         );
 
         let mut config = with_override("explorer", "gemini:flash@low", Some(ThinkingLevel::Low));
-        apply_orchestrator_override(&mut config);
+        apply_orchestrator_override(&mut config).unwrap();
         assert_eq!(
             config.model, "claude-cli:opus@high",
             "other overrides are ignored"
         );
     }
 
-    /// A `mode:<name>` orchestrator override runs (and reports) the mode's
-    /// primary spec, never the raw reference. An unknown mode is ignored.
+    /// A `mode:<name>` orchestrator override runs the mode's primary, resolved
+    /// from the config at hand each time. An unknown mode is an error that
+    /// leaves the config unchanged.
     #[test]
     fn orchestrator_override_resolves_a_model_mode_reference() {
         let mode = crate::config::ModelMode {
@@ -1184,20 +1195,31 @@ mod tests {
         };
 
         let mut config = with_ref("mode:smart");
-        apply_orchestrator_override(&mut config);
+        apply_orchestrator_override(&mut config).unwrap();
         assert_eq!(config.model, "claude-cli:claude-opus-5@high");
         assert_eq!(config.thinking_level, ThinkingLevel::High);
 
         // A later thread override still layers on top, as it does for a spec.
-        config.apply_thread_model_override(None, Some(ThinkingLevel::XHigh));
+        config
+            .apply_thread_model_override(None, Some(ThinkingLevel::XHigh))
+            .unwrap();
         assert_eq!(config.model, "claude-cli:claude-opus-5@xhigh");
 
         let mut config = with_ref("mode:nope");
-        apply_orchestrator_override(&mut config);
-        assert_eq!(
-            config.model, "gemini:flash@low",
-            "an unknown mode leaves the chat's model in place"
+        let err = apply_orchestrator_override(&mut config).unwrap_err();
+        assert!(crate::config::UnknownModeError::is_in(&err), "{err:#}");
+        assert!(
+            format!("{err:#}").contains("subagent 'orchestrator' override"),
+            "{err:#}"
         );
+        assert_eq!(config.model, "gemini:flash@low", "nothing changes on error");
+
+        // An edited mode is what the next application resolves to.
+        let mut config = with_ref("mode:smart");
+        config.model_modes[0].primary = "claude-cli:claude-sonnet-5@low".to_string();
+        config.model_modes[0].thinking = ThinkingLevel::Low;
+        apply_orchestrator_override(&mut config).unwrap();
+        assert_eq!(config.model, "claude-cli:claude-sonnet-5@low");
     }
 
     #[test]

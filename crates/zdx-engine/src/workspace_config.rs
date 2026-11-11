@@ -229,6 +229,10 @@ pub struct Setting {
     pub kind: SettingKind,
     /// Effective value; `None` when unset (the runtime default applies).
     pub value: Option<String>,
+    /// For a `mode:<name>` value: the model spec that mode resolves to in
+    /// this workspace now, or `None` when no such mode is configured here.
+    /// Always `None` for any other value.
+    pub resolves_to: Option<String>,
     pub source: Source,
     /// Value without this workspace's own overlay: what resetting the
     /// workspace layer resolves to.
@@ -336,15 +340,26 @@ pub fn settings_from_layers(
         .filter(|path| path.as_path() != own)
         .cloned()
         .collect();
-    let (inherited, inherited_sources) = Config::load_layered_with_sources(&inherited_layers)?;
+    // The inherited view is hypothetical: without this overlay, a `mode:<name>`
+    // default may name a mode only the overlay defines. Report the reference
+    // instead of failing the whole (valid) workspace.
+    let (inherited, inherited_sources) =
+        Config::load_layered_with_sources_unresolved(&inherited_layers)?;
 
     let effective = Resolved::new(&config, &sources)?;
     let base = Resolved::new(&inherited, &inherited_sources)?;
 
     let mut settings = Vec::new();
     for (key, group, label, kind) in setting_defs(scope, &config, &inherited) {
+        let value = effective.value(&key);
+        let resolves_to = value
+            .as_deref()
+            .and_then(|value| config.resolve_mode_ref(value))
+            .and_then(Result::ok)
+            .map(str::to_string);
         settings.push(Setting {
-            value: effective.value(&key),
+            value,
+            resolves_to,
             source: Source::classify(effective.sources.source(&key), global, own),
             inherited_value: base.value(&key),
             inherited_source: Source::classify(base.sources.source(&key), global, own),
@@ -367,7 +382,7 @@ impl<'a> Resolved<'a> {
     fn new(config: &'a Config, sources: &'a ConfigSources) -> Result<Self> {
         Ok(Self {
             config,
-            json: serde_json::to_value(config).context("serialize config")?,
+            json: config.to_json_value().context("serialize config")?,
             sources,
         })
     }
@@ -785,6 +800,30 @@ mod tests {
 
         let tldr = setting(&settings, "tldr_model");
         assert_eq!(tldr.source.layer, Layer::Default);
+    }
+
+    /// A mode default reports the reference plus what it resolves to here.
+    /// The inherited view may name a mode only this overlay defines; that
+    /// keeps the reference instead of failing the whole valid workspace.
+    #[test]
+    fn mode_values_report_their_resolution_and_survive_inherited_gaps() {
+        let (_dir, global, _parent, workspace) = fixture();
+        fs::write(&global, "model = \"mode:smart\"\n").unwrap();
+        fs::create_dir_all(workspace.overlay_path.parent().unwrap()).unwrap();
+        fs::write(
+            &workspace.overlay_path,
+            "[[model_modes]]\nname = \"smart\"\nprimary = \"work:big@high\"\n",
+        )
+        .unwrap();
+        let layers = vec![global.clone(), workspace.overlay_path.clone()];
+
+        let settings =
+            settings_from_layers(Scope::Workspace(&workspace), &layers, &global).unwrap();
+        let model = setting(&settings, "model");
+        assert_eq!(model.value.as_deref(), Some("mode:smart"));
+        assert_eq!(model.resolves_to.as_deref(), Some("work:big@high"));
+        assert_eq!(model.inherited_value.as_deref(), Some("mode:smart"));
+        assert_eq!(setting(&settings, "title_model").resolves_to, None);
     }
 
     #[test]

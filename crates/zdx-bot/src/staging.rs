@@ -744,6 +744,9 @@ async fn seed_new_topic(
     profile: Option<&str>,
     model_override: Option<String>,
 ) -> Result<SeededTopic> {
+    // The new topic's model comes from this chat's config: refuse before
+    // creating anything when that config does not load.
+    context.checked_config_for_chat(chat_id)?;
     let topic_name = chrono::Utc::now()
         .format(&format!("{topic_prefix} %Y-%m-%d %H:%M"))
         .to_string();
@@ -752,18 +755,20 @@ async fn seed_new_topic(
     } else {
         topic_name
     };
+    // Without a pick, a model is pinned only when the source pinned one; an
+    // unpinned topic resolves its role's default on every turn, which is the
+    // same model `new_topic_model` reports. A starting profile model that
+    // does not resolve opens nothing.
+    let new_model = match model_override {
+        Some(model) => Some(model),
+        None => new_topic_model(context, chat_id, source_thread_id, profile)
+            .pinned_selection()
+            .map_err(|err| anyhow::anyhow!("{err}"))?,
+    };
     let new_topic_id = context
         .client()
         .create_forum_topic(chat_id, &topic_name)
         .await?;
-
-    // Without a pick, a model is pinned only when the source pinned one; an
-    // unpinned topic resolves its role's default on every turn, which is the
-    // same model `new_topic_model` reports.
-    let new_model = model_override.or_else(|| {
-        let start = new_topic_model(context, chat_id, source_thread_id, profile);
-        start.source_pinned.then_some(start.config.model)
-    });
     let new_thread_id = thread_id_for_chat(chat_id, Some(new_topic_id));
     let created = record_seeded_thread(&new_thread_id, source_thread_id, profile, new_model);
     if let Err(err) = created {
@@ -846,6 +851,43 @@ struct NewTopicModel {
     config: Config,
     /// Whether the source thread pinned a model or thinking level (`/model`).
     source_pinned: bool,
+    /// The source's stored selection when it names a mode `config` lacks.
+    /// The new topic keeps it as given (and refuses turns until it resolves)
+    /// instead of starting on the default, which may be another account.
+    unresolved: Option<String>,
+    /// Why the new topic's profile model does not resolve (an orchestrator
+    /// override naming an undefined mode); its turns are refused then.
+    profile_error: Option<String>,
+}
+
+impl NewTopicModel {
+    /// The selection the new topic is created with when nothing is picked.
+    ///
+    /// # Errors
+    /// Returns the reason when the starting profile model does not resolve:
+    /// a pin derived from the fallback config would run another model.
+    fn pinned_selection(&self) -> std::result::Result<Option<String>, String> {
+        if let Some(err) = &self.profile_error {
+            return Err(err.clone());
+        }
+        Ok(self.source_pinned.then(|| {
+            self.unresolved
+                .clone()
+                .unwrap_or_else(|| self.config.model_selection())
+        }))
+    }
+
+    fn label(&self) -> String {
+        if let Some(err) = &self.profile_error {
+            return format!("⚠️ {err}; turns are refused");
+        }
+        match &self.unresolved {
+            Some(selection) => {
+                format!("{selection} (mode not configured here; turns are refused)")
+            }
+            None => self.config.model_label(),
+        }
+    }
 }
 
 /// Resolves the starting model of a topic opened from `source_thread_id` as
@@ -888,13 +930,22 @@ fn layer_new_topic_model(
 ) -> NewTopicModel {
     let source_pinned = model_override.is_some() || thinking_override.is_some();
     let role = if source_pinned { source_role } else { new_role };
-    if role == HandoffRole::Orchestrator {
-        zdx_engine::subagents::apply_orchestrator_override(&mut config);
-    }
-    config.apply_thread_model_override(model_override, thinking_override);
+    let profile_error = if role == HandoffRole::Orchestrator {
+        zdx_engine::subagents::apply_orchestrator_override(&mut config)
+            .err()
+            .map(|err| format!("{err:#}"))
+    } else {
+        None
+    };
+    let unresolved = config
+        .apply_thread_model_override(model_override, thinking_override)
+        .err()
+        .map(|err| err.selection);
     NewTopicModel {
         config,
         source_pinned,
+        unresolved,
+        profile_error,
     }
 }
 
@@ -906,6 +957,19 @@ pub(crate) fn staged_topic_config(
     chat_id: i64,
     topic_id: Option<i64>,
 ) -> Config {
+    staged_topic_model(context, chat_id, topic_id).config
+}
+
+/// Label of the model a live staged command's new topic starts with.
+pub(crate) fn staged_topic_label(
+    context: &BotContext,
+    chat_id: i64,
+    topic_id: Option<i64>,
+) -> String {
+    staged_topic_model(context, chat_id, topic_id).label()
+}
+
+fn staged_topic_model(context: &BotContext, chat_id: i64, topic_id: Option<i64>) -> NewTopicModel {
     let thread_id = session_thread_id(chat_id, topic_id);
     let profile = {
         let map = context.staging_map().lock().expect("staging lock poisoned");
@@ -913,7 +977,7 @@ pub(crate) fn staged_topic_config(
             .and_then(|session| session.handoff_role)
             .and_then(HandoffRole::profile)
     };
-    new_topic_model(context, chat_id, &thread_id, profile).config
+    new_topic_model(context, chat_id, &thread_id, profile)
 }
 
 /// Generates the handoff context and opens the new topic immediately — no
@@ -956,7 +1020,13 @@ async fn start_handoff_topic(
     };
     let role = role.unwrap_or_else(|| HandoffRole::of_thread(thread_id));
 
-    let seeded = match run_handoff_generation(context, incoming, thread_id, input).await {
+    // A chat whose workspace config does not load opens nothing: generation
+    // and the new topic's model would come from the bot-level config.
+    let generated = match context.checked_config_for_chat(incoming.chat_id) {
+        Ok(_) => run_handoff_generation(context, incoming, thread_id, input).await,
+        Err(err) => Err(err),
+    };
+    let seeded = match generated {
         Ok(suggestion) => {
             let record = handoff_record(
                 &suggestion,
@@ -1266,7 +1336,7 @@ async fn open_model_picker(
         return;
     }
 
-    let keyboard = build_provider_keyboard(context, chat_id, ModelPickerScope::Staging);
+    let keyboard = build_provider_keyboard(context, chat_id, topic_id, ModelPickerScope::Staging);
     let header = crate::model_picker_header(context, chat_id, topic_id, ModelPickerScope::Staging);
     if let Err(err) = client
         .edit_message_text(chat_id, message.id, &header, Some(&keyboard))
@@ -1754,6 +1824,57 @@ mod tests {
             "openai:orchestrator-model@medium"
         );
         assert!(thinking_only.source_pinned);
+    }
+
+    /// A source kept on a mode this config lacks hands that selection on as
+    /// given, so the new topic is refused too instead of starting on the
+    /// default model.
+    #[test]
+    fn unresolved_source_mode_is_handed_on_as_given() {
+        use zdx_engine::config::{Config, ThinkingLevel};
+
+        let base = Config {
+            model: "openai:default-model@low".to_string(),
+            thinking_level: ThinkingLevel::Low,
+            ..Config::default()
+        };
+        let start = layer_new_topic_model(
+            base,
+            HandoffRole::Agent,
+            HandoffRole::Agent,
+            Some("mode:gone"),
+            None,
+        );
+        assert_eq!(
+            start.pinned_selection().unwrap().as_deref(),
+            Some("mode:gone")
+        );
+
+        // An orchestrator source whose override names an undefined mode pins
+        // nothing derived from the fallback config, even with only a legacy
+        // thinking level stored.
+        let mut base = Config::default();
+        base.subagents.overrides.insert(
+            zdx_engine::subagents::ORCHESTRATOR_SUBAGENT_NAME.to_string(),
+            zdx_engine::config::SubagentOverride {
+                model: Some("mode:gone".to_string()),
+                thinking_level: None,
+            },
+        );
+        let start = layer_new_topic_model(
+            base,
+            HandoffRole::Orchestrator,
+            HandoffRole::Agent,
+            None,
+            Some(ThinkingLevel::High),
+        );
+        let err = start.pinned_selection().unwrap_err();
+        assert!(err.contains("`mode:gone`"), "{err}");
+        assert!(
+            start.label().contains("turns are refused"),
+            "{}",
+            start.label()
+        );
     }
 
     #[test]

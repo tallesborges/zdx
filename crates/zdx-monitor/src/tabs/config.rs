@@ -220,7 +220,7 @@ pub fn build_config_lines(
     config: &config::Config,
     subagents: &[SubagentDefinition],
 ) -> Vec<ConfigLine> {
-    let value = match serde_json::to_value(config) {
+    let value = match config.to_json_value() {
         Ok(v) => v,
         Err(e) => return vec![ConfigLine::Row("error".to_string(), e.to_string())],
     };
@@ -243,6 +243,9 @@ pub fn build_config_lines(
         } else {
             let display = if is_sensitive(key) && !matches!(val, Value::Null) {
                 "***".to_string()
+            } else if key == "model" {
+                // A `mode:<name>` default shows the tier and what it runs now.
+                config.model_label()
             } else {
                 format_json_scalar(val)
             };
@@ -1205,9 +1208,10 @@ impl ModelPickerState {
         };
         items.sort();
         items.dedup();
-        // Subagent overrides may point at a mode instead of a concrete model;
-        // list those refs first so the tier is the easy choice.
-        if field.starts_with("subagents.") {
+        // Agent model fields (the default model and subagent overrides) may
+        // point at a mode instead of a concrete model; list those refs first
+        // so the tier is the easy choice. Helper models stay concrete.
+        if field == "model" || field.starts_with("subagents.") {
             let refs: Vec<String> = modes.iter().map(config::ModelMode::as_ref_spec).collect();
             items.splice(0..0, refs);
         }

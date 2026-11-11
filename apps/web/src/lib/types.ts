@@ -429,6 +429,9 @@ export interface WorkspaceSetting {
   kind: "chat" | "transcription" | "speech" | "toggle" | "modes";
   /** `null` when unset: the runtime default applies. */
   value: string | null;
+  /** For a `mode:<name>` value, the spec it resolves to here; `null` when the
+   * mode is not configured, and for any other value. */
+  resolves_to: string | null;
   source: ConfigSource;
   /** What resetting this workspace's own overlay would fall back to. */
   inherited_value: string | null;
@@ -530,7 +533,10 @@ export interface MonitorConfigModel {
 }
 
 export interface MonitorConfig {
+  /** The resolved model spec the default runs. */
   model: string;
+  /** `mode:<name>` when the default is a mode selection; `null` for a spec. */
+  model_mode: string | null;
   thinking: string;
   max_tokens: number | null;
   subagents_enabled: boolean;

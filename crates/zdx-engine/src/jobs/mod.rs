@@ -428,12 +428,26 @@ pub fn resolve_run_from(
 
     let mut model_origin = SettingOrigin::Config;
     let mut thinking_origin = SettingOrigin::Config;
-    let mut apply = |config: &mut Config, spec: &str, origin: SettingOrigin| {
-        config.apply_model_spec(spec);
+    // Every explicit layer (the subagent's `model:`, its override, the job's
+    // own `model:`) must resolve: a mode it names that is not configured fails
+    // the run instead of falling through to whatever the layers below pick.
+    // An absent layer inherits.
+    let mut apply = |config: &mut Config,
+                     spec: &str,
+                     origin: SettingOrigin,
+                     what: &dyn Fn() -> String|
+     -> Result<()> {
+        let mode = config.find_mode(spec).is_some();
+        config
+            .apply_model_selection(spec)
+            .map_err(anyhow::Error::new)
+            .with_context(what)?;
         model_origin = origin;
-        if ModelSpec::parse(spec).thinking.is_some() {
+        // A mode sets the level too; a spec only with its `@<level>`.
+        if mode || ModelSpec::parse(spec).thinking.is_some() {
             thinking_origin = origin;
         }
+        Ok(())
     };
 
     let subagent = match job.subagent.as_deref() {
@@ -441,7 +455,9 @@ pub fn resolve_run_from(
             let definition = subagents::resolve_named(&root.path, name, None)
                 .with_context(|| format!("load subagent '{name}'"))?;
             if let Some(model) = definition.model.as_deref() {
-                apply(&mut config, model, SettingOrigin::Subagent);
+                apply(&mut config, model, SettingOrigin::Subagent, &|| {
+                    format!("subagent '{name}' definition model")
+                })?;
             }
             if let Some(model) = config
                 .subagents
@@ -449,14 +465,21 @@ pub fn resolve_run_from(
                 .get(name)
                 .and_then(|over| over.model.clone())
             {
-                apply(&mut config, &model, SettingOrigin::SubagentOverride);
+                apply(
+                    &mut config,
+                    &model,
+                    SettingOrigin::SubagentOverride,
+                    &|| format!("subagent '{name}' override model"),
+                )?;
             }
             Some(definition)
         }
         None => None,
     };
     if let Some(model) = job.model.as_deref() {
-        apply(&mut config, model, SettingOrigin::Job);
+        apply(&mut config, model, SettingOrigin::Job, &|| {
+            "job model".to_string()
+        })?;
     }
 
     let model = describe_model(&config, model_origin, thinking_origin);
@@ -1228,6 +1251,82 @@ mod tests {
         .unwrap();
         assert_eq!(explicit.model.thinking, "low");
         assert_eq!(explicit.model.thinking_origin, SettingOrigin::Job);
+
+        // A mode resolves each run from the job's config, thinking included;
+        // an unknown mode fails the run.
+        let config = Config {
+            model_modes: vec![crate::config::ModelMode {
+                name: "fast".to_string(),
+                description: String::new(),
+                primary: "claude-cli:claude-haiku-5@low".to_string(),
+                alternatives: Vec::new(),
+                thinking: crate::config::ThinkingLevel::Low,
+            }],
+            ..config
+        };
+        let mode =
+            resolve_run_settings(&config, caller.path(), &definition(Some("mode:fast"))).unwrap();
+        assert_eq!(mode.model.spec, "claude-cli:claude-haiku-5@low");
+        assert_eq!(mode.model.origin, SettingOrigin::Job);
+        assert_eq!(mode.model.thinking_origin, SettingOrigin::Job);
+        let unknown = resolve_run_settings(&config, caller.path(), &definition(Some("mode:nope")))
+            .unwrap_err();
+        assert!(
+            crate::config::UnknownModeError::is_in(&unknown),
+            "a job's own missing mode fails instead of running the default: {unknown:#}"
+        );
+    }
+
+    /// A job's subagent override naming an undefined mode fails the run; a
+    /// defined one resolves from the config the run is given, so an edit
+    /// applies to the next run.
+    #[test]
+    fn job_subagent_mode_overrides_fail_or_resolve_per_run() {
+        let _home = crate::test_support::temp_zdx_home();
+        let caller = tempdir().unwrap();
+        let mut config = Config {
+            model: "claude-cli:claude-sonnet-5@high".to_string(),
+            thinking_level: crate::config::ThinkingLevel::High,
+            model_modes: vec![crate::config::ModelMode {
+                name: "fast".to_string(),
+                description: String::new(),
+                primary: "claude-cli:claude-haiku-5@low".to_string(),
+                alternatives: Vec::new(),
+                thinking: crate::config::ThinkingLevel::Low,
+            }],
+            ..Default::default()
+        };
+        let set_override = |config: &mut Config, model: &str| {
+            config.subagents.overrides.insert(
+                "explorer".to_string(),
+                crate::config::SubagentOverride {
+                    model: Some(model.to_string()),
+                    thinking_level: None,
+                },
+            );
+        };
+        let job = JobDefinition {
+            subagent: Some("explorer".to_string()),
+            ..definition(None)
+        };
+
+        set_override(&mut config, "mode:fast");
+        let run = resolve_run_settings(&config, caller.path(), &job).unwrap();
+        assert_eq!(run.model.spec, "claude-cli:claude-haiku-5@low");
+        assert_eq!(run.model.origin, SettingOrigin::SubagentOverride);
+
+        config.model_modes[0].primary = "claude-cli:claude-sonnet-5@medium".to_string();
+        config.model_modes[0].thinking = crate::config::ThinkingLevel::Medium;
+        let run = resolve_run_settings(&config, caller.path(), &job).unwrap();
+        assert_eq!(run.model.spec, "claude-cli:claude-sonnet-5@medium");
+
+        set_override(&mut config, "mode:gone");
+        let err = resolve_run_settings(&config, caller.path(), &job).unwrap_err();
+        assert!(crate::config::UnknownModeError::is_in(&err), "{err:#}");
+        assert!(
+            format!("{err:#}").contains("subagent 'explorer' override model"),
+            "{err:#}"
+        );
     }
 
     #[test]

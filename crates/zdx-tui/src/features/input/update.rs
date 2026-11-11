@@ -584,7 +584,12 @@ fn handle_overlays(
         // Ctrl+T: change only the thinking level, keeping the current model
         // (mirrors `/thinking`).
         KeyCode::Char('t') if mods.only_ctrl() => {
-            match crate::overlays::thinking_picker::thinking_request_for_model(ctx.model_id) {
+            // A staged `mode:<name>` changes level on the model it runs: the
+            // result is a concrete pin, never `mode:<name>@<level>`.
+            let model = zdx_engine::config::mode_ref_name(ctx.model_id)
+                .and_then(|_| ctx.config.selection_spec(ctx.model_id))
+                .unwrap_or_else(|| ctx.model_id.to_string());
+            match crate::overlays::thinking_picker::thinking_request_for_model(&model) {
                 Some(request) => Some((vec![], vec![], Some(request))),
                 None => Some((
                     vec![],
@@ -694,22 +699,37 @@ fn handle_model_modes(
 
     let forward = code == KeyCode::Tab && !mods.shift();
     // During a handoff the selection targets the thread it will open, so cycle
-    // from the staged model rather than this tab's.
-    let current_level = zdx_engine::models::ModelSpec::parse(ctx.model_id)
-        .thinking
-        .unwrap_or(ctx.config.thinking_level);
-    let idx = next_mode_index(
-        &ctx.config.model_modes,
-        ctx.model_id,
-        current_level,
-        forward,
-    );
-    let selected = ctx.config.model_modes.get(idx)?;
+    // from the staged model rather than this tab's. A mode selection is found
+    // by name; anything else by matching a mode's primary.
+    let model_modes = &ctx.config.model_modes;
+    let current_mode = zdx_engine::config::mode_ref_name(ctx.model_id)
+        .or_else(|| {
+            if input.handoff.is_active() {
+                None
+            } else {
+                ctx.config.model_mode.as_deref()
+            }
+        })
+        .and_then(|name| {
+            model_modes
+                .iter()
+                .position(|mode| mode.name.trim().eq_ignore_ascii_case(name))
+        });
+    let idx = match current_mode {
+        Some(i) if forward => (i + 1) % model_modes.len(),
+        Some(i) => (i + model_modes.len() - 1) % model_modes.len(),
+        None => {
+            let current_level = zdx_engine::models::ModelSpec::parse(ctx.model_id)
+                .thinking
+                .unwrap_or(ctx.config.thinking_level);
+            next_mode_index(model_modes, ctx.model_id, current_level, forward)
+        }
+    };
+    let selected = model_modes.get(idx)?;
 
-    // Canonicalize before storing: a suffixless primary inherits the currently
-    // effective level, and the stored override has to carry that resolved level
-    // or a config reload would re-resolve it against the default instead.
-    let (model, _) = zdx_engine::models::resolve_model_spec(&selected.primary, current_level);
+    // Keep the reference, not its primary: the thread then runs whatever the
+    // mode means in its workspace on each later turn.
+    let model = selected.as_ref_spec();
 
     let (effects, mutations) = crate::overlays::thinking_picker::model_selection_updates(
         crate::overlays::thinking_picker::ModelSelection {
@@ -1671,6 +1691,41 @@ mod tests {
         assert!(input.get_text().is_empty(), "Ctrl+T must not insert text");
     }
 
+    /// Ctrl+T on a staged `mode:<name>` opens the picker on the model the
+    /// mode runs, so the result is a concrete pin, never `mode:x@level`.
+    #[test]
+    fn ctrl_t_on_a_staged_mode_targets_its_concrete_model() {
+        let mut input = InputState::default();
+        let tasks = Tasks::default();
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config {
+            model: "anthropic:claude-haiku-4-5".to_string(),
+            model_modes: vec![mode(
+                "smart",
+                "anthropic:claude-sonnet-4-6@high",
+                ThinkingLevel::High,
+            )],
+            ..Config::default()
+        };
+        let mut ctx = make_idle_ctx(&tasks, &active_thread_ids, &config);
+        ctx.model_id = "mode:smart";
+
+        let (_effects, _mutations, overlay) = handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
+        );
+
+        assert!(
+            matches!(
+                overlay,
+                Some(OverlayRequest::ThinkingPicker { ref model, .. })
+                    if model == "anthropic:claude-sonnet-4-6@high"
+            ),
+            "got: {overlay:?}"
+        );
+    }
+
     #[test]
     fn empty_enter_retries_when_can_retry() {
         let mut input = InputState::default();
@@ -1810,12 +1865,12 @@ mod tests {
         assert!(mutations.iter().any(|m| matches!(
             m,
             StateMutation::SetActiveThreadOverrides { model_override: Some(model), .. }
-                if model == "anthropic:claude-sonnet-4-6@high"
+                if model == "mode:smart"
         )));
         assert!(mutations.iter().any(|m| matches!(
             m,
             StateMutation::Thread(ThreadMutation::SetOverrides { model_override: Some(model), .. })
-                if model == "anthropic:claude-sonnet-4-6@high"
+                if model == "mode:smart"
         )));
         assert!(
             !effects

@@ -24,9 +24,9 @@ pub(crate) use commands::{
     build_provider_keyboard, models_for_provider,
 };
 pub(crate) use launcher::{
-    LaunchRole, LauncherMap, answer_topic_created, create_topic_with_model,
-    handle_callback as handle_launcher_callback, launch_config, new_launcher_map, render_launcher,
-    schedule_repost as schedule_launcher_repost,
+    LaunchRole, LauncherMap, answer_topic_created, bot_visible_modes, create_topic_with_model,
+    filter_available_modes, handle_callback as handle_launcher_callback, launch_config,
+    new_launcher_map, render_launcher, schedule_repost as schedule_launcher_repost,
 };
 pub(crate) use response::{append_thread_link, worker_link};
 pub(crate) use thread_header::{

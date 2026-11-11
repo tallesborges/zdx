@@ -37,6 +37,12 @@ impl SelectionSource {
 struct StatusSnapshot<'a> {
     model_id: &'a str,
     model_source: SelectionSource,
+    /// `mode:<name>` when the selection is a mode reference, resolved to
+    /// `model_id` for this turn.
+    model_mode: Option<&'a str>,
+    /// Why the stored selection does not resolve here; turns are refused then
+    /// and `model_id` is only the default the topic would otherwise use.
+    unresolved: Option<&'a str>,
     thinking: zdx_engine::config::ThinkingLevel,
     thinking_source: SelectionSource,
     profile_name: Option<&'a str>,
@@ -59,22 +65,21 @@ fn selection_sources(
     } else {
         SelectionSource::Default
     };
-    let thinking_source = if legacy_topic_thinking.is_some()
-        || topic_model.is_some_and(|model| {
-            zdx_engine::models::ModelSpec::parse(model)
+    // A mode reference carries its mode's thinking level.
+    let sets_thinking = |model: &str| {
+        zdx_engine::config::mode_ref_name(model).is_some()
+            || zdx_engine::models::ModelSpec::parse(model)
                 .thinking
                 .is_some()
-        }) {
-        SelectionSource::Topic
-    } else if orchestrator_model.is_some_and(|model| {
-        zdx_engine::models::ModelSpec::parse(model)
-            .thinking
-            .is_some()
-    }) {
-        SelectionSource::Orchestrator
-    } else {
-        SelectionSource::Default
     };
+    let thinking_source =
+        if legacy_topic_thinking.is_some() || topic_model.is_some_and(sets_thinking) {
+            SelectionSource::Topic
+        } else if orchestrator_model.is_some_and(sets_thinking) {
+            SelectionSource::Orchestrator
+        } else {
+            SelectionSource::Default
+        };
     (model_source, thinking_source)
 }
 
@@ -394,10 +399,25 @@ async fn current_status_message_with_heading(
     thread_id: &str,
     heading: &str,
 ) -> Result<String> {
-    let mut config = context.config_for_chat(chat_id);
+    let mut config = match context.checked_config_for_chat(chat_id) {
+        Ok(config) => config,
+        Err(err) => {
+            return Ok(format!(
+                "{heading}\n⚠️ <pre>{}</pre>",
+                escape_html(&format!("{err:#}"))
+            ));
+        }
+    };
     let resolved_root = context.root_for_chat(chat_id);
     let root_path = thread_persistence::read_thread_root_path(thread_id)?
         .map_or_else(|| resolved_root.root.clone(), PathBuf::from);
+    // Modes mean what the root the topic runs in defines, as on its turns.
+    if let Err(err) = config.use_modes_of(&resolved_root.root, &root_path) {
+        return Ok(format!(
+            "{heading}\n⚠️ <pre>{}</pre>",
+            escape_html(&format!("{err:#}"))
+        ));
+    }
     // Orchestrator home bases get their own card: the folder/branch are fixed
     // noise there, while live worker state is the interesting part. They also
     // run with `[subagents.overrides.orchestrator]` layered under any topic
@@ -414,9 +434,13 @@ async fn current_status_message_with_heading(
         })
         .flatten()
         .map(str::to_string);
-    if is_orchestrator {
-        zdx_engine::subagents::apply_orchestrator_override(&mut config);
-    }
+    let profile_error = if is_orchestrator {
+        zdx_engine::subagents::apply_orchestrator_override(&mut config)
+            .err()
+            .map(|err| format!("{err:#}"))
+    } else {
+        None
+    };
     let model_override = thread_persistence::read_thread_model_override(thread_id)?;
     let thinking_override = thread_persistence::read_thread_thinking_override(thread_id)?;
     let (model_source, thinking_source) = selection_sources(
@@ -424,7 +448,9 @@ async fn current_status_message_with_heading(
         model_override.as_deref(),
         thinking_override,
     );
-    config.apply_thread_model_override(model_override.as_deref(), thinking_override);
+    let unresolved = config
+        .apply_thread_model_override(model_override.as_deref(), thinking_override)
+        .err();
     let branch = git_branch_name(&root_path).await;
     let events = thread_persistence::load_thread_events(thread_id)?;
     let (cumulative_usage, latest_usage) =
@@ -435,10 +461,14 @@ async fn current_status_message_with_heading(
         None
     };
     let mini_app_url = super::mini_app_base_url(context, chat_id);
+    let model_mode = config.mode_selection();
+    let unresolved = profile_error.or_else(|| unresolved.map(|err| err.to_string()));
     Ok(format_status_message_with_heading(
         &StatusSnapshot {
             model_id: &config.model,
             model_source,
+            model_mode: model_mode.as_deref(),
+            unresolved: unresolved.as_deref(),
             thinking: config.thinking_level,
             thinking_source,
             profile_name: resolved_root.profile_name.as_deref(),
@@ -469,11 +499,25 @@ fn format_status_message_with_heading(
     };
     let mut lines = vec![heading.to_string()];
 
-    lines.push(format!(
-        "Model: <code>{}</code> ({})",
-        escape_html(snapshot.model_id),
-        snapshot.model_source.label()
-    ));
+    if let Some(reason) = snapshot.unresolved {
+        lines.push(format!(
+            "⚠️ Turns here are refused: {}. Pick another model with /model.",
+            escape_html(reason)
+        ));
+    }
+    lines.push(match snapshot.model_mode {
+        Some(mode) => format!(
+            "Model: <code>{}</code> ({}, <code>{}</code>)",
+            escape_html(snapshot.model_id),
+            snapshot.model_source.label(),
+            escape_html(mode)
+        ),
+        None => format!(
+            "Model: <code>{}</code> ({})",
+            escape_html(snapshot.model_id),
+            snapshot.model_source.label()
+        ),
+    });
     lines.push(format!(
         "Thinking: <code>{}</code> ({})",
         snapshot.thinking.display_name(),

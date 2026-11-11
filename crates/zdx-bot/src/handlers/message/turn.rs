@@ -71,8 +71,6 @@ pub(super) async fn run_agent_turn(
         .map_or_else(|| resolved_root.root.clone(), std::path::PathBuf::from);
     let model_override = thread_persistence::read_thread_model_override(thread_id)?;
     let thinking_override = thread_persistence::read_thread_thinking_override(thread_id)?;
-    let mut config = context.config_for_chat(incoming.chat_id);
-    config.apply_thread_model_override(model_override.as_deref(), thinking_override);
     let (mut thread, mut messages, runtime_note) = agent::load_thread_state(thread_id)?;
     // Bot threads are opened by id, so their meta has no root until now. Record
     // the chat's project root so they group by project like CLI/TUI threads.
@@ -81,45 +79,56 @@ pub(super) async fn run_agent_turn(
     }
     // Prepare the turn once so the advisory runtime-context snapshot is known
     // before the user message is persisted (it is attached there and replayed
-    // identically on the next turn).
-    zdx_engine::core::context::set_runtime_env(&config, Some(thread_id));
+    // identically on the next turn). A chat whose workspace config does not
+    // load, or a topic kept on a mode that config does not define, fails here
+    // rather than running another model.
+    // A topic stored in another project than the chat's current root resolves
+    // its modes where it runs.
     let prepared =
-        match agent::prepare_bot_turn(&config, &worktree_root, context.bot_instruction_layer()) {
-            Ok(prepared) => prepared,
-            Err(err) => {
-                // The turn cannot run, but the incoming message must not be
-                // silently dropped (the queue caller only logs). Persist it
-                // without a runtime-context snapshot (preparation failed) and
-                // surface a visible error. Only a newly recorded message is
-                // written — a retry has nothing new to persist, and the success
-                // path below never runs, so nothing is double-written.
-                tracing::error!(err = %format!("{err:#}"), "Failed to prepare bot turn");
-                if record_user
-                    && let Err(persist_err) = agent::record_user_message(
-                        &mut thread,
-                        &mut messages,
-                        &incoming,
-                        None,
-                        runtime_note.as_deref(),
-                    )
-                {
-                    tracing::error!(
-                        %persist_err,
-                        "Failed to persist user message after prompt-preparation failure"
-                    );
-                }
-                let _ = context
-                    .client()
-                    .send_message_without_preview(
-                        incoming.chat_id,
-                        &format_user_error_message(&err.to_string()),
-                        reply_ctx.reply_to_message_id,
-                        reply_ctx.topic_id,
-                    )
-                    .await;
-                return Err(err);
+        crate::topic_config(context, incoming.chat_id, thread_id).and_then(|mut config| {
+            config
+                .apply_thread_model_override(model_override.as_deref(), thinking_override)
+                .map_err(anyhow::Error::new)
+                .context("This topic's model selection cannot run; pick another with /model")?;
+            zdx_engine::core::context::set_runtime_env(&config, Some(thread_id));
+            agent::prepare_bot_turn(&config, &worktree_root, context.bot_instruction_layer())
+        });
+    let prepared = match prepared {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            // The turn cannot run, but the incoming message must not be
+            // silently dropped (the queue caller only logs). Persist it
+            // without a runtime-context snapshot (preparation failed) and
+            // surface a visible error. Only a newly recorded message is
+            // written — a retry has nothing new to persist, and the success
+            // path below never runs, so nothing is double-written.
+            tracing::error!(err = %format!("{err:#}"), "Failed to prepare bot turn");
+            if record_user
+                && let Err(persist_err) = agent::record_user_message(
+                    &mut thread,
+                    &mut messages,
+                    &incoming,
+                    None,
+                    runtime_note.as_deref(),
+                )
+            {
+                tracing::error!(
+                    %persist_err,
+                    "Failed to persist user message after prompt-preparation failure"
+                );
             }
-        };
+            let _ = context
+                .client()
+                .send_message_without_preview(
+                    incoming.chat_id,
+                    &format_user_error_message(&format!("{err:#}")),
+                    reply_ctx.reply_to_message_id,
+                    reply_ctx.topic_id,
+                )
+                .await;
+            return Err(err);
+        }
+    };
     let pending_topic_title = thread_persistence::read_thread_pending_topic_title(thread_id)?;
     if record_user {
         agent::record_user_message(
@@ -1058,5 +1067,72 @@ mod tests {
             .filter(|event| matches!(event, ThreadEvent::Delivery { .. }))
             .count();
         assert!(deliveries >= 2, "{deliveries} delivery records");
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use zdx_engine::core::thread_persistence;
+
+    use super::run_agent_turn;
+    use crate::bot::context::BotContext;
+    use crate::handlers::message::ReplyContext;
+    use crate::telegram::TelegramClient;
+    use crate::telegram::fake::{FakeTelegram, TOKEN};
+
+    /// A topic kept on a mode its config does not define is refused with an
+    /// actionable error instead of running the default model (possibly
+    /// another account). The user's message is still recorded.
+    #[tokio::test]
+    async fn a_topic_kept_on_a_missing_mode_is_refused() {
+        let _home = zdx_engine::test_support::temp_zdx_home();
+        let fake = FakeTelegram::start().await;
+        let context = BotContext::for_test(
+            TelegramClient::with_base_url(TOKEN.to_string(), fake.base_url.clone()),
+            zdx_engine::config::Config::default(),
+            std::env::temp_dir(),
+        );
+        let thread_id = "telegram--1001-topic-7";
+        thread_persistence::Thread::with_id(thread_id.to_string())
+            .unwrap()
+            .set_model_override(Some("mode:gone".to_string()))
+            .unwrap();
+        let incoming = crate::types::IncomingMessage {
+            chat_id: -1001,
+            message_id: 42,
+            user_id: 1,
+            text: Some("go".to_string()),
+            images: Vec::new(),
+            audios: Vec::new(),
+            documents: Vec::new(),
+            videos: Vec::new(),
+            notices: Vec::new(),
+            message_thread_id: Some(7),
+            is_forum: true,
+            replied_to: None,
+        };
+        let reply_ctx = ReplyContext {
+            reply_to_message_id: Some(42),
+            topic_id: Some(7),
+            cross_topic_reply_parameters: None,
+        };
+
+        let err = run_agent_turn(&context, incoming, reply_ctx, thread_id, false, None, true)
+            .await
+            .unwrap_err();
+        assert!(zdx_engine::config::UnknownModeError::is_in(&err), "{err:#}");
+        let sent: Vec<String> = fake
+            .seen()
+            .into_iter()
+            .filter(|seen| seen.method == "sendMessage")
+            .map(|seen| seen.body)
+            .collect();
+        assert!(
+            sent.iter()
+                .any(|body| body.contains("mode:gone") && body.contains("/model")),
+            "{sent:?}"
+        );
+        let replay = thread_persistence::load_thread_replay(thread_id).unwrap();
+        assert_eq!(replay.messages.len(), 1, "the user's message is kept");
     }
 }

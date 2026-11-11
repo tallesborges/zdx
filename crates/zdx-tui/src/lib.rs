@@ -44,7 +44,9 @@ fn format_context_warning(warning: &ContextWarning) -> String {
     }
 }
 
-/// Runs the interactive chat loop.
+/// Runs the interactive chat loop. `model_selection` is an explicit `-m`: on
+/// a resumed thread it beats the thread's stored selection for this session
+/// (it is not written to the thread).
 ///
 /// # Errors
 /// Returns an error if the operation fails.
@@ -52,8 +54,9 @@ pub async fn run_interactive_chat(
     config: &Config,
     thread_handle: Option<Thread>,
     root: PathBuf,
+    model_selection: Option<&str>,
 ) -> Result<()> {
-    run_interactive_chat_with_history(config, thread_handle, Vec::new(), root).await
+    run_chat(config, thread_handle, Vec::new(), root, model_selection).await
 }
 
 /// Runs the interactive chat loop with pre-loaded history.
@@ -65,6 +68,16 @@ pub async fn run_interactive_chat_with_history(
     thread_handle: Option<Thread>,
     history: Vec<ChatMessage>,
     root: PathBuf,
+) -> Result<()> {
+    run_chat(config, thread_handle, history, root, None).await
+}
+
+async fn run_chat(
+    config: &Config,
+    thread_handle: Option<Thread>,
+    history: Vec<ChatMessage>,
+    root: PathBuf,
+    model_selection: Option<&str>,
 ) -> Result<()> {
     tokio::task::yield_now().await;
     // Chat mode requires a terminal to render the TUI
@@ -119,6 +132,7 @@ pub async fn run_interactive_chat_with_history(
             effective.prompt,
             effective.runtime_context,
             thread_handle,
+            model_selection.map(str::to_string),
         )?
     } else {
         TuiRuntime::with_history(
@@ -128,6 +142,7 @@ pub async fn run_interactive_chat_with_history(
             effective.runtime_context,
             thread_handle,
             history,
+            model_selection.map(str::to_string),
         )?
     };
 

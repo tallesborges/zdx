@@ -358,11 +358,15 @@ pub async fn thread_create(
                     .ok()
                     .flatten();
                 if model_override.is_some() || thinking_override.is_some() {
-                    config.apply_thread_model_override(
-                        model_override.as_deref(),
-                        thinking_override,
-                    );
-                    let model_override = Some(config.model.clone());
+                    // A source mode this config lacks is handed on as given, so
+                    // the new thread is refused too instead of running the
+                    // default in its place.
+                    let model_override = match config
+                        .apply_thread_model_override(model_override.as_deref(), thinking_override)
+                    {
+                        Ok(()) => Some(config.model_selection()),
+                        Err(err) => Some(err.selection),
+                    };
                     let _ = thread_handle.set_model_override(model_override.clone());
                     (model_override, None)
                 } else {

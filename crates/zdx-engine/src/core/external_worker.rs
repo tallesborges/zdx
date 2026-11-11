@@ -390,20 +390,38 @@ fn prepare(
 
 /// The model the remote `zdx exec` must run: the worker's pinned override, or
 /// the host config layers for its root (the same chain a local child uses),
-/// so the request never depends on the remote config.
+/// so the request never depends on the remote config. A `mode:<name>` pin is
+/// resolved here, against the host layers for the root, on every turn; one
+/// that names no mode there fails the turn.
 fn resolve_model(request: &WorkerRunRequest) -> Result<(String, &'static str)> {
-    if let Some(model) = request.model.as_deref() {
+    if let Some(model) = request
+        .model
+        .as_deref()
+        .filter(|model| crate::config::mode_ref_name(model).is_none())
+    {
         let model = request.thinking_level.map_or_else(
             || model.to_string(),
             |level| crate::models::format_model_thinking(model, level),
         );
         return Ok((model, "worker_override"));
     }
-    let config = Config::load_layered(&paths::config_layer_paths_for(&request.root))
+    let mut config = Config::load_layered(&paths::config_layer_paths_for(&request.root))
         .context("Failed to load the host config for the worker root")?;
+    // A stored mode must resolve on the host: running the root's default in
+    // its place could send the turn to another provider or account.
+    let source = match request.model.as_deref() {
+        Some(reference) => {
+            config
+                .apply_model_selection(reference)
+                .map_err(anyhow::Error::new)
+                .with_context(|| format!("worker model for root {}", request.root.display()))?;
+            "worker_override"
+        }
+        None => "host_config",
+    };
     Ok((
         crate::models::format_model_thinking(&config.model, config.thinking_level),
-        "host_config",
+        source,
     ))
 }
 
@@ -715,6 +733,70 @@ esac
             serde_json::from_slice(&std::fs::read(fake.marks.join("request-1")).unwrap()).unwrap();
         assert_eq!(request.model, "openai:gpt-test@high");
         assert_eq!(request.model_source, "worker_override");
+    }
+
+    /// A worker kept on `mode:<name>` sends what the mode means on the host
+    /// for each turn, so an edited mode moves it on the next turn.
+    #[tokio::test]
+    async fn mode_pin_resolves_on_the_host_each_turn() {
+        let _home = temp_zdx_home();
+        let write_mode = |primary: &str| {
+            std::fs::write(
+                paths::config_path(),
+                format!("[[model_modes]]\nname = \"smart\"\nprimary = \"{primary}\"\n"),
+            )
+            .unwrap();
+        };
+        write_mode("openai:first@low");
+        let fake = fake_launcher();
+        let (manager, mut rx) = external_manager(&fake, "complete", 0, 5);
+        let worker = manager
+            .create_worker(
+                "owner",
+                Path::new(REMOTE_ROOT),
+                "go",
+                None,
+                Some("mode:smart".into()),
+                None,
+            )
+            .unwrap();
+        let (event, _) = completion(&mut rx).await;
+        assert_eq!(event.status, WorkerStatus::Completed, "{:?}", event.error);
+        let request: LaunchRequest =
+            serde_json::from_slice(&std::fs::read(fake.marks.join("request-1")).unwrap()).unwrap();
+        assert_eq!(request.model, "openai:first@low");
+        assert_eq!(request.model_source, "worker_override");
+
+        write_mode("openai:second@high");
+        manager.send_message("owner", &worker, "again").unwrap();
+        let (event, _) = completion(&mut rx).await;
+        assert_eq!(event.status, WorkerStatus::Completed, "{:?}", event.error);
+        let request: LaunchRequest =
+            serde_json::from_slice(&std::fs::read(fake.marks.join("request-2")).unwrap()).unwrap();
+        assert_eq!(request.model, "openai:second@high");
+        assert_eq!(
+            thread_persistence::read_thread_model_override(&worker)
+                .unwrap()
+                .as_deref(),
+            Some("mode:smart")
+        );
+
+        // A mode removed on the host fails the turn instead of running the
+        // root's default model.
+        std::fs::write(
+            paths::config_path(),
+            "[[model_modes]]\nname = \"fast\"\nprimary = \"openai:other@low\"\n",
+        )
+        .unwrap();
+        manager.send_message("owner", &worker, "third").unwrap();
+        let (event, _) = completion(&mut rx).await;
+        assert_eq!(event.status, WorkerStatus::Failed);
+        let error = event.error.unwrap_or_default();
+        assert!(error.contains("`mode:smart`"), "{error}");
+        assert!(
+            !fake.marks.join("request-3").exists(),
+            "nothing was launched"
+        );
     }
 
     #[tokio::test]

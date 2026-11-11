@@ -73,8 +73,8 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             if let Some(handle) = thread_handle {
                 app.tui.mark_thread_running(handle.id.clone());
                 app.tui.thread.thread_handle = Some(handle);
-                app.tui.thread.model_override = Some(app.tui.config.model.clone());
-                app.tui.thread.thinking_override = Some(app.tui.config.thinking_level);
+                app.tui.thread.model_override = Some(app.tui.current_selection());
+                app.tui.thread.thinking_override = None;
             } else if let Some(thread_id) = app
                 .tui
                 .thread
@@ -125,8 +125,8 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             if let Some(tab) = app.background_tab_mut(tab_id) {
                 if let Some(handle) = thread_handle {
                     tab.mark_thread_running(handle.id.clone());
-                    tab.thread.model_override = Some(tab.config.model.clone());
-                    tab.thread.thinking_override = Some(tab.config.thinking_level);
+                    tab.thread.model_override = Some(tab.current_selection());
+                    tab.thread.thinking_override = None;
                     tab.thread.thread_handle = Some(handle);
                 } else if let Some(thread_id) = tab
                     .thread
@@ -1066,7 +1066,10 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
             } => {
                 tui.config.model.clone_from(&tui.base_model);
                 tui.config.thinking_level = tui.base_thinking_level;
-                tui.config
+                tui.config.model_mode.clone_from(&tui.base_model_mode);
+                // An unresolved stored mode is shown and refused at turn start.
+                let _ = tui
+                    .config
                     .apply_thread_model_override(model_override.as_deref(), thinking_override);
             }
             StateMutation::SetSystemPrompt(refresh) => {
@@ -1187,11 +1190,13 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
             model,
             display_name,
         } => {
-            let (state, effects) = overlays::ThinkingPickerState::open(
-                model.clone(),
-                display_name.clone(),
-                app.tui.config.thinking_level,
-            );
+            // Start on the requested spec's own level (a staged handoff pick
+            // may differ from this tab's), else the tab's.
+            let current = zdx_engine::models::ModelSpec::parse(model)
+                .thinking
+                .unwrap_or(app.tui.config.thinking_level);
+            let (state, effects) =
+                overlays::ThinkingPickerState::open(model.clone(), display_name.clone(), current);
             app.overlay = Some(overlays::Overlay::ThinkingPicker(state));
             effects
         }
@@ -1366,6 +1371,10 @@ fn create_btw_tab(tab_id: TabId, parent_thread_id: Option<String>, parent: &TuiS
     use crate::transcript::TranscriptState;
 
     let agent_opts = parent.agent_opts.clone();
+    // The side chat starts on the parent's selection, kept as given (a mode
+    // the config lacks stays refused rather than turning into the default).
+    let mut thread = ThreadState::new();
+    thread.model_override = Some(parent.current_selection());
 
     TuiState {
         tab_id,
@@ -1373,7 +1382,7 @@ fn create_btw_tab(tab_id: TabId, parent_thread_id: Option<String>, parent: &TuiS
         should_quit: false,
         input: InputState::new(),
         transcript: TranscriptState::with_cells(Vec::new()),
-        thread: ThreadState::new(),
+        thread,
         task_seq: crate::common::TaskSeq::default(),
         tasks: crate::common::Tasks::default(),
         auth: crate::auth::AuthState::new(),
@@ -1381,6 +1390,7 @@ fn create_btw_tab(tab_id: TabId, parent_thread_id: Option<String>, parent: &TuiS
         config_watch: parent.config_watch.clone(),
         base_model: parent.base_model.clone(),
         base_thinking_level: parent.base_thinking_level,
+        base_model_mode: parent.base_model_mode.clone(),
         last_skill_repo: parent.last_skill_repo.clone(),
         loaded_skills: parent.loaded_skills.clone(),
         agent_opts,
@@ -1409,6 +1419,7 @@ fn create_main_tab(tab_id: TabId, parent: &TuiState) -> TuiState {
     let mut config = parent.config.clone();
     config.model.clone_from(&parent.base_model);
     config.thinking_level = parent.base_thinking_level;
+    config.model_mode.clone_from(&parent.base_model_mode);
 
     let mut tab = TuiState::with_history(
         tab_id,
@@ -1456,7 +1467,9 @@ fn create_thread_tab(
     thread.usage.restore(usage.0, usage.1);
 
     let mut config = parent.config.clone();
-    config.apply_thread_model_override(model_override.map(String::as_str), thinking_override);
+    // An unresolved stored mode is shown and refused at turn start.
+    let _ =
+        config.apply_thread_model_override(model_override.map(String::as_str), thinking_override);
 
     let mut input = InputState::new();
     input.history = history;
@@ -1487,6 +1500,7 @@ fn create_thread_tab(
         config_watch: parent.config_watch.clone(),
         base_model: parent.base_model.clone(),
         base_thinking_level: parent.base_thinking_level,
+        base_model_mode: parent.base_model_mode.clone(),
         last_skill_repo: parent.last_skill_repo.clone(),
         loaded_skills: parent.loaded_skills.clone(),
         agent_opts,
@@ -1797,9 +1811,25 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         runtime_context: app.tui.runtime_context.as_ref(),
         last_attached_key: last_attached_key.as_deref(),
     };
-    let (effects, mutations, overlay_request) =
+    let (mut effects, mutations, overlay_request) =
         input::handle_main_key(&mut app.tui.input, &ctx, key);
     apply_mutations(&mut app.tui, mutations);
+
+    // Without a staged pick, a source tab with its own selection hands on what
+    // it runs (a session-only `-m` included), captured here while it is still
+    // the active tab, rather than what its thread file says.
+    if app.tui.thread.model_override.is_some() {
+        let selection = app.tui.current_selection();
+        for effect in &mut effects {
+            if let UiEffect::HandoffSubmit {
+                model_override: model_override @ None,
+                ..
+            } = effect
+            {
+                *model_override = Some(selection.clone());
+            }
+        }
+    }
 
     // Handoff submission opens the new thread in a fresh background tab so
     // the source thread stays intact in its current tab. Push the new tab
@@ -1888,6 +1918,39 @@ mod tests {
             }
             other => panic!("expected a btw tab, got {other:?}"),
         }
+    }
+
+    /// A btw tab starts on the parent's selection as given: a mode reference
+    /// stays one, and a parent mode the config lacks stays refused instead of
+    /// becoming the default it fell back to, across a config reload too.
+    #[test]
+    fn btw_tab_keeps_the_parent_selection_as_given() {
+        let config = zdx_engine::config::Config {
+            model: "openai:default@low".to_string(),
+            thinking_level: zdx_engine::config::ThinkingLevel::Low,
+            model_modes: vec![zdx_engine::config::ModelMode {
+                name: "smart".to_string(),
+                description: String::new(),
+                primary: "openai:big@high".to_string(),
+                alternatives: Vec::new(),
+                thinking: zdx_engine::config::ThinkingLevel::High,
+            }],
+            ..zdx_engine::config::Config::default()
+        };
+        let mut app = AppState::new(config.clone(), PathBuf::new(), None, None);
+
+        app.tui.thread.model_override = Some("mode:smart".to_string());
+        app.tui.apply_reloaded_config(config.clone());
+        let btw = create_btw_tab(app.next_tab_id(), None, &app.tui);
+        assert_eq!(btw.current_selection(), "mode:smart");
+
+        app.tui.thread.model_override = Some("mode:gone".to_string());
+        app.tui.apply_reloaded_config(config.clone());
+        let mut btw = create_btw_tab(app.next_tab_id(), None, &app.tui);
+        assert_eq!(btw.current_selection(), "mode:gone");
+        btw.apply_reloaded_config(config);
+        assert_eq!(btw.current_selection(), "mode:gone");
+        assert_eq!(btw.thread.model_override.as_deref(), Some("mode:gone"));
     }
 
     /// Without a persisted parent thread there is nothing to point at, so the
@@ -2294,6 +2357,51 @@ mod tests {
         assert!(app.tui.transcript.cells().is_empty());
         assert!(app.tui.input.get_text().is_empty());
         assert!(matches!(app.tui.input.handoff, HandoffState::Idle));
+    }
+
+    /// Without a staged pick, the handoff carries the source tab's own
+    /// selection (here a session-only one that differs from the thread file),
+    /// not what the file says.
+    #[test]
+    fn handoff_carries_the_source_session_selection() {
+        use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
+
+        use crate::input::HandoffState;
+
+        let _home = zdx_engine::test_support::temp_zdx_home();
+        let mut app = AppState::new(
+            zdx_engine::config::Config::default(),
+            PathBuf::new(),
+            None,
+            None,
+        );
+        let source_thread_id = unique_thread_id("handoff-session");
+        let mut source = Thread::with_id(source_thread_id.clone()).unwrap();
+        source
+            .set_model_override(Some("openai:on-disk@low".to_string()))
+            .unwrap();
+        app.tui.thread.thread_handle = Some(source);
+        app.tui.thread.model_override = Some("openai:session@high".to_string());
+        app.tui.apply_reloaded_config(app.tui.config.clone());
+
+        app.tui.input.handoff = HandoffState::Ready;
+        app.tui.input.set_text("Generated handoff prompt body.");
+        let effects = update(
+            &mut app,
+            UiEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            ))),
+        );
+
+        let carried = effects
+            .iter()
+            .find_map(|effect| match effect {
+                UiEffect::HandoffSubmit { model_override, .. } => Some(model_override.clone()),
+                _ => None,
+            })
+            .expect("expected HandoffSubmit effect");
+        assert_eq!(carried.as_deref(), Some("openai:session@high"));
     }
 
     /// A model picked while the handoff composer is open belongs to the thread

@@ -359,65 +359,42 @@ fn set_last_answer(worker: &mut Value, bounded: Option<&BoundedWorkerText>) {
     }
 }
 
-/// Resolves a worker's requested model, substituting a `mode:<name>` reference
-/// with that mode's primary spec. The orchestrator prompt offers mode names, so
-/// a worker must not be started on the literal reference.
+/// Resolves the model selection a new worker is kept on.
 ///
-/// A mode means whatever the worker's *own* workspace says it means: the
-/// layered config at `root` decides, so a project can point `smart` at its own
-/// account or vendor. A workspace overlay replaces the mode list wholesale, so
-/// an empty list there means that workspace defines none and the orchestrator's
-/// own config answers instead.
-///
-/// `None` means "inherit configuration": no model was asked for, or the mode is
-/// not configured anywhere, which beats starting a worker that cannot reach a
-/// provider. An explicit model id passes through untouched.
-fn resolve_worker_model_spec(
-    orchestrator_config: Option<&crate::config::Config>,
-    root: &Path,
-    model: &str,
-) -> Option<String> {
+/// An explicit model id passes through untouched. A `mode:<name>` must be
+/// defined by the worker root's own config layers, the config every later turn
+/// of the worker resolves it against: the worker keeps the reference, so an
+/// edited mode moves it at its next turn. A mode the root does not define is
+/// refused with an actionable error rather than replaced by another model (and
+/// possibly another account).
+fn resolve_worker_model_spec(root: &Path, model: &str) -> Result<String, ToolOutput> {
     if crate::config::mode_ref_name(model).is_none() {
-        return Some(model.to_string());
+        return Ok(model.to_string());
     }
-
-    let workspace_config =
+    let mut config =
         crate::config::Config::load_layered(&crate::config::paths::config_layer_paths_for(root))
-            .inspect_err(
-                |err| tracing::warn!(root = %root.display(), %err, "create_thread: failed to read the worker workspace config"),
-            )
-            .ok()
-            .filter(|config| !config.model_modes.is_empty());
-
-    let resolve = |config: &crate::config::Config| {
-        config
-            .resolve_mode_ref(model)
-            .map(|outcome| outcome.map(str::to_string).map_err(str::to_string))
-    };
-    let resolved = match workspace_config.as_ref() {
-        Some(config) => resolve(config),
-        None => orchestrator_config.and_then(resolve),
-    };
-
-    match resolved {
-        Some(Ok(primary)) => Some(primary),
-        Some(Err(name)) => {
-            tracing::warn!(
-                mode = %name,
-                root = %root.display(),
-                "create_thread: unknown model mode; inheriting the workspace default instead"
-            );
-            None
-        }
-        None => {
-            tracing::warn!(
-                model,
-                root = %root.display(),
-                "create_thread: no model modes configured; inheriting the workspace default instead"
-            );
-            None
-        }
-    }
+            .map_err(|err| {
+                ToolOutput::failure(
+                    "invalid_config",
+                    format!(
+                        "Cannot resolve {model:?}: the config for {} failed to load: {err:#}",
+                        root.display()
+                    ),
+                    None,
+                )
+            })?;
+    config.apply_model_selection(model).map_err(|err| {
+        ToolOutput::failure(
+            "unknown_model_mode",
+            format!("{err} for worker root {}", root.display()),
+            Some(
+                "Pass one of the modes listed above, an explicit model id, or omit `model` \
+                 to use the workspace default."
+                    .to_string(),
+            ),
+        )
+    })?;
+    Ok(config.model_selection())
 }
 
 /// Resolves the root a worker runs in.
@@ -465,13 +442,17 @@ fn create_thread(
     };
     let title = optional_str(input, "title");
     let (model, thinking_level) = match optional_str(input, "model") {
-        Some(model) => match resolve_worker_model_spec(ctx.config.as_ref(), &root, model) {
-            Some(spec) => {
+        Some(model) => match resolve_worker_model_spec(&root, model) {
+            // A mode carries its own thinking level and resolves per turn.
+            Ok(selection) if crate::config::mode_ref_name(&selection).is_some() => {
+                (Some(selection), None)
+            }
+            Ok(spec) => {
                 let inherited = ctx.thinking_level.unwrap_or_default();
                 let (model, thinking) = crate::models::resolve_model_spec(&spec, inherited);
                 (Some(model), Some(thinking))
             }
-            None => (None, None),
+            Err(failure) => return failure,
         },
         None => (None, None),
     };
@@ -697,89 +678,44 @@ mod tests {
 
     use super::*;
 
-    fn mode_config() -> crate::config::Config {
-        crate::config::Config {
-            model_modes: vec![crate::config::ModelMode {
-                name: "smart".to_string(),
-                description: "deep work".to_string(),
-                primary: "claude-cli:claude-opus-5@high".to_string(),
-                alternatives: Vec::new(),
-                thinking: crate::config::ThinkingLevel::High,
-            }],
-            ..Default::default()
-        }
-    }
-
-    /// A worker asked for on `mode:<name>` starts on that mode's primary spec;
-    /// an unknown mode inherits configuration instead of a broken model id, and
-    /// an explicit model id passes through untouched.
+    /// A worker on `mode:<name>` keeps the reference when its root defines
+    /// the mode; an unknown mode is refused instead of running the default,
+    /// and an explicit model id passes through untouched.
     #[test]
-    fn worker_model_resolves_mode_references() {
+    fn worker_model_keeps_mode_references_its_root_defines() {
         let _home = crate::test_support::temp_zdx_home();
-        let root = tempfile::tempdir().unwrap();
-        let config = mode_config();
-        let resolve = |model: &str| resolve_worker_model_spec(Some(&config), root.path(), model);
-
-        assert_eq!(
-            resolve("mode:smart").as_deref(),
-            Some("claude-cli:claude-opus-5@high")
-        );
-        assert_eq!(
-            resolve("  MODE:Smart ").as_deref(),
-            Some("claude-cli:claude-opus-5@high")
-        );
-        assert_eq!(
-            resolve("openai:gpt-5.5@low").as_deref(),
-            Some("openai:gpt-5.5@low"),
-            "a plain spec passes through untouched"
-        );
-        assert_eq!(resolve("mode:nope"), None);
-        assert_eq!(
-            resolve_worker_model_spec(None, root.path(), "openai:gpt-5.5").as_deref(),
-            Some("openai:gpt-5.5"),
-            "an id needs no config to pass through"
-        );
-        assert_eq!(
-            resolve_worker_model_spec(None, root.path(), "mode:smart"),
-            None,
-            "a ref with nothing to resolve against inherits configuration"
-        );
-    }
-
-    /// The worker's own workspace decides what a mode means. Its overlay
-    /// replaces the list wholesale, so a workspace that defines modes answers
-    /// for every name, and one that defines none defers to the orchestrator.
-    #[test]
-    fn worker_model_prefers_the_target_workspace_modes() {
-        let _home = crate::test_support::temp_zdx_home();
-        let orchestrator = mode_config();
-
         let workspace = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(workspace.path().join(".zdx")).unwrap();
         std::fs::write(
             workspace.path().join(".zdx/config.toml"),
-            "[[model_modes]]\nname = \"smart\"\nprimary = \"claude-cli@parity:claude-opus-5@high\"\n",
+            "[[model_modes]]\nname = \"smart\"\nprimary = \"claude-cli@work:claude-opus-5@high\"\n",
         )
         .unwrap();
 
         assert_eq!(
-            resolve_worker_model_spec(Some(&orchestrator), workspace.path(), "mode:smart")
-                .as_deref(),
-            Some("claude-cli@parity:claude-opus-5@high"),
-            "the workspace overlay wins over the orchestrator's own list"
+            resolve_worker_model_spec(workspace.path(), " MODE:Smart ").unwrap(),
+            "mode:smart"
         );
         assert_eq!(
-            resolve_worker_model_spec(Some(&orchestrator), workspace.path(), "mode:fast"),
-            None,
-            "a name the overlay drops is unknown there, not inherited from the orchestrator"
+            resolve_worker_model_spec(workspace.path(), "openai:gpt-5.5@low").unwrap(),
+            "openai:gpt-5.5@low"
         );
+        let refused = resolve_worker_model_spec(workspace.path(), "mode:fast").unwrap_err();
+        let text = serde_json::to_string(&refused).unwrap();
+        assert!(text.contains("unknown_model_mode"), "{text}");
+        assert!(text.contains("configured: smart"), "{text}");
+    }
 
-        // A workspace with no modes of its own defers to the orchestrator.
+    /// A mode only the orchestrator's own config defines is refused: the
+    /// worker resolves its mode in its own root each turn, where that name
+    /// means nothing.
+    #[test]
+    fn worker_model_refuses_modes_its_root_does_not_define() {
+        let _home = crate::test_support::temp_zdx_home();
         let plain = tempfile::tempdir().unwrap();
-        assert_eq!(
-            resolve_worker_model_spec(Some(&orchestrator), plain.path(), "mode:smart").as_deref(),
-            Some("claude-cli:claude-opus-5@high")
-        );
+        let refused = resolve_worker_model_spec(plain.path(), "mode:smart").unwrap_err();
+        let text = serde_json::to_string(&refused).unwrap();
+        assert!(text.contains("no modes are configured here"), "{text}");
     }
 
     fn context_model(provider: &'static str, context_limit: u64) -> crate::models::ModelOption {

@@ -318,7 +318,18 @@ fn execute_command(
             }
         }
         "model" => (Some(OverlayRequest::ModelPicker), vec![], vec![]),
-        "thinking" => match super::thinking_picker::thinking_request_for_model(&tui.config.model) {
+        // While a handoff is staged, `/thinking` targets the thread it will
+        // open (as Ctrl+T does), on the concrete model its selection runs.
+        "thinking" => match super::thinking_picker::thinking_request_for_model(
+            &tui.input.handoff_model.as_deref().map_or_else(
+                || tui.config.model.clone(),
+                |staged| {
+                    zdx_engine::config::mode_ref_name(staged)
+                        .and_then(|_| tui.config.selection_spec(staged))
+                        .unwrap_or_else(|| staged.to_string())
+                },
+            ),
+        ) {
             Some(request) => (Some(request), vec![], vec![]),
             None => (
                 None,
@@ -333,10 +344,7 @@ fn execute_command(
         "model-save" => (
             None,
             vec![UiEffect::PersistModel {
-                model: zdx_engine::models::format_model_thinking(
-                    &tui.config.model,
-                    tui.config.thinking_level,
-                ),
+                model: tui.config.model_selection(),
             }],
             vec![],
         ),
