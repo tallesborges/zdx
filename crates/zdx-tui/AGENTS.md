@@ -29,7 +29,7 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 ### Feature slices (`src/features/`)
 
 - `features/auth/`: auth feature slice. Most providers use browser-redirect PKCE (`AwaitingCode` → paste/callback → `Exchanging`); Muse Code is RFC 8628 device code instead (`DeviceStarting` → `DeviceAwaitingApproval` showing the user code → poll → `LoginResult`), so it has no pasteable code and no localhost listener. `LoginState::reopen` returns effects: a retry must re-open the browser / re-arm the listener / request a fresh device code, since the previous attempt's are spent.
-- `features/input/`: input feature slice (`text_buffer.rs` cursor editing). Empty Enter after a failed turn retries it: `TuiState::can_retry_last_turn` gates `InputContext.can_retry`, and `submit_input` emits a bare `StartAgentTurn` (re-runs `thread.messages` with no new user message).
+- `features/input/`: input feature slice (`text_buffer.rs` cursor editing). While a turn runs, Enter emits `StateMutation::Steer` (`TuiState::steer_or_queue`: joins the running turn through its `SteerInbox`, else queues) and Tab with text queues; `TuiState::settle_steers` on `TurnFinished` runs unread steers next or, after a cancel, puts them back in the composer (SPEC §21). Empty Enter after a failed turn retries it: `TuiState::can_retry_last_turn` gates `InputContext.can_retry`, and `submit_input` emits a bare `StartAgentTurn` (re-runs `thread.messages` with no new user message).
 - `features/statusline/`: debug status line state/render
 - `features/thread/`: thread picker + thread tree view
 - `features/transcript/`: transcript feature + markdown rendering (`reasoning.rs` shared reasoning-display helper + `[redacted reasoning]` placeholder constant)

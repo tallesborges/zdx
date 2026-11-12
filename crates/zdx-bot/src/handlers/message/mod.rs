@@ -44,12 +44,20 @@ struct ReplyContext {
 ///
 /// # Errors
 /// Returns an error if the operation fails.
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn handle_message(
     context: &std::sync::Arc<BotContext>,
     queues: &crate::bot::queue::ChatQueueMap,
-    message: Message,
+    mut message: Message,
 ) -> Result<()> {
     let ctx = context.as_ref();
+    if let Some(prepared) = message.prepared.take() {
+        return Box::pin(run_prepared(ctx, *prepared.0)).await;
+    }
+    let steer_attempt = message.delivery == crate::telegram::MessageDelivery::SteerAttempt;
+    // A bot-generated prompt never steers, like in `steer_eligible`.
+    let steer_if_busy = message.delivery != crate::telegram::MessageDelivery::ForceQueue
+        && message.synthetic.is_none();
     let bot_config = context.config_for_chat(message.chat.id);
     let synthetic_topic_routed_from_general = message.synthetic_topic_routed_from_general;
     let routed_as_btw_input = message.routed_as_btw_input;
@@ -147,7 +155,12 @@ pub(crate) async fn handle_message(
         return Ok(());
     }
 
-    run_agent_turn(
+    if steer_attempt {
+        cleanup_provisional_status(ctx, Some(incoming.chat_id), provisional_status).await;
+        return steer_into_running_turn(context, queues, incoming, &reply_ctx, &thread_id).await;
+    }
+
+    Box::pin(run_agent_turn(
         ctx,
         incoming,
         reply_ctx,
@@ -155,9 +168,167 @@ pub(crate) async fn handle_message(
         synthetic_topic_routed_from_general,
         provisional_status,
         true,
-    )
+        steer_if_busy,
+    ))
     .await?;
     Ok(())
+}
+
+/// A steer that could not join the running turn: already parsed and routed,
+/// so it runs as a normal turn without parsing again.
+async fn run_prepared(context: &BotContext, incoming: crate::types::IncomingMessage) -> Result<()> {
+    let reply_ctx = build_reply_context(&incoming, false, false);
+    let thread_id =
+        resolve_effective_thread_id(&thread_id_for_chat(incoming.chat_id, reply_ctx.topic_id));
+    Box::pin(run_agent_turn(
+        context, incoming, reply_ctx, &thread_id, false, None, true, false,
+    ))
+    .await
+}
+
+/// Offers a message sent while its topic's turn runs to that turn as a
+/// steer. Agent topics push into the running turn's inbox here; a message the
+/// turn cannot take (no turn, closing, or images) goes to the normal queue,
+/// already parsed. Orchestrator topics ask the service, which steers it or
+/// queues it itself (the bridge renders that turn).
+async fn steer_into_running_turn(
+    context: &std::sync::Arc<BotContext>,
+    queues: &crate::bot::queue::ChatQueueMap,
+    incoming: crate::types::IncomingMessage,
+    reply_ctx: &ReplyContext,
+    thread_id: &str,
+) -> Result<()> {
+    use zdx_engine::orchestration::client::ok;
+    use zdx_engine::orchestration::protocol::{Delivery, Follow, Reply, Request, Route, Submit};
+
+    let ctx = context.as_ref();
+    if thread_persistence::read_persistent_profile(thread_id)?.is_some() {
+        let submit = Submit {
+            thread_id: Some(thread_id.to_string()),
+            root: context.root_for_chat(incoming.chat_id).root,
+            profile: None,
+            model: None,
+            route: Some(Route {
+                chat: incoming.chat_id,
+                topic: reply_ctx.topic_id,
+            }),
+            text: crate::agent::build_user_text(&incoming),
+            images: crate::agent::inline_images(&incoming),
+            follow: Follow::None,
+            delivery: Delivery::Steer,
+        };
+        // Not in the turn: queued by the service, and the bridge renders the
+        // turn it starts.
+        if let Reply::Submitted {
+            input_id,
+            in_turn: true,
+            ..
+        } = ok(context
+            .orchestrator()
+            .call(&Request::Submit(submit))
+            .await?)?
+        {
+            post_steer_ack(ctx, &incoming, reply_ctx, &input_id.to_string()).await;
+        }
+        return Ok(());
+    }
+
+    let chat = incoming.chat_id;
+    let fallback = if incoming.images.is_empty() {
+        let text = crate::agent::build_user_text(&incoming);
+        let steer = crate::steer::LocalSteer {
+            incoming,
+            reply_to_message_id: reply_ctx.reply_to_message_id,
+            topic_id: reply_ctx.topic_id,
+        };
+        match ctx.steer().try_push(thread_id, text, steer) {
+            Ok(id) => {
+                // The inbox owns the message now; post_steer_ack only needs
+                // where to answer.
+                post_steer_ack_at(
+                    ctx,
+                    reply_ctx.reply_to_message_id,
+                    reply_ctx.topic_id,
+                    &id,
+                    chat,
+                )
+                .await;
+                return Ok(());
+            }
+            Err(steer) => steer.incoming,
+        }
+    } else {
+        incoming
+    };
+    if let Some(message) = crate::bot::synthetic::prepared_message(fallback) {
+        crate::bot::queue::enqueue_prepared(queues, context, message).await;
+    }
+    Ok(())
+}
+
+async fn post_steer_ack(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    reply_ctx: &ReplyContext,
+    id: &str,
+) {
+    post_steer_ack_at(
+        context,
+        reply_ctx.reply_to_message_id,
+        reply_ctx.topic_id,
+        id,
+        incoming.chat_id,
+    )
+    .await;
+}
+
+/// Answers an accepted steer with "will be added", or "added" when the turn
+/// already read it.
+async fn post_steer_ack_at(
+    context: &BotContext,
+    reply_to: Option<i64>,
+    topic_id: Option<i64>,
+    id: &str,
+    chat: i64,
+) {
+    context.steer().expect_ack(id);
+    match context
+        .client()
+        .send_text(&crate::telegram::TextSend {
+            chat_id: chat,
+            text: crate::steer::ACK_PENDING,
+            reply_to_message_id: reply_to,
+            message_thread_id: topic_id,
+            reply_parameters: None,
+            reply_markup: None,
+            disable_preview: true,
+        })
+        .await
+    {
+        Ok(sent) => {
+            let ack = crate::steer::Ack {
+                chat,
+                message_id: sent.id,
+            };
+            if let Some(outcome) = context.steer().record_ack(id, ack) {
+                edit_steer_ack(context, ack, outcome).await;
+            }
+        }
+        Err(err) => {
+            context.steer().forget(id);
+            tracing::warn!(err = %format!("{err:#}"), "Failed to acknowledge a steer");
+        }
+    }
+}
+
+pub(crate) async fn edit_steer_ack(context: &BotContext, ack: crate::steer::Ack, text: &str) {
+    if let Err(err) = context
+        .client()
+        .edit_message_text(ack.chat, ack.message_id, text, None)
+        .await
+    {
+        tracing::warn!(err = %format!("{err:#}"), "Failed to update a steer acknowledgement");
+    }
 }
 
 /// Re-runs a failed turn from the already-persisted thread state.
@@ -196,7 +367,10 @@ pub(crate) async fn retry_agent_turn(
         cross_topic_reply_parameters: None,
     };
 
-    run_agent_turn(context, incoming, reply_ctx, thread_id, false, None, false).await
+    Box::pin(run_agent_turn(
+        context, incoming, reply_ctx, thread_id, false, None, false, false,
+    ))
+    .await
 }
 
 async fn parse_message_with_status(

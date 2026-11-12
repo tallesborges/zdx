@@ -68,6 +68,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             cancel,
             thread_handle,
             messages,
+            steer,
         } => {
             // For btw tabs: apply thread state from first-send preparation
             if let Some(handle) = thread_handle {
@@ -88,6 +89,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 app.tui.thread.messages = msgs;
             }
             app.tui.agent_state = AgentState::Waiting { rx, cancel };
+            app.tui.steer = steer;
             app.tui.transcript.activate_pending_user_cell();
             app.tui.status_line.start_turn();
             vec![]
@@ -121,6 +123,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             cancel,
             thread_handle,
             messages,
+            steer,
         } => {
             if let Some(tab) = app.background_tab_mut(tab_id) {
                 if let Some(handle) = thread_handle {
@@ -140,6 +143,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     tab.thread.messages = msgs;
                 }
                 tab.agent_state = AgentState::Waiting { rx, cancel };
+                tab.steer = steer;
                 tab.transcript.activate_pending_user_cell();
                 tab.status_line.start_turn();
             }
@@ -431,6 +435,12 @@ fn finalize_agent_event_for_tab(
     }
 
     maybe_push_timing_cell_for_tab(tui, should_dequeue);
+    if let AgentEvent::TurnFinished { status, .. } = agent_event {
+        tui.settle_steers(matches!(
+            status,
+            zdx_engine::core::events::TurnStatus::Interrupted
+        ));
+    }
     let continues = maybe_send_next_queued_prompt_for_tab(tui, should_dequeue, tab, effects);
 
     if let AgentEvent::TurnFinished { status, .. } = agent_event {
@@ -585,6 +595,7 @@ fn apply_tab_mutations(tui: &mut crate::state::TuiState, mutations: Vec<StateMut
             StateMutation::Input(m) => tui.input.apply(m),
             // Per-tab state: must apply to the owning tab, not just the active one.
             StateMutation::SetLastFollowups(items) => tui.last_followups = items,
+            StateMutation::Steer(text) => tui.steer_or_queue(text),
             StateMutation::Auth(_)
             | StateMutation::SetRootDisplay { .. }
             | StateMutation::SetActiveThreadOverrides { .. }
@@ -1088,6 +1099,7 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
             StateMutation::ToggleDebugStatus => {
                 tui.show_debug_status = !tui.show_debug_status;
             }
+            StateMutation::Steer(text) => tui.steer_or_queue(text),
         }
     }
 }
@@ -1412,6 +1424,8 @@ fn create_btw_tab(tab_id: TabId, parent_thread_id: Option<String>, parent: &TuiS
         active_threads_scan: std::collections::HashSet::new(),
         active_threads_scanned_at: None,
         last_followups: Vec::new(),
+        steer: None,
+        next_steer_id: 0,
     }
 }
 
@@ -1522,6 +1536,8 @@ fn create_thread_tab(
         active_threads_scan: std::collections::HashSet::new(),
         active_threads_scanned_at: None,
         last_followups: Vec::new(),
+        steer: None,
+        next_steer_id: 0,
     }
 }
 

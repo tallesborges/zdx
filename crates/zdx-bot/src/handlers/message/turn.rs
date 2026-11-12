@@ -8,7 +8,7 @@ use zdx_engine::core::events::{AgentEvent, ErrorKind, TurnStatus as AgentTurnSta
 use zdx_engine::core::thread_persistence;
 use zdx_engine::orchestration::OrchestratorClient;
 use zdx_engine::orchestration::client::ok;
-use zdx_engine::orchestration::protocol::{Event, Follow, Reply, Request, Route, Submit};
+use zdx_engine::orchestration::protocol::{Delivery, Event, Follow, Reply, Request, Route, Submit};
 
 use super::response::{TouchedWorker, send_final_response};
 use super::status::{StatusDebounce, cleanup_turn_status, flush_status, setup_turn_status};
@@ -17,7 +17,12 @@ use crate::agent;
 use crate::bot::context::BotContext;
 use crate::telegram::InlineKeyboardMarkup;
 
-#[allow(clippy::too_many_lines)]
+/// `steer_if_busy`: in an orchestrator topic, the message joins a turn the
+/// service is already running (a worker update) instead of waiting behind it.
+///
+/// Steers an agent turn never read run next in this queue slot, one at a
+/// time in arrival order (those that miss their own turn go behind them).
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 pub(super) async fn run_agent_turn(
     context: &BotContext,
     incoming: crate::types::IncomingMessage,
@@ -26,6 +31,62 @@ pub(super) async fn run_agent_turn(
     synthetic_topic_routed_from_general: bool,
     provisional_status: Option<TurnStatus>,
     record_user: bool,
+    steer_if_busy: bool,
+) -> Result<()> {
+    let mut unread = std::collections::VecDeque::new();
+    let result = Box::pin(run_one_turn(
+        context,
+        incoming,
+        reply_ctx,
+        thread_id,
+        synthetic_topic_routed_from_general,
+        provisional_status,
+        record_user,
+        steer_if_busy,
+        &mut unread,
+    ))
+    .await;
+    while let Some(steer) = unread.pop_front() {
+        let reply_ctx = ReplyContext {
+            reply_to_message_id: steer.reply_to_message_id,
+            topic_id: steer.topic_id,
+            cross_topic_reply_parameters: None,
+        };
+        if let Err(err) = Box::pin(run_one_turn(
+            context,
+            steer.incoming,
+            reply_ctx,
+            thread_id,
+            false,
+            None,
+            true,
+            false,
+            &mut unread,
+        ))
+        .await
+        {
+            tracing::warn!(thread_id, err = %format!("{err:#}"), "A steer that missed its turn failed as the next turn");
+        }
+    }
+    result
+}
+
+/// One turn. Steers an agent turn never read are pushed onto `unread`.
+#[allow(
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::fn_params_excessive_bools
+)]
+async fn run_one_turn(
+    context: &BotContext,
+    incoming: crate::types::IncomingMessage,
+    reply_ctx: ReplyContext,
+    thread_id: &str,
+    synthetic_topic_routed_from_general: bool,
+    provisional_status: Option<TurnStatus>,
+    record_user: bool,
+    steer_if_busy: bool,
+    unread: &mut std::collections::VecDeque<crate::steer::LocalSteer>,
 ) -> Result<()> {
     // Queued turns can start long after the message arrived, so re-check the
     // config layers here too: this is what feeds model, thinking level, and
@@ -53,7 +114,7 @@ pub(super) async fn run_agent_turn(
     // Persistent-profile threads (orchestrator home bases) run in the
     // orchestrator service, their only writer; this process renders them.
     if thread_persistence::read_persistent_profile(thread_id)?.is_some() {
-        return run_service_turn(
+        return Box::pin(run_service_turn(
             context,
             incoming,
             reply_ctx,
@@ -61,7 +122,8 @@ pub(super) async fn run_agent_turn(
             synthetic_topic_routed_from_general,
             provisional_status,
             record_user,
-        )
+            steer_if_busy,
+        ))
         .await;
     }
     let resolved_root = context.root_for_chat(incoming.chat_id);
@@ -169,12 +231,15 @@ pub(super) async fn run_agent_turn(
         messages,
         prepared,
     };
+    // Messages sent while this turn runs join it at its next safe point.
+    let steer = context.steer().open(thread_id);
     let mut handle = agent::spawn_agent_turn(
         spawn.messages,
         spawn.prepared,
         spawn.thread_id,
         spawn.thread,
         context.tool_config(),
+        steer,
     );
     let result = stream_turn_events(
         context,
@@ -189,7 +254,7 @@ pub(super) async fn run_agent_turn(
     handle.await_persisted().await;
     drop(typing);
     cleanup_turn_status(context, &status).await;
-    finalize_turn(
+    let finalized = finalize_turn(
         context,
         &incoming,
         &reply_ctx,
@@ -199,7 +264,44 @@ pub(super) async fn run_agent_turn(
         result,
         false,
     )
-    .await
+    .await;
+    // Settled even when the reply above failed.
+    Box::pin(settle_unread_steers(
+        context,
+        thread_id,
+        handle.cancel.is_cancelled(),
+        unread,
+    ))
+    .await;
+    finalized
+}
+
+/// Settles a finished agent turn's steers: read ones get their "added"
+/// edit if still due; unread ones run next (queued on `unread`) after a
+/// completed or failed turn, and are not added after a cancel.
+async fn settle_unread_steers(
+    context: &BotContext,
+    thread_id: &str,
+    cancelled: bool,
+    unread: &mut std::collections::VecDeque<crate::steer::LocalSteer>,
+) {
+    let closed = context.steer().close(thread_id);
+    for ack in closed.added {
+        super::edit_steer_ack(context, ack, crate::steer::ACK_ADDED).await;
+    }
+    let outcome = if cancelled {
+        crate::steer::ACK_NOT_ADDED
+    } else {
+        crate::steer::ACK_NEW_TURN
+    };
+    for (id, steer) in closed.unread {
+        if let Some(ack) = context.steer().settle(&id, outcome) {
+            super::edit_steer_ack(context, ack, outcome).await;
+        }
+        if !cancelled {
+            unread.push_back(steer);
+        }
+    }
 }
 
 /// Async LLM topic title for a new topic (and Threaded Mode DM threads, which
@@ -240,6 +342,7 @@ fn spawn_topic_title(
 /// Sends a message to a persistent-profile thread in the orchestrator service
 /// and renders the turn that runs it, exactly like a local turn: status line,
 /// cancel, final reply, delivery records.
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 async fn run_service_turn(
     context: &BotContext,
     incoming: crate::types::IncomingMessage,
@@ -248,6 +351,7 @@ async fn run_service_turn(
     synthetic_topic_routed_from_general: bool,
     provisional_status: Option<TurnStatus>,
     record_user: bool,
+    steer_if_busy: bool,
 ) -> Result<()> {
     if !record_user {
         // A retry re-runs persisted state in this process, which would make
@@ -302,9 +406,28 @@ async fn run_service_turn(
         text: agent::build_user_text(&incoming),
         images: agent::inline_images(&incoming),
         follow: Follow::Turn,
+        delivery: if steer_if_busy {
+            Delivery::Steer
+        } else {
+            Delivery::Queue
+        },
     };
     let turn = match ServiceTurn::submit(context.orchestrator(), thread_id, submit).await {
-        Ok(turn) => turn,
+        Ok(Submission::Following(turn)) => turn,
+        Ok(Submission::InTurn(input_id)) => {
+            // Joined the turn the service is running; that turn's renderer
+            // answers. Only the acknowledgement is ours.
+            drop(typing);
+            cleanup_turn_status(context, &status).await;
+            Box::pin(super::post_steer_ack(
+                context,
+                &incoming,
+                &reply_ctx,
+                &input_id.to_string(),
+            ))
+            .await;
+            return Ok(());
+        }
         Err(err) => {
             drop(typing);
             tracing::warn!(thread = %thread_id, err = %format!("{err:#}"), "Orchestrator service refused the message");
@@ -436,17 +559,35 @@ struct ServiceTurn {
     ended: oneshot::Receiver<Option<(u64, bool)>>,
 }
 
+/// What happened to a message submitted to the service.
+enum Submission {
+    /// Queued; its turn is followed here.
+    Following(ServiceTurn),
+    /// Steered into the running turn (input id); nothing to follow.
+    InTurn(u64),
+}
+
 impl ServiceTurn {
     /// Submits a message and follows the turn that runs it.
-    async fn submit(client: &OrchestratorClient, thread_id: &str, submit: Submit) -> Result<Self> {
+    async fn submit(
+        client: &OrchestratorClient,
+        thread_id: &str,
+        submit: Submit,
+    ) -> Result<Submission> {
         let mut stream = client.open(&Request::Submit(submit)).await?;
         let first = stream
             .next()
             .await?
             .context("the orchestrator service closed the connection")?;
-        let Reply::Submitted { input_id, .. } = ok(first)? else {
+        let Reply::Submitted {
+            input_id, in_turn, ..
+        } = ok(first)?
+        else {
             bail!("unexpected reply from the orchestrator service");
         };
+        if in_turn {
+            return Ok(Submission::InTurn(input_id));
+        }
         let (tx, events) = mpsc::unbounded_channel();
         // Read until the service closes the connection: it holds a routed
         // turn for this connection until the reply is delivered and released,
@@ -458,12 +599,12 @@ impl ServiceTurn {
                 }
             }
         });
-        Ok(Self::pump(
+        Ok(Submission::Following(Self::pump(
             client.clone(),
             thread_id.to_string(),
             CancelBy::Input(input_id),
             events,
-        ))
+        )))
     }
 
     /// Turns service events of one turn into agent events. A turn that never
@@ -612,6 +753,22 @@ async fn stream_turn_events(
                         match other {
                             AgentEvent::ToolStarted { id, name } => {
                                 tool_names.insert(id.clone(), name.clone());
+                            }
+                            // Steers of agent topics; the service bridge
+                            // handles the orchestrator's.
+                            AgentEvent::UserMessageInjected { id, .. }
+                                if crate::steer::BotSteer::is_local(id) =>
+                            {
+                                if let Some(ack) =
+                                    context.steer().settle(id, crate::steer::ACK_ADDED)
+                                {
+                                    Box::pin(super::edit_steer_ack(
+                                        context,
+                                        ack,
+                                        crate::steer::ACK_ADDED,
+                                    ))
+                                    .await;
+                                }
                             }
                             AgentEvent::ToolCompleted { id, result, .. } => {
                                 if let Some(name) = tool_names.remove(id)
@@ -1014,7 +1171,7 @@ mod tests {
         // Let the bridge subscribe as the renderer first.
         tokio::time::sleep(Duration::from_millis(300)).await;
 
-        super::run_agent_turn(
+        Box::pin(super::run_agent_turn(
             &context,
             incoming(),
             super::ReplyContext {
@@ -1026,7 +1183,8 @@ mod tests {
             false,
             None,
             true,
-        )
+            true,
+        ))
         .await
         .expect("turn");
 
@@ -1117,9 +1275,11 @@ mod selection_tests {
             cross_topic_reply_parameters: None,
         };
 
-        let err = run_agent_turn(&context, incoming, reply_ctx, thread_id, false, None, true)
-            .await
-            .unwrap_err();
+        let err = Box::pin(run_agent_turn(
+            &context, incoming, reply_ctx, thread_id, false, None, true, true,
+        ))
+        .await
+        .unwrap_err();
         assert!(zdx_engine::config::UnknownModeError::is_in(&err), "{err:#}");
         let sent: Vec<String> = fake
             .seen()

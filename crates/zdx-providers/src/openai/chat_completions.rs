@@ -336,7 +336,7 @@ fn tool_call_turn_replay(messages: &[ChatMessage]) -> Vec<bool> {
     let mut turn_has_tool_call = false;
 
     for (index, message) in messages.iter().enumerate() {
-        if index > turn_start && message.role == "user" && !message.has_tool_results() {
+        if index > turn_start && message.starts_turn() {
             if turn_has_tool_call {
                 replay[turn_start..index].fill(true);
             }

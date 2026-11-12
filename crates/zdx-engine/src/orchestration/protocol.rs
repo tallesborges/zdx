@@ -44,6 +44,20 @@ pub enum Follow {
     Settled,
 }
 
+/// How a `Submit` reaches the thread.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Delivery {
+    /// A new turn after the running and queued ones.
+    #[default]
+    Queue,
+    /// Added to the running turn at its next safe point (after its current
+    /// tool calls). With no running turn, a closing one, or images, it is
+    /// queued like `Queue`. Admitted into the running turn, the connection
+    /// closes after the reply: the running turn has its own renderer.
+    Steer,
+}
+
 /// One message for a persistent-profile thread.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Submit {
@@ -67,6 +81,8 @@ pub struct Submit {
     pub images: Vec<InputImage>,
     #[serde(default)]
     pub follow: Follow,
+    #[serde(default)]
+    pub delivery: Delivery,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,6 +147,12 @@ pub enum Reply {
         input_id: u64,
         /// Turns and inputs ahead of this one on the thread.
         queued_ahead: usize,
+        /// The input joined the running turn as a steer (`Delivery::Steer`).
+        /// Its `UserMessageInjected` agent event carries `input_id`; if the
+        /// turn ends first it is queued, or reported in `InputsDropped` after
+        /// a cancel.
+        #[serde(default)]
+        in_turn: bool,
     },
     Status {
         report: StatusReport,
@@ -223,7 +245,8 @@ pub enum Event {
         turn_id: u64,
         held: bool,
     },
-    /// Waiting inputs removed by a cancel.
+    /// Inputs removed without running: waiting inputs dropped by a cancel,
+    /// and steers a cancelled turn never read.
     InputsDropped {
         thread_id: String,
         input_ids: Vec<u64>,

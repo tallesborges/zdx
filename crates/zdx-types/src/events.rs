@@ -146,6 +146,18 @@ pub enum AgentEvent {
         prior_message_count: usize,
     },
 
+    /// A steer was added to the running turn at a safe point (after a tool
+    /// round, before the next model request). The message itself reaches the
+    /// thread through the next `TurnCheckpoint`; this event only reports it.
+    UserMessageInjected {
+        /// Id the steer was accepted under (inbox id or worker sequence).
+        id: String,
+        /// Who sent it, for example `user` or `worker_update`.
+        source: String,
+        /// The text added to the turn.
+        text: String,
+    },
+
     /// Token usage update from the provider.
     UsageUpdate {
         /// Input tokens (non-cached)

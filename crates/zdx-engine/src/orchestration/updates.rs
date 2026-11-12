@@ -110,8 +110,46 @@ pub fn worker_update_prompt(event: &CompletionEvent, worker_context: &serde_json
             }
         }
     }
+    prompt.push_str(&steers_section(&event.steers));
     prompt.push_str(&worker_context_section(worker_context));
     prompt
+}
+
+/// One line per steer outcome of the turn; empty when it took no steers.
+fn steers_section(steers: &[crate::core::workers::SteerReceipt]) -> String {
+    use std::fmt::Write as _;
+
+    use crate::core::workers::SteerState;
+
+    let ids = |state: SteerState| {
+        steers
+            .iter()
+            .filter(|steer| steer.state == state)
+            .map(|steer| steer.steer_id.to_string())
+            .collect::<Vec<_>>()
+    };
+    let mut lines = String::new();
+    let mut line = |state: SteerState, text: &str| {
+        let ids = ids(state);
+        if !ids.is_empty() {
+            let _ = writeln!(lines, "- {text}: {}", ids.join(", "));
+        }
+    };
+    line(SteerState::Injected, "read in this turn");
+    line(
+        SteerState::Queued,
+        "not read in time, queued as the next prompt",
+    );
+    line(SteerState::Discarded, "dropped by cancel");
+    line(
+        SteerState::Uncertain,
+        "unknown whether read (the worker stopped reporting); not re-sent",
+    );
+    if lines.is_empty() {
+        lines
+    } else {
+        format!("\nSteers (steer_id):\n{lines}")
+    }
 }
 
 /// Runtime context-usage metadata for a worker update.
@@ -252,6 +290,7 @@ mod tests {
             final_text: None,
             error: None,
             mirror_url: None,
+            steers: Vec::new(),
         }
     }
 

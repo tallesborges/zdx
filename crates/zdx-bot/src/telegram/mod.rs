@@ -26,11 +26,12 @@ mod types;
 
 #[allow(unused_imports)]
 pub use rich::RichMessage;
-#[allow(unused_imports)]
 pub use types::{
     Audio, CallbackQuery, Document, InlineKeyboardButton, InlineKeyboardMarkup, Message,
     PaidMediaInfo, PhotoSize, TelegramFile, Update, Video, Voice, WebAppInfo,
 };
+#[allow(unused_imports)]
+pub(crate) use types::{MessageDelivery, PreparedMessage};
 
 pub struct TelegramSettings {
     pub bot_token: String,

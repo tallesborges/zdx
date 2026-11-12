@@ -160,6 +160,38 @@ pub struct Message {
     /// Additional Telegram messages that belong to the same media album.
     #[serde(skip)]
     pub grouped_messages: Vec<Message>,
+    /// Internal: how this message reaches a running turn of its topic.
+    #[serde(skip)]
+    pub(crate) delivery: MessageDelivery,
+    /// Internal: already parsed (a steer that could not join the turn), so it
+    /// runs without downloading or transcribing again.
+    #[serde(skip)]
+    pub(crate) prepared: Option<PreparedMessage>,
+}
+
+/// How a user message reaches a running turn of its topic.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum MessageDelivery {
+    /// Queued; in an orchestrator topic it may still join a turn the service
+    /// runs on its own.
+    #[default]
+    Default,
+    /// Sent while the topic's turn was running: offered to that turn as a
+    /// steer before it queues (handled outside the queue).
+    SteerAttempt,
+    /// `/queue <text>`: a normal turn, never steered.
+    ForceQueue,
+}
+
+/// An already-parsed message queued for a normal turn.
+pub(crate) struct PreparedMessage(pub(crate) Box<crate::types::IncomingMessage>);
+
+impl std::fmt::Debug for PreparedMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedMessage")
+            .field("message_id", &self.0.message_id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Message {

@@ -181,6 +181,45 @@ pub struct LiveToolSpan {
     pub started_at: String,
 }
 
+/// The span of one user input: the input that starts a turn, or a steer
+/// added to a turn already running.
+fn input_span(sequence: usize, ts: &str, text: &str, turn: usize) -> TrajectorySpan {
+    let start_ms = precise_event_ms(ts);
+    TrajectorySpan {
+        key: format!("input:{sequence}"),
+        kind: TrajectorySpanKind::Input,
+        lane: TrajectoryLane::Input,
+        turn,
+        sequence,
+        result_sequence: None,
+        tool_use_id: None,
+        label: "Input".to_string(),
+        detail: compact(text, 96),
+        status: TrajectoryStatus::Ok,
+        timing: if start_ms.is_some() {
+            TimingQuality::Exact
+        } else {
+            TimingQuality::Unavailable
+        },
+        started_at: Some(ts.to_string()),
+        completed_at: None,
+        start_ms,
+        end_ms: start_ms,
+        duration_ms: Some(0),
+        wall_ms: Some(0),
+        track: 0,
+        model: None,
+        provider: None,
+        ttft_ms: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        cache_write_tokens: None,
+        live_input: None,
+        live_output_tail: None,
+    }
+}
+
 struct MutableTurn {
     index: usize,
     input: Option<TrajectoryInput>,
@@ -276,12 +315,27 @@ pub fn inspect_thread_trajectory_with_live(
     let mut unmatched_result = false;
 
     for (sequence, event) in events.iter().enumerate() {
-        if let ThreadEvent::Message { role, text, ts, .. } = event
+        if let ThreadEvent::Message {
+            role,
+            text,
+            ts,
+            phase,
+            ..
+        } = event
             && role == "user"
         {
+            // A steer is input of the turn already running, not a new turn.
+            if phase.as_deref() == Some(zdx_types::STEER_PHASE)
+                && let Some(index) = current
+            {
+                let turn: &mut MutableTurn = &mut turns[index];
+                let mut span = input_span(sequence, ts, text, turn.index);
+                span.label = "Steer".to_string();
+                turn.spans.push(span);
+                continue;
+            }
             flush_pending_usage(&mut turns, &mut current, &mut pending_usage);
             let index = turns.len() + 1;
-            let start_ms = precise_event_ms(ts);
             let input = TrajectoryInput {
                 sequence,
                 ts: ts.clone(),
@@ -290,39 +344,7 @@ pub fn inspect_thread_trajectory_with_live(
             turns.push(MutableTurn {
                 index,
                 input: Some(input),
-                spans: vec![TrajectorySpan {
-                    key: format!("input:{sequence}"),
-                    kind: TrajectorySpanKind::Input,
-                    lane: TrajectoryLane::Input,
-                    turn: index,
-                    sequence,
-                    result_sequence: None,
-                    tool_use_id: None,
-                    label: "Input".to_string(),
-                    detail: compact(text, 96),
-                    status: TrajectoryStatus::Ok,
-                    timing: if start_ms.is_some() {
-                        TimingQuality::Exact
-                    } else {
-                        TimingQuality::Unavailable
-                    },
-                    started_at: Some(ts.clone()),
-                    completed_at: None,
-                    start_ms,
-                    end_ms: start_ms,
-                    duration_ms: Some(0),
-                    wall_ms: Some(0),
-                    track: 0,
-                    model: None,
-                    provider: None,
-                    ttft_ms: None,
-                    input_tokens: None,
-                    output_tokens: None,
-                    cache_read_tokens: None,
-                    cache_write_tokens: None,
-                    live_input: None,
-                    live_output_tail: None,
-                }],
+                spans: vec![input_span(sequence, ts, text, index)],
                 request_count: 0,
             });
             current = Some(turns.len() - 1);

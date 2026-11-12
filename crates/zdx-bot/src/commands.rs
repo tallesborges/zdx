@@ -156,7 +156,26 @@ pub(crate) fn telegram_command_specs() -> Vec<TelegramCommandSpec> {
         command: "model",
         description: "View or change model and thinking",
     });
+    specs.push(TelegramCommandSpec {
+        command: "queue",
+        description: "Queue a message instead of adding it to the running turn",
+    });
     specs
+}
+
+/// `/queue <text>`: the text to queue as a normal turn, never steered into
+/// the running one. `None` for any other message or an empty `/queue`.
+pub(crate) fn parse_queue_command(text: &str) -> Option<&str> {
+    let trimmed = text.trim_start();
+    let (command, rest) = trimmed
+        .split_once(char::is_whitespace)
+        .unwrap_or((trimmed, ""));
+    let is_queue = command == "/queue"
+        || command
+            .strip_prefix("/queue@")
+            .is_some_and(|username| !username.is_empty());
+    let rest = rest.trim();
+    (is_queue && !rest.is_empty()).then_some(rest)
 }
 
 /// Native bot command names that custom `.md` commands may not shadow in the
@@ -166,7 +185,7 @@ pub(crate) fn native_command_names() -> Vec<&'static str> {
         .iter()
         .map(|def| def.telegram_spec.command)
         .collect();
-    names.extend(["model", "cancel"]);
+    names.extend(["model", "cancel", "queue"]);
     names
 }
 
@@ -296,8 +315,21 @@ mod tests {
 
     use super::{
         BotCommand, RestartMode, bypasses_queue, command_matches, is_topic_blocking_command,
-        parse_command, parse_model_command, parse_restart_command, telegram_command_specs,
+        parse_command, parse_model_command, parse_queue_command, parse_restart_command,
+        telegram_command_specs,
     };
+
+    #[test]
+    fn queue_command_takes_its_text() {
+        assert_eq!(
+            parse_queue_command("/queue run the tests"),
+            Some("run the tests")
+        );
+        assert_eq!(parse_queue_command("/queue@zdx_bot  later "), Some("later"));
+        assert_eq!(parse_queue_command("/queue"), None);
+        assert_eq!(parse_queue_command("/queued x"), None);
+        assert_eq!(parse_queue_command("please /queue x"), None);
+    }
 
     #[test]
     fn parse_basic_commands() {

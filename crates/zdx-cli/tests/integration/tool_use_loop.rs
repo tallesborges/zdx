@@ -1676,3 +1676,103 @@ async fn real_runaway_content_is_retried_at_a_lower_thinking_level() {
         );
     }
 }
+
+/// A worker child (`--steer-file`) reads a pending steer after the tool
+/// round, sends it in the next request after the tool result, reports it on
+/// stdout, and never reads one written during its final answer. Its last
+/// stdout line says every steer report is written.
+#[tokio::test]
+async fn test_steer_file_joins_the_turn_after_the_tool_round() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
+    let zdx_home = temp_zdx_home();
+    let temp_dir = TempDir::new().unwrap();
+    fs::write(temp_dir.path().join("data.txt"), "secret data").unwrap();
+    let steer_file = temp_dir.path().join("steer.jsonl");
+    fs::write(&steer_file, "{\"seq\":7,\"text\":\"use the other file\"}\n").unwrap();
+
+    let mock_server = MockServer::start().await;
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let call_count_clone = Arc::clone(&call_count);
+    let second_body = Arc::new(std::sync::Mutex::new(String::new()));
+    let second_body_clone = Arc::clone(&second_body);
+    let late_file = steer_file.clone();
+    let first_response = tool_use_sse("toolu_steer1", "read", r#"{"file_path": "data.txt"}"#);
+    let second_response = text_sse("Done!");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(move |req: &Request| {
+            let count = call_count_clone.fetch_add(1, Ordering::SeqCst);
+            if count == 0 {
+                sse_response(&first_response)
+            } else {
+                *second_body_clone.lock().unwrap() = String::from_utf8_lossy(&req.body).to_string();
+                // Arrives during the final answer: past the last safe point.
+                let mut file = fs::OpenOptions::new()
+                    .append(true)
+                    .open(&late_file)
+                    .unwrap();
+                std::io::Write::write_all(&mut file, b"{\"seq\":8,\"text\":\"too late\"}\n")
+                    .unwrap();
+                sse_response(&second_response)
+            }
+        })
+        .expect(2)
+        .mount(&mock_server)
+        .await;
+
+    let output = crate::fixtures::zdx_cmd()
+        .env("ZDX_HOME", zdx_home.path())
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args([
+            "--root",
+            temp_dir.path().to_str().unwrap(),
+            "--no-thread",
+            "exec",
+            "-m",
+            MOCK_MODEL,
+            "--steer-file",
+            steer_file.to_str().unwrap(),
+            "-p",
+            "Read data.txt",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let body = second_body.lock().unwrap().clone();
+    let result_at = body
+        .find("toolu_steer1")
+        .expect("tool result in the second request");
+    let steer_at = body
+        .find("use the other file")
+        .expect("steer in the second request");
+    assert!(
+        steer_at > result_at,
+        "the steer follows the tool result: {body}"
+    );
+    assert!(!body.contains("too late"));
+
+    let stdout = String::from_utf8(output).unwrap();
+    let injected: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.contains("\"user_message_injected\""))
+        .collect();
+    assert_eq!(injected.len(), 1, "{stdout}");
+    assert!(injected[0].contains("\"id\":\"7\""), "{stdout}");
+    let closed = stdout
+        .lines()
+        .position(|line| line == r#"{"type":"steer_closed"}"#)
+        .expect("closing marker");
+    let injected_at = stdout
+        .lines()
+        .position(|line| line.contains("\"user_message_injected\""))
+        .unwrap();
+    assert!(closed > injected_at);
+}

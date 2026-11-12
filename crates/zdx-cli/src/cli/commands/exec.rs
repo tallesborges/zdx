@@ -43,6 +43,8 @@ pub struct ExecRunOptions<'a> {
     pub activity_kind: Option<&'a str>,
     pub activity_parent_thread_id: Option<&'a str>,
     pub activity_subagent_name: Option<&'a str>,
+    /// Worker steer file (`--steer-file`), read at safe points.
+    pub steer_file: Option<PathBuf>,
 }
 
 /// The config this run uses: the loaded layers, then the subagent's model and
@@ -172,6 +174,7 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
         tool_timeout: options
             .tool_timeout_override
             .map(|secs| std::time::Duration::from_secs(u64::from(secs))),
+        steer_file: options.steer_file.clone(),
     };
 
     // Use streaming variant - response is printed incrementally, final newline added at end

@@ -620,6 +620,7 @@ esac
                 timeout_secs,
                 cancel_grace_secs,
             }),
+            update_delivery: crate::config::UpdateDelivery::default(),
         };
         WorkerManager::from_config(&config).unwrap()
     }
@@ -976,6 +977,7 @@ esac
         let missing = WorkersConfig {
             runner: WorkerRunnerKind::External,
             external: None,
+            update_delivery: crate::config::UpdateDelivery::default(),
         };
         assert!(WorkerManager::from_config(&missing).is_err());
         let relative = ExternalWorkerConfig {

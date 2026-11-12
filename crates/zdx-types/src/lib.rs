@@ -18,8 +18,8 @@ pub use events::{
 };
 pub use messages::{
     ChatContentBlock, ChatMessage, ContentBlockType, IdOrigin, MessageContent, ReasoningBlock,
-    ReasoningReplay, ReplayToken, SignatureProvider, current_turn_start, estimated_input_tokens,
-    strip_voice_transcript, wrap_voice_transcript,
+    ReasoningReplay, ReplayToken, STEER_PHASE, SignatureProvider, current_turn_start,
+    estimated_input_tokens, strip_voice_transcript, wrap_voice_transcript,
 };
 pub use providers::{
     ProviderError, ProviderErrorKind, ProviderResult, ProviderStream, StreamEvent, Usage,

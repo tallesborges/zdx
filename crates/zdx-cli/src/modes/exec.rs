@@ -50,6 +50,8 @@ pub struct ExecOptions {
     pub activity_subagent_name: Option<String>,
     /// Per-run cap on a single tool call, from a job's `timeout_secs`.
     pub tool_timeout: Option<std::time::Duration>,
+    /// Worker steer file (`--steer-file`), read at safe points.
+    pub steer_file: Option<PathBuf>,
 }
 
 impl From<&ExecOptions> for AgentOptions {
@@ -65,6 +67,11 @@ impl From<&ExecOptions> for AgentOptions {
             activity_parent_thread_id: opts.activity_parent_thread_id.clone(),
             activity_subagent_name: opts.activity_subagent_name.clone(),
             tool_timeout: opts.tool_timeout,
+            steer: opts.steer_file.clone().map(|path| {
+                zdx_engine::core::steer::SteerSource::File(std::sync::Arc::new(
+                    zdx_engine::core::steer::SteerFile::new(path),
+                ))
+            }),
         }
     }
 }
@@ -111,6 +118,11 @@ pub async fn run_exec(
     mut thread: Option<Thread>,
     options: &ExecOptions,
 ) -> Result<String> {
+    // Dropped on every return, after the renderer has written every event.
+    let mut steer_closed = SteerClosedMarker {
+        enabled: options.steer_file.is_some(),
+        reports_complete: true,
+    };
     let thread_id_ref = thread.as_ref().map(|t| t.id.as_str());
 
     // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
@@ -211,11 +223,15 @@ pub async fn run_exec(
     .await;
 
     // Wait for all tasks to complete (even on error, to flush error events)
+    let mut events_complete = true;
     if let Some((broadcaster, persist)) = persist_handle {
-        let _ = broadcaster.await;
+        events_complete &= broadcaster.await.is_ok();
         let _ = persist.await;
     }
-    let _ = renderer_handle.await;
+    events_complete &= renderer_handle.await.unwrap_or(false);
+    // A steer report that may not have reached stdout makes every unreported
+    // steer uncertain, so no marker then.
+    steer_closed.reports_complete = events_complete;
 
     // Propagate error after tasks complete
     let (final_text, _messages) = result?;
@@ -225,11 +241,33 @@ pub async fn run_exec(
     Ok(final_text)
 }
 
+/// Writes the closing steer marker on drop, so a worker's manager knows the
+/// run has written every steer report (`core::subagent::STEER_CLOSED_LINE`).
+/// No marker when a report may be missing: the manager then reports unread
+/// steers as uncertain instead of re-sending them.
+struct SteerClosedMarker {
+    enabled: bool,
+    /// False once an event write failed or the renderer did not finish.
+    reports_complete: bool,
+}
+
+impl Drop for SteerClosedMarker {
+    fn drop(&mut self) {
+        if self.enabled && self.reports_complete {
+            let mut out = stdout();
+            let _ = writeln!(out, "{}", zdx_engine::core::subagent::STEER_CLOSED_LINE);
+            let _ = out.flush();
+        }
+    }
+}
+
 /// CLI renderer that writes agent events as compact JSONL to stdout.
 pub struct ExecRenderer {
     stdout: Stdout,
     event_filter: Vec<String>,
     stream: bool,
+    /// A line could not be written: the parent may have missed an event.
+    write_failed: bool,
 }
 
 impl Default for ExecRenderer {
@@ -245,6 +283,7 @@ impl ExecRenderer {
             stdout: stdout(),
             event_filter,
             stream,
+            write_failed: false,
         }
     }
 
@@ -263,9 +302,12 @@ impl ExecRenderer {
             return;
         }
 
-        if let Ok(line) = serde_json::to_string(&event) {
-            let _ = writeln!(self.stdout, "{line}");
-            let _ = self.stdout.flush();
+        match serde_json::to_string(&event) {
+            Ok(line) => {
+                let written = writeln!(self.stdout, "{line}").and_then(|()| self.stdout.flush());
+                self.write_failed |= written.is_err();
+            }
+            Err(_) => self.write_failed = true,
         }
     }
 
@@ -275,12 +317,13 @@ impl ExecRenderer {
 /// Spawns a renderer task that consumes events from a channel.
 ///
 /// The task owns the `ExecRenderer` and processes events until the channel closes.
-/// Returns a `JoinHandle` that resolves when all events have been rendered.
+/// Returns a `JoinHandle` that resolves when all events have been rendered,
+/// with `false` when a line could not be written.
 pub fn spawn_exec_renderer_task_with_filter(
     mut rx: zdx_engine::core::agent::AgentEventRx,
     event_filter: Vec<String>,
     stream: bool,
-) -> JoinHandle<()> {
+) -> JoinHandle<bool> {
     tokio::spawn(async move {
         let mut renderer = ExecRenderer::new(event_filter, stream);
 
@@ -289,6 +332,7 @@ pub fn spawn_exec_renderer_task_with_filter(
         }
 
         ExecRenderer::finish();
+        !renderer.write_failed
     })
 }
 
@@ -305,6 +349,7 @@ fn event_type_name(event: &AgentEvent) -> &'static str {
         AgentEvent::Notice { .. } => "notice",
         AgentEvent::ProviderRetry { .. } => "provider_retry",
         AgentEvent::UsageUpdate { .. } => "usage_update",
+        AgentEvent::UserMessageInjected { .. } => "user_message_injected",
         // Only emitted under `--stream`; addressable via `--filter` so a
         // streaming caller can narrow to deltas plus the final text.
         AgentEvent::AssistantDelta { .. } => "assistant_delta",
@@ -392,6 +437,7 @@ mod tests {
             activity_parent_thread_id: None,
             activity_subagent_name: None,
             tool_timeout: Some(std::time::Duration::from_secs(45)),
+            steer_file: None,
         };
 
         assert_eq!(
@@ -420,6 +466,7 @@ mod tests {
             activity_parent_thread_id: None,
             activity_subagent_name: None,
             tool_timeout: None,
+            steer_file: None,
         };
         let agent_opts = AgentOptions::from(&opts);
 

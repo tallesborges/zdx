@@ -297,6 +297,9 @@ pub struct TranscriptState {
     /// User cell ID for the most recently appended prompt awaiting agent start.
     pending_user_cell_id: Option<super::CellId>,
 
+    /// Steers waiting for the running turn: steer id and its notice cell.
+    pending_steers: Vec<(String, super::CellId)>,
+
     /// User cell ID for the currently running agent turn.
     active_user_cell_id: Option<super::CellId>,
 
@@ -327,6 +330,7 @@ impl Default for TranscriptState {
             position_map: PositionMap::new(),
             last_click: None,
             pending_user_cell_id: None,
+            pending_steers: Vec::new(),
             active_user_cell_id: None,
             // Force an initial full build on the first frame.
             line_info_dirty: Some(0),
@@ -371,8 +375,40 @@ impl TranscriptState {
         self.scroll.reset();
         self.wrap_cache.clear();
         self.pending_user_cell_id = None;
+        self.pending_steers.clear();
         self.active_user_cell_id = None;
         self.invalidate_line_info();
+    }
+
+    /// Shows a steer waiting for the running turn.
+    pub fn add_pending_steer(&mut self, id: String, text: &str) {
+        let cell =
+            super::HistoryCell::system(format!("↪ Will be added to the running turn: {text}"));
+        self.pending_steers.push((id, cell.id()));
+        self.cells.push(cell);
+        self.mark_line_info_dirty_from(self.cells.len().saturating_sub(2));
+    }
+
+    /// The running turn read a steer: its notice becomes a user message where
+    /// the turn read it. Unlike a sent prompt it is not pending agent start.
+    pub fn resolve_steer(&mut self, id: &str, text: &str) {
+        if let Some(index) = self
+            .pending_steers
+            .iter()
+            .position(|(steer, _)| steer == id)
+        {
+            let (_, cell) = self.pending_steers.remove(index);
+            self.remove_cell_by_id(cell);
+        }
+        self.cells.push(super::HistoryCell::user(text));
+        self.mark_line_info_dirty_from(self.cells.len().saturating_sub(2));
+    }
+
+    /// Removes the notices of steers the turn never read.
+    pub fn clear_pending_steers(&mut self) {
+        for (_, cell) in std::mem::take(&mut self.pending_steers) {
+            self.remove_cell_by_id(cell);
+        }
     }
 
     /// Removes a cell by its ID.

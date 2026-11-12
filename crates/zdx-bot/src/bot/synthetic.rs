@@ -55,6 +55,31 @@ fn build_synthetic_value(
     value
 }
 
+/// Wraps an already-parsed user message for the topic queue, keeping its real
+/// id so the queue's status and cancel point at it. `None` when the value
+/// does not parse (logged).
+pub(crate) fn prepared_message(
+    incoming: crate::types::IncomingMessage,
+) -> Option<crate::telegram::Message> {
+    let value = build_synthetic_value(
+        incoming.chat_id,
+        incoming.message_thread_id,
+        incoming.user_id,
+        incoming.message_id,
+        "",
+    );
+    match serde_json::from_value::<crate::telegram::Message>(value) {
+        Ok(mut message) => {
+            message.prepared = Some(crate::telegram::PreparedMessage(Box::new(incoming)));
+            Some(message)
+        }
+        Err(err) => {
+            tracing::error!(%err, "Failed to queue a steer that missed its turn");
+            None
+        }
+    }
+}
+
 /// Builds a synthetic user message with a fresh synthetic id. `None` when the
 /// message value does not parse (logged).
 pub(crate) fn build_synthetic_message(

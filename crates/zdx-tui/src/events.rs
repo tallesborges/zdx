@@ -257,6 +257,8 @@ pub enum UiEvent {
         thread_handle: Option<Thread>,
         /// For btw tabs: updated message list after thread preparation.
         messages: Option<Vec<ChatMessage>>,
+        /// Inbox of the new turn: messages sent while it runs join it.
+        steer: Option<zdx_engine::core::steer::SteerInbox>,
     },
 
     /// Agent turn spawned for a background (non-active) tab.
@@ -272,6 +274,7 @@ pub enum UiEvent {
         cancel: CancellationToken,
         thread_handle: Option<Thread>,
         messages: Option<Vec<ChatMessage>>,
+        steer: Option<zdx_engine::core::steer::SteerInbox>,
     },
 
     /// Agent event for a background (non-active) tab.

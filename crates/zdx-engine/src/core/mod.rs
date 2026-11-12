@@ -15,6 +15,7 @@
 //! - `recency`: shared recency decay applied to search relevance scores
 //! - `media_fallback`: image-to-`ask-media` fallback for models without image input
 //! - `native_memory`: native SQLite-backed memory index/search
+//! - `steer`: Messages added to a running turn at a safe point (in-memory inbox, worker steer file)
 //! - `subagent`: Child `zdx exec` subagent runner
 //! - `external_worker`: Worker turns run by a configured external launcher
 //! - `thread_export`: Thread transcript exports
@@ -43,6 +44,7 @@ pub mod native_memory;
 pub mod posted;
 pub mod prompt_builder_generation;
 pub mod recency;
+pub mod steer;
 pub mod subagent;
 pub mod thread_export;
 pub mod thread_index;

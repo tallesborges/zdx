@@ -87,6 +87,8 @@ pub(crate) struct BotContext {
     /// could not be deleted. Turns there are refused. Backs up the on-disk
     /// marker for when that write fails too.
     unsetup_topics: std::sync::Mutex<HashSet<String>>,
+    /// Running agent-topic turns that take steers, and steer acknowledgements.
+    steer: crate::steer::BotSteer,
 }
 
 #[derive(Debug, Clone)]
@@ -157,7 +159,12 @@ impl BotContext {
             active_deliveries: ActiveDeliveries::default(),
             send_files: crate::file_card::SendFileState::default(),
             unsetup_topics: std::sync::Mutex::new(HashSet::new()),
+            steer: crate::steer::BotSteer::default(),
         }
+    }
+
+    pub(crate) fn steer(&self) -> &crate::steer::BotSteer {
+        &self.steer
     }
 
     pub(crate) fn unsetup_topics(&self) -> &std::sync::Mutex<HashSet<String>> {

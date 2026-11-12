@@ -172,6 +172,7 @@ pub(crate) fn spawn_agent_turn(
     thread_id: &str,
     thread: &Thread,
     tool_config: &ToolConfig,
+    steer: zdx_engine::core::steer::SteerInbox,
 ) -> AgentTurnHandle {
     let PreparedBotTurn {
         config: bot_config,
@@ -192,6 +193,7 @@ pub(crate) fn spawn_agent_turn(
         activity_parent_thread_id: None,
         activity_subagent_name: None,
         tool_timeout: None,
+        steer: Some(zdx_engine::core::steer::SteerSource::Inbox(steer)),
     };
 
     // Create channels: agent -> broadcaster -> [bot, persist]

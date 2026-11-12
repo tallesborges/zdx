@@ -3389,3 +3389,60 @@ fn concurrent_appends_survive_metadata_rewrites() {
         Some(format!("example:model-{}", REWRITES - 1).as_str())
     );
 }
+
+#[test]
+fn a_steer_replays_inside_its_turn_and_leaves_notes_for_the_next_user_message() {
+    let post = crate::core::posted::PostedMessage {
+        surface: "telegram".to_string(),
+        chat_id: -100,
+        topic_id: Some(7),
+        message_id: 70,
+        url: None,
+        text: Some("An alert".to_string()),
+        file: None,
+        context: None,
+        source_thread_id: Some("job-example-1".to_string()),
+    };
+    let tool_round = vec![
+        crate::providers::ChatMessage::assistant_blocks(vec![
+            crate::providers::ChatContentBlock::ToolUse {
+                id: "t1".to_string(),
+                name: "read".to_string(),
+                input: json!({"file_path": "a.txt"}),
+                id_origin: zdx_types::IdOrigin::Real,
+                replay: None,
+            },
+        ]),
+        crate::providers::ChatMessage::tool_results(vec![crate::tools::ToolResult {
+            tool_use_id: "t1".to_string(),
+            content: crate::tools::ToolResultContent::Text("ok".to_string()),
+            is_error: false,
+        }]),
+        crate::providers::ChatMessage::steer("use b.txt instead"),
+    ];
+    let mut events = vec![ThreadEvent::user_message("read a file")];
+    events.push(ThreadEvent::posted(post));
+    events.extend(messages_to_events(&tool_round));
+    events.push(ThreadEvent::assistant_message("read b.txt"));
+    events.push(ThreadEvent::user_message("thanks"));
+
+    let replay = thread_events_to_replay(events);
+    let messages = replay.messages;
+    let steer = messages
+        .iter()
+        .position(crate::providers::ChatMessage::is_steer)
+        .expect("steer replayed");
+    assert!(
+        messages[steer - 1].has_tool_results(),
+        "after the tool results"
+    );
+    assert_eq!(
+        content_texts(&messages[steer]),
+        ["use b.txt instead"],
+        "no note"
+    );
+    // Same reasoning scope as live: the steer does not start a turn.
+    assert_eq!(zdx_types::current_turn_start(&messages[..=steer]), 1);
+    let thanks = content_texts(messages.last().unwrap());
+    assert!(thanks[0].starts_with("<posted_messages>"), "{}", thanks[0]);
+}

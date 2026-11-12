@@ -875,6 +875,7 @@ mod tests {
             current_tool_input: None,
             seconds_since_last_activity: None,
             turn_elapsed_seconds: None,
+            steers: Vec::new(),
         };
 
         assert_eq!(

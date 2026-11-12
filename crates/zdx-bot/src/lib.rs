@@ -36,6 +36,7 @@ mod restart_queue;
 mod retry;
 pub(crate) mod server;
 mod staging;
+mod steer;
 pub mod telegram;
 mod topic_title;
 mod transcribe;

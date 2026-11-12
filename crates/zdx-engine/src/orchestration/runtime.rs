@@ -26,7 +26,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::prompt::{prepare_turn, turn_config};
 use super::protocol::{
-    Event, Follow, InputRef, Route, StatusReport, Submit, ThreadState, ThreadStatus, TurnKind,
+    Delivery, Event, Follow, InputRef, Route, StatusReport, Submit, ThreadState, ThreadStatus,
+    TurnKind,
 };
 use super::updates::{InputImage, record_user_input, worker_update_prompt};
 use crate::config::{Config, TextVerbosity, paths};
@@ -34,6 +35,7 @@ use crate::core::agent::{
     self, AgentEventRx, AgentEventTx, AgentOptions, ToolConfig, ToolSelection, create_event_channel,
 };
 use crate::core::events::{AgentEvent, ErrorKind, TurnStatus};
+use crate::core::steer::{SOURCE_USER, SOURCE_WORKER_UPDATE, SteerInbox, SteerItem, SteerSource};
 use crate::core::thread_persistence::{self, Thread};
 use crate::core::workers::{WorkerEvent, WorkerManager};
 use crate::subagents::{self, ORCHESTRATOR_SUBAGENT_NAME};
@@ -69,6 +71,20 @@ pub struct TurnRequest {
     pub cancel: CancellationToken,
     /// Tool registry with the thread-control tools bound to the live workers.
     pub registry: ToolRegistry,
+    /// Steers for this turn (user messages, worker updates), taken at safe
+    /// points. Unread ones go back to the queue when the turn ends.
+    pub steer: SteerInbox,
+}
+
+/// Result of [`Orchestrator::submit`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Submitted {
+    pub thread_id: String,
+    pub input_id: u64,
+    /// Turns and inputs ahead of this one on the thread.
+    pub queued_ahead: usize,
+    /// The input was steered into the running turn instead of queued.
+    pub in_turn: bool,
 }
 
 type RunnerFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
@@ -103,8 +119,14 @@ impl Input {
 
 struct Running {
     turn_id: u64,
+    /// Inputs this turn holds: the batch it started with, then every steer
+    /// admitted into it (so a cancel naming one finds the turn).
     inputs: Vec<u64>,
     cancel: CancellationToken,
+    steer: SteerInbox,
+    /// A thread cancel that cleared the queue: unread steers are dropped, not
+    /// put back, when the turn ends.
+    drop_steers: bool,
 }
 
 struct ThreadEntry {
@@ -171,6 +193,9 @@ pub struct Orchestrator {
     release: Notify,
     next_id: AtomicU64,
     control: mpsc::UnboundedSender<Control>,
+    /// `[workers] update_delivery`: whether a worker result joins a running
+    /// turn of its thread at the next safe point (`Steer`) or always queues.
+    update_delivery: crate::config::UpdateDelivery,
 }
 
 /// Receives the events of one subscription; unsubscribes on drop.
@@ -202,9 +227,11 @@ impl Orchestrator {
     /// # Errors
     /// Returns an error when the worker runner is not validly configured.
     pub fn start(workers: &crate::config::WorkersConfig) -> anyhow::Result<Arc<Self>> {
+        let update_delivery = workers.update_delivery;
         let (workers, worker_events) = WorkerManager::from_config(workers)?;
         let runner: TurnRunner = Arc::new(|request| Box::pin(run_profile_turn(request)));
-        let orchestrator = Self::start_with(workers, worker_events, runner);
+        let orchestrator =
+            Self::start_with_delivery(workers, worker_events, runner, update_delivery);
         orchestrator.recover_mirrors();
         Ok(orchestrator)
     }
@@ -216,6 +243,22 @@ impl Orchestrator {
         workers: Arc<WorkerManager>,
         worker_events: mpsc::UnboundedReceiver<WorkerEvent>,
         runner: TurnRunner,
+    ) -> Arc<Self> {
+        Self::start_with_delivery(
+            workers,
+            worker_events,
+            runner,
+            crate::config::UpdateDelivery::Queue,
+        )
+    }
+
+    /// [`Self::start_with`] with an explicit worker-update delivery.
+    #[must_use]
+    pub fn start_with_delivery(
+        workers: Arc<WorkerManager>,
+        worker_events: mpsc::UnboundedReceiver<WorkerEvent>,
+        runner: TurnRunner,
+        update_delivery: crate::config::UpdateDelivery,
     ) -> Arc<Self> {
         let mut registry = ToolRegistry::builtins();
         for tool in OrchestratorTool::bound(&workers) {
@@ -231,6 +274,7 @@ impl Orchestrator {
             release: Notify::new(),
             next_id: AtomicU64::new(1),
             control,
+            update_delivery,
         });
         tokio::spawn(Arc::clone(&orchestrator).deliver_worker_events(worker_events, control_rx));
         orchestrator
@@ -275,7 +319,7 @@ impl Orchestrator {
     ///
     /// # Panics
     /// Panics if an internal lock is poisoned.
-    pub fn submit(self: &Arc<Self>, submit: Submit) -> Result<(String, u64, usize)> {
+    pub fn submit(self: &Arc<Self>, submit: Submit) -> Result<Submitted> {
         self.submit_held(submit, None)
     }
 
@@ -288,11 +332,7 @@ impl Orchestrator {
     ///
     /// # Panics
     /// Panics if an internal lock is poisoned.
-    pub fn submit_held(
-        self: &Arc<Self>,
-        submit: Submit,
-        holder: Option<u64>,
-    ) -> Result<(String, u64, usize)> {
+    pub fn submit_held(self: &Arc<Self>, submit: Submit, holder: Option<u64>) -> Result<Submitted> {
         if submit.text.trim().is_empty() && submit.images.is_empty() {
             bail!("message is empty");
         }
@@ -312,16 +352,7 @@ impl Orchestrator {
         )?;
 
         let followed = submit.follow != Follow::None;
-        let input = Input {
-            id: self.next_id(),
-            followed,
-            holder: holder.filter(|_| submit.route.is_some()),
-            kind: InputKind::User {
-                text: submit.text,
-                images: submit.images,
-            },
-        };
-        let input_id = input.id;
+        let input_id = self.next_id();
         let entry = threads
             .entry(thread_id.clone())
             .or_insert_with(|| ThreadEntry::new(root.clone()));
@@ -329,13 +360,45 @@ impl Orchestrator {
         if submit.route.is_some() {
             entry.route = submit.route;
         }
+        // A steer joins the running turn at its next safe point; images are
+        // not steered, and a closed or absent turn means the normal queue.
+        let text = if submit.delivery == Delivery::Steer && submit.images.is_empty() {
+            match admit_steer(entry, input_id, SOURCE_USER, submit.text) {
+                Ok(()) => {
+                    tracing::info!(thread = %thread_id, input_id, "Steer accepted for the running turn");
+                    return Ok(Submitted {
+                        thread_id,
+                        input_id,
+                        queued_ahead: 0,
+                        in_turn: true,
+                    });
+                }
+                Err(text) => text,
+            }
+        } else {
+            submit.text
+        };
+        let input = Input {
+            id: input_id,
+            followed,
+            holder: holder.filter(|_| submit.route.is_some()),
+            kind: InputKind::User {
+                text,
+                images: submit.images,
+            },
+        };
         let ahead = entry.queue.len()
             + usize::from(entry.running.is_some())
             + usize::from(entry.held.is_some());
         entry.queue.push_back(input);
         drop(threads);
         self.ensure_draining(&thread_id);
-        Ok((thread_id, input_id, ahead))
+        Ok(Submitted {
+            thread_id,
+            input_id,
+            queued_ahead: ahead,
+            in_turn: false,
+        })
     }
 
     /// Stops work on a thread. A [`CancelTarget::Input`] or
@@ -360,15 +423,30 @@ impl Orchestrator {
             };
             let cancelled = entry
                 .running
-                .as_ref()
+                .as_mut()
                 .filter(|running| matches(running))
                 .is_some_and(|running| {
                     running.cancel.cancel();
+                    // No more steers join a cancelled turn; its unread ones
+                    // are settled when it ends.
+                    running.steer.close();
                     true
                 });
             let dropped: Vec<u64> = match target {
                 CancelTarget::Thread { clear_queue: true } => {
-                    entry.queue.drain(..).map(|input| input.id).collect()
+                    let mut dropped: Vec<u64> = Vec::new();
+                    if let Some(running) = entry.running.as_mut() {
+                        running.drop_steers = true;
+                        dropped.extend(
+                            running
+                                .steer
+                                .drain_unread()
+                                .iter()
+                                .filter_map(steer_input_id),
+                        );
+                    }
+                    dropped.extend(entry.queue.drain(..).map(|input| input.id));
+                    dropped
                 }
                 CancelTarget::Input(id) if !cancelled => {
                     let before = entry.queue.len();
@@ -585,14 +663,18 @@ impl Orchestrator {
                         }
                         let turn_id = self.next_id();
                         let cancel = CancellationToken::new();
+                        let steer = SteerInbox::new();
                         entry.running = Some(Running {
                             turn_id,
                             inputs: batch.iter().map(|input| input.id).collect(),
                             cancel: cancel.clone(),
+                            steer: steer.clone(),
+                            drop_steers: false,
                         });
                         Some((
                             turn_id,
                             cancel,
+                            steer,
                             batch,
                             entry.route,
                             entry.config_root.clone(),
@@ -600,7 +682,7 @@ impl Orchestrator {
                     }
                 }
             };
-            let Some((turn_id, cancel, batch, route, config_root)) = next else {
+            let Some((turn_id, cancel, steer, batch, route, config_root)) = next else {
                 let _ = self.control.send(Control::ThreadIdle(thread_id));
                 return;
             };
@@ -626,21 +708,19 @@ impl Orchestrator {
             } else {
                 None
             };
-            self.run_turn(&thread_id, turn_id, cancel, batch, route, config_root)
-                .await;
+            self.run_turn(
+                &thread_id,
+                turn_id,
+                cancel,
+                steer,
+                batch,
+                route,
+                config_root,
+            )
+            .await;
 
             let renderer = renderer.filter(|id| self.is_subscribed(*id));
-            let held = {
-                let mut threads = self.threads.lock().expect("orchestrator lock poisoned");
-                threads.get_mut(&thread_id).is_some_and(|entry| {
-                    entry.running = None;
-                    let hold = renderer.is_some();
-                    if hold {
-                        entry.held = Some(turn_id);
-                    }
-                    hold
-                })
-            };
+            let held = self.end_turn(&thread_id, turn_id, renderer.is_some());
             self.emit(&Event::TurnEnded {
                 thread_id: thread_id.clone(),
                 turn_id,
@@ -650,6 +730,35 @@ impl Orchestrator {
                 self.wait_for_release(&thread_id, turn_id, renderer).await;
             }
         }
+    }
+
+    /// Ends a turn: settles its unread steers in the same step that clears it,
+    /// so the thread never looks idle with one, and holds the thread for its
+    /// renderer. Returns whether it is held.
+    fn end_turn(&self, thread_id: &str, turn_id: u64, hold: bool) -> bool {
+        let (is_held, not_added) = {
+            let mut threads = self.threads.lock().expect("orchestrator lock poisoned");
+            threads
+                .get_mut(thread_id)
+                .map_or((false, Vec::new()), |entry| {
+                    let not_added = entry
+                        .running
+                        .take()
+                        .map(|running| settle_steers(entry, &running))
+                        .unwrap_or_default();
+                    if hold {
+                        entry.held = Some(turn_id);
+                    }
+                    (hold, not_added)
+                })
+        };
+        if !not_added.is_empty() {
+            self.emit(&Event::InputsDropped {
+                thread_id: thread_id.to_string(),
+                input_ids: not_added,
+            });
+        }
+        is_held
     }
 
     async fn wait_for_release(&self, thread_id: &str, turn_id: u64, renderer: u64) {
@@ -707,11 +816,13 @@ impl Orchestrator {
             .is_some_and(|entry| entry.held == Some(turn_id))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn run_turn(
         &self,
         thread_id: &str,
         turn_id: u64,
         cancel: CancellationToken,
+        steer: SteerInbox,
         batch: Vec<Input>,
         route: Option<Route>,
         config_root: PathBuf,
@@ -761,6 +872,7 @@ impl Orchestrator {
             events,
             cancel,
             registry: self.registry.clone(),
+            steer,
         });
         let forward = async {
             let mut finished = None;
@@ -941,30 +1053,116 @@ impl Orchestrator {
             &completion.worker_thread_id,
             config.as_ref(),
         );
-        let input = Input {
-            id: self.next_id(),
-            followed: false,
-            holder: None,
-            kind: InputKind::WorkerUpdate {
-                text: worker_update_prompt(completion, &worker_context),
-            },
-        };
-        {
+        let text = worker_update_prompt(completion, &worker_context);
+        let steered = {
             let mut threads = self.threads.lock().expect("orchestrator lock poisoned");
-            threads
+            // Allocated under the lock, so input ids follow admission order.
+            let id = self.next_id();
+            let entry = threads
                 .entry(owner.clone())
-                .or_insert_with(|| ThreadEntry::new(config_root))
-                .queue
-                .push_back(input);
-        }
+                .or_insert_with(|| ThreadEntry::new(config_root));
+            let text = if self.update_delivery == crate::config::UpdateDelivery::Steer {
+                admit_steer(entry, id, SOURCE_WORKER_UPDATE, text).err()
+            } else {
+                Some(text)
+            };
+            match text {
+                None => true,
+                Some(text) => {
+                    entry.queue.push_back(Input {
+                        id,
+                        followed: false,
+                        holder: None,
+                        kind: InputKind::WorkerUpdate { text },
+                    });
+                    false
+                }
+            }
+        };
         tracing::info!(
             owner = %owner,
             worker = %completion.worker_thread_id,
             status = completion.status.as_str(),
+            steered,
             "Queued worker update"
         );
-        self.ensure_draining(owner);
+        if !steered {
+            self.ensure_draining(owner);
+        }
     }
+}
+
+/// Puts `text` into the thread's running turn as a steer. Hands the text back
+/// when no turn runs or its inbox is closed; the caller queues it then.
+/// Caller holds the threads lock.
+fn admit_steer(
+    entry: &mut ThreadEntry,
+    input_id: u64,
+    source: &str,
+    text: String,
+) -> std::result::Result<(), String> {
+    let Some(running) = entry.running.as_mut() else {
+        return Err(text);
+    };
+    let item = SteerItem {
+        id: input_id.to_string(),
+        source: source.to_string(),
+        text,
+    };
+    match running.steer.try_push(item) {
+        Ok(_) => {
+            running.inputs.push(input_id);
+            Ok(())
+        }
+        Err(item) => Err(item.text),
+    }
+}
+
+fn steer_input_id(item: &SteerItem) -> Option<u64> {
+    item.id.parse().ok()
+}
+
+/// Settles the steers a turn never read, when the turn ends. Caller holds the
+/// threads lock. Unread worker updates go back to the queue (results are
+/// never lost unless a cancel cleared it); unread user messages go back to
+/// the queue too, except after a cancel, which gives them back instead.
+/// Returns the input ids not added (given back or dropped).
+fn settle_steers(entry: &mut ThreadEntry, running: &Running) -> Vec<u64> {
+    let unread = running.steer.drain_unread();
+    let cancelled = running.cancel.is_cancelled();
+    let mut not_added = Vec::new();
+    for item in unread {
+        let Some(id) = steer_input_id(&item) else {
+            continue;
+        };
+        let worker_update = item.source == SOURCE_WORKER_UPDATE;
+        if running.drop_steers || (cancelled && !worker_update) {
+            not_added.push(id);
+            continue;
+        }
+        let input = Input {
+            id,
+            followed: false,
+            holder: None,
+            kind: if worker_update {
+                InputKind::WorkerUpdate { text: item.text }
+            } else {
+                InputKind::User {
+                    text: item.text,
+                    images: Vec::new(),
+                }
+            },
+        };
+        // Ids follow admission order, so this keeps arrival order against
+        // anything queued after the turn closed its inbox.
+        let at = entry
+            .queue
+            .iter()
+            .position(|queued| queued.id > id)
+            .unwrap_or(entry.queue.len());
+        entry.queue.insert(at, input);
+    }
+    not_added
 }
 
 /// Opens (or creates) a persistent-profile thread and returns its id.
@@ -1058,6 +1256,7 @@ async fn run_profile_turn(request: TurnRequest) {
         events,
         cancel,
         registry,
+        steer,
     } = request;
     let prepared = match prepare_profile_turn(&thread_id, &config_root, route, text, &images) {
         Ok(prepared) => prepared,
@@ -1102,6 +1301,7 @@ async fn run_profile_turn(request: TurnRequest) {
         activity_parent_thread_id: None,
         activity_subagent_name: None,
         tool_timeout: None,
+        steer: Some(SteerSource::Inbox(steer)),
     };
     let (agent_tx, agent_rx) = create_event_channel();
     let (persist_tx, persist_rx): (AgentEventTx, AgentEventRx) = create_event_channel();
@@ -1274,6 +1474,7 @@ mod tests {
             text: text.to_string(),
             images: Vec::new(),
             follow: Follow::None,
+            delivery: Delivery::Queue,
         }
     }
 
@@ -1307,7 +1508,11 @@ mod tests {
         let orchestrator = Orchestrator::start_with(workers, events, runner);
 
         let mut subscription = orchestrator.subscribe(Some("issue-1".to_string()), false);
-        let (thread_id, _, ahead) = orchestrator
+        let Submitted {
+            thread_id,
+            queued_ahead: ahead,
+            ..
+        } = orchestrator
             .submit(submit(
                 root.path(),
                 Some("issue-1"),
@@ -1660,7 +1865,10 @@ mod tests {
         orchestrator
             .submit(submit(root.path(), Some("cancel"), "wait", None))
             .unwrap();
-        let (_, dropped_id, _) = orchestrator
+        let Submitted {
+            input_id: dropped_id,
+            ..
+        } = orchestrator
             .submit(submit(root.path(), Some("cancel"), "never runs", None))
             .unwrap();
         while !matches!(
@@ -1676,6 +1884,185 @@ mod tests {
         let events = until_settled(&mut subscription).await;
         assert!(events.iter().any(|event| matches!(event, Event::InputsDropped { input_ids, .. } if input_ids == &[dropped_id])));
         assert_eq!(*seen.lock().unwrap(), ["wait"]);
+    }
+
+    /// Turn runner with one safe point: records the text, starts workers for
+    /// `delegate <name>` lines, waits for `gate` on `wait`, takes the pending
+    /// steers (recorded as `steered:<text>`), then on `late` waits for `gate`
+    /// again so a steer sent now is left unread.
+    fn steering_turns(
+        workers: &Arc<WorkerManager>,
+        root: PathBuf,
+        seen: &Seen,
+        gate: &Arc<Notify>,
+    ) -> TurnRunner {
+        let workers = Arc::clone(workers);
+        let seen = Arc::clone(seen);
+        let gate = Arc::clone(gate);
+        Arc::new(move |request: TurnRequest| {
+            let workers = Arc::clone(&workers);
+            let seen = Arc::clone(&seen);
+            let gate = Arc::clone(&gate);
+            let root = root.clone();
+            Box::pin(async move {
+                seen.lock().unwrap().push(request.text.clone());
+                for line in request.text.lines() {
+                    if let Some(name) = line.strip_prefix("delegate ") {
+                        workers
+                            .create_worker(&request.thread_id, &root, name, None, None, None)
+                            .expect("create worker");
+                    }
+                }
+                if request.text.contains("wait") {
+                    gate.notified().await;
+                    for item in request.steer.take() {
+                        seen.lock().unwrap().push(format!("steered:{}", item.text));
+                        let _ = request
+                            .events
+                            .send(Arc::new(AgentEvent::UserMessageInjected {
+                                id: item.id,
+                                source: item.source,
+                                text: item.text,
+                            }));
+                    }
+                }
+                if request.text.contains("late") {
+                    gate.notified().await;
+                }
+                request.steer.close();
+                let _ = request.events.send(Arc::new(AgentEvent::TurnFinished {
+                    status: TurnStatus::Completed,
+                    final_text: "reply".to_string(),
+                    messages: Vec::new(),
+                    prior_message_count: 0,
+                }));
+            })
+        })
+    }
+
+    fn steer_submit(root: &Path, thread_id: &str, text: &str) -> Submit {
+        Submit {
+            delivery: Delivery::Steer,
+            ..submit(root, Some(thread_id), text, None)
+        }
+    }
+
+    async fn queued_inputs(orchestrator: &Arc<Orchestrator>, thread: &str) -> usize {
+        orchestrator.status(Some(thread)).await.threads[0].queued_inputs
+    }
+
+    #[tokio::test]
+    async fn worker_results_and_user_steers_join_the_running_turn_and_late_ones_queue() {
+        let _home = crate::test_support::temp_zdx_home();
+        let root = tempfile::tempdir().unwrap();
+        let (workers, events) = instant_workers();
+        let seen = Seen::default();
+        let gate = Arc::new(Notify::new());
+        let runner = steering_turns(&workers, root.path().to_path_buf(), &seen, &gate);
+        let orchestrator = Orchestrator::start_with_delivery(
+            Arc::clone(&workers),
+            events,
+            runner,
+            crate::config::UpdateDelivery::Steer,
+        );
+        let mut subscription = orchestrator.subscribe(Some("steer".to_string()), false);
+
+        orchestrator
+            .submit(submit(
+                root.path(),
+                Some("steer"),
+                "delegate one\nwait\nlate",
+                None,
+            ))
+            .unwrap();
+        // The worker's result arrives while the turn runs: steered, not queued.
+        while !matches!(
+            next_event(&mut subscription).await,
+            Event::Worker {
+                event: WorkerEvent::Completed(_),
+                ..
+            }
+        ) {}
+        assert_eq!(queued_inputs(&orchestrator, "steer").await, 0);
+        let detail = orchestrator
+            .submit(steer_submit(root.path(), "steer", "more detail"))
+            .unwrap();
+        assert!(detail.in_turn);
+        assert!(!orchestrator.settled(Some("steer")).await);
+        gate.notify_one();
+
+        // At the second wait the turn is past its safe point: this one is
+        // left unread and runs as the next turn.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while seen.lock().unwrap().len() < 3 {
+            assert!(tokio::time::Instant::now() < deadline, "steers never taken");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let late = orchestrator
+            .submit(steer_submit(root.path(), "steer", "missed it"))
+            .unwrap();
+        assert!(late.in_turn);
+        gate.notify_one();
+
+        let events = until_settled(&mut subscription).await;
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 4, "{seen:?}");
+        assert!(
+            seen[1].starts_with("steered:[worker update]"),
+            "{}",
+            seen[1]
+        );
+        assert!(seen[1].contains("done:one"));
+        assert_eq!(seen[2], "steered:more detail");
+        assert_eq!(seen[3], "missed it");
+        let started: Vec<&Vec<InputRef>> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::TurnStarted { inputs, .. } => Some(inputs),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(started.len(), 1, "only the late steer started a turn");
+        assert_eq!(started[0][0].input_id, late.input_id);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_turn_gives_back_its_unread_user_steers() {
+        let _home = crate::test_support::temp_zdx_home();
+        let root = tempfile::tempdir().unwrap();
+        let (workers, events) = instant_workers();
+        let seen = Seen::default();
+        let gate = Arc::new(Notify::new());
+        let runner = steering_turns(&workers, root.path().to_path_buf(), &seen, &gate);
+        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        let mut subscription = orchestrator.subscribe(Some("given".to_string()), false);
+
+        orchestrator
+            .submit(submit(root.path(), Some("given"), "late", None))
+            .unwrap();
+        while !matches!(
+            next_event(&mut subscription).await,
+            Event::TurnStarted { .. }
+        ) {}
+        let steer = orchestrator
+            .submit(steer_submit(root.path(), "given", "never read"))
+            .unwrap();
+        assert!(steer.in_turn);
+        let (cancelled, dropped) =
+            orchestrator.cancel("given", CancelTarget::Thread { clear_queue: false });
+        assert!(cancelled && dropped.is_empty());
+        let after = orchestrator
+            .submit(steer_submit(root.path(), "given", "after cancel"))
+            .unwrap();
+        assert!(!after.in_turn, "a cancelled turn takes no steers");
+        gate.notify_one();
+
+        let events = until_settled(&mut subscription).await;
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::InputsDropped { input_ids, .. } if input_ids == &[steer.input_id]
+        )));
+        assert_eq!(*seen.lock().unwrap(), ["late", "after cancel"]);
     }
 
     #[tokio::test]

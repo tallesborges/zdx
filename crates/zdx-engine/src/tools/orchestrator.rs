@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use super::{Tool, ToolContext, ToolDefinition, ToolFuture};
 use crate::core::events::ToolOutput;
 use crate::core::thread_persistence;
-use crate::core::workers::{WorkerManager, WorkerSnapshot};
+use crate::core::workers::{SteerOutcome, WorkerManager, WorkerSnapshot};
 use crate::orchestration::updates::{BoundedWorkerText, bound_worker_text};
 
 /// Longest queued-prompt excerpt returned per queue entry.
@@ -156,7 +156,7 @@ fn definition_for(op: Op) -> ToolDefinition {
         },
         Op::Send => ToolDefinition {
             name: "Send_Thread_Message".to_string(),
-            description: "Queue another prompt on an existing worker thread. Prompts on one worker run strictly one at a time in order, with the worker's full prior context. The returned snapshot's `queue` lists every waiting prompt with its `prompt_id`; the one you just sent is last. Also re-attaches a thread that is no longer managed (e.g. after a restart) using its persisted project root.".to_string(),
+            description: "Send a message to an existing worker thread. `delivery: \"queue\"` (default) runs it as a new prompt after the worker's current and queued prompts, in order, with the worker's full prior context; the returned snapshot's `queue` lists every waiting prompt with its `prompt_id`, the one you just sent last. `delivery: \"steer\"` adds it to the worker's current work: the worker reads it after its current tool calls finish, without a cancel. Use it to add detail to or correct the task the worker is on. Steering does not stop running tools. When the worker is not running, or its turn ends before it reads the message, the message is queued instead, the same as `delivery: \"queue\"`. The result's `outcome` says `in_turn` or `queued` (with `reason`); `in_turn` is not a promise that it was read: `Get_Thread_Status` reports what finally happened to each steer in `steers`. Use `Cancel_Thread` to stop a worker; it also drops steers that were not read yet. Both modes re-attach a thread that is no longer managed (e.g. after a restart) using its persisted project root.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -166,7 +166,12 @@ fn definition_for(op: Op) -> ToolDefinition {
                     },
                     "message": {
                         "type": "string",
-                        "description": "Prompt to queue on the worker"
+                        "description": "Prompt to queue on the worker, or detail to add to its current work"
+                    },
+                    "delivery": {
+                        "type": "string",
+                        "enum": ["queue", "steer"],
+                        "description": "`queue` (default): a new prompt after the current and queued ones. `steer`: added to the current work at its next tool-round boundary, else queued."
                     }
                 },
                 "required": ["thread_id", "message"],
@@ -297,6 +302,7 @@ fn snapshot_json(snapshot: &WorkerSnapshot) -> Value {
         "current_tool_input": snapshot.current_tool_input,
         "seconds_since_last_activity": snapshot.seconds_since_last_activity,
         "turn_elapsed_seconds": snapshot.turn_elapsed_seconds,
+        "steers": snapshot.steers,
     })
 }
 
@@ -499,8 +505,48 @@ fn send_thread_message(manager: &Arc<WorkerManager>, owner: &str, input: &Value)
         Err(failure) => return failure,
     };
 
-    match manager.send_message(owner, thread_id, &frame_worker_prompt(owner, message)) {
-        Ok(snapshot) => ToolOutput::success(json!({ "worker": snapshot_json(&snapshot) })),
+    let steer = match input.get("delivery") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(delivery)) if delivery == "queue" => false,
+        Some(Value::String(delivery)) if delivery == "steer" => true,
+        Some(other) => {
+            return ToolOutput::failure(
+                "invalid_input",
+                format!("delivery must be \"queue\" or \"steer\", got {other}"),
+                None,
+            );
+        }
+    };
+    let framed = frame_worker_prompt(owner, message);
+    if !steer {
+        return match manager.send_message(owner, thread_id, &framed) {
+            Ok(snapshot) => ToolOutput::success(json!({ "worker": snapshot_json(&snapshot) })),
+            Err(err) => ToolOutput::failure("send_thread_message_failed", format!("{err:#}"), None),
+        };
+    }
+    match manager.steer(owner, thread_id, &framed) {
+        Ok((outcome, snapshot)) => {
+            let mut result = match outcome {
+                SteerOutcome::InTurn { steer_id } => json!({
+                    "delivery": "steer",
+                    "outcome": "in_turn",
+                    "steer_id": steer_id,
+                }),
+                SteerOutcome::Queued {
+                    steer_id,
+                    prompt_id,
+                    reason,
+                } => json!({
+                    "delivery": "steer",
+                    "outcome": "queued",
+                    "steer_id": steer_id,
+                    "prompt_id": prompt_id,
+                    "reason": reason,
+                }),
+            };
+            result["worker"] = snapshot_json(&snapshot);
+            ToolOutput::success(result)
+        }
         Err(err) => ToolOutput::failure("send_thread_message_failed", format!("{err:#}"), None),
     }
 }
@@ -846,6 +892,7 @@ mod tests {
             current_tool_input: Some("./gradlew assembleDebug".into()),
             seconds_since_last_activity: Some(360),
             turn_elapsed_seconds: Some(400),
+            steers: Vec::new(),
         };
         let payload = snapshot_json(&snapshot);
         assert_eq!(payload["current_tool"], "bash");
@@ -913,6 +960,59 @@ mod tests {
             remove_thread_prompt(&manager, &json!({"thread_id": id, "prompt_id": prompt_id}));
         let (code, _, _) = again.error_info().unwrap();
         assert_eq!(code, "remove_thread_prompt_failed");
+        release_tx.send(true).unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_thread_message_steers_a_running_worker_and_queues_otherwise() {
+        let home = crate::test_support::temp_zdx_home();
+        let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+        let (manager, _events) = WorkerManager::with_runner(Arc::new(move |request| {
+            let mut release = release_rx.clone();
+            Box::pin(async move {
+                release.wait_for(|released| *released).await.unwrap();
+                Ok(request.prompt)
+            })
+        }));
+        let schema = definition_for(Op::Send).input_schema;
+        assert_eq!(
+            schema["properties"]["delivery"]["enum"],
+            json!(["queue", "steer"])
+        );
+        assert!(
+            !schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("delivery"))
+        );
+
+        let id = manager
+            .create_worker("owner", home.path(), "first", None, None, None)
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let steered = send_thread_message(
+            &manager,
+            "owner",
+            &json!({"thread_id": id, "message": "detail", "delivery": "steer"}),
+        );
+        let data = steered.data().unwrap();
+        assert_eq!(data["outcome"], "in_turn");
+        assert_eq!(data["worker"]["queue_depth"], 0, "nothing queued");
+        assert_eq!(data["worker"]["steers"][0]["state"], "pending");
+
+        let invalid = send_thread_message(
+            &manager,
+            "owner",
+            &json!({"thread_id": id, "message": "x", "delivery": "later"}),
+        );
+        assert_eq!(invalid.error_info().unwrap().0, "invalid_input");
+
+        let queued = send_thread_message(
+            &manager,
+            "owner",
+            &json!({"thread_id": id, "message": "next task"}),
+        );
+        assert_eq!(queued.data().unwrap()["worker"]["queue_depth"], 1);
         release_tx.send(true).unwrap();
     }
 

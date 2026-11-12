@@ -637,6 +637,7 @@ fn job_exec_options<'a>(
         activity_kind: Some("job"),
         activity_parent_thread_id: None,
         activity_subagent_name: None,
+        steer_file: None,
     }
 }
 

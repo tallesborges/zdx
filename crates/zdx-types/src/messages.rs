@@ -187,6 +187,9 @@ pub enum MessageContent {
     Blocks(Vec<ChatContentBlock>),
 }
 
+/// `ChatMessage::phase` of a steer: user text added to a running turn.
+pub const STEER_PHASE: &str = "steer";
+
 /// A chat message with owned data.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -307,6 +310,32 @@ impl ChatMessage {
         }
     }
 
+    /// Creates a steer: user text added to a running turn at a safe point
+    /// (after a tool round, before the next model request). It is input of
+    /// the turn already running, not the start of a new turn.
+    pub fn steer(content: impl Into<String>) -> Self {
+        Self {
+            role: "user".to_string(),
+            phase: Some(STEER_PHASE.to_string()),
+            context: None,
+            context_key: None,
+            content: MessageContent::Text(content.into()),
+        }
+    }
+
+    /// Whether this is a steer added to a running turn ([`Self::steer`]).
+    #[must_use]
+    pub fn is_steer(&self) -> bool {
+        self.role == "user" && self.phase.as_deref() == Some(STEER_PHASE)
+    }
+
+    /// Whether this message starts a turn: a user message that is neither a
+    /// tool-result carrier nor a steer added to a running turn.
+    #[must_use]
+    pub fn starts_turn(&self) -> bool {
+        self.role == "user" && !self.has_tool_results() && !self.is_steer()
+    }
+
     /// Creates an assistant message with content blocks (for tool use).
     pub fn assistant_blocks(blocks: Vec<ChatContentBlock>) -> Self {
         Self {
@@ -383,7 +412,7 @@ impl ChatMessage {
 /// turn.
 ///
 /// Tool results also use the `user` role, so a tool-result carrier does not
-/// start a turn. Request builders use this boundary to decide which assistant
+/// start a turn. Neither does a steer: it is input of the turn already running. Request builders use this boundary to decide which assistant
 /// reasoning may be replayed: only the current turn's reasoning is required
 /// back on the wire, and older reasoning is dead weight that grows the request
 /// without bound on providers that do not filter it server-side.
@@ -391,7 +420,7 @@ impl ChatMessage {
 pub fn current_turn_start(messages: &[ChatMessage]) -> usize {
     messages
         .iter()
-        .rposition(|message| message.role == "user" && !message.has_tool_results())
+        .rposition(ChatMessage::starts_turn)
         .map_or(0, |index| index + 1)
 }
 
@@ -519,6 +548,25 @@ pub fn strip_voice_transcript(text: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_steer_does_not_start_a_turn() {
+        let messages = vec![
+            ChatMessage::user("task"),
+            ChatMessage::assistant_blocks(Vec::new()),
+            ChatMessage::tool_results(vec![crate::tools::ToolResult {
+                tool_use_id: "t".to_string(),
+                content: crate::tools::ToolResultContent::Text("ok".to_string()),
+                is_error: false,
+            }]),
+            ChatMessage::steer("more detail"),
+        ];
+        assert!(messages[3].is_steer() && !messages[3].starts_turn());
+        assert_eq!(current_turn_start(&messages), 1);
+        let mut later = messages;
+        later.push(ChatMessage::user("next task"));
+        assert_eq!(current_turn_start(&later), 5);
+    }
 
     fn assistant_reasoning(text: &str) -> ChatMessage {
         ChatMessage::assistant_blocks(vec![ChatContentBlock::Reasoning(ReasoningBlock {

@@ -157,6 +157,14 @@ pub(crate) fn awaiting_btw_input(
     btw_awaits_input(&map, thread_id, synthetic_prompt)
 }
 
+/// Whether any live staged command waits for input on this thread. Such a
+/// message belongs to the session, so it is never steered.
+pub(crate) fn has_live_session(context: &BotContext, thread_id: &str) -> bool {
+    let map = context.staging_map().lock().expect("staging lock poisoned");
+    map.get(thread_id)
+        .is_some_and(|session| !session.is_expired())
+}
+
 fn btw_awaits_input(
     sessions: &HashMap<String, StagingSession>,
     thread_id: &str,

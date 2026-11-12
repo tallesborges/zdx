@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(not(unix))]
 use std::process::Stdio;
 use std::time::Duration;
@@ -68,6 +68,9 @@ pub struct ExecSubagentOptions {
     /// this existing thread (loading its prior history), so repeated runs
     /// against the same id behave like a resumable worker thread.
     pub thread_id: Option<String>,
+    /// Worker steer file (`--steer-file`): the child reads new steers there
+    /// at safe points and reports each one it adds on its event stream.
+    pub steer_file: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -435,11 +438,24 @@ pub enum TurnOutcome {
     Failed(String),
 }
 
+/// Relayed chunk `t` for a steer the child added to its turn (`id`: the
+/// steer's sequence number).
+pub const STEER_CHUNK: &str = "steer";
+/// Relayed chunk `t` for the child's closing steer marker.
+pub const STEER_CLOSED_CHUNK: &str = "steer_closed";
+/// Line a child run with `--steer-file` writes on stdout after every other
+/// event, so the parent knows its steer reports are complete.
+pub const STEER_CLOSED_LINE: &str = r#"{"type":"steer_closed"}"#;
+
 /// One event a child subagent's stdout reports, in the order it arrives.
 #[derive(Debug)]
 pub enum ChildEvent<'a> {
     /// A tool lifecycle chunk (`{"t":"start"|"input"|"done"|"error", ...}`).
     Tool(&'a Value),
+    /// The child added the steer with this id to its turn.
+    SteerInjected(&'a str),
+    /// The child wrote every steer report it will write.
+    SteerClosed,
     /// The child's turn ended. Reported when the event arrives, which can be
     /// well before the child process exits (for example while it waits for
     /// its own background commands).
@@ -478,10 +494,15 @@ async fn run_child_streaming(
 
     let stderr_handle = tokio::spawn(read_to_end(stderr));
     let stdout_handle = tokio::spawn(async move {
-        let outcome = read_stdout_events(stdout, |event| {
-            if let ChildEvent::Tool(chunk) = event {
-                sink.emit(chunk);
+        let outcome = read_stdout_events(stdout, |event| match event {
+            ChildEvent::Tool(chunk) => sink.emit(chunk),
+            ChildEvent::SteerInjected(id) => {
+                sink.emit(&serde_json::json!({ "t": STEER_CHUNK, "id": id }));
             }
+            ChildEvent::SteerClosed => {
+                sink.emit(&serde_json::json!({ "t": STEER_CLOSED_CHUNK }));
+            }
+            ChildEvent::TurnEnded(_) => {}
         })
         .await;
         drop(sink);
@@ -553,6 +574,10 @@ pub async fn read_stdout_events<R: AsyncRead + Unpin>(
         if trimmed.is_empty() {
             continue;
         }
+        if trimmed == STEER_CLOSED_LINE {
+            on_event(ChildEvent::SteerClosed);
+            continue;
+        }
         let Ok(event) = serde_json::from_str::<AgentEvent>(trimmed) else {
             continue;
         };
@@ -579,6 +604,9 @@ pub async fn read_stdout_events<R: AsyncRead + Unpin>(
             AgentEvent::ToolCompleted { id, result, .. } => {
                 let t = if result.is_ok() { "done" } else { "error" };
                 on_event(ChildEvent::Tool(&serde_json::json!({ "t": t, "id": id })));
+            }
+            AgentEvent::UserMessageInjected { id, .. } => {
+                on_event(ChildEvent::SteerInjected(&id));
             }
             AgentEvent::TurnFinished {
                 status,
@@ -667,6 +695,11 @@ fn build_exec_args(
 
     if options.no_background_commands {
         args.push(OsString::from("--no-background-commands"));
+    }
+
+    if let Some(path) = &options.steer_file {
+        args.push(OsString::from("--steer-file"));
+        args.push(path.as_os_str().to_os_string());
     }
 
     if let Some(tools) = options
@@ -870,6 +903,7 @@ mod tests {
                 thread_parent_id: None,
                 thread_subagent_name: None,
                 thread_id: None,
+                steer_file: None,
             },
             Some(system_prompt_file),
         );
@@ -1236,5 +1270,27 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(outcome.turn, Some(TurnOutcome::Failed("boom".to_string())));
+    }
+
+    /// A worker child's steer reports and closing marker reach the parent in
+    /// stream order, so a report always precedes the marker.
+    #[tokio::test]
+    async fn read_stdout_events_relays_steer_reports_then_the_closing_marker() {
+        let mut bytes = jsonl(&[AgentEvent::UserMessageInjected {
+            id: "7".to_string(),
+            source: "orchestrator".to_string(),
+            text: "detail".to_string(),
+        }]);
+        bytes.push('\n');
+        bytes.push_str(STEER_CLOSED_LINE);
+        let mut seen = Vec::new();
+        read_stdout_events(bytes.as_bytes(), |event| match event {
+            ChildEvent::SteerInjected(id) => seen.push(format!("steer:{id}")),
+            ChildEvent::SteerClosed => seen.push("closed".to_string()),
+            ChildEvent::Tool(_) | ChildEvent::TurnEnded(_) => {}
+        })
+        .await
+        .unwrap();
+        assert_eq!(seen, ["steer:7", "closed"]);
     }
 }

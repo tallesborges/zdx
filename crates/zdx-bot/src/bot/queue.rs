@@ -12,7 +12,7 @@ use crate::handlers::message::{
     thread_id_for_chat,
 };
 use crate::staging;
-use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message};
+use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageDelivery};
 
 /// Queue key: (`chat_id`, `topic_id`). Different topics run concurrently.
 /// DMs use (`chat_id`, 0) since they have no topic.
@@ -84,6 +84,10 @@ pub(crate) async fn dispatch_message(
         spawn_standalone(Arc::clone(context), Arc::clone(queues), message);
         return;
     }
+
+    let Some(message) = route_steer(queues, context, message, is_forum_general).await else {
+        return;
+    };
 
     if is_forum_general {
         // Check for commands that shouldn't create a topic
@@ -365,6 +369,64 @@ fn generate_topic_name(text: Option<&str>) -> String {
 
     let now = chrono::Utc::now();
     now.format("Chat %Y-%m-%d %H:%M").to_string()
+}
+
+/// `/queue <text>` becomes a normal message that never steers. A plain
+/// message to a topic whose turn runs is offered to that turn outside the
+/// queue (so a voice note is transcribed while the turn runs); `None` then.
+async fn route_steer(
+    queues: &ChatQueueMap,
+    context: &Arc<BotContext>,
+    mut message: Message,
+    is_forum_general: bool,
+) -> Option<Message> {
+    if let Some(rest) = message
+        .text
+        .as_deref()
+        .and_then(crate::commands::parse_queue_command)
+    {
+        message.text = Some(rest.to_string());
+        message.delivery = MessageDelivery::ForceQueue;
+    } else if !is_forum_general && steer_eligible(queues, context, &message).await {
+        message.delivery = MessageDelivery::SteerAttempt;
+        spawn_standalone(Arc::clone(context), Arc::clone(queues), message);
+        return None;
+    }
+    Some(message)
+}
+
+/// Whether a plain user message to a topic whose turn is running should be
+/// offered to that turn as a steer: not a command, a bot-generated prompt,
+/// or the input of a staged command, and the topic's queue is busy.
+async fn steer_eligible(queues: &ChatQueueMap, context: &BotContext, message: &Message) -> bool {
+    if message.synthetic.is_some()
+        || message
+            .plain_text()
+            .is_some_and(|text| text.trim_start().starts_with('/'))
+    {
+        return false;
+    }
+    let topic_id = message.effective_thread_id();
+    let thread_id = resolve_effective_thread_id(&thread_id_for_chat(message.chat.id, topic_id));
+    if staging::has_live_session(context, &thread_id) {
+        return false;
+    }
+    let key = (message.chat.id, topic_id.unwrap_or(0));
+    queues
+        .lock()
+        .await
+        .get(&key)
+        .is_some_and(|state| state.pending > 0)
+}
+
+/// Queues an already-parsed message for a normal turn (a steer that could not
+/// join the running one).
+pub(crate) async fn enqueue_prepared(
+    queues: &ChatQueueMap,
+    context: &Arc<BotContext>,
+    message: Message,
+) {
+    enqueue_message(queues, context, message).await;
 }
 
 /// Spawn a standalone task for a message (no queuing, fully concurrent).

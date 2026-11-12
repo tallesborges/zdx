@@ -57,6 +57,7 @@ pub struct SendOptions<'a> {
     pub model: Option<&'a str>,
     pub prompt: String,
     pub wait: bool,
+    pub delivery: zdx_engine::orchestration::protocol::Delivery,
 }
 
 /// Queues a message. Without `wait`, prints the receipt as one JSON object.
@@ -84,6 +85,7 @@ pub async fn send(options: SendOptions<'_>) -> Result<()> {
         } else {
             Follow::None
         },
+        delivery: options.delivery,
     };
     let client = OrchestratorClient::new();
     let mut stream = client.open(&Request::Submit(submit)).await?;

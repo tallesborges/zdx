@@ -650,6 +650,26 @@ fn handle_submission(
 ) -> Option<KeyResult> {
     match code {
         KeyCode::Enter if !mods.shift() && !mods.alt() => Some(submit_current_input(input, ctx)),
+        // While a turn runs, Tab queues the message for after it instead of
+        // adding it to the running turn (Enter).
+        KeyCode::Tab
+            if mods.none()
+                && ctx.agent_state.is_running()
+                && !input.get_text().trim().is_empty() =>
+        {
+            Some(submit_input(
+                input,
+                ctx.agent_state,
+                ctx.tasks,
+                ctx.thread_id.clone(),
+                ctx.thread_title,
+                ctx.active_thread_ids,
+                ctx.can_retry,
+                ctx.runtime_context,
+                ctx.last_attached_key,
+                true,
+            ))
+        }
         _ => None,
     }
 }
@@ -669,6 +689,7 @@ pub fn submit_current_input(input: &mut InputState, ctx: &InputContext<'_>) -> K
         ctx.can_retry,
         ctx.runtime_context,
         ctx.last_attached_key,
+        false,
     )
 }
 
@@ -888,6 +909,7 @@ fn submit_input(
     can_retry: bool,
     runtime_context: Option<&zdx_engine::core::context::RuntimeContext>,
     last_attached_key: Option<&str>,
+    queue: bool,
 ) -> KeyResult {
     // Block input during any modal generation. Each branch shows a hint
     // pointing at Esc as the cancel path and shares the early-return shape.
@@ -900,7 +922,7 @@ fn submit_input(
 
     let agent_running = agent_state.is_running();
     if agent_running {
-        return handle_submit_while_agent_running(input, trimmed, &text);
+        return handle_submit_while_agent_running(input, trimmed, &text, queue);
     }
 
     let bash_running = tasks.state(TaskKind::Bash).is_running();
@@ -1017,10 +1039,14 @@ fn block_submit_during_generation(input: &InputState) -> Option<KeyResult> {
     None
 }
 
+/// A message sent while a turn runs: added to that turn at its next safe
+/// point (a steer), or queued for after it with `queue` (Tab) or when it
+/// carries images.
 fn handle_submit_while_agent_running(
     input: &mut InputState,
     trimmed: &str,
     text: &str,
+    queue: bool,
 ) -> KeyResult {
     if trimmed.is_empty() {
         return (vec![], vec![], None);
@@ -1062,9 +1088,13 @@ fn handle_submit_while_agent_running(
     input.history.push(text.to_string());
     input.reset_navigation();
     let images = input.take_images();
-    input.enqueue_prompt(text.to_string(), images);
+    if queue || !images.is_empty() {
+        input.enqueue_prompt(text.to_string(), images);
+        input.clear();
+        return (vec![], vec![], None);
+    }
     input.clear();
-    (vec![], vec![], None)
+    (vec![], vec![StateMutation::Steer(text.to_string())], None)
 }
 
 fn handle_bash_commands(input: &mut InputState, trimmed: &str, text: &str) -> Option<KeyResult> {

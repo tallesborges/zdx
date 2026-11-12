@@ -60,6 +60,9 @@ pub struct AgentOptions {
     /// command, and the model cannot raise, remove, or reach it: the `Bash`
     /// tool's own `timeout_secs` argument only bounds the foreground wait.
     pub tool_timeout: Option<Duration>,
+    /// Steers for this run, taken at safe points (after a tool round, before
+    /// the next model request). `None`: the run takes no steers.
+    pub steer: Option<crate::core::steer::SteerSource>,
 }
 
 /// Tool configuration for agent execution.
@@ -1232,6 +1235,9 @@ async fn run_turn_inner(
     sender: &EventSender,
     cancel: Option<&CancellationToken>,
 ) -> RunTurnResult {
+    // Every exit closes the steer source; the explicit closes below run before
+    // the terminal event, so an owner reacting to it sees the source closed.
+    let _steer_close = crate::core::steer::CloseOnDrop(options.steer.as_ref());
     // A persistent-profile thread has one writer: the orchestrator service.
     // Any other run on it would interleave with the service's turns.
     if let Some(thread_id) = thread_id
@@ -1497,9 +1503,17 @@ async fn run_turn_inner(
                 cancel,
                 initial_message_count,
                 run_guard.as_deref(),
+                options.steer.as_ref(),
             )
             .await
             .map_err(|e| (e, messages.clone()))?;
+            // New input is progress: the loop guards must not end a turn that
+            // just took a steer the model has not seen yet.
+            if stats.steered > 0 {
+                consecutive_malformed_tool_turns = 0;
+                tool_loop_tracker.reset_counts();
+                continue;
+            }
             if stats.executable == 0 && stats.malformed > 0 {
                 consecutive_malformed_tool_turns += 1;
                 if consecutive_malformed_tool_turns >= MAX_CONSECUTIVE_MALFORMED_TOOL_TURNS {
@@ -1557,12 +1571,16 @@ async fn run_turn_inner(
                     message: OutputLoop::ToolRepetition.message().to_string(),
                     details: Some(OutputLoop::ToolRepetition.details().to_string()),
                 });
+                close_steer(options);
                 return Ok(finish_turn_early(messages, sender, initial_message_count));
             }
             continue;
         }
 
         tracing::info!(model_turns = model_turn, "Turn finished");
+        // A steer that arrives during the final answer stays unread: the
+        // answer is delivered unchanged and the owner runs the steer next.
+        close_steer(options);
         return Ok(finalize_non_tool_turn(
             &mut messages,
             stream_state.turn,
@@ -2783,6 +2801,40 @@ fn invalid_tool_output(input_json: &str, error: &serde_json::Error) -> ToolOutpu
 struct ToolTurnStats {
     executable: usize,
     malformed: usize,
+    /// Steers added after this round's tool results.
+    steered: usize,
+}
+
+fn close_steer(options: &AgentOptions) {
+    if let Some(source) = &options.steer {
+        source.close();
+    }
+}
+
+/// Adds pending steers after a complete tool round. Each becomes its own
+/// user message after the tool results, marked as a steer so it stays input
+/// of the running turn (reasoning replay, trajectories, replay notes).
+fn inject_steers(
+    messages: &mut Vec<ChatMessage>,
+    steer: Option<&crate::core::steer::SteerSource>,
+    sender: &EventSender,
+) -> usize {
+    let Some(source) = steer else {
+        return 0;
+    };
+    let items = source.take();
+    for item in &items {
+        messages.push(ChatMessage::steer(item.text.clone()));
+        sender.send(AgentEvent::UserMessageInjected {
+            id: item.id.clone(),
+            source: item.source.clone(),
+            text: item.text.clone(),
+        });
+    }
+    if !items.is_empty() {
+        tracing::info!(count = items.len(), "Steer injected");
+    }
+    items.len()
 }
 
 #[tracing::instrument(name = "tool_turn", skip_all)]
@@ -2795,6 +2847,7 @@ async fn process_tool_turn(
     cancel: Option<&CancellationToken>,
     prior_message_count: usize,
     run_guard: Option<&crate::agent_activity::RunGuard>,
+    steer: Option<&crate::core::steer::SteerSource>,
 ) -> TurnResult<ToolTurnStats> {
     let finalized = std::mem::take(turn).finalize();
     let executable_count = finalized.executable.len();
@@ -2838,9 +2891,12 @@ async fn process_tool_turn(
         ));
     }
 
+    // Safe point: the whole tool round is done and nothing is in flight.
+    let steered = inject_steers(messages, steer, sender);
+
     // Emit a non-terminal checkpoint so persistence flushes the new turn
-    // suffix (assistant blocks + tool_results) without waiting for the
-    // terminal `TurnFinished`. Long tool loops persist incrementally between
+    // suffix (assistant blocks + tool_results + steers) without waiting for
+    // the terminal `TurnFinished`. Long tool loops persist incrementally between
     // tool turns. UI consumers can ignore this; they get live state from
     // streaming events.
     sender.send(AgentEvent::TurnCheckpoint {
@@ -2851,6 +2907,7 @@ async fn process_tool_turn(
     Ok(ToolTurnStats {
         executable: executable_count,
         malformed: malformed_count,
+        steered,
     })
 }
 
@@ -3336,6 +3393,7 @@ mod tests {
             activity_parent_thread_id: None,
             activity_subagent_name: None,
             tool_timeout,
+            steer: None,
         }
     }
 
@@ -3523,6 +3581,7 @@ mod tests {
             activity_parent_thread_id: None,
             activity_subagent_name: None,
             tool_timeout: None,
+            steer: None,
         };
         for (suffix, expected) in [
             ("@high", ThinkingLevel::High),
@@ -6563,6 +6622,7 @@ mod tests {
             None,
             prior_count,
             None,
+            None,
         )
         .await
         .expect("tool turn should complete");
@@ -6584,6 +6644,117 @@ mod tests {
             saw_checkpoint,
             "process_tool_turn must emit a TurnCheckpoint after a successful tool turn"
         );
+    }
+
+    /// A steer pending at the end of a tool round is added after the tool
+    /// results, reported, and carried by the round's checkpoint, so the next
+    /// model request reads it. A closed source adds nothing.
+    #[tokio::test]
+    async fn pending_steers_join_the_turn_after_the_tool_round() {
+        use std::collections::HashSet;
+
+        use crate::core::steer::{SOURCE_USER, SteerInbox, SteerItem, SteerSource};
+        use crate::tools::{ToolContext, ToolRegistry};
+
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+        let tool_turn = || {
+            let mut turn = AssistantTurnBuilder::new("gemini-3-pro-preview".to_string());
+            turn.push_tool_use(ToolUseBuilder {
+                index: 0,
+                id: "tool_no_op".to_string(),
+                name: "nonexistent".to_string(),
+                input_json: "{}".to_string(),
+                input_preview_len: 0,
+                id_origin: zdx_types::IdOrigin::Real,
+                replay: None,
+            });
+            turn
+        };
+        let setup = RunTurnSetup {
+            model: "gemini-3-pro-preview".to_string(),
+            provider: "gemini".to_string(),
+            account: None,
+            thinking_level: ThinkingLevel::Off,
+            client: Box::new(GeminiClient::new(GeminiConfig {
+                api_key: "x".to_string(),
+                base_url: "https://example.invalid".to_string(),
+                model: "gemini-3-pro-preview".to_string(),
+                max_output_tokens: None,
+                thinking_config: None,
+                extra_headers: reqwest::header::HeaderMap::new(),
+            })),
+            tools: Vec::new(),
+            enabled_tools: HashSet::new(),
+            tool_ctx: ToolContext::new(std::path::PathBuf::from("."), None),
+            tool_registry: ToolRegistry::builtins(),
+        };
+        let inbox = SteerInbox::new();
+        inbox
+            .try_push(SteerItem {
+                id: "s1".to_string(),
+                source: SOURCE_USER.to_string(),
+                text: "use the other file".to_string(),
+            })
+            .unwrap();
+        let source = SteerSource::Inbox(inbox.clone());
+
+        let mut messages = vec![ChatMessage::user("first turn")];
+        let stats = process_tool_turn(
+            &mut messages,
+            &mut tool_turn(),
+            &setup,
+            &sender,
+            None,
+            1,
+            None,
+            Some(&source),
+        )
+        .await
+        .unwrap();
+        assert_eq!(stats.steered, 1);
+        let n = messages.len();
+        assert!(messages[n - 2].has_tool_results(), "results come first");
+        assert!(messages[n - 1].is_steer());
+        assert_eq!(zdx_types::current_turn_start(&messages), 1, "same turn");
+
+        let mut injected = false;
+        let mut checkpoint_has_steer = false;
+        while let Ok(event) = rx.try_recv() {
+            match &*event {
+                AgentEvent::UserMessageInjected { id, text, .. } => {
+                    injected = id == "s1" && text == "use the other file";
+                }
+                AgentEvent::TurnCheckpoint { messages, .. } => {
+                    checkpoint_has_steer = messages.last().is_some_and(ChatMessage::is_steer);
+                }
+                _ => {}
+            }
+        }
+        assert!(injected && checkpoint_has_steer);
+
+        inbox
+            .try_push(SteerItem {
+                id: "s2".to_string(),
+                source: SOURCE_USER.to_string(),
+                text: "late".to_string(),
+            })
+            .unwrap();
+        source.close();
+        let stats = process_tool_turn(
+            &mut messages,
+            &mut tool_turn(),
+            &setup,
+            &sender,
+            None,
+            1,
+            None,
+            Some(&source),
+        )
+        .await
+        .unwrap();
+        assert_eq!(stats.steered, 0, "a closed source adds nothing");
+        assert_eq!(inbox.drain_unread().len(), 1, "left for the owner");
     }
 
     /// Provider errors after a partial run carry the run-entry

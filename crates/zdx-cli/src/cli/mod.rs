@@ -169,6 +169,11 @@ enum Commands {
         /// Internal: named subagent invoked (e.g. `explorer`, `oracle`).
         #[arg(long = "activity-subagent-name", hide = true, value_name = "NAME")]
         activity_subagent_name: Option<String>,
+
+        /// Internal: file the worker manager appends steers to; the run reads
+        /// new lines at safe points (after each tool round).
+        #[arg(long = "steer-file", hide = true, value_name = "PATH")]
+        steer_file: Option<PathBuf>,
     },
 
     /// Generate images with Gemini, `OpenAI`, or `OpenAI` Codex image models
@@ -461,6 +466,12 @@ enum OrchestratorCommands {
         /// queued or running and no worker still working for it
         #[arg(long)]
         wait: bool,
+
+        /// `queue` (default): a new turn after the running and queued ones.
+        /// `steer`: added to the running turn after its current tool calls,
+        /// else queued; the receipt's `in_turn` says which
+        #[arg(long, value_enum, default_value = "queue")]
+        delivery: DeliveryArg,
     },
     /// Show threads, queues, and workers of the running service
     Status {
@@ -1276,6 +1287,13 @@ struct DispatchContext<'a> {
     system_prompt: Option<&'a str>,
 }
 
+/// `zdx orchestrator send --delivery`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum DeliveryArg {
+    Queue,
+    Steer,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 struct ExecCommandInput {
     prompt: Option<String>,
@@ -1293,6 +1311,7 @@ struct ExecCommandInput {
     activity_kind: Option<String>,
     activity_parent_thread_id: Option<String>,
     activity_subagent_name: Option<String>,
+    steer_file: Option<PathBuf>,
 }
 
 struct ImagineCommandInput {
@@ -1370,6 +1389,7 @@ async fn run_exec_command(context: &DispatchContext<'_>, input: ExecCommandInput
         activity_kind: input.activity_kind.as_deref(),
         activity_parent_thread_id: input.activity_parent_thread_id.as_deref(),
         activity_subagent_name: input.activity_subagent_name.as_deref(),
+        steer_file: input.steer_file,
     })
     .await
 }
@@ -1432,6 +1452,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             activity_kind,
             activity_parent_thread_id,
             activity_subagent_name,
+            steer_file,
         } => {
             run_exec_command(
                 context,
@@ -1451,6 +1472,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
                     activity_kind,
                     activity_parent_thread_id,
                     activity_subagent_name,
+                    steer_file,
                 },
             )
             .await
@@ -1794,6 +1816,7 @@ async fn dispatch_orchestrator(
             profile,
             model,
             wait,
+            delivery,
         } => {
             let prompt = resolve_exec_prompt(prompt, prompt_file.as_deref())?;
             commands::orchestrator::send(commands::orchestrator::SendOptions {
@@ -1803,6 +1826,10 @@ async fn dispatch_orchestrator(
                 model: model.as_deref(),
                 prompt,
                 wait,
+                delivery: match delivery {
+                    DeliveryArg::Queue => zdx_engine::orchestration::protocol::Delivery::Queue,
+                    DeliveryArg::Steer => zdx_engine::orchestration::protocol::Delivery::Steer,
+                },
             })
             .await
         }

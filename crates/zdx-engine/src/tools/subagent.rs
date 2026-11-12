@@ -714,6 +714,7 @@ fn build_exec_options(
         thread_parent_id: ctx.current_thread_id.clone(),
         thread_subagent_name: Some(subagent_name),
         thread_id: None,
+        steer_file: None,
     }
 }
 

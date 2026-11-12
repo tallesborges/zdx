@@ -685,6 +685,19 @@ pub struct WorkersConfig {
     /// External launcher settings; required when `runner = "external"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external: Option<ExternalWorkerConfig>,
+    /// How a finished worker's `[worker update]` reaches its orchestrator
+    /// thread: `steer` (default) adds it to a running turn at the next safe
+    /// point, else queues it; `queue` always queues and batches it.
+    pub update_delivery: UpdateDelivery,
+}
+
+/// `[workers] update_delivery` (SPEC §18).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateDelivery {
+    #[default]
+    Steer,
+    Queue,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

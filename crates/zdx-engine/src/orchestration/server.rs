@@ -185,12 +185,13 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
     write_reply(&mut write, &reply).await
 }
 
-fn submitted(result: Result<(String, u64, usize)>) -> Reply {
+fn submitted(result: Result<super::runtime::Submitted>) -> Reply {
     match result {
-        Ok((thread_id, input_id, queued_ahead)) => Reply::Submitted {
-            thread_id,
-            input_id,
-            queued_ahead,
+        Ok(submitted) => Reply::Submitted {
+            thread_id: submitted.thread_id,
+            input_id: submitted.input_id,
+            queued_ahead: submitted.queued_ahead,
+            in_turn: submitted.in_turn,
         },
         Err(err) => Reply::Error {
             message: format!("{err:#}"),
@@ -219,9 +220,12 @@ async fn follow_submit(
     let Reply::Submitted {
         thread_id,
         input_id,
+        in_turn: false,
         ..
     } = reply
     else {
+        // An error, or a steer that joined the running turn: nothing of its
+        // own to follow.
         return Ok(());
     };
 
@@ -325,6 +329,75 @@ mod tests {
         })
     }
 
+    /// A followed steer that joins the running turn gets its receipt and the
+    /// connection closes: there is no turn of its own to follow.
+    #[tokio::test]
+    async fn a_followed_steer_into_the_running_turn_closes_after_the_receipt() {
+        let _home = crate::test_support::temp_zdx_home();
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("o.sock");
+        let (workers, events) = WorkerManager::with_runner(Arc::new(|_: WorkerRunRequest| {
+            Box::pin(async { Ok(String::new()) })
+        }));
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let turn_gate = Arc::clone(&gate);
+        let runner: TurnRunner = Arc::new(move |request: TurnRequest| {
+            let gate = Arc::clone(&turn_gate);
+            Box::pin(async move {
+                gate.notified().await;
+                let _ = request.events.send(Arc::new(AgentEvent::TurnFinished {
+                    status: TurnStatus::Completed,
+                    final_text: String::new(),
+                    messages: Vec::new(),
+                    prior_message_count: 0,
+                }));
+            })
+        });
+        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        let mut started = orchestrator.subscribe(Some("busy".to_string()), false);
+        tokio::spawn(serve(Arc::clone(&orchestrator), socket.clone()));
+        let client = OrchestratorClient::at(&socket);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while !socket.exists() {
+            assert!(tokio::time::Instant::now() < deadline, "socket never bound");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let submit = |text: &str, delivery| Submit {
+            thread_id: Some("busy".to_string()),
+            root: dir.path().to_path_buf(),
+            profile: None,
+            model: None,
+            route: None,
+            text: text.to_string(),
+            images: Vec::new(),
+            follow: Follow::Turn,
+            delivery,
+        };
+        let _first = client
+            .open(&Request::Submit(submit(
+                "work",
+                crate::orchestration::protocol::Delivery::Queue,
+            )))
+            .await
+            .unwrap();
+        while !matches!(started.events.recv().await, Some(Event::TurnStarted { .. })) {}
+
+        let mut stream = client
+            .open(&Request::Submit(submit(
+                "detail",
+                crate::orchestration::protocol::Delivery::Steer,
+            )))
+            .await
+            .unwrap();
+        let receipt = ok(stream.next().await.unwrap().unwrap()).unwrap();
+        assert!(matches!(receipt, Reply::Submitted { in_turn: true, .. }));
+        assert!(
+            stream.next().await.unwrap().is_none(),
+            "closed after the receipt"
+        );
+        gate.notify_one();
+    }
+
     /// End to end over the socket: a followed submit streams exactly its own
     /// turn, and the blocking client reads status from the same service.
     #[tokio::test]
@@ -360,6 +433,7 @@ mod tests {
                 text: "hello".to_string(),
                 images: Vec::new(),
                 follow: Follow::Turn,
+                delivery: crate::orchestration::protocol::Delivery::Queue,
             }))
             .await
             .unwrap();

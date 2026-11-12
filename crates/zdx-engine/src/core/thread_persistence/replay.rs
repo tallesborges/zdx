@@ -369,7 +369,9 @@ impl MessageReplay {
         // cancel orphaned tool_uses, then push the user/system message.
         self.flush_pending_assistant_blocks();
         self.cancel_open_tool_uses();
-        let note = if role == "user" {
+        // A steer is input of the running turn: pending notes wait for the
+        // next user message that starts a turn, as they did live.
+        let note = if role == "user" && phase.as_deref() != Some(zdx_types::STEER_PHASE) {
             self.take_note()
         } else {
             None

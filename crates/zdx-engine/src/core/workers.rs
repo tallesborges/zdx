@@ -72,6 +72,152 @@ pub struct CompletionEvent {
     pub error: Option<String>,
     /// Link to the worker's surface mirror (Telegram topic), when registered.
     pub mirror_url: Option<String>,
+    /// What happened to the steers this turn accepted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steers: Vec<SteerReceipt>,
+}
+
+/// What finally happened to a steer sent to a worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SteerState {
+    /// Accepted for the running turn; not read yet.
+    Pending,
+    /// The worker's turn read it.
+    Injected,
+    /// It runs as a normal queued prompt (`prompt_id`).
+    Queued,
+    /// An explicit cancel dropped it.
+    Discarded,
+    /// The worker's report stream ended early (crash, kill, output failure),
+    /// so whether it was read is unknown. It is not re-sent.
+    Uncertain,
+}
+
+/// Why a steer was queued instead of joining the running turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SteerQueueReason {
+    /// No turn was running.
+    NotRunning,
+    /// The running turn was being cancelled.
+    Cancelling,
+    /// The worker runs through an external launcher, which takes no steers.
+    UnsupportedRunner,
+    /// Steering is closed for this turn (a steer write failed earlier).
+    SteerClosed,
+    /// The thread was not managed; it was re-attached and the message queued.
+    NotManaged,
+    /// The turn ended before reading it.
+    TurnEnded,
+}
+
+/// One steer's outcome, reported in status and in the turn's completion.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SteerReceipt {
+    pub steer_id: u64,
+    pub state: SteerState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<SteerQueueReason>,
+}
+
+/// Result of [`WorkerManager::steer`].
+#[derive(Debug, Clone)]
+pub enum SteerOutcome {
+    /// The message waits in the running turn; the worker reads it after its
+    /// current tool calls finish. Not a promise of injection: if the turn
+    /// ends first it is queued, and a cancel drops it (see the receipt).
+    InTurn { steer_id: u64 },
+    /// The message is a normal queued prompt.
+    Queued {
+        steer_id: u64,
+        prompt_id: u64,
+        reason: SteerQueueReason,
+    },
+}
+
+/// Steer reports from one running local turn, written by the runner's
+/// stream reader and read at settlement.
+#[derive(Debug)]
+pub struct WorkerSteer {
+    path: PathBuf,
+    reports: Mutex<SteerReports>,
+}
+
+#[derive(Debug, Default)]
+struct SteerReports {
+    injected: Vec<u64>,
+    /// The child reported that every steer report was written.
+    closed: bool,
+}
+
+impl WorkerSteer {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            reports: Mutex::new(SteerReports::default()),
+        }
+    }
+
+    /// File the manager appends steers to and the child reads.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The child added steer `seq` to its turn.
+    pub fn record_injected(&self, seq: u64) {
+        self.reports
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .injected
+            .push(seq);
+    }
+
+    /// The child wrote its last steer report.
+    pub fn record_closed(&self) {
+        self.reports
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .closed = true;
+    }
+
+    fn reports(&self) -> (Vec<u64>, bool) {
+        let reports = self
+            .reports
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (reports.injected.clone(), reports.closed)
+    }
+}
+
+/// A steer accepted for the running turn and not settled yet.
+struct PendingSteer {
+    steer_id: u64,
+    text: String,
+    requester_thread_id: String,
+}
+
+/// Steering of one running local turn.
+struct RunSteer {
+    shared: Arc<WorkerSteer>,
+    pending: Vec<PendingSteer>,
+    /// False after a failed append: nothing more is written to this file.
+    open: bool,
+}
+
+/// Receipts kept per worker for status (the newest last).
+const MAX_STEER_RECEIPTS: usize = 20;
+
+fn not_managed_receipt(steer_id: u64, prompt_id: u64) -> SteerReceipt {
+    SteerReceipt {
+        steer_id,
+        state: SteerState::Queued,
+        prompt_id: Some(prompt_id),
+        reason: Some(SteerQueueReason::NotManaged),
+    }
 }
 
 /// One live tool-activity update from a running worker turn, decoded from the
@@ -149,6 +295,9 @@ pub struct QueuedPrompt {
     pub text: String,
     /// Orchestrator that queued the prompt; its completion is routed there.
     pub requester_thread_id: String,
+    /// Set when this prompt is a steer that could not join a running turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steer_id: Option<u64>,
 }
 
 /// Point-in-time view of a managed worker.
@@ -175,6 +324,9 @@ pub struct WorkerSnapshot {
     pub seconds_since_last_activity: Option<u64>,
     /// Seconds the current turn has been running. `None` when idle.
     pub turn_elapsed_seconds: Option<u64>,
+    /// Recent steers and what happened to each (newest last).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steers: Vec<SteerReceipt>,
 }
 
 impl WorkerSnapshot {
@@ -197,6 +349,9 @@ pub struct WorkerRunRequest {
     pub cancel: CancellationToken,
     /// Manager event channel, for runners that relay live `Activity`.
     pub events: mpsc::UnboundedSender<WorkerEvent>,
+    /// Steering of this turn: the file to read and where to report. `None`
+    /// when the runner takes no steers.
+    pub steer: Option<Arc<WorkerSteer>>,
 }
 
 type RunnerFuture = Pin<Box<dyn Future<Output = Result<String>> + Send>>;
@@ -230,6 +385,11 @@ struct WorkerState {
     touched_at: Instant,
     /// Orchestrator that queued the running prompt; its result goes there.
     running_requester: Option<String>,
+    /// Steering of the running turn; `None` when nothing runs or the runner
+    /// takes no steers.
+    run_steer: Option<RunSteer>,
+    /// Recent steer receipts, newest last, at most `MAX_STEER_RECEIPTS`.
+    steer_receipts: VecDeque<SteerReceipt>,
 }
 
 impl WorkerState {
@@ -251,6 +411,42 @@ impl WorkerState {
                 .and_then(|tool| tool.input.clone()),
             seconds_since_last_activity: self.last_activity_at.map(|at| at.elapsed().as_secs()),
             turn_elapsed_seconds: self.turn_started_at.map(|at| at.elapsed().as_secs()),
+            steers: self.steer_receipts(),
+        }
+    }
+
+    /// Receipts with the running turn's reports applied, so a steer the
+    /// worker already read shows as injected before the turn ends.
+    fn steer_receipts(&self) -> Vec<SteerReceipt> {
+        let injected = self
+            .run_steer
+            .as_ref()
+            .map(|run| run.shared.reports().0)
+            .unwrap_or_default();
+        self.steer_receipts
+            .iter()
+            .map(|receipt| {
+                let mut receipt = receipt.clone();
+                if receipt.state == SteerState::Pending && injected.contains(&receipt.steer_id) {
+                    receipt.state = SteerState::Injected;
+                }
+                receipt
+            })
+            .collect()
+    }
+
+    fn record_receipt(&mut self, receipt: SteerReceipt) {
+        if let Some(existing) = self
+            .steer_receipts
+            .iter_mut()
+            .find(|existing| existing.steer_id == receipt.steer_id)
+        {
+            *existing = receipt;
+            return;
+        }
+        self.steer_receipts.push_back(receipt);
+        while self.steer_receipts.len() > MAX_STEER_RECEIPTS {
+            self.steer_receipts.pop_front();
         }
     }
 }
@@ -269,6 +465,7 @@ pub struct WorkerManager {
     runner: WorkerRunner,
     /// Local runners need the worker root to exist on this host; an external
     /// runner maps it to a remote workspace, so it only has to be absolute.
+    /// Only local runners take steers.
     local_roots: bool,
 }
 
@@ -475,6 +672,7 @@ impl WorkerManager {
             model,
             thinking_level,
             prompt,
+            None,
         );
         Ok(worker_id)
     }
@@ -512,14 +710,17 @@ impl WorkerManager {
 
         let root = self.worker_root(&persisted_root(worker_thread_id)?)?;
         let model = resolve_persisted_model(worker_thread_id);
-        Ok(self.attach_or_enqueue(
-            worker_thread_id,
-            Some(owner_thread_id),
-            root,
-            model,
-            None,
-            message,
-        ))
+        Ok(self
+            .attach_or_enqueue(
+                worker_thread_id,
+                Some(owner_thread_id),
+                root,
+                model,
+                None,
+                message,
+                None,
+            )
+            .0)
     }
 
     /// Queues a prompt originating from a worker's mirror Telegram topic.
@@ -547,7 +748,9 @@ impl WorkerManager {
 
         let root = self.worker_root(&persisted_root(worker_thread_id)?)?;
         let model = resolve_persisted_model(worker_thread_id);
-        Ok(self.attach_or_enqueue(worker_thread_id, None, root, model, None, message))
+        Ok(self
+            .attach_or_enqueue(worker_thread_id, None, root, model, None, message, None)
+            .0)
     }
 
     /// Enqueues onto an already-managed worker; `None` when unmanaged.
@@ -582,6 +785,7 @@ impl WorkerManager {
     /// caller enqueues onto the winner instead of overwriting it (model tool
     /// calls run concurrently, so two `Send_Thread_Message` calls can race).
     /// `owner` of `None` keeps the current owner (vacant entries own themselves).
+    #[allow(clippy::too_many_arguments)]
     fn attach_or_enqueue(
         self: &Arc<Self>,
         worker_thread_id: &str,
@@ -590,8 +794,9 @@ impl WorkerManager {
         model: Option<String>,
         thinking_level: Option<ThinkingLevel>,
         prompt: &str,
-    ) -> WorkerSnapshot {
-        let (snapshot, spawn_wake) = {
+        steer_id: Option<u64>,
+    ) -> (WorkerSnapshot, u64) {
+        let (snapshot, prompt_id, spawn_wake) = {
             let mirror_url = self.mirror_url(worker_thread_id);
             let mut map = self.state.lock().expect("worker state lock poisoned");
             match map.entry(worker_thread_id.to_string()) {
@@ -600,20 +805,32 @@ impl WorkerManager {
                     if let Some(owner) = owner {
                         state.owner_thread_id = owner.to_string();
                     }
-                    let prompt = self.queued_prompt(prompt, &state.owner_thread_id);
+                    let mut prompt = self.queued_prompt(prompt, &state.owner_thread_id);
+                    prompt.steer_id = steer_id;
+                    let prompt_id = prompt.id;
                     state.queue.push_back(prompt);
+                    if let Some(steer_id) = steer_id {
+                        state.record_receipt(not_managed_receipt(steer_id, prompt_id));
+                    }
                     state.touched_at = Instant::now();
                     if state.status != WorkerStatus::Running {
                         state.status = WorkerStatus::Queued;
                     }
                     state.wake.notify_one();
-                    (state.snapshot(worker_thread_id, mirror_url), None)
+                    (
+                        state.snapshot(worker_thread_id, mirror_url),
+                        prompt_id,
+                        None,
+                    )
                 }
                 Entry::Vacant(vacant) => {
                     let wake = Arc::new(Notify::new());
                     let owner_thread_id = owner.unwrap_or(worker_thread_id).to_string();
                     let mut queue = VecDeque::new();
-                    queue.push_back(self.queued_prompt(prompt, &owner_thread_id));
+                    let mut prompt = self.queued_prompt(prompt, &owner_thread_id);
+                    prompt.steer_id = steer_id;
+                    let prompt_id = prompt.id;
+                    queue.push_back(prompt);
                     let state = vacant.insert(WorkerState {
                         owner_thread_id,
                         root,
@@ -630,15 +847,24 @@ impl WorkerManager {
                         turn_started_at: None,
                         touched_at: Instant::now(),
                         running_requester: None,
+                        run_steer: None,
+                        steer_receipts: steer_id
+                            .map(|steer_id| not_managed_receipt(steer_id, prompt_id))
+                            .into_iter()
+                            .collect(),
                     });
-                    (state.snapshot(worker_thread_id, mirror_url), Some(wake))
+                    (
+                        state.snapshot(worker_thread_id, mirror_url),
+                        prompt_id,
+                        Some(wake),
+                    )
                 }
             }
         };
         if let Some(wake) = spawn_wake {
             spawn_worker_task(Arc::clone(self), worker_thread_id.to_string(), wake);
         }
-        snapshot
+        (snapshot, prompt_id)
     }
 
     /// Snapshot of a single worker, when managed.
@@ -720,6 +946,11 @@ impl WorkerManager {
                     .queue
                     .iter()
                     .any(|prompt| prompt.requester_thread_id == requester_thread_id)
+                && !state.run_steer.as_ref().is_some_and(|run| {
+                    run.pending
+                        .iter()
+                        .any(|steer| steer.requester_thread_id == requester_thread_id)
+                })
         })
     }
 
@@ -737,7 +968,19 @@ impl WorkerManager {
             let Some(state) = map.get_mut(worker_thread_id) else {
                 bail!("Worker '{worker_thread_id}' is not managed");
             };
-            state.queue.clear();
+            let cleared: Vec<QueuedPrompt> = state.queue.drain(..).collect();
+            for steer_id in cleared.iter().filter_map(|prompt| prompt.steer_id) {
+                state.record_receipt(SteerReceipt {
+                    steer_id,
+                    state: SteerState::Discarded,
+                    prompt_id: None,
+                    reason: None,
+                });
+            }
+            // Unread steers of the running turn are dropped at settlement.
+            if let Some(run) = state.run_steer.as_mut() {
+                run.open = false;
+            }
             if let Some(cancel) = state.current_cancel.as_ref() {
                 // Status flips to Cancelled when the run returns; the FIFO task
                 // will not start another prompt before the child is reaped.
@@ -787,6 +1030,14 @@ impl WorkerManager {
                 );
             };
             let prompt = state.queue.remove(index).expect("index from position");
+            if let Some(steer_id) = prompt.steer_id {
+                state.record_receipt(SteerReceipt {
+                    steer_id,
+                    state: SteerState::Discarded,
+                    prompt_id: Some(prompt.id),
+                    reason: None,
+                });
+            }
             (
                 prompt,
                 state.snapshot(worker_thread_id, self.mirror_url(worker_thread_id)),
@@ -796,14 +1047,245 @@ impl WorkerManager {
         Ok(removed)
     }
 
+    fn next_id(&self) -> u64 {
+        self.next_prompt_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
     fn queued_prompt(&self, text: &str, requester_thread_id: &str) -> QueuedPrompt {
         QueuedPrompt {
-            id: self
-                .next_prompt_id
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            id: self.next_id(),
             text: text.to_string(),
             requester_thread_id: requester_thread_id.to_string(),
+            steer_id: None,
         }
+    }
+
+    /// Adds `message` to the worker's current work: the running turn reads
+    /// it after its current tool calls finish. When the worker cannot take
+    /// it into the running turn, the message is queued like
+    /// [`Self::send_message`] (an unmanaged thread is re-attached), and the
+    /// outcome says so. Never cancels or restarts the running turn.
+    ///
+    /// The decision, the file append, and any fallback enqueue happen under
+    /// the state lock that cancel, settlement, and the FIFO's next pop also
+    /// take, so none of them can interleave with a steer.
+    ///
+    /// # Errors
+    /// Returns an error if the message is empty, the steer cannot be written
+    /// (nothing is queued then), or an unmanaged thread cannot be re-attached.
+    ///
+    /// # Panics
+    /// Panics if the internal worker state lock is poisoned.
+    pub fn steer(
+        self: &Arc<Self>,
+        owner_thread_id: &str,
+        worker_thread_id: &str,
+        message: &str,
+    ) -> Result<(SteerOutcome, WorkerSnapshot)> {
+        ensure!(!message.trim().is_empty(), "Worker message cannot be empty");
+        let event = WorkerEvent::Prompted {
+            worker_thread_id: worker_thread_id.to_string(),
+            prompt: message.to_string(),
+        };
+        if self.events_tx.send(event).is_err() {
+            tracing::debug!(worker = %worker_thread_id, "Worker event channel closed");
+        }
+        let steer_id = self.next_id();
+        {
+            let mut map = self.state.lock().expect("worker state lock poisoned");
+            if let Some(state) = map.get_mut(worker_thread_id) {
+                state.owner_thread_id = owner_thread_id.to_string();
+                state.touched_at = Instant::now();
+                let reason = if state.status != WorkerStatus::Running {
+                    SteerQueueReason::NotRunning
+                } else if state
+                    .current_cancel
+                    .as_ref()
+                    .is_some_and(CancellationToken::is_cancelled)
+                {
+                    SteerQueueReason::Cancelling
+                } else if !self.local_roots {
+                    SteerQueueReason::UnsupportedRunner
+                } else {
+                    match state.run_steer.as_mut().filter(|run| run.open) {
+                        None => SteerQueueReason::SteerClosed,
+                        Some(run) => {
+                            if let Err(err) = crate::core::steer::append_steer_line(
+                                run.shared.path(),
+                                steer_id,
+                                message,
+                            ) {
+                                // The write may have left a partial line: stop
+                                // writing to this file, so later steers queue.
+                                run.open = false;
+                                return Err(anyhow::Error::new(err)
+                                    .context("Failed to write the steer for the running turn"));
+                            }
+                            run.pending.push(PendingSteer {
+                                steer_id,
+                                text: message.to_string(),
+                                requester_thread_id: owner_thread_id.to_string(),
+                            });
+                            state.record_receipt(SteerReceipt {
+                                steer_id,
+                                state: SteerState::Pending,
+                                prompt_id: None,
+                                reason: None,
+                            });
+                            tracing::info!(worker = %worker_thread_id, steer_id, "Steer accepted for the running turn");
+                            let snapshot =
+                                state.snapshot(worker_thread_id, self.mirror_url(worker_thread_id));
+                            return Ok((SteerOutcome::InTurn { steer_id }, snapshot));
+                        }
+                    }
+                };
+                let prompt_id = self.queue_steer(state, steer_id, message, owner_thread_id, reason);
+                tracing::info!(worker = %worker_thread_id, steer_id, ?reason, "Steer queued");
+                let snapshot = state.snapshot(worker_thread_id, self.mirror_url(worker_thread_id));
+                return Ok((
+                    SteerOutcome::Queued {
+                        steer_id,
+                        prompt_id,
+                        reason,
+                    },
+                    snapshot,
+                ));
+            }
+        }
+        self.steer_unmanaged(owner_thread_id, worker_thread_id, message, steer_id)
+    }
+
+    /// An unmanaged thread takes no steers: re-attach and queue, exactly like
+    /// `send_message`.
+    fn steer_unmanaged(
+        self: &Arc<Self>,
+        owner_thread_id: &str,
+        worker_thread_id: &str,
+        message: &str,
+        steer_id: u64,
+    ) -> Result<(SteerOutcome, WorkerSnapshot)> {
+        let root = self.worker_root(&persisted_root(worker_thread_id)?)?;
+        let model = resolve_persisted_model(worker_thread_id);
+        // The receipt is recorded with the enqueue, under the same lock.
+        let (snapshot, prompt_id) = self.attach_or_enqueue(
+            worker_thread_id,
+            Some(owner_thread_id),
+            root,
+            model,
+            None,
+            message,
+            Some(steer_id),
+        );
+        let reason = SteerQueueReason::NotManaged;
+        tracing::info!(worker = %worker_thread_id, steer_id, ?reason, "Steer queued");
+        Ok((
+            SteerOutcome::Queued {
+                steer_id,
+                prompt_id,
+                reason,
+            },
+            snapshot,
+        ))
+    }
+
+    /// Queues a steer as a normal prompt at the back of the FIFO. Caller
+    /// holds the state lock.
+    fn queue_steer(
+        &self,
+        state: &mut WorkerState,
+        steer_id: u64,
+        text: &str,
+        requester_thread_id: &str,
+        reason: SteerQueueReason,
+    ) -> u64 {
+        let mut prompt = self.queued_prompt(text, requester_thread_id);
+        prompt.steer_id = Some(steer_id);
+        let prompt_id = prompt.id;
+        state.queue.push_back(prompt);
+        if state.status != WorkerStatus::Running {
+            state.status = WorkerStatus::Queued;
+        }
+        state.wake.notify_one();
+        state.record_receipt(SteerReceipt {
+            steer_id,
+            state: SteerState::Queued,
+            prompt_id: Some(prompt_id),
+            reason: Some(reason),
+        });
+        prompt_id
+    }
+
+    /// Settles the steers of a turn that just ended. Caller holds the state
+    /// lock, before the turn's completion is published.
+    ///
+    /// - Cancelled turn: every unread steer is dropped.
+    /// - The child reported every injection (its closing marker arrived):
+    ///   unread steers are clearly unread and are queued as normal prompts.
+    /// - Otherwise the report stream ended early: unread steers may or may
+    ///   not have been read. They are reported `uncertain` and not re-sent.
+    fn settle_steers(
+        &self,
+        state: &mut WorkerState,
+        worker_thread_id: &str,
+        cancelled: bool,
+    ) -> Vec<SteerReceipt> {
+        let Some(run) = state.run_steer.take() else {
+            return Vec::new();
+        };
+        let (injected, closed) = run.shared.reports();
+        let mut receipts = Vec::with_capacity(run.pending.len());
+        for steer in run.pending {
+            let receipt = if injected.contains(&steer.steer_id) {
+                SteerReceipt {
+                    steer_id: steer.steer_id,
+                    state: SteerState::Injected,
+                    prompt_id: None,
+                    reason: None,
+                }
+            } else if cancelled {
+                SteerReceipt {
+                    steer_id: steer.steer_id,
+                    state: SteerState::Discarded,
+                    prompt_id: None,
+                    reason: None,
+                }
+            } else if closed {
+                let reason = SteerQueueReason::TurnEnded;
+                let prompt_id = self.queue_steer(
+                    state,
+                    steer.steer_id,
+                    &steer.text,
+                    &steer.requester_thread_id,
+                    reason,
+                );
+                SteerReceipt {
+                    steer_id: steer.steer_id,
+                    state: SteerState::Queued,
+                    prompt_id: Some(prompt_id),
+                    reason: Some(reason),
+                }
+            } else {
+                SteerReceipt {
+                    steer_id: steer.steer_id,
+                    state: SteerState::Uncertain,
+                    prompt_id: None,
+                    reason: None,
+                }
+            };
+            state.record_receipt(receipt.clone());
+            receipts.push(receipt);
+        }
+        if !receipts.is_empty() {
+            tracing::info!(
+                worker = %worker_thread_id,
+                settled = receipts.len(),
+                closed,
+                cancelled,
+                "Settled worker steers"
+            );
+        }
+        receipts
     }
 
     /// Updates a thread's title.
@@ -903,6 +1385,10 @@ async fn run_worker_prompt(
         thread_id: Some(request.worker_thread_id.clone()),
         activity_kind: Some("worker".to_string()),
         activity_parent_thread_id: Some(request.owner_thread_id.clone()),
+        steer_file: request
+            .steer
+            .as_ref()
+            .map(|steer| steer.path().to_path_buf()),
         ..Default::default()
     };
     let (tx, rx) = create_event_channel();
@@ -915,6 +1401,7 @@ async fn run_worker_prompt(
         request.worker_thread_id.clone(),
         request.events.clone(),
         manager,
+        request.steer.clone(),
     ));
     let result = run_exec_subagent_with_cancel(
         &request.root,
@@ -938,11 +1425,17 @@ async fn forward_activity(
     worker_thread_id: String,
     events: mpsc::UnboundedSender<WorkerEvent>,
     manager: Weak<WorkerManager>,
+    steer: Option<Arc<WorkerSteer>>,
 ) {
     while let Some(event) = rx.recv().await {
         let AgentEvent::ToolOutputDelta { chunk, .. } = event.as_ref() else {
             continue;
         };
+        if let Some(steer) = &steer
+            && record_steer_report(steer, chunk)
+        {
+            continue;
+        }
         let Some(activity) = WorkerActivity::from_stream_chunk(chunk) else {
             continue;
         };
@@ -961,6 +1454,31 @@ async fn forward_activity(
     }
 }
 
+/// Applies a steer report relayed from the child (`{"t":"steer","id":N}` or
+/// `{"t":"steer_closed"}`); false for any other chunk.
+fn record_steer_report(steer: &WorkerSteer, chunk: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(chunk) else {
+        return false;
+    };
+    match value.get("t").and_then(Value::as_str) {
+        Some(crate::core::subagent::STEER_CHUNK) => {
+            if let Some(seq) = value
+                .get("id")
+                .and_then(Value::as_str)
+                .and_then(|id| id.parse().ok())
+            {
+                steer.record_injected(seq);
+            }
+            true
+        }
+        Some(crate::core::subagent::STEER_CLOSED_CHUNK) => {
+            steer.record_closed();
+            true
+        }
+        _ => false,
+    }
+}
+
 /// One FIFO task per worker: drains queued prompts strictly serially, updating
 /// status and emitting one `CompletionEvent` per finished prompt.
 fn spawn_worker_task(manager: Arc<WorkerManager>, worker_thread_id: String, wake: Arc<Notify>) {
@@ -973,6 +1491,15 @@ fn spawn_worker_task(manager: Arc<WorkerManager>, worker_thread_id: String, wake
                 };
                 state.queue.pop_front().map(|prompt| {
                     let cancel = CancellationToken::new();
+                    let steer = manager
+                        .local_roots
+                        .then(|| new_steer_file(&worker_thread_id))
+                        .flatten();
+                    state.run_steer = steer.as_ref().map(|shared| RunSteer {
+                        shared: Arc::clone(shared),
+                        pending: Vec::new(),
+                        open: true,
+                    });
                     state.current_cancel = Some(cancel.clone());
                     state.running_requester = Some(prompt.requester_thread_id.clone());
                     state.status = WorkerStatus::Running;
@@ -990,6 +1517,7 @@ fn spawn_worker_task(manager: Arc<WorkerManager>, worker_thread_id: String, wake
                         thinking_level: state.thinking_level,
                         cancel,
                         events: manager.events_tx.clone(),
+                        steer,
                     }
                 })
             };
@@ -1010,6 +1538,11 @@ fn spawn_worker_task(manager: Arc<WorkerManager>, worker_thread_id: String, wake
             let Some(state) = map.get_mut(&worker_thread_id) else {
                 break;
             };
+            let steer_path = state
+                .run_steer
+                .as_ref()
+                .map(|run| run.shared.path().to_path_buf());
+            let steers = manager.settle_steers(state, &worker_thread_id, cancel.is_cancelled());
             state.current_cancel = None;
             state.running_requester = None;
             state.turn_started_at = None;
@@ -1039,6 +1572,7 @@ fn spawn_worker_task(manager: Arc<WorkerManager>, worker_thread_id: String, wake
                 final_text: result.as_ref().ok().cloned(),
                 error: state.last_error.clone(),
                 mirror_url: manager.mirror_url(&worker_thread_id),
+                steers,
             };
             if manager
                 .events_tx
@@ -1048,8 +1582,36 @@ fn spawn_worker_task(manager: Arc<WorkerManager>, worker_thread_id: String, wake
                 tracing::debug!(worker = %worker_thread_id, "Worker event channel closed");
             }
             drop(map);
+            remove_steer_file(steer_path);
         }
     });
+}
+
+fn remove_steer_file(path: Option<PathBuf>) {
+    if let Some(path) = path
+        && let Err(err) = std::fs::remove_file(&path)
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(
+            error = &err as &dyn std::error::Error,
+            "Failed to remove a worker steer file"
+        );
+    }
+}
+
+/// Picks the steer file of one worker turn. `None` (the turn takes no
+/// steers, which then queue) when its directory cannot be created.
+fn new_steer_file(worker_thread_id: &str) -> Option<Arc<WorkerSteer>> {
+    let dir = crate::config::paths::zdx_home().join("run").join("steer");
+    if let Err(err) = std::fs::create_dir_all(&dir) {
+        tracing::warn!(
+            error = &err as &dyn std::error::Error,
+            "Failed to create the steer directory"
+        );
+        return None;
+    }
+    let name = format!("{worker_thread_id}-{}.jsonl", uuid::Uuid::new_v4());
+    Some(Arc::new(WorkerSteer::new(dir.join(name))))
 }
 
 #[cfg(test)]
@@ -1090,6 +1652,188 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("worker should settle quickly");
+    }
+
+    /// How the fake child of a steer test ends its turn.
+    #[derive(Clone, Copy)]
+    enum ChildEnd {
+        /// Reads the first steer line, reports it, then reports it is done.
+        ReadFirstThenClose,
+        /// Reads every steer line but stops reporting (a crash).
+        ReadAllNoReport,
+        /// Waits for cancel.
+        UntilCancelled,
+    }
+
+    /// A runner whose "task" prompt waits for `go`, then behaves as `end`
+    /// says, like a child `zdx exec` reading its steer file.
+    fn steering_runner(go: Arc<Notify>, end: ChildEnd) -> WorkerRunner {
+        Arc::new(move |request: WorkerRunRequest| {
+            let go = Arc::clone(&go);
+            Box::pin(async move {
+                if request.prompt != "task" {
+                    return Ok(format!("ran:{}", request.prompt));
+                }
+                let steer = request.steer.clone().expect("local runs take steers");
+                match end {
+                    ChildEnd::UntilCancelled => {
+                        request.cancel.cancelled().await;
+                        anyhow::bail!("Subagent cancelled")
+                    }
+                    ChildEnd::ReadFirstThenClose | ChildEnd::ReadAllNoReport => {
+                        go.notified().await;
+                        let lines = std::fs::read_to_string(steer.path()).unwrap_or_default();
+                        let seqs: Vec<u64> = lines
+                            .lines()
+                            .map(|line| {
+                                serde_json::from_str::<Value>(line).unwrap()["seq"]
+                                    .as_u64()
+                                    .unwrap()
+                            })
+                            .collect();
+                        if matches!(end, ChildEnd::ReadFirstThenClose) {
+                            steer.record_injected(seqs[0]);
+                            steer.record_closed();
+                        }
+                        Ok("task done".to_string())
+                    }
+                }
+            })
+        })
+    }
+
+    async fn wait_running(manager: &Arc<WorkerManager>, id: &str) {
+        for _ in 0..500 {
+            if manager.snapshot(id).expect("managed").status == WorkerStatus::Running {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("worker should start");
+    }
+
+    fn in_turn(outcome: &SteerOutcome) -> u64 {
+        match outcome {
+            SteerOutcome::InTurn { steer_id } => *steer_id,
+            SteerOutcome::Queued { reason, .. } => panic!("expected in_turn, got {reason:?}"),
+        }
+    }
+
+    #[test]
+    fn steer_reports_relayed_from_the_child_reach_the_turn_state() {
+        let steer = WorkerSteer::new(PathBuf::from("/nonexistent/steer.jsonl"));
+        assert!(record_steer_report(&steer, r#"{"t":"steer","id":"7"}"#));
+        assert!(record_steer_report(&steer, r#"{"t":"steer_closed"}"#));
+        assert!(!record_steer_report(
+            &steer,
+            r#"{"t":"start","id":"a","name":"read"}"#
+        ));
+        assert_eq!(steer.reports(), (vec![7], true));
+    }
+
+    #[tokio::test]
+    async fn a_steer_the_turn_missed_runs_once_as_the_next_prompt() {
+        let _home = temp_zdx_home();
+        let project = tempfile::tempdir().unwrap();
+        let go = Arc::new(Notify::new());
+        let (manager, mut rx) = WorkerManager::with_runner(steering_runner(
+            Arc::clone(&go),
+            ChildEnd::ReadFirstThenClose,
+        ));
+        let id = manager
+            .create_worker("owner", project.path(), "task", None, None, None)
+            .unwrap();
+        wait_running(&manager, &id).await;
+
+        let read = in_turn(&manager.steer("owner", &id, "first detail").unwrap().0);
+        let missed = in_turn(&manager.steer("owner", &id, "second detail").unwrap().0);
+        assert!(!manager.idle_for_requester("owner"));
+        go.notify_one();
+
+        let done = next_completion(&mut rx).await;
+        assert_eq!(done.final_text.as_deref(), Some("task done"));
+        let state = |steer_id| {
+            done.steers
+                .iter()
+                .find(|receipt| receipt.steer_id == steer_id)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(state(read).state, SteerState::Injected);
+        assert_eq!(state(missed).state, SteerState::Queued);
+        assert_eq!(state(missed).reason, Some(SteerQueueReason::TurnEnded));
+
+        let next = next_completion(&mut rx).await;
+        assert_eq!(next.final_text.as_deref(), Some("ran:second detail"));
+        let snapshot = wait_idle(&manager, &id).await;
+        assert!(snapshot.queue.is_empty(), "queued exactly once");
+        assert!(manager.idle_for_requester("owner"));
+
+        // Idle: the steer is queued like `delivery: "queue"` and runs.
+        let (outcome, _) = manager.steer("owner", &id, "later").unwrap();
+        assert!(matches!(
+            outcome,
+            SteerOutcome::Queued {
+                reason: SteerQueueReason::NotRunning,
+                ..
+            }
+        ));
+        let ran = next_completion(&mut rx).await;
+        assert_eq!(ran.final_text.as_deref(), Some("ran:later"));
+    }
+
+    #[tokio::test]
+    async fn steers_of_a_child_that_stopped_reporting_are_uncertain_and_not_resent() {
+        let _home = temp_zdx_home();
+        let project = tempfile::tempdir().unwrap();
+        let go = Arc::new(Notify::new());
+        let (manager, mut rx) =
+            WorkerManager::with_runner(steering_runner(Arc::clone(&go), ChildEnd::ReadAllNoReport));
+        let id = manager
+            .create_worker("owner", project.path(), "task", None, None, None)
+            .unwrap();
+        wait_running(&manager, &id).await;
+        let steer_id = in_turn(&manager.steer("owner", &id, "detail").unwrap().0);
+        go.notify_one();
+
+        let done = next_completion(&mut rx).await;
+        assert_eq!(done.steers.len(), 1);
+        assert_eq!(done.steers[0].steer_id, steer_id);
+        assert_eq!(done.steers[0].state, SteerState::Uncertain);
+        let snapshot = wait_idle(&manager, &id).await;
+        assert!(snapshot.queue.is_empty(), "never re-sent");
+        assert_eq!(snapshot.steers[0].state, SteerState::Uncertain);
+    }
+
+    #[tokio::test]
+    async fn cancel_drops_unread_steers_and_later_ones_queue() {
+        let _home = temp_zdx_home();
+        let project = tempfile::tempdir().unwrap();
+        let (manager, mut rx) = WorkerManager::with_runner(steering_runner(
+            Arc::new(Notify::new()),
+            ChildEnd::UntilCancelled,
+        ));
+        let id = manager
+            .create_worker("owner", project.path(), "task", None, None, None)
+            .unwrap();
+        wait_running(&manager, &id).await;
+        let dropped = in_turn(&manager.steer("owner", &id, "before cancel").unwrap().0);
+        manager.cancel(&id).unwrap();
+        let (outcome, _) = manager.steer("owner", &id, "after cancel").unwrap();
+        assert!(matches!(
+            outcome,
+            SteerOutcome::Queued {
+                reason: SteerQueueReason::Cancelling,
+                ..
+            }
+        ));
+
+        let cancelled = next_completion(&mut rx).await;
+        assert_eq!(cancelled.status, WorkerStatus::Cancelled);
+        assert_eq!(cancelled.steers[0].steer_id, dropped);
+        assert_eq!(cancelled.steers[0].state, SteerState::Discarded);
+        let next = next_completion(&mut rx).await;
+        assert_eq!(next.final_text.as_deref(), Some("ran:after cancel"));
     }
 
     #[tokio::test]
@@ -1912,6 +2656,7 @@ mod tests {
             worker_id.clone(),
             fwd_tx,
             Arc::downgrade(&manager),
+            None,
         ));
 
         tx.send(Arc::new(AgentEvent::ToolOutputDelta {

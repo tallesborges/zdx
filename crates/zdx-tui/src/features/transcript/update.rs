@@ -109,6 +109,10 @@ pub fn handle_agent_event(
             vec![]
         }
         AgentEvent::ToolStarted { .. } => vec![],
+        AgentEvent::UserMessageInjected { id, text, .. } => {
+            transcript.resolve_steer(id, text);
+            vec![]
+        }
         AgentEvent::ToolCompleted { id, result, .. } => {
             transcript.set_tool_result_for(id, result.clone());
             vec![]

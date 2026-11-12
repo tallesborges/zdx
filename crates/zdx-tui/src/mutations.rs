@@ -35,6 +35,9 @@ pub enum StateMutation {
     SetLastFollowups(Vec<String>),
     /// Toggle the debug status line visibility.
     ToggleDebugStatus,
+    /// Add this message to the running turn at its next safe point, or queue
+    /// it when the turn no longer takes steers.
+    Steer(String),
 }
 
 /// Transcript slice mutations requested by other slices.

@@ -19,7 +19,7 @@ mod update;
 // Re-export reducer functions
 // Re-export view functions
 pub use render::{calculate_input_height, render_input, render_input_with_cursor};
-pub use state::{HandoffState, InputState, PromptBuilderState};
+pub use state::{HandoffState, InputState, PromptBuilderState, QueuedPrompt};
 pub use text_buffer::{CursorMove, TextBuffer};
 pub use update::{
     InputContext, TabContext, build_send_effects, build_send_effects_for_tab,

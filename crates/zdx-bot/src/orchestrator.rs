@@ -28,6 +28,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio::time::Instant;
+use zdx_engine::core::events::AgentEvent;
 use zdx_engine::core::thread_persistence;
 use zdx_engine::core::workers::{CompletionEvent, WorkerActivity, WorkerEvent, WorkerStatus};
 use zdx_engine::orchestration::client::ReplyStream;
@@ -192,6 +193,7 @@ impl Bridge {
     }
 
     async fn handle(&mut self, event: Event) {
+        self.update_steer_acks(&event).await;
         match event {
             Event::TurnStarted {
                 thread_id,
@@ -229,6 +231,39 @@ impl Bridge {
                     .await;
             }
             Event::TurnStarted { .. } | Event::InputsDropped { .. } | Event::Settled { .. } => {}
+        }
+    }
+
+    /// Keeps the acknowledgement of each message steered into a service turn
+    /// current: added when the turn reads it, a new turn when it missed the
+    /// turn, not added when a cancel gave it back.
+    async fn update_steer_acks(&self, event: &Event) {
+        let steer = self.context.steer();
+        let updates: Vec<(crate::steer::Ack, &str)> = match event {
+            Event::Agent {
+                event: AgentEvent::UserMessageInjected { id, .. },
+                ..
+            } if !crate::steer::BotSteer::is_local(id) => steer
+                .settle_service_injection(id)
+                .map(|ack| (ack, crate::steer::ACK_ADDED))
+                .into_iter()
+                .collect(),
+            Event::TurnStarted { inputs, .. } => inputs
+                .iter()
+                .filter_map(|input| {
+                    steer.settle(&input.input_id.to_string(), crate::steer::ACK_NEW_TURN)
+                })
+                .map(|ack| (ack, crate::steer::ACK_NEW_TURN))
+                .collect(),
+            Event::InputsDropped { input_ids, .. } => input_ids
+                .iter()
+                .filter_map(|id| steer.settle(&id.to_string(), crate::steer::ACK_NOT_ADDED))
+                .map(|ack| (ack, crate::steer::ACK_NOT_ADDED))
+                .collect(),
+            _ => Vec::new(),
+        };
+        for (ack, text) in updates {
+            crate::handlers::message::edit_steer_ack(&self.context, ack, text).await;
         }
     }
 
@@ -643,6 +678,7 @@ mod tests {
             final_text: None,
             error: None,
             mirror_url: None,
+            steers: Vec::new(),
         }
     }
 

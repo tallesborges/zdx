@@ -422,9 +422,63 @@ pub struct TuiState {
     pub(crate) active_threads_scanned_at: Option<Instant>,
     /// Suggested replies from the most recent reply (Ctrl+F to pick).
     pub last_followups: Vec<String>,
+    /// Inbox of the running turn: messages sent while it runs join it.
+    pub steer: Option<zdx_engine::core::steer::SteerInbox>,
+    /// Source of steer ids in this tab.
+    pub next_steer_id: u64,
 }
 
 impl TuiState {
+    /// Adds `text` to the running turn at its next safe point, or queues it
+    /// for after the turn when the turn no longer takes steers.
+    pub fn steer_or_queue(&mut self, text: String) {
+        let id = format!("t{}", self.next_steer_id);
+        self.next_steer_id += 1;
+        let item = zdx_engine::core::steer::SteerItem {
+            id: id.clone(),
+            source: zdx_engine::core::steer::SOURCE_USER.to_string(),
+            text: text.clone(),
+        };
+        match self.steer.as_ref().map(|inbox| inbox.try_push(item)) {
+            Some(Ok(_)) => self.transcript.add_pending_steer(id, &text),
+            _ => self.input.enqueue_prompt(text, Vec::new()),
+        }
+    }
+
+    /// Settles the steers the finished turn never read: they run next, ahead
+    /// of other queued prompts, or go back to the composer after a cancel.
+    pub fn settle_steers(&mut self, cancelled: bool) {
+        let Some(inbox) = self.steer.take() else {
+            return;
+        };
+        self.transcript.clear_pending_steers();
+        let unread = inbox.drain_unread();
+        if unread.is_empty() {
+            return;
+        }
+        if cancelled {
+            let mut text = unread
+                .into_iter()
+                .map(|item| item.text)
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let draft = self.input.get_text();
+            if !draft.trim().is_empty() {
+                text = format!("{text}\n\n{draft}");
+            }
+            self.input.set_text(&text);
+            return;
+        }
+        for item in unread.into_iter().rev() {
+            self.input
+                .queued
+                .push_front(crate::features::input::QueuedPrompt {
+                    text: item.text,
+                    images: Vec::new(),
+                });
+        }
+    }
+
     /// Creates a `TuiState` with pre-loaded message history.
     ///
     /// Used for resuming previous threads.
@@ -451,6 +505,7 @@ impl TuiState {
             activity_parent_thread_id: None,
             activity_subagent_name: None,
             tool_timeout: None,
+            steer: None,
         };
 
         // Cache display values at startup (avoids I/O during render)
@@ -521,6 +576,8 @@ impl TuiState {
             active_threads_scan: HashSet::new(),
             active_threads_scanned_at: None,
             last_followups: Vec::new(),
+            steer: None,
+            next_steer_id: 0,
         }
     }
 
@@ -802,6 +859,53 @@ mod tests {
 
     fn state_with_config(config: Config) -> TuiState {
         AppState::new(config, PathBuf::new(), None, None).tui
+    }
+
+    /// A message sent while a turn runs waits as a notice, becomes a user
+    /// message when the turn reads it, and one the turn never read runs next,
+    /// ahead of queued prompts; without a running turn it queues.
+    #[test]
+    fn steers_join_the_running_turn_and_unread_ones_run_next() {
+        let mut tui = state_with_config(Config::default());
+        tui.steer_or_queue("no turn".to_string());
+        assert_eq!(tui.input.queued.len(), 1, "no turn: queued");
+
+        let inbox = zdx_engine::core::steer::SteerInbox::new();
+        tui.steer = Some(inbox.clone());
+        tui.steer_or_queue("read me".to_string());
+        tui.steer_or_queue("missed".to_string());
+        let cells_with_notices = tui.transcript.cells().len();
+        let taken = inbox.take();
+        assert_eq!(taken.len(), 2);
+        tui.transcript.resolve_steer(&taken[0].id, &taken[0].text);
+        assert!(
+            !tui.transcript.has_pending_user_cell(),
+            "never blocks the queue"
+        );
+        inbox
+            .try_push(zdx_engine::core::steer::SteerItem {
+                id: "late".to_string(),
+                source: zdx_engine::core::steer::SOURCE_USER.to_string(),
+                text: "late one".to_string(),
+            })
+            .unwrap();
+        tui.settle_steers(false);
+        assert!(tui.steer.is_none());
+        assert_eq!(tui.input.queued.front().unwrap().text, "late one");
+        assert_eq!(tui.input.queued.len(), 2);
+        assert!(tui.transcript.cells().len() <= cells_with_notices);
+    }
+
+    #[test]
+    fn a_cancelled_turn_gives_unread_steers_back_to_the_composer() {
+        let mut tui = state_with_config(Config::default());
+        let inbox = zdx_engine::core::steer::SteerInbox::new();
+        tui.steer = Some(inbox);
+        tui.steer_or_queue("first".to_string());
+        tui.steer_or_queue("second".to_string());
+        tui.settle_steers(true);
+        assert_eq!(tui.input.get_text(), "first\n\nsecond");
+        assert!(tui.input.queued.is_empty());
     }
 
     /// A config reloaded from disk becomes the tab's new default when no

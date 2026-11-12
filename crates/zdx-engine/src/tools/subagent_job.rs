@@ -857,6 +857,8 @@ fn spawn_log_readers(
                     chunk.clone()
                 }
                 ChildEvent::TurnEnded(outcome) => turn_record(outcome),
+                // Only worker runs take steers.
+                ChildEvent::SteerInjected(_) | ChildEvent::SteerClosed => return,
             };
             events_log.append(&record);
         })

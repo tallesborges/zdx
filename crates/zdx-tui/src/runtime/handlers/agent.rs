@@ -1,6 +1,7 @@
 use anyhow::Context;
 use tokio_util::sync::CancellationToken;
 use zdx_engine::core::handoff_generation;
+use zdx_engine::core::steer::{SteerInbox, SteerSource};
 use zdx_engine::core::thread_persistence::{self, ThreadEvent};
 use zdx_engine::providers::ChatMessage;
 
@@ -63,6 +64,8 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
     let refused = selection_error(tui);
     let mut agent_opts = tui.agent_opts.clone();
     agent_opts.conversation_id = Some(tui.thread.conversation_id.clone());
+    let steer = SteerInbox::new();
+    agent_opts.steer = Some(SteerSource::Inbox(steer.clone()));
     let system_prompt = tui.system_prompt.clone();
     let thread_id = tui.thread.thread_handle.as_ref().map(|h| h.id.clone());
 
@@ -100,6 +103,7 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
         cancel,
         thread_handle: None,
         messages: None,
+        steer: Some(steer),
     }
 }
 
@@ -126,7 +130,9 @@ fn spawn_btw_tab_turn(tui: &TuiState, parent_thread_id: Option<&str>) -> UiEvent
 
     let config = tui.config.clone();
     let refused = selection_error(tui);
-    let agent_opts = tui.agent_opts.clone();
+    let mut agent_opts = tui.agent_opts.clone();
+    let steer = SteerInbox::new();
+    agent_opts.steer = Some(SteerSource::Inbox(steer.clone()));
     let system_prompt = tui.system_prompt.clone();
     let thread_id = prepared.thread_handle.id.clone();
 
@@ -160,6 +166,7 @@ fn spawn_btw_tab_turn(tui: &TuiState, parent_thread_id: Option<&str>) -> UiEvent
         cancel,
         thread_handle: prepared.thread_update,
         messages: prepared.messages_update,
+        steer: Some(steer),
     }
 }
 

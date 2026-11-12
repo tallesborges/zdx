@@ -708,12 +708,14 @@ impl TuiRuntime {
                         cancel,
                         thread_handle,
                         messages,
+                        steer,
                     } => UiEvent::BackgroundTabAgentSpawned {
                         tab_id,
                         rx,
                         cancel,
                         thread_handle,
                         messages,
+                        steer,
                     },
                     other => other,
                 };
