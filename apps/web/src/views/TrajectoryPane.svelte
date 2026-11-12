@@ -1,5 +1,7 @@
 <script lang="ts">
+  import ToolDetail from "../components/ToolDetail.svelte";
   import { selectionChanged } from "$lib/telegram";
+  import { findToolNode, type ToolNode } from "$lib/transcript";
   import type {
     Json,
     ThreadActivity,
@@ -25,8 +27,14 @@
           null)
       : null,
   );
-  let selectedInput = $derived(selected ? spanInput(selected) : undefined);
-  let selectedOutput = $derived(selected ? spanOutput(selected) : undefined);
+  /** A tool span's call as the transcript shows it (shared view, raw JSON). */
+  let selectedTool = $derived(selected ? spanTool(selected) : undefined);
+  /** How the call ended, in the shared view's words (`timed out`, `exit 1`). */
+  let selectedOutcome = $derived(
+    selectedTool?.result ? selectedTool.view?.status.find((fact) => fact.kind === "outcome") : undefined,
+  );
+  let selectedInput = $derived(selected && !selectedTool ? spanInput(selected) : undefined);
+  let selectedOutput = $derived(selected && !selectedTool ? spanOutput(selected) : undefined);
 
   function select(span: TrajectorySpan) {
     selectionChanged();
@@ -107,6 +115,15 @@
       .flatMap((turn) => turn.spans)
       .find((candidate) => candidate.key === bottleneck.key);
     if (span) select(span);
+  }
+
+  function spanTool(span: TrajectorySpan): ToolNode | undefined {
+    if (span.kind !== "tool" || !span.tool_use_id) return undefined;
+    const node = findToolNode(activity, span.tool_use_id, span.result_sequence);
+    // A live call the activity has not reported yet: the span's own input and
+    // output tail are the newer data.
+    if (!node || (span.status === "running" && !node.running && !node.result)) return undefined;
+    return node;
   }
 
   function spanInput(span: TrajectorySpan): Json | string | undefined {
@@ -369,7 +386,11 @@
         {#if selected.ttft_ms !== undefined}
           <div><span>TTFT</span><strong>{formatTrajectoryDuration(selected.ttft_ms)}</strong></div>
         {/if}
-        <div><span>Status</span><strong class:failed-text={selected.status === "failed"}>{selected.status}</strong></div>
+        {#if selectedOutcome}
+          <div><span>Status</span><strong class:failed-text={selectedOutcome.bad}>{selectedOutcome.text}</strong></div>
+        {:else}
+          <div><span>Status</span><strong class:failed-text={selected.status === "failed"}>{selected.status}</strong></div>
+        {/if}
       </div>
 
       {#if selected.kind === "model"}
@@ -379,6 +400,14 @@
           <span>{(selected.input_tokens ?? 0).toLocaleString()} in</span>
           <span>{(selected.output_tokens ?? 0).toLocaleString()} out</span>
           <span>{(selected.cache_read_tokens ?? 0).toLocaleString()} cached</span>
+        </div>
+      {/if}
+
+      {#if selectedTool}
+        <div class="tool-detail">
+          {#key selectedTool.key}
+            <ToolDetail node={selectedTool} omitFacts={["outcome", "duration"]} />
+          {/key}
         </div>
       {/if}
 
@@ -963,6 +992,8 @@
     font-size: 0.5625rem;
     color: var(--color-muted-foreground);
   }
+
+  .tool-detail { margin-top: 0.6rem; }
 
   .payload { margin-top: 0.85rem; }
   .payload h4 {

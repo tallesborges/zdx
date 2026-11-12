@@ -236,6 +236,8 @@ export interface ToolUseActivity extends ActivityBase {
   id: string;
   name: string;
   input: Json;
+  /** Input-only view, only on a call with no result in the thread. */
+  view?: ToolView;
 }
 
 export interface ToolRunningActivity extends ActivityBase {
@@ -252,6 +254,8 @@ export interface ToolRunningActivity extends ActivityBase {
   completed_at?: string;
   ok?: boolean;
   duration_ms?: number;
+  /** Display projection from the input alone (head, edit diff). */
+  view: ToolView;
 }
 
 export interface ToolResultActivity extends ActivityBase {
@@ -261,7 +265,60 @@ export interface ToolResultActivity extends ActivityBase {
   duration_ms?: number;
   started_at?: string;
   completed_at?: string;
+  /** Raw result envelope, for the JSON view. */
   output: Json;
+  /** Display projection of the call (`zdx_types::tool_view`). */
+  view: ToolView;
+}
+
+/* Mirrors `zdx_types::tool_view`. */
+
+export type ToolOutcome = "pending" | "ok" | "failed" | "timed_out" | "canceled";
+
+export type ToolFactKind = "outcome" | "duration" | "detail";
+
+export interface ToolFact {
+  text: string;
+  bad: boolean;
+  kind: ToolFactKind;
+}
+
+export type ToolHead =
+  | { kind: "shell"; cwd?: string; command: string }
+  | { kind: "path"; path: string }
+  | { kind: "search"; pattern: string; scope?: string }
+  | { kind: "prompt"; agent?: string; prompt: string }
+  | { kind: "text"; text: string };
+
+export type ToolBody =
+  | { kind: "empty" }
+  | { kind: "streams"; streams: { name: string; text: string }[] }
+  | { kind: "code"; text: string; first_line: number }
+  | {
+      kind: "matches";
+      files: { path: string; lines: { line: number; text: string; context?: boolean }[] }[];
+    }
+  | { kind: "paths"; entries: { path: string; dir: boolean }[] }
+  | {
+      kind: "diff";
+      lines: { op: "add" | "del" | "ctx"; text: string }[];
+      additions: number;
+      deletions: number;
+    }
+  | { kind: "markdown"; text: string }
+  | { kind: "error"; code: string; message: string; details?: string }
+  | { kind: "text"; text: string };
+
+export interface ToolView {
+  outcome: ToolOutcome;
+  head?: ToolHead;
+  body: ToolBody;
+  status: ToolFact[];
+  hint?: ToolFact;
+  notes: string[];
+  /** Plain details too long for the status line (log paths). */
+  info?: string[];
+  thread_id?: string;
 }
 
 export interface UsageActivity extends ActivityBase {

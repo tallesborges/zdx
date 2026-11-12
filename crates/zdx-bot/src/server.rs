@@ -43,6 +43,7 @@ use zdx_engine::providers::subscription_quota::{self, QuotaError, SubscriptionQu
 use zdx_engine::service::{self, Service};
 use zdx_engine::workspace_config::{self, WorkspaceReport};
 use zdx_engine::{agent_activity, background_activity, jobs};
+use zdx_types::tool_view::{ToolView, ViewLimits, tool_view};
 
 use crate::artifact_feedback::{
     FeedbackDelivery, FeedbackRoute, FeedbackSink, resolve_destination,
@@ -248,6 +249,11 @@ pub enum ThreadActivity {
         id: String,
         name: String,
         input: Value,
+        /// Input-only view for a call with no result in the thread
+        /// (interrupted, or still running); a call with a result carries its
+        /// view on the result instead.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        view: Option<ToolView>,
     },
     /// A tool call of the running round (from the run's activity marker), not
     /// yet persisted to the thread. Always the tail of `activity`. A call that
@@ -275,6 +281,8 @@ pub enum ThreadActivity {
         ok: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
         duration_ms: Option<u64>,
+        /// Display projection from the input alone (head, edit diff).
+        view: ToolView,
     },
     ToolResult {
         sequence: usize,
@@ -289,6 +297,9 @@ pub enum ThreadActivity {
         #[serde(skip_serializing_if = "Option::is_none")]
         completed_at: Option<String>,
         output: Value,
+        /// Display projection of the call (`zdx_types::tool_view`); `output`
+        /// stays the raw envelope.
+        view: ToolView,
     },
     Usage {
         sequence: usize,
@@ -1874,6 +1885,8 @@ fn attach_live_run(response: &mut ThreadResponse, source_id: &str) {
             (Some(_), Some(ms)) => agent_activity::format_secs(ms / 1000),
             (Some(_), None) => String::new(),
         };
+        let name = tool.name.to_ascii_lowercase();
+        let view = tool_view(&name, &tool.input, None, None, ViewLimits::DISPLAY);
         response.activity.push(ThreadActivity::ToolRunning {
             sequence,
             time: event_time(&started_at),
@@ -1881,13 +1894,14 @@ fn attach_live_run(response: &mut ThreadResponse, source_id: &str) {
             started_at,
             running_for,
             id: tool.id,
-            name: tool.name.to_ascii_lowercase(),
+            name,
             summary: tool.summary,
             input: tool.input,
             output_tail: tool.output_tail,
             completed_at: tool.completed_at,
             ok: tool.ok,
             duration_ms: tool.duration_ms,
+            view,
         });
         sequence += 1;
     }
@@ -1905,6 +1919,8 @@ fn project_thread(
     let mut activity = Vec::new();
     let mut total_messages = 0;
     let superseded = zdx_engine::core::thread_persistence::superseded_deliveries(&events);
+    // Tool calls by id, so a result's view knows its tool and input.
+    let mut calls: HashMap<String, (String, Value)> = HashMap::new();
 
     for (sequence, event) in events.into_iter().enumerate() {
         match event {
@@ -1956,14 +1972,18 @@ fn project_thread(
                 input,
                 ts,
                 ..
-            } => activity.push(ThreadActivity::ToolUse {
-                sequence,
-                time: event_time(&ts),
-                ts,
-                id,
-                name,
-                input,
-            }),
+            } => {
+                calls.insert(id.clone(), (name.clone(), input.clone()));
+                activity.push(ThreadActivity::ToolUse {
+                    sequence,
+                    time: event_time(&ts),
+                    ts,
+                    id,
+                    name,
+                    input,
+                    view: None,
+                });
+            }
             ThreadEvent::ToolResult {
                 tool_use_id,
                 output,
@@ -1972,17 +1992,29 @@ fn project_thread(
                 started_at,
                 completed_at,
                 ts,
-            } => activity.push(ThreadActivity::ToolResult {
-                sequence,
-                time: event_time(&ts),
-                ts,
-                tool_use_id,
-                ok,
-                duration_ms,
-                started_at,
-                completed_at,
-                output,
-            }),
+            } => {
+                let (name, input) = calls.remove(&tool_use_id).unwrap_or_default();
+                // The app keeps the raw `output` for the complete text.
+                let view = tool_view(
+                    &name,
+                    &input,
+                    Some(&output),
+                    duration_ms,
+                    ViewLimits::DISPLAY,
+                );
+                activity.push(ThreadActivity::ToolResult {
+                    sequence,
+                    time: event_time(&ts),
+                    ts,
+                    tool_use_id,
+                    ok,
+                    duration_ms,
+                    started_at,
+                    completed_at,
+                    output,
+                    view,
+                });
+            }
             ThreadEvent::Usage {
                 input_tokens,
                 output_tokens,
@@ -2061,6 +2093,21 @@ fn project_thread(
                 });
             }
             ThreadEvent::Meta { .. } => {}
+        }
+    }
+
+    // What is left in `calls` never got a result.
+    for item in &mut activity {
+        if let ThreadActivity::ToolUse {
+            id,
+            name,
+            input,
+            view,
+            ..
+        } = item
+            && calls.contains_key(id.as_str())
+        {
+            *view = Some(tool_view(name, input, None, None, ViewLimits::DISPLAY));
         }
     }
 
@@ -5230,6 +5277,70 @@ mod tests {
         assert!(!json.contains("/private/project"));
         assert!(!json.contains("private-replay-blob"));
         assert!(!json.contains("private-tool-signature"));
+    }
+
+    #[test]
+    fn tool_results_carry_the_shared_view_of_their_call() {
+        let events = vec![
+            ThreadEvent::ToolUse {
+                id: "call-1".to_string(),
+                name: "Bash".to_string(),
+                input: serde_json::json!({"command": "cd /repo && sleep 99"}),
+                id_origin: zdx_engine::providers::IdOrigin::Real,
+                replay: None,
+                ts: "2026-08-24T10:00:02Z".to_string(),
+            },
+            ThreadEvent::ToolResult {
+                tool_use_id: "call-1".to_string(),
+                output: serde_json::json!({"ok": true, "data": {
+                    "stdout": "partial\n", "stderr": "", "exit_code": -1, "timed_out": true
+                }}),
+                ok: true,
+                duration_ms: Some(1500),
+                started_at: None,
+                completed_at: None,
+                ts: "2026-08-24T10:00:03Z".to_string(),
+            },
+            // Interrupted: no result ever landed.
+            ThreadEvent::ToolUse {
+                id: "call-2".to_string(),
+                name: "Read".to_string(),
+                input: serde_json::json!({"file_path": "src/lib.rs"}),
+                id_origin: zdx_engine::providers::IdOrigin::Real,
+                replay: None,
+                ts: "2026-08-24T10:00:04Z".to_string(),
+            },
+        ];
+
+        let response = project_thread(
+            "thread-1".to_string(),
+            events,
+            None,
+            ThreadLineage::default(),
+        );
+        let use_json = serde_json::to_value(&response.activity[0]).expect("serialize tool use");
+        assert!(
+            use_json.get("view").is_none(),
+            "a call with a result has its view on the result"
+        );
+        let interrupted = serde_json::to_value(&response.activity[2]).expect("serialize tool use");
+        assert_eq!(interrupted["view"]["outcome"], "pending");
+        assert_eq!(interrupted["view"]["head"]["path"], "src/lib.rs");
+
+        let json = serde_json::to_value(&response.activity[1]).expect("serialize tool result");
+
+        assert_eq!(
+            json["output"]["data"]["stdout"], "partial\n",
+            "raw output kept"
+        );
+        let view = &json["view"];
+        assert_eq!(view["outcome"], "timed_out");
+        assert_eq!(view["head"]["kind"], "shell");
+        assert_eq!(view["head"]["cwd"], "/repo");
+        assert_eq!(view["head"]["command"], "sleep 99");
+        assert_eq!(view["body"]["streams"][0]["text"], "partial\n");
+        assert_eq!(view["hint"]["text"], "timed out");
+        assert_eq!(view["status"][0]["kind"], "outcome");
     }
 
     #[test]

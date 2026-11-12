@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ToolNode } from "$lib/transcript";
   import { selectionChanged } from "$lib/telegram";
+  import ToolDetail from "./ToolDetail.svelte";
 
   interface Props {
     node: ToolNode;
@@ -20,19 +21,10 @@
     selectionChanged();
   }
 
-  function pretty(value: unknown): string {
-    if (typeof value === "string") return value;
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return String(value);
-    }
-  }
-
-  function duration(ms?: number): string {
-    if (ms === undefined) return "";
-    return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
-  }
+  /** The view's row fact; bare calls without a view fall back to `failed`. */
+  let hint = $derived(
+    node.view?.hint ?? (s.failed ? { text: "failed", bad: true } : undefined),
+  );
 </script>
 
 <div class:nested>
@@ -53,8 +45,8 @@
     {#if node.running}
       {#if node.running.ok === false}<span class="del">failed</span>{/if}
       <span class="meta">{node.running.running_for}</span>
-    {:else if s.failed}
-      <span class="del">failed</span>
+    {:else if hint && (hint.bad || (!s.additions && !s.deletions))}
+      <span class={hint.bad ? "del" : "meta"}>{hint.text}</span>
     {/if}
 
     <svg viewBox="0 0 24 24" class="chev" class:open aria-hidden="true">
@@ -70,26 +62,7 @@
   </button>
 
   {#if open}
-    <div class="detail">
-      {#if node.running?.output_tail}
-        <pre class="out">{node.running.output_tail}</pre>
-      {/if}
-
-      {#if node.input !== null && node.input !== undefined}
-        <p class="lbl">Arguments</p>
-        <pre class="out">{pretty(node.input)}</pre>
-      {/if}
-
-      {#if node.result}
-        <p class="lbl">
-          Result
-          {#if node.result.duration_ms !== undefined}
-            <span class="meta">· {duration(node.result.duration_ms)}</span>
-          {/if}
-        </p>
-        <pre class="out" class:err={s.failed}>{pretty(node.result.output)}</pre>
-      {/if}
-    </div>
+    <ToolDetail {node} />
   {/if}
 </div>
 
@@ -191,35 +164,4 @@
     }
   }
 
-  .detail {
-    padding: 0.25rem 0 0.5rem;
-  }
-
-  .lbl {
-    margin: 0.4rem 0 0.2rem;
-    font-size: 0.625rem;
-    font-weight: 500;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--color-muted-foreground);
-  }
-
-  .out {
-    margin: 0;
-    max-height: 22rem;
-    overflow: auto;
-    -webkit-overflow-scrolling: touch;
-    padding: 0.5rem;
-    border-radius: 6px;
-    background: var(--color-editor-background);
-    color: var(--color-editor-foreground);
-    font-family: var(--font-mono);
-    font-size: 0.6875rem;
-    line-height: 1.55;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-  }
-  .out.err {
-    color: var(--color-destructive);
-  }
 </style>

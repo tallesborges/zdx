@@ -33,6 +33,7 @@ rust-embed = { workspace = true }
 tower-http = { workspace = true }
 url = { workspace = true }
 zdx-engine = { path = "../zdx-engine" }
+zdx-types.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 

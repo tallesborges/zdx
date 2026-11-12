@@ -33,6 +33,7 @@ has been removed.
   preview, or a notice when the key is not listed or the file is gone. The pending link is a plain field,
   not `$state`: changing `router.current` re-runs `ThreadView`'s load (its props are getters on the route),
   which remounts the pane and would drop the preview. Only explicit thread ids, never `active`.
+- `tool-pairing.test.mjs`: call/result pairing and which `view` a node gets (`bun test apps/web/tool-pairing.test.mjs`)
 - `src/lib/transcript.ts`: projects the flat activity stream into a three-level collapsible tree
   (`work` turn → folded `group` → single `tool`) and derives the one-line summaries
 - `src/lib/diff.ts`: unified-diff parser with word-level intra-line segmentation, and `diffPath` (the file a diff block names, for syntax rules)
@@ -54,7 +55,8 @@ has been removed.
   replaced per path from a browser test with `window.__zdxDemoArtifacts = { [path]: Blob }`
 - `src/components/`: `Collapse`, `Markdown` (prose table rules exclude `.md-diff`, because the diff view is a table too), `DiffView` (same Wrap rule as `TextView`), `TextView` (text and code with line numbers, highlighting, and a Wrap toggle that defaults on for plain text), `Drawer`, `TabStrip`, `Icon`,
   `RunStatusLine` (the running turn's label, turn age, last-event and heartbeat ages under the thread header),
-  `WorkGroup` (the "Worked for 5m" turn divider), `GroupLine` (folded run), `ToolLine` (one call),
+  `WorkGroup` (the "Worked for 5m" turn divider), `GroupLine` (folded run), `ToolLine` (one call: row),
+  `ToolDetail` (an open call: renders the server's `view` (head, body by kind, warnings, info, status) plus a `{ } JSON` toggle with the raw input and output; `omitFacts` drops fact kinds its host already shows),
   `ArtifactAttachments` (inline image/audio/file-card rows under a message),
   `ArtifactPreview` (full-screen preview overlay; the `markdown` kind renders through `Markdown` with a Preview/Source switch, the `text` kind through `TextView`; HTML goes through a sandboxed
   iframe with an opaque origin, never the app's credentials; an image goes to the annotator as its
@@ -104,7 +106,10 @@ has been removed.
   `/api/threads/{id}/trajectory`; it owns presentation only, not timing arithmetic. It is mobile-first:
   the bottleneck summary stays readable at phone width, exact spans
   use horizontally scrollable Input/Model/Tools lanes with pinned labels, and selected spans open in a
-  bottom sheet. Legacy duration-only events rank as measured durations but are never positioned as
+  bottom sheet. A tool span's sheet keeps the span timing and renders the call through `ToolDetail`
+  (found in the thread activity with `transcript.ts` `findToolNode`, so the shared `view` and
+  `{ } JSON` match the transcript), shows the view's outcome fact as Status (`timed out`, not the span's `failed`), and leaves outcome and duration out of the detail's status line; model and input spans, and a live call the activity has not
+  reported yet, show their own payload. Legacy duration-only events rank as measured durations but are never positioned as
   inferred overlap.
   `ChangesPane` owns a scope selector — **All Changes** / **Uncommitted** / a specific commit.
   `uncommitted` renders the status groups already in `GitResponse`; the history scopes fetch
@@ -141,13 +146,16 @@ Agent activity is hidden by default and expands on demand, in three levels:
    `Worked for 5m ›` divider. Auto-expands while a tool is running.
 2. **`GroupLine`** — consecutive related calls fold into one line: read-only tools become
    `Explored 8 files, 3 searches`, repeated shell calls become `Ran 7 commands`.
-3. **`ToolLine`** — a single call, expanding to full arguments and output.
+3. **`ToolLine`** — a single call, expanding to `ToolDetail`: the output by kind, with the raw
+   arguments and output behind `{ } JSON`.
    A `tool_running` row with `completed_at` is a call that finished while its round is still running;
    `ToolLine` shows its outcome and duration until the persisted `tool_use`/`tool_result` replace it.
 
-Summaries are derived from real tool payloads in `summarize()`. `edit` carries `old_string`/
-`new_string`, so `+N -M` line deltas are computed client-side; `bash` failure is detected from
-`output.data.exit_code`, not just `tool_result.ok`. When adding a tool, add a case there.
+Row labels (verb, subject) come from `summarize()`; add a case there when adding a tool. Everything
+read from the result comes from the server's `view` (`zdx_types::tool_view`, attached to
+`tool_result`, `tool_running`, and a `tool_use` that has no result, so an interrupted call still shows its command): failure, timeout, and cancel (`outcome`), the row hint,
+`edit` `+N -M` line counts (a line diff, so a one-line change reads `+1 -1`), `write` `+N` and `Created` only for a file it created, and the whole
+detail. Never read the raw `output` envelope for display; add the case to `tool_view` instead.
 
 **Keep activity rows borderless and muted.** The prose answer is the focus; boxes and colour on
 every tool call defeat the whole point. Only diff stats and failures get colour.

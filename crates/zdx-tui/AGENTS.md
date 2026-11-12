@@ -42,7 +42,7 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 - While a handoff composer is open the same helper stages the pick instead: `InputState.handoff_model` (cleared by `InputState::set_handoff` whenever the flow leaves `Active`, so cancelling can never change the source thread), rendered in the composer title, used as `InputContext.model_id` so the level keys operate on it, and carried by `UiEffect::HandoffSubmit` → `handlers::thread_create(.., pinned_model)`, which pins it on the new thread ahead of the source-thread inheritance. `/btw` needs none of this: it opens its own tab, so a pick there is already tab-local and gets pinned when `prepare_btw_tab_thread` creates the thread.
 - `src/overlays/background.rs`: background-process overlay (`/background`) — lists the current thread's running background processes (from `zdx_engine::background_activity`) with a kill key; bottom-right `▸ N bg` status indicator lives in `render.rs` (count cached on `TuiState.background_count`, refreshed via `TuiState::poll_background_count` on tick)
 - `src/overlays/tldr.rs`: thread TLDR/recap overlay (Ctrl+R)
-- `src/overlays/tool_detail.rs`: tool detail popup overlay (full args/output/status on click; body built by `zdx_transcript::tool_detail_body`, shared with the monitor's tool pane)
+- `src/overlays/tool_detail.rs`: tool detail popup overlay (status with result facts, raw args, output by kind on click; body built by `zdx_transcript::tool_detail_body` from the shared `zdx_types::tool_view`, same as the monitor's tool pane)
 - `src/overlays/followup_picker.rs`: end-of-turn follow-up suggestion picker (Ctrl+F; sends selection as next message)
 
 ## Conventions

@@ -5,7 +5,7 @@ zdx is a terminal-based AI coding assistant built in Rust, featuring a non-inter
 ## Workspace Layout
 
 - **zdx (binary):** CLI + exec mode, routes to the TUI when the `tui` feature is enabled.
-- **zdx-types:** Pure shared value types (DTOs/enums) used across providers, tools, and events. No runtime deps.
+- **zdx-types:** Pure shared value types (DTOs/enums) used across providers, tools, and events. No runtime deps. Also holds pure shared projections such as `tool_view` (the display model of one tool call that the Mini App and the terminal tool detail render).
 - **zdx-assets:** Embedded asset content (prompts, instruction layers, default TOMLs, bundled skills, built-in subagents). No runtime deps.
 - **zdx-providers:** LLM provider implementations (Anthropic, OpenAI, Gemini, etc.). Depends on zdx-types and zdx-assets.
 - **zdx-tools:** Leaf tool implementations (bash, edit, read, write, glob, grep, etc.) with a minimal ToolContext, plus Unix supervision for invocation-owned process groups. Depends on zdx-types.

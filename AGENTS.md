@@ -9,7 +9,7 @@ This monorepo now uses scoped `AGENTS.md` files per crate.
 - `AGENTS.md` (this file): workspace-level conventions + index
 - `crates/zdx-assets/AGENTS.md`: embedded assets (prompts, default TOMLs, bundled skills, built-in subagents)
 - `crates/zdx-types/AGENTS.md`: pure shared value types and pure helper logic for providers, tools, events
-- `crates/zdx-transcript/`: shared transcript display model + rendering (thread events → `HistoryCell`s → styled/ratatui lines; markdown, wrapping, tool pairing, `tool_detail_body` for full tool args/output) plus shared TUI interaction utilities (`clipboard` with OSC 52 → arboard fallback, `keys::GPrefix` vim `gg` prefix). Reused by `zdx-tui` and `zdx-monitor`.
+- `crates/zdx-transcript/`: shared transcript display model + rendering (thread events → `HistoryCell`s → styled/ratatui lines; markdown, wrapping, tool pairing, `tool_detail_body` for full tool args/output, which styles the shared `zdx_types::tool_view` for the terminal) plus shared TUI interaction utilities (`clipboard` with OSC 52 → arboard fallback, `keys::GPrefix` vim `gg` prefix). Reused by `zdx-tui` and `zdx-monitor`.
 - `crates/zdx-providers/AGENTS.md`: LLM provider implementations (Anthropic, OpenAI, Gemini, etc.)
 - `crates/zdx-engine/AGENTS.md`: core engine — runtime, config, agent orchestration, tools
 - `crates/zdx-tui/AGENTS.md`: TUI architecture map + runtime/features conventions
@@ -77,6 +77,7 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `bun test apps/web/artifact-list.test.mjs` (Artifacts tab order and day groups)
 - `bun test apps/web/version-match.test.mjs` (artifact Update: which notes move to a newer version)
 - `bun test apps/web/text-preview.test.mjs` (text artifact preview: UTF-8 cut, binary detection, line splitting)
+- `bun test apps/web/tool-pairing.test.mjs` (transcript tool pairing: result, interrupted, live, and orphaned calls and their shared views)
 
 ## Verification
 

@@ -1,7 +1,7 @@
 //! Tool detail popup overlay.
 //!
 //! Displays full tool information in a near-full-screen popup:
-//! args (pretty JSON), output, status, and error details.
+//! status with result facts, args (pretty JSON), and output by kind.
 //! Opens on click from compact tool header in transcript.
 //! Supports live updates for running tools via render-time cell lookup.
 //!

@@ -8,15 +8,16 @@
  *                ("Explored 8 files, 3 searches", "Ran 7 commands, 1 failed").
  *   3. `tool`  — one call, expanding to full arguments and output.
  *
- * Summaries are derived from the real tool payload shapes: `edit` carries
- * `old_string`/`new_string` so line deltas are computed here rather than being
- * reported by the backend.
+ * Row labels (verb, subject) are named here. Outcome, line deltas, and the
+ * detail come from the server's shared `view` (`zdx_types::tool_view`), never
+ * from the raw envelope.
  */
 import type {
   ThreadActivity,
   ToolResultActivity,
   ToolRunningActivity,
   ToolUseActivity,
+  ToolView,
 } from "./types";
 
 export interface ToolNode {
@@ -29,6 +30,8 @@ export interface ToolNode {
   running?: ToolRunningActivity;
   orphaned: boolean;
   summary: ToolSummary;
+  /** The result's view, else the running call's; absent for a bare `tool_use`. */
+  view?: ToolView;
 }
 
 export interface ToolSummary {
@@ -40,6 +43,7 @@ export interface ToolSummary {
   mono: boolean;
   additions?: number;
   deletions?: number;
+  /** Failed, timed out, or canceled. */
   failed: boolean;
 }
 
@@ -122,54 +126,45 @@ function basename(path: string): string {
   return clean.split("/").pop() || clean;
 }
 
-function lineCount(text: string): number {
-  if (!text) return 0;
-  return text.split("\n").length;
-}
-
 function truncate(text: string, max = 80): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
-function failedOf(node: { result?: ToolResultActivity }): boolean {
-  if (!node.result) return false;
-  if (!node.result.ok) return true;
-  // bash reports a non-zero exit inside a successful tool call.
-  const out = obj(node.result.output);
-  const data = obj(out.data);
-  return typeof data.exit_code === "number" && data.exit_code !== 0;
+function failedOf(view?: ToolView): boolean {
+  const outcome = view?.outcome;
+  return outcome === "failed" || outcome === "timed_out" || outcome === "canceled";
 }
 
-function summarize(name: string, input: unknown, result?: ToolResultActivity): ToolSummary {
+function summarize(name: string, input: unknown, view?: ToolView): ToolSummary {
   const args = obj(input);
-  const failed = failedOf({ result });
+  const failed = failedOf(view);
   const base: ToolSummary = { verb: name, subject: "", mono: false, failed };
+  const diff = view?.body.kind === "diff" ? view.body : undefined;
 
   switch (name) {
     case "bash": {
-      return { ...base, verb: "$", subject: truncate(str(args.command), 72), mono: true };
+      const command = view?.head?.kind === "shell" ? view.head.command : str(args.command);
+      return { ...base, verb: "$", subject: truncate(command, 72), mono: true };
     }
-    case "edit": {
-      const before = lineCount(str(args.old_string));
-      const after = lineCount(str(args.new_string));
+    case "edit":
       return {
         ...base,
         verb: "Edited",
         subject: basename(str(args.file_path)),
         mono: true,
-        additions: Math.max(0, after - Math.min(before, after)),
-        deletions: Math.max(0, before - Math.min(before, after)),
+        additions: diff?.additions,
+        deletions: diff?.deletions,
       };
-    }
     case "write": {
-      const created = obj(obj(result?.output).data).created === true;
+      // The view shows a diff only for a file the write created.
+      const created = diff !== undefined;
       return {
         ...base,
         verb: created ? "Created" : "Wrote",
         subject: basename(str(args.file_path)),
         mono: true,
-        additions: lineCount(str(args.content)),
+        additions: diff?.additions,
       };
     }
     case "read":
@@ -206,13 +201,17 @@ function pairTools(activity: ThreadActivity[]): Map<string, ToolNode> {
         name: use.name.toLowerCase(),
         input: use.input,
         orphaned: false,
-        summary: summarize(use.name.toLowerCase(), use.input),
+        view: use.view,
+        summary: summarize(use.name.toLowerCase(), use.input, use.view),
       });
     } else if (item.type === "tool_running") {
       const run = item as ToolRunningActivity;
       const existing = byId.get(run.id);
-      if (existing) existing.running = run;
-      else
+      if (existing) {
+        existing.running = run;
+        existing.view = run.view;
+        existing.summary = summarize(existing.name, existing.input, run.view);
+      } else
         byId.set(run.id, {
           kind: "tool",
           key: `tool:${run.id}`,
@@ -221,7 +220,8 @@ function pairTools(activity: ThreadActivity[]): Map<string, ToolNode> {
           input: run.input,
           running: run,
           orphaned: false,
-          summary: summarize(run.name, run.input),
+          view: run.view,
+          summary: summarize(run.name, run.input, run.view),
         });
     } else if (item.type === "tool_result") {
       const res = item as ToolResultActivity;
@@ -229,7 +229,8 @@ function pairTools(activity: ThreadActivity[]): Map<string, ToolNode> {
       if (target) {
         target.result = res;
         target.running = undefined;
-        target.summary = summarize(target.name, target.input, res);
+        target.view = res.view;
+        target.summary = summarize(target.name, target.input, res.view);
       } else {
         byId.set(`orphan:${res.tool_use_id}:${res.sequence}`, {
           kind: "tool",
@@ -239,13 +240,31 @@ function pairTools(activity: ThreadActivity[]): Map<string, ToolNode> {
           input: null,
           result: res,
           orphaned: true,
-          summary: { verb: "Tool result", subject: "", mono: false, failed: !res.ok },
+          view: res.view,
+          summary: { verb: "Tool result", subject: "", mono: false, failed: failedOf(res.view) },
         });
       }
     }
   }
 
   return byId;
+}
+
+/**
+ * One tool call paired with its result or live state, as the transcript sees
+ * it, for views outside the transcript (the trajectory span detail). A result
+ * without its call is found by its own sequence.
+ */
+export function findToolNode(
+  activity: ThreadActivity[],
+  toolUseId: string,
+  resultSequence?: number,
+): ToolNode | undefined {
+  const tools = pairTools(activity);
+  return (
+    tools.get(toolUseId) ??
+    (resultSequence === undefined ? undefined : tools.get(`orphan:${toolUseId}:${resultSequence}`))
+  );
 }
 
 /* --------------------------------- grouping --------------------------------- */

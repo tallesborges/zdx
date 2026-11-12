@@ -297,7 +297,7 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
-        assert_eq!(status, "Status: Done (2.5s)");
+        assert_eq!(status, "Status: Done (2.5s) · 1 line");
     }
 
     #[test]
