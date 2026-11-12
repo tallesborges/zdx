@@ -2,16 +2,16 @@
 # Edit this file to customize the model picker.
 
 [[model]]
-id = "claude-fable-5-1"
+id = "claude-fable-5-2"
 provider = "anthropic"
-display_name = "Claude Fable 5.1"
+display_name = "Claude Fable 5.2"
 context_limit = 1000000
 
 [model.pricing]
-input = 10.0
-output = 50.0
-cache_read = 0.25
-cache_write = 12.5
+input = 8.0
+output = 40.0
+cache_read = 0.2
+cache_write = 10.0
 
 [model.capabilities]
 reasoning = true
@@ -70,9 +70,9 @@ input_images = true
 output_limit = 128000
 
 [[model]]
-id = "claude-cli:claude-fable-5-1"
+id = "claude-cli:claude-fable-5-2"
 provider = "claude-cli"
-display_name = "Claude Fable 5.1"
+display_name = "Claude Fable 5.2"
 context_limit = 1000000
 
 [model.pricing]

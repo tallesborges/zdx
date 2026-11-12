@@ -2489,7 +2489,7 @@ fn default_anthropic_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
-            "claude-fable-5-1".to_string(),
+            "claude-fable-5-2".to_string(),
             "claude-opus-5-5".to_string(),
             "claude-sonnet-5-5".to_string(),
             "claude-haiku-5-5".to_string(),
@@ -2502,7 +2502,7 @@ fn default_claude_cli_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
-            "claude-fable-5-1".to_string(),
+            "claude-fable-5-2".to_string(),
             "claude-opus-5-5".to_string(),
             "claude-sonnet-5-5".to_string(),
             "claude-haiku-5-5".to_string(),
