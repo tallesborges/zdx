@@ -546,6 +546,23 @@ input_images = true
 output_limit = 131072
 
 [[model]]
+id = "gemini:gemini-4-carbon"
+provider = "gemini"
+display_name = "Gemini 4 Carbon"
+context_limit = 1048576
+
+[model.pricing]
+input = 4.0
+output = 20.0
+cache_read = 0.2
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 32768
+
+[[model]]
 id = "gemini:gemini-4-argon"
 provider = "gemini"
 display_name = "Gemini 4 Argon"

@@ -2662,6 +2662,7 @@ fn default_gemini_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gemini-4-carbon".to_string(),
             "gemini-4-argon".to_string(),
             "gemini-3.8-flash".to_string(),
             "gemini-3.5-flash-lite".to_string(),
@@ -5542,7 +5543,10 @@ file = "prompts/template.md"
     fn test_default_provider_models_lead_with_newest() {
         let providers = ProvidersConfig::default();
 
-        assert_eq!(providers.gemini.models.first().unwrap(), "gemini-4-argon");
+        assert_eq!(
+            providers.gemini.models[..2],
+            ["gemini-4-carbon", "gemini-4-argon"]
+        );
         assert_eq!(
             providers.google_antigravity.models[..3],
             [
