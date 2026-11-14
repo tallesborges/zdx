@@ -1,0 +1,24 @@
+ zdx monitor   ⠋ connecting…                                             ? help
+ 1 Agents  2 Threads  3 Svcs  4 Jobs  5 Usage  6 Logs  7 Procs  8 Config
+
+
+  ⠋ Loading active agents…
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ↵ transcript  ? help  q quit  1-8 tabs                               ⠋ loading

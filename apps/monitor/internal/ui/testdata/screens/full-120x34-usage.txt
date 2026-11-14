@@ -1,0 +1,34 @@
+ zdx monitor   ● orchestrator busy · 2 threads with work                                                         ? help
+ 1 Agents 6  2 Threads  3 Services  4 Jobs  5 Usage  6 Logs  7 Background  8 Config
+
+ Subscription quotas  fetched 0s ago · every 5m · Q refresh
+    WINDOW                             USED  REMAINING  RESETS                       SCOPE
+  Claude (work)  claude-cli · max plan
+    5h      ██████████░░░░░░░░░░░░░░  42.5%      57.5%  16:30 (in 2h)
+    week    ██████████████████████░░  91.0%       9.0%  Mon 16 Nov 16:30 (in 2d 2h)  Opus
+
+  ChatGPT  openai-codex · pro plan
+    5h      ██░░░░░░░░░░░░░░░░░░░░░░   7.0%      93.0%  unknown
+
+  Gemini  gemini-cli
+    ✗ token refresh failed: 401 Unauthorized
+
+── Token usage · last 7 days · [ ] change ──────────────────────────────────────────────────────────────────────────────
+  412.9M tokens · 18.3k requests · $38.27 billed · 380.1M on subscriptions
+  input 391.0M · output 3.9M · cache read 301.4M · cache write 18.0M · 1844 threads
+  12 rows have no known price: the cost is a lower bound.
+  3 threads are not indexed: their project and run kind are unknown.
+
+  Daily  ▅▆▆▇██▃  8 Nov – 14 Nov
+
+  By provider
+  TOKENS  REQUESTS  COST          NAME
+  251.0M      9211  subscription  claude-cli
+  129.1M      6120  subscription  openai-codex
+   32.8M      3011  $38.27~       gemini
+
+  By model (top 8)
+  TOKENS  REQUESTS  COST          NAME
+  210.0M      7000  subscription  claude-opus-5-5  claude-cli
+  129.1M      6120  subscription  gpt-6-astra  openai-codex
+ Q refresh quotas  [ ] days  ? help  q quit  1-8 tabs                                                    updated 0s ago

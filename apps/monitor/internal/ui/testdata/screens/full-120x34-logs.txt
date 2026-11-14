@@ -1,0 +1,34 @@
+ zdx monitor   ● orchestrator busy · 2 threads with work                                                         ? help
+ 1 Agents 6  2 Threads  3 Services  4 Jobs  5 Usage  6 Logs  7 Background  8 Config
+
+ Logs  zdx.log.2026-11-14 (1 of 3) · all levels · 7 of 7 lines  ● following
+ 14:12:01 INFO  zdx_engine::skills: Loaded skills count=24 warnings=0
+ 14:12:01 INFO  turn: zdx_engine::core::agent: Turn started thinking="high" tools=20 kind="orchestrator" thread="telegr…
+ 14:12:09 DEBUG zdx_engine::providers::openai: stream opened status=200 ttft_ms=812
+ 14:13:40 WARN  zdx_engine::core::thread_index: Slow thread index sync on a read path elapsed_ms=526 scope=Meta files=2…
+ 14:14:02 ERROR zdx_engine::providers::anthropic: request failed status=529 body="overloaded" attempt=2
+                retrying in 4s
+ 14:14:06 INFO  turn: zdx_engine::core::agent: Turn finished model_turns=3 thread="telegram--1001234567890-topic-42"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ l level  / filter  esc clear  [ ] day  G follow  ? help  q quit  1-8 tabs                               updated 0s ago

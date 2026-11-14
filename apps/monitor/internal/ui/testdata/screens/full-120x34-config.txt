@@ -1,0 +1,34 @@
+ zdx monitor   ● orchestrator busy · 2 threads with work                                                         ? help
+ 1 Agents 6  2 Threads  3 Services  4 Jobs  5 Usage  6 Logs  7 Background 3  8 Config
+
+ Config  read only
+  Default    claude-cli:claude-opus-5-5@high via mode:deep · thinking high · 3 modes · subagents on
+
+── Workspace 1 of 2 · [ ] switch ───────────────────────────────────────────────────────────────────────────────────────
+  Documents  current  /Users/example/Documents
+  Overlay    /Users/example/Documents/.zdx/config.toml
+
+  GROUP          SETTING              VALUE                            FROM       NOTE
+▌ core           model                claude-cli:claude-opus-5-5@high  workspace  overrides gpt-6-astra from global
+                 model_mode           mode:deep                        global     → claude-cli:claude-opus-5-5@max
+  helper models  title_model          gemini:gemini-3.5-flash-lite     default
+                 handoff_model        gemini:gemini-3.8-flash          global
+  audio          transcription.model  unset                            default
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ [ ] workspace  ? help  q quit  1-8 tabs                                                                 updated 0s ago

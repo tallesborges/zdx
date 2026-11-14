@@ -1,0 +1,34 @@
+ ‹ Tool detail  Go monitor: polish the Bubble Tea dashboard
+ ⠋ tool bash: go test -race ./... · 3 messages · 14 events · worker of zdx orchestrator · telegram--1001234567890-topic…
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ✗ bash c4
+  $ go vet ./...
+  exit 1 · 4.2s
+
+  ── stderr ──
+  internal/ui/trajectory.go:5:2: "strings" imported and not used
+
+
+  input
+  {
+     "command": "go vet ./..."
+   }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ esc back  j/k scroll                                                                                    updated 0s ago

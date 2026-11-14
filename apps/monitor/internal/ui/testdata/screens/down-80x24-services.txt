@@ -1,0 +1,24 @@
+ zdx monitor   ○ orchestrator not running                                ? help
+ ! Agents, threads, usage, and config need the orchestrator (or --cli-fallback)…
+ 1 Agents  2 Threads  3 Svcs !  4 Jobs  5 Usage  6 Logs  7 Procs  8 Config
+
+ Services  launchd · read only
+     SERVICE       STATUS     PID  UPTIME  LAUNCHD
+▌ ●  bot           running  48190  3h 14m  installed
+  ○  daemon        stopped      —       —  not installed
+  ●  orchestrator  stopped      —       —  installed
+
+── Orchestrator work ───────────────────────────────────────────────────────────
+  Not reachable: orchestrator service is not running (no listener at /Users/exa…
+
+
+
+
+
+
+
+
+
+
+
+ ? help  q quit  1-8 tabs                                        updated 0s ago

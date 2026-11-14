@@ -1,0 +1,24 @@
+ ‹ Timing  Go monitor: polish the Bubble Tea dashboard
+ ⠋ tool bash: go test -race ./... · 3 messages · 14 events · worker of zdx orch…
+────────────────────────────────────────────────────────────────────────────────
+  Client-observed trajectory · 14 events · observed Sat 14 Nov 14:30
+  coverage 5/6 durations measured · 4 exact
+  active wall 5m 12s · span work 4m 46s · concurrent 0ms
+  some spans have no timing: totals cover measured spans only
+
+  Bottlenecks
+   1. ✓ claude-opus-5-5 · turn 1 · 3m 2s
+   2. ✗ bash · turn 1 · 4.2s
+
+  Turn 1 · partial · 5/6 measured · elapsed 5m 12s · active 5m 0s · work 4m 46s
+     Polish the monitor. Check the real terminal output first.
+     ✓ model claude-opus-5-5 claude-cli · 3m 2s · TTFT 2.4s · in 48.2k out 1.8k
+     ✓ tool  read apps/monitor/internal/ui/model.go · 12ms
+     ✗ tool  bash go vet ./... · 4.2s
+     … tool  bash go test -race ./... · no timing
+
+
+
+
+
+ esc back  j/k scroll  r refresh                                 updated 0s ago

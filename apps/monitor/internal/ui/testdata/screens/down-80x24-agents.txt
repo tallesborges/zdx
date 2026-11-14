@@ -1,0 +1,24 @@
+ zdx monitor   ○ orchestrator not running                                ? help
+ ! Agents, threads, usage, and config need the orchestrator (or --cli-fallback)…
+ 1 Agents  2 Threads  3 Svcs  4 Jobs  5 Usage  6 Logs  7 Procs  8 Config
+
+
+  ✗ Could not load active agents: orchestrator service is not running (no liste…
+  This needs the orchestrator service. Start it, or run the monitor with --cli-…
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ↵ transcript  ? help  q quit  1-8 tabs                             load failed

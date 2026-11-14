@@ -1,0 +1,34 @@
+ zdx monitor   ● orchestrator busy · 2 threads with work                                                         ? help
+ 1 Agents 6  2 Threads  3 Services  4 Jobs  5 Usage  6 Logs  7 Background  8 Config
+
+ Services  launchd · read only
+     SERVICE       STATUS     PID  UPTIME  LAUNCHD        LABEL
+▌ ●  bot           running  48190  3h 14m  installed      dev.zdx.bot
+  ○  daemon        stopped      —       —  not installed  dev.zdx.daemon
+  ●  orchestrator  running  48213  3h 12m  installed      dev.zdx.orchestrator
+
+── Orchestrator work ───────────────────────────────────────────────────────────────────────────────────────────────────
+  STATE       THREAD                             TURN  QUEUED  WORKERS
+  running     telegram--1001234567890-topic-42     12       1  1 running, 1 failed, 1 completed
+  delivering  telegram--1001234567890-topic-512     —       0  —
+  + 1 thread idle
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ? help  q quit  1-8 tabs                                                                                updated 0s ago

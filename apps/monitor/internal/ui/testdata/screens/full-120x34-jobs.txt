@@ -1,0 +1,34 @@
+ zdx monitor   ● orchestrator busy · 2 threads with work                                                         ? help
+ 1 Agents 6  2 Threads  3 Services  4 Jobs 2!  5 Usage  6 Logs  7 Background  8 Config
+
+ Jobs  resolved as the running daemon does · root /Users/example/Documents
+  NAME                        STATUS     SCHEDULE     NEXT    LAST RUN          MODEL
+▌ daily-report                scheduled  0 8 * * 1-5  in 17h  ✓ 6h ago          gemini:gemini-3.8-flash@low
+  english-coach               running    30 19 * * *  in 5h   ✗ failed 19h ago  claude-cli@work:claude-opus-5-5@high
+  disk-space-housekeeping-w…  pending    once         in 1d   never             openai:gpt-5.6-terra@low
+  broken                      invalid    —            —       never             —
+
+── Selected job ────────────────────────────────────────────────────────────────────────────────────────────────────────
+  File       /Users/example/.zdx/jobs/daily-report.md
+  Schedule   0 8 * * 1-5 · grace 10m · 0 retries
+  Status     scheduled · next Sun 15 Nov 08:00 (in 17h 30m)
+  Last run   succeeded · schedule · 08:02 (6h 28m ago) · thread job-daily-report-20261114
+  Model      gemini:gemini-3.8-flash@low from job · thinking high from job
+  Root       /Users/example/Documents from daemon
+  Declared   model gemini:gemini-3.8-flash@low
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ? help  q quit  1-8 tabs                                                                                updated 0s ago

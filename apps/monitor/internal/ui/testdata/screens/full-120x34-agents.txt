@@ -1,0 +1,34 @@
+ zdx monitor   ● orchestrator busy · 2 threads with work                                                         ? help
+ 1 Agents 6  2 Threads  3 Services  4 Jobs  5 Usage  6 Logs  7 Background  8 Config
+
+ Active agents  6 runs
+     RUN             STATE      MODEL                                                                                 UP
+▌ ⠋  orchestrator    tool       openai-codex@work:gpt-6-astra@high                                                   13m
+  ⠋  ├─ worker       thinking   claude-cli@work:claude-opus-5-5@high                                                100h
+  ⠋  │  └─ explorer  retrying   google-vertex-anthropic-com…:gemini-3.8-flash-preview-thinking-exp-2026-11@minimal    2m
+  ⠋  └─ oracle       answering  openai-codex:gpt-6-astra@xhigh                                                       41s
+  ◌  parent, idle               telegram--1009876543210-topic-3
+  ⠋  └─ worker       tool       claude-cli:claude-sonnet-5@medium                                                     1h
+  ⠋  tui             waiting    openrouter:moonshotai/kimi-k3-0905-preview-extended-context                           9s
+
+── Selected run ────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Activity   tool  bash: go test -race ./... (+1 more)
+  Thread     telegram--1001234567890-topic-42
+  Turn       14m · last event 3s ago · heartbeat 1s ago
+  Tools      2 running · 5 finished
+  Model      openai-codex@work:gpt-6-astra@high
+             provider openai-codex · account work · thinking high
+  Process    pid 48213 · telegram · up 13m 25s
+
+
+
+
+
+
+
+
+
+
+
+
+ ↵ transcript  ? help  q quit  1-8 tabs                                                                  updated 0s ago
