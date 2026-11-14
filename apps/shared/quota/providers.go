@@ -81,6 +81,14 @@ func (f *fetcher) codex(ctx context.Context, c *credentials) (*Quota, *Error) {
 	return incompatibleUnless(parseCodex(body))
 }
 
+// antigravityUserAgent is the client identity of zdx's Antigravity model
+// client (crates/zdx-providers/src/gemini/antigravity.rs). The quota summary
+// needs an Antigravity-style UA (a plain one 401s) and gates groups on its
+// version: `antigravity/cli/1.0.0`, the Rust reader's UA, gets only the
+// Claude and GPT group, so the Gemini-only filter found nothing. Verified
+// live 2026-11-14.
+const antigravityUserAgent = "antigravity/cli/2.24.0"
+
 func (f *fetcher) antigravity(ctx context.Context, c *credentials) (*Quota, *Error) {
 	if c == nil {
 		return nil, failure(KindNotAuthenticated)
@@ -95,8 +103,7 @@ func (f *fetcher) antigravity(ctx context.Context, c *credentials) (*Quota, *Err
 	body, err := f.do(ctx, request{method: "POST", url: f.urls.AntigravityQuota, headers: [][2]string{
 		bearer(c.access),
 		{"Accept", "application/json"},
-		// The quota-summary endpoint requires an Antigravity-style UA.
-		{"user-agent", "antigravity/cli/1.0.0"},
+		{"user-agent", antigravityUserAgent},
 		{"Content-Type", "application/json"},
 	}, body: []byte(`{"project":` + jsonString(project) + `}`)})
 	if err != nil {

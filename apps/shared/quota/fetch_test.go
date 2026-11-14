@@ -212,7 +212,7 @@ func TestFetchAllProvidersHeadersAndBodies(t *testing.T) {
 		"Authorization": "Bearer tok-codex", "chatgpt-account-id": "acct-synthetic", "originator": "zdx", "User-Agent": "zdx/9.9.9-test", "Accept": "*/*",
 	})
 	ag := check("/antigravity", "POST", map[string]string{
-		"Authorization": "Bearer tok-ag", "Accept": "application/json", "User-Agent": "antigravity/cli/1.0.0", "Content-Type": "application/json",
+		"Authorization": "Bearer tok-ag", "Accept": "application/json", "User-Agent": "antigravity/cli/2.24.0", "Content-Type": "application/json",
 	})
 	if ag.body != `{"project":"proj-<1>&"}` {
 		t.Errorf("antigravity body = %s", ag.body)
@@ -229,6 +229,53 @@ func TestFetchAllProvidersHeadersAndBodies(t *testing.T) {
 	}
 	if got := f.requests("/grok"); len(got) == 1 && got[0].headers.Get("Accept-Encoding") != "" {
 		t.Errorf("Accept-Encoding sent")
+	}
+}
+
+// The live quota summary dropped the Gemini groups for the legacy client UA
+// `antigravity/cli/1.0.0` and returned only the Claude and GPT group, which
+// the Gemini filter reads as unexpected response (observed 2026-11-14).
+// This fake answers any `antigravity/cli/1.` UA that way.
+func TestFetchAntigravityGetsGeminiGroupsWithCurrentClientUA(t *testing.T) {
+	home := t.TempDir()
+	writeCache(t, home, map[string]cred{
+		"google-antigravity": {Type: "oauth", Refresh: "r-ag", Access: "tok-ag", Expires: future, AccountID: str("proj-synthetic")},
+	})
+	legacy := `{"groups":[{"displayName":"Claude and GPT models","buckets":[{"window":"weekly","remainingFraction":1}]}]}`
+	current := string(fixture(t, "antigravity_usage_argon.json"))
+	f := newFake(t, map[string]http.HandlerFunc{
+		"/antigravity": func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.Header.Get("User-Agent"), "antigravity/cli/1.") {
+				io.WriteString(w, legacy)
+				return
+			}
+			io.WriteString(w, current)
+		},
+	})
+	snap, err := Fetch(context.Background(), options(home, f, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ag *Result
+	for i := range snap.Providers {
+		if snap.Providers[i].Provider == ProviderAntigravity {
+			ag = &snap.Providers[i]
+		}
+	}
+	if ag == nil || ag.Err != nil || ag.Quota == nil {
+		t.Fatalf("antigravity = %+v", ag)
+	}
+	var got []string
+	for _, w := range ag.Quota.Windows {
+		got = append(got, fmt.Sprintf("%s %s %g %s", *w.Scope, w.Label, w.UsedPercent, FormatRFC3339(*w.ResetsAt)))
+	}
+	want := []string{
+		"Gemini Models weekly 25 2026-08-07T10:00:00+00:00",
+		"Gemini Models 5h 50 2026-08-01T15:00:00+00:00",
+		"Gemini 4 Argon weekly 100 2026-08-06T10:00:00+00:00",
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("windows =\n%v\nwant\n%v", got, want)
 	}
 }
 
