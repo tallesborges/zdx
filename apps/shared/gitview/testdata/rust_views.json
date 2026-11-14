@@ -1,0 +1,1585 @@
+{
+  "recorder": "zdx 0.14.0+build.1794686446.g28a0be278eca (Rust Git views, crates/zdx-engine/src/orchestration/view_bodies/git.rs), over the socket of an isolated service",
+  "git": "git version 2.50.1 (Apple Git-155)",
+  "cases": [
+    {
+      "name": "status/changes",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_status\",\"thread_id\":\"t-changes\"}",
+      "reply": {
+        "body": {
+          "commits": [
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T12:00:00Z",
+              "hash": "5d4c8913204b5d894b0207b6fd75dc5629e2f0f8",
+              "refs": "HEAD -> main",
+              "relative_time": "$RELATIVE",
+              "short_hash": "5d4c891",
+              "subject": "third, <local> & unpushed"
+            },
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T11:00:00Z",
+              "hash": "a125a5b1aadf045f9258e9a7a7c3670723129856",
+              "refs": "side",
+              "relative_time": "$RELATIVE",
+              "short_hash": "a125a5b",
+              "subject": "second"
+            },
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T10:00:00Z",
+              "hash": "79b87bf00009e7bbd4a17bf9c2d6744102d246cf",
+              "refs": "",
+              "relative_time": "$RELATIVE",
+              "short_hash": "79b87bf",
+              "subject": "first"
+            }
+          ],
+          "files": {
+            "staged": [
+              {
+                "path": "both.txt",
+                "status": "M"
+              },
+              {
+                "path": "gone.txt",
+                "status": "D"
+              },
+              {
+                "original_path": "old name.txt",
+                "path": "new name.txt",
+                "status": "R"
+              },
+              {
+                "path": "src/lib.rs",
+                "status": "M"
+              }
+            ],
+            "unstaged": [
+              {
+                "path": "README.md",
+                "status": "M"
+              },
+              {
+                "path": "binary.bin",
+                "status": "M"
+              },
+              {
+                "path": "both.txt",
+                "status": "M"
+              },
+              {
+                "path": "literal*.txt",
+                "status": "M"
+              },
+              {
+                "path": "literal-match.txt",
+                "status": "M"
+              }
+            ],
+            "untracked": [
+              {
+                "path": "euro-1.txt",
+                "status": "?"
+              },
+              {
+                "path": "euro-2.txt",
+                "status": "?"
+              },
+              {
+                "path": "euro-3.txt",
+                "status": "?"
+              },
+              {
+                "path": "large.txt",
+                "status": "?"
+              },
+              {
+                "path": "latin1.txt",
+                "status": "?"
+              },
+              {
+                "path": "new file.txt",
+                "status": "?"
+              },
+              {
+                "path": "notes/todo.txt",
+                "status": "?"
+              }
+            ]
+          },
+          "repository": {
+            "ahead": 1,
+            "behind": 1,
+            "branch": "main",
+            "clean": false,
+            "detached": false,
+            "head": "5d4c8913",
+            "name": "changes",
+            "root": "$WORLD/changes",
+            "source": "thread",
+            "thread_id": "t-changes",
+            "upstream": "origin/main"
+          },
+          "worktrees": [
+            {
+              "branch": "main",
+              "current": true,
+              "flags": [],
+              "head": "5d4c8913",
+              "path": "$WORLD/changes"
+            },
+            {
+              "branch": "side",
+              "current": false,
+              "flags": [
+                "locked"
+              ],
+              "head": "a125a5b1",
+              "path": "$WORLD/changes-side"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "status/subdirectory",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_status\",\"thread_id\":\"t-sub\"}",
+      "reply": {
+        "body": {
+          "commits": [
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T12:00:00Z",
+              "hash": "5d4c8913204b5d894b0207b6fd75dc5629e2f0f8",
+              "refs": "HEAD -> main",
+              "relative_time": "$RELATIVE",
+              "short_hash": "5d4c891",
+              "subject": "third, <local> & unpushed"
+            },
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T11:00:00Z",
+              "hash": "a125a5b1aadf045f9258e9a7a7c3670723129856",
+              "refs": "side",
+              "relative_time": "$RELATIVE",
+              "short_hash": "a125a5b",
+              "subject": "second"
+            },
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T10:00:00Z",
+              "hash": "79b87bf00009e7bbd4a17bf9c2d6744102d246cf",
+              "refs": "",
+              "relative_time": "$RELATIVE",
+              "short_hash": "79b87bf",
+              "subject": "first"
+            }
+          ],
+          "files": {
+            "staged": [
+              {
+                "path": "both.txt",
+                "status": "M"
+              },
+              {
+                "path": "gone.txt",
+                "status": "D"
+              },
+              {
+                "original_path": "old name.txt",
+                "path": "new name.txt",
+                "status": "R"
+              },
+              {
+                "path": "src/lib.rs",
+                "status": "M"
+              }
+            ],
+            "unstaged": [
+              {
+                "path": "README.md",
+                "status": "M"
+              },
+              {
+                "path": "binary.bin",
+                "status": "M"
+              },
+              {
+                "path": "both.txt",
+                "status": "M"
+              },
+              {
+                "path": "literal*.txt",
+                "status": "M"
+              },
+              {
+                "path": "literal-match.txt",
+                "status": "M"
+              }
+            ],
+            "untracked": [
+              {
+                "path": "euro-1.txt",
+                "status": "?"
+              },
+              {
+                "path": "euro-2.txt",
+                "status": "?"
+              },
+              {
+                "path": "euro-3.txt",
+                "status": "?"
+              },
+              {
+                "path": "large.txt",
+                "status": "?"
+              },
+              {
+                "path": "latin1.txt",
+                "status": "?"
+              },
+              {
+                "path": "new file.txt",
+                "status": "?"
+              },
+              {
+                "path": "notes/todo.txt",
+                "status": "?"
+              }
+            ]
+          },
+          "repository": {
+            "ahead": 1,
+            "behind": 1,
+            "branch": "main",
+            "clean": false,
+            "detached": false,
+            "head": "5d4c8913",
+            "name": "changes",
+            "root": "$WORLD/changes",
+            "source": "thread",
+            "thread_id": "t-sub",
+            "upstream": "origin/main"
+          },
+          "worktrees": [
+            {
+              "branch": "main",
+              "current": true,
+              "flags": [],
+              "head": "5d4c8913",
+              "path": "$WORLD/changes"
+            },
+            {
+              "branch": "side",
+              "current": false,
+              "flags": [
+                "locked"
+              ],
+              "head": "a125a5b1",
+              "path": "$WORLD/changes-side"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "status/clean",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_status\",\"thread_id\":\"t-clean\"}",
+      "reply": {
+        "body": {
+          "commits": [
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T13:00:00Z",
+              "hash": "f53ece6b7d50b5a65bcf482d3514af393660ad7f",
+              "refs": "HEAD -> main",
+              "relative_time": "$RELATIVE",
+              "short_hash": "f53ece6",
+              "subject": "only"
+            }
+          ],
+          "files": {
+            "staged": [],
+            "unstaged": [],
+            "untracked": []
+          },
+          "repository": {
+            "ahead": 0,
+            "behind": 0,
+            "branch": "main",
+            "clean": true,
+            "detached": false,
+            "head": "f53ece6b",
+            "name": "clean",
+            "root": "$WORLD/clean",
+            "source": "thread",
+            "thread_id": "t-clean",
+            "upstream": null
+          },
+          "worktrees": [
+            {
+              "branch": "main",
+              "current": true,
+              "flags": [],
+              "head": "f53ece6b",
+              "path": "$WORLD/clean"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "status/initial",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_status\",\"thread_id\":\"t-initial\"}",
+      "reply": {
+        "body": {
+          "commits": [],
+          "files": {
+            "staged": [
+              {
+                "path": "staged.txt",
+                "status": "A"
+              }
+            ],
+            "unstaged": [],
+            "untracked": [
+              {
+                "path": "loose.txt",
+                "status": "?"
+              }
+            ]
+          },
+          "repository": {
+            "ahead": 0,
+            "behind": 0,
+            "branch": "main",
+            "clean": false,
+            "detached": false,
+            "head": null,
+            "name": "initial",
+            "root": "$WORLD/initial",
+            "source": "thread",
+            "thread_id": "t-initial",
+            "upstream": null
+          },
+          "worktrees": [
+            {
+              "branch": "main",
+              "current": true,
+              "flags": [],
+              "head": "00000000",
+              "path": "$WORLD/initial"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "status/detached",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_status\",\"thread_id\":\"t-detached\"}",
+      "reply": {
+        "body": {
+          "commits": [
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T14:00:00Z",
+              "hash": "33b6520f092a1924239518efd665d12e85edf418",
+              "refs": "HEAD",
+              "relative_time": "$RELATIVE",
+              "short_hash": "33b6520",
+              "subject": "one"
+            }
+          ],
+          "files": {
+            "staged": [],
+            "unstaged": [],
+            "untracked": []
+          },
+          "repository": {
+            "ahead": 0,
+            "behind": 0,
+            "branch": "detached",
+            "clean": true,
+            "detached": true,
+            "head": "33b6520f",
+            "name": "detached",
+            "root": "$WORLD/detached",
+            "source": "thread",
+            "thread_id": "t-detached",
+            "upstream": null
+          },
+          "worktrees": [
+            {
+              "branch": null,
+              "current": true,
+              "flags": [
+                "detached"
+              ],
+              "head": "33b6520f",
+              "path": "$WORLD/detached"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "status/feature",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_status\",\"thread_id\":\"t-feature\"}",
+      "reply": {
+        "body": {
+          "commits": [
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T19:00:00Z",
+              "hash": "9418dfd991a6950e372092b197abc6001ef47005",
+              "refs": "HEAD -> feature",
+              "relative_time": "$RELATIVE",
+              "short_hash": "9418dfd",
+              "subject": "feature two"
+            },
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T18:00:00Z",
+              "hash": "7e11c9f0b29d35736b54e24a4ca773e0fc4b48e7",
+              "refs": "",
+              "relative_time": "$RELATIVE",
+              "short_hash": "7e11c9f",
+              "subject": "feature one"
+            },
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T17:00:00Z",
+              "hash": "29ce00efa289c22296f441af0a6e0b2df80ccd64",
+              "refs": "main",
+              "relative_time": "$RELATIVE",
+              "short_hash": "29ce00e",
+              "subject": "main two"
+            },
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T16:00:00Z",
+              "hash": "dc6405c489e12491dcf1ecf202268ec3c69bdd75",
+              "refs": "",
+              "relative_time": "$RELATIVE",
+              "short_hash": "dc6405c",
+              "subject": "base"
+            }
+          ],
+          "files": {
+            "staged": [],
+            "unstaged": [
+              {
+                "path": "app.txt",
+                "status": "M"
+              }
+            ],
+            "untracked": [
+              {
+                "path": "scratch.txt",
+                "status": "?"
+              }
+            ]
+          },
+          "repository": {
+            "ahead": 0,
+            "behind": 0,
+            "branch": "feature",
+            "clean": false,
+            "detached": false,
+            "head": "9418dfd9",
+            "name": "feature",
+            "root": "$WORLD/feature",
+            "source": "thread",
+            "thread_id": "t-feature",
+            "upstream": null
+          },
+          "worktrees": [
+            {
+              "branch": "feature",
+              "current": true,
+              "flags": [],
+              "head": "9418dfd9",
+              "path": "$WORLD/feature"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "status/origin-head",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_status\",\"thread_id\":\"t-origin-head\"}",
+      "reply": {
+        "body": {
+          "commits": [
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T21:00:00Z",
+              "hash": "1c2a335f066d0b0c1375eadee9ddc3c8d5cec2bb",
+              "refs": "HEAD -> topic",
+              "relative_time": "$RELATIVE",
+              "short_hash": "1c2a335",
+              "subject": "topic"
+            },
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T20:00:00Z",
+              "hash": "09aa70b571cfc1f6a55acbd4e5fd0b6329072ee1",
+              "refs": "origin/develop, origin/HEAD, main, develop",
+              "relative_time": "$RELATIVE",
+              "short_hash": "09aa70b",
+              "subject": "develop"
+            }
+          ],
+          "files": {
+            "staged": [],
+            "unstaged": [],
+            "untracked": []
+          },
+          "repository": {
+            "ahead": 0,
+            "behind": 0,
+            "branch": "topic",
+            "clean": true,
+            "detached": false,
+            "head": "1c2a335f",
+            "name": "origin-head",
+            "root": "$WORLD/origin-head",
+            "source": "thread",
+            "thread_id": "t-origin-head",
+            "upstream": null
+          },
+          "worktrees": [
+            {
+              "branch": "topic",
+              "current": true,
+              "flags": [],
+              "head": "1c2a335f",
+              "path": "$WORLD/origin-head"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "status/remote-only",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_status\",\"thread_id\":\"t-remote-only\"}",
+      "reply": {
+        "body": {
+          "commits": [
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T23:00:00Z",
+              "hash": "990fce36dbe7f41f8d8df4ae9eb22ec7926fa0a7",
+              "refs": "HEAD -> work",
+              "relative_time": "$RELATIVE",
+              "short_hash": "990fce3",
+              "subject": "two"
+            },
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T22:00:00Z",
+              "hash": "e87fe35dfb8c5785ec17fdab7f08606d92934cba",
+              "refs": "origin/main",
+              "relative_time": "$RELATIVE",
+              "short_hash": "e87fe35",
+              "subject": "one"
+            }
+          ],
+          "files": {
+            "staged": [],
+            "unstaged": [],
+            "untracked": []
+          },
+          "repository": {
+            "ahead": 0,
+            "behind": 0,
+            "branch": "work",
+            "clean": true,
+            "detached": false,
+            "head": "990fce36",
+            "name": "remote-only",
+            "root": "$WORLD/remote-only",
+            "source": "thread",
+            "thread_id": "t-remote-only",
+            "upstream": null
+          },
+          "worktrees": [
+            {
+              "branch": "work",
+              "current": true,
+              "flags": [],
+              "head": "990fce36",
+              "path": "$WORLD/remote-only"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "status/trunk",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_status\",\"thread_id\":\"t-trunk\"}",
+      "reply": {
+        "body": {
+          "commits": [
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-03T00:00:00Z",
+              "hash": "095500848aec5b9f88f5515f296de17a5bfe2724",
+              "refs": "HEAD -> trunk",
+              "relative_time": "$RELATIVE",
+              "short_hash": "0955008",
+              "subject": "one"
+            }
+          ],
+          "files": {
+            "staged": [],
+            "unstaged": [
+              {
+                "path": "t.txt",
+                "status": "M"
+              }
+            ],
+            "untracked": []
+          },
+          "repository": {
+            "ahead": 0,
+            "behind": 0,
+            "branch": "trunk",
+            "clean": false,
+            "detached": false,
+            "head": "09550084",
+            "name": "trunk",
+            "root": "$WORLD/trunk",
+            "source": "thread",
+            "thread_id": "t-trunk",
+            "upstream": null
+          },
+          "worktrees": [
+            {
+              "branch": "trunk",
+              "current": true,
+              "flags": [],
+              "head": "09550084",
+              "path": "$WORLD/trunk"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "status/not-a-repository",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_status\",\"thread_id\":\"t-plain\"}",
+      "reply": {
+        "code": "not_found",
+        "message": "Git repository not found"
+      }
+    },
+    {
+      "name": "status/no-thread-file",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_status\",\"thread_id\":\"t-none\"}",
+      "reply": {
+        "code": "not_found",
+        "message": "Git repository not found"
+      }
+    },
+    {
+      "name": "status/fallback-from-non-repository",
+      "fallback": "clean",
+      "view": "{\"op\":\"git_status\",\"thread_id\":\"t-plain\"}",
+      "reply": {
+        "body": {
+          "commits": [
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T13:00:00Z",
+              "hash": "f53ece6b7d50b5a65bcf482d3514af393660ad7f",
+              "refs": "HEAD -> main",
+              "relative_time": "$RELATIVE",
+              "short_hash": "f53ece6",
+              "subject": "only"
+            }
+          ],
+          "files": {
+            "staged": [],
+            "unstaged": [],
+            "untracked": []
+          },
+          "repository": {
+            "ahead": 0,
+            "behind": 0,
+            "branch": "main",
+            "clean": true,
+            "detached": false,
+            "head": "f53ece6b",
+            "name": "clean",
+            "root": "$WORLD/clean",
+            "source": "bot_root",
+            "thread_id": "t-plain",
+            "upstream": null
+          },
+          "worktrees": [
+            {
+              "branch": "main",
+              "current": true,
+              "flags": [],
+              "head": "f53ece6b",
+              "path": "$WORLD/clean"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "status/fallback-without-thread-file",
+      "fallback": "clean",
+      "view": "{\"op\":\"git_status\",\"thread_id\":\"t-none\"}",
+      "reply": {
+        "body": {
+          "commits": [
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T13:00:00Z",
+              "hash": "f53ece6b7d50b5a65bcf482d3514af393660ad7f",
+              "refs": "HEAD -> main",
+              "relative_time": "$RELATIVE",
+              "short_hash": "f53ece6",
+              "subject": "only"
+            }
+          ],
+          "files": {
+            "staged": [],
+            "unstaged": [],
+            "untracked": []
+          },
+          "repository": {
+            "ahead": 0,
+            "behind": 0,
+            "branch": "main",
+            "clean": true,
+            "detached": false,
+            "head": "f53ece6b",
+            "name": "clean",
+            "root": "$WORLD/clean",
+            "source": "bot_root",
+            "thread_id": "t-none",
+            "upstream": null
+          },
+          "worktrees": [
+            {
+              "branch": "main",
+              "current": true,
+              "flags": [],
+              "head": "f53ece6b",
+              "path": "$WORLD/clean"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "status/thread-root-is-fallback",
+      "fallback": "clean",
+      "view": "{\"op\":\"git_status\",\"thread_id\":\"t-clean\"}",
+      "reply": {
+        "body": {
+          "commits": [
+            {
+              "author": "Fixture Author",
+              "authored_at": "2026-01-02T13:00:00Z",
+              "hash": "f53ece6b7d50b5a65bcf482d3514af393660ad7f",
+              "refs": "HEAD -> main",
+              "relative_time": "$RELATIVE",
+              "short_hash": "f53ece6",
+              "subject": "only"
+            }
+          ],
+          "files": {
+            "staged": [],
+            "unstaged": [],
+            "untracked": []
+          },
+          "repository": {
+            "ahead": 0,
+            "behind": 0,
+            "branch": "main",
+            "clean": true,
+            "detached": false,
+            "head": "f53ece6b",
+            "name": "clean",
+            "root": "$WORLD/clean",
+            "source": "thread",
+            "thread_id": "t-clean",
+            "upstream": null
+          },
+          "worktrees": [
+            {
+              "branch": "main",
+              "current": true,
+              "flags": [],
+              "head": "f53ece6b",
+              "path": "$WORLD/clean"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "scope/all-on-main",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_scope\",\"thread_id\":\"t-changes\",\"scope\":\"all\"}",
+      "reply": {
+        "body": {
+          "ahead": 0,
+          "base": "5d4c8913204b5d894b0207b6fd75dc5629e2f0f8",
+          "base_ref": "main",
+          "files": [
+            {
+              "path": "README.md",
+              "status": "M"
+            },
+            {
+              "path": "binary.bin",
+              "status": "M"
+            },
+            {
+              "path": "both.txt",
+              "status": "M"
+            },
+            {
+              "path": "gone.txt",
+              "status": "D"
+            },
+            {
+              "path": "literal*.txt",
+              "status": "M"
+            },
+            {
+              "path": "literal-match.txt",
+              "status": "M"
+            },
+            {
+              "path": "new name.txt",
+              "status": "A"
+            },
+            {
+              "path": "old name.txt",
+              "status": "D"
+            },
+            {
+              "path": "src/lib.rs",
+              "status": "M"
+            },
+            {
+              "path": "euro-1.txt",
+              "status": "?"
+            },
+            {
+              "path": "euro-2.txt",
+              "status": "?"
+            },
+            {
+              "path": "euro-3.txt",
+              "status": "?"
+            },
+            {
+              "path": "large.txt",
+              "status": "?"
+            },
+            {
+              "path": "latin1.txt",
+              "status": "?"
+            },
+            {
+              "path": "new file.txt",
+              "status": "?"
+            },
+            {
+              "path": "notes/todo.txt",
+              "status": "?"
+            }
+          ],
+          "scope": "all",
+          "untracked": [
+            "euro-1.txt",
+            "euro-2.txt",
+            "euro-3.txt",
+            "large.txt",
+            "latin1.txt",
+            "new file.txt",
+            "notes/todo.txt"
+          ]
+        }
+      }
+    },
+    {
+      "name": "scope/all-feature",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_scope\",\"thread_id\":\"t-feature\",\"scope\":\"all\"}",
+      "reply": {
+        "body": {
+          "ahead": 2,
+          "base": "29ce00efa289c22296f441af0a6e0b2df80ccd64",
+          "base_ref": "main",
+          "files": [
+            {
+              "path": "app.txt",
+              "status": "M"
+            },
+            {
+              "path": "feature.txt",
+              "status": "A"
+            },
+            {
+              "path": "scratch.txt",
+              "status": "?"
+            }
+          ],
+          "scope": "all",
+          "untracked": [
+            "scratch.txt"
+          ]
+        }
+      }
+    },
+    {
+      "name": "scope/all-trimmed",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_scope\",\"thread_id\":\"t-feature\",\"scope\":\" all \"}",
+      "reply": {
+        "body": {
+          "ahead": 2,
+          "base": "29ce00efa289c22296f441af0a6e0b2df80ccd64",
+          "base_ref": "main",
+          "files": [
+            {
+              "path": "app.txt",
+              "status": "M"
+            },
+            {
+              "path": "feature.txt",
+              "status": "A"
+            },
+            {
+              "path": "scratch.txt",
+              "status": "?"
+            }
+          ],
+          "scope": "all",
+          "untracked": [
+            "scratch.txt"
+          ]
+        }
+      }
+    },
+    {
+      "name": "scope/all-origin-head",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_scope\",\"thread_id\":\"t-origin-head\",\"scope\":\"all\"}",
+      "reply": {
+        "body": {
+          "ahead": 1,
+          "base": "09aa70b571cfc1f6a55acbd4e5fd0b6329072ee1",
+          "base_ref": "develop",
+          "files": [
+            {
+              "path": "t.txt",
+              "status": "A"
+            }
+          ],
+          "scope": "all",
+          "untracked": []
+        }
+      }
+    },
+    {
+      "name": "scope/all-remote-only",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_scope\",\"thread_id\":\"t-remote-only\",\"scope\":\"all\"}",
+      "reply": {
+        "body": {
+          "ahead": 1,
+          "base": "e87fe35dfb8c5785ec17fdab7f08606d92934cba",
+          "base_ref": "origin/main",
+          "files": [
+            {
+              "path": "r.txt",
+              "status": "M"
+            }
+          ],
+          "scope": "all",
+          "untracked": []
+        }
+      }
+    },
+    {
+      "name": "scope/all-trunk",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_scope\",\"thread_id\":\"t-trunk\",\"scope\":\"all\"}",
+      "reply": {
+        "body": {
+          "ahead": 0,
+          "base": "HEAD",
+          "base_ref": null,
+          "files": [
+            {
+              "path": "t.txt",
+              "status": "M"
+            }
+          ],
+          "scope": "all",
+          "untracked": []
+        }
+      }
+    },
+    {
+      "name": "scope/all-detached",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_scope\",\"thread_id\":\"t-detached\",\"scope\":\"all\"}",
+      "reply": {
+        "body": {
+          "ahead": 0,
+          "base": "33b6520f092a1924239518efd665d12e85edf418",
+          "base_ref": "main",
+          "files": [],
+          "scope": "all",
+          "untracked": []
+        }
+      }
+    },
+    {
+      "name": "scope/all-initial",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_scope\",\"thread_id\":\"t-initial\",\"scope\":\"all\"}",
+      "reply": {
+        "code": "internal",
+        "message": "Git scope unavailable"
+      }
+    },
+    {
+      "name": "scope/commit",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_scope\",\"thread_id\":\"t-feature\",\"scope\":\"$F2\"}",
+      "reply": {
+        "body": {
+          "ahead": 0,
+          "base": "9418dfd991a6950e372092b197abc6001ef47005",
+          "base_ref": null,
+          "files": [
+            {
+              "path": "app.txt",
+              "status": "M"
+            }
+          ],
+          "scope": "commit",
+          "untracked": []
+        }
+      }
+    },
+    {
+      "name": "scope/commit-short",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_scope\",\"thread_id\":\"t-feature\",\"scope\":\"$F2:7\"}",
+      "reply": {
+        "body": {
+          "ahead": 0,
+          "base": "9418dfd",
+          "base_ref": null,
+          "files": [
+            {
+              "path": "app.txt",
+              "status": "M"
+            }
+          ],
+          "scope": "commit",
+          "untracked": []
+        }
+      }
+    },
+    {
+      "name": "scope/commit-unknown",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_scope\",\"thread_id\":\"t-feature\",\"scope\":\"deadbeefdeadbeef\"}",
+      "reply": {
+        "code": "internal",
+        "message": "Git scope unavailable"
+      }
+    },
+    {
+      "name": "scope/invalid",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_scope\",\"thread_id\":\"t-feature\",\"scope\":\"zzz\"}",
+      "reply": {
+        "code": "invalid",
+        "message": "Invalid Git scope"
+      }
+    },
+    {
+      "name": "scope/invalid-revision",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_scope\",\"thread_id\":\"t-feature\",\"scope\":\"HEAD~1\"}",
+      "reply": {
+        "code": "invalid",
+        "message": "Invalid Git scope"
+      }
+    },
+    {
+      "name": "scope/invalid-without-repository",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_scope\",\"thread_id\":\"t-plain\",\"scope\":\"zzz\"}",
+      "reply": {
+        "code": "not_found",
+        "message": "Git repository not found"
+      }
+    },
+    {
+      "name": "diff/staged",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"src/lib.rs\",\"kind\":\"staged\"}",
+      "reply": {
+        "body": {
+          "bytes": 137,
+          "content": "diff --git a/src/lib.rs b/src/lib.rs\nindex ca05282..83021ca 100644\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1,2 @@\n fn a() {}\n+fn b() {}\n",
+          "kind": "staged",
+          "limit_bytes": 262144,
+          "lines": 7,
+          "path": "src/lib.rs",
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "diff/unstaged",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"README.md\",\"kind\":\"unstaged\"}",
+      "reply": {
+        "body": {
+          "bytes": 130,
+          "content": "diff --git a/README.md b/README.md\nindex 814f4a4..4cb29ea 100644\n--- a/README.md\n+++ b/README.md\n@@ -1,2 +1,3 @@\n one\n two\n+three\n",
+          "kind": "unstaged",
+          "limit_bytes": 262144,
+          "lines": 8,
+          "path": "README.md",
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "diff/both-staged",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"both.txt\",\"kind\":\"staged\"}",
+      "reply": {
+        "body": {
+          "bytes": 119,
+          "content": "diff --git a/both.txt b/both.txt\nindex df967b9..19d9cc8 100644\n--- a/both.txt\n+++ b/both.txt\n@@ -1 +1 @@\n-base\n+staged\n",
+          "kind": "staged",
+          "limit_bytes": 262144,
+          "lines": 7,
+          "path": "both.txt",
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "diff/both-unstaged",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"both.txt\",\"kind\":\"unstaged\"}",
+      "reply": {
+        "body": {
+          "bytes": 125,
+          "content": "diff --git a/both.txt b/both.txt\nindex 19d9cc8..b97ac3c 100644\n--- a/both.txt\n+++ b/both.txt\n@@ -1 +1,2 @@\n staged\n+unstaged\n",
+          "kind": "unstaged",
+          "limit_bytes": 262144,
+          "lines": 7,
+          "path": "both.txt",
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "diff/renamed",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"new name.txt\",\"kind\":\"staged\"}",
+      "reply": {
+        "body": {
+          "bytes": 144,
+          "content": "diff --git a/new name.txt b/new name.txt\nnew file mode 100644\nindex 0000000..43372ed\n--- /dev/null\n+++ b/new name.txt\t\n@@ -0,0 +1 @@\n+rename me\n",
+          "kind": "staged",
+          "limit_bytes": 262144,
+          "lines": 7,
+          "path": "new name.txt",
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "diff/deleted",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"gone.txt\",\"kind\":\"staged\"}",
+      "reply": {
+        "body": {
+          "bytes": 129,
+          "content": "diff --git a/gone.txt b/gone.txt\ndeleted file mode 100644\nindex b023018..0000000\n--- a/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\n",
+          "kind": "staged",
+          "limit_bytes": 262144,
+          "lines": 7,
+          "path": "gone.txt",
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "diff/binary",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"binary.bin\",\"kind\":\"unstaged\"}",
+      "reply": {
+        "body": {
+          "bytes": 117,
+          "content": "diff --git a/binary.bin b/binary.bin\nindex a1239a7..3b91a64 100644\nBinary files a/binary.bin and b/binary.bin differ\n",
+          "kind": "unstaged",
+          "limit_bytes": 262144,
+          "lines": 3,
+          "path": "binary.bin",
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "diff/untracked-nested",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"notes/todo.txt\",\"kind\":\"untracked\"}",
+      "reply": {
+        "body": {
+          "bytes": 144,
+          "content": "diff --git a/notes/todo.txt b/notes/todo.txt\nnew file mode 100644\nindex 0000000..258cd57\n--- /dev/null\n+++ b/notes/todo.txt\n@@ -0,0 +1 @@\n+todo\n",
+          "kind": "untracked",
+          "limit_bytes": 262144,
+          "lines": 7,
+          "path": "notes/todo.txt",
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "diff/untracked-space",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"new file.txt\",\"kind\":\"untracked\"}",
+      "reply": {
+        "body": {
+          "bytes": 149,
+          "content": "diff --git a/new file.txt b/new file.txt\nnew file mode 100644\nindex 0000000..f946fff\n--- /dev/null\n+++ b/new file.txt\t\n@@ -0,0 +1 @@\n+fresh <b>&</b>\n",
+          "kind": "untracked",
+          "limit_bytes": 262144,
+          "lines": 7,
+          "path": "new file.txt",
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "diff/untracked-truncated",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"large.txt\",\"kind\":\"untracked\"}",
+      "reply": {
+        "body": {
+          "bytes": 262144,
+          "content": "$SHA256 67ff22bbd40b66a8e51a464ca6cbd1416d17c13d889767b310c72f2bffb05da7, 262144 bytes, ends \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"",
+          "kind": "untracked",
+          "limit_bytes": 262144,
+          "lines": 7,
+          "path": "large.txt",
+          "truncated": true
+        }
+      }
+    },
+    {
+      "name": "diff/truncated-utf8-1",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"euro-1.txt\",\"kind\":\"untracked\"}",
+      "reply": {
+        "body": {
+          "bytes": 262144,
+          "content": "$SHA256 18a39e60576c44a388c826e6820af9fe0821324d40072fa424c950e4e522355f, 262145 bytes, ends \"€€€€€€€€€€€€€€€�\"",
+          "kind": "untracked",
+          "limit_bytes": 262144,
+          "lines": 7,
+          "path": "euro-1.txt",
+          "truncated": true
+        }
+      }
+    },
+    {
+      "name": "diff/truncated-utf8-2",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"euro-2.txt\",\"kind\":\"untracked\"}",
+      "reply": {
+        "body": {
+          "bytes": 262144,
+          "content": "$SHA256 4d92173692691ff3b05e0be1b979e0b12ed7154f3c1aa639a8319f266b4f8241, 262146 bytes, ends \"€€€€€€€€€€€€€€€�\"",
+          "kind": "untracked",
+          "limit_bytes": 262144,
+          "lines": 7,
+          "path": "euro-2.txt",
+          "truncated": true
+        }
+      }
+    },
+    {
+      "name": "diff/truncated-utf8-3",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"euro-3.txt\",\"kind\":\"untracked\"}",
+      "reply": {
+        "body": {
+          "bytes": 262144,
+          "content": "$SHA256 ae5d3b945824737c563d0179bd0caff3d8c3a23c5df1ae8f4b2114614e3618cf, 262144 bytes, ends \"€€€€€€€€€€€€€€€€\"",
+          "kind": "untracked",
+          "limit_bytes": 262144,
+          "lines": 7,
+          "path": "euro-3.txt",
+          "truncated": true
+        }
+      }
+    },
+    {
+      "name": "diff/invalid-utf8",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"latin1.txt\",\"kind\":\"untracked\"}",
+      "reply": {
+        "body": {
+          "bytes": 138,
+          "content": "diff --git a/latin1.txt b/latin1.txt\nnew file mode 100644\nindex 0000000..7721c5c\n--- /dev/null\n+++ b/latin1.txt\n@@ -0,0 +1 @@\n+caf� cr�me\n",
+          "kind": "untracked",
+          "limit_bytes": 262144,
+          "lines": 7,
+          "path": "latin1.txt",
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "diff/literal-pathspec",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"literal*.txt\",\"kind\":\"unstaged\"}",
+      "reply": {
+        "body": {
+          "bytes": 140,
+          "content": "diff --git a/literal*.txt b/literal*.txt\nindex e79c5e8..33fc42b 100644\n--- a/literal*.txt\n+++ b/literal*.txt\n@@ -1 +1 @@\n-initial\n+selected\n",
+          "kind": "unstaged",
+          "limit_bytes": 262144,
+          "lines": 7,
+          "path": "literal*.txt",
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "diff/all-on-main",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"README.md\",\"kind\":\"all\"}",
+      "reply": {
+        "body": {
+          "bytes": 130,
+          "content": "diff --git a/README.md b/README.md\nindex 814f4a4..4cb29ea 100644\n--- a/README.md\n+++ b/README.md\n@@ -1,2 +1,3 @@\n one\n two\n+three\n",
+          "kind": "all",
+          "limit_bytes": 262144,
+          "lines": 8,
+          "path": "README.md",
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "diff/all-untracked-not-in-scope",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"new file.txt\",\"kind\":\"all\"}",
+      "reply": {
+        "code": "not_found",
+        "message": "Git file is not in that scope"
+      }
+    },
+    {
+      "name": "diff/all-feature",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-feature\",\"path\":\"app.txt\",\"kind\":\"all\"}",
+      "reply": {
+        "body": {
+          "bytes": 109,
+          "content": "diff --git a/app.txt b/app.txt\nindex 8c1384d..c694117 100644\n--- a/app.txt\n+++ b/app.txt\n@@ -1 +1 @@\n-v2\n+v4\n",
+          "kind": "all",
+          "limit_bytes": 262144,
+          "lines": 7,
+          "path": "app.txt",
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "diff/all-feature-added",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-feature\",\"path\":\"feature.txt\",\"kind\":\"all\"}",
+      "reply": {
+        "body": {
+          "bytes": 138,
+          "content": "diff --git a/feature.txt b/feature.txt\nnew file mode 100644\nindex 0000000..a7453f0\n--- /dev/null\n+++ b/feature.txt\n@@ -0,0 +1 @@\n+feature\n",
+          "kind": "all",
+          "limit_bytes": 262144,
+          "lines": 7,
+          "path": "feature.txt",
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "diff/commit",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-feature\",\"path\":\"feature.txt\",\"kind\":\"commit\",\"commit\":\"$F1\"}",
+      "reply": {
+        "body": {
+          "bytes": 138,
+          "content": "diff --git a/feature.txt b/feature.txt\nnew file mode 100644\nindex 0000000..a7453f0\n--- /dev/null\n+++ b/feature.txt\n@@ -0,0 +1 @@\n+feature\n",
+          "kind": "commit",
+          "limit_bytes": 262144,
+          "lines": 7,
+          "path": "feature.txt",
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "diff/commit-trimmed",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-feature\",\"path\":\"feature.txt\",\"kind\":\"commit\",\"commit\":\" $F1 \"}",
+      "reply": {
+        "body": {
+          "bytes": 138,
+          "content": "diff --git a/feature.txt b/feature.txt\nnew file mode 100644\nindex 0000000..a7453f0\n--- /dev/null\n+++ b/feature.txt\n@@ -0,0 +1 @@\n+feature\n",
+          "kind": "commit",
+          "limit_bytes": 262144,
+          "lines": 7,
+          "path": "feature.txt",
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "diff/commit-not-in-scope",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-feature\",\"path\":\"app.txt\",\"kind\":\"commit\",\"commit\":\"$F1\"}",
+      "reply": {
+        "code": "not_found",
+        "message": "Git file is not in that scope"
+      }
+    },
+    {
+      "name": "diff/no-longer-staged",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"README.md\",\"kind\":\"staged\"}",
+      "reply": {
+        "code": "not_found",
+        "message": "Git file is no longer in that category"
+      }
+    },
+    {
+      "name": "diff/no-longer-untracked",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"README.md\",\"kind\":\"untracked\"}",
+      "reply": {
+        "code": "not_found",
+        "message": "Git file is no longer in that category"
+      }
+    },
+    {
+      "name": "diff/interior-dot-path",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"src/./lib.rs\",\"kind\":\"staged\"}",
+      "reply": {
+        "code": "not_found",
+        "message": "Git file is no longer in that category"
+      }
+    },
+    {
+      "name": "diff/invalid-parent-path",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"../outside\",\"kind\":\"staged\"}",
+      "reply": {
+        "code": "invalid",
+        "message": "Invalid Git file path"
+      }
+    },
+    {
+      "name": "diff/invalid-absolute-path",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"/etc/hosts\",\"kind\":\"staged\"}",
+      "reply": {
+        "code": "invalid",
+        "message": "Invalid Git file path"
+      }
+    },
+    {
+      "name": "diff/invalid-leading-dot-path",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"./README.md\",\"kind\":\"staged\"}",
+      "reply": {
+        "code": "invalid",
+        "message": "Invalid Git file path"
+      }
+    },
+    {
+      "name": "diff/invalid-kind",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-changes\",\"path\":\"README.md\",\"kind\":\"worktree\"}",
+      "reply": {
+        "code": "invalid",
+        "message": "Invalid Git file category"
+      }
+    },
+    {
+      "name": "diff/commit-without-hash",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-feature\",\"path\":\"feature.txt\",\"kind\":\"commit\"}",
+      "reply": {
+        "code": "invalid",
+        "message": "Invalid commit hash"
+      }
+    },
+    {
+      "name": "diff/commit-invalid-hash",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-feature\",\"path\":\"feature.txt\",\"kind\":\"commit\",\"commit\":\"HEAD~1\"}",
+      "reply": {
+        "code": "invalid",
+        "message": "Invalid commit hash"
+      }
+    },
+    {
+      "name": "diff/invalid-kind-without-repository",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-plain\",\"path\":\"README.md\",\"kind\":\"worktree\"}",
+      "reply": {
+        "code": "not_found",
+        "message": "Git repository not found"
+      }
+    },
+    {
+      "name": "diff/invalid-path-without-repository",
+      "fallback": "plain",
+      "view": "{\"op\":\"git_diff\",\"thread_id\":\"t-plain\",\"path\":\"../outside\",\"kind\":\"staged\"}",
+      "reply": {
+        "code": "invalid",
+        "message": "Invalid Git file path"
+      }
+    }
+  ]
+}

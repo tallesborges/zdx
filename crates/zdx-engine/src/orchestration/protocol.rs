@@ -138,12 +138,15 @@ pub const CAPABILITY_ARTIFACT_VIEWS: &str = "artifact_views";
 pub const CAPABILITY_MONITOR_VIEWS: &str = "monitor_views";
 /// Git views: status, scope, diff.
 pub const CAPABILITY_GIT_VIEWS: &str = "git_views";
+/// The `thread_root` view: a thread's stored root and the views root.
+pub const CAPABILITY_THREAD_ROOT: &str = "thread_root";
 /// Every view capability, listed together when a provider is installed.
 pub const VIEW_CAPABILITIES: &[&str] = &[
     CAPABILITY_THREAD_VIEWS,
     CAPABILITY_ARTIFACT_VIEWS,
     CAPABILITY_MONITOR_VIEWS,
     CAPABILITY_GIT_VIEWS,
+    CAPABILITY_THREAD_ROOT,
 ];
 
 /// One message for a thread the service runs: a persistent-profile thread,

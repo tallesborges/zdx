@@ -119,6 +119,8 @@ type parity struct {
 	picture  string
 	pictureB []byte
 	notes    string
+	// report is the service's status at start: its capabilities.
+	report *engine.StatusReport
 
 	mu     sync.Mutex
 	models []string // model request bodies, in order
@@ -291,6 +293,7 @@ func startParityWith(t *testing.T, opts parityOptions) *parity {
 	p.sockPath = socket
 	p.eng = engine.NewClient(socket)
 	report := p.waitReady(exited, &exitErr)
+	p.report = report
 	t.Logf("service protocol %d, capabilities %v", report.Version(), report.Capabilities)
 	if report.Version() < engine.ProtocolCapabilities {
 		sandbox.RustFeatureMissing(t, fmt.Sprintf("binary %s speaks protocol %d, these checks need >= %d", bin, report.Version(), engine.ProtocolCapabilities))
@@ -599,8 +602,6 @@ func TestRealRouteParity(t *testing.T) {
 			{"/api/threads/" + parityThread + "/artifacts/file?path=%2Fetc%2Fhosts", engine.View{Op: engine.ViewArtifactResolve, ThreadID: &thread, Path: str("/etc/hosts")}},
 			{"/api/threads/" + parityThread + "/artifacts/version?path=nope.txt", engine.View{Op: engine.ViewArtifactVersion, ThreadID: &thread, Path: str("nope.txt")}},
 			{"/api/threads/" + parityThread + "/artifacts/image?path=" + url.QueryEscape(p.page), engine.View{Op: engine.ViewArtifactCanonical, ThreadID: &thread, Path: str(p.page)}},
-			{"/api/git/scope?thread_id=" + parityThread + "&scope=zzz", engine.View{Op: engine.ViewGitScope, ThreadID: &thread, Scope: str("zzz")}},
-			{"/api/git/diff?thread_id=" + parityThread + "&kind=staged&path=new.txt", engine.View{Op: engine.ViewGitDiff, ThreadID: &thread, Kind: str("staged"), Path: str("new.txt")}},
 		}
 		status := map[string]int{"invalid": 400, "not_found": 404, "artifact_not_found": 404, "unsupported_artifact": 422}
 		for _, c := range cases {
@@ -767,28 +768,80 @@ func TestRealRouteParity(t *testing.T) {
 		sameJSON(t, "workspaces", ws.body, wantWS.Body)
 	})
 
+	// The Git routes are Go (the shared gitview package) on Rust's
+	// thread_root view; the reference is the Rust Git views they replace,
+	// read from the same service on the same repository.
 	t.Run("git", func(t *testing.T) {
+		if !p.report.Has(engine.CapThreadRoot) {
+			sandbox.RustFeatureMissing(t, fmt.Sprintf("binary %s lacks %s (it reports %v)", p.bin, engine.CapThreadRoot, p.report.Capabilities))
+		}
+		compare := func(path string, view engine.View) {
+			t.Helper()
+			got := p.get(path)
+			want, err := p.socket(view)
+			var se *engine.ServiceError
+			switch {
+			case err == nil:
+				if got.status != http.StatusOK {
+					t.Errorf("%s: Rust answered, Go %d %q", path, got.status, got.body)
+					return
+				}
+				sameJSON(t, path, got.body, want.Body)
+			case errors.As(err, &se):
+				status := map[string]int{"invalid": 400, "not_found": 404, "internal": 500}[se.Code]
+				if got.status != status || string(got.body) != se.Message {
+					t.Errorf("%s: go %d %q, Rust %s %q", path, got.status, got.body, se.Code, se.Message)
+				}
+			default:
+				t.Fatalf("%s: %v", path, err)
+			}
+		}
+		active, missing, alias := "active", "telegram--100-topic-404", "telegram--100-topic-6"
 		for _, c := range []struct {
 			path string
 			view engine.View
 		}{
+			{"/api/git", engine.View{Op: engine.ViewGitStatus}},
+			{"/api/git?thread_id=active", engine.View{Op: engine.ViewGitStatus, ThreadID: &active}},
 			{"/api/git?thread_id=" + parityThread, engine.View{Op: engine.ViewGitStatus, ThreadID: &thread}},
+			{"/api/git?thread_id=" + missing, engine.View{Op: engine.ViewGitStatus, ThreadID: &missing}},
 			{"/api/git/scope?thread_id=" + parityThread + "&scope=all", engine.View{Op: engine.ViewGitScope, ThreadID: &thread, Scope: str("all")}},
+			{"/api/git/scope?thread_id=" + parityThread + "&scope=zzz", engine.View{Op: engine.ViewGitScope, ThreadID: &thread, Scope: str("zzz")}},
 			{"/api/git/diff?thread_id=" + parityThread + "&kind=unstaged&path=README.md", engine.View{Op: engine.ViewGitDiff, ThreadID: &thread, Kind: str("unstaged"), Path: str("README.md")}},
 			{"/api/git/diff?thread_id=" + parityThread + "&kind=untracked&path=new.txt", engine.View{Op: engine.ViewGitDiff, ThreadID: &thread, Kind: str("untracked"), Path: str("new.txt")}},
+			{"/api/git/diff?thread_id=" + parityThread + "&kind=all&path=README.md", engine.View{Op: engine.ViewGitDiff, ThreadID: &thread, Kind: str("all"), Path: str("README.md")}},
+			{"/api/git/diff?thread_id=" + parityThread + "&kind=staged&path=new.txt", engine.View{Op: engine.ViewGitDiff, ThreadID: &thread, Kind: str("staged"), Path: str("new.txt")}},
+			{"/api/git/diff?thread_id=" + parityThread + "&kind=worktree&path=new.txt", engine.View{Op: engine.ViewGitDiff, ThreadID: &thread, Kind: str("worktree"), Path: str("new.txt")}},
+			{"/api/git/diff?thread_id=" + parityThread + "&kind=staged&path=..%2Fx", engine.View{Op: engine.ViewGitDiff, ThreadID: &thread, Kind: str("staged"), Path: str("../x")}},
 		} {
-			got := p.get(c.path)
-			want, err := p.socket(c.view)
-			if err != nil || got.status != http.StatusOK {
-				t.Fatalf("%s: %d %s / %v", c.path, got.status, got.body, err)
-			}
-			sameJSON(t, c.path, got.body, want.Body)
+			compare(c.path, c.view)
 		}
 		status := p.get("/api/git?thread_id=" + parityThread)
 		for _, needle := range []string{`"source":"thread"`, `"branch":"main"`, "README.md", "new.txt"} {
 			if !bytes.Contains(status.body, []byte(needle)) {
 				t.Fatalf("git status lacks %s: %s", needle, status.body)
 			}
+		}
+
+		// A mirror topic aliasing the thread: Rust resolves the alias, the
+		// repository is the thread's, and the reported thread is the topic.
+		meta := fmt.Sprintf(`{"type":"meta","schema_version":1,"alias_to":%q,"worker_topic":true,"ts":"2026-01-02T00:00:00Z"}`+"\n", parityThread)
+		if err := os.WriteFile(filepath.Join(p.home, "threads", alias+".jsonl"), []byte(meta), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		compare("/api/git?thread_id="+alias, engine.View{Op: engine.ViewGitStatus, ThreadID: &alias})
+		if body := p.get("/api/git?thread_id=" + alias).body; !bytes.Contains(body, []byte(`"thread_id":"`+alias+`"`)) || !bytes.Contains(body, []byte(`"source":"thread"`)) {
+			t.Fatalf("alias status: %s", body)
+		}
+
+		// thread_root has a `zdx views` twin with the socket's body.
+		root, err := p.socket(engine.View{Op: engine.ViewThreadRoot, ThreadID: &alias})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "thread_root (CLI)", root.Body, p.cli(`{"op":"thread_root","thread_id":"`+alias+`"}`))
+		if !bytes.Contains(root.Body, []byte(`"effective_id":"`+parityThread+`"`)) {
+			t.Fatalf("thread_root %s", root.Body)
 		}
 	})
 }

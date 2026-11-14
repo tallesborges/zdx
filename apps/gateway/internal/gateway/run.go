@@ -116,7 +116,7 @@ var ServiceCapabilities = append(slices.Clone(TurnCapabilities),
 	engine.CapComposeUserText, engine.CapPrepareImage, engine.CapTranscribeAudio, engine.CapPreparePhoto,
 	engine.CapTouchedWorkers, engine.CapWorkerMirrorRoute, engine.CapFeedbackSubmit, engine.CapGenerate,
 	engine.CapBtwSeed, engine.CapTopicStart, engine.CapCatalog, engine.CapSetChatModel,
-	engine.CapThreadViews, engine.CapArtifactViews, engine.CapMonitorViews, engine.CapGitViews,
+	engine.CapThreadViews, engine.CapArtifactViews, engine.CapMonitorViews, engine.CapThreadRoot,
 )
 
 // BotComponents builds the bot from the shared handles.

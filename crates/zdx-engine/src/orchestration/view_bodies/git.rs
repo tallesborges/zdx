@@ -10,8 +10,8 @@ use serde::Serialize;
 use tokio::io::AsyncReadExt as _;
 use tokio::process::Command;
 
-use super::{EngineViews, internal, invalid, refused, valid_thread_id};
-use crate::core::{thread_index, thread_persistence};
+use super::thread_root::select_thread_root;
+use super::{EngineViews, internal, invalid, refused};
 use crate::orchestration::protocol::ErrorCode;
 use crate::orchestration::views::ViewError;
 
@@ -144,11 +144,6 @@ pub struct GitDiffResponse {
     lines: usize,
     truncated: bool,
     limit_bytes: usize,
-}
-
-struct GitSelection {
-    thread_id: Option<String>,
-    thread_root: Option<PathBuf>,
 }
 
 struct ResolvedGitRepository {
@@ -533,49 +528,13 @@ async fn resolve_git_repository(
     views_root: &Path,
     thread_id: Option<String>,
 ) -> Result<ResolvedGitRepository, ViewError> {
-    let requested_id = thread_id
-        .filter(|id| !id.trim().is_empty())
-        .unwrap_or_else(|| "active".to_string());
-    if requested_id != "active" && !valid_thread_id(&requested_id) {
-        return Err(invalid("Invalid thread ID"));
-    }
-
     let bot_root = views_root.to_path_buf();
-    let selection = tokio::task::spawn_blocking(move || {
-        let thread_id = if requested_id == "active" {
-            thread_index::latest_thread_id_with_prefix("telegram-")
-                .ok()
-                .flatten()
-        } else {
-            Some(requested_id)
-        };
-        let effective_id = thread_id.as_deref().map(|id| {
-            thread_persistence::read_thread_alias(id)
-                .ok()
-                .flatten()
-                .filter(|alias| valid_thread_id(alias))
-                .unwrap_or_else(|| id.to_string())
-        });
-        let thread_root = effective_id.as_deref().and_then(|id| {
-            thread_persistence::read_thread_root_path(id)
-                .ok()
-                .flatten()
-                .map(PathBuf::from)
-        });
-        GitSelection {
-            thread_id,
-            thread_root,
-        }
-    })
-    .await
-    .map_err(|error| {
-        tracing::warn!(%error, "Mini App Git thread resolution task failed");
-        internal("Git repository resolution failed")
-    })?;
+    let selection =
+        select_thread_root(views_root, thread_id, "Git repository resolution failed").await?;
 
     let mut candidates = Vec::with_capacity(2);
-    if let Some(root) = selection.thread_root {
-        candidates.push(("thread", root));
+    if let Some(root) = selection.root_path {
+        candidates.push(("thread", PathBuf::from(root)));
     }
     if candidates
         .first()

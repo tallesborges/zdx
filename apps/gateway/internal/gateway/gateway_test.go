@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -31,6 +32,7 @@ import (
 	"github.com/tallesborges/zdx/apps/gateway/internal/engine"
 	"github.com/tallesborges/zdx/apps/gateway/internal/miniapp"
 	"github.com/tallesborges/zdx/apps/gateway/internal/telegram"
+	"github.com/tallesborges/zdx/apps/shared/gitview"
 	"github.com/tallesborges/zdx/apps/shared/quota"
 	"github.com/tallesborges/zdx/apps/shared/version"
 )
@@ -252,8 +254,8 @@ func TestMiniAppEngineMapsCapabilitiesAndErrors(t *testing.T) {
 		engine.CapMonitorViews + "/agents":   func() error { _, err := e.ActiveAgents(ctx); return err },
 		engine.CapMonitorViews + "/usage":    func() error { _, err := e.UsageReport(ctx, 7); return err },
 		engine.CapMonitorViews + "/spaces":   func() error { _, err := e.Workspaces(ctx); return err },
-		engine.CapGitViews + "/git":          func() error { _, err := e.GitStatus(ctx, ""); return err },
-		engine.CapGitViews + "/diff":         func() error { _, err := e.GitDiff(ctx, miniapp.GitDiff{Path: "a", Kind: "k"}); return err },
+		engine.CapThreadRoot + "/git":        func() error { _, err := e.GitStatus(ctx, ""); return err },
+		engine.CapThreadRoot + "/diff":       func() error { _, err := e.GitDiff(ctx, miniapp.GitDiff{Path: "a", Kind: "k"}); return err },
 	}
 	for name, call := range gated {
 		capability, _, _ := strings.Cut(name, "/")
@@ -598,15 +600,15 @@ func TestFeedbackFailuresAreClassifiedByStage(t *testing.T) {
 // Views go out in the views.rs wire shape and their bodies pass through
 // unchanged; refusals keep Rust's code and text.
 func TestMiniAppEngineViews(t *testing.T) {
-	f := &fakeService{caps: []string{engine.CapThreadViews, engine.CapArtifactViews, engine.CapMonitorViews, engine.CapGitViews}}
+	f := &fakeService{caps: []string{engine.CapThreadViews, engine.CapArtifactViews, engine.CapMonitorViews}}
 	f.viewReply = func(op string) map[string]any {
 		switch op {
 		case engine.ViewThreadView:
 			return map[string]any{"reply": "view", "body": map[string]any{"id": "t", "delivering": false}, "source_id": "src"}
 		case engine.ViewArtifactResolve:
 			return map[string]any{"reply": "view", "body": map[string]any{"path": "/abs/a.html", "mime": "text/html", "filename": "a.html"}}
-		case engine.ViewGitDiff:
-			return map[string]any{"reply": "error", "code": "not_found", "message": "no such file"}
+		case engine.ViewUsageReport:
+			return map[string]any{"reply": "error", "code": "invalid", "message": "days must be between 1 and 365"}
 		case engine.ViewArtifactCanonical:
 			return map[string]any{"reply": "view", "body": map[string]any{
 				"mime": "image/png", "data": "iVBORw0K", "source_sha256": "s", "sha256": "c",
@@ -640,19 +642,12 @@ func TestMiniAppEngineViews(t *testing.T) {
 	if body, err := e.ThreadList(ctx, "workers"); err != nil || string(body) != `{"op":"threads_list"}` {
 		t.Fatalf("threads: %s %v", body, err)
 	}
-	for _, call := range []func() (json.RawMessage, error){
-		func() (json.RawMessage, error) { return e.UsageReport(ctx, 30) },
-		func() (json.RawMessage, error) { return e.GitStatus(ctx, "") },
-		func() (json.RawMessage, error) { return e.GitScope(ctx, "t", "staged") },
-		func() (json.RawMessage, error) { return e.MonitorSnapshot(ctx) },
-	} {
-		if _, err := call(); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := e.MonitorSnapshot(ctx); err != nil {
+		t.Fatal(err)
 	}
-	_, err = e.GitDiff(ctx, miniapp.GitDiff{ThreadID: "t", Path: "a.go", Kind: "worktree"})
+	_, err = e.UsageReport(ctx, 30)
 	var ee *miniapp.EngineError
-	if !errors.As(err, &ee) || ee.Code != "not_found" || ee.Message != "no such file" {
+	if !errors.As(err, &ee) || ee.Code != "invalid" || ee.Message != "days must be between 1 and 365" {
 		t.Fatalf("want the Rust refusal, got %v", err)
 	}
 	f.mu.Lock()
@@ -663,17 +658,115 @@ func TestMiniAppEngineViews(t *testing.T) {
 		`{"op":"artifact_canonical","thread_id":"t","path":"a.png"}`,
 		`{"op":"artifact_version","thread_id":"t","path":"a.png"}`,
 		`{"op":"threads_list","kind":"workers"}`,
-		`{"op":"usage_report","days":30}`,
-		`{"op":"git_status"}`,
-		`{"op":"git_scope","thread_id":"t","scope":"staged"}`,
 		`{"op":"monitor_snapshot"}`,
-		`{"op":"git_diff","thread_id":"t","kind":"worktree","path":"a.go"}`,
+		`{"op":"usage_report","days":30}`,
 	}
 	if strings.Join(f.views, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("requests:\n%s", strings.Join(f.views, "\n"))
 	}
 }
 func ptr[T any](v T) *T { return &v }
+
+// Git views run in process with the shared gitview package. Rust's
+// thread_root view names the thread and its stored root, and is the only
+// request sent; its refusals keep their code and text, and gitview's
+// refusals come back as the EngineError their route answers with.
+func TestMiniAppEngineGit(t *testing.T) {
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
+			"GIT_AUTHOR_NAME=A", "GIT_AUTHOR_EMAIL=a@example.invalid", "GIT_COMMITTER_NAME=C", "GIT_COMMITTER_EMAIL=c@example.invalid")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repo, "a.go"), []byte("package a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "a.go")
+	git("commit", "-q", "-m", "first")
+	if err := os.WriteFile(filepath.Join(repo, "a.go"), []byte("package a\n\nvar B = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeService{caps: []string{engine.CapThreadRoot}}
+	reply := map[string]any{"reply": "view", "body": map[string]any{
+		"thread_id": "t", "effective_id": "w", "root_path": repo, "fallback_root": t.TempDir(),
+	}}
+	f.viewReply = func(string) map[string]any { return reply }
+	startService(t, f)
+	e := &MiniAppEngine{Client: engine.NewClient(f.socket)}
+	ctx := context.Background()
+
+	body, err := e.GitStatus(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status gitview.StatusResponse
+	if err := json.Unmarshal(body, &status); err != nil || status.Repository.Root != repo || status.Repository.Source != "thread" ||
+		*status.Repository.ThreadID != "t" || len(status.Files.Unstaged) != 1 || len(status.Commits) != 1 {
+		t.Fatalf("status %s %v", body, err)
+	}
+	if body, err := e.GitScope(ctx, "t", "all"); err != nil || !strings.Contains(string(body), `"files":[{"path":"a.go","status":"M"}]`) {
+		t.Fatalf("scope %s %v", body, err)
+	}
+	body, err = e.GitDiff(ctx, miniapp.GitDiff{ThreadID: "t", Path: "a.go", Kind: "unstaged"})
+	if err != nil || !strings.Contains(string(body), `+var B = 1`) {
+		t.Fatalf("diff %s %v", body, err)
+	}
+	refused := func(err error, code, message string) {
+		t.Helper()
+		var ee *miniapp.EngineError
+		if !errors.As(err, &ee) || ee.Code != code || ee.Message != message {
+			t.Fatalf("want %s %q, got %v", code, message, err)
+		}
+	}
+	_, err = e.GitDiff(ctx, miniapp.GitDiff{ThreadID: "t", Path: "a.go", Kind: "staged"})
+	refused(err, "not_found", "Git file is no longer in that category")
+	_, err = e.GitDiff(ctx, miniapp.GitDiff{ThreadID: "t", Path: "../a.go", Kind: "staged"})
+	refused(err, "invalid", "Invalid Git file path")
+	_, err = e.GitScope(ctx, "t", "HEAD~1")
+	refused(err, "invalid", "Invalid Git scope")
+
+	f.mu.Lock()
+	reply = map[string]any{"reply": "error", "code": "invalid", "message": "Invalid thread ID"}
+	f.mu.Unlock()
+	_, err = e.GitStatus(ctx, "x")
+	refused(err, "invalid", "Invalid thread ID")
+	f.mu.Lock()
+	reply = map[string]any{"reply": "error", "code": "internal", "message": "Thread root resolution failed"}
+	f.mu.Unlock()
+	_, err = e.GitStatus(ctx, "x")
+	refused(err, "internal", "Git repository resolution failed")
+	f.mu.Lock()
+	reply = map[string]any{"reply": "view", "body": map[string]any{"thread_id": nil, "effective_id": nil, "root_path": nil, "fallback_root": t.TempDir()}}
+	f.mu.Unlock()
+	_, err = e.GitStatus(ctx, "")
+	refused(err, "not_found", "Git repository not found")
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	want := []string{
+		`{"op":"thread_root"}`,
+		`{"op":"thread_root","thread_id":"t"}`,
+		`{"op":"thread_root","thread_id":"t"}`,
+		`{"op":"thread_root","thread_id":"t"}`,
+		`{"op":"thread_root","thread_id":"t"}`,
+		`{"op":"thread_root","thread_id":"x"}`,
+		`{"op":"thread_root","thread_id":"x"}`,
+		`{"op":"thread_root"}`,
+	}
+	if strings.Join(f.views, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("requests:\n%s", strings.Join(f.views, "\n"))
+	}
+}
 
 // Quotas are read in process with the shared quota package: nothing goes to
 // the socket, and a failure is an error (the Mini App cache then keeps its

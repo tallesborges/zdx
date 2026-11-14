@@ -62,6 +62,15 @@ pub enum ViewRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         days: Option<u32>,
     },
+    /// The thread a Git route means and the roots its repository is looked
+    /// for in: `{thread_id, effective_id, root_path, fallback_root}`
+    /// ([`super::view_bodies::ThreadRootResponse`]). `thread_id` absent or
+    /// blank means `active`. The Go gateway reads it to serve `/api/git*`
+    /// with `apps/shared/gitview`.
+    ThreadRoot {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread_id: Option<String>,
+    },
     /// `GET /api/git`.
     GitStatus {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -126,6 +135,7 @@ pub fn capability(request: &ViewRequest) -> &'static str {
         | ViewRequest::ActiveAgents
         | ViewRequest::Workspaces
         | ViewRequest::UsageReport { .. } => super::protocol::CAPABILITY_MONITOR_VIEWS,
+        ViewRequest::ThreadRoot { .. } => super::protocol::CAPABILITY_THREAD_ROOT,
         ViewRequest::GitStatus { .. }
         | ViewRequest::GitScope { .. }
         | ViewRequest::GitDiff { .. } => super::protocol::CAPABILITY_GIT_VIEWS,
@@ -222,6 +232,7 @@ async fn build(views: &EngineViews, request: ViewRequest) -> Result<ViewOutput, 
         ViewRequest::ActiveAgents => body(&views.active_agents().await?, None),
         ViewRequest::Workspaces => body(&views.workspaces().await?, None),
         ViewRequest::UsageReport { days } => body(&views.usage(days).await?, None),
+        ViewRequest::ThreadRoot { thread_id } => body(&views.thread_root(thread_id).await?, None),
         ViewRequest::GitStatus { thread_id } => body(&views.git_status(thread_id).await?, None),
         ViewRequest::GitScope { thread_id, scope } => {
             body(&views.git_scope(thread_id, &scope).await?, None)

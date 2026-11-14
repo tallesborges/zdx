@@ -18,15 +18,18 @@ import (
 	"github.com/tallesborges/zdx/apps/gateway/internal/engine"
 	"github.com/tallesborges/zdx/apps/gateway/internal/miniapp"
 	"github.com/tallesborges/zdx/apps/gateway/internal/telegram"
+	"github.com/tallesborges/zdx/apps/shared/gitview"
 	"github.com/tallesborges/zdx/apps/shared/quota"
 	"github.com/tallesborges/zdx/apps/shared/version"
 )
 
 // MiniAppEngine implements miniapp.Engine over the orchestrator socket.
-// Every read except quotas is a Rust view (views.rs) whose body is the
-// route's JSON, passed through unchanged. A view whose capability the
+// Every read except quotas and Git is a Rust view (views.rs) whose body is
+// the route's JSON, passed through unchanged. A view whose capability the
 // service lacks answers miniapp.ErrUnavailable (HTTP 503) without sending
-// it. Quotas are read in this process by the shared quota package.
+// it. Quotas are read in this process by the shared quota package. Git is
+// read in this process by the shared gitview package, after the Rust
+// thread_root view names the thread and its stored root.
 type MiniAppEngine struct {
 	Client *engine.Client
 	// Quota are the inputs of the in-process quota read: the ZDX home whose
@@ -210,16 +213,55 @@ func (e *MiniAppEngine) Workspaces(ctx context.Context) (json.RawMessage, error)
 	return e.body(ctx, engine.View{Op: engine.ViewWorkspaces})
 }
 
+// locate asks Rust which thread a Git request means and where its
+// repository is looked for (the thread_root view). An empty id is `active`.
+func (e *MiniAppEngine) locate(threadID string) gitview.Locate {
+	return func(ctx context.Context) (gitview.Selection, error) {
+		out, err := e.Client.View(ctx, engine.View{Op: engine.ViewThreadRoot, ThreadID: optional(threadID)})
+		if err != nil {
+			return gitview.Selection{}, err
+		}
+		var sel gitview.Selection
+		if err := json.Unmarshal(out.Body, &sel); err != nil {
+			return gitview.Selection{}, fmt.Errorf("decode thread_root body: %w", err)
+		}
+		return sel, nil
+	}
+}
+
 func (e *MiniAppEngine) GitStatus(ctx context.Context, threadID string) (json.RawMessage, error) {
-	return e.body(ctx, engine.View{Op: engine.ViewGitStatus, ThreadID: optional(threadID)})
+	return gitBody(gitview.Status(ctx, e.locate(threadID)))
 }
 
 func (e *MiniAppEngine) GitScope(ctx context.Context, threadID, scope string) (json.RawMessage, error) {
-	return e.body(ctx, engine.View{Op: engine.ViewGitScope, ThreadID: optional(threadID), Scope: &scope})
+	return gitBody(gitview.Scope(ctx, e.locate(threadID), scope))
 }
 
 func (e *MiniAppEngine) GitDiff(ctx context.Context, req miniapp.GitDiff) (json.RawMessage, error) {
-	return e.body(ctx, engine.View{Op: engine.ViewGitDiff, ThreadID: optional(req.ThreadID), Path: &req.Path, Kind: &req.Kind, Commit: optional(req.Commit)})
+	return gitBody(gitview.Diff(ctx, e.locate(req.ThreadID), gitview.DiffRequest{Path: req.Path, Kind: req.Kind, Commit: optional(req.Commit)}))
+}
+
+// gitBody encodes a Git view, or maps its refusal: a gitview.Error becomes
+// the *miniapp.EngineError its route answers with (the cause stays in the
+// error for the log, never in the answer); a thread_root failure maps like
+// any view's.
+func gitBody[T any](body *T, err error) (json.RawMessage, error) {
+	if err != nil {
+		var refusal *gitview.Error
+		if errors.As(err, &refusal) {
+			answer := &miniapp.EngineError{Code: refusal.Code, Message: refusal.Message}
+			if refusal.Err != nil {
+				return nil, fmt.Errorf("%w: %w", answer, refusal.Err)
+			}
+			return nil, answer
+		}
+		return nil, mapError(err)
+	}
+	encoded, err := gitview.Encode(body)
+	if err != nil {
+		return nil, fmt.Errorf("encode Git view: %w", err)
+	}
+	return json.RawMessage(encoded), nil
 }
 
 // FeedbackSubmit sends the submission text unchanged and maps the reply.

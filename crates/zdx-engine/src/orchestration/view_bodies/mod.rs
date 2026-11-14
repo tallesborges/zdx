@@ -9,6 +9,7 @@
 mod artifacts;
 mod git;
 mod monitor;
+mod thread_root;
 mod threads;
 
 use std::collections::HashMap;
@@ -24,6 +25,7 @@ pub use self::git::{GitDiffResponse, GitResponse, GitScopeResponse};
 pub use self::monitor::{
     MAX_USAGE_DAYS, MonitorAgent, MonitorResponse, UsageResponse, WorkspacesResponse,
 };
+pub use self::thread_root::ThreadRootResponse;
 pub use self::threads::{
     ThreadActivity, ThreadListItem, ThreadListKind, ThreadListResponse, ThreadResponse, WorkerItem,
     WorkerRollup, WorkersResponse,
@@ -178,7 +180,8 @@ pub fn resolve_thread_param(id: String) -> String {
 /// (`?startapp={thread_id}` in the pinned header), and a worker mirror topic is
 /// an alias whose own thread file carries neither lineage nor workers. Without
 /// this hop, opening a worker from its mirror looks like a thread with no
-/// orchestrator and no workers. The Git view resolves the same way.
+/// orchestrator and no workers. `thread_root` (and so the Git views)
+/// resolves the same way.
 #[must_use]
 pub fn resolve_alias_id(id: &str) -> String {
     thread_persistence::read_thread_alias(id)

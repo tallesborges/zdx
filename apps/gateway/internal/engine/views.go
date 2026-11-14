@@ -23,6 +23,7 @@ const (
 	ViewGitStatus         = protocol.ViewGitStatus
 	ViewGitScope          = protocol.ViewGitScope
 	ViewGitDiff           = protocol.ViewGitDiff
+	ViewThreadRoot        = protocol.ViewThreadRoot
 )
 
 // ViewCapability is the capability a view op needs, or "" for an unknown op.

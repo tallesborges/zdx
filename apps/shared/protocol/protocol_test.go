@@ -45,7 +45,7 @@ func TestViewCapabilityAndBudget(t *testing.T) {
 	cases := map[string]string{
 		ViewThreadsList: CapThreadViews, ViewThreadWorkers: CapThreadViews,
 		ViewArtifactCanonical: CapArtifactViews, ViewMonitorSnapshot: CapMonitorViews,
-		ViewUsageReport: CapMonitorViews, ViewGitDiff: CapGitViews, "nope": "",
+		ViewUsageReport: CapMonitorViews, ViewGitDiff: CapGitViews, ViewThreadRoot: CapThreadRoot, "nope": "",
 		// Retired: quotas are read with the quota package, not a view.
 		"subscription_quotas": "",
 	}

@@ -217,7 +217,8 @@ func gitThreadID(w http.ResponseWriter, query queryValues) (string, bool) {
 }
 
 // gitFailure answers a failed Git view. The engine owns Git inspection,
-// its input checks and its texts.
+// its input checks and its texts (the gateway's engine runs the shared
+// gitview package on Rust's thread_root view).
 func (s *server) gitFailure(w http.ResponseWriter, err error) {
 	s.viewFailure(w, err, "Git views", "Git state unavailable")
 }

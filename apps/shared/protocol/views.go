@@ -23,6 +23,7 @@ const (
 	ViewGitStatus         = "git_status"
 	ViewGitScope          = "git_scope"
 	ViewGitDiff           = "git_diff"
+	ViewThreadRoot        = "thread_root"
 )
 
 // viewCapability is views.rs capability(): the capability each view needs.
@@ -35,6 +36,7 @@ var viewCapability = map[string]string{
 	ViewWorkspaces:  CapMonitorViews,
 	ViewUsageReport: CapMonitorViews,
 	ViewGitStatus:   CapGitViews, ViewGitScope: CapGitViews, ViewGitDiff: CapGitViews,
+	ViewThreadRoot: CapThreadRoot,
 }
 
 // ViewCapability is the capability a view op needs, or "" for an unknown op.

@@ -171,6 +171,152 @@ fn test_orchestrator_send_without_service_names_the_fix() {
         .stderr(predicates::str::contains("zdx service start orchestrator"));
 }
 
+/// `thread_root` names the thread a Git route means and that thread's stored
+/// root: blank or `active` is the most recent Telegram thread, an alias
+/// resolves one hop, and a thread without a file has no root. `zdx views`
+/// answers it without a service.
+#[test]
+fn test_thread_root_view_resolves_active_alias_and_stored_root() {
+    let zdx_home = TempDir::new().unwrap();
+    let root = TempDir::new().unwrap();
+    let worker_root = TempDir::new().unwrap();
+    let topic_root = TempDir::new().unwrap();
+    let threads = zdx_home.path().join("threads");
+    fs::create_dir_all(&threads).unwrap();
+    let write_meta = |id: &str, fields: serde_json::Value, age: Duration| {
+        let mut meta =
+            serde_json::json!({"type": "meta", "schema_version": 1, "ts": "2026-01-02T00:00:00Z"});
+        meta.as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let path = threads.join(format!("{id}.jsonl"));
+        fs::write(&path, format!("{meta}\n")).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - age)
+            .unwrap();
+    };
+    write_meta(
+        "worker-1",
+        serde_json::json!({"root_path": worker_root.path()}),
+        Duration::from_hours(2),
+    );
+    write_meta(
+        "telegram-1-topic-1",
+        serde_json::json!({"root_path": topic_root.path()}),
+        Duration::from_hours(1),
+    );
+    write_meta(
+        "telegram-1-topic-2",
+        serde_json::json!({"alias_to": "worker-1", "worker_topic": true}),
+        Duration::ZERO,
+    );
+
+    let view = |home: &TempDir, request: serde_json::Value| -> serde_json::Value {
+        let output = crate::fixtures::zdx_cmd()
+            .env("ZDX_HOME", home.path())
+            .args(["--root", root.path().to_str().unwrap()])
+            .args(["views", "--file", "-"])
+            .write_stdin(request.to_string())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let reply: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(reply["reply"], "view", "{reply}");
+        let body = reply["body"].clone();
+        assert_eq!(
+            body["fallback_root"]
+                .as_str()
+                .and_then(|path| std::path::Path::new(path).canonicalize().ok()),
+            Some(root.path().canonicalize().unwrap()),
+            "{body}"
+        );
+        body
+    };
+    let path = |dir: &TempDir| serde_json::json!(dir.path().display().to_string());
+
+    for request in [
+        serde_json::json!({"op": "thread_root"}),
+        serde_json::json!({"op": "thread_root", "thread_id": "active"}),
+        serde_json::json!({"op": "thread_root", "thread_id": "  "}),
+    ] {
+        let body = view(&zdx_home, request);
+        assert_eq!(body["thread_id"], "telegram-1-topic-2", "{body}");
+        assert_eq!(body["effective_id"], "worker-1", "{body}");
+        assert_eq!(body["root_path"], path(&worker_root), "{body}");
+    }
+    let body = view(
+        &zdx_home,
+        serde_json::json!({"op": "thread_root", "thread_id": "telegram-1-topic-1"}),
+    );
+    assert_eq!(body["thread_id"], "telegram-1-topic-1", "{body}");
+    assert_eq!(body["effective_id"], "telegram-1-topic-1", "{body}");
+    assert_eq!(body["root_path"], path(&topic_root), "{body}");
+    let body = view(
+        &zdx_home,
+        serde_json::json!({"op": "thread_root", "thread_id": "no-such-thread"}),
+    );
+    assert_eq!(body["thread_id"], "no-such-thread", "{body}");
+    assert_eq!(body["effective_id"], "no-such-thread", "{body}");
+    assert!(body["root_path"].is_null(), "{body}");
+
+    // A home without Telegram threads: `active` names no thread.
+    let empty_home = TempDir::new().unwrap();
+    let body = view(&empty_home, serde_json::json!({"op": "thread_root"}));
+    assert!(body["thread_id"].is_null(), "{body}");
+    assert!(body["effective_id"].is_null(), "{body}");
+    assert!(body["root_path"].is_null(), "{body}");
+
+    crate::fixtures::zdx_cmd()
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["views", "--file", "-"])
+        .write_stdin(r#"{"op":"thread_root","thread_id":"a/b"}"#)
+        .assert()
+        .failure()
+        .stdout(predicates::str::is_empty())
+        .stderr(predicates::str::contains("Invalid thread ID"));
+}
+
+/// `thread_root` answers both roots absolute, resolved against the answering
+/// process's directory, so the gateway never resolves them against its own.
+#[test]
+fn test_thread_root_view_answers_absolute_roots() {
+    let zdx_home = TempDir::new().unwrap();
+    let root = TempDir::new().unwrap();
+    fs::create_dir(root.path().join("sub")).unwrap();
+    let threads = zdx_home.path().join("threads");
+    fs::create_dir_all(&threads).unwrap();
+    fs::write(
+        threads.join("telegram-1-topic-1.jsonl"),
+        "{\"type\":\"meta\",\"schema_version\":1,\"root_path\":\"sub\",\"ts\":\"2026-01-02T00:00:00Z\"}\n",
+    )
+    .unwrap();
+
+    let output = crate::fixtures::zdx_cmd()
+        .env("ZDX_HOME", zdx_home.path())
+        .current_dir(root.path())
+        .args(["--root", ".", "views", "--file", "-"])
+        .write_stdin(r#"{"op":"thread_root","thread_id":"telegram-1-topic-1"}"#)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let reply: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let absolute = |key: &str| {
+        let path = std::path::PathBuf::from(reply["body"][key].as_str().unwrap());
+        assert!(path.is_absolute(), "{reply}");
+        path.canonicalize().unwrap()
+    };
+    let root = root.path().canonicalize().unwrap();
+    assert_eq!(absolute("fallback_root"), root);
+    assert_eq!(absolute("root_path"), root.join("sub"));
+}
+
 /// Starts `zdx orchestrator serve` against a mock Anthropic endpoint and waits
 /// until its socket listens.
 async fn start_service(
@@ -450,6 +596,7 @@ async fn test_orchestrator_send_ordinary_runs_a_routed_agent_turn() {
         "artifact_views",
         "monitor_views",
         "git_views",
+        "thread_root",
     ] {
         assert!(
             status["capabilities"]

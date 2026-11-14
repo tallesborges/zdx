@@ -69,6 +69,7 @@ const (
 	CapFeedbackSubmit  = "feedback_submit"
 	CapThreadViews     = "thread_views"
 	CapGitViews        = "git_views"
+	CapThreadRoot      = "thread_root"
 	CapMonitorViews    = "monitor_views"
 	CapArtifactViews   = "artifact_views"
 	CapComposeUserText = "compose_user_text"
