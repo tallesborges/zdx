@@ -1,20 +1,41 @@
-//! `zdx service` — launchd control for the long-lived `bot` and `daemon`
-//! services; thin wrapper over `zdx_engine::service`.
+//! `zdx service` — launchd control for the long-lived `bot`, `daemon`, and
+//! `orchestrator` services; thin wrapper over `zdx_engine::service`.
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use zdx_engine::agent_activity;
 use zdx_engine::service::{self, Service};
 
 /// `zdx service install [--program PATH]` — write and bootstrap the launchd agents.
 ///
+/// Each service runs its default program (the gateway for the bot, `zdx`
+/// for the others); `--program` replaces it for a single-service target.
+/// Every program is checked before any service is installed.
+///
 /// # Errors
-/// Returns an error if the target is unknown or launchd control fails.
-pub fn install(target: &str, root: &Path, program: Option<PathBuf>) -> Result<()> {
-    let program = program.unwrap_or_else(service::default_program);
-    for svc in Service::parse_target(target)? {
-        println!("{}", service::install(svc, &program, root)?);
+/// Returns an error if the target is unknown, `--program` names several
+/// services, a program is missing or wrong, or launchd control fails.
+pub fn install(target: &str, root: &Path, program: Option<&Path>) -> Result<()> {
+    let services = Service::parse_target(target)?;
+    if program.is_some() && services.len() > 1 {
+        bail!(
+            "--program sets one service's program; install `{target}` without it, or name one service"
+        );
+    }
+    let planned: Vec<(Service, PathBuf)> = services
+        .into_iter()
+        .map(|svc| {
+            let program =
+                program.map_or_else(|| service::default_program_for(svc), Path::to_path_buf);
+            (svc, program)
+        })
+        .collect();
+    for (svc, program) in &planned {
+        service::check_program(*svc, program)?;
+    }
+    for (svc, program) in &planned {
+        println!("{}", service::install(*svc, program, root)?);
     }
     println!("Logs: {}", service::Service::Bot.log_path(true).display());
     Ok(())

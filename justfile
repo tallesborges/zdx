@@ -19,9 +19,13 @@ run *ARGS:
 monitor:
     cargo run -p zdx -- monitor
 
-# Run the Telegram bot
-bot:
-    cargo run -p zdx -- bot
+# The gateway's bot.pid refuses a second bot on one ZDX_HOME: stop the bot
+# service first (`zdx service stop bot`). Gateway args go after `--`.
+
+# Run the Telegram bot from this checkout (builds the Go gateway; `zdx bot` execs it)
+bot *ARGS:
+    apps/gateway/build.sh
+    ZDX_GATEWAY="{{justfile_directory()}}/apps/gateway/bin/zdx-gateway" cargo run -p zdx -- bot {{ARGS}}
 
 # Run the orchestrator service (orchestrator topics in the bot need it)
 orchestrator:
@@ -80,7 +84,7 @@ codebase *CRATES:
 
 # ─── Mini App (apps/web) ──────────────────────────
 
-# Svelte Mini App dev server (proxies /api to a running `zdx bot` on :4141)
+# Svelte Mini App dev server (proxies /api to a running bot's Mini App server on :4141)
 web-dev *ARGS:
     cd apps/web && bun run dev {{ARGS}}
 
@@ -107,8 +111,8 @@ gateway-build *OUT:
 
 # ─── Build ────────────────────────────────────────
 
-# Build release binary (embeds the Mini App, so build it first)
-build-release: web-build
+# Build the release zdx binary (Rust only; the Mini App ships in the gateway)
+build-release:
     cargo build -p zdx --release
 
 # Install current workspace as the released `zdx` binary at ~/.local/bin/zdx
@@ -126,12 +130,12 @@ install: build-release
     @# index only: no exports, no memory index.
     ~/.local/bin/zdx threads reindex
 
-# Build, install (plus an installed gateway), and restart the launchd services
-deploy: install install-gateway-if-present
+# Build and install zdx and the gateway, then restart the launchd services
+deploy: install gateway-install
     ~/.local/bin/zdx service restart all
 
-# Build, install, and queue the restart until agent runs, workers, and orchestrator updates are done
-safe-deploy: install install-gateway-if-present
+# Build and install zdx and the gateway, and queue the restart until agent runs, workers, and orchestrator updates are done
+safe-deploy: install gateway-install
     ~/.local/bin/zdx service restart all --queue
 
 # Build the Go gateway into ~/.local/bin/zdx-gateway, the stable path the bot service runs
@@ -140,10 +144,6 @@ gateway-install:
     apps/gateway/build.sh ~/.local/bin/.zdx-gateway.new
     mv -f ~/.local/bin/.zdx-gateway.new ~/.local/bin/zdx-gateway
     @echo "Installed ~/.local/bin/zdx-gateway"
-
-[private]
-install-gateway-if-present:
-    @if [ -x ~/.local/bin/zdx-gateway ]; then just gateway-install; fi
 
 # (Re)create ~/.local/bin/zdxd as a symlink to the debug build
 install-debug:

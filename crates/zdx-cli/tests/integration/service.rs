@@ -454,3 +454,53 @@ fn test_install_bot_program_requires_a_ready_preflight() {
         "no plist written"
     );
 }
+
+/// The bot service runs the gateway: without `--program` it is
+/// `~/.local/bin/zdx-gateway`, a `zdx` bot program is refused, and
+/// `--program` names one service only. Every program is checked before any
+/// service is installed, so these refusals write no plist and never reach
+/// launchd.
+#[cfg(unix)]
+#[test]
+fn test_install_checks_every_program_before_installing() {
+    let dir = tempdir().unwrap();
+    let home = dir.path();
+    let install = |args: &[&str]| {
+        let output = crate::fixtures::zdx_cmd()
+            .env("ZDX_HOME", home)
+            .env("HOME", home)
+            .args(["--root", home.to_str().unwrap(), "service", "install"])
+            .args(args)
+            .assert()
+            .failure()
+            .get_output()
+            .stderr
+            .clone();
+        String::from_utf8_lossy(&output).into_owned()
+    };
+
+    let all = install(&[]);
+    assert!(all.contains(".local/bin/zdx-gateway not found"), "{all}");
+    assert!(all.contains("just gateway-install"), "{all}");
+    let bot = install(&["bot"]);
+    assert!(bot.contains("just gateway-install"), "{bot}");
+
+    let zdx = home.join("zdx");
+    std::fs::write(&zdx, "").unwrap();
+    let refused = install(&["bot", "--program", zdx.to_str().unwrap()]);
+    assert!(
+        refused.contains("runs the Go gateway, not zdx"),
+        "{refused}"
+    );
+
+    let several = install(&["all", "--program", zdx.to_str().unwrap()]);
+    assert!(
+        several.contains("--program sets one service's program"),
+        "{several}"
+    );
+
+    assert!(
+        !home.join("Library/LaunchAgents").exists(),
+        "no plist written"
+    );
+}

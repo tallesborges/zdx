@@ -8,6 +8,7 @@ mod fixtures;
 
 mod ask_media_audio;
 mod background_subagent;
+mod bot_gateway;
 mod cli_help;
 mod config_path;
 mod custom_provider_api;

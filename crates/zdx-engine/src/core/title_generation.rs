@@ -1,6 +1,6 @@
 //! Title generation from messages using LLM subagent.
 //!
-//! Provides shared title generation logic for thread/topic naming across zdx-tui and zdx-bot.
+//! Provides shared title generation logic for thread/topic naming across the TUI and the Telegram bot (through the orchestrator service's `generate`).
 
 use std::path::Path;
 use std::time::Duration;

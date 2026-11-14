@@ -254,6 +254,10 @@ fn test_bot_command_fails_when_token_is_missing() {
     let zdx_home = tempdir().unwrap();
     crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
+        // A temp HOME too: `zdx bot` would otherwise exec an installed
+        // ~/.local/bin/zdx-gateway if the token check ever stopped first.
+        .env("HOME", zdx_home.path())
+        .env_remove("ZDX_GATEWAY")
         .env_remove("ZDX_TELEGRAM_BOT_TOKEN")
         .env_remove("TELEGRAM_BOT_TOKEN")
         .args(["bot"])

@@ -1,7 +1,7 @@
 /**
  * `Open artifact` deep links from Telegram replies.
  *
- * The bot (`artifact_link` in `crates/zdx-bot/src/handlers/message/response.rs`)
+ * The bot (`ArtifactLink` in `apps/gateway/internal/render/keyboards.go`)
  * publishes `startapp=a_<key>_<thread>`: `key` is the artifact's `key` in the
  * shared `zdx_engine::core::artifacts` projection (16 lowercase hex; it does
  * not embed the raw path) and `thread` is the chat or topic that received the

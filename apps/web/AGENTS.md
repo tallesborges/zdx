@@ -2,7 +2,7 @@
 
 Svelte 5 + Vite + Tailwind v4 frontend for the zdx Telegram Mini App.
 
-Consumes the JSON API served by `crates/zdx-bot/src/server.rs` (read-only except artifact feedback), which also embeds this
+Consumes the JSON API served by the Go gateway (`apps/gateway/internal/miniapp`; read-only except artifact feedback), which also embeds this
 app's build output and serves it at `/app`. This is the Mini App — the old vanilla `app.html` shell
 has been removed.
 
@@ -264,10 +264,10 @@ real one in `apps/web/.env.local` as `ZDX_DEV_INIT_DATA=...`.
 
 ## Serving
 
-`crates/zdx-bot/src/server.rs` embeds `apps/web/dist` with `rust-embed`, so **the binary is
-self-contained but `dist/` must exist before any cargo build of `zdx-bot`** — a missing folder is a
-compile error, not a silent empty UI. `just build-release` and both GitHub workflows run the web
-build first; a bare `cargo build` on a fresh clone needs `just web-build` once.
+`apps/gateway/build.sh` (`just gateway-build`, `just gateway-install`) runs the web build, copies
+`apps/web/dist` into the gateway and embeds it (`-tags webdist`), so the gateway binary is
+self-contained. A gateway built without the tag needs `--web-dist DIR` and refuses to start when
+`index.html` is missing. The Rust build does not use `apps/web` at all.
 
 Cache policy: `/app` (the SPA entry) is `no-cache` so new content hashes are picked up;
 `/app/assets/*` is `immutable` for a year. That HTTP cache is the only caching layer available —
@@ -276,4 +276,4 @@ service workers do not work in Telegram's iOS WebView.
 ## Maintenance
 
 - Add/move/delete files here: update this file.
-- Change the API contract in `server.rs`: update `src/lib/types.ts` and `src/lib/api.ts`.
+- Change the API contract (the gateway's `internal/miniapp` routes, the engine's `orchestration/view_bodies`): update `src/lib/types.ts` and `src/lib/api.ts`.

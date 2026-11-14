@@ -42,7 +42,10 @@ zdx exec -p "hello"
 
 ### Telegram bot
 
+The bot is a separate Go binary, `zdx-gateway` (`apps/gateway`). Build it with Go and `bun` installed, then start it through `zdx`:
+
 ```bash
+just gateway-install   # builds ~/.local/bin/zdx-gateway with the Mini App embedded
 zdx bot
 ```
 

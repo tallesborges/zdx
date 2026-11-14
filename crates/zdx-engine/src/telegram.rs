@@ -6,12 +6,11 @@
 //! way. It is deliberately narrow: only the three outbound operations those
 //! surfaces expose.
 //!
-//! The Telegram bot runtime (`zdx-bot`) keeps its own richer client for the
-//! long-poll loop, message editing, callbacks, and media types; that client
-//! serves a different job and is not used here. Both share [`flood`] for
-//! error classification, flood-wait retries, and per-call logging. This client
-//! has no pacing gate: it runs in other processes (and beside the bot), so it
-//! cannot see the bot's per-chat state.
+//! The Telegram bot (the Go gateway, `apps/gateway`) has its own client for
+//! the long-poll loop, message editing, callbacks, and media types. This
+//! client uses [`flood`] for error classification, flood-wait retries, and
+//! per-call logging. It has no pacing gate: it runs in other processes (and
+//! beside the bot), so it cannot see the bot's per-chat state.
 
 pub mod flood;
 pub mod photo;

@@ -1,6 +1,6 @@
 # internal/miniapp
 
-Go HTTP layer of the Telegram Mini App: the Svelte shell (`apps/web/dist`) and `/api/*`. It replaces `crates/zdx-bot/src/server.rs` route for route; that file and `apps/web/src/lib/api.ts` are the contract until the Rust server is removed.
+Go HTTP layer of the Telegram Mini App: the Svelte shell (`apps/web/dist`) and `/api/*`. It replaced the Rust Mini App server (zdx-bot's `server.rs`, now removed) route for route: `testdata/rust_routes.json` keeps that route table, and `apps/web/src/lib/api.ts` is the client contract.
 
 ## Boundaries
 
@@ -18,6 +18,6 @@ Go HTTP layer of the Telegram Mini App: the Svelte shell (`apps/web/dist`) and `
 - `go vet ./internal/miniapp && go test -race ./internal/miniapp` from `apps/gateway` (`-short` skips the 48 MiB body cases).
 - `TestMain` (`sandbox_test.go`) runs every test in `internal/sandbox` (fresh HOME, ZDX_HOME, TMPDIR); the real-service tests also pass their child env through `sandbox.CheckEnv` and need an absolute binary path.
 - Unit tests use fakes (`fakeEngine`, `echoEngine`, `gate`, `fstest.MapFS`) and `t.TempDir()` only: no socket, no `ZDX_HOME`, no network. Fakes do not prove engine parity.
-- `golden_test.go` replays `testdata/axum_*_cases.json` against answers recorded from a Rust harness with the workspace's axum, tower-http and serde versions and copies of server.rs's extractors and layers (`testdata/harness`). Re-record when server.rs extractors or the locked versions change; the recorder's header has the commands.
+- `golden_test.go` replays `testdata/axum_*_cases.json` against answers recorded from a Rust harness with the removed server's axum, tower-http and serde versions (pinned in `testdata/harness/Cargo.toml`) and copies of its extractors and layers (`testdata/harness`). The goldens are frozen: the Rust server is gone, so there is nothing to re-record against; the recorder's header still has the commands.
 - `rust_parity_test.go` (opt-in, `ZDX_GATEWAY_RUST_ZDX=<absolute path to a zdx binary>`; never builds; skips without a binary or on missing capabilities, fails instead with `ZDX_GATEWAY_RUST_STRICT=1`) runs an isolated `zdx orchestrator serve` on a temp `HOME`/`ZDX_HOME` with a mock provider, makes one real turn, and compares every read route served by Go through the real gateway adapter with the same socket view (and `zdx views` for some). Its reference is the Rust view provider, not Rust's HTTP server. `rust_feedback_test.go` (same opt-in) sends feedback over HTTP through the real adapter into that service, with the chat's allowlist and transcription only in the project root config, and checks model requests, thread records, the renderer's routed turns and bundle markers, not only HTTP answers.
-- `TestServesEveryRouteOfTheRustRouterWithItsMethod` and `TestServesEveryPathTheFrontendCalls` read the Rust router and `api.ts`; keep them passing when routes change on either side.
+- `TestServesEveryRouteOfTheRustRouterWithItsMethod` reads the frozen Rust route table (`testdata/rust_routes.json`) and `TestServesEveryPathTheFrontendCalls` reads `api.ts`. A new route changes the Go router, `api.ts`, and that table together.

@@ -15,11 +15,10 @@ This monorepo now uses scoped `AGENTS.md` files per crate.
 - `crates/zdx-tui/AGENTS.md`: TUI architecture map + runtime/features conventions
 - `crates/zdx-tools/AGENTS.md`: leaf tool implementations (bash, edit, read, write, glob, grep, web_search, fetch_webpage, apply_patch)
 - `crates/zdx-cli/AGENTS.md`: CLI routing/modes/commands map + CLI testing guidance
-- `crates/zdx-bot/AGENTS.md`: Telegram bot flow map + bot-specific conventions
 - `crates/zdx-monitor/AGENTS.md`: monitor TUI dashboard map + conventions
 - `crates/xtask/AGENTS.md`: maintainer task crate guidance
-- `apps/web/AGENTS.md`: Svelte Mini App frontend (design system + views, consumes the zdx-bot HTTP API)
-- `apps/gateway/AGENTS.md`: Go gateway that will replace `zdx-bot` and its Mini App server (independent Go module; talks to Rust only through the orchestrator socket and CLI; not production-ready)
+- `apps/web/AGENTS.md`: Svelte Mini App frontend (design system + views, consumes the gateway's Mini App HTTP API)
+- `apps/gateway/AGENTS.md`: Go gateway: the Telegram bot and Mini App server (independent Go module; talks to Rust only through the orchestrator socket and CLI)
 
 ### Scope and precedence
 
@@ -34,7 +33,7 @@ This monorepo now uses scoped `AGENTS.md` files per crate.
 - `docs/SPEC.md`: behavior contracts
 - `docs/ARCHITECTURE.md`: architecture and data flow
 - `docs/plans/`: commit-sized implementation plans, staged by lifecycle: `drafts/` (exploratory) → `active/` (building) → `done/` + `archived/`
-- `apps/web/`: Svelte Mini App frontend, embedded into `zdx-bot` at compile time (see `apps/web/AGENTS.md`)
+- `apps/web/`: Svelte Mini App frontend, embedded into the gateway binary by `apps/gateway/build.sh` (see `apps/web/AGENTS.md`)
 - `apps/gateway/`: Go Telegram + Mini App gateway (see `apps/gateway/AGENTS.md`)
 - `.github/workflows/`: CI/release workflows
 - `.cargo/config.toml`: cargo aliases/shared target dir config
@@ -46,18 +45,11 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 
 - `just run` (interactive TUI; pass extra args: `just run --help`)
 - `just monitor` (service dashboard for config, threads, jobs)
-- `just bot` (Telegram bot; runs the global `[telegram]` config)
+- `just bot [-- ARGS]` (Telegram bot: builds the Go gateway and `zdx` from this checkout, then `zdx bot` execs the gateway on the global `[telegram]` config. The gateway's `bot.pid` refuses a second bot on one `ZDX_HOME`, so stop the bot service first. Outside `just`, `zdx bot` runs `$ZDX_GATEWAY` or the installed `~/.local/bin/zdx-gateway`, and fails when neither exists)
 - `just orchestrator` (orchestrator service; orchestrator topics in the bot and `zdx orchestrator send` need it)
 - `just jobs` (jobs subcommands; e.g. `just jobs list`)
-- `just deploy` (build release → install to `~/.local/bin/zdx` → guarded `zdx service restart all`; the standard way to ship a change to the running bot/daemon/orchestrator service). `all` includes the `orchestrator` service: `restart all` checks that every service is installed before it restarts any, and the bot answers orchestrator topics only while that service runs. The restart refuses to interrupt active agent runs; wait for them, queue it with `zdx service restart --queue` (the bot restarts once no run is active — use this from inside an agent run, which counts as active), or explicitly run `zdx service restart all --force`. Set `ZDX_CODESIGN_ID` in your shell env to a code-signing identity so `install` signs the binary with a stable identifier and macOS TCC grants survive rebuilds; unset, the binary stays ad-hoc signed and macOS re-prompts after every build.
-  - **First deploy of the orchestrator service (one time).** The running bot is the old build: it runs orchestrator topics itself and cannot read a queued restart that names `orchestrator`. So do not use `just deploy` or `just safe-deploy` this time. From the directory the bot service was installed from:
-    1. `just install` (new binary at `~/.local/bin/zdx`; running services keep the old code).
-    2. `~/.local/bin/zdx service install orchestrator` (starts the service; nothing reaches it until the bot restarts).
-    3. `~/.local/bin/zdx service restart bot --queue` (`bot` only: the old bot restarts onto the new binary once its own workers and turns are done; those workers stop with it).
-    4. Wait until `~/.local/bin/zdx service status` shows a new bot PID and no queued restart. Queue nothing else before that: a request naming `orchestrator` merged into the pending one is dropped by the old bot.
-    5. `~/.local/bin/zdx service restart daemon` (refuses while agent runs are active; retry later).
-    6. Check `~/.local/bin/zdx service status` (three services running) and `~/.local/bin/zdx orchestrator status`. After this, `just deploy` and `just safe-deploy` work as usual.
-- `just safe-deploy` (build release → install → `zdx service restart all --queue`: the bot restarts once no agent run, worker, or orchestrator `[worker update]` turn is pending. Use this from inside an agent run, or whenever workers may be busy.)
+- `just deploy` (build release → install to `~/.local/bin/zdx` → build and install the gateway to `~/.local/bin/zdx-gateway` (needs Go and `bun`) → guarded `zdx service restart all`; the standard way to ship a change to the running bot/daemon/orchestrator service). `all` includes the `orchestrator` service: `restart all` checks that every service is installed before it restarts any, and the bot answers orchestrator topics only while that service runs. The restart refuses to interrupt active agent runs; wait for them, queue it with `zdx service restart --queue` (the bot restarts once no run is active — use this from inside an agent run, which counts as active), or explicitly run `zdx service restart all --force`. Set `ZDX_CODESIGN_ID` in your shell env to a code-signing identity so `install` signs the binary with a stable identifier and macOS TCC grants survive rebuilds; unset, the binary stays ad-hoc signed and macOS re-prompts after every build.
+- `just safe-deploy` (build release → install `zdx` and the gateway → `zdx service restart all --queue`: the bot restarts once no agent run, worker, or orchestrator `[worker update]` turn is pending. Use this from inside an agent run, or whenever workers may be busy.)
 - `just ci` (full local CI: lint + test; matches what GHA runs on push/PR — optional pre-push gate)
 - `just ci-fast` (fast inner-loop check: fmt + clippy on default features, lib+bins only — single cargo mode, avoids mode-switching tax)
 - `just lint` (format + clippy)
@@ -70,8 +62,8 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `just update-config` (maintainer: refresh default_config.toml)
 - `just codebase` (generate codebase.txt for entire workspace)
 - `just codebase crates/zdx-tui` (generate codebase.txt for specific crate)
-- `just build-release` (build release binary; skips the web build when input fingerprints and dist contents match)
-- `just gateway-check` (Go gateway: `gofmt`, `go vet`, `go test -race`) / `just gateway-build [OUT]` (gateway binary with the Mini App embedded)
+- `just build-release` (build the release `zdx` binary; Rust only: it needs neither Go nor the Mini App build)
+- `just gateway-check` (Go gateway: `gofmt`, `go vet`, `go test -race`) / `just gateway-build [OUT]` (gateway binary with the Mini App embedded; runs the cached web build) / `just gateway-install` (build it into `~/.local/bin/zdx-gateway`, the bot service's program)
 - `just web-demo` / `just web-dev` / `just web-check` / `just web-build` (Svelte Mini App in `apps/web`; requires `bun`)
 - `bun test apps/web/build-cached.test.mjs` (web-build cache/invalidation regression tests)
 - `bun test apps/web/annotate.test.mjs` (artifact annotation bridge and message-validation tests)

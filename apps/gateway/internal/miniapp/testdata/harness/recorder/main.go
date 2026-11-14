@@ -1,11 +1,14 @@
 // Records the golden answers of the Rust harness (../src/main.rs) for the
 // Mini App Go tests. The harness copies the extractors, query structs,
-// layers and route table of crates/zdx-bot/src/server.rs and echoes what it
-// parsed; it pins the workspace's axum and tower-http, and takes serde_json
-// and serde_urlencoded from the workspace lock. To re-record after a change
-// there or to the case files, from this directory:
+// layers and route table of crates/zdx-bot/src/server.rs (removed; see git
+// history) and echoes what it parsed; it pins that server's axum and
+// tower-http, and takes serde_json and serde_urlencoded from the workspace
+// lock of the last tree that still had the crate. To re-record after a change
+// to the case files, from this directory:
 //
-//	h=$(mktemp -d) && cp -R .. "$h/harness" && cp ../../../../../../../Cargo.lock "$h/harness/"
+//	h=$(mktemp -d) && cp -R .. "$h/harness"
+//	rev=$(git log -1 --format=%H -- ../../../../../../../crates/zdx-bot/Cargo.toml)
+//	git show "$rev^:Cargo.lock" > "$h/harness/Cargo.lock"
 //	CARGO_TARGET_DIR="$h/target" cargo build --offline --manifest-path "$h/harness/Cargo.toml"
 //	go run . "$h/target/debug/axum-golden" ../..
 //

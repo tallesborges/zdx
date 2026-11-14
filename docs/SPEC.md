@@ -78,7 +78,7 @@ ZDX solves this with a boring, reliable core:
 
 **Shipped commands (v0.1):**
 - `zdx` — interactive chat (TTY)
-- `zdx bot` — run the global Telegram bot from `[telegram]` in `$ZDX_HOME/config.toml`
+- `zdx bot [-- ARGS]` — run the global Telegram bot from `[telegram]` in `$ZDX_HOME/config.toml`. The bot is the Go gateway: `zdx bot` replaces itself (exec) with `$ZDX_GATEWAY` (an absolute path) or else `~/.local/bin/zdx-gateway`, as `<gateway> --root ROOT bot ARGS`, with `ZDX_HOME` and `ZDX_BIN` (this binary unless already set). Signals and the exit status are the gateway's. It fails before running anything when the gateway is missing, is a relative path, or is the `zdx` binary itself.
 - `zdx bot init` — create/update global Telegram bot settings in `$ZDX_HOME/config.toml`
 - `zdx bot profile add <NAME> <CHAT_ID> <CWD>` — map a Telegram chat to a project cwd via `telegram.profiles.<NAME>`
 - `zdx exec -p, --prompt <PROMPT> [--no-system-prompt] [--subagent NAME]` — run one prompt non-interactively
@@ -126,7 +126,8 @@ ZDX solves this with a boring, reliable core:
 ### `zdx service ...` (macOS/launchd)
 
 - launchd owns the lifetime of the `bot`, `daemon`, and `orchestrator` services: start at login, restart on crash. Telegram `/restart` restarts the daemon and, when installed, the orchestrator service first, then exits the bot so launchd restarts it. `/restart f` (also `force`, `--force`) explicitly allows interrupting active runs; `/restart q` (also `queue`) waits until the machine is idle (defined below) and then performs the gated restart automatically, announcing it in the topic that queued it. `zdx service restart [target] --queue` queues the same restart from the CLI, so an agent can request it from inside its own run; the bot announces it in the caller's Telegram thread (`ZDX_THREAD_ID`) when there is one. Both write one persisted request that the bot service performs. Besides no active agent run, the bot also waits until the orchestrator service reports itself settled (no worker running or queued, no worker result waiting, no orchestrator turn queued, running, or being delivered; a service that is not running counts as settled) and no bot turn is queued or running, so a queued restart never drops a worker result. The `orchestrator` target of a queued restart (included in `all`) is skipped when that service is not installed. `--queue` refuses when no supervised bot is running. `just safe-deploy` is install plus this queued restart. Only one queued restart is pending at a time: a second request (from either surface) merges its services into it and reports that one was already queued. A pending request is dropped once every requested service runs a process started after it, so a forced or manual restart in the meantime satisfies it. `zdx service status` (text and `--json` `queued_restart`) shows the pending request. `/restart` in any mode bypasses the per-topic queue, so it is answered while a turn runs.
-- Agents run `~/.local/bin/zdx` (the `just install` target), never the calling binary, so `restart` always picks up the currently installed build.
+- The bot agent runs the Go gateway `~/.local/bin/zdx-gateway` (the `just gateway-install` target); the daemon and orchestrator run `~/.local/bin/zdx` (the `just install` target). Never the calling binary, so `restart` always picks up the currently installed build. Every plist sets `ZDX_BIN` to `~/.local/bin/zdx`.
+- `install --program PATH` replaces the program of one service and is refused for a multi-service target. `install` checks every program before it installs any service: a missing program, or a `zdx` binary as the bot program, is refused. The bot program must then pass its read-only `preflight --root ROOT --json` (`"ready": true`) before its plist is written.
 - Agents are launched via `zsh -c 'exec …'` so `~/.zshenv` is sourced; launchd sources no shell startup files, and provider API keys live there.
 - `install` refuses when the service is already running outside launchd; PID-file uniqueness continues to prevent duplicate instances.
 - `stop` is durable: the service stays stopped until an explicit `start`, across reboots. It has the same guard as `restart` (below); CLI `stop --force` bypasses it.
@@ -738,7 +739,7 @@ Two tools work on skills. Neither is in the default tool sets: a run gets them w
 
 ---
 
-## 15) Telegram bot media response (`zdx-bot`)
+## 15) Telegram bot media response (bot)
 
 When using the Telegram bot runtime, assistant turns may include media file directives.
 
@@ -777,7 +778,7 @@ Contracts:
 
 ---
 
-## 16) Telegram forum topic flow (`zdx-bot`)
+## 16) Telegram forum topic flow (bot)
 
 When the Telegram bot is used in a forum-enabled supergroup:
 
@@ -830,7 +831,7 @@ When the Telegram bot is used in a forum-enabled supergroup:
 
 ---
 
-## 17) Telegram turn status and final reply (`zdx-bot`)
+## 17) Telegram turn status and final reply (bot)
 
 - While a turn runs, the bot keeps one live status message carrying the current activity and the Cancel button, edited in place at most once per 3 s. A change inside that interval is not dropped: the newest activity is shown when the interval ends, even if no further event arrives, and a pending change is discarded when the turn ends. During a known flood wait the edit is skipped and tried again one interval later.
 - The status message also offers an `Open Thread` button that deep-links the Mini App to that turn's effective thread, on the same terms as the topic header: only when `[telegram.server]` is enabled with `mini_app_url` set, otherwise Cancel stands alone. Audio turns show it once transcription hands over to the agent, since the thread is not known while transcribing.
@@ -962,7 +963,7 @@ Workers created before silent workers may have a **mirror topic**: a forum topic
 
 ---
 
-## 19) Telegram incoming message content (`zdx-bot`)
+## 19) Telegram incoming message content (bot)
 
 Applies to every chat the bot reads (DM, group, forum topic).
 

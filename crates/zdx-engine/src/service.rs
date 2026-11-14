@@ -195,6 +195,21 @@ pub fn default_program() -> PathBuf {
         .join("zdx")
 }
 
+/// The stable gateway binary the bot service runs and `zdx bot` starts:
+/// `~/.local/bin/zdx-gateway` (the `just gateway-install` target).
+pub fn default_gateway_program() -> PathBuf {
+    default_program().with_file_name("zdx-gateway")
+}
+
+/// The program `service` runs when none is given: the Go gateway for the
+/// bot, the installed `zdx` for the daemon and the orchestrator.
+pub fn default_program_for(service: Service) -> PathBuf {
+    match service {
+        Service::Bot => default_gateway_program(),
+        Service::Daemon | Service::Orchestrator => default_program(),
+    }
+}
+
 /// Renders the launchd plist for `service`.
 ///
 /// The agent runs through `zsh -c` rather than executing the binary directly:
@@ -397,16 +412,14 @@ fn shell_unquote_words(command: &str) -> Result<Vec<String>> {
 /// Returns an error if the program is missing, a manually started instance is
 /// already running, the plist cannot be written, or `launchctl` fails.
 pub fn install(service: Service, program: &Path, root: &Path) -> Result<String> {
-    if !program.is_file() {
-        bail!("{} not found — run `just install` first", program.display());
-    }
+    check_program(service, program)?;
     // launchd has no useful notion of the caller's cwd, so a relative root
     // (the CLI's default `.`) has to be resolved before it reaches the plist.
     let root = root
         .canonicalize()
         .with_context(|| format!("resolve root {}", root.display()))?;
     let root = root.as_path();
-    if service == Service::Bot && !is_zdx_program(program) {
+    if service == Service::Bot {
         for warning in preflight(program, root)? {
             tracing::warn!(program = %program.display(), warning, "Bot program preflight warning");
         }
@@ -441,9 +454,29 @@ pub fn install(service: Service, program: &Path, root: &Path) -> Result<String> 
     ))
 }
 
-/// Whether `program` is a `zdx` binary (which needs no preflight).
-fn is_zdx_program(program: &Path) -> bool {
-    program.file_name().is_some_and(|name| name == "zdx")
+/// Checks that `program` can run `service`, before anything is changed: it
+/// must exist, and the bot service runs the gateway, never `zdx` (which has
+/// no bot of its own).
+///
+/// # Errors
+/// Returns an error naming the build step when the program is missing, or
+/// when the bot program is a `zdx` binary.
+pub fn check_program(service: Service, program: &Path) -> Result<()> {
+    if service == Service::Bot && program.file_name().is_some_and(|name| name == "zdx") {
+        bail!(
+            "the bot service runs the Go gateway, not zdx ({}); install it with `just gateway-install` or pass --program <zdx-gateway>",
+            program.display()
+        );
+    }
+    if !program.is_file() {
+        let step = if service == Service::Bot {
+            "just gateway-install"
+        } else {
+            "just install"
+        };
+        bail!("{} not found — run `{step}` first", program.display());
+    }
+    Ok(())
 }
 
 /// How long a bot program's preflight may take.
@@ -462,8 +495,8 @@ struct PreflightReport {
     warnings: Vec<String>,
 }
 
-/// Runs `<program> preflight --root <root> --json` before a bot program
-/// other than `zdx` replaces the bot service. Read-only by contract. The
+/// Runs `<program> preflight --root <root> --json` before the gateway
+/// replaces the bot service. Read-only by contract. The
 /// install goes on only when it exits 0 and reports `"ready": true`;
 /// returns its warnings.
 ///
@@ -1188,7 +1221,7 @@ mod tests {
         let _home = crate::test_support::temp_zdx_home();
         let plist = render_plist(
             Service::Bot,
-            Path::new("/Users/x/.local/bin/zdx"),
+            Path::new("/Users/x/.local/bin/zdx-gateway"),
             Path::new("/Users/x/projects/zdx"),
         );
         assert!(plist.contains("<key>Label</key>"));
@@ -1196,7 +1229,7 @@ mod tests {
         assert!(plist.contains("<string>/bin/zsh</string>"));
         assert!(plist.contains("<string>-c</string>"));
         assert!(plist.contains(
-            "<string>exec '/Users/x/.local/bin/zdx' '--root' '/Users/x/projects/zdx' 'bot'</string>"
+            "<string>exec '/Users/x/.local/bin/zdx-gateway' '--root' '/Users/x/projects/zdx' 'bot'</string>"
         ));
         assert!(plist.contains("<key>KeepAlive</key>"));
         assert!(plist.contains("<key>ThrottleInterval</key>"));
@@ -1209,6 +1242,38 @@ mod tests {
         );
         assert!(plist.contains("bot.out"));
         assert!(plist.contains("bot.err"));
+    }
+
+    #[test]
+    fn the_bot_runs_the_gateway_and_never_zdx() {
+        assert_eq!(
+            default_program_for(Service::Bot).file_name().unwrap(),
+            "zdx-gateway"
+        );
+        assert_eq!(default_program_for(Service::Daemon), default_program());
+        assert_eq!(
+            default_program_for(Service::Orchestrator),
+            default_program()
+        );
+        assert_eq!(
+            default_gateway_program().parent(),
+            default_program().parent()
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let zdx = dir.path().join("zdx");
+        std::fs::write(&zdx, "").unwrap();
+        let refused = check_program(Service::Bot, &zdx).unwrap_err().to_string();
+        assert!(refused.contains("runs the Go gateway"), "{refused}");
+        check_program(Service::Daemon, &zdx).unwrap();
+
+        let missing = dir.path().join("zdx-gateway");
+        let refused = check_program(Service::Bot, &missing)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("just gateway-install"), "{refused}");
+        std::fs::write(&missing, "").unwrap();
+        check_program(Service::Bot, &missing).unwrap();
     }
 
     #[test]

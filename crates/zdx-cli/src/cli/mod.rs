@@ -89,10 +89,17 @@ impl From<&ThreadArgs> for ThreadPersistenceOptions {
 
 #[derive(clap::Subcommand)]
 enum Commands {
-    /// Run or configure the global Telegram bot
+    /// Run or configure the global Telegram bot (running it starts the Go
+    /// gateway, `~/.local/bin/zdx-gateway` or `$ZDX_GATEWAY`)
+    #[command(args_conflicts_with_subcommands = true)]
     Bot {
         #[command(subcommand)]
         command: Option<BotCommands>,
+
+        /// Extra arguments for `zdx-gateway --root ROOT bot` (after `--`),
+        /// for example `-- --web-dist apps/web/dist`
+        #[arg(last = true, value_name = "GATEWAY_ARGS")]
+        gateway_args: Vec<String>,
     },
     /// Executes a command with a prompt
     Exec {
@@ -612,7 +619,8 @@ enum ServiceCommands {
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
 
-        /// Binary launchd should run (default: ~/.local/bin/zdx)
+        /// Binary launchd should run, for a single service (default:
+        /// ~/.local/bin/zdx-gateway for the bot, ~/.local/bin/zdx otherwise)
         #[arg(long, value_name = "PATH")]
         program: Option<std::path::PathBuf>,
     },
@@ -1629,7 +1637,10 @@ async fn run_speak_command(context: &DispatchContext<'_>, input: SpeakCommandInp
 #[allow(clippy::too_many_lines)]
 async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> Result<()> {
     match command {
-        Commands::Bot { command } => Box::pin(dispatch_bot(command, context)).await,
+        Commands::Bot {
+            command,
+            gateway_args,
+        } => dispatch_bot(command, &gateway_args, context),
         Commands::Exec {
             prompt,
             prompt_file,
@@ -1854,16 +1865,15 @@ fn parse_image_size(value: &str) -> std::result::Result<String, String> {
     }
 }
 
-async fn dispatch_bot(command: Option<BotCommands>, context: &DispatchContext<'_>) -> Result<()> {
+fn dispatch_bot(
+    command: Option<BotCommands>,
+    gateway_args: &[String],
+    context: &DispatchContext<'_>,
+) -> Result<()> {
     match command {
         None => {
             let root_path = resolve_root(context.root, context.worktree_id)?;
-            Box::pin(zdx_bot::run_named_with_config_and_root(
-                "bot",
-                context.config.clone(),
-                root_path,
-            ))
-            .await
+            commands::bot::run_gateway(context.config, &root_path, gateway_args)
         }
         Some(BotCommands::Init { bot_token, user_id }) => commands::bot::init(
             context.config,
@@ -1888,7 +1898,7 @@ fn dispatch_service(command: ServiceCommands, context: &DispatchContext<'_>) -> 
     match command {
         ServiceCommands::Install { target, program } => {
             let root = resolve_root(context.root, context.worktree_id)?;
-            commands::service::install(&target, &root, program)
+            commands::service::install(&target, &root, program.as_deref())
         }
         ServiceCommands::Uninstall { target } => commands::service::uninstall(&target),
         ServiceCommands::Start { target } => commands::service::start(&target),

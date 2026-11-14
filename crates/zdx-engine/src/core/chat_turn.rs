@@ -504,4 +504,72 @@ mod tests {
             "User sent an attachment."
         );
     }
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let img = image::RgbImage::from_fn(width, height, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+        });
+        let mut buf = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .unwrap();
+        buf
+    }
+
+    fn prompt_for(path: &Path, delivery: ImageDelivery) -> String {
+        compose_user_text(&UserInput {
+            images: vec![ImageInput {
+                path: path.to_path_buf(),
+                delivery,
+                label: None,
+            }],
+            ..UserInput::default()
+        })
+    }
+
+    #[test]
+    fn a_large_image_is_sent_downscaled_with_its_aspect_ratio() {
+        use base64::Engine as _;
+        // Small in pixels on purpose: image work is slow in a debug build.
+        let path = Path::new("/tmp/screen.png");
+        let prepared = prepare_inline_image(path, &png(3200, 100));
+        assert_eq!(
+            prepared.delivery,
+            ImageDelivery::Inline { downscaled: true }
+        );
+        let sent = base64::engine::general_purpose::STANDARD
+            .decode(&prepared.image.unwrap().data)
+            .unwrap();
+        assert!(sent.len() <= INLINE_IMAGE_BYTES);
+        let copy = image::load_from_memory(&sent).unwrap();
+        assert_eq!((copy.width(), copy.height()), (INLINE_IMAGE_EDGE, 49));
+        assert!(prompt_for(path, prepared.delivery).contains("You see a downscaled copy"));
+    }
+
+    #[test]
+    fn images_the_model_cannot_take_are_saved_with_guidance() {
+        let mut heic = vec![0, 0, 0, 0x18];
+        heic.extend_from_slice(b"ftypheic\0\0\0\0mif1heic");
+        heic.resize(64, 0);
+        let path = Path::new("/tmp/IMG_1.HEIC");
+        let prepared = prepare_inline_image(path, &heic);
+        assert!(prepared.image.is_none());
+        let prompt = prompt_for(path, prepared.delivery);
+        assert!(
+            prompt.contains("not attached for you to see: the model cannot take image/heif images directly. Use the `ask_media` tool"),
+            "{prompt}"
+        );
+
+        let svg = b"<svg xmlns='http://www.w3.org/2000/svg'/>";
+        let path = Path::new("/tmp/logo.svg");
+        let prepared = prepare_inline_image(path, svg);
+        assert!(prepared.image.is_none());
+        let prompt = prompt_for(path, prepared.delivery);
+        assert!(
+            prompt.contains(
+                "its image format was not recognized. `ask_media` cannot read this file either"
+            ),
+            "{prompt}"
+        );
+    }
 }

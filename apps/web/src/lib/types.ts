@@ -1,6 +1,7 @@
 /**
- * Response types for the zdx bot's embedded Mini App API.
- * Mirrors crates/zdx-bot/src/server.rs — all endpoints are GET and read-only.
+ * Response types for the zdx bot's Mini App API, served by the Go gateway
+ * (apps/gateway/internal/miniapp) from the engine's views. All endpoints are
+ * GET and read-only, except artifact feedback.
  */
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };

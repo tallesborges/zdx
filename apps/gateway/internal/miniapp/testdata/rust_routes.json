@@ -1,0 +1,25 @@
+{
+  "api": [
+    ["GET", "/threads"],
+    ["GET", "/threads/{id}/trajectory"],
+    ["GET", "/threads/{id}/artifacts"],
+    ["GET", "/threads/{id}/artifacts/file"],
+    ["GET", "/threads/{id}/artifacts/version"],
+    ["GET", "/threads/{id}/artifacts/image"],
+    ["POST", "/threads/{id}/artifacts/feedback"],
+    ["GET", "/threads/{id}"],
+    ["GET", "/threads/{id}/workers"],
+    ["GET", "/monitor"],
+    ["GET", "/workspaces"],
+    ["GET", "/usage"],
+    ["GET", "/git"],
+    ["GET", "/git/scope"],
+    ["GET", "/git/diff"]
+  ],
+  "shell": [
+    ["GET", "/app"],
+    ["GET", "/app/{*path}"],
+    ["GET", "/threads"],
+    ["GET", "/monitor"]
+  ]
+}

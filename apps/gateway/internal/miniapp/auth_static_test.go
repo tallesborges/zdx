@@ -1,7 +1,6 @@
 package miniapp
 
 import (
-	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"io"
@@ -144,34 +143,23 @@ var apiRoutes = []struct{ method, path string }{
 	{"GET", "/api/git/diff?thread_id=active&kind=unstaged&path=README.md"},
 }
 
-// rustRoutes reads create_router in server.rs: method and path of every
-// `.route(...)`, split into API routes (nested under /api) and shell routes.
+// rustRoutes reads testdata/rust_routes.json: method and path of every route
+// of the removed Rust Mini App server (create_router in zdx-bot's server.rs),
+// split into API routes (nested under /api) and shell routes.
 func rustRoutes(t *testing.T) (api, shell [][2]string) {
 	t.Helper()
-	source, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "crates", "zdx-bot", "src", "server.rs"))
+	source, err := os.ReadFile(filepath.Join("testdata", "rust_routes.json"))
 	if err != nil {
-		t.Skipf("Rust Mini App server not present: %v", err)
+		t.Fatal(err)
 	}
-	start := bytes.Index(source, []byte("fn create_router"))
-	end := bytes.Index(source[start:], []byte("\n}\n"))
-	router := string(source[start : start+end])
-	if !strings.Contains(router, `.nest("/api", api)`) {
-		t.Fatal("create_router no longer nests the API under /api")
+	var routes struct {
+		API   [][2]string `json:"api"`
+		Shell [][2]string `json:"shell"`
 	}
-	split := strings.Index(router, "Router::new()\n        .route(\"/app\"")
-	if split < 0 {
-		t.Fatal("cannot split the API router from the shell router")
+	if err := json.Unmarshal(source, &routes); err != nil {
+		t.Fatal(err)
 	}
-	routeRe := regexp.MustCompile(`\.route\(\s*"([^"]+)",\s*(get|post)\(`)
-	for _, m := range routeRe.FindAllStringSubmatchIndex(router, -1) {
-		route := [2]string{strings.ToUpper(router[m[4]:m[5]]), router[m[2]:m[3]]}
-		if m[0] < split {
-			api = append(api, route)
-		} else {
-			shell = append(shell, route)
-		}
-	}
-	return api, shell
+	return routes.API, routes.Shell
 }
 
 // The Go API answers exactly the Rust routes, with the same method rules:
