@@ -25,6 +25,7 @@ pub enum GeminiThinkingConfig {
     /// - Gemini 3 Flash / Flash-Lite: `minimal`, `low`, `medium`, `high`
     /// - Gemini 3.1 Flash Image Preview: `minimal`, `high`
     /// - Gemini 3 Pro Image: `high` only
+    /// - Gemini 4 Hydrogen: `low`, `medium`, `high`, `xhigh`
     Level(String),
     /// For Gemini 2.5 models: use token budget.
     /// -1 = dynamic (default), 0 = disabled, positive = specific budget.
@@ -35,7 +36,7 @@ pub enum GeminiThinkingConfig {
 ///
 /// All Gemini 3 models support `"high"`, so we only track the intermediate
 /// levels explicitly. Used to clamp zdx `ThinkingLevel` values to a level the
-/// target model actually accepts.
+/// target model actually accepts. `"xhigh"` is tracked by `supports_xhigh`.
 #[derive(Debug, Clone, Copy)]
 struct GeminiCapabilities {
     supports_minimal: bool,
@@ -109,6 +110,11 @@ fn capabilities_for_model(model: &str) -> GeminiCapabilities {
     }
 }
 
+/// Whether the model accepts `thinkingLevel: "xhigh"` (Gemini 4 Hydrogen only).
+fn supports_xhigh(model: &str) -> bool {
+    model.contains("gemini-4-hydrogen")
+}
+
 impl GeminiThinkingConfig {
     /// Maps zdx's `ThinkingLevel` to Gemini-specific config based on model name.
     ///
@@ -118,7 +124,7 @@ impl GeminiThinkingConfig {
     pub fn from_thinking_level(level: ThinkingLevel, model: &str) -> Self {
         if is_gemini_3_or_later(model) || model.contains("gemini-pro-agent") {
             let caps = capabilities_for_model(model);
-            return Self::gemini_3_level(level, caps);
+            return Self::gemini_3_level(level, caps, supports_xhigh(model));
         }
 
         // Gemini 2.5 (and older) models use thinkingBudget.
@@ -162,8 +168,9 @@ impl GeminiThinkingConfig {
     ///   else up to `medium`, else `high`.
     /// - `Medium`: prefer `medium`; otherwise clamp **up** to `high` (closer
     ///   than clamping all the way down to `minimal`/`low`).
-    /// - `High` / `XHigh` / `Max`: always `high`.
-    fn gemini_3_level(level: ThinkingLevel, caps: GeminiCapabilities) -> Self {
+    /// - `High`: always `high`.
+    /// - `XHigh` / `Max`: `xhigh` where the model has it, else `high`.
+    fn gemini_3_level(level: ThinkingLevel, caps: GeminiCapabilities, xhigh: bool) -> Self {
         let lowest_supported = if caps.supports_minimal {
             "minimal"
         } else if caps.supports_low {
@@ -195,7 +202,14 @@ impl GeminiThinkingConfig {
                     "high"
                 }
             }
-            ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max => "high",
+            ThinkingLevel::High => "high",
+            ThinkingLevel::XHigh | ThinkingLevel::Max => {
+                if xhigh {
+                    "xhigh"
+                } else {
+                    "high"
+                }
+            }
         };
 
         Self::Level(chosen.to_string())
@@ -748,6 +762,27 @@ mod tests {
             assert!(
                 matches!(config, GeminiThinkingConfig::Level(ref l) if l == expected),
                 "expected '{expected}' for {level:?} on Argon, got {config:?}"
+            );
+        }
+    }
+
+    /// Gemini 4 Hydrogen: low/medium/high plus `xhigh`, which `XHigh` and
+    /// `Max` reach. No `minimal`, so Off clamps up to `low`.
+    #[test]
+    fn test_thinking_config_gemini_4_hydrogen() {
+        let model = "gemini-4-hydrogen";
+        for (level, expected) in [
+            (ThinkingLevel::Off, "low"),
+            (ThinkingLevel::Low, "low"),
+            (ThinkingLevel::Medium, "medium"),
+            (ThinkingLevel::High, "high"),
+            (ThinkingLevel::XHigh, "xhigh"),
+            (ThinkingLevel::Max, "xhigh"),
+        ] {
+            let config = GeminiThinkingConfig::from_thinking_level(level, model);
+            assert!(
+                matches!(config, GeminiThinkingConfig::Level(ref l) if l == expected),
+                "expected '{expected}' for {level:?} on Hydrogen, got {config:?}"
             );
         }
     }

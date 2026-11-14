@@ -145,6 +145,56 @@ input_images = true
 context_limit = 1048576
 output_limit = 65536
 
+# Gemini 4 Hydrogen tiers on Antigravity: same rules as the Argon tiers (the
+# tier suffix is sent as thinkingLevel; `xhigh` is accepted). The bare
+# `gemini-4-hydrogen` id returns 404 there. The live catalog (CLI client, daily
+# endpoint) reports 1048576 context and 262144 max output; output is pinned to
+# the documented 65536 synchronous cap instead. Verified: 2026-11-13.
+[[override]]
+id = "google-antigravity:gemini-4-hydrogen-xhigh"
+reasoning = false
+input_images = true
+context_limit = 1048576
+output_limit = 65536
+
+[[override]]
+id = "google-antigravity:gemini-4-hydrogen-high"
+reasoning = false
+input_images = true
+context_limit = 1048576
+output_limit = 65536
+
+[[override]]
+id = "google-antigravity:gemini-4-hydrogen-medium"
+reasoning = false
+input_images = true
+context_limit = 1048576
+output_limit = 65536
+
+[[override]]
+id = "google-antigravity:gemini-4-hydrogen-low"
+reasoning = false
+input_images = true
+context_limit = 1048576
+output_limit = 65536
+
+# Gemini 4 Hydrogen (`gemini-4-hydrogen`, Gemini API GA 2026-11-12): flat standard
+# price over the whole 1M window, no introductory rate. Implicit caching only
+# (cached input 95% off). Thinking levels: low, medium, high (default), xhigh.
+# Live models.get: 1048576 input / 65536 output.
+# https://aistudio.google.com/docs/pricing and
+# https://aistudio.google.com/docs/whats-new-gemini-4-hydrogen — verified 2026-11-13
+[[override]]
+id = "gemini:gemini-4-hydrogen"
+input = 1.5
+output = 7.5
+cache_read = 0.075
+cache_write = 0.0
+reasoning = true
+input_images = true
+context_limit = 1048576
+output_limit = 65536
+
 # Gemini 4 Argon (`gemini-4-argon`, Gemini API GA 2026-10-13): pinned to the current
 # introductory rate, valid through 2026-11-30. Cached input is 95% off input.
 # EXPIRES: from 2026-12-01 the standard rate is $4 input / $20 output ($0.20 cached);

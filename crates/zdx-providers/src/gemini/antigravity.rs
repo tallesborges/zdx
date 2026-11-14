@@ -202,7 +202,7 @@ fn gemini_4_tier_level(model: &str) -> Option<&'static str> {
     if !model.starts_with("gemini-4") {
         return None;
     }
-    ["low", "medium", "high"]
+    ["low", "medium", "high", "xhigh"]
         .into_iter()
         .find(|tier| model.ends_with(&format!("-{tier}")))
 }
@@ -259,11 +259,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gemini_4_argon_tiers_send_their_own_level_whatever_the_zdx_level() {
+    fn gemini_4_tiers_send_their_own_level_whatever_the_zdx_level() {
         for (model, tier) in [
             ("gemini-4-argon-low", "low"),
             ("gemini-4-argon-medium", "medium"),
             ("gemini-4-argon-high", "high"),
+            ("gemini-4-hydrogen-low", "low"),
+            ("gemini-4-hydrogen-medium", "medium"),
+            ("gemini-4-hydrogen-high", "high"),
+            ("gemini-4-hydrogen-xhigh", "xhigh"),
         ] {
             for level in [ThinkingLevel::Off, ThinkingLevel::Low, ThinkingLevel::Max] {
                 assert!(

@@ -2682,6 +2682,7 @@ fn default_gemini_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gemini-4-hydrogen".to_string(),
             "gemini-4-carbon".to_string(),
             "gemini-4-argon".to_string(),
             "gemini-3.8-flash".to_string(),
@@ -2696,6 +2697,10 @@ fn default_google_antigravity_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gemini-4-hydrogen-xhigh".to_string(),
+            "gemini-4-hydrogen-high".to_string(),
+            "gemini-4-hydrogen-medium".to_string(),
+            "gemini-4-hydrogen-low".to_string(),
             "gemini-4-argon-high".to_string(),
             "gemini-4-argon-medium".to_string(),
             "gemini-4-argon-low".to_string(),
@@ -5564,12 +5569,16 @@ file = "prompts/template.md"
         let providers = ProvidersConfig::default();
 
         assert_eq!(
-            providers.gemini.models[..2],
-            ["gemini-4-carbon", "gemini-4-argon"]
+            providers.gemini.models[..3],
+            ["gemini-4-hydrogen", "gemini-4-carbon", "gemini-4-argon"]
         );
         assert_eq!(
-            providers.google_antigravity.models[..3],
+            providers.google_antigravity.models[..7],
             [
+                "gemini-4-hydrogen-xhigh",
+                "gemini-4-hydrogen-high",
+                "gemini-4-hydrogen-medium",
+                "gemini-4-hydrogen-low",
                 "gemini-4-argon-high",
                 "gemini-4-argon-medium",
                 "gemini-4-argon-low"
