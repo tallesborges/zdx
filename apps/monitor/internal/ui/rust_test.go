@@ -89,7 +89,7 @@ func TestRealServiceTranscript(t *testing.T) {
 			"started_at": at(time.Second), "completed_at": at(1900 * time.Millisecond), "ts": at(2 * time.Second)}),
 		ev("tool_use", map[string]any{"id": "c1", "name": "bash", "input": map[string]any{"command": "go test ./..."}, "ts": at(2 * time.Second)}),
 		bashResult("c1", "ok  example/pkg 0.1s\n", at(2*time.Second), at(3200*time.Millisecond)),
-		ev("message", map[string]any{"role": "assistant", "text": "All tests pass.", "ts": at(4 * time.Second)}),
+		ev("message", map[string]any{"role": "assistant", "text": "**All tests pass.**\n\n- `go test` passed\n- no &#x1b;[31mescape\n\n```sh\ngo test ./...\n```", "ts": at(4 * time.Second)}),
 	)
 	realsvc.AppendEvents(t, home, seedAlias,
 		ev("meta", map[string]any{"schema_version": 1, "title": "Alias topic", "alias_to": seedMain, "ts": at(0)}))
@@ -204,7 +204,7 @@ func TestRealServiceTranscript(t *testing.T) {
 	if done == nil || done.CompletedAt == nil || done.OK == nil || !*done.OK || done.DurationMS == nil || *done.DurationMS != 2000 {
 		t.Fatalf("finished live tool %+v", done)
 	}
-	finishedLine, _ := renderActivity(&finished, 120, false)
+	finishedLine, _ := renderActivity(&finished, 120, false, nil)
 	if got := ansi.Strip(strings.Join(finishedLine, "\n")); !strings.Contains(got, "✓ bash $ sleep 30 finished 2s, not saved yet") || strings.Contains(got, "sleep 30 running") {
 		t.Fatalf("finished live tool renders as:\n%s", got)
 	}
@@ -271,9 +271,16 @@ func TestRealServiceTranscript(t *testing.T) {
 	}
 	pump(m, m.openTranscript(seedAlias, seedAlias))
 	out := plain(m)
-	for _, want := range []string{"Seeded transcript", "alias of seed-main", "run the tests", "✓ bash $ go test ./...", "bash $ go vet ./... (no result)", "∴ thinking · 1 lines"} {
+	for _, want := range []string{"Seeded transcript", "alias of seed-main", "run the tests", "✓ bash $ go test ./...", "bash $ go vet ./... (no result)", "∴ thinking · 1 line",
+		"All tests pass.", "• go test passed", "• no [31mescape", // the decoded &#x1b; was dropped: Strip would have removed a real sequence
+		"sh", "▎ go test ./..."} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("transcript lacks %q:\n%s", want, out)
+		}
+	}
+	for _, raw := range []string{"**", "```", "`go test`"} {
+		if strings.Contains(out, raw) {
+			t.Fatalf("raw Markdown %q in the transcript:\n%s", raw, out)
 		}
 	}
 	_, cmd = m.Update(key("i"))

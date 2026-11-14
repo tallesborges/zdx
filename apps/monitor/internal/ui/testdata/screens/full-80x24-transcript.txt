@@ -1,22 +1,22 @@
  ‹ Transcript  Go monitor: polish the Bubble Tea dashboard
  ⠋ tool bash: go test -race ./... · 3 messages · 14 events · worker of zdx orch…
 ────────────────────────────────────────────────────────────────────────────────
- ▌ You  14:16
-   Polish the monitor. Check the real terminal output first, then fix layout,
-   alignment, and key hints.
-
- ∴ thinking · 3 lines (t to expand)
-
- ✓ read apps/monitor/internal/ui/model.go  lines 379-382 of 531
- ✓ grep func render in apps/monitor  1 match in 1 file
- ✓ edit apps/monitor/internal/ui/util.go  +2 -1
-   · usage in 48.2k out 1.8k cache 41.0k/0 claude-opus-5-5
-
- ✗ bash $ go vet ./...  exit 1 · 4.2s
-
  ▌ Z  14:20
-   Vet found an unused import. I removed it and I am running the race tests
-   now.
+   Vet found an unused import in trajectory.go.
+
+   • go vet checks the whole module.
+   • The import was strings; nothing used it after the refactor.
+     ◦ The race tests run next.
+
+   How to check it
+
+   Run this in your terminal:
+
+   sh
+   ▎ go vet ./... && go test -race -count=1 ./internal/ui ./internal/source ./i
+   ┊ nternal/wire
+
+   See the vet docs (https://pkg.go.dev/cmd/vet) for the full list of checks.
 
  ! context: Context is 81% full; older tool output will be compacted.
 

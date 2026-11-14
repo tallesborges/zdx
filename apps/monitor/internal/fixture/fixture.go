@@ -262,13 +262,27 @@ func Transcript(id string) data.Thread {
 				Head:   &data.ToolHead{Kind: "shell", Command: "go vet ./..."},
 				Body:   data.ToolBody{Kind: "streams", Streams: []data.OutputStream{{Name: "stderr", Text: "internal/ui/trajectory.go:5:2: \"strings\" imported and not used\n"}}},
 				Status: []data.ToolFact{{Text: "exit 1", Bad: true, Kind: "outcome"}, {Text: "4.2s", Kind: "duration"}}}},
-			{Type: "message", Sequence: 12, Time: "14:20", Role: "assistant", Speaker: "Z", Text: "Vet found an unused import. I removed it and I am running the race tests now."},
+			{Type: "message", Sequence: 12, Time: "14:20", Role: "assistant", Speaker: "Z", Text: MarkdownReply},
 			{Type: "notice", Sequence: 13, Time: "14:20", Kind: "context", Message: "Context is 81% full; older tool output will be compacted."},
 			{Type: "tool_running", Sequence: 14, Time: "14:21", ID: "c5", Name: "bash", RunningFor: "38s", OutputTail: "=== RUN   TestProgramQuitsCleanly\n--- PASS: TestProgramQuitsCleanly (2.77s)",
 				Input: []byte(`{"command":"go test -race ./..."}`), View: &data.ToolView{Outcome: "pending", Head: &data.ToolHead{Kind: "shell", Command: "go test -race ./..."}, Body: data.ToolBody{Kind: "empty"}}},
 		},
 	}
 }
+
+// MarkdownReply is an assistant answer with the Markdown models write:
+// bold, inline code, nested lists, a fenced block with a long line, and a
+// link.
+const MarkdownReply = "**Vet found an unused import in `trajectory.go`.**\n\n" +
+	"- `go vet` checks the **whole** module.\n" +
+	"- The import was `strings`; nothing used it after the refactor.\n" +
+	"  - The race tests run next.\n\n" +
+	"**How to check it**\n\n" +
+	"Run this in your terminal:\n\n" +
+	"```sh\n" +
+	"go vet ./... && go test -race -count=1 ./internal/ui ./internal/source ./internal/wire\n" +
+	"```\n\n" +
+	"See [the vet docs](https://pkg.go.dev/cmd/vet) for the full list of checks."
 
 // Trajectory is `thread_trajectory`.
 func (b *Backend) Trajectory(ctx context.Context, id string) (data.Trajectory, source.Origin, error) {

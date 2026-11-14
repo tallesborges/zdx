@@ -31,6 +31,7 @@ type transcriptState struct {
 	viewRows  int
 	paneLines []string
 	traj      *trajectoryState
+	md        mdCache
 }
 
 // toolRef is one tool row: its call id and its rendered line span.
@@ -123,7 +124,8 @@ func hasRunning(th *data.Thread) bool {
 
 func (t *transcriptState) rebuild(width int) {
 	t.width = width
-	t.lines, t.tools = renderActivity(t.thread, width, t.thinking)
+	t.lines, t.tools = renderActivity(t.thread, width, t.thinking, &t.md)
+	t.md.done()
 	if t.selTool >= len(t.tools) {
 		t.selTool = len(t.tools) - 1
 	}
@@ -269,8 +271,9 @@ func calls(th *data.Thread) map[string]*toolCall {
 }
 
 // renderActivity lays the transcript out as lines and records each tool
-// row's span.
-func renderActivity(th *data.Thread, width int, thinking bool) ([]string, []toolRef) {
+// row's span. Message, thinking, and interruption text is Markdown; tool
+// rows and their output are not. md may be nil.
+func renderActivity(th *data.Thread, width int, thinking bool, md *mdCache) ([]string, []toolRef) {
 	if th == nil {
 		return nil, nil
 	}
@@ -283,12 +286,18 @@ func renderActivity(th *data.Thread, width int, thinking bool) ([]string, []tool
 			lines = append(lines, "")
 		}
 	}
-	text := func(s string, style func(...string) string) {
-		for _, l := range wrapText(s, width-4) {
-			lines = append(lines, "  "+style(l))
+	prose := func(a *data.Activity, theme *mdTheme) []string {
+		return md.render(a.Sequence, a.Text, width-4, theme)
+	}
+	indent := func(ls []string) {
+		for _, l := range ls {
+			if l == "" {
+				lines = append(lines, "")
+			} else {
+				lines = append(lines, "  "+l)
+			}
 		}
 	}
-	plain := func(s ...string) string { return strings.Join(s, " ") }
 	for i := range th.Activity {
 		a := &th.Activity[i]
 		switch a.Type {
@@ -304,7 +313,7 @@ func renderActivity(th *data.Thread, width int, thinking bool) ([]string, []tool
 			}
 			lines = append(lines, style.Bold(true).Render("▌ "+who)+dim.Render("  "+a.Time))
 			if a.Text != "" {
-				text(a.Text, plain)
+				indent(prose(a, mdNormal))
 			}
 			for _, f := range a.Artifacts {
 				note := f.Kind
@@ -315,15 +324,15 @@ func renderActivity(th *data.Thread, width int, thinking bool) ([]string, []tool
 			}
 		case "reasoning":
 			gap()
-			n := len(wrapText(a.Text, width-4))
 			switch {
 			case a.Redacted:
 				lines = append(lines, dim.Render("∴ thinking (redacted)"))
 			case thinking:
 				lines = append(lines, dim.Render("∴ thinking"))
-				text(a.Text, dim.Render)
+				indent(prose(a, mdMuted))
 			default:
-				lines = append(lines, dim.Render(fmt.Sprintf("∴ thinking · %d lines (t to expand)", n)))
+				n := len(prose(a, mdMuted))
+				lines = append(lines, dim.Render(fmt.Sprintf("∴ thinking · %s (t to expand)", count(n, "line", "lines"))))
 			}
 		case "tool_use", "tool_running", "tool_result":
 			id := a.ID
@@ -365,7 +374,9 @@ func renderActivity(th *data.Thread, width int, thinking bool) ([]string, []tool
 		case "interrupted":
 			gap()
 			lines = append(lines, bad.Render("⨯ interrupted ("+a.Role+")"))
-			text(a.Text, dim.Render)
+			if a.Text != "" {
+				indent(prose(a, mdMuted))
+			}
 		default:
 			gap()
 			lines = append(lines, dim.Render("["+a.Type+"]"))
@@ -677,6 +688,10 @@ func bodyLines(b data.ToolBody, width int) []string {
 			default:
 				out = append(out, fit(dim.Render("  "+l.Text), width))
 			}
+		}
+	case "markdown":
+		for _, l := range renderMarkdown(b.Text, width-2, mdNormal) {
+			out = append(out, " "+l)
 		}
 	case "error":
 		out = append(out, bad.Render(" "+b.Code+": "+b.Message))

@@ -9,6 +9,7 @@ require (
 	charm.land/lipgloss/v2 v2.1.0
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/tallesborges/zdx/apps/shared v0.0.0
+	github.com/yuin/goldmark/v2 v2.1.16
 )
 
 require (

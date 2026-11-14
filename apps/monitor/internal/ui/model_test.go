@@ -443,7 +443,7 @@ func TestTranscriptPollsWithCursorAndOpensToolDetail(t *testing.T) {
 	_, cmd := m.Update(special(tea.KeyEnter))
 	pump(m, cmd)
 	out := plain(m)
-	for _, want := range []string{"Fixing tests", "run the tests", "∴ thinking · 1 lines", "bash $ go test ./... running 4s"} {
+	for _, want := range []string{"Fixing tests", "run the tests", "∴ thinking · 1 line", "bash $ go test ./... running 4s"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("transcript lacks %q:\n%s", want, out)
 		}
