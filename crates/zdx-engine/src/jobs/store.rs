@@ -377,19 +377,6 @@ impl JobsHome {
         read_json(&self.claim_path(job, key))
     }
 
-    /// Claims without an outcome, across all jobs. Scans every claim, so call
-    /// it at daemon start, not per tick.
-    ///
-    /// # Errors
-    /// Returns an error when the state directory cannot be read.
-    pub fn unfinished_claims(&self) -> Result<Vec<Claim>> {
-        Ok(self
-            .all_claims()?
-            .into_iter()
-            .filter(|claim| claim.outcome.is_none())
-            .collect())
-    }
-
     /// Removes finished recurring claims scheduled before `before`. Once-job
     /// claims stay: they keep a restored file from running again.
     ///
@@ -929,11 +916,13 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(stored.run_id, first.run_id, "the first claim wins");
-        assert_eq!(home.unfinished_claims().unwrap().len(), 1);
+        assert!(stored.outcome.is_none());
 
         home.update_claim(&stored.finished(Outcome::Succeeded, None))
             .unwrap();
-        assert!(home.unfinished_claims().unwrap().is_empty());
+        let claims = home.all_claims().unwrap();
+        assert_eq!(claims.len(), 1);
+        assert!(claims[0].outcome.is_some());
         let leftovers = fs::read_dir(dir.path().join("state/jobs/demo/claims"))
             .unwrap()
             .filter_map(Result::ok)

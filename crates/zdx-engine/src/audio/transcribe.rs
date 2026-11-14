@@ -80,13 +80,6 @@ impl SttProvider {
     }
 }
 
-/// Curated `provider:model` transcription (STT) options — one default per
-/// supported provider. Source of truth for the monitor Config picker.
-#[must_use]
-pub fn transcription_model_options() -> Vec<String> {
-    STT_PROVIDERS.iter().map(SttProvider::selector).collect()
-}
-
 fn require_stt_provider(kind: ProviderKind) -> Result<&'static SttProvider> {
     stt_provider(kind).ok_or_else(|| {
         anyhow!(

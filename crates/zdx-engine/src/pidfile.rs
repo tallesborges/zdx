@@ -143,11 +143,6 @@ pub fn mark_supervised(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Remove the supervision marker for `name`. Silent no-op if the file is absent.
-pub fn unmark_supervised(name: &str) {
-    let _ = fs::remove_file(supervised_path(name));
-}
-
 /// Returns true when `name` has a supervision marker whose owning process is alive.
 ///
 /// A stale marker (process gone) is treated as unsupervised and is cleaned up.

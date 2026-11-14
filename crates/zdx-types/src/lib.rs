@@ -26,8 +26,7 @@ pub use providers::{
 };
 pub use tool_view::{ToolView, ViewLimits, tool_output_view, tool_view};
 pub use tools::{
-    ToolDefinition, ToolResult, ToolResultBlock, ToolResultContent, primary_input_key,
-    tool_command_text,
+    ToolDefinition, ToolResult, ToolResultBlock, ToolResultContent, tool_command_text,
 };
 pub mod config;
 pub use config::{TextVerbosity, ThinkingLevel};

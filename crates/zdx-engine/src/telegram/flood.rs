@@ -1,5 +1,5 @@
-//! Flood control and delivery-outcome classification shared by every ZDX
-//! Telegram client (the bot runtime and [`super::TelegramOutbound`]).
+//! Flood control and delivery-outcome classification for
+//! [`super::TelegramOutbound`].
 //!
 //! What Telegram documents (Bots FAQ, Bot API `ResponseParameters`): avoid
 //! more than about one message per second in a chat, at most 20 messages per
@@ -9,24 +9,16 @@
 //! What it does not document, and this module therefore does not assume:
 //! whether a 429 is scoped to one chat, one method, or the whole bot; whether
 //! forum topics have their own budget; and how edits, typing, deletes, or
-//! albums count. The pacing below is ZDX policy derived from the published
-//! numbers, keyed per chat and applied to new messages only. A refusal can
-//! still arrive at any time, so every caller must handle 429 regardless.
+//! albums count. This module does no pacing: per-chat pacing is the Go
+//! gateway's (`apps/gateway/internal/telegram/pacer.go`). A refusal can
+//! arrive at any time, so every caller must handle 429.
 
-use std::collections::VecDeque;
 use std::fmt;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Result;
 use serde_json::Value;
 
-/// Policy: minimum spacing between new messages in one chat ("avoid sending
-/// more than one message per second").
-pub const MIN_NEW_MESSAGE_SPACING: Duration = Duration::from_secs(1);
-/// Policy: rolling window for the group limit.
-pub const GROUP_WINDOW: Duration = Duration::from_mins(1);
-/// Policy: new messages allowed per [`GROUP_WINDOW`] in a group chat.
-pub const GROUP_WINDOW_MAX_NEW_MESSAGES: usize = 20;
 /// Wait used when a 429 carries no usable `retry_after`.
 const FALLBACK_RETRY_AFTER: Duration = Duration::from_secs(5);
 
@@ -164,29 +156,6 @@ impl fmt::Display for TelegramTransportError {
 
 impl std::error::Error for TelegramTransportError {}
 
-/// A send skipped locally because the chat is inside a flood wait that
-/// Telegram announced earlier. Nothing was sent.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FloodWaitActive {
-    pub method: String,
-    pub chat_id: i64,
-    pub remaining: Duration,
-}
-
-impl fmt::Display for FloodWaitActive {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} not sent: Telegram flood wait for chat {} has {}s left",
-            self.method,
-            self.chat_id,
-            self.remaining.as_secs().max(1)
-        )
-    }
-}
-
-impl std::error::Error for FloodWaitActive {}
-
 /// Parses a Bot API response body into its `result`.
 ///
 /// # Errors
@@ -222,8 +191,8 @@ pub fn parse_response(method: &str, bytes: &[u8]) -> Result<Value> {
 /// What a failed call means for delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureClass {
-    /// Flood control refused it (or a known wait is still running). Not
-    /// delivered; may be repeated after the wait.
+    /// Flood control refused it. Not delivered; may be repeated after the
+    /// wait.
     FloodWait(Duration),
     /// Telegram refused it for another reason. Not delivered.
     Rejected,
@@ -235,12 +204,6 @@ pub enum FailureClass {
 }
 
 impl FailureClass {
-    /// Whether the item is known not to have been delivered.
-    #[must_use]
-    pub fn is_definitely_undelivered(self) -> bool {
-        !matches!(self, Self::Unknown)
-    }
-
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -271,9 +234,6 @@ pub fn classify(err: &anyhow::Error) -> FailureClass {
                 TransportStage::NotSent => FailureClass::NotSent,
                 TransportStage::Ambiguous => FailureClass::Unknown,
             };
-        }
-        if let Some(active) = cause.downcast_ref::<FloodWaitActive>() {
-            return FailureClass::FloodWait(active.remaining);
         }
     }
     FailureClass::NotSent
@@ -312,84 +272,11 @@ impl RetryPolicy {
     }
 }
 
-/// Per-chat pacing and cooldown state.
-///
-/// Only new messages are paced and counted; edits, deletes, and typing are
-/// not, because Telegram does not document how they count. A flood wait
-/// blocks every call to the chat until it ends. Admission is checked and
-/// recorded in one step at send time, so waiters that wake together still go
-/// out one slot apart.
-#[derive(Debug, Default)]
-pub struct ChatPacer {
-    last_new_message: Option<Instant>,
-    /// Send times of recent new messages, ascending.
-    window: VecDeque<Instant>,
-    cooldown_until: Option<Instant>,
-}
-
-impl ChatPacer {
-    /// Time left in an announced flood wait.
-    #[must_use]
-    pub fn cooldown_remaining(&self, now: Instant) -> Option<Duration> {
-        self.cooldown_until
-            .and_then(|until| until.checked_duration_since(now))
-            .filter(|left| !left.is_zero())
-    }
-
-    /// Records a flood refusal: nothing goes to the chat for `retry_after`.
-    pub fn note_flood_wait(&mut self, now: Instant, retry_after: Duration) {
-        let until = now + retry_after;
-        self.cooldown_until = Some(self.cooldown_until.map_or(until, |c| c.max(until)));
-    }
-
-    /// Admits a new message now and counts it, or returns the earliest time
-    /// it may be retried. A later refusal or another sender can move that
-    /// time, so callers check again after waiting.
-    ///
-    /// # Errors
-    /// The earliest admission time when the message may not go out now.
-    pub fn try_admit_new_message(&mut self, now: Instant, is_group: bool) -> Result<(), Instant> {
-        self.prune(now);
-        let mut at = now;
-        if let Some(until) = self.cooldown_until {
-            at = at.max(until);
-        }
-        if let Some(last) = self.last_new_message {
-            at = at.max(last + MIN_NEW_MESSAGE_SPACING);
-        }
-        if is_group && self.window.len() >= GROUP_WINDOW_MAX_NEW_MESSAGES {
-            let oldest_in_limit = self.window[self.window.len() - GROUP_WINDOW_MAX_NEW_MESSAGES];
-            at = at.max(oldest_in_limit + GROUP_WINDOW);
-        }
-        if at > now {
-            return Err(at);
-        }
-        self.record_new_message(now);
-        Ok(())
-    }
-
-    /// Counts a new message sent at `at` without waiting for admission.
-    pub fn record_new_message(&mut self, at: Instant) {
-        self.last_new_message = Some(self.last_new_message.map_or(at, |last| last.max(at)));
-        let idx = self.window.partition_point(|t| *t <= at);
-        self.window.insert(idx, at);
-    }
-
-    fn prune(&mut self, now: Instant) {
-        while let Some(first) = self.window.front() {
-            if *first + GROUP_WINDOW <= now {
-                self.window.pop_front();
-            } else {
-                break;
-            }
-        }
-    }
-}
-
 /// One Telegram call attempt, for the per-call log line.
 #[derive(Debug, Clone, Copy)]
 pub struct CallRecord<'a> {
-    /// `"bot"` (the bot runtime) or `"outbound"` (`zdx telegram`, the tool).
+    /// `"outbound"` (`zdx telegram`, the tool). The Go gateway logs its own
+    /// calls as `"gateway"`.
     pub client: &'static str,
     pub bot: &'a str,
     pub method: &'a str,
@@ -405,7 +292,7 @@ pub struct CallRecord<'a> {
 /// Logs one call attempt. New messages log at `info` so message rates can be
 /// measured from the default log; other calls log at `debug`. Message bodies
 /// and tokens are never logged. `client` plus `pid` identify the sending
-/// process (the bot, or a tool/CLI process); a reply's delivery record logs
+/// tool or CLI process; a reply's delivery record logs
 /// the message ids it produced, which ties these lines to that record.
 pub fn log_call(record: &CallRecord<'_>, outcome: Result<Option<i64>, &anyhow::Error>) {
     let waited_ms = u64::try_from(record.waited.as_millis()).unwrap_or(u64::MAX);
@@ -451,10 +338,7 @@ pub fn log_call(record: &CallRecord<'_>, outcome: Result<Option<i64>, &anyhow::E
                 _ => None,
             };
             let error = format!("{err:#}");
-            let skipped_locally = err
-                .chain()
-                .any(<dyn std::error::Error>::is::<FloodWaitActive>);
-            if record.new_message && !skipped_locally {
+            if record.new_message {
                 tracing::warn!(
                     client = record.client,
                     pid,
@@ -482,11 +366,7 @@ pub fn log_call(record: &CallRecord<'_>, outcome: Result<Option<i64>, &anyhow::E
                     retry_after_s,
                     waited_ms,
                     duration_ms,
-                    outcome = if skipped_locally {
-                        "skipped_cooldown"
-                    } else {
-                        class.label()
-                    },
+                    outcome = class.label(),
                     error,
                     "Telegram call failed"
                 );
@@ -633,96 +513,6 @@ mod tests {
         assert_eq!(
             policy.delay_before_retry(1, Duration::from_secs(115), wait),
             None
-        );
-    }
-
-    /// Admits like a waiter would: retry at the returned time until admitted.
-    fn admit(pacer: &mut ChatPacer, mut now: Instant, is_group: bool) -> Instant {
-        loop {
-            match pacer.try_admit_new_message(now, is_group) {
-                Ok(()) => return now,
-                Err(at) => now = at,
-            }
-        }
-    }
-
-    #[test]
-    fn pacer_spaces_new_messages_by_one_second() {
-        let start = Instant::now();
-        let mut pacer = ChatPacer::default();
-        assert_eq!(admit(&mut pacer, start, false), start);
-        assert_eq!(
-            pacer.try_admit_new_message(start, false),
-            Err(start + MIN_NEW_MESSAGE_SPACING)
-        );
-        // An unpaced send also pushes the next slot.
-        pacer.record_new_message(start + Duration::from_secs(5));
-        assert_eq!(
-            admit(&mut pacer, start, false),
-            start + Duration::from_secs(6)
-        );
-    }
-
-    #[test]
-    fn pacer_caps_groups_at_twenty_per_minute() {
-        let start = Instant::now();
-        let mut pacer = ChatPacer::default();
-        let mut last = start;
-        for _ in 0..GROUP_WINDOW_MAX_NEW_MESSAGES {
-            last = admit(&mut pacer, last, true);
-        }
-        assert_eq!(last, start + Duration::from_secs(19));
-        // The 21st waits until the first one leaves the window.
-        assert_eq!(admit(&mut pacer, last, true), start + GROUP_WINDOW);
-    }
-
-    #[test]
-    fn private_chats_are_not_capped_per_minute() {
-        let start = Instant::now();
-        let mut pacer = ChatPacer::default();
-        let mut last = start;
-        for _ in 0..=GROUP_WINDOW_MAX_NEW_MESSAGES {
-            last = admit(&mut pacer, last, false);
-        }
-        assert_eq!(last, start + Duration::from_secs(20));
-    }
-
-    #[test]
-    fn waiters_released_by_a_cooldown_still_go_out_one_slot_apart() {
-        let start = Instant::now();
-        let mut pacer = ChatPacer::default();
-        pacer.note_flood_wait(start, Duration::from_secs(10));
-        let end = start + Duration::from_secs(10);
-        // Two senders both wake when the wait ends: one goes, one waits.
-        assert_eq!(pacer.try_admit_new_message(end, true), Ok(()));
-        assert_eq!(
-            pacer.try_admit_new_message(end, true),
-            Err(end + MIN_NEW_MESSAGE_SPACING)
-        );
-    }
-
-    #[test]
-    fn cooldown_delays_admission_and_reports_remaining() {
-        let start = Instant::now();
-        let mut pacer = ChatPacer::default();
-        pacer.note_flood_wait(start, Duration::from_secs(11));
-        assert_eq!(
-            pacer.cooldown_remaining(start + Duration::from_secs(1)),
-            Some(Duration::from_secs(10))
-        );
-        assert_eq!(
-            pacer.try_admit_new_message(start, true),
-            Err(start + Duration::from_secs(11))
-        );
-        assert_eq!(
-            pacer.cooldown_remaining(start + Duration::from_secs(11)),
-            None
-        );
-        // A shorter later wait does not shorten the running one.
-        pacer.note_flood_wait(start, Duration::from_secs(2));
-        assert_eq!(
-            pacer.cooldown_remaining(start),
-            Some(Duration::from_secs(11))
         );
     }
 }

@@ -213,8 +213,8 @@ fn resolve_model(config: &Config, speech: &SpeechConfig) -> Result<Option<(Provi
     }))
 }
 
-/// Curated `provider:model` speech (TTS) options — one default per supported
-/// provider. Source of truth for the monitor Config picker.
+/// Curated `provider:model` speech (TTS) options: one default per supported
+/// provider. No CLI or view exposes it yet.
 #[must_use]
 pub fn speech_model_options() -> Vec<String> {
     SPEECH_PROVIDERS

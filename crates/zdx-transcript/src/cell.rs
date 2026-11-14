@@ -172,7 +172,7 @@ fn tool_key_arg(name: &str, input: &Value) -> Option<String> {
 /// Sibling of [`tool_key_arg`], which returns a truncated/summarized form for
 /// compact headers. Shared with the engine's active-run marker via
 /// `zdx_types`.
-pub use zdx_types::{primary_input_key, tool_command_text};
+pub use zdx_types::tool_command_text;
 
 /// Regex pattern matching `[Image N]` placeholders in text (e.g., `[Image 1]`, `[Image 23]`).
 fn highlight_image_placeholders(styled_line: StyledLine) -> StyledLine {

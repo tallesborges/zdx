@@ -19,8 +19,7 @@ mod wrap;
 
 pub use build::build_transcript_from_events;
 pub use cell::{
-    CellId, ChildToolEntry, ChildToolState, HistoryCell, ToolState, gap_after, primary_input_key,
-    tool_command_text,
+    CellId, ChildToolEntry, ChildToolState, HistoryCell, ToolState, gap_after, tool_command_text,
 };
 pub use convert::{convert_style, convert_styled_line, wrap_line_to_width};
 pub use reasoning::reasoning_display_text;

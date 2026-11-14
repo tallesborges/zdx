@@ -126,28 +126,6 @@ pub fn tool_command_text(name: &str, input: &Value) -> String {
     }
 }
 
-/// The input key holding a tool's primary command/target, when it has one.
-///
-/// Inverse companion of [`tool_command_text`]: lets a consumer that only kept
-/// the summarized command (e.g. an active-run marker) rebuild a displayable
-/// input object like `{"command": "cargo build"}`.
-#[must_use]
-pub fn primary_input_key(name: &str) -> Option<&'static str> {
-    match name {
-        "bash" => Some("command"),
-        "read" | "write" | "edit" => Some("file_path"),
-        "glob" | "grep" => Some("pattern"),
-        "fetch_webpage" => Some("url"),
-        "read_thread" => Some("thread_id"),
-        "thread_search" => Some("query"),
-        "apply_patch" => Some("patch"),
-        "invoke_subagent" => Some("prompt"),
-        "web_search" => Some("objective"),
-        "skill" | "skill_exec" => Some("name"),
-        _ => None,
-    }
-}
-
 /// Content block within a tool result.
 ///
 /// Anthropic API requires `tool_result` content to be an array of blocks
