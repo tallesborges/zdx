@@ -1,4 +1,3 @@
- zdx monitor   ● orchestrator busy · 2 threads with work                 ? help
  1 Agents 6  2 Threads  3 Svcs  4 Jobs  5 Usage  6 Logs  7 Procs  8 Config
 
  Threads  all threads · latest 6 (recent list, no full browse yet)
@@ -8,7 +7,7 @@
        1h  Weekly English practice
       17h  A very long thread title that goes on and on to check how the list c…
       12d  b0d7e6f5-1a2b-4c3d-8e9f-0a1b2c3d4e5f
-     365d  Trip to Florianópolis: hotels and flights
+     365d  Plan a weekend trip: hotels and flights
 
 ── Selected thread ─────────────────────────────────────────────────────────────
   Title      Go monitor: polish the Bubble Tea dashboard
@@ -21,4 +20,5 @@
 
 
 
- ↵ transcript  t show workers  ? help  q quit  1-8 tabs          updated 0s ago
+
+ ↵ transcript  t show workers  q quit     updated 0s ago · ● connected · ? help

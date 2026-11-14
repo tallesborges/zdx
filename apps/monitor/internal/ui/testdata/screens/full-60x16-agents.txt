@@ -1,4 +1,3 @@
- zdx monitor   ● orchestrator busy · 2 threads with work
  1 Agents 6  2  3  4  5  6  7  8
  Active agents  6 runs
      RUN             STATE      MODEL
@@ -6,11 +5,12 @@
   ⠋  ├─ worker       thinking   claude…:claude-opus-5-5@high
   ⠋  │  └─ explorer  retrying   …hinking-exp-2026-11@minimal
   ⠋  └─ oracle       answering  openai-co…:gpt-6-astra@xhigh
-  ◌  parent, idle               telegram--1009876543210-top…
+  ◌  Plan a weeken…  idle       claude-cli:claude-opus-5-5
   ⠋  └─ worker       tool       clau…:claude-sonnet-5@medium
 
 ── Selected run ────────────────────────────────────────────
   Activity   tool  bash: go test -race ./... (+1 more)
   Thread     telegram--1001234567890-topic-42
   Turn       14m · last event 3s ago · heartbeat 1s ago
- ↵ transcript  ? help  q quit  1-8 tabs      updated 0s ago
+  Tools      2 running · 5 finished
+ ↵ transcript  q quit  1-8 tabs        ● connected · ? help

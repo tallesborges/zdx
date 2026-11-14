@@ -1,4 +1,3 @@
- zdx monitor   ● orchestrator idle                                       ? help
  1 Agents 0  2 Threads  3 Svcs  4 Jobs  5 Usage  6 Logs  7 Procs  8 Config
 
  Threads  all threads · latest 0 (recent list, no full browse yet)
@@ -21,4 +20,5 @@
 
 
 
- ↵ transcript  t show workers  ? help  q quit  1-8 tabs          updated 0s ago
+
+ ↵ transcript  t show workers  q quit     updated 0s ago · ● connected · ? help

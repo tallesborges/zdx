@@ -1,0 +1,50 @@
+ zdx monitor · read-only dashboard
+
+  Everywhere
+    1-8  tab  ← →           switch tabs
+    j k  ↑ ↓  wheel         move
+    pgup pgdn  ctrl+u/d     page
+    gg  G                   top, bottom
+    r                       refresh this tab now
+    ?                       this help (esc closes)
+    q  ctrl+c               quit
+
+  Tabs
+    Agents  ↵               open the selected run's transcript
+    Threads  ↵  t           open transcript · all threads or workers only
+    Usage  Q  [ ]           fetch quotas now · token window 1/7/30/90/365 days
+    Logs  l / esc [ ] G     level · filter text · clear · older/newer day · follow
+    Config  [ ]             previous/next workspace
+
+  Transcript
+    n p  tab                next/previous tool
+    ↵                       tool detail (output, input)
+    t                       expand/collapse thinking
+    i                       timing (trajectory)
+    G                       follow new activity
+    esc                     back
+
+  Connection
+    state                   ● connected
+    project root            /Users/example/Documents
+    ZDX home                /Users/example/.zdx
+    socket                  /Users/example/.zdx/run/orchestrator.sock
+    protocol                2
+    views root              /Users/example/Documents
+    capabilities            thread_views, monitor_views
+    tracked threads         3 (threads the service holds state for)
+    cli fallback            off
+
+  Data sources
+    Views come from the orchestrator socket; Services and Jobs from `zdx service status --json`
+    and `zdx jobs list --daemon --json`; Logs from $ZDX_HOME/logs. Nothing here writes.
+    Not here yet: service start/stop/restart, bg kill, job model edit (use the zdx CLI),
+    full thread browse and filters, config edits.
+
+
+
+
+
+
+
+ esc close  j/k scroll                                                                                                                                                                      ● connected

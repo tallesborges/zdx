@@ -1,4 +1,3 @@
- zdx monitor   ● orchestrator busy · 2 threads with work                                                         ? help
  1 Agents 6  2 Threads  3 Services  4 Jobs 2!  5 Usage  6 Logs  7 Background  8 Config
 
  Jobs  resolved as the running daemon does · root /Users/example/Documents
@@ -31,4 +30,5 @@
 
 
 
- ? help  q quit  1-8 tabs                                                                                updated 0s ago
+
+ q quit  1-8 tabs                                                                 updated 0s ago · ● connected · ? help

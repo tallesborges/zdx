@@ -168,6 +168,11 @@ var golden = []struct {
 	{fixture.Empty, 80, 24, "threads"},
 	{fixture.Loading, 80, 24, "agents"},
 	{fixture.Stale, 80, 24, "agents"},
+	{fixture.Scope, 80, 24, "usage"},
+	{fixture.Scope, 120, 34, "config"},
+	{fixture.Scope, 60, 16, "usage"},
+	{fixture.Down, 60, 16, "agents"},
+	{fixture.Full, 200, 50, "help"},
 }
 
 // TestScreenSnapshots compares frames with testdata/screens. Regenerate
@@ -339,5 +344,44 @@ func TestDurationColumnsAreNeverCut(t *testing.T) {
 	frame := stripANSI(capture(t, fixture.Full, 80, 30, []tea.Msg{key("2"), key("j"), key("j"), key("j")}))
 	if !strings.Contains(frame, "Last write 17h 58m ago") {
 		t.Fatalf("the detail must keep the full age:\n%s", frame)
+	}
+}
+
+// TestChromeIsTabsOnTopStatusAtTheBottom: no header row above the tabs,
+// one footer line with the connection and help, the scope warning only on
+// the tabs it concerns, at every size.
+func TestChromeIsTabsOnTopStatusAtTheBottom(t *testing.T) {
+	steps := map[string][]tea.Msg{}
+	for _, s := range screens {
+		steps[s.name] = s.steps
+	}
+	for _, size := range frameSizes {
+		for _, sc := range []fixture.Scenario{fixture.Full, fixture.Down, fixture.Scope} {
+			for _, name := range []string{"agents", "threads", "usage", "config"} {
+				lines := strings.Split(stripANSI(capture(t, sc, size[0], size[1], steps[name])), "\n")
+				if !strings.HasPrefix(strings.TrimSpace(lines[0]), "1 ") {
+					t.Fatalf("%s %v %s: first line is not the tab bar: %q", sc, size, name, lines[0])
+				}
+				foot := lines[len(lines)-1]
+				want := "● connected"
+				if sc == fixture.Down {
+					want = "○ disconnected"
+				}
+				if size[0] < 80 {
+					want = want[:len("●")]
+				}
+				if !strings.Contains(foot, want) {
+					t.Fatalf("%s %v %s: footer %q lacks %q", sc, size, name, foot, want)
+				}
+				all := strings.Join(lines, "\n")
+				if strings.Count(all, "? help") > 1 || strings.Contains(all, "orchestrator busy") || strings.Contains(all, "orchestrator idle") {
+					t.Fatalf("%s %v %s: repeated help or old header:\n%s", sc, size, name, all)
+				}
+				scoped := sc == fixture.Scope && (name == "usage" || name == "config")
+				if got := strings.Contains(foot, "! scope"); got != scoped {
+					t.Fatalf("%s %v %s: scope shown=%v: %q", sc, size, name, got, foot)
+				}
+			}
+		}
 	}
 }

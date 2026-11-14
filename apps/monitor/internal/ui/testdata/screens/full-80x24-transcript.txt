@@ -21,4 +21,4 @@
  ! context: Context is 81% full; older tool output will be compacted.
 
  … bash $ go test -race ./... running 38s
- esc back  n/p tools  ↵ detail  t thinking  i timing  G follow   updated 0s ago
+ esc back  n/p tools  ↵ detail            updated 0s ago · ● connected · ? help

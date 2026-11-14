@@ -260,6 +260,7 @@ type Activity struct {
 	CacheReadTokens  uint64  `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens uint64  `json:"cache_write_tokens,omitempty"`
 	Model            *string `json:"model,omitempty"`
+	Provider         *string `json:"provider,omitempty"`
 	ContextLimit     *uint64 `json:"context_limit,omitempty"`
 
 	Kind    string `json:"kind,omitempty"`

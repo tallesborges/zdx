@@ -1,0 +1,16 @@
+ 1  2  3  4  5 Usage  6  7  8
+ Subscription quotas  fetched 0s ago · every 5m · Q refresh
+    WINDOW             USED  REMAINING  RESETS
+  Claude (work)  claude-cli · max plan
+    5h      ███░░░░░  42.5%      57.5%  in 2h
+    week    ███████░  91.0%       9.0%  in 2d 2h
+
+  ChatGPT  openai-codex · pro plan
+    5h      █░░░░░░░   7.0%      93.0%  unknown
+
+  Antigravity  google-antigravity
+    ✗ expired · re-login in zdx
+
+── Token usage · last 7 days · [ ] change ──────────────────
+  412.9M tokens · 18.3k requests · $38.27 billed · 380.1M o…
+ Q refresh quotas  [ ] days  ! scope · ● connected · ? help

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tallesborges/zdx/apps/monitor/internal/source"
@@ -56,11 +57,7 @@ func (m *Model) renderFrame() string {
 		return m.renderTranscript()
 	}
 	w := m.contentWidth()
-	var lines []string
-	for _, l := range m.headerLines() {
-		lines = append(lines, fit(l, w))
-	}
-	lines = append(lines, m.tabBar(w))
+	lines := []string{m.tabBar(w)}
 	if m.spacer() {
 		lines = append(lines, "")
 	}
@@ -121,66 +118,54 @@ func (m *Model) pending(k fetchKey, what string) []string {
 	return []string{"", "  " + dim.Render(spinner(m.now())+" Loading "+what+"…")}
 }
 
-// connection is the header's state of the orchestrator service.
-func (m *Model) connection() string {
+// connection is the footer's state of the orchestrator service: whether
+// the socket answers, not whether agents are busy (the Agents tab shows
+// that). short drops the words for narrow terminals.
+func (m *Model) connection(short bool) string {
 	st := m.fetch[keyStatus]
-	switch {
-	case m.status != nil:
-		busy := 0
-		for _, t := range m.status.Threads {
-			if t.State != "idle" || t.QueuedInputs > 0 {
-				busy++
-			}
+	label := func(style lipgloss.Style, mark, text string) string {
+		if short {
+			return style.Render(mark)
 		}
-		if m.status.Settled {
-			return ok.Render("●") + " orchestrator idle"
-		}
-		s := warn.Render("●") + " orchestrator busy"
-		if busy > 0 {
-			s += dim.Render(" · " + count(busy, "thread", "threads") + " with work")
-		}
-		return s
-	case st.err != nil && errors.Is(st.err, wire.ErrNotRunning):
-		return bad.Render("○ orchestrator not running")
-	case st.err != nil:
-		return bad.Render("○ orchestrator unreachable")
+		return style.Render(mark + " " + text)
 	}
-	return dim.Render(spinner(m.now()) + " connecting…")
+	switch {
+	case m.status != nil && len(m.missingViews()) > 0:
+		return label(warn, "●", "connected, views missing")
+	case m.status != nil:
+		return label(ok, "●", "connected")
+	case st.err != nil && errors.Is(st.err, wire.ErrNotRunning):
+		return label(bad, "○", "disconnected")
+	case st.err != nil:
+		return label(bad, "○", "unreachable")
+	}
+	return label(dim, spinner(m.now()), "connecting")
 }
 
-// headerLines are the title and connection, plus a line for each warning
-// the reader must see. Paths and protocol details are in the help screen.
-func (m *Model) headerLines() []string {
-	left := " " + title.Render("zdx monitor") + "   " + m.connection()
-	right := dim.Render("? help ")
-	gap := m.contentWidth() - ansi.StringWidth(left) - ansi.StringWidth(right)
-	if gap < 1 {
-		right, gap = "", 0
+// missingViews are the view capabilities the running service lacks.
+func (m *Model) missingViews() []string {
+	if m.status == nil {
+		return nil
 	}
-	lines := []string{left + strings.Repeat(" ", gap) + right}
-	warnLine := func(s string) { lines = append(lines, " "+warn.Render("! ")+s) }
-	if m.status != nil {
-		if r := m.status.ViewsRoot; r != nil && !sameDir(*r, m.opts.Root) {
-			warnLine(fmt.Sprintf("The service reads views for %s, not --root %s: config, usage, and jobs are for its root.", tildePath(*r), tildePath(m.opts.Root)))
-		}
-		var missing []string
-		for _, c := range []string{wire.CapMonitorViews, wire.CapThreadViews} {
-			if !m.status.Has(c) {
-				missing = append(missing, c)
-			}
-		}
-		if len(missing) > 0 {
-			warnLine("The orchestrator does not serve " + strings.Join(missing, ", ") + ": update and restart it.")
-		}
-	} else if m.fetch[keyStatus].err != nil {
-		if m.opts.CLIFallback {
-			warnLine("Views run in this process through `zdx views` (--cli-fallback); this refreshes derived caches.")
-		} else {
-			warnLine("Agents, threads, usage, and config need the orchestrator (or --cli-fallback). Services, jobs, and logs still work.")
+	var missing []string
+	for _, c := range []string{wire.CapMonitorViews, wire.CapThreadViews} {
+		if !m.status.Has(c) {
+			missing = append(missing, c)
 		}
 	}
-	return lines
+	return missing
 }
+
+// scopeMismatch is the service's views root when it is not --root.
+func (m *Model) scopeMismatch() (string, bool) {
+	if m.status == nil || m.status.ViewsRoot == nil || sameDir(*m.status.ViewsRoot, m.opts.Root) {
+		return "", false
+	}
+	return *m.status.ViewsRoot, true
+}
+
+// scopeAffects lists the tabs whose answers come from the views root.
+func scopeAffects(t tab) bool { return t == tabUsage || t == tabConfig }
 
 // badge is a tab's short count, when its data is loaded.
 func (m *Model) badge(t tab) (string, bool) {
@@ -254,8 +239,9 @@ func (m *Model) tabBar(width int) string {
 	return fit(build(true, false, true), width)
 }
 
-// footerLines are the key hints and how fresh the shown data is; a stale
-// surface gets its own line with the error.
+// footerLines are the key hints on the left and, on the right, how fresh
+// the shown data is, the connection, and the help key. A stale surface gets
+// its own line with the error.
 func (m *Model) footerLines() []string {
 	keys := tabKeys(m.tab)
 	if m.transcript != nil {
@@ -272,11 +258,44 @@ func (m *Model) footerLines() []string {
 			lines = append(lines, " "+warn.Render(fmt.Sprintf("! Could not refresh %s: %s. Showing data from %s ago.", k, oneLine(st.err.Error()), span(now.Sub(st.fetched)))))
 		}
 	}
-	right := ""
-	if len(keys) > 0 {
-		right = freshness(m.fetch[keys[0]], now)
-	}
 	w := m.contentWidth()
+	fresh := ""
+	if len(keys) > 0 {
+		fresh = freshness(m.fetch[keys[0]], now)
+	}
+	scope, scopeShort := "", ""
+	if root, ok := m.scopeMismatch(); ok && m.transcript == nil && scopeAffects(m.tab) {
+		scope, scopeShort = warn.Render("! scope "+tildePath(root)), warn.Render("! scope")
+	}
+	help := keyStyle.Render("?") + " " + dim.Render("help")
+	sep := dim.Render(" · ")
+	join := func(parts ...string) string {
+		var keep []string
+		for _, p := range parts {
+			if p != "" {
+				keep = append(keep, p)
+			}
+		}
+		return strings.Join(keep, sep) + " "
+	}
+	// Drop the least important parts until the right side leaves room for
+	// some hints: freshness first, then the scope path (help has it), then
+	// words. The scope mark and the connection dot always stay.
+	conn, connShort := m.connection(false), m.connection(true)
+	right := ""
+	for _, r := range []string{
+		join(fresh, scope, conn, help),
+		join(scope, conn, help),
+		join(scopeShort, conn, help),
+		join(scopeShort, connShort, help),
+		join(scopeShort, connShort),
+		join(connShort),
+	} {
+		right = r
+		if ansi.StringWidth(r) <= w-24 {
+			break
+		}
+	}
 	left := " " + m.hints(w-ansi.StringWidth(right)-3)
 	gap := w - ansi.StringWidth(left) - ansi.StringWidth(right)
 	return append(lines, left+strings.Repeat(" ", max(gap, 1))+right)
@@ -289,17 +308,17 @@ func freshness(st fetchState, now time.Time) string {
 	}
 	switch {
 	case st.err != nil && st.fetched.IsZero():
-		return bad.Render("load failed ")
+		return bad.Render("load failed")
 	case st.err != nil:
-		return warn.Render("stale " + span(now.Sub(st.fetched)) + " ")
+		return warn.Render("stale " + span(now.Sub(st.fetched)))
 	case st.fetched.IsZero() && st.inflight:
-		return dim.Render(spinner(now) + " loading ")
+		return dim.Render(spinner(now) + " loading")
 	case st.fetched.IsZero():
 		return ""
 	case st.inflight:
-		return dim.Render(spinner(now) + " refreshing" + origin + " ")
+		return dim.Render(spinner(now) + " refreshing" + origin)
 	}
-	return dim.Render("updated " + span(now.Sub(st.fetched)) + " ago" + origin + " ")
+	return dim.Render("updated " + span(now.Sub(st.fetched)) + " ago" + origin)
 }
 
 // hint renders `key action` pairs.
@@ -330,7 +349,7 @@ func (m *Model) hints(width int) string {
 		case m.transcript.pane != nil:
 			return hintFit(width, "esc", "back", "j/k", "scroll")
 		}
-		return hintFit(width, "esc", "back", "n/p", "tools", "↵", "detail", "t", "thinking", "i", "timing", "G", "follow", "?", "help")
+		return hintFit(width, "esc", "back", "n/p", "tools", "↵", "detail", "t", "thinking", "i", "timing", "G", "follow")
 	}
 	var tabHints []string
 	switch m.tab {
@@ -349,7 +368,7 @@ func (m *Model) hints(width int) string {
 	case tabConfig:
 		tabHints = []string{"[ ]", "workspace"}
 	}
-	return hintFit(width, append(tabHints, "?", "help", "q", "quit", "1-8", "tabs")...)
+	return hintFit(width, append(tabHints, "q", "quit", "1-8", "tabs")...)
 }
 
 // helpLines list every key and the connection details.
@@ -385,6 +404,7 @@ func (m *Model) helpLines() []string {
 		"  " + bold.Render("Connection"),
 	}
 	line := func(k, v string) { out = append(out, "    "+dim.Render(pad(k, 24))+v) }
+	line("state", m.connection(false))
 	line("project root", m.opts.Root)
 	line("ZDX home", m.opts.Home)
 	line("socket", source.SocketPath(m.opts.Home))
@@ -393,8 +413,24 @@ func (m *Model) helpLines() []string {
 		line("views root", orDash(str(m.status.ViewsRoot)))
 		line("capabilities", strings.Join(m.status.Capabilities, ", "))
 		line("tracked threads", fmt.Sprintf("%d (threads the service holds state for)", len(m.status.Threads)))
+		if missing := m.missingViews(); len(missing) > 0 {
+			line("", warn.Render("missing "+strings.Join(missing, ", ")+": update and restart the orchestrator"))
+		}
 	} else if err := m.fetch[keyStatus].err; err != nil {
 		line("status", bad.Render(oneLine(err.Error())))
+		if m.opts.CLIFallback {
+			line("", warn.Render("views run in this process through `zdx views`; this refreshes derived caches"))
+		} else {
+			line("", dim.Render("agents, threads, usage, and config need the orchestrator (or --cli-fallback);"))
+			line("", dim.Render("services, jobs, and logs still work"))
+		}
+	}
+	if root, ok := m.scopeMismatch(); ok {
+		out = append(out, "",
+			"  "+warn.Render("Scope"),
+			"    "+fmt.Sprintf("The service reads views for %s, not --root %s.", root, m.opts.Root),
+			"    "+dim.Render("Usage and Config answer for the service's root; the footer of those tabs shows \"! scope\"."),
+			"    "+dim.Render("To match, start the monitor with --root "+root+"."))
 	}
 	fallback := "off"
 	if m.opts.CLIFallback {
@@ -423,6 +459,8 @@ func (m *Model) renderHelp() string {
 	for len(out) < h {
 		out = append(out, "")
 	}
-	out = append(out, " "+hint("esc", "close", "j/k", "scroll"))
+	right := m.connection(false) + " "
+	left := " " + hint("esc", "close", "j/k", "scroll")
+	out = append(out, left+strings.Repeat(" ", max(m.contentWidth()-ansi.StringWidth(left)-ansi.StringWidth(right), 1))+right)
 	return strings.Join(out, "\n")
 }

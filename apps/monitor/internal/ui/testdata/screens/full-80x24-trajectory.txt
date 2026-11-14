@@ -21,4 +21,4 @@
 
 
 
- esc back  j/k scroll  r refresh                                 updated 0s ago
+ esc back  j/k scroll  r refresh          updated 0s ago · ● connected · ? help

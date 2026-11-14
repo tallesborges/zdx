@@ -1,5 +1,3 @@
- zdx monitor   ○ orchestrator not running                                ? help
- ! Agents, threads, usage, and config need the orchestrator (or --cli-fallback)…
  1 Agents  2 Threads  3 Svcs  4 Jobs  5 Usage  6 Logs  7 Procs  8 Config
 
 
@@ -21,4 +19,6 @@
 
 
 
- ↵ transcript  ? help  q quit  1-8 tabs                             load failed
+
+
+ ↵ transcript  q quit  1-8 tabs           load failed · ○ disconnected · ? help

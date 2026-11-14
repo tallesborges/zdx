@@ -149,6 +149,12 @@ func (m *Model) applyResult(r resultMsg) tea.Cmd {
 	case []data.Agent:
 		cleanAll(&v)
 		m.agents.set(v)
+		if m.agents.syncParents() {
+			m.fetch[keyParents].force = true
+			return m.refresh(m.now())
+		}
+	case parentsAnswer:
+		m.applyParents(v.result, v.lookups)
 	case data.ThreadList:
 		cleanAll(&v)
 		m.threads.set(v)
@@ -207,7 +213,7 @@ func (m *Model) bodyHeight() int {
 	if m.spacer() {
 		spacer = 1
 	}
-	return max(m.height-len(m.headerLines())-1-spacer-len(m.footerLines()), 3)
+	return max(m.height-1-spacer-len(m.footerLines()), 3)
 }
 
 func (m *Model) switchTab(t tab) tea.Cmd {

@@ -29,10 +29,16 @@ const (
 	Loading Scenario = "loading"
 	// Stale: the first answer of each surface works, later ones fail.
 	Stale Scenario = "stale"
+	// Scope: Full, with the service reading views for another root than
+	// the monitor's --root.
+	Scope Scenario = "scope"
 )
 
 // Scenarios lists every scenario.
-var Scenarios = []Scenario{Full, Empty, Down, Loading, Stale}
+var Scenarios = []Scenario{Full, Empty, Down, Loading, Stale, Scope}
+
+// ScopeRoot is the views root of the Scope scenario.
+const ScopeRoot = "/Users/example/Documents/projects/example-app"
 
 // Base is the fixture clock's start.
 var Base = time.Date(2026, 11, 14, 14, 30, 0, 0, time.UTC)
@@ -90,6 +96,9 @@ func (b *Backend) Status(ctx context.Context) (*wire.StatusReport, error) {
 	}
 	r := &wire.StatusReport{Protocol: ptr(uint32(2)), Capabilities: []string{wire.CapThreadViews, wire.CapMonitorViews},
 		ViewsRoot: ptr("/Users/example/Documents")}
+	if b.Scenario == Scope {
+		r.ViewsRoot = ptr(ScopeRoot)
+	}
 	if b.Scenario == Empty {
 		r.Settled = true
 		return r, nil
@@ -208,7 +217,7 @@ func (b *Backend) Threads(ctx context.Context, kind string) (data.ThreadList, so
 		{ID: "6e1b7a2c-0f34-4d8e-9a61-3c5b8d2e7f90", Title: "A very long thread title that goes on and on to check how the list cuts long titles at narrow widths", Project: ptr("a-project-with-a-long-directory-name"), Age: ptr("17h 58m"),
 			Workers: &data.WorkerRollup{Total: 2, Unknown: 2}},
 		{ID: "b0d7e6f5-1a2b-4c3d-8e9f-0a1b2c3d4e5f", Title: "b0d7e6f5-1a2b-4c3d-8e9f-0a1b2c3d4e5f", Age: ptr("12d 4h")},
-		{ID: "telegram--1009876543210-topic-3", Title: "Trip to Florianópolis: hotels and flights", Project: ptr("Documents"), Age: ptr("365d 23h")},
+		{ID: "telegram--1009876543210-topic-3", Title: "Plan a weekend trip: hotels and flights", Project: ptr("Documents"), Age: ptr("365d 23h")},
 	}
 	if kind == "workers" {
 		return data.ThreadList{Threads: all[1:2]}, source.OriginSocket, nil
@@ -222,12 +231,24 @@ func (b *Backend) Thread(ctx context.Context, id string, after *uint64) (data.Th
 		return data.Thread{}, source.OriginSocket, err
 	}
 	th := Transcript(id)
+	if id == IdleParent {
+		th = data.Thread{ID: id, SourceID: id, Title: "Plan a weekend trip: hotels and flights", TotalMessages: 4, TotalEvents: 9, Cursor: 9,
+			Activity: []data.Activity{
+				{Type: "message", Sequence: 0, Time: "09:02", Role: "user", Speaker: "You", Text: "Compare the hotels."},
+				{Type: "usage", Sequence: 1, Time: "09:03", InputTokens: 12000, OutputTokens: 900, Model: ptr("claude-opus-5-5"), Provider: ptr("claude-cli")},
+				{Type: "message", Sequence: 2, Time: "09:03", Role: "assistant", Speaker: "Z", Text: "I sent a worker to check prices."},
+			}}
+	}
 	if after != nil {
 		th.Partial = true
 		th.Activity = nil
 	}
 	return th, source.OriginSocket, nil
 }
+
+// IdleParent is the orchestrator thread of Full whose worker runs while
+// it has no run of its own.
+const IdleParent = "telegram--1009876543210-topic-3"
 
 // Transcript is a thread with every activity kind.
 func Transcript(id string) data.Thread {

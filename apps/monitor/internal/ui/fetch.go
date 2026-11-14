@@ -45,11 +45,12 @@ const (
 	keyJobs
 	keyLogs
 	keyTrajectory
+	keyParents
 	keyCount
 )
 
 func (k fetchKey) String() string {
-	return [...]string{"status", "services", "snapshot", "agents", "threads", "transcript", "usage", "quotas", "workspaces", "jobs", "logs", "trajectory"}[k]
+	return [...]string{"status", "services", "snapshot", "agents", "threads", "transcript", "usage", "quotas", "workspaces", "jobs", "logs", "trajectory", "parents"}[k]
 }
 
 // fetchBudget bounds one fetch. Quotas ask every provider over the network.
@@ -114,6 +115,8 @@ func interval(k fetchKey) time.Duration {
 		return 5 * time.Minute
 	case keyWorkspaces, keyJobs:
 		return 30 * time.Second
+	case keyParents:
+		return 15 * time.Second
 	case keyLogs:
 		return time.Second
 	}
@@ -180,6 +183,8 @@ func (m *Model) fetcher(k fetchKey) fetchFunc {
 			th, origin, err := b.Thread(ctx, id, after)
 			return transcriptResult{id: id, after: after, thread: th}, origin, err
 		}
+	case keyParents:
+		return m.parentsFetcher()
 	case keyTrajectory:
 		t := m.transcript
 		if t == nil || t.thread == nil {
@@ -238,7 +243,7 @@ type transcriptResult struct {
 func tabKeys(t tab) []fetchKey {
 	switch t {
 	case tabAgents:
-		return []fetchKey{keyAgents}
+		return []fetchKey{keyAgents, keyParents}
 	case tabThreads:
 		return []fetchKey{keyThreads}
 	case tabServices:

@@ -126,6 +126,11 @@ func TestRealServiceTranscript(t *testing.T) {
 	if full.Activity[0].Speaker != "You" || full.Activity[5].Speaker != "Z" {
 		t.Fatalf("speakers %q %q", full.Activity[0].Speaker, full.Activity[5].Speaker)
 	}
+	// An idle parent's row reads its title and last request from this
+	// answer.
+	if p := parentFrom(parentLookup{id: seedMain}, full, nil); p.title != "Seeded transcript" || parentSpec(p) != "test:test-model" || p.cursor == nil || *p.cursor != 7 {
+		t.Fatalf("idle parent from the real answer: %+v", p)
+	}
 
 	// Alias: the requested id stays, the events come from the source.
 	alias, _, err := src.Thread(ctx, seedAlias, nil)

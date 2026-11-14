@@ -131,7 +131,7 @@ func TestAgentsSelectionFollowsARunThatMoves(t *testing.T) {
 		t.Fatalf("node %+v", n)
 	}
 	out := plain(m)
-	if !strings.Contains(out, "Active agents  1 run") || !strings.Contains(out, "parent, idle") || !strings.Contains(out, "not counted as a run") {
+	if !strings.Contains(out, "Active agents  1 run") || !strings.Contains(out, "idle parent") || !strings.Contains(out, "not counted as a run") {
 		t.Fatalf("screen:\n%s", out)
 	}
 	_, cmd := m.Update(special(tea.KeyEnter))

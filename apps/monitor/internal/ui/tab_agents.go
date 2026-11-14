@@ -10,10 +10,14 @@ import (
 )
 
 type agentsTab struct {
-	rows   []data.Agent
-	tree   []agentNode
-	loaded bool
-	list   listState
+	// parents are the idle parents' titles and last models, by thread.
+	parents map[string]parentInfo
+	// parentSync and parentLooks order syncs and answers (see parents.go).
+	parentSync, parentLooks uint64
+	rows                    []data.Agent
+	tree                    []agentNode
+	loaded                  bool
+	list                    listState
 }
 
 // agentID keys a run: a thread runs at most one turn at a time, and the
@@ -89,12 +93,17 @@ func (m *Model) renderAgents(width, h int) []string {
 	now := m.now()
 	for _, n := range t.tree {
 		if n.run < 0 {
-			inModel := n.thread
-			if width >= 170 {
-				inModel = ""
+			p, ok := t.parents[n.thread]
+			titleMax := 22
+			switch {
+			case width < 80:
+				titleMax = 14
+			case width < 110:
+				titleMax = 16
 			}
+			run, model := parentRow(p, ok, titleMax)
 			tb.rows = append(tb.rows, []cell{
-				cs("◌", dim), cs("parent, idle", dim), c(""), c(""), cs(inModel, dim), c(""), cs(n.thread, dim),
+				cs("◌", dim), run, cs("idle", dim), c(""), model, c(""), cs(n.thread, dim),
 			})
 			continue
 		}
@@ -109,11 +118,8 @@ func (m *Model) renderAgents(width, h int) []string {
 	if n := t.selectedNode(); n != nil && n.run >= 0 {
 		detail = agentDetail(t.rows[n.run], width)
 	} else if n != nil {
-		detail = []string{
-			kv("Thread", n.thread),
-			kv("Activity", dim.Render("not running")),
-			"  " + dim.Render(fmt.Sprintf("Parent of %s below; shown for context, not counted as a run.", count(n.kids, "active run", "active runs"))),
-		}
+		p, ok := t.parents[n.thread]
+		detail = parentDetail(*n, p, ok, now)
 	}
 	return listWithDetail(out, width, h, &tb, &t.list, detail, "Selected run")
 }

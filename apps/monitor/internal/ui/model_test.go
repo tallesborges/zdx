@@ -210,7 +210,7 @@ func TestFirstRefreshShowsStatusAndAgents(t *testing.T) {
 	}
 	pump(m, m.Init())
 	out := plain(m)
-	for _, want := range []string{"orchestrator idle", "Active agents  1 run", "bash: ls", "Thread     thread-a", "updated 0s ago"} {
+	for _, want := range []string{"● connected · ? help", "Active agents  1 run", "bash: ls", "Thread     thread-a", "updated 0s ago"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("screen lacks %q:\n%s", want, out)
 		}
@@ -306,54 +306,92 @@ func TestFailedRefreshKeepsDataAndSaysStale(t *testing.T) {
 func TestUnavailableServiceSaysSoAndNamesTheFallback(t *testing.T) {
 	f := &fake{status: func(context.Context) (*wire.StatusReport, error) {
 		return nil, wire.ErrNotRunning
-	}}
+	}, agents: func(context.Context) ([]data.Agent, error) { return nil, wire.ErrNotRunning }}
 	m, _ := newModel(t, f)
 	pump(m, m.Init())
 	out := plain(m)
-	if !strings.Contains(out, "orchestrator not running") || !strings.Contains(out, "--cli-fallback") {
+	if !strings.Contains(lastLine(out), "○ disconnected · ? help") || !strings.Contains(out, "--cli-fallback") {
 		t.Fatalf("screen:\n%s", out)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 200, Height: 80})
+	m.Update(key("?"))
+	help := plain(m)
+	for _, want := range []string{"state                   ○ disconnected", "need the orchestrator (or --cli-fallback)"} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("help lacks %q:\n%s", want, help)
+		}
 	}
 }
 
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	return lines[len(lines)-1]
+}
+
+// TestViewsRootMismatchIsShown: no banner; the tabs that answer for the
+// views root say so in the footer, and help has both full paths.
 func TestViewsRootMismatchIsShown(t *testing.T) {
 	f := &fake{status: func(context.Context) (*wire.StatusReport, error) {
 		r := modernStatus()
-		r.ViewsRoot = ptr("/elsewhere")
+		r.ViewsRoot = ptr("/elsewhere/Documents")
 		return r, nil
 	}}
 	m, _ := newModel(t, f)
 	pump(m, m.Init())
-	if !strings.Contains(plain(m), "The service reads views for /elsewhere, not --root") {
-		t.Fatalf("screen:\n%s", plain(m))
+	if out := plain(m); strings.Contains(out, "scope") || strings.Contains(out, "/elsewhere") {
+		t.Fatalf("the Agents tab does not depend on the views root:\n%s", out)
+	}
+	for _, k := range []string{"5", "8"} {
+		_, cmd := m.Update(key(k))
+		pump(m, cmd)
+		if foot := lastLine(plain(m)); !strings.Contains(foot, "! scope /elsewhere/Documents · ● connected · ? help") {
+			t.Fatalf("tab %s footer: %q", k, foot)
+		}
+	}
+	m.Update(tea.WindowSizeMsg{Width: 200, Height: 80})
+	m.Update(key("?"))
+	help := plain(m)
+	if !strings.Contains(help, "The service reads views for /elsewhere/Documents, not --root /r.") || !strings.Contains(help, "--root /elsewhere/Documents") {
+		t.Fatalf("help:\n%s", help)
 	}
 }
 
-func TestModernServiceHasNoCapabilityWarning(t *testing.T) {
-	f := &fake{}
-	m, _ := newModel(t, f)
-	pump(m, m.Init())
-	out := plain(m)
-	if strings.Contains(out, "does not serve") {
-		t.Fatalf("a protocol 2 service with both view capabilities needs no warning:\n%s", out)
+func TestConnectionStatesInTheFooter(t *testing.T) {
+	cases := []struct {
+		name   string
+		status func(context.Context) (*wire.StatusReport, error)
+		want   string
+	}{
+		{"connected", func(context.Context) (*wire.StatusReport, error) { return modernStatus(), nil }, "● connected · ? help"},
+		{"busy is still connected", func(context.Context) (*wire.StatusReport, error) {
+			r := modernStatus()
+			r.Settled = false
+			return r, nil
+		}, "● connected · ? help"},
+		{"old service", func(context.Context) (*wire.StatusReport, error) {
+			return &wire.StatusReport{Settled: true}, nil
+		}, "● connected, views missing · ? help"},
+		{"stopped", func(context.Context) (*wire.StatusReport, error) { return nil, wire.ErrNotRunning }, "○ disconnected · ? help"},
+		{"unreachable", func(context.Context) (*wire.StatusReport, error) { return nil, errors.New("permission denied") }, "○ unreachable · ? help"},
 	}
-	if f.n("status") == 0 || f.n("agents") == 0 {
-		t.Fatalf("status and the Agents view must run: %v", f.calls)
+	for _, tc := range cases {
+		m, _ := newModel(t, &fake{status: tc.status})
+		pump(m, m.Init())
+		out := plain(m)
+		if foot := lastLine(out); !strings.Contains(foot, tc.want) {
+			t.Errorf("%s: footer %q", tc.name, foot)
+		}
+		if strings.Count(out, "? help") != 1 || strings.Contains(out, "orchestrator busy") || strings.Contains(out, "zdx monitor") {
+			t.Errorf("%s: help or a header repeated:\n%s", tc.name, out)
+		}
+		if first := strings.Split(out, "\n")[0]; !strings.Contains(first, "1 Agents") {
+			t.Errorf("%s: the tab bar must be the first line: %q", tc.name, first)
+		}
 	}
-	help := strings.Join(strings.Fields(ansi.Strip(strings.Join(m.helpLines(), "\n"))), " ")
-	if !strings.Contains(help, "protocol 2") || !strings.Contains(help, "capabilities "+wire.CapMonitorViews+", "+wire.CapThreadViews) {
-		t.Fatalf("help must show protocol 2 and the capabilities:\n%s", help)
-	}
-}
-
-func TestProtocolOneServiceIsWarnedAsUnsupported(t *testing.T) {
-	// A protocol 1 report has no capabilities, even when it lists names.
-	f := &fake{status: func(context.Context) (*wire.StatusReport, error) {
-		return &wire.StatusReport{Settled: true, Capabilities: []string{wire.CapMonitorViews, wire.CapThreadViews}}, nil
-	}}
-	m, _ := newModel(t, f)
-	pump(m, m.Init())
-	if out := plain(m); !strings.Contains(out, "The orchestrator does not serve "+wire.CapMonitorViews+", "+wire.CapThreadViews+": update and restart it.") {
-		t.Fatalf("screen:\n%s", out)
+	// Before the first answer.
+	m, _ := newModel(t, &fake{})
+	if foot := lastLine(plain(m)); !strings.Contains(foot, "connecting · ? help") {
+		t.Fatalf("footer %q", foot)
 	}
 }
 

@@ -1,4 +1,3 @@
- zdx monitor   ⠋ connecting…                                             ? help
  1 Agents  2 Threads  3 Svcs  4 Jobs  5 Usage  6 Logs  7 Procs  8 Config
 
 
@@ -21,4 +20,5 @@
 
 
 
- ↵ transcript  ? help  q quit  1-8 tabs                               ⠋ loading
+
+ ↵ transcript  q quit  1-8 tabs               ⠋ loading · ⠋ connecting · ? help

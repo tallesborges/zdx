@@ -1,4 +1,3 @@
- zdx monitor   ● orchestrator busy · 2 threads with work                 ? help
  1 Agents 6  2 Threads  3 Svcs  4 Jobs  5 Usage  6 Logs  7 Procs  8 Config
 
  Subscription quotas  fetched 0s ago · every 5m · Q refresh
@@ -21,4 +20,5 @@
 
   Daily  ▅▆▆▇██▃  8 Nov – 14 Nov
 
- Q refresh quotas  [ ] days  ? help  q quit  1-8 tabs            updated 0s ago
+  By provider
+ Q refresh quotas  [ ] days  q quit       updated 0s ago · ● connected · ? help
