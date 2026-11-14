@@ -23,7 +23,6 @@ microphone = ["tui", "zdx-tui/microphone"]
 [dependencies]
 zdx-engine = { path = "../zdx-engine" }
 zdx-tui = { path = "../zdx-tui", optional = true, default-features = false }
-zdx-monitor = { path = "../zdx-monitor" }
 
 anyhow.workspace = true
 chrono.workspace = true

@@ -4,8 +4,7 @@
 //! relayed child tools, and output (final result or live streaming deltas) —
 //! as ratatui lines. What a result means (output by kind, exit code, timeout,
 //! warnings) comes from the shared `zdx_types::tool_view`; this module only
-//! styles it for the terminal. Used by the `zdx-tui` tool detail popup and the
-//! `zdx-monitor` transcript overlay so both show identical content.
+//! styles it for the terminal. Used by the `zdx-tui` tool detail popup.
 //!
 //! Interactive concerns (selection, clipboard, scrolling, popup chrome) stay
 //! with the callers.

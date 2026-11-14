@@ -9,15 +9,15 @@ This monorepo now uses scoped `AGENTS.md` files per crate.
 - `AGENTS.md` (this file): workspace-level conventions + index
 - `crates/zdx-assets/AGENTS.md`: embedded assets (prompts, default TOMLs, bundled skills, built-in subagents)
 - `crates/zdx-types/AGENTS.md`: pure shared value types and pure helper logic for providers, tools, events
-- `crates/zdx-transcript/`: shared transcript display model + rendering (thread events → `HistoryCell`s → styled/ratatui lines; markdown, wrapping, tool pairing, `tool_detail_body` for full tool args/output, which styles the shared `zdx_types::tool_view` for the terminal) plus shared TUI interaction utilities (`clipboard` with OSC 52 → arboard fallback, `keys::GPrefix` vim `gg` prefix). Reused by `zdx-tui` and `zdx-monitor`.
+- `crates/zdx-transcript/`: shared transcript display model + rendering (thread events → `HistoryCell`s → styled/ratatui lines; markdown, wrapping, tool pairing, `tool_detail_body` for full tool args/output, which styles the shared `zdx_types::tool_view` for the terminal) plus shared TUI interaction utilities (`clipboard` with OSC 52 → arboard fallback, `keys::GPrefix` vim `gg` prefix). Used by `zdx-tui`.
 - `crates/zdx-providers/AGENTS.md`: LLM provider implementations (Anthropic, OpenAI, Gemini, etc.)
 - `crates/zdx-engine/AGENTS.md`: core engine — runtime, config, agent orchestration, tools
 - `crates/zdx-tui/AGENTS.md`: TUI architecture map + runtime/features conventions
 - `crates/zdx-tools/AGENTS.md`: leaf tool implementations (bash, edit, read, write, glob, grep, web_search, fetch_webpage, apply_patch)
 - `crates/zdx-cli/AGENTS.md`: CLI routing/modes/commands map + CLI testing guidance
-- `crates/zdx-monitor/AGENTS.md`: monitor TUI dashboard map + conventions
 - `crates/xtask/AGENTS.md`: maintainer task crate guidance
 - `apps/web/AGENTS.md`: Svelte Mini App frontend (design system + views, consumes the gateway's Mini App HTTP API)
+- `apps/monitor/AGENTS.md`: Go monitor: the read-only dashboard `zdx monitor` runs (independent Go module; reads the orchestrator socket views and read-only CLI JSON)
 - `apps/gateway/AGENTS.md`: Go gateway: the Telegram bot and Mini App server (independent Go module; talks to Rust only through the orchestrator socket and CLI)
 
 ### Scope and precedence
@@ -44,12 +44,12 @@ This monorepo now uses scoped `AGENTS.md` files per crate.
 All common tasks are available via `just` (see `justfile`). Run `just` to list all recipes.
 
 - `just run` (interactive TUI; pass extra args: `just run --help`)
-- `just monitor` (service dashboard for config, threads, jobs)
+- `just monitor [-- ARGS]` (read-only dashboard: builds the Go monitor into `apps/monitor/bin/zdx-monitor`, then `zdx monitor` execs it. Outside `just`, `zdx monitor` runs `$ZDX_MONITOR` or the installed `~/.local/bin/zdx-monitor`, and fails when neither exists)
 - `just bot [-- ARGS]` (Telegram bot: builds the Go gateway and `zdx` from this checkout, then `zdx bot` execs the gateway on the global `[telegram]` config. The gateway's `bot.pid` refuses a second bot on one `ZDX_HOME`, so stop the bot service first. Outside `just`, `zdx bot` runs `$ZDX_GATEWAY` or the installed `~/.local/bin/zdx-gateway`, and fails when neither exists)
 - `just orchestrator` (orchestrator service; orchestrator topics in the bot and `zdx orchestrator send` need it)
 - `just jobs` (jobs subcommands; e.g. `just jobs list`)
-- `just deploy` (build release → install to `~/.local/bin/zdx` → build and install the gateway to `~/.local/bin/zdx-gateway` (needs Go and `bun`) → guarded `zdx service restart all`; the standard way to ship a change to the running bot/daemon/orchestrator service). `all` includes the `orchestrator` service: `restart all` checks that every service is installed before it restarts any, and the bot answers orchestrator topics only while that service runs. The restart refuses to interrupt active agent runs; wait for them, queue it with `zdx service restart --queue` (the bot restarts once no run is active — use this from inside an agent run, which counts as active), or explicitly run `zdx service restart all --force`. Set `ZDX_CODESIGN_ID` in your shell env to a code-signing identity so `install` signs the binary with a stable identifier and macOS TCC grants survive rebuilds; unset, the binary stays ad-hoc signed and macOS re-prompts after every build.
-- `just safe-deploy` (build release → install `zdx` and the gateway → `zdx service restart all --queue`: the bot restarts once no agent run, worker, or orchestrator `[worker update]` turn is pending. Use this from inside an agent run, or whenever workers may be busy.)
+- `just deploy` (build release → install to `~/.local/bin/zdx` → build and install the gateway to `~/.local/bin/zdx-gateway` (needs Go and `bun`) → rebuild `~/.local/bin/zdx-monitor` only if it is installed → guarded `zdx service restart all`; the standard way to ship a change to the running bot/daemon/orchestrator service). `all` includes the `orchestrator` service: `restart all` checks that every service is installed before it restarts any, and the bot answers orchestrator topics only while that service runs. The restart refuses to interrupt active agent runs; wait for them, queue it with `zdx service restart --queue` (the bot restarts once no run is active — use this from inside an agent run, which counts as active), or explicitly run `zdx service restart all --force`. Set `ZDX_CODESIGN_ID` in your shell env to a code-signing identity so `install` signs the binary with a stable identifier and macOS TCC grants survive rebuilds; unset, the binary stays ad-hoc signed and macOS re-prompts after every build.
+- `just safe-deploy` (build release → install `zdx` and the gateway, refresh an installed monitor → `zdx service restart all --queue`: the bot restarts once no agent run, worker, or orchestrator `[worker update]` turn is pending. Use this from inside an agent run, or whenever workers may be busy.)
 - `just ci` (full local CI: lint + test; matches what GHA runs on push/PR — optional pre-push gate)
 - `just ci-fast` (fast inner-loop check: fmt + clippy on default features, lib+bins only — single cargo mode, avoids mode-switching tax)
 - `just lint` (format + clippy)
@@ -64,6 +64,7 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `just codebase crates/zdx-tui` (generate codebase.txt for specific crate)
 - `just build-release` (build the release `zdx` binary; Rust only: it needs neither Go nor the Mini App build)
 - `just gateway-check` (Go gateway: `gofmt`, `go vet`, `go test -race`) / `just gateway-build [OUT]` (gateway binary with the Mini App embedded; runs the cached web build) / `just gateway-install` (build it into `~/.local/bin/zdx-gateway`, the bot service's program)
+- `just monitor-check` (Go monitor: `gofmt`, `go vet`, `go test -race`) / `just monitor-build [OUT]` (Go only, no cargo) / `just monitor-install` (build it into `~/.local/bin/zdx-monitor`, what `zdx monitor` runs; deploys never install it, they only refresh an installed copy)
 - `just web-demo` / `just web-dev` / `just web-check` / `just web-build` (Svelte Mini App in `apps/web`; requires `bun`)
 - `bun test apps/web/build-cached.test.mjs` (web-build cache/invalidation regression tests)
 - `bun test apps/web/annotate.test.mjs` (artifact annotation bridge and message-validation tests)

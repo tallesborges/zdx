@@ -20,6 +20,7 @@ mod login_logout;
 mod memory_embed;
 mod memory_relevance;
 mod model_selection;
+mod monitor_go;
 mod opencode_go_headers;
 mod orchestrator;
 mod quota;

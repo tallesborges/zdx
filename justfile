@@ -15,9 +15,9 @@ default:
 run *ARGS:
     cargo run -p zdx -- {{ARGS}}
 
-# Run the service dashboard
-monitor:
-    cargo run -p zdx -- monitor
+# Run the read-only monitor from this checkout (builds the Go monitor; `zdx monitor` execs it). Monitor args go after `--`.
+monitor *ARGS: monitor-build
+    ZDX_MONITOR="{{justfile_directory()}}/apps/monitor/bin/zdx-monitor" cargo run -p zdx -- monitor {{ARGS}}
 
 # The gateway's bot.pid refuses a second bot on one ZDX_HOME: stop the bot
 # service first (`zdx service stop bot`). Gateway args go after `--`.
@@ -109,6 +109,14 @@ gateway-check:
 gateway-build *OUT:
     apps/gateway/build.sh {{OUT}}
 
+# Go monitor (apps/monitor): format, vet, race tests (Go toolchain pinned in its go.mod)
+monitor-check:
+    cd apps/monitor && test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...
+
+# Build zdx-monitor (Go only, no cargo; default output apps/monitor/bin/zdx-monitor)
+monitor-build OUT=(justfile_directory() + "/apps/monitor/bin/zdx-monitor"):
+    cd apps/monitor && go build -trimpath -o "{{OUT}}" ./cmd/zdx-monitor
+
 # ─── Build ────────────────────────────────────────
 
 # Build the release zdx binary (Rust only; the Mini App ships in the gateway)
@@ -130,12 +138,12 @@ install: build-release
     @# index only: no exports, no memory index.
     ~/.local/bin/zdx threads reindex
 
-# Build and install zdx and the gateway, then restart the launchd services
-deploy: install gateway-install
+# Build and install zdx and the gateway (and refresh an installed monitor), then restart the launchd services
+deploy: install gateway-install monitor-refresh
     ~/.local/bin/zdx service restart all
 
-# Build and install zdx and the gateway, and queue the restart until agent runs, workers, and orchestrator updates are done
-safe-deploy: install gateway-install
+# Build and install zdx and the gateway (and refresh an installed monitor), and queue the restart until agent runs, workers, and orchestrator updates are done
+safe-deploy: install gateway-install monitor-refresh
     ~/.local/bin/zdx service restart all --queue
 
 # Build the Go gateway into ~/.local/bin/zdx-gateway, the stable path the bot service runs
@@ -144,6 +152,17 @@ gateway-install:
     apps/gateway/build.sh ~/.local/bin/.zdx-gateway.new
     mv -f ~/.local/bin/.zdx-gateway.new ~/.local/bin/zdx-gateway
     @echo "Installed ~/.local/bin/zdx-gateway"
+
+# Build the Go monitor into ~/.local/bin/zdx-monitor, the path `zdx monitor` runs
+monitor-install:
+    @mkdir -p ~/.local/bin
+    cd apps/monitor && go build -trimpath -o ~/.local/bin/.zdx-monitor.new ./cmd/zdx-monitor
+    mv -f ~/.local/bin/.zdx-monitor.new ~/.local/bin/zdx-monitor
+    @echo "Installed ~/.local/bin/zdx-monitor"
+
+# Rebuild ~/.local/bin/zdx-monitor only when it is installed: deploys never install it
+monitor-refresh:
+    @if [ -e ~/.local/bin/zdx-monitor ]; then {{just_executable()}} monitor-install; else echo "zdx-monitor not installed, skipped (run just monitor-install once)"; fi
 
 # (Re)create ~/.local/bin/zdxd as a symlink to the debug build
 install-debug:

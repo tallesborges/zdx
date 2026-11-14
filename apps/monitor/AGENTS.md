@@ -1,10 +1,11 @@
 # apps/monitor
 
-Read-only ZDX dashboard in Go with Bubble Tea v2 (`charm.land/bubbletea/v2`, Lip Gloss v2). An independent Go module, not part of the Cargo workspace or `apps/gateway`. It does not replace the Rust monitor yet: `crates/zdx-monitor` and `zdx monitor` stay unchanged until this one is tested and the user approves.
+Read-only ZDX dashboard in Go with Bubble Tea v2 (`charm.land/bubbletea/v2`, Lip Gloss v2). An independent Go module, not part of the Cargo workspace or `apps/gateway`: Rust builds never need Go, and this module never needs cargo. It is what `zdx monitor` runs; the Rust monitor crate it replaced is gone. Its scope is deliberately read-only (see Surfaces and gaps).
 
 ## Running it
 
-- Build: `go build -o "$TMPDIR/zdx-monitor" ./cmd/zdx-monitor` (from this directory). Not wired into `just`, CI, or `zdx monitor`.
+- From the repo root: `just monitor [-- ARGS]` (build into `bin/zdx-monitor`, then `zdx monitor` execs it), `just monitor-build [OUT]`, `just monitor-install` (`~/.local/bin/zdx-monitor`), `just monitor-check`. `just deploy`/`safe-deploy` rebuild the installed copy only when it exists. CI does not run Go checks.
+- `zdx monitor [-- ARGS]` execs `$ZDX_MONITOR` (absolute) or `~/.local/bin/zdx-monitor` as `zdx-monitor --root ROOT ARGS`, with `ZDX_HOME` and `ZDX_BIN` set (`crates/zdx-cli/src/cli/commands/go_program.rs`, the same contract as `zdx bot`). Never a PATH lookup.
 - Layout preview without a home, service, or binary: `go run ./cmd/zdx-monitor-preview --scenario full|empty|down|loading|stale` (synthetic `internal/fixture` data).
 - Run: `zdx-monitor [--root DIR] [--zdx-home DIR] [--zdx PATH] [--cli-fallback]`. Defaults: root `.`, home `$ZDX_HOME` else `~/.zdx`, binary `$ZDX_BIN` else `zdx` on PATH (a missing binary only breaks the tabs that need the CLI). Pass the orchestrator service's own `--root` (its `views_root`); the header warns on a mismatch, because config, usage, and job answers then belong to the service's root.
 - It never starts a bot, an engine, or a service, and the monitor itself writes no ZDX state. Reading is not free of disk writes: the engine views it calls may bring derived caches (thread index, usage cache) up to date, and the service drops stale run markers.
@@ -14,14 +15,14 @@ Read-only ZDX dashboard in Go with Bubble Tea v2 (`charm.land/bubbletea/v2`, Lip
 - Rust owns every rule: config resolution, usage accounting, worker and run state, job status, indexed thread queries, service control. Go decodes and lays out what Rust returns. Do not port engine rules here; ask for a socket view (with its `zdx views` twin) instead.
 - Views come from the orchestrator socket (`$ZDX_HOME/run/orchestrator.sock`, NDJSON, one request per connection; source of truth `crates/zdx-engine/src/orchestration/protocol.rs` and `views.rs`). The client checks the view capability with a `status` call before every view, as the gateway does. It sends only `status` and view ops.
 - `--cli-fallback` runs views through `zdx --root ROOT views --file -` while the socket has no listener. Off by default: an in-process view refreshes derived caches (thread index, usage cache) in that process. The header says when it is active.
-- Read-only CLI JSON: `zdx service status --json` (service state without the orchestrator; reads pidfiles and launchd) and `zdx jobs list --daemon --json` (`job_daemon::jobs()`, the Rust monitor's Jobs source). Children get `ZDX_HOME` set to the monitor's home.
-- Logs: the tail (at most 1 MiB, then the last 2000 lines) of `$ZDX_HOME/logs/zdx.log*`, as the Rust monitor reads them. No view exists for them; no other directory is listed.
+- Read-only CLI JSON: `zdx service status --json` (service state without the orchestrator; reads pidfiles and launchd) and `zdx jobs list --daemon --json` (`job_daemon::jobs()`). Children get `ZDX_HOME` set to the monitor's home.
+- Logs: the tail (at most 1 MiB, then the last 2000 lines) of `$ZDX_HOME/logs/zdx.log*`. No view exists for them; no other directory is listed.
 - No directory scans for corpus data and no fallback that invents data. Missing data stays unknown, stale, or an error on screen.
 - Do not import `apps/gateway/internal/...`. A shared Go client package needs coordination first.
 
 ## Surfaces and gaps
 
-| Tab | Source | Missing vs the Rust monitor |
+| Tab | Source | Not built (the removed Rust monitor had it) |
 | --- | --- | --- |
 | Agents | `active_agents` as a tree + `thread_view` transcript (cursor polls, merged as `apps/web` merges) + `i` overlay over `thread_trajectory` | thinking toggles all blocks, not one; no mouse click on a tool; no expand/collapse |
 | Threads | `threads_list` (recent 50, `all`/`workers`) | indexed browse (500 rows, kind/project/text filters, project picker); `o` open JSONL |
@@ -41,10 +42,10 @@ Read-only ZDX dashboard in Go with Bubble Tea v2 (`charm.land/bubbletea/v2`, Lip
 
 Existing engine interfaces for the missing parts (reuse them when controls are approved; none is wired yet):
 
-- Service start/stop/restart: `zdx service start|stop|restart [SERVICE]`. Stop and restart refuse active agent runs and in-flight orchestrator work unless `--force` (the Rust monitor's `r`/`R`); `restart --queue` queues it.
+- Service start/stop/restart: `zdx service start|stop|restart [SERVICE]`. Stop and restart refuse active agent runs and in-flight orchestrator work unless `--force`; `restart --queue` queues it.
 - Background kill: `zdx bg kill <bg_id>`. Exited processes: `zdx bg list --json`.
 - Archived once jobs: `zdx jobs list --archived --json`.
-- Job model edit: `zdx jobs set-model NAME SPEC|--clear`. Missing: the compare-and-set guard the Rust monitor passes (`jobs::set_model` `expected`); the CLI passes `None`.
+- Job model edit: `zdx jobs set-model NAME SPEC|--clear`. Missing: the compare-and-set guard `jobs::set_model` supports (`expected`); the CLI passes `None`.
 - Model picker list: `zdx models list --json`.
 
 Genuinely missing (each needs a JSON CLI or view in Rust):

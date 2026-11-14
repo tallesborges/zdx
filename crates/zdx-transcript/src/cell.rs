@@ -1331,8 +1331,8 @@ impl HistoryCell {
 /// input box.
 ///
 /// Every consumer that lays out cells must use this — the chat transcript's
-/// full and lazy render paths, its line-count bookkeeping, and
-/// `cells_to_lines_with_offsets` — or scroll math and selection drift apart.
+/// full and lazy render paths and its line-count bookkeeping — or scroll
+/// math and selection drift apart.
 pub fn gap_after(cell: &HistoryCell, next: Option<&HistoryCell>) -> usize {
     fn is_tool(cell: &HistoryCell) -> bool {
         matches!(cell, HistoryCell::Tool { .. })

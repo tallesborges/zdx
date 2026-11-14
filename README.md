@@ -51,6 +51,15 @@ zdx bot
 
 > First time? Run `zdx config init` and set your provider + telegram keys.
 
+### Monitor
+
+The monitor is a separate Go binary, `zdx-monitor` (`apps/monitor`). Build it with Go installed, then start it through `zdx`:
+
+```bash
+just monitor-install   # builds ~/.local/bin/zdx-monitor
+zdx monitor
+```
+
 ## Features
 
 Just the ones I use — but that turns out to be a lot.
@@ -60,7 +69,7 @@ Just the ones I use — but that turns out to be a lot.
 - **Interactive TUI** — the main terminal experience (built with Ratatui)
 - **Exec mode** — headless, scriptable one-shot runs (`zdx exec -p "..."`)
 - **Telegram bot** — drive the agent from your phone
-- **Monitor dashboard** — a separate TUI to watch agent runs, services, logs, and config
+- **Monitor dashboard** — a read-only terminal dashboard (`zdx monitor`, Go) to watch agent runs, services, logs, and config
 
 ### Providers & models
 

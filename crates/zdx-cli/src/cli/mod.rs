@@ -439,8 +439,15 @@ enum Commands {
         file: PathBuf,
     },
 
-    /// Service dashboard (inspect config, threads, jobs)
-    Monitor,
+    /// Read-only dashboard: agents, threads, services, jobs, usage, logs,
+    /// config (starts the Go monitor, `~/.local/bin/zdx-monitor` or
+    /// `$ZDX_MONITOR`)
+    Monitor {
+        /// Extra arguments for `zdx-monitor --root ROOT` (after `--`), for
+        /// example `-- --cli-fallback`
+        #[arg(last = true, value_name = "MONITOR_ARGS")]
+        monitor_args: Vec<String>,
+    },
 
     /// Manage git worktrees
     Worktree {
@@ -1358,7 +1365,7 @@ fn cli_enters_alt_screen(cli: &Cli) -> bool {
     matches!(
         &cli.command,
         None | Some(
-            Commands::Monitor
+            Commands::Monitor { .. }
                 | Commands::Threads {
                     command: ThreadCommands::Resume { .. },
                 }
@@ -1828,7 +1835,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             account.as_deref(),
         ),
         Commands::Models { command } => dispatch_models(command, context).await,
-        Commands::Monitor => dispatch_monitor(context),
+        Commands::Monitor { monitor_args } => dispatch_monitor(&monitor_args, context),
         Commands::Telegram { command } => dispatch_telegram(command, context).await,
         Commands::Helper { file } => commands::telegram::helper(&file).await,
         Commands::Views { file } => {
@@ -2315,9 +2322,9 @@ async fn dispatch_telegram(command: TelegramCommands, context: &DispatchContext<
     }
 }
 
-fn dispatch_monitor(context: &DispatchContext<'_>) -> Result<()> {
+fn dispatch_monitor(args: &[String], context: &DispatchContext<'_>) -> Result<()> {
     let root_path = resolve_root(context.root, context.worktree_id)?;
-    zdx_monitor::run(&root_path)
+    commands::monitor::run(&root_path, args)
 }
 
 fn dispatch_worktree(command: WorktreeCommands, context: &DispatchContext<'_>) -> Result<()> {

@@ -4616,7 +4616,6 @@ dependencies = [
  "uuid",
  "wiremock",
  "zdx-engine",
- "zdx-monitor",
  "zdx-tui",
 ]
 
@@ -4664,22 +4663,6 @@ dependencies = [
  "zdx-providers",
  "zdx-tools",
  "zdx-types",
-]
-
-[[package]]
-name = "zdx-monitor"
-version = "0.14.0"
-dependencies = [
- "anyhow",
- "chrono",
- "crossterm",
- "open",
- "ratatui",
- "serde",
- "serde_json",
- "tokio",
- "zdx-engine",
- "zdx-transcript",
 ]
 
 [[package]]

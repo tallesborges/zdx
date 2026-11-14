@@ -1,22 +1,26 @@
 //! Telegram bot command handlers.
 
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use zdx_engine::config::{Config, TelegramProfileConfig, paths};
-use zdx_engine::service;
+use zdx_engine::config::{Config, TelegramProfileConfig};
 
-/// Names the gateway binary `zdx bot` starts instead of the installed
-/// `~/.local/bin/zdx-gateway`. Must be an absolute path.
-pub const GATEWAY_ENV: &str = "ZDX_GATEWAY";
+use super::go_program::{self, GoProgram};
+
+/// The Go gateway `zdx bot` starts: `$ZDX_GATEWAY` (absolute) or the
+/// installed `~/.local/bin/zdx-gateway`.
+pub const GATEWAY: GoProgram = GoProgram {
+    name: "zdx-gateway",
+    env: "ZDX_GATEWAY",
+    role: "gateway",
+    why: "the Telegram bot is the Go gateway",
+    install: "gateway-install",
+};
 
 /// `zdx bot [-- ARGS]`: replaces this process with the Go gateway, as
-/// `<gateway> --root ROOT bot ARGS`, the argv the bot service runs. The
-/// gateway gets this `ZDX_HOME`, and `ZDX_BIN` (this binary unless already
-/// set), so it never looks `zdx` up on PATH. Being the same process, it
-/// receives this process's signals and its exit status is `zdx bot`'s.
+/// `<gateway> --root ROOT bot ARGS`, the argv the bot service runs (see
+/// `go_program` for the environment and the checks).
 ///
 /// # Errors
 /// Returns an error, before anything runs, when the Telegram settings are
@@ -24,61 +28,9 @@ pub const GATEWAY_ENV: &str = "ZDX_GATEWAY";
 /// absolute path, or is this binary; or when the exec fails.
 pub fn run_gateway(config: &Config, root: &Path, args: &[String]) -> Result<()> {
     config.resolve_telegram_runtime()?;
-    let gateway = match std::env::var_os(GATEWAY_ENV) {
-        Some(path) if !path.is_empty() => PathBuf::from(path),
-        _ => service::default_gateway_program(),
-    };
-    if !gateway.is_absolute() {
-        bail!(
-            "{GATEWAY_ENV} must be an absolute path to a zdx-gateway binary (got {})",
-            gateway.display()
-        );
-    }
-    if !gateway.is_file() {
-        bail!(
-            "zdx-gateway not found at {}: the Telegram bot is the Go gateway. Build and install it with `just gateway-install`, or set {GATEWAY_ENV} to a zdx-gateway binary",
-            gateway.display()
-        );
-    }
-    let exe = std::env::current_exe()
-        .and_then(|exe| exe.canonicalize())
-        .context("resolve the zdx binary")?;
-    let resolved = gateway
-        .canonicalize()
-        .with_context(|| format!("resolve {}", gateway.display()))?;
-    if resolved == exe {
-        bail!(
-            "{} is this zdx binary, not the gateway; set {GATEWAY_ENV} to a zdx-gateway binary",
-            gateway.display()
-        );
-    }
-    let root = root
-        .canonicalize()
-        .with_context(|| format!("resolve root {}", root.display()))?;
-
-    let mut command = Command::new(&gateway);
-    command
-        .arg("--root")
-        .arg(&root)
-        .arg("bot")
-        .args(args)
-        .env("ZDX_HOME", paths::zdx_home());
-    if std::env::var_os("ZDX_BIN").is_none_or(|bin| bin.is_empty()) {
-        command.env("ZDX_BIN", &exe);
-    }
-    exec(command, &gateway)
-}
-
-#[cfg(unix)]
-fn exec(mut command: Command, gateway: &Path) -> Result<()> {
-    use std::os::unix::process::CommandExt as _;
-    let error = command.exec();
-    Err(error).with_context(|| format!("start {}", gateway.display()))
-}
-
-#[cfg(not(unix))]
-fn exec(_command: Command, _gateway: &Path) -> Result<()> {
-    bail!("`zdx bot` starts the gateway in place of zdx, which needs a Unix system")
+    let (mut command, gateway) = GATEWAY.command(root)?;
+    command.arg("bot").args(args);
+    go_program::exec(command, &gateway)
 }
 
 pub struct BotInitOptions {

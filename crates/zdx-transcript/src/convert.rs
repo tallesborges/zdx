@@ -1,12 +1,11 @@
-//! Pure conversion from semantic `StyledLine`s to ratatui `Line`s, plus
-//! stateless helpers for consumers that render whole transcripts or hard-wrap
-//! ratatui lines themselves (the chat TUI's tool popup, the monitor's overlay).
+//! Pure conversion from semantic `StyledLine`s to ratatui `Line`s, plus a
+//! stateless helper for consumers that hard-wrap ratatui lines themselves
+//! (the chat TUI's tool popup).
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::cell::HistoryCell;
 use crate::style::{Style as TranscriptStyle, StyledLine};
 use crate::text::{ratatui_text, ratatui_width};
 
@@ -21,37 +20,6 @@ pub fn convert_styled_line(styled_line: &StyledLine) -> Line<'static> {
         })
         .collect();
     Line::from(spans)
-}
-
-/// Renders a slice of transcript cells into ratatui lines, separated by
-/// `gap_after`, and returns the starting line index of each cell (parallel to
-/// `cells`). Intended for static/persisted transcripts, so any in-progress cell
-/// renders at spinner frame 0.
-///
-/// Consumers that need to map a rendered line back to its cell — e.g. drilling
-/// into a tool call — use the offsets.
-pub fn cells_to_lines_with_offsets(
-    cells: &[HistoryCell],
-    width: usize,
-) -> (Vec<Line<'static>>, Vec<usize>) {
-    let mut lines = Vec::new();
-    let mut offsets = Vec::with_capacity(cells.len());
-    for (index, cell) in cells.iter().enumerate() {
-        offsets.push(lines.len());
-        let styled_lines = cell.display_lines(width, 0);
-        let gap = if styled_lines.is_empty() {
-            0
-        } else {
-            crate::cell::gap_after(cell, cells.get(index + 1))
-        };
-        for styled in styled_lines {
-            lines.push(convert_styled_line(&styled));
-        }
-        for _ in 0..gap {
-            lines.push(Line::default());
-        }
-    }
-    (lines, offsets)
 }
 
 /// Hard-wraps a ratatui line to `width` display columns, preserving span styles

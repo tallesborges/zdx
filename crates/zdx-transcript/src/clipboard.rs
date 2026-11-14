@@ -1,4 +1,4 @@
-//! Clipboard access shared by the ZDX TUIs (chat TUI and monitor).
+//! Clipboard access for the chat TUI.
 //!
 //! Provides clipboard access with multiple transport fallbacks:
 //! 1. OSC 52 — terminal clipboard escape sequence (works over SSH)
