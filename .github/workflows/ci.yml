@@ -73,20 +73,48 @@ jobs:
       - name: Test
         run: cargo test --workspace --lib --tests --bins --locked
 
+  go-shared:
+    name: shared Go module
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [changed]
+    if: needs.changed.outputs.code_changed == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # The Go version comes from the module's own go.mod (toolchain directive).
+      - name: Install Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: apps/shared/go.mod
+          cache-dependency-path: apps/shared/go.mod
+
+      - name: Format, vet, race tests
+        working-directory: apps/shared
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test -race ./...
+
   results:
     name: results
     runs-on: ubuntu-latest
-    needs: [changed, checks]
+    needs: [changed, checks, go-shared]
     if: always()
     steps:
       - name: Verify results
         run: |
           echo "code_changed: ${{ needs.changed.outputs.code_changed }}"
           echo "checks result: ${{ needs.checks.result }}"
+          echo "go-shared result: ${{ needs.go-shared.result }}"
           if [ "${{ needs.changed.outputs.code_changed }}" != "true" ]; then
             echo "Docs-only change; skipping checks."
             exit 0
           fi
           if [ "${{ needs.checks.result }}" != "success" ]; then
+            exit 1
+          fi
+          if [ "${{ needs.go-shared.result }}" != "success" ]; then
             exit 1
           fi

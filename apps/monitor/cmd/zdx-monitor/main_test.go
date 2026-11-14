@@ -25,7 +25,7 @@ func TestDefaultsComeFromTheEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.home != "/h/.zdx" || o.zdx != "/b/zdx" || o.cliFallback {
+	if o.home != "/h/.zdx" || o.zdx != "/b/zdx" || o.zdxVersion != "" || o.cliFallback {
 		t.Fatalf("got %+v", o)
 	}
 	if abs, _ := filepath.Abs(root); o.root != abs {
@@ -35,11 +35,11 @@ func TestDefaultsComeFromTheEnvironment(t *testing.T) {
 
 func TestFlagsWinOverTheEnvironment(t *testing.T) {
 	root := t.TempDir()
-	o, err := parseArgs([]string{"--root", root, "--zdx-home", "/x", "--zdx", "/y/zdx", "--cli-fallback"}, env(map[string]string{"ZDX_HOME": "/h", "ZDX_BIN": "/b"}), noZdx, io.Discard)
+	o, err := parseArgs([]string{"--root", root, "--zdx-home", "/x", "--zdx", "/y/zdx", "--zdx-version", "9.9.9-test", "--cli-fallback"}, env(map[string]string{"ZDX_HOME": "/h", "ZDX_BIN": "/b"}), noZdx, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.home != "/x" || o.zdx != "/y/zdx" || !o.cliFallback {
+	if o.home != "/x" || o.zdx != "/y/zdx" || o.zdxVersion != "9.9.9-test" || !o.cliFallback {
 		t.Fatalf("got %+v", o)
 	}
 }

@@ -14,5 +14,5 @@ rm -rf "$dist"
 cp -R "$web/dist" "$dist"
 
 cd "$gateway"
-go build -tags webdist -trimpath -o "$out" ./cmd/zdx-gateway
+go build -tags webdist -trimpath -ldflags "$("$gateway/../shared/ldflags.sh")" -o "$out" ./cmd/zdx-gateway
 echo "$out"

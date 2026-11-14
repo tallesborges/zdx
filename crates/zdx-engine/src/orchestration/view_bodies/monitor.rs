@@ -1,24 +1,22 @@
-//! Dashboard bodies: the monitor snapshot and its live overlays (active
-//! agents, subscription quotas), workspaces, and the usage report.
+//! Dashboard bodies: the monitor snapshot, active agents, workspaces, and the
+//! usage report. Each is its own view; the surface (the gateway's Mini App)
+//! composes and caches the dashboard and adds quotas, which it reads with the
+//! shared Go quota package (`apps/shared/quota`).
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tokio::sync::Mutex;
 
 use super::{EngineViews, internal, invalid};
 use crate::agent_activity::{self, RunStatus};
 use crate::config::{Config, paths};
 use crate::core::usage_report::{self, ProjectUsage, RunUsage, UsageReport};
 use crate::orchestration::views::ViewError;
-use crate::providers::subscription_quota::{self, QuotaError, SubscriptionQuota};
 use crate::service::{self, Service};
 use crate::workspace_config::{self, WorkspaceReport};
 use crate::{background_activity, jobs};
 
 const MONITOR_CACHE_TTL: Duration = Duration::from_secs(30);
-const SUBSCRIPTION_CACHE_TTL: Duration = Duration::from_mins(5);
 
 #[derive(Clone, Serialize)]
 pub struct MonitorResponse {
@@ -31,13 +29,12 @@ pub struct MonitorResponse {
     /// Set when jobs could not be listed at all.
     jobs_error: Option<String>,
     config: MonitorConfig,
-    subscriptions: Vec<MonitorSubscription>,
-    /// Freshness of `subscriptions`, which are refreshed off the request path:
-    /// `"ready"`, `"pending"` (never fetched since startup, a refresh is in
-    /// flight) or `"stale"` (older than the refresh window, refresh in flight).
-    /// The client must not read an empty `pending` list as "no subscriptions".
+    /// Quotas are not part of the snapshot: always `[]`, `"pending"` and
+    /// null here, and the surface overlays its own (the gateway's quota cache
+    /// sets `"ready"`, `"pending"` or `"stale"` and the age). The client must
+    /// not read an empty `pending` list as "no subscriptions".
+    subscriptions: [(); 0],
     subscriptions_status: &'static str,
-    /// Age of the cached quota snapshot, absent while it is `pending`.
     subscriptions_age: Option<String>,
 }
 
@@ -144,33 +141,6 @@ struct MonitorDailyUsage {
     tokens: u64,
 }
 
-#[derive(Clone, Serialize)]
-pub struct MonitorSubscription {
-    provider: String,
-    name: String,
-    plan: Option<String>,
-    windows: Vec<MonitorQuotaWindow>,
-    error: Option<String>,
-}
-
-#[derive(Clone, Serialize)]
-struct MonitorQuotaWindow {
-    label: String,
-    used_percent: f64,
-    resets_at: Option<String>,
-    scope: Option<String>,
-}
-
-pub(super) struct CachedMonitor {
-    cached_at: Instant,
-    response: MonitorResponse,
-}
-
-pub(super) struct CachedSubscriptions {
-    cached_at: Instant,
-    subscriptions: Vec<MonitorSubscription>,
-}
-
 #[derive(Serialize)]
 pub struct WorkspacesResponse {
     workspaces: Vec<WorkspaceReport>,
@@ -244,24 +214,6 @@ impl EngineViews {
         Ok(response)
     }
 
-    /// The whole dashboard: the cached local snapshot, active agents read
-    /// fresh, and the last known quotas (a refresh starts in the background
-    /// when they are missing or old).
-    ///
-    /// # Errors
-    /// `Internal` when the snapshot or the active agents cannot be read.
-    pub async fn monitor(&self) -> Result<MonitorResponse, ViewError> {
-        let mut response = self.cached_monitor().await?;
-        response.active_agents = tokio::task::spawn_blocking(active_monitor_agents)
-            .await
-            .map_err(|error| {
-                tracing::warn!(%error, "Mini App active agents task failed");
-                internal("Active agents unavailable")
-            })?;
-        self.attach_subscriptions(&mut response).await;
-        Ok(response)
-    }
-
     /// The local part of the dashboard built now, uncached, without
     /// `active_agents` and quotas (`subscriptions_status` is `pending`).
     ///
@@ -292,97 +244,6 @@ impl EngineViews {
                 tracing::warn!(%error, "View task failed");
                 internal("Active agents unavailable")
             })
-    }
-
-    /// Live quotas of every stored account, fetched now. Slow (a network call
-    /// per account); never on a request path.
-    pub async fn subscription_quotas(&self) -> Vec<MonitorSubscription> {
-        fetch_subscription_quotas().await
-    }
-
-    /// Builds (or reuses) the local part of the dashboard: services, jobs, and
-    /// config (usage has its own body). Everything here is local state, so it
-    /// is cached for [`MONITOR_CACHE_TTL`] and never waits on the network.
-    ///
-    /// Quotas are deliberately *not* cached with it — they are overlaid per
-    /// request by `attach_subscriptions`, so a refresh that lands mid-window
-    /// is served immediately instead of waiting for this cache to expire.
-    async fn cached_monitor(&self) -> Result<MonitorResponse, ViewError> {
-        let root = self.root.clone();
-        self.cached_monitor_or_build(move || build_monitor_response(&root))
-            .await
-    }
-
-    async fn cached_monitor_or_build(
-        &self,
-        build: impl FnOnce() -> anyhow::Result<MonitorResponse> + Send + 'static,
-    ) -> Result<MonitorResponse, ViewError> {
-        if let Some(cached) = self.fresh_monitor().await {
-            return Ok(cached);
-        }
-        // Single-flight: the Mini App opens several views on `/api/monitor` at
-        // once, and each build lists jobs and services. Later callers wait for
-        // the first build and reuse it.
-        let _build = self.monitor_build.lock().await;
-        if let Some(cached) = self.fresh_monitor().await {
-            return Ok(cached);
-        }
-
-        let response = tokio::task::spawn_blocking(build)
-            .await
-            .map_err(|error| {
-                tracing::warn!(%error, "Mini App monitor snapshot task failed");
-                internal("Monitor snapshot unavailable")
-            })?
-            .map_err(|error| {
-                tracing::warn!(error = %format!("{error:#}"), "Failed to build Mini App monitor snapshot");
-                internal("Monitor snapshot unavailable")
-            })?;
-
-        *self.monitor_cache.write().await = Some(CachedMonitor {
-            cached_at: Instant::now(),
-            response: response.clone(),
-        });
-        Ok(response)
-    }
-
-    async fn fresh_monitor(&self) -> Option<MonitorResponse> {
-        self.monitor_cache
-            .read()
-            .await
-            .as_ref()
-            .filter(|cached| cached.cached_at.elapsed() < MONITOR_CACHE_TTL)
-            .map(|cached| cached.response.clone())
-    }
-
-    /// Overlays the last known quota snapshot onto a dashboard response and,
-    /// when it is missing or past [`SUBSCRIPTION_CACHE_TTL`], starts a refresh
-    /// in the background.
-    ///
-    /// This never awaits a provider call. A quota fetch talks to every stored
-    /// OAuth account with a 10s per-request timeout and no shared deadline, so
-    /// awaiting it here made a cold dashboard open stall for as long as the
-    /// slowest provider — intermittently, since a warm cache hid it. The client
-    /// polls every 30s and picks the values up on a later tick;
-    /// `subscriptions_status` says which of "not fetched yet" and "no
-    /// subscriptions" an empty list means.
-    async fn attach_subscriptions(&self, response: &mut MonitorResponse) {
-        let cached = self
-            .subscription_cache
-            .lock()
-            .await
-            .as_ref()
-            .map(|cached| (cached.subscriptions.clone(), cached.cached_at.elapsed()));
-
-        let (status, refresh) = classify_subscriptions(cached.as_ref().map(|(_, age)| *age));
-        if let Some((subscriptions, age)) = cached {
-            response.subscriptions = subscriptions;
-            response.subscriptions_age = Some(service::format_uptime(age));
-        }
-        response.subscriptions_status = status;
-        if refresh {
-            spawn_subscription_refresh(&self.subscription_refresh, &self.subscription_cache);
-        }
     }
 }
 
@@ -447,123 +308,17 @@ fn build_monitor_response(root: &std::path::Path) -> anyhow::Result<MonitorRespo
     Ok(MonitorResponse {
         generated_at: chrono::Utc::now().to_rfc3339(),
         services,
-        // Overlaid per request by `EngineViews::monitor`: run markers are cheap to read
-        // and go stale long before the rest of the snapshot.
+        // A view of its own (`active_agents`): run markers go stale long
+        // before the rest of the snapshot, so a surface reads them fresh.
         active_agents: Vec::new(),
         background_processes,
         jobs,
         jobs_error,
         config: monitor_config(&config),
-        subscriptions: Vec::new(),
+        subscriptions: [],
         subscriptions_status: "pending",
         subscriptions_age: None,
     })
-}
-
-/// Maps the age of the cached quota snapshot to the status reported to the
-/// client and whether a background refresh is due.
-///
-/// `None` is "never fetched since startup", which must stay distinguishable
-/// from "fetched, and there are no subscriptions" — both are an empty list.
-fn classify_subscriptions(age: Option<Duration>) -> (&'static str, bool) {
-    match age {
-        None => ("pending", true),
-        Some(age) if age < SUBSCRIPTION_CACHE_TTL => ("ready", false),
-        Some(_) => ("stale", true),
-    }
-}
-
-/// Starts one background quota refresh unless one is already running.
-///
-/// The guard is an owned mutex guard rather than a flag so it is released even
-/// if the fetch panics or the task is cancelled; a stuck flag would freeze
-/// quotas for the life of the process.
-fn spawn_subscription_refresh(
-    refresh: &Arc<Mutex<()>>,
-    cache: &Arc<Mutex<Option<CachedSubscriptions>>>,
-) {
-    let Ok(guard) = Arc::clone(refresh).try_lock_owned() else {
-        return;
-    };
-    let cache = Arc::clone(cache);
-    tokio::spawn(async move {
-        let _guard = guard;
-        let started = Instant::now();
-        let subscriptions = fetch_subscription_quotas().await;
-        tracing::debug!(
-            elapsed_ms = started.elapsed().as_millis(),
-            count = subscriptions.len(),
-            "Refreshed Mini App subscription quotas"
-        );
-        *cache.lock().await = Some(CachedSubscriptions {
-            cached_at: Instant::now(),
-            subscriptions,
-        });
-    });
-}
-
-/// Fetches live quotas for every stored account, sorted by display name.
-///
-/// A provider failure stays attached to its account, and a snapshot error
-/// yields an empty list rather than failing the caller.
-async fn fetch_subscription_quotas() -> Vec<MonitorSubscription> {
-    let snapshot = match subscription_quota::fetch_snapshot().await {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            tracing::warn!(error = %format!("{error:#}"), "Failed to fetch subscription quota snapshot");
-            subscription_quota::SubscriptionQuotaSnapshot {
-                providers: Vec::new(),
-            }
-        }
-    };
-    let mut subscriptions: Vec<MonitorSubscription> = snapshot
-        .providers
-        .into_iter()
-        .filter_map(|result| {
-            let name =
-                subscription_quota::account_display(result.provider, result.account.as_deref());
-            monitor_subscription(result.provider, name, result.quota)
-        })
-        .collect();
-    subscriptions.sort_by(|a, b| a.name.cmp(&b.name));
-    subscriptions
-}
-
-fn monitor_subscription(
-    provider: &str,
-    name: String,
-    result: Result<SubscriptionQuota, QuotaError>,
-) -> Option<MonitorSubscription> {
-    match result {
-        Ok(quota) => Some(MonitorSubscription {
-            provider: provider.to_string(),
-            name,
-            plan: quota.plan,
-            windows: quota
-                .windows
-                .into_iter()
-                .map(|window| MonitorQuotaWindow {
-                    label: window.label,
-                    used_percent: if window.used_percent.is_finite() {
-                        window.used_percent.clamp(0.0, 100.0)
-                    } else {
-                        0.0
-                    },
-                    resets_at: window.resets_at.map(|reset| reset.to_rfc3339()),
-                    scope: window.scope,
-                })
-                .collect(),
-            error: None,
-        }),
-        Err(QuotaError::NotAuthenticated) => None,
-        Err(error) => Some(MonitorSubscription {
-            provider: provider.to_string(),
-            name,
-            plan: None,
-            windows: Vec::new(),
-            error: Some(error.reason()),
-        }),
-    }
 }
 
 fn monitor_config(config: &Config) -> MonitorConfig {
@@ -649,22 +404,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unfetched_quotas_are_pending_rather_than_an_empty_result() {
-        // The dashboard must never wait on a provider call, so an empty list
-        // before the first refresh lands has to stay distinguishable from
-        // "this user has no subscriptions".
-        assert_eq!(classify_subscriptions(None), ("pending", true));
-        assert_eq!(
-            classify_subscriptions(Some(SUBSCRIPTION_CACHE_TTL / 2)),
-            ("ready", false)
-        );
-        assert_eq!(
-            classify_subscriptions(Some(SUBSCRIPTION_CACHE_TTL * 2)),
-            ("stale", true)
-        );
-    }
-
-    #[test]
     fn monitor_config_never_serializes_credentials_or_prompts() {
         let mut config = Config::default();
         config.telegram.bot_token = Some("never-expose-this-token".to_string());
@@ -677,79 +416,5 @@ mod tests {
         assert!(!json.contains("123456"));
         assert!(!json.contains("private system prompt"));
         assert!(json.contains(&config.model));
-    }
-
-    #[test]
-    fn monitor_subscription_serializes_bounded_quota_windows() {
-        let reset = chrono::DateTime::parse_from_rfc3339("2026-08-22T10:00:00Z")
-            .expect("valid reset")
-            .with_timezone(&chrono::Utc);
-        let quota = SubscriptionQuota {
-            plan: Some("max".to_string()),
-            windows: vec![crate::providers::subscription_quota::QuotaWindow {
-                label: "5h".to_string(),
-                used_percent: 140.0,
-                resets_at: Some(reset),
-                scope: Some("Opus".to_string()),
-            }],
-        };
-
-        let subscription = monitor_subscription("claude-cli", "Claude".to_string(), Ok(quota))
-            .expect("authenticated subscription");
-
-        assert_eq!(subscription.plan.as_deref(), Some("max"));
-        assert!((subscription.windows[0].used_percent - 100.0).abs() < f64::EPSILON);
-        assert_eq!(
-            subscription.windows[0].resets_at.as_deref(),
-            Some("2026-08-22T10:00:00+00:00")
-        );
-        assert_eq!(subscription.windows[0].scope.as_deref(), Some("Opus"));
-        assert!(
-            monitor_subscription(
-                "claude-cli",
-                "Claude".to_string(),
-                Err(QuotaError::NotAuthenticated),
-            )
-            .is_none()
-        );
-    }
-
-    #[tokio::test]
-    async fn concurrent_monitor_requests_share_one_build() {
-        let views = Arc::new(EngineViews::with_client(
-            std::path::PathBuf::from("."),
-            crate::orchestration::OrchestratorClient::at(
-                std::env::temp_dir().join(format!("zdx-test-{}.sock", uuid::Uuid::new_v4())),
-            ),
-        ));
-        let builds = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let requests = (0..4).map(|_| {
-            let (views, builds) = (Arc::clone(&views), Arc::clone(&builds));
-            tokio::spawn(async move {
-                views
-                    .cached_monitor_or_build(move || {
-                        builds.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        std::thread::sleep(Duration::from_millis(200));
-                        Ok(MonitorResponse {
-                            generated_at: String::new(),
-                            services: Vec::new(),
-                            active_agents: Vec::new(),
-                            background_processes: Vec::new(),
-                            jobs: Vec::new(),
-                            jobs_error: None,
-                            config: monitor_config(&Config::default()),
-                            subscriptions: Vec::new(),
-                            subscriptions_status: "pending",
-                            subscriptions_age: None,
-                        })
-                    })
-                    .await
-                    .is_ok()
-            })
-        });
-        for request in requests.collect::<Vec<_>>() {
-            assert!(request.await.expect("join monitor request"));
-        }
-        assert_eq!(builds.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }

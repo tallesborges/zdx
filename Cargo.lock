@@ -4769,7 +4769,6 @@ dependencies = [
 name = "zdx-types"
 version = "0.14.0"
 dependencies = [
- "chrono",
  "futures-util",
  "serde",
  "serde_json",

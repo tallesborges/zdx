@@ -313,19 +313,19 @@ func (b *Backend) Usage(ctx context.Context, days uint32) (data.Usage, source.Or
 		Daily:     daily}, source.OriginSocket, nil
 }
 
-// Quotas is `subscription_quotas`.
+// Quotas is the direct quota fetch; it needs no service.
 func (b *Backend) Quotas(ctx context.Context) ([]data.Subscription, source.Origin, error) {
-	if err := b.gate(ctx, "quotas", true); err != nil {
-		return nil, source.OriginSocket, err
+	if err := b.gate(ctx, "quotas", false); err != nil {
+		return nil, source.OriginDirect, err
 	}
 	if b.Scenario == Empty {
-		return []data.Subscription{}, source.OriginSocket, nil
+		return []data.Subscription{}, source.OriginDirect, nil
 	}
 	return []data.Subscription{
 		{Provider: "claude-cli", Name: "Claude (work)", Plan: ptr("max"), Windows: []data.QuotaWindow{{Label: "5h", UsedPercent: 42.5, ResetsAt: ptr(b.at(2 * time.Hour))}, {Label: "week", UsedPercent: 91, ResetsAt: ptr(b.at(50 * time.Hour)), Scope: ptr("Opus")}}},
 		{Provider: "openai-codex", Name: "ChatGPT", Plan: ptr("pro"), Windows: []data.QuotaWindow{{Label: "5h", UsedPercent: 7}}},
-		{Provider: "gemini-cli", Name: "Gemini", Error: ptr("token refresh failed: 401 Unauthorized")},
-	}, source.OriginSocket, nil
+		{Provider: "google-antigravity", Name: "Antigravity", Windows: []data.QuotaWindow{}, Error: ptr("expired · re-login in zdx")},
+	}, source.OriginDirect, nil
 }
 
 // Workspaces is `workspaces`.

@@ -1,0 +1,25 @@
+{
+  "quota": {
+    "plan": null,
+    "windows": [
+      {
+        "label": "5h",
+        "resets_at": "2026-07-14T01:09:59.535017+00:00",
+        "scope": null,
+        "used_percent": 0.0
+      },
+      {
+        "label": "weekly",
+        "resets_at": "2026-07-15T19:59:59.535041+00:00",
+        "scope": null,
+        "used_percent": 45.0
+      },
+      {
+        "label": "weekly",
+        "resets_at": "2026-07-15T19:59:59.535324+00:00",
+        "scope": "Opus",
+        "used_percent": 45.0
+      }
+    ]
+  }
+}

@@ -1,26 +1,22 @@
 package engine
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net"
-	"os"
-	"syscall"
 	"time"
+
+	"github.com/tallesborges/zdx/apps/shared/protocol"
+	"github.com/tallesborges/zdx/apps/shared/socket"
 )
 
 // ReplyTimeout is the longest wait for a one-shot reply, as in the Rust client.
-const ReplyTimeout = 30 * time.Second
-
-// maxLine bounds one reply line. Agent events with message snapshots are
-// stripped by the service, but tool output can still be large.
-const maxLine = 64 << 20
+const ReplyTimeout = socket.ReplyTimeout
 
 // Client talks to the orchestrator service. One request per connection.
+// The transport is the shared socket package; this type adds the
+// gateway's request and reply types.
 type Client struct {
 	Socket       string
 	ReplyTimeout time.Duration
@@ -31,41 +27,18 @@ func NewClient(socket string) *Client {
 	return &Client{Socket: socket, ReplyTimeout: ReplyTimeout}
 }
 
+func (c *Client) transport() *socket.Client {
+	return &socket.Client{Socket: c.Socket, ReplyTimeout: c.ReplyTimeout}
+}
+
 // ErrNotRunning means no service listens on the socket.
-var ErrNotRunning = errors.New("orchestrator service is not running")
+var ErrNotRunning = socket.ErrNotRunning
 
 // ErrUnsupported means the running service lacks a capability the caller
 // needs. Nothing was sent.
-type ErrUnsupported struct {
-	Capability string
-	Protocol   uint32
-}
+type ErrUnsupported = protocol.ErrUnsupported
 
-func (e *ErrUnsupported) Error() string {
-	return fmt.Sprintf("the orchestrator service (protocol %d) does not support %s yet; update and restart the orchestrator service", e.Protocol, e.Capability)
-}
-
-func (c *Client) dial(ctx context.Context) (net.Conn, error) {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", c.Socket)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) {
-			return nil, fmt.Errorf("%w (no listener at %s); start it with `zdx service start orchestrator` or `zdx orchestrator serve`", ErrNotRunning, c.Socket)
-		}
-		if errors.Is(err, syscall.EINVAL) && len(c.Socket) > 100 {
-			return nil, fmt.Errorf("connect to %s: %w (the path is %d bytes; Unix socket paths are limited to about 104)", c.Socket, err, len(c.Socket))
-		}
-		return nil, fmt.Errorf("connect to %s: %w", c.Socket, err)
-	}
-	return conn, nil
-}
-
-func (c *Client) timeout() time.Duration {
-	if c.ReplyTimeout > 0 {
-		return c.ReplyTimeout
-	}
-	return ReplyTimeout
-}
+func (c *Client) timeout() time.Duration { return c.transport().Budget() }
 
 // Per-operation reply budgets for operations that can wait for work in the
 // service. Rust's image normalization waits up to 60 seconds for a slot
@@ -73,7 +46,7 @@ func (c *Client) timeout() time.Duration {
 // encodes, so these get twice that.
 const (
 	FeedbackTimeout  = 2 * time.Minute
-	CanonicalTimeout = 2 * time.Minute
+	CanonicalTimeout = protocol.CanonicalTimeout
 	// TranscribeTimeout bounds one transcription: a provider call on a file
 	// of up to 25 MiB.
 	TranscribeTimeout = 5 * time.Minute
@@ -81,19 +54,19 @@ const (
 
 // Request outcome classes, for callers that must not claim more than they
 // know about a write. Every transport error of Open, Call and CallWithin
-// wraps exactly one of them.
+// wraps exactly one of them (package socket defines them).
 var (
 	// ErrRequestNotSent: the request line was never written (encode or
 	// connect failed). Nothing happened.
-	ErrRequestNotSent = errors.New("request not sent")
+	ErrRequestNotSent = socket.ErrRequestNotSent
 	// ErrRequestOutcomeUnknown: the line may have reached the service (a
 	// write error after connecting, or no readable reply). It may complete.
-	ErrRequestOutcomeUnknown = errors.New("request outcome unknown")
+	ErrRequestOutcomeUnknown = socket.ErrRequestOutcomeUnknown
 )
 
 // ErrNoAnswer means the request was sent and no reply came in time. The
 // service may still complete it.
-var ErrNoAnswer = fmt.Errorf("%w: the orchestrator service did not answer in time; the request may still complete", ErrRequestOutcomeUnknown)
+var ErrNoAnswer = socket.ErrNoAnswer
 
 // Call sends one request and waits for its reply. An error reply is returned
 // as a value; use Reply.Err or CallOK to turn it into an error.
@@ -103,24 +76,19 @@ func (c *Client) Call(ctx context.Context, req Request) (*Reply, error) {
 
 // CallWithin is Call with its own reply budget.
 func (c *Client) CallWithin(ctx context.Context, req Request, budget time.Duration) (*Reply, error) {
-	ctx, cancel := context.WithTimeout(ctx, budget)
-	defer cancel()
-	s, err := c.Open(ctx, req)
+	line, err := EncodeRequest(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: encode request: %w", ErrRequestNotSent, err)
+	}
+	raw, err := c.transport().Call(ctx, line, budget)
 	if err != nil {
 		return nil, err
 	}
-	defer s.Close()
-	reply, err := s.Next()
-	switch {
-	case err == nil:
-		return reply, nil
-	case errors.Is(err, io.EOF):
-		return nil, fmt.Errorf("%w: orchestrator service closed the connection without a reply", ErrRequestOutcomeUnknown)
-	case ctx.Err() != nil:
-		return nil, ErrNoAnswer
-	default:
-		return nil, fmt.Errorf("%w: %w", ErrRequestOutcomeUnknown, err)
+	var reply Reply
+	if err := json.Unmarshal(raw, &reply); err != nil {
+		return nil, fmt.Errorf("%w: decode orchestrator reply: %w", ErrRequestOutcomeUnknown, err)
 	}
+	return &reply, nil
 }
 
 // CallOK is Call that also fails on an error reply.
@@ -142,46 +110,26 @@ func (c *Client) Open(ctx context.Context, req Request) (*Stream, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode request: %w", ErrRequestNotSent, err)
 	}
-	conn, err := c.dial(ctx)
+	raw, err := c.transport().Open(ctx, line)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrRequestNotSent, err)
+		return nil, err
 	}
-	if _, err := conn.Write(append(line, '\n')); err != nil {
-		conn.Close()
-		// Part or all of the line may have been read by the service.
-		return nil, fmt.Errorf("%w: send request: %w", ErrRequestOutcomeUnknown, err)
-	}
-	s := &Stream{conn: conn, scanner: bufio.NewScanner(conn), done: make(chan struct{})}
-	s.scanner.Buffer(make([]byte, 0, 64<<10), maxLine)
-	go func() {
-		select {
-		case <-ctx.Done():
-			conn.Close()
-		case <-s.done:
-		}
-	}()
-	return s, nil
+	return &Stream{raw: raw}, nil
 }
 
-// Stream is the reply stream of one connection.
-type Stream struct {
-	conn    net.Conn
-	scanner *bufio.Scanner
-	done    chan struct{}
-	closed  bool
-}
+// Stream is the reply stream of one connection. Every line is decoded on
+// its own; nothing is merged or dropped.
+type Stream struct{ raw *socket.Stream }
 
 // Next returns the next reply, or io.EOF once the service closes the
 // connection.
 func (s *Stream) Next() (*Reply, error) {
-	if !s.scanner.Scan() {
-		if err := s.scanner.Err(); err != nil {
-			return nil, fmt.Errorf("read reply: %w", err)
-		}
-		return nil, io.EOF
+	line, err := s.raw.Next()
+	if err != nil {
+		return nil, err
 	}
 	var r Reply
-	if err := json.Unmarshal(s.scanner.Bytes(), &r); err != nil {
+	if err := json.Unmarshal(line, &r); err != nil {
 		return nil, fmt.Errorf("decode orchestrator reply: %w", err)
 	}
 	return &r, nil
@@ -190,25 +138,11 @@ func (s *Stream) Next() (*Reply, error) {
 // Close closes the connection. For a followed routed turn, close only after
 // the service closed it (after Release): closing early lets the next turn
 // start before delivery records land.
-func (s *Stream) Close() error {
-	if s.closed {
-		return nil
-	}
-	s.closed = true
-	close(s.done)
-	return s.conn.Close()
-}
+func (s *Stream) Close() error { return s.raw.Close() }
 
 // StatusReport returns the service status for one thread or all.
 func (c *Client) StatusReport(ctx context.Context, threadID *string) (*StatusReport, error) {
-	reply, err := c.CallOK(ctx, Status{ThreadID: threadID})
-	if err != nil {
-		return nil, err
-	}
-	if reply.Kind != ReplyStatus || reply.Report == nil {
-		return nil, fmt.Errorf("unexpected reply %q to status", reply.Kind)
-	}
-	return reply.Report, nil
+	return c.transport().Status(ctx, threadID)
 }
 
 // Require fails with *ErrUnsupported unless the service reports capability.
@@ -221,16 +155,7 @@ func (c *Client) Require(ctx context.Context, capability string) error {
 // RequireAll is Require for several capabilities with one status call. It
 // names the first missing one.
 func (c *Client) RequireAll(ctx context.Context, capabilities ...string) error {
-	report, err := c.StatusReport(ctx, nil)
-	if err != nil {
-		return err
-	}
-	for _, capability := range capabilities {
-		if !report.Has(capability) {
-			return &ErrUnsupported{Capability: capability, Protocol: report.Version()}
-		}
-	}
-	return nil
+	return c.transport().Require(ctx, capabilities...)
 }
 
 // Release tells the service the renderer finished a held turn.

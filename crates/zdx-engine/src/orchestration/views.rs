@@ -1,10 +1,10 @@
 //! Read-only views of saved state for chat surfaces (the Mini App): the
 //! exact JSON bodies of its API routes, built in Rust so no surface
 //! re-derives them. The bodies are plain engine functions
-//! ([`super::view_bodies::EngineViews`]); the bot's HTTP routes call them
-//! directly. The service serves them through a [`ViewProvider`] that the
-//! `zdx` binary installs (`zdx orchestrator serve`), and `zdx views` is their
-//! CLI twin.
+//! ([`super::view_bodies::EngineViews`]). The service serves them through a
+//! [`ViewProvider`] that the `zdx` binary installs (`zdx orchestrator
+//! serve`); the gateway's Mini App routes read them over the socket, and
+//! `zdx views` is their CLI twin.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -49,14 +49,12 @@ pub enum ViewRequest {
     /// identity: `{mime, data (base64), source_sha256, sha256, width, height,
     /// source_width, source_height}`.
     ArtifactCanonical { thread_id: String, path: String },
-    /// `GET /api/monitor` without `active_agents` and quotas (they come from
-    /// their own views); `subscriptions_status` is `pending`.
+    /// `GET /api/monitor` without `active_agents` (its own view) and quotas
+    /// (the gateway reads them with the shared Go quota package);
+    /// `subscriptions` is empty and `subscriptions_status` is `pending`.
     MonitorSnapshot,
     /// The `active_agents` of `GET /api/monitor`, read fresh.
     ActiveAgents,
-    /// The `subscriptions` of `GET /api/monitor`, fetched from every provider
-    /// now. Slow (a network call per account); never on a request path.
-    SubscriptionQuotas,
     /// `GET /api/workspaces`.
     Workspaces,
     /// `GET /api/usage?days=`.
@@ -126,7 +124,6 @@ pub fn capability(request: &ViewRequest) -> &'static str {
         | ViewRequest::ArtifactCanonical { .. } => super::protocol::CAPABILITY_ARTIFACT_VIEWS,
         ViewRequest::MonitorSnapshot
         | ViewRequest::ActiveAgents
-        | ViewRequest::SubscriptionQuotas
         | ViewRequest::Workspaces
         | ViewRequest::UsageReport { .. } => super::protocol::CAPABILITY_MONITOR_VIEWS,
         ViewRequest::GitStatus { .. }
@@ -176,9 +173,7 @@ async fn build(views: &EngineViews, request: ViewRequest) -> Result<ViewOutput, 
             body(&views.threads(kind).await?, None)
         }
         ViewRequest::ThreadView { thread_id, after } => {
-            let (thread, source_id) = views
-                .thread(thread_id, after, |_source_id, load| (load(), false))
-                .await?;
+            let (thread, source_id) = views.thread(thread_id, after).await?;
             body(&thread, Some(source_id))
         }
         ViewRequest::ThreadTrajectory { thread_id } => {
@@ -225,7 +220,6 @@ async fn build(views: &EngineViews, request: ViewRequest) -> Result<ViewOutput, 
         }
         ViewRequest::MonitorSnapshot => body(&views.monitor_snapshot().await?, None),
         ViewRequest::ActiveAgents => body(&views.active_agents().await?, None),
-        ViewRequest::SubscriptionQuotas => body(&views.subscription_quotas().await, None),
         ViewRequest::Workspaces => body(&views.workspaces().await?, None),
         ViewRequest::UsageReport { days } => body(&views.usage(days).await?, None),
         ViewRequest::GitStatus { thread_id } => body(&views.git_status(thread_id).await?, None),
@@ -243,5 +237,21 @@ async fn build(views: &EngineViews, request: ViewRequest) -> Result<ViewOutput, 
                 .await?,
             None,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ViewRequest;
+    use crate::orchestration::protocol::Request;
+
+    /// `subscription_quotas` is retired (quotas are read with the shared Go
+    /// quota package): neither a view nor any other request accepts it.
+    #[test]
+    fn retired_subscription_quotas_view_is_refused() {
+        let line = r#"{"op":"subscription_quotas"}"#;
+        assert!(serde_json::from_str::<ViewRequest>(line).is_err());
+        assert!(serde_json::from_str::<Request>(line).is_err());
+        assert!(serde_json::from_str::<Request>(r#"{"op":"monitor_snapshot"}"#).is_ok());
     }
 }

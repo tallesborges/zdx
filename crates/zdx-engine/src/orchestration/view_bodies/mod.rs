@@ -15,19 +15,18 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 
 pub use self::artifacts::{
     ArtifactFile, ArtifactVersionResponse, ArtifactsResponse, check_artifact_path,
 };
 pub use self::git::{GitDiffResponse, GitResponse, GitScopeResponse};
 pub use self::monitor::{
-    MAX_USAGE_DAYS, MonitorAgent, MonitorResponse, MonitorSubscription, UsageResponse,
-    WorkspacesResponse,
+    MAX_USAGE_DAYS, MonitorAgent, MonitorResponse, UsageResponse, WorkspacesResponse,
 };
 pub use self::threads::{
-    EventsLoad, ThreadActivity, ThreadListItem, ThreadListKind, ThreadListResponse, ThreadResponse,
-    WorkerItem, WorkerRollup, WorkersResponse,
+    ThreadActivity, ThreadListItem, ThreadListKind, ThreadListResponse, ThreadResponse, WorkerItem,
+    WorkerRollup, WorkersResponse,
 };
 use super::OrchestratorClient;
 use super::protocol::ErrorCode;
@@ -39,9 +38,9 @@ use crate::core::{thread_index, thread_persistence};
 /// root whose config the dashboard and usage read. The root is the caller's,
 /// passed explicitly; nothing here reads the current directory.
 ///
-/// Holds the caches the bodies share (dashboard snapshot, usage windows,
-/// quotas, artifact hashes) and the image-preview permits, so every surface
-/// built on one instance (or a clone of it) shares them.
+/// Holds the caches the bodies share (usage windows, artifact hashes) and the
+/// image-preview permits, so every surface built on one instance (or a clone
+/// of it) shares them.
 #[derive(Clone)]
 pub struct EngineViews {
     root: PathBuf,
@@ -50,17 +49,9 @@ pub struct EngineViews {
     /// service restarted (or while it is down), which is why worker listings
     /// merge it with persisted lineage.
     workers: Arc<LiveWorkers>,
-    monitor_cache: Arc<RwLock<Option<monitor::CachedMonitor>>>,
-    /// Single-flight guard for building `monitor_cache`; see `monitor`.
-    monitor_build: Arc<Mutex<()>>,
     /// Usage reports per window, held for `MONITOR_CACHE_TTL`. The lock is
     /// held across a build, so concurrent requests share one usage-cache sync.
     usage_cache: Arc<Mutex<HashMap<u32, monitor::CachedUsage>>>,
-    subscription_cache: Arc<Mutex<Option<monitor::CachedSubscriptions>>>,
-    /// Single-flight guard for the background quota refresh, held for the
-    /// whole fetch. Every open Mini App polls `/api/monitor` every 30s, so
-    /// without it a slow provider would accumulate overlapping refreshes.
-    subscription_refresh: Arc<Mutex<()>>,
     /// Image previews served at once: each reads and hashes an original of
     /// up to 25 MiB (`canonical::MAX_SOURCE_BYTES`, checked from the file
     /// length first). Making the copy is bounded separately, process-wide, by
@@ -95,11 +86,7 @@ impl EngineViews {
         Self {
             root,
             workers: Arc::new(workers),
-            monitor_cache: Arc::new(RwLock::new(None)),
-            monitor_build: Arc::new(Mutex::new(())),
             usage_cache: Arc::new(Mutex::new(HashMap::new())),
-            subscription_cache: Arc::new(Mutex::new(None)),
-            subscription_refresh: Arc::new(Mutex::new(())),
             image_permits: Arc::new(tokio::sync::Semaphore::new(artifacts::IMAGE_READS)),
             artifact_versions: Arc::new(artifacts::VersionCache::default()),
         }

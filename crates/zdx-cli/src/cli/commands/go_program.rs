@@ -1,5 +1,6 @@
 //! Go programs `zdx` runs in its own place (exec): the Telegram gateway
-//! (`zdx bot`) and the monitor (`zdx monitor`). Both get the same contract:
+//! (`zdx bot`), the monitor (`zdx monitor`), and the quota reader
+//! (`zdx quota`). All get the same contract:
 //! an absolute override path or the installed copy in `~/.local/bin`, never
 //! a PATH lookup, never this binary; this `ZDX_HOME`; this binary as
 //! `ZDX_BIN` unless already set. Being the same process, the program

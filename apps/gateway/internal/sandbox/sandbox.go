@@ -143,6 +143,9 @@ func Enter(fakeZdx bool) (check func() error, err error) {
 		}
 		os.Unsetenv(k)
 	}
+	// The quota read takes OPENCODE_API_KEY from the environment; no test
+	// may reach the real provider with it.
+	os.Unsetenv("OPENCODE_API_KEY")
 	return func() error {
 		os.RemoveAll(dir)
 		var changed []string

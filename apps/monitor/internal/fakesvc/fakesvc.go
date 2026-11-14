@@ -19,6 +19,7 @@ type Server struct {
 
 	mu        sync.Mutex
 	caps      []string
+	protocol  *int
 	viewsRoot *string
 	views     map[string]func(req map[string]any) any
 	requests  []map[string]any
@@ -32,7 +33,8 @@ func Start(t *testing.T, home string, caps ...string) *Server {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{Socket: filepath.Join(dir, "orchestrator.sock"), caps: caps, views: map[string]func(map[string]any) any{}}
+	two := 2
+	s := &Server{Socket: filepath.Join(dir, "orchestrator.sock"), caps: caps, protocol: &two, views: map[string]func(map[string]any) any{}}
 	ln, err := net.Listen("unix", s.Socket)
 	if err != nil {
 		t.Fatal(err)
@@ -41,6 +43,14 @@ func Start(t *testing.T, home string, caps ...string) *Server {
 	go s.serve()
 	t.Cleanup(func() { ln.Close() })
 	return s
+}
+
+// Protocol sets the status report's protocol (default 2); nil omits the
+// field, as a protocol 1 service does.
+func (s *Server) Protocol(version *int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.protocol = version
 }
 
 // ViewsRoot sets the status report's views_root.
@@ -105,7 +115,10 @@ func (s *Server) handle(conn net.Conn) {
 	op, _ := req["op"].(string)
 	var reply any
 	if op == "status" {
-		report := map[string]any{"protocol": 2, "capabilities": s.caps, "settled": true, "threads": []any{}}
+		report := map[string]any{"capabilities": s.caps, "settled": true, "threads": []any{}}
+		if s.protocol != nil {
+			report["protocol"] = *s.protocol
+		}
 		if s.viewsRoot != nil {
 			report["views_root"] = *s.viewsRoot
 		}

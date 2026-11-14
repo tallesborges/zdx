@@ -1,8 +1,10 @@
-// Package engine is the Go side of the Rust orchestrator service protocol:
-// newline-delimited JSON over the Unix socket at
+// Package engine is the gateway's side of the Rust orchestrator service
+// protocol: newline-delimited JSON over the Unix socket at
 // $ZDX_HOME/run/orchestrator.sock. The Rust definitions in
-// crates/zdx-engine/src/orchestration/protocol.rs are the source of truth;
-// this package mirrors them and adds no engine behavior.
+// crates/zdx-engine/src/orchestration/protocol.rs are the source of truth.
+// The shared module (apps/shared: protocol, socket) holds the transport and
+// the types every Go client shares; this package re-exports them and adds
+// the gateway's operations. It adds no engine behavior.
 //
 // A connection carries one request. Most requests get one reply and the
 // connection closes. Submit with a follow mode and Subscribe keep the
@@ -10,21 +12,23 @@
 package engine
 
 import (
-	"bytes"
 	"encoding/json"
-	"path/filepath"
+
+	"github.com/tallesborges/zdx/apps/shared/protocol"
 )
 
 // SocketPath is the service socket for a ZDX home directory.
-func SocketPath(zdxHome string) string {
-	return filepath.Join(zdxHome, "run", "orchestrator.sock")
-}
+func SocketPath(zdxHome string) string { return protocol.SocketPath(zdxHome) }
 
-// Route is the Telegram chat and topic a thread answers in.
-type Route struct {
-	Chat  int64  `json:"chat"`
-	Topic *int64 `json:"topic"`
-}
+// Shared wire types (package protocol).
+type (
+	Route          = protocol.Route
+	StatusReport   = protocol.StatusReport
+	ThreadStatus   = protocol.ThreadStatus
+	WorkerSnapshot = protocol.WorkerSnapshot
+	WorkerMirror   = protocol.WorkerMirror
+	ServiceError   = protocol.ServiceError
+)
 
 // Follow is what a submit connection streams after the reply.
 type Follow string
@@ -81,32 +85,8 @@ type Submit struct {
 	Replay bool `json:"replay,omitempty"`
 }
 
-// Version is the report's protocol version (1 when absent).
-func (r *StatusReport) Version() uint32 {
-	if r == nil || r.Protocol == nil {
-		return 1
-	}
-	return *r.Protocol
-}
-
-// Has reports whether the service supports a capability. A report older
-// than ProtocolCapabilities has none.
-func (r *StatusReport) Has(capability string) bool {
-	if r.Version() < ProtocolCapabilities {
-		return false
-	}
-	for _, c := range r.Capabilities {
-		if c == capability {
-			return true
-		}
-	}
-	return false
-}
-
 // Status asks for one thread, or every thread plus global settlement.
-type Status struct {
-	ThreadID *string `json:"thread_id,omitempty"`
-}
+type Status protocol.Status
 
 // Cancel stops work on a thread. With InputID or TurnID, only that work.
 type Cancel struct {
@@ -198,19 +178,7 @@ func EncodeRequest(r Request) ([]byte, error) {
 		}
 		r = s
 	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(r); err != nil {
-		return nil, err
-	}
-	body := bytes.TrimRight(buf.Bytes(), "\n")
-	op, _ := json.Marshal(r.op())
-	line := append([]byte(`{"op":`), op...)
-	if len(body) > 2 {
-		line = append(line, ',')
-	}
-	return append(line, body[1:]...), nil
+	return protocol.EncodeLine(r.op(), r)
 }
 
 // Reply kinds.
@@ -323,12 +291,6 @@ type Reply struct {
 	Data     *string `json:"data,omitempty"`
 }
 
-// ServiceError is a reply of kind "error": the service refused the request.
-// Code is empty for older operations.
-type ServiceError struct{ Message, Code string }
-
-func (e *ServiceError) Error() string { return e.Message }
-
 // Err turns an error reply into a *ServiceError.
 func (r *Reply) Err() error {
 	if r.Kind == ReplyError {
@@ -337,110 +299,33 @@ func (r *Reply) Err() error {
 	return nil
 }
 
-// Capability names the service reports in status once each lands. Check the
-// exact capability before any new operation or field: known operations
-// silently ignore unknown fields.
+// Capability names (package protocol).
 const (
-	CapOrdinarySubmit  = "ordinary_submit"
-	CapRerun           = "rerun"
-	CapUpdateThread    = "update_thread"
-	CapRecordDelivery  = "record_delivery"
-	CapResetThread     = "reset_thread"
-	CapGenerate        = "generate"
-	CapFeedbackSubmit  = "feedback_submit"
-	CapThreadViews     = "thread_views"
-	CapGitViews        = "git_views"
-	CapMonitorViews    = "monitor_views"
-	CapArtifactViews   = "artifact_views"
-	CapComposeUserText = "compose_user_text"
-	CapResolveThread   = "resolve_thread"
-	CapReplyParts      = "reply_parts"
-	CapPrepareImage    = "prepare_image"
-	CapTranscribeAudio = "transcribe_audio"
-	// CapHoldTokens: one renderer, hold tokens on releases, turn ids on
-	// delivery records, replay of undelivered turns (Rust holds v7).
-	CapHoldTokens = "hold_tokens"
-	// CapWorkerMirrorRoute: WorkerSnapshot.Mirror names a worker's legacy
-	// mirror topic.
-	CapWorkerMirrorRoute = "worker_mirror_route"
-	// CapPreparePhoto: prepare_photo, a reply photo made ready for
-	// sendPhoto.
-	CapPreparePhoto = "prepare_photo"
-	// CapTouchedWorkers: turn_ended.touched_workers.
-	CapTouchedWorkers = "touched_workers"
+	CapOrdinarySubmit    = protocol.CapOrdinarySubmit
+	CapRerun             = protocol.CapRerun
+	CapUpdateThread      = protocol.CapUpdateThread
+	CapRecordDelivery    = protocol.CapRecordDelivery
+	CapResetThread       = protocol.CapResetThread
+	CapGenerate          = protocol.CapGenerate
+	CapFeedbackSubmit    = protocol.CapFeedbackSubmit
+	CapThreadViews       = protocol.CapThreadViews
+	CapGitViews          = protocol.CapGitViews
+	CapMonitorViews      = protocol.CapMonitorViews
+	CapArtifactViews     = protocol.CapArtifactViews
+	CapComposeUserText   = protocol.CapComposeUserText
+	CapResolveThread     = protocol.CapResolveThread
+	CapReplyParts        = protocol.CapReplyParts
+	CapPrepareImage      = protocol.CapPrepareImage
+	CapTranscribeAudio   = protocol.CapTranscribeAudio
+	CapHoldTokens        = protocol.CapHoldTokens
+	CapWorkerMirrorRoute = protocol.CapWorkerMirrorRoute
+	CapPreparePhoto      = protocol.CapPreparePhoto
+	CapTouchedWorkers    = protocol.CapTouchedWorkers
 )
 
 // ProtocolCapabilities is the first protocol version that reports
 // capabilities.
-const ProtocolCapabilities uint32 = 2
-
-type StatusReport struct {
-	// Protocol is the service protocol version; absent means 1.
-	Protocol     *uint32        `json:"protocol,omitempty"`
-	Capabilities []string       `json:"capabilities,omitempty"`
-	Settled      bool           `json:"settled"`
-	Threads      []ThreadStatus `json:"threads"`
-	// ViewsRoot is the root the service's views read config, usage and the
-	// Git fallback from (its --root), when it serves views.
-	ViewsRoot *string `json:"views_root,omitempty"`
-}
-
-type ThreadStatus struct {
-	ThreadID     string           `json:"thread_id"`
-	Profile      *string          `json:"profile"`
-	State        string           `json:"state"` // idle, queued, running, delivering
-	RunningTurn  *uint64          `json:"running_turn"`
-	QueuedInputs int              `json:"queued_inputs"`
-	Route        *Route           `json:"route"`
-	Settled      bool             `json:"settled"`
-	Workers      []WorkerSnapshot `json:"workers"`
-}
-
-// WorkerSnapshot is a point-in-time view of a managed worker. Raw keeps the
-// full object so callers can pass it through unchanged.
-type WorkerSnapshot struct {
-	ThreadID        string  `json:"thread_id"`
-	OwnerThreadID   string  `json:"owner_thread_id"`
-	Root            string  `json:"root"`
-	Status          string  `json:"status"`
-	QueueDepth      int     `json:"queue_depth"`
-	LatestFinalText *string `json:"latest_final_text"`
-	LastError       *string `json:"last_error"`
-	MirrorURL       *string `json:"mirror_url"`
-	CurrentTool     *string `json:"current_tool"`
-	// Mirror is the worker's legacy mirror topic (capability
-	// worker_mirror_route); nil for a worker without one.
-	Mirror *WorkerMirror `json:"mirror,omitempty"`
-
-	Raw json.RawMessage `json:"-"`
-}
-
-// WorkerMirror is a worker's legacy mirror topic: the chat and topic the
-// feed posts to, and the mirror thread `telegram-<chat>-topic-<topic>`.
-type WorkerMirror struct {
-	Chat     int64  `json:"chat"`
-	Topic    int64  `json:"topic"`
-	ThreadID string `json:"thread_id"`
-}
-
-func (w *WorkerSnapshot) UnmarshalJSON(data []byte) error {
-	type plain WorkerSnapshot
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*w = WorkerSnapshot(p)
-	w.Raw = append(json.RawMessage(nil), data...)
-	return nil
-}
-
-func (w WorkerSnapshot) MarshalJSON() ([]byte, error) {
-	if len(w.Raw) > 0 {
-		return w.Raw, nil
-	}
-	type plain WorkerSnapshot
-	return json.Marshal(plain(w))
-}
+const ProtocolCapabilities = protocol.ProtocolCapabilities
 
 // Event types.
 const (

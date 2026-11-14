@@ -33,6 +33,9 @@ import (
 	"github.com/tallesborges/zdx/apps/gateway/internal/gateway"
 	"github.com/tallesborges/zdx/apps/gateway/internal/miniapp"
 	"github.com/tallesborges/zdx/apps/gateway/internal/sandbox"
+	"github.com/tallesborges/zdx/apps/shared/protocol"
+	"github.com/tallesborges/zdx/apps/shared/quota"
+	"github.com/tallesborges/zdx/apps/shared/socket"
 )
 
 // The real-route checks are opt-in: they run the prebuilt zdx binary named
@@ -687,6 +690,40 @@ func TestRealRouteParity(t *testing.T) {
 			h.Get("X-Zdx-Canonical-Height") != strconv.Itoa(decoded.Bounds().Dy()) ||
 			h.Get("X-Zdx-Source-Width") != "40" || h.Get("X-Zdx-Source-Height") != "30" {
 			t.Fatalf("image identity headers %v (decoded %s %v)", h, format, decoded.Bounds())
+		}
+	})
+
+	t.Run("subscription_quotas is retired", func(t *testing.T) {
+		// The Rust view is gone: the socket refuses the op as an invalid
+		// request and `zdx views` fails, so no caller can read it by accident.
+		line, err := socket.NewClient(p.sockPath).Call(context.Background(), []byte(`{"op":"subscription_quotas"}`), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var reply protocol.Reply
+		if err := json.Unmarshal(line, &reply); err != nil {
+			t.Fatalf("%s: %v", line, err)
+		}
+		if reply.Kind != protocol.ReplyError || reply.Code != "invalid" || !strings.Contains(reply.Message, "invalid request") {
+			t.Fatalf("want an invalid-request refusal, got %s", line)
+		}
+		cmd := exec.Command(p.bin, "--root", p.root, "views")
+		cmd.Dir, cmd.Env = p.root, p.env
+		cmd.Stdin = strings.NewReader(`{"op":"subscription_quotas"}`)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if err := cmd.Run(); err == nil || stdout.Len() != 0 || !strings.Contains(stderr.String(), "parse view request") {
+			t.Fatalf("zdx views must refuse the retired view: err %v, stdout %q, stderr %q", err, stdout.String(), stderr.String())
+		}
+
+		// The Mini App reads quotas in process instead. The home has no
+		// credentials and the reader no OPENCODE_API_KEY: every account is
+		// not logged in, which the recorded body drops, so it is `[]`.
+		noEnv := func(string) (string, bool) { return "", false }
+		goEngine := &gateway.MiniAppEngine{Quota: quota.Options{Home: p.home, LookupEnv: noEnv, Version: "0.0.0-test"}}
+		got, err := goEngine.SubscriptionQuotas(context.Background())
+		if err != nil || string(got) != "[]" {
+			t.Fatalf("Go quotas %s %v", got, err)
 		}
 	})
 

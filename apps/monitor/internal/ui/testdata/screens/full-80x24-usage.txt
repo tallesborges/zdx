@@ -10,8 +10,8 @@
   ChatGPT  openai-codex · pro plan
     5h      █░░░░░░░░░░░   7.0%      93.0%  unknown
 
-  Gemini  gemini-cli
-    ✗ token refresh failed: 401 Unauthorized
+  Antigravity  google-antigravity
+    ✗ expired · re-login in zdx
 
 ── Token usage · last 7 days · [ ] change ──────────────────────────────────────
   412.9M tokens · 18.3k requests · $38.27 billed · 380.1M on subscriptions

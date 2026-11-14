@@ -1,0 +1,19 @@
+{
+  "quota": {
+    "plan": null,
+    "windows": [
+      {
+        "label": "weekly",
+        "resets_at": "2026-07-26T15:46:32+00:00",
+        "scope": "Gemini Models",
+        "used_percent": 0.2862800000000054
+      },
+      {
+        "label": "5h",
+        "resets_at": "2026-07-21T03:22:39+00:00",
+        "scope": "Gemini Models",
+        "used_percent": 60.0
+      }
+    ]
+  }
+}

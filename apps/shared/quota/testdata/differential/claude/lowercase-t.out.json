@@ -1,0 +1,13 @@
+{
+  "quota": {
+    "plan": null,
+    "windows": [
+      {
+        "label": "5h",
+        "resets_at": "2026-07-14T01:09:59+00:00",
+        "scope": null,
+        "used_percent": 3.0
+      }
+    ]
+  }
+}

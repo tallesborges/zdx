@@ -1559,7 +1559,7 @@ pub mod muse_code {
 
     const DEVICE_AUTHORIZATION_URL: &str = "https://auth.meta.com/oidc/device/authorization/";
     const DEVICE_TOKEN_URL: &str = "https://auth.meta.com/oidc/device/token/";
-    /// Mint endpoint. Doubles as the subscription-usage read (see `subs_usage`).
+    /// Mint endpoint.
     pub const KEY_MINT_URL: &str = "https://api.meta.ai/muse-code/key";
     const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
     const API_VERSION: &str = "1.0.0";
@@ -1656,21 +1656,6 @@ pub mod muse_code {
         error_description: Option<String>,
     }
 
-    /// One rolling allowance window reported by the mint endpoint.
-    #[derive(Debug, Clone, Default, Deserialize)]
-    pub struct SubscriptionWindow {
-        pub used_percent: Option<f64>,
-        pub resets_at: Option<serde_json::Value>,
-        pub window_duration_mins: Option<f64>,
-    }
-
-    /// Subscription allowance block: a rolling window plus a weekly window.
-    #[derive(Debug, Clone, Default, Deserialize)]
-    pub struct SubscriptionUsage {
-        pub window: Option<SubscriptionWindow>,
-        pub weekly: Option<SubscriptionWindow>,
-    }
-
     /// Response shape of `POST /muse-code/key`.
     ///
     /// Undocumented by Meta; field names follow the `oh-my-pi` schema and its
@@ -1688,7 +1673,6 @@ pub mod muse_code {
         pub user_id: Option<String>,
         pub subs_tier_id: Option<String>,
         pub subs_tier_name: Option<String>,
-        pub subs_usage: Option<SubscriptionUsage>,
     }
 
     /// Starts a device authorization and returns the code to show the user.

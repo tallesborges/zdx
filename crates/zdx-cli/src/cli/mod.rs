@@ -1691,7 +1691,10 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
         }
         Commands::Threads { command } => dispatch_threads(command, context).await,
         Commands::Stats { days, json } => commands::stats::run(context.config, days, json),
-        Commands::Quota { json } => commands::quota::run(json).await,
+        Commands::Quota { json } => {
+            let root = resolve_root(context.root, context.worktree_id)?;
+            commands::quota::run(&root, json)
+        }
         Commands::Bg { command } => dispatch_bg(command).await,
         Commands::Service { command } => dispatch_service(command, context),
         Commands::Imagine {

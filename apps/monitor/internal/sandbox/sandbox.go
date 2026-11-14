@@ -1,10 +1,13 @@
 // Package sandbox keeps tests off the developer's real ZDX home.
 //
 // TestMain calls Enter: it moves HOME, ZDX_HOME and TMPDIR into a fresh
-// directory, drops every other inherited ZDX_ variable, and puts a failing
+// directory, drops every other inherited ZDX_ variable and the provider
+// credentials the quota fetch reads (OPENCODE_API_KEY), and puts a failing
 // `zdx` first on PATH, so a test that forgets its fake binary never runs the
-// real one. Variables starting with KeepPrefix stay. The returned check removes the sandbox and fails the run when a
-// file in the inherited home's run directory changed.
+// real one. Variables starting with KeepPrefix stay. The returned check
+// removes the sandbox and fails the run when a live-service file or the
+// OAuth cache of the inherited home changed (only size and modification
+// time are read, never contents).
 package sandbox
 
 import (
@@ -19,8 +22,14 @@ import (
 // ZDX_MONITOR_TEST_ZDX, the prebuilt binary of the opt-in real check).
 const KeepPrefix = "ZDX_MONITOR_TEST_"
 
-// watched are live-service files a test must never touch.
-var watched = []string{"bot.pid", "bot.supervised", "orchestrator.sock", "orchestrator.pid", "restart-queue.json"}
+// watched are files of the inherited home a test must never touch.
+var watched = []string{
+	"oauth.json", "oauth.lock",
+	"run/bot.pid", "run/bot.supervised", "run/orchestrator.sock", "run/orchestrator.pid", "run/restart-queue.json",
+}
+
+// dropped are credential variables outside the ZDX_ prefix.
+var dropped = []string{"OPENCODE_API_KEY"}
 
 type stamp struct {
 	exists bool
@@ -61,7 +70,7 @@ func Enter() (check func() error, err error) {
 	}
 	before := map[string]stamp{}
 	for _, name := range watched {
-		p := filepath.Join(realHome, "run", name)
+		p := filepath.Join(realHome, name)
 		before[p] = stampOf(p)
 	}
 	for _, kv := range os.Environ() {
@@ -69,6 +78,9 @@ func Enter() (check func() error, err error) {
 		if strings.HasPrefix(k, "ZDX_") && !strings.HasPrefix(k, KeepPrefix) {
 			os.Unsetenv(k)
 		}
+	}
+	for _, k := range dropped {
+		os.Unsetenv(k)
 	}
 	set := map[string]string{
 		"HOME":     home,

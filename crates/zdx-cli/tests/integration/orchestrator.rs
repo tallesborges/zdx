@@ -401,6 +401,23 @@ async fn test_orchestrator_send_ordinary_runs_a_routed_agent_turn() {
     assert!(agents["body"].is_array(), "{agents}");
     let snapshot = view(serde_json::json!({"op":"monitor_snapshot"}));
     assert!(snapshot["body"]["services"].is_array(), "{snapshot}");
+    // Quotas are not part of the snapshot: the gateway overlays its own.
+    assert_eq!(snapshot["body"]["subscriptions"], serde_json::json!([]));
+    assert_eq!(snapshot["body"]["subscriptions_status"], "pending");
+    assert!(
+        snapshot["body"]["subscriptions_age"].is_null(),
+        "{snapshot}"
+    );
+    // `zdx views` refuses the retired quota view before it reaches the
+    // service.
+    crate::fixtures::zdx_cmd()
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["views", "--file", "-"])
+        .write_stdin(r#"{"op":"subscription_quotas"}"#)
+        .assert()
+        .failure()
+        .stdout(predicates::str::is_empty())
+        .stderr(predicates::str::contains("parse view request"));
     let usage = view(serde_json::json!({"op":"usage_report","days":7}));
     assert!(usage["body"].is_object(), "{usage}");
     let artifacts = view(serde_json::json!({"op":"artifacts_list","thread_id":thread}));
@@ -1141,6 +1158,10 @@ async fn test_helper_ops_generate_seed_and_topic_start() {
     }))
     .await;
     assert_eq!(title["reply"], "generated", "{title}");
+    // The retired quota view is an invalid request on the socket.
+    let retired = call(serde_json::json!({"op": "subscription_quotas"})).await;
+    assert_eq!(retired["reply"], "error", "{retired}");
+    assert_eq!(retired["code"], "invalid", "{retired}");
     assert!(
         title["text"].as_str().unwrap().contains("Helper Output"),
         "{title}"

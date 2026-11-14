@@ -1,0 +1,34 @@
+{
+  "providers": [
+    {
+      "account": null,
+      "error": "not logged in",
+      "provider": "claude-cli"
+    },
+    {
+      "account": null,
+      "error": "not logged in",
+      "provider": "openai-codex"
+    },
+    {
+      "account": null,
+      "error": "not logged in",
+      "provider": "google-antigravity"
+    },
+    {
+      "account": null,
+      "error": "not logged in",
+      "provider": "grok-build"
+    },
+    {
+      "account": null,
+      "error": "not logged in",
+      "provider": "opencode-go"
+    },
+    {
+      "account": null,
+      "error": "not logged in",
+      "provider": "muse-code"
+    }
+  ]
+}

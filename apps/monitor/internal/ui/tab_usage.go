@@ -102,10 +102,17 @@ func (m *Model) quotaLines(width int) []string {
 	}
 	out := []string{sectionTitle("Subscription quotas", meta)}
 	if st.err != nil {
+		// Wrapped, not cut: the error can say how to fix it (an unknown
+		// zdx version names the build flag and --zdx-version).
 		if t.quotasLoaded {
-			out = append(out, "  "+warn.Render("Last refresh failed: "+oneLine(st.err.Error())+". Values below are from "+span(now.Sub(st.fetched))+" ago."))
+			for _, l := range wrapText("Last refresh failed: "+oneLine(st.err.Error())+". Values below are from "+span(now.Sub(st.fetched))+" ago.", width-2) {
+				out = append(out, "  "+warn.Render(l))
+			}
 		} else {
-			return append(out, "  "+bad.Render("Could not fetch quotas: "+oneLine(st.err.Error())))
+			for _, l := range wrapText("Could not fetch quotas: "+oneLine(st.err.Error()), width-2) {
+				out = append(out, "  "+bad.Render(l))
+			}
+			return out
 		}
 	}
 	if !t.quotasLoaded {

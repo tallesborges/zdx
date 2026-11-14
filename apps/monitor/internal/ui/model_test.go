@@ -58,7 +58,13 @@ func (f *fake) Status(ctx context.Context) (*wire.StatusReport, error) {
 	if f.status != nil {
 		return f.status(ctx)
 	}
-	return &wire.StatusReport{Settled: true, Capabilities: []string{wire.CapMonitorViews, wire.CapThreadViews}}, nil
+	return modernStatus(), nil
+}
+
+// modernStatus is a current service: protocol 2 with both view
+// capabilities. Without Protocol a report is protocol 1, which has none.
+func modernStatus() *wire.StatusReport {
+	return &wire.StatusReport{Protocol: ptr(uint32(2)), Settled: true, Capabilities: []string{wire.CapMonitorViews, wire.CapThreadViews}}
 }
 func (f *fake) Services(context.Context) (data.ServiceStatus, error) {
 	f.count("services")
@@ -311,12 +317,43 @@ func TestUnavailableServiceSaysSoAndNamesTheFallback(t *testing.T) {
 
 func TestViewsRootMismatchIsShown(t *testing.T) {
 	f := &fake{status: func(context.Context) (*wire.StatusReport, error) {
-		return &wire.StatusReport{Settled: true, ViewsRoot: ptr("/elsewhere")}, nil
+		r := modernStatus()
+		r.ViewsRoot = ptr("/elsewhere")
+		return r, nil
 	}}
 	m, _ := newModel(t, f)
 	pump(m, m.Init())
 	if !strings.Contains(plain(m), "The service reads views for /elsewhere, not --root") {
 		t.Fatalf("screen:\n%s", plain(m))
+	}
+}
+
+func TestModernServiceHasNoCapabilityWarning(t *testing.T) {
+	f := &fake{}
+	m, _ := newModel(t, f)
+	pump(m, m.Init())
+	out := plain(m)
+	if strings.Contains(out, "does not serve") {
+		t.Fatalf("a protocol 2 service with both view capabilities needs no warning:\n%s", out)
+	}
+	if f.n("status") == 0 || f.n("agents") == 0 {
+		t.Fatalf("status and the Agents view must run: %v", f.calls)
+	}
+	help := strings.Join(strings.Fields(ansi.Strip(strings.Join(m.helpLines(), "\n"))), " ")
+	if !strings.Contains(help, "protocol 2") || !strings.Contains(help, "capabilities "+wire.CapMonitorViews+", "+wire.CapThreadViews) {
+		t.Fatalf("help must show protocol 2 and the capabilities:\n%s", help)
+	}
+}
+
+func TestProtocolOneServiceIsWarnedAsUnsupported(t *testing.T) {
+	// A protocol 1 report has no capabilities, even when it lists names.
+	f := &fake{status: func(context.Context) (*wire.StatusReport, error) {
+		return &wire.StatusReport{Settled: true, Capabilities: []string{wire.CapMonitorViews, wire.CapThreadViews}}, nil
+	}}
+	m, _ := newModel(t, f)
+	pump(m, m.Init())
+	if out := plain(m); !strings.Contains(out, "The orchestrator does not serve "+wire.CapMonitorViews+", "+wire.CapThreadViews+": update and restart it.") {
+		t.Fatalf("screen:\n%s", out)
 	}
 }
 

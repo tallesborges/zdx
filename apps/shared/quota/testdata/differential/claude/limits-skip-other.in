@@ -1,0 +1,1 @@
+{"limits":[{"group":"other","percent":5},{"group":"session","percent":101.5,"resets_at":"2026-07-14T01:09:59.123456789-03:00"},{"group":"weekly","percent":null,"scope":{"model":{"display_name":"Fable"}}}],"five_hour":{"utilization":1}}

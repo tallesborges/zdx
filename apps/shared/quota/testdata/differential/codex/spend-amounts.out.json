@@ -1,0 +1,13 @@
+{
+  "quota": {
+    "plan": null,
+    "windows": [
+      {
+        "label": "spend",
+        "resets_at": null,
+        "scope": "$12.35 of $30.00",
+        "used_percent": 41.150000000000006
+      }
+    ]
+  }
+}

@@ -1,0 +1,147 @@
+// RECONSTRUCTED RECORDER SOURCE. Reference text only: not compiled, not run
+// by any Go or Rust test.
+//
+// What this is: the Rust test that recorded every <provider>/<case>.out.json
+// in this directory from the matching .in body. The original file was never
+// committed and was deleted with the Rust quota readers. This text was
+// rebuilt after the deletion. It is not hash-verified against the file that
+// recorded the outputs. It matches, apart from the `|_decode|` closure
+// parameter (a clippy fix in the final version), a copy of the source read
+// before the deletion.
+//
+// Recorded against (checked in git):
+// - crates/zdx-providers/src/subscription_quota.rs at commit aab08ba4
+//   (unchanged through 6224254b): the wire structs and parse_* functions
+//   that `use super::*` reaches.
+// - crates/zdx-providers/src/oauth.rs at aab08ba4: muse_code::
+//   MuseCodeKeyResponse, SubscriptionUsage, SubscriptionWindow (subs_usage).
+// - Cargo.lock at aab08ba4 (same versions at 6224254b): serde 1.0.229,
+//   serde_derive 1.0.229, serde_json 1.0.151 (default features), zmij 1.0.23,
+//   itoa 1.0.18, memchr 2.8.3, chrono 0.4.45.
+//
+// To check or re-record: check out aab08ba4, save the code below as
+// crates/zdx-providers/src/subscription_quota/differential.rs, add
+// `#[cfg(test)] mod differential;` to subscription_quota.rs, copy only the
+// provider directories (not this file: the recorder reads every entry of the
+// root as a provider directory) to
+// crates/zdx-providers/tests/fixtures/quota/differential, then run
+// `cargo test -p zdx-providers --lib differential` to check, or the same
+// with ZDX_QUOTA_DIFF_UPDATE=1 to record. Expected outputs come only from
+// this Rust recorder, never from Go.
+//
+// ---- recorder source ----
+//! Differential fixtures for the Go quota package (`apps/shared/quota`).
+//!
+//! Each `tests/fixtures/quota/differential/<provider>/<case>.in` is a raw
+//! provider response body. This test runs the Rust decode + parse path that
+//! the fetchers use on it (serde decode failure and an unparsable payload are
+//! both `unexpected response`) and compares the result with
+//! `<case>.out.json`, which records what Rust produced. The Go package reads
+//! the same pairs, so both implementations are checked against Rust output,
+//! not hand-written expectations. `ZDX_QUOTA_DIFF_UPDATE=1` rewrites the
+//! `.out.json` files from Rust.
+//!
+//! Reference copy. It ran as `crates/zdx-providers/src/subscription_quota/
+//! differential.rs` (declared `#[cfg(test)] mod differential;` in
+//! `subscription_quota.rs`, so `super::*` is that module) and was never
+//! committed. To re-record, restore `subscription_quota.rs` from the last
+//! commit that has it, add this file back there, copy the cases to
+//! `tests/fixtures/quota/differential`, and run
+//! `ZDX_QUOTA_DIFF_UPDATE=1 cargo test -p zdx-providers --lib differential`.
+
+use std::path::{Path, PathBuf};
+
+use serde_json::{Value, json};
+
+use super::*;
+
+fn quota_json(result: Result<SubscriptionQuota, QuotaError>) -> Value {
+    match result {
+        Ok(quota) => json!({
+            "quota": {
+                "plan": quota.plan,
+                "windows": quota.windows.iter().map(|w| json!({
+                    "label": w.label,
+                    "used_percent": w.used_percent,
+                    "resets_at": w.resets_at.map(|dt| dt.to_rfc3339()),
+                    "scope": w.scope,
+                })).collect::<Vec<_>>(),
+            }
+        }),
+        Err(error) => json!({ "error": error.reason() }),
+    }
+}
+
+fn decode<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T, QuotaError> {
+    serde_json::from_slice(body).map_err(|_decode| QuotaError::Incompatible)
+}
+
+/// The response-handling half of each fetcher, after a successful status.
+fn run_case(provider: &str, body: &[u8]) -> Value {
+    let result = match provider {
+        "claude" => decode::<ClaudeUsageWire>(body)
+            .and_then(|wire| parse_claude(&wire, None).ok_or(QuotaError::Incompatible)),
+        "claude-profile" => {
+            let plan = serde_json::from_slice::<ClaudeProfileWire>(body)
+                .ok()
+                .and_then(|wire| wire.plan_label());
+            return json!({ "plan": plan });
+        }
+        "codex" => decode::<CodexUsageWire>(body)
+            .and_then(|wire| parse_codex(&wire).ok_or(QuotaError::Incompatible)),
+        "antigravity" => decode::<AntigravityUsageWire>(body)
+            .and_then(|wire| parse_antigravity(&wire).ok_or(QuotaError::Incompatible)),
+        "grok" => decode::<GrokBillingWire>(body)
+            .and_then(|wire| parse_grok(&wire).ok_or(QuotaError::Incompatible)),
+        "opencode-go" => decode::<OpenCodeGoUsageWire>(body)
+            .and_then(|wire| parse_opencode_go(&wire).ok_or(QuotaError::Incompatible)),
+        "muse-code" => decode::<muse_code::MuseCodeKeyResponse>(body).and_then(|wire| {
+            if wire.is_subs_active == Some(false) {
+                return Err(QuotaError::Unauthorized);
+            }
+            parse_muse_code(&wire).ok_or(QuotaError::Incompatible)
+        }),
+        other => panic!("unknown differential provider directory {other}"),
+    };
+    quota_json(result)
+}
+
+fn cases() -> Vec<(String, PathBuf)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/quota/differential");
+    let mut out = Vec::new();
+    for provider in std::fs::read_dir(&root).expect("differential fixtures") {
+        let provider = provider.unwrap().path();
+        let name = provider.file_name().unwrap().to_string_lossy().into_owned();
+        for case in std::fs::read_dir(&provider).unwrap() {
+            let case = case.unwrap().path();
+            if case.extension().is_some_and(|ext| ext == "in") {
+                out.push((name.clone(), case));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn differential_fixtures_match_recorded_rust_output() {
+    let update = std::env::var_os("ZDX_QUOTA_DIFF_UPDATE").is_some_and(|v| v == "1");
+    let cases = cases();
+    assert!(cases.len() > 40, "differential fixtures missing");
+    let mut failures = Vec::new();
+    for (provider, input) in cases {
+        let body = std::fs::read(&input).unwrap();
+        let got = serde_json::to_string_pretty(&run_case(&provider, &body)).unwrap() + "\n";
+        let output = input.with_extension("out.json");
+        if update {
+            std::fs::write(&output, &got).unwrap();
+            continue;
+        }
+        match std::fs::read_to_string(&output) {
+            Ok(want) if want == got => {}
+            Ok(want) => failures.push(format!("{}: want\n{want}got\n{got}", input.display())),
+            Err(error) => failures.push(format!("{}: {error}", output.display())),
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

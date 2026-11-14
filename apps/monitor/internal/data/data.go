@@ -1,10 +1,15 @@
 // Package data holds the JSON bodies the monitor reads, decoded as the
 // engine writes them (views.rs bodies, `zdx service status --json`,
-// `zdx jobs list --daemon --json`). Types only: every value is derived in
-// Rust, and the monitor shows it without re-deriving it.
+// `zdx jobs list --daemon --json`), and the quota rows of the shared quota
+// package. Types only: every value is derived in Rust or the shared Go
+// module, and the monitor shows it without re-deriving it.
 package data
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/tallesborges/zdx/apps/shared/quota"
+)
 
 // RunStatus is agent_activity::RunStatus.
 type RunStatus struct {
@@ -33,8 +38,8 @@ type Agent struct {
 	Run            RunStatus `json:"run"`
 }
 
-// Snapshot is `monitor_snapshot` (active agents and quotas come from their
-// own views).
+// Snapshot is `monitor_snapshot` (active agents come from their own view,
+// quotas from the shared quota package).
 type Snapshot struct {
 	GeneratedAt         string              `json:"generated_at"`
 	Services            []SnapshotService   `json:"services"`
@@ -109,22 +114,13 @@ type JobSummary struct {
 	Error     *string      `json:"error"`
 }
 
-// Subscription is one account's quota (`subscription_quotas`).
-type Subscription struct {
-	Provider string        `json:"provider"`
-	Name     string        `json:"name"`
-	Plan     *string       `json:"plan"`
-	Windows  []QuotaWindow `json:"windows"`
-	Error    *string       `json:"error"`
-}
+// Subscription is one account's quota row, as quota.Subscriptions builds it
+// from a quota.Fetch snapshot (the row contract the shared quota package
+// records).
+type Subscription = quota.Subscription
 
 // QuotaWindow is one quota window.
-type QuotaWindow struct {
-	Label       string  `json:"label"`
-	UsedPercent float64 `json:"used_percent"`
-	ResetsAt    *string `json:"resets_at"`
-	Scope       *string `json:"scope"`
-}
+type QuotaWindow = quota.SubscriptionWindow
 
 // Usage is `usage_report`.
 type Usage struct {

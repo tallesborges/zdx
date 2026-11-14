@@ -1,0 +1,25 @@
+{
+  "quota": {
+    "plan": null,
+    "windows": [
+      {
+        "label": "5h",
+        "resets_at": "2026-07-14T01:09:59+00:00",
+        "scope": "GEMINI Pro",
+        "used_percent": 75.0
+      },
+      {
+        "label": "weekly",
+        "resets_at": null,
+        "scope": "GEMINI Pro",
+        "used_percent": 0.0
+      },
+      {
+        "label": "weekly",
+        "resets_at": null,
+        "scope": "GEMINI Pro",
+        "used_percent": -50.0
+      }
+    ]
+  }
+}

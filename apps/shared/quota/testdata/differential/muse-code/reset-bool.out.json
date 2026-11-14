@@ -1,0 +1,13 @@
+{
+  "quota": {
+    "plan": null,
+    "windows": [
+      {
+        "label": "weekly",
+        "resets_at": null,
+        "scope": null,
+        "used_percent": 10.0
+      }
+    ]
+  }
+}

@@ -23,19 +23,22 @@ import (
 	"github.com/tallesborges/zdx/apps/monitor/internal/ui"
 )
 
-const usage = `Usage: zdx-monitor [--root DIR] [--zdx-home DIR] [--zdx PATH] [--cli-fallback]
+const usage = `Usage: zdx-monitor [--root DIR] [--zdx-home DIR] [--zdx PATH] [--zdx-version V] [--cli-fallback]
 
 Read-only ZDX dashboard (Bubble Tea).
 
   --root DIR       project root for CLI calls (default: current directory)
   --zdx-home DIR   ZDX home to read (default: $ZDX_HOME, else ~/.zdx)
   --zdx PATH       zdx binary for read-only CLI JSON (default: $ZDX_BIN, else zdx on PATH)
+  --zdx-version V  zdx version for provider requests (default: the version this
+                   binary was built with; a plain go build or go run has none)
   --cli-fallback   while the orchestrator service is down, build views with
                    'zdx views' in its own process (refreshes derived caches)
 `
 
 type options struct {
 	root, home, zdx string
+	zdxVersion      string
 	cliFallback     bool
 }
 
@@ -47,6 +50,7 @@ func parseArgs(args []string, getenv func(string) string, lookPath func(string) 
 	fs.StringVar(&o.root, "root", ".", "")
 	fs.StringVar(&o.home, "zdx-home", "", "")
 	fs.StringVar(&o.zdx, "zdx", "", "")
+	fs.StringVar(&o.zdxVersion, "zdx-version", "", "")
 	fs.BoolVar(&o.cliFallback, "cli-fallback", false, "")
 	if err := fs.Parse(args); err != nil {
 		return o, err
@@ -112,7 +116,7 @@ func run(o options) error {
 	ctx, cancel := context.WithCancel(ctx)
 	// Cancelling stops every running fetch: sockets close, CLI children die.
 	defer cancel()
-	src := source.New(source.Config{Root: o.root, Home: o.home, Zdx: o.zdx, CLIFallback: o.cliFallback})
+	src := source.New(source.Config{Root: o.root, Home: o.home, Zdx: o.zdx, ZdxVersion: o.zdxVersion, CLIFallback: o.cliFallback})
 	model := ui.New(ctx, src, ui.Options{Root: o.root, Home: o.home, CLIFallback: o.cliFallback})
 	_, err := tea.NewProgram(model, tea.WithContext(ctx)).Run()
 	if errors.Is(err, tea.ErrProgramKilled) && ctx.Err() != nil {

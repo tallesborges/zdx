@@ -13,6 +13,7 @@ import (
 	"github.com/tallesborges/zdx/apps/monitor/internal/fakesvc"
 	"github.com/tallesborges/zdx/apps/monitor/internal/sandbox"
 	"github.com/tallesborges/zdx/apps/monitor/internal/wire"
+	"github.com/tallesborges/zdx/apps/shared/socket"
 )
 
 func TestMain(m *testing.M) { os.Exit(sandbox.Main(m.Run)) }
@@ -63,6 +64,21 @@ func TestViewWithoutCapabilitySendsNothing(t *testing.T) {
 	}
 }
 
+func TestProtocolOneServiceSendsNoView(t *testing.T) {
+	h := home(t)
+	svc := fakesvc.Start(t, h, wire.CapMonitorViews, wire.CapThreadViews)
+	svc.Protocol(nil)
+	svc.HandleBody(wire.ViewActiveAgents, []any{})
+	_, err := wire.NewClient(svc.Socket).View(context.Background(), wire.View{Op: wire.ViewActiveAgents})
+	var unsupported *wire.ErrUnsupported
+	if !errors.As(err, &unsupported) || unsupported.Capability != wire.CapMonitorViews || unsupported.Protocol != 1 {
+		t.Fatalf("want ErrUnsupported at protocol 1, got %v", err)
+	}
+	if ops := svc.Ops(); len(ops) != 1 || ops[0] != "status" {
+		t.Fatalf("only status may be sent, got %v", ops)
+	}
+}
+
 func TestErrorReplyIsAServiceError(t *testing.T) {
 	h := home(t)
 	svc := fakesvc.Start(t, h, wire.CapThreadViews)
@@ -74,6 +90,9 @@ func TestErrorReplyIsAServiceError(t *testing.T) {
 	var se *wire.ServiceError
 	if !errors.As(err, &se) || se.Code != "not_found" {
 		t.Fatalf("want ServiceError not_found, got %v", err)
+	}
+	if err.Error() != "not_found: Thread not found" {
+		t.Fatalf("the screen text keeps the code: %q", err)
 	}
 }
 
@@ -92,7 +111,7 @@ func TestSilentServiceTimesOutWithinTheBudget(t *testing.T) {
 	c := &wire.Client{Socket: svc.Socket, ReplyTimeout: 200 * time.Millisecond}
 	start := time.Now()
 	_, err := c.View(context.Background(), wire.View{Op: wire.ViewActiveAgents})
-	if err == nil || !strings.Contains(err.Error(), "did not answer") {
+	if err == nil || !strings.Contains(err.Error(), "did not answer") || !errors.Is(err, socket.ErrNoAnswer) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("want a timeout, got %v", err)
 	}
 	if d := time.Since(start); d > 2*time.Second {
@@ -114,8 +133,8 @@ func TestCancelClosesTheConnection(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		if err == nil {
-			t.Fatal("want an error after cancel")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("want context.Canceled after cancel, got %v", err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("cancel did not stop the call")

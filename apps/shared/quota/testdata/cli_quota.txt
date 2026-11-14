@@ -1,0 +1,19 @@
+Subscriptions (live quota)
+  Claude [claude_max_20x]
+    5h         0%   resets in 1h 9m
+    weekly    45%   resets in 1d 19h
+    weekly    45%   resets in 1d 19h   · Opus
+  Claude @work   expired · re-login in zdx
+  Codex [prolite]
+    weekly     6%   resets in 5d 23h
+  Codex @biz [business]
+    spend      0%   resets in 79d 0h   · $0.89 of $2500.00
+  Antigravity
+    weekly     0%   resets in 12d 15h   · Gemini Models
+    5h        60%   resets in 7d 3h   · Gemini Models
+  Grok [SuperGrok Heavy]
+    weekly    12%   resets in 6d 10h
+  Grok @busy   rate limited
+  OpenCode Go   HTTP 503
+  Muse Code [Power Usage]
+    5h        42%   resets in 185d 8h

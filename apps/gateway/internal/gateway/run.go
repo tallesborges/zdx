@@ -21,6 +21,8 @@ import (
 	"github.com/tallesborges/zdx/apps/gateway/internal/miniapp"
 	"github.com/tallesborges/zdx/apps/gateway/internal/render"
 	"github.com/tallesborges/zdx/apps/gateway/internal/telegram"
+	"github.com/tallesborges/zdx/apps/shared/quota"
+	"github.com/tallesborges/zdx/apps/shared/version"
 )
 
 // Deps are the shared handles the bot components are built from.
@@ -280,11 +282,15 @@ func Run(ctx context.Context, cfg Config) error {
 	var srv *http.Server
 	var ln net.Listener
 	if cfg.Settings.Server.Enabled {
+		zdxVersion, err := version.Resolve("")
+		if err != nil {
+			log.Warn("Mini App subscription quotas are unavailable", "error", err)
+		}
 		handler, err := miniapp.New(miniapp.Config{
 			BotToken:       cfg.Settings.BotToken,
 			AllowedUserIDs: cfg.Settings.AllowlistUserIDs,
 			Assets:         cfg.Assets,
-			Engine:         &MiniAppEngine{Client: eng, RootForChat: cfg.Settings.RootForChat, Root: cfg.Settings.Root, Telegram: tg, Log: log},
+			Engine:         &MiniAppEngine{Client: eng, RootForChat: cfg.Settings.RootForChat, Root: cfg.Settings.Root, Telegram: tg, Log: log, Quota: quota.Options{Home: cfg.Home, Version: zdxVersion}},
 			Deliveries:     deliveries,
 			Feedback:       FeedbackGate{Allow: allow},
 			Logger:         log,

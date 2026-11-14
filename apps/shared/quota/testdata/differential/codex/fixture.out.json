@@ -1,0 +1,13 @@
+{
+  "quota": {
+    "plan": "prolite",
+    "windows": [
+      {
+        "label": "weekly",
+        "resets_at": "2026-07-19T23:11:15+00:00",
+        "scope": null,
+        "used_percent": 6.0
+      }
+    ]
+  }
+}

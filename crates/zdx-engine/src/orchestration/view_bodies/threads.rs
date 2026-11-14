@@ -32,11 +32,6 @@ use crate::service;
 /// How many recent threads the Mini App browser lists. Applied in SQL.
 const THREAD_LIST_LIMIT: usize = 50;
 
-/// Reads a thread's events for [`EngineViews::thread`]. A surface that
-/// delivers replies wraps the read to sample its own delivery state around
-/// it; the bool it returns is the body's `delivering`.
-pub type EventsLoad<'a> = &'a dyn Fn() -> anyhow::Result<Vec<ThreadEvent>>;
-
 #[derive(Serialize)]
 pub struct ThreadResponse {
     pub id: String,
@@ -64,8 +59,8 @@ pub struct ThreadResponse {
     /// A reply delivery for this thread is running in the process that
     /// serves it. Clients keep polling while it is set, so its pending warning
     /// is replaced by the outcome without a reload. A pending record left by a
-    /// crash is never reported as running. Always false where nothing
-    /// delivers.
+    /// crash is never reported as running. Always false here: the surface that
+    /// delivers replies (the gateway) sets it from its own delivery state.
     pub delivering: bool,
     /// Shared live status of a turn running on this thread in any process
     /// (`agent_activity::RunStatus`), or `None` when no turn runs. Clients
@@ -401,37 +396,27 @@ impl EngineViews {
     /// One thread's transcript projection, with the thread its events come
     /// from (`active` resolved, then one alias hop).
     ///
-    /// `observe` reads the events through `load` and says whether a reply
-    /// delivery is running for the source thread (the body's `delivering`);
-    /// a surface that delivers nothing answers `(load(), false)`. With
-    /// `after`, only activity at or after that cursor is returned, unless a
-    /// delivery outcome replaces a record the client already holds.
+    /// The body's `delivering` is false; the surface that delivers replies
+    /// sets it. With `after`, only activity at or after that cursor is
+    /// returned, unless a delivery outcome replaces a record the client
+    /// already holds.
     ///
     /// # Errors
     /// `Invalid` for a bad id, `NotFound` when the thread cannot be read.
-    pub async fn thread<O>(
+    pub async fn thread(
         &self,
         id: String,
         after: Option<usize>,
-        observe: O,
-    ) -> Result<(ThreadResponse, String), ViewError>
-    where
-        O: FnOnce(&str, EventsLoad<'_>) -> (anyhow::Result<Vec<ThreadEvent>>, bool)
-            + Send
-            + 'static,
-    {
+    ) -> Result<(ThreadResponse, String), ViewError> {
         let workers = Arc::clone(&self.workers);
         tokio::task::spawn_blocking(move || {
             let target_id = target_thread(id)?;
 
             // A resumed or mirror topic is an alias: its events, and the reply
-            // deliveries the bot tracks, live under the source thread. The
+            // deliveries the gateway tracks, live under the source thread. The
             // response keeps the requested id and its topic link.
             let source_id = resolve_alias_id(&target_id);
-            // Sampled around the read so the flag can never be false while the
-            // events still show a pending record.
-            let (events, delivering) = observe(&source_id, &|| load_thread_events(&source_id));
-            let events = events.map_err(|error| {
+            let events = load_thread_events(&source_id).map_err(|error| {
                 tracing::warn!(thread_id = source_id, error = %format!("{error:#}"), "Failed to load Mini App thread");
                 refused(ErrorCode::NotFound, "Thread not found")
             })?;
@@ -441,7 +426,6 @@ impl EngineViews {
 
             let events_for_cursor = delivery_ids(&events);
             let mut response = project_thread(target_id, events, telegram_link, lineage);
-            response.delivering = delivering;
             attach_live_run(&mut response, &source_id);
 
             // Live polling asks only for what it has not seen. Dropping delivered

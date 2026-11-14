@@ -2,7 +2,7 @@
 //! threads, a thread's status card, custom commands) and the one config
 //! write behind the General `/model` picker. Every value is derived here,
 //! from the chat's root config and the thread metadata; surfaces only lay it
-//! out. Shared with the Rust bot, which formats the same values.
+//! out.
 
 use std::path::{Path, PathBuf};
 

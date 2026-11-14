@@ -19,6 +19,10 @@ run *ARGS:
 monitor *ARGS: monitor-build
     ZDX_MONITOR="{{justfile_directory()}}/apps/monitor/bin/zdx-monitor" cargo run -p zdx -- monitor {{ARGS}}
 
+# Run `zdx quota` from this checkout (builds the Go quota reader; `zdx quota` execs it)
+quota *ARGS: quota-build
+    ZDX_QUOTA="{{justfile_directory()}}/apps/shared/bin/zdx-quota" cargo run -p zdx -- quota {{ARGS}}
+
 # The gateway's bot.pid refuses a second bot on one ZDX_HOME: stop the bot
 # service first (`zdx service stop bot`). Gateway args go after `--`.
 
@@ -115,7 +119,15 @@ monitor-check:
 
 # Build zdx-monitor (Go only, no cargo; default output apps/monitor/bin/zdx-monitor)
 monitor-build OUT=(justfile_directory() + "/apps/monitor/bin/zdx-monitor"):
-    cd apps/monitor && go build -trimpath -o "{{OUT}}" ./cmd/zdx-monitor
+    cd apps/monitor && go build -trimpath -ldflags "$(../shared/ldflags.sh)" -o "{{OUT}}" ./cmd/zdx-monitor
+
+# Shared Go module (apps/shared: socket, protocol, quota, zdx-quota): format, vet, race tests
+shared-check:
+    cd apps/shared && test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...
+
+# Build zdx-quota, the reader `zdx quota` runs (Go only, no cargo; default output apps/shared/bin/zdx-quota)
+quota-build OUT=(justfile_directory() + "/apps/shared/bin/zdx-quota"):
+    cd apps/shared && go build -trimpath -ldflags "$(./ldflags.sh)" -o "{{OUT}}" ./cmd/zdx-quota
 
 # ─── Build ────────────────────────────────────────
 
@@ -138,12 +150,12 @@ install: build-release
     @# index only: no exports, no memory index.
     ~/.local/bin/zdx threads reindex
 
-# Build and install zdx and the gateway (and refresh an installed monitor), then restart the launchd services
-deploy: install gateway-install monitor-refresh
+# Build and install zdx, the gateway, and zdx-quota (and refresh an installed monitor), then restart the launchd services
+deploy: install gateway-install quota-install monitor-refresh
     ~/.local/bin/zdx service restart all
 
-# Build and install zdx and the gateway (and refresh an installed monitor), and queue the restart until agent runs, workers, and orchestrator updates are done
-safe-deploy: install gateway-install monitor-refresh
+# Build and install zdx, the gateway, and zdx-quota (and refresh an installed monitor), and queue the restart until agent runs, workers, and orchestrator updates are done
+safe-deploy: install gateway-install quota-install monitor-refresh
     ~/.local/bin/zdx service restart all --queue
 
 # Build the Go gateway into ~/.local/bin/zdx-gateway, the stable path the bot service runs
@@ -156,9 +168,16 @@ gateway-install:
 # Build the Go monitor into ~/.local/bin/zdx-monitor, the path `zdx monitor` runs
 monitor-install:
     @mkdir -p ~/.local/bin
-    cd apps/monitor && go build -trimpath -o ~/.local/bin/.zdx-monitor.new ./cmd/zdx-monitor
+    cd apps/monitor && go build -trimpath -ldflags "$(../shared/ldflags.sh)" -o ~/.local/bin/.zdx-monitor.new ./cmd/zdx-monitor
     mv -f ~/.local/bin/.zdx-monitor.new ~/.local/bin/zdx-monitor
     @echo "Installed ~/.local/bin/zdx-monitor"
+
+# Build the Go quota reader into ~/.local/bin/zdx-quota, the path `zdx quota` runs
+quota-install:
+    @mkdir -p ~/.local/bin
+    cd apps/shared && go build -trimpath -ldflags "$(./ldflags.sh)" -o ~/.local/bin/.zdx-quota.new ./cmd/zdx-quota
+    mv -f ~/.local/bin/.zdx-quota.new ~/.local/bin/zdx-quota
+    @echo "Installed ~/.local/bin/zdx-quota"
 
 # Rebuild ~/.local/bin/zdx-monitor only when it is installed: deploys never install it
 monitor-refresh:

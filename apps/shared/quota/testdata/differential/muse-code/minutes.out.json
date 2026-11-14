@@ -1,0 +1,13 @@
+{
+  "quota": {
+    "plan": "tier-x",
+    "windows": [
+      {
+        "label": "90m",
+        "resets_at": "2027-01-15T08:00:00+00:00",
+        "scope": null,
+        "used_percent": 5.5
+      }
+    ]
+  }
+}

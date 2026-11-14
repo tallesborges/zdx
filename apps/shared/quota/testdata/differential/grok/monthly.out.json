@@ -1,0 +1,13 @@
+{
+  "quota": {
+    "plan": "SuperGrok",
+    "windows": [
+      {
+        "label": "monthly",
+        "resets_at": "2026-08-01T00:00:00+00:00",
+        "scope": null,
+        "used_percent": 62.5
+      }
+    ]
+  }
+}

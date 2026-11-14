@@ -173,7 +173,7 @@ func (f *fakeEngine) ActiveAgents(context.Context) (json.RawMessage, error) {
 }
 
 func (f *fakeEngine) SubscriptionQuotas(context.Context) (json.RawMessage, error) {
-	f.record("subscription_quotas")
+	f.record("quotas")
 	return raw(f.quotas)
 }
 

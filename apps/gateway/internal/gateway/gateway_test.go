@@ -31,6 +31,8 @@ import (
 	"github.com/tallesborges/zdx/apps/gateway/internal/engine"
 	"github.com/tallesborges/zdx/apps/gateway/internal/miniapp"
 	"github.com/tallesborges/zdx/apps/gateway/internal/telegram"
+	"github.com/tallesborges/zdx/apps/shared/quota"
+	"github.com/tallesborges/zdx/apps/shared/version"
 )
 
 const token = "4242:SECRET-gateway-test"
@@ -248,7 +250,6 @@ func TestMiniAppEngineMapsCapabilitiesAndErrors(t *testing.T) {
 		engine.CapArtifactViews + "/resolve": func() error { _, err := e.ArtifactResolve(ctx, "t", "p"); return err },
 		engine.CapMonitorViews + "/monitor":  func() error { _, err := e.MonitorSnapshot(ctx); return err },
 		engine.CapMonitorViews + "/agents":   func() error { _, err := e.ActiveAgents(ctx); return err },
-		engine.CapMonitorViews + "/quotas":   func() error { _, err := e.SubscriptionQuotas(ctx); return err },
 		engine.CapMonitorViews + "/usage":    func() error { _, err := e.UsageReport(ctx, 7); return err },
 		engine.CapMonitorViews + "/spaces":   func() error { _, err := e.Workspaces(ctx); return err },
 		engine.CapGitViews + "/git":          func() error { _, err := e.GitStatus(ctx, ""); return err },
@@ -673,6 +674,80 @@ func TestMiniAppEngineViews(t *testing.T) {
 	}
 }
 func ptr[T any](v T) *T { return &v }
+
+// Quotas are read in process with the shared quota package: nothing goes to
+// the socket, and a failure is an error (the Mini App cache then keeps its
+// last known quotas), never a healthy empty list.
+func TestMiniAppEngineReadsQuotasInProcess(t *testing.T) {
+	f := &fakeService{caps: []string{engine.CapMonitorViews}}
+	startService(t, f)
+	home := t.TempDir()
+	noEnv := func(string) (string, bool) { return "", false }
+	e := &MiniAppEngine{Client: engine.NewClient(f.socket), Quota: quota.Options{Home: home, LookupEnv: noEnv}}
+	ctx := context.Background()
+
+	if _, err := e.SubscriptionQuotas(ctx); !errors.Is(err, version.ErrUnknown) {
+		t.Fatalf("no version must be version.ErrUnknown, got %v", err)
+	}
+	e.Quota.Version = "0.0.0-test"
+	body, err := e.SubscriptionQuotas(ctx)
+	if err != nil || string(body) != "[]" {
+		t.Fatalf("no stored accounts are no subscriptions: %s %v", body, err)
+	}
+
+	const secret = "test-access-SECRET"
+	if err := os.WriteFile(filepath.Join(home, "oauth.json"), []byte(`{"claude-cli":{"access":"`+secret+`"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.SubscriptionQuotas(ctx)
+	if !errors.Is(err, quota.ErrDiscovery) || strings.Contains(err.Error(), secret) {
+		t.Fatalf("an unreadable account store must be ErrDiscovery without its contents, got %v", err)
+	}
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	os.Remove(filepath.Join(home, "oauth.json"))
+	if _, err := e.SubscriptionQuotas(cancelled); err == nil {
+		t.Fatal("a cancelled read must fail")
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.views) != 0 {
+		t.Fatalf("quotas must not use the socket: %v", f.views)
+	}
+}
+
+func TestMiniAppEngineQuotaBodyIsTheViewBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-key" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Write([]byte(`{"usage":{"rolling":{"status":"ok","percent":12.5,"resetsAt":"2026-08-14T15:10:54.202Z"},"weekly":{"status":"limited","percent":1}}}`))
+	}))
+	defer srv.Close()
+	env := func(k string) (string, bool) {
+		if k == "OPENCODE_API_KEY" {
+			return "test-key", true
+		}
+		return "", false
+	}
+	e := &MiniAppEngine{Quota: quota.Options{
+		Home: t.TempDir(), LookupEnv: env, Version: "0.0.0-test", HTTP: srv.Client(),
+		Endpoints: quota.Endpoints{OpenCodeGoUsage: srv.URL},
+	}}
+	body, err := e.SubscriptionQuotas(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Byte for byte the body the Rust view sent: serde_json, sorted keys,
+	// chrono RFC 3339; the not-logged-in accounts are dropped.
+	want := `[{"error":null,"name":"OpenCode Go","plan":null,"provider":"opencode-go","windows":[{"label":"5h","resets_at":"2026-08-14T15:10:54.202+00:00","scope":null,"used_percent":12.5}]}]`
+	if string(body) != want {
+		t.Fatalf("body:\n%s\nwant:\n%s", body, want)
+	}
+}
 
 // Malformed resolve and canonical bodies are errors, never half-filled
 // values.

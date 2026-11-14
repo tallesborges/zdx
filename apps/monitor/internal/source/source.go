@@ -1,9 +1,11 @@
 // Package source fetches what the monitor shows. Views come from the
 // orchestrator socket; with CLIFallback they come from `zdx views` while the
-// service is down. Service state and daemon jobs come from their read-only
-// CLI JSON (`zdx service status --json`, `zdx jobs list --daemon --json`).
-// Logs are read from the rolling log files. Nothing here writes, starts, or
-// stops anything.
+// service is down. Subscription quotas are read here directly (shared quota
+// package: oauth.json read-only, then each provider over HTTPS), with or
+// without the service. Service state and daemon jobs come from their
+// read-only CLI JSON (`zdx service status --json`, `zdx jobs list --daemon
+// --json`). Logs are read from the rolling log files. Nothing here writes,
+// starts, or stops anything.
 package source
 
 import (
@@ -15,12 +17,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/tallesborges/zdx/apps/monitor/internal/data"
 	"github.com/tallesborges/zdx/apps/monitor/internal/wire"
+	"github.com/tallesborges/zdx/apps/shared/quota"
+	"github.com/tallesborges/zdx/apps/shared/version"
 )
 
 // Origin says where a view answer came from.
@@ -31,6 +34,8 @@ const (
 	OriginSocket Origin = "socket"
 	// OriginCLI: `zdx views` built the view in its own process.
 	OriginCLI Origin = "cli"
+	// OriginDirect: the monitor read it itself (subscription quotas).
+	OriginDirect Origin = "direct"
 )
 
 // CLITimeout bounds one CLI call.
@@ -47,6 +52,12 @@ type Config struct {
 	Home string
 	// Zdx is the engine binary for CLI calls.
 	Zdx string
+	// ZdxVersion is an explicit zdx version (--zdx-version) for provider
+	// requests; empty means the build-time version (shared/version).
+	ZdxVersion string
+	// Quota overrides the quota fetch's HTTP client, endpoints, environment,
+	// and clock (tests). Home and Version always come from this Config.
+	Quota quota.Options
 	// CLIFallback lets views run through `zdx views` when the socket has no
 	// listener. Off by default: an in-process view refreshes the derived
 	// caches (thread index, usage cache) in this process.
@@ -64,9 +75,8 @@ func New(cfg Config) *Source {
 	return &Source{cfg: cfg, client: wire.NewClient(SocketPath(cfg.Home))}
 }
 
-// SocketPath is the orchestrator socket of a ZDX home (protocol.rs
-// socket_path).
-func SocketPath(home string) string { return filepath.Join(home, "run", "orchestrator.sock") }
+// SocketPath is the orchestrator socket of a ZDX home.
+func SocketPath(home string) string { return wire.SocketPath(home) }
 
 // Config returns the source's settings.
 func (s *Source) Config() Config { return s.cfg }
@@ -231,10 +241,22 @@ func (s *Source) Usage(ctx context.Context, days uint32) (data.Usage, Origin, er
 	return viewAs[data.Usage](ctx, s, wire.View{Op: wire.ViewUsageReport, Days: &days})
 }
 
-// Quotas is the `subscription_quotas` view: slow, one network call per
-// account.
+// Quotas fetches every provider account's quota: slow, one network call per
+// account. It needs no service. An unknown zdx version, an unreadable
+// oauth.json, or a cancelled fetch is an error, never an empty list; a
+// failed account is a row with its reason.
 func (s *Source) Quotas(ctx context.Context) ([]data.Subscription, Origin, error) {
-	return viewAs[[]data.Subscription](ctx, s, wire.View{Op: wire.ViewSubscriptionQuotas})
+	v, err := version.Resolve(s.cfg.ZdxVersion)
+	if err != nil {
+		return nil, OriginDirect, err
+	}
+	o := s.cfg.Quota
+	o.Home, o.Version = s.cfg.Home, v
+	snap, err := quota.Fetch(ctx, o)
+	if err != nil {
+		return nil, OriginDirect, err
+	}
+	return quota.Subscriptions(snap), OriginDirect, nil
 }
 
 // Workspaces is the `workspaces` view.

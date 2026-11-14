@@ -18,14 +18,22 @@ import (
 	"github.com/tallesborges/zdx/apps/gateway/internal/engine"
 	"github.com/tallesborges/zdx/apps/gateway/internal/miniapp"
 	"github.com/tallesborges/zdx/apps/gateway/internal/telegram"
+	"github.com/tallesborges/zdx/apps/shared/quota"
+	"github.com/tallesborges/zdx/apps/shared/version"
 )
 
 // MiniAppEngine implements miniapp.Engine over the orchestrator socket.
-// Every read is a Rust view (views.rs) whose body is the route's JSON,
-// passed through unchanged. A view whose capability the service lacks
-// answers miniapp.ErrUnavailable (HTTP 503) without sending it.
+// Every read except quotas is a Rust view (views.rs) whose body is the
+// route's JSON, passed through unchanged. A view whose capability the
+// service lacks answers miniapp.ErrUnavailable (HTTP 503) without sending
+// it. Quotas are read in this process by the shared quota package.
 type MiniAppEngine struct {
 	Client *engine.Client
+	// Quota are the inputs of the in-process quota read: the ZDX home whose
+	// oauth.json is read (read-only) and the zdx version for the providers'
+	// user agent. An empty Version fails every quota read with
+	// version.ErrUnknown.
+	Quota quota.Options
 	// RootForChat is the chat root a feedback submission is sent with, the
 	// same function the bot's Handler uses (Settings.RootForChat). Root is
 	// the bot's root, for a thread id that names no Telegram chat (Rust
@@ -182,8 +190,20 @@ func (e *MiniAppEngine) ActiveAgents(ctx context.Context) (json.RawMessage, erro
 	return e.body(ctx, engine.View{Op: engine.ViewActiveAgents})
 }
 
+// SubscriptionQuotas reads every stored account's quota with the shared
+// quota package and returns the `subscriptions` body (quota.Subscriptions,
+// the JSON the retired Rust view sent). It sends nothing to the socket. A
+// missing version, an unreadable account store, or a cancelled ctx is an
+// error, never an empty list, so the caller keeps its last known quotas.
 func (e *MiniAppEngine) SubscriptionQuotas(ctx context.Context) (json.RawMessage, error) {
-	return e.body(ctx, engine.View{Op: engine.ViewSubscriptionQuotas})
+	if e.Quota.Version == "" {
+		return nil, version.ErrUnknown
+	}
+	snapshot, err := quota.Fetch(ctx, e.Quota)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(quota.SubscriptionsJSON(quota.Subscriptions(snapshot))), nil
 }
 
 func (e *MiniAppEngine) Workspaces(ctx context.Context) (json.RawMessage, error) {
