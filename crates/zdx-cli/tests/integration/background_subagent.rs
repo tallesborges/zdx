@@ -787,17 +787,20 @@ async fn slow_normal_call_hands_off_the_same_child() {
         return;
     }
     let (zdx_home, root) = workspace();
-    set_bound(&zdx_home, 1);
+    // The bound must cover a child process start, one model request, and
+    // one Bash call; 1s did not under heavy load (base revision too: 7 of 10
+    // failed with every core busy). The answer comes well after the bound.
+    set_bound(&zdx_home, 3);
     let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let child_starts = Arc::clone(&starts);
     // A quick tool call first (progress before the handoff), then an answer
-    // that arrives well after the 1s bound.
+    // that arrives well after the bound.
     let child: Arc<TimedChildScript> = Arc::new(move |step| match step {
         0 => {
             child_starts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             (bash("toolu_child_echo", "echo early"), Duration::ZERO)
         }
-        _ => (text_sse("CHILD-SLOW-ANSWER"), Duration::from_secs(3)),
+        _ => (text_sse("CHILD-SLOW-ANSWER"), Duration::from_secs(8)),
     });
     let parent: Arc<ParentScript> = Arc::new(|step, body| match step {
         0 => invoke_normal(),
@@ -825,7 +828,7 @@ async fn slow_normal_call_hands_off_the_same_child() {
     assert_eq!(data["kind"], "subagent", "{handoff}");
     assert_eq!(data["status"], "running", "{handoff}");
     assert_eq!(data["turn"], "running", "{handoff}");
-    assert_eq!(data["elapsed_secs"], 1, "{handoff}");
+    assert_eq!(data["elapsed_secs"], 3, "{handoff}");
     assert_eq!(
         data["tool_calls"], 1,
         "progress before the handoff is kept: {handoff}"
@@ -1183,7 +1186,9 @@ async fn handoff_after_the_answer_reports_it_and_says_not_to_wait() {
         return;
     }
     let (zdx_home, root) = workspace();
-    set_bound(&zdx_home, 3);
+    // Covers a child start, two model requests, and the child's 1s
+    // foreground wait; 3s did not under heavy load.
+    set_bound(&zdx_home, 6);
     let pidfile = root.path().join("drained-command.pid");
     // The opted-in child moves its own slow command to the background after
     // 1s, answers, and then stays alive draining that command.
@@ -1219,7 +1224,7 @@ async fn handoff_after_the_answer_reports_it_and_says_not_to_wait() {
     assert_eq!(data["status"], "running", "{handoff}");
     assert_eq!(data["turn"], "completed", "{handoff}");
     assert_eq!(data["result"], "CHILD-EARLY-ANSWER", "{handoff}");
-    assert!(data["elapsed_secs"].as_u64().unwrap() >= 3, "{handoff}");
+    assert!(data["elapsed_secs"].as_u64().unwrap() >= 6, "{handoff}");
     let message = data["message"].as_str().unwrap();
     assert!(message.contains("already ended its turn"), "{message}");
     assert!(

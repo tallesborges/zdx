@@ -11,7 +11,7 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{ToolContext, ToolDefinition, resolve_existing_path};
+use super::{ToolContext, ToolDefinition};
 use crate::core::events::ToolOutput;
 use crate::media::{DEFAULT_ASK_MEDIA_MODEL, ask_media};
 
@@ -73,7 +73,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         return ToolOutput::failure("invalid_input", "file cannot be empty", None);
     }
 
-    let resolved = match resolve_existing_path(file, &ctx.root) {
+    let resolved = match ctx.resolve_existing_path(file) {
         Ok(resolved) => resolved,
         Err(output) => return output,
     };

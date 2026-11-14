@@ -34,7 +34,7 @@ const MAX_WALK_DEPTH: usize = 6;
 /// (plain text, data, and source code) as text with line numbers. `other`
 /// covers everything else (PDF, video, archives): the Mini App offers
 /// download, not a preview.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ArtifactKind {
     Image,

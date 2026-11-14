@@ -414,6 +414,21 @@ pub fn mark_queued(dir: &Path) -> anyhow::Result<()> {
     fs::write(dir.join(QUEUED_MARKER), stamp).context("write queued marker")
 }
 
+/// Removes the queued marker of a bundle whose queueing failed after it was
+/// marked, so a retry queues it again. No error when it is already gone.
+///
+/// # Errors
+/// Returns an error when the marker exists and cannot be removed.
+pub fn unmark_queued(dir: &Path) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    match fs::remove_file(dir.join(QUEUED_MARKER)) {
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+            Err(err).context("remove queued marker")
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Validates a submission, checks it against the artifact on disk, and saves
 /// the bundle. Nothing is written unless every check passes.
 ///

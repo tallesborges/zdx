@@ -1,0 +1,3519 @@
+{
+ "Markdown": [
+  {
+   "In": "> *",
+   "Out": "<blockquote>- </blockquote>"
+  },
+  {
+   "In": "<!-- c --> <i>x</i>",
+   "Out": "&lt;!-- c --&gt; &lt;i&gt;x&lt;/i&gt;"
+  },
+  {
+   "In": "<i>x</i>- [ ] t ",
+   "Out": "<i>x</i>- [ ] t"
+  },
+  {
+   "In": "***bi***\na<b <https://auto.link/x>\n\n</a>>\n\t",
+   "Out": "<i><b>bi</b></i> a&lt;b <a href=\"https://auto.link/x\">https://auto.link/x</a>\n\n&lt;/a&gt;&gt;"
+  },
+  {
+   "In": "<!-- c -->\n\n1.a\\\n\n***\n\n",
+   "Out": "&lt;!-- c --&gt;\n\n1.a\\\n\n———"
+  },
+  {
+   "In": "\\*\t~~s~~ a<b &#128512; <pre>p</pre>```go\ncode < 1\n``` &bogus;",
+   "Out": "\\*\t~~s~~ a<b &#128512; <pre>p</pre>```go\ncode < 1\n``` &bogus;"
+  },
+  {
+   "In": "<code class=\"language-go\">\n\n",
+   "Out": "&lt;code class=\"language-go\"&gt;"
+  },
+  {
+   "In": "    indented1.\n\n",
+   "Out": "<pre>indented1.</pre>"
+  },
+  {
+   "In": "***bi***> > qq [l](<https://e.com/a b>) \n\n\n\n",
+   "Out": "<i><b>bi</b></i>&gt; &gt; qq <a href=\"https://e.com/a b\">l</a>"
+  },
+  {
+   "In": "***\n\n &amp; ![alt *x*](i.png)\n\n",
+   "Out": "———\n\n&amp; alt <i>x</i>"
+  },
+  {
+   "In": "1. x\né😀中\n\nx > ya\\\n</b>\n\n</b>**b**<task> ",
+   "Out": "1. x é😀中\n\nx &gt; ya\n&lt;/b&gt;\n\n&lt;/b&gt;<b>b</b>&lt;task&gt;"
+  },
+  {
+   "In": "<https://auto.link/x>\n\n*** 3) y<pre>p</pre>\n\n## h *x*a<b# h<b>",
+   "Out": "<a href=\"https://auto.link/x\">https://auto.link/x</a>\n\n*** 3) y&lt;pre&gt;p&lt;/pre&gt;\n\n<b>h <i>x</i>a&lt;b# h&lt;b&gt;</b>"
+  },
+  {
+   "In": "é😀中\n  - n\n- a\n<b>\n\n",
+   "Out": "é😀中\n\n- n\n- a &lt;b&gt;"
+  },
+  {
+   "In": "[l](<https://e.com/a b>)",
+   "Out": "<a href=\"https://e.com/a b\">l</a>"
+  },
+  {
+   "In": "é😀中&amp;\n\n<i>x</i>\n\n```\nraw\n\n\n> q~~s~~",
+   "Out": "é😀中&amp;\n\n<i>x</i>\n\n```\nraw\n\n\n> q~~s~~"
+  },
+  {
+   "In": "&#128512;# h&nbsp;\n\ntext\n</b>&#128512;     indented<pre>p</pre>\n\n",
+   "Out": "😀# h \n\ntext &lt;/b&gt;😀     indented&lt;pre&gt;p&lt;/pre&gt;"
+  },
+  {
+   "In": "<pre>p</pre>\n\n\n # h ",
+   "Out": "<pre>p</pre>\n\n\n # h"
+  },
+  {
+   "In": "3) y a\\\n\n*\n```go\ncode < 1\n```\n</blockquote>\n",
+   "Out": "3. y a\\\n\n- \n\n<pre><code class=\"language-go\">code &lt; 1</code></pre>\n\n&lt;/blockquote&gt;"
+  },
+  {
+   "In": "[ref]\n\n\n ",
+   "Out": "[ref]"
+  },
+  {
+   "In": "[l](https://e.com/x?a=1&b=2)\n&nbsp; ",
+   "Out": "<a href=\"https://e.com/x?a=1&amp;b=2\">l</a>"
+  },
+  {
+   "In": "```go\ncode < 1\n```\n## h *x*\n\n# h\n",
+   "Out": "<pre><code class=\"language-go\">code &lt; 1</code></pre>\n\n<b>h <i>x</i></b>\n\n<b>h</b>"
+  },
+  {
+   "In": "\\&amp; > q1. x\n`` a ` b ``\n</a>\n\n<task> \n",
+   "Out": "&amp;amp; &gt; q1. x <code>a ` b</code> &lt;/a&gt;\n\n&lt;task&gt;"
+  },
+  {
+   "In": "_\n*i*\n",
+   "Out": "_ <i>i</i>"
+  },
+  {
+   "In": "<blockquote>\n*i*\n\n\n&amp;\n\n~~s~~ [ref]\n\n1. x    indented\n",
+   "Out": "&lt;blockquote&gt;\n*i*\n\n&amp;\n\n~~s~~ [ref]\n\n1. x    indented"
+  },
+  {
+   "In": "> > qq\n**b**\n\n[l](https://e.com/x?a=1&b=2)\\*text `c`\n<code class=\"language-go\">\n\n_\n",
+   "Out": "<blockquote>qq <b>b</b></blockquote>\n\n<a href=\"https://e.com/x?a=1&amp;b=2\">l</a>*text <code>c</code> &lt;code class=\"language-go\"&gt;\n\n_"
+  },
+  {
+   "In": "<https://auto.link/x>\n&#128512; ",
+   "Out": "<a href=\"https://auto.link/x\">https://auto.link/x</a> 😀"
+  },
+  {
+   "In": "> q\n\n***bi*** \n\n- b\n\n",
+   "Out": "<blockquote>q</blockquote>\n\n<i><b>bi</b></i>\n\n- b"
+  },
+  {
+   "In": "\\* \t\n\n3) y \\&amp;\n&bogus;\n\n[ref]text [ref]",
+   "Out": "*\n\n3. y &amp;amp; &amp;bogus;\n\n[ref]text [ref]"
+  },
+  {
+   "In": "[l](<https://e.com/a b>)<task>1.\n&nbsp;\n\n</code>\n\n",
+   "Out": "<a href=\"https://e.com/a b\">l</a>&lt;task&gt;1.  \n\n&lt;/code&gt;"
+  },
+  {
+   "In": "</blockquote> \"q\" 'a'",
+   "Out": "&lt;/blockquote&gt; \"q\" 'a'"
+  },
+  {
+   "In": "&#128512;\n<!-- c -->\\&amp; 1. x\n\n***\n\n",
+   "Out": "😀\n\n&lt;!-- c --&gt;\\&amp;amp; 1. x\n\n———"
+  },
+  {
+   "In": "- [ ] t <!-- c --> 3) y\n    indented\n",
+   "Out": "- [ ] t &lt;!-- c --&gt; 3) y indented"
+  },
+  {
+   "In": "<i>x</i>```go\ncode < 1\n```\n```go\ncode < 1\n```\n\n\n\n<!-- c -->",
+   "Out": "&lt;i&gt;x&lt;/i&gt;```go code &lt; 1\n\n<pre>```go\ncode &lt; 1</pre>\n\n&lt;!-- c --&gt;"
+  },
+  {
+   "In": "&bogus;\n***bi*** *i*\n- a---&nbsp;*i*\n",
+   "Out": "&amp;bogus; <i><b>bi</b></i> <i>i</i>\n\n- a--- <i>i</i>"
+  },
+  {
+   "In": "\n\na  \n     indented\n\n&nbsp;",
+   "Out": "a\nindented"
+  },
+  {
+   "In": "## h *x*\n_ &#128512;\n~~s~~ - b\n\n",
+   "Out": "<b>h <i>x</i></b>\n\n_ 😀 ~~s~~ - b"
+  },
+  {
+   "In": "<https://auto.link/x>",
+   "Out": "<a href=\"https://auto.link/x\">https://auto.link/x</a>"
+  },
+  {
+   "In": "[ref]: https://r.e\n\n",
+   "Out": ""
+  },
+  {
+   "In": " &nbsp;\n\t<me@example.com>\n",
+   "Out": "<a href=\"me@example.com\">me@example.com</a>"
+  },
+  {
+   "In": "**b**\n\n<i>x</i> - [ ] t a  \n[l](https://e.com/x?a=1&b=2) ",
+   "Out": "**b**\n\n<i>x</i> - [ ] t a  \n[l](https://e.com/x?a=1&b=2)"
+  },
+  {
+   "In": "<me@example.com> _u_ - [ ] t\n\n3) y> > qq3) y\n",
+   "Out": "<a href=\"me@example.com\">me@example.com</a> <i>u</i> - [ ] t\n\n3. y&gt; &gt; qq3) y"
+  },
+  {
+   "In": "## h *x*\n\n<task> </code> &nbsp;\né😀中 \n <div>\nblock\n</div>\n\n",
+   "Out": "<b>h <i>x</i></b>\n\n&lt;task&gt; &lt;/code&gt;   é😀中\n\n &lt;div&gt;\nblock\n&lt;/div&gt;"
+  },
+  {
+   "In": "<i>x</i>\n\n---\na\\\n\n\n",
+   "Out": "<i>x</i>\n\n---\na\\"
+  },
+  {
+   "In": "<pre>p</pre>   - n> > qq\n\n## h *x* é😀中\n\n",
+   "Out": "<pre>p</pre>   - n> > qq\n\n## h *x* é😀中"
+  },
+  {
+   "In": "\n <a href=\"u\">\n\n",
+   "Out": "&lt;a href=\"u\"&gt;"
+  },
+  {
+   "In": "<task> \\&amp; \n\n\n_\n~~s~~     indented </blockquote>\n[ref]\n\n",
+   "Out": "&lt;task&gt; &amp;amp;\n\n_ ~~s~~     indented &lt;/blockquote&gt; [ref]"
+  },
+  {
+   "In": "<task>\n\n- a ",
+   "Out": "&lt;task&gt;\n\n- a"
+  },
+  {
+   "In": "&nbsp; <pre>p</pre>\n\n- a",
+   "Out": "&nbsp; <pre>p</pre>\n\n- a"
+  },
+  {
+   "In": "*** <code class=\"language-go\">\\&amp;textSetext\n===\n<!-- c -->",
+   "Out": "<b>*** &lt;code class=\"language-go\"&gt;&amp;amp;textSetext</b>\n\n&lt;!-- c --&gt;"
+  },
+  {
+   "In": "[ref]\n\n- ba  \n\n_u_\n_u_\n\n\n\n</a>\n\n",
+   "Out": "[ref]\n\n- ba\n\n<i>u</i> <i>u</i>\n\n&lt;/a&gt;"
+  },
+  {
+   "In": "<https://auto.link/x> a  \n1. x - [ ] t<pre>p</pre>     indented\n\n ",
+   "Out": "<https://auto.link/x> a  \n1. x - [ ] t<pre>p</pre>     indented"
+  },
+  {
+   "In": "x > y***bi***\n> > qq ",
+   "Out": "x &gt; y<i><b>bi</b></i>\n\n<blockquote>qq</blockquote>"
+  },
+  {
+   "In": "&amp;\n# h\n",
+   "Out": "&amp;\n\n<b>h</b>"
+  },
+  {
+   "In": "    indented\n\n\n\n\n\n\n\n\n`` a ` b ``\n\n</blockquote>text\n\n  - n_u_ ",
+   "Out": "<pre>indented</pre>\n\n<code>a ` b</code>\n\n&lt;/blockquote&gt;text\n\n- n_u_"
+  },
+  {
+   "In": "<b>\n~~s~~ *** _\n\n<i>x</i>  \n_u_\n\n",
+   "Out": "&lt;b&gt;\n~~s~~ *** _\n\n&lt;i&gt;x&lt;/i&gt;\n<i>u</i>"
+  },
+  {
+   "In": "[ref]: https://r.e\n</b><code class=\"language-go\">\n\n<a href=\"u\">\n\n<task>\n",
+   "Out": "&lt;/b&gt;&lt;code class=\"language-go\"&gt;\n\n&lt;a href=\"u\"&gt;\n\n&lt;task&gt;"
+  },
+  {
+   "In": "[ref]: https://r.e",
+   "Out": ""
+  },
+  {
+   "In": "text\n",
+   "Out": "text"
+  },
+  {
+   "In": "![alt *x*](i.png) \"q\" 'a' 1.\n\n<code class=\"language-go\">&nbsp;\n\n## h *x*\n- [ ] t\n\n \n",
+   "Out": "alt <i>x</i> \"q\" 'a' 1.\n\n&lt;code class=\"language-go\"&gt; \n\n<b>h <i>x</i></b>\n\n- [ ] t"
+  },
+  {
+   "In": "**b**```\nraw\n\n",
+   "Out": "<b>b</b>``` raw"
+  },
+  {
+   "In": "<me@example.com>\n[l](https://e.com/x?a=1&b=2)\n\"q\" 'a'<b> ```go\ncode < 1\n```",
+   "Out": "<a href=\"me@example.com\">me@example.com</a> <a href=\"https://e.com/x?a=1&amp;b=2\">l</a> \"q\" 'a'&lt;b&gt; ```go code &lt; 1\n\n<pre></pre>"
+  },
+  {
+   "In": "> > qq\n_u_ <a href=\"u\">\n",
+   "Out": "<blockquote>qq <i>u</i> &lt;a href=\"u\"&gt;</blockquote>"
+  },
+  {
+   "In": "<div>Setext\n=== 3) y <pre>p</pre><pre>p</pre>1.\n[l](https://e.com/x?a=1&b=2)\n\n_u_\n",
+   "Out": "&lt;div&gt;Setext\n=== 3) y &lt;pre&gt;p&lt;/pre&gt;&lt;pre&gt;p&lt;/pre&gt;1.\n[l](https://e.com/x?a=1&amp;b=2)\n\n<i>u</i>"
+  },
+  {
+   "In": "***bi***",
+   "Out": "<i><b>bi</b></i>"
+  },
+  {
+   "In": "\n\n\n1. x [ref]",
+   "Out": "1. x [ref]"
+  },
+  {
+   "In": "***bi***\n\t",
+   "Out": "<i><b>bi</b></i>"
+  },
+  {
+   "In": "## h *x*é😀中<task><i>x</i>\n\n  - n\n",
+   "Out": "<b>h <i>x</i>é😀中&lt;task&gt;&lt;i&gt;x&lt;/i&gt;</b>\n\n- n"
+  },
+  {
+   "In": "[ref]\n\n- ba  \n ",
+   "Out": "[ref]\n\n- ba"
+  },
+  {
+   "In": "***\n\n\"q\" 'a' \\*\n\n",
+   "Out": "———\n\n\"q\" 'a' *"
+  },
+  {
+   "In": "<div>\nblock\n</div>[ref]\n</blockquote>\n\n",
+   "Out": "&lt;div&gt;\nblock\n&lt;/div&gt;[ref]\n&lt;/blockquote&gt;"
+  },
+  {
+   "In": "[l](<https://e.com/a b>) </a> ",
+   "Out": "<a href=\"https://e.com/a b\">l</a> &lt;/a&gt;"
+  },
+  {
+   "In": "<a href=\"u\"> ",
+   "Out": "&lt;a href=\"u\"&gt;"
+  },
+  {
+   "In": "_u_\n</code>\n\n![alt *x*](i.png)a<b",
+   "Out": "<i>u</i> &lt;/code&gt;\n\nalt <i>x</i>a&lt;b"
+  },
+  {
+   "In": "a\\\n [l](<https://e.com/a b>)\n\n> q\n[l](https://e.com/x?a=1&b=2)\n\n# h\n\n\n\n\n<blockquote>\n",
+   "Out": "a\n<a href=\"https://e.com/a b\">l</a>\n\n<blockquote>q l (https://e.com/x?a=1&amp;b=2)</blockquote>\n\n<b>h</b>\n\n&lt;blockquote&gt;"
+  },
+  {
+   "In": "<i>x</i>text text&#128512;\n\n[l](https://e.com/x?a=1&b=2) ",
+   "Out": "<i>x</i>text text&#128512;\n\n[l](https://e.com/x?a=1&b=2)"
+  },
+  {
+   "In": "1. x\n",
+   "Out": "1. x"
+  },
+  {
+   "In": "- [ ] t",
+   "Out": "- [ ] t"
+  },
+  {
+   "In": "</blockquote>\n",
+   "Out": "&lt;/blockquote&gt;"
+  },
+  {
+   "In": "\n\n\n> q\n\n`` a ` b ``",
+   "Out": "<blockquote>q</blockquote>\n\n<code>a ` b</code>"
+  },
+  {
+   "In": "[l](https://e.com/x?a=1&b=2)\n<code class=\"language-go\"> *** ***bi***> > qq\n<blockquote>\n\n`c`\n\n<https://auto.link/x>\n\n",
+   "Out": "<a href=\"https://e.com/x?a=1&amp;b=2\">l</a> &lt;code class=\"language-go\"&gt; *** <i><b>bi</b></i>&gt; &gt; qq\n\n&lt;blockquote&gt;\n\n<code>c</code>\n\n<a href=\"https://auto.link/x\">https://auto.link/x</a>"
+  },
+  {
+   "In": "\"q\" 'a'\n\n_u_ Setext\n===\n",
+   "Out": "\"q\" 'a'\n\n<b><i>u</i> Setext</b>"
+  },
+  {
+   "In": "1.<task>\n\n------\n<pre>p</pre>\n",
+   "Out": "1.&lt;task&gt;\n\n———\n\n&lt;pre&gt;p&lt;/pre&gt;"
+  },
+  {
+   "In": "<me@example.com>\na  \ntext\n",
+   "Out": "<a href=\"me@example.com\">me@example.com</a> a\ntext"
+  },
+  {
+   "In": "<!-- c -->",
+   "Out": "&lt;!-- c --&gt;"
+  },
+  {
+   "In": "_\n\n*- [ ] t\n<https://auto.link/x>\n3) y\n\n<pre>p</pre> a<b\n\n&bogus;",
+   "Out": "_\n\n*- [ ] t <a href=\"https://auto.link/x\">https://auto.link/x</a> 3) y\n\n&lt;pre&gt;p&lt;/pre&gt; a&lt;b\n\n&amp;bogus;"
+  },
+  {
+   "In": "    indented\n",
+   "Out": "<pre>indented</pre>"
+  },
+  {
+   "In": "<code class=\"language-go\">| a | b |\n| - | - |\n| 1 | 2 |\n\n\n\n\n",
+   "Out": "&lt;code class=\"language-go\"&gt;| a | b | | - | - | | 1 | 2 |"
+  },
+  {
+   "In": "  - n\n\n# h\n1. x\n",
+   "Out": "- n\n\n<b>h</b>\n\n1. x"
+  },
+  {
+   "In": "<a href=\"u\">\n\n<me@example.com>\n&#128512;",
+   "Out": "&lt;a href=\"u\"&gt;\n\n<a href=\"me@example.com\">me@example.com</a> 😀"
+  },
+  {
+   "In": "\n\n\n\n\n***bi***<div>  \né😀中&nbsp;## h *x*\n\n<i>x</i>",
+   "Out": "<i><b>bi</b></i>&lt;div&gt;\né😀中 ## h <i>x</i>\n\n&lt;i&gt;x&lt;/i&gt;"
+  },
+  {
+   "In": "[ref][l](https://e.com/x?a=1&b=2) *\n\n| a | b |\n| - | - |\n| 1 | 2 |\n    indented<i>x</i> <blockquote>\n\n",
+   "Out": "[ref]<a href=\"https://e.com/x?a=1&amp;b=2\">l</a> *\n\na | b\n1 | 2\nindented&lt;i&gt;x&lt;/i&gt; &lt;blockquote&gt; |"
+  },
+  {
+   "In": "1. x&amp;\n\n\n\n\n**b**\n<a href=\"u\"><i>x</i>\n\n",
+   "Out": "1. x&amp;\n\n<b>b</b> &lt;a href=\"u\"&gt;&lt;i&gt;x&lt;/i&gt;"
+  },
+  {
+   "In": "\n\n\n\n3) y\n<code class=\"language-go\"> ",
+   "Out": "3. y &lt;code class=\"language-go\"&gt;"
+  },
+  {
+   "In": "<i>x</i>\n</a>",
+   "Out": "&lt;i&gt;x&lt;/i&gt; &lt;/a&gt;"
+  },
+  {
+   "In": "x > y",
+   "Out": "x &gt; y"
+  },
+  {
+   "In": "```\nraw\n [l](https://e.com/x?a=1&b=2)",
+   "Out": "<pre>raw\n [l](https://e.com/x?a=1&amp;b=2)</pre>"
+  },
+  {
+   "In": "a  \n\n\n\t <code class=\"language-go\">\n\n",
+   "Out": "a\n\n<pre> &lt;code class=\"language-go\"&gt;</pre>"
+  },
+  {
+   "In": "<task>\n</a>_u_~~s~~\n***\n ",
+   "Out": "&lt;task&gt;\n&lt;/a&gt;_u_~~s~~\n***"
+  },
+  {
+   "In": "`` a ` b ``\n\n`` a ` b ``\n\n<i>x</i>\n\n\\* \"q\" 'a'>~~s~~> q",
+   "Out": "`` a ` b ``\n\n`` a ` b ``\n\n<i>x</i>\n\n\\* \"q\" 'a'>~~s~~> q"
+  },
+  {
+   "In": "| a | b |\n| - | - |\n| 1 | 2 |\n![alt *x*](i.png)\n\n3) y\n\n\\*é😀中",
+   "Out": "a | b\n1 | 2\nalt <i>x</i> | \n\n3. y\n\n*é😀中"
+  },
+  {
+   "In": "* ![alt *x*](i.png)\n**b**\n\n&amp;\n&#128512;&bogus;\n<a href=\"u\">",
+   "Out": "- alt <i>x</i> <b>b</b>\n\n&amp; 😀&amp;bogus; &lt;a href=\"u\"&gt;"
+  },
+  {
+   "In": "\"q\" 'a' &nbsp; > q\n\n<blockquote><code class=\"language-go\">> q",
+   "Out": "\"q\" 'a'   &gt; q\n\n&lt;blockquote&gt;&lt;code class=\"language-go\"&gt;&gt; q"
+  },
+  {
+   "In": "> q</code><blockquote>[ref]\n<https://auto.link/x>\n</a>\n***\n",
+   "Out": "<blockquote>q&lt;/code&gt;&lt;blockquote&gt;[ref] https://auto.link/x (https://auto.link/x) &lt;/a&gt;</blockquote>\n\n———"
+  },
+  {
+   "In": "[l](https://e.com/x?a=1&b=2)<div> ~~s~~ ![alt *x*](i.png)\n\\&amp; **b** [ref]: https://r.e <code class=\"language-go\">\n\n",
+   "Out": "<a href=\"https://e.com/x?a=1&amp;b=2\">l</a>&lt;div&gt; ~~s~~ alt <i>x</i> &amp;amp; <b>b</b> [ref]: https://r.e &lt;code class=\"language-go\"&gt;"
+  },
+  {
+   "In": "\\*\n\n1.`` a ` b ``   - n```go\ncode < 1\n```<a href=\"u\">\n",
+   "Out": "*\n\n1.<code>a ` b</code>   - n```go code &lt; 1\n\n<pre></pre>"
+  },
+  {
+   "In": "<i>x</i>\n\n\n\n\n",
+   "Out": "<i>x</i>"
+  },
+  {
+   "In": "  - n ",
+   "Out": "- n"
+  },
+  {
+   "In": "Setext\n===![alt *x*](i.png)\n",
+   "Out": "Setext ===alt <i>x</i>"
+  },
+  {
+   "In": "  <https://auto.link/x>\n\nx > y\n\n\n\n\n\n",
+   "Out": "<a href=\"https://auto.link/x\">https://auto.link/x</a>\n\nx &gt; y"
+  },
+  {
+   "In": "- atext- a\n\n",
+   "Out": "- atext- a"
+  },
+  {
+   "In": "*i* ~~s~~<task>\n\n***![alt *x*](i.png)",
+   "Out": "<i>i</i> ~~s~~&lt;task&gt;\n\n***alt <i>x</i>"
+  },
+  {
+   "In": "</b>\n\n<a href=\"u\">\n# h\n\n",
+   "Out": "&lt;/b&gt;\n\n&lt;a href=\"u\"&gt;\n# h"
+  },
+  {
+   "In": "***\n    indented",
+   "Out": "———\n\n<pre>indented</pre>"
+  },
+  {
+   "In": "_\n</code><b>\n\n",
+   "Out": "_ &lt;/code&gt;&lt;b&gt;"
+  },
+  {
+   "In": "&#128512;\n\n",
+   "Out": "😀"
+  },
+  {
+   "In": "_",
+   "Out": "_"
+  },
+  {
+   "In": "| a | b |\n| - | - |\n| 1 | 2 |\n\n<task> ```go\ncode < 1\n```- a <pre>p</pre> <div>\n*i* <i>x</i>",
+   "Out": "a | b\n1 | 2\n\n&lt;task&gt; ```go code &lt; 1\n\n<pre><code class=\"language--\">*i* &lt;i&gt;x&lt;/i&gt;</code></pre>"
+  },
+  {
+   "In": "## h *x*\n<blockquote>\n> > qq\n",
+   "Out": "<b>h <i>x</i></b>\n\n&lt;blockquote&gt;\n&gt; &gt; qq"
+  },
+  {
+   "In": "[l](https://e.com/x?a=1&b=2)\n\n```go\ncode < 1\n```\n    indented[ref]: https://r.e\n\n\n _u_\n\n![alt *x*](i.png) > q\n\n",
+   "Out": "<a href=\"https://e.com/x?a=1&amp;b=2\">l</a>\n\n<pre><code class=\"language-go\">code &lt; 1</code></pre>\n\n<pre>indented[ref]: https://r.e</pre>\n\n<i>u</i>\n\nalt <i>x</i> &gt; q"
+  },
+  {
+   "In": "é😀中\n\n<pre>p</pre>\n```\nraw\n\n\n[ref]: https://r.e",
+   "Out": "é😀中\n\n<pre>p</pre>\n```\nraw\n\n\n[ref]: https://r.e"
+  },
+  {
+   "In": "a<b\n<pre>p</pre>\n`c`\n",
+   "Out": "a<b\n<pre>p</pre>\n`c`"
+  },
+  {
+   "In": "  - n `` a ` b ``\n\n| a | b |\n| - | - |\n| 1 | 2 |",
+   "Out": "- n <code>a ` b</code>\n\na | b\n1 | 2"
+  },
+  {
+   "In": "&bogus;\n[ref]\n***\n***bi***\n---\n*\n\n",
+   "Out": "&amp;bogus; [ref]\n\n———\n\n<b><i><b>bi</b></i></b>\n\n-"
+  },
+  {
+   "In": "1. Setext\n===`c`\n\n`c`\n\n[ref]: https://r.e\n\n\n",
+   "Out": "1. Setext ===<code>c</code>\n\n<code>c</code>"
+  },
+  {
+   "In": "[ref]\n\n",
+   "Out": "[ref]"
+  },
+  {
+   "In": "&amp;***bi***<b>\n`` a ` b ``\n\n[ref]: https://r.e&nbsp;\n***bi***\n\n",
+   "Out": "&amp;<i><b>bi</b></i>&lt;b&gt; <code>a ` b</code>\n\n<i><b>bi</b></i>"
+  },
+  {
+   "In": "a  \n\n<b>\n\n\\*",
+   "Out": "a\n\n&lt;b&gt;\n\n*"
+  },
+  {
+   "In": "&#128512;\n\n&nbsp;\n![alt *x*](i.png)\n\n  - n\n\t ",
+   "Out": "😀\n\n  alt <i>x</i>\n\n- n"
+  },
+  {
+   "In": "***bi***a<b\n\n\n\n\n \n***\n",
+   "Out": "<i><b>bi</b></i>a&lt;b\n\n———"
+  },
+  {
+   "In": "*i* ",
+   "Out": "<i>i</i>"
+  },
+  {
+   "In": "---\n\ntext\n\n```go\ncode < 1\n```",
+   "Out": "———\n\ntext\n\n<pre><code class=\"language-go\">code &lt; 1</code></pre>"
+  },
+  {
+   "In": "[l](<https://e.com/a b>)\n\n- b\n> > qqa<b   - n ",
+   "Out": "<a href=\"https://e.com/a b\">l</a>\n\n- b\n\n<blockquote>qqa&lt;b   - n</blockquote>"
+  },
+  {
+   "In": "```go\ncode < 1\n```\n\n## h *x*\n## h *x*\n\n",
+   "Out": "<pre><code class=\"language-go\">code &lt; 1</code></pre>\n\n<b>h <i>x</i></b>\n\n<b>h <i>x</i></b>"
+  },
+  {
+   "In": "\n\n\n1. x\n  - n\n\n<code class=\"language-go\">\n*i*",
+   "Out": "1. x\n\n- n\n\n&lt;code class=\"language-go\"&gt;\n*i*"
+  },
+  {
+   "In": "> q*\n\\*",
+   "Out": "<blockquote>q* *</blockquote>"
+  },
+  {
+   "In": "***\n\n`` a ` b ``[ref]\n* x > y| a | b |\n| - | - |\n| 1 | 2 | ```\nraw\n > > qq\n\n",
+   "Out": "———\n\n<code>a ` b</code>[ref]\n\n- x &gt; y| a | b | | - | - | | 1 | 2 | ``` raw\n\n<blockquote>qq</blockquote>"
+  },
+  {
+   "In": "## h *x*\n1.\n",
+   "Out": "<b>h <i>x</i></b>\n\n1."
+  },
+  {
+   "In": "[ref]: https://r.e\n\n \nSetext\n=== 3) y<i>x</i>\n\n",
+   "Out": "[ref]: https://r.e\n\n \nSetext\n=== 3) y<i>x</i>"
+  },
+  {
+   "In": "<pre>p</pre>\n\n\t - [ ] t <me@example.com>\n\n<me@example.com> <b>\n1. x",
+   "Out": "&lt;pre&gt;p&lt;/pre&gt;\n\n<pre> - [ ] t &lt;me@example.com&gt;</pre>\n\n<a href=\"me@example.com\">me@example.com</a> &lt;b&gt;\n\n1. x"
+  },
+  {
+   "In": "é😀中\n<code class=\"language-go\">\n&amp;\n\n\n\n\n ",
+   "Out": "é😀中 &lt;code class=\"language-go\"&gt; &amp;"
+  },
+  {
+   "In": "\t\n\n<a href=\"u\">\n\ntext- [ ] t\n\n[ref]&nbsp;\n",
+   "Out": "&lt;a href=\"u\"&gt;\n\ntext- [ ] t\n\n[ref]"
+  },
+  {
+   "In": "</b> a<b a  \n\n",
+   "Out": "&lt;/b&gt; a&lt;b a"
+  },
+  {
+   "In": "- [ ] t\na\\\n\\&amp;\n[ref]\n\\* ",
+   "Out": "- [ ] t a\n&amp;amp; [ref] *"
+  },
+  {
+   "In": "\"q\" 'a'\n\n<https://auto.link/x><a href=\"u\"> ",
+   "Out": "\"q\" 'a'\n\n<a href=\"https://auto.link/x\">https://auto.link/x</a>&lt;a href=\"u\"&gt;"
+  },
+  {
+   "In": "> q\n\n# h\n\n3) y\n\n_u_ 1.\ntext",
+   "Out": "<blockquote>q</blockquote>\n\n<b>h</b>\n\n3. y\n\n<i>u</i> 1. text"
+  },
+  {
+   "In": "## h *x*\n\n*** ![alt *x*](i.png)</code>\n\n## h *x*",
+   "Out": "<b>h <i>x</i></b>\n\n*** alt <i>x</i>&lt;/code&gt;\n\n<b>h <i>x</i></b>"
+  },
+  {
+   "In": "</blockquote>\n<div> \n </b> a  \n| a | b |\n| - | - |\n| 1 | 2 |\n",
+   "Out": "&lt;/blockquote&gt;\n&lt;div&gt; \n &lt;/b&gt; a  \n| a | b |\n| - | - |\n| 1 | 2 |"
+  },
+  {
+   "In": "[l](https://e.com/x?a=1&b=2)\n\n<b> *<blockquote>\n\n> _u_ ```\nraw\n***bi***\n\n",
+   "Out": "<a href=\"https://e.com/x?a=1&amp;b=2\">l</a>\n\n&lt;b&gt; *&lt;blockquote&gt;\n\n<blockquote><i>u</i> ``` raw <i><b>bi</b></i></blockquote>"
+  },
+  {
+   "In": "  - n &amp;\n&bogus;\n\"q\" 'a' &bogus;\n~~s~~",
+   "Out": "- n &amp; &amp;bogus; \"q\" 'a' &amp;bogus; ~~s~~"
+  },
+  {
+   "In": "<blockquote>",
+   "Out": "&lt;blockquote&gt;"
+  },
+  {
+   "In": "\n `` a ` b ``\n\n</blockquote> a  \n\n\n<!-- c -->",
+   "Out": "<code>a ` b</code>\n\n&lt;/blockquote&gt; a  \n\n&lt;!-- c --&gt;"
+  },
+  {
+   "In": "# h\n![alt *x*](i.png) 3) y</code>\n<task>",
+   "Out": "<b>h</b>\n\nalt <i>x</i> 3) y&lt;/code&gt; &lt;task&gt;"
+  },
+  {
+   "In": "a\\\n\n\n\n\na  \n\n\né😀中 <task> ",
+   "Out": "a\\\n\na\n\né😀中 &lt;task&gt;"
+  },
+  {
+   "In": "[ref]\n\n",
+   "Out": "[ref]"
+  },
+  {
+   "In": "a\\\n<me@example.com>\n\n1. x</b>\n\n> > qq  \n\n**b**\n\n<me@example.com>\n\n",
+   "Out": "a\n<a href=\"me@example.com\">me@example.com</a>\n\n1. x&lt;/b&gt;\n\n<blockquote>qq</blockquote>\n\n<b>b</b>\n\n<a href=\"me@example.com\">me@example.com</a>"
+  },
+  {
+   "In": "</blockquote>\n<code class=\"language-go\"> * x > y\n\n\\*\n  - n ",
+   "Out": "&lt;/blockquote&gt;\n&lt;code class=\"language-go\"&gt; * x &gt; y\n\n*\n\n- n"
+  },
+  {
+   "In": "a<b\n_u_\n## h *x*\n\n<i>x</i>## h *x*\n\n<code class=\"language-go\">\n\n</b>\n> q\n\n",
+   "Out": "a&lt;b <i>u</i>\n\n<b>h <i>x</i></b>\n\n&lt;i&gt;x&lt;/i&gt;## h <i>x</i>\n\n&lt;code class=\"language-go\"&gt;\n\n&lt;/b&gt;\n&gt; q"
+  },
+  {
+   "In": "Setext\n===- b \t  - n ",
+   "Out": "Setext ===- b \t  - n"
+  },
+  {
+   "In": "```\nraw\n\n\n*i*\n\n</code>\n`c`\nSetext\n=== - b\n\n",
+   "Out": "<pre>raw\n\n\n*i*\n\n&lt;/code&gt;\n`c`\nSetext\n=== - b\n</pre>"
+  },
+  {
+   "In": "\n\n\n***bi***\n\n\t[ref]: https://r.e\n[l](<https://e.com/a b>)```go\ncode < 1\n```\n[l](https://e.com/x?a=1&b=2) ",
+   "Out": "<i><b>bi</b></i>\n\n<pre>[ref]: https://r.e</pre>\n\n<a href=\"https://e.com/a b\">l</a>```go code &lt; 1\n\n<pre>[l](https://e.com/x?a=1&amp;b=2) </pre>"
+  },
+  {
+   "In": "<i>x</i>&amp;\n\n\"q\" 'a' - [ ] t# h <pre>p</pre> &nbsp; a  \n",
+   "Out": "<i>x</i>&amp;\n\n\"q\" 'a' - [ ] t# h <pre>p</pre> &nbsp; a"
+  },
+  {
+   "In": "1. x\n\n```go\ncode < 1\n```é😀中\né😀中```\nraw\n</blockquote>\n\n  &#128512; ",
+   "Out": "1. x\n\n<pre><code class=\"language-go\">code &lt; 1\n```é😀中\né😀中```\nraw\n&lt;/blockquote&gt;\n\n  &amp;#128512; </code></pre>"
+  },
+  {
+   "In": "> q<me@example.com>",
+   "Out": "<blockquote>qme@example.com (me@example.com)</blockquote>"
+  },
+  {
+   "In": "&#128512;\n\n--- - a\n<blockquote> - b \t",
+   "Out": "😀\n\n--- - a\n\n&lt;blockquote&gt; - b"
+  },
+  {
+   "In": "<i>x</i>     indented\n\né😀中\n",
+   "Out": "<i>x</i>     indented\n\né😀中"
+  },
+  {
+   "In": "<i>x</i><div>",
+   "Out": "&lt;i&gt;x&lt;/i&gt;&lt;div&gt;"
+  },
+  {
+   "In": "<i>x</i> \n\n\n\n\n",
+   "Out": "<i>x</i>"
+  },
+  {
+   "In": "_u_\n",
+   "Out": "<i>u</i>"
+  },
+  {
+   "In": "</b>\n\n</a><a href=\"u\">\n<div>\n  - n\"q\" 'a'",
+   "Out": "&lt;/b&gt;\n\n&lt;/a&gt;&lt;a href=\"u\"&gt;\n\n&lt;div&gt;\n  - n\"q\" 'a'"
+  },
+  {
+   "In": "\n\n\n_ <task> ## h *x* a<b [l](https://e.com/x?a=1&b=2)\n\n",
+   "Out": "_ &lt;task&gt; ## h <i>x</i> a&lt;b <a href=\"https://e.com/x?a=1&amp;b=2\">l</a>"
+  },
+  {
+   "In": "<me@example.com>\n_ *i* é😀中 <blockquote>",
+   "Out": "<a href=\"me@example.com\">me@example.com</a> _ <i>i</i> é😀中 &lt;blockquote&gt;"
+  },
+  {
+   "In": "- [ ] t",
+   "Out": "- [ ] t"
+  },
+  {
+   "In": "![alt *x*](i.png)",
+   "Out": "alt <i>x</i>"
+  },
+  {
+   "In": "x > y <i>x</i>\n\n</b>\n",
+   "Out": "x &gt; y &lt;i&gt;x&lt;/i&gt;\n\n&lt;/b&gt;"
+  },
+  {
+   "In": "---\"q\" 'a'\n",
+   "Out": "---\"q\" 'a'"
+  },
+  {
+   "In": "- a\n_u_\n\n\n\n\n ",
+   "Out": "- a <i>u</i>"
+  },
+  {
+   "In": "\"q\" 'a'\nSetext\n===\n***bi***\n",
+   "Out": "<b>\"q\" 'a' Setext</b>\n\n<i><b>bi</b></i>"
+  },
+  {
+   "In": "Setext\n===\n",
+   "Out": "<b>Setext</b>"
+  },
+  {
+   "In": "- b# h <i>x</i>\n- b[ref]\n\n- [ ] t\n<b>",
+   "Out": "- b# h &lt;i&gt;x&lt;/i&gt;\n- b[ref]\n- [ ] t &lt;b&gt;"
+  },
+  {
+   "In": "[l](https://e.com/x?a=1&b=2)\n`c`\n\n </code> ",
+   "Out": "<a href=\"https://e.com/x?a=1&amp;b=2\">l</a> <code>c</code>\n\n &lt;/code&gt;"
+  },
+  {
+   "In": "</b>\n\n[ref]\n\n| a | b |\n| - | - |\n| 1 | 2 |",
+   "Out": "&lt;/b&gt;\n\n[ref]\n\na | b\n1 | 2"
+  },
+  {
+   "In": "*\n[ref]\n> > qqé😀中\n</a>\n\n>![alt *x*](i.png) ",
+   "Out": "- \n\n[ref]\n\n<blockquote>qqé😀中 &lt;/a&gt;</blockquote>\n\n<blockquote>alt <i>x</i></blockquote>"
+  },
+  {
+   "In": "  - n\n\n\"q\" 'a'\n\nx > y\n\n",
+   "Out": "- n\n\n\"q\" 'a'\n\nx &gt; y"
+  },
+  {
+   "In": "1. x[l](<https://e.com/a b>)\n\n ",
+   "Out": "1. x<a href=\"https://e.com/a b\">l</a>"
+  },
+  {
+   "In": "> `` a ` b ``\n<code class=\"language-go\">~~s~~\n",
+   "Out": "<blockquote>a ` b &lt;code class=\"language-go\"&gt;~~s~~</blockquote>"
+  },
+  {
+   "In": "\n\n\n\n\n\\&amp; a  \n\n```go\ncode < 1\n```> q\n\n1. x\n\n## h *x* &amp; ",
+   "Out": "&amp;amp; a\n\n<pre><code class=\"language-go\">code &lt; 1\n```&gt; q\n\n1. x\n\n## h *x* &amp;amp; </code></pre>"
+  },
+  {
+   "In": "<pre>p</pre>\n```go\ncode < 1\n```\n",
+   "Out": "<pre>p</pre>\n```go\ncode < 1\n```"
+  },
+  {
+   "In": "`c`",
+   "Out": "<code>c</code>"
+  },
+  {
+   "In": "</b> ",
+   "Out": "&lt;/b&gt;"
+  },
+  {
+   "In": "_u_\n> > qq<me@example.com>\n",
+   "Out": "<i>u</i>\n\n<blockquote>qqme@example.com (me@example.com)</blockquote>"
+  },
+  {
+   "In": "&amp; a<b ",
+   "Out": "&amp; a&lt;b"
+  },
+  {
+   "In": "a  \n ## h *x* &#128512;~~s~~\n\n\n\n\n\\*\n\nx > y\n[ref]: https://r.e ",
+   "Out": "a\n\n<b>h <i>x</i> 😀~~s~~</b>\n\n*\n\nx &gt; y [ref]: https://r.e"
+  },
+  {
+   "In": "[ref]: https://r.e\n\n- [ ] t </b>\n\n",
+   "Out": "- [ ] t &lt;/b&gt;"
+  },
+  {
+   "In": "<task>\n><me@example.com>\n  - n ",
+   "Out": "&lt;task&gt;\n&gt;&lt;me@example.com&gt;\n  - n"
+  },
+  {
+   "In": "<me@example.com>\n\n  - n ",
+   "Out": "<a href=\"me@example.com\">me@example.com</a>\n\n- n"
+  },
+  {
+   "In": "<me@example.com>> > qq \n&amp; ",
+   "Out": "<a href=\"me@example.com\">me@example.com</a>&gt; &gt; qq &amp;"
+  },
+  {
+   "In": "1. x\n\n&bogus;<https://auto.link/x>\n\n--- ",
+   "Out": "1. x\n\n&amp;bogus;<a href=\"https://auto.link/x\">https://auto.link/x</a>\n\n———"
+  },
+  {
+   "In": "  - n _\na<b `c`\n\\* </blockquote> \\*\n",
+   "Out": "- n _ a&lt;b <code>c</code> * &lt;/blockquote&gt; *"
+  },
+  {
+   "In": "`` a ` b `` --- a<b\n&bogus;--- > > qq\n\n<b>\n\n",
+   "Out": "<code>a ` b</code> --- a&lt;b &amp;bogus;--- &gt; &gt; qq\n\n&lt;b&gt;"
+  },
+  {
+   "In": "```\nraw\ntext\n\na<b<div>\nblock\n</div>![alt *x*](i.png) <me@example.com>\n\n \n",
+   "Out": "<pre>raw\ntext\n\na&lt;b&lt;div&gt;\nblock\n&lt;/div&gt;![alt *x*](i.png) &lt;me@example.com&gt;\n\n </pre>"
+  },
+  {
+   "In": "<code class=\"language-go\">\n\n- [ ] t\n",
+   "Out": "&lt;code class=\"language-go\"&gt;\n\n- [ ] t"
+  },
+  {
+   "In": "![alt *x*](i.png)<i>x</i>\n\n&amp;\n\na  \n <https://auto.link/x>a  \n> <pre>p</pre>\n\n",
+   "Out": "![alt *x*](i.png)<i>x</i>\n\n&amp;\n\na  \n <https://auto.link/x>a  \n> <pre>p</pre>"
+  },
+  {
+   "In": "- b ~~s~~\n\n",
+   "Out": "- b ~~s~~"
+  },
+  {
+   "In": "[l](https://e.com/x?a=1&b=2)\n\n\t\n\n1.<div>\nblock\n</div> ```go\ncode < 1\n```\n\n`` a ` b `` ---\n\n",
+   "Out": "<a href=\"https://e.com/x?a=1&amp;b=2\">l</a>\n\n1.&lt;div&gt; block\n\n&lt;/div&gt; ```go\ncode &lt; 1\n```\n\n<code>a ` b</code> ---"
+  },
+  {
+   "In": "_u_\n<i>x</i>\n\n~~s~~    indented <i>x</i>~~s~~\na  \n <div>\nblock\n</div>\n",
+   "Out": "<i>u</i> &lt;i&gt;x&lt;/i&gt;\n\n~~s~~    indented &lt;i&gt;x&lt;/i&gt;~~s~~ a\n\n &lt;div&gt;\nblock\n&lt;/div&gt;"
+  },
+  {
+   "In": "![alt *x*](i.png)\n\n</code>\n\n<div>\n\nSetext\n=== é😀中\n- [ ] t",
+   "Out": "alt <i>x</i>\n\n&lt;/code&gt;\n\n&lt;div&gt;\n\nSetext === é😀中\n\n- [ ] t"
+  },
+  {
+   "In": "3) y &nbsp;\n**b** `c` > > qq | a | b |\n| - | - |\n| 1 | 2 |\n\n<div>\nblock\n</div> _u_",
+   "Out": "3. y   <b>b</b> <code>c</code> &gt; &gt; qq | a | b | | - | - | | 1 | 2 |\n\n&lt;div&gt;\nblock\n&lt;/div&gt; _u_"
+  },
+  {
+   "In": "```\nraw\n\n\n",
+   "Out": "<pre>raw\n\n</pre>"
+  },
+  {
+   "In": "***     indented\n\n<b>\n\n<me@example.com>\n\n<!-- c -->\n",
+   "Out": "***     indented\n\n&lt;b&gt;\n\n<a href=\"me@example.com\">me@example.com</a>\n\n&lt;!-- c --&gt;"
+  },
+  {
+   "In": "<https://auto.link/x> _\n\na\\\n**b**\n<b>\n\n`` a ` b ``\n</blockquote>\n",
+   "Out": "<a href=\"https://auto.link/x\">https://auto.link/x</a> _\n\na\n<b>b</b> &lt;b&gt;\n\n<code>a ` b</code>\n\n&lt;/blockquote&gt;"
+  },
+  {
+   "In": "<pre>p</pre>\n\n- a&#128512;```go\ncode < 1\n```\n\n![alt *x*](i.png)\n \n\n<b> ",
+   "Out": "<pre>p</pre>\n\n- a&#128512;```go\ncode < 1\n```\n\n![alt *x*](i.png)\n \n\n<b>"
+  },
+  {
+   "In": "é😀中\n\né😀中> > qq &#128512; 3) y\n\n***bi***<i>x</i> ",
+   "Out": "é😀中\n\né😀中> > qq &#128512; 3) y\n\n***bi***<i>x</i>"
+  },
+  {
+   "In": "3) y\n\n1. x\n\n```\nraw\n </blockquote>\n\n[l](https://e.com/x?a=1&b=2)\n",
+   "Out": "3. y\n\n1. x\n\n<pre>raw\n &lt;/blockquote&gt;\n\n[l](https://e.com/x?a=1&amp;b=2)</pre>"
+  },
+  {
+   "In": "```\nraw\n</code> ***bi*** ",
+   "Out": "<pre>raw\n&lt;/code&gt; ***bi*** </pre>"
+  },
+  {
+   "In": "[ref]\n\n<task>\n\n\n\n<div> <a href=\"u\">\n3) y<b> <b>",
+   "Out": "[ref]\n\n&lt;task&gt;\n\n&lt;div&gt; &lt;a href=\"u\"&gt;\n3) y&lt;b&gt; &lt;b&gt;"
+  },
+  {
+   "In": "Setext\n===\n- [ ] t\n\t\n\\&amp;---\n\n## h *x*```\nraw\n\n\n",
+   "Out": "<b>Setext</b>\n\n- [ ] t\n\n&amp;amp;---\n\n<b>h <i>x</i>```</b>\n\nraw"
+  },
+  {
+   "In": "***bi***\n\n\\*\n\n<task>\n\n</a> \n\n *i*\n\n",
+   "Out": "<i><b>bi</b></i>\n\n*\n\n&lt;task&gt;\n\n&lt;/a&gt; \n\n<i>i</i>"
+  },
+  {
+   "In": "- aa\\\n\n\n\\*",
+   "Out": "- aa\\\n\n*"
+  },
+  {
+   "In": "## h *x*\n\n1. x<a href=\"u\">*\n",
+   "Out": "<b>h <i>x</i></b>\n\n1. x&lt;a href=\"u\"&gt;*"
+  },
+  {
+   "In": "[ref]: https://r.e",
+   "Out": ""
+  },
+  {
+   "In": "- b\n***\n\na<b ",
+   "Out": "- b\n\n———\n\na&lt;b"
+  },
+  {
+   "In": "a<b\n\n- b\n\n",
+   "Out": "a&lt;b\n\n- b"
+  },
+  {
+   "In": "*i*\n\n  &amp;\n\n",
+   "Out": "<i>i</i>\n\n&amp;"
+  },
+  {
+   "In": "\\&amp;\n\n*\n\n\\&amp;\n\n<!-- c -->\n\n",
+   "Out": "&amp;amp;\n\n- \n\n&amp;amp;\n\n&lt;!-- c --&gt;"
+  },
+  {
+   "In": "a<b\n\n<div>\nblock\n</div>| a | b |\n| - | - |\n| 1 | 2 |\n\n\"q\" 'a'\n",
+   "Out": "a&lt;b\n\n&lt;div&gt;\nblock\n&lt;/div&gt;| a | b |\n| - | - |\n| 1 | 2 |\n\n\"q\" 'a'"
+  },
+  {
+   "In": "<!-- c -->\n> > q  - n\n\n  - n<https://auto.link/x>     indented ",
+   "Out": "&lt;!-- c --&gt;\n\n<blockquote>q  - n</blockquote>\n\n- n<a href=\"https://auto.link/x\">https://auto.link/x</a>     indented"
+  },
+  {
+   "In": "| a | b |\n| - | - |\n| 1 | 2 |\n",
+   "Out": "a | b\n1 | 2"
+  },
+  {
+   "In": "---\n\n",
+   "Out": "———"
+  },
+  {
+   "In": "</b>- [ ] t - a1.<!-- c -->\n",
+   "Out": "&lt;/b&gt;- [ ] t - a1.&lt;!-- c --&gt;"
+  },
+  {
+   "In": "> 1. <pre>p</pre>\né😀中 > > qq\n\na<b\n",
+   "Out": "> 1. <pre>p</pre>\né😀中 > > qq\n\na<b"
+  },
+  {
+   "In": "</blockquote>\n  - n\n\n- [ ] t[ref]: https://r.e<!-- c --> --- `` a ` b ``a\\\n",
+   "Out": "&lt;/blockquote&gt;\n  - n\n\n- [ ] t[ref]: https://r.e&lt;!-- c --&gt; --- <code>a ` b</code>a\\"
+  },
+  {
+   "In": "**b**\n\n</b>--- >\n<!-- c --> \n\n\n ",
+   "Out": "<b>b</b>\n\n&lt;/b&gt;--- &gt;\n\n&lt;!-- c --&gt;"
+  },
+  {
+   "In": "~~s~~ </blockquote>\n\n  - n\n>\n\n  - n",
+   "Out": "~~s~~ &lt;/blockquote&gt;\n\n- n\n\n- n"
+  },
+  {
+   "In": "3) y\n\n",
+   "Out": "3. y"
+  },
+  {
+   "In": "_\n\n&nbsp;\n\n<b>\n&#128512;\nSetext\n===\n```go\ncode < 1\n``` <pre>p</pre> <b>\n",
+   "Out": "_\n\n \n\n&lt;b&gt;\n&amp;#128512;\nSetext\n===\n```go\ncode &lt; 1\n``` &lt;pre&gt;p&lt;/pre&gt; &lt;b&gt;"
+  },
+  {
+   "In": "é😀中\n\n`c`> > qq\n\n*i*\n*> > qq \n\n",
+   "Out": "é😀中\n\n<code>c</code>&gt; &gt; qq\n\n<i>i</i> *&gt; &gt; qq"
+  },
+  {
+   "In": "```go\ncode < 1\n```>\n\n",
+   "Out": "<pre><code class=\"language-go\">code &lt; 1\n```&gt;\n</code></pre>"
+  },
+  {
+   "In": "<!-- c --> a<b    indented \"q\" 'a' <div>\n1. x\n\n![alt *x*](i.png)\n\\*\n\n",
+   "Out": "&lt;!-- c --&gt; a&lt;b    indented \"q\" 'a' &lt;div&gt;\n\n1. x\n\nalt <i>x</i> *"
+  },
+  {
+   "In": "<code class=\"language-go\">\nSetext\n===text&amp;&nbsp;\n\t<!-- c -->\n\n",
+   "Out": "&lt;code class=\"language-go\"&gt;\nSetext\n===text&amp;amp;&amp;nbsp;\n\t&lt;!-- c --&gt;"
+  },
+  {
+   "In": "<div>\n- [ ] t\n\n<a href=\"u\">\n\n***bi***",
+   "Out": "&lt;div&gt;\n- [ ] t\n\n&lt;a href=\"u\"&gt;\n\n<i><b>bi</b></i>"
+  },
+  {
+   "In": "Setext\n===\n- b ![alt *x*](i.png) <task>&#128512;\n\n~~s~~ | a | b |\n| - | - |\n| 1 | 2 |\\&amp; ",
+   "Out": "<b>Setext</b>\n\n- b alt <i>x</i> &lt;task&gt;😀\n\n~~s~~ | a | b | | - | - | | 1 | 2 |&amp;amp;"
+  },
+  {
+   "In": "***bi***\n\n",
+   "Out": "<i><b>bi</b></i>"
+  },
+  {
+   "In": "_\n> - b\n</code>**b** *i* *\n\n\n",
+   "Out": "_\n\n<blockquote>- b &lt;/code&gt;<b>b</b> <i>i</i> *</blockquote>"
+  },
+  {
+   "In": "<div>\nblock\n</div>\n[ref]: https://r.e\n\n&nbsp; [ref]: https://r.e<pre>p</pre> ",
+   "Out": "&lt;div&gt;\nblock\n&lt;/div&gt;\n[ref]: https://r.e\n\n  [ref]: https://r.e&lt;pre&gt;p&lt;/pre&gt;"
+  },
+  {
+   "In": "`c`> q- a```\nraw\n\n\n<div>1.<b>    indented",
+   "Out": "<code>c</code>&gt; q- a``` raw\n\n&lt;div&gt;1.&lt;b&gt;    indented"
+  },
+  {
+   "In": "> > qq\n\\&amp;\n\n> q &nbsp;\n\ntext\n\n![alt *x*](i.png)\n",
+   "Out": "<blockquote>qq &amp;amp;</blockquote>\n\n<blockquote>q  </blockquote>\n\ntext\n\nalt <i>x</i>"
+  },
+  {
+   "In": "[ref]: https://r.e <task> ",
+   "Out": "[ref]: https://r.e &lt;task&gt;"
+  },
+  {
+   "In": "a<b\n\n_u_\n[ref]: https://r.e\n&amp;* **b** 3) y",
+   "Out": "a&lt;b\n\n<i>u</i> [ref]: https://r.e &amp;* <b>b</b> 3) y"
+  },
+  {
+   "In": "---***\n\n<code class=\"language-go\">1. x\n",
+   "Out": "---***\n\n&lt;code class=\"language-go\"&gt;1. x"
+  },
+  {
+   "In": "[l](<https://e.com/a b>)a<b Setext\n===<pre>p</pre><div>\n",
+   "Out": "<a href=\"https://e.com/a b\">l</a>a&lt;b Setext ===&lt;pre&gt;p&lt;/pre&gt;&lt;div&gt;"
+  },
+  {
+   "In": "Setext\n===",
+   "Out": "<b>Setext</b>"
+  },
+  {
+   "In": "1. x\n\t\n</b>\n",
+   "Out": "1. x\n\n&lt;/b&gt;"
+  },
+  {
+   "In": "1. x <div>",
+   "Out": "1. x &lt;div&gt;"
+  },
+  {
+   "In": "`c`\n<b>\n> > qq\n\n<pre>p</pre> a<b\n*i* <me@example.com>\n> q",
+   "Out": "<code>c</code> &lt;b&gt;\n\n<blockquote>qq</blockquote>\n\n&lt;pre&gt;p&lt;/pre&gt; a&lt;b\n\n<i>i</i> <a href=\"me@example.com\">me@example.com</a>\n\n<blockquote>q</blockquote>"
+  },
+  {
+   "In": "\\&amp;\n[ref]\n> q1. x ",
+   "Out": "&amp;amp; [ref]\n\n<blockquote>q1. x</blockquote>"
+  },
+  {
+   "In": "<a href=\"u\"> \n\n\n a  \n\n\nx > y\"q\" 'a'\n\n",
+   "Out": "&lt;a href=\"u\"&gt; \n\na\n\nx &gt; y\"q\" 'a'"
+  },
+  {
+   "In": "3) y[ref]text\n</a>\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n[l](<https://e.com/a b>)\n\n| a | b |\n| - | - |\n| 1 | 2 | ",
+   "Out": "3. y[ref]text &lt;/a&gt;\n\na | b\n1 | 2\n\n<a href=\"https://e.com/a b\">l</a>\n\na | b\n1 | 2"
+  },
+  {
+   "In": "```go\ncode < 1\n``` _\n- a\n<b> - a\n\n<me@example.com>\n> > qqx > y",
+   "Out": "<pre><code class=\"language-go\">code &lt; 1\n``` _\n- a\n&lt;b&gt; - a\n\n&lt;me@example.com&gt;\n&gt; &gt; qqx &gt; y</code></pre>"
+  },
+  {
+   "In": "&nbsp; *i*```go\ncode < 1\n```\n\n",
+   "Out": "<i>i</i>```go code &lt; 1\n\n<pre></pre>"
+  },
+  {
+   "In": "[ref]: https://r.e&#128512; </a> - b[l](<https://e.com/a b>)\n\n\n",
+   "Out": "[ref]: https://r.e😀 &lt;/a&gt; - b<a href=\"https://e.com/a b\">l</a>"
+  },
+  {
+   "In": "a<b <code class=\"language-go\">\n\n",
+   "Out": "a&lt;b &lt;code class=\"language-go\"&gt;"
+  },
+  {
+   "In": "> > qq     indented\n\n<task>",
+   "Out": "<blockquote>qq     indented</blockquote>\n\n&lt;task&gt;"
+  },
+  {
+   "In": "\\*\n\na  \n\n  - n\n\n",
+   "Out": "*\n\na\n\n- n"
+  },
+  {
+   "In": "<div>",
+   "Out": "&lt;div&gt;"
+  },
+  {
+   "In": "a<b&amp;\n\n**b**\n\n a  \n",
+   "Out": "a&lt;b&amp;\n\n<b>b</b>\n\na"
+  },
+  {
+   "In": "<code class=\"language-go\">> > qq\n ",
+   "Out": "&lt;code class=\"language-go\"&gt;&gt; &gt; qq"
+  },
+  {
+   "In": "```go\ncode < 1\n``` &amp; - b\n[ref]<div>\nblock\n</div>",
+   "Out": "<pre><code class=\"language-go\">code &lt; 1\n``` &amp;amp; - b\n[ref]&lt;div&gt;\nblock\n&lt;/div&gt;</code></pre>"
+  },
+  {
+   "In": "<b>\n\n```go\ncode < 1\n```",
+   "Out": "&lt;b&gt;\n\n<pre><code class=\"language-go\">code &lt; 1</code></pre>"
+  },
+  {
+   "In": "***\n3) y***bi***\n***bi***<task> text\n\n- b\n\n \n\n",
+   "Out": "———\n\n3. y<i><b>bi</b></i> <i><b>bi</b></i>&lt;task&gt; text\n\n- b"
+  },
+  {
+   "In": "Setext\n===\n\n<a href=\"u\">\n\n</code>\n# h [l](https://e.com/x?a=1&b=2)",
+   "Out": "<b>Setext</b>\n\n&lt;a href=\"u\"&gt;\n\n&lt;/code&gt;\n# h [l](https://e.com/x?a=1&amp;b=2)"
+  },
+  {
+   "In": "<me@example.com>\n\n> q \t\n\n>\n\\* ",
+   "Out": "<a href=\"me@example.com\">me@example.com</a>\n\n<blockquote>q</blockquote>\n\n*"
+  },
+  {
+   "In": "`` a ` b ``\n<i>x</i>\n\n- [ ] t\n# h***\n",
+   "Out": "`` a ` b ``\n<i>x</i>\n\n- [ ] t\n# h***"
+  },
+  {
+   "In": "_u_![alt *x*](i.png)\n<i>x</i> </blockquote>\n\n<blockquote><a href=\"u\">\n>",
+   "Out": "<i>u</i>alt <i>x</i> &lt;i&gt;x&lt;/i&gt; &lt;/blockquote&gt;\n\n&lt;blockquote&gt;&lt;a href=\"u\"&gt;\n&gt;"
+  },
+  {
+   "In": "[ref]: https://r.e <https://auto.link/x>\n    indented \n\n\n\n*",
+   "Out": "[ref]: https://r.e <a href=\"https://auto.link/x\">https://auto.link/x</a> indented\n\n-"
+  },
+  {
+   "In": "## h *x* <a href=\"u\"><div>\n\n[l](<https://e.com/a b>) x > y\n<div>\nblock\n</div> ",
+   "Out": "<b>h <i>x</i> &lt;a href=\"u\"&gt;&lt;div&gt;</b>\n\n<a href=\"https://e.com/a b\">l</a> x &gt; y\n\n&lt;div&gt;\nblock\n&lt;/div&gt;"
+  },
+  {
+   "In": "x > y\n</code>\n\n<a href=\"u\">\n",
+   "Out": "x &gt; y &lt;/code&gt;\n\n&lt;a href=\"u\"&gt;"
+  },
+  {
+   "In": "a\\\n\n&#128512; ",
+   "Out": "a\\\n\n😀"
+  },
+  {
+   "In": "a<b![alt *x*](i.png)\n*i*\n\n- a<blockquote>\n",
+   "Out": "a&lt;balt <i>x</i> <i>i</i>\n\n- a&lt;blockquote&gt;"
+  },
+  {
+   "In": "text3) y",
+   "Out": "text3) y"
+  },
+  {
+   "In": "<i>x</i>\n\n",
+   "Out": "<i>x</i>"
+  },
+  {
+   "In": "\n\n\n\n> q</b> &bogus;\n\n*i*\n\n*\n <i>x</i>\n\n",
+   "Out": "<blockquote>q&lt;/b&gt; &amp;bogus;</blockquote>\n\n<i>i</i>\n\n- \n\n&lt;i&gt;x&lt;/i&gt;"
+  },
+  {
+   "In": "</a>\n\n&bogus;\"q\" 'a' é😀中 ",
+   "Out": "&lt;/a&gt;\n\n&amp;bogus;\"q\" 'a' é😀中"
+  },
+  {
+   "In": "&#128512;\n\n*\n",
+   "Out": "😀\n\n-"
+  },
+  {
+   "In": "</code> ",
+   "Out": "&lt;/code&gt;"
+  },
+  {
+   "In": "<!-- c -->[ref]: https://r.e1. x\n\n## h *x*\n\ntext\\*\n\n[ref]: https://r.e",
+   "Out": "&lt;!-- c --&gt;[ref]: https://r.e1. x\n\n<b>h <i>x</i></b>\n\ntext*"
+  },
+  {
+   "In": "<a href=\"u\">\n```go\ncode < 1\n```\n</a> ",
+   "Out": "&lt;a href=\"u\"&gt;\n```go\ncode &lt; 1\n```\n&lt;/a&gt;"
+  },
+  {
+   "In": "<pre>p</pre># h Setext\n===\n\n",
+   "Out": "<pre>p</pre># h Setext\n==="
+  },
+  {
+   "In": "1. x`` a ` b `` *<div> a\\\n</a>\n\n",
+   "Out": "1. x<code>a ` b</code> *&lt;div&gt; a\n&lt;/a&gt;"
+  },
+  {
+   "In": "- a[ref]: https://r.e\n\n```\nraw\n</code> ```\nraw\n &amp;\n\na<b\n\n",
+   "Out": "- a[ref]: https://r.e\n\n<pre>raw\n&lt;/code&gt; ```\nraw\n &amp;amp;\n\na&lt;b\n</pre>"
+  },
+  {
+   "In": "\n\n<a href=\"u\">\n| a | b |\n| - | - |\n| 1 | 2 |\n",
+   "Out": "&lt;a href=\"u\"&gt;\n| a | b |\n| - | - |\n| 1 | 2 |"
+  },
+  {
+   "In": "`` a ` b ``\n&#128512;\n\n    indented \n\n\n<div>\n\n",
+   "Out": "<code>a ` b</code> 😀\n\n<pre>indented </pre>\n\n&lt;div&gt;"
+  },
+  {
+   "In": "[ref]: https://r.e\n\ntext<i>x</i>\n\na<b <pre>p</pre>\n\n",
+   "Out": "[ref]: https://r.e\n\ntext<i>x</i>\n\na<b <pre>p</pre>"
+  },
+  {
+   "In": "\n\n\n---\n\nx > y \n\n </a> <https://auto.link/x> ",
+   "Out": "———\n\nx &gt; y\n\n&lt;/a&gt; <a href=\"https://auto.link/x\">https://auto.link/x</a>"
+  },
+  {
+   "In": "> > qq\n\n<a href=\"u\">\n<pre>p</pre>\n\n[l](https://e.com/x?a=1&b=2)\n\n1. x ",
+   "Out": "<blockquote>qq</blockquote>\n\n&lt;a href=\"u\"&gt;\n&lt;pre&gt;p&lt;/pre&gt;\n\n<a href=\"https://e.com/x?a=1&amp;b=2\">l</a>\n\n1. x"
+  },
+  {
+   "In": "<code class=\"language-go\"></b> <!-- c -->\n\n",
+   "Out": "&lt;code class=\"language-go\"&gt;&lt;/b&gt; &lt;!-- c --&gt;"
+  },
+  {
+   "In": "\n\n\n\n",
+   "Out": ""
+  },
+  {
+   "In": "<pre>p</pre> ",
+   "Out": "<pre>p</pre>"
+  },
+  {
+   "In": "a<b> > qq\n\n",
+   "Out": "a&lt;b&gt; &gt; qq"
+  },
+  {
+   "In": "```go\ncode < 1\n``` \n\n\n\n\n\t\n  - n\n\n[ref]1.\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n<blockquote>\n\n",
+   "Out": "<pre><code class=\"language-go\">code &lt; 1</code></pre>\n\n- n\n\n[ref]1.\n\na | b\n1 | 2\n\n&lt;blockquote&gt;"
+  },
+  {
+   "In": "_<div>\nblock\n</div>\n\n<blockquote>&#128512; ",
+   "Out": "_&lt;div&gt; block\n\n&lt;/div&gt;\n\n&lt;blockquote&gt;&amp;#128512;"
+  }
+ ],
+ "Sanitize": [
+  {
+   "In": "</blockquote> <div>>\n<!-- c --> # h<a href=\"u\">\n\n",
+   "Out": "&lt;/blockquote&gt; &lt;div&gt;&gt;\n&lt;!-- c --&gt; # h<a href=\"u\">\n\n</a>"
+  },
+  {
+   "In": "    indented\n\ntext```go\ncode < 1\n``` [l](https://e.com/x?a=1&b=2)\n- a     indented\n\n> ",
+   "Out": "    indented\n\ntext```go\ncode &lt; 1\n``` [l](https://e.com/x?a=1&amp;b=2)\n- a     indented\n\n&gt; "
+  },
+  {
+   "In": "<me@example.com>\n\n\\*\n<b> Setext\n=== - a\n*** [ref]: https://r.e ",
+   "Out": "&lt;me@example.com&gt;\n\n\\*\n<b> Setext\n=== - a\n*** [ref]: https://r.e </b>"
+  },
+  {
+   "In": "`` a ` b ``- aa<b &nbsp;\n\n[ref]: https://r.e\n\n[ref]\n<div> <b>",
+   "Out": "`` a ` b ``- aa&lt;b &amp;nbsp;\n\n[ref]: https://r.e\n\n[ref]\n&lt;div&gt; <b></b>"
+  },
+  {
+   "In": "&#128512;\n\n![alt *x*](i.png) | a | b |\n| - | - |\n| 1 | 2 |\n# h\n\n\n\n",
+   "Out": "&#128512;\n\n![alt *x*](i.png) | a | b |\n| - | - |\n| 1 | 2 |\n# h\n\n\n\n"
+  },
+  {
+   "In": "`` a ` b `` <b> &nbsp;\n| a | b |\n| - | - |\n| 1 | 2 | &#128512;\n",
+   "Out": "`` a ` b `` <b> &amp;nbsp;\n| a | b |\n| - | - |\n| 1 | 2 | &#128512;\n</b>"
+  },
+  {
+   "In": "_x > y| a | b |\n| - | - |\n| 1 | 2 |\n1. x\n_u_\n\n</blockquote>\n\n",
+   "Out": "_x &gt; y| a | b |\n| - | - |\n| 1 | 2 |\n1. x\n_u_\n\n&lt;/blockquote&gt;\n\n"
+  },
+  {
+   "In": " \n\n`` a ` b `` </code>\n\n\"q\" 'a'\n",
+   "Out": " \n\n`` a ` b `` &lt;/code&gt;\n\n\"q\" 'a'\n"
+  },
+  {
+   "In": "[ref]\n\n",
+   "Out": "[ref]\n\n"
+  },
+  {
+   "In": "\\*\n\na\\\n **b**\n# h ~~s~~\n_\n\n~~s~~ ",
+   "Out": "\\*\n\na\\\n **b**\n# h ~~s~~\n_\n\n~~s~~ "
+  },
+  {
+   "In": "# h![alt *x*](i.png)<me@example.com>",
+   "Out": "# h![alt *x*](i.png)&lt;me@example.com&gt;"
+  },
+  {
+   "In": "&#128512;</code>Setext\n===\n\n",
+   "Out": "&#128512;&lt;/code&gt;Setext\n===\n\n"
+  },
+  {
+   "In": "<task>\n\n\n\n\n\n</a> <code class=\"language-go\">*\n`` a ` b ``",
+   "Out": "&lt;task&gt;\n\n\n\n\n\n&lt;/a&gt; <code class=\"language-go\">*\n`` a ` b ``</code>"
+  },
+  {
+   "In": "<https://auto.link/x>\n\ntext `` a ` b ``\n\n<b> `c` ",
+   "Out": "&lt;https://auto.link/x&gt;\n\ntext `` a ` b ``\n\n<b> `c` </b>"
+  },
+  {
+   "In": "</b>\n\n\\*\n",
+   "Out": "&lt;/b&gt;\n\n\\*\n"
+  },
+  {
+   "In": "&bogus; ***bi***\n    indented",
+   "Out": "&amp;bogus; ***bi***\n    indented"
+  },
+  {
+   "In": "---\n[ref]: https://r.e ```go\ncode < 1\n```\n<b>\n\n_u_ <task>Setext\n===\n\n_u_\n\n",
+   "Out": "---\n[ref]: https://r.e ```go\ncode &lt; 1\n```\n<b>\n\n_u_ &lt;task&gt;Setext\n===\n\n_u_\n\n</b>"
+  },
+  {
+   "In": "`c` ```go\ncode < 1\n```text     indented text Setext\n===1. x\n",
+   "Out": "`c` ```go\ncode &lt; 1\n```text     indented text Setext\n===1. x\n"
+  },
+  {
+   "In": "&bogus;<me@example.com> <div>\nblock\n</div> ***bi***\n\n&nbsp;| a | b |\n| - | - |\n| 1 | 2 |\n\n_u_```\nraw\n",
+   "Out": "&amp;bogus;&lt;me@example.com&gt; &lt;div&gt;\nblock\n&lt;/div&gt; ***bi***\n\n&amp;nbsp;| a | b |\n| - | - |\n| 1 | 2 |\n\n_u_```\nraw\n"
+  },
+  {
+   "In": "&nbsp;\ntext\n\n[ref]: https://r.e\n<https://auto.link/x>\n    indented\n\n# h ",
+   "Out": "&amp;nbsp;\ntext\n\n[ref]: https://r.e\n&lt;https://auto.link/x&gt;\n    indented\n\n# h "
+  },
+  {
+   "In": "<task> <https://auto.link/x>_u_\n\n\n[l](https://e.com/x?a=1&b=2)\n\n***bi***Setext\n===x > y ",
+   "Out": "&lt;task&gt; &lt;https://auto.link/x&gt;_u_\n\n\n[l](https://e.com/x?a=1&amp;b=2)\n\n***bi***Setext\n===x &gt; y "
+  },
+  {
+   "In": "`c`[l](https://e.com/x?a=1&b=2)\n",
+   "Out": "`c`[l](https://e.com/x?a=1&amp;b=2)\n"
+  },
+  {
+   "In": "\n\n\n\n[l](<https://e.com/a b>)\n\n",
+   "Out": "\n\n\n\n[l](&lt;https://e.com/a b&gt;)\n\n"
+  },
+  {
+   "In": "## h *x* [ref]*i*\n\n---",
+   "Out": "## h *x* [ref]*i*\n\n---"
+  },
+  {
+   "In": "- aa<b_u_ \t <pre>p</pre> --- <a href=\"u\"></blockquote>",
+   "Out": "- aa&lt;b_u_ \t <pre>p</pre> --- <a href=\"u\">&lt;/blockquote&gt;</a>"
+  },
+  {
+   "In": "&amp; \n\n\n\n</a>\n",
+   "Out": "&amp; \n\n\n\n&lt;/a&gt;\n"
+  },
+  {
+   "In": "**b**\"q\" 'a'\n\n</b>\n***bi***a<b ***\n***bi***\n",
+   "Out": "**b**\"q\" 'a'\n\n&lt;/b&gt;\n***bi***a&lt;b ***\n***bi***\n"
+  },
+  {
+   "In": "<i>x</i> </b>\n\n<me@example.com>",
+   "Out": "<i>x</i> &lt;/b&gt;\n\n&lt;me@example.com&gt;"
+  },
+  {
+   "In": " \n<b></code>\n_\n\n* </code> é😀中\n\n",
+   "Out": " \n<b>&lt;/code&gt;\n_\n\n* &lt;/code&gt; é😀中\n\n</b>"
+  },
+  {
+   "In": "---\n\n*i*\n\n",
+   "Out": "---\n\n*i*\n\n"
+  },
+  {
+   "In": "a  \n```\nraw\n- [ ] t\n\n```\nraw\n1. x\n<task> ",
+   "Out": "a  \n```\nraw\n- [ ] t\n\n```\nraw\n1. x\n&lt;task&gt; "
+  },
+  {
+   "In": "</blockquote> [l](<https://e.com/a b>)    indented\n",
+   "Out": "&lt;/blockquote&gt; [l](&lt;https://e.com/a b&gt;)    indented\n"
+  },
+  {
+   "In": "<https://auto.link/x>\n\n`c`\n\n[ref]\n\n**b**_",
+   "Out": "&lt;https://auto.link/x&gt;\n\n`c`\n\n[ref]\n\n**b**_"
+  },
+  {
+   "In": "\n\n\n~~s~~\n",
+   "Out": "\n\n\n~~s~~\n"
+  },
+  {
+   "In": "[ref]\n\n\n\n\n\na  \n\n\n> &#128512; # h [ref]\n",
+   "Out": "[ref]\n\n\n\n\n\na  \n\n\n&gt; &#128512; # h [ref]\n"
+  },
+  {
+   "In": "*\n[ref]\n",
+   "Out": "*\n[ref]\n"
+  },
+  {
+   "In": "**b** ***bi***\n<code class=\"language-go\">a\\\n ",
+   "Out": "**b** ***bi***\n<code class=\"language-go\">a\\\n </code>"
+  },
+  {
+   "In": "\\&amp; ",
+   "Out": "\\&amp; "
+  },
+  {
+   "In": "> q\n\n_\n\t\n",
+   "Out": "&gt; q\n\n_\n\t\n"
+  },
+  {
+   "In": "Setext\n===\n<div>\nblock\n</div>\n",
+   "Out": "Setext\n===\n&lt;div&gt;\nblock\n&lt;/div&gt;\n"
+  },
+  {
+   "In": "1. x\n<pre>p</pre> <div>",
+   "Out": "1. x\n<pre>p</pre> &lt;div&gt;"
+  },
+  {
+   "In": " ***\n\n**b** > > qq\n[l](https://e.com/x?a=1&b=2)\n\n\n\n\n\n\n</b>\n1. ",
+   "Out": " ***\n\n**b** &gt; &gt; qq\n[l](https://e.com/x?a=1&amp;b=2)\n\n\n\n\n\n\n&lt;/b&gt;\n1. "
+  },
+  {
+   "In": "*i*\n\n~~s~~- b\n\n<!-- c -->\n```\nraw\n ",
+   "Out": "*i*\n\n~~s~~- b\n\n&lt;!-- c --&gt;\n```\nraw\n "
+  },
+  {
+   "In": "[l](<https://e.com/a b>) ```go\ncode < 1\n```</b>\n\n&amp;\n",
+   "Out": "[l](&lt;https://e.com/a b&gt;) ```go\ncode &lt; 1\n```&lt;/b&gt;\n\n&amp;\n"
+  },
+  {
+   "In": "> > qq\n\ntextSetext\n===\n",
+   "Out": "&gt; &gt; qq\n\ntextSetext\n===\n"
+  },
+  {
+   "In": "1. x\n`` a ` b ``\n",
+   "Out": "1. x\n`` a ` b ``\n"
+  },
+  {
+   "In": "- [ ] t <code class=\"language-go\">",
+   "Out": "- [ ] t <code class=\"language-go\"></code>"
+  },
+  {
+   "In": "text\n\n",
+   "Out": "text\n\n"
+  },
+  {
+   "In": "</blockquote><a href=\"u\">\n<a href=\"u\">\n\n\\&amp;\n\n> q ",
+   "Out": "&lt;/blockquote&gt;<a href=\"u\">\n<a href=\"u\">\n\n\\&amp;\n\n&gt; q </a></a>"
+  },
+  {
+   "In": "\\*\n",
+   "Out": "\\*\n"
+  },
+  {
+   "In": "</a>\\*> \n\n\n </blockquote>\n\n",
+   "Out": "&lt;/a&gt;\\*&gt; \n\n\n &lt;/blockquote&gt;\n\n"
+  },
+  {
+   "In": "<task> \t\n\n[ref]: https://r.e\n```go\ncode < 1\n```\n<b> </a><pre>p</pre> ",
+   "Out": "&lt;task&gt; \t\n\n[ref]: https://r.e\n```go\ncode &lt; 1\n```\n<b> &lt;/a&gt;<pre>p</pre> </b>"
+  },
+  {
+   "In": "<i>x</i>\n\n",
+   "Out": "<i>x</i>\n\n"
+  },
+  {
+   "In": "`` a ` b ``\n<task>\n\n</b>\n\n<https://auto.link/x>\n\n</a>~~s~~ `c`",
+   "Out": "`` a ` b ``\n&lt;task&gt;\n\n&lt;/b&gt;\n\n&lt;https://auto.link/x&gt;\n\n&lt;/a&gt;~~s~~ `c`"
+  },
+  {
+   "In": "a<b\n\n",
+   "Out": "a&lt;b\n\n"
+  },
+  {
+   "In": "![alt *x*](i.png)\n\n\t**b** 1. x # h\n",
+   "Out": "![alt *x*](i.png)\n\n\t**b** 1. x # h\n"
+  },
+  {
+   "In": "## h *x* é😀中\n\n<i>x</i>\n",
+   "Out": "## h *x* é😀中\n\n<i>x</i>\n"
+  },
+  {
+   "In": "<https://auto.link/x>\n\n- [ ] t\n\n```\nraw\n ~~s~~ _\n",
+   "Out": "&lt;https://auto.link/x&gt;\n\n- [ ] t\n\n```\nraw\n ~~s~~ _\n"
+  },
+  {
+   "In": "[ref]: https://r.e - b\n\n<!-- c -->\n[l](https://e.com/x?a=1&b=2)",
+   "Out": "[ref]: https://r.e - b\n\n&lt;!-- c --&gt;\n[l](https://e.com/x?a=1&amp;b=2)"
+  },
+  {
+   "In": "<i>x</i>\n| a | b |\n| - | - |\n| 1 | 2 |\n\n<a href=\"u\"><task>\n&#128512;\n",
+   "Out": "<i>x</i>\n| a | b |\n| - | - |\n| 1 | 2 |\n\n<a href=\"u\">&lt;task&gt;\n&#128512;\n</a>"
+  },
+  {
+   "In": "<i>x</i>\n[ref] ***bi*** ---\t\n\n![alt *x*](i.png)\n",
+   "Out": "<i>x</i>\n[ref] ***bi*** ---\t\n\n![alt *x*](i.png)\n"
+  },
+  {
+   "In": "<task> \n\n\n>",
+   "Out": "&lt;task&gt; \n\n\n&gt;"
+  },
+  {
+   "In": "\"q\" 'a'\n\n- [ ] t </code> a  \n <pre>p</pre> --- ",
+   "Out": "\"q\" 'a'\n\n- [ ] t &lt;/code&gt; a  \n <pre>p</pre> --- "
+  },
+  {
+   "In": "\n\n\\* &amp; &amp;\n\n  - n ![alt *x*](i.png)\n> q ",
+   "Out": "\n\n\\* &amp; &amp;\n\n  - n ![alt *x*](i.png)\n&gt; q "
+  },
+  {
+   "In": "\t\n- a\n",
+   "Out": "\t\n- a\n"
+  },
+  {
+   "In": "\n\n\n<task>\n\n~~s~~\n\\&amp;\n\n> q \"q\" 'a'\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n[ref]: https://r.e",
+   "Out": "\n\n\n&lt;task&gt;\n\n~~s~~\n\\&amp;\n\n&gt; q \"q\" 'a'\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n[ref]: https://r.e"
+  },
+  {
+   "In": "*i*\n\na\\\n > <a href=\"u\">_1. x![alt *x*](i.png)\n",
+   "Out": "*i*\n\na\\\n &gt; <a href=\"u\">_1. x![alt *x*](i.png)\n</a>"
+  },
+  {
+   "In": "\\*\n",
+   "Out": "\\*\n"
+  },
+  {
+   "In": "```go\ncode < 1\n```\n[l](<https://e.com/a b>)\n\n\n",
+   "Out": "```go\ncode &lt; 1\n```\n[l](&lt;https://e.com/a b&gt;)\n\n\n"
+  },
+  {
+   "In": "x > y é😀中 - [ ] t ",
+   "Out": "x &gt; y é😀中 - [ ] t "
+  },
+  {
+   "In": "&nbsp;\n\n\n\n\n# h",
+   "Out": "&amp;nbsp;\n\n\n\n\n# h"
+  },
+  {
+   "In": "[ref]: https://r.e\nSetext\n===a\\\n &bogus;\n<b>\na<b ",
+   "Out": "[ref]: https://r.e\nSetext\n===a\\\n &amp;bogus;\n<b>\na&lt;b </b>"
+  },
+  {
+   "In": "[l](<https://e.com/a b>)\n\n_u_\n</blockquote> <!-- c --><task>x > y\n\n<pre>p</pre>\n",
+   "Out": "[l](&lt;https://e.com/a b&gt;)\n\n_u_\n&lt;/blockquote&gt; &lt;!-- c --&gt;&lt;task&gt;x &gt; y\n\n<pre>p</pre>\n"
+  },
+  {
+   "In": "1.[l](https://e.com/x?a=1&b=2) _u_\n\n<div>| a | b |\n| - | - |\n| 1 | 2 |\n",
+   "Out": "1.[l](https://e.com/x?a=1&amp;b=2) _u_\n\n&lt;div&gt;| a | b |\n| - | - |\n| 1 | 2 |\n"
+  },
+  {
+   "In": "<pre>p</pre> ~~s~~\n",
+   "Out": "<pre>p</pre> ~~s~~\n"
+  },
+  {
+   "In": "[ref]: https://r.e * ",
+   "Out": "[ref]: https://r.e * "
+  },
+  {
+   "In": "\\*\n\n\n~~s~~\n\n1. x\n\n1. x",
+   "Out": "\\*\n\n\n~~s~~\n\n1. x\n\n1. x"
+  },
+  {
+   "In": "1.</blockquote>",
+   "Out": "1.&lt;/blockquote&gt;"
+  },
+  {
+   "In": " \n\n>\n*\n\n\n\n***bi***\n",
+   "Out": " \n\n&gt;\n*\n\n\n\n***bi***\n"
+  },
+  {
+   "In": "---\n\n[l](<https://e.com/a b>)`` a ` b ``\n<!-- c -->\n",
+   "Out": "---\n\n[l](&lt;https://e.com/a b&gt;)`` a ` b ``\n&lt;!-- c --&gt;\n"
+  },
+  {
+   "In": "<blockquote> ---- [ ] t\n\n![alt *x*](i.png)é😀中\n\ntext\t\n",
+   "Out": "<blockquote> ---- [ ] t\n\n![alt *x*](i.png)é😀中\n\ntext\t\n</blockquote>"
+  },
+  {
+   "In": "<a href=\"u\">\n<pre>p</pre>\n_u_\n</code>\n\n***bi***\n\n[l](<https://e.com/a b>) <task><div>\nblock\n</div>\n\n",
+   "Out": "<a href=\"u\">\n<pre>p</pre>\n_u_\n&lt;/code&gt;\n\n***bi***\n\n[l](&lt;https://e.com/a b&gt;) &lt;task&gt;&lt;div&gt;\nblock\n&lt;/div&gt;\n\n</a>"
+  },
+  {
+   "In": "<https://auto.link/x></b>\n<i>x</i>\n\n\\&amp; é😀中",
+   "Out": "&lt;https://auto.link/x&gt;&lt;/b&gt;\n<i>x</i>\n\n\\&amp; é😀中"
+  },
+  {
+   "In": "\t <pre>p</pre>\n\n</a>```go\ncode < 1\n```\nx > y\n\n## h *x*é😀中",
+   "Out": "\t <pre>p</pre>\n\n&lt;/a&gt;```go\ncode &lt; 1\n```\nx &gt; y\n\n## h *x*é😀中"
+  },
+  {
+   "In": "[ref]\\&amp;\n\n3) y***     indented ",
+   "Out": "[ref]\\&amp;\n\n3) y***     indented "
+  },
+  {
+   "In": "<https://auto.link/x> a\\\n",
+   "Out": "&lt;https://auto.link/x&gt; a\\\n"
+  },
+  {
+   "In": "> > qq&nbsp;\n    indented\n\n| a | b |\n| - | - |\n| 1 | 2 | ## h *x*\na<b\n    indented3) y\n\n",
+   "Out": "&gt; &gt; qq&amp;nbsp;\n    indented\n\n| a | b |\n| - | - |\n| 1 | 2 | ## h *x*\na&lt;b\n    indented3) y\n\n"
+  },
+  {
+   "In": "  - n  - n\n[l](https://e.com/x?a=1&b=2)\na<b\n- a\n\n",
+   "Out": "  - n  - n\n[l](https://e.com/x?a=1&amp;b=2)\na&lt;b\n- a\n\n"
+  },
+  {
+   "In": "a\\\n",
+   "Out": "a\\\n"
+  },
+  {
+   "In": "- b<https://auto.link/x>\n\n***bi***# h - b ",
+   "Out": "- b&lt;https://auto.link/x&gt;\n\n***bi***# h - b "
+  },
+  {
+   "In": "> q***bi***\n\na<b | a | b |\n| - | - |\n| 1 | 2 |\n\nx > y | a | b |\n| - | - |\n| 1 | 2 |\n\n\n ",
+   "Out": "&gt; q***bi***\n\na<b | a | b |\n| - | - |\n| 1 | 2 |\n\nx > y | a | b |\n| - | - |\n| 1 | 2 |\n\n\n </b>"
+  },
+  {
+   "In": "> > qq\n\n\n\n- a\n\na<b\n",
+   "Out": "&gt; &gt; qq\n\n\n\n- a\n\na&lt;b\n"
+  },
+  {
+   "In": "a  \n\n\n- [ ] t&#128512; text\n\n- b - [ ] t\n<me@example.com>***",
+   "Out": "a  \n\n\n- [ ] t&#128512; text\n\n- b - [ ] t\n&lt;me@example.com&gt;***"
+  },
+  {
+   "In": "~~s~~\n\n\n1. <task>\n\n ",
+   "Out": "~~s~~\n\n\n1. &lt;task&gt;\n\n "
+  },
+  {
+   "In": "</blockquote> [l](https://e.com/x?a=1&b=2)<code class=\"language-go\">\n \n<!-- c -->> > qq ",
+   "Out": "&lt;/blockquote&gt; [l](https://e.com/x?a=1&amp;b=2)<code class=\"language-go\">\n \n&lt;!-- c --&gt;&gt; &gt; qq </code>"
+  },
+  {
+   "In": "***bi*** ",
+   "Out": "***bi*** "
+  },
+  {
+   "In": "---\n",
+   "Out": "---\n"
+  },
+  {
+   "In": "> > qqa\\\n\n- [ ] t\n<https://auto.link/x>\n\n```go\ncode < 1\n```\n<a href=\"u\"> _u_\n\n",
+   "Out": "&gt; &gt; qqa\\\n\n- [ ] t\n&lt;https://auto.link/x&gt;\n\n```go\ncode &lt; 1\n```\n<a href=\"u\"> _u_\n\n</a>"
+  },
+  {
+   "In": "<a href=\"u\">\nx > y *\n\t\n\n&amp;   - n ![alt *x*](i.png) > > qq",
+   "Out": "<a href=\"u\">\nx &gt; y *\n\t\n\n&amp;   - n ![alt *x*](i.png) &gt; &gt; qq</a>"
+  },
+  {
+   "In": "1. x",
+   "Out": "1. x"
+  }
+ ],
+ "Truncate": [
+  {
+   "In": "<blockquote>- </blockquote>",
+   "N": 12,
+   "Out": [
+    "<blockquote>- </blockquote>"
+   ]
+  },
+  {
+   "In": "&lt;!-- c --&gt; &lt;i&gt;x&lt;/i&gt;",
+   "N": 12,
+   "Out": [
+    "&lt;!-- c --&gt; …"
+   ]
+  },
+  {
+   "In": "<i>x</i>- [ ] t",
+   "N": 12,
+   "Out": [
+    "<i>x</i>- [ ] t"
+   ]
+  },
+  {
+   "In": "<i><b>bi</b></i> a&lt;b <a href=\"https://auto.link/x\">https://auto.link/x</a>\n\n&lt;/a&gt;&gt;",
+   "N": 12,
+   "Out": [
+    "<i><b>bi</b></i> a&lt;b <a href=\"https://auto.link/x\">http…</a>"
+   ]
+  },
+  {
+   "In": "&lt;!-- c --&gt;\n\n1.a\\\n\n———",
+   "N": 12,
+   "Out": [
+    "&lt;!-- c --&gt;\n…"
+   ]
+  },
+  {
+   "In": "\\*\t~~s~~ a<b &#128512; <pre>p</pre>```go\ncode < 1\n``` &bogus;",
+   "N": 12,
+   "Out": [
+    "\\*\t~~s~~ a<…"
+   ]
+  },
+  {
+   "In": "&lt;code class=\"language-go\"&gt;",
+   "N": 12,
+   "Out": [
+    "&lt;code class…"
+   ]
+  },
+  {
+   "In": "<pre>indented1.</pre>",
+   "N": 12,
+   "Out": [
+    "<pre>indented1.</pre>"
+   ]
+  },
+  {
+   "In": "<i><b>bi</b></i>&gt; &gt; qq <a href=\"https://e.com/a b\">l</a>",
+   "N": 12,
+   "Out": [
+    "<i><b>bi</b></i>&gt; &gt; qq <a href=\"https://e.com/a b\">l</a>"
+   ]
+  },
+  {
+   "In": "———\n\n&amp; alt <i>x</i>",
+   "N": 12,
+   "Out": [
+    "———\n\n&amp; alt <i>x</i>"
+   ]
+  },
+  {
+   "In": "1. x é😀中\n\nx &gt; ya\n&lt;/b&gt;\n\n&lt;/b&gt;<b>b</b>&lt;task&gt;",
+   "N": 12,
+   "Out": [
+    "1. x é😀中\n\nx…"
+   ]
+  },
+  {
+   "In": "<a href=\"https://auto.link/x\">https://auto.link/x</a>\n\n*** 3) y&lt;pre&gt;p&lt;/pre&gt;\n\n<b>h <i>x</i>a&lt;b# h&lt;b&gt;</b>",
+   "N": 12,
+   "Out": [
+    "<a href=\"https://auto.link/x\">https://aut…</a>"
+   ]
+  },
+  {
+   "In": "é😀中\n\n- n\n- a &lt;b&gt;",
+   "N": 12,
+   "Out": [
+    "é😀中\n\n- n\n- …"
+   ]
+  },
+  {
+   "In": "<a href=\"https://e.com/a b\">l</a>",
+   "N": 12,
+   "Out": [
+    "<a href=\"https://e.com/a b\">l</a>"
+   ]
+  },
+  {
+   "In": "é😀中&amp;\n\n<i>x</i>\n\n```\nraw\n\n\n> q~~s~~",
+   "N": 12,
+   "Out": [
+    "é😀中&amp;\n\n<i>x</i>\n\n``…"
+   ]
+  },
+  {
+   "In": "😀# h \n\ntext &lt;/b&gt;😀     indented&lt;pre&gt;p&lt;/pre&gt;",
+   "N": 12,
+   "Out": [
+    "😀# h \n\ntext…"
+   ]
+  },
+  {
+   "In": "<pre>p</pre>\n\n\n # h",
+   "N": 12,
+   "Out": [
+    "<pre>p</pre>\n\n\n # h"
+   ]
+  },
+  {
+   "In": "3. y a\\\n\n- \n\n<pre><code class=\"language-go\">code &lt; 1</code></pre>\n\n&lt;/blockquote&gt;",
+   "N": 12,
+   "Out": [
+    "3. y a\\\n\n- …"
+   ]
+  },
+  {
+   "In": "[ref]",
+   "N": 12,
+   "Out": [
+    "[ref]"
+   ]
+  },
+  {
+   "In": "<a href=\"https://e.com/x?a=1&amp;b=2\">l</a>",
+   "N": 12,
+   "Out": [
+    "<a href=\"https://e.com/x?a=1&amp;b=2\">l</a>"
+   ]
+  },
+  {
+   "In": "<pre><code class=\"language-go\">code &lt; 1</code></pre>\n\n<b>h <i>x</i></b>\n\n<b>h</b>",
+   "N": 12,
+   "Out": [
+    "<pre><code class=\"language-go\">code &lt; 1</code></pre>\n\n<b>h…</b>"
+   ]
+  },
+  {
+   "In": "&amp;amp; &gt; q1. x <code>a ` b</code> &lt;/a&gt;\n\n&lt;task&gt;",
+   "N": 12,
+   "Out": [
+    "&amp;amp; &gt; q1.…"
+   ]
+  },
+  {
+   "In": "_ <i>i</i>",
+   "N": 12,
+   "Out": [
+    "_ <i>i</i>"
+   ]
+  },
+  {
+   "In": "&lt;blockquote&gt;\n*i*\n\n&amp;\n\n~~s~~ [ref]\n\n1. x    indented",
+   "N": 12,
+   "Out": [
+    "&lt;blockquote…"
+   ]
+  },
+  {
+   "In": "<blockquote>qq <b>b</b></blockquote>\n\n<a href=\"https://e.com/x?a=1&amp;b=2\">l</a>*text <code>c</code> &lt;code class=\"language-go\"&gt;\n\n_",
+   "N": 12,
+   "Out": [
+    "<blockquote>qq <b>b</b></blockquote>\n\n<a href=\"https://e.com/x?a=1&amp;b=2\">l</a>*tex…"
+   ]
+  },
+  {
+   "In": "<a href=\"https://auto.link/x\">https://auto.link/x</a> 😀",
+   "N": 12,
+   "Out": [
+    "<a href=\"https://auto.link/x\">https://aut…</a>"
+   ]
+  },
+  {
+   "In": "<blockquote>q</blockquote>\n\n<i><b>bi</b></i>\n\n- b",
+   "N": 12,
+   "Out": [
+    "<blockquote>q</blockquote>\n\n<i><b>bi</b></i>\n\n- b"
+   ]
+  },
+  {
+   "In": "*\n\n3. y &amp;amp; &amp;bogus;\n\n[ref]text [ref]",
+   "N": 12,
+   "Out": [
+    "*\n\n3. y &amp;am…"
+   ]
+  },
+  {
+   "In": "<a href=\"https://e.com/a b\">l</a>&lt;task&gt;1.  \n\n&lt;/code&gt;",
+   "N": 12,
+   "Out": [
+    "<a href=\"https://e.com/a b\">l</a>&lt;task&gt;1.  …"
+   ]
+  },
+  {
+   "In": "&lt;/blockquote&gt; \"q\" 'a'",
+   "N": 12,
+   "Out": [
+    "&lt;/blockquot…"
+   ]
+  },
+  {
+   "In": "😀\n\n&lt;!-- c --&gt;\\&amp;amp; 1. x\n\n———",
+   "N": 12,
+   "Out": [
+    "😀\n\n&lt;!-- c -…"
+   ]
+  },
+  {
+   "In": "- [ ] t &lt;!-- c --&gt; 3) y indented",
+   "N": 12,
+   "Out": [
+    "- [ ] t &lt;!-…"
+   ]
+  },
+  {
+   "In": "&lt;i&gt;x&lt;/i&gt;```go code &lt; 1\n\n<pre>```go\ncode &lt; 1</pre>\n\n&lt;!-- c --&gt;",
+   "N": 12,
+   "Out": [
+    "&lt;i&gt;x&lt;/i&gt;```…"
+   ]
+  },
+  {
+   "In": "&amp;bogus; <i><b>bi</b></i> <i>i</i>\n\n- a--- <i>i</i>",
+   "N": 12,
+   "Out": [
+    "&amp;bogus; <i><b>bi</b></i> …"
+   ]
+  },
+  {
+   "In": "a\nindented",
+   "N": 12,
+   "Out": [
+    "a\nindented"
+   ]
+  },
+  {
+   "In": "<b>h <i>x</i></b>\n\n_ 😀 ~~s~~ - b",
+   "N": 12,
+   "Out": [
+    "<b>h <i>x</i></b>\n\n_ 😀 ~~…"
+   ]
+  },
+  {
+   "In": "<a href=\"https://auto.link/x\">https://auto.link/x</a>",
+   "N": 12,
+   "Out": [
+    "<a href=\"https://auto.link/x\">https://aut…</a>"
+   ]
+  },
+  {
+   "In": "",
+   "N": 12,
+   "Out": [
+    ""
+   ]
+  },
+  {
+   "In": "<a href=\"me@example.com\">me@example.com</a>",
+   "N": 12,
+   "Out": [
+    "<a href=\"me@example.com\">me@example.…</a>"
+   ]
+  },
+  {
+   "In": "**b**\n\n<i>x</i> - [ ] t a  \n[l](https://e.com/x?a=1&b=2)",
+   "N": 12,
+   "Out": [
+    "**b**\n\n<i>x</i> - …"
+   ]
+  },
+  {
+   "In": "<a href=\"me@example.com\">me@example.com</a> <i>u</i> - [ ] t\n\n3. y&gt; &gt; qq3) y",
+   "N": 12,
+   "Out": [
+    "<a href=\"me@example.com\">me@example.…</a>"
+   ]
+  },
+  {
+   "In": "<b>h <i>x</i></b>\n\n&lt;task&gt; &lt;/code&gt;   é😀中\n\n &lt;div&gt;\nblock\n&lt;/div&gt;",
+   "N": 12,
+   "Out": [
+    "<b>h <i>x</i></b>\n\n&lt;task&gt;…"
+   ]
+  },
+  {
+   "In": "<i>x</i>\n\n---\na\\",
+   "N": 12,
+   "Out": [
+    "<i>x</i>\n\n---\na\\"
+   ]
+  },
+  {
+   "In": "<pre>p</pre>   - n> > qq\n\n## h *x* é😀中",
+   "N": 12,
+   "Out": [
+    "<pre>p</pre>   - n> > …"
+   ]
+  },
+  {
+   "In": "&lt;a href=\"u\"&gt;",
+   "N": 12,
+   "Out": [
+    "&lt;a href=\"u\"&gt;"
+   ]
+  },
+  {
+   "In": "&lt;task&gt; &amp;amp;\n\n_ ~~s~~     indented &lt;/blockquote&gt; [ref]",
+   "N": 12,
+   "Out": [
+    "&lt;task&gt; &amp;amp…"
+   ]
+  },
+  {
+   "In": "&lt;task&gt;\n\n- a",
+   "N": 12,
+   "Out": [
+    "&lt;task&gt;\n\n- a"
+   ]
+  },
+  {
+   "In": "&nbsp; <pre>p</pre>\n\n- a",
+   "N": 12,
+   "Out": [
+    "&nbsp; <pre>p</pre>\n\n-…"
+   ]
+  },
+  {
+   "In": "<b>*** &lt;code class=\"language-go\"&gt;&amp;amp;textSetext</b>\n\n&lt;!-- c --&gt;",
+   "N": 12,
+   "Out": [
+    "<b>*** &lt;code c…</b>"
+   ]
+  },
+  {
+   "In": "[ref]\n\n- ba\n\n<i>u</i> <i>u</i>\n\n&lt;/a&gt;",
+   "N": 12,
+   "Out": [
+    "[ref]\n\n- ba…"
+   ]
+  },
+  {
+   "In": "<https://auto.link/x> a  \n1. x - [ ] t<pre>p</pre>     indented",
+   "N": 12,
+   "Out": [
+    "<https://au…"
+   ]
+  },
+  {
+   "In": "x &gt; y<i><b>bi</b></i>\n\n<blockquote>qq</blockquote>",
+   "N": 12,
+   "Out": [
+    "x &gt; y<i><b>bi</b></i>\n\n<blockquote>qq</blockquote>"
+   ]
+  },
+  {
+   "In": "&amp;\n\n<b>h</b>",
+   "N": 12,
+   "Out": [
+    "&amp;\n\n<b>h</b>"
+   ]
+  },
+  {
+   "In": "<pre>indented</pre>\n\n<code>a ` b</code>\n\n&lt;/blockquote&gt;text\n\n- n_u_",
+   "N": 12,
+   "Out": [
+    "<pre>indented</pre>\n\n<code>a…</code>"
+   ]
+  },
+  {
+   "In": "&lt;b&gt;\n~~s~~ *** _\n\n&lt;i&gt;x&lt;/i&gt;\n<i>u</i>",
+   "N": 12,
+   "Out": [
+    "&lt;b&gt;\n~~s~~ *…"
+   ]
+  },
+  {
+   "In": "&lt;/b&gt;&lt;code class=\"language-go\"&gt;\n\n&lt;a href=\"u\"&gt;\n\n&lt;task&gt;",
+   "N": 12,
+   "Out": [
+    "&lt;/b&gt;&lt;code c…"
+   ]
+  },
+  {
+   "In": "",
+   "N": 12,
+   "Out": [
+    ""
+   ]
+  },
+  {
+   "In": "text",
+   "N": 12,
+   "Out": [
+    "text"
+   ]
+  },
+  {
+   "In": "alt <i>x</i> \"q\" 'a' 1.\n\n&lt;code class=\"language-go\"&gt; \n\n<b>h <i>x</i></b>\n\n- [ ] t",
+   "N": 12,
+   "Out": [
+    "alt <i>x</i> \"q\" '…"
+   ]
+  },
+  {
+   "In": "<b>b</b>``` raw",
+   "N": 12,
+   "Out": [
+    "<b>b</b>``` raw"
+   ]
+  },
+  {
+   "In": "<a href=\"me@example.com\">me@example.com</a> <a href=\"https://e.com/x?a=1&amp;b=2\">l</a> \"q\" 'a'&lt;b&gt; ```go code &lt; 1\n\n<pre></pre>",
+   "N": 12,
+   "Out": [
+    "<a href=\"me@example.com\">me@example.…</a>"
+   ]
+  },
+  {
+   "In": "<blockquote>qq <i>u</i> &lt;a href=\"u\"&gt;</blockquote>",
+   "N": 12,
+   "Out": [
+    "<blockquote>qq <i>u</i> &lt;a hre…</blockquote>"
+   ]
+  },
+  {
+   "In": "&lt;div&gt;Setext\n=== 3) y &lt;pre&gt;p&lt;/pre&gt;&lt;pre&gt;p&lt;/pre&gt;1.\n[l](https://e.com/x?a=1&amp;b=2)\n\n<i>u</i>",
+   "N": 12,
+   "Out": [
+    "&lt;div&gt;Setext…"
+   ]
+  },
+  {
+   "In": "<i><b>bi</b></i>",
+   "N": 12,
+   "Out": [
+    "<i><b>bi</b></i>"
+   ]
+  },
+  {
+   "In": "1. x [ref]",
+   "N": 12,
+   "Out": [
+    "1. x [ref]"
+   ]
+  },
+  {
+   "In": "<i><b>bi</b></i>",
+   "N": 12,
+   "Out": [
+    "<i><b>bi</b></i>"
+   ]
+  },
+  {
+   "In": "<b>h <i>x</i>é😀中&lt;task&gt;&lt;i&gt;x&lt;/i&gt;</b>\n\n- n",
+   "N": 12,
+   "Out": [
+    "<b>h <i>x</i>é😀中&lt;task…</b>"
+   ]
+  },
+  {
+   "In": "[ref]\n\n- ba",
+   "N": 12,
+   "Out": [
+    "[ref]\n\n- ba"
+   ]
+  },
+  {
+   "In": "———\n\n\"q\" 'a' *",
+   "N": 12,
+   "Out": [
+    "———\n\n\"q\" 'a…"
+   ]
+  },
+  {
+   "In": "&lt;div&gt;\nblock\n&lt;/div&gt;[ref]\n&lt;/blockquote&gt;",
+   "N": 12,
+   "Out": [
+    "&lt;div&gt;\nblock…"
+   ]
+  },
+  {
+   "In": "<a href=\"https://e.com/a b\">l</a> &lt;/a&gt;",
+   "N": 12,
+   "Out": [
+    "<a href=\"https://e.com/a b\">l</a> &lt;/a&gt;"
+   ]
+  },
+  {
+   "In": "&lt;a href=\"u\"&gt;",
+   "N": 12,
+   "Out": [
+    "&lt;a href=\"u\"&gt;"
+   ]
+  },
+  {
+   "In": "<i>u</i> &lt;/code&gt;\n\nalt <i>x</i>a&lt;b",
+   "N": 12,
+   "Out": [
+    "<i>u</i> &lt;/code&gt;\n\n…"
+   ]
+  },
+  {
+   "In": "a\n<a href=\"https://e.com/a b\">l</a>\n\n<blockquote>q l (https://e.com/x?a=1&amp;b=2)</blockquote>\n\n<b>h</b>\n\n&lt;blockquote&gt;",
+   "N": 12,
+   "Out": [
+    "a\n<a href=\"https://e.com/a b\">l</a>\n\n<blockquote>q l (h…</blockquote>"
+   ]
+  },
+  {
+   "In": "<i>x</i>text text&#128512;\n\n[l](https://e.com/x?a=1&b=2)",
+   "N": 12,
+   "Out": [
+    "<i>x</i>text text&#128512;…"
+   ]
+  },
+  {
+   "In": "1. x",
+   "N": 12,
+   "Out": [
+    "1. x"
+   ]
+  },
+  {
+   "In": "- [ ] t",
+   "N": 12,
+   "Out": [
+    "- [ ] t"
+   ]
+  },
+  {
+   "In": "&lt;/blockquote&gt;",
+   "N": 12,
+   "Out": [
+    "&lt;/blockquot…"
+   ]
+  },
+  {
+   "In": "<blockquote>q</blockquote>\n\n<code>a ` b</code>",
+   "N": 12,
+   "Out": [
+    "<blockquote>q</blockquote>\n\n<code>a ` b</code>"
+   ]
+  },
+  {
+   "In": "<a href=\"https://e.com/x?a=1&amp;b=2\">l</a> &lt;code class=\"language-go\"&gt; *** <i><b>bi</b></i>&gt; &gt; qq\n\n&lt;blockquote&gt;\n\n<code>c</code>\n\n<a href=\"https://auto.link/x\">https://auto.link/x</a>",
+   "N": 12,
+   "Out": [
+    "<a href=\"https://e.com/x?a=1&amp;b=2\">l</a> &lt;code cla…"
+   ]
+  },
+  {
+   "In": "\"q\" 'a'\n\n<b><i>u</i> Setext</b>",
+   "N": 12,
+   "Out": [
+    "\"q\" 'a'\n\n<b><i>u</i> …</b>"
+   ]
+  },
+  {
+   "In": "1.&lt;task&gt;\n\n———\n\n&lt;pre&gt;p&lt;/pre&gt;",
+   "N": 12,
+   "Out": [
+    "1.&lt;task&gt;\n\n—…"
+   ]
+  },
+  {
+   "In": "<a href=\"me@example.com\">me@example.com</a> a\ntext",
+   "N": 12,
+   "Out": [
+    "<a href=\"me@example.com\">me@example.…</a>"
+   ]
+  },
+  {
+   "In": "&lt;!-- c --&gt;",
+   "N": 12,
+   "Out": [
+    "&lt;!-- c --&gt;"
+   ]
+  },
+  {
+   "In": "_\n\n*- [ ] t <a href=\"https://auto.link/x\">https://auto.link/x</a> 3) y\n\n&lt;pre&gt;p&lt;/pre&gt; a&lt;b\n\n&amp;bogus;",
+   "N": 12,
+   "Out": [
+    "_\n\n*- [ ] t…"
+   ]
+  },
+  {
+   "In": "<pre>indented</pre>",
+   "N": 12,
+   "Out": [
+    "<pre>indented</pre>"
+   ]
+  },
+  {
+   "In": "&lt;code class=\"language-go\"&gt;| a | b | | - | - | | 1 | 2 |",
+   "N": 12,
+   "Out": [
+    "&lt;code class…"
+   ]
+  },
+  {
+   "In": "- n\n\n<b>h</b>\n\n1. x",
+   "N": 12,
+   "Out": [
+    "- n\n\n<b>h</b>\n\n1. x"
+   ]
+  },
+  {
+   "In": "&lt;a href=\"u\"&gt;\n\n<a href=\"me@example.com\">me@example.com</a> 😀",
+   "N": 12,
+   "Out": [
+    "&lt;a href=\"u\"…"
+   ]
+  },
+  {
+   "In": "<i><b>bi</b></i>&lt;div&gt;\né😀中 ## h <i>x</i>\n\n&lt;i&gt;x&lt;/i&gt;",
+   "N": 12,
+   "Out": [
+    "<i><b>bi</b></i>&lt;div&gt;\né😀中…"
+   ]
+  },
+  {
+   "In": "[ref]<a href=\"https://e.com/x?a=1&amp;b=2\">l</a> *\n\na | b\n1 | 2\nindented&lt;i&gt;x&lt;/i&gt; &lt;blockquote&gt; |",
+   "N": 12,
+   "Out": [
+    "[ref]<a href=\"https://e.com/x?a=1&amp;b=2\">l</a> *\n\na…"
+   ]
+  },
+  {
+   "In": "1. x&amp;\n\n<b>b</b> &lt;a href=\"u\"&gt;&lt;i&gt;x&lt;/i&gt;",
+   "N": 12,
+   "Out": [
+    "1. x&amp;\n\n<b>b</b> &lt;a…"
+   ]
+  },
+  {
+   "In": "3. y &lt;code class=\"language-go\"&gt;",
+   "N": 12,
+   "Out": [
+    "3. y &lt;code …"
+   ]
+  },
+  {
+   "In": "&lt;i&gt;x&lt;/i&gt; &lt;/a&gt;",
+   "N": 12,
+   "Out": [
+    "&lt;i&gt;x&lt;/i&gt; &lt;/…"
+   ]
+  },
+  {
+   "In": "x &gt; y",
+   "N": 12,
+   "Out": [
+    "x &gt; y"
+   ]
+  },
+  {
+   "In": "<pre>raw\n [l](https://e.com/x?a=1&amp;b=2)</pre>",
+   "N": 12,
+   "Out": [
+    "<pre>raw\n [l](ht…</pre>"
+   ]
+  },
+  {
+   "In": "a\n\n<pre> &lt;code class=\"language-go\"&gt;</pre>",
+   "N": 12,
+   "Out": [
+    "a\n\n<pre> &lt;code c…</pre>"
+   ]
+  },
+  {
+   "In": "&lt;task&gt;\n&lt;/a&gt;_u_~~s~~\n***",
+   "N": 12,
+   "Out": [
+    "&lt;task&gt;\n&lt;/a&gt;…"
+   ]
+  },
+  {
+   "In": "`` a ` b ``\n\n`` a ` b ``\n\n<i>x</i>\n\n\\* \"q\" 'a'>~~s~~> q",
+   "N": 12,
+   "Out": [
+    "`` a ` b ``…"
+   ]
+  },
+  {
+   "In": "a | b\n1 | 2\nalt <i>x</i> | \n\n3. y\n\n*é😀中",
+   "N": 12,
+   "Out": [
+    "a | b\n1 | 2…"
+   ]
+  }
+ ],
+ "Split": [
+  {
+   "In": "- alt <i>x</i> <b>b</b>\n\n&amp; 😀&amp;bogus; &lt;a href=\"u\"&gt;",
+   "N": 40,
+   "Out": [
+    "- alt <i>x</i> <b>b</b>\n\n",
+    "&amp; 😀&amp;bogus; &lt;a href=\"u\"&gt;"
+   ]
+  },
+  {
+   "In": "\"q\" 'a'   &gt; q\n\n&lt;blockquote&gt;&lt;code class=\"language-go\"&gt;&gt; q",
+   "N": 40,
+   "Out": [
+    "\"q\" 'a'   &gt; q\n\n&lt;blockquote&gt;&lt;",
+    "code class=\"language-go\"&gt;&gt; q"
+   ]
+  },
+  {
+   "In": "<blockquote>q&lt;/code&gt;&lt;blockquote&gt;[ref] https://auto.link/x (https://auto.link/x) &lt;/a&gt;</blockquote>\n\n———",
+   "N": 40,
+   "Out": [
+    "<blockquote>q&lt;/code&gt;</blockquote>",
+    "<blockquote>&lt;blockquote</blockquote>",
+    "<blockquote>&gt;[ref] </blockquote>",
+    "<blockquote>https://auto.li</blockquote>",
+    "<blockquote>nk/x (https://a</blockquote>",
+    "<blockquote>uto.link/x) </blockquote>",
+    "<blockquote>&lt;/a&gt;</blockquote>\n\n———"
+   ]
+  },
+  {
+   "In": "<a href=\"https://e.com/x?a=1&amp;b=2\">l</a>&lt;div&gt; ~~s~~ alt <i>x</i> &amp;amp; <b>b</b> [ref]: https://r.e &lt;code class=\"language-go\"&gt;",
+   "N": 40,
+   "Out": [
+    "l&lt;div&gt; ~~s~~ alt x &amp;amp; b ",
+    "[ref]: https://r.e &lt;code ",
+    "class=\"language-go\"&gt;"
+   ]
+  },
+  {
+   "In": "*\n\n1.<code>a ` b</code>   - n```go code &lt; 1\n\n<pre></pre>",
+   "N": 40,
+   "Out": [
+    "*\n\n1.<code>a ` b</code>   - n```go code ",
+    "&lt; 1\n\n<pre></pre>"
+   ]
+  },
+  {
+   "In": "<i>x</i>",
+   "N": 40,
+   "Out": [
+    "<i>x</i>"
+   ]
+  },
+  {
+   "In": "- n",
+   "N": 40,
+   "Out": [
+    "- n"
+   ]
+  },
+  {
+   "In": "Setext ===alt <i>x</i>",
+   "N": 40,
+   "Out": [
+    "Setext ===alt <i>x</i>"
+   ]
+  },
+  {
+   "In": "<a href=\"https://auto.link/x\">https://auto.link/x</a>\n\nx &gt; y",
+   "N": 40,
+   "Out": [
+    "<a href=\"https://auto.link/x\">https:</a>",
+    "<a href=\"https://auto.link/x\">//auto</a>",
+    "<a href=\"https://auto.link/x\">.link/</a>",
+    "<a href=\"https://auto.link/x\">x</a>\n\n",
+    "x &gt; y"
+   ]
+  },
+  {
+   "In": "- atext- a",
+   "N": 40,
+   "Out": [
+    "- atext- a"
+   ]
+  },
+  {
+   "In": "<i>i</i> ~~s~~&lt;task&gt;\n\n***alt <i>x</i>",
+   "N": 40,
+   "Out": [
+    "<i>i</i> ~~s~~&lt;task&gt;\n\n",
+    "***alt <i>x</i>"
+   ]
+  },
+  {
+   "In": "&lt;/b&gt;\n\n&lt;a href=\"u\"&gt;\n# h",
+   "N": 40,
+   "Out": [
+    "&lt;/b&gt;\n\n&lt;a href=\"u\"&gt;\n# h"
+   ]
+  },
+  {
+   "In": "———\n\n<pre>indented</pre>",
+   "N": 40,
+   "Out": [
+    "———\n\n<pre>indented</pre>"
+   ]
+  },
+  {
+   "In": "_ &lt;/code&gt;&lt;b&gt;",
+   "N": 40,
+   "Out": [
+    "_ &lt;/code&gt;&lt;b&gt;"
+   ]
+  },
+  {
+   "In": "😀",
+   "N": 40,
+   "Out": [
+    "😀"
+   ]
+  },
+  {
+   "In": "_",
+   "N": 40,
+   "Out": [
+    "_"
+   ]
+  },
+  {
+   "In": "a | b\n1 | 2\n\n&lt;task&gt; ```go code &lt; 1\n\n<pre><code class=\"language--\">*i* &lt;i&gt;x&lt;/i&gt;</code></pre>",
+   "N": 40,
+   "Out": [
+    "a | b\n1 | 2\n\n&lt;task&gt; ```go code ",
+    "&lt; 1\n\n",
+    "*i* &lt;i&gt;x&lt;/i&gt;"
+   ]
+  },
+  {
+   "In": "<b>h <i>x</i></b>\n\n&lt;blockquote&gt;\n&gt; &gt; qq",
+   "N": 40,
+   "Out": [
+    "<b>h <i>x</i></b>\n\n&lt;blockquote&gt;\n",
+    "&gt; &gt; qq"
+   ]
+  },
+  {
+   "In": "<a href=\"https://e.com/x?a=1&amp;b=2\">l</a>\n\n<pre><code class=\"language-go\">code &lt; 1</code></pre>\n\n<pre>indented[ref]: https://r.e</pre>\n\n<i>u</i>\n\nalt <i>x</i> &gt; q",
+   "N": 40,
+   "Out": [
+    "l\n\ncode &lt; 1\n\nindented[ref]: ",
+    "https://r.e\n\nu\n\nalt x &gt; q"
+   ]
+  },
+  {
+   "In": "é😀中\n\n<pre>p</pre>\n```\nraw\n\n\n[ref]: https://r.e",
+   "N": 40,
+   "Out": [
+    "é😀中\n\n<pre>p</pre>\n```\nraw\n\n\n",
+    "[ref]: https://r.e"
+   ]
+  },
+  {
+   "In": "a<b\n<pre>p</pre>\n`c`",
+   "N": 40,
+   "Out": [
+    "a<b\n<pre>p</pre>\n`c`"
+   ]
+  },
+  {
+   "In": "- n <code>a ` b</code>\n\na | b\n1 | 2",
+   "N": 40,
+   "Out": [
+    "- n <code>a ` b</code>\n\na | b\n1 | 2"
+   ]
+  },
+  {
+   "In": "&amp;bogus; [ref]\n\n———\n\n<b><i><b>bi</b></i></b>\n\n-",
+   "N": 40,
+   "Out": [
+    "&amp;bogus; [ref]\n\n———\n\n",
+    "<b><i><b>bi</b></i></b>\n\n-"
+   ]
+  },
+  {
+   "In": "1. Setext ===<code>c</code>\n\n<code>c</code>",
+   "N": 40,
+   "Out": [
+    "1. Setext ===<code>c</code>\n\n",
+    "<code>c</code>"
+   ]
+  },
+  {
+   "In": "[ref]",
+   "N": 40,
+   "Out": [
+    "[ref]"
+   ]
+  },
+  {
+   "In": "&amp;<i><b>bi</b></i>&lt;b&gt; <code>a ` b</code>\n\n<i><b>bi</b></i>",
+   "N": 40,
+   "Out": [
+    "&amp;<i><b>bi</b></i>&lt;b&gt; ",
+    "<code>a ` b</code>\n\n<i><b>bi</b></i>"
+   ]
+  },
+  {
+   "In": "a\n\n&lt;b&gt;\n\n*",
+   "N": 40,
+   "Out": [
+    "a\n\n&lt;b&gt;\n\n*"
+   ]
+  },
+  {
+   "In": "😀\n\n  alt <i>x</i>\n\n- n",
+   "N": 40,
+   "Out": [
+    "😀\n\n  alt <i>x</i>\n\n- n"
+   ]
+  },
+  {
+   "In": "<i><b>bi</b></i>a&lt;b\n\n———",
+   "N": 40,
+   "Out": [
+    "<i><b>bi</b></i>a&lt;b\n\n———"
+   ]
+  },
+  {
+   "In": "<i>i</i>",
+   "N": 40,
+   "Out": [
+    "<i>i</i>"
+   ]
+  },
+  {
+   "In": "———\n\ntext\n\n<pre><code class=\"language-go\">code &lt; 1</code></pre>",
+   "N": 40,
+   "Out": [
+    "———\n\ntext\n\n",
+    "code &lt; 1"
+   ]
+  },
+  {
+   "In": "<a href=\"https://e.com/a b\">l</a>\n\n- b\n\n<blockquote>qqa&lt;b   - n</blockquote>",
+   "N": 40,
+   "Out": [
+    "<a href=\"https://e.com/a b\">l</a>\n\n- b\n\n",
+    "<blockquote>qqa&lt;b   - n</blockquote>"
+   ]
+  },
+  {
+   "In": "<pre><code class=\"language-go\">code &lt; 1</code></pre>\n\n<b>h <i>x</i></b>\n\n<b>h <i>x</i></b>",
+   "N": 40,
+   "Out": [
+    "code &lt; 1\n\nh x\n\nh x"
+   ]
+  },
+  {
+   "In": "1. x\n\n- n\n\n&lt;code class=\"language-go\"&gt;\n*i*",
+   "N": 40,
+   "Out": [
+    "1. x\n\n- n\n\n&lt;code ",
+    "class=\"language-go\"&gt;\n*i*"
+   ]
+  },
+  {
+   "In": "<blockquote>q* *</blockquote>",
+   "N": 40,
+   "Out": [
+    "<blockquote>q* *</blockquote>"
+   ]
+  },
+  {
+   "In": "———\n\n<code>a ` b</code>[ref]\n\n- x &gt; y| a | b | | - | - | | 1 | 2 | ``` raw\n\n<blockquote>qq</blockquote>",
+   "N": 40,
+   "Out": [
+    "———\n\n<code>a ` b</code>[ref]\n\n",
+    "- x &gt; y| a | b | | - | - | | 1 | 2 | ",
+    "``` raw\n\n<blockquote>qq</blockquote>"
+   ]
+  },
+  {
+   "In": "3. y | a | b | | - | - | | 1 | 2 | <i>i</i>\n\n<pre>raw\n\n\n`c` Setext\n===\n</pre>",
+   "N": 40,
+   "Out": [
+    "3. y | a | b | | - | - | | 1 | 2 | ",
+    "<i>i</i>\n\n<pre>raw\n\n\n`c` Setext\n</pre>",
+    "<pre>===\n</pre>"
+   ]
+  },
+  {
+   "In": "<b>h <i>x</i></b>\n\n1.",
+   "N": 40,
+   "Out": [
+    "<b>h <i>x</i></b>\n\n1."
+   ]
+  },
+  {
+   "In": "[ref]: https://r.e\n\n \nSetext\n=== 3) y<i>x</i>",
+   "N": 40,
+   "Out": [
+    "[ref]: https://r.e\n\n \nSetext\n",
+    "=== 3) y<i>x</i>"
+   ]
+  },
+  {
+   "In": "&lt;pre&gt;p&lt;/pre&gt;\n\n<pre> - [ ] t &lt;me@example.com&gt;</pre>\n\n<a href=\"me@example.com\">me@example.com</a> &lt;b&gt;\n\n1. x",
+   "N": 40,
+   "Out": [
+    "&lt;pre&gt;p&lt;/pre&gt;\n\n",
+    "<pre> - [ ] t &lt;me@example.com</pre>",
+    "<pre>&gt;</pre>\n\n",
+    "<a href=\"me@example.com\">me@example.</a>",
+    "<a href=\"me@example.com\">com</a> ",
+    "&lt;b&gt;\n\n1. x"
+   ]
+  },
+  {
+   "In": "é😀中 &lt;code class=\"language-go\"&gt; &amp;",
+   "N": 40,
+   "Out": [
+    "é😀中 &lt;code class=\"language-go\"&gt; ",
+    "&amp;"
+   ]
+  },
+  {
+   "In": "&lt;a href=\"u\"&gt;\n\ntext- [ ] t\n\n[ref]",
+   "N": 40,
+   "Out": [
+    "&lt;a href=\"u\"&gt;\n\ntext- [ ] t\n\n[ref]"
+   ]
+  },
+  {
+   "In": "&lt;/b&gt; a&lt;b a",
+   "N": 40,
+   "Out": [
+    "&lt;/b&gt; a&lt;b a"
+   ]
+  },
+  {
+   "In": "- [ ] t a\n&amp;amp; [ref] *",
+   "N": 40,
+   "Out": [
+    "- [ ] t a\n&amp;amp; [ref] *"
+   ]
+  },
+  {
+   "In": "\"q\" 'a'\n\n<a href=\"https://auto.link/x\">https://auto.link/x</a>&lt;a href=\"u\"&gt;",
+   "N": 40,
+   "Out": [
+    "\"q\" 'a'\n\n",
+    "<a href=\"https://auto.link/x\">https:</a>",
+    "<a href=\"https://auto.link/x\">//auto</a>",
+    "<a href=\"https://auto.link/x\">.link/</a>",
+    "<a href=\"https://auto.link/x\">x</a>&lt;a",
+    " href=\"u\"&gt;"
+   ]
+  },
+  {
+   "In": "<blockquote>q</blockquote>\n\n<b>h</b>\n\n3. y\n\n<i>u</i> 1. text",
+   "N": 40,
+   "Out": [
+    "<blockquote>q</blockquote>\n\n<b>h</b>\n\n",
+    "3. y\n\n<i>u</i> 1. text"
+   ]
+  },
+  {
+   "In": "<b>h <i>x</i></b>\n\n*** alt <i>x</i>&lt;/code&gt;\n\n<b>h <i>x</i></b>",
+   "N": 40,
+   "Out": [
+    "<b>h <i>x</i></b>\n\n*** alt ",
+    "<i>x</i>&lt;/code&gt;\n\n<b>h <i>x</i></b>"
+   ]
+  },
+  {
+   "In": "&lt;/blockquote&gt;\n&lt;div&gt; \n &lt;/b&gt; a  \n| a | b |\n| - | - |\n| 1 | 2 |",
+   "N": 40,
+   "Out": [
+    "&lt;/blockquote&gt;\n&lt;div&gt; \n",
+    " &lt;/b&gt; a  \n| a | b |\n| - | - |\n",
+    "| 1 | 2 |"
+   ]
+  },
+  {
+   "In": "<a href=\"https://e.com/x?a=1&amp;b=2\">l</a>\n\n&lt;b&gt; *&lt;blockquote&gt;\n\n<blockquote><i>u</i> ``` raw <i><b>bi</b></i></blockquote>",
+   "N": 40,
+   "Out": [
+    "l\n\n&lt;b&gt; *&lt;blockquote&gt;\n\n",
+    "u ``` raw bi"
+   ]
+  },
+  {
+   "In": "- n &amp; &amp;bogus; \"q\" 'a' &amp;bogus; ~~s~~",
+   "N": 40,
+   "Out": [
+    "- n &amp; &amp;bogus; \"q\" 'a' ",
+    "&amp;bogus; ~~s~~"
+   ]
+  },
+  {
+   "In": "&lt;blockquote&gt;",
+   "N": 40,
+   "Out": [
+    "&lt;blockquote&gt;"
+   ]
+  },
+  {
+   "In": "<code>a ` b</code>\n\n&lt;/blockquote&gt; a  \n\n&lt;!-- c --&gt;",
+   "N": 40,
+   "Out": [
+    "<code>a ` b</code>\n\n",
+    "&lt;/blockquote&gt; a  \n\n",
+    "&lt;!-- c --&gt;"
+   ]
+  },
+  {
+   "In": "<b>h</b>\n\nalt <i>x</i> 3) y&lt;/code&gt; &lt;task&gt;",
+   "N": 40,
+   "Out": [
+    "<b>h</b>\n\nalt <i>x</i> 3) ",
+    "y&lt;/code&gt; &lt;task&gt;"
+   ]
+  },
+  {
+   "In": "a\\\n\na\n\né😀中 &lt;task&gt;",
+   "N": 40,
+   "Out": [
+    "a\\\n\na\n\né😀中 &lt;task&gt;"
+   ]
+  },
+  {
+   "In": "[ref]",
+   "N": 40,
+   "Out": [
+    "[ref]"
+   ]
+  },
+  {
+   "In": "a\n<a href=\"me@example.com\">me@example.com</a>\n\n1. x&lt;/b&gt;\n\n<blockquote>qq</blockquote>\n\n<b>b</b>\n\n<a href=\"me@example.com\">me@example.com</a>",
+   "N": 40,
+   "Out": [
+    "a\n<a href=\"me@example.com\">me@exampl</a>",
+    "<a href=\"me@example.com\">e.com</a>\n\n",
+    "1. x&lt;/b&gt;\n\n",
+    "<blockquote>qq</blockquote>\n\n<b>b</b>\n\n",
+    "<a href=\"me@example.com\">me@example.</a>",
+    "<a href=\"me@example.com\">com</a>"
+   ]
+  },
+  {
+   "In": "&lt;/blockquote&gt;\n&lt;code class=\"language-go\"&gt; * x &gt; y\n\n*\n\n- n",
+   "N": 40,
+   "Out": [
+    "&lt;/blockquote&gt;\n",
+    "&lt;code class=\"language-go\"&gt; * x ",
+    "&gt; y\n\n*\n\n- n"
+   ]
+  },
+  {
+   "In": "a&lt;b <i>u</i>\n\n<b>h <i>x</i></b>\n\n&lt;i&gt;x&lt;/i&gt;## h <i>x</i>\n\n&lt;code class=\"language-go\"&gt;\n\n&lt;/b&gt;\n&gt; q",
+   "N": 40,
+   "Out": [
+    "a&lt;b <i>u</i>\n\n<b>h <i>x</i></b>\n\n",
+    "&lt;i&gt;x&lt;/i&gt;## h <i>x</i>\n\n",
+    "&lt;code class=\"language-go\"&gt;\n\n",
+    "&lt;/b&gt;\n&gt; q"
+   ]
+  },
+  {
+   "In": "Setext ===- b \t  - n",
+   "N": 40,
+   "Out": [
+    "Setext ===- b \t  - n"
+   ]
+  },
+  {
+   "In": "<pre>raw\n\n\n*i*\n\n&lt;/code&gt;\n`c`\nSetext\n=== - b\n</pre>",
+   "N": 40,
+   "Out": [
+    "<pre>raw\n\n\n*i*\n\n&lt;/code&gt;\n`c`\n</pre>",
+    "<pre>Setext\n=== - b\n</pre>"
+   ]
+  },
+  {
+   "In": "<i><b>bi</b></i>\n\n<pre>[ref]: https://r.e</pre>\n\n<a href=\"https://e.com/a b\">l</a>```go code &lt; 1\n\n<pre>[l](https://e.com/x?a=1&amp;b=2) </pre>",
+   "N": 40,
+   "Out": [
+    "<i><b>bi</b></i>\n\n",
+    "<pre>[ref]: https://r.e</pre>\n\n",
+    "<a href=\"https://e.com/a b\">l</a>```go ",
+    "code &lt; 1\n\n<pre>[l](https://e.co</pre>",
+    "<pre>m/x?a=1&amp;b=2) </pre>"
+   ]
+  },
+  {
+   "In": "<i>x</i>&amp;\n\n\"q\" 'a' - [ ] t# h <pre>p</pre> &nbsp; a",
+   "N": 40,
+   "Out": [
+    "<i>x</i>&amp;\n\n\"q\" 'a' - [ ] t# h ",
+    "<pre>p</pre> &nbsp; a"
+   ]
+  },
+  {
+   "In": "1. x\n\n<pre><code class=\"language-go\">code &lt; 1\n```é😀中\né😀中```\nraw\n&lt;/blockquote&gt;\n\n  &amp;#128512; </code></pre>",
+   "N": 40,
+   "Out": [
+    "1. x\n\n",
+    "code &lt; 1\n```é😀中\né😀中```\nraw\n",
+    "&lt;/blockquote&gt;\n\n  &amp;#128512; "
+   ]
+  },
+  {
+   "In": "<blockquote>qme@example.com (me@example.com)</blockquote>",
+   "N": 40,
+   "Out": [
+    "<blockquote>qme@example.com</blockquote>",
+    "<blockquote> (me@example.co</blockquote>",
+    "<blockquote>m)</blockquote>"
+   ]
+  },
+  {
+   "In": "😀\n\n--- - a\n\n&lt;blockquote&gt; - b",
+   "N": 40,
+   "Out": [
+    "😀\n\n--- - a\n\n&lt;blockquote&gt; - b"
+   ]
+  },
+  {
+   "In": "<i>x</i>     indented\n\né😀中",
+   "N": 40,
+   "Out": [
+    "<i>x</i>     indented\n\né😀中"
+   ]
+  },
+  {
+   "In": "&lt;i&gt;x&lt;/i&gt;&lt;div&gt;",
+   "N": 40,
+   "Out": [
+    "&lt;i&gt;x&lt;/i&gt;&lt;div&gt;"
+   ]
+  },
+  {
+   "In": "<i>x</i>",
+   "N": 40,
+   "Out": [
+    "<i>x</i>"
+   ]
+  },
+  {
+   "In": "<i>u</i>",
+   "N": 40,
+   "Out": [
+    "<i>u</i>"
+   ]
+  },
+  {
+   "In": "&lt;/b&gt;\n\n&lt;/a&gt;&lt;a href=\"u\"&gt;\n\n&lt;div&gt;\n  - n\"q\" 'a'",
+   "N": 40,
+   "Out": [
+    "&lt;/b&gt;\n\n&lt;/a&gt;&lt;a ",
+    "href=\"u\"&gt;\n\n&lt;div&gt;\n  - n\"q\" 'a'"
+   ]
+  },
+  {
+   "In": "_ &lt;task&gt; ## h <i>x</i> a&lt;b <a href=\"https://e.com/x?a=1&amp;b=2\">l</a>",
+   "N": 40,
+   "Out": [
+    "_ &lt;task&gt; ## h <i>x</i> a&lt;b ",
+    "l"
+   ]
+  },
+  {
+   "In": "<a href=\"me@example.com\">me@example.com</a> _ <i>i</i> é😀中 &lt;blockquote&gt;",
+   "N": 40,
+   "Out": [
+    "<a href=\"me@example.com\">me@example.</a>",
+    "<a href=\"me@example.com\">com</a> _ ",
+    "<i>i</i> é😀中 &lt;blockquote&gt;"
+   ]
+  },
+  {
+   "In": "- [ ] t",
+   "N": 40,
+   "Out": [
+    "- [ ] t"
+   ]
+  },
+  {
+   "In": "alt <i>x</i>",
+   "N": 40,
+   "Out": [
+    "alt <i>x</i>"
+   ]
+  },
+  {
+   "In": "x &gt; y &lt;i&gt;x&lt;/i&gt;\n\n&lt;/b&gt;",
+   "N": 40,
+   "Out": [
+    "x &gt; y &lt;i&gt;x&lt;/i&gt;\n\n",
+    "&lt;/b&gt;"
+   ]
+  },
+  {
+   "In": "---\"q\" 'a'",
+   "N": 40,
+   "Out": [
+    "---\"q\" 'a'"
+   ]
+  },
+  {
+   "In": "- a <i>u</i>",
+   "N": 40,
+   "Out": [
+    "- a <i>u</i>"
+   ]
+  },
+  {
+   "In": "<b>\"q\" 'a' Setext</b>\n\n<i><b>bi</b></i>",
+   "N": 40,
+   "Out": [
+    "<b>\"q\" 'a' Setext</b>\n\n<i><b>bi</b></i>"
+   ]
+  },
+  {
+   "In": "<b>Setext</b>",
+   "N": 40,
+   "Out": [
+    "<b>Setext</b>"
+   ]
+  },
+  {
+   "In": "- b# h &lt;i&gt;x&lt;/i&gt;\n- b[ref]\n- [ ] t &lt;b&gt;",
+   "N": 40,
+   "Out": [
+    "- b# h &lt;i&gt;x&lt;/i&gt;\n- b[ref]\n",
+    "- [ ] t &lt;b&gt;"
+   ]
+  },
+  {
+   "In": "<a href=\"https://e.com/x?a=1&amp;b=2\">l</a> <code>c</code>\n\n &lt;/code&gt;",
+   "N": 40,
+   "Out": [
+    "l c\n\n &lt;/code&gt;"
+   ]
+  },
+  {
+   "In": "&lt;/b&gt;\n\n[ref]\n\na | b\n1 | 2",
+   "N": 40,
+   "Out": [
+    "&lt;/b&gt;\n\n[ref]\n\na | b\n1 | 2"
+   ]
+  },
+  {
+   "In": "- \n\n[ref]\n\n<blockquote>qqé😀中 &lt;/a&gt;</blockquote>\n\n<blockquote>alt <i>x</i></blockquote>",
+   "N": 40,
+   "Out": [
+    "- \n\n[ref]\n\n<blockquote>qqé</blockquote>",
+    "<blockquote>😀中 &lt;/a&gt;</blockquote>\n",
+    "\n<blockquote>alt <i>x</i></blockquote>"
+   ]
+  },
+  {
+   "In": "- n\n\n\"q\" 'a'\n\nx &gt; y",
+   "N": 40,
+   "Out": [
+    "- n\n\n\"q\" 'a'\n\nx &gt; y"
+   ]
+  },
+  {
+   "In": "1. x<a href=\"https://e.com/a b\">l</a>",
+   "N": 40,
+   "Out": [
+    "1. x<a href=\"https://e.com/a b\">l</a>"
+   ]
+  },
+  {
+   "In": "<blockquote>a ` b &lt;code class=\"language-go\"&gt;~~s~~</blockquote>",
+   "N": 40,
+   "Out": [
+    "<blockquote>a ` b &lt;code </blockquote>",
+    "<blockquote>class=\"language</blockquote>",
+    "<blockquote>-go\"&gt;~~s~~</blockquote>"
+   ]
+  },
+  {
+   "In": "&amp;amp; a\n\n<pre><code class=\"language-go\">code &lt; 1\n```&gt; q\n\n1. x\n\n## h *x* &amp;amp; </code></pre>",
+   "N": 40,
+   "Out": [
+    "&amp;amp; a\n\n",
+    "code &lt; 1\n```&gt; q\n\n1. x\n\n",
+    "## h *x* &amp;amp; "
+   ]
+  },
+  {
+   "In": "<pre>p</pre>\n```go\ncode < 1\n```",
+   "N": 40,
+   "Out": [
+    "<pre>p</pre>\n```go\ncode < 1\n```"
+   ]
+  },
+  {
+   "In": "<code>c</code>",
+   "N": 40,
+   "Out": [
+    "<code>c</code>"
+   ]
+  },
+  {
+   "In": "&lt;/b&gt;",
+   "N": 40,
+   "Out": [
+    "&lt;/b&gt;"
+   ]
+  },
+  {
+   "In": "<i>u</i>\n\n<blockquote>qqme@example.com (me@example.com)</blockquote>",
+   "N": 40,
+   "Out": [
+    "<i>u</i>\n\n<blockquote>qqme@</blockquote>",
+    "<blockquote>example.com </blockquote>",
+    "<blockquote>(me@example.com</blockquote>",
+    "<blockquote>)</blockquote>"
+   ]
+  },
+  {
+   "In": "&amp; a&lt;b",
+   "N": 40,
+   "Out": [
+    "&amp; a&lt;b"
+   ]
+  },
+  {
+   "In": "a\n\n<b>h <i>x</i> 😀~~s~~</b>\n\n*\n\nx &gt; y [ref]: https://r.e",
+   "N": 40,
+   "Out": [
+    "a\n\n<b>h <i>x</i> 😀~~s~~</b>\n\n*\n\n",
+    "x &gt; y [ref]: https://r.e"
+   ]
+  },
+  {
+   "In": "- [ ] t &lt;/b&gt;",
+   "N": 40,
+   "Out": [
+    "- [ ] t &lt;/b&gt;"
+   ]
+  },
+  {
+   "In": "&lt;task&gt;\n&gt;&lt;me@example.com&gt;\n  - n",
+   "N": 40,
+   "Out": [
+    "&lt;task&gt;\n&gt;&lt;me@example.com&gt;\n",
+    "  - n"
+   ]
+  },
+  {
+   "In": "<a href=\"me@example.com\">me@example.com</a>\n\n- n",
+   "N": 40,
+   "Out": [
+    "<a href=\"me@example.com\">me@example.</a>",
+    "<a href=\"me@example.com\">com</a>\n\n- n"
+   ]
+  },
+  {
+   "In": "<a href=\"me@example.com\">me@example.com</a>&gt; &gt; qq &amp;",
+   "N": 40,
+   "Out": [
+    "<a href=\"me@example.com\">me@example.</a>",
+    "<a href=\"me@example.com\">com</a>&gt; ",
+    "&gt; qq &amp;"
+   ]
+  },
+  {
+   "In": "1. x\n\n&amp;bogus;<a href=\"https://auto.link/x\">https://auto.link/x</a>\n\n———",
+   "N": 40,
+   "Out": [
+    "1. x\n\n&amp;bogus;",
+    "<a href=\"https://auto.link/x\">https:</a>",
+    "<a href=\"https://auto.link/x\">//auto</a>",
+    "<a href=\"https://auto.link/x\">.link/</a>",
+    "<a href=\"https://auto.link/x\">x</a>\n\n———"
+   ]
+  },
+  {
+   "In": "- n _ a&lt;b <code>c</code> * &lt;/blockquote&gt; *",
+   "N": 40,
+   "Out": [
+    "- n _ a&lt;b <code>c</code> * ",
+    "&lt;/blockquote&gt; *"
+   ]
+  },
+  {
+   "In": "<code>a ` b</code> --- a&lt;b &amp;bogus;--- &gt; &gt; qq\n\n&lt;b&gt;",
+   "N": 40,
+   "Out": [
+    "<code>a ` b</code> --- a&lt;b ",
+    "&amp;bogus;--- &gt; &gt; qq\n\n&lt;b&gt;"
+   ]
+  },
+  {
+   "In": "<pre>raw\ntext\n\na&lt;b&lt;div&gt;\nblock\n&lt;/div&gt;![alt *x*](i.png) &lt;me@example.com&gt;\n\n </pre>",
+   "N": 40,
+   "Out": [
+    "<pre>raw\ntext\n\na&lt;b&lt;div&gt;\n</pre>",
+    "<pre>block\n&lt;/div&gt;![alt </pre>",
+    "<pre>*x*](i.png) &lt;me@example.co</pre>",
+    "<pre>m&gt;\n\n </pre>"
+   ]
+  },
+  {
+   "In": "&lt;code class=\"language-go\"&gt;\n\n- [ ] t",
+   "N": 40,
+   "Out": [
+    "&lt;code class=\"language-go\"&gt;\n\n",
+    "- [ ] t"
+   ]
+  },
+  {
+   "In": "![alt *x*](i.png)<i>x</i>\n\n&amp;\n\na  \n <https://auto.link/x>a  \n> <pre>p</pre>",
+   "N": 40,
+   "Out": [
+    "![alt *x*](i.png)<i>x</i>\n\n&amp;\n\na  \n",
+    " <https://auto.link/x>a  \n> <pre>p</pre>"
+   ]
+  },
+  {
+   "In": "- b ~~s~~",
+   "N": 40,
+   "Out": [
+    "- b ~~s~~"
+   ]
+  },
+  {
+   "In": "<a href=\"https://e.com/x?a=1&amp;b=2\">l</a>\n\n1.&lt;div&gt; block\n\n&lt;/div&gt; ```go\ncode &lt; 1\n```\n\n<code>a ` b</code> ---",
+   "N": 40,
+   "Out": [
+    "l\n\n1.&lt;div&gt; block\n\n",
+    "&lt;/div&gt; ```go\ncode &lt; 1\n```\n\n",
+    "a ` b ---"
+   ]
+  },
+  {
+   "In": "<i>u</i> &lt;i&gt;x&lt;/i&gt;\n\n~~s~~    indented &lt;i&gt;x&lt;/i&gt;~~s~~ a\n\n &lt;div&gt;\nblock\n&lt;/div&gt;",
+   "N": 40,
+   "Out": [
+    "<i>u</i> &lt;i&gt;x&lt;/i&gt;\n\n",
+    "~~s~~    indented &lt;i&gt;x&lt;/i&gt;~~",
+    "s~~ a\n\n &lt;div&gt;\nblock\n&lt;/div&gt;"
+   ]
+  },
+  {
+   "In": "alt <i>x</i>\n\n&lt;/code&gt;\n\n&lt;div&gt;\n\nSetext === é😀中\n\n- [ ] t",
+   "N": 40,
+   "Out": [
+    "alt <i>x</i>\n\n&lt;/code&gt;\n\n",
+    "&lt;div&gt;\n\nSetext === é😀中\n\n- [ ] t"
+   ]
+  },
+  {
+   "In": "3. y   <b>b</b> <code>c</code> &gt; &gt; qq | a | b | | - | - | | 1 | 2 |\n\n&lt;div&gt;\nblock\n&lt;/div&gt; _u_",
+   "N": 40,
+   "Out": [
+    "3. y   <b>b</b> <code>c</code> &gt; ",
+    "&gt; qq | a | b | | - | - | | 1 | 2 |\n\n",
+    "&lt;div&gt;\nblock\n&lt;/div&gt; _u_"
+   ]
+  },
+  {
+   "In": "<pre>raw\n\n</pre>",
+   "N": 40,
+   "Out": [
+    "<pre>raw\n\n</pre>"
+   ]
+  },
+  {
+   "In": "***     indented\n\n&lt;b&gt;\n\n<a href=\"me@example.com\">me@example.com</a>\n\n&lt;!-- c --&gt;",
+   "N": 40,
+   "Out": [
+    "***     indented\n\n&lt;b&gt;\n\n",
+    "<a href=\"me@example.com\">me@example.</a>",
+    "<a href=\"me@example.com\">com</a>\n\n",
+    "&lt;!-- c --&gt;"
+   ]
+  },
+  {
+   "In": "<a href=\"https://auto.link/x\">https://auto.link/x</a> _\n\na\n<b>b</b> &lt;b&gt;\n\n<code>a ` b</code>\n\n&lt;/blockquote&gt;",
+   "N": 40,
+   "Out": [
+    "<a href=\"https://auto.link/x\">https:</a>",
+    "<a href=\"https://auto.link/x\">//auto</a>",
+    "<a href=\"https://auto.link/x\">.link/</a>",
+    "<a href=\"https://auto.link/x\">x</a> _\n\n",
+    "a\n<b>b</b> &lt;b&gt;\n\n",
+    "<code>a ` b</code>\n\n&lt;/blockquote&gt;"
+   ]
+  },
+  {
+   "In": "<pre>p</pre>\n\n- a&#128512;```go\ncode < 1\n```\n\n![alt *x*](i.png)\n \n\n<b>",
+   "N": 40,
+   "Out": [
+    "<pre>p</pre>\n\n- a&#128512;```go\n",
+    "code < 1\n```\n\n![alt *x*](i.png)\n \n\n<b>"
+   ]
+  },
+  {
+   "In": "é😀中\n\né😀中> > qq &#128512; 3) y\n\n***bi***<i>x</i>",
+   "N": 40,
+   "Out": [
+    "é😀中\n\né😀中> > qq &#128512; 3) y\n\n",
+    "***bi***<i>x</i>"
+   ]
+  },
+  {
+   "In": "3. y\n\n1. x\n\n<pre>raw\n &lt;/blockquote&gt;\n\n[l](https://e.com/x?a=1&amp;b=2)</pre>",
+   "N": 40,
+   "Out": [
+    "3. y\n\n1. x\n\n<pre>raw\n</pre>",
+    "<pre> &lt;/blockquote&gt;\n\n</pre>",
+    "<pre>[l](https://e.com/x?a=1&amp;b</pre>",
+    "<pre>=2)</pre>"
+   ]
+  },
+  {
+   "In": "<pre>raw\n&lt;/code&gt; ***bi*** </pre>",
+   "N": 40,
+   "Out": [
+    "<pre>raw\n&lt;/code&gt; ***bi*** </pre>"
+   ]
+  },
+  {
+   "In": "[ref]\n\n&lt;task&gt;\n\n&lt;div&gt; &lt;a href=\"u\"&gt;\n3) y&lt;b&gt; &lt;b&gt;",
+   "N": 40,
+   "Out": [
+    "[ref]\n\n&lt;task&gt;\n\n",
+    "&lt;div&gt; &lt;a href=\"u\"&gt;\n",
+    "3) y&lt;b&gt; &lt;b&gt;"
+   ]
+  },
+  {
+   "In": "<b>Setext</b>\n\n- [ ] t\n\n&amp;amp;---\n\n<b>h <i>x</i>```</b>\n\nraw",
+   "N": 40,
+   "Out": [
+    "<b>Setext</b>\n\n- [ ] t\n\n&amp;amp;---\n\n",
+    "<b>h <i>x</i>```</b>\n\nraw"
+   ]
+  },
+  {
+   "In": "<i><b>bi</b></i>\n\n*\n\n&lt;task&gt;\n\n&lt;/a&gt; \n\n<i>i</i>",
+   "N": 40,
+   "Out": [
+    "<i><b>bi</b></i>\n\n*\n\n&lt;task&gt;\n\n",
+    "&lt;/a&gt; \n\n<i>i</i>"
+   ]
+  },
+  {
+   "In": "- aa\\\n\n*",
+   "N": 40,
+   "Out": [
+    "- aa\\\n\n*"
+   ]
+  },
+  {
+   "In": "<b>h <i>x</i></b>\n\n1. x&lt;a href=\"u\"&gt;*",
+   "N": 40,
+   "Out": [
+    "<b>h <i>x</i></b>\n\n",
+    "1. x&lt;a href=\"u\"&gt;*"
+   ]
+  },
+  {
+   "In": "",
+   "N": 40,
+   "Out": [
+    ""
+   ]
+  },
+  {
+   "In": "- b\n\n———\n\na&lt;b",
+   "N": 40,
+   "Out": [
+    "- b\n\n———\n\na&lt;b"
+   ]
+  },
+  {
+   "In": "a&lt;b\n\n- b",
+   "N": 40,
+   "Out": [
+    "a&lt;b\n\n- b"
+   ]
+  },
+  {
+   "In": "<i>i</i>\n\n&amp;",
+   "N": 40,
+   "Out": [
+    "<i>i</i>\n\n&amp;"
+   ]
+  },
+  {
+   "In": "&amp;amp;\n\n- \n\n&amp;amp;\n\n&lt;!-- c --&gt;",
+   "N": 40,
+   "Out": [
+    "&amp;amp;\n\n- \n\n&amp;amp;\n\n",
+    "&lt;!-- c --&gt;"
+   ]
+  },
+  {
+   "In": "a&lt;b\n\n&lt;div&gt;\nblock\n&lt;/div&gt;| a | b |\n| - | - |\n| 1 | 2 |\n\n\"q\" 'a'",
+   "N": 40,
+   "Out": [
+    "a&lt;b\n\n&lt;div&gt;\nblock\n",
+    "&lt;/div&gt;| a | b |\n| - | - |\n",
+    "| 1 | 2 |\n\n\"q\" 'a'"
+   ]
+  },
+  {
+   "In": "&lt;!-- c --&gt;\n\n<blockquote>q  - n</blockquote>\n\n- n<a href=\"https://auto.link/x\">https://auto.link/x</a>     indented",
+   "N": 40,
+   "Out": [
+    "&lt;!-- c --&gt;\n\n",
+    "<blockquote>q  - n</blockquote>\n\n",
+    "- n<a href=\"https://auto.link/x\">htt</a>",
+    "<a href=\"https://auto.link/x\">ps://a</a>",
+    "<a href=\"https://auto.link/x\">uto.li</a>",
+    "<a href=\"https://auto.link/x\">nk/x</a>  ",
+    "   indented"
+   ]
+  },
+  {
+   "In": "a | b\n1 | 2",
+   "N": 40,
+   "Out": [
+    "a | b\n1 | 2"
+   ]
+  },
+  {
+   "In": "———",
+   "N": 40,
+   "Out": [
+    "———"
+   ]
+  },
+  {
+   "In": "&lt;/b&gt;- [ ] t - a1.&lt;!-- c --&gt;",
+   "N": 40,
+   "Out": [
+    "&lt;/b&gt;- [ ] t - a1.&lt;!-- c --&gt;"
+   ]
+  },
+  {
+   "In": "> 1. <pre>p</pre>\né😀中 > > qq\n\na<b",
+   "N": 40,
+   "Out": [
+    "> 1. <pre>p</pre>\né😀中 > > qq\n\na<b"
+   ]
+  },
+  {
+   "In": "&lt;/blockquote&gt;\n  - n\n\n- [ ] t[ref]: https://r.e&lt;!-- c --&gt; --- <code>a ` b</code>a\\",
+   "N": 40,
+   "Out": [
+    "&lt;/blockquote&gt;\n  - n\n\n",
+    "- [ ] t[ref]: https://r.e&lt;!-- c ",
+    "--&gt; --- <code>a ` b</code>a\\"
+   ]
+  },
+  {
+   "In": "<b>b</b>\n\n&lt;/b&gt;--- &gt;\n\n&lt;!-- c --&gt;",
+   "N": 40,
+   "Out": [
+    "<b>b</b>\n\n&lt;/b&gt;--- &gt;\n\n",
+    "&lt;!-- c --&gt;"
+   ]
+  },
+  {
+   "In": "~~s~~ &lt;/blockquote&gt;\n\n- n\n\n- n",
+   "N": 40,
+   "Out": [
+    "~~s~~ &lt;/blockquote&gt;\n\n- n\n\n- n"
+   ]
+  },
+  {
+   "In": "3. y",
+   "N": 40,
+   "Out": [
+    "3. y"
+   ]
+  },
+  {
+   "In": "_\n\n \n\n&lt;b&gt;\n&amp;#128512;\nSetext\n===\n```go\ncode &lt; 1\n``` &lt;pre&gt;p&lt;/pre&gt; &lt;b&gt;",
+   "N": 40,
+   "Out": [
+    "_\n\n \n\n&lt;b&gt;\n&amp;#128512;\nSetext\n",
+    "===\n```go\ncode &lt; 1\n",
+    "``` &lt;pre&gt;p&lt;/pre&gt; &lt;b&gt;"
+   ]
+  },
+  {
+   "In": "é😀中\n\n<code>c</code>&gt; &gt; qq\n\n<i>i</i> *&gt; &gt; qq",
+   "N": 40,
+   "Out": [
+    "é😀中\n\n<code>c</code>&gt; &gt; qq\n\n",
+    "<i>i</i> *&gt; &gt; qq"
+   ]
+  },
+  {
+   "In": "<pre><code class=\"language-go\">code &lt; 1\n```&gt;\n</code></pre>",
+   "N": 40,
+   "Out": [
+    "code &lt; 1\n```&gt;\n"
+   ]
+  },
+  {
+   "In": "&lt;!-- c --&gt; a&lt;b    indented \"q\" 'a' &lt;div&gt;\n\n1. x\n\nalt <i>x</i> *",
+   "N": 40,
+   "Out": [
+    "&lt;!-- c --&gt; a&lt;b    indented \"q\" ",
+    "'a' &lt;div&gt;\n\n1. x\n\nalt <i>x</i> *"
+   ]
+  },
+  {
+   "In": "&lt;code class=\"language-go\"&gt;\nSetext\n===text&amp;amp;&amp;nbsp;\n\t&lt;!-- c --&gt;",
+   "N": 40,
+   "Out": [
+    "&lt;code class=\"language-go\"&gt;\nSetext\n",
+    "===text&amp;amp;&amp;nbsp;\n",
+    "\t&lt;!-- c --&gt;"
+   ]
+  },
+  {
+   "In": "&lt;div&gt;\n- [ ] t\n\n&lt;a href=\"u\"&gt;\n\n<i><b>bi</b></i>",
+   "N": 40,
+   "Out": [
+    "&lt;div&gt;\n- [ ] t\n\n&lt;a href=\"u\"&gt;\n",
+    "\n<i><b>bi</b></i>"
+   ]
+  },
+  {
+   "In": "<b>Setext</b>\n\n- b alt <i>x</i> &lt;task&gt;😀\n\n~~s~~ | a | b | | - | - | | 1 | 2 |&amp;amp;",
+   "N": 40,
+   "Out": [
+    "<b>Setext</b>\n\n- b alt <i>x</i> ",
+    "&lt;task&gt;😀\n\n~~s~~ | a | b | | - | - ",
+    "| | 1 | 2 |&amp;amp;"
+   ]
+  },
+  {
+   "In": "<i><b>bi</b></i>",
+   "N": 40,
+   "Out": [
+    "<i><b>bi</b></i>"
+   ]
+  },
+  {
+   "In": "_\n\n<blockquote>- b &lt;/code&gt;<b>b</b> <i>i</i> *</blockquote>",
+   "N": 40,
+   "Out": [
+    "_\n\n<blockquote>- b </blockquote>",
+    "<blockquote>&lt;/code&gt;</blockquote>",
+    "<blockquote><b>b</b> </blockquote>",
+    "<blockquote><i>i</i> *</blockquote>"
+   ]
+  },
+  {
+   "In": "&lt;div&gt;\nblock\n&lt;/div&gt;\n[ref]: https://r.e\n\n  [ref]: https://r.e&lt;pre&gt;p&lt;/pre&gt;",
+   "N": 40,
+   "Out": [
+    "&lt;div&gt;\nblock\n&lt;/div&gt;\n",
+    "[ref]: https://r.e\n\n  [ref]: ",
+    "https://r.e&lt;pre&gt;p&lt;/pre&gt;"
+   ]
+  },
+  {
+   "In": "<code>c</code>&gt; q- a``` raw\n\n&lt;div&gt;1.&lt;b&gt;    indented",
+   "N": 40,
+   "Out": [
+    "<code>c</code>&gt; q- a``` raw\n\n",
+    "&lt;div&gt;1.&lt;b&gt;    indented"
+   ]
+  },
+  {
+   "In": "<blockquote>qq &amp;amp;</blockquote>\n\n<blockquote>q  </blockquote>\n\ntext\n\nalt <i>x</i>",
+   "N": 40,
+   "Out": [
+    "<blockquote>qq &amp;amp;</blockquote>\n\n",
+    "<blockquote>q  </blockquote>\n\ntext\n\n",
+    "alt <i>x</i>"
+   ]
+  },
+  {
+   "In": "[ref]: https://r.e &lt;task&gt;",
+   "N": 40,
+   "Out": [
+    "[ref]: https://r.e &lt;task&gt;"
+   ]
+  },
+  {
+   "In": "a&lt;b\n\n<i>u</i> [ref]: https://r.e &amp;* <b>b</b> 3) y",
+   "N": 40,
+   "Out": [
+    "a&lt;b\n\n<i>u</i> [ref]: https://r.e ",
+    "&amp;* <b>b</b> 3) y"
+   ]
+  },
+  {
+   "In": "---***\n\n&lt;code class=\"language-go\"&gt;1. x",
+   "N": 40,
+   "Out": [
+    "---***\n\n&lt;code class=\"language-go\"&gt;",
+    "1. x"
+   ]
+  }
+ ]
+}

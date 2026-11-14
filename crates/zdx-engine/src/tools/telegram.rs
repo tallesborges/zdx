@@ -9,7 +9,7 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{ToolContext, ToolDefinition, resolve_existing_path};
+use super::{ToolContext, ToolDefinition};
 use crate::core::events::ToolOutput;
 use crate::telegram::{
     MAX_CAPTION_CHARS, MAX_MESSAGE_CHARS, ParseMode, PostDetails, SentMessage, TelegramOutbound,
@@ -164,7 +164,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
             let Some(path) = input.path.as_deref() else {
                 return missing("path", action);
             };
-            let resolved = match resolve_existing_path(path, &ctx.root) {
+            let resolved = match ctx.resolve_existing_path(path) {
                 Ok(resolved) => resolved,
                 Err(output) => return output,
             };

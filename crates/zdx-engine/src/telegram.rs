@@ -14,6 +14,7 @@
 //! cannot see the bot's per-chat state.
 
 pub mod flood;
+pub mod photo;
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -503,6 +504,110 @@ pub fn resolve_bot_token(config: &Config, override_token: Option<&str>) -> Resul
     )
 }
 
+/// What a Telegram gateway process needs to serve the bot: the bot's
+/// resolved runtime (the token only on request), the Mini App server, the
+/// bot root, and each profile's chat binding. Printed by
+/// `zdx telegram settings`.
+#[derive(Debug, Clone, Serialize)]
+pub struct GatewaySettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot_token: Option<String>,
+    pub allowlist_user_ids: Vec<i64>,
+    /// Includes every profile chat.
+    pub allowlist_chat_ids: Vec<i64>,
+    pub server: GatewayServer,
+    /// Root of chats without a profile.
+    pub root: std::path::PathBuf,
+    pub profiles: Vec<GatewayProfile>,
+    /// Every config file that feeds these settings or a profile's config
+    /// ([`watched_config_layers`]), absolute, existing or not: a change to
+    /// any of them means the profile configs must be read again.
+    pub config_layers: Vec<std::path::PathBuf>,
+}
+
+/// Every config file that feeds the bot-level config at `root` or any
+/// Telegram profile's config (the layers of each profile's cwd), in order,
+/// without repeats. Files that do not exist yet are included: creating one
+/// is a change. The bot reloads when any of them changes; the gateway reads
+/// the list from its settings.
+#[must_use]
+pub fn watched_config_layers(root: &Path, config: &Config) -> Vec<std::path::PathBuf> {
+    let mut layers = crate::config::paths::config_layer_paths_for(root);
+    for profile in config.telegram.profiles.values() {
+        let cwd = profile.cwd_path();
+        let cwd = cwd.canonicalize().unwrap_or(cwd);
+        for path in crate::config::paths::config_layer_paths_for(&cwd) {
+            if !layers.contains(&path) {
+                layers.push(path);
+            }
+        }
+    }
+    layers
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GatewayServer {
+    pub enabled: bool,
+    pub port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mini_app_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GatewayProfile {
+    pub name: String,
+    pub chat_id: i64,
+    /// The profile's root, as turns in its chat run (canonicalized when it
+    /// exists).
+    pub cwd: std::path::PathBuf,
+    pub orchestrator: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_root: Option<String>,
+}
+
+/// Resolves [`GatewaySettings`] the way the bot resolves its own runtime.
+///
+/// # Errors
+/// Returns an error when the Telegram runtime is not validly configured (no
+/// token, no allowed user, a broken profile).
+pub fn gateway_settings(
+    config: &Config,
+    root: &Path,
+    include_token: bool,
+) -> Result<GatewaySettings> {
+    let runtime = config.resolve_telegram_runtime()?;
+    let profiles = config
+        .telegram
+        .profiles
+        .iter()
+        .map(|(name, profile)| {
+            let cwd = profile.cwd_path();
+            GatewayProfile {
+                name: name.clone(),
+                chat_id: profile.chat_id,
+                cwd: cwd.canonicalize().unwrap_or(cwd),
+                orchestrator: profile.orchestrator,
+                worker_root: profile.worker_root.clone(),
+            }
+        })
+        .collect();
+    let server = config.telegram.server.clone().unwrap_or_default();
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    Ok(GatewaySettings {
+        bot_token: include_token.then_some(runtime.bot_token),
+        allowlist_user_ids: runtime.allowlist_user_ids,
+        allowlist_chat_ids: runtime.allowlist_chat_ids,
+        server: GatewayServer {
+            enabled: server.enabled,
+            port: server.port,
+            mini_app_url: server.mini_app_url,
+        },
+        config_layers: watched_config_layers(&root, config),
+        root,
+        profiles,
+    })
+}
+
 fn check_document_size(len: u64) -> Result<()> {
     if len > MAX_DOCUMENT_BYTES {
         bail!(
@@ -515,6 +620,45 @@ fn check_document_size(len: u64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The watched layers are the root's, then each profile cwd's new ones,
+    /// absolute, without repeats, including files that do not exist yet.
+    #[test]
+    fn watched_layers_cover_root_and_profile_cwds() {
+        let home = crate::test_support::temp_zdx_home();
+        let root = home.path().join("root");
+        let project = home.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        let mut config = Config::default();
+        for (name, chat_id, cwd) in [("a", -1, &project), ("b", -2, &project), ("c", -3, &root)] {
+            config.telegram.profiles.insert(
+                name.to_string(),
+                crate::config::TelegramProfileConfig {
+                    chat_id,
+                    cwd: cwd.display().to_string(),
+                    orchestrator: false,
+                    worker_root: None,
+                },
+            );
+        }
+        let layers = watched_config_layers(&root, &config);
+        let root_layers = crate::config::paths::config_layer_paths_for(&root);
+        assert_eq!(layers[..root_layers.len()], root_layers[..]);
+        let project_layer = project
+            .canonicalize()
+            .unwrap()
+            .join(".zdx")
+            .join("config.toml");
+        assert!(layers.contains(&project_layer), "{layers:?}");
+        assert!(!project_layer.exists());
+        let mut unique = layers.clone();
+        unique.dedup();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), layers.len(), "no repeats");
+        assert!(layers.iter().all(|path| path.is_absolute()));
+    }
 
     #[test]
     fn parses_known_parse_modes() {

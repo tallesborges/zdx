@@ -44,11 +44,6 @@ fn artifact_dir_for_thread_with_zdx_home(zdx_home: &Path, thread_id: Option<&str
     }
 }
 
-fn build_runtime_env_vars(config: &Config, thread_id: Option<&str>) -> RuntimeEnvVars {
-    let zdx_home = paths::zdx_home();
-    build_runtime_env_vars_with_zdx_home(config, thread_id, &zdx_home)
-}
-
 fn build_runtime_env_vars_with_zdx_home(
     config: &Config,
     thread_id: Option<&str>,
@@ -66,26 +61,28 @@ fn build_runtime_env_vars_with_zdx_home(
     }
 }
 
-/// Sets runtime `ZDX_*` environment variables for paths and session context.
-///
-/// These are visible to all child processes (bash tool, subagents) automatically.
-/// Must be called once at startup, before any concurrent work begins.
-///
-/// # Safety
-/// Uses `std::env::set_var` which is `unsafe` in Rust 2024 (process-global mutation).
-/// Same pattern as `ZDX_DEBUG_TRACE` in `cli/mod.rs`. Acceptable because it's called
-/// once at startup before concurrent work.
-pub fn set_runtime_env(config: &Config, thread_id: Option<&str>) {
-    let runtime_env = build_runtime_env_vars(config, thread_id);
-    let _ = crate::skills::ensure_bundled_skills_materialized();
-    // SAFETY: Called once at startup before any concurrent work.
-    // Same pattern as ZDX_DEBUG_TRACE in cli/mod.rs.
-    unsafe {
-        std::env::set_var("ZDX_HOME", runtime_env.zdx_home.as_os_str());
-        std::env::set_var("ZDX_ARTIFACT_DIR", runtime_env.artifact_dir.as_os_str());
-        std::env::set_var("ZDX_THREAD_ID", &runtime_env.thread_id);
-        std::env::set_var("ZDX_MEMORY_ROOT", runtime_env.memory_root.as_os_str());
-    }
+/// The runtime `ZDX_*` variables of one run (`ZDX_HOME`, `ZDX_ARTIFACT_DIR`,
+/// `ZDX_THREAD_ID`, `ZDX_MEMORY_ROOT`), for its tool context. Tools pass them
+/// to every child process they start and read them first when they expand
+/// `$VAR` in paths, so runs that share a process keep their own values.
+#[must_use]
+pub fn runtime_tool_env(config: &Config, thread_id: Option<&str>) -> zdx_tools::ToolEnv {
+    runtime_tool_env_with_zdx_home(config, thread_id, &paths::zdx_home())
+}
+
+/// [`runtime_tool_env`] for an explicit `ZDX_HOME`.
+#[must_use]
+pub fn runtime_tool_env_with_zdx_home(
+    config: &Config,
+    thread_id: Option<&str>,
+    zdx_home: &Path,
+) -> zdx_tools::ToolEnv {
+    let vars = build_runtime_env_vars_with_zdx_home(config, thread_id, zdx_home);
+    zdx_tools::ToolEnv::default()
+        .with("ZDX_HOME", vars.zdx_home.to_string_lossy())
+        .with("ZDX_ARTIFACT_DIR", vars.artifact_dir.to_string_lossy())
+        .with("ZDX_THREAD_ID", vars.thread_id)
+        .with("ZDX_MEMORY_ROOT", vars.memory_root.to_string_lossy())
 }
 
 /// Maximum size for a single project context file (`AGENTS.md`/`CLAUDE.md`) (64KB).

@@ -15,7 +15,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::process::Command;
 
-use super::{ToolContext, ToolDefinition, resolve_existing_path};
+use super::{ToolContext, ToolDefinition, ToolEnv};
 use crate::core::events::ToolOutput;
 
 /// Upper bound on returned text, so a huge diff cannot flood the context.
@@ -125,7 +125,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         .map(str::trim)
         .filter(|r| !r.is_empty())
     {
-        Some(repo) => match resolve_existing_path(repo, &ctx.root) {
+        Some(repo) => match ctx.resolve_existing_path(repo) {
             Ok(resolved) => resolved.resolved_path,
             Err(output) => return output,
         },
@@ -211,14 +211,15 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         args.push(path.clone());
     }
 
-    run_git(&repo, &args, action).await
+    run_git(&repo, &args, action, &ctx.env).await
 }
 
-async fn run_git(repo: &Path, args: &[String], action: &str) -> ToolOutput {
+async fn run_git(repo: &Path, args: &[String], action: &str, env: &ToolEnv) -> ToolOutput {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(args)
+        .envs(env.iter())
         .output()
         .await;
 

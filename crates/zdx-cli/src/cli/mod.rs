@@ -417,6 +417,20 @@ enum Commands {
         #[command(subcommand)]
         command: TelegramCommands,
     },
+    /// Print, as JSON, the answer to one helper request (the socket op JSON:
+    /// `generate`, `btw_seed`, `topic_start`, `catalog`, or `set_chat_model`)
+    Helper {
+        /// JSON file, or `-` for stdin
+        #[arg(long, value_name = "FILE", default_value = "-")]
+        file: PathBuf,
+    },
+    /// Print, as JSON, one read-only view (the Mini App's API bodies): the
+    /// request is the socket view op JSON, e.g. `{"op":"thread_view","thread_id":"…"}`
+    Views {
+        /// JSON file, or `-` for stdin
+        #[arg(long, value_name = "FILE", default_value = "-")]
+        file: PathBuf,
+    },
 
     /// Service dashboard (inspect config, threads, jobs)
     Monitor,
@@ -433,18 +447,42 @@ enum OrchestratorCommands {
     /// Run the service: it owns persistent-profile threads and their workers,
     /// and continues a thread when one of its workers finishes
     Serve,
-    /// Send a message to a persistent-profile thread (created when missing)
+    /// Send a message to a persistent-profile thread, or with `--ordinary` an
+    /// ordinary agent thread (created when missing)
     Send {
         /// Thread to continue or create (default: a new thread)
         #[arg(long, value_name = "ID")]
         thread: Option<String>,
+
+        /// Run an ordinary agent thread (the agent the bot runs in a topic),
+        /// not a persistent profile
+        #[arg(long, conflicts_with = "profile")]
+        ordinary: bool,
+
+        /// Telegram chat the thread answers in (Telegram instruction layer;
+        /// the turn is held for delivery, released here at once)
+        #[arg(long, value_name = "CHAT_ID", allow_hyphen_values = true)]
+        route_chat: Option<i64>,
+
+        /// Telegram topic within `--route-chat`
+        #[arg(long, value_name = "TOPIC_ID", requires = "route_chat")]
+        route_topic: Option<i64>,
+
+        /// Image sent inline with the message (repeatable)
+        #[arg(long = "image", value_name = "FILE")]
+        images: Vec<PathBuf>,
+
+        /// Run the ordinary thread again on its saved history, recording no
+        /// new message (a retry); takes no prompt
+        #[arg(long, requires = "ordinary", conflicts_with_all = ["prompt", "prompt_file", "images"])]
+        rerun: bool,
 
         /// The message
         #[arg(
             short,
             long,
             conflicts_with = "prompt_file",
-            required_unless_present = "prompt_file"
+            required_unless_present_any = ["prompt_file", "rerun"]
         )]
         prompt: Option<String>,
 
@@ -485,7 +523,7 @@ enum OrchestratorCommands {
     },
     /// Stop a thread's running turn and drop its waiting messages, or stop one worker
     Cancel {
-        /// Orchestrator thread to cancel
+        /// Thread to cancel
         #[arg(
             long,
             value_name = "ID",
@@ -501,6 +539,52 @@ enum OrchestratorCommands {
         /// Keep the thread's waiting messages
         #[arg(long, requires = "thread")]
         keep_queue: bool,
+
+        /// Only this input: the turn that holds it, or the waiting input
+        #[arg(long, value_name = "INPUT_ID", requires = "thread", conflicts_with_all = ["turn", "keep_queue"])]
+        input: Option<u64>,
+
+        /// Only this running turn
+        #[arg(
+            long,
+            value_name = "TURN_ID",
+            requires = "thread",
+            conflicts_with = "keep_queue"
+        )]
+        turn: Option<u64>,
+    },
+    /// Save Mini App artifact feedback and queue it as a turn in the chat that
+    /// owns the thread (the service must run). Prints the JSON receipt
+    Feedback {
+        /// Thread the feedback is on (a chat conversation id)
+        #[arg(long, value_name = "ID")]
+        thread: String,
+
+        /// Telegram user who sends it
+        #[arg(long, value_name = "USER_ID")]
+        user_id: i64,
+
+        /// Submission body (JSON), or `-` for stdin
+        #[arg(long, value_name = "FILE", default_value = "-")]
+        file: std::path::PathBuf,
+    },
+    /// Release a turn held for delivery, so the thread runs its next turn
+    Release {
+        /// Thread whose turn is held
+        #[arg(long, value_name = "ID")]
+        thread: String,
+
+        /// The held turn
+        #[arg(long, value_name = "TURN_ID")]
+        turn: u64,
+
+        /// Token of the hold's owner (from its `submitted` or `subscribed` reply)
+        #[arg(long, value_name = "TOKEN", required_unless_present = "force")]
+        holder: Option<String>,
+
+        /// Release without the owner's token (manual override, logged)
+        #[arg(long, conflicts_with = "holder")]
+        force: bool,
     },
 }
 
@@ -570,6 +654,35 @@ enum ServiceCommands {
         /// active (safe to call from inside an agent run)
         #[arg(long)]
         queue: bool,
+
+        /// With `--queue`: thread to announce the restart in (default:
+        /// `ZDX_THREAD_ID`)
+        #[arg(long, requires = "queue", value_name = "ID")]
+        thread: Option<String>,
+
+        /// With `--queue`: emit machine-readable JSON
+        #[arg(long, requires = "queue")]
+        json: bool,
+    },
+    /// Restart what the bot restarts before exiting itself (`/restart`): the
+    /// daemon, plus the orchestrator service when installed
+    RestartPeers {
+        /// Restart even when work would be lost
+        #[arg(long)]
+        force: bool,
+
+        /// Emit machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Perform the queued restart once nothing would be lost (run by the bot
+    /// service while its own queues are empty). Restarts daemon and
+    /// orchestrator targets; reports `restart_bot` instead of restarting the
+    /// bot, which must exit with code 42 itself.
+    RunQueuedRestart {
+        /// Emit machine-readable JSON instead of a text summary
+        #[arg(long)]
+        json: bool,
     },
     /// Show launchd registration and live process status
     Status {
@@ -646,6 +759,43 @@ enum ThreadCommands {
         /// Message text
         #[arg(long)]
         text: String,
+    },
+    /// Change thread metadata from a JSON object (the `update_thread`
+    /// fields; absent keeps, `null` clears) and print the result as JSON
+    Update {
+        #[arg(value_name = "THREAD_ID")]
+        id: String,
+        /// JSON file, or `-` for stdin
+        #[arg(long, value_name = "FILE", default_value = "-")]
+        file: PathBuf,
+    },
+    /// Append a delivery record (JSON) to the thread that holds the turn
+    RecordDelivery {
+        #[arg(value_name = "THREAD_ID")]
+        id: String,
+        /// JSON file, or `-` for stdin
+        #[arg(long, value_name = "FILE", default_value = "-")]
+        file: PathBuf,
+        /// The held turn the record belongs to (required while the thread is
+        /// held in the service)
+        #[arg(long, value_name = "TURN_ID", requires = "holder")]
+        turn: Option<u64>,
+        /// Token of that hold's owner
+        #[arg(long, value_name = "TOKEN", requires = "turn")]
+        holder: Option<String>,
+    },
+    /// Print, as JSON, which thread a Telegram chat or topic runs as and how
+    /// (ordinary, persistent profile, or a worker's mirror topic)
+    Resolve {
+        #[arg(long, value_name = "CHAT_ID", allow_hyphen_values = true)]
+        chat: i64,
+        #[arg(long, value_name = "TOPIC_ID")]
+        topic: Option<i64>,
+    },
+    /// Delete a thread's history (refused while a turn runs on it)
+    Reset {
+        #[arg(value_name = "THREAD_ID")]
+        id: String,
     },
     /// Bring the thread index up to date (thread metadata only, no exports)
     Reindex,
@@ -1046,6 +1196,50 @@ enum ModelsCommands {
 
 #[derive(clap::Subcommand)]
 enum TelegramCommands {
+    /// Print, as JSON, the user text a chat turn records for one incoming
+    /// message (JSON `compose_user_text` fields)
+    ComposeText {
+        /// JSON file, or `-` for stdin
+        #[arg(long, value_name = "FILE", default_value = "-")]
+        file: PathBuf,
+    },
+    /// Print, as JSON, a final answer split into chat text, follow-ups, and
+    /// media files
+    ReplyParts {
+        /// File holding the final answer text, or `-` for stdin
+        #[arg(long, value_name = "FILE", default_value = "-")]
+        file: PathBuf,
+    },
+    /// Print, as JSON, an incoming image made ready for a turn (inline copy,
+    /// or why the model cannot see it)
+    PrepareImage {
+        #[arg(value_name = "FILE")]
+        path: PathBuf,
+    },
+    /// Print, as JSON, a file made ready for Telegram `sendPhoto` (cropped,
+    /// resized, or re-encoded; base64 `data` only when it changed)
+    PreparePhoto {
+        #[arg(value_name = "FILE")]
+        path: PathBuf,
+    },
+    /// Print, as JSON, the transcript of an incoming audio file with the
+    /// transcription config of `--root` (null when none is configured)
+    TranscribeAudio {
+        #[arg(value_name = "FILE")]
+        path: PathBuf,
+        /// File name the provider sees (default: the file's own)
+        #[arg(long)]
+        file_name: Option<String>,
+        #[arg(long)]
+        mime_type: Option<String>,
+    },
+    /// Print, as JSON, what a Telegram gateway needs to serve this bot:
+    /// allowlists, profile chats and roots, and the Mini App server
+    Settings {
+        /// Include the bot token. Read it through a pipe; never log it
+        #[arg(long)]
+        include_token: bool,
+    },
     /// Create a forum topic in a supergroup with topics enabled
     CreateTopic {
         /// Telegram chat ID (supergroup)
@@ -1625,6 +1819,11 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
         Commands::Models { command } => dispatch_models(command, context).await,
         Commands::Monitor => dispatch_monitor(context),
         Commands::Telegram { command } => dispatch_telegram(command, context).await,
+        Commands::Helper { file } => commands::telegram::helper(&file).await,
+        Commands::Views { file } => {
+            let root = resolve_root(context.root, context.worktree_id)?;
+            commands::orchestrator::view(&root, &file).await
+        }
         Commands::Worktree { command } => dispatch_worktree(command, context),
     }
 }
@@ -1697,12 +1896,18 @@ fn dispatch_service(command: ServiceCommands, context: &DispatchContext<'_>) -> 
         ServiceCommands::Restart {
             target,
             queue: true,
+            thread,
+            json,
             ..
-        } => commands::service::queue_restart(&target),
+        } => commands::service::queue_restart(&target, thread, json),
+        ServiceCommands::RestartPeers { force, json } => {
+            commands::service::restart_peers(force, json)
+        }
         ServiceCommands::Restart { target, force, .. } => {
             commands::service::restart(&target, force)
         }
         ServiceCommands::Status { json } => commands::service::status(json),
+        ServiceCommands::RunQueuedRestart { json } => commands::service::run_queued_restart(json),
         ServiceCommands::Logs { target, lines, err } => {
             commands::service::logs(&target, lines, err)
         }
@@ -1717,6 +1922,15 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
         ThreadCommands::Resume { id } => commands::threads::resume(id, context.config).await,
         ThreadCommands::Rename { id, title } => commands::threads::rename(&id, &title),
         ThreadCommands::Append { id, role, text } => commands::threads::append(&id, &role, &text),
+        ThreadCommands::Update { id, file } => commands::threads::update(&id, &file).await,
+        ThreadCommands::RecordDelivery {
+            id,
+            file,
+            turn,
+            holder,
+        } => commands::threads::record_delivery(&id, &file, turn, holder).await,
+        ThreadCommands::Reset { id } => commands::threads::reset(&id).await,
+        ThreadCommands::Resolve { chat, topic } => commands::threads::resolve(chat, topic),
         ThreadCommands::Reindex => commands::threads::reindex(),
         ThreadCommands::Export { force, dry_run } => commands::threads::export(force, dry_run),
         ThreadCommands::Search {
@@ -1811,6 +2025,11 @@ async fn dispatch_orchestrator(
         OrchestratorCommands::Serve => commands::orchestrator::serve(&root_path).await,
         OrchestratorCommands::Send {
             thread,
+            ordinary,
+            route_chat,
+            route_topic,
+            images,
+            rerun,
             prompt,
             prompt_file,
             profile,
@@ -1818,11 +2037,22 @@ async fn dispatch_orchestrator(
             wait,
             delivery,
         } => {
-            let prompt = resolve_exec_prompt(prompt, prompt_file.as_deref())?;
+            let prompt = if rerun {
+                String::new()
+            } else {
+                resolve_exec_prompt(prompt, prompt_file.as_deref())?
+            };
             commands::orchestrator::send(commands::orchestrator::SendOptions {
                 root: root_path,
                 thread_id: thread.as_deref(),
                 profile: profile.as_deref(),
+                ordinary,
+                rerun,
+                route: route_chat.map(|chat| zdx_engine::orchestration::protocol::Route {
+                    chat,
+                    topic: route_topic,
+                }),
+                images: &images,
                 model: model.as_deref(),
                 prompt,
                 wait,
@@ -1840,7 +2070,29 @@ async fn dispatch_orchestrator(
             thread,
             worker,
             keep_queue,
-        } => commands::orchestrator::cancel(thread.as_deref(), worker.as_deref(), keep_queue).await,
+            input,
+            turn,
+        } => {
+            commands::orchestrator::cancel(commands::orchestrator::CancelOptions {
+                thread_id: thread.as_deref(),
+                worker: worker.as_deref(),
+                keep_queue,
+                input,
+                turn,
+            })
+            .await
+        }
+        OrchestratorCommands::Feedback {
+            thread,
+            user_id,
+            file,
+        } => commands::orchestrator::feedback(&thread, user_id, &root_path, &file).await,
+        OrchestratorCommands::Release {
+            thread,
+            turn,
+            holder,
+            force,
+        } => commands::orchestrator::release(&thread, turn, holder, force).await,
     }
 }
 
@@ -1987,6 +2239,22 @@ async fn dispatch_models(command: ModelsCommands, context: &DispatchContext<'_>)
 
 async fn dispatch_telegram(command: TelegramCommands, context: &DispatchContext<'_>) -> Result<()> {
     match command {
+        TelegramCommands::ComposeText { file } => commands::telegram::compose_text(&file),
+        TelegramCommands::PrepareImage { path } => commands::telegram::prepare_image(&path),
+        TelegramCommands::PreparePhoto { path } => commands::telegram::prepare_photo(&path),
+        TelegramCommands::TranscribeAudio {
+            path,
+            file_name,
+            mime_type,
+        } => {
+            let root = resolve_root(context.root, context.worktree_id)?;
+            commands::telegram::transcribe_audio(&path, file_name, mime_type, &root).await
+        }
+        TelegramCommands::ReplyParts { file } => commands::telegram::reply_parts(&file),
+        TelegramCommands::Settings { include_token } => {
+            let root = resolve_root(context.root, context.worktree_id)?;
+            commands::telegram::settings(context.config, &root, include_token)
+        }
         TelegramCommands::CreateTopic {
             chat_id,
             name,

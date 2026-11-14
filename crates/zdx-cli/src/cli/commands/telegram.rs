@@ -139,6 +139,161 @@ fn receipt_line(kind: &str, sent: &SentMessage) -> String {
     }
 }
 
+/// Prints the gateway settings as one JSON object (the token only with
+/// `include_token`).
+///
+/// # Errors
+/// Returns an error when the Telegram runtime is not validly configured.
+pub fn settings(config: &Config, root: &std::path::Path, include_token: bool) -> Result<()> {
+    let settings = zdx_engine::telegram::gateway_settings(config, root, include_token)?;
+    println!("{}", serde_json::to_string(&settings)?);
+    Ok(())
+}
+
+fn read_input(path: &std::path::Path) -> Result<String> {
+    use anyhow::Context as _;
+    if path.as_os_str() == "-" {
+        std::io::read_to_string(std::io::stdin()).context("read stdin")
+    } else {
+        std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))
+    }
+}
+
+/// `zdx telegram compose-text`: the CLI twin of `compose_user_text`.
+///
+/// # Errors
+/// Returns an error when the input is not valid JSON.
+pub fn compose_text(file: &std::path::Path) -> Result<()> {
+    let input: zdx_engine::core::chat_turn::UserInput = serde_json::from_str(&read_input(file)?)?;
+    let reply = zdx_engine::orchestration::protocol::Reply::Text {
+        text: zdx_engine::core::chat_turn::compose_user_text(&input),
+    };
+    println!("{}", serde_json::to_string(&reply)?);
+    Ok(())
+}
+
+/// `zdx telegram reply-parts`: the CLI twin of `reply_parts`.
+///
+/// # Errors
+/// Returns an error when the input cannot be read.
+pub fn reply_parts(file: &std::path::Path) -> Result<()> {
+    let reply = zdx_engine::orchestration::protocol::Reply::ReplyParts(
+        zdx_engine::core::chat_turn::reply_parts(&read_input(file)?),
+    );
+    println!("{}", serde_json::to_string(&reply)?);
+    Ok(())
+}
+
+/// `zdx telegram prepare-image`: the CLI twin of `prepare_image`.
+///
+/// # Errors
+/// Returns an error when the file cannot be read.
+pub fn prepare_image(path: &std::path::Path) -> Result<()> {
+    use anyhow::Context as _;
+    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let reply = zdx_engine::orchestration::protocol::Reply::PreparedImage(
+        zdx_engine::core::chat_turn::prepare_inline_image(path, &bytes),
+    );
+    println!("{}", serde_json::to_string(&reply)?);
+    Ok(())
+}
+
+/// `zdx telegram prepare-photo`: the CLI twin of `prepare_photo`.
+///
+/// # Errors
+/// Returns an error when the file cannot be read or prepared.
+pub fn prepare_photo(path: &std::path::Path) -> Result<()> {
+    let reply = zdx_engine::orchestration::server::prepare_photo(path)?;
+    println!("{}", serde_json::to_string(&reply)?);
+    Ok(())
+}
+
+/// `zdx helper`: the CLI twin of `generate`, `btw_seed`, and `topic_start`.
+/// They hold no service state, so this runs them here.
+///
+/// # Errors
+/// Returns an error when the request cannot be read or parsed, is not one of
+/// those ops, or fails.
+pub async fn helper(file: &std::path::Path) -> Result<()> {
+    use anyhow::{Context as _, bail};
+    use zdx_engine::orchestration::helpers;
+    use zdx_engine::orchestration::protocol::{Reply, Request};
+
+    let text = if file.as_os_str() == "-" {
+        std::io::read_to_string(std::io::stdin()).context("read stdin")?
+    } else {
+        std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?
+    };
+    let request: Request = serde_json::from_str(&text).context("parse helper request")?;
+    let reply = match request {
+        Request::Generate(request) => Reply::Generated {
+            text: helpers::generate(request).await?,
+        },
+        Request::BtwSeed {
+            thread_id,
+            question,
+        } => Reply::Text {
+            text: helpers::btw_seed(&thread_id, &question)?,
+        },
+        Request::TopicStart(request) => Reply::TopicStart(helpers::topic_start(&request)?),
+        Request::SetChatModel { root, model } => Reply::ChatModel {
+            selection: zdx_engine::orchestration::catalog::set_chat_model(&root, &model)?,
+        },
+        // The service knows its managed workers (never resumable, listed on
+        // an orchestrator's card); without it nothing runs as a worker.
+        request @ Request::Catalog(_) => match zdx_engine::pidfile::status("orchestrator") {
+            zdx_engine::pidfile::ServiceStatus::Running { .. } => {
+                zdx_engine::orchestration::client::ok(
+                    zdx_engine::orchestration::OrchestratorClient::new()
+                        .call(&request)
+                        .await?,
+                )?
+            }
+            zdx_engine::pidfile::ServiceStatus::Stopped => {
+                let Request::Catalog(query) = request else {
+                    unreachable!()
+                };
+                Reply::Catalog {
+                    body: zdx_engine::orchestration::catalog::catalog(query, None)?,
+                }
+            }
+        },
+        _ => bail!(
+            "`zdx helper` takes a `generate`, `btw_seed`, `topic_start`, `catalog`, or `set_chat_model` request"
+        ),
+    };
+    println!("{}", serde_json::to_string(&reply)?);
+    Ok(())
+}
+
+/// `zdx telegram transcribe-audio`: the CLI twin of `transcribe_audio`.
+///
+/// # Errors
+/// Returns an error when the file cannot be read or transcription fails.
+pub async fn transcribe_audio(
+    path: &std::path::Path,
+    file_name: Option<String>,
+    mime_type: Option<String>,
+    root: &std::path::Path,
+) -> Result<()> {
+    let file_name = file_name.unwrap_or_else(|| {
+        path.file_name().map_or_else(
+            || "audio".to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        )
+    });
+    let transcript = zdx_engine::orchestration::server::transcribe_audio(
+        path,
+        &file_name,
+        mime_type.as_deref(),
+        root,
+    )
+    .await?;
+    let reply = zdx_engine::orchestration::protocol::Reply::Transcript { transcript };
+    println!("{}", serde_json::to_string(&reply)?);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

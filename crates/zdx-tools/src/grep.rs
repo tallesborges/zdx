@@ -383,6 +383,7 @@ fn resolve_search_paths(
     legacy_path: Option<&str>,
     paths: Option<Vec<String>>,
     root: &Path,
+    env: &super::ToolEnv,
 ) -> Result<Vec<PathBuf>, ToolOutput> {
     let mut raw: Vec<String> = paths.unwrap_or_default();
     if let Some(p) = legacy_path {
@@ -401,7 +402,7 @@ fn resolve_search_paths(
             resolved.push(root.to_path_buf());
             continue;
         }
-        let full = super::resolve_input_path(trimmed, root)?;
+        let full = super::resolve_input_path_in(trimmed, root, env)?;
         if full.exists() {
             resolved.push(full);
         } else {
@@ -455,10 +456,11 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         }
     };
 
-    let search_paths = match resolve_search_paths(input.path.as_deref(), input.paths, &ctx.root) {
-        Ok(p) => p,
-        Err(output) => return output,
-    };
+    let search_paths =
+        match resolve_search_paths(input.path.as_deref(), input.paths, &ctx.root, &ctx.env) {
+            Ok(p) => p,
+            Err(output) => return output,
+        };
 
     let glob_matcher: Option<GlobMatcher> = match &input.glob {
         Some(g) => match build_glob_matcher(g) {

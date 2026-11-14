@@ -207,6 +207,8 @@ async fn steer_into_running_turn(
             thread_id: Some(thread_id.to_string()),
             root: context.root_for_chat(incoming.chat_id).root,
             profile: None,
+            ordinary: false,
+            rerun: false,
             model: None,
             route: Some(Route {
                 chat: incoming.chat_id,
@@ -216,6 +218,7 @@ async fn steer_into_running_turn(
             images: crate::agent::inline_images(&incoming),
             follow: Follow::None,
             delivery: Delivery::Steer,
+            replay: false,
         };
         // Not in the turn: queued by the service, and the bridge renders the
         // turn it starts.

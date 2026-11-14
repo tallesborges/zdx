@@ -506,6 +506,7 @@ impl TuiState {
             activity_subagent_name: None,
             tool_timeout: None,
             steer: None,
+            run_lease: None,
         };
 
         // Cache display values at startup (avoids I/O during render)

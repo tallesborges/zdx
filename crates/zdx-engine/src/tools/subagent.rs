@@ -715,6 +715,7 @@ fn build_exec_options(
         thread_subagent_name: Some(subagent_name),
         thread_id: None,
         steer_file: None,
+        env: ctx.env.clone(),
     }
 }
 
@@ -1232,6 +1233,26 @@ mod tests {
             ..explorer_definition(None)
         };
         assert!(!build(&opted_in).no_background_commands);
+    }
+
+    /// Blocking and background children start from these options, so the
+    /// parent turn's environment must ride along with them.
+    #[test]
+    fn test_build_exec_options_carries_the_run_env() {
+        let env = crate::tools::ToolEnv::default()
+            .with("ZDX_THREAD_ID", "parent-thread")
+            .with("ZDX_HOME", "/zdx-home");
+        let ctx = ToolContext::new(std::path::PathBuf::from("."), None).with_env(env.clone());
+
+        let options = build_exec_options(
+            &explorer_definition(None),
+            &ctx,
+            "openai:gpt-5.2".to_string(),
+            crate::config::ThinkingLevel::Low,
+            "system".to_string(),
+        );
+
+        assert_eq!(options.env, env);
     }
 
     fn thread_files() -> Vec<std::path::PathBuf> {

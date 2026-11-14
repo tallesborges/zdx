@@ -189,7 +189,7 @@ impl ReplyStream {
 /// Returns the service's error message.
 pub fn ok(reply: Reply) -> Result<Reply> {
     match reply {
-        Reply::Error { message } => bail!("{message}"),
+        Reply::Error { message, .. } => bail!("{message}"),
         other => Ok(other),
     }
 }

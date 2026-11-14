@@ -8,7 +8,7 @@ use std::sync::PoisonError;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{ToolContext, ToolDefinition, ToolOutput, insert_file_path_fields, resolve_input_path};
+use super::{ToolContext, ToolDefinition, ToolOutput, insert_file_path_fields};
 
 /// Returns the tool definition for the write tool.
 pub fn definition() -> ToolDefinition {
@@ -53,7 +53,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     if display_path.is_empty() {
         return ToolOutput::failure("invalid_input", "file_path cannot be empty", None);
     }
-    let file_path = match resolve_input_path(display_path, &ctx.root) {
+    let file_path = match ctx.resolve_input_path(display_path) {
         Ok(path) => path,
         Err(output) => return output,
     };

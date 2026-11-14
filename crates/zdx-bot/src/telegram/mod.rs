@@ -1,13 +1,9 @@
 use std::collections::{HashMap, HashSet};
-use std::io::Cursor;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use image::codecs::jpeg::JpegEncoder;
-use image::imageops::FilterType;
-use image::{GenericImageView, ImageReader};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -70,14 +66,9 @@ pub struct TelegramClient {
 const TELEGRAM_PARSE_MODE: &str = "HTML";
 const TELEGRAM_CONNECT_TIMEOUT_SECS: u64 = 2;
 const TELEGRAM_HTTP_TIMEOUT_SECS: u64 = 35;
-const TELEGRAM_PHOTO_MAX_BYTES: usize = 10 * 1024 * 1024;
 
 pub(crate) use zdx_engine::telegram::topic_link;
 const TELEGRAM_DOCUMENT_MAX_BYTES: usize = 50 * 1024 * 1024;
-const TELEGRAM_PHOTO_MAX_LONG_EDGE: u32 = 1920;
-const TELEGRAM_PHOTO_MAX_ASPECT_RATIO: f64 = 20.0;
-const TELEGRAM_PHOTO_MAX_ASPECT_RATIO_INT: u32 = 20;
-const TELEGRAM_RESIZE_JPEG_QUALITIES: [u8; 3] = [85, 75, 65];
 
 /// Reads a file that is uploaded as is. Its size is checked from the file's
 /// metadata first, against the same limit `send_file` applies to the bytes,
@@ -94,156 +85,12 @@ fn read_upload(path: &Path, field: &str) -> Result<Vec<u8>> {
     std::fs::read(path).with_context(|| format!("read {field} file {}", path.display()))
 }
 
-struct PreparedPhoto {
-    bytes: Vec<u8>,
-    file_name: String,
-    mime_type: String,
-}
-
 /// Whether Telegram rejected the message because it could not parse the HTML
 /// markup (stray `<`, unknown entity, or an unclosed tag).
 fn is_html_parse_error(err: &anyhow::Error) -> bool {
     api_error_description(err).is_some_and(|description| {
         description.contains("can't parse entities") || description.contains("Can't find end of")
     })
-}
-
-fn prepare_photo_for_telegram(
-    photo_data: Vec<u8>,
-    file_name: &str,
-    mime_type: &str,
-) -> Result<PreparedPhoto> {
-    let Some((width, height)) = read_photo_dimensions(&photo_data) else {
-        return Ok(PreparedPhoto {
-            bytes: photo_data,
-            file_name: file_name.to_string(),
-            mime_type: mime_type.to_string(),
-        });
-    };
-
-    let needs_full_hd_resize = is_photo_long_edge_too_large(width, height);
-    let needs_aspect_crop = is_photo_aspect_ratio_invalid(width, height);
-    let needs_reencode_for_size = photo_data.len() > TELEGRAM_PHOTO_MAX_BYTES;
-    let needs_reencode_for_format = !mime_type.eq_ignore_ascii_case("image/jpeg");
-    if !needs_full_hd_resize
-        && !needs_aspect_crop
-        && !needs_reencode_for_size
-        && !needs_reencode_for_format
-    {
-        return Ok(PreparedPhoto {
-            bytes: photo_data,
-            file_name: file_name.to_string(),
-            mime_type: mime_type.to_string(),
-        });
-    }
-
-    let image = image::load_from_memory(&photo_data).context("decode photo")?;
-    let normalized = normalize_photo_for_telegram(image);
-    let resized_bytes = encode_jpeg_with_size_cap(&normalized).context("encode resized photo")?;
-    let resized_name = jpeg_file_name(file_name);
-
-    Ok(PreparedPhoto {
-        bytes: resized_bytes,
-        file_name: resized_name,
-        mime_type: "image/jpeg".to_string(),
-    })
-}
-
-fn read_photo_dimensions(photo_data: &[u8]) -> Option<(u32, u32)> {
-    let cursor = Cursor::new(photo_data);
-    let reader = ImageReader::new(cursor).with_guessed_format().ok()?;
-    reader.into_dimensions().ok()
-}
-
-fn normalize_photo_for_telegram(image: image::DynamicImage) -> image::DynamicImage {
-    let mut normalized = image;
-
-    let (mut width, mut height) = normalized.dimensions();
-    if is_photo_aspect_ratio_invalid(width, height) {
-        normalized = crop_photo_to_aspect_ratio_limit(&normalized);
-        (width, height) = normalized.dimensions();
-    }
-
-    if is_photo_long_edge_too_large(width, height) {
-        normalized = resize_photo_to_full_hd_limit(&normalized);
-    }
-
-    normalized
-}
-
-fn crop_photo_to_aspect_ratio_limit(image: &image::DynamicImage) -> image::DynamicImage {
-    let (width, height) = image.dimensions();
-    if width == 0 || height == 0 {
-        return image.clone();
-    }
-
-    if width >= height {
-        let target_width = (height.saturating_mul(TELEGRAM_PHOTO_MAX_ASPECT_RATIO_INT)).min(width);
-        if target_width == width {
-            return image.clone();
-        }
-        let x = (width - target_width) / 2;
-        image.crop_imm(x, 0, target_width, height)
-    } else {
-        let target_height = (width.saturating_mul(TELEGRAM_PHOTO_MAX_ASPECT_RATIO_INT)).min(height);
-        if target_height == height {
-            return image.clone();
-        }
-        let y = (height - target_height) / 2;
-        image.crop_imm(0, y, width, target_height)
-    }
-}
-
-fn resize_photo_to_full_hd_limit(image: &image::DynamicImage) -> image::DynamicImage {
-    let (width, height) = image.dimensions();
-    let longest_edge = f64::from(width.max(height));
-    let scale = f64::from(TELEGRAM_PHOTO_MAX_LONG_EDGE) / longest_edge;
-    let scaled_width = ((f64::from(width) * scale).floor()).max(1.0) as u32;
-    let scaled_height = ((f64::from(height) * scale).floor()).max(1.0) as u32;
-    image.resize_exact(scaled_width, scaled_height, FilterType::Lanczos3)
-}
-
-fn encode_jpeg_with_size_cap(image: &image::DynamicImage) -> Result<Vec<u8>> {
-    let mut last = Vec::new();
-
-    for quality in TELEGRAM_RESIZE_JPEG_QUALITIES {
-        let bytes = encode_jpeg(image, quality)?;
-        if bytes.len() <= TELEGRAM_PHOTO_MAX_BYTES {
-            return Ok(bytes);
-        }
-        last = bytes;
-    }
-
-    Ok(last)
-}
-
-fn encode_jpeg(image: &image::DynamicImage, quality: u8) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    let mut encoder = JpegEncoder::new_with_quality(&mut bytes, quality);
-    encoder
-        .encode_image(image)
-        .with_context(|| format!("encode JPEG (quality {quality})"))?;
-    Ok(bytes)
-}
-
-fn jpeg_file_name(file_name: &str) -> String {
-    Path::new(file_name)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .map_or_else(|| "photo.jpg".to_string(), |stem| format!("{stem}.jpg"))
-}
-
-fn is_photo_long_edge_too_large(width: u32, height: u32) -> bool {
-    width.max(height) > TELEGRAM_PHOTO_MAX_LONG_EDGE
-}
-
-fn is_photo_aspect_ratio_invalid(width: u32, height: u32) -> bool {
-    let min = width.min(height);
-    if min == 0 {
-        return true;
-    }
-    let max = width.max(height);
-    f64::from(max) / f64::from(min) > TELEGRAM_PHOTO_MAX_ASPECT_RATIO
 }
 
 /// How a call may use the per-chat gate. See the module docs of
@@ -521,26 +368,7 @@ impl TelegramClient {
         photo_path: &Path,
         options: &MediaSend<'_>,
     ) -> Result<Message> {
-        let photo_data = std::fs::read(photo_path)
-            .with_context(|| format!("read photo file {}", photo_path.display()))?;
-        let file_name = photo_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("photo.png");
-        let mime_type = infer::get(&photo_data).map_or_else(
-            || "application/octet-stream".to_string(),
-            |kind| kind.mime_type().to_string(),
-        );
-        let prepared = prepare_photo_for_telegram(photo_data, file_name, &mime_type)
-            .with_context(|| format!("prepare photo for Telegram {}", photo_path.display()))?;
-        if prepared.bytes.len() > TELEGRAM_PHOTO_MAX_BYTES {
-            bail!(
-                "photo exceeds Telegram limit ({} bytes > {} bytes)",
-                prepared.bytes.len(),
-                TELEGRAM_PHOTO_MAX_BYTES
-            );
-        }
-
+        let prepared = zdx_engine::telegram::photo::prepare_photo_file(photo_path)?;
         self.send_file(
             chat_id,
             &FileUpload {
@@ -1691,10 +1519,7 @@ mod tests {
     use zdx_engine::telegram::flood::{self, FailureClass};
 
     use super::fake::{FakeTelegram, Reply, TOKEN};
-    use super::{
-        InlineKeyboardButton, InlineKeyboardMarkup, MediaSend, TelegramClient, TextSend,
-        is_photo_aspect_ratio_invalid, is_photo_long_edge_too_large,
-    };
+    use super::{InlineKeyboardButton, InlineKeyboardMarkup, MediaSend, TelegramClient, TextSend};
 
     const CHAT: i64 = -1001;
 
@@ -2043,19 +1868,5 @@ mod tests {
             .unwrap_err();
         assert!(!format!("{err:#}").contains("test-secret"));
         assert_eq!(flood::classify(&err), FailureClass::NotSent);
-    }
-
-    #[test]
-    fn detects_full_hd_long_edge_limit() {
-        assert!(is_photo_long_edge_too_large(2560, 1440));
-        assert!(is_photo_long_edge_too_large(1080, 2400));
-        assert!(!is_photo_long_edge_too_large(1920, 1080));
-        assert!(!is_photo_long_edge_too_large(1080, 1920));
-    }
-
-    #[test]
-    fn detects_aspect_ratio_limit() {
-        assert!(is_photo_aspect_ratio_invalid(30000, 1000));
-        assert!(!is_photo_aspect_ratio_invalid(3840, 2160));
     }
 }

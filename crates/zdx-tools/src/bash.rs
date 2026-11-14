@@ -560,6 +560,29 @@ pub fn spawn_background(
     stdout_log: &std::path::Path,
     stderr_log: &std::path::Path,
 ) -> std::io::Result<BackgroundSpawn> {
+    spawn_background_with_env(
+        command,
+        cwd,
+        &crate::ToolEnv::default(),
+        stdout_log,
+        stderr_log,
+    )
+}
+
+/// [`spawn_background`] for a tool call: the process also gets the run's
+/// environment (`ToolContext::env`).
+///
+/// # Errors
+/// Returns an error if the log files cannot be opened or the process cannot be
+/// spawned.
+#[cfg(unix)]
+pub fn spawn_background_with_env(
+    command: &str,
+    cwd: &std::path::Path,
+    env: &crate::ToolEnv,
+    stdout_log: &std::path::Path,
+    stderr_log: &std::path::Path,
+) -> std::io::Result<BackgroundSpawn> {
     use std::os::unix::fs::OpenOptionsExt;
 
     let open_log = |path: &std::path::Path| {
@@ -578,6 +601,7 @@ pub fn spawn_background(
         .current_dir(cwd)
         .env("TERM", "dumb")
         .env("NO_COLOR", "1")
+        .envs(env.iter())
         .stdin(Stdio::null())
         .stdout(Stdio::from(out))
         .stderr(Stdio::from(err))
@@ -763,6 +787,9 @@ async fn run_command(
             .env("TERM", "dumb")
             .env("NO_COLOR", "1")
             .stdin_null();
+        for (key, value) in ctx.env.iter() {
+            cmd.env(key, value);
+        }
         cmd.spawn(Duration::from_millis(300)).await.map_err(|e| {
             ToolOutput::failure(
                 "spawn_error",
@@ -788,7 +815,8 @@ async fn run_command(
             // `gradlew` under piped exec environments).
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .envs(ctx.env.iter());
 
         cmd.kill_on_drop(true);
 
@@ -1087,6 +1115,58 @@ mod tests {
             None,
         )
         .await
+    }
+
+    /// Two calls from different runs overlap in one process; each child
+    /// sees its own run's variables, and a run's value wins over the
+    /// process environment's.
+    #[tokio::test]
+    async fn concurrent_calls_get_their_own_run_env() {
+        let temp = TempDir::new().unwrap();
+        let ctx_for = |thread: &str| {
+            ToolContext::new(temp.path().to_path_buf(), None).with_env(
+                crate::ToolEnv::default()
+                    .with("ZDX_THREAD_ID", thread)
+                    .with("ZDX_ARTIFACT_DIR", format!("/artifacts/{thread}"))
+                    .with("HOME", format!("/home/{thread}")),
+            )
+        };
+        let (ctx_a, ctx_b) = (ctx_for("thread-a"), ctx_for("thread-b"));
+        let input = json!({
+            "command": "sleep 0.2; printf '%s|%s|%s' \"$ZDX_THREAD_ID\" \"$ZDX_ARTIFACT_DIR\" \"$HOME\"",
+        });
+
+        let (a, b) = tokio::join!(
+            execute_plain(&input, &ctx_a, None),
+            execute_without_background(&input, &ctx_b, None, None),
+        );
+
+        for (thread, output) in [("thread-a", a), ("thread-b", b)] {
+            assert_eq!(
+                output.data().unwrap()["stdout"],
+                format!("{thread}|/artifacts/{thread}|/home/{thread}")
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn background_spawn_gets_the_run_env() {
+        let temp = TempDir::new().unwrap();
+        let out = temp.path().join("out.log");
+        let err = temp.path().join("err.log");
+        let env = crate::ToolEnv::default().with("ZDX_THREAD_ID", "thread-bg");
+
+        let mut spawn = spawn_background_with_env(
+            "printf %s \"$ZDX_THREAD_ID\"",
+            temp.path(),
+            &env,
+            &out,
+            &err,
+        )
+        .unwrap();
+        assert!(spawn.child.wait().await.unwrap().success());
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "thread-bg");
     }
 
     #[cfg(unix)]

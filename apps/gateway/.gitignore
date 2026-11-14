@@ -1,0 +1,3 @@
+# Build output of build.sh: the gateway binary, and the Mini App copy it embeds.
+/bin/
+/internal/gateway/webdist/dist/

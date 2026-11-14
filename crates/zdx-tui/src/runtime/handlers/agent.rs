@@ -2,6 +2,7 @@ use anyhow::Context;
 use tokio_util::sync::CancellationToken;
 use zdx_engine::core::handoff_generation;
 use zdx_engine::core::steer::{SteerInbox, SteerSource};
+use zdx_engine::core::thread_lease::ThreadRunLease;
 use zdx_engine::core::thread_persistence::{self, ThreadEvent};
 use zdx_engine::providers::ChatMessage;
 
@@ -42,6 +43,29 @@ fn refused_turn(message: String) -> std::sync::Arc<zdx_engine::core::events::Age
     })
 }
 
+/// Takes the thread's run lease for one turn, or the refusal text when
+/// another run holds it.
+fn take_run_lease(
+    thread_id: Option<&str>,
+) -> Result<Option<std::sync::Arc<ThreadRunLease>>, String> {
+    thread_id
+        .map(ThreadRunLease::try_acquire)
+        .transpose()
+        .map(|lease| lease.map(std::sync::Arc::new))
+        .map_err(|err| format!("{err:#}"))
+}
+
+/// Keeps `lease` until the turn's events are persisted.
+fn hold_until_persisted(
+    lease: Option<std::sync::Arc<ThreadRunLease>>,
+    persist: tokio::task::JoinHandle<()>,
+) {
+    tokio::spawn(async move {
+        let _ = persist.await;
+        drop(lease);
+    });
+}
+
 /// Spawns an agent turn for the active tab.
 ///
 /// For btw tabs, this seeds a parent-thread pointer and creates a persistent
@@ -61,13 +85,19 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
 
     let messages = tui.thread.messages.clone();
     let config = tui.config.clone();
-    let refused = selection_error(tui);
     let mut agent_opts = tui.agent_opts.clone();
     agent_opts.conversation_id = Some(tui.thread.conversation_id.clone());
     let steer = SteerInbox::new();
     agent_opts.steer = Some(SteerSource::Inbox(steer.clone()));
     let system_prompt = tui.system_prompt.clone();
     let thread_id = tui.thread.thread_handle.as_ref().map(|h| h.id.clone());
+    let refused = match take_run_lease(thread_id.as_deref()) {
+        Ok(lease) => {
+            agent_opts.run_lease = lease;
+            selection_error(tui)
+        }
+        Err(message) => Some(message),
+    };
 
     let (tui_tx, tui_rx) = zdx_engine::core::agent::create_event_channel();
 
@@ -75,7 +105,8 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
         let (persist_tx, persist_rx) = zdx_engine::core::agent::create_event_channel();
         let _broadcaster =
             zdx_engine::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx, persist_tx]);
-        let _persist = thread_persistence::spawn_thread_persist_task(thread_handle, persist_rx);
+        let persist = thread_persistence::spawn_thread_persist_task(thread_handle, persist_rx);
+        hold_until_persisted(agent_opts.run_lease.clone(), persist);
     } else {
         let _broadcaster = zdx_engine::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx]);
     }
@@ -129,19 +160,25 @@ fn spawn_btw_tab_turn(tui: &TuiState, parent_thread_id: Option<&str>) -> UiEvent
     let run_cancel = cancel.clone();
 
     let config = tui.config.clone();
-    let refused = selection_error(tui);
     let mut agent_opts = tui.agent_opts.clone();
     let steer = SteerInbox::new();
     agent_opts.steer = Some(SteerSource::Inbox(steer.clone()));
     let system_prompt = tui.system_prompt.clone();
     let thread_id = prepared.thread_handle.id.clone();
+    let refused = match take_run_lease(Some(&thread_id)) {
+        Ok(lease) => {
+            agent_opts.run_lease = lease;
+            selection_error(tui)
+        }
+        Err(message) => Some(message),
+    };
 
     let (tui_tx, tui_rx) = zdx_engine::core::agent::create_event_channel();
     let (persist_tx, persist_rx) = zdx_engine::core::agent::create_event_channel();
     let _broadcaster =
         zdx_engine::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx, persist_tx]);
-    let _persist =
-        thread_persistence::spawn_thread_persist_task(prepared.thread_handle, persist_rx);
+    let persist = thread_persistence::spawn_thread_persist_task(prepared.thread_handle, persist_rx);
+    hold_until_persisted(agent_opts.run_lease.clone(), persist);
 
     let run_messages = prepared.run_messages;
     tokio::spawn(async move {

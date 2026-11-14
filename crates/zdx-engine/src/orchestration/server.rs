@@ -6,12 +6,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
 
 use super::protocol::{Event, Follow, Reply, Request};
 use super::runtime::{CancelTarget, Orchestrator};
+use super::thread_ops;
 
 /// Serves requests until the listener fails. The caller owns process
 /// uniqueness (the service PID file); a socket file left by a dead service is
@@ -80,18 +81,55 @@ async fn write_reply(write: &mut OwnedWriteHalf, reply: &Reply) -> Result<()> {
     write.flush().await.context("flush reply")
 }
 
+/// Largest request line: room for a 48 MiB feedback body sent as a JSON
+/// string, or an album of inline images.
+const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
+/// A client must send its whole request line within this time.
+const REQUEST_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(1);
+
 #[allow(clippy::too_many_lines)]
 async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) -> Result<()> {
     let (read, mut write) = stream.into_split();
-    let mut lines = BufReader::new(read).lines();
-    let Some(line) = lines.next_line().await.context("read request")? else {
-        return Ok(());
-    };
-    let request: Request = match serde_json::from_str(&line) {
+    let mut reader = BufReader::new(read);
+    let mut line = Vec::new();
+    let read = tokio::time::timeout(
+        REQUEST_READ_TIMEOUT,
+        (&mut reader)
+            .take(MAX_REQUEST_BYTES as u64 + 1)
+            .read_until(b'\n', &mut line),
+    )
+    .await;
+    match read {
+        Err(_) => return Ok(()),
+        Ok(read) => {
+            if read.context("read request")? == 0 {
+                return Ok(());
+            }
+        }
+    }
+    if line.len() > MAX_REQUEST_BYTES {
+        return write_reply(
+            &mut write,
+            &Reply::Error {
+                message: format!("request is larger than {MAX_REQUEST_BYTES} bytes"),
+                code: Some(super::protocol::ErrorCode::Invalid),
+            },
+        )
+        .await;
+    }
+    let mut lines = reader.lines();
+    let request: Request = match serde_json::from_slice(&line) {
         Ok(request) => request,
         Err(err) => {
             let message = format!("invalid request: {err}");
-            return write_reply(&mut write, &Reply::Error { message }).await;
+            return write_reply(
+                &mut write,
+                &Reply::Error {
+                    message,
+                    code: Some(super::protocol::ErrorCode::Invalid),
+                },
+            )
+            .await;
         }
     };
 
@@ -99,14 +137,24 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
         Request::Submit(submit) => {
             let follow = submit.follow;
             if follow == Follow::None {
-                submitted(orchestrator.submit(submit))
+                submitted(orchestrator.submit(submit), None)
             } else {
                 return follow_submit(orchestrator, submit, follow, lines, write).await;
             }
         }
-        Request::Subscribe { renderer } => {
-            let mut subscription = orchestrator.subscribe(None, renderer);
-            write_reply(&mut write, &Reply::Ok).await?;
+        Request::Subscribe { renderer, replay } => {
+            let mut subscription = match orchestrator.subscribe(None, renderer, replay) {
+                Ok(subscription) => subscription,
+                Err(err) => return write_reply(&mut write, &error_reply(&err)).await,
+            };
+            let first = if renderer {
+                Reply::Subscribed {
+                    holder: subscription.token().to_string(),
+                }
+            } else {
+                Reply::Ok
+            };
+            write_reply(&mut write, &first).await?;
             loop {
                 tokio::select! {
                     event = subscription.events.recv() => {
@@ -143,10 +191,15 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
                 dropped_inputs,
             }
         }
-        Request::Release { thread_id, turn_id } => {
-            orchestrator.release(&thread_id, turn_id);
-            Reply::Ok
-        }
+        Request::Release {
+            thread_id,
+            turn_id,
+            holder,
+            force,
+        } => match orchestrator.release(&thread_id, turn_id, holder.as_deref(), force) {
+            Ok(()) => Reply::Ok,
+            Err(err) => error_reply(&err),
+        },
         Request::Workers { owner_thread_id } => {
             let workers = orchestrator.workers();
             Reply::Workers {
@@ -163,9 +216,7 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
             Ok(snapshot) => Reply::Worker {
                 worker: Some(snapshot),
             },
-            Err(err) => Reply::Error {
-                message: format!("{err:#}"),
-            },
+            Err(err) => error_reply(&err),
         },
         Request::EnqueueFromTopic {
             worker_thread_id,
@@ -177,25 +228,260 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
             Ok(snapshot) => Reply::Worker {
                 worker: Some(snapshot),
             },
-            Err(err) => Reply::Error {
-                message: format!("{err:#}"),
+            Err(err) => error_reply(&err),
+        },
+        Request::UpdateThread(update) => {
+            let service = Arc::clone(&orchestrator);
+            match tokio::task::spawn_blocking(move || service.update_thread(&update)).await {
+                Ok(Ok(updated)) => Reply::ThreadUpdated(updated),
+                Ok(Err(err)) => error_reply(&err),
+                Err(err) => error_reply(&anyhow::anyhow!("update thread: {err}")),
+            }
+        }
+        Request::RecordDelivery {
+            thread_id,
+            record,
+            turn_id,
+            holder,
+        } => match orchestrator
+            .record_delivery(thread_id, record, turn_id, holder)
+            .await
+        {
+            Ok(user_summary) => Reply::DeliveryRecorded { user_summary },
+            Err(err) => error_reply(&err),
+        },
+        Request::Generate(request) => match super::helpers::generate(request).await {
+            Ok(text) => Reply::Generated { text },
+            Err(err) => error_reply(&err),
+        },
+        Request::Catalog(query) => {
+            let workers = Arc::clone(orchestrator.workers());
+            match tokio::task::spawn_blocking(move || {
+                super::catalog::catalog(query, Some(&workers))
+            })
+            .await
+            {
+                Ok(Ok(body)) => Reply::Catalog { body },
+                Ok(Err(err)) => error_reply(&err),
+                Err(err) => error_reply(&anyhow::anyhow!("catalog: {err}")),
+            }
+        }
+        Request::SetChatModel { root, model } => {
+            match tokio::task::spawn_blocking(move || super::catalog::set_chat_model(&root, &model))
+                .await
+            {
+                Ok(Ok(selection)) => Reply::ChatModel { selection },
+                Ok(Err(err)) => error_reply(&err),
+                Err(err) => error_reply(&anyhow::anyhow!("set chat model: {err}")),
+            }
+        }
+        Request::BtwSeed {
+            thread_id,
+            question,
+        } => match super::helpers::btw_seed(&thread_id, &question) {
+            Ok(text) => Reply::Text { text },
+            Err(err) => error_reply(&err),
+        },
+        Request::TopicStart(request) => {
+            match tokio::task::spawn_blocking(move || super::helpers::topic_start(&request)).await {
+                Ok(Ok(reply)) => Reply::TopicStart(reply),
+                Ok(Err(err)) => error_reply(&err),
+                Err(err) => error_reply(&anyhow::anyhow!("topic start: {err}")),
+            }
+        }
+        Request::FeedbackSubmit(request) => {
+            // Its own task: a client that goes away cannot stop it between
+            // marking the bundle queued and queueing it.
+            let orchestrator = Arc::clone(&orchestrator);
+            match tokio::spawn(async move { orchestrator.feedback_submit(request).await }).await {
+                Ok(Ok(receipt)) => Reply::Feedback(receipt),
+                Ok(Err(err)) => error_reply(&err),
+                Err(err) => error_reply(&anyhow::anyhow!("feedback task: {err}")),
+            }
+        }
+        Request::ResetThread { thread_id } => match orchestrator.reset_thread(&thread_id) {
+            Ok(()) => Reply::Ok,
+            Err(err) => error_reply(&err),
+        },
+        Request::ResolveThread { chat_id, topic_id } => {
+            match tokio::task::spawn_blocking(move || thread_ops::resolve_thread(chat_id, topic_id))
+                .await
+            {
+                Ok(Ok(route)) => Reply::ThreadRoute(route),
+                Ok(Err(err)) => error_reply(&err),
+                Err(err) => error_reply(&anyhow::anyhow!("resolve thread: {err}")),
+            }
+        }
+        Request::ComposeUserText(input) => Reply::Text {
+            text: crate::core::chat_turn::compose_user_text(&input),
+        },
+        Request::PrepareImage { path } => {
+            if let Err(err) = check_input_size(&path) {
+                return write_reply(&mut write, &error_reply(&err)).await;
+            }
+            match tokio::task::spawn_blocking(move || {
+                std::fs::read(&path)
+                    .map(|bytes| crate::core::chat_turn::prepare_inline_image(&path, &bytes))
+            })
+            .await
+            {
+                Ok(Ok(prepared)) => Reply::PreparedImage(prepared),
+                Ok(Err(err)) => Reply::Error {
+                    message: format!("read image: {err}"),
+                    code: Some(super::protocol::ErrorCode::NotFound),
+                },
+                Err(err) => error_reply(&anyhow::anyhow!("prepare image: {err}")),
+            }
+        }
+        Request::PreparePhoto { path } => {
+            if !path.is_file() {
+                return write_reply(
+                    &mut write,
+                    &Reply::Error {
+                        message: format!("photo not found: {}", path.display()),
+                        code: Some(super::protocol::ErrorCode::NotFound),
+                    },
+                )
+                .await;
+            }
+            match tokio::task::spawn_blocking(move || prepare_photo(&path)).await {
+                Ok(Ok(reply)) => reply,
+                Ok(Err(err)) => error_reply(&err),
+                Err(err) => error_reply(&anyhow::anyhow!("prepare photo: {err}")),
+            }
+        }
+        Request::TranscribeAudio {
+            path,
+            file_name,
+            mime_type,
+            root,
+        } => match transcribe_audio(&path, &file_name, mime_type.as_deref(), &root).await {
+            Ok(transcript) => Reply::Transcript { transcript },
+            Err(err) => error_reply(&err),
+        },
+        Request::View(request) => match orchestrator.views() {
+            Some(views) => match views.view(request).await {
+                Ok(output) => Reply::View(output),
+                Err(err) => Reply::Error {
+                    message: err.message,
+                    code: Some(err.code),
+                },
+            },
+            None => Reply::Error {
+                message: "this service has no views".to_string(),
+                code: Some(super::protocol::ErrorCode::Invalid),
             },
         },
+        Request::ReplyParts { final_text } => {
+            match tokio::task::spawn_blocking(move || {
+                crate::core::chat_turn::reply_parts(&final_text)
+            })
+            .await
+            {
+                Ok(parts) => Reply::ReplyParts(parts),
+                Err(err) => error_reply(&anyhow::anyhow!("reply parts: {err}")),
+            }
+        }
     };
     write_reply(&mut write, &reply).await
 }
 
-fn submitted(result: Result<super::runtime::Submitted>) -> Reply {
+fn submitted(result: Result<super::runtime::Submitted>, holder: Option<String>) -> Reply {
     match result {
         Ok(submitted) => Reply::Submitted {
             thread_id: submitted.thread_id,
             input_id: submitted.input_id,
             queued_ahead: submitted.queued_ahead,
             in_turn: submitted.in_turn,
+            holder: holder.filter(|_| !submitted.in_turn),
         },
-        Err(err) => Reply::Error {
-            message: format!("{err:#}"),
-        },
+        Err(err) => error_reply(&err),
+    }
+}
+
+/// `prepare_photo`: the file made ready for `sendPhoto`, inline only when it
+/// changed. Blocking.
+///
+/// # Errors
+/// Returns an error when the file cannot be read or prepared.
+pub fn prepare_photo(path: &Path) -> Result<Reply> {
+    use base64::Engine as _;
+    let photo = crate::telegram::photo::prepare_photo_file(path)?;
+    Ok(Reply::PreparedPhoto {
+        changed: photo.changed,
+        data: photo
+            .changed
+            .then(|| base64::engine::general_purpose::STANDARD.encode(&photo.bytes)),
+        file_name: photo.file_name,
+        mime_type: photo.mime_type,
+    })
+}
+
+/// Largest incoming media file `prepare_image` and `transcribe_audio` read:
+/// above every input surfaces save (Telegram downloads stop at 20 MiB, voice
+/// notes at 25 MiB).
+pub const MAX_INPUT_FILE_BYTES: u64 = 50 * 1024 * 1024;
+
+/// `not_found` for a missing file, `invalid` for one over
+/// [`MAX_INPUT_FILE_BYTES`]; checked before anything is read.
+fn check_input_size(path: &Path) -> Result<()> {
+    let len = std::fs::metadata(path)
+        .map_err(|err| {
+            thread_ops::coded(
+                super::protocol::ErrorCode::NotFound,
+                format!("read {}: {err}", path.display()),
+            )
+        })?
+        .len();
+    if len > MAX_INPUT_FILE_BYTES {
+        return Err(thread_ops::coded(
+            super::protocol::ErrorCode::Invalid,
+            format!(
+                "{} is {len} bytes, over the {MAX_INPUT_FILE_BYTES}-byte input limit",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Transcribes an incoming audio file with the transcription config of
+/// `root`, as the bot does for a voice note.
+///
+/// # Errors
+/// `not_found` when the file cannot be read; otherwise the provider error.
+pub async fn transcribe_audio(
+    path: &Path,
+    file_name: &str,
+    mime_type: Option<&str>,
+    root: &Path,
+) -> Result<Option<String>> {
+    check_input_size(path)?;
+    let bytes = tokio::fs::read(path).await.map_err(|err| {
+        thread_ops::coded(
+            super::protocol::ErrorCode::NotFound,
+            format!("read {}: {err}", path.display()),
+        )
+    })?;
+    let config =
+        crate::config::Config::load_layered(&crate::config::paths::config_layer_paths_for(root))
+            .context("load config")?;
+    crate::audio::transcribe::transcribe_audio_if_configured(
+        &config,
+        &config.transcription,
+        bytes,
+        file_name,
+        mime_type,
+        None,
+    )
+    .await
+}
+
+/// The error reply for `err`, with its code when it has one.
+fn error_reply(err: &anyhow::Error) -> Reply {
+    Reply::Error {
+        message: format!("{err:#}"),
+        code: thread_ops::error_code(err),
     }
 }
 
@@ -213,9 +499,16 @@ async fn follow_submit(
     // The thread id is known only after submit for a new thread, so the
     // subscription takes every event and filters here. A Telegram-routed
     // follower delivers the reply, so its subscription holds the turn.
-    let mut subscription = orchestrator.subscribe(None, false);
-    let holder = submit.route.is_some().then(|| subscription.id());
-    let reply = submitted(orchestrator.submit_held(submit, holder));
+    let mut subscription = match orchestrator.subscribe(None, false, false) {
+        Ok(subscription) => subscription,
+        Err(err) => return write_reply(&mut write, &error_reply(&err)).await,
+    };
+    let holder = submit
+        .route
+        .is_some()
+        .then(|| subscription.holder(submit.replay));
+    let token = holder.as_ref().map(|holder| holder.token.clone());
+    let reply = submitted(orchestrator.submit_held(submit, holder), token.clone());
     write_reply(&mut write, &reply).await?;
     let Reply::Submitted {
         thread_id,
@@ -280,7 +573,7 @@ async fn follow_submit(
                 turn_id,
                 held: true,
                 ..
-            } if holder.is_some() && Some(*turn_id) == my_turn => Some(*turn_id),
+            } if token.is_some() && Some(*turn_id) == my_turn => Some(*turn_id),
             _ => None,
         };
         write_reply(&mut write, &Reply::Event { event }).await?;
@@ -331,6 +624,22 @@ mod tests {
 
     /// A followed steer that joins the running turn gets its receipt and the
     /// connection closes: there is no turn of its own to follow.
+    #[test]
+    fn input_files_over_the_limit_are_refused_before_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let big = dir.path().join("big.ogg");
+        std::fs::File::create(&big)
+            .unwrap()
+            .set_len(MAX_INPUT_FILE_BYTES + 1)
+            .unwrap();
+        let code = |path: &Path| thread_ops::error_code(&check_input_size(path).unwrap_err());
+        assert_eq!(code(&big), Some(super::super::protocol::ErrorCode::Invalid));
+        assert_eq!(
+            code(&dir.path().join("missing")),
+            Some(super::super::protocol::ErrorCode::NotFound)
+        );
+    }
+
     #[tokio::test]
     async fn a_followed_steer_into_the_running_turn_closes_after_the_receipt() {
         let _home = crate::test_support::temp_zdx_home();
@@ -354,7 +663,9 @@ mod tests {
             })
         });
         let orchestrator = Orchestrator::start_with(workers, events, runner);
-        let mut started = orchestrator.subscribe(Some("busy".to_string()), false);
+        let mut started = orchestrator
+            .subscribe(Some("busy".to_string()), false, false)
+            .unwrap();
         tokio::spawn(serve(Arc::clone(&orchestrator), socket.clone()));
         let client = OrchestratorClient::at(&socket);
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -366,12 +677,15 @@ mod tests {
             thread_id: Some("busy".to_string()),
             root: dir.path().to_path_buf(),
             profile: None,
+            ordinary: false,
+            rerun: false,
             model: None,
             route: None,
             text: text.to_string(),
             images: Vec::new(),
             follow: Follow::Turn,
             delivery,
+            replay: false,
         };
         let _first = client
             .open(&Request::Submit(submit(
@@ -428,12 +742,15 @@ mod tests {
                 thread_id: Some("socket-thread".to_string()),
                 root: dir.path().to_path_buf(),
                 profile: None,
+                ordinary: false,
+                rerun: false,
                 model: None,
                 route: None,
                 text: "hello".to_string(),
                 images: Vec::new(),
                 follow: Follow::Turn,
                 delivery: crate::orchestration::protocol::Delivery::Queue,
+                replay: false,
             }))
             .await
             .unwrap();
@@ -473,6 +790,129 @@ mod tests {
             panic!("unexpected reply {status:?}");
         };
         assert_eq!(report.threads[0].thread_id, "socket-thread");
+        server.abort();
+    }
+
+    /// Sends one raw request line, as a non-Rust client does, and returns the
+    /// reply line.
+    async fn raw(socket: &Path, request: &serde_json::Value) -> serde_json::Value {
+        let stream = UnixStream::connect(socket).await.unwrap();
+        let (read, mut write) = stream.into_split();
+        let mut line = serde_json::to_vec(request).unwrap();
+        line.push(b'\n');
+        write.write_all(&line).await.unwrap();
+        let reply = BufReader::new(read)
+            .lines()
+            .next_line()
+            .await
+            .unwrap()
+            .expect("reply line");
+        serde_json::from_str(&reply).unwrap()
+    }
+
+    /// The chat-surface thread operations over the wire, in the JSON a Go
+    /// client sends: route lookup, metadata, delivery records, user text,
+    /// reply parts, and reset with its refusals.
+    #[tokio::test]
+    async fn thread_operations_answer_raw_json_requests() {
+        let _home = crate::test_support::temp_zdx_home();
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("o.sock");
+        let (workers, events) = WorkerManager::with_runner(Arc::new(|_: WorkerRunRequest| {
+            Box::pin(async { Ok(String::new()) })
+        }));
+        let orchestrator = Orchestrator::start_with(workers, events, echo_turns());
+        let server = tokio::spawn(serve(orchestrator, socket.clone()));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while !socket.exists() {
+            assert!(tokio::time::Instant::now() < deadline, "socket never bound");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let root = dir.path().canonicalize().unwrap();
+        let thread = "telegram--100-topic-7";
+
+        let route = raw(
+            &socket,
+            &serde_json::json!({"op":"resolve_thread","chat_id":-100,"topic_id":7}),
+        )
+        .await;
+        assert_eq!(route["reply"], "thread_route", "{route}");
+        assert_eq!(route["thread_id"], thread);
+        assert_eq!(route["effective_thread_id"], thread);
+        assert_eq!(route["kind"], "ordinary");
+        assert_eq!(route["exists"], false);
+
+        let updated = raw(
+            &socket,
+            &serde_json::json!({"op":"update_thread","thread_id":thread,"root":root,"pending_topic_title":true,"title":"Topic"}),
+        )
+        .await;
+        assert_eq!(updated["reply"], "thread_updated", "{updated}");
+        assert_eq!(updated["title"], "Topic");
+        let route = raw(
+            &socket,
+            &serde_json::json!({"op":"resolve_thread","chat_id":-100,"topic_id":7}),
+        )
+        .await;
+        assert_eq!(route["exists"], true);
+        assert_eq!(route["pending_topic_title"], true);
+        assert_eq!(route["root"], root.display().to_string());
+
+        let record = serde_json::json!({"id":"r1","surface":"telegram","chat_id":-100,"topic_id":7,"items":[{"kind":"text","status":"sent","message_id":5}]});
+        let recorded = raw(
+            &socket,
+            &serde_json::json!({"op":"record_delivery","thread_id":thread,"record":record}),
+        )
+        .await;
+        assert_eq!(recorded["reply"], "delivery_recorded", "{recorded}");
+        assert!(recorded.get("user_summary").is_none(), "{recorded}");
+        let missing = raw(
+            &socket,
+            &serde_json::json!({"op":"record_delivery","thread_id":"missing","record":record}),
+        )
+        .await;
+        assert_eq!(missing["reply"], "error");
+        assert_eq!(missing["code"], "not_found");
+
+        let text = raw(
+            &socket,
+            &serde_json::json!({"op":"compose_user_text","text":"hi","documents":[{"file_name":"a.pdf","path":"/tmp/a.pdf"}]}),
+        )
+        .await;
+        assert_eq!(text["reply"], "text", "{text}");
+        assert!(
+            text["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("hi\n\nDocument attachment 'a.pdf'")
+        );
+
+        let parts = raw(
+            &socket,
+            &serde_json::json!({"op":"reply_parts","final_text":"Done.\n<media>/nope/x.html</media>"}),
+        )
+        .await;
+        assert_eq!(parts["reply"], "reply_parts", "{parts}");
+        assert_eq!(parts["media"][0]["kind"], "html");
+        assert_eq!(parts["media"][0]["send_as"], "document");
+        assert_eq!(parts["media"][0]["sendable"], false);
+
+        let bad = raw(
+            &socket,
+            &serde_json::json!({"op":"update_thread","thread_id":"../escape"}),
+        )
+        .await;
+        assert_eq!(bad["code"], "invalid", "{bad}");
+        let unknown = raw(&socket, &serde_json::json!({"op":"no_such_op"})).await;
+        assert_eq!(unknown["code"], "invalid", "{unknown}");
+
+        let reset = raw(
+            &socket,
+            &serde_json::json!({"op":"reset_thread","thread_id":thread}),
+        )
+        .await;
+        assert_eq!(reset["reply"], "ok", "{reset}");
+        assert!(!crate::core::thread_persistence::thread_exists(thread));
         server.abort();
     }
 

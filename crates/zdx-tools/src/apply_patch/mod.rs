@@ -9,7 +9,7 @@ use std::sync::PoisonError;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{ToolContext, ToolDefinition, ToolOutput, file_lock};
+use super::{ToolContext, ToolDefinition, ToolEnv, ToolOutput, file_lock};
 
 pub mod parser;
 pub mod types;
@@ -47,7 +47,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(out) => return out,
     };
 
-    match apply_patch(&input.patch, &ctx.root) {
+    match apply_patch(&input.patch, &ctx.root, &ctx.env) {
         Ok(result) => ToolOutput::success(result.to_json()),
         Err(err) => map_error(err),
     }
@@ -175,14 +175,18 @@ impl From<ParseError> for ApplyPatchError {
 ///
 /// # Errors
 /// Returns an error if the operation fails.
-pub fn apply_patch(patch: &str, root: &Path) -> Result<ApplyResult, ApplyPatchError> {
+pub fn apply_patch(
+    patch: &str,
+    root: &Path,
+    env: &ToolEnv,
+) -> Result<ApplyResult, ApplyPatchError> {
     let hunks = parser::parse_patch(patch)?;
     let mut result = ApplyResult::default();
 
     for hunk in hunks {
         match hunk {
             Hunk::AddFile { path, contents } => {
-                let target = resolve_path(&path, root);
+                let target = resolve_path(&path, root, env);
                 let lock = file_lock::for_path(&target);
                 let _guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
                 if target.exists() {
@@ -206,7 +210,7 @@ pub fn apply_patch(patch: &str, root: &Path) -> Result<ApplyResult, ApplyPatchEr
                 });
             }
             Hunk::DeleteFile { path } => {
-                let target = resolve_path(&path, root);
+                let target = resolve_path(&path, root, env);
                 let lock = file_lock::for_path(&target);
                 let _guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
                 if !target.exists() {
@@ -223,7 +227,7 @@ pub fn apply_patch(patch: &str, root: &Path) -> Result<ApplyResult, ApplyPatchEr
                 move_path,
                 chunks,
             } => {
-                let target = resolve_path(&path, root);
+                let target = resolve_path(&path, root, env);
                 let lock = file_lock::for_path(&target);
                 let _guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
                 if !target.exists() {
@@ -231,7 +235,7 @@ pub fn apply_patch(patch: &str, root: &Path) -> Result<ApplyResult, ApplyPatchEr
                 }
                 let updated_bytes = apply_update(&target, &chunks)?;
                 let moved_to = if let Some(move_to) = move_path {
-                    let target_path = resolve_path(&move_to, root);
+                    let target_path = resolve_path(&move_to, root, env);
                     if target_path != target && target_path.exists() {
                         return Err(ApplyPatchError::FileExists { path: target_path });
                     }
@@ -271,8 +275,8 @@ pub fn apply_patch(patch: &str, root: &Path) -> Result<ApplyResult, ApplyPatchEr
     Ok(result)
 }
 
-fn resolve_path(path: &Path, root: &Path) -> PathBuf {
-    super::resolve_path_against_root(path, root)
+fn resolve_path(path: &Path, root: &Path, env: &ToolEnv) -> PathBuf {
+    super::resolve_path_against_root_in(path, root, env)
 }
 
 fn apply_update(path: &Path, chunks: &[UpdateFileChunk]) -> Result<usize, ApplyPatchError> {

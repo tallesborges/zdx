@@ -422,3 +422,101 @@ fn parse_date_filter(raw: Option<&str>, flag: &str) -> Result<Option<NaiveDate>>
         .with_context(|| format!("invalid --{flag} value '{trimmed}' (expected YYYY-MM-DD)"))
         .map(Some)
 }
+
+/// Reads a JSON value from `path`, or stdin for `-`.
+fn read_json<T: serde::de::DeserializeOwned>(path: &std::path::Path) -> Result<T> {
+    let text = if path.as_os_str() == "-" {
+        std::io::read_to_string(std::io::stdin()).context("read stdin")?
+    } else {
+        std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?
+    };
+    serde_json::from_str(&text).context("parse JSON")
+}
+
+fn print_reply(reply: &zdx_engine::orchestration::protocol::Reply) -> Result<()> {
+    println!("{}", serde_json::to_string(reply)?);
+    Ok(())
+}
+
+/// Runs a thread write in the orchestrator service while it runs (it may own
+/// the thread's queue or a held turn), and directly only when no service is
+/// running. A running service that does not answer fails the command.
+async fn via_service(
+    request: zdx_engine::orchestration::protocol::Request,
+    direct: impl FnOnce() -> Result<zdx_engine::orchestration::protocol::Reply>,
+) -> Result<()> {
+    use zdx_engine::orchestration::client::{OrchestratorClient, ok};
+
+    let reply = match zdx_engine::pidfile::status("orchestrator") {
+        zdx_engine::pidfile::ServiceStatus::Running { .. } => {
+            ok(OrchestratorClient::new().call(&request).await?)?
+        }
+        zdx_engine::pidfile::ServiceStatus::Stopped => direct()?,
+    };
+    print_reply(&reply)
+}
+
+/// `zdx threads update`: the CLI twin of the `update_thread` socket op.
+pub async fn update(id: &str, file: &std::path::Path) -> Result<()> {
+    use zdx_engine::orchestration::protocol::{Reply, Request};
+    use zdx_engine::orchestration::thread_ops;
+
+    let mut request: thread_ops::UpdateThread = read_json(file)?;
+    request.thread_id = id.to_string();
+    let direct = request.clone();
+    via_service(Request::UpdateThread(request), move || {
+        Ok(Reply::ThreadUpdated(thread_ops::update_thread(&direct)?))
+    })
+    .await
+}
+
+/// `zdx threads record-delivery`: the CLI twin of `record_delivery`.
+pub async fn record_delivery(
+    id: &str,
+    file: &std::path::Path,
+    turn_id: Option<u64>,
+    holder: Option<String>,
+) -> Result<()> {
+    use zdx_engine::orchestration::protocol::{Reply, Request};
+
+    let record: zdx_engine::core::delivery::DeliveryRecord = read_json(file)?;
+    let direct = record.clone();
+    via_service(
+        Request::RecordDelivery {
+            thread_id: id.to_string(),
+            record,
+            turn_id,
+            holder,
+        },
+        || {
+            let user_summary = zdx_engine::orchestration::thread_ops::record_delivery(id, direct)?;
+            Ok(Reply::DeliveryRecorded { user_summary })
+        },
+    )
+    .await
+}
+
+/// `zdx threads reset`: the CLI twin of `reset_thread`. Goes through the
+/// service while it runs, so a queued or held thread is never deleted.
+pub async fn reset(id: &str) -> Result<()> {
+    use zdx_engine::orchestration::protocol::{Reply, Request};
+
+    via_service(
+        Request::ResetThread {
+            thread_id: id.to_string(),
+        },
+        || {
+            zdx_engine::orchestration::thread_ops::reset_thread(id)?;
+            Ok(Reply::Ok)
+        },
+    )
+    .await
+}
+
+/// `zdx threads resolve`: the CLI twin of `resolve_thread`.
+pub fn resolve(chat_id: i64, topic_id: Option<i64>) -> Result<()> {
+    let route = zdx_engine::orchestration::thread_ops::resolve_thread(chat_id, topic_id)?;
+    print_reply(&zdx_engine::orchestration::protocol::Reply::ThreadRoute(
+        route,
+    ))
+}

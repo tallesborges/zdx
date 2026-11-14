@@ -718,6 +718,31 @@ fn cancel_thread(manager: &Arc<WorkerManager>, input: &Value) -> ToolOutput {
     }
 }
 
+/// Worker thread id from a successful `Create_Thread` / `Send_Thread_Message`
+/// result: the worker a turn created or prompted.
+#[must_use]
+pub fn touched_worker_id(
+    tool_name: &str,
+    result: &crate::core::events::ToolOutput,
+) -> Option<String> {
+    if !matches!(
+        tool_name.to_ascii_lowercase().as_str(),
+        "create_thread" | "send_thread_message"
+    ) {
+        return None;
+    }
+    let crate::core::events::ToolOutput::Success { data, .. } = result else {
+        return None;
+    };
+    data.get("thread_id")
+        .or_else(|| {
+            data.get("worker")
+                .and_then(|worker| worker.get("thread_id"))
+        })
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -888,6 +913,7 @@ mod tests {
             latest_final_text: None,
             last_error: None,
             mirror_url: None,
+            mirror: None,
             current_tool: Some("bash".into()),
             current_tool_input: Some("./gradlew assembleDebug".into()),
             seconds_since_last_activity: Some(360),

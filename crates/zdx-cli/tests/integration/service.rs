@@ -206,3 +206,251 @@ fn test_service_restart_queue_records_and_merges_request() {
     assert_eq!(queued["thread_id"], "telegram--100-topic-7");
     assert!(queued["requested_at"].is_string());
 }
+
+fn write_queue(home: &std::path::Path, services: &[&str], thread_id: Option<&str>) {
+    let run = home.join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    // Later than the PID files written below, so the request is unfulfilled.
+    let requested_at = chrono::Utc::now() + chrono::Duration::seconds(60);
+    std::fs::write(
+        run.join("restart-queue.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "services": services,
+            "requested_at": requested_at.to_rfc3339(),
+            "thread_id": thread_id,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+/// The bot's PID file and supervision marker, owned by this live test process.
+fn supervised_bot(home: &std::path::Path) {
+    let run = home.join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    let pid = std::process::id().to_string();
+    std::fs::write(run.join("bot.pid"), &pid).unwrap();
+    std::fs::write(run.join("bot.supervised"), &pid).unwrap();
+}
+
+fn active_agent(home: &std::path::Path) {
+    let agents_dir = home.join("run/agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+    std::fs::write(
+        agents_dir.join("active.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "pid": std::process::id(),
+            "started_at": chrono::Utc::now().to_rfc3339(),
+            "thread_id": "test-thread",
+            "surface": "test",
+            "model": "test-model"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+fn run_queued(home: &std::path::Path) -> Value {
+    let output = crate::fixtures::zdx_cmd()
+        .env("ZDX_HOME", home)
+        .env("HOME", home)
+        .args(["service", "run-queued-restart", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&output).unwrap()
+}
+
+/// The queued-restart step: nothing pending, waiting behind an agent run,
+/// the bot target reported as `restart_bot` (never restarted here), dropped
+/// without a supervisor, and a failed peer restart. No case reaches
+/// `launchctl`: nothing is installed in the temp home.
+#[test]
+fn test_run_queued_restart_outcomes() {
+    let dir = tempdir().unwrap();
+    let home = dir.path();
+    let queue = home.join("run/restart-queue.json");
+
+    assert_eq!(run_queued(home)["status"], "none");
+
+    supervised_bot(home);
+    write_queue(home, &["bot"], Some("telegram--100-topic-7"));
+    active_agent(home);
+    let waiting = run_queued(home);
+    assert_eq!(waiting["status"], "waiting");
+    assert_eq!(waiting["restart_bot"], false);
+    assert!(queue.is_file(), "a waiting request stays queued");
+    std::fs::remove_dir_all(home.join("run/agents")).unwrap();
+
+    let done = run_queued(home);
+    assert_eq!(done["status"], "done");
+    assert_eq!(done["restart_bot"], true);
+    assert_eq!(done["thread_id"], "telegram--100-topic-7");
+    assert!(
+        done["message"].as_str().unwrap().contains("exiting bot"),
+        "{done}"
+    );
+    assert!(!queue.exists(), "a done request is cleared");
+
+    std::fs::remove_file(home.join("run/bot.supervised")).unwrap();
+    write_queue(home, &["bot"], None);
+    let dropped = run_queued(home);
+    assert_eq!(dropped["status"], "dropped");
+    assert_eq!(dropped["restart_bot"], false);
+    assert!(
+        dropped["message"]
+            .as_str()
+            .unwrap()
+            .contains("no active supervisor"),
+        "{dropped}"
+    );
+    assert!(!queue.exists());
+
+    write_queue(home, &["daemon"], None);
+    let failed = run_queued(home);
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["restart_bot"], false);
+    assert!(
+        failed["message"]
+            .as_str()
+            .unwrap()
+            .contains("not installed"),
+        "{failed}"
+    );
+    assert!(!queue.exists());
+
+    std::fs::write(&queue, "not json").unwrap();
+    assert_eq!(run_queued(home)["status"], "dropped");
+    assert!(!queue.exists());
+}
+
+/// `restart-peers --json`: a gate refusal is a successful `blocked` answer;
+/// a failed restart (here: not installed) is an error.
+#[test]
+fn test_restart_peers_json() {
+    let dir = tempdir().unwrap();
+    let home = dir.path();
+    crate::fixtures::zdx_cmd()
+        .env("ZDX_HOME", home)
+        .env("HOME", home)
+        .args(["service", "restart-peers", "--json"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not installed"));
+
+    active_agent(home);
+    let output = crate::fixtures::zdx_cmd()
+        .env("ZDX_HOME", home)
+        .env("HOME", home)
+        .args(["service", "restart-peers", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let blocked: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(blocked["outcome"], "blocked");
+    assert!(
+        blocked["text"]
+            .as_str()
+            .unwrap()
+            .contains("restart blocked"),
+        "{blocked}"
+    );
+}
+
+/// `restart --queue --thread ID --json` records the announcement thread and
+/// reports a merge into a pending request.
+#[test]
+fn test_queue_restart_json_with_thread() {
+    let dir = tempdir().unwrap();
+    let home = dir.path();
+    let queue = |thread: &str| {
+        let output = crate::fixtures::zdx_cmd()
+            .env("ZDX_HOME", home)
+            .env("HOME", home)
+            .env_remove("ZDX_THREAD_ID")
+            .args([
+                "service", "restart", "all", "--queue", "--json", "--thread", thread,
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice::<Value>(&output).unwrap()
+    };
+    crate::fixtures::zdx_cmd()
+        .env("ZDX_HOME", home)
+        .env("HOME", home)
+        .args(["service", "restart", "all", "--queue", "--json"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not running under a supervisor"));
+
+    supervised_bot(home);
+    let first = queue("telegram--100-topic-7");
+    assert_eq!(first["already_pending"], false);
+    assert_eq!(first["active_runs"], 0);
+    assert_eq!(first["request"]["thread_id"], "telegram--100-topic-7");
+    assert_eq!(
+        first["request"]["services"],
+        serde_json::json!(["bot", "daemon", "orchestrator"])
+    );
+    let second = queue("telegram--100-topic-8");
+    assert_eq!(second["already_pending"], true);
+    assert_eq!(second["request"]["thread_id"], "telegram--100-topic-8");
+}
+
+/// A bot program other than `zdx` must pass its read-only preflight before
+/// it replaces the bot service. Every refusal here happens before launchd is
+/// touched or a plist is written.
+#[cfg(unix)]
+#[test]
+fn test_install_bot_program_requires_a_ready_preflight() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempdir().unwrap();
+    let home = dir.path();
+    let program = home.join("gateway-stub");
+    let install = |script: &str| {
+        std::fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::fixtures::zdx_cmd()
+            .env("ZDX_HOME", home)
+            .env("HOME", home)
+            .args(["--root", home.to_str().unwrap()])
+            .args([
+                "service",
+                "install",
+                "bot",
+                "--program",
+                program.to_str().unwrap(),
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .stderr
+            .clone()
+    };
+    let stderr = |bytes: Vec<u8>| String::from_utf8_lossy(&bytes).into_owned();
+
+    let not_ready = stderr(install(
+        r#"echo '{"service":"bot","ready":false,"problems":["missing feature"],"warnings":[]}'"#,
+    ));
+    assert!(not_ready.contains("missing feature"), "{not_ready}");
+    let failed = stderr(install("exit 2"));
+    assert!(failed.contains("preflight failed"), "{failed}");
+    let garbage = stderr(install("echo hello"));
+    assert!(garbage.contains("no valid report"), "{garbage}");
+    let args = stderr(install(
+        r#"[ "$1" = preflight ] && [ "$4" = --json ] && [ "${ZDX_BIN##*/}" = zdx ] || exit 3; echo '{"service":"daemon","ready":true}'"#,
+    ));
+    assert!(args.contains("not bot"), "{args}");
+    assert!(
+        !home.join("Library/LaunchAgents/dev.zdx.bot.plist").exists(),
+        "no plist written"
+    );
+}

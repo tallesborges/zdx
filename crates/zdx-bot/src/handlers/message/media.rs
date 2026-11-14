@@ -1,18 +1,10 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use zdx_engine::core::chat_turn::{SendAs, send_as};
 
 use crate::telegram::markdown::to_telegram_html;
 use crate::telegram::{MediaSend, Message, TelegramClient};
-
-const MEDIA_BLOCK_OPEN: &str = "<medias>";
-
-const MEDIA_BLOCK_CLOSE: &str = "</medias>";
-
-const MEDIA_TAG_OPEN: &str = "<media";
-
-const MEDIA_TAG_CLOSE: &str = "</media>";
 
 /// Sends one local file with the Telegram method that fits its type
 /// (photo, voice note, audio, or document).
@@ -40,105 +32,14 @@ pub(super) struct ParsedFinalResponse {
     pub(super) followups: Vec<String>,
 }
 
+/// [`zdx_engine::core::chat_turn::reply_parts`], with the text as Telegram
+/// HTML.
 pub(super) fn parse_final_response(final_text: &str) -> ParsedFinalResponse {
-    let (text_without_followups, followups) = zdx_engine::followups::extract_followups(final_text);
-    let text_without_wrappers = strip_media_wrappers(&text_without_followups);
-    let (text_without_media_tags, raw_media_values) = extract_media_tags(&text_without_wrappers);
-    let mut media_paths = Vec::new();
-    let mut seen = HashSet::new();
-
-    for raw in raw_media_values {
-        if let Some(path) = parse_media_path(&raw)
-            && seen.insert(media_identity(&path))
-        {
-            media_paths.push(path);
-        }
-    }
-
+    let parts = zdx_engine::core::chat_turn::reply_parts(final_text);
     ParsedFinalResponse {
-        text: to_telegram_html(&text_without_media_tags),
-        media_paths,
-        followups,
-    }
-}
-
-fn strip_media_wrappers(input: &str) -> String {
-    input
-        .replace(MEDIA_BLOCK_OPEN, "")
-        .replace(MEDIA_BLOCK_CLOSE, "")
-}
-
-fn extract_media_tags(input: &str) -> (String, Vec<String>) {
-    let mut cleaned = String::new();
-    let mut media_values = Vec::new();
-    let mut cursor = 0;
-
-    while let Some(start_rel) = input[cursor..].find(MEDIA_TAG_OPEN) {
-        let start = cursor + start_rel;
-        let Some(after_tag_name) = input.as_bytes().get(start + MEDIA_TAG_OPEN.len()) else {
-            break;
-        };
-        // Skip accidental matches such as "<medias>".
-        if *after_tag_name == b's' {
-            let skip_to = start + MEDIA_TAG_OPEN.len();
-            cleaned.push_str(&input[cursor..skip_to]);
-            cursor = skip_to;
-            continue;
-        }
-
-        cleaned.push_str(&input[cursor..start]);
-
-        let Some(open_end_rel) = input[start..].find('>') else {
-            cleaned.push_str(&input[start..]);
-            cursor = input.len();
-            break;
-        };
-        let open_end = start + open_end_rel;
-        let open_tag = &input[start..=open_end];
-
-        if open_tag.ends_with("/>") {
-            cursor = open_end + 1;
-            continue;
-        }
-
-        let content_start = open_end + 1;
-        let Some(close_rel) = input[content_start..].find(MEDIA_TAG_CLOSE) else {
-            cleaned.push_str(&input[start..]);
-            cursor = input.len();
-            break;
-        };
-        let content_end = content_start + close_rel;
-        let inner = input[content_start..content_end].trim();
-        if !inner.is_empty() {
-            media_values.push(inner.to_string());
-        }
-
-        cursor = content_end + MEDIA_TAG_CLOSE.len();
-    }
-
-    if cursor < input.len() {
-        cleaned.push_str(&input[cursor..]);
-    }
-
-    (cleaned, media_values)
-}
-
-/// Same rule as the shared artifact projection, so the file sent is the file
-/// the Mini App lists (and an `Open artifact` link names).
-fn parse_media_path(raw: &str) -> Option<PathBuf> {
-    zdx_engine::core::artifacts::clean_media_path(raw).map(PathBuf::from)
-}
-
-/// What makes two `<media>` values the same file, so a reply sends it once.
-/// Spellings that resolve to the same place the artifact projection lists
-/// (`/a/x.png`, `/a/./x.png`, `/a/b/../x.png`) share its artifact key. A path
-/// whose lexical form is another file than the one it opens (a `..` out of a
-/// symlinked directory) keeps its own spelling and is never merged.
-fn media_identity(path: &Path) -> String {
-    if zdx_engine::core::artifacts::lexical_path_is_physical(path) {
-        format!("key:{}", zdx_engine::core::artifacts::artifact_key(path))
-    } else {
-        format!("path:{}", path.display())
+        text: to_telegram_html(&parts.text),
+        media_paths: parts.media.into_iter().map(|media| media.path).collect(),
+        followups: parts.followups,
     }
 }
 
@@ -147,29 +48,13 @@ pub(super) fn is_valid_media_path(path: &Path) -> bool {
 }
 
 pub(super) fn is_image_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| {
-            matches!(
-                ext.to_ascii_lowercase().as_str(),
-                "png" | "jpg" | "jpeg" | "webp"
-            )
-        })
+    send_as(path) == SendAs::Photo
 }
 
 pub(super) fn is_voice_note_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| matches!(ext.to_ascii_lowercase().as_str(), "ogg" | "oga" | "opus"))
+    send_as(path) == SendAs::Voice
 }
 
 pub(super) fn is_audio_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| {
-            matches!(
-                ext.to_ascii_lowercase().as_str(),
-                "mp3" | "m4a" | "wav" | "aac" | "flac"
-            )
-        })
+    send_as(path) == SendAs::Audio
 }

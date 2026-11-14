@@ -3202,11 +3202,11 @@ mod tests {
             let max_tokens = row("max_tokens");
             assert!(max_tokens.starts_with("│ ·   max_tokens "), "{max_tokens}");
             assert!(!max_tokens.contains('≠'), "{max_tokens}");
-            let modes = rows
+            let modes_header = rows
                 .iter()
                 .find(|line| line.contains("── MODEL MODES"))
                 .unwrap();
-            assert!(modes.contains("≠ ws"), "{modes}");
+            assert!(modes_header.contains("≠ ws"), "{modes_header}");
             assert!(!row("base").contains('≠'), "{}", row("base"));
         }
 

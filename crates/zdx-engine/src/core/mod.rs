@@ -19,10 +19,12 @@
 //! - `subagent`: Child `zdx exec` subagent runner
 //! - `external_worker`: Worker turns run by a configured external launcher
 //! - `thread_export`: Thread transcript exports
+//! - `thread_lease`: run lease, one writer of a thread's turns across processes
 //! - `thread_index`: derived `threads.sqlite` cache (metadata, FTS, tool rows, export dirty state)
 //! - `thread_persistence`: Thread persistence
 //! - `thread_trajectory`: Shared per-thread trajectory projection and formatting
 //! - `title_generation`: LLM-based title generation
+//! - `topic_start`: the starting model of a seeded (`/handoff`, `/btw`) topic
 //! - `tldr_generation`: LLM-based thread TLDR/recap generation
 //! - `usage_stats`: Usage/cost aggregation over saved threads
 //! - `usage_report`: Usage in a day window split by project and run kind
@@ -31,6 +33,7 @@
 pub mod agent;
 pub mod artifact_feedback;
 pub mod artifacts;
+pub mod chat_turn;
 pub mod context;
 pub mod delivery;
 pub mod events;
@@ -48,10 +51,12 @@ pub mod steer;
 pub mod subagent;
 pub mod thread_export;
 pub mod thread_index;
+pub mod thread_lease;
 pub mod thread_persistence;
 pub mod thread_trajectory;
 pub mod title_generation;
 pub mod tldr_generation;
+pub mod topic_start;
 pub mod usage_report;
 pub mod usage_stats;
 pub mod workers;

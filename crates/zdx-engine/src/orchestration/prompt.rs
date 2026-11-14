@@ -107,6 +107,50 @@ pub fn prepare_turn(
     })
 }
 
+/// The prompt of an ordinary agent thread's turn: the agent the bot runs in a
+/// topic.
+pub struct OrdinaryPrompt {
+    pub system_prompt: Option<String>,
+    /// Advisory runtime-context snapshot for the next user message.
+    pub runtime_context: Option<RuntimeContext>,
+}
+
+/// Builds the system prompt of an ordinary agent turn: project context,
+/// memory, and skills, plus the Telegram instruction layer on a routed turn
+/// (the bot's topic agent) or the non-interactive exec layer otherwise.
+///
+/// # Errors
+/// Returns an error if the prompt cannot be built.
+pub fn prepare_ordinary_turn(
+    config: &Config,
+    root: &Path,
+    route: Option<Route>,
+) -> Result<OrdinaryPrompt> {
+    let layer = if route.is_some() {
+        crate::prompts::TELEGRAM_INSTRUCTION_LAYER
+    } else {
+        crate::prompts::EXEC_INSTRUCTION_LAYER
+    }
+    .trim();
+    let layers: Vec<&str> = (!layer.is_empty()).then_some(layer).into_iter().collect();
+    let effective = crate::core::context::build_prompt_with_context_and_layers(
+        config,
+        root,
+        &config.model,
+        &layers,
+        PromptContextInclusion {
+            project_context: true,
+            memory_index: true,
+            skills: true,
+        },
+    )
+    .context("build prompt")?;
+    Ok(OrdinaryPrompt {
+        system_prompt: effective.prompt,
+        runtime_context: effective.runtime_context,
+    })
+}
+
 /// Telegram **workspace** groups bound to the bot, so the orchestrator can pick
 /// worker roots deliberately. Each workspace also lists the project skills its
 /// workers discover there, since the orchestrator's own skill catalog only

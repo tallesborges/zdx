@@ -215,6 +215,12 @@ pub fn render_plist(service: Service, program: &Path, root: &Path) -> String {
         let _ = writeln!(program_args, "        <string>{}</string>", xml_escape(arg));
     }
 
+    let exit_timeout = if service == Service::Bot {
+        format!("\n    <key>ExitTimeOut</key>\n    <integer>{BOT_EXIT_TIMEOUT_SECS}</integer>")
+    } else {
+        String::new()
+    };
+    let zdx_bin = xml_escape(&default_program().to_string_lossy());
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -232,7 +238,7 @@ pub fn render_plist(service: Service, program: &Path, root: &Path) -> String {
     <key>KeepAlive</key>
     <true/>
     <key>ThrottleInterval</key>
-    <integer>10</integer>
+    <integer>10</integer>{exit_timeout}
     <key>ProcessType</key>
     <string>Background</string>
     <key>StandardOutPath</key>
@@ -245,6 +251,8 @@ pub fn render_plist(service: Service, program: &Path, root: &Path) -> String {
         <string>{path}</string>
         <key>ZDX_HOME</key>
         <string>{zdx_home}</string>
+        <key>ZDX_BIN</key>
+        <string>{zdx_bin}</string>
         <key>{supervisor_env}</key>
         <string>launchd</string>
     </dict>
@@ -398,6 +406,11 @@ pub fn install(service: Service, program: &Path, root: &Path) -> Result<String> 
         .canonicalize()
         .with_context(|| format!("resolve root {}", root.display()))?;
     let root = root.as_path();
+    if service == Service::Bot && !is_zdx_program(program) {
+        for warning in preflight(program, root)? {
+            tracing::warn!(program = %program.display(), warning, "Bot program preflight warning");
+        }
+    }
     if let ServiceStatus::Running { pid, .. } = pidfile::status(service.name())
         && !service.plist_path().is_file()
     {
@@ -426,6 +439,111 @@ pub fn install(service: Service, program: &Path, root: &Path) -> Result<String> 
         "Installed and started {service} ({})",
         plist.display()
     ))
+}
+
+/// Whether `program` is a `zdx` binary (which needs no preflight).
+fn is_zdx_program(program: &Path) -> bool {
+    program.file_name().is_some_and(|name| name == "zdx")
+}
+
+/// How long a bot program's preflight may take.
+const PREFLIGHT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Preflight output kept; the rest is dropped.
+const PREFLIGHT_OUTPUT_CAP: usize = 64 * 1024;
+
+#[derive(Debug, Deserialize)]
+struct PreflightReport {
+    #[serde(default)]
+    service: Option<String>,
+    ready: bool,
+    #[serde(default)]
+    problems: Vec<String>,
+    #[serde(default)]
+    warnings: Vec<String>,
+}
+
+/// Runs `<program> preflight --root <root> --json` before a bot program
+/// other than `zdx` replaces the bot service. Read-only by contract. The
+/// install goes on only when it exits 0 and reports `"ready": true`;
+/// returns its warnings.
+///
+/// # Errors
+/// The program does not run, times out, fails, prints no valid report, or
+/// is not ready (its problems are listed). Nothing was changed then.
+fn preflight(program: &Path, root: &Path) -> Result<Vec<String>> {
+    use std::io::Read as _;
+    use std::process::Stdio;
+
+    let mut child = Command::new(program)
+        .args(["preflight", "--root"])
+        .arg(root)
+        .arg("--json")
+        // The same engine path and PATH launchd will give it (`render_plist`).
+        .env("ZDX_BIN", default_program())
+        .env("PATH", agent_path_env())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("run {} preflight", program.display()))?;
+    let mut stdout = child.stdout.take().context("preflight stdout")?;
+    let reader = std::thread::spawn(move || {
+        let mut out = Vec::new();
+        let _ = (&mut stdout)
+            .take(PREFLIGHT_OUTPUT_CAP as u64)
+            .read_to_end(&mut out);
+        // Drain the rest so the child never blocks on a full pipe.
+        let _ = std::io::copy(&mut stdout, &mut std::io::sink());
+        out
+    });
+    let deadline = std::time::Instant::now() + PREFLIGHT_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child.try_wait().context("wait for preflight")? {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!(
+                "{} preflight did not finish in {}s; the bot service was not changed",
+                program.display(),
+                PREFLIGHT_TIMEOUT.as_secs()
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let out = reader.join().unwrap_or_default();
+    if !status.success() {
+        bail!(
+            "{} preflight failed ({status}); the bot service was not changed",
+            program.display()
+        );
+    }
+    let report: PreflightReport = serde_json::from_slice(&out).with_context(|| {
+        format!(
+            "{} preflight printed no valid report; the bot service was not changed",
+            program.display()
+        )
+    })?;
+    if report.service.as_deref().is_some_and(|name| name != "bot") {
+        bail!(
+            "{} preflight reports service {:?}, not bot; the bot service was not changed",
+            program.display(),
+            report.service
+        );
+    }
+    if !report.ready {
+        bail!(
+            "{} is not ready to run the bot service; nothing was changed:\n- {}",
+            program.display(),
+            if report.problems.is_empty() {
+                "no reason given".to_string()
+            } else {
+                report.problems.join("\n- ")
+            }
+        );
+    }
+    Ok(report.warnings)
 }
 
 /// Boots the agent out and removes its plist.
@@ -498,7 +616,38 @@ pub fn restart_many(services: &[Service], force: bool) -> Result<Vec<String>> {
     for service in services {
         require_installed(*service)?;
     }
-    services.iter().copied().map(restart_unchecked).collect()
+    restart_order(services)
+        .into_iter()
+        .map(restart_unchecked)
+        .collect()
+}
+
+/// The order services restart in: the orchestrator first, the bot last,
+/// because the bot needs the orchestrator socket for every message.
+fn restart_order(services: &[Service]) -> Vec<Service> {
+    [Service::Orchestrator, Service::Daemon, Service::Bot]
+        .into_iter()
+        .filter(|service| services.contains(service))
+        .collect()
+}
+
+/// Seconds launchd waits after SIGTERM before SIGKILL when it stops the bot
+/// (`ExitTimeOut`): above the gateway's graceful drain (2 min, plus its
+/// update confirm and reply timeout). Other services keep launchd's default.
+const BOT_EXIT_TIMEOUT_SECS: u32 = 150;
+
+/// Restarts what the bot service restarts before it exits itself (Telegram
+/// `/restart`): the daemon, plus the orchestrator service when it is
+/// installed. Gated like [`restart_many`] unless `force`.
+///
+/// # Errors
+/// As [`restart_many`]; a [`RestartBlocked`] error means work would be lost.
+pub fn restart_bot_peers(force: bool) -> Result<Vec<String>> {
+    let mut services = vec![Service::Daemon];
+    if state(Service::Orchestrator).installed {
+        services.push(Service::Orchestrator);
+    }
+    restart_many(&services, force)
 }
 
 /// The one guard for restarting or stopping services. Active agent runs
@@ -723,6 +872,141 @@ pub fn queued_restart() -> Result<Option<QueuedRestart>> {
         .with_context(|| format!("parse {}", path.display()))
 }
 
+/// What [`run_queued_restart`] did with the pending request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueuedRestartStatus {
+    /// No request is pending (or a newer process already fulfilled it).
+    None,
+    /// A request is pending, but an agent run is active or the orchestrator
+    /// service has work in flight. Nothing changed; check again later.
+    Waiting,
+    /// The request was dropped without restarting anything.
+    Dropped,
+    /// A restart failed; the request was dropped and the bot stays up.
+    Failed,
+    /// The non-bot targets restarted (if any) and the request was cleared.
+    Done,
+}
+
+/// Result of [`run_queued_restart`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct QueuedRestartRun {
+    pub status: QueuedRestartStatus,
+    /// The bot must now exit with code 42 so launchd restarts it.
+    pub restart_bot: bool,
+    /// Status lines of the services that restarted.
+    pub restarted: Vec<String>,
+    /// Thread that asked; the bot announces there when it is a Telegram
+    /// thread of an allowlisted chat.
+    pub thread_id: Option<String>,
+    /// Plain-text announcement for that thread; `None` when there is nothing
+    /// to announce.
+    pub message: Option<String>,
+}
+
+impl QueuedRestartRun {
+    fn quiet(status: QueuedRestartStatus) -> Self {
+        Self {
+            status,
+            restart_bot: false,
+            restarted: Vec::new(),
+            thread_id: None,
+            message: None,
+        }
+    }
+}
+
+/// Performs the pending queued restart when nothing would be lost, as one
+/// step the bot service runs while its own chat queues are empty.
+///
+/// The gates are the same as for `restart`: no active agent run anywhere and
+/// a settled (or stopped) orchestrator service. Daemon and orchestrator
+/// targets restart here; the bot target is never restarted here, it is
+/// reported as `restart_bot` so the bot exits itself. A request that needs
+/// the bot to restart is dropped when the bot is not supervised.
+///
+/// Blocking: file, process, socket, and `launchctl` checks.
+#[must_use]
+pub fn run_queued_restart() -> QueuedRestartRun {
+    let request = match queued_restart() {
+        Ok(Some(request)) => request,
+        Ok(None) => return QueuedRestartRun::quiet(QueuedRestartStatus::None),
+        Err(err) => {
+            tracing::warn!(err = %format!("{err:#}"), "Dropping unreadable queued restart");
+            clear_queued_restart();
+            return QueuedRestartRun::quiet(QueuedRestartStatus::Dropped);
+        }
+    };
+    if request.is_fulfilled() {
+        tracing::info!("Queued restart already fulfilled by a newer process; dropping it");
+        clear_queued_restart();
+        return QueuedRestartRun::quiet(QueuedRestartStatus::None);
+    }
+    if !agent_activity::list_active().is_empty() || orchestrator_in_flight().is_some() {
+        return QueuedRestartRun::quiet(QueuedRestartStatus::Waiting);
+    }
+    let finish = |status, restart_bot, restarted, message: String| QueuedRestartRun {
+        status,
+        restart_bot,
+        restarted,
+        thread_id: request.thread_id.clone(),
+        message: Some(message),
+    };
+
+    if request.includes(Service::Bot) && !pidfile::is_supervised(Service::Bot.name()) {
+        clear_queued_restart();
+        return finish(
+            QueuedRestartStatus::Dropped,
+            false,
+            Vec::new(),
+            "⚠️ Queued restart dropped: the bot has no active supervisor, so it cannot exit and come back.".to_string(),
+        );
+    }
+
+    let services: Vec<Service> = [Service::Daemon, Service::Orchestrator]
+        .into_iter()
+        .filter(|svc| request.includes(*svc))
+        // `all` includes the orchestrator; skip it where it is not installed.
+        .filter(|svc| *svc != Service::Orchestrator || state(*svc).installed)
+        .collect();
+    let mut restarted = Vec::new();
+    if !services.is_empty() {
+        match restart_many(&services, false) {
+            Ok(status) => restarted = status,
+            // A run started after the idle check; the gate caught it.
+            Err(err) if err.downcast_ref::<RestartBlocked>().is_some() => {
+                return QueuedRestartRun::quiet(QueuedRestartStatus::Waiting);
+            }
+            Err(err) => {
+                clear_queued_restart();
+                return finish(
+                    QueuedRestartStatus::Failed,
+                    false,
+                    Vec::new(),
+                    format!("⚠️ Queued restart failed, so I left the bot running.\n{err:#}"),
+                );
+            }
+        }
+    }
+
+    clear_queued_restart();
+    let prefix = if restarted.is_empty() {
+        String::new()
+    } else {
+        format!("🔄 {}.\n", restarted.join(", "))
+    };
+    let restart_bot = request.includes(Service::Bot);
+    let message = if restart_bot {
+        format!(
+            "{prefix}👋 Queued restart: no agent run is active, exiting bot… launchd will restart it shortly."
+        )
+    } else {
+        format!("{prefix}✅ Queued restart done: no agent run was active.")
+    };
+    finish(QueuedRestartStatus::Done, restart_bot, restarted, message)
+}
+
 /// Drops the pending queued restart. Silent no-op when none is pending.
 pub fn clear_queued_restart() {
     let _ = fs::remove_file(restart_queue_path());
@@ -869,6 +1153,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_orchestrator_restarts_before_the_bot() {
+        assert_eq!(
+            restart_order(&Service::ALL),
+            [Service::Orchestrator, Service::Daemon, Service::Bot]
+        );
+        assert_eq!(restart_order(&[Service::Bot]), [Service::Bot]);
+    }
+
+    #[test]
     fn parses_targets() {
         assert_eq!(Service::parse_target("bot").unwrap(), vec![Service::Bot]);
         assert_eq!(
@@ -908,6 +1201,12 @@ mod tests {
         assert!(plist.contains("<key>KeepAlive</key>"));
         assert!(plist.contains("<key>ThrottleInterval</key>"));
         assert!(plist.contains("<string>launchd</string>"));
+        assert!(plist.contains("<key>ExitTimeOut</key>\n    <integer>150</integer>"));
+        assert!(plist.contains("<key>ZDX_BIN</key>"));
+        assert!(
+            !render_plist(Service::Daemon, Path::new("/x/zdx"), Path::new("/p"))
+                .contains("ExitTimeOut")
+        );
         assert!(plist.contains("bot.out"));
         assert!(plist.contains("bot.err"));
     }

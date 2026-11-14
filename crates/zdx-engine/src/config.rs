@@ -1421,18 +1421,25 @@ impl Config {
 
         self.validate_telegram_profiles()?;
 
-        let mut allowlist_chat_ids = self.telegram.allowlist_chat_ids.clone();
-        for profile in self.telegram.profiles.values() {
-            if !allowlist_chat_ids.contains(&profile.chat_id) {
-                allowlist_chat_ids.push(profile.chat_id);
-            }
-        }
-
+        let (allowlist_user_ids, allowlist_chat_ids) = self.telegram_allowlists();
         Ok(ResolvedTelegramRuntime {
             bot_token,
-            allowlist_user_ids: self.telegram.allowlist_user_ids.clone(),
+            allowlist_user_ids,
             allowlist_chat_ids,
         })
+    }
+
+    /// The bot's allowed users, and its allowed chats: the configured ones
+    /// plus every profile's chat.
+    #[must_use]
+    pub fn telegram_allowlists(&self) -> (Vec<i64>, Vec<i64>) {
+        let mut chats = self.telegram.allowlist_chat_ids.clone();
+        for profile in self.telegram.profiles.values() {
+            if !chats.contains(&profile.chat_id) {
+                chats.push(profile.chat_id);
+            }
+        }
+        (self.telegram.allowlist_user_ids.clone(), chats)
     }
 
     /// Returns a Telegram profile by chat ID.

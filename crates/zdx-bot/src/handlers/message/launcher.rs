@@ -43,25 +43,7 @@ pub(crate) fn bot_visible_modes(context: &BotContext, chat_id: i64) -> Vec<Model
     filter_available_modes(&config.model_modes, &config.subagent_available_models())
 }
 
-/// Pure filter: keep modes whose primary resolves to an available model id.
-/// Logs each skipped mode so a misconfigured tier is visible in the logs.
-pub(crate) fn filter_available_modes(modes: &[ModelMode], available: &[String]) -> Vec<ModelMode> {
-    modes
-        .iter()
-        .filter(|mode| {
-            let ok = mode.model_available(available);
-            if !ok {
-                tracing::warn!(
-                    mode = %mode.name,
-                    primary = %mode.primary,
-                    "launcher: skipping mode with unavailable primary model"
-                );
-            }
-            ok
-        })
-        .cloned()
-        .collect()
-}
+pub(crate) use zdx_engine::orchestration::catalog::filter_available_modes;
 
 /// What a launcher-created topic runs as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,12 +132,10 @@ pub(crate) fn launch_config(
     chat_id: i64,
     role: LaunchRole,
 ) -> std::result::Result<Config, String> {
-    let mut config = context.config_for_chat(chat_id);
-    if role == LaunchRole::Orchestrator {
-        zdx_engine::subagents::apply_orchestrator_override(&mut config)
-            .map_err(|err| format!("{err:#}"))?;
-    }
-    Ok(config)
+    zdx_engine::orchestration::catalog::launch_config(
+        context.config_for_chat(chat_id),
+        role == LaunchRole::Orchestrator,
+    )
 }
 
 /// Create a new forum topic of `role` pre-set to a unified `model` spec, mark
@@ -478,22 +458,6 @@ fn launcher_view(
     (header, build_launcher_keyboard(&modes, role))
 }
 
-/// Newest-first threads that can be resumed in this chat's project: top-level
-/// user threads (excludes `telegram-*` topic threads) whose `root_path` matches
-/// the chat's resolved project root, capped to `cap`.
-fn resumable_threads(
-    all: Vec<zdx_engine::core::thread_persistence::ThreadSummary>,
-    root: &std::path::Path,
-    cap: usize,
-) -> Vec<zdx_engine::core::thread_persistence::ThreadSummary> {
-    let root_str = root.display().to_string();
-    all.into_iter()
-        .filter(|t| !t.id.starts_with("telegram-"))
-        .filter(|t| t.root_path.as_deref() == Some(root_str.as_str()))
-        .take(cap)
-        .collect()
-}
-
 /// Compact relative-age label for a thread's last-modified time.
 fn relative_time(modified: Option<std::time::SystemTime>) -> String {
     let Some(elapsed) = modified.and_then(|m| m.elapsed().ok()) else {
@@ -803,12 +767,8 @@ pub(crate) async fn handle_callback(
         // Managed workers must not be offered for resume: an in-process turn
         // on a worker thread would race its child process writing the same
         // JSONL. Steering happens in the worker's mirror topic instead.
-        let managed = managed_worker_ids(context).await;
-        let all: Vec<_> = all
-            .into_iter()
-            .filter(|t| !managed.contains(&t.id))
-            .collect();
-        let threads = resumable_threads(all, &root, 8);
+        let managed: Vec<String> = managed_worker_ids(context).await.into_iter().collect();
+        let threads = zdx_engine::orchestration::catalog::resumable_threads(all, &root, &managed);
         if threads.is_empty() {
             let _ = client
                 .answer_callback_query(&callback.id, Some("No recent threads for this project yet"))
@@ -1297,31 +1257,6 @@ mod tests {
             .collect();
         assert_eq!(data, vec!["nt:as:a", "nt:ocustom", "nt:resume", "nt:x"]);
         assert!(!fake.methods().iter().any(|m| m == "createForumTopic"));
-    }
-
-    #[test]
-    fn resumable_threads_filters_by_root_and_excludes_telegram() {
-        use std::path::PathBuf;
-
-        use zdx_engine::core::thread_persistence::ThreadSummary;
-
-        let root = PathBuf::from("/proj/a");
-        let summary = |id: &str, root_path: Option<&str>| ThreadSummary {
-            id: id.to_string(),
-            root_path: root_path.map(str::to_string),
-            ..Default::default()
-        };
-        let all = vec![
-            summary("uuid-keep-1", Some("/proj/a")),
-            summary("telegram-1-topic-2", Some("/proj/a")), // excluded: telegram
-            summary("uuid-other", Some("/proj/b")),         // excluded: wrong root
-            summary("uuid-noroot", None),                   // excluded: no root
-            summary("uuid-keep-2", Some("/proj/a")),
-        ];
-
-        let kept = resumable_threads(all, &root, 8);
-        let ids: Vec<&str> = kept.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, vec!["uuid-keep-1", "uuid-keep-2"]);
     }
 
     /// A mode button stores the `mode:<name>` reference. The topic then runs

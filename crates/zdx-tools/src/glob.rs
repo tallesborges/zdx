@@ -262,7 +262,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
             Err(output) => return output,
         };
 
-    let search_path = match super::resolve_search_path(input.path.as_deref(), &ctx.root) {
+    let search_path = match super::resolve_search_path(input.path.as_deref(), ctx) {
         Ok(p) => p,
         Err(output) => return output,
     };

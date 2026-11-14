@@ -475,16 +475,7 @@ fn profile_root_path(profile: &TelegramProfileConfig) -> PathBuf {
 /// Every config file that feeds the bot-level config or any profile config, so
 /// an edit to any of them triggers one reload.
 fn watched_config_layers(root: &Path, base: &Config) -> Vec<PathBuf> {
-    let mut layers = zdx_engine::config::paths::config_layer_paths_for(root);
-    for profile in base.telegram.profiles.values() {
-        for path in zdx_engine::config::paths::config_layer_paths_for(&profile_root_path(profile)) {
-            if !layers.contains(&path) {
-                layers.push(path);
-            }
-        }
-    }
-
-    layers
+    zdx_engine::telegram::watched_config_layers(root, base)
 }
 
 /// Loads one layered [`Config`] per Telegram profile, anchored at the profile's

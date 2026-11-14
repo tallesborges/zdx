@@ -12,9 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use zdx_engine::agent_activity;
-use zdx_engine::orchestration::protocol::{Reply, Request};
-use zdx_engine::service::{self, QueuedRestart, Service};
+use zdx_engine::service;
 
 use crate::bot::context::BotContext;
 use crate::bot::queue::ChatQueueMap;
@@ -36,15 +34,7 @@ pub(crate) enum RestartAttempt {
 /// Restarts the daemon and the orchestrator service when it is installed
 /// (gated unless `force`), without exiting the bot.
 pub(crate) async fn attempt_restart(force: bool) -> Result<RestartAttempt> {
-    let mut services = vec![Service::Daemon];
-    if service::state(Service::Orchestrator).installed {
-        services.push(Service::Orchestrator);
-    }
-    restart_services(services, force).await
-}
-
-async fn restart_services(services: Vec<Service>, force: bool) -> Result<RestartAttempt> {
-    let outcome = tokio::task::spawn_blocking(move || service::restart_many(&services, force))
+    let outcome = tokio::task::spawn_blocking(move || service::restart_bot_peers(force))
         .await
         .context("join service restart task")?;
     Ok(match outcome {
@@ -57,155 +47,40 @@ async fn restart_services(services: Vec<Service>, force: bool) -> Result<Restart
 }
 
 /// Checks for a queued restart every few seconds, acting only when nothing
-/// could be lost: the orchestrator service is settled (or not running) and no
-/// chat queue holds a message or a running turn.
+/// could be lost: no chat queue holds a message or a running turn here, and
+/// `service::run_queued_restart` checks agent runs and the orchestrator
+/// service.
 pub(crate) fn spawn_poller(context: Arc<BotContext>, queues: ChatQueueMap) {
     tokio::spawn(async move {
         let mut poll = tokio::time::interval(POLL);
         loop {
             poll.tick().await;
-            if orchestrator_settled(&context).await && queues.lock().await.is_empty() {
+            if queues.lock().await.is_empty() {
                 tick(&context).await;
             }
         }
     });
 }
 
-/// Whether the orchestrator service has nothing in flight. A service that is
-/// not running has nothing to lose.
-async fn orchestrator_settled(context: &BotContext) -> bool {
-    if !context.orchestrator().socket().exists() {
-        return true;
-    }
-    match context
-        .orchestrator()
-        .call(&Request::Status { thread_id: None })
-        .await
-    {
-        Ok(Reply::Status { report }) => report.settled,
-        Ok(_) => false,
-        Err(err) => {
-            tracing::debug!(err = %format!("{err:#}"), "Orchestrator service status unavailable");
-            !matches!(
-                zdx_engine::pidfile::status(Service::Orchestrator.name()),
-                zdx_engine::pidfile::ServiceStatus::Running { .. }
-            )
-        }
-    }
-}
-
-enum Pending {
-    None,
-    Waiting,
-    Ready(QueuedRestart),
-}
-
-/// Reads the queue and decides whether to act. Blocking: file and process checks.
-fn check_pending() -> Pending {
-    let request = match service::queued_restart() {
-        Ok(Some(request)) => request,
-        Ok(None) => return Pending::None,
-        Err(err) => {
-            tracing::warn!(err = %format!("{err:#}"), "Dropping unreadable queued restart");
-            service::clear_queued_restart();
-            return Pending::None;
-        }
-    };
-    if request.is_fulfilled() {
-        tracing::info!("Queued restart already fulfilled by a newer process; dropping it");
-        service::clear_queued_restart();
-        return Pending::None;
-    }
-    if agent_activity::list_active().is_empty() {
-        Pending::Ready(request)
-    } else {
-        Pending::Waiting
-    }
-}
-
-/// Performs a pending queued restart when no agent run is active.
-///
-/// Called only by the poller once the orchestrator service is settled and no
-/// bot turn is queued or running; this adds the cross-process
-/// `agent_activity` check.
 async fn tick(context: &Arc<BotContext>) {
-    if let Err(err) = try_tick(context).await {
-        tracing::warn!(err = %format!("{err:#}"), "Queued restart check failed");
-    }
-}
-
-async fn try_tick(context: &Arc<BotContext>) -> Result<()> {
-    let Pending::Ready(request) = tokio::task::spawn_blocking(check_pending)
-        .await
-        .context("join queued restart check")?
-    else {
-        return Ok(());
-    };
-    let target = announce_target(
-        request.thread_id.as_deref(),
-        context.allowlist_chat_ids(),
-        context.allowlist_user_ids(),
-    );
-
-    if request.includes(Service::Bot) && !zdx_engine::pidfile::is_supervised("bot") {
-        service::clear_queued_restart();
-        announce(
-            context,
-            target,
-            "⚠️ Queued restart dropped: the bot has no active supervisor, so it cannot exit and come back.",
-        )
-        .await;
-        return Ok(());
-    }
-
-    let services: Vec<Service> = [Service::Daemon, Service::Orchestrator]
-        .into_iter()
-        .filter(|svc| request.includes(*svc))
-        // `all` includes the orchestrator; skip it where it is not installed.
-        .filter(|svc| *svc != Service::Orchestrator || service::state(*svc).installed)
-        .collect();
-    let mut status = None;
-    if !services.is_empty() {
-        match restart_services(services, false).await? {
-            RestartAttempt::Restarting(text) => status = Some(text),
-            // A run started after the idle check; the gate caught it, so wait again.
-            RestartAttempt::Blocked(_) => return Ok(()),
-            RestartAttempt::Failed(error) => {
-                service::clear_queued_restart();
-                announce(
-                    context,
-                    target,
-                    &format!(
-                        "⚠️ Queued restart failed, so I left the bot running.\n<code>{error}</code>"
-                    ),
-                )
-                .await;
-                return Ok(());
-            }
+    let run = match tokio::task::spawn_blocking(service::run_queued_restart).await {
+        Ok(run) => run,
+        Err(err) => {
+            tracing::warn!(err = %err, "Queued restart check failed");
+            return;
         }
+    };
+    if let Some(message) = &run.message {
+        let target = announce_target(
+            run.thread_id.as_deref(),
+            context.allowlist_chat_ids(),
+            context.allowlist_user_ids(),
+        );
+        announce(context, target, &escape_html(message)).await;
     }
-
-    service::clear_queued_restart();
-    let prefix = status.map(|s| format!("🔄 {s}.\n")).unwrap_or_default();
-    if request.includes(Service::Bot) {
-        announce(
-            context,
-            target,
-            &format!(
-                "{prefix}👋 Queued restart: no agent run is active, exiting bot… launchd will restart it shortly."
-            ),
-        )
-        .await;
+    if run.restart_bot {
         context.request_exit();
-    } else {
-        announce(
-            context,
-            target,
-            &format!("{prefix}✅ Queued restart done: no agent run was active."),
-        )
-        .await;
     }
-    Ok(())
 }
 
 /// Chat and topic to announce in, from the requesting thread id. Only

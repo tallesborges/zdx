@@ -151,6 +151,15 @@ impl Thread {
         })
     }
 
+    /// Writes the meta line of a new thread (with the root, lineage, and
+    /// profile set so far); no-op for a written one.
+    ///
+    /// # Errors
+    /// Returns an error if the meta line cannot be written.
+    pub fn ensure_written(&mut self) -> Result<()> {
+        self.ensure_meta()
+    }
+
     /// Records subagent/helper lineage in the thread's meta line.
     ///
     /// Only effective before the meta event is written (i.e. on a new thread);

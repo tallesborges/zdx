@@ -314,6 +314,9 @@ pub struct WorkerSnapshot {
     pub last_error: Option<String>,
     /// Link to the worker's surface mirror (Telegram topic), when registered.
     pub mirror_url: Option<String>,
+    /// The worker's legacy mirror topic, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirror: Option<WorkerMirror>,
     /// Tool the current turn is running right now, when one is in flight.
     /// `None` between tools or when no turn is running.
     pub current_tool: Option<String>,
@@ -334,6 +337,35 @@ impl WorkerSnapshot {
     #[must_use]
     pub fn is_idle(&self) -> bool {
         self.status != WorkerStatus::Running && self.queue_depth == 0
+    }
+}
+
+/// A worker's legacy mirror topic in Telegram: messages there go to the
+/// worker, and its activity is posted there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerMirror {
+    pub chat: i64,
+    pub topic: i64,
+    /// The topic's conversation thread id (`telegram-<chat>-topic-<topic>`).
+    pub thread_id: String,
+}
+
+impl WorkerMirror {
+    /// The mirror for a topic conversation id, when it is one.
+    #[must_use]
+    pub fn from_topic_thread(thread_id: &str) -> Option<Self> {
+        let (chat, topic) = crate::telegram::parse_topic_conversation_id(thread_id)?;
+        Some(Self {
+            chat,
+            topic,
+            thread_id: thread_id.to_string(),
+        })
+    }
+
+    /// The topic's `t.me/c` link (supergroups only).
+    #[must_use]
+    pub fn url(&self) -> Option<String> {
+        crate::telegram::topic_link(self.chat, self.topic)
     }
 }
 
@@ -393,7 +425,7 @@ struct WorkerState {
 }
 
 impl WorkerState {
-    fn snapshot(&self, thread_id: &str, mirror_url: Option<String>) -> WorkerSnapshot {
+    fn snapshot(&self, thread_id: &str, mirror: Option<WorkerMirror>) -> WorkerSnapshot {
         WorkerSnapshot {
             thread_id: thread_id.to_string(),
             owner_thread_id: self.owner_thread_id.clone(),
@@ -403,7 +435,8 @@ impl WorkerState {
             queue: self.queue.iter().cloned().collect(),
             latest_final_text: self.latest_final_text.clone(),
             last_error: self.last_error.clone(),
-            mirror_url,
+            mirror_url: mirror.as_ref().and_then(WorkerMirror::url),
+            mirror,
             current_tool: self.current_tools.last().map(|tool| tool.name.clone()),
             current_tool_input: self
                 .current_tools
@@ -460,7 +493,7 @@ pub struct WorkerManager {
     /// after a restart. Kept apart from `state` so a link can outlive/precede
     /// the worker's managed state. Lock order when both are needed: `state`
     /// first, then `mirrors`.
-    mirrors: Mutex<HashMap<String, String>>,
+    mirrors: Mutex<HashMap<String, WorkerMirror>>,
     events_tx: mpsc::UnboundedSender<WorkerEvent>,
     runner: WorkerRunner,
     /// Local runners need the worker root to exist on this host; an external
@@ -577,25 +610,25 @@ impl WorkerManager {
         }
     }
 
-    /// Registers the link of a worker's legacy surface mirror (a Telegram
-    /// topic recovered after a restart). New workers are silent and never
-    /// register one.
+    /// Registers a worker's legacy surface mirror (a Telegram topic
+    /// recovered after a restart). New workers are silent and never register
+    /// one.
     ///
     /// # Panics
     /// Panics if the internal mirror lock is poisoned.
-    pub fn set_mirror_url(&self, worker_thread_id: &str, url: String) {
+    pub fn set_mirror(&self, worker_thread_id: &str, mirror: WorkerMirror) {
         self.mirrors
             .lock()
             .expect("worker mirror lock poisoned")
-            .insert(worker_thread_id.to_string(), url);
+            .insert(worker_thread_id.to_string(), mirror);
     }
 
-    /// The registered legacy mirror link for a worker, if any.
+    /// The registered legacy mirror topic of a worker, if any.
     ///
     /// # Panics
     /// Panics if the internal mirror lock is poisoned.
     #[must_use]
-    pub fn mirror_url(&self, worker_thread_id: &str) -> Option<String> {
+    pub fn mirror(&self, worker_thread_id: &str) -> Option<WorkerMirror> {
         self.mirrors
             .lock()
             .expect("worker mirror lock poisoned")
@@ -773,7 +806,7 @@ impl WorkerManager {
                 state.status = WorkerStatus::Queued;
             }
             state.wake.notify_one();
-            state.snapshot(worker_thread_id, self.mirror_url(worker_thread_id))
+            state.snapshot(worker_thread_id, self.mirror(worker_thread_id))
         };
         Some(snapshot)
     }
@@ -797,7 +830,7 @@ impl WorkerManager {
         steer_id: Option<u64>,
     ) -> (WorkerSnapshot, u64) {
         let (snapshot, prompt_id, spawn_wake) = {
-            let mirror_url = self.mirror_url(worker_thread_id);
+            let mirror = self.mirror(worker_thread_id);
             let mut map = self.state.lock().expect("worker state lock poisoned");
             match map.entry(worker_thread_id.to_string()) {
                 Entry::Occupied(mut occupied) => {
@@ -818,7 +851,7 @@ impl WorkerManager {
                     }
                     state.wake.notify_one();
                     (
-                        state.snapshot(worker_thread_id, mirror_url),
+                        state.snapshot(worker_thread_id, mirror.clone()),
                         prompt_id,
                         None,
                     )
@@ -854,7 +887,7 @@ impl WorkerManager {
                             .collect(),
                     });
                     (
-                        state.snapshot(worker_thread_id, mirror_url),
+                        state.snapshot(worker_thread_id, mirror.clone()),
                         prompt_id,
                         Some(wake),
                     )
@@ -873,12 +906,12 @@ impl WorkerManager {
     /// Panics if the internal worker state lock is poisoned.
     #[must_use]
     pub fn snapshot(&self, worker_thread_id: &str) -> Option<WorkerSnapshot> {
-        let mirror_url = self.mirror_url(worker_thread_id);
+        let mirror = self.mirror(worker_thread_id);
         self.state
             .lock()
             .expect("worker state lock poisoned")
             .get(worker_thread_id)
-            .map(|state| state.snapshot(worker_thread_id, mirror_url))
+            .map(|state| state.snapshot(worker_thread_id, mirror.clone()))
     }
 
     /// Snapshots of every worker owned by `owner_thread_id`, most recently
@@ -906,7 +939,7 @@ impl WorkerManager {
         let mut workers: Vec<(Instant, WorkerSnapshot)> = map
             .iter()
             .filter(|(_, state)| keep(state))
-            .map(|(id, state)| (state.touched_at, state.snapshot(id, self.mirror_url(id))))
+            .map(|(id, state)| (state.touched_at, state.snapshot(id, self.mirror(id))))
             .collect();
         workers.sort_by(|(a_at, a), (b_at, b)| {
             b_at.cmp(a_at).then_with(|| a.thread_id.cmp(&b.thread_id))
@@ -988,7 +1021,7 @@ impl WorkerManager {
             } else {
                 state.status = WorkerStatus::Cancelled;
             }
-            state.snapshot(worker_thread_id, self.mirror_url(worker_thread_id))
+            state.snapshot(worker_thread_id, self.mirror(worker_thread_id))
         };
         self.queue_changed(worker_thread_id);
         Ok(snapshot)
@@ -1040,7 +1073,7 @@ impl WorkerManager {
             }
             (
                 prompt,
-                state.snapshot(worker_thread_id, self.mirror_url(worker_thread_id)),
+                state.snapshot(worker_thread_id, self.mirror(worker_thread_id)),
             )
         };
         self.queue_changed(worker_thread_id);
@@ -1135,14 +1168,14 @@ impl WorkerManager {
                             });
                             tracing::info!(worker = %worker_thread_id, steer_id, "Steer accepted for the running turn");
                             let snapshot =
-                                state.snapshot(worker_thread_id, self.mirror_url(worker_thread_id));
+                                state.snapshot(worker_thread_id, self.mirror(worker_thread_id));
                             return Ok((SteerOutcome::InTurn { steer_id }, snapshot));
                         }
                     }
                 };
                 let prompt_id = self.queue_steer(state, steer_id, message, owner_thread_id, reason);
                 tracing::info!(worker = %worker_thread_id, steer_id, ?reason, "Steer queued");
-                let snapshot = state.snapshot(worker_thread_id, self.mirror_url(worker_thread_id));
+                let snapshot = state.snapshot(worker_thread_id, self.mirror(worker_thread_id));
                 return Ok((
                     SteerOutcome::Queued {
                         steer_id,
@@ -1571,7 +1604,10 @@ fn spawn_worker_task(manager: Arc<WorkerManager>, worker_thread_id: String, wake
                 status: state.status,
                 final_text: result.as_ref().ok().cloned(),
                 error: state.last_error.clone(),
-                mirror_url: manager.mirror_url(&worker_thread_id),
+                mirror_url: manager
+                    .mirror(&worker_thread_id)
+                    .as_ref()
+                    .and_then(WorkerMirror::url),
                 steers,
             };
             if manager
@@ -2503,13 +2539,17 @@ mod tests {
             .unwrap();
 
         // New workers are silent: nothing registers a mirror for them.
-        assert_eq!(manager.mirror_url(&worker_id), None);
+        assert_eq!(manager.mirror(&worker_id), None);
 
-        manager.set_mirror_url(&worker_id, "https://t.me/c/1/2".to_string());
-        assert_eq!(
-            manager.snapshot(&worker_id).unwrap().mirror_url.as_deref(),
-            Some("https://t.me/c/1/2")
-        );
+        let mirror = WorkerMirror::from_topic_thread("telegram--1001-topic-2").unwrap();
+        manager.set_mirror(&worker_id, mirror.clone());
+        let snapshot = manager.snapshot(&worker_id).unwrap();
+        assert_eq!(snapshot.mirror_url.as_deref(), Some("https://t.me/c/1/2"));
+        assert_eq!(snapshot.mirror, Some(mirror));
+        let wire = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(wire["mirror"]["chat"], -1001);
+        assert_eq!(wire["mirror"]["topic"], 2);
+        assert_eq!(wire["mirror"]["thread_id"], "telegram--1001-topic-2");
         let event = next_completion(&mut events_rx).await;
         assert_eq!(event.mirror_url.as_deref(), Some("https://t.me/c/1/2"));
     }

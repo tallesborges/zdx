@@ -88,10 +88,9 @@ async fn run_chat(
         );
     }
 
-    let thread_id_ref = thread_handle.as_ref().map(|t| t.id.as_str());
-
-    // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
-    zdx_engine::core::context::set_runtime_env(config, thread_id_ref);
+    // Tabs run concurrent turns on different threads, so the run's ZDX_*
+    // values reach tools through their context, not the process environment.
+    let _ = zdx_engine::skills::ensure_bundled_skills_materialized();
 
     let instruction_layers = tui_instruction_layers();
     let effective =

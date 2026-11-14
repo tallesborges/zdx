@@ -4,8 +4,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use tokio_util::sync::CancellationToken;
 use zdx_engine::config::{Config, paths};
 use zdx_engine::telegram::flood::{TelegramApiError, TelegramTransportError};
@@ -24,12 +22,11 @@ const TELEGRAM_DOWNLOAD_LIMIT_BYTES: u64 = 20 * 1024 * 1024;
 /// purpose: it keeps uploads fast and cheap and still leaves screenshot text
 /// legible; 1568px is Anthropic's standard-tier long edge, which it would
 /// downscale to anyway. The saved file keeps full resolution.
-const INLINE_IMAGE_EDGE: u32 = 1568;
-const INLINE_IMAGE_BYTES: usize = 1024 * 1024;
+#[cfg(test)]
+use zdx_engine::core::chat_turn::{INLINE_IMAGE_BYTES, INLINE_IMAGE_EDGE};
 const MAX_AUDIO_BYTES: u64 = 25 * 1024 * 1024; // 25MB
 const MAX_DOCUMENT_BYTES: u64 = 25 * 1024 * 1024; // 25MB
 const MAX_VIDEO_BYTES: u64 = zdx_engine::media::MAX_INLINE_BYTES as u64;
-const SUPPORTED_IMAGE_MIMES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
 /// Tries per Telegram file (`getFile` plus the file fetch). A slow link to
 /// Telegram drops single requests now and then; a fresh try usually works.
 const DOWNLOAD_ATTEMPTS: u32 = 3;
@@ -594,43 +591,25 @@ async fn load_image(
     }))
 }
 
-/// Shrinks an image to the inline limits, or explains why the model cannot
-/// see it. An image the decoder cannot read (GIF, for one) is sent as-is when
-/// it is a type providers accept and already within the byte limit.
+/// [`zdx_engine::core::chat_turn::prepare_inline_image`] as this bot's
+/// image delivery.
 fn prepare_inline_image(local_path: &Path, bytes: &[u8]) -> ImageDelivery {
-    if let Some((resized, mime_type)) =
-        zdx_engine::images::downscale_to_fit(bytes, INLINE_IMAGE_EDGE, INLINE_IMAGE_BYTES)
-    {
-        return ImageDelivery::Inline {
-            mime_type: mime_type.to_string(),
-            data: BASE64.encode(resized),
-            downscaled: true,
-        };
-    }
+    use zdx_engine::core::chat_turn::{self as chat, ImageDelivery as Prepared};
 
-    let detected = infer::get(bytes).map(|kind| kind.mime_type());
-    let reason = match detected {
-        Some(mime) if SUPPORTED_IMAGE_MIMES.contains(&mime) => {
-            if bytes.len() <= INLINE_IMAGE_BYTES {
-                return ImageDelivery::Inline {
-                    mime_type: mime.to_string(),
-                    data: BASE64.encode(bytes),
-                    downscaled: false,
-                };
-            }
-            format!(
-                "it is {} and could not be shrunk below the {} inline limit",
-                format_mib(bytes.len() as u64),
-                format_mib(INLINE_IMAGE_BYTES as u64)
-            )
+    let prepared = chat::prepare_inline_image(local_path, bytes);
+    match (prepared.delivery, prepared.image) {
+        (Prepared::Inline { downscaled }, Some(image)) => ImageDelivery::Inline {
+            mime_type: image.mime_type,
+            data: image.data,
+            downscaled,
+        },
+        (Prepared::SavedOnly { reason, ask_media }, _) => {
+            ImageDelivery::SavedOnly { reason, ask_media }
         }
-        Some(mime) => format!("the model cannot take {mime} images directly"),
-        None => "its image format was not recognized".to_string(),
-    };
-
-    ImageDelivery::SavedOnly {
-        reason,
-        ask_media: zdx_engine::media::can_ask_media(local_path, bytes.len() as u64),
+        (Prepared::Inline { .. }, None) => ImageDelivery::SavedOnly {
+            reason: "it could not be prepared".to_string(),
+            ask_media: false,
+        },
     }
 }
 
@@ -988,11 +967,12 @@ mod tests {
     use axum::routing::{get, post};
     use axum::{Json, Router};
     use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64;
     use serde_json::json;
     use zdx_engine::config::Config;
 
     use super::{
-        AllowlistConfig, BASE64, DOWNLOAD_ATTEMPTS, DownloadUnavailable, INLINE_IMAGE_BYTES,
+        AllowlistConfig, DOWNLOAD_ATTEMPTS, DownloadUnavailable, INLINE_IMAGE_BYTES,
         INLINE_IMAGE_EDGE, MAX_VIDEO_BYTES, TELEGRAM_DOWNLOAD_LIMIT_BYTES, extract_text,
         parse_incoming_message,
     };

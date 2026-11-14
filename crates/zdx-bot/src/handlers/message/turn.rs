@@ -126,6 +126,24 @@ async fn run_one_turn(
         ))
         .await;
     }
+    // Held from before anything is written until the turn is persisted: no
+    // other run (the orchestrator service, a TUI, `zdx exec`) may write this
+    // thread meanwhile.
+    let run_lease = match zdx_engine::core::thread_lease::ThreadRunLease::try_acquire(thread_id) {
+        Ok(lease) => std::sync::Arc::new(lease),
+        Err(err) => {
+            let _ = context
+                .client()
+                .send_message_without_preview(
+                    incoming.chat_id,
+                    &format_user_error_message(&format!("{err:#}")),
+                    reply_ctx.reply_to_message_id,
+                    reply_ctx.topic_id,
+                )
+                .await;
+            return Err(err);
+        }
+    };
     let resolved_root = context.root_for_chat(incoming.chat_id);
     let stored_root = thread_persistence::read_thread_root_path(thread_id)?;
     let worktree_root = stored_root
@@ -152,7 +170,7 @@ async fn run_one_turn(
                 .apply_thread_model_override(model_override.as_deref(), thinking_override)
                 .map_err(anyhow::Error::new)
                 .context("This topic's model selection cannot run; pick another with /model")?;
-            zdx_engine::core::context::set_runtime_env(&config, Some(thread_id));
+            let _ = zdx_engine::skills::ensure_bundled_skills_materialized();
             agent::prepare_bot_turn(&config, &worktree_root, context.bot_instruction_layer())
         });
     let prepared = match prepared {
@@ -240,6 +258,7 @@ async fn run_one_turn(
         spawn.thread,
         context.tool_config(),
         steer,
+        std::sync::Arc::clone(&run_lease),
     );
     let result = stream_turn_events(
         context,
@@ -252,6 +271,7 @@ async fn run_one_turn(
     // Barrier: the next queued message rebuilds its history from the thread log,
     // so the turn must be fully written before this one releases the queue slot.
     handle.await_persisted().await;
+    drop(run_lease);
     drop(typing);
     cleanup_turn_status(context, &status).await;
     let finalized = finalize_turn(
@@ -398,6 +418,8 @@ async fn run_service_turn(
         thread_id: Some(thread_id.to_string()),
         root: context.root_for_chat(incoming.chat_id).root,
         profile: None,
+        ordinary: false,
+        rerun: false,
         model: None,
         route: Some(Route {
             chat: incoming.chat_id,
@@ -411,6 +433,7 @@ async fn run_service_turn(
         } else {
             Delivery::Queue
         },
+        replay: false,
     };
     let turn = match ServiceTurn::submit(context.orchestrator(), thread_id, submit).await {
         Ok(Submission::Following(turn)) => turn,
@@ -458,6 +481,7 @@ pub(crate) async fn render_started_turn(
     thread_id: String,
     turn_id: u64,
     route: Route,
+    holder: Option<String>,
     events: mpsc::UnboundedReceiver<Event>,
 ) {
     let incoming = crate::types::IncomingMessage {
@@ -486,6 +510,7 @@ pub(crate) async fn render_started_turn(
         context.orchestrator().clone(),
         thread_id.clone(),
         CancelBy::Turn(turn_id),
+        holder,
         events,
     );
     if let Err(err) =
@@ -533,6 +558,8 @@ async fn render_service_turn(
             .call(&Request::Release {
                 thread_id: thread_id.to_string(),
                 turn_id,
+                force: turn.holder.is_none(),
+                holder: turn.holder.clone(),
             })
             .await
     {
@@ -557,6 +584,9 @@ struct ServiceTurn {
     rx: AgentEventRx,
     cancel: CancellationToken,
     ended: oneshot::Receiver<Option<(u64, bool)>>,
+    /// Token of the hold this process owns for the turn: the follower's,
+    /// or the renderer subscription's.
+    holder: Option<String>,
 }
 
 /// What happened to a message submitted to the service.
@@ -580,7 +610,10 @@ impl ServiceTurn {
             .await?
             .context("the orchestrator service closed the connection")?;
         let Reply::Submitted {
-            input_id, in_turn, ..
+            input_id,
+            in_turn,
+            holder,
+            ..
         } = ok(first)?
         else {
             bail!("unexpected reply from the orchestrator service");
@@ -603,6 +636,7 @@ impl ServiceTurn {
             client.clone(),
             thread_id.to_string(),
             CancelBy::Input(input_id),
+            holder,
             events,
         )))
     }
@@ -614,6 +648,7 @@ impl ServiceTurn {
         client: OrchestratorClient,
         thread_id: String,
         cancel_by: CancelBy,
+        holder: Option<String>,
         mut events: mpsc::UnboundedReceiver<Event>,
     ) -> Self {
         let (tx, rx) = zdx_engine::core::agent::create_event_channel();
@@ -683,7 +718,12 @@ impl ServiceTurn {
             }
             let _ = ended_tx.send(ran);
         });
-        Self { rx, cancel, ended }
+        Self {
+            rx,
+            cancel,
+            ended,
+            holder,
+        }
     }
 }
 
@@ -772,7 +812,8 @@ async fn stream_turn_events(
                             }
                             AgentEvent::ToolCompleted { id, result, .. } => {
                                 if let Some(name) = tool_names.remove(id)
-                                    && let Some(worker) = touched_worker_id(&name, result)
+                                    && let Some(worker) =
+                                        zdx_engine::tools::orchestrator::touched_worker_id(&name, result)
                                     && !touched_workers.contains(&worker)
                                 {
                                     touched_workers.push(worker);
@@ -803,30 +844,6 @@ async fn stream_turn_events(
         error_message,
         touched_workers,
     }
-}
-
-/// Worker thread id from a successful `Create_Thread` / `Send_Thread_Message`
-/// result, so the reply can link the worker.
-fn touched_worker_id(
-    tool_name: &str,
-    result: &zdx_engine::core::events::ToolOutput,
-) -> Option<String> {
-    if !matches!(
-        tool_name.to_ascii_lowercase().as_str(),
-        "create_thread" | "send_thread_message"
-    ) {
-        return None;
-    }
-    let zdx_engine::core::events::ToolOutput::Success { data, .. } = result else {
-        return None;
-    };
-    data.get("thread_id")
-        .or_else(|| {
-            data.get("worker")
-                .and_then(|worker| worker.get("thread_id"))
-        })
-        .and_then(|value| value.as_str())
-        .map(str::to_string)
 }
 
 #[allow(clippy::too_many_arguments)]

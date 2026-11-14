@@ -1,0 +1,191 @@
+[
+  {
+    "name": "json gzip",
+    "status": 200,
+    "content_type": "application/json",
+    "content_encoding": "gzip",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "json no header",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "json q zero",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "json identity preferred",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "json tie prefers gzip",
+    "status": 200,
+    "content_type": "application/json",
+    "content_encoding": "gzip",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "json star",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "json upper",
+    "status": 200,
+    "content_type": "application/json",
+    "content_encoding": "gzip",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "json space q",
+    "status": 200,
+    "content_type": "application/json",
+    "content_encoding": "gzip",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "json spaced equals",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "json q too precise",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "json q above one",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "json q tiny",
+    "status": 200,
+    "content_type": "application/json",
+    "content_encoding": "gzip",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "json x-gzip",
+    "status": 200,
+    "content_type": "application/json",
+    "content_encoding": "gzip",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "json br only",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "json deflate br gzip",
+    "status": 200,
+    "content_type": "application/json",
+    "content_encoding": "gzip",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "json two headers",
+    "status": 200,
+    "content_type": "application/json",
+    "content_encoding": "gzip",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "json other param",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "small",
+    "status": 200,
+    "content_type": "text/plain",
+    "body": "31 bytes"
+  },
+  {
+    "name": "edge 32",
+    "status": 200,
+    "content_type": "text/plain",
+    "content_encoding": "gzip",
+    "vary": "accept-encoding",
+    "body": "32 bytes"
+  },
+  {
+    "name": "png",
+    "status": 200,
+    "content_type": "image/png",
+    "body": "400 bytes"
+  },
+  {
+    "name": "svg",
+    "status": 200,
+    "content_type": "image/svg+xml",
+    "content_encoding": "gzip",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "upper image type",
+    "status": 200,
+    "content_type": "Image/PNG",
+    "content_encoding": "gzip",
+    "vary": "accept-encoding",
+    "body": "400 bytes"
+  },
+  {
+    "name": "sse",
+    "status": 200,
+    "content_type": "text/event-stream",
+    "body": "400 bytes"
+  },
+  {
+    "name": "grpc",
+    "status": 200,
+    "content_type": "application/grpc",
+    "body": "400 bytes"
+  },
+  {
+    "name": "error text",
+    "status": 401,
+    "content_type": "text/plain; charset=utf-8",
+    "content_encoding": "gzip",
+    "vary": "accept-encoding",
+    "body": "41 bytes"
+  },
+  {
+    "name": "small no header",
+    "status": 200,
+    "content_type": "text/plain",
+    "body": "31 bytes"
+  }
+]

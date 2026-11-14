@@ -7,7 +7,7 @@
 //! into a user message, so the assistant cannot invoke them.
 
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::core::context::{
     MAX_AGENTS_FILE_SIZE, ScopedContextFile, discover_scoped_context, load_all_agents_files,
@@ -24,7 +24,7 @@ pub fn build_zdx_context(root: &Path) -> String {
     if let Some(section) = build_manifest_section(root) {
         parts.push(section);
     }
-    if let Some(section) = build_memory_section() {
+    if let Some(section) = build_memory_section(root) {
         parts.push(section);
     }
     if let Some(section) = build_instructions_section(root) {
@@ -60,9 +60,18 @@ fn build_manifest_section(root: &Path) -> Option<String> {
     Some(out.trim_end().to_string())
 }
 
-fn build_memory_section() -> Option<String> {
-    let memory_root = std::env::var("ZDX_MEMORY_ROOT").ok()?;
-    let path = PathBuf::from(memory_root).join("Notes").join("MEMORY.md");
+/// The memory index of the config that applies at `root`: the same value a
+/// run there gets as `ZDX_MEMORY_ROOT`, without reading the process
+/// environment (shared by concurrent runs).
+fn build_memory_section(root: &Path) -> Option<String> {
+    let config =
+        crate::config::Config::load_layered(&crate::config::paths::config_layer_paths_for(root))
+            .ok()?;
+    let path = config
+        .memory
+        .effective_root_path()
+        .join("Notes")
+        .join("MEMORY.md");
     let body = std::fs::read_to_string(&path).ok()?;
     let trimmed = body.trim();
     if trimmed.is_empty() {

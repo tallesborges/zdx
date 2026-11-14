@@ -1,0 +1,99 @@
+[
+  {
+    "name": "valid",
+    "status": 200,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "ok"
+  },
+  {
+    "name": "missing field",
+    "status": 422,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize the JSON body into the target type: missing field `artifact_path` at line 1 column 21"
+  },
+  {
+    "name": "unknown field",
+    "status": 422,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize the JSON body into the target type: notes: unknown field `notes`, expected one of `submission_id`, `artifact_path`, `artifact_sha256`, `allow_stale`, `note`, `viewport`, `image`, `annotations` at line 1 column 28"
+  },
+  {
+    "name": "wrong type",
+    "status": 422,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize the JSON body into the target type: submission_id: invalid type: integer `5`, expected a string at line 1 column 18"
+  },
+  {
+    "name": "duplicate field",
+    "status": 422,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize the JSON body into the target type: duplicate field `submission_id` at line 1 column 36"
+  },
+  {
+    "name": "not an object",
+    "status": 422,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize the JSON body into the target type: invalid length 1, expected struct TypedSubmission with 8 elements at line 1 column 5"
+  },
+  {
+    "name": "data error before syntax error",
+    "status": 422,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize the JSON body into the target type: submission_id: invalid type: integer `5`, expected a string at line 1 column 18"
+  },
+  {
+    "name": "syntax error before data error",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to parse the request body as JSON: submission_id: unexpected end of hex escape at line 1 column 25"
+  },
+  {
+    "name": "lone surrogate after data error",
+    "status": 422,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize the JSON body into the target type: x: unknown field `x`, expected one of `submission_id`, `artifact_path`, `artifact_sha256`, `allow_stale`, `note`, `viewport`, `image`, `annotations` at line 1 column 4"
+  },
+  {
+    "name": "trailing after valid",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to parse the request body as JSON: trailing characters at line 1 column 82"
+  },
+  {
+    "name": "trailing after data error",
+    "status": 422,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize the JSON body into the target type: submission_id: invalid type: integer `5`, expected a string at line 1 column 18"
+  },
+  {
+    "name": "case sensitive key",
+    "status": 422,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize the JSON body into the target type: Submission_ID: unknown field `Submission_ID`, expected one of `submission_id`, `artifact_path`, `artifact_sha256`, `allow_stale`, `note`, `viewport`, `image`, `annotations` at line 1 column 16"
+  },
+  {
+    "name": "null",
+    "status": 422,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize the JSON body into the target type: invalid type: null, expected struct TypedSubmission at line 1 column 4"
+  },
+  {
+    "name": "empty",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to parse the request body as JSON: EOF while parsing a value at line 1 column 0"
+  }
+]

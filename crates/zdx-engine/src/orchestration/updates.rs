@@ -218,6 +218,34 @@ pub struct InputImage {
     pub data: String,
 }
 
+impl InputImage {
+    /// Reads an image file as sent inline, typed by its content (PNG, JPEG,
+    /// GIF, or WebP).
+    ///
+    /// # Errors
+    /// Returns an error when the file cannot be read or is not such an image.
+    pub fn from_file(path: &std::path::Path) -> Result<Self> {
+        use base64::Engine as _;
+
+        let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+        let mime_type = infer::get(&bytes)
+            .map(|kind| kind.mime_type())
+            .filter(|mime| {
+                matches!(
+                    *mime,
+                    "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+                )
+            })
+            .with_context(|| {
+                format!("{} is not a PNG, JPEG, GIF, or WebP image", path.display())
+            })?;
+        Ok(Self {
+            mime_type: mime_type.to_string(),
+            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        })
+    }
+}
+
 /// Appends a user message to the thread and to the in-memory history.
 ///
 /// The persisted event carries the text and the advisory runtime-context

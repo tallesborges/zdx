@@ -135,6 +135,7 @@ async fn run_subagent(prompt: String, ctx: &ToolContext) -> Result<String, Strin
         activity_parent_thread_id: ctx.current_thread_id.clone(),
         thread_origin_kind: Some("helper:read_thread".to_string()),
         thread_parent_id: ctx.current_thread_id.clone(),
+        env: ctx.env.clone(),
         ..Default::default()
     };
 

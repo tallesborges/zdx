@@ -83,20 +83,31 @@ pub fn restart(target: &str, force: bool) -> Result<()> {
     Ok(())
 }
 
-/// `zdx service restart <target> --queue` — hand the restart to the bot,
-/// which performs it once no agent run is active.
+/// `zdx service restart <target> --queue [--thread ID] [--json]` — hand the
+/// restart to the bot, which performs it once no agent run is active.
 ///
 /// # Errors
 /// Returns an error if the target is unknown, the bot service is not running
 /// under a supervisor, or the request cannot be written.
-pub fn queue_restart(target: &str) -> Result<()> {
+pub fn queue_restart(target: &str, thread: Option<String>, json: bool) -> Result<()> {
     let services = Service::parse_target(target)?;
     // Lets the bot announce the restart in the Telegram topic that asked.
-    let thread_id = std::env::var("ZDX_THREAD_ID")
-        .ok()
+    let thread_id = thread
+        .or_else(|| std::env::var("ZDX_THREAD_ID").ok())
         .filter(|id| !id.trim().is_empty());
     let outcome = service::queue_restart(&services, thread_id.as_deref())?;
     let active = agent_activity::list_active().len();
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "already_pending": outcome.already_pending,
+                "active_runs": active,
+                "request": outcome.request,
+            })
+        );
+        return Ok(());
+    }
     let names = service_names(&outcome.request.services);
     if outcome.already_pending {
         println!("A restart was already queued; it now covers {names}.");
@@ -106,6 +117,50 @@ pub fn queue_restart(target: &str) -> Result<()> {
     println!(
         "The bot performs it as soon as no agent run is active ({active} active now). Check with `zdx service status`."
     );
+    Ok(())
+}
+
+/// `zdx service restart-peers [--force] [--json]` — the bot's `/restart`
+/// step before it exits: daemon, plus the orchestrator service when
+/// installed. With `--json`, a gate refusal is a successful
+/// `{"outcome":"blocked","text"}`; a failed restart is an error.
+///
+/// # Errors
+/// Returns an error if a restart fails (or, without `--json`, is blocked).
+pub fn restart_peers(force: bool, json: bool) -> Result<()> {
+    match service::restart_bot_peers(force) {
+        Ok(statuses) if json => println!(
+            "{}",
+            serde_json::json!({"outcome": "restarted", "text": statuses.join(", ")})
+        ),
+        Ok(statuses) => {
+            for status in statuses {
+                println!("{status}");
+            }
+        }
+        Err(err) if json && err.downcast_ref::<service::RestartBlocked>().is_some() => println!(
+            "{}",
+            serde_json::json!({"outcome": "blocked", "text": err.to_string()})
+        ),
+        Err(err) => return Err(err),
+    }
+    Ok(())
+}
+
+/// `zdx service run-queued-restart [--json]`.
+///
+/// # Errors
+/// Returns an error only if JSON serialization fails.
+pub fn run_queued_restart(json: bool) -> Result<()> {
+    let run = service::run_queued_restart();
+    if json {
+        println!("{}", serde_json::to_string(&run)?);
+        return Ok(());
+    }
+    match &run.message {
+        Some(message) => println!("{message}"),
+        None => println!("{}", serde_json::to_string(&run.status)?.trim_matches('"')),
+    }
     Ok(())
 }
 

@@ -48,10 +48,7 @@ where
     }
 }
 
-use super::{
-    ImageContent, ToolContext, ToolDefinition, ToolOutput, insert_file_path_fields,
-    resolve_existing_path,
-};
+use super::{ImageContent, ToolContext, ToolDefinition, ToolOutput, insert_file_path_fields};
 
 /// Maximum number of lines to return (truncation threshold).
 const MAX_LINES: usize = 2000;
@@ -125,7 +122,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     let normalized_path = crate::normalize_input_path(path);
     let normalized_path_str = normalized_path.to_string_lossy();
 
-    let mut resolved = match resolve_existing_path(normalized_path_str.as_ref(), &ctx.root) {
+    let mut resolved = match ctx.resolve_existing_path(normalized_path_str.as_ref()) {
         Ok(p) => p,
         Err(e) => return e,
     };

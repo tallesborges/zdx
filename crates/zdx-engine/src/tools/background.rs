@@ -1,7 +1,7 @@
 //! Background-process tools + spawn/registration used by the Bash tool.
 //!
 //! - [`run_background`] is invoked by the `Bash` tool when `background: true`:
-//!   it spawns a detached process (via [`zdx_tools::bash::spawn_background`]),
+//!   it spawns a detached process (via [`spawn_background_with_env`]),
 //!   registers it in [`crate::background_activity`], starts a reaping waiter,
 //!   and returns a `bg_id`.
 //! - [`prepare_handoff`] is invoked by the `Bash` tool for every *foreground*
@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
+use zdx_tools::bash::spawn_background_with_env;
 
 use super::{Tool, ToolContext, ToolDefinition, ToolFuture};
 use crate::background_activity::{
@@ -92,7 +93,7 @@ pub async fn run_background(input: &Value, ctx: &ToolContext) -> ToolOutput {
     let stderr_log = background_activity::stderr_log_path(&bg_id);
     let cwd = ctx.root.clone();
 
-    let spawn = match zdx_tools::bash::spawn_background(command, &cwd, &stdout_log, &stderr_log) {
+    let spawn = match spawn_background_with_env(command, &cwd, &ctx.env, &stdout_log, &stderr_log) {
         Ok(s) => s,
         Err(e) => {
             return ToolOutput::failure(
@@ -775,6 +776,30 @@ mod handoff_registry_tests {
             return true;
         }
         std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+
+    /// A `background: true` command gets the run's environment.
+    #[tokio::test]
+    async fn explicit_background_command_gets_the_run_env() {
+        let home = crate::test_support::temp_zdx_home();
+        let mut ctx = ToolContext::new(home.path().to_path_buf(), None)
+            .with_env(crate::tools::ToolEnv::default().with("ZDX_THREAD_ID", "thread-bg"));
+        ctx.current_thread_id = Some("thread-bg".to_string());
+
+        let output =
+            run_background(&json!({ "command": "printf %s \"$ZDX_THREAD_ID\"" }), &ctx).await;
+        let data = output.data().expect("spawned");
+        let log = std::path::PathBuf::from(data["stdout_log"].as_str().unwrap());
+
+        let mut content = String::new();
+        for _ in 0..100 {
+            content = std::fs::read_to_string(&log).unwrap_or_default();
+            if !content.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(content, "thread-bg");
     }
 
     #[tokio::test]

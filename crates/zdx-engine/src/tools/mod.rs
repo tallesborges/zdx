@@ -32,8 +32,8 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 // Re-export path helpers and serde helpers from zdx-tools for backward compat
 pub use zdx_tools::{
-    ResolvedPath, expand_env_vars, insert_file_path_fields, resolve_existing_path,
-    resolve_input_path, resolve_path_against_root,
+    ResolvedPath, ToolEnv, expand_env_vars, insert_file_path_fields, resolve_existing_path,
+    resolve_existing_path_in, resolve_input_path, resolve_path_against_root,
 };
 use zdx_types::events::AgentEvent;
 pub use zdx_types::{ToolDefinition, ToolResult, ToolResultBlock, ToolResultContent};
@@ -98,6 +98,13 @@ pub struct ToolContext {
 
     /// Skills the `skill` and `skill_exec` tools may reach in this run.
     pub skill_scope: crate::skills::SkillScope,
+
+    /// The run's own environment (`ZDX_HOME`, `ZDX_ARTIFACT_DIR`,
+    /// `ZDX_THREAD_ID`, `ZDX_MEMORY_ROOT`), set per turn from its config and
+    /// thread. Every child process a tool starts gets it, and `$VAR` in tool
+    /// paths reads it before the process environment. Empty outside an
+    /// engine turn, where only the process environment applies.
+    pub env: ToolEnv,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -119,6 +126,7 @@ impl std::fmt::Debug for ToolContext {
             .field("background_execution", &self.background_execution)
             .field("turn_tasks", &self.turn_tasks.is_some())
             .field("skill_scope", &self.skill_scope)
+            .field("env", &self.env)
             .finish()
     }
 }
@@ -231,7 +239,23 @@ impl ToolContext {
             },
             turn_tasks: None,
             skill_scope: crate::skills::SkillScope::default(),
+            env: ToolEnv::default(),
         }
+    }
+
+    /// Sets the run's own environment; see [`ToolContext::env`].
+    #[must_use]
+    pub fn with_env(mut self, env: ToolEnv) -> Self {
+        self.env = env;
+        self
+    }
+
+    /// [`resolve_existing_path`] with the run's environment.
+    ///
+    /// # Errors
+    /// Returns an error if the path is empty or does not exist.
+    pub fn resolve_existing_path(&self, path: &str) -> Result<ResolvedPath, ToolOutput> {
+        resolve_existing_path_in(path, &self.root, &self.env)
     }
 
     #[must_use]
@@ -276,7 +300,8 @@ impl ToolContext {
     /// Convert to a leaf tool context (for zdx-tools).
     #[must_use]
     pub fn as_leaf(&self) -> zdx_tools::ToolContext {
-        let mut ctx = zdx_tools::ToolContext::new(self.root.clone(), self.timeout);
+        let mut ctx =
+            zdx_tools::ToolContext::new(self.root.clone(), self.timeout).with_env(self.env.clone());
         ctx.cancel_token.clone_from(&self.cancel_token);
         ctx
     }

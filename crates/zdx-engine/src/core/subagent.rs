@@ -71,6 +71,9 @@ pub struct ExecSubagentOptions {
     /// Worker steer file (`--steer-file`): the child reads new steers there
     /// at safe points and reports each one it adds on its event stream.
     pub steer_file: Option<PathBuf>,
+    /// Environment of the run that starts the child, passed on top of the
+    /// process environment (`ToolContext::env`). Empty: process env only.
+    pub env: zdx_tools::ToolEnv,
 }
 
 #[derive(Debug)]
@@ -234,6 +237,9 @@ pub async fn spawn_exec_subagent(
     let child = {
         let mut command = SupervisedCommand::new(exe);
         command.args(args).current_dir(root);
+        for (key, value) in options.env.iter() {
+            command.env(key, value);
+        }
         command
             .spawn(Duration::from_secs(5))
             .await
@@ -246,6 +252,7 @@ pub async fn spawn_exec_subagent(
         command
             .args(args)
             .current_dir(root)
+            .envs(options.env.iter())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
@@ -904,6 +911,7 @@ mod tests {
                 thread_subagent_name: None,
                 thread_id: None,
                 steer_file: None,
+                env: zdx_tools::ToolEnv::default(),
             },
             Some(system_prompt_file),
         );

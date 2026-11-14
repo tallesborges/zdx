@@ -8,10 +8,7 @@ use std::sync::PoisonError;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{
-    ToolContext, ToolDefinition, ToolOutput, i64_or_string, insert_file_path_fields,
-    resolve_existing_path,
-};
+use super::{ToolContext, ToolDefinition, ToolOutput, i64_or_string, insert_file_path_fields};
 
 /// Returns the tool definition for the edit tool.
 pub fn definition() -> ToolDefinition {
@@ -95,7 +92,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     };
 
     // Resolve path
-    let resolved = match resolve_existing_path(&input.file_path, &ctx.root) {
+    let resolved = match ctx.resolve_existing_path(&input.file_path) {
         Ok(p) => p,
         Err(e) => return e,
     };

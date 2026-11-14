@@ -945,16 +945,14 @@ impl TuiRuntime {
             // Thread effects (pure async handlers)
             UiEffect::SaveThread { event } => {
                 if let Some(ref mut s) = self.state.tui.thread.thread_handle {
-                    let _ = s.append(&event);
-                    // Errors are silently ignored for thread persistence
+                    append_or_warn(s, &event);
                 }
             }
             UiEffect::SaveThreadInBackgroundTab { tab_id, event } => {
                 if let Some(tab) = self.state.background_tab_mut(tab_id)
                     && let Some(ref mut s) = tab.thread.thread_handle
                 {
-                    let _ = s.append(&event);
-                    // Errors silently ignored, mirroring the active-tab path.
+                    append_or_warn(s, &event);
                 }
             }
             UiEffect::RenameThread { thread_id, title } => {
@@ -1580,6 +1578,18 @@ pub(crate) fn reload_tab_config(tab: &mut crate::state::TuiState, layers: &[Path
         }
     }
     tab.config_watch = watch;
+}
+
+/// Appends a TUI-made event, unless a run in another process is writing the
+/// thread now. Errors are logged and otherwise ignored, as before; a turn
+/// started next reports the held thread.
+fn append_or_warn(
+    thread: &mut zdx_engine::core::thread_persistence::Thread,
+    event: &zdx_engine::core::thread_persistence::ThreadEvent,
+) {
+    if let Err(err) = zdx_engine::core::thread_lease::append_outside_foreign_turn(thread, event) {
+        tracing::warn!(thread = %thread.id, err = %format!("{err:#}"), "Thread event not saved");
+    }
 }
 
 #[cfg(test)]

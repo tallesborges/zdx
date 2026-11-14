@@ -97,6 +97,14 @@ web-check:
 web-build:
     cd apps/web && bun run build-cached.mjs
 
+# Go gateway (apps/gateway): format, vet, race tests (Go toolchain pinned in its go.mod)
+gateway-check:
+    cd apps/gateway && test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...
+
+# Build zdx-gateway with the Mini App embedded (default output apps/gateway/bin/zdx-gateway)
+gateway-build *OUT:
+    apps/gateway/build.sh {{OUT}}
+
 # ─── Build ────────────────────────────────────────
 
 # Build release binary (embeds the Mini App, so build it first)
@@ -118,13 +126,24 @@ install: build-release
     @# index only: no exports, no memory index.
     ~/.local/bin/zdx threads reindex
 
-# Build, install, and restart the launchd services with the new binary
-deploy: install
+# Build, install (plus an installed gateway), and restart the launchd services
+deploy: install install-gateway-if-present
     ~/.local/bin/zdx service restart all
 
 # Build, install, and queue the restart until agent runs, workers, and orchestrator updates are done
-safe-deploy: install
+safe-deploy: install install-gateway-if-present
     ~/.local/bin/zdx service restart all --queue
+
+# Build the Go gateway into ~/.local/bin/zdx-gateway, the stable path the bot service runs
+gateway-install:
+    @mkdir -p ~/.local/bin
+    apps/gateway/build.sh ~/.local/bin/.zdx-gateway.new
+    mv -f ~/.local/bin/.zdx-gateway.new ~/.local/bin/zdx-gateway
+    @echo "Installed ~/.local/bin/zdx-gateway"
+
+[private]
+install-gateway-if-present:
+    @if [ -x ~/.local/bin/zdx-gateway ]; then just gateway-install; fi
 
 # (Re)create ~/.local/bin/zdxd as a symlink to the debug build
 install-debug:

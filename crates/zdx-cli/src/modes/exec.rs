@@ -72,6 +72,7 @@ impl From<&ExecOptions> for AgentOptions {
                     zdx_engine::core::steer::SteerFile::new(path),
                 ))
             }),
+            run_lease: None,
         }
     }
 }
@@ -124,9 +125,16 @@ pub async fn run_exec(
         reports_complete: true,
     };
     let thread_id_ref = thread.as_ref().map(|t| t.id.as_str());
+    // Held from before the user message is recorded until the turn is
+    // persisted: no other run may write this thread meanwhile.
+    let run_lease = thread_id_ref
+        .map(zdx_engine::core::thread_lease::ThreadRunLease::try_acquire)
+        .transpose()?
+        .map(std::sync::Arc::new);
 
-    // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
-    zdx_engine::core::context::set_runtime_env(config, thread_id_ref);
+    // The run's ZDX_* values reach its tools through their context; the
+    // process environment is never changed (other threads may read it).
+    let _ = zdx_engine::skills::ensure_bundled_skills_materialized();
 
     let effective = if options.no_system_prompt {
         None
@@ -184,7 +192,8 @@ pub async fn run_exec(
     if let Some(ref mut s) = thread {
         s.append(&ThreadEvent::user_message_with_context(prompt, block, key))?;
     }
-    let agent_opts = AgentOptions::from(options);
+    let mut agent_opts = AgentOptions::from(options);
+    agent_opts.run_lease.clone_from(&run_lease);
 
     // Create channels for broadcast
     let (agent_tx, agent_rx) = zdx_engine::core::agent::create_event_channel();
@@ -228,6 +237,7 @@ pub async fn run_exec(
         events_complete &= broadcaster.await.is_ok();
         let _ = persist.await;
     }
+    drop(run_lease);
     events_complete &= renderer_handle.await.unwrap_or(false);
     // A steer report that may not have reached stdout makes every unreported
     // steer uncertain, so no marker then.

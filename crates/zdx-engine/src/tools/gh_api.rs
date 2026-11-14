@@ -102,7 +102,7 @@ fn checked_path(raw: &str) -> Result<String, ToolOutput> {
 }
 
 /// Executes the GitHub API tool and returns a structured envelope.
-pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
+pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     let input: GhApiInput = match serde_json::from_value(input.clone()) {
         Ok(value) => value,
         Err(err) => {
@@ -138,7 +138,12 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
         args.push(format!("Accept: {accept}"));
     }
 
-    let output = match Command::new("gh").args(&args).output().await {
+    let output = match Command::new("gh")
+        .args(&args)
+        .envs(ctx.env.iter())
+        .output()
+        .await
+    {
         Ok(output) => output,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return ToolOutput::failure(

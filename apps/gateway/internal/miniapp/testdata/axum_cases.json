@@ -1,0 +1,698 @@
+[
+ {
+  "name": "threads default",
+  "path": "/api/threads"
+ },
+ {
+  "name": "threads kind workers",
+  "path": "/api/threads?kind=workers"
+ },
+ {
+  "name": "threads kind percent",
+  "path": "/api/threads?kind=work%65rs"
+ },
+ {
+  "name": "threads kind unknown",
+  "path": "/api/threads?kind=bogus"
+ },
+ {
+  "name": "threads kind empty",
+  "path": "/api/threads?kind="
+ },
+ {
+  "name": "threads kind case",
+  "path": "/api/threads?kind=WORKERS"
+ },
+ {
+  "name": "threads kind duplicate",
+  "path": "/api/threads?kind=all&kind=workers"
+ },
+ {
+  "name": "threads unknown key",
+  "path": "/api/threads?other=1&kind=all"
+ },
+ {
+  "name": "threads semicolon",
+  "path": "/api/threads?kind=workers;x=1"
+ },
+ {
+  "name": "thread plain",
+  "path": "/api/threads/t1"
+ },
+ {
+  "name": "thread after",
+  "path": "/api/threads/t1?after=5"
+ },
+ {
+  "name": "thread after plus",
+  "path": "/api/threads/t1?after=%2B5"
+ },
+ {
+  "name": "thread after plus only",
+  "path": "/api/threads/t1?after=%2B"
+ },
+ {
+  "name": "thread after negative",
+  "path": "/api/threads/t1?after=-1"
+ },
+ {
+  "name": "thread after empty",
+  "path": "/api/threads/t1?after="
+ },
+ {
+  "name": "thread after overflow",
+  "path": "/api/threads/t1?after=99999999999999999999"
+ },
+ {
+  "name": "thread after exponent",
+  "path": "/api/threads/t1?after=1e3"
+ },
+ {
+  "name": "thread after space",
+  "path": "/api/threads/t1?after=+5"
+ },
+ {
+  "name": "thread after duplicate",
+  "path": "/api/threads/t1?after=1&after=2"
+ },
+ {
+  "name": "thread after bad then dup",
+  "path": "/api/threads/t1?after=x&after=1"
+ },
+ {
+  "name": "thread id utf8",
+  "path": "/api/threads/%E2%82%AC"
+ },
+ {
+  "name": "thread id invalid utf8",
+  "path": "/api/threads/%FF"
+ },
+ {
+  "name": "thread id invalid utf8 and bad query",
+  "path": "/api/threads/%FF?after=x"
+ },
+ {
+  "name": "thread id escaped slash",
+  "path": "/api/threads/a%2Fb"
+ },
+ {
+  "name": "trajectory invalid utf8",
+  "path": "/api/threads/%C3%28/trajectory"
+ },
+ {
+  "name": "artifact file",
+  "path": "/api/threads/t1/artifacts/file?path=a"
+ },
+ {
+  "name": "artifact file missing path",
+  "path": "/api/threads/t1/artifacts/file"
+ },
+ {
+  "name": "artifact file missing path bad id",
+  "path": "/api/threads/%FF/artifacts/file"
+ },
+ {
+  "name": "artifact file duplicate path",
+  "path": "/api/threads/t1/artifacts/file?path=a&path=b"
+ },
+ {
+  "name": "artifact file bad escape",
+  "path": "/api/threads/t1/artifacts/file?path=a%zzb%"
+ },
+ {
+  "name": "artifact file plus",
+  "path": "/api/threads/t1/artifacts/file?path=a+b"
+ },
+ {
+  "name": "artifact file lossy",
+  "path": "/api/threads/t1/artifacts/file?path=x%FFy"
+ },
+ {
+  "name": "artifact file empty key",
+  "path": "/api/threads/t1/artifacts/file?=1&&path=a"
+ },
+ {
+  "name": "artifact file key only",
+  "path": "/api/threads/t1/artifacts/file?path"
+ },
+ {
+  "name": "artifact version",
+  "path": "/api/threads/t1/artifacts/version?path=dir%2Fa.png"
+ },
+ {
+  "name": "artifact image missing",
+  "path": "/api/threads/t1/artifacts/image?pat=a"
+ },
+ {
+  "name": "git none",
+  "path": "/api/git"
+ },
+ {
+  "name": "git empty thread",
+  "path": "/api/git?thread_id="
+ },
+ {
+  "name": "git duplicate thread",
+  "path": "/api/git?thread_id=a&thread_id=b"
+ },
+ {
+  "name": "git scope",
+  "path": "/api/git/scope?scope=all&thread_id=t1"
+ },
+ {
+  "name": "git scope missing",
+  "path": "/api/git/scope?thread_id=t1"
+ },
+ {
+  "name": "git diff ok",
+  "path": "/api/git/diff?thread_id=t1&kind=commit&commit=abc1234&path=src%2Fa%20b.rs"
+ },
+ {
+  "name": "git diff missing both",
+  "path": "/api/git/diff?thread_id=t1"
+ },
+ {
+  "name": "git diff missing kind",
+  "path": "/api/git/diff?path=a"
+ },
+ {
+  "name": "git diff duplicate commit",
+  "path": "/api/git/diff?path=a&kind=all&commit=1&commit=2"
+ },
+ {
+  "name": "usage default",
+  "path": "/api/usage"
+ },
+ {
+  "name": "usage days",
+  "path": "/api/usage?days=30"
+ },
+ {
+  "name": "usage overflow",
+  "path": "/api/usage?days=4294967296"
+ },
+ {
+  "name": "usage negative",
+  "path": "/api/usage?days=-1"
+ },
+ {
+  "name": "usage plus",
+  "path": "/api/usage?days=%2B3"
+ },
+ {
+  "name": "usage decimal",
+  "path": "/api/usage?days=1.5"
+ },
+ {
+  "name": "no auth",
+  "path": "/api/usage?days=x",
+  "no_auth": true
+ },
+ {
+  "name": "no auth bad id",
+  "path": "/api/threads/%FF",
+  "no_auth": true
+ },
+ {
+  "name": "unknown api path",
+  "path": "/api/nope",
+  "no_auth": true
+ },
+ {
+  "name": "wrong method",
+  "method": "POST",
+  "path": "/api/threads",
+  "no_auth": true
+ },
+ {
+  "name": "wrong method feedback",
+  "method": "GET",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "no_auth": true
+ },
+ {
+  "name": "trailing slash list",
+  "path": "/api/threads/"
+ },
+ {
+  "name": "trailing slash thread",
+  "path": "/api/threads/t1/"
+ },
+ {
+  "name": "empty id segment",
+  "path": "/api/threads//trajectory"
+ },
+ {
+  "name": "head thread list",
+  "method": "HEAD",
+  "path": "/api/threads"
+ },
+ {
+  "name": "feedback ok",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json",
+  "body": "{\"submission_id\":\"s1\"}"
+ },
+ {
+  "name": "feedback no content type",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "body": "{\"submission_id\":\"s1\"}"
+ },
+ {
+  "name": "feedback text json",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "text/json",
+  "body": "{}"
+ },
+ {
+  "name": "feedback charset",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json; charset=utf-8",
+  "body": "{}"
+ },
+ {
+  "name": "feedback suffix",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/cloudevents+json",
+  "body": "{}"
+ },
+ {
+  "name": "feedback upper",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "APPLICATION/JSON",
+  "body": "{}"
+ },
+ {
+  "name": "feedback trailing semicolon",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json;",
+  "body": "{}"
+ },
+ {
+  "name": "feedback bad param",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json; charset",
+  "body": "{}"
+ },
+ {
+  "name": "feedback spaced",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json ; charset=utf-8",
+  "body": "{}"
+ },
+ {
+  "name": "feedback no subtype",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/",
+  "body": "{}"
+ },
+ {
+  "name": "feedback plus only",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/+json",
+  "body": "{}"
+ },
+ {
+  "name": "feedback empty body",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json",
+  "body": ""
+ },
+ {
+  "name": "feedback truncated",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json",
+  "body": "{\"submission_id\":"
+ },
+ {
+  "name": "feedback trailing",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json",
+  "body": "{\"submission_id\":\"s1\"} x"
+ },
+ {
+  "name": "feedback trailing ws",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json",
+  "body": "{\"submission_id\":\"s1\"} \n\t"
+ },
+ {
+  "name": "feedback lone surrogate",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json",
+  "body": "{\"submission_id\":\"s1\",\"note\":\"a\\ude80x\"}"
+ },
+ {
+  "name": "feedback lone high",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json",
+  "body": "{\"note\":\"\\ud83d\"}"
+ },
+ {
+  "name": "feedback pair ok",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json",
+  "body": "{\"submission_id\":\"\\ud83d\\ude80\"}"
+ },
+ {
+  "name": "feedback invalid utf8 string",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json",
+  "body_b64": "eyJzdWJtaXNzaW9uX2lkIjoic8D/In0="
+ },
+ {
+  "name": "feedback invalid utf8 line 2",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json",
+  "body_b64": "ewogICJub3RlIjogIq7/IgogIH0="
+ },
+ {
+  "name": "feedback raw control",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json",
+  "body": "{\"note\":\"a\u0001\"}"
+ },
+ {
+  "name": "feedback bom",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json",
+  "body": "﻿{}"
+ },
+ {
+  "name": "feedback deep 128",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json",
+  "repeat": {
+   "prefix": "",
+   "unit": "[",
+   "count": 128,
+   "suffix_unit": "]"
+  }
+ },
+ {
+  "name": "feedback deep 129",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json",
+  "repeat": {
+   "prefix": "",
+   "unit": "[",
+   "count": 129,
+   "suffix_unit": "]"
+  }
+ },
+ {
+  "name": "feedback too large",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json",
+  "repeat": {
+   "prefix": "{\"pad\":\"",
+   "unit": "a",
+   "count": 50331648,
+   "suffix": "\"}"
+  }
+ },
+ {
+  "name": "feedback at limit",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json",
+  "repeat": {
+   "prefix": "{\"pad\":\"",
+   "unit": "a",
+   "count": 50331638,
+   "suffix": "\"}"
+  }
+ },
+ {
+  "name": "feedback no auth bad body",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "text/plain",
+  "body": "x",
+  "no_auth": true
+ },
+ {
+  "name": "feedback bad id utf8",
+  "method": "POST",
+  "path": "/api/threads/%FF/artifacts/feedback",
+  "content_type": "application/json",
+  "body": "{"
+ },
+ {
+  "name": "feedback bad id escaped slash",
+  "method": "POST",
+  "path": "/api/threads/a%2Fb/artifacts/feedback",
+  "content_type": "application/json",
+  "body": "{}"
+ },
+ {
+  "name": "asset",
+  "path": "/app/assets/x.js"
+ },
+ {
+  "name": "asset invalid utf8",
+  "path": "/app/%FF.js"
+ },
+ {
+  "name": "asset double slash",
+  "path": "/app//etc/hosts"
+ },
+ {
+  "name": "asset encoded dots",
+  "path": "/app/%2e%2e/secret"
+ },
+ {
+  "name": "asset encoded slash dots",
+  "path": "/app/assets/..%2Findex.html"
+ },
+ {
+  "name": "asset empty",
+  "path": "/app/"
+ },
+ {
+  "name": "ct compact param",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json;charset=utf-8",
+  "body": "{}"
+ },
+ {
+  "name": "ct quoted param",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json; charset=\"utf-8\"",
+  "body": "{}"
+ },
+ {
+  "name": "ct leading space",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": " application/json",
+  "body": "{}"
+ },
+ {
+  "name": "ct trailing space",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json ",
+  "body": "{}"
+ },
+ {
+  "name": "ct semicolon space",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json; ",
+  "body": "{}"
+ },
+ {
+  "name": "ct double semicolon",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json;;",
+  "body": "{}"
+ },
+ {
+  "name": "ct two params",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json; a=1; b=2",
+  "body": "{}"
+ },
+ {
+  "name": "ct empty value",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json;a=",
+  "body": "{}"
+ },
+ {
+  "name": "ct vnd suffix",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/vnd.api+json",
+  "body": "{}"
+ },
+ {
+  "name": "ct double suffix",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/x+json+xml",
+  "body": "{}"
+ },
+ {
+  "name": "ct json suffix xml",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json+xml",
+  "body": "{}"
+ },
+ {
+  "name": "ct tab",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json\t",
+  "body": "{}"
+ },
+ {
+  "name": "ct star",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/*",
+  "body": "{}"
+ },
+ {
+  "name": "ct any",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "*/*",
+  "body": "{}"
+ },
+ {
+  "name": "ct upper suffix",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/X+JSON",
+  "body": "{}"
+ },
+ {
+  "name": "ct no slash",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application",
+  "body": "{}"
+ },
+ {
+  "name": "ct param no space before value",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/json;charset= utf-8",
+  "body": "{}"
+ },
+ {
+  "name": "ct space after slash",
+  "method": "POST",
+  "path": "/api/threads/t1/artifacts/feedback",
+  "content_type": "application/ json",
+  "body": "{}"
+ },
+ {
+  "name": "wrong method with auth",
+  "method": "POST",
+  "path": "/api/threads"
+ },
+ {
+  "name": "wrong method put feedback with auth",
+  "method": "PUT",
+  "path": "/api/threads/t1/artifacts/feedback"
+ },
+ {
+  "name": "wrong method shell",
+  "method": "POST",
+  "path": "/app"
+ },
+ {
+  "name": "wrong method asset",
+  "method": "DELETE",
+  "path": "/app/x.js"
+ },
+ {
+  "name": "empty id workers",
+  "path": "/api/threads//workers"
+ },
+ {
+  "name": "empty id artifact file",
+  "path": "/api/threads//artifacts/file?path=a"
+ },
+ {
+  "name": "empty id feedback",
+  "method": "POST",
+  "path": "/api/threads//artifacts/feedback",
+  "content_type": "application/json",
+  "body": "{}"
+ },
+ {
+  "name": "double slash api prefix",
+  "path": "/api//threads"
+ },
+ {
+  "name": "literal encoded",
+  "path": "/api/thr%65ads"
+ },
+ {
+  "name": "dot id",
+  "path": "/api/threads/."
+ },
+ {
+  "name": "dotdot id",
+  "path": "/api/threads/%2e%2e"
+ },
+ {
+  "name": "encoded slash in asset",
+  "path": "/app/assets%2Fx.js"
+ },
+ {
+  "name": "asset only slash after",
+  "path": "/app//"
+ },
+ {
+  "name": "threads alias trailing",
+  "path": "/threads/"
+ },
+ {
+  "name": "monitor alias",
+  "path": "/monitor"
+ },
+ {
+  "name": "shell query",
+  "path": "/app?x=1"
+ },
+ {
+  "name": "plus in path id",
+  "path": "/api/threads/a+b"
+ }
+]

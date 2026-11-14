@@ -1,0 +1,16 @@
+[
+  {"name": "valid", "body": "{\"submission_id\":\"s\",\"artifact_path\":\"a\",\"artifact_sha256\":\"h\",\"annotations\":[]}"},
+  {"name": "missing field", "body": "{\"submission_id\":\"s\"}"},
+  {"name": "unknown field", "body": "{\"submission_id\":\"s\",\"notes\":[]}"},
+  {"name": "wrong type", "body": "{\"submission_id\":5}"},
+  {"name": "duplicate field", "body": "{\"submission_id\":\"a\",\"submission_id\":\"b\"}"},
+  {"name": "not an object", "body": "[\"s\"]"},
+  {"name": "data error before syntax error", "body": "{\"submission_id\":5,"},
+  {"name": "syntax error before data error", "body": "{\"submission_id\":\"\\ud800\",\"x\":1}"},
+  {"name": "lone surrogate after data error", "body": "{\"x\":1,\"note\":\"\\ud800\"}"},
+  {"name": "trailing after valid", "body": "{\"submission_id\":\"s\",\"artifact_path\":\"a\",\"artifact_sha256\":\"h\",\"annotations\":[]} x"},
+  {"name": "trailing after data error", "body": "{\"submission_id\":5} x"},
+  {"name": "case sensitive key", "body": "{\"Submission_ID\":\"s\"}"},
+  {"name": "null", "body": "null"},
+  {"name": "empty", "body": ""}
+]

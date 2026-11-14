@@ -63,6 +63,10 @@ pub struct AgentOptions {
     /// Steers for this run, taken at safe points (after a tool round, before
     /// the next model request). `None`: the run takes no steers.
     pub steer: Option<crate::core::steer::SteerSource>,
+    /// The thread's run lease, taken by the caller before it recorded the
+    /// user message. A turn on a thread without its lease takes one itself,
+    /// and is refused when another run holds it.
+    pub run_lease: Option<std::sync::Arc<crate::core::thread_lease::ThreadRunLease>>,
 }
 
 /// Tool configuration for agent execution.
@@ -1246,6 +1250,20 @@ async fn run_turn_inner(
     {
         return Err((TurnError::from_anyhow(err), messages));
     }
+    let _run_lease = match thread_id {
+        Some(thread_id) => match options
+            .run_lease
+            .as_ref()
+            .filter(|lease| lease.thread_id() == thread_id)
+        {
+            Some(lease) => Some(Arc::clone(lease)),
+            None => match crate::core::thread_lease::ThreadRunLease::try_acquire(thread_id) {
+                Ok(lease) => Some(Arc::new(lease)),
+                Err(err) => return Err((TurnError::from_anyhow(err), messages)),
+            },
+        },
+        None => None,
+    };
     let mut setup = build_run_turn_setup(config, options, thread_id, &messages, None)
         .map_err(|e| (TurnError::from_anyhow(e), messages.clone()))?;
     // Background work started by this turn's tool calls is stopped when the
@@ -1685,18 +1703,12 @@ fn build_run_turn_setup(
         account: selection.account.as_deref(),
     };
     let client = provider.build_client(&provider_ctx)?;
-    let tool_ctx = ToolContext::new(
-        options
-            .root
-            .canonicalize()
-            .unwrap_or_else(|_| options.root.clone()),
-        options.tool_timeout,
-    )
-    .with_current_thread_id(thread_id)
-    .with_config(config)
-    .with_allowed_subagents(options.tool_config.allowed_subagents.clone())
-    .with_skill_scope(options.tool_config.skill_scope.clone())
-    .with_background_execution(background_execution(config, options));
+    let tool_ctx = turn_tool_context(
+        config,
+        options,
+        thread_id,
+        &crate::config::paths::zdx_home(),
+    );
     let tool_registry = options.tool_config.registry.clone();
     let tools = resolve_tools(
         config,
@@ -1718,6 +1730,33 @@ fn build_run_turn_setup(
         tool_ctx,
         tool_registry,
     })
+}
+
+/// Builds the tool context one turn's tool calls run with. The thread's
+/// runtime environment (`ZDX_HOME`, `ZDX_ARTIFACT_DIR`, `ZDX_THREAD_ID`,
+/// `ZDX_MEMORY_ROOT`) is carried here, per turn, so concurrent turns in one
+/// process never read each other's values from the process environment.
+fn turn_tool_context(
+    config: &Config,
+    options: &AgentOptions,
+    thread_id: Option<&str>,
+    zdx_home: &std::path::Path,
+) -> ToolContext {
+    ToolContext::new(
+        options
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| options.root.clone()),
+        options.tool_timeout,
+    )
+    .with_current_thread_id(thread_id)
+    .with_config(config)
+    .with_allowed_subagents(options.tool_config.allowed_subagents.clone())
+    .with_skill_scope(options.tool_config.skill_scope.clone())
+    .with_background_execution(background_execution(config, options))
+    .with_env(crate::core::context::runtime_tool_env_with_zdx_home(
+        config, thread_id, zdx_home,
+    ))
 }
 
 /// Builds the run-turn setup for a custom provider
@@ -1776,18 +1815,12 @@ fn build_custom_run_turn_setup(
         ),
     };
 
-    let tool_ctx = ToolContext::new(
-        options
-            .root
-            .canonicalize()
-            .unwrap_or_else(|_| options.root.clone()),
-        options.tool_timeout,
-    )
-    .with_current_thread_id(thread_id)
-    .with_config(config)
-    .with_allowed_subagents(options.tool_config.allowed_subagents.clone())
-    .with_skill_scope(options.tool_config.skill_scope.clone())
-    .with_background_execution(background_execution(config, options));
+    let tool_ctx = turn_tool_context(
+        config,
+        options,
+        thread_id,
+        &crate::config::paths::zdx_home(),
+    );
     let tool_registry = options.tool_config.registry.clone();
     let provider_config = crate::config::ProviderConfig::default();
     let tools = resolve_tools(config, options, &provider_config, false, &tool_registry);
@@ -3394,6 +3427,7 @@ mod tests {
             activity_subagent_name: None,
             tool_timeout,
             steer: None,
+            run_lease: None,
         }
     }
 
@@ -3582,6 +3616,7 @@ mod tests {
             activity_subagent_name: None,
             tool_timeout: None,
             steer: None,
+            run_lease: None,
         };
         for (suffix, expected) in [
             ("@high", ThinkingLevel::High),
@@ -6836,5 +6871,72 @@ mod tests {
     fn test_assistant_turn_builder_stores_model() {
         let turn = AssistantTurnBuilder::new("gemini-3-pro-preview".to_string());
         assert_eq!(turn.model, "gemini-3-pro-preview");
+    }
+
+    /// Two turns of different threads run tools at the same time in one
+    /// process. Each turn's children and `$VAR` paths must see that turn's
+    /// runtime environment, never the other turn's or the process's.
+    #[tokio::test]
+    async fn concurrent_turns_keep_their_own_runtime_env() {
+        let zdx_home = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let config = Config::default();
+        let options = bash_policy_options(root.path(), &["bash", "write", "read"], false, None);
+        let enabled: HashSet<String> = ["Bash", "Write", "Read"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+
+        let run_turn = |thread: &'static str| {
+            let ctx = turn_tool_context(&config, &options, Some(thread), zdx_home.path());
+            let enabled = enabled.clone();
+            async move {
+                let echo = serde_json::json!({
+                    "command": "sleep 0.3; printf '%s|%s|%s|%s' \"$ZDX_THREAD_ID\" \"$ZDX_ARTIFACT_DIR\" \"$ZDX_HOME\" \"$ZDX_MEMORY_ROOT\"",
+                });
+                let write = serde_json::json!({ "file_path": "$ZDX_ARTIFACT_DIR/out.txt", "content": thread });
+                let read = serde_json::json!({ "file_path": "${ZDX_ARTIFACT_DIR}/out.txt" });
+                let (bash, write, read) = tokio::join!(
+                    crate::tools::execute_tool("bash", "t1", &echo, &ctx, &enabled),
+                    crate::tools::execute_tool("write", "t2", &write, &ctx, &enabled),
+                    async {
+                        tokio::time::sleep(Duration::from_millis(150)).await;
+                        crate::tools::execute_tool("read", "t3", &read, &ctx, &enabled).await
+                    },
+                );
+                (bash.0, write.0, read.0)
+            }
+        };
+
+        let ((bash_a, write_a, read_a), (bash_b, write_b, read_b)) =
+            tokio::join!(run_turn("thread-a"), run_turn("thread-b"));
+
+        let memory_root = config
+            .memory
+            .effective_root_path_with_zdx_home(zdx_home.path())
+            .display()
+            .to_string();
+        for (thread, bash, write, read) in [
+            ("thread-a", bash_a, write_a, read_a),
+            ("thread-b", bash_b, write_b, read_b),
+        ] {
+            let artifact_dir = zdx_home.path().join("artifacts/threads").join(thread);
+            let data = bash.data().expect("bash succeeded");
+            assert_eq!(
+                data["stdout"].as_str().unwrap(),
+                format!(
+                    "{thread}|{}|{}|{memory_root}",
+                    artifact_dir.display(),
+                    zdx_home.path().display()
+                )
+            );
+            assert!(write.is_ok(), "{write:?}");
+            assert_eq!(
+                std::fs::read_to_string(artifact_dir.join("out.txt")).unwrap(),
+                thread
+            );
+            let read = read.data().expect("read succeeded");
+            assert_eq!(read["content"].as_str().unwrap(), thread);
+        }
     }
 }

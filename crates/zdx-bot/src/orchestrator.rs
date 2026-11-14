@@ -100,6 +100,8 @@ struct Bridge {
     /// Turns the service started on its own and this process renders, by
     /// turn id: where their events go.
     turns: HashMap<u64, mpsc::UnboundedSender<Event>>,
+    /// Token of this renderer subscription's holds.
+    holder: Option<String>,
 }
 
 /// Spawns the process-lifetime bridge task. It reconnects whenever the
@@ -111,11 +113,17 @@ pub(crate) fn spawn_service_bridge(context: Arc<BotContext>) {
             mirrors: HashMap::new(),
             live: HashMap::new(),
             turns: HashMap::new(),
+            holder: None,
         };
         bridge.recover_mirrors().await;
         let mut reported_down = false;
         loop {
-            let subscribe = Request::Subscribe { renderer: true };
+            // No replay: this bot writes its delivery records to the thread
+            // file itself, so the service cannot tell a started delivery.
+            let subscribe = Request::Subscribe {
+                renderer: true,
+                replay: false,
+            };
             match bridge.context.orchestrator().open(&subscribe).await {
                 Ok(stream) => {
                     tracing::info!("Connected to the orchestrator service");
@@ -123,6 +131,7 @@ pub(crate) fn spawn_service_bridge(context: Arc<BotContext>) {
                     bridge.run(stream).await;
                     // Turns in flight cannot finish without the service.
                     bridge.turns.clear();
+                    bridge.holder = None;
                     tracing::warn!("Lost the connection to the orchestrator service");
                 }
                 Err(err) if !reported_down => {
@@ -172,6 +181,11 @@ impl Bridge {
                 reply = stream.next() => {
                     match reply {
                         Ok(Some(Reply::Event { event })) => self.handle(event).await,
+                        Ok(Some(Reply::Subscribed { holder })) => self.holder = Some(holder),
+                        Ok(Some(Reply::Error { message, .. })) => {
+                            tracing::warn!(error = %message, "The orchestrator service refused this renderer");
+                            return;
+                        }
                         Ok(Some(_)) => {}
                         Ok(None) => return,
                         Err(err) => {
@@ -209,6 +223,7 @@ impl Bridge {
                     thread_id,
                     turn_id,
                     route,
+                    self.holder.clone(),
                     rx,
                 ));
             }
@@ -230,7 +245,10 @@ impl Bridge {
                 self.handle_worker(owner_thread_id.as_deref(), route, event)
                     .await;
             }
-            Event::TurnStarted { .. } | Event::InputsDropped { .. } | Event::Settled { .. } => {}
+            Event::TurnStarted { .. }
+            | Event::InputsDropped { .. }
+            | Event::Settled { .. }
+            | Event::TurnReplay { .. } => {}
         }
     }
 

@@ -23,7 +23,8 @@ Leaf tool implementations that only need a root directory and optional timeout �
 
 ## Key types
 
-- `ToolContext` — minimal context: `root: PathBuf` + optional timeout/cancellation
+- `ToolContext` — minimal context: `root: PathBuf` + optional timeout/cancellation + `env: ToolEnv`
+- `ToolEnv` — one run's own environment variables (the engine sets `ZDX_HOME`, `ZDX_ARTIFACT_DIR`, `ZDX_THREAD_ID`, `ZDX_MEMORY_ROOT` per turn). Several runs share one process, so these never come from the process environment: every child process a tool starts gets `ctx.env` (`.envs`/`.env`), and path `$VAR` expansion goes through `ctx.resolve_*`/`ToolEnv::expand`, which read the run's value first and fall back to the process environment. The free `expand_env_vars`/`resolve_*` helpers read the process environment only; tool code must not use them.
 - Re-exports from `zdx-types`: `ToolDefinition`, `ToolResult`, `ToolOutput`, `ImageContent`, etc.
 
 ## Conventions

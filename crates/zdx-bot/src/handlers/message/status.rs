@@ -7,6 +7,7 @@ use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 use zdx_engine::core::thread_persistence;
 use zdx_engine::models::{ModelOption, ModelPricing};
+use zdx_engine::orchestration::catalog::{SelectionSource, selection_sources};
 use zdx_engine::providers::{ProviderAuthMode, provider_for_model};
 use zdx_engine::telegram::flood::{self, FailureClass};
 
@@ -16,23 +17,6 @@ use crate::bot::context::BotContext;
 use crate::telegram::{
     InlineKeyboardButton, InlineKeyboardMarkup, Message, is_invalid_reply_error,
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SelectionSource {
-    Default,
-    Orchestrator,
-    Topic,
-}
-
-impl SelectionSource {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Default => "workspace/global default",
-            Self::Orchestrator => "orchestrator override",
-            Self::Topic => "topic override",
-        }
-    }
-}
 
 struct StatusSnapshot<'a> {
     model_id: &'a str,
@@ -51,36 +35,6 @@ struct StatusSnapshot<'a> {
     branch: Option<&'a str>,
     cumulative_usage: thread_persistence::Usage,
     latest_usage: thread_persistence::Usage,
-}
-
-fn selection_sources(
-    orchestrator_model: Option<&str>,
-    topic_model: Option<&str>,
-    legacy_topic_thinking: Option<zdx_engine::config::ThinkingLevel>,
-) -> (SelectionSource, SelectionSource) {
-    let model_source = if topic_model.is_some() {
-        SelectionSource::Topic
-    } else if orchestrator_model.is_some() {
-        SelectionSource::Orchestrator
-    } else {
-        SelectionSource::Default
-    };
-    // A mode reference carries its mode's thinking level.
-    let sets_thinking = |model: &str| {
-        zdx_engine::config::mode_ref_name(model).is_some()
-            || zdx_engine::models::ModelSpec::parse(model)
-                .thinking
-                .is_some()
-    };
-    let thinking_source =
-        if legacy_topic_thinking.is_some() || topic_model.is_some_and(sets_thinking) {
-            SelectionSource::Topic
-        } else if orchestrator_model.is_some_and(sets_thinking) {
-            SelectionSource::Orchestrator
-        } else {
-            SelectionSource::Default
-        };
-    (model_source, thinking_source)
 }
 
 /// Minimum interval between Telegram status message edits (avoid rate limiting).
@@ -871,6 +825,7 @@ mod tests {
             latest_final_text: None,
             last_error: None,
             mirror_url: None,
+            mirror: None,
             current_tool: None,
             current_tool_input: None,
             seconds_since_last_activity: None,

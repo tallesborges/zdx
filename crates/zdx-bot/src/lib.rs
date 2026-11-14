@@ -34,7 +34,7 @@ mod intake_log;
 mod orchestrator;
 mod restart_queue;
 mod retry;
-pub(crate) mod server;
+pub mod server;
 mod staging;
 mod steer;
 pub mod telegram;
@@ -587,14 +587,11 @@ pub(crate) fn topic_config(
     chat_id: i64,
     thread_id: &str,
 ) -> anyhow::Result<Config> {
-    let mut config = context.checked_config_for_chat(chat_id)?;
-    if let Some(stored) = zdx_engine::core::thread_persistence::read_thread_root_path(thread_id)? {
-        config.use_modes_of(
-            &context.root_for_chat(chat_id).root,
-            std::path::Path::new(&stored),
-        )?;
-    }
-    Ok(config)
+    zdx_engine::orchestration::catalog::topic_config(
+        context.checked_config_for_chat(chat_id)?,
+        &context.root_for_chat(chat_id).root,
+        thread_id,
+    )
 }
 
 /// The modes a picker of `scope` offers: for a topic, the modes of the root
@@ -634,13 +631,7 @@ pub(crate) fn apply_topic_selection(
     model: Option<&str>,
     thinking: Option<zdx_engine::config::ThinkingLevel>,
 ) -> String {
-    match config.apply_thread_model_override(model, thinking) {
-        Ok(()) => config.model_label(),
-        Err(err) => format!(
-            "{} (mode not configured here; turns are refused)",
-            err.selection
-        ),
-    }
+    zdx_engine::orchestration::catalog::apply_topic_selection(config, model, thinking)
 }
 
 fn current_topic_config(context: &BotContext, chat_id: i64, thread_id: Option<i64>) -> Config {

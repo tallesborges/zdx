@@ -1,0 +1,854 @@
+[
+  {
+    "name": "threads default",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"kind\":\"all\"}"
+  },
+  {
+    "name": "threads kind workers",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"kind\":\"workers\"}"
+  },
+  {
+    "name": "threads kind percent",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"kind\":\"workers\"}"
+  },
+  {
+    "name": "threads kind unknown",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: kind: unknown variant `bogus`, expected `all` or `workers`"
+  },
+  {
+    "name": "threads kind empty",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: kind: unknown variant ``, expected `all` or `workers`"
+  },
+  {
+    "name": "threads kind case",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: kind: unknown variant `WORKERS`, expected `all` or `workers`"
+  },
+  {
+    "name": "threads kind duplicate",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: duplicate field `kind`"
+  },
+  {
+    "name": "threads unknown key",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"kind\":\"all\"}"
+  },
+  {
+    "name": "threads semicolon",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: kind: unknown variant `workers;x=1`, expected `all` or `workers`"
+  },
+  {
+    "name": "thread plain",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"after\":null,\"id\":\"t1\"}"
+  },
+  {
+    "name": "thread after",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"after\":5,\"id\":\"t1\"}"
+  },
+  {
+    "name": "thread after plus",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"after\":5,\"id\":\"t1\"}"
+  },
+  {
+    "name": "thread after plus only",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: after: invalid digit found in string"
+  },
+  {
+    "name": "thread after negative",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: after: invalid digit found in string"
+  },
+  {
+    "name": "thread after empty",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: after: cannot parse integer from empty string"
+  },
+  {
+    "name": "thread after overflow",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: after: number too large to fit in target type"
+  },
+  {
+    "name": "thread after exponent",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: after: invalid digit found in string"
+  },
+  {
+    "name": "thread after space",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: after: invalid digit found in string"
+  },
+  {
+    "name": "thread after duplicate",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: duplicate field `after`"
+  },
+  {
+    "name": "thread after bad then dup",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: after: invalid digit found in string"
+  },
+  {
+    "name": "thread id utf8",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"after\":null,\"id\":\"€\"}"
+  },
+  {
+    "name": "thread id invalid utf8",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Invalid URL: Invalid UTF-8 in `id`"
+  },
+  {
+    "name": "thread id invalid utf8 and bad query",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Invalid URL: Invalid UTF-8 in `id`"
+  },
+  {
+    "name": "thread id escaped slash",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"after\":null,\"id\":\"a/b\"}"
+  },
+  {
+    "name": "trajectory invalid utf8",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Invalid URL: Invalid UTF-8 in `id`"
+  },
+  {
+    "name": "artifact file",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"id\":\"t1\",\"path\":\"a\"}"
+  },
+  {
+    "name": "artifact file missing path",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: missing field `path`"
+  },
+  {
+    "name": "artifact file missing path bad id",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Invalid URL: Invalid UTF-8 in `id`"
+  },
+  {
+    "name": "artifact file duplicate path",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: duplicate field `path`"
+  },
+  {
+    "name": "artifact file bad escape",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"id\":\"t1\",\"path\":\"a%zzb%\"}"
+  },
+  {
+    "name": "artifact file plus",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"id\":\"t1\",\"path\":\"a b\"}"
+  },
+  {
+    "name": "artifact file lossy",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"id\":\"t1\",\"path\":\"x�y\"}"
+  },
+  {
+    "name": "artifact file empty key",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"id\":\"t1\",\"path\":\"a\"}"
+  },
+  {
+    "name": "artifact file key only",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"id\":\"t1\",\"path\":\"\"}"
+  },
+  {
+    "name": "artifact version",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"id\":\"t1\",\"path\":\"dir/a.png\"}"
+  },
+  {
+    "name": "artifact image missing",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: missing field `path`"
+  },
+  {
+    "name": "git none",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"thread_id\":null}"
+  },
+  {
+    "name": "git empty thread",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"thread_id\":\"\"}"
+  },
+  {
+    "name": "git duplicate thread",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: duplicate field `thread_id`"
+  },
+  {
+    "name": "git scope",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"scope\":\"all\",\"thread_id\":\"t1\"}"
+  },
+  {
+    "name": "git scope missing",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: missing field `scope`"
+  },
+  {
+    "name": "git diff ok",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"commit\":\"abc1234\",\"kind\":\"commit\",\"path\":\"src/a b.rs\",\"thread_id\":\"t1\"}"
+  },
+  {
+    "name": "git diff missing both",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: missing field `path`"
+  },
+  {
+    "name": "git diff missing kind",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: missing field `kind`"
+  },
+  {
+    "name": "git diff duplicate commit",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: duplicate field `commit`"
+  },
+  {
+    "name": "usage default",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"days\":null}"
+  },
+  {
+    "name": "usage days",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"days\":30}"
+  },
+  {
+    "name": "usage overflow",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: days: number too large to fit in target type"
+  },
+  {
+    "name": "usage negative",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: days: invalid digit found in string"
+  },
+  {
+    "name": "usage plus",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"days\":3}"
+  },
+  {
+    "name": "usage decimal",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to deserialize query string: days: invalid digit found in string"
+  },
+  {
+    "name": "no auth",
+    "status": 401,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "Telegram authorization required"
+  },
+  {
+    "name": "no auth bad id",
+    "status": 401,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "Telegram authorization required"
+  },
+  {
+    "name": "unknown api path",
+    "status": 404,
+    "body": ""
+  },
+  {
+    "name": "wrong method",
+    "status": 401,
+    "content_type": "text/plain; charset=utf-8",
+    "allow": "GET,HEAD",
+    "body": "Telegram authorization required"
+  },
+  {
+    "name": "wrong method feedback",
+    "status": 401,
+    "content_type": "text/plain; charset=utf-8",
+    "allow": "POST",
+    "body": "Telegram authorization required"
+  },
+  {
+    "name": "trailing slash list",
+    "status": 404,
+    "body": ""
+  },
+  {
+    "name": "trailing slash thread",
+    "status": 404,
+    "body": ""
+  },
+  {
+    "name": "empty id segment",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"id\":\"\"}"
+  },
+  {
+    "name": "head thread list",
+    "status": 200,
+    "content_type": "application/json",
+    "body": ""
+  },
+  {
+    "name": "feedback ok",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":\"s1\"}"
+  },
+  {
+    "name": "feedback no content type",
+    "status": 415,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Expected request with `Content-Type: application/json`"
+  },
+  {
+    "name": "feedback text json",
+    "status": 415,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Expected request with `Content-Type: application/json`"
+  },
+  {
+    "name": "feedback charset",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":null}"
+  },
+  {
+    "name": "feedback suffix",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":null}"
+  },
+  {
+    "name": "feedback upper",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":null}"
+  },
+  {
+    "name": "feedback trailing semicolon",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":null}"
+  },
+  {
+    "name": "feedback bad param",
+    "status": 415,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Expected request with `Content-Type: application/json`"
+  },
+  {
+    "name": "feedback spaced",
+    "status": 415,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Expected request with `Content-Type: application/json`"
+  },
+  {
+    "name": "feedback no subtype",
+    "status": 415,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Expected request with `Content-Type: application/json`"
+  },
+  {
+    "name": "feedback plus only",
+    "status": 415,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Expected request with `Content-Type: application/json`"
+  },
+  {
+    "name": "feedback empty body",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to parse the request body as JSON: EOF while parsing a value at line 1 column 0"
+  },
+  {
+    "name": "feedback truncated",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to parse the request body as JSON: submission_id: EOF while parsing a value at line 1 column 17"
+  },
+  {
+    "name": "feedback trailing",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to parse the request body as JSON: trailing characters at line 1 column 24"
+  },
+  {
+    "name": "feedback trailing ws",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":\"s1\"}"
+  },
+  {
+    "name": "feedback lone surrogate",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to parse the request body as JSON: note: lone leading surrogate in hex escape at line 1 column 37"
+  },
+  {
+    "name": "feedback lone high",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to parse the request body as JSON: note: unexpected end of hex escape at line 1 column 16"
+  },
+  {
+    "name": "feedback pair ok",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":\"🚀\"}"
+  },
+  {
+    "name": "feedback invalid utf8 string",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to parse the request body as JSON: submission_id: invalid unicode code point at line 1 column 22"
+  },
+  {
+    "name": "feedback invalid utf8 line 2",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to parse the request body as JSON: note: invalid unicode code point at line 2 column 14"
+  },
+  {
+    "name": "feedback raw control",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to parse the request body as JSON: note: control character (\\u0000-\\u001F) found while parsing a string at line 1 column 11"
+  },
+  {
+    "name": "feedback bom",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to parse the request body as JSON: expected value at line 1 column 1"
+  },
+  {
+    "name": "feedback deep 128",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to parse the request body as JSON: [0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]: recursion limit exceeded at line 1 column 128"
+  },
+  {
+    "name": "feedback deep 129",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to parse the request body as JSON: [0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]: recursion limit exceeded at line 1 column 128"
+  },
+  {
+    "name": "feedback too large",
+    "status": 413,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Failed to buffer the request body: length limit exceeded"
+  },
+  {
+    "name": "feedback at limit",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":null}"
+  },
+  {
+    "name": "feedback no auth bad body",
+    "status": 401,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "Telegram authorization required"
+  },
+  {
+    "name": "feedback bad id utf8",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Invalid URL: Invalid UTF-8 in `id`"
+  },
+  {
+    "name": "feedback bad id escaped slash",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"a/b\",\"submission_id\":null}"
+  },
+  {
+    "name": "asset",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"path\":\"assets/x.js\"}"
+  },
+  {
+    "name": "asset invalid utf8",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Invalid URL: Invalid UTF-8 in `path`"
+  },
+  {
+    "name": "asset double slash",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"path\":\"/etc/hosts\"}"
+  },
+  {
+    "name": "asset encoded dots",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"path\":\"../secret\"}"
+  },
+  {
+    "name": "asset encoded slash dots",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"path\":\"assets/../index.html\"}"
+  },
+  {
+    "name": "asset empty",
+    "status": 404,
+    "body": ""
+  },
+  {
+    "name": "ct compact param",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":null}"
+  },
+  {
+    "name": "ct quoted param",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":null}"
+  },
+  {
+    "name": "ct leading space",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":null}"
+  },
+  {
+    "name": "ct trailing space",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":null}"
+  },
+  {
+    "name": "ct semicolon space",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":null}"
+  },
+  {
+    "name": "ct double semicolon",
+    "status": 415,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Expected request with `Content-Type: application/json`"
+  },
+  {
+    "name": "ct two params",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":null}"
+  },
+  {
+    "name": "ct empty value",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":null}"
+  },
+  {
+    "name": "ct vnd suffix",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":null}"
+  },
+  {
+    "name": "ct double suffix",
+    "status": 415,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Expected request with `Content-Type: application/json`"
+  },
+  {
+    "name": "ct json suffix xml",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":null}"
+  },
+  {
+    "name": "ct tab",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":null}"
+  },
+  {
+    "name": "ct star",
+    "status": 415,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Expected request with `Content-Type: application/json`"
+  },
+  {
+    "name": "ct any",
+    "status": 415,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Expected request with `Content-Type: application/json`"
+  },
+  {
+    "name": "ct upper suffix",
+    "status": 200,
+    "content_type": "application/json",
+    "vary": "accept-encoding",
+    "body": "{\"id\":\"t1\",\"submission_id\":null}"
+  },
+  {
+    "name": "ct no slash",
+    "status": 415,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Expected request with `Content-Type: application/json`"
+  },
+  {
+    "name": "ct param no space before value",
+    "status": 415,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Expected request with `Content-Type: application/json`"
+  },
+  {
+    "name": "ct space after slash",
+    "status": 415,
+    "content_type": "text/plain; charset=utf-8",
+    "vary": "accept-encoding",
+    "body": "Expected request with `Content-Type: application/json`"
+  },
+  {
+    "name": "wrong method with auth",
+    "status": 405,
+    "allow": "GET,HEAD",
+    "body": ""
+  },
+  {
+    "name": "wrong method put feedback with auth",
+    "status": 405,
+    "allow": "POST",
+    "body": ""
+  },
+  {
+    "name": "wrong method shell",
+    "status": 405,
+    "allow": "GET,HEAD",
+    "body": ""
+  },
+  {
+    "name": "wrong method asset",
+    "status": 405,
+    "allow": "GET,HEAD",
+    "body": ""
+  },
+  {
+    "name": "empty id workers",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"id\":\"\"}"
+  },
+  {
+    "name": "empty id artifact file",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"id\":\"\",\"path\":\"a\"}"
+  },
+  {
+    "name": "empty id feedback",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"id\":\"\",\"submission_id\":null}"
+  },
+  {
+    "name": "double slash api prefix",
+    "status": 404,
+    "body": ""
+  },
+  {
+    "name": "literal encoded",
+    "status": 404,
+    "body": ""
+  },
+  {
+    "name": "dot id",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"after\":null,\"id\":\".\"}"
+  },
+  {
+    "name": "dotdot id",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"after\":null,\"id\":\"..\"}"
+  },
+  {
+    "name": "encoded slash in asset",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"path\":\"assets/x.js\"}"
+  },
+  {
+    "name": "asset only slash after",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"path\":\"/\"}"
+  },
+  {
+    "name": "threads alias trailing",
+    "status": 404,
+    "body": ""
+  },
+  {
+    "name": "monitor alias",
+    "status": 200,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "shell"
+  },
+  {
+    "name": "shell query",
+    "status": 200,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "shell"
+  },
+  {
+    "name": "plus in path id",
+    "status": 200,
+    "content_type": "application/json",
+    "body": "{\"after\":null,\"id\":\"a+b\"}"
+  }
+]

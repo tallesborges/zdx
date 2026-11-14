@@ -19,6 +19,7 @@ This monorepo now uses scoped `AGENTS.md` files per crate.
 - `crates/zdx-monitor/AGENTS.md`: monitor TUI dashboard map + conventions
 - `crates/xtask/AGENTS.md`: maintainer task crate guidance
 - `apps/web/AGENTS.md`: Svelte Mini App frontend (design system + views, consumes the zdx-bot HTTP API)
+- `apps/gateway/AGENTS.md`: Go gateway that will replace `zdx-bot` and its Mini App server (independent Go module; talks to Rust only through the orchestrator socket and CLI; not production-ready)
 
 ### Scope and precedence
 
@@ -34,6 +35,7 @@ This monorepo now uses scoped `AGENTS.md` files per crate.
 - `docs/ARCHITECTURE.md`: architecture and data flow
 - `docs/plans/`: commit-sized implementation plans, staged by lifecycle: `drafts/` (exploratory) → `active/` (building) → `done/` + `archived/`
 - `apps/web/`: Svelte Mini App frontend, embedded into `zdx-bot` at compile time (see `apps/web/AGENTS.md`)
+- `apps/gateway/`: Go Telegram + Mini App gateway (see `apps/gateway/AGENTS.md`)
 - `.github/workflows/`: CI/release workflows
 - `.cargo/config.toml`: cargo aliases/shared target dir config
 - `justfile`: common development tasks
@@ -69,6 +71,7 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `just codebase` (generate codebase.txt for entire workspace)
 - `just codebase crates/zdx-tui` (generate codebase.txt for specific crate)
 - `just build-release` (build release binary; skips the web build when input fingerprints and dist contents match)
+- `just gateway-check` (Go gateway: `gofmt`, `go vet`, `go test -race`) / `just gateway-build [OUT]` (gateway binary with the Mini App embedded)
 - `just web-demo` / `just web-dev` / `just web-check` / `just web-build` (Svelte Mini App in `apps/web`; requires `bun`)
 - `bun test apps/web/build-cached.test.mjs` (web-build cache/invalidation regression tests)
 - `bun test apps/web/annotate.test.mjs` (artifact annotation bridge and message-validation tests)

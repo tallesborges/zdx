@@ -214,7 +214,31 @@ impl DeliveryRecord {
     pub fn has_problems(&self) -> bool {
         self.items.iter().any(DeliveryItem::is_problem)
     }
+
+    /// Whether any item is still pending.
+    #[must_use]
+    pub fn has_pending(&self) -> bool {
+        self.items
+            .iter()
+            .any(|item| item.status == DeliveryStatus::Pending)
+    }
+
+    /// This record (same id) with every pending item `unknown`: the
+    /// delivering client went away mid-delivery, so nothing is resent.
+    #[must_use]
+    pub fn interrupted(&self) -> Self {
+        let mut record = self.clone();
+        for item in &mut record.items {
+            if item.status == DeliveryStatus::Pending {
+                item.mark_unknown(INTERRUPTED);
+            }
+        }
+        record
+    }
 }
+
+/// The error of an item whose delivery was cut off.
+pub const INTERRUPTED: &str = "delivery interrupted; outcome unknown";
 
 /// Folds records by id (a later record with the same id replaces the earlier
 /// one) and keeps first-seen order.

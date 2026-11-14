@@ -173,6 +173,7 @@ pub(crate) fn spawn_agent_turn(
     thread: &Thread,
     tool_config: &ToolConfig,
     steer: zdx_engine::core::steer::SteerInbox,
+    run_lease: std::sync::Arc<zdx_engine::core::thread_lease::ThreadRunLease>,
 ) -> AgentTurnHandle {
     let PreparedBotTurn {
         config: bot_config,
@@ -194,6 +195,7 @@ pub(crate) fn spawn_agent_turn(
         activity_subagent_name: None,
         tool_timeout: None,
         steer: Some(zdx_engine::core::steer::SteerSource::Inbox(steer)),
+        run_lease: Some(run_lease),
     };
 
     // Create channels: agent -> broadcaster -> [bot, persist]
@@ -261,120 +263,73 @@ pub(crate) fn tool_running_status(name: &str) -> String {
     format!("{emoji} Running `{name}`...")
 }
 
-/// The replied-to message, placed before the user's words.
-fn reply_to_block(reply: &crate::types::RepliedTo) -> String {
-    let sender = if reply.from_bot {
-        "the bot (or another run posting through it)"
-    } else {
-        "a user"
-    };
-    let what = if reply.quoted {
-        "quotes this part of"
-    } else {
-        "replies to"
-    };
-    format!(
-        "<reply_to>\nThe user's message below {what} message {} in this chat, sent by {sender}:\n{}\n</reply_to>",
-        reply.message_id, reply.text
-    )
+/// The user text a turn records for `incoming`
+/// ([`zdx_engine::core::chat_turn::compose_user_text`]).
+pub(crate) fn build_user_text(incoming: &IncomingMessage) -> String {
+    zdx_engine::core::chat_turn::compose_user_text(&user_input(incoming))
 }
 
-pub(crate) fn build_user_text(incoming: &IncomingMessage) -> String {
-    let mut parts = Vec::new();
-    if let Some(reply) = incoming.replied_to.as_ref() {
-        parts.push(reply_to_block(reply));
-    }
-    if let Some(text) = incoming.text.as_ref()
-        && !text.trim().is_empty()
-    {
-        parts.push(text.clone());
-    }
+fn user_input(incoming: &IncomingMessage) -> zdx_engine::core::chat_turn::UserInput {
+    use zdx_engine::core::chat_turn as chat;
 
-    for audio in &incoming.audios {
-        // A labelled clip (Mini App feedback) names the note it belongs to,
-        // so the transcript stays attached to it.
-        let prefix = audio
-            .label
-            .as_ref()
-            .map_or_else(String::new, |label| format!("{label}: "));
-        if let Some(transcript) = &audio.transcript {
-            if !prefix.is_empty() {
-                parts.push(format!("{prefix}transcript"));
-            }
-            parts.push(zdx_engine::providers::wrap_voice_transcript(transcript));
-            parts.push(format!(
-                "(Audio file saved at {} — use the `ask_media` tool on it if you need more than the transcript.)",
-                audio.local_path.display()
-            ));
-        } else {
-            parts.push(format!(
-                "{prefix}Audio attachment saved at {} (transcription unavailable).",
-                audio.local_path.display()
-            ));
-        }
-    }
-
-    for image in &incoming.images {
-        let path = image.local_path.display();
-        let (prefix, subject) = match &image.label {
-            Some(label) => (format!("{label}: "), "image attachment"),
-            None => (String::new(), "Image attachment"),
-        };
-        let text = match &image.delivery {
-            ImageDelivery::Inline {
-                downscaled: false, ..
-            } => format!("{subject} saved at {path}."),
-            ImageDelivery::Inline {
-                downscaled: true, ..
-            } => format!(
-                "{subject} saved at {path}. You see a downscaled copy; the saved file is the full-resolution original — use `ask_media` on it if you need fine detail."
-            ),
-            ImageDelivery::SavedOnly {
-                reason,
-                ask_media: true,
-            } => format!(
-                "{subject} saved at {path}, but it was not attached for you to see: {reason}. Use the `ask_media` tool on the saved file to inspect it."
-            ),
-            ImageDelivery::SavedOnly {
-                reason,
-                ask_media: false,
-            } => format!(
-                "{subject} saved at {path}, but it was not attached for you to see: {reason}. `ask_media` cannot read this file either; ask the user to resend it as a PNG or JPEG."
-            ),
-        };
-        parts.push(format!("{prefix}{text}"));
-    }
-
-    for doc in &incoming.documents {
-        parts.push(format!(
-            "Document attachment '{}' saved at {} — use the `ask_media` tool on it to read its contents.",
-            doc.file_name,
-            doc.local_path.display()
-        ));
-    }
-
-    for video in &incoming.videos {
-        parts.push(match &video.status {
-            VideoStatus::Saved(path) => format!(
-                "{} attachment saved at {} — use the `ask_media` tool on it to watch it.",
-                video.kind,
-                path.display()
-            ),
-            VideoStatus::TooLarge { size_bytes } => format!(
-                "{} attachment was not downloaded: it is {:.1} MiB and the limit is {} MiB. Ask the user for a shorter or compressed clip.",
-                video.kind,
-                *size_bytes as f64 / (1024.0 * 1024.0),
-                zdx_engine::media::MAX_INLINE_BYTES / (1024 * 1024)
-            ),
-        });
-    }
-
-    parts.extend(incoming.notices.iter().cloned());
-
-    if parts.is_empty() {
-        "User sent an attachment.".to_string()
-    } else {
-        parts.join("\n\n")
+    chat::UserInput {
+        reply_to: incoming.replied_to.as_ref().map(|reply| chat::RepliedTo {
+            message_id: reply.message_id,
+            from_bot: reply.from_bot,
+            text: reply.text.clone(),
+            quoted: reply.quoted,
+        }),
+        text: incoming.text.clone(),
+        audios: incoming
+            .audios
+            .iter()
+            .map(|audio| chat::AudioInput {
+                path: audio.local_path.clone(),
+                transcript: audio.transcript.clone(),
+                label: audio.label.clone(),
+            })
+            .collect(),
+        images: incoming
+            .images
+            .iter()
+            .map(|image| chat::ImageInput {
+                path: image.local_path.clone(),
+                delivery: match &image.delivery {
+                    ImageDelivery::Inline { downscaled, .. } => chat::ImageDelivery::Inline {
+                        downscaled: *downscaled,
+                    },
+                    ImageDelivery::SavedOnly { reason, ask_media } => {
+                        chat::ImageDelivery::SavedOnly {
+                            reason: reason.clone(),
+                            ask_media: *ask_media,
+                        }
+                    }
+                },
+                label: image.label.clone(),
+            })
+            .collect(),
+        documents: incoming
+            .documents
+            .iter()
+            .map(|doc| chat::DocumentInput {
+                file_name: doc.file_name.clone(),
+                path: doc.local_path.clone(),
+            })
+            .collect(),
+        videos: incoming
+            .videos
+            .iter()
+            .map(|video| chat::VideoInput {
+                kind: video.kind.to_string(),
+                status: match &video.status {
+                    VideoStatus::Saved(path) => chat::VideoStatus::Saved { path: path.clone() },
+                    VideoStatus::TooLarge { size_bytes } => chat::VideoStatus::TooLarge {
+                        size_bytes: *size_bytes,
+                    },
+                },
+            })
+            .collect(),
+        notices: incoming.notices.clone(),
     }
 }
 

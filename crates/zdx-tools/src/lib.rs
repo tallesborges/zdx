@@ -44,6 +44,9 @@ pub struct ToolContext {
     pub timeout: Option<Duration>,
     /// Cancellation for work owned by the current invocation.
     pub cancel_token: Option<CancellationToken>,
+    /// Environment of the run this call belongs to. Every child process a
+    /// tool starts gets it, and `$VAR` in tool paths reads it first.
+    pub env: ToolEnv,
 }
 
 impl ToolContext {
@@ -52,7 +55,103 @@ impl ToolContext {
             root,
             timeout,
             cancel_token: None,
+            env: ToolEnv::default(),
         }
+    }
+
+    #[must_use]
+    pub fn with_env(mut self, env: ToolEnv) -> Self {
+        self.env = env;
+        self
+    }
+
+    /// [`resolve_input_path`] with this call's environment.
+    ///
+    /// # Errors
+    /// Returns an error if the path is empty.
+    pub fn resolve_input_path(&self, path: &str) -> Result<PathBuf, ToolOutput> {
+        resolve_input_path_in(path, &self.root, &self.env)
+    }
+
+    /// [`resolve_existing_path`] with this call's environment.
+    ///
+    /// # Errors
+    /// Returns an error if the path is empty or does not exist.
+    pub fn resolve_existing_path(&self, path: &str) -> Result<ResolvedPath, ToolOutput> {
+        resolve_existing_path_in(path, &self.root, &self.env)
+    }
+
+    /// [`resolve_path_against_root`] with this call's environment.
+    #[must_use]
+    pub fn resolve_path(&self, path: &Path) -> PathBuf {
+        resolve_path_against_root_in(path, &self.root, &self.env)
+    }
+}
+
+/// Environment variables that belong to one run, not to the process.
+///
+/// Several runs can share one process (the bot, the orchestrator service, a
+/// TUI with background threads), so per-run values such as `ZDX_THREAD_ID`
+/// must not live in the process environment. Tools pass these to every child
+/// process they start, and `$VAR` expansion in tool paths reads them before
+/// the process environment. A name that is not set here falls back to the
+/// process environment; an empty `ToolEnv` is the process environment alone.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolEnv {
+    vars: Vec<(String, String)>,
+}
+
+impl ToolEnv {
+    /// Sets `key` to `value`, replacing an earlier value for `key`.
+    pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        let key = key.into();
+        let value = value.into();
+        match self.vars.iter_mut().find(|(name, _)| *name == key) {
+            Some(entry) => entry.1 = value,
+            None => self.vars.push((key, value)),
+        }
+    }
+
+    #[must_use]
+    pub fn with(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.set(key, value);
+        self
+    }
+
+    /// The value set for this run, without the process fallback.
+    #[must_use]
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.vars
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.as_str())
+    }
+
+    /// The value a child process of this run sees: the run's value, else
+    /// the process environment's.
+    #[must_use]
+    pub fn var(&self, key: &str) -> Option<String> {
+        self.get(key)
+            .map(str::to_owned)
+            .or_else(|| std::env::var(key).ok())
+    }
+
+    /// The run's own variables, to pass to a child process.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.vars
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.vars.is_empty()
+    }
+
+    /// [`expand_env_vars`] that reads this run's variables first.
+    #[must_use]
+    pub fn expand(&self, input: &str) -> String {
+        expand_env_vars_with(input, |name| self.var(name))
     }
 }
 
@@ -327,7 +426,13 @@ pub(crate) fn parse_tool_input<T: DeserializeOwned>(
 /// Expand environment variables in a path string.
 ///
 /// Supports `$VAR` and `${VAR}` syntax. Unknown variables are left as-is.
+/// Reads the process environment only; tools use [`ToolEnv::expand`] so a
+/// run's own variables win.
 pub fn expand_env_vars(input: &str) -> String {
+    expand_env_vars_with(input, |name| std::env::var(name).ok())
+}
+
+fn expand_env_vars_with(input: &str, lookup: impl Fn(&str) -> Option<String>) -> String {
     let mut result = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
 
@@ -355,7 +460,7 @@ pub fn expand_env_vars(input: &str) -> String {
                 if braced {
                     result.push('{');
                 }
-            } else if let Ok(val) = std::env::var(&var_name) {
+            } else if let Some(val) = lookup(&var_name) {
                 result.push_str(&val);
             } else {
                 // Leave unknown vars as-is
@@ -401,7 +506,13 @@ pub fn expand_tilde(path: &Path) -> PathBuf {
 /// and a leading `~`/`~/` to `$HOME`.
 #[must_use]
 pub fn resolve_path_against_root(path: &Path, root: &Path) -> PathBuf {
-    let expanded = expand_env_vars(path.to_string_lossy().as_ref());
+    resolve_path_against_root_in(path, root, &ToolEnv::default())
+}
+
+/// [`resolve_path_against_root`] that expands `$VAR` with `env` first.
+#[must_use]
+pub fn resolve_path_against_root_in(path: &Path, root: &Path, env: &ToolEnv) -> PathBuf {
+    let expanded = env.expand(path.to_string_lossy().as_ref());
     let requested = expand_tilde(Path::new(&expanded));
 
     if requested.is_absolute() {
@@ -419,6 +530,18 @@ pub fn resolve_path_against_root(path: &Path, root: &Path) -> PathBuf {
 /// # Errors
 /// Returns an error if the path is empty.
 pub fn resolve_input_path(path: &str, root: &Path) -> Result<PathBuf, ToolOutput> {
+    resolve_input_path_in(path, root, &ToolEnv::default())
+}
+
+/// [`resolve_input_path`] that expands `$VAR` with `env` first.
+///
+/// # Errors
+/// Returns an error if the path is empty.
+pub fn resolve_input_path_in(
+    path: &str,
+    root: &Path,
+    env: &ToolEnv,
+) -> Result<PathBuf, ToolOutput> {
     let display_path = path.trim();
     if display_path.is_empty() {
         return Err(ToolOutput::failure(
@@ -428,7 +551,11 @@ pub fn resolve_input_path(path: &str, root: &Path) -> Result<PathBuf, ToolOutput
         ));
     }
 
-    Ok(resolve_path_against_root(Path::new(display_path), root))
+    Ok(resolve_path_against_root_in(
+        Path::new(display_path),
+        root,
+        env,
+    ))
 }
 
 /// A user-facing path plus its canonical filesystem resolution.
@@ -471,8 +598,20 @@ pub fn insert_file_path_fields(
 /// # Errors
 /// Returns an error if the operation fails.
 pub fn resolve_existing_path(path: &str, root: &Path) -> Result<ResolvedPath, ToolOutput> {
+    resolve_existing_path_in(path, root, &ToolEnv::default())
+}
+
+/// [`resolve_existing_path`] that expands `$VAR` with `env` first.
+///
+/// # Errors
+/// Returns an error if the path is empty or does not exist.
+pub fn resolve_existing_path_in(
+    path: &str,
+    root: &Path,
+    env: &ToolEnv,
+) -> Result<ResolvedPath, ToolOutput> {
     let display_path = path.trim().to_string();
-    let full_path = resolve_input_path(&display_path, root)?;
+    let full_path = resolve_input_path_in(&display_path, root, env)?;
 
     // Canonicalize to resolve any .. or symlinks (requires file to exist)
     full_path
@@ -496,15 +635,16 @@ pub fn resolve_existing_path(path: &str, root: &Path) -> Result<ResolvedPath, To
 /// the path against `root` and errors when it does not exist.
 pub(crate) fn resolve_search_path(
     user_path: Option<&str>,
-    root: &Path,
+    ctx: &ToolContext,
 ) -> Result<PathBuf, ToolOutput> {
+    let root = ctx.root.as_path();
     match user_path {
         Some(p) => {
             let p = p.trim();
             if p.is_empty() {
                 return Ok(root.to_path_buf());
             }
-            let full = resolve_input_path(p, root)?;
+            let full = ctx.resolve_input_path(p)?;
             if full.exists() {
                 Ok(full)
             } else {
@@ -629,6 +769,51 @@ pub fn write_spill_file(label: &str, bytes: &[u8]) -> Option<String> {
 pub(crate) fn truncate_str_to_byte_limit(text: &str, max_bytes: usize) -> (String, bool) {
     let (truncated, was_truncated, _) = truncate_bytes_to_byte_limit(text.as_bytes(), max_bytes);
     (truncated, was_truncated)
+}
+
+#[cfg(test)]
+mod env_tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{ToolContext, ToolEnv, expand_env_vars};
+
+    #[test]
+    fn run_env_wins_then_process_env_then_literal() {
+        let home = std::env::var("HOME").expect("HOME must be set for tests");
+        let env = ToolEnv::default()
+            .with("ZDX_ARTIFACT_DIR", "/run-a/art")
+            .with("ZDX_THREAD_ID", "first")
+            .with("ZDX_THREAD_ID", "run-a");
+
+        assert_eq!(
+            env.expand("$ZDX_ARTIFACT_DIR/x ${ZDX_THREAD_ID} $HOME $ZDX_UNSET_FOR_TEST ${"),
+            format!("/run-a/art/x run-a {home} $ZDX_UNSET_FOR_TEST ${{")
+        );
+        assert_eq!(env.iter().count(), 2);
+        assert_eq!(
+            ToolEnv::default().expand("$HOME/x $ZDX_UNSET_FOR_TEST"),
+            expand_env_vars("$HOME/x $ZDX_UNSET_FOR_TEST")
+        );
+    }
+
+    #[test]
+    fn context_paths_expand_with_the_run_env() {
+        let ctx = ToolContext::new(PathBuf::from("/root"), None)
+            .with_env(ToolEnv::default().with("ZDX_ARTIFACT_DIR", "/run-b/art"));
+
+        assert_eq!(
+            ctx.resolve_input_path("$ZDX_ARTIFACT_DIR/out.txt").unwrap(),
+            PathBuf::from("/run-b/art/out.txt")
+        );
+        assert_eq!(
+            ctx.resolve_path(Path::new("${ZDX_ARTIFACT_DIR}/a/../b")),
+            PathBuf::from("/run-b/art/a/../b")
+        );
+        assert_eq!(
+            ctx.resolve_input_path("rel/$ZDX_UNSET_FOR_TEST").unwrap(),
+            PathBuf::from("/root/rel/$ZDX_UNSET_FOR_TEST")
+        );
+    }
 }
 
 #[cfg(test)]

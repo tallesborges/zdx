@@ -7,12 +7,18 @@
 //! thread. The CLI and the Telegram bot are clients over the Unix socket in
 //! [`protocol`]. Overview: `docs/ARCHITECTURE.md`, Orchestrator Service.
 
+pub mod catalog;
 pub mod client;
+pub mod feedback;
+pub mod helpers;
 pub mod prompt;
 pub mod protocol;
 pub mod runtime;
 pub mod server;
+pub mod thread_ops;
 pub mod updates;
+pub mod view_bodies;
+pub mod views;
 
 use anyhow::{Result, bail};
 pub use client::OrchestratorClient;

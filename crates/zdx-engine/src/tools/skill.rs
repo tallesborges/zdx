@@ -429,7 +429,7 @@ fn plan_run(ctx: &ToolContext, object: &Map<String, Value>) -> Result<RunPlan, T
         command_line.push(expand_zdx_vars(&arg, |var| match var {
             "ZDX_SKILL_DIR" => Some(skill_dir.clone()),
             "ZDX_SKILL_NAME" => Some(skill.name.clone()),
-            _ => std::env::var(var).ok(),
+            _ => ctx.env.var(var),
         }));
     }
 
@@ -1428,6 +1428,49 @@ mod tests {
         );
         assert!(!marker.exists(), "an argument must never run as a command");
         assert_eq!(data["skill"], "demo");
+    }
+
+    /// Two runs call the same skill script at the same time: each script
+    /// sees its own run's `ZDX_*` values, in its environment and in `$ZDX_*`
+    /// arguments.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn concurrent_runs_get_their_own_run_env() {
+        let fx = Fixture::new();
+        let dir = fx.add_skill("demo");
+        write_script(
+            &dir,
+            "env.sh",
+            "#!/bin/sh\nsleep 0.2\nprintf '%s|%s' \"$ZDX_THREAD_ID\" \"$1\"\n",
+            true,
+        );
+        let ctx_for = |thread: &str| {
+            fx.ctx(Some(thread)).with_env(
+                crate::tools::ToolEnv::default()
+                    .with("ZDX_THREAD_ID", thread)
+                    .with("ZDX_ARTIFACT_DIR", format!("/artifacts/{thread}")),
+            )
+        };
+        let input = json!({
+            "action": "run",
+            "name": "demo",
+            "file": "scripts/env.sh",
+            "args": ["$ZDX_ARTIFACT_DIR/out.png"],
+        });
+        let (ctx_a, ctx_b) = (ctx_for("thread-a"), ctx_for("thread-b"));
+
+        let (a, b) = tokio::join!(
+            execute_skill_exec(&input, &ctx_a),
+            execute_skill_exec(&input, &ctx_b),
+        );
+
+        for (thread, output) in [("thread-a", a), ("thread-b", b)] {
+            let data = output.data().expect("run succeeds");
+            assert_eq!(
+                data["stdout"].as_str().unwrap(),
+                format!("{thread}|/artifacts/{thread}/out.png")
+            );
+        }
     }
 
     #[cfg(unix)]
