@@ -18,7 +18,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use super::store::{JobRunRecord, JobsHome, Outcome, RunTrigger};
+use super::records::{JobRunRecord, JobsHome, Outcome, RunTrigger};
 use crate::core::posted::{PostLink, links_from};
 use crate::core::thread_persistence::{ThreadEvent, load_thread_events};
 
@@ -290,23 +290,26 @@ mod tests {
             job: job.to_string(),
             run_id: run_id.map(str::to_string),
             trigger: RunTrigger::Daemon,
-            schedule_kind: None,
             scheduled_for: None,
-            lateness_secs: None,
             thread_id: run_id.map(|id| format!("job-{job}-{id}")),
             attempt,
-            max_attempts: 2,
             started_at: format!("2026-01-0{attempt}T08:00:00+00:00"),
             finished_at: format!("2026-01-0{attempt}T08:01:00+00:00"),
-            duration_ms: 1,
             ok: outcome == Outcome::Succeeded,
             outcome: Some(outcome),
             error: (outcome != Outcome::Succeeded).then(|| "boom".to_string()),
-            schedule: None,
-            model: None,
-            subagent: None,
-            root: None,
         }
+    }
+
+    /// Appends `record` as the jobs program does: one JSON line.
+    fn append(home: &JobsHome, record: &JobRunRecord) {
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(home.runs_log())
+            .unwrap();
+        writeln!(file, "{}", serde_json::to_string(record).unwrap()).unwrap();
     }
 
     fn at(mut record: JobRunRecord, day: u32) -> JobRunRecord {
@@ -340,7 +343,7 @@ mod tests {
                 ..at(record("daily", Some("m"), 0, Outcome::Missed), 6)
             },
         ] {
-            home.append_run_record(&record).expect("append");
+            append(&home, &record);
         }
 
         let runs = recent_runs(&home, "daily", 10, Some("c")).expect("runs");
@@ -370,8 +373,10 @@ mod tests {
     fn lists_posts_with_answers_in_their_conversation() {
         let zdx_home = crate::test_support::temp_zdx_home();
         let home = JobsHome::at(zdx_home.path());
-        home.append_run_record(&at(record("alerts", Some("r1"), 1, Outcome::Succeeded), 1))
-            .expect("append");
+        append(
+            &home,
+            &at(record("alerts", Some("r1"), 1, Outcome::Succeeded), 1),
+        );
         let conversation = "telegram--100-topic-7";
         let mut thread = Thread::with_id(conversation.to_string()).expect("thread");
         thread

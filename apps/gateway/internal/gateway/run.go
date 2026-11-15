@@ -290,7 +290,7 @@ func Run(ctx context.Context, cfg Config) error {
 			BotToken:       cfg.Settings.BotToken,
 			AllowedUserIDs: cfg.Settings.AllowlistUserIDs,
 			Assets:         cfg.Assets,
-			Engine:         &MiniAppEngine{Client: eng, RootForChat: cfg.Settings.RootForChat, Root: cfg.Settings.Root, Telegram: tg, Log: log, Quota: quota.Options{Home: cfg.Home, Version: zdxVersion}},
+			Engine:         &MiniAppEngine{Client: eng, RootForChat: cfg.Settings.RootForChat, Root: cfg.Settings.Root, Telegram: tg, Log: log, Quota: quota.Options{Home: cfg.Home, Version: zdxVersion}, Home: cfg.Home},
 			Deliveries:     deliveries,
 			Feedback:       FeedbackGate{Allow: allow},
 			Logger:         log,

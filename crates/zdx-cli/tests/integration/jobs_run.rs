@@ -1,5 +1,7 @@
-//! Tests for `zdx jobs run`: non-interactive prompt layers, the runtime
-//! context, and the optional per-job `root`.
+//! Tests for the Rust side of jobs, which the Go jobs program runs:
+//! `zdx jobs attempt` (prompt layers, the runtime context, the optional
+//! per-job `root`, the result file), `zdx jobs resolve` (caller and daemon
+//! settings), and `zdx jobs history`.
 
 use std::fs;
 use std::sync::{Arc, Mutex};
@@ -15,14 +17,75 @@ fn can_bind_localhost() -> bool {
     std::net::TcpListener::bind("127.0.0.1:0").is_ok()
 }
 
-fn write_job(zdx_home: &std::path::Path, name: &str, frontmatter: &str) {
-    let dir = zdx_home.join("jobs");
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(
-        dir.join(format!("{name}.md")),
-        format!("---\n{frontmatter}---\nSummarize the workspace.\n"),
-    )
-    .unwrap();
+/// The attempt input the jobs program sends for job `name`.
+fn attempt_input(name: &str, fields: serde_json::Value) -> serde_json::Value {
+    let mut input = serde_json::json!({
+        "job": name, "prompt": "Summarize the workspace.", "run_id": "run-1",
+        "thread_id": null, "no_thread": true,
+    });
+    let serde_json::Value::Object(fields) = fields else {
+        panic!("fields must be an object");
+    };
+    for (key, value) in fields {
+        input[key] = value;
+    }
+    input
+}
+
+/// Runs `zdx --root ROOT jobs attempt` in `root` and returns the command's
+/// assertion and the result file.
+fn run_attempt(
+    zdx_home: &std::path::Path,
+    root: &std::path::Path,
+    provider: &str,
+    input: &serde_json::Value,
+) -> (assert_cmd::assert::Assert, serde_json::Value) {
+    let result = zdx_home.join("attempt-result.json");
+    let assert = crate::fixtures::zdx_cmd()
+        .env("ZDX_HOME", zdx_home)
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", provider)
+        .current_dir(root)
+        .args([
+            "--root",
+            root.to_str().unwrap(),
+            "jobs",
+            "attempt",
+            "--result",
+        ])
+        .arg(&result)
+        .write_stdin(input.to_string())
+        .assert();
+    let report = serde_json::from_str(&fs::read_to_string(&result).expect("result file")).unwrap();
+    (assert, report)
+}
+
+/// Runs `zdx --root ROOT jobs resolve ARGS` with `jobs` on stdin.
+fn resolve(
+    zdx_home: &std::path::Path,
+    home: Option<&std::path::Path>,
+    root: &std::path::Path,
+    args: &[&str],
+    jobs: serde_json::Value,
+) -> serde_json::Value {
+    let mut cmd = crate::fixtures::zdx_cmd();
+    cmd.env("ZDX_HOME", zdx_home).current_dir(root);
+    if let Some(home) = home {
+        cmd.env("HOME", home);
+    }
+    let output = cmd
+        .args(["--root", root.to_str().unwrap(), "jobs", "resolve"])
+        .args(args)
+        .write_stdin(
+            serde_json::Value::Object([("jobs".to_string(), jobs)].into_iter().collect())
+                .to_string(),
+        )
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&output).unwrap()
 }
 
 /// One earlier run of `job` (two attempts) that posted one message.
@@ -61,35 +124,8 @@ fn seed_previous_run(zdx_home: &std::path::Path, job: &str) {
     .unwrap();
 }
 
-fn read_run_records(zdx_home: &std::path::Path) -> Vec<serde_json::Value> {
-    fs::read_to_string(zdx_home.join("jobs_runs.jsonl"))
-        .unwrap_or_default()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
-}
-
-#[tokio::test]
-async fn test_job_run_uses_declared_root_layers_and_runtime_context() {
-    if !can_bind_localhost() {
-        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
-        return;
-    }
-    let zdx_home = TempDir::new().unwrap();
-    let caller_root = TempDir::new().unwrap();
-    fs::write(caller_root.path().join("AGENTS.md"), "CALLER-ROOT-NOTE").unwrap();
-    let declared_root = TempDir::new().unwrap();
-    fs::write(declared_root.path().join("AGENTS.md"), "DECLARED-ROOT-NOTE").unwrap();
-    write_job(
-        zdx_home.path(),
-        "scoped",
-        &format!(
-            "model: \"{MOCK_MODEL}@low\"\nroot: \"{}\"\n",
-            declared_root.path().display()
-        ),
-    );
-    seed_previous_run(zdx_home.path(), "scoped");
-
+/// A mock provider that records the request it answers.
+async fn capturing_provider() -> (MockServer, Arc<Mutex<Option<serde_json::Value>>>) {
     let mock_server = MockServer::start().await;
     let captured: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
     let captured_clone = Arc::clone(&captured);
@@ -103,22 +139,37 @@ async fn test_job_run_uses_declared_root_layers_and_runtime_context() {
         .expect(1)
         .mount(&mock_server)
         .await;
+    (mock_server, captured)
+}
 
-    crate::fixtures::zdx_cmd()
-        .env("ZDX_HOME", zdx_home.path())
-        .env("ANTHROPIC_API_KEY", "test-api-key")
-        .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .current_dir(caller_root.path())
-        .args([
-            "--root",
-            caller_root.path().to_str().unwrap(),
-            "--no-thread",
-            "jobs",
-            "run",
-            "scoped",
-        ])
-        .assert()
-        .success();
+#[tokio::test]
+async fn test_job_attempt_uses_declared_root_layers_and_runtime_context() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
+    let zdx_home = TempDir::new().unwrap();
+    let caller_root = TempDir::new().unwrap();
+    fs::write(caller_root.path().join("AGENTS.md"), "CALLER-ROOT-NOTE").unwrap();
+    let declared_root = TempDir::new().unwrap();
+    fs::write(declared_root.path().join("AGENTS.md"), "DECLARED-ROOT-NOTE").unwrap();
+    seed_previous_run(zdx_home.path(), "scoped");
+    let (mock_server, captured) = capturing_provider().await;
+
+    let input = attempt_input(
+        "scoped",
+        serde_json::json!({
+            "model": format!("{MOCK_MODEL}@low"),
+            "root": declared_root.path().display().to_string(),
+        }),
+    );
+    let (assert, result) = run_attempt(
+        zdx_home.path(),
+        caller_root.path(),
+        &mock_server.uri(),
+        &input,
+    );
+    assert.success();
 
     let request = captured.lock().unwrap().clone().expect("captured request");
     let system = request["system"].to_string();
@@ -144,83 +195,77 @@ async fn test_job_run_uses_declared_root_layers_and_runtime_context() {
         );
     }
 
-    let records = read_run_records(zdx_home.path());
-    assert_eq!(records.len(), 3);
-    let records = &records[2..];
-    assert_eq!(records[0]["ok"], true);
-    assert_eq!(records[0]["model"], format!("{MOCK_MODEL}@low"));
+    assert_eq!(result["outcome"], "succeeded");
+    assert_eq!(result["prepared"], true);
+    assert!(result["error"].is_null());
+    assert_eq!(result["model"], format!("{MOCK_MODEL}@low"));
     assert_eq!(
-        records[0]["root"],
+        result["root"],
         declared_root.path().to_string_lossy().as_ref()
     );
-}
-
-#[tokio::test]
-async fn test_job_run_with_missing_root_fails_without_running() {
-    let zdx_home = TempDir::new().unwrap();
-    let caller_root = TempDir::new().unwrap();
-    let missing = caller_root.path().join("missing-root");
-    write_job(
-        zdx_home.path(),
-        "scoped",
-        &format!("model: \"{MOCK_MODEL}\"\nroot: \"{}\"\n", missing.display()),
+    let log = fs::read_to_string(zdx_home.path().join("jobs_runs.jsonl")).unwrap();
+    assert_eq!(
+        log.lines().count(),
+        2,
+        "an attempt never writes the run log"
     );
-
-    crate::fixtures::zdx_cmd()
-        .env("ZDX_HOME", zdx_home.path())
-        .env("ANTHROPIC_API_KEY", "test-api-key")
-        .env("ANTHROPIC_BASE_URL", "http://127.0.0.1:9")
-        .current_dir(caller_root.path())
-        .args([
-            "--root",
-            caller_root.path().to_str().unwrap(),
-            "--no-thread",
-            "jobs",
-            "run",
-            "scoped",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "does not exist or is not a directory",
-        ));
-
-    let records = read_run_records(zdx_home.path());
-    assert_eq!(records.len(), 1, "a failed start is still recorded");
-    assert_eq!(records[0]["ok"], false);
-    assert!(records[0]["root"].is_null());
 }
 
 #[test]
-fn test_jobs_list_json_reports_resolved_settings_and_errors() {
+fn test_job_attempt_with_missing_root_fails_unprepared_without_running() {
     let zdx_home = TempDir::new().unwrap();
     let caller_root = TempDir::new().unwrap();
-    write_job(
-        zdx_home.path(),
-        "explicit",
-        &format!("schedule: \"0 8 * * *\"\nmodel: \"{MOCK_MODEL}@low\"\n"),
+    let missing = caller_root.path().join("missing-root");
+    let input = attempt_input(
+        "scoped",
+        serde_json::json!({ "model": MOCK_MODEL, "root": missing.display().to_string() }),
     );
-    write_job(zdx_home.path(), "broken", "root: \"relative/path\"\n");
 
-    let output = crate::fixtures::zdx_cmd()
-        .env("ZDX_HOME", zdx_home.path())
-        .current_dir(caller_root.path())
-        .args([
-            "--root",
-            caller_root.path().to_str().unwrap(),
-            "jobs",
-            "list",
-            "--json",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let list: serde_json::Value = serde_json::from_slice(&output).unwrap();
-    let items = list.as_array().unwrap();
+    let (assert, result) = run_attempt(
+        zdx_home.path(),
+        caller_root.path(),
+        "http://127.0.0.1:9",
+        &input,
+    );
+    assert.failure().stderr(predicate::str::contains(
+        "does not exist or is not a directory",
+    ));
+    assert_eq!(result["outcome"], "failed");
+    assert_eq!(result["prepared"], false);
+    assert!(result["root"].is_null());
+    assert!(
+        result["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("prepare job run: ")
+    );
+}
 
-    let broken = items.iter().find(|item| item["name"] == "broken").unwrap();
+#[test]
+fn test_jobs_resolve_reports_caller_settings_and_errors() {
+    let zdx_home = TempDir::new().unwrap();
+    let caller_root = TempDir::new().unwrap();
+    let view = resolve(
+        zdx_home.path(),
+        None,
+        caller_root.path(),
+        &[],
+        serde_json::json!([
+            { "job": "explicit", "model": format!("{MOCK_MODEL}@low") },
+            { "job": "broken", "root": "relative/path" },
+        ]),
+    );
+    assert!(view["daemon"].is_null());
+    let settings = &view["results"][0]["settings"];
+    assert_eq!(settings["model"]["spec"], format!("{MOCK_MODEL}@low"));
+    assert_eq!(settings["model"]["origin"], "job");
+    assert_eq!(settings["model"]["thinking"], "low");
+    assert_eq!(settings["root"]["origin"], "caller");
+    assert_eq!(
+        settings["root"]["path"],
+        caller_root.path().to_string_lossy().as_ref()
+    );
+    let broken = &view["results"][1];
     assert!(broken["settings"].is_null());
     assert!(
         broken["error"]
@@ -229,19 +274,18 @@ fn test_jobs_list_json_reports_resolved_settings_and_errors() {
             .contains("must be an absolute path")
     );
 
-    let explicit = items
-        .iter()
-        .find(|item| item["name"] == "explicit")
-        .unwrap();
-    assert_eq!(explicit["declared_model"], format!("{MOCK_MODEL}@low"));
-    let settings = &explicit["settings"];
-    assert_eq!(settings["model"]["spec"], format!("{MOCK_MODEL}@low"));
-    assert_eq!(settings["model"]["origin"], "job");
-    assert_eq!(settings["model"]["thinking"], "low");
-    assert_eq!(settings["root"]["origin"], "caller");
-    assert_eq!(
-        settings["root"]["path"],
-        caller_root.path().to_string_lossy().as_ref()
+    let prepared = resolve(
+        zdx_home.path(),
+        None,
+        caller_root.path(),
+        &["--prepare"],
+        serde_json::json!([{ "job": "delegated", "subagent": "missing-subagent" }]),
+    );
+    assert!(
+        prepared["results"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("missing-subagent")
     );
 }
 
@@ -268,40 +312,14 @@ async fn test_subagent_job_keeps_safeguards_and_context() {
         "---\ndescription: Helper\ntools:\n  - read\n---\nHELPER-BODY. {% if project_context %}{{ project_context }}{% endif %}\n",
     )
     .unwrap();
-    write_job(
-        zdx_home.path(),
+    let (mock_server, captured) = capturing_provider().await;
+
+    let input = attempt_input(
         "delegated",
-        &format!("model: \"{MOCK_MODEL}\"\nsubagent: helper\n"),
+        serde_json::json!({ "model": MOCK_MODEL, "subagent": "helper" }),
     );
-
-    let mock_server = MockServer::start().await;
-    let captured: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
-    let captured_clone = Arc::clone(&captured);
-    let body = text_sse("done");
-    Mock::given(method("POST"))
-        .and(path("/v1/messages"))
-        .respond_with(move |req: &Request| {
-            *captured_clone.lock().unwrap() = req.body_json().ok();
-            sse_response(&body)
-        })
-        .expect(1)
-        .mount(&mock_server)
-        .await;
-
-    crate::fixtures::zdx_cmd()
-        .env("ZDX_HOME", zdx_home.path())
-        .env("ANTHROPIC_API_KEY", "test-api-key")
-        .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .current_dir(root.path())
-        .args([
-            "--root",
-            root.path().to_str().unwrap(),
-            "--no-thread",
-            "jobs",
-            "run",
-            "delegated",
-        ])
-        .assert()
+    run_attempt(zdx_home.path(), root.path(), &mock_server.uri(), &input)
+        .0
         .success();
 
     let request = captured.lock().unwrap().clone().expect("captured request");
@@ -347,11 +365,7 @@ async fn test_subagent_job_keeps_safeguards_and_context() {
 
 #[test]
 fn test_jobs_reject_global_model_flag() {
-    let zdx_home = TempDir::new().unwrap();
-    write_job(zdx_home.path(), "any", "");
-
     crate::fixtures::zdx_cmd()
-        .env("ZDX_HOME", zdx_home.path())
         .args(["--model", MOCK_MODEL, "jobs", "run", "any"])
         .assert()
         .failure()
@@ -369,43 +383,18 @@ fn write_daemon_config(root: &std::path::Path, model: &str) {
     .unwrap();
 }
 
-fn daemon_list(
+fn daemon_resolve(
     zdx_home: &std::path::Path,
     home: &std::path::Path,
     caller_root: &std::path::Path,
+    jobs: serde_json::Value,
 ) -> serde_json::Value {
-    let output = crate::fixtures::zdx_cmd()
-        .env("ZDX_HOME", zdx_home)
-        .env("HOME", home)
-        .current_dir(caller_root)
-        .args([
-            "--root",
-            caller_root.to_str().unwrap(),
-            "jobs",
-            "list",
-            "--daemon",
-            "--json",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    serde_json::from_slice(&output).unwrap()
-}
-
-fn find<'a>(view: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
-    view["jobs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|item| item["name"] == name)
-        .unwrap()
+    resolve(zdx_home, Some(home), caller_root, &["--daemon"], jobs)
 }
 
 /// The caller's own root and config never stand in for the daemon's.
 #[test]
-fn test_list_daemon_uses_running_daemon_context_not_caller_root() {
+fn test_resolve_daemon_uses_running_daemon_context_not_caller_root() {
     let zdx_home = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
     let daemon_root = TempDir::new().unwrap();
@@ -413,15 +402,6 @@ fn test_list_daemon_uses_running_daemon_context_not_caller_root() {
     let caller_root = TempDir::new().unwrap();
     write_daemon_config(caller_root.path(), "openai-codex:gpt-5.4@low");
     let scoped_root = TempDir::new().unwrap();
-    write_job(zdx_home.path(), "inherited", "");
-    write_job(
-        zdx_home.path(),
-        "scoped",
-        &format!(
-            "root: \"{}\"\nmodel: \"{MOCK_MODEL}@medium\"\n",
-            scoped_root.path().display()
-        ),
-    );
 
     let run = zdx_home.path().join("run");
     fs::create_dir_all(&run).unwrap();
@@ -439,12 +419,24 @@ fn test_list_daemon_uses_running_daemon_context_not_caller_root() {
     )
     .unwrap();
 
-    let view = daemon_list(zdx_home.path(), home.path(), caller_root.path());
+    let view = daemon_resolve(
+        zdx_home.path(),
+        home.path(),
+        caller_root.path(),
+        serde_json::json!([
+            { "job": "inherited" },
+            {
+                "job": "scoped",
+                "root": scoped_root.path().display().to_string(),
+                "model": format!("{MOCK_MODEL}@medium"),
+            },
+        ]),
+    );
     assert_eq!(view["daemon"]["status"], "available");
     assert_eq!(view["daemon"]["context"]["source"], "running");
     assert_eq!(view["daemon"]["context"]["pid"], pid);
 
-    let inherited = &find(&view, "inherited")["settings"];
+    let inherited = &view["results"][0]["settings"];
     assert_eq!(
         inherited["root"]["path"],
         daemon_root.path().to_string_lossy().as_ref()
@@ -458,7 +450,7 @@ fn test_list_daemon_uses_running_daemon_context_not_caller_root() {
     assert_eq!(inherited["model"]["thinking"], "high");
     assert_eq!(inherited["model"]["origin"], "config");
 
-    let scoped = &find(&view, "scoped")["settings"];
+    let scoped = &view["results"][1]["settings"];
     assert_eq!(
         scoped["root"]["path"],
         scoped_root.path().to_string_lossy().as_ref()
@@ -469,13 +461,12 @@ fn test_list_daemon_uses_running_daemon_context_not_caller_root() {
 }
 
 #[test]
-fn test_list_daemon_reports_installed_service_when_stopped() {
+fn test_resolve_daemon_reports_installed_service_when_stopped() {
     let zdx_home = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
     let daemon_root = TempDir::new().unwrap();
     write_daemon_config(daemon_root.path(), "claude-cli:claude-sonnet-5@low");
     let caller_root = TempDir::new().unwrap();
-    write_job(zdx_home.path(), "inherited", "");
 
     let agents = home.path().join("Library").join("LaunchAgents");
     fs::create_dir_all(&agents).unwrap();
@@ -493,30 +484,37 @@ fn test_list_daemon_reports_installed_service_when_stopped() {
     )
     .unwrap();
 
-    let view = daemon_list(zdx_home.path(), home.path(), caller_root.path());
+    let view = daemon_resolve(
+        zdx_home.path(),
+        home.path(),
+        caller_root.path(),
+        serde_json::json!([{ "job": "inherited" }]),
+    );
     let context = &view["daemon"]["context"];
     assert_eq!(context["source"], "installed");
     assert!(context["pid"].is_null());
     assert!(context["note"].as_str().unwrap().contains("not running"));
-    let inherited = &find(&view, "inherited")["settings"];
+    let inherited = &view["results"][0]["settings"];
     assert_eq!(inherited["root"]["path"], root.to_string());
     assert_eq!(inherited["model"]["spec"], "claude-cli:claude-sonnet-5@low");
 }
 
 #[test]
-fn test_list_daemon_unavailable_never_falls_back_to_caller_root() {
+fn test_resolve_daemon_unavailable_never_falls_back_to_caller_root() {
     let zdx_home = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
     let caller_root = TempDir::new().unwrap();
     let scoped_root = TempDir::new().unwrap();
-    write_job(zdx_home.path(), "inherited", "");
-    write_job(
-        zdx_home.path(),
-        "scoped",
-        &format!("root: \"{}\"\n", scoped_root.path().display()),
-    );
 
-    let view = daemon_list(zdx_home.path(), home.path(), caller_root.path());
+    let view = daemon_resolve(
+        zdx_home.path(),
+        home.path(),
+        caller_root.path(),
+        serde_json::json!([
+            { "job": "inherited" },
+            { "job": "scoped", "root": scoped_root.path().display().to_string() },
+        ]),
+    );
     assert_eq!(view["daemon"]["status"], "unavailable");
     assert!(
         view["daemon"]["reason"]
@@ -524,7 +522,7 @@ fn test_list_daemon_unavailable_never_falls_back_to_caller_root() {
             .unwrap()
             .contains("not running")
     );
-    let inherited = find(&view, "inherited");
+    let inherited = &view["results"][0];
     assert!(inherited["settings"].is_null());
     assert!(
         inherited["error"]
@@ -533,49 +531,9 @@ fn test_list_daemon_unavailable_never_falls_back_to_caller_root() {
             .contains("daemon settings unavailable")
     );
     assert_eq!(
-        find(&view, "scoped")["settings"]["root"]["path"],
+        view["results"][1]["settings"]["root"]["path"],
         scoped_root.path().to_string_lossy().as_ref()
     );
-}
-
-#[test]
-fn test_set_model_command_edits_only_the_model_line() {
-    let zdx_home = TempDir::new().unwrap();
-    let dir = zdx_home.path().join("jobs");
-    fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("paused.md");
-    let original = "---\n# paused: no schedule\ntimeout_secs: 60\n---\nDo the thing.\n";
-    fs::write(&path, original).unwrap();
-
-    let run = |args: &[&str]| {
-        crate::fixtures::zdx_cmd()
-            .env("ZDX_HOME", zdx_home.path())
-            .args(["jobs", "set-model"])
-            .args(args)
-            .assert()
-    };
-
-    run(&["paused", "claude-cli@work:claude-opus-5@high"])
-        .success()
-        .stdout(predicate::str::contains(
-            "paused: model = claude-cli@work:claude-opus-5@high",
-        ));
-    assert_eq!(
-        fs::read_to_string(&path).unwrap(),
-        original.replace(
-            "timeout_secs: 60\n---",
-            "timeout_secs: 60\nmodel: \"claude-cli@work:claude-opus-5@high\"\n---"
-        )
-    );
-
-    run(&["paused", "--clear"])
-        .success()
-        .stdout(predicate::str::contains("model cleared"));
-    assert_eq!(fs::read_to_string(&path).unwrap(), original);
-
-    run(&["paused"]).failure();
-    run(&["paused", "bad \"spec"]).failure();
-    assert_eq!(fs::read_to_string(&path).unwrap(), original);
 }
 
 /// Runs one job whose subagent declares `frontmatter_extra`, and returns the
@@ -590,40 +548,13 @@ async fn subagent_job_tools(frontmatter_extra: &str) -> Vec<serde_json::Value> {
         format!("---\ndescription: Shell helper\n{frontmatter_extra}tools:\n  - bash\n---\nYou run commands.\n"),
     )
     .unwrap();
-    write_job(
-        zdx_home.path(),
+    let (mock_server, captured) = capturing_provider().await;
+    let input = attempt_input(
         "shell",
-        &format!("model: \"{MOCK_MODEL}\"\nsubagent: shell-helper\n"),
+        serde_json::json!({ "model": MOCK_MODEL, "subagent": "shell-helper" }),
     );
-
-    let mock_server = MockServer::start().await;
-    let captured: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
-    let captured_clone = Arc::clone(&captured);
-    let body = text_sse("done");
-    Mock::given(method("POST"))
-        .and(path("/v1/messages"))
-        .respond_with(move |req: &Request| {
-            *captured_clone.lock().unwrap() = req.body_json().ok();
-            sse_response(&body)
-        })
-        .expect(1)
-        .mount(&mock_server)
-        .await;
-
-    crate::fixtures::zdx_cmd()
-        .env("ZDX_HOME", zdx_home.path())
-        .env("ANTHROPIC_API_KEY", "test-api-key")
-        .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .current_dir(root.path())
-        .args([
-            "--root",
-            root.path().to_str().unwrap(),
-            "--no-thread",
-            "jobs",
-            "run",
-            "shell",
-        ])
-        .assert()
+    run_attempt(zdx_home.path(), root.path(), &mock_server.uri(), &input)
+        .0
         .success();
 
     let request = captured.lock().unwrap().clone().expect("captured request");

@@ -3,6 +3,7 @@ package miniapp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -94,6 +95,10 @@ func (s *server) monitorSnapshot(ctx context.Context) (json.RawMessage, error) {
 	snapshot, err := s.engine.MonitorSnapshot(ctx)
 	if err != nil {
 		return nil, err
+	}
+	jobs, jobsError := s.engine.JobSummaries(ctx)
+	if snapshot, err = setFields(snapshot, field{"jobs", jobs}, field{"jobs_error", jobsError}); err != nil {
+		return nil, fmt.Errorf("monitor snapshot: %w", err)
 	}
 	s.monitor.mu.Lock()
 	s.monitor.snapshot, s.monitor.builtAt = snapshot, time.Now()

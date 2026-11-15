@@ -44,8 +44,6 @@ type Snapshot struct {
 	GeneratedAt         string              `json:"generated_at"`
 	Services            []SnapshotService   `json:"services"`
 	BackgroundProcesses []BackgroundProcess `json:"background_processes"`
-	Jobs                []JobSummary        `json:"jobs"`
-	JobsError           *string             `json:"jobs_error"`
 	Config              MonitorConfig       `json:"config"`
 }
 
@@ -86,7 +84,7 @@ type HelperModel struct {
 	Model string `json:"model"`
 }
 
-// JobSchedule is jobs::JobSchedule (`kind`: manual, recurring, once).
+// JobSchedule is a job's schedule (`kind`: manual, recurring, once; apps/shared/jobs).
 type JobSchedule struct {
 	Kind  string  `json:"kind"`
 	Cron  *string `json:"cron,omitempty"`
@@ -102,16 +100,6 @@ type LastRun struct {
 	FinishedAt   string  `json:"finished_at"`
 	Error        *string `json:"error"`
 	ThreadID     *string `json:"thread_id"`
-}
-
-// JobSummary is jobs::JobSummary.
-type JobSummary struct {
-	Name      string       `json:"name"`
-	Schedule  *JobSchedule `json:"schedule"`
-	Status    string       `json:"status"`
-	NextRunAt *string      `json:"next_run_at"`
-	LastRun   *LastRun     `json:"last_run"`
-	Error     *string      `json:"error"`
 }
 
 // Subscription is one account's quota row, as quota.Subscriptions builds it
@@ -411,7 +399,7 @@ type ServiceState struct {
 	UptimeSecs *uint64 `json:"uptime_secs"`
 }
 
-// DaemonJobs is `zdx jobs list --daemon --json` (job_daemon::jobs): jobs
+// DaemonJobs is `zdx jobs list --daemon --json` (the Go jobs program): jobs
 // resolved the way the scheduled daemon resolves them.
 type DaemonJobs struct {
 	Daemon DaemonContextState `json:"daemon"`

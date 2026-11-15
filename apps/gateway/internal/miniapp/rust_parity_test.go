@@ -315,7 +315,7 @@ func startParityWith(t *testing.T, opts parityOptions) *parity {
 // its own in-process state (caches, feedback guard), like a second gateway.
 func (p *parity) newHandler(opts parityOptions) *httptest.Server {
 	p.t.Helper()
-	var eng miniapp.Engine = &gateway.MiniAppEngine{Client: p.eng, Root: p.root}
+	var eng miniapp.Engine = &gateway.MiniAppEngine{Client: p.eng, Root: p.root, Home: p.home}
 	if opts.engine != nil {
 		eng = opts.engine(p)
 	}
@@ -734,7 +734,7 @@ func TestRealRouteParity(t *testing.T) {
 		if err != nil || got.status != http.StatusOK {
 			t.Fatalf("%d %s / %v", got.status, got.body, err)
 		}
-		overlay := []string{"active_agents", "subscriptions", "subscriptions_status"}
+		overlay := []string{"jobs", "jobs_error", "active_agents", "subscriptions", "subscriptions_status"}
 		sameJSON(t, "monitor without the overlay", got.body, snapshot.Body, overlay...)
 		agents, _ := p.socket(engine.View{Op: engine.ViewActiveAgents})
 		var monitor map[string]json.RawMessage
@@ -751,6 +751,12 @@ func TestRealRouteParity(t *testing.T) {
 		}
 		for k := range rust {
 			rustKeys = append(rustKeys, k)
+		}
+		// Go adds the job summaries, read with the shared jobs package; the
+		// test home has no jobs.
+		rustKeys = append(rustKeys, "jobs", "jobs_error")
+		if string(monitor["jobs"]) != "[]" || string(monitor["jobs_error"]) != "null" {
+			t.Fatalf("jobs %s, jobs_error %s", monitor["jobs"], monitor["jobs_error"])
 		}
 		sort.Strings(keys)
 		sort.Strings(rustKeys)

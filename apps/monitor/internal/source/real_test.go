@@ -12,13 +12,15 @@ import (
 // TestRealZdxShapes runs a prebuilt zdx (ZDX_MONITOR_TEST_ZDX, never built
 // here) in the sandbox home, with no service running there, and decodes
 // every surface the monitor reads through the CLI: views via `zdx views`,
-// service status, and daemon jobs. It checks that the Go types match what
-// Rust writes.
+// service status, and daemon jobs (which `zdx` runs with the prebuilt jobs
+// program ZDX_MONITOR_TEST_JOBS). It checks that the Go types match what the
+// programs write.
 func TestRealZdxShapes(t *testing.T) {
-	bin := os.Getenv("ZDX_MONITOR_TEST_ZDX")
-	if bin == "" {
-		t.Skip("set ZDX_MONITOR_TEST_ZDX to a prebuilt zdx binary")
+	bin, jobsBin := os.Getenv("ZDX_MONITOR_TEST_ZDX"), os.Getenv("ZDX_MONITOR_TEST_JOBS")
+	if bin == "" || jobsBin == "" {
+		t.Skip("set ZDX_MONITOR_TEST_ZDX to a prebuilt zdx binary and ZDX_MONITOR_TEST_JOBS to a prebuilt zdx-jobs")
 	}
+	t.Setenv("ZDX_JOBS", jobsBin)
 	home := os.Getenv("ZDX_HOME")
 	root := tempDir(t, "r")
 	if err := os.MkdirAll(filepath.Join(home, "jobs"), 0o700); err != nil {
@@ -35,7 +37,7 @@ func TestRealZdxShapes(t *testing.T) {
 	if err != nil || origin != source.OriginCLI {
 		t.Fatalf("snapshot: %v %v", origin, err)
 	}
-	if len(snap.Services) == 0 || snap.Config.Model == "" || len(snap.Jobs) != 1 || snap.Jobs[0].Schedule == nil || snap.Jobs[0].Schedule.Kind != "recurring" {
+	if len(snap.Services) == 0 || snap.Config.Model == "" {
 		t.Fatalf("snapshot %+v", snap)
 	}
 	if _, _, err := s.ActiveAgents(ctx); err != nil {
@@ -55,7 +57,8 @@ func TestRealZdxShapes(t *testing.T) {
 		t.Fatalf("services: %+v %v", svc, err)
 	}
 	jobs, err := s.Jobs(ctx)
-	if err != nil || len(jobs.Jobs) != 1 || jobs.Jobs[0].Name != "daily-report" || jobs.Daemon.Status == "" {
+	if err != nil || len(jobs.Jobs) != 1 || jobs.Jobs[0].Name != "daily-report" || jobs.Jobs[0].Schedule == nil ||
+		jobs.Jobs[0].Schedule.Kind != "recurring" || jobs.Daemon.Status == "" {
 		t.Fatalf("jobs: %+v %v", jobs, err)
 	}
 }

@@ -167,6 +167,11 @@ func (f *fakeEngine) MonitorSnapshot(context.Context) (json.RawMessage, error) {
 	return raw(f.monitor)
 }
 
+func (f *fakeEngine) JobSummaries(context.Context) (json.RawMessage, *string) {
+	f.record("job_summaries")
+	return json.RawMessage(`[]`), nil
+}
+
 func (f *fakeEngine) ActiveAgents(context.Context) (json.RawMessage, error) {
 	f.record("active_agents")
 	return raw(f.activeAgents)

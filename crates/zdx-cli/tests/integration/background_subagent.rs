@@ -623,13 +623,6 @@ async fn job_deadline_stops_a_background_subagent() {
         return;
     }
     let (zdx_home, root) = workspace();
-    let jobs = zdx_home.path().join("jobs");
-    std::fs::create_dir_all(&jobs).unwrap();
-    std::fs::write(
-        jobs.join("bounded.md"),
-        format!("---\nmodel: \"{MOCK_MODEL}\"\ntimeout_secs: 3\n---\nDelegate the task.\n"),
-    )
-    .unwrap();
     let pidfile = root.path().join("child-command.pid");
     let child_reply = bash(
         "toolu_child_bash",
@@ -651,23 +644,7 @@ async fn job_deadline_stops_a_background_subagent() {
     });
     let (server, bodies) = start_mock(parent, child_reply).await;
 
-    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_zdx"));
-    cmd.env("ZDX_HOME", zdx_home.path())
-        .env("ANTHROPIC_API_KEY", "test-api-key")
-        .env("ANTHROPIC_BASE_URL", server.uri())
-        .current_dir(root.path())
-        .args([
-            "--root",
-            root.path().to_str().unwrap(),
-            "--no-thread",
-            "jobs",
-            "run",
-            "bounded",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let elapsed = run_to_exit(cmd).await;
+    let elapsed = run_job(&zdx_home, &root, &server, 3).await;
     assert!(elapsed < Duration::from_secs(30), "took {elapsed:?}");
 
     let bodies_now = bodies.lock().unwrap().clone();
@@ -997,20 +974,22 @@ async fn normal_call_without_background_execution_blocks() {
     assert!(subagent_markers(&zdx_home).is_empty());
 }
 
-/// Writes a job and runs it with `zdx jobs run`.
+/// Runs one attempt of a job with a tool deadline, as the jobs program
+/// does: `zdx jobs attempt` with the job on stdin.
 async fn run_job(
     zdx_home: &TempDir,
     root: &TempDir,
     server: &MockServer,
     timeout_secs: u32,
 ) -> std::time::Duration {
-    let jobs = zdx_home.path().join("jobs");
-    std::fs::create_dir_all(&jobs).unwrap();
+    let input = zdx_home.path().join("attempt-input.json");
     std::fs::write(
-        jobs.join("bounded.md"),
-        format!(
-            "---\nmodel: \"{MOCK_MODEL}\"\ntimeout_secs: {timeout_secs}\n---\nDelegate the task.\n"
-        ),
+        &input,
+        json!({
+            "job": "bounded", "prompt": "Delegate the task.", "model": MOCK_MODEL,
+            "timeout_secs": timeout_secs, "run_id": "run-1", "no_thread": true,
+        })
+        .to_string(),
     )
     .unwrap();
     let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_zdx"));
@@ -1021,12 +1000,12 @@ async fn run_job(
         .args([
             "--root",
             root.path().to_str().unwrap(),
-            "--no-thread",
             "jobs",
-            "run",
-            "bounded",
+            "attempt",
+            "--result",
         ])
-        .stdin(Stdio::null())
+        .arg(zdx_home.path().join("attempt-result.json"))
+        .stdin(std::fs::File::open(&input).unwrap())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     run_to_exit(cmd).await

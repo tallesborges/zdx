@@ -35,9 +35,9 @@ bot *ARGS:
 orchestrator:
     cargo run -p zdx -- orchestrator serve
 
-# Run jobs commands (pass extra args: just jobs list)
-jobs *ARGS:
-    cargo run -p zdx -- jobs {{ARGS}}
+# Run jobs commands from this checkout (builds the Go jobs program; `zdx jobs` execs it; pass extra args: just jobs list)
+jobs *ARGS: jobs-build
+    ZDX_JOBS="{{justfile_directory()}}/apps/shared/bin/zdx-jobs" cargo run -p zdx -- jobs {{ARGS}}
 
 # ─── Quality ──────────────────────────────────────
 
@@ -129,6 +129,10 @@ shared-check:
 quota-build OUT=(justfile_directory() + "/apps/shared/bin/zdx-quota"):
     cd apps/shared && go build -trimpath -ldflags "$(./ldflags.sh)" -o "{{OUT}}" ./cmd/zdx-quota
 
+# Build zdx-jobs, the jobs program `zdx jobs` runs (Go only, no cargo; default output apps/shared/bin/zdx-jobs)
+jobs-build OUT=(justfile_directory() + "/apps/shared/bin/zdx-jobs"):
+    cd apps/shared && go build -trimpath -o "{{OUT}}" ./cmd/zdx-jobs
+
 # ─── Build ────────────────────────────────────────
 
 # Build the release zdx binary (Rust only; the Mini App ships in the gateway).
@@ -151,12 +155,12 @@ install: build-release
     @# index only: no exports, no memory index.
     ~/.local/bin/zdx threads reindex
 
-# Build and install zdx, the gateway, and zdx-quota (and refresh an installed monitor), then restart the launchd services
-deploy: install gateway-install quota-install monitor-refresh
+# Build and install zdx, the gateway, zdx-quota, and zdx-jobs (and refresh an installed monitor), then restart the launchd services
+deploy: install gateway-install quota-install jobs-install monitor-refresh
     ~/.local/bin/zdx service restart all
 
-# Build and install zdx, the gateway, and zdx-quota (and refresh an installed monitor), and queue the restart until agent runs, workers, and orchestrator updates are done
-safe-deploy: install gateway-install quota-install monitor-refresh
+# Build and install zdx, the gateway, zdx-quota, and zdx-jobs (and refresh an installed monitor), and queue the restart until agent runs, workers, and orchestrator updates are done
+safe-deploy: install gateway-install quota-install jobs-install monitor-refresh
     ~/.local/bin/zdx service restart all --queue
 
 # Build the Go gateway into ~/.local/bin/zdx-gateway, the stable path the bot service runs
@@ -179,6 +183,13 @@ quota-install:
     cd apps/shared && go build -trimpath -ldflags "$(./ldflags.sh)" -o ~/.local/bin/.zdx-quota.new ./cmd/zdx-quota
     mv -f ~/.local/bin/.zdx-quota.new ~/.local/bin/zdx-quota
     @echo "Installed ~/.local/bin/zdx-quota"
+
+# Build zdx-jobs into ~/.local/bin/zdx-jobs, which `zdx jobs` (and so the daemon service) runs
+jobs-install:
+    @mkdir -p ~/.local/bin
+    cd apps/shared && go build -trimpath -o ~/.local/bin/.zdx-jobs.new ./cmd/zdx-jobs
+    mv -f ~/.local/bin/.zdx-jobs.new ~/.local/bin/zdx-jobs
+    @echo "Installed ~/.local/bin/zdx-jobs"
 
 # Rebuild ~/.local/bin/zdx-monitor only when it is installed: deploys never install it
 monitor-refresh:

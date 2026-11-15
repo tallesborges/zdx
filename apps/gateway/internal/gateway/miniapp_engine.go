@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"math"
 	"path/filepath"
+	"time"
 
 	"github.com/tallesborges/zdx/apps/gateway/internal/bot"
 	"github.com/tallesborges/zdx/apps/gateway/internal/conversation"
@@ -19,15 +20,17 @@ import (
 	"github.com/tallesborges/zdx/apps/gateway/internal/miniapp"
 	"github.com/tallesborges/zdx/apps/gateway/internal/telegram"
 	"github.com/tallesborges/zdx/apps/shared/gitview"
+	"github.com/tallesborges/zdx/apps/shared/jobs"
 	"github.com/tallesborges/zdx/apps/shared/quota"
 	"github.com/tallesborges/zdx/apps/shared/version"
 )
 
 // MiniAppEngine implements miniapp.Engine over the orchestrator socket.
-// Every read except quotas and Git is a Rust view (views.rs) whose body is
+// Every read except quotas, job summaries, and Git is a Rust view (views.rs) whose body is
 // the route's JSON, passed through unchanged. A view whose capability the
 // service lacks answers miniapp.ErrUnavailable (HTTP 503) without sending
-// it. Quotas are read in this process by the shared quota package. Git is
+// it. Quotas and job summaries are read in this process by the shared quota
+// and jobs packages. Git is
 // read in this process by the shared gitview package, after the Rust
 // thread_root view names the thread and its stored root.
 type MiniAppEngine struct {
@@ -37,6 +40,9 @@ type MiniAppEngine struct {
 	// user agent. An empty Version fails every quota read with
 	// version.ErrUnknown.
 	Quota quota.Options
+	// Home is the ZDX home whose job files and state the job summaries
+	// read (read-only).
+	Home string
 	// RootForChat is the chat root a feedback submission is sent with, the
 	// same function the bot's Handler uses (Settings.RootForChat). Root is
 	// the bot's root, for a thread id that names no Telegram chat (Rust
@@ -191,6 +197,23 @@ func (e *MiniAppEngine) MonitorSnapshot(ctx context.Context) (json.RawMessage, e
 
 func (e *MiniAppEngine) ActiveAgents(ctx context.Context) (json.RawMessage, error) {
 	return e.body(ctx, engine.View{Op: engine.ViewActiveAgents})
+}
+
+// JobSummaries reads the job summaries of Home with the shared jobs
+// package, in this process's local time. It sends nothing to the socket. A
+// jobs directory that cannot be listed is an empty list with the error.
+func (e *MiniAppEngine) JobSummaries(context.Context) (json.RawMessage, *string) {
+	summaries, err := jobs.Summaries(jobs.Home{Dir: e.Home}, time.Now(), time.Local)
+	if err != nil {
+		text := err.Error()
+		return json.RawMessage(`[]`), &text
+	}
+	body, err := json.Marshal(summaries)
+	if err != nil {
+		text := err.Error()
+		return json.RawMessage(`[]`), &text
+	}
+	return body, nil
 }
 
 // SubscriptionQuotas reads every stored account's quota with the shared

@@ -1,5 +1,6 @@
 //! CLI entry and dispatch.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -1037,21 +1038,30 @@ enum JobCommands {
         /// Run a once job as a test: its scheduled run stays pending
         #[arg(long)]
         keep: bool,
-
-        /// Internal: occurrence key of a scheduler-started run
-        #[arg(long, hide = true, value_name = "KEY", requires = "scheduled_for")]
-        occurrence: Option<String>,
-
-        /// Internal: scheduled instant of that occurrence (RFC 3339)
-        #[arg(long, hide = true, value_name = "RFC3339", requires = "occurrence")]
-        scheduled_for: Option<String>,
     },
-    /// Move job files from the old `automations` location to
-    /// `$ZDX_HOME/jobs` and convert the run log
-    Migrate {
-        /// Print what would change without changing anything
+    /// Internal: run one attempt's agent for the jobs program (`zdx-jobs`),
+    /// with the job on stdin
+    #[command(hide = true)]
+    Attempt {
+        /// File the attempt's result JSON is written to
+        #[arg(long, value_name = "PATH")]
+        result: PathBuf,
+
+        /// The job's locked descriptor, kept out of child processes
+        #[arg(long, value_name = "FD")]
+        lock_fd: Option<i32>,
+    },
+    /// Internal: resolve the settings of the jobs on stdin for the jobs
+    /// program (`zdx-jobs`)
+    #[command(hide = true)]
+    Resolve {
+        /// Resolve the way the scheduled daemon does
         #[arg(long)]
-        dry_run: bool,
+        daemon: bool,
+
+        /// Also render each run's prompt, as an attempt does
+        #[arg(long)]
+        prepare: bool,
     },
 }
 
@@ -2126,69 +2136,72 @@ async fn dispatch_jobs(command: JobCommands, context: &DispatchContext<'_>) -> R
         config: context.config,
         system_prompt_override: context.system_prompt,
     };
-    match command {
+    let flag = |on: bool, name: &str| on.then(|| OsString::from(name));
+    let args: Vec<OsString> = match command {
+        JobCommands::Attempt { result, lock_fd } => {
+            return Box::pin(commands::jobs::attempt(&caller, &result, lock_fd)).await;
+        }
+        JobCommands::Resolve { daemon, prepare } => {
+            return commands::jobs::resolve(&caller, daemon, prepare);
+        }
+        JobCommands::History { name, limit, json } => {
+            return commands::jobs::history(&name, limit, json);
+        }
         JobCommands::List {
             json,
-            archived: true,
-            ..
-        } => commands::jobs::list_archived(json),
-        JobCommands::List {
-            json, daemon: true, ..
-        } => commands::jobs::list_daemon(json),
-        JobCommands::List { json, .. } => commands::jobs::list(&caller, json),
-        JobCommands::Validate => commands::jobs::validate(&caller),
-        JobCommands::Daemon { poll_interval_secs } => {
-            Box::pin(commands::daemon::run(commands::daemon::DaemonOptions {
-                root: &root_path,
-                system_prompt_override: context.system_prompt,
-                no_thread: context.thread_args.no_save,
-                poll_interval_secs,
-            }))
-            .await
-        }
+            daemon,
+            archived,
+        } => std::iter::once("list".into())
+            .chain(flag(json, "--json"))
+            .chain(flag(daemon, "--daemon"))
+            .chain(flag(archived, "--archived"))
+            .collect(),
+        JobCommands::Validate => vec!["validate".into()],
+        JobCommands::Daemon { poll_interval_secs } => vec![
+            "daemon".into(),
+            "--poll-interval-secs".into(),
+            poll_interval_secs.to_string().into(),
+        ],
         JobCommands::Runs {
             name,
             date,
             date_start,
             date_end,
             json,
-        } => commands::jobs::runs(commands::jobs::RunsOptions {
-            name,
-            date,
-            date_start,
-            date_end,
-            json,
-        }),
-        JobCommands::History { name, limit, json } => commands::jobs::history(&name, limit, json),
-        JobCommands::SetModel { name, spec, clear } => {
-            commands::jobs::set_model(&name, spec.as_deref(), clear)
-        }
-        JobCommands::Run {
-            name,
-            keep,
-            occurrence,
-            scheduled_for,
         } => {
-            let scheduled = match (occurrence, scheduled_for) {
-                (Some(key), Some(at)) => Some(commands::jobs::ScheduledOccurrence {
-                    key,
-                    at: chrono::DateTime::parse_from_rfc3339(&at)
-                        .with_context(|| format!("invalid --scheduled-for '{at}'"))?
-                        .with_timezone(&chrono::Utc),
-                }),
-                _ => None,
-            };
-            let thread_opts: ThreadPersistenceOptions = context.thread_args.into();
-            Box::pin(commands::jobs::run(
-                &caller,
-                &thread_opts,
-                &name,
-                commands::jobs::RunRequest { keep, scheduled },
-            ))
-            .await
+            let mut args: Vec<OsString> = vec!["runs".into()];
+            args.extend(name.map(OsString::from));
+            for (flag, value) in [
+                ("--date", date),
+                ("--date-start", date_start),
+                ("--date-end", date_end),
+            ] {
+                if let Some(value) = value {
+                    args.extend([flag.into(), value.into()]);
+                }
+            }
+            args.extend(flag(json, "--json"));
+            args
         }
-        JobCommands::Migrate { dry_run } => commands::jobs::migrate(dry_run),
-    }
+        JobCommands::SetModel { name, spec, clear } => std::iter::once("set-model".into())
+            .chain([OsString::from(name)])
+            .chain(spec.map(OsString::from))
+            .chain(flag(clear, "--clear"))
+            .collect(),
+        JobCommands::Run { name, keep } => std::iter::once("run".into())
+            .chain([OsString::from(name)])
+            .chain(flag(keep, "--keep"))
+            .collect(),
+    };
+    commands::jobs::delegate(
+        &commands::jobs::Delegated {
+            root: &root_path,
+            system_prompt: context.system_prompt,
+            no_thread: context.thread_args.no_save,
+            thread: context.thread_args.thread.as_deref(),
+        },
+        args,
+    )
 }
 
 async fn dispatch_mcp(command: McpCommands, context: &DispatchContext<'_>) -> Result<()> {

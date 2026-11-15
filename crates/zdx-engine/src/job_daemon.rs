@@ -3,8 +3,9 @@
 //!
 //! Surfaces must show the daemon's context, never their own working
 //! directory. The context comes from one of two sources, reported as-is:
-//! - `Running`: the live daemon wrote `run/daemon.context.json` at start, and
-//!   its PID still owns the daemon PID file.
+//! - `Running`: the live daemon (the Go jobs program) wrote
+//!   `run/daemon.context.json` at start, and its PID still owns the daemon
+//!   PID file.
 //! - `Installed`: the launchd plist, which applies at the next start. Used when
 //!   the daemon is stopped, or running without a context record (an older
 //!   build).
@@ -16,19 +17,19 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Config, paths};
-use crate::jobs::{self, InheritedContext, JobOverview, JobsHome, SettingOrigin};
+use crate::jobs::{self, InheritedContext, JobRunSettings, JobSpec, SettingOrigin};
 use crate::pidfile::{self, ServiceStatus};
 use crate::service::{self, InstalledLaunch, Service};
 
 const RECORD_FILE: &str = "daemon.context.json";
 
 /// What the running daemon records about itself at start.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct DaemonRecord {
     pub pid: u32,
     /// `--root` the daemon resolves inherited jobs against.
@@ -36,49 +37,6 @@ pub struct DaemonRecord {
     /// Working directory the daemon loads config layers from.
     pub config_dir: PathBuf,
     pub started_at: DateTime<Utc>,
-}
-
-/// Removes the daemon record when the daemon exits, if it is still ours.
-pub struct DaemonRecordGuard {
-    path: PathBuf,
-    pid: u32,
-}
-
-impl Drop for DaemonRecordGuard {
-    fn drop(&mut self) {
-        if read_record_at(&self.path).is_some_and(|record| record.pid == self.pid) {
-            let _ = fs::remove_file(&self.path);
-        }
-    }
-}
-
-/// Records the current process as the running daemon.
-///
-/// # Errors
-/// Returns an error if the record cannot be written.
-pub fn record_running(root: &Path, config_dir: &Path) -> Result<DaemonRecordGuard> {
-    let path = record_path();
-    let record = DaemonRecord {
-        pid: std::process::id(),
-        root: root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
-        config_dir: config_dir.to_path_buf(),
-        started_at: Utc::now(),
-    };
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create run dir {}", parent.display()))?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    fs::write(
-        &tmp,
-        serde_json::to_vec_pretty(&record).context("serialize daemon record")?,
-    )
-    .with_context(|| format!("write {}", tmp.display()))?;
-    fs::rename(&tmp, &path).with_context(|| format!("write {}", path.display()))?;
-    Ok(DaemonRecordGuard {
-        path,
-        pid: record.pid,
-    })
 }
 
 /// Where the daemon's settings come from.
@@ -111,15 +69,6 @@ pub struct DaemonContext {
 pub enum DaemonContextState {
     Available { context: DaemonContext },
     Unavailable { reason: String },
-}
-
-/// Jobs resolved the way the scheduled daemon resolves them.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct DaemonJobs {
-    pub daemon: DaemonContextState,
-    pub jobs: Vec<JobOverview>,
-    /// Set when jobs could not be listed at all.
-    pub error: Option<String>,
 }
 
 /// Finds the daemon's context from the PID file, its record, and the
@@ -214,48 +163,51 @@ pub fn discover_from(inputs: DiscoveryInputs) -> DaemonContextState {
     }
 }
 
-/// Lists jobs resolved with the daemon's context.
-#[must_use]
-pub fn jobs() -> DaemonJobs {
-    jobs_for(discover(), &JobsHome::current())
+/// One job's resolution: its settings, or why it has none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct JobResolution {
+    pub settings: Option<JobRunSettings>,
+    pub error: Option<String>,
 }
 
-/// Like [`jobs`], with an explicit context and jobs home. Invalid job files
-/// are listed with their error.
-#[must_use]
-pub fn jobs_for(daemon: DaemonContextState, home: &JobsHome) -> DaemonJobs {
-    let catalog = match jobs::catalog(home) {
-        Ok(catalog) => catalog,
-        Err(err) => {
-            return DaemonJobs {
-                daemon,
-                jobs: Vec::new(),
-                error: Some(format!("discover jobs: {err:#}")),
-            };
+impl From<Result<JobRunSettings>> for JobResolution {
+    fn from(result: Result<JobRunSettings>) -> Self {
+        match result {
+            Ok(settings) => Self {
+                settings: Some(settings),
+                error: None,
+            },
+            Err(error) => Self {
+                settings: None,
+                error: Some(format!("{error:#}")),
+            },
         }
-    };
+    }
+}
 
-    let config = match &daemon {
+/// Resolves `jobs` the way the scheduled daemon resolves them: inherited
+/// values come from `daemon`'s root and config directory. When the context
+/// is unavailable or its config fails to load, a job without its own `root`
+/// stays unresolved with that reason.
+#[must_use]
+pub fn resolve(daemon: &DaemonContextState, jobs: &[JobSpec]) -> Vec<JobResolution> {
+    let config = match daemon {
         DaemonContextState::Available { context } => Some(
             Config::load_layered(&paths::config_layer_paths_for(&context.config_dir))
                 .map_err(|err| format!("load daemon config: {err:#}")),
         ),
         DaemonContextState::Unavailable { .. } => None,
     };
-    let missing = match (&daemon, &config) {
+    let missing = match (daemon, &config) {
         (DaemonContextState::Unavailable { reason }, _) => {
             Some(format!("daemon settings unavailable: {reason}"))
         }
         (_, Some(Err(err))) => Some(err.clone()),
         _ => None,
     };
-
-    let now = Utc::now();
-    let mut overviews: Vec<JobOverview> = catalog
-        .jobs
-        .iter()
-        .map(|definition| {
-            let inherited = match (&daemon, &config, &missing) {
+    jobs.iter()
+        .map(|job| {
+            let inherited = match (daemon, &config, &missing) {
                 (DaemonContextState::Available { context }, Some(Ok(config)), None) => {
                     Ok(InheritedContext {
                         config,
@@ -265,43 +217,11 @@ pub fn jobs_for(daemon: DaemonContextState, home: &JobsHome) -> DaemonJobs {
                 }
                 (_, _, reason) => Err(reason.as_deref().unwrap_or("daemon settings unavailable")),
             };
-            jobs::overview_from(
-                inherited,
-                definition,
-                jobs::job_state(home, definition, now, &chrono::Local),
-            )
+            jobs::resolve_run_from(inherited, job)
+                .map(|run| run.settings)
+                .into()
         })
-        .chain(catalog.invalid.iter().map(jobs::invalid_overview))
-        .collect();
-    overviews.sort_by(|a, b| a.name.cmp(&b.name));
-
-    DaemonJobs {
-        daemon,
-        jobs: overviews,
-        error: None,
-    }
-}
-
-/// Config whose providers decide which models `overview` can use: its own
-/// `root:` layers, else the daemon's config directory. When neither is known
-/// (unresolved job, unavailable daemon), the global config alone, never the
-/// caller's workspace.
-///
-/// # Errors
-/// Returns an error if the chosen config layers fail to load.
-pub fn job_config(daemon: &DaemonContextState, overview: &JobOverview) -> Result<Config> {
-    let dir = match (&overview.settings, daemon) {
-        (Some(settings), _) if settings.root.origin == SettingOrigin::Job => {
-            Some(settings.root.path.clone())
-        }
-        (Some(_), DaemonContextState::Available { context }) => Some(context.config_dir.clone()),
-        _ => None,
-    };
-    match dir {
-        Some(dir) => Config::load_layered(&paths::config_layer_paths_for(&dir))
-            .with_context(|| format!("load config for {}", dir.display())),
-        None => Config::load_layered(&[paths::config_path()]).context("load global config"),
-    }
+        .collect()
 }
 
 fn record_path() -> PathBuf {
@@ -421,27 +341,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn record_guard_writes_and_removes_own_record() {
-        let _home = crate::test_support::temp_zdx_home();
-        let root = tempdir().unwrap();
-        let guard = record_running(root.path(), root.path()).unwrap();
-        let stored = read_record_at(&record_path()).unwrap();
-        assert_eq!(stored.pid, std::process::id());
-        assert_eq!(stored.root, root.path().canonicalize().unwrap());
-        drop(guard);
-        assert!(read_record_at(&record_path()).is_none());
-    }
-
-    fn write_job(dir: &Path, name: &str, frontmatter: &str) {
-        fs::create_dir_all(dir).unwrap();
-        fs::write(
-            dir.join(format!("{name}.md")),
-            format!("---\n{frontmatter}---\nprompt"),
-        )
-        .unwrap();
-    }
-
     fn write_config(dir: &Path, body: &str) {
         fs::create_dir_all(dir.join(".zdx")).unwrap();
         fs::write(dir.join(".zdx").join("config.toml"), body).unwrap();
@@ -460,9 +359,18 @@ mod tests {
         }
     }
 
+    fn spec(job: &str, model: Option<&str>, root: Option<&Path>) -> JobSpec {
+        JobSpec {
+            job: job.to_string(),
+            model: model.map(str::to_string),
+            subagent: None,
+            root: root.map(|root| root.display().to_string()),
+        }
+    }
+
     #[test]
     fn jobs_resolve_against_daemon_root_and_config() {
-        let home = crate::test_support::temp_zdx_home();
+        let _home = crate::test_support::temp_zdx_home();
         let daemon_root = tempdir().unwrap();
         write_config(
             daemon_root.path(),
@@ -471,33 +379,17 @@ mod tests {
         let own_root = tempdir().unwrap();
         write_config(own_root.path(), "model = \"openai-codex:gpt-5.4@low\"\n");
 
-        let dir = home.path().join("jobs");
-        write_job(&dir, "inherited", "");
-        write_job(
-            &dir,
-            "suffixless",
-            "model: \"claude-cli:claude-sonnet-5\"\n",
+        let resolved = resolve(
+            &available(daemon_root.path(), DaemonContextSource::Running),
+            &[
+                spec("inherited", None, None),
+                spec("suffixless", Some("claude-cli:claude-sonnet-5"), None),
+                spec("scoped", None, Some(own_root.path())),
+            ],
         );
-        write_job(
-            &dir,
-            "scoped",
-            &format!("root: \"{}\"\n", own_root.path().display()),
-        );
+        let get = |i: usize| resolved[i].settings.clone().unwrap();
 
-        let view = jobs_for(
-            available(daemon_root.path(), DaemonContextSource::Running),
-            &JobsHome::at(home.path()),
-        );
-        assert!(view.error.is_none());
-        let get = |name: &str| {
-            view.jobs
-                .iter()
-                .find(|item| item.name == name)
-                .and_then(|item| item.settings.clone())
-                .unwrap()
-        };
-
-        let inherited = get("inherited");
+        let inherited = get(0);
         assert_eq!(inherited.root.path, daemon_root.path());
         assert_eq!(inherited.root.origin, SettingOrigin::Daemon);
         assert_eq!(inherited.model.spec, "claude-cli@work:claude-opus-5@high");
@@ -505,13 +397,13 @@ mod tests {
         assert_eq!(inherited.model.thinking, "high");
         assert_eq!(inherited.model.origin, SettingOrigin::Config);
 
-        let suffixless = get("suffixless");
+        let suffixless = get(1);
         assert_eq!(suffixless.model.spec, "claude-cli:claude-sonnet-5@high");
         assert_eq!(suffixless.model.account, None);
         assert_eq!(suffixless.model.origin, SettingOrigin::Job);
         assert_eq!(suffixless.model.thinking_origin, SettingOrigin::Config);
 
-        let scoped = get("scoped");
+        let scoped = get(2);
         assert_eq!(scoped.root.path, own_root.path());
         assert_eq!(scoped.root.origin, SettingOrigin::Job);
         assert_eq!(scoped.model.spec, "openai-codex:gpt-5.4@low");
@@ -519,16 +411,8 @@ mod tests {
 
     #[test]
     fn unavailable_or_broken_daemon_leaves_only_inherited_jobs_unresolved() {
-        let home = crate::test_support::temp_zdx_home();
+        let _home = crate::test_support::temp_zdx_home();
         let own_root = tempdir().unwrap();
-        let dir = home.path().join("jobs");
-        write_job(&dir, "inherited", "");
-        write_job(
-            &dir,
-            "scoped",
-            &format!("root: \"{}\"\n", own_root.path().display()),
-        );
-
         let broken_root = tempdir().unwrap();
         write_config(broken_root.path(), "model = [\n");
         let states = [
@@ -544,58 +428,19 @@ mod tests {
             ),
         ];
         for (state, expected) in states {
-            let view = jobs_for(state, &JobsHome::at(home.path()));
-            let inherited = view.jobs.iter().find(|a| a.name == "inherited").unwrap();
-            assert!(inherited.settings.is_none());
-            assert!(inherited.error.as_deref().unwrap().contains(expected));
-            let scoped = view.jobs.iter().find(|a| a.name == "scoped").unwrap();
-            assert_eq!(scoped.settings.as_ref().unwrap().root.path, own_root.path());
+            let resolved = resolve(
+                &state,
+                &[
+                    spec("inherited", None, None),
+                    spec("scoped", None, Some(own_root.path())),
+                ],
+            );
+            assert!(resolved[0].settings.is_none());
+            assert!(resolved[0].error.as_deref().unwrap().contains(expected));
+            assert_eq!(
+                resolved[1].settings.as_ref().unwrap().root.path,
+                own_root.path()
+            );
         }
-    }
-
-    #[test]
-    fn job_config_follows_the_jobs_own_context() {
-        let home = crate::test_support::temp_zdx_home();
-        fs::write(
-            home.path().join("config.toml"),
-            "model = \"global:model@low\"\n",
-        )
-        .unwrap();
-        let daemon_root = tempdir().unwrap();
-        write_config(daemon_root.path(), "model = \"daemon:model@high\"\n");
-        let own_root = tempdir().unwrap();
-        write_config(own_root.path(), "model = \"own:model@medium\"\n");
-        let dir = home.path().join("jobs");
-        write_job(&dir, "inherited", "");
-        write_job(
-            &dir,
-            "scoped",
-            &format!("root: \"{}\"\n", own_root.path().display()),
-        );
-
-        let running = available(daemon_root.path(), DaemonContextSource::Running);
-        let view = jobs_for(running.clone(), &JobsHome::at(home.path()));
-        let model_for =
-            |state: &DaemonContextState, item: &JobOverview| job_config(state, item).unwrap().model;
-        let find = |view: &DaemonJobs, name: &str| {
-            view.jobs.iter().find(|a| a.name == name).unwrap().clone()
-        };
-        assert_eq!(
-            model_for(&running, &find(&view, "inherited")),
-            "daemon:model@high"
-        );
-        assert_eq!(
-            model_for(&running, &find(&view, "scoped")),
-            "own:model@medium"
-        );
-
-        let unknown = DaemonContextState::Unavailable {
-            reason: "daemon is not running".to_string(),
-        };
-        let view = jobs_for(unknown.clone(), &JobsHome::at(home.path()));
-        assert_eq!(
-            model_for(&unknown, &find(&view, "inherited")),
-            "global:model@low"
-        );
     }
 }

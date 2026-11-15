@@ -39,6 +39,11 @@ toml_edit.workspace = true
 url.workspace = true
 uuid.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# Keeping the job lock descriptor out of an attempt's child processes; tests
+# also signal the exec process under test.
+libc.workspace = true
+
 [lints]
 workspace = true
 
@@ -51,7 +56,3 @@ serde_json.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process", "test-util"] }
 wiremock = "0.6.5"
-
-[target.'cfg(unix)'.dev-dependencies]
-# Signalling the exec process under test (drain/interrupt integration tests).
-libc.workspace = true

@@ -119,9 +119,14 @@ type Engine interface {
 	// UsageReport is `GET /api/usage?days=N` for a validated window.
 	UsageReport(ctx context.Context, days int) (json.RawMessage, error)
 	// MonitorSnapshot is the cacheable part of `GET /api/monitor`: a JSON
-	// object without `active_agents`, `subscriptions`,
-	// `subscriptions_status` and `subscriptions_age`, which Go overlays.
+	// object without `jobs`, `jobs_error`, `active_agents`,
+	// `subscriptions`, `subscriptions_status` and `subscriptions_age`,
+	// which Go overlays.
 	MonitorSnapshot(ctx context.Context) (json.RawMessage, error)
+	// JobSummaries is the monitor's `jobs` array (the shared job summaries:
+	// schedule, status, next run, last outcome) and its `jobs_error`, set
+	// when the jobs could not be listed. It is cached with the snapshot.
+	JobSummaries(ctx context.Context) (jobs json.RawMessage, jobsError *string)
 	// ActiveAgents is the `active_agents` array, read on every request.
 	ActiveAgents(ctx context.Context) (json.RawMessage, error)
 	// SubscriptionQuotas is the `subscriptions` array. Slow: it calls

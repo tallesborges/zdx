@@ -6,7 +6,6 @@ pub mod bg;
 pub mod bot;
 pub mod chat;
 pub mod config;
-pub mod daemon;
 pub mod exec;
 pub mod go_program;
 pub mod imagine;

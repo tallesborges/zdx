@@ -172,6 +172,10 @@ func (e *echoEngine) MonitorSnapshot(context.Context) (json.RawMessage, error) {
 	return json.RawMessage(`{}`), nil
 }
 
+func (e *echoEngine) JobSummaries(context.Context) (json.RawMessage, *string) {
+	return json.RawMessage(`[]`), nil
+}
+
 func (e *echoEngine) ActiveAgents(context.Context) (json.RawMessage, error) {
 	return json.RawMessage(`[]`), nil
 }

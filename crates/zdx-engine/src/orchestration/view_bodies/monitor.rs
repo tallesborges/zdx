@@ -1,7 +1,8 @@
 //! Dashboard bodies: the monitor snapshot, active agents, workspaces, and the
 //! usage report. Each is its own view; the surface (the gateway's Mini App)
-//! composes and caches the dashboard and adds quotas, which it reads with the
-//! shared Go quota package (`apps/shared/quota`).
+//! composes and caches the dashboard and adds quotas and job summaries, which
+//! it reads with the shared Go packages (`apps/shared/quota`,
+//! `apps/shared/jobs`).
 
 use std::time::{Duration, Instant};
 
@@ -9,12 +10,12 @@ use serde::Serialize;
 
 use super::{EngineViews, internal, invalid};
 use crate::agent_activity::{self, RunStatus};
+use crate::background_activity;
 use crate::config::{Config, paths};
 use crate::core::usage_report::{self, ProjectUsage, RunUsage, UsageReport};
 use crate::orchestration::views::ViewError;
 use crate::service::{self, Service};
 use crate::workspace_config::{self, WorkspaceReport};
-use crate::{background_activity, jobs};
 
 const MONITOR_CACHE_TTL: Duration = Duration::from_secs(30);
 
@@ -24,10 +25,6 @@ pub struct MonitorResponse {
     services: Vec<MonitorService>,
     active_agents: Vec<MonitorAgent>,
     background_processes: Vec<MonitorBackgroundProcess>,
-    /// Shared job summaries (`crate::jobs::summaries`).
-    jobs: Vec<jobs::JobSummary>,
-    /// Set when jobs could not be listed at all.
-    jobs_error: Option<String>,
     config: MonitorConfig,
     /// Quotas are not part of the snapshot: always `[]`, `"pending"` and
     /// null here, and the surface overlays its own (the gateway's quota cache
@@ -300,11 +297,6 @@ fn build_monitor_response(root: &std::path::Path) -> anyhow::Result<MonitorRespo
         })
         .collect();
 
-    let (jobs, jobs_error) = match jobs::summaries(&jobs::JobsHome::current(), chrono::Utc::now()) {
-        Ok(jobs) => (jobs, None),
-        Err(error) => (Vec::new(), Some(format!("{error:#}"))),
-    };
-
     Ok(MonitorResponse {
         generated_at: chrono::Utc::now().to_rfc3339(),
         services,
@@ -312,8 +304,6 @@ fn build_monitor_response(root: &std::path::Path) -> anyhow::Result<MonitorRespo
         // before the rest of the snapshot, so a surface reads them fresh.
         active_agents: Vec::new(),
         background_processes,
-        jobs,
-        jobs_error,
         config: monitor_config(&config),
         subscriptions: [],
         subscriptions_status: "pending",
