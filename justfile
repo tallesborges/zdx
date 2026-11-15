@@ -152,27 +152,30 @@ jobs-build OUT=(justfile_directory() + "/apps/shared/bin/zdx-jobs"):
 build-release:
     CARGO_INCREMENTAL=0 cargo build -p zdx --release
 
-# Install current workspace as the released `zdx` binary at ~/.local/bin/zdx
+# Install current workspace as the released `zdx` binary at ~/.local/bin/zdx.
+# Signed under a temp name, then renamed: a process that starts `zdx` meanwhile gets the old or the new binary, never a partial one
 install: build-release
     @mkdir -p ~/.local/bin
-    install -m 0755 target/release/zdx ~/.local/bin/zdx
+    install -m 0755 target/release/zdx ~/.local/bin/.zdx.new
     @if [ -n "{{ codesign_id }}" ]; then \
-        codesign --force --sign "{{ codesign_id }}" --identifier dev.zdx.cli ~/.local/bin/zdx; \
+        codesign --force --sign "{{ codesign_id }}" --identifier dev.zdx.cli ~/.local/bin/.zdx.new; \
     else \
         echo "ZDX_CODESIGN_ID unset — skipping codesign; macOS will re-prompt for permissions after each rebuild"; \
     fi
+    mv -f ~/.local/bin/.zdx.new ~/.local/bin/zdx
     @echo "Installed $(~/.local/bin/zdx --version 2>/dev/null || echo zdx) to ~/.local/bin/zdx"
     @# Pay any thread-index schema rebuild here rather than inside the first
     @# request after a restart, which would otherwise block the bot. Thread
     @# index only: no exports, no memory index.
     ~/.local/bin/zdx threads reindex
 
-# Build and install zdx, the gateway, zdx-quota, zdx-jobs, and zdx-tui (and refresh an installed monitor), then restart the launchd services
-deploy: install gateway-install quota-install jobs-install tui-install monitor-refresh
+# Build and install zdx, the gateway, zdx-quota, zdx-jobs, and zdx-tui (and refresh an installed monitor), then restart the launchd services.
+# `zdx` is installed last: the new `zdx` execs these Go programs (a scheduled job runs `zdx jobs run`), so they must be in place first, and a failed build leaves the old `zdx`
+deploy: build-release gateway-install quota-install jobs-install tui-install monitor-refresh install
     ~/.local/bin/zdx service restart all
 
-# Build and install zdx, the gateway, zdx-quota, zdx-jobs, and zdx-tui (and refresh an installed monitor), and queue the restart until agent runs, workers, and orchestrator updates are done
-safe-deploy: install gateway-install quota-install jobs-install tui-install monitor-refresh
+# Same install order as `deploy`, and queue the restart until agent runs, workers, and orchestrator updates are done
+safe-deploy: build-release gateway-install quota-install jobs-install tui-install monitor-refresh install
     ~/.local/bin/zdx service restart all --queue
 
 # Build the Go gateway into ~/.local/bin/zdx-gateway, the stable path the bot service runs
