@@ -131,9 +131,10 @@ quota-build OUT=(justfile_directory() + "/apps/shared/bin/zdx-quota"):
 
 # ─── Build ────────────────────────────────────────
 
-# Build the release zdx binary (Rust only; the Mini App ships in the gateway)
+# Build the release zdx binary (Rust only; the Mini App ships in the gateway).
+# Not incremental: .cargo/config.toml turns it on for every profile, and it gave release builds no speedup.
 build-release:
-    cargo build -p zdx --release
+    CARGO_INCREMENTAL=0 cargo build -p zdx --release
 
 # Install current workspace as the released `zdx` binary at ~/.local/bin/zdx
 install: build-release

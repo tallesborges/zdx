@@ -38,7 +38,7 @@ This monorepo now uses scoped `AGENTS.md` files per crate.
 - `apps/gateway/`: Go Telegram + Mini App gateway (see `apps/gateway/AGENTS.md`)
 - `apps/shared/`: shared Go module and `zdx-quota` (see `apps/shared/AGENTS.md`)
 - `.github/workflows/`: CI/release workflows
-- `.cargo/config.toml`: cargo aliases/shared target dir config
+- `.cargo/config.toml`: cargo aliases, lld linker, and incremental builds for workspace crates (overrides a global `incremental = false`; works with a global sccache wrapper, which still caches dependencies)
 - `justfile`: common development tasks
 
 ## Build / run
@@ -65,7 +65,7 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `just update-config` (maintainer: refresh default_config.toml)
 - `just codebase` (generate codebase.txt for entire workspace)
 - `just codebase crates/zdx-tui` (generate codebase.txt for specific crate)
-- `just build-release` (build the release `zdx` binary; Rust only: it needs neither Go nor the Mini App build)
+- `just build-release` (build the release `zdx` binary, not incremental; Rust only: it needs neither Go nor the Mini App build)
 - `just gateway-check` (Go gateway: `gofmt`, `go vet`, `go test -race`) / `just gateway-build [OUT]` (gateway binary with the Mini App embedded; runs the cached web build) / `just gateway-install` (build it into `~/.local/bin/zdx-gateway`, the bot service's program)
 - `just shared-check` (shared Go module: `gofmt`, `go vet`, `go test -race`) / `just quota-build [OUT]` / `just quota-install` (build `zdx-quota` into `~/.local/bin/zdx-quota`, what `zdx quota` runs). Go programs that report the zdx version build with `-ldflags "$(apps/shared/ldflags.sh)"`
 - `just monitor-check` (Go monitor: `gofmt`, `go vet`, `go test -race`) / `just monitor-build [OUT]` (Go only, no cargo) / `just monitor-install` (build it into `~/.local/bin/zdx-monitor`, what `zdx monitor` runs; deploys never install it, they only refresh an installed copy)

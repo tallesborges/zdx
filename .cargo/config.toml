@@ -1,6 +1,14 @@
 [alias]
 xtask = "run -p xtask --"
 
+# Overrides `incremental = false` in the user-level ~/.cargo/config.toml.
+# Cargo applies incremental only to workspace crates; dependencies stay
+# non-incremental, so a global `rustc-wrapper = "sccache"` still caches them
+# and passes the workspace crates through uncached. `build-release` sets
+# CARGO_INCREMENTAL=0, because this key also applies to the release profile.
+[build]
+incremental = true
+
 [target.aarch64-apple-darwin]
 linker = "clang"
 rustflags = ["-C", "link-arg=-fuse-ld=lld"]
