@@ -556,6 +556,14 @@ fn build_prompt_template_vars(
         "`edit`/`write`".to_string()
     };
     let (git_repo_root, git_branch) = detect_git_repo(&canonical_root);
+    // Only inside a git repository: outside one nothing prunes the listing (no
+    // `.gitignore`), and a home or temp directory has tens of thousands of
+    // entries to read. A non-repo root describes its layout in its AGENTS.md.
+    let cwd_tree = if git_repo_root.is_empty() {
+        String::new()
+    } else {
+        build_cwd_tree(&canonical_root)
+    };
 
     PromptTemplateVars {
         identity_prompt: prompts::identity_prompt().to_string(),
@@ -588,7 +596,7 @@ fn build_prompt_template_vars(
             })
             .collect(),
         cwd: root.display().to_string(),
-        cwd_tree: build_cwd_tree(&canonical_root),
+        cwd_tree,
         date: Utc::now().format("%Y-%m-%d").to_string(),
     }
 }
@@ -2680,6 +2688,43 @@ mod tests {
         assert!(truncated.path.is_some());
         assert!(truncated.message.contains("Truncated"));
         assert!(truncated.message.contains("100000"));
+    }
+
+    #[test]
+    fn test_cwd_tree_is_built_only_inside_a_git_repo() {
+        let vars_for = |root: &Path| {
+            build_prompt_template_vars(
+                root,
+                "anthropic:claude-opus-4-6",
+                PromptTemplateSections {
+                    base_prompt: Some("hello"),
+                    project_context: None,
+                    memory_index: None,
+                    skills_list: &[],
+                    scoped_context: &[],
+                    specialized_capabilities: &[],
+                    model_modes: &[],
+                },
+            )
+        };
+
+        let plain = tempdir().unwrap();
+        fs::write(plain.path().join("notes.txt"), b"x").unwrap();
+        let vars = vars_for(plain.path());
+        assert!(vars.cwd_tree.is_empty());
+        let initial = build_runtime_context_blocks(&vars, None).initial;
+        assert!(
+            initial
+                .as_deref()
+                .is_none_or(|text| !text.contains("Working Directory Snapshot"))
+        );
+
+        let repo = git_repo_tempdir();
+        fs::write(repo.path().join("notes.txt"), b"x").unwrap();
+        let vars = vars_for(repo.path());
+        assert!(vars.cwd_tree.lines().any(|line| line == "notes.txt"));
+        let initial = build_runtime_context_blocks(&vars, None).initial.unwrap();
+        assert!(initial.contains("Working Directory Snapshot"));
     }
 
     #[test]

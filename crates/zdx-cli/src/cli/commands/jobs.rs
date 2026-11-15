@@ -556,6 +556,14 @@ mod tests {
     fn prepare_job_run_subagent_keeps_non_interactive_layers_and_context() {
         let _home = zdx_engine::test_support::temp_zdx_home();
         let dir = tempdir().unwrap();
+        // The working-directory snapshot, this run's only runtime context, is
+        // built only inside a git repository.
+        let init = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(init.success());
         std::fs::write(dir.path().join("notes.md"), "workspace file").unwrap();
         let subagents_dir = dir.path().join(".zdx").join("subagents");
         std::fs::create_dir_all(&subagents_dir).unwrap();
