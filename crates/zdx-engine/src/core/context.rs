@@ -364,20 +364,22 @@ fn detect_os_version() -> String {
         .clone()
 }
 
-fn detect_git_repo(cwd: &Path) -> (String, String) {
-    let toplevel = Command::new("git")
+/// The top-level directory of the git repository `dir` is in, if any.
+fn git_toplevel(dir: &Path) -> Option<String> {
+    Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
-        .current_dir(cwd)
+        .current_dir(dir)
         .output()
         .ok()
         .filter(|out| out.status.success())
         .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_default();
+}
 
-    if toplevel.is_empty() {
+fn detect_git_repo(cwd: &Path) -> (String, String) {
+    let Some(toplevel) = git_toplevel(cwd) else {
         return (String::new(), String::new());
-    }
+    };
 
     let branch = Command::new("git")
         .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
@@ -1171,6 +1173,11 @@ const SCOPED_CONTEXT_LIMIT: usize = 200;
 
 /// Discovers scoped `AGENTS.md`/`CLAUDE.md` files in subdirectories of the project root.
 ///
+/// Only inside a git repository. Outside one the root's own file (loaded
+/// inline by [`load_all_agents_files`]) is the only one: nothing prunes a
+/// non-repo walk, and a home or temp directory has tens of thousands of
+/// directories. Such a root names its subdirectory files in its `AGENTS.md`.
+///
 /// Uses gitignore-aware walking to skip ignored directories (target/, .git/, etc.).
 /// Limited to [`SCOPED_CONTEXT_MAX_DEPTH`] levels deep and [`SCOPED_CONTEXT_LIMIT`] files.
 /// Returns files sorted by path for deterministic ordering.
@@ -1181,6 +1188,9 @@ pub fn discover_scoped_context(root: &Path) -> Vec<ScopedContextFile> {
     use ignore::{WalkBuilder, WalkState};
 
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if git_toplevel(&canonical_root).is_none() {
+        return Vec::new();
+    }
     let root_primary = canonical_root.join(PRIMARY_CONTEXT_FILE_NAME);
     let root_fallback = canonical_root.join(FALLBACK_CONTEXT_FILE_NAME);
     let candidates: Mutex<Vec<(String, PathBuf, u8)>> = Mutex::new(Vec::new());
@@ -2290,9 +2300,33 @@ mod tests {
         );
     }
 
+    fn git_repo_tempdir() -> tempfile::TempDir {
+        let dir = tempdir().unwrap();
+        let init = Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(init.success());
+        dir
+    }
+
+    #[test]
+    fn test_discover_scoped_context_is_empty_outside_a_git_repo() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "root rule").unwrap();
+        fs::create_dir_all(dir.path().join("scope")).unwrap();
+        fs::write(dir.path().join("scope/AGENTS.md"), "scoped rule").unwrap();
+        assert!(discover_scoped_context(dir.path()).is_empty());
+
+        let loaded = load_all_agents_files(dir.path()).unwrap();
+        assert!(loaded.content.contains("root rule"));
+        assert!(!loaded.content.contains("scoped rule"));
+    }
+
     #[test]
     fn test_discover_scoped_context_prefers_agents_and_falls_back_to_claude() {
-        let dir = tempdir().unwrap();
+        let dir = git_repo_tempdir();
         let claude_scope = dir.path().join("claude-scope");
         let agents_scope = dir.path().join("agents-scope");
         let mixed_scope = dir.path().join("mixed-scope");
@@ -2336,7 +2370,7 @@ mod tests {
 
     #[test]
     fn test_discover_scoped_context_is_sorted_depth_limited_and_ignore_aware() {
-        let dir = tempdir().unwrap();
+        let dir = git_repo_tempdir();
         let root = dir.path();
         for (scope, file) in [
             ("zeta", "AGENTS.md"),
@@ -3065,7 +3099,7 @@ mod tests {
     fn test_template_mode_lists_scoped_claude_context_path() {
         // Rendering a prompt materializes bundled skills into $ZDX_HOME.
         let _home = crate::test_support::temp_zdx_home();
-        let dir = tempdir().unwrap();
+        let dir = git_repo_tempdir();
         let nested = dir.path().join("nested");
         fs::create_dir_all(&nested).unwrap();
         fs::write(nested.join("CLAUDE.md"), "Nested Claude note").unwrap();

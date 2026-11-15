@@ -682,6 +682,7 @@ ZDX loads project/user context inputs in this order before template rendering:
 
 - At each directory scope, ZDX loads `AGENTS.md` if present; otherwise it loads `CLAUDE.md`.
 - At each directory scope (home, every ancestor between home and the project root, and the project root itself), ZDX additionally loads `<dir>/.zdx/AGENTS.md` (or `CLAUDE.md` fallback) when present, after the scope's regular `AGENTS.md`. This is intended for personal rules that live alongside other `.zdx/` per-project assets and are typically gitignored. Loading order means the `.zdx/` file wins over the committed file at the same scope ("deeper wins").
+- Subdirectory `AGENTS.md`/`CLAUDE.md` files (depth 4, gitignore-aware) are listed for the agent to read only when the root is inside a git repository. Outside one only the root and its ancestors are loaded (above); a non-repo root names its subdirectory files in its own `AGENTS.md`.
 - Relative file references mentioned inside an `AGENTS.md`/`CLAUDE.md` block resolve from that context file's directory, not from the session cwd/root, unless the file explicitly says otherwise.
 - Memory is optional. Missing `MEMORY.md` does not fail startup and does not inject memory blocks.
 - `MEMORY.md` load failures are warnings (non-fatal).
