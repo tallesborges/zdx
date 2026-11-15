@@ -85,6 +85,11 @@ codegen-units = 256
 [profile.dev.package."*"]
 debug = 0
 
+# No thin-local LTO: it ran inside every crate's release codegen. Measured
+# cost: cold `zdx stats` +2-4%, binary +9%; reindex and search unchanged.
+[profile.release]
+lto = "off"
+
 # Release builds of the engine and the CLI crate run at opt-level 1: no runtime
 # cost was measured (thread reindex, stats, search, exec). At opt-level 0-1 rustc
 # shares generic instantiations between crates, so the CLI crate reuses the
