@@ -30,6 +30,7 @@ var credentialEnv = []string{"OPENCODE_API_KEY"}
 var watched = []string{
 	"oauth.json", "oauth.lock",
 	"run/bot.pid", "run/bot.supervised", "run/orchestrator.sock", "run/orchestrator.pid", "run/restart-queue.json",
+	"run/daemon.pid", "run/daemon.context.json",
 }
 
 type stamp struct {
