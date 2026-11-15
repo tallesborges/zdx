@@ -10,7 +10,7 @@ Scope: embedded asset content (prompts, instruction layers, default TOMLs, bundl
 - `prompts/partials/*.md`: named MiniJinja partials (`project_instructions`, `runtime_layers`, `safety_rules`) registered by the engine renderer and pulled into templates with `{% include "<name>" %}`. The default system prompt and `prompts/non_interactive_subagent_suffix.md` (appended to a subagent prompt when a job runs it) both use them, so edit these blocks only in the partials. Register a new partial in `PROMPT_PARTIALS` in `src/lib.rs`.
 - `instruction_layers/job_instruction_layer.md`: job-specific rules, applied on top of the exec layer (keep shared one-shot rules in the exec layer only)
 - `instruction_layers/exec_instruction_layer.md`: non-interactive `zdx exec` run rules (direct CLI, orchestrator workers, zbar)
-- `instruction_layers/chat_instruction_layer.md`: interactive TUI chat output rules
+- `instruction_layers/chat_instruction_layer.md`: interactive chat output rules (the service's `chat` submits, i.e. the Go chat TUI)
 - `instruction_layers/telegram_instruction_layer.md`: Telegram bot output rules
 - `default_config.toml`: default configuration template (generated output; do not edit by hand)
 - `default_models.toml`: default model registry fallback

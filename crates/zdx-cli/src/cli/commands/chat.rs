@@ -1,14 +1,15 @@
-//! Chat command handler.
+//! Chat command handler: piped stdin runs `exec`; a terminal gets the Go
+//! chat TUI (`apps/tui`).
 
 use std::io::{IsTerminal, Read};
-use std::path::PathBuf;
+use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use zdx_engine::config;
 use zdx_engine::core::thread_persistence::ThreadPersistenceOptions;
 
 use super::exec;
-use crate::modes;
+use super::go_program::{self, GoProgram};
 
 pub async fn run(
     root: &str,
@@ -52,21 +53,41 @@ pub async fn run(
         .await;
     }
 
-    let root_path = PathBuf::from(root);
-    let mut config = config.clone();
-    // Loaded from the process cwd; a mode means what `--root` defines, the
-    // layers the TUI reloads from.
-    let cwd = std::env::current_dir().context("determine current directory")?;
-    config.use_modes_of(&cwd, &root_path)?;
-    if let Some(model) = model_override {
-        config.apply_model_selection(model).context("-m")?;
+    if thread_opts.no_save {
+        anyhow::bail!(
+            "--no-thread does not apply to the chat TUI: the orchestrator service saves every turn"
+        );
     }
+    tui(
+        Path::new(root),
+        thread_opts.thread_id.as_deref(),
+        model_override,
+    )
+}
 
-    let thread = thread_opts.resolve(&root_path).context("resolve thread")?;
+/// The Go chat TUI bare `zdx` starts: `$ZDX_TUI` (absolute) or the installed
+/// `~/.local/bin/zdx-tui`. Its turns run in the orchestrator service.
+pub const TUI: GoProgram = GoProgram {
+    name: "zdx-tui",
+    env: "ZDX_TUI",
+    role: "chat TUI",
+    why: "the interactive chat is the Go TUI",
+    install: "tui-install",
+};
 
-    modes::run_interactive_chat(&config, thread, root_path, model_override)
-        .await
-        .context("interactive chat failed")?;
-
-    Ok(())
+/// Replaces this process with the Go chat TUI, as
+/// `<tui> --root ROOT [--thread ID] [--model SPEC]`.
+///
+/// # Errors
+/// Returns an error, before anything runs, when the TUI is missing, is not an
+/// absolute path, or is this binary; or when the exec fails.
+pub fn tui(root: &Path, thread_id: Option<&str>, model: Option<&str>) -> Result<()> {
+    let (mut command, program) = TUI.command(root)?;
+    if let Some(id) = thread_id {
+        command.arg("--thread").arg(id);
+    }
+    if let Some(model) = model {
+        command.arg("--model").arg(model);
+    }
+    go_program::exec(command, &program)
 }

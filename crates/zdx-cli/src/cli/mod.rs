@@ -1367,10 +1367,10 @@ enum WorktreeCommands {
     },
 }
 
-/// Returns true when the command will enter an alternate-screen TUI,
-/// so tracing stderr output must be suppressed to avoid painting over
-/// the rendered UI. Keep this in sync with dispatch paths that call into
-/// the runtime terminal setup in `zdx-tui`.
+/// Returns true when the command will start an alternate-screen Go program
+/// (the chat TUI, the monitor), so tracing stderr output must be suppressed
+/// to avoid painting over it. Keep this in sync with the dispatch paths
+/// that exec them.
 fn cli_enters_alt_screen(cli: &Cli) -> bool {
     matches!(
         &cli.command,
@@ -1949,7 +1949,9 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
         ThreadCommands::List { all, workers } => commands::threads::list(all, workers),
         ThreadCommands::Show { id } => commands::threads::show(&id, context.config),
         ThreadCommands::Inspect { id, json } => commands::threads::inspect(&id, json),
-        ThreadCommands::Resume { id } => commands::threads::resume(id, context.config).await,
+        ThreadCommands::Resume { id } => {
+            commands::threads::resume(id, &resolve_root(context.root, context.worktree_id)?)
+        }
         ThreadCommands::Rename { id, title } => commands::threads::rename(&id, &title),
         ThreadCommands::Append { id, role, text } => commands::threads::append(&id, &role, &text),
         ThreadCommands::Update { id, file } => commands::threads::update(&id, &file).await,

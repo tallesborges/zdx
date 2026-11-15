@@ -115,10 +115,9 @@ Edit `crates/zdx-cli/src/cli/commands/models.rs`:
 - Add `ProviderSpec` to `provider_specs()` array
 - Set `api_id` (models.dev provider key), `prefix`, `provider_cfg`
 
-### 6. TUI auth label
+### 6. Login (OAuth/CLI providers only)
 
-Edit `crates/zdx-tui/src/features/auth/render.rs`:
-- Add auth title match arm for the new `ProviderKind` variant
+API-key providers need nothing here. An OAuth/CLI provider gets a `zdx login` flag and an arm in `select_auth_provider` (`crates/zdx-cli/src/cli/mod.rs`) and its flow in `crates/zdx-cli/src/cli/commands/auth.rs`. The chat TUI's `/login` runs `zdx login`.
 
 ### 7. Regenerate and verify
 
@@ -188,20 +187,7 @@ The printed `input_images` is exactly what `model_reads_images()` uses to decide
 
 ## TUI / UI impact
 
-**New model on existing provider — no TUI changes needed.** The model picker, pricing display, and thinking picker are all registry/config-driven:
-
-- Model picker (`crates/zdx-tui/src/overlays/model_picker.rs`) loads from the registry, filters by enabled provider + `models` allow-list. New entries appear automatically.
-- Usage/pricing display (`crates/zdx-tui/src/features/input/render.rs:611-650`) looks up `ModelOption` from the registry — context limit, pricing, and cost calculation are all dynamic.
-- Thinking picker uses `model_supports_reasoning()` — driven by the `reasoning` capability in the registry.
-
-**New provider — TUI changes required:**
-- Auth title: add a match arm in `login_overlay_title()` at `crates/zdx-tui/src/features/auth/render.rs:40-64`.
-- If it's an OAuth/CLI provider: add to the CLI provider selection list at `crates/zdx-tui/src/features/auth/render.rs:181-187` and the login flow in `crates/zdx-tui/src/overlays/login.rs:39-157`.
-- API-key providers use the generic fallback automatically — just the title match is needed.
-
-**Feature gates to be aware of:**
-- Fast mode is hardcoded to specific providers only (`crates/zdx-tui/src/common/commands.rs:249-260`). New provider needing fast mode requires a code change.
-- Context refine (exact token counting) is provider-specific (`crates/zdx-tui/src/runtime/context_analyze.rs:62-67`).
+**No TUI changes for a new model or provider.** The Go chat TUI (`apps/tui`) lists models from the service's catalog picker (`crates/zdx-engine/src/orchestration/catalog.rs`, the bot's picker too), which reads the registry and the enabled providers' `models` allow-lists; thinking levels come from the same registry (`model_supports_reasoning()`). Its status line takes context limit and usage from the catalog `thread_status` card.
 
 ## Gotchas
 
@@ -227,6 +213,5 @@ The printed `input_images` is exactly what `model_reads_images()` uses to decide
 | `crates/zdx-assets/model_overrides.toml` | Pinned post-fetch overrides applied by `zdx models update` (durable price/metadata corrections) |
 | `crates/zdx-assets/default_config.toml` | Generated config defaults (don't edit directly) |
 | `crates/zdx-cli/src/cli/commands/models.rs` | `zdx models update` implementation, `ProviderSpec` |
-| `crates/zdx-tui/src/features/auth/render.rs` | TUI auth labels per provider, CLI provider list |
-| `crates/zdx-tui/src/overlays/model_picker.rs` | Model picker (dynamic from registry, no changes for new models) |
-| `crates/zdx-tui/src/overlays/login.rs` | Login flow (hardcoded OAuth providers, API-key fallback) |
+| `crates/zdx-engine/src/orchestration/catalog.rs` | Model picker body for the chat TUI and the bot (dynamic from registry) |
+| `crates/zdx-cli/src/cli/commands/auth.rs` | `zdx login` flows (OAuth/CLI providers) |

@@ -2,6 +2,11 @@
 
 The interactive ZDX chat in Go with Bubble Tea v2 (`zdx-tui`). An independent Go module, not part of the Cargo workspace: Rust builds never need Go, and this module never needs cargo. It requires the shared module `apps/shared` through a local `replace` (socket transport, wire types, the transcript layout).
 
+## Running it
+
+- Bare `zdx` on a terminal execs `$ZDX_TUI` (absolute) or `~/.local/bin/zdx-tui` as `zdx-tui --root ROOT [--thread ID] [--model SPEC]`, with `ZDX_HOME` and `ZDX_BIN` set (`crates/zdx-cli/src/cli/commands/chat.rs`, the `GoProgram` contract shared with `zdx bot` and `zdx monitor`). `zdx threads resume [ID]` passes that thread. Never a PATH lookup.
+- `just run [ARGS]` builds it and runs `zdx` from this checkout with it; `just tui [ARGS]` runs the built binary directly; `just tui-install` installs it; `just deploy` and `just safe-deploy` install it with the rest.
+
 ## Boundaries
 
 - Every turn runs in the orchestrator service (`$ZDX_HOME/run/orchestrator.sock`; `crates/zdx-engine/src/orchestration/protocol.rs` is the source of truth). The program runs no agent, provider, or tool, and reads or writes no thread, index, config, or credential file. It needs a running service (`zdx service start orchestrator` or `zdx orchestrator serve`) and says so at start.

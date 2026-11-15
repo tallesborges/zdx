@@ -1,16 +1,15 @@
 # zdx Architecture
 
-zdx is a terminal-based AI coding assistant built in Rust, featuring a non-interactive execution mode and a full-screen interactive TUI.
+zdx is a terminal-based AI coding assistant: a Rust engine with a non-interactive execution mode, and Go front ends (the chat TUI, the Telegram gateway, the monitor) that reach it through the orchestrator service.
 
 ## Workspace Layout
 
-- **zdx (binary):** CLI + exec mode, routes to the TUI when the `tui` feature is enabled.
-- **zdx-types:** Pure shared value types (DTOs/enums) used across providers, tools, and events. No runtime deps. Also holds pure shared projections such as `tool_view` (the display model of one tool call that the Mini App and the terminal tool detail render).
+- **zdx (binary):** CLI + exec mode. Bare `zdx` on a terminal execs the Go chat TUI (`zdx-tui`).
+- **zdx-types:** Pure shared value types (DTOs/enums) used across providers, tools, and events. No runtime deps. Also holds pure shared projections such as `tool_view` (the display model of one tool call that the Mini App and the Go transcript layout render).
 - **zdx-assets:** Embedded asset content (prompts, instruction layers, default TOMLs, bundled skills, built-in subagents). No runtime deps.
 - **zdx-providers:** LLM provider implementations (Anthropic, OpenAI, Gemini, etc.). Depends on zdx-types and zdx-assets.
 - **zdx-tools:** Leaf tool implementations (bash, edit, read, write, glob, grep, etc.) with a minimal ToolContext, plus Unix supervision for invocation-owned process groups. Depends on zdx-types.
 - **zdx-engine:** Runtime engine: config, agent orchestration, thread persistence, skills, subagents, MCP, engine-backed tools, and all remaining runtime modules. Depends on zdx-types, zdx-assets, zdx-providers, zdx-tools.
-- **zdx-tui:** Full-screen TUI (Elm/MVU), depends on zdx-engine.
 - **apps/gateway (Go, outside the Cargo workspace):** the Telegram bot and Mini App server (`zdx-gateway`). A client of the orchestrator socket and the CLI; `zdx bot` and the `bot` service run it.
 - **apps/tui (Go, outside the Cargo workspace):** the chat TUI (`zdx-tui`, Bubble Tea). A client of the orchestrator socket: every turn is a `chat` ordinary submit the service runs; it streams the turn's events and reads the saved thread through `thread_view`. It runs no agent and writes no file.
 - **apps/shared/transcript (Go):** the terminal layout of a thread (types, cursor merge, Markdown, cleaning) that the monitor and the chat TUI share.
@@ -87,12 +86,12 @@ Persistent-profile threads (SPEC §18) run in one long-lived process, the orches
 
 Contract: SPEC §21. One mechanism, owned by the engine; surfaces only route messages to it and show outcomes.
 
-- **Engine (`core/steer.rs`, `core/agent.rs`):** a run takes steers from `AgentOptions.steer`: a `SteerInbox` (in memory; TUI, bot agent topics, orchestrator turns) or a `SteerFile` (a worker child's file, appended only by its manager). `process_tool_turn` takes them after the whole tool round and the interrupt check, appends each as `ChatMessage::steer` after the tool results, emits `UserMessageInjected`, and lets the round's `TurnCheckpoint` persist it. A `CloseOnDrop` guard closes the source on every exit; an explicit close runs before the terminal event, so owners see a closed source when they react to `TurnFinished`. One mutex per inbox decides each item once: taken by the loop, drained by the owner (`drain_unread`), or refused (`Closed`) and queued by the caller.
+- **Engine (`core/steer.rs`, `core/agent.rs`):** a run takes steers from `AgentOptions.steer`: a `SteerInbox` (in memory; orchestrator turns, including chat and bot agent topics) or a `SteerFile` (a worker child's file, appended only by its manager). `process_tool_turn` takes them after the whole tool round and the interrupt check, appends each as `ChatMessage::steer` after the tool results, emits `UserMessageInjected`, and lets the round's `TurnCheckpoint` persist it. A `CloseOnDrop` guard closes the source on every exit; an explicit close runs before the terminal event, so owners see a closed source when they react to `TurnFinished`. One mutex per inbox decides each item once: taken by the loop, drained by the owner (`drain_unread`), or refused (`Closed`) and queued by the caller.
 - **Turn boundary:** `ChatMessage::starts_turn` excludes steers, so reasoning replay (`current_turn_start`), Chat Completions tool-call replay, trajectories, and replay notes keep a steer inside its turn. Live and replayed history match (`phase: "steer"` persists).
 - **Service (`orchestration/runtime.rs`):** `Running` holds the turn's inbox. `admit_steer` (under the threads lock; input ids allocated under it) serves `Submit.delivery = Steer` and, with `[workers] update_delivery = "steer"`, worker updates. `end_turn` drains unread steers in the same step that clears `running`: reinserted by input id, or reported in `InputsDropped` after a cancel (user steers) or a queue-clearing cancel (all).
 - **Workers (`core/workers.rs`):** `steer()` decides under the manager lock (append to the run's steer file, or queue like `send_message`). The child reports each injected steer on its event stream, then a closing marker that `zdx exec` writes only when every event reached stdout. Settlement, under the lock that publishes `Completed`: injected, discarded (cancel), queued (unread and the marker arrived), or uncertain (no marker; never re-sent).
 - **Bot:** `bot/queue.rs` sends plain messages for a busy topic to a standalone task (parsing, incl. voice transcription, runs there); `handlers/message/mod.rs` pushes into the agent turn's inbox (`steer.rs` registry) or submits `Delivery::Steer` to the service, else queues the parsed message. `steer.rs` keeps acknowledgement state, so an outcome that arrives before the acknowledgement is posted is applied when it is.
-- **TUI:** `StateMutation::Steer` → `TuiState::steer_or_queue`; `settle_steers` on `TurnFinished`.
+- **Chat TUI (`apps/tui`):** Enter while a turn runs submits `Delivery::Steer` to the service; the turn's `user_message_injected` (on the thread subscription) shows it as read.
 
 ## Jobs Scheduler
 
@@ -109,97 +108,13 @@ Jobs (`$ZDX_HOME/jobs/*.md`) are owned by the Go package `apps/shared/jobs` and 
 
 ## Owned Process Lifetimes
 
-On Unix, foreground Bash commands and child `zdx exec` runs use `zdx-tools::process_supervisor`. The owner retains the sole lease endpoint while an external supervisor, isolated from both the owner's and target's process groups, directly owns the target. The supervisor reports the target's `pid`/`pgid` back over the startup handshake, so the owner can register the process without inspecting it. Lease closure from cancellation, future drop, or owner-process death triggers TERM, a bounded teardown grace, KILL if needed, same-group cleanup, and target reaping. Healthy commands have no supervision deadline: the foreground bound (`bash_foreground_bound_secs`) ends the *wait*, not the command. On expiry the live handle — lease, completion, pipes, process group — moves out of the tool call into the process-global adopted-jobs registry (`zdx-tools::adopted`), the stream sinks flip from the in-memory tail to the background log files, and the job continues under the same supervisor; this makes adopted jobs session-scoped and killable through the same lease path. Because the adopting process holds that lease, the handoff is enabled only where the process can keep the job alive. One per-run policy, `tools::BackgroundExecution`, decides it: a run with background execution off (every subagent unless its definition sets `background_commands: true`, carried to the child as `zdx exec --no-background-commands`) never hands off and has no implicit limit either: a command stays in the foreground until it finishes, and only the caller's `timeout_secs`, the run's deadline, or cancellation kill it; with it on, `tools::surface_keeps_background_jobs` decides by surface: the TUI (`chat`), the bot daemon (`telegram`), and the orchestrator service (`orchestrator`, which runs Telegram-routed turns as `telegram`) outlive the run, while `zdx exec` — and therefore orchestrator workers and opted-in `invoke_subagent` children — *drains* instead, awaiting `zdx_tools::adopted::drain` at the end of the exec command before returning from `dispatch`. The same policy shapes the tool list (`background_output`/`background_kill` present exactly when background execution is on and the run has `bash` or `invoke_subagent`) and the `Bash` and `invoke_subagent` schemas, in `core::agent::resolve_tools`. A managed subagent (`tools::subagent_job`) reuses the same machinery, for both `invoke_subagent` with `background: true` and a normal call in a run with a handoff bound, which waits up to `bash_foreground_bound_secs` and then hands the same child off, like a `Bash` handoff. The child is adopted at spawn and registered with the turn at once; its registry marker is written only at the handoff (a child that finishes first returns its answer and leaves nothing behind), under a lock shared with its exit callback so exactly one of completion or handoff wins. Beyond that: its child `zdx exec` is spawned like a blocking one, registered as an adopted job of kind `subagent`, and its stdout events are condensed into the job log that `background_output` reads; the end of the child's turn is written the moment the child reports it, so an answer is readable while the process is still exiting and after it is stopped. A run's tool deadline stops it as it stops a blocking call. Its owner is the agent turn, not the process: `run_turn_inner` holds a `TurnTasksGuard` whose drop closes the lease of every background subagent the turn started, so the child stops when the turn ends however it ends, before any drain, and the drain then only waits for that teardown. Draining must complete inside `rt.block_on`: the runtime is dropped when `cli::run` returns, which would drop the task holding the lease and kill the job. `adopt` awaits the job's reader tasks and records its exit before deregistering it, so a drained process never truncates a job's log or leaves its bookkeeping half-written. An interrupt during the drain routes to `terminate_all`, closing every lease so nothing is orphaned. `WorkerManager` (in the orchestrator service) owns worker-prompt leases independently of originating orchestrator turns, while Bash `background: true` continues through the durable detached-process registry and intentionally bypasses invocation supervision. Descendants that deliberately leave the owned process group are outside this containment model.
+On Unix, foreground Bash commands and child `zdx exec` runs use `zdx-tools::process_supervisor`. The owner retains the sole lease endpoint while an external supervisor, isolated from both the owner's and target's process groups, directly owns the target. The supervisor reports the target's `pid`/`pgid` back over the startup handshake, so the owner can register the process without inspecting it. Lease closure from cancellation, future drop, or owner-process death triggers TERM, a bounded teardown grace, KILL if needed, same-group cleanup, and target reaping. Healthy commands have no supervision deadline: the foreground bound (`bash_foreground_bound_secs`) ends the *wait*, not the command. On expiry the live handle — lease, completion, pipes, process group — moves out of the tool call into the process-global adopted-jobs registry (`zdx-tools::adopted`), the stream sinks flip from the in-memory tail to the background log files, and the job continues under the same supervisor; this makes adopted jobs session-scoped and killable through the same lease path. Because the adopting process holds that lease, the handoff is enabled only where the process can keep the job alive. One per-run policy, `tools::BackgroundExecution`, decides it: a run with background execution off (every subagent unless its definition sets `background_commands: true`, carried to the child as `zdx exec --no-background-commands`) never hands off and has no implicit limit either: a command stays in the foreground until it finishes, and only the caller's `timeout_secs`, the run's deadline, or cancellation kill it; with it on, `tools::surface_keeps_background_jobs` decides by surface: the orchestrator service (`orchestrator`, which runs Telegram-routed turns as `telegram` and chat TUI turns as `chat`) outlives the run, while `zdx exec` — and therefore orchestrator workers and opted-in `invoke_subagent` children — *drains* instead, awaiting `zdx_tools::adopted::drain` at the end of the exec command before returning from `dispatch`. The same policy shapes the tool list (`background_output`/`background_kill` present exactly when background execution is on and the run has `bash` or `invoke_subagent`) and the `Bash` and `invoke_subagent` schemas, in `core::agent::resolve_tools`. A managed subagent (`tools::subagent_job`) reuses the same machinery, for both `invoke_subagent` with `background: true` and a normal call in a run with a handoff bound, which waits up to `bash_foreground_bound_secs` and then hands the same child off, like a `Bash` handoff. The child is adopted at spawn and registered with the turn at once; its registry marker is written only at the handoff (a child that finishes first returns its answer and leaves nothing behind), under a lock shared with its exit callback so exactly one of completion or handoff wins. Beyond that: its child `zdx exec` is spawned like a blocking one, registered as an adopted job of kind `subagent`, and its stdout events are condensed into the job log that `background_output` reads; the end of the child's turn is written the moment the child reports it, so an answer is readable while the process is still exiting and after it is stopped. A run's tool deadline stops it as it stops a blocking call. Its owner is the agent turn, not the process: `run_turn_inner` holds a `TurnTasksGuard` whose drop closes the lease of every background subagent the turn started, so the child stops when the turn ends however it ends, before any drain, and the drain then only waits for that teardown. Draining must complete inside `rt.block_on`: the runtime is dropped when `cli::run` returns, which would drop the task holding the lease and kill the job. `adopt` awaits the job's reader tasks and records its exit before deregistering it, so a drained process never truncates a job's log or leaves its bookkeeping half-written. An interrupt during the drain routes to `terminate_all`, closing every lease so nothing is orphaned. `WorkerManager` (in the orchestrator service) owns worker-prompt leases independently of originating orchestrator turns, while Bash `background: true` continues through the durable detached-process registry and intentionally bypasses invocation supervision. Descendants that deliberately leave the owned process group are outside this containment model.
 
-## TUI Architecture (Elm/MVU)
+## Chat TUI (Go)
 
-The interactive mode (`crates/zdx-tui/src/`) strictly follows The Elm Architecture (Model-View-Update).
-
-**Core Principle:** All state lives in one place (`AppState`). All mutations happen via the reducer (`update`). All side effects are explicit descriptions (`UiEffect`) executed by the runtime.
-
-## Design Principles (Guidance)
-
-- **Decision simplicity (prefer):** Favor designs where the answer to a UI question is obvious and derived from one clear place, reducing ambiguity and making decisions faster.
-- **Low‑drift structures (prefer):** Avoid parallel state that can fall out of sync; prefer structures that minimize maintenance and drift over time.
-
-### Data Flow
-
-```
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│  Term Event  │    │ Agent Event  │    │ Async Event  │
-└───────┬──────┘    └──────┬───────┘    └──────┬───────┘
-        │                  │                   │
-        ▼                  ▼                   ▼
-    ┌─────────────────────────────────────────┐
-    │           UiEvent (Unified)             │
-    └────────────────────┬────────────────────┘
-                         │
-               ┌─────────▼─────────┐
-               │ update(state, msg)│
-               │ -> (state, effs)  │
-               └────┬───────────┬──┘
-                    │           │
-          ┌─────────▼─┐       ┌─▼─────────────┐
-          │ new state │       │ Vec<UiEffect> │
-          └────┬──────┘       └─┬─────────────┘
-               │                │
-      ┌────────▼───────┐    ┌───▼─────────────┐
-      │ render(state)  │    │ runtime executes│
-      └────────────────┘    └─────────────────┘
-```
-
-### 1. Model (`AppState`)
-State is a plain struct containing:
-- `tui`: Core application state (input, transcript, thread, config).
-- `overlay`: `Option<Overlay>` for modal UIs (command palette, file picker, etc.).
-
-State is organized into **feature slices** (auth, input, thread, transcript), each exposing `state`, `update`, and `render` modules.
-
-### 2. Update (The Reducer)
-The `update` function is the single source of truth for state transitions. It handles `UiEvent`s and returns `Vec<UiEffect>`. It never performs I/O directly.
-
-**StateMutations:** Feature slices return `StateMutation` enums to request changes on other slices (e.g., Input slice requesting a Transcript scroll). The reducer routes each mutation to the owning slice’s `apply()` method.
-
-### 3. View
-Pure functions render `&AppState` to a Ratatui frame.
-*   **Interior Mutability:** `RefCell` is used *only* for render-time caches (markdown wrapping, selection mapping) to avoid expensive re-computations without mutating logical state.
-
-### 4. Effects & Runtime
-`UiEffect` describes I/O and task spawning only (e.g., `Quit`, `OpenBrowser`, `SaveThread`).
-The `TuiRuntime`:
-1.  Collects events (User input, Agent messages, Async channels).
-2.  Feeds them to `update`.
-3.  Executes resulting `UiEffect`s.
-4.  Renders the view.
+`apps/tui` (`zdx-tui`) is a Bubble Tea front end with no engine in it. Per shown thread it opens one `subscribe` connection filtered to that thread (`thread_id`), then sends each message as a one-shot `chat` ordinary submit; the service runs the turn (chat instruction layer, surface `chat`) and the subscription carries every event in order. Sent messages wait in an outbox until `turn_started` names their input id; live turns are kept per turn id and replaced by the saved items once a `thread_view` load (numbered, so an older answer never wins) has them. Pickers, the status line, titles, images, and voice use the catalog, `update_thread`, `generate`, `prepare_image`, and `transcribe_audio` ops. The transcript layout is `apps/shared/transcript`, the monitor's. A subscription that drops is reopened and the thread reloaded.
 
 ## Key Patterns
-
-### Overlays (Modals)
-Overlays (e.g., Command Palette, File Picker) are self-contained state machines in `AppState.overlay`.
-- **Mutual Exclusion:** Only one overlay is active at a time.
-- **Input Priority:** Active overlay intercepts keys before the main app.
-- **Lifecycle:**
-    - **Open:** Set directly by the reducer (often from input or overlay actions). File picker opening returns `DiscoverFiles` for I/O.
-    - **Update:** Internal mutations + `StateMutation`s for global changes.
-    - **Close:** Returns effects to run after dismissal (e.g., `LoadSession`).
-
-### Async & Concurrency
-- **Receivers in State:** Receivers for async workflows live in `AppState`. The runtime polls them and emits `UiEvent`s.
-- **Task state only:** All async operations are modeled as tasks; UI derives loading state from `TaskState` only (no separate loading flags).
-- **Task lifecycle:** The runtime emits `UiEvent::TaskStarted` when a task is actually spawned, and `UiEvent::TaskCompleted` with the wrapped result when it finishes. The reducer is the only place that mutates `TaskState`, and uses `TaskId` for latest-only gating.
-- **Cancellation pattern:** Cancelable tasks use `CancellationToken` carried in `TaskStarted`. The reducer initiates cancellation via `UiEffect::CancelTask` (with the token); the runtime only calls `token.cancel()`.
-- **Lifecycle flow:**
-  - User action → reducer emits effect (with/without `TaskId`)
-  - Runtime `spawn_task` emits `TaskStarted` → reducer marks running
-  - Runtime emits `TaskCompleted` with result → reducer clears task + applies result
-
-### Performance
-- **Delta Coalescing:** High-frequency events (streaming text, scrolling) are buffered and applied once per frame (`UiEvent::Frame`).
-- **Lazy Rendering:** Only visible transcript cells are rendered.
-- **Wrap Cache:** Markdown layout is cached per cell ID.
-
-### Agent State Machine
-The agent progresses through `Idle` -> `Waiting` (for first byte) -> `Streaming` (accumulating deltas) -> `Idle`.
 
 ### Provider Error Classification
 Provider adapters normalize failures into `ProviderError` with a typed kind plus optional HTTP `status` and provider-native `code`. Transport/request construction is classified at the `reqwest` or WebSocket boundary; HTTP adapters retain response status and extract common OpenAI, Anthropic, and Gemini error code/type fields; stream error events retain their provider code/type through the engine. Retry classification is structured-first: request/parse and known account-limit errors are terminal, transport/timeout is transient, HTTP `408`/`429`/`500..=599` and known overload/rate-limit codes are transient, and message matching is only the final fallback for unknown or unstructured upstreams. The provider-agnostic retry loop still owns the three-attempt budget, exponential backoff, retry events, and pre-visible-content safety gate.

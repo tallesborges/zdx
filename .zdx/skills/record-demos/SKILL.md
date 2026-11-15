@@ -117,7 +117,7 @@ vhs docs/tapes/<name>.tape
 **Success criteria:** the clip is full-color, readable, framed, and shows the intended feature; the file lands in `docs/assets/`.
 
 ### 3. Add a new feature clip
-Copy the template to `docs/tapes/<feature>.tape`, script the keystrokes for that feature (find the real keybindings in `crates/zdx-tui/src` first — command palette is `Ctrl+O`), preview, finalize, embed. One tape per feature.
+Copy the template to `docs/tapes/<feature>.tape`, script the keystrokes for that feature (find the real keybindings in `apps/tui/internal/ui` first — command palette is `Ctrl+O`; the TUI needs a running orchestrator service), preview, finalize, embed. One tape per feature.
 
 ## Notes
 

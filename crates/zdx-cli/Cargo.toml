@@ -13,16 +13,8 @@ homepage = "https://github.com/tallesborges/zdx"
 name = "zdx"
 path = "src/main.rs"
 
-[features]
-default = ["tui", "microphone"]
-tui = ["dep:zdx-tui"]
-# TUI voice input from the microphone. Linux release builds leave it out so the
-# binary does not need ALSA (`libasound.so.2`).
-microphone = ["tui", "zdx-tui/microphone"]
-
 [dependencies]
 zdx-engine = { path = "../zdx-engine" }
-zdx-tui = { path = "../zdx-tui", optional = true, default-features = false }
 
 anyhow.workspace = true
 chrono.workspace = true

@@ -3,7 +3,6 @@
 ![Zdx Hero](docs/assets/hero.png)
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tallesborges/zdx)
-[![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
 
 Zdx is a coding agent built in Rust. I made it to have customization freedom and also for learnig purpose.
 
@@ -25,13 +24,16 @@ cd zdx
 cargo install --path crates/zdx-cli
 ```
 
-On Linux, the default build needs ALSA headers (`libasound2-dev`) for TUI microphone input. Without them, or for a headless host, build without it: `cargo install --path crates/zdx-cli --no-default-features --features tui`. The released Linux binary is built this way and needs glibc 2.35 or newer and OpenSSL 3 (`libssl3`).
+The released Linux binary needs glibc 2.35 or newer and OpenSSL 3 (`libssl3`).
 
 ### Run
 
+The interactive chat is a separate Go binary, `zdx-tui` (`apps/tui`). Its turns run in the orchestrator service, so start that first. Build the TUI with Go installed:
+
 ```bash
-zdx --help
-zdx
+just tui-install                    # builds ~/.local/bin/zdx-tui
+zdx service start orchestrator      # or: zdx orchestrator serve
+zdx                                 # chat in the current directory
 ```
 
 ### Exec mode
@@ -66,7 +68,7 @@ Just the ones I use — but that turns out to be a lot.
 
 ### Interfaces
 
-- **Interactive TUI** — the main terminal experience (built with Ratatui)
+- **Interactive TUI** — the main terminal experience (`zdx`, Go and Bubble Tea; turns run in the orchestrator service)
 - **Exec mode** — headless, scriptable one-shot runs (`zdx exec -p "..."`)
 - **Telegram bot** — drive the agent from your phone
 - **Monitor dashboard** — a read-only terminal dashboard (`zdx monitor`, Go) to watch agent runs, services, logs, and config
@@ -105,13 +107,12 @@ Delegate scoped work to isolated child agents:
 ### Memory & threads
 
 - **Native memory** — SQLite-backed lexical search across notes, calendar, and exported past-thread transcripts; hits carry the canonical source path
-- **Threads** — resume, rename, append, export, search, and tool-call inspection; open as tabs and forks
+- **Threads** — resume, rename, append, export, search, and tool-call inspection
 
 ### TUI niceties
 
-- Tabbed threads/forks, image attachments via the **Kitty graphics protocol**, **voice dictation**
-- Overlays for context usage, thread TLDR, and skills; model picker with Tab-cycled model modes
-- Inline questions + follow-up suggestions, `/prompt-builder`, and a `btw` side chat
+- Streaming replies, steer a running turn (Enter) or queue the next message (Tab), interrupt (Esc)
+- Model and thinking pickers, recent-thread picker, command palette, image attachments by path, **voice dictation** (ffmpeg)
 
 ### Telegram bot
 

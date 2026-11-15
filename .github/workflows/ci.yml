@@ -64,9 +64,6 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
-      - name: Clippy (Linux release features, no microphone)
-        run: cargo clippy -p zdx --bins --no-default-features --features tui --locked -- -D warnings
-
       - name: Build
         run: cargo build -p zdx --locked
 

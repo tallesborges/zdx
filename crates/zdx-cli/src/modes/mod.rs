@@ -1,29 +1,7 @@
 //! Runtime execution modes.
 //!
 //! - `exec`: Non-interactive streaming mode (stdout/stderr)
-//! - `tui`: Full-screen interactive terminal UI (optional feature)
+//!
+//! The interactive chat is the Go TUI (`apps/tui`); `commands::chat` starts it.
 
 pub mod exec;
-
-#[cfg(feature = "tui")]
-pub use zdx_tui::{run_interactive_chat, run_interactive_chat_with_history};
-
-#[cfg(not(feature = "tui"))]
-pub async fn run_interactive_chat(
-    _config: &zdx_engine::config::Config,
-    _thread_log: Option<zdx_engine::core::thread_persistence::Thread>,
-    _root: std::path::PathBuf,
-    _model_selection: Option<&str>,
-) -> anyhow::Result<()> {
-    anyhow::bail!("TUI support is disabled in this build (feature \"tui\").");
-}
-
-#[cfg(not(feature = "tui"))]
-pub async fn run_interactive_chat_with_history(
-    _config: &zdx_engine::config::Config,
-    _thread_log: Option<zdx_engine::core::thread_persistence::Thread>,
-    _history: Vec<zdx_engine::providers::ChatMessage>,
-    _root: std::path::PathBuf,
-) -> anyhow::Result<()> {
-    anyhow::bail!("TUI support is disabled in this build (feature \"tui\").");
-}

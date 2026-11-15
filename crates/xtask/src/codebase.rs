@@ -10,7 +10,6 @@ const INCLUDE_DIRS: &[&str] = &[
     "crates/zdx-providers",
     "crates/zdx-tools",
     "crates/zdx-engine",
-    "crates/zdx-tui",
     "crates/xtask",
 ];
 const EXCLUDE_EXTENSIONS: &[&str] = &[

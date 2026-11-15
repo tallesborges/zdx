@@ -26,9 +26,9 @@ enum CommandName {
     /// Generate codebase.txt with all source files.
     ///
     /// If no directory is specified, it includes all default directories.
-    /// If directories are specified (e.g., "crates/zdx-tui"), it only includes those.
+    /// If directories are specified (e.g., "crates/zdx-engine"), it only includes those.
     Codebase {
-        /// Directory paths to include (e.g., "crates/zdx-tui", "crates/zdx-engine").
+        /// Directory paths to include (e.g., "crates/zdx-engine", "apps/tui").
         /// If not provided, defaults to all workspace directories.
         #[arg(value_name = "DIR")]
         dirs: Vec<String>,

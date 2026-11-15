@@ -115,23 +115,6 @@ impl ThreadRunLease {
     }
 }
 
-/// Appends `event` to `thread` unless a run in another process holds the
-/// thread: a write in the middle of its turn would interleave with it. This
-/// process's own turn does not block it. Returns whether it was appended.
-///
-/// # Errors
-/// [`ThreadBusy`] when another process runs a turn; else the append error.
-pub fn append_outside_foreign_turn(
-    thread: &mut crate::core::thread_persistence::Thread,
-    event: &crate::core::thread_persistence::ThreadEvent,
-) -> Result<()> {
-    if ThreadRunLease::held_here(&thread.id) {
-        return thread.append(event);
-    }
-    let _lease = ThreadRunLease::try_acquire(&thread.id)?;
-    thread.append(event)
-}
-
 /// Whether `err` is a refused lease.
 #[must_use]
 pub fn is_busy(err: &anyhow::Error) -> bool {

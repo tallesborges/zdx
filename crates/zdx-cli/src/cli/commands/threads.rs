@@ -1,6 +1,6 @@
 //! Thread command handlers.
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
@@ -15,7 +15,6 @@ use zdx_engine::core::thread_trajectory::{
 use zdx_engine::core::usage_stats::{self, UsageTotals};
 
 use super::stats::{format_cost, format_tokens};
-use crate::modes;
 
 /// Appends a message to an existing thread.
 pub fn append(thread_id: &str, role: &str, text: &str) -> Result<()> {
@@ -281,7 +280,7 @@ pub fn reindex() -> Result<()> {
     Ok(())
 }
 
-pub async fn resume(id: Option<String>, config: &config::Config) -> Result<()> {
+pub fn resume(id: Option<String>, root: &Path) -> Result<()> {
     let thread_id = match id {
         Some(id) => id,
         None => thread_persistence::latest_thread_id()
@@ -289,19 +288,7 @@ pub async fn resume(id: Option<String>, config: &config::Config) -> Result<()> {
             .context("No threads found to resume")?,
     };
     zdx_engine::orchestration::ensure_direct_run_allowed(&thread_id)?;
-
-    let history = thread_persistence::load_thread_as_messages(&thread_id)
-        .with_context(|| format!("load history for '{thread_id}'"))?;
-
-    let thread = thread_persistence::Thread::with_id(thread_id.clone())
-        .with_context(|| format!("open thread '{thread_id}'"))?;
-
-    let root_path = PathBuf::from(".");
-    modes::run_interactive_chat_with_history(config, Some(thread), history, root_path)
-        .await
-        .context("resume chat failed")?;
-
-    Ok(())
+    super::chat::tui(root, Some(&thread_id), None)
 }
 
 pub fn search(options: SearchCommandOptions) -> Result<()> {

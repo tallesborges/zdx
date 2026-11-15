@@ -11,11 +11,11 @@ default:
 
 # ─── Run ──────────────────────────────────────────
 
-# Run the TUI (pass extra args: just run --help)
-run *ARGS:
-    cargo run -p zdx -- {{ARGS}}
+# Run zdx from this checkout; bare `just run` starts the Go chat TUI it builds (pass extra args: just run --help)
+run *ARGS: tui-build
+    ZDX_TUI="{{justfile_directory()}}/apps/tui/bin/zdx-tui" cargo run -p zdx -- {{ARGS}}
 
-# Run the Go chat TUI from this checkout (turns run in the orchestrator service). TUI args go after the recipe name.
+# Run the built Go chat TUI directly, without zdx (turns run in the orchestrator service)
 tui *ARGS: tui-build
     apps/tui/bin/zdx-tui {{ARGS}}
 
@@ -86,7 +86,7 @@ update-config:
 update-defaults:
     cargo xtask update-defaults
 
-# Generate codebase snapshot (optional: just codebase crates/zdx-tui)
+# Generate codebase snapshot (optional: just codebase crates/zdx-engine)
 codebase *CRATES:
     cargo xtask codebase {{CRATES}}
 
@@ -167,12 +167,12 @@ install: build-release
     @# index only: no exports, no memory index.
     ~/.local/bin/zdx threads reindex
 
-# Build and install zdx, the gateway, zdx-quota, and zdx-jobs (and refresh an installed monitor), then restart the launchd services
-deploy: install gateway-install quota-install jobs-install monitor-refresh
+# Build and install zdx, the gateway, zdx-quota, zdx-jobs, and zdx-tui (and refresh an installed monitor), then restart the launchd services
+deploy: install gateway-install quota-install jobs-install tui-install monitor-refresh
     ~/.local/bin/zdx service restart all
 
-# Build and install zdx, the gateway, zdx-quota, and zdx-jobs (and refresh an installed monitor), and queue the restart until agent runs, workers, and orchestrator updates are done
-safe-deploy: install gateway-install quota-install jobs-install monitor-refresh
+# Build and install zdx, the gateway, zdx-quota, zdx-jobs, and zdx-tui (and refresh an installed monitor), and queue the restart until agent runs, workers, and orchestrator updates are done
+safe-deploy: install gateway-install quota-install jobs-install tui-install monitor-refresh
     ~/.local/bin/zdx service restart all --queue
 
 # Build the Go gateway into ~/.local/bin/zdx-gateway, the stable path the bot service runs
@@ -189,7 +189,7 @@ monitor-install:
     mv -f ~/.local/bin/.zdx-monitor.new ~/.local/bin/zdx-monitor
     @echo "Installed ~/.local/bin/zdx-monitor"
 
-# Build the Go chat TUI into ~/.local/bin/zdx-tui
+# Build the Go chat TUI into ~/.local/bin/zdx-tui, the path bare `zdx` runs
 tui-install:
     @mkdir -p ~/.local/bin
     cd apps/tui && go build -trimpath -o ~/.local/bin/.zdx-tui.new ./cmd/zdx-tui

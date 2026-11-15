@@ -16,7 +16,6 @@ anyhow.workspace = true
 base64.workspace = true
 chrono.workspace = true
 ctrlc.workspace = true
-fast_image_resize.workspace = true
 futures-util.workspace = true
 globset.workspace = true
 grep-regex.workspace = true
