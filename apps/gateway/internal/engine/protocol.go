@@ -309,7 +309,6 @@ const (
 	CapGenerate          = protocol.CapGenerate
 	CapFeedbackSubmit    = protocol.CapFeedbackSubmit
 	CapThreadViews       = protocol.CapThreadViews
-	CapGitViews          = protocol.CapGitViews
 	CapThreadRoot        = protocol.CapThreadRoot
 	CapMonitorViews      = protocol.CapMonitorViews
 	CapArtifactViews     = protocol.CapArtifactViews

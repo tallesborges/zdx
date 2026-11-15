@@ -20,9 +20,6 @@ const (
 	ViewActiveAgents      = "active_agents"
 	ViewWorkspaces        = "workspaces"
 	ViewUsageReport       = "usage_report"
-	ViewGitStatus         = "git_status"
-	ViewGitScope          = "git_scope"
-	ViewGitDiff           = "git_diff"
 	ViewThreadRoot        = "thread_root"
 )
 
@@ -35,8 +32,7 @@ var viewCapability = map[string]string{
 	ViewMonitorSnapshot: CapMonitorViews, ViewActiveAgents: CapMonitorViews,
 	ViewWorkspaces:  CapMonitorViews,
 	ViewUsageReport: CapMonitorViews,
-	ViewGitStatus:   CapGitViews, ViewGitScope: CapGitViews, ViewGitDiff: CapGitViews,
-	ViewThreadRoot: CapThreadRoot,
+	ViewThreadRoot:  CapThreadRoot,
 }
 
 // ViewCapability is the capability a view op needs, or "" for an unknown op.
@@ -58,16 +54,13 @@ func ViewBudget(op string, fallback time.Duration) time.Duration {
 }
 
 // View is one read-only view request (views.rs ViewRequest). Op names the
-// view; set only the fields that view takes. Kind is threads_list's kind or
-// git_diff's kind.
+// view; set only the fields that view takes. Kind is threads_list's kind.
 type View struct {
 	Op       string  `json:"-"`
 	ThreadID *string `json:"thread_id,omitempty"`
 	Kind     *string `json:"kind,omitempty"`
 	After    *uint64 `json:"after,omitempty"`
 	Path     *string `json:"path,omitempty"`
-	Scope    *string `json:"scope,omitempty"`
-	Commit   *string `json:"commit,omitempty"`
 	Days     *uint32 `json:"days,omitempty"`
 }
 

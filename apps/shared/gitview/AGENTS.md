@@ -1,6 +1,6 @@
 # apps/shared/gitview
 
-The Mini App Git views (`/api/git`, `/api/git/scope`, `/api/git/diff`) in Go. The gateway calls them in process (`internal/gateway/miniapp_engine.go`). The package doc in `gitview.go` states the contract; `crates/zdx-engine/src/orchestration/view_bodies/git.rs` is the Rust implementation it replaces, still served as the `git_*` views.
+The Mini App Git views (`/api/git`, `/api/git/scope`, `/api/git/diff`) in Go. The gateway calls them in process (`internal/gateway/miniapp_engine.go`). The package doc in `gitview.go` states the contract. It is the only implementation: the Rust `git_*` views it replaced are retired, and the socket refuses their ops.
 
 ## Rules
 
@@ -13,7 +13,7 @@ The Mini App Git views (`/api/git`, `/api/git/scope`, `/api/git/diff`) in Go. Th
 
 ## Tests
 
-- `testdata/rust_views.json` holds the replies the Rust views gave on the synthetic world (`scenario_test.go`). They are the contract: rewrite them only from a Rust service, never from Go. `TestGoldenRustViews` runs every case; a case added without a recording fails it.
-- Live comparison and recording (opt-in, prebuilt binary, never built here): `ZDX_SHARED_TEST_GITVIEW_RUST=<abs path to zdx> go test ./gitview -run TestRustDifferential` from `apps/shared`; add `ZDX_SHARED_TEST_GITVIEW_RECORD=1` to rewrite the recording. It starts isolated `zdx orchestrator serve` processes on temp homes.
+- `testdata/rust_views.json` holds the replies the retired Rust views gave on the synthetic world (`scenario_test.go`), recorded before they were removed. They are the contract and cannot be recorded again: never rewrite them from Go or by hand, and keep `viewCases` as recorded. `TestGoldenRustViews` runs every case. Test new or changed behavior with ordinary tests (`gitview_test.go`).
+- To investigate an old reply, build the last Rust binary with the `git_*` views (the parent of the commit that deleted `crates/zdx-engine/src/orchestration/view_bodies/git.rs`) in a separate worktree.
 - Fixture repositories use fixed identities and dates (stable object ids) and no user or system git config. Tests never run git in a real repository.
-- The recording names the git version it came from (`git` in the file). Another git version, for example on the Linux CI runner, may print some cases differently; re-record from Rust on that version, never edit the file by hand.
+- The recording names the git version it came from (`git` in the file). Another git version, for example on the Linux CI runner, may print some cases differently. Check the case against that git's output; never edit the file by hand.

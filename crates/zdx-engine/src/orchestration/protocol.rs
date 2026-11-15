@@ -134,10 +134,8 @@ pub const CAPABILITY_FEEDBACK_SUBMIT: &str = "feedback_submit";
 pub const CAPABILITY_THREAD_VIEWS: &str = "thread_views";
 /// Artifact views: list, resolve, version, canonical image.
 pub const CAPABILITY_ARTIFACT_VIEWS: &str = "artifact_views";
-/// Monitor views: snapshot, active agents, quotas, workspaces, usage.
+/// Monitor views: snapshot, active agents, workspaces, usage.
 pub const CAPABILITY_MONITOR_VIEWS: &str = "monitor_views";
-/// Git views: status, scope, diff.
-pub const CAPABILITY_GIT_VIEWS: &str = "git_views";
 /// The `thread_root` view: a thread's stored root and the views root.
 pub const CAPABILITY_THREAD_ROOT: &str = "thread_root";
 /// Every view capability, listed together when a provider is installed.
@@ -145,7 +143,6 @@ pub const VIEW_CAPABILITIES: &[&str] = &[
     CAPABILITY_THREAD_VIEWS,
     CAPABILITY_ARTIFACT_VIEWS,
     CAPABILITY_MONITOR_VIEWS,
-    CAPABILITY_GIT_VIEWS,
     CAPABILITY_THREAD_ROOT,
 ];
 

@@ -595,7 +595,6 @@ async fn test_orchestrator_send_ordinary_runs_a_routed_agent_turn() {
         "thread_views",
         "artifact_views",
         "monitor_views",
-        "git_views",
         "thread_root",
     ] {
         assert!(
@@ -607,6 +606,14 @@ async fn test_orchestrator_send_ordinary_runs_a_routed_agent_turn() {
             "{status}"
         );
     }
+    assert!(
+        !status["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|name| name == "git_views"),
+        "the Git views are retired: {status}"
+    );
 
     service.kill().await.unwrap();
 }

@@ -45,9 +45,10 @@ func TestViewCapabilityAndBudget(t *testing.T) {
 	cases := map[string]string{
 		ViewThreadsList: CapThreadViews, ViewThreadWorkers: CapThreadViews,
 		ViewArtifactCanonical: CapArtifactViews, ViewMonitorSnapshot: CapMonitorViews,
-		ViewUsageReport: CapMonitorViews, ViewGitDiff: CapGitViews, ViewThreadRoot: CapThreadRoot, "nope": "",
-		// Retired: quotas are read with the quota package, not a view.
-		"subscription_quotas": "",
+		ViewUsageReport: CapMonitorViews, ViewThreadRoot: CapThreadRoot, "nope": "",
+		// Retired: quotas are read with the quota package, and the Git
+		// views run in the gateway with the gitview package.
+		"subscription_quotas": "", "git_status": "", "git_scope": "", "git_diff": "",
 	}
 	for op, want := range cases {
 		if got := ViewCapability(op); got != want {
@@ -91,7 +92,7 @@ func TestStatusReportCapabilitiesNeedProtocolTwo(t *testing.T) {
 		t.Fatal("a report without protocol is v1 without capabilities")
 	}
 	report, _ = DecodeStatusReply([]byte(`{"reply":"status","report":{"protocol":2,"settled":true,"threads":[],"capabilities":["thread_views"]}}`))
-	if report.Version() != 2 || !report.Has(CapThreadViews) || report.Has(CapGitViews) {
+	if report.Version() != 2 || !report.Has(CapThreadViews) || report.Has(CapThreadRoot) {
 		t.Fatalf("v2: %+v", report)
 	}
 	var nilReport *StatusReport

@@ -298,7 +298,7 @@ func startParityWith(t *testing.T, opts parityOptions) *parity {
 	if report.Version() < engine.ProtocolCapabilities {
 		sandbox.RustFeatureMissing(t, fmt.Sprintf("binary %s speaks protocol %d, these checks need >= %d", bin, report.Version(), engine.ProtocolCapabilities))
 	}
-	need := append([]string{engine.CapOrdinarySubmit, engine.CapThreadViews, engine.CapArtifactViews, engine.CapMonitorViews, engine.CapGitViews}, opts.caps...)
+	need := append([]string{engine.CapOrdinarySubmit, engine.CapThreadViews, engine.CapArtifactViews, engine.CapMonitorViews}, opts.caps...)
 	for _, capability := range need {
 		if !report.Has(capability) {
 			sandbox.RustFeatureMissing(t, fmt.Sprintf("binary %s lacks %s (it reports %v)", bin, capability, report.Capabilities))
@@ -769,58 +769,49 @@ func TestRealRouteParity(t *testing.T) {
 	})
 
 	// The Git routes are Go (the shared gitview package) on Rust's
-	// thread_root view; the reference is the Rust Git views they replace,
-	// read from the same service on the same repository.
+	// thread_root view; Rust has no Git views of its own, so the answers are
+	// checked here and the bodies by gitview's recorded Rust replies.
 	t.Run("git", func(t *testing.T) {
 		if !p.report.Has(engine.CapThreadRoot) {
 			sandbox.RustFeatureMissing(t, fmt.Sprintf("binary %s lacks %s (it reports %v)", p.bin, engine.CapThreadRoot, p.report.Capabilities))
 		}
-		compare := func(path string, view engine.View) {
-			t.Helper()
-			got := p.get(path)
-			want, err := p.socket(view)
-			var se *engine.ServiceError
-			switch {
-			case err == nil:
-				if got.status != http.StatusOK {
-					t.Errorf("%s: Rust answered, Go %d %q", path, got.status, got.body)
-					return
-				}
-				sameJSON(t, path, got.body, want.Body)
-			case errors.As(err, &se):
-				status := map[string]int{"invalid": 400, "not_found": 404, "internal": 500}[se.Code]
-				if got.status != status || string(got.body) != se.Message {
-					t.Errorf("%s: go %d %q, Rust %s %q", path, got.status, got.body, se.Code, se.Message)
-				}
-			default:
-				t.Fatalf("%s: %v", path, err)
+		for _, retired := range []string{
+			`{"op":"git_status","thread_id":"` + thread + `"}`,
+			`{"op":"git_scope","thread_id":"` + thread + `","scope":"all"}`,
+			`{"op":"git_diff","thread_id":"` + thread + `","path":"README.md","kind":"unstaged"}`,
+		} {
+			reply, err := socket.NewClient(p.sockPath).Call(context.Background(), []byte(retired), 0)
+			if err != nil || !bytes.Contains(reply, []byte(`"reply":"error"`)) {
+				t.Errorf("retired %s: %v %s", retired, err, reply)
 			}
 		}
-		active, missing, alias := "active", "telegram--100-topic-404", "telegram--100-topic-6"
-		for _, c := range []struct {
-			path string
-			view engine.View
-		}{
-			{"/api/git", engine.View{Op: engine.ViewGitStatus}},
-			{"/api/git?thread_id=active", engine.View{Op: engine.ViewGitStatus, ThreadID: &active}},
-			{"/api/git?thread_id=" + parityThread, engine.View{Op: engine.ViewGitStatus, ThreadID: &thread}},
-			{"/api/git?thread_id=" + missing, engine.View{Op: engine.ViewGitStatus, ThreadID: &missing}},
-			{"/api/git/scope?thread_id=" + parityThread + "&scope=all", engine.View{Op: engine.ViewGitScope, ThreadID: &thread, Scope: str("all")}},
-			{"/api/git/scope?thread_id=" + parityThread + "&scope=zzz", engine.View{Op: engine.ViewGitScope, ThreadID: &thread, Scope: str("zzz")}},
-			{"/api/git/diff?thread_id=" + parityThread + "&kind=unstaged&path=README.md", engine.View{Op: engine.ViewGitDiff, ThreadID: &thread, Kind: str("unstaged"), Path: str("README.md")}},
-			{"/api/git/diff?thread_id=" + parityThread + "&kind=untracked&path=new.txt", engine.View{Op: engine.ViewGitDiff, ThreadID: &thread, Kind: str("untracked"), Path: str("new.txt")}},
-			{"/api/git/diff?thread_id=" + parityThread + "&kind=all&path=README.md", engine.View{Op: engine.ViewGitDiff, ThreadID: &thread, Kind: str("all"), Path: str("README.md")}},
-			{"/api/git/diff?thread_id=" + parityThread + "&kind=staged&path=new.txt", engine.View{Op: engine.ViewGitDiff, ThreadID: &thread, Kind: str("staged"), Path: str("new.txt")}},
-			{"/api/git/diff?thread_id=" + parityThread + "&kind=worktree&path=new.txt", engine.View{Op: engine.ViewGitDiff, ThreadID: &thread, Kind: str("worktree"), Path: str("new.txt")}},
-			{"/api/git/diff?thread_id=" + parityThread + "&kind=staged&path=..%2Fx", engine.View{Op: engine.ViewGitDiff, ThreadID: &thread, Kind: str("staged"), Path: str("../x")}},
-		} {
-			compare(c.path, c.view)
+		expect := func(path string, status int, body string) {
+			t.Helper()
+			got := p.get(path)
+			if got.status != status || (body != "" && string(got.body) != body) {
+				t.Errorf("%s: %d %.300q, want %d %q", path, got.status, got.body, status, body)
+			}
 		}
+		missing, alias := "telegram--100-topic-404", "telegram--100-topic-6"
+		expect("/api/git", http.StatusOK, "")
+		expect("/api/git?thread_id=active", http.StatusOK, "")
+		expect("/api/git?thread_id="+missing, http.StatusOK, "")
+		expect("/api/git/scope?thread_id="+thread+"&scope=all", http.StatusOK, "")
+		expect("/api/git/scope?thread_id="+thread+"&scope=zzz", http.StatusBadRequest, "Invalid Git scope")
+		expect("/api/git/diff?thread_id="+thread+"&kind=unstaged&path=README.md", http.StatusOK, "")
+		expect("/api/git/diff?thread_id="+thread+"&kind=untracked&path=new.txt", http.StatusOK, "")
+		expect("/api/git/diff?thread_id="+thread+"&kind=all&path=README.md", http.StatusOK, "")
+		expect("/api/git/diff?thread_id="+thread+"&kind=staged&path=new.txt", http.StatusNotFound, "Git file is no longer in that category")
+		expect("/api/git/diff?thread_id="+thread+"&kind=worktree&path=new.txt", http.StatusBadRequest, "Invalid Git file category")
+		expect("/api/git/diff?thread_id="+thread+"&kind=staged&path=..%2Fx", http.StatusBadRequest, "Invalid Git file path")
 		status := p.get("/api/git?thread_id=" + parityThread)
 		for _, needle := range []string{`"source":"thread"`, `"branch":"main"`, "README.md", "new.txt"} {
 			if !bytes.Contains(status.body, []byte(needle)) {
 				t.Fatalf("git status lacks %s: %s", needle, status.body)
 			}
+		}
+		if body := p.get("/api/git?thread_id=" + missing).body; !bytes.Contains(body, []byte(`"source":"bot_root"`)) {
+			t.Fatalf("missing thread status: %s", body)
 		}
 
 		// A mirror topic aliasing the thread: Rust resolves the alias, the
@@ -829,7 +820,6 @@ func TestRealRouteParity(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(p.home, "threads", alias+".jsonl"), []byte(meta), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		compare("/api/git?thread_id="+alias, engine.View{Op: engine.ViewGitStatus, ThreadID: &alias})
 		if body := p.get("/api/git?thread_id=" + alias).body; !bytes.Contains(body, []byte(`"thread_id":"`+alias+`"`)) || !bytes.Contains(body, []byte(`"source":"thread"`)) {
 			t.Fatalf("alias status: %s", body)
 		}

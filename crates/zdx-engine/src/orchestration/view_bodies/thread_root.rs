@@ -1,6 +1,6 @@
-//! The thread a view request means and its stored root. The Git views
-//! (here and in the shared Go `apps/shared/gitview`) look for the repository
-//! in that root first, then in the views root.
+//! The thread a view request means and its stored root. The gateway's Git
+//! routes (the shared Go `apps/shared/gitview`) look for the repository in
+//! that root first, then in the views root.
 
 use std::path::Path;
 
@@ -38,17 +38,15 @@ impl EngineViews {
         &self,
         thread_id: Option<String>,
     ) -> Result<ThreadRootResponse, ViewError> {
-        select_thread_root(&self.root, thread_id, "Thread root resolution failed").await
+        select_thread_root(&self.root, thread_id).await
     }
 }
 
 /// Resolves the thread and its root. Read failures of the index, the alias,
-/// or the root count as missing values. `failed` is the `Internal` text when
-/// the blocking lookup itself fails.
-pub(super) async fn select_thread_root(
+/// or the root count as missing values.
+async fn select_thread_root(
     views_root: &Path,
     thread_id: Option<String>,
-    failed: &'static str,
 ) -> Result<ThreadRootResponse, ViewError> {
     let requested_id = thread_id
         .filter(|id| !id.trim().is_empty())
@@ -81,7 +79,7 @@ pub(super) async fn select_thread_root(
     .await
     .map_err(|error| {
         tracing::warn!(%error, "Thread root resolution task failed");
-        internal(failed)
+        internal("Thread root resolution failed")
     })
 }
 

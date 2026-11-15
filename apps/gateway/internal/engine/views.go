@@ -20,9 +20,6 @@ const (
 	ViewActiveAgents      = protocol.ViewActiveAgents
 	ViewWorkspaces        = protocol.ViewWorkspaces
 	ViewUsageReport       = protocol.ViewUsageReport
-	ViewGitStatus         = protocol.ViewGitStatus
-	ViewGitScope          = protocol.ViewGitScope
-	ViewGitDiff           = protocol.ViewGitDiff
 	ViewThreadRoot        = protocol.ViewThreadRoot
 )
 

@@ -7,7 +7,6 @@
 //! status, and the exact text the route answers with.
 
 mod artifacts;
-mod git;
 mod monitor;
 mod thread_root;
 mod threads;
@@ -21,7 +20,6 @@ use tokio::sync::Mutex;
 pub use self::artifacts::{
     ArtifactFile, ArtifactVersionResponse, ArtifactsResponse, check_artifact_path,
 };
-pub use self::git::{GitDiffResponse, GitResponse, GitScopeResponse};
 pub use self::monitor::{
     MAX_USAGE_DAYS, MonitorAgent, MonitorResponse, UsageResponse, WorkspacesResponse,
 };
@@ -36,9 +34,9 @@ use super::views::ViewError;
 use crate::core::workers::{WorkerManager, WorkerSnapshot, WorkerStatus};
 use crate::core::{thread_index, thread_persistence};
 
-/// Builds view bodies for one root: the fallback root of Git views and the
-/// root whose config the dashboard and usage read. The root is the caller's,
-/// passed explicitly; nothing here reads the current directory.
+/// Builds view bodies for one root: the fallback root `thread_root` reports
+/// and the root whose config the dashboard and usage read. The root is the
+/// caller's, passed explicitly; nothing here reads the current directory.
 ///
 /// Holds the caches the bodies share (usage windows, artifact hashes) and the
 /// image-preview permits, so every surface built on one instance (or a clone
@@ -180,8 +178,8 @@ pub fn resolve_thread_param(id: String) -> String {
 /// (`?startapp={thread_id}` in the pinned header), and a worker mirror topic is
 /// an alias whose own thread file carries neither lineage nor workers. Without
 /// this hop, opening a worker from its mirror looks like a thread with no
-/// orchestrator and no workers. `thread_root` (and so the Git views)
-/// resolves the same way.
+/// orchestrator and no workers. `thread_root` (and so the gateway's Git
+/// routes) resolves the same way.
 #[must_use]
 pub fn resolve_alias_id(id: &str) -> String {
     thread_persistence::read_thread_alias(id)

@@ -8,30 +8,17 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
-	"time"
 
-	"github.com/tallesborges/zdx/apps/shared/protocol"
 	"github.com/tallesborges/zdx/apps/shared/sandbox"
-	"github.com/tallesborges/zdx/apps/shared/socket"
 )
 
-// goldenFile holds the replies the Rust Git views (view_bodies/git.rs)
-// gave for viewCases on the synthetic world. They are the contract: they
-// are written only from a Rust service (recordEnv), never from Go.
+// goldenFile holds the replies the retired Rust Git views gave for
+// viewCases on the synthetic world, recorded from a Rust service before
+// they were removed. They are the contract and cannot be recorded again:
+// never write them from Go or by hand.
 const goldenFile = "testdata/rust_views.json"
-
-// rustEnv names a prebuilt zdx (absolute path) whose Git views the
-// differential test compares with this package, live, on one world.
-// recordEnv=1 also rewrites goldenFile from that binary's replies.
-const (
-	rustEnv   = sandbox.KeepPrefix + "GITVIEW_RUST"
-	recordEnv = sandbox.KeepPrefix + "GITVIEW_RECORD"
-)
 
 func TestMain(m *testing.M) {
 	os.Exit(sandbox.Main(func() int {
@@ -190,7 +177,7 @@ func TestGoldenRustViews(t *testing.T) {
 		recorded[c.Name] = c
 	}
 	if len(recorded) != len(viewCases) || len(g.Cases) != len(viewCases) {
-		t.Fatalf("%s has %d cases (%d names), the test %d: re-record with %s", goldenFile, len(g.Cases), len(recorded), len(viewCases), recordEnv)
+		t.Fatalf("%s has %d cases (%d names), the test %d: recorded cases are fixed, test new behavior outside viewCases", goldenFile, len(g.Cases), len(recorded), len(viewCases))
 	}
 	w := newWorld(t)
 	ran := 0
@@ -198,7 +185,7 @@ func TestGoldenRustViews(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			rec, ok := recorded[c.name]
 			if !ok || rec.View != c.view || rec.Fallback != c.fallback {
-				t.Fatalf("case %s is not recorded as it is defined (recorded %+v): re-record with %s", c.name, rec, recordEnv)
+				t.Fatalf("case %s is not recorded as it is defined (recorded %+v)", c.name, rec)
 			}
 			want := w.normalize(t, rec.Reply)
 			got := w.normalize(t, w.runGo(t, c))
@@ -211,162 +198,4 @@ func TestGoldenRustViews(t *testing.T) {
 	if ran != len(viewCases) {
 		t.Fatalf("ran %d of %d cases", ran, len(viewCases))
 	}
-}
-
-// rustService is an isolated `zdx orchestrator serve` on a temp home with
-// the cases' thread files, whose views root is one world directory.
-type rustService struct {
-	client *socket.Client
-	stop   func()
-}
-
-func (w *world) startRust(t *testing.T, bin, fallback string) *rustService {
-	t.Helper()
-	// Short: macOS limits Unix socket paths to 104 bytes.
-	home, err := os.MkdirTemp("", "g")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(home) })
-	if n := len(protocol.SocketPath(home)); n > 100 {
-		t.Fatalf("socket path is %d bytes: %s", n, protocol.SocketPath(home))
-	}
-	if err := os.MkdirAll(filepath.Join(home, "threads"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for id, root := range threads {
-		meta, _ := json.Marshal(map[string]any{"type": "meta", "schema_version": 1, "root_path": w.path(root), "ts": "2026-01-02T00:00:00Z"})
-		if err := os.WriteFile(filepath.Join(home, "threads", id+".jsonl"), append(meta, '\n'), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	env := []string{"HOME=" + home, "ZDX_HOME=" + home, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1"}
-	for _, kv := range os.Environ() {
-		key, _, _ := strings.Cut(kv, "=")
-		if key == "PATH" || key == "TMPDIR" || key == "LANG" || strings.HasPrefix(key, "LC_") {
-			env = append(env, kv)
-		}
-	}
-	logPath := filepath.Join(home, "service.log")
-	logFile, err := os.Create(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(bin, "--root", w.path(fallback), "orchestrator", "serve")
-	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = w.path(fallback), env, logFile, logFile
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	exited := make(chan struct{})
-	go func() { _ = cmd.Wait(); close(exited) }()
-	stop := func() {
-		_ = cmd.Process.Signal(syscall.SIGTERM)
-		select {
-		case <-exited:
-		case <-time.After(5 * time.Second):
-			_ = cmd.Process.Kill()
-			<-exited
-		}
-		logFile.Close()
-	}
-	t.Cleanup(stop)
-	client := socket.NewClient(protocol.SocketPath(home))
-	for deadline := time.Now().Add(30 * time.Second); ; {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		report, err := client.Status(ctx, nil)
-		cancel()
-		if err == nil {
-			if !report.Has(protocol.CapGitViews) {
-				t.Fatalf("%s lacks %s: %v", bin, protocol.CapGitViews, report.Capabilities)
-			}
-			break
-		}
-		select {
-		case <-exited:
-			log, _ := os.ReadFile(logPath)
-			t.Fatalf("service exited: %s", log)
-		case <-time.After(20 * time.Millisecond):
-		}
-		if time.Now().After(deadline) {
-			log, _ := os.ReadFile(logPath)
-			t.Fatalf("service never answered: %v\n%s", err, log)
-		}
-	}
-	return &rustService{client: client, stop: stop}
-}
-
-// ask sends one view line and returns the reply in the recorded form.
-func (s *rustService) ask(t *testing.T, line string) []byte {
-	t.Helper()
-	reply, err := s.client.Call(context.Background(), []byte(line), 0)
-	if err != nil {
-		t.Fatalf("%s: %v", line, err)
-	}
-	var r protocol.Reply
-	if err := json.Unmarshal(reply, &r); err != nil {
-		t.Fatalf("%s: %v: %s", line, err, reply)
-	}
-	if r.Kind == protocol.ReplyError {
-		return refusal(r.Code, r.Message)
-	}
-	if r.Kind != protocol.ReplyView {
-		t.Fatalf("%s: reply %s", line, reply)
-	}
-	return []byte(`{"body":` + string(r.Body) + `}`)
-}
-
-// TestRustDifferential compares this package with the Rust Git views of
-// the binary named by rustEnv, live on one world. With recordEnv=1 it
-// also rewrites goldenFile from the Rust replies.
-func TestRustDifferential(t *testing.T) {
-	bin := os.Getenv(rustEnv)
-	if bin == "" {
-		t.Skipf("%s not set: the live Rust comparison is opt-in (the golden test covers the recorded contract)", rustEnv)
-	}
-	if !filepath.IsAbs(bin) {
-		t.Fatalf("%s must be an absolute path, got %q", rustEnv, bin)
-	}
-	w := newWorld(t)
-	services := map[string]*rustService{}
-	var cases []goldenCase
-	for _, c := range viewCases {
-		svc := services[c.fallback]
-		if svc == nil {
-			svc = w.startRust(t, bin, c.fallback)
-			services[c.fallback] = svc
-		}
-		rust := svc.ask(t, w.expand(c.view))
-		cases = append(cases, goldenCase{Name: c.name, Fallback: c.fallback, View: c.view, Reply: w.normalize(t, rust)})
-		t.Run(c.name, func(t *testing.T) {
-			if got, want := w.normalize(t, w.runGo(t, c)), w.normalize(t, rust); !bytes.Equal(got, want) {
-				t.Errorf("Go differs from Rust\n  go: %.2000s\nrust: %.2000s", got, want)
-			}
-		})
-	}
-	if os.Getenv(recordEnv) != "1" {
-		return
-	}
-	version, err := exec.Command(bin, "--version").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	gitVersion, err := exec.Command("git", "--version").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	enc := json.NewEncoder(&out)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(golden{
-		Recorder: strings.TrimSpace(string(version)) + " (Rust Git views, crates/zdx-engine/src/orchestration/view_bodies/git.rs), over the socket of an isolated service",
-		Git:      strings.TrimSpace(string(gitVersion)),
-		Cases:    cases,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(goldenFile, out.Bytes(), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("recorded %d cases from %s into %s", len(cases), bin, goldenFile)
 }

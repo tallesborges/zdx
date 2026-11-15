@@ -66,30 +66,10 @@ pub enum ViewRequest {
     /// for in: `{thread_id, effective_id, root_path, fallback_root}`
     /// ([`super::view_bodies::ThreadRootResponse`]). `thread_id` absent or
     /// blank means `active`. The Go gateway reads it to serve `/api/git*`
-    /// with `apps/shared/gitview`.
+    /// with `apps/shared/gitview`; Rust has no Git views.
     ThreadRoot {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         thread_id: Option<String>,
-    },
-    /// `GET /api/git`.
-    GitStatus {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        thread_id: Option<String>,
-    },
-    /// `GET /api/git/scope`.
-    GitScope {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        thread_id: Option<String>,
-        scope: String,
-    },
-    /// `GET /api/git/diff`.
-    GitDiff {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        thread_id: Option<String>,
-        path: String,
-        kind: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        commit: Option<String>,
     },
 }
 
@@ -136,9 +116,6 @@ pub fn capability(request: &ViewRequest) -> &'static str {
         | ViewRequest::Workspaces
         | ViewRequest::UsageReport { .. } => super::protocol::CAPABILITY_MONITOR_VIEWS,
         ViewRequest::ThreadRoot { .. } => super::protocol::CAPABILITY_THREAD_ROOT,
-        ViewRequest::GitStatus { .. }
-        | ViewRequest::GitScope { .. }
-        | ViewRequest::GitDiff { .. } => super::protocol::CAPABILITY_GIT_VIEWS,
     }
 }
 
@@ -233,21 +210,6 @@ async fn build(views: &EngineViews, request: ViewRequest) -> Result<ViewOutput, 
         ViewRequest::Workspaces => body(&views.workspaces().await?, None),
         ViewRequest::UsageReport { days } => body(&views.usage(days).await?, None),
         ViewRequest::ThreadRoot { thread_id } => body(&views.thread_root(thread_id).await?, None),
-        ViewRequest::GitStatus { thread_id } => body(&views.git_status(thread_id).await?, None),
-        ViewRequest::GitScope { thread_id, scope } => {
-            body(&views.git_scope(thread_id, &scope).await?, None)
-        }
-        ViewRequest::GitDiff {
-            thread_id,
-            path,
-            kind,
-            commit,
-        } => body(
-            &views
-                .git_diff(thread_id, path, &kind, commit.as_deref())
-                .await?,
-            None,
-        ),
     }
 }
 
@@ -264,5 +226,20 @@ mod tests {
         assert!(serde_json::from_str::<ViewRequest>(line).is_err());
         assert!(serde_json::from_str::<Request>(line).is_err());
         assert!(serde_json::from_str::<Request>(r#"{"op":"monitor_snapshot"}"#).is_ok());
+    }
+
+    /// The Git views are retired (the gateway serves them with the shared Go
+    /// `gitview` package on `thread_root`): no request accepts their ops.
+    #[test]
+    fn retired_git_views_are_refused() {
+        for line in [
+            r#"{"op":"git_status"}"#,
+            r#"{"op":"git_scope","scope":"all"}"#,
+            r#"{"op":"git_diff","path":"a","kind":"staged"}"#,
+        ] {
+            assert!(serde_json::from_str::<ViewRequest>(line).is_err(), "{line}");
+            assert!(serde_json::from_str::<Request>(line).is_err(), "{line}");
+        }
+        assert!(serde_json::from_str::<ViewRequest>(r#"{"op":"thread_root"}"#).is_ok());
     }
 }

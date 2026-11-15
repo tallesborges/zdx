@@ -1,7 +1,7 @@
 // Package gitview builds the Mini App's Git views: the repository of a
 // thread (or of the service's views root), its uncommitted state, the files
-// a history scope touches, and one file's diff. The bodies are the JSON the
-// Rust views in crates/zdx-engine/src/orchestration/view_bodies/git.rs
+// a history scope touches, and one file's diff. It is the only
+// implementation: the bodies are the JSON the retired Rust Git views
 // answered, recorded in testdata/rust_views.json and checked by the golden
 // tests (key order aside: the Rust socket body had sorted keys, these
 // follow the struct fields).

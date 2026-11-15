@@ -322,9 +322,9 @@ func TestRequireNamesTheFirstMissingCapability(t *testing.T) {
 	if err := c.Require(context.Background(), protocol.CapThreadViews, protocol.CapMonitorViews); err != nil {
 		t.Fatal(err)
 	}
-	err := c.Require(context.Background(), protocol.CapThreadViews, protocol.CapGitViews, protocol.CapHoldTokens)
+	err := c.Require(context.Background(), protocol.CapThreadViews, protocol.CapThreadRoot, protocol.CapHoldTokens)
 	var unsupported *protocol.ErrUnsupported
-	if !errors.As(err, &unsupported) || unsupported.Capability != protocol.CapGitViews {
+	if !errors.As(err, &unsupported) || unsupported.Capability != protocol.CapThreadRoot {
 		t.Fatalf("got %v", err)
 	}
 }
