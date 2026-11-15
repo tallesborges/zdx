@@ -284,6 +284,34 @@ func TestMuseCodeQuotaWithoutUsageIsIncompatible(t *testing.T) {
 	}
 }
 
+func TestMuseCodeIdleWindowIsZeroRolling(t *testing.T) {
+	// Shape of a live answer before the first request of the window.
+	body := `{"api_key":"LLM|k","base_url":"https://api.meta.ai/v1","has_payment_method":true,
+		"require_payment":false,"is_subs_active":true,"action_url":null,
+		"subs_tier_id":"1","subs_tier_name":"Power Usage"}`
+	q, e := museOutcome([]byte(body))
+	if e != nil || q == nil || *q.Plan != "Power Usage" || len(q.Windows) != 1 {
+		t.Fatalf("%+v %v", q, e)
+	}
+	if w := q.Windows[0]; w.Label != "rolling" || w.UsedPercent != 0 || w.ResetsAt != nil {
+		t.Errorf("%+v", w)
+	}
+}
+
+func TestMuseCodeWithoutUsageStaysUnexpectedUnlessIdle(t *testing.T) {
+	for _, body := range []string{
+		`{"is_subs_active":true,"require_payment":true}`,
+		`{"is_subs_active":true,"action_url":"https://example.test/pay"}`,
+		`{"is_subs_active":true,"require_payment_action_url":"https://example.test/pay"}`,
+		`{"api_key":"LLM|k"}`,
+		`{"is_subs_active":true,"subs_usage":{"window":{"resets_at":1}}}`,
+	} {
+		if q, e := museOutcome([]byte(body)); q != nil || e == nil || e.Kind != KindIncompatible {
+			t.Errorf("%s = %+v %v", body, q, e)
+		}
+	}
+}
+
 func TestMuseCodeWindowLabelFallsBackWhenDurationIsAbsent(t *testing.T) {
 	f := func(v float64) *float64 { return &v }
 	for _, c := range []struct {

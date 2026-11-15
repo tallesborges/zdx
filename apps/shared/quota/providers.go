@@ -170,13 +170,44 @@ func (f *fetcher) museCode(ctx context.Context, c *credentials) (*Quota, *Error)
 }
 
 // museOutcome is the Muse Code answer after a 2xx: an inactive subscription
-// is unauthorized, else the parsed allowance.
+// is unauthorized, an idle one is a 0% rolling window, else the parsed
+// allowance.
 func museOutcome(body []byte) (*Quota, *Error) {
 	q, active, err := parseMuseCode(body)
 	if err == nil && active != nil && !*active {
 		return nil, failure(KindUnauthorized)
 	}
+	if err == nil && q == nil {
+		q = museIdle(body)
+	}
 	return incompatibleUnless(q, err)
+}
+
+// museIdle reads an answer without `subs_usage`. Meta leaves it out while no
+// rolling window is open (seen 2026-11-15: absent before the first request
+// of the day, present right after it), so an active subscription with no
+// payment demand is a 0% rolling window with no reset. The weekly figure is
+// unknown then and is not reported. Any other answer stays nil. Only called
+// after parseMuseCode accepted the body.
+func museIdle(body []byte) *Quota {
+	doc, _ := document(body)
+	root, _ := object(doc, museFields...)
+	active, _ := root.optBool("is_subs_active")
+	payment, _ := root.optBool("require_payment")
+	action, _ := root.optString("action_url")
+	paymentAction, _ := root.optString("require_payment_action_url")
+	if active == nil || !*active || (payment != nil && *payment) ||
+		trimmedNonEmpty(action, "") != nil || trimmedNonEmpty(paymentAction, "") != nil {
+		return nil
+	}
+	if _, ok := root["subs_usage"]; ok && !isNull(root["subs_usage"]) {
+		return nil
+	}
+	plan, _ := root.optString("subs_tier_name")
+	if plan == nil {
+		plan, _ = root.optString("subs_tier_id")
+	}
+	return &Quota{Plan: trimmedNonEmpty(plan, ""), Windows: []Window{{Label: museLabel(nil), UsedPercent: 0}}}
 }
 
 // --- parsers: each a port of its Rust `parse_*` and wire structs ---

@@ -20,6 +20,28 @@ const differentialDir = "testdata/differential"
 // recorderFile is the recorder's reference source, not a case.
 const recorderFile = "recorder.rs.txt"
 
+// acceptedDifferences are cases where Go deliberately answers differently
+// from the recorded Rust output, keyed by case input. The .out.json stays the
+// Rust record; each entry is listed under "Known differences from Rust" in
+// AGENTS.md.
+var acceptedDifferences = map[string]string{
+	// Meta omits subs_usage while no rolling window is open.
+	"muse-code/no-usage.in": `{
+  "quota": {
+    "plan": null,
+    "windows": [
+      {
+        "label": "rolling",
+        "resets_at": null,
+        "scope": null,
+        "used_percent": 0.0
+      }
+    ]
+  }
+}
+`,
+}
+
 func differentialCases(t *testing.T, root string) map[string][]byte {
 	t.Helper()
 	out := map[string][]byte{}
@@ -116,6 +138,9 @@ func TestDifferentialFixturesMatchRecordedRustOutput(t *testing.T) {
 		if !ok {
 			t.Errorf("%s: no recorded output", in)
 			continue
+		}
+		if accepted, ok := acceptedDifferences[in]; ok {
+			want = []byte(accepted)
 		}
 		if got := runDifferential(provider, files[in]); !bytes.Equal(got, want) {
 			t.Errorf("%s:\n--- go\n%s--- rust\n%s", in, got, want)
