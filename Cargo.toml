@@ -97,3 +97,8 @@ codegen-units = 256
 
 [profile.dev.package."*"]
 debug = 0
+
+# The CLI crate is glue. Its release codegen runs last, after the engine, so it
+# adds straight to build time; opt-level 1 shortens it with no measured runtime cost.
+[profile.release.package.zdx]
+opt-level = 1
