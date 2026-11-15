@@ -14,7 +14,7 @@ var Zdx string
 // ErrUnknown: neither an explicit version nor a build-time one is set.
 var ErrUnknown = errors.New("zdx version unknown: this binary was built without the version linker flag; " +
 	"build it with its just recipe, add -ldflags \"$(apps/shared/ldflags.sh)\" to go build or go run " +
-	"(from apps/monitor: ../shared/ldflags.sh), or pass --zdx-version")
+	"(from apps: shared/ldflags.sh), or pass --zdx-version")
 
 // Resolve is explicit when set (a --zdx-version flag), else Zdx, else
 // ErrUnknown. It never guesses a version.

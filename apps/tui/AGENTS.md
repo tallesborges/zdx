@@ -1,11 +1,11 @@
 # apps/tui
 
-The interactive ZDX chat in Go with Bubble Tea v2 (`zdx-tui`). An independent Go module, not part of the Cargo workspace: Rust builds never need Go, and this module never needs cargo. It requires the shared module `apps/shared` through a local `replace` (socket transport, wire types, the transcript layout).
+The interactive ZDX chat in Go with Bubble Tea v2 (`zdx-go tui`). Part of the one Go module `apps/go.mod`, not part of the Cargo workspace: Rust builds never need Go, and the module never needs cargo. It imports `apps/shared` (socket transport, wire types, the transcript layout).
 
 ## Running it
 
-- Bare `zdx` on a terminal execs `$ZDX_TUI` (absolute) or `~/.local/bin/zdx-tui` as `zdx-tui --root ROOT [--thread ID] [--model SPEC]`, with `ZDX_HOME` and `ZDX_BIN` set (`crates/zdx-cli/src/cli/commands/chat.rs`, the `GoProgram` contract shared with `zdx bot` and `zdx monitor`). `zdx threads resume [ID]` passes that thread. Never a PATH lookup.
-- `just run [ARGS]` builds it and runs `zdx` from this checkout with it; `just tui [ARGS]` runs the built binary directly; `just tui-install` installs it; `just deploy` and `just safe-deploy` install it with the rest.
+- Bare `zdx` on a terminal execs `$ZDX_GO` (absolute) or `~/.local/bin/zdx-go` as `zdx-go tui --root ROOT [--thread ID] [--model SPEC]`, with `ZDX_HOME` and `ZDX_BIN` set (`crates/zdx-cli/src/cli/commands/chat.rs`, the `GoProgram` contract shared with `zdx bot` and `zdx monitor`). `zdx threads resume [ID]` passes that thread. Never a PATH lookup.
+- `just run [ARGS]` builds `apps/bin/zdx-go` (without the Mini App) and runs `zdx` from this checkout with it; `just tui [ARGS]` runs `zdx-go tui` directly; `just go-install`, `just deploy`, and `just safe-deploy` install `~/.local/bin/zdx-go`.
 
 ## Boundaries
 
@@ -21,12 +21,12 @@ The interactive ZDX chat in Go with Bubble Tea v2 (`zdx-tui`). An independent Go
 
 ## Layout
 
-- `cmd/zdx-tui`: flags (`--root`, `--zdx-home`, `--zdx`, `--thread`, `--model`), the capability check, `tea.NewProgram`.
+- `cli`: `zdx-go tui` (`Main`): flags (`--root`, `--zdx-home`, `--zdx`, `--thread`, `--model`), the capability check, `tea.NewProgram`.
 - `internal/engine`: the chat's requests and the thread subscription over `apps/shared/socket`.
 - `internal/ui`: `model.go` (state, messages, keys, turns), `live.go` (the running turn as transcript items), `commands.go` (pickers, slash commands, palette), `view.go` (layout), `picker.go`, `voice.go`. The transcript itself is `apps/shared/transcript`, the layout the monitor uses.
 
 ## Checks
 
-From `apps/tui`: `gofmt -l .`, `go vet ./...`, `go test -race ./...` (`just tui-check`). Tests use fakes only (a fake socket in `internal/engine`, a fake backend in `internal/ui`); every package calls `apps/shared/sandbox.Main`. Create sockets under `os.MkdirTemp("", ...)`: macOS limits socket paths to 104 bytes.
+`just tui-check` (from `apps`: `gofmt -l tui`, `go vet ./tui/...`, `go test -race ./tui/...`). Tests use fakes only (a fake socket in `internal/engine`, a fake backend in `internal/ui`); every package calls `apps/shared/sandbox.Main`. Create sockets under `os.MkdirTemp("", ...)`: macOS limits socket paths to 104 bytes.
 
-Real check (manual): a sandbox `ZDX_HOME` with a config naming an API-key model, `zdx orchestrator serve` from this checkout's build in that home, then `zdx-tui --root DIR` in a terminal or `tmux` (`capture-pane -p` to read the screen).
+Real check (manual): a sandbox `ZDX_HOME` with a config naming an API-key model, `zdx orchestrator serve` from this checkout's build in that home, then `zdx-go tui --root DIR` in a terminal or `tmux` (`capture-pane -p` to read the screen).

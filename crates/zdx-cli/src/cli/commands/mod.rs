@@ -7,6 +7,7 @@ pub mod bot;
 pub mod chat;
 pub mod config;
 pub mod exec;
+pub mod git;
 pub mod go_program;
 pub mod imagine;
 pub mod jobs;

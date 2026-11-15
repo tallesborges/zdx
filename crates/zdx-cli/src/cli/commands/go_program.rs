@@ -1,11 +1,12 @@
-//! Go programs `zdx` runs in its own place (exec): the Telegram gateway
-//! (`zdx bot`), the monitor (`zdx monitor`), the quota reader
-//! (`zdx quota`), and the jobs program (`zdx jobs`). All get the same
-//! contract:
-//! an absolute override path or the installed copy in `~/.local/bin`, never
-//! a PATH lookup, never this binary; this `ZDX_HOME`; this binary as
-//! `ZDX_BIN` unless already set. Being the same process, the program
-//! receives this process's signals and its exit status is the command's.
+//! `zdx-go`, the one Go binary `zdx` runs in its own place (exec), with the
+//! command first: the Telegram gateway (`zdx bot`), the monitor
+//! (`zdx monitor`), the chat TUI (bare `zdx`), the quota reader
+//! (`zdx quota`), the jobs program (`zdx jobs`), and the Git views
+//! (`zdx git`). All get the same contract: `$ZDX_GO` (an absolute path) or
+//! the installed `~/.local/bin/zdx-go`, never a PATH lookup, never this
+//! binary; this `ZDX_HOME`; this binary as `ZDX_BIN` unless already set.
+//! Being the same process, the program receives this process's signals and
+//! its exit status is the command's.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,48 +15,43 @@ use anyhow::{Context, Result, bail};
 use zdx_engine::config::paths;
 use zdx_engine::service;
 
+/// The binary name.
+pub const NAME: &str = "zdx-go";
+/// Environment variable naming an absolute override path.
+pub const ENV: &str = "ZDX_GO";
+/// The `just` recipe that installs it.
+pub const INSTALL: &str = "go-install";
+
+/// One `zdx-go` command.
 pub struct GoProgram {
-    /// Binary name, e.g. `zdx-gateway`.
-    pub name: &'static str,
-    /// Environment variable naming an absolute override path.
-    pub env: &'static str,
-    /// What the program is, for "… is this zdx binary, not the {role}".
-    pub role: &'static str,
+    /// The `zdx-go` command, e.g. `gateway`.
+    pub command: &'static str,
     /// Why it is needed, for the not-found error.
     pub why: &'static str,
-    /// The `just` recipe that installs it.
-    pub install: &'static str,
 }
 
 impl GoProgram {
-    /// The installed copy: `~/.local/bin/<name>`.
-    pub fn installed(&self) -> PathBuf {
-        service::default_program().with_file_name(self.name)
-    }
-
-    /// `<program> --root ROOT` with `ZDX_HOME` and `ZDX_BIN` set.
+    /// `zdx-go <command> --root ROOT` with `ZDX_HOME` and `ZDX_BIN` set.
     ///
     /// # Errors
     /// When the program is not an absolute path, does not exist, or is this
     /// binary, or a path cannot be resolved.
     pub fn command(&self, root: &Path) -> Result<(Command, PathBuf)> {
-        let program = match std::env::var_os(self.env) {
+        let program = match std::env::var_os(ENV) {
             Some(path) if !path.is_empty() => PathBuf::from(path),
-            _ => self.installed(),
+            _ => service::default_go_program(),
         };
-        let (name, env) = (self.name, self.env);
         if !program.is_absolute() {
             bail!(
-                "{env} must be an absolute path to a {name} binary (got {})",
+                "{ENV} must be an absolute path to a {NAME} binary (got {})",
                 program.display()
             );
         }
         if !program.is_file() {
             bail!(
-                "{name} not found at {}: {}. Build and install it with `just {}`, or set {env} to a {name} binary",
+                "{NAME} not found at {}: {}. Build and install it with `just {INSTALL}`, or set {ENV} to a {NAME} binary",
                 program.display(),
                 self.why,
-                self.install
             );
         }
         let exe = std::env::current_exe()
@@ -66,9 +62,8 @@ impl GoProgram {
             .with_context(|| format!("resolve {}", program.display()))?;
         if resolved == exe {
             bail!(
-                "{} is this zdx binary, not the {}; set {env} to a {name} binary",
+                "{} is this zdx binary, not {NAME}; set {ENV} to a {NAME} binary",
                 program.display(),
-                self.role
             );
         }
         let root = root
@@ -77,6 +72,7 @@ impl GoProgram {
 
         let mut command = Command::new(&program);
         command
+            .arg(self.command)
             .arg("--root")
             .arg(&root)
             .env("ZDX_HOME", paths::zdx_home());

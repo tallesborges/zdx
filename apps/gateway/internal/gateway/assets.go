@@ -25,7 +25,7 @@ func MiniAppAssets(dir string) (fs.FS, error) {
 	default:
 		assets = webdist.FS()
 		if assets == nil {
-			return nil, errors.New("this build embeds no Mini App: build it with apps/gateway/build.sh, or pass --web-dist <apps/web/dist>")
+			return nil, errors.New("this build embeds no Mini App: build it with apps/build.sh, or pass --web-dist <apps/web/dist>")
 		}
 	}
 	info, err := fs.Stat(assets, "index.html")

@@ -12,15 +12,15 @@ import (
 // TestRealZdxShapes runs a prebuilt zdx (ZDX_MONITOR_TEST_ZDX, never built
 // here) in the sandbox home, with no service running there, and decodes
 // every surface the monitor reads through the CLI: views via `zdx views`,
-// service status, and daemon jobs (which `zdx` runs with the prebuilt jobs
-// program ZDX_MONITOR_TEST_JOBS). It checks that the Go types match what the
+// service status, and daemon jobs (which `zdx` runs with the prebuilt
+// zdx-go, ZDX_MONITOR_TEST_GO). It checks that the Go types match what the
 // programs write.
 func TestRealZdxShapes(t *testing.T) {
-	bin, jobsBin := os.Getenv("ZDX_MONITOR_TEST_ZDX"), os.Getenv("ZDX_MONITOR_TEST_JOBS")
-	if bin == "" || jobsBin == "" {
-		t.Skip("set ZDX_MONITOR_TEST_ZDX to a prebuilt zdx binary and ZDX_MONITOR_TEST_JOBS to a prebuilt zdx-jobs")
+	bin, goBin := os.Getenv("ZDX_MONITOR_TEST_ZDX"), os.Getenv("ZDX_MONITOR_TEST_GO")
+	if bin == "" || goBin == "" {
+		t.Skip("set ZDX_MONITOR_TEST_ZDX to a prebuilt zdx binary and ZDX_MONITOR_TEST_GO to a prebuilt zdx-go")
 	}
-	t.Setenv("ZDX_JOBS", jobsBin)
+	t.Setenv("ZDX_GO", goBin)
 	home := os.Getenv("ZDX_HOME")
 	root := tempDir(t, "r")
 	if err := os.MkdirAll(filepath.Join(home, "jobs"), 0o700); err != nil {

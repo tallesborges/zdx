@@ -1,15 +1,15 @@
-// Command zdx-jobs is the jobs program: every `zdx jobs` subcommand except
-// `history` (and the internal `attempt` and `resolve`) execs it
-// (crates/zdx-cli/src/cli/commands/go_program.rs). It owns job files, the
+// Package cli is `zdx-go jobs`, the jobs program: every `zdx jobs`
+// subcommand except `history` (and the internal `attempt` and `resolve`)
+// execs it (crates/zdx-cli/src/cli/commands/go_program.rs). It owns job files, the
 // scheduler, and run bookkeeping (package jobs); it runs Rust `zdx` for
 // each attempt's agent and for settings resolution.
 //
-// Usage: zdx-jobs [--root ROOT] [--system-prompt TEXT] [--no-thread]
+// Usage: zdx-go jobs [--root ROOT] [--system-prompt TEXT] [--no-thread]
 // [--thread ID] [--zdx PATH] <list|validate|daemon|runs|set-model|run> ARGS
 //
 // The ZDX home is $ZDX_HOME, else ~/.zdx. Rust is --zdx, else $ZDX_BIN,
 // else `zdx` on PATH.
-package main
+package cli
 
 import (
 	"context"
@@ -32,8 +32,9 @@ import (
 	"github.com/tallesborges/zdx/apps/shared/jobs"
 )
 
-func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+// Main runs `zdx-go jobs ARGS` and returns the exit code.
+func Main(args []string) int {
+	return run(args, os.Stdout, os.Stderr)
 }
 
 // globals are the flags before the subcommand, the global flags of `zdx`
@@ -68,16 +69,16 @@ type app struct {
 func run(args []string, stdout, stderr io.Writer) int {
 	g, rest, err := parseGlobals(args)
 	if err != nil {
-		fmt.Fprintln(stderr, "zdx-jobs:", err)
+		fmt.Fprintln(stderr, "zdx-go jobs:", err)
 		return 2
 	}
 	if len(rest) == 0 {
-		fmt.Fprintln(stderr, "zdx-jobs: missing subcommand (list, validate, daemon, runs, set-model, run)")
+		fmt.Fprintln(stderr, "zdx-go jobs: missing subcommand (list, validate, daemon, runs, set-model, run)")
 		return 2
 	}
 	home, err := zdxHome()
 	if err != nil {
-		fmt.Fprintln(stderr, "zdx-jobs:", err)
+		fmt.Fprintln(stderr, "zdx-go jobs:", err)
 		return 1
 	}
 	a := &app{g: g, home: jobs.Home{Dir: home}, stdout: stdout, stderr: stderr,
@@ -89,7 +90,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	cmd, ok := commands[sub]
 	if !ok {
-		fmt.Fprintf(stderr, "zdx-jobs: unknown subcommand %q\n", sub)
+		fmt.Fprintf(stderr, "zdx-go jobs: unknown subcommand %q\n", sub)
 		return 2
 	}
 	err = cmd(subArgs)
@@ -99,7 +100,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case err == nil:
 		return 0
 	case errors.As(err, &usage):
-		fmt.Fprintln(stderr, "zdx-jobs:", err)
+		fmt.Fprintln(stderr, "zdx-go jobs:", err)
 		return 2
 	case errors.As(err, &busy):
 		fmt.Fprintln(stderr, err)
@@ -766,7 +767,7 @@ func (a *app) daemon(args []string) error {
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("locate the zdx-jobs binary: %w", err)
+		return fmt.Errorf("locate the zdx-go binary: %w", err)
 	}
 	configDir, err := os.Getwd()
 	if err != nil {
@@ -778,7 +779,8 @@ func (a *app) daemon(args []string) error {
 	}
 	defer files.Release()
 
-	child := a.g.childArgs()
+	// A run child is this binary's jobs command: `zdx-go jobs [globals] run …`.
+	child := append([]string{"jobs"}, a.g.childArgs()...)
 	if a.g.zdx != "" {
 		child = append(child, "--zdx", a.g.zdx)
 	}

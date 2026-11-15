@@ -77,7 +77,7 @@ impl Service {
     fn cli_args(self, root: &Path) -> Vec<String> {
         let root = root.to_string_lossy().to_string();
         match self {
-            Self::Bot => vec!["--root".into(), root, "bot".into()],
+            Self::Bot => vec!["gateway".into(), "--root".into(), root, "bot".into()],
             Self::Daemon => vec!["--root".into(), root, "jobs".into(), "daemon".into()],
             Self::Orchestrator => {
                 vec!["--root".into(), root, "orchestrator".into(), "serve".into()]
@@ -195,17 +195,20 @@ pub fn default_program() -> PathBuf {
         .join("zdx")
 }
 
-/// The stable gateway binary the bot service runs and `zdx bot` starts:
-/// `~/.local/bin/zdx-gateway` (the `just gateway-install` target).
-pub fn default_gateway_program() -> PathBuf {
-    default_program().with_file_name("zdx-gateway")
+/// The stable Go binary: `~/.local/bin/zdx-go` (the `just go-install`
+/// target). The bot service runs its `gateway` command; `zdx` execs it for
+/// `zdx bot`, the chat TUI, `zdx monitor`, `zdx quota`, `zdx jobs`, and
+/// `zdx git`.
+pub fn default_go_program() -> PathBuf {
+    default_program().with_file_name("zdx-go")
 }
 
-/// The program `service` runs when none is given: the Go gateway for the
-/// bot, the installed `zdx` for the daemon and the orchestrator.
+/// The program `service` runs when none is given: `zdx-go` for the bot
+/// (as `zdx-go gateway`), the installed `zdx` for the daemon and the
+/// orchestrator.
 pub fn default_program_for(service: Service) -> PathBuf {
     match service {
-        Service::Bot => default_gateway_program(),
+        Service::Bot => default_go_program(),
         Service::Daemon | Service::Orchestrator => default_program(),
     }
 }
@@ -293,6 +296,8 @@ pub struct InstalledLaunch {
     pub working_directory: PathBuf,
     /// `ZDX_HOME` set for the service, if any.
     pub zdx_home: Option<PathBuf>,
+    /// The service command's arguments after the program.
+    pub args: Vec<String>,
 }
 
 /// Reads the installed plist of `service`. `None` when it is not installed.
@@ -335,7 +340,56 @@ pub fn parse_launch(plist: &str) -> Result<InstalledLaunch> {
         root: PathBuf::from(root),
         working_directory: PathBuf::from(working_directory),
         zdx_home: zdx_home.map(PathBuf::from),
+        args: words.iter().skip(1).cloned().collect(),
     })
+}
+
+impl InstalledLaunch {
+    /// Whether the command arguments are not the ones `install` writes now.
+    /// They change only with the program's contract, as when the bot moved
+    /// from `zdx-gateway --root ROOT bot` to `zdx-go gateway --root ROOT
+    /// bot`; launchd keeps running the loaded command until the service is
+    /// installed again. The program path is not compared: `install
+    /// --program` may have set another one.
+    #[must_use]
+    pub fn is_outdated(&self, service: Service) -> bool {
+        self.args != service.cli_args(&self.root)
+    }
+}
+
+/// The root of an installed service whose definition
+/// [`InstalledLaunch::is_outdated`], or `None` when it is current or not
+/// installed.
+///
+/// # Errors
+/// When the installed plist cannot be read or parsed.
+pub fn outdated_definition(service: Service) -> Result<Option<PathBuf>> {
+    let Some(launch) = installed_launch(service).transpose()? else {
+        return Ok(None);
+    };
+    Ok(launch.is_outdated(service).then_some(launch.root))
+}
+
+/// Installs `service` again with its default program and installed root,
+/// for an [`outdated_definition`]. The caller has checked that nothing
+/// would be lost.
+fn reinstall(service: Service, root: &Path) -> Result<String> {
+    if let Some(Ok(InstalledLaunch {
+        zdx_home: Some(home),
+        ..
+    })) = installed_launch(service)
+        && home != paths::zdx_home()
+    {
+        bail!(
+            "{service} runs with ZDX_HOME {}, not {}; restart it from that home",
+            home.display(),
+            paths::zdx_home().display()
+        );
+    }
+    install(service, &default_program_for(service), root)?;
+    Ok(format!(
+        "Restarted {service} with its updated service definition"
+    ))
 }
 
 fn plist_strings(plist: &str) -> Vec<String> {
@@ -455,8 +509,8 @@ pub fn install(service: Service, program: &Path, root: &Path) -> Result<String> 
 }
 
 /// Checks that `program` can run `service`, before anything is changed: it
-/// must exist, and the bot service runs the gateway, never `zdx` (which has
-/// no bot of its own).
+/// must exist, and the bot service runs `zdx-go gateway`, never `zdx`
+/// (which has no bot of its own).
 ///
 /// # Errors
 /// Returns an error naming the build step when the program is missing, or
@@ -464,13 +518,13 @@ pub fn install(service: Service, program: &Path, root: &Path) -> Result<String> 
 pub fn check_program(service: Service, program: &Path) -> Result<()> {
     if service == Service::Bot && program.file_name().is_some_and(|name| name == "zdx") {
         bail!(
-            "the bot service runs the Go gateway, not zdx ({}); install it with `just gateway-install` or pass --program <zdx-gateway>",
+            "the bot service runs the Go gateway, not zdx ({}); install zdx-go with `just go-install` or pass --program <zdx-go>",
             program.display()
         );
     }
     if !program.is_file() {
         let step = if service == Service::Bot {
-            "just gateway-install"
+            "just go-install"
         } else {
             "just install"
         };
@@ -495,7 +549,7 @@ struct PreflightReport {
     warnings: Vec<String>,
 }
 
-/// Runs `<program> preflight --root <root> --json` before the gateway
+/// Runs `<program> gateway preflight --root <root> --json` before the gateway
 /// replaces the bot service. Read-only by contract. The
 /// install goes on only when it exits 0 and reports `"ready": true`;
 /// returns its warnings.
@@ -508,7 +562,7 @@ fn preflight(program: &Path, root: &Path) -> Result<Vec<String>> {
     use std::process::Stdio;
 
     let mut child = Command::new(program)
-        .args(["preflight", "--root"])
+        .args(["gateway", "preflight", "--root"])
         .arg(root)
         .arg("--json")
         // The same engine path and PATH launchd will give it (`render_plist`).
@@ -778,6 +832,9 @@ fn in_flight_summary(
 
 fn restart_unchecked(service: Service) -> Result<String> {
     require_installed(service)?;
+    if let Some(root) = outdated_definition(service)? {
+        return reinstall(service, &root);
+    }
     // A stale/missing PID file does not mean launchd dropped the job, and
     // bootstrapping a job the domain still holds fails with `5: Input/output error`.
     if !is_loaded(service) {
@@ -1029,8 +1086,18 @@ pub fn run_queued_restart() -> QueuedRestartRun {
     } else {
         format!("🔄 {}.\n", restarted.join(", "))
     };
-    let restart_bot = request.includes(Service::Bot);
-    let message = if restart_bot {
+    let mut restart_bot = request.includes(Service::Bot);
+    // The bot restarts by exiting, and launchd starts the command it
+    // loaded: an outdated one needs a restart from outside the bot.
+    let outdated_bot = restart_bot && matches!(outdated_definition(Service::Bot), Ok(Some(_)));
+    if outdated_bot {
+        restart_bot = false;
+    }
+    let message = if outdated_bot {
+        format!(
+            "{prefix}⚠️ Queued restart: the bot service definition changed, so the bot cannot restart itself onto it. Run `zdx service restart bot` to apply it."
+        )
+    } else if restart_bot {
         format!(
             "{prefix}👋 Queued restart: no agent run is active, exiting bot… launchd will restart it shortly."
         )
@@ -1221,7 +1288,7 @@ mod tests {
         let _home = crate::test_support::temp_zdx_home();
         let plist = render_plist(
             Service::Bot,
-            Path::new("/Users/x/.local/bin/zdx-gateway"),
+            Path::new("/Users/x/.local/bin/zdx-go"),
             Path::new("/Users/x/projects/zdx"),
         );
         assert!(plist.contains("<key>Label</key>"));
@@ -1229,7 +1296,7 @@ mod tests {
         assert!(plist.contains("<string>/bin/zsh</string>"));
         assert!(plist.contains("<string>-c</string>"));
         assert!(plist.contains(
-            "<string>exec '/Users/x/.local/bin/zdx-gateway' '--root' '/Users/x/projects/zdx' 'bot'</string>"
+            "<string>exec '/Users/x/.local/bin/zdx-go' 'gateway' '--root' '/Users/x/projects/zdx' 'bot'</string>"
         ));
         assert!(plist.contains("<key>KeepAlive</key>"));
         assert!(plist.contains("<key>ThrottleInterval</key>"));
@@ -1248,17 +1315,14 @@ mod tests {
     fn the_bot_runs_the_gateway_and_never_zdx() {
         assert_eq!(
             default_program_for(Service::Bot).file_name().unwrap(),
-            "zdx-gateway"
+            "zdx-go"
         );
         assert_eq!(default_program_for(Service::Daemon), default_program());
         assert_eq!(
             default_program_for(Service::Orchestrator),
             default_program()
         );
-        assert_eq!(
-            default_gateway_program().parent(),
-            default_program().parent()
-        );
+        assert_eq!(default_go_program().parent(), default_program().parent());
 
         let dir = tempfile::tempdir().unwrap();
         let zdx = dir.path().join("zdx");
@@ -1267,11 +1331,11 @@ mod tests {
         assert!(refused.contains("runs the Go gateway"), "{refused}");
         check_program(Service::Daemon, &zdx).unwrap();
 
-        let missing = dir.path().join("zdx-gateway");
+        let missing = dir.path().join("zdx-go");
         let refused = check_program(Service::Bot, &missing)
             .unwrap_err()
             .to_string();
-        assert!(refused.contains("just gateway-install"), "{refused}");
+        assert!(refused.contains("just go-install"), "{refused}");
         std::fs::write(&missing, "").unwrap();
         check_program(Service::Bot, &missing).unwrap();
     }
@@ -1328,6 +1392,28 @@ mod tests {
         assert_eq!(launch.zdx_home, Some(paths::zdx_home()));
 
         assert!(parse_launch("<plist></plist>").is_err());
+    }
+
+    #[test]
+    fn a_service_command_with_other_arguments_is_outdated() {
+        // The plist embeds ZDX_HOME, which other tests change.
+        let _home = crate::test_support::temp_zdx_home();
+        let root = Path::new("/Users/x/projects/zdx");
+        let current = render_plist(Service::Bot, Path::new("/Users/x/.local/bin/zdx-go"), root);
+        let launch = parse_launch(&current).unwrap();
+        assert!(!launch.is_outdated(Service::Bot), "{launch:?}");
+        // Another program path with the same arguments (`install --program`).
+        let other = render_plist(Service::Bot, Path::new("/tmp/build/zdx-go"), root);
+        assert!(!parse_launch(&other).unwrap().is_outdated(Service::Bot));
+        // The bot plist before zdx-go: `zdx-gateway --root ROOT bot`.
+        let legacy = current.replace(
+            "exec '/Users/x/.local/bin/zdx-go' 'gateway' '--root'",
+            "exec '/Users/x/.local/bin/zdx-gateway' '--root'",
+        );
+        assert_ne!(legacy, current);
+        assert!(parse_launch(&legacy).unwrap().is_outdated(Service::Bot));
+        let daemon = render_plist(Service::Daemon, Path::new("/Users/x/.local/bin/zdx"), root);
+        assert!(!parse_launch(&daemon).unwrap().is_outdated(Service::Daemon));
     }
 
     #[test]

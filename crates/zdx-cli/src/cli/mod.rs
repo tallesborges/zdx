@@ -91,13 +91,13 @@ impl From<&ThreadArgs> for ThreadPersistenceOptions {
 #[derive(clap::Subcommand)]
 enum Commands {
     /// Run or configure the global Telegram bot (running it starts the Go
-    /// gateway, `~/.local/bin/zdx-gateway` or `$ZDX_GATEWAY`)
+    /// gateway, `zdx-go gateway`)
     #[command(args_conflicts_with_subcommands = true)]
     Bot {
         #[command(subcommand)]
         command: Option<BotCommands>,
 
-        /// Extra arguments for `zdx-gateway --root ROOT bot` (after `--`),
+        /// Extra arguments for `zdx-go gateway --root ROOT bot` (after `--`),
         /// for example `-- --web-dist apps/web/dist`
         #[arg(last = true, value_name = "GATEWAY_ARGS")]
         gateway_args: Vec<String>,
@@ -441,13 +441,19 @@ enum Commands {
     },
 
     /// Read-only dashboard: agents, threads, services, jobs, usage, logs,
-    /// config (starts the Go monitor, `~/.local/bin/zdx-monitor` or
-    /// `$ZDX_MONITOR`)
+    /// config (starts the Go monitor, `zdx-go monitor`)
     Monitor {
-        /// Extra arguments for `zdx-monitor --root ROOT` (after `--`), for
+        /// Extra arguments for `zdx-go monitor --root ROOT` (after `--`), for
         /// example `-- --cli-fallback`
         #[arg(last = true, value_name = "MONITOR_ARGS")]
         monitor_args: Vec<String>,
+    },
+
+    /// Git views of a repository as JSON, the bodies of the Mini App Git
+    /// routes (starts `zdx-go git`)
+    Git {
+        #[command(subcommand)]
+        command: GitCommands,
     },
 
     /// Manage git worktrees
@@ -620,6 +626,46 @@ enum BgCommands {
 }
 
 #[derive(clap::Subcommand)]
+enum GitCommands {
+    /// Branch state, uncommitted files, worktrees, and recent commits
+    Status {
+        #[command(flatten)]
+        thread: GitThread,
+    },
+    /// Files a history scope touches: `all` (the branch since the main
+    /// branch, plus uncommitted and untracked files) or one commit
+    Scope {
+        #[command(flatten)]
+        thread: GitThread,
+        /// `all` or a commit hash (7-40 hex characters)
+        #[arg(value_name = "SCOPE", default_value = "all")]
+        scope: String,
+    },
+    /// One file's diff (at most 256 KiB)
+    Diff {
+        #[command(flatten)]
+        thread: GitThread,
+        /// staged, unstaged, untracked, all, or commit (with --commit)
+        #[arg(long, value_name = "KIND")]
+        kind: String,
+        /// The commit of a `commit` diff
+        #[arg(long, value_name = "HASH")]
+        commit: Option<String>,
+        /// Repository-relative path
+        #[arg(value_name = "PATH")]
+        path: String,
+    },
+}
+
+#[derive(clap::Args)]
+struct GitThread {
+    /// Use this thread's stored root (`active`: the latest Telegram
+    /// thread); --root is the fallback (default: the repository at --root)
+    #[arg(long, value_name = "ID")]
+    thread: Option<String>,
+}
+
+#[derive(clap::Subcommand)]
 enum ServiceCommands {
     /// Write the launchd plists and start the services
     Install {
@@ -628,7 +674,7 @@ enum ServiceCommands {
         target: String,
 
         /// Binary launchd should run, for a single service (default:
-        /// ~/.local/bin/zdx-gateway for the bot, ~/.local/bin/zdx otherwise)
+        /// ~/.local/bin/zdx-go for the bot, ~/.local/bin/zdx otherwise)
         #[arg(long, value_name = "PATH")]
         program: Option<std::path::PathBuf>,
     },
@@ -1039,7 +1085,7 @@ enum JobCommands {
         #[arg(long)]
         keep: bool,
     },
-    /// Internal: run one attempt's agent for the jobs program (`zdx-jobs`),
+    /// Internal: run one attempt's agent for the jobs program (`zdx-go jobs`),
     /// with the job on stdin
     #[command(hide = true)]
     Attempt {
@@ -1052,7 +1098,7 @@ enum JobCommands {
         lock_fd: Option<i32>,
     },
     /// Internal: resolve the settings of the jobs on stdin for the jobs
-    /// program (`zdx-jobs`)
+    /// program (`zdx-go jobs`)
     #[command(hide = true)]
     Resolve {
         /// Resolve the way the scheduled daemon does
@@ -1849,6 +1895,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
         ),
         Commands::Models { command } => dispatch_models(command, context).await,
         Commands::Monitor { monitor_args } => dispatch_monitor(&monitor_args, context),
+        Commands::Git { command } => dispatch_git(command, context),
         Commands::Telegram { command } => dispatch_telegram(command, context).await,
         Commands::Helper { file } => commands::telegram::helper(&file).await,
         Commands::Views { file } => {
@@ -2343,6 +2390,31 @@ async fn dispatch_telegram(command: TelegramCommands, context: &DispatchContext<
 fn dispatch_monitor(args: &[String], context: &DispatchContext<'_>) -> Result<()> {
     let root_path = resolve_root(context.root, context.worktree_id)?;
     commands::monitor::run(&root_path, args)
+}
+
+fn dispatch_git(command: GitCommands, context: &DispatchContext<'_>) -> Result<()> {
+    let root_path = resolve_root(context.root, context.worktree_id)?;
+    let (thread, mut args): (GitThread, Vec<OsString>) = match command {
+        GitCommands::Status { thread } => (thread, vec!["status".into()]),
+        GitCommands::Scope { thread, scope } => (thread, vec!["scope".into(), scope.into()]),
+        GitCommands::Diff {
+            thread,
+            kind,
+            commit,
+            path,
+        } => {
+            let mut args: Vec<OsString> = vec!["diff".into(), "--kind".into(), kind.into()];
+            if let Some(commit) = commit {
+                args.extend(["--commit".into(), commit.into()]);
+            }
+            args.extend(["--".into(), path.into()]);
+            (thread, args)
+        }
+    };
+    if let Some(id) = thread.thread {
+        args.splice(1..1, ["--thread".into(), id.into()]);
+    }
+    commands::git::run(&root_path, args)
 }
 
 fn dispatch_worktree(command: WorktreeCommands, context: &DispatchContext<'_>) -> Result<()> {

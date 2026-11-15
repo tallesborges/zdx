@@ -1,7 +1,7 @@
 //! The Rust side of jobs (docs/SPEC.md §8 Jobs): one attempt's agent
 //! (`zdx jobs attempt`), settings resolution (`zdx jobs resolve`), and
 //! `zdx jobs history`. Every other `zdx jobs` subcommand is the Go jobs
-//! program (`zdx-jobs`, `apps/shared/cmd/zdx-jobs`), which owns job files,
+//! program (`zdx-go jobs`, `apps/shared/jobs/cli`), which owns job files,
 //! the scheduler, and run bookkeeping, and runs these commands.
 
 use std::ffi::OsString;
@@ -22,13 +22,10 @@ use super::exec;
 use super::go_program::{self, GoProgram};
 
 /// The Go jobs program every other `zdx jobs` subcommand runs:
-/// `$ZDX_JOBS` (absolute) or the installed `~/.local/bin/zdx-jobs`.
+/// `zdx-go jobs`.
 pub const JOBS: GoProgram = GoProgram {
-    name: "zdx-jobs",
-    env: "ZDX_JOBS",
-    role: "jobs program",
+    command: "jobs",
     why: "`zdx jobs` runs the Go jobs program",
-    install: "jobs-install",
 };
 
 /// Global flags the jobs program receives.
@@ -39,7 +36,7 @@ pub struct Delegated<'a> {
     pub thread: Option<&'a str>,
 }
 
-/// Replaces this process with `zdx-jobs --root ROOT [globals] ARGS` (see
+/// Replaces this process with `zdx-go jobs --root ROOT [globals] ARGS` (see
 /// `go_program` for the environment and the checks).
 ///
 /// # Errors

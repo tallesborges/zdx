@@ -1,4 +1,4 @@
-//! `zdx quota`: the Go quota reader (`apps/shared/cmd/zdx-quota`).
+//! `zdx quota`: the Go quota reader (`zdx-go quota`, `apps/shared/quota/cli`).
 //!
 //! The quota implementation lives in the shared Go module, so the CLI, the
 //! Mini App, and the monitor read quotas the same way. This command only
@@ -11,18 +11,14 @@ use anyhow::Result;
 
 use super::go_program::{self, GoProgram};
 
-/// The Go quota reader `zdx quota` starts: `$ZDX_QUOTA` (absolute) or the
-/// installed `~/.local/bin/zdx-quota`.
+/// The Go quota reader `zdx quota` starts: `zdx-go quota`.
 pub const QUOTA: GoProgram = GoProgram {
-    name: "zdx-quota",
-    env: "ZDX_QUOTA",
-    role: "quota reader",
+    command: "quota",
     why: "`zdx quota` runs the Go quota reader",
-    install: "quota-install",
 };
 
 /// `zdx quota [--json]`: replaces this process with the Go quota reader, as
-/// `<zdx-quota> --root ROOT --zdx-version VERSION [--json]`. The version is
+/// `zdx-go quota --root ROOT --zdx-version VERSION [--json]`. The version is
 /// this binary's, sent as the `zdx/<version>` user agent where the
 /// providers expect it.
 ///

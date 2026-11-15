@@ -1,8 +1,8 @@
-// Command zdx-tui is the interactive ZDX chat in the terminal. Every turn
+// Package cli is `zdx-go tui`, the interactive ZDX chat in the terminal. Every turn
 // runs in the orchestrator service: this program composes messages, sends
 // them over the service socket, and streams each turn's events. It reads
 // and writes no thread, index, config, or credential file itself.
-package main
+package cli
 
 import (
 	"context"
@@ -22,7 +22,7 @@ import (
 	"github.com/tallesborges/zdx/apps/tui/internal/ui"
 )
 
-const usage = `Usage: zdx-tui [--root DIR] [--zdx-home DIR] [--zdx PATH] [--thread ID] [--model SPEC]
+const usage = `Usage: zdx-go tui [--root DIR] [--zdx-home DIR] [--zdx PATH] [--thread ID] [--model SPEC]
 
 Interactive ZDX chat (Bubble Tea). Turns run in the orchestrator service
 (zdx service start orchestrator).
@@ -41,7 +41,7 @@ type options struct {
 }
 
 func parseArgs(args []string, getenv func(string) string, lookPath func(string) (string, error), stderr io.Writer) (options, error) {
-	fs := flag.NewFlagSet("zdx-tui", flag.ContinueOnError)
+	fs := flag.NewFlagSet("zdx-go tui", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 	var o options
@@ -86,19 +86,21 @@ func parseArgs(args []string, getenv func(string) string, lookPath func(string) 
 	return o, nil
 }
 
-func main() {
-	o, err := parseArgs(os.Args[1:], os.Getenv, exec.LookPath, os.Stderr)
+// Main runs `zdx-go tui ARGS` and returns the exit code.
+func Main(args []string) int {
+	o, err := parseArgs(args, os.Getenv, exec.LookPath, os.Stderr)
 	if errors.Is(err, flag.ErrHelp) {
-		return
+		return 0
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "zdx-tui:", err)
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "zdx-go tui:", err)
+		return 2
 	}
 	if err := run(o); err != nil {
-		fmt.Fprintln(os.Stderr, "zdx-tui:", err)
-		os.Exit(1)
+		fmt.Fprintln(os.Stderr, "zdx-go tui:", err)
+		return 1
 	}
+	return 0
 }
 
 func run(o options) error {

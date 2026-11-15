@@ -177,7 +177,7 @@ var Missing = []string{}
 // a deployment, so they do not block serve; `check` lists them.
 var AcceptanceChecks = []string{
 	"with the real Bot API: a message, a reply with files, a button tap and a Mini App open through the gateway",
-	"under launchd (`zdx service install bot --program <zdx-gateway>`): start, /restart, a queued restart (exit 42 and back), and stop-old/start-new from the Rust bot with no update lost",
+	"under launchd (`zdx service install bot`): start, /restart, a queued restart (exit 42 and back), and stop-old/start-new from the Rust bot with no update lost",
 }
 
 // Config is one gateway process.

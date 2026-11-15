@@ -28,10 +28,10 @@ The released Linux binary needs glibc 2.35 or newer and OpenSSL 3 (`libssl3`).
 
 ### Run
 
-The interactive chat is a separate Go binary, `zdx-tui` (`apps/tui`). Its turns run in the orchestrator service, so start that first. Build the TUI with Go installed:
+The chat TUI, the Telegram bot, and the monitor live in one Go binary, `zdx-go` (`apps/`); `zdx` starts them. Build it with Go and `bun` installed (`bun` builds the Mini App it embeds). Chat turns run in the orchestrator service, so start that first:
 
 ```bash
-just tui-install                    # builds ~/.local/bin/zdx-tui
+just go-install                     # builds ~/.local/bin/zdx-go
 zdx service start orchestrator      # or: zdx orchestrator serve
 zdx                                 # chat in the current directory
 ```
@@ -44,10 +44,7 @@ zdx exec -p "hello"
 
 ### Telegram bot
 
-The bot is a separate Go binary, `zdx-gateway` (`apps/gateway`). Build it with Go and `bun` installed, then start it through `zdx`:
-
 ```bash
-just gateway-install   # builds ~/.local/bin/zdx-gateway with the Mini App embedded
 zdx bot
 ```
 
@@ -55,10 +52,7 @@ zdx bot
 
 ### Monitor
 
-The monitor is a separate Go binary, `zdx-monitor` (`apps/monitor`). Build it with Go installed, then start it through `zdx`:
-
 ```bash
-just monitor-install   # builds ~/.local/bin/zdx-monitor
 zdx monitor
 ```
 

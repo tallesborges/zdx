@@ -1,10 +1,10 @@
 //! `zdx jobs` starts the Go jobs program in its own place (exec), except for
 //! `history` and the internal `attempt` and `resolve`. The program gets
-//! `--root ROOT`, the global `--system-prompt`, `--no-thread`, and
+//! `jobs --root ROOT`, the global `--system-prompt`, `--no-thread`, and
 //! `--thread`, then the subcommand and its flags; this `ZDX_HOME`; and this
 //! binary as `ZDX_BIN`. Its exit status is the command's. These tests use a
-//! fake program; the opt-in test at the end runs a built `zdx-jobs` named by
-//! `ZDX_JOBS_TEST_BIN` against a mock provider.
+//! fake program; the opt-in test at the end runs a built `zdx-go` named by
+//! `ZDX_GO_TEST_BIN` against a mock provider.
 
 #![cfg(unix)]
 
@@ -58,7 +58,7 @@ fn zdx_jobs(sb: &Sandbox, program: Option<&Path>, globals: &[&str], args: &[&str
         .args(args)
         .stdin(Stdio::null());
     if let Some(program) = program {
-        cmd.env("ZDX_JOBS", program);
+        cmd.env("ZDX_GO", program);
     }
     cmd
 }
@@ -126,7 +126,7 @@ fn test_jobs_subcommands_exec_the_go_program_with_their_flags() {
             .status()
             .unwrap();
         assert!(status.success(), "{args:?}");
-        let mut want = vec!["--root".to_string(), root.clone()];
+        let mut want = vec!["jobs".to_string(), "--root".to_string(), root.clone()];
         let mut rest = globals.iter();
         while let Some(flag) = rest.next() {
             want.push((*flag).to_string());
@@ -164,10 +164,10 @@ fn test_jobs_fail_closed_without_a_usable_program() {
     let output = zdx_jobs(&sb, None, &[], &["list"]).output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("zdx-jobs not found"), "{stderr}");
-    assert!(stderr.contains("just jobs-install"), "{stderr}");
+    assert!(stderr.contains("zdx-go not found"), "{stderr}");
+    assert!(stderr.contains("just go-install"), "{stderr}");
 
-    let relative = zdx_jobs(&sb, Some(Path::new("zdx-jobs")), &[], &["list"])
+    let relative = zdx_jobs(&sb, Some(Path::new("zdx-go")), &[], &["list"])
         .output()
         .unwrap();
     assert!(String::from_utf8_lossy(&relative.stderr).contains("must be an absolute path"));
@@ -187,13 +187,13 @@ fn test_jobs_history_stays_in_rust() {
     assert!(!sb.out.exists(), "history does not run the jobs program");
 }
 
-/// Opt-in: with `ZDX_JOBS_TEST_BIN` naming a built `zdx-jobs`, a manual run
+/// Opt-in: with `ZDX_GO_TEST_BIN` naming a built `zdx-go`, a manual run
 /// of a once job goes through the Go bookkeeping and the Rust attempt: it
 /// consumes the occurrence, archives the file, and records one attempt.
 #[tokio::test]
 async fn test_real_jobs_program_runs_a_once_job_through_rust() {
-    let Some(bin) = std::env::var_os("ZDX_JOBS_TEST_BIN").filter(|bin| !bin.is_empty()) else {
-        eprintln!("skipped: ZDX_JOBS_TEST_BIN not set");
+    let Some(bin) = std::env::var_os("ZDX_GO_TEST_BIN").filter(|bin| !bin.is_empty()) else {
+        eprintln!("skipped: ZDX_GO_TEST_BIN not set");
         return;
     };
     let sb = sandbox();
@@ -247,14 +247,14 @@ async fn test_real_jobs_program_runs_a_once_job_through_rust() {
     assert_eq!(record["run_id"], claim["run_id"]);
 }
 
-/// Opt-in: with `ZDX_JOBS_TEST_BIN` naming a built `zdx-jobs`, `zdx jobs
+/// Opt-in: with `ZDX_GO_TEST_BIN` naming a built `zdx-go`, `zdx jobs
 /// daemon` runs the Go scheduler: it runs a due once job through a run child
 /// and a Rust attempt, marks a run that died with the previous daemon as
 /// interrupted, and removes its PID file and context record when stopped.
 #[tokio::test]
 async fn test_real_jobs_daemon_runs_and_recovers_once_jobs() {
-    let Some(bin) = std::env::var_os("ZDX_JOBS_TEST_BIN").filter(|bin| !bin.is_empty()) else {
-        eprintln!("skipped: ZDX_JOBS_TEST_BIN not set");
+    let Some(bin) = std::env::var_os("ZDX_GO_TEST_BIN").filter(|bin| !bin.is_empty()) else {
+        eprintln!("skipped: ZDX_GO_TEST_BIN not set");
         return;
     };
     let sb = sandbox();

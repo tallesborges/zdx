@@ -294,6 +294,31 @@ fn test_run_queued_restart_outcomes() {
     );
     assert!(!queue.exists(), "a done request is cleared");
 
+    // A bot plist from before zdx-go: exiting would restart the old command.
+    let agents = home.join("Library/LaunchAgents");
+    std::fs::create_dir_all(&agents).unwrap();
+    let plist = agents.join("dev.zdx.bot.plist");
+    std::fs::write(
+        &plist,
+        "<plist><dict><key>ProgramArguments</key><array><string>/bin/zsh</string><string>-c</string>\
+         <string>exec '/x/.local/bin/zdx-gateway' '--root' '/r' 'bot'</string></array>\
+         <key>WorkingDirectory</key><string>/r</string></dict></plist>",
+    )
+    .unwrap();
+    write_queue(home, &["bot"], None);
+    let outdated = run_queued(home);
+    assert_eq!(outdated["status"], "done");
+    assert_eq!(outdated["restart_bot"], false, "{outdated}");
+    assert!(
+        outdated["message"]
+            .as_str()
+            .unwrap()
+            .contains("zdx service restart bot"),
+        "{outdated}"
+    );
+    assert!(!queue.exists());
+    std::fs::remove_file(&plist).unwrap();
+
     std::fs::remove_file(home.join("run/bot.supervised")).unwrap();
     write_queue(home, &["bot"], None);
     let dropped = run_queued(home);
@@ -414,7 +439,7 @@ fn test_install_bot_program_requires_a_ready_preflight() {
 
     let dir = tempdir().unwrap();
     let home = dir.path();
-    let program = home.join("gateway-stub");
+    let program = home.join("zdx-go-stub");
     let install = |script: &str| {
         std::fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -446,7 +471,7 @@ fn test_install_bot_program_requires_a_ready_preflight() {
     let garbage = stderr(install("echo hello"));
     assert!(garbage.contains("no valid report"), "{garbage}");
     let args = stderr(install(
-        r#"[ "$1" = preflight ] && [ "$4" = --json ] && [ "${ZDX_BIN##*/}" = zdx ] || exit 3; echo '{"service":"daemon","ready":true}'"#,
+        r#"[ "$1" = gateway ] && [ "$2" = preflight ] && [ "$5" = --json ] && [ "${ZDX_BIN##*/}" = zdx ] || exit 3; echo '{"service":"daemon","ready":true}'"#,
     ));
     assert!(args.contains("not bot"), "{args}");
     assert!(
@@ -456,7 +481,7 @@ fn test_install_bot_program_requires_a_ready_preflight() {
 }
 
 /// The bot service runs the gateway: without `--program` it is
-/// `~/.local/bin/zdx-gateway`, a `zdx` bot program is refused, and
+/// `~/.local/bin/zdx-go`, a `zdx` bot program is refused, and
 /// `--program` names one service only. Every program is checked before any
 /// service is installed, so these refusals write no plist and never reach
 /// launchd.
@@ -480,10 +505,10 @@ fn test_install_checks_every_program_before_installing() {
     };
 
     let all = install(&[]);
-    assert!(all.contains(".local/bin/zdx-gateway not found"), "{all}");
-    assert!(all.contains("just gateway-install"), "{all}");
+    assert!(all.contains(".local/bin/zdx-go not found"), "{all}");
+    assert!(all.contains("just go-install"), "{all}");
     let bot = install(&["bot"]);
-    assert!(bot.contains("just gateway-install"), "{bot}");
+    assert!(bot.contains("just go-install"), "{bot}");
 
     let zdx = home.join("zdx");
     std::fs::write(&zdx, "").unwrap();

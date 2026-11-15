@@ -65,18 +65,15 @@ pub async fn run(
     )
 }
 
-/// The Go chat TUI bare `zdx` starts: `$ZDX_TUI` (absolute) or the installed
-/// `~/.local/bin/zdx-tui`. Its turns run in the orchestrator service.
+/// The Go chat TUI bare `zdx` starts: `zdx-go tui`. Its turns run in the
+/// orchestrator service.
 pub const TUI: GoProgram = GoProgram {
-    name: "zdx-tui",
-    env: "ZDX_TUI",
-    role: "chat TUI",
+    command: "tui",
     why: "the interactive chat is the Go TUI",
-    install: "tui-install",
 };
 
 /// Replaces this process with the Go chat TUI, as
-/// `<tui> --root ROOT [--thread ID] [--model SPEC]`.
+/// `zdx-go tui --root ROOT [--thread ID] [--model SPEC]`.
 ///
 /// # Errors
 /// Returns an error, before anything runs, when the TUI is missing, is not an

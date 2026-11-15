@@ -1,6 +1,6 @@
 # apps/shared
 
-Shared Go module `github.com/tallesborges/zdx/apps/shared` (`go.mod`; Go and toolchain pinned to the same versions as the apps). Public packages that the Go gateway (`apps/gateway`), the Go monitor (`apps/monitor`), the chat TUI (`apps/tui`), `zdx-quota`, and `zdx-jobs` import. It is not part of the Cargo workspace: the Rust build needs no Go. A consumer adds `require github.com/tallesborges/zdx/apps/shared v0.0.0` and `replace github.com/tallesborges/zdx/apps/shared => ../shared` to its `go.mod`; there is no `go.work`.
+Shared packages of the one Go module `github.com/tallesborges/zdx/apps` (`apps/go.mod`; Go and toolchain pinned there), which builds the one Go binary `zdx-go` (`apps/cmd/zdx-go`). The gateway (`apps/gateway`), the monitor (`apps/monitor`), the chat TUI (`apps/tui`), and the `quota`, `jobs`, and `git` commands of `zdx-go` import them. The module is not part of the Cargo workspace: the Rust build needs no Go.
 
 ## Packages
 
@@ -14,9 +14,9 @@ Shared Go module `github.com/tallesborges/zdx/apps/shared` (`go.mod`; Go and too
 - `gitview`: the Mini App Git views (status, scope, diff) the gateway serves in process, on Rust's `thread_root` view. See `gitview/AGENTS.md`.
 - `version`: the zdx version a Go program was built for (`version.Zdx`, set by the linker flag `ldflags.sh` prints from the workspace `Cargo.toml`). `Resolve(explicit)` never guesses: without a flag value or a build value it returns `ErrUnknown`, which says how to build or run with a version.
 - `sandbox`: `TestMain` isolation for this module's tests (fresh `HOME`, `ZDX_HOME`, `TMPDIR`; other `ZDX_` variables and `OPENCODE_API_KEY` dropped; a failing `zdx` on PATH; the run fails when the inherited home's OAuth cache or live-service files changed).
-- `cmd/zdx-quota`: the quota reader `zdx quota [--json]` execs (`crates/zdx-cli/src/cli/commands/quota.rs`, `GoProgram` contract): `--root ROOT --zdx-version VERSION [--json]`. Output is the stdout `zdx quota` printed when it was Rust. It never runs `zdx`.
-
-- `cmd/zdx-jobs`: the jobs program every `zdx jobs` subcommand but `history` execs (`crates/zdx-cli/src/cli/commands/jobs.rs`, `GoProgram` contract): `--root ROOT [--system-prompt TEXT] [--no-thread] [--thread ID] [--zdx PATH] <list|validate|daemon|runs|set-model|run> ARGS`. Output is what the Rust commands printed. Rust is `--zdx`, else `$ZDX_BIN`, else `zdx` on PATH.
+- `quota/cli`: `zdx-go quota`, the quota reader `zdx quota [--json]` execs (`crates/zdx-cli/src/cli/commands/quota.rs`, `GoProgram` contract): `--root ROOT --zdx-version VERSION [--json]`. Output is the stdout `zdx quota` printed when it was Rust. It never runs `zdx`.
+- `jobs/cli`: `zdx-go jobs`, the jobs program every `zdx jobs` subcommand but `history` execs (`crates/zdx-cli/src/cli/commands/jobs.rs`, `GoProgram` contract): `--root ROOT [--system-prompt TEXT] [--no-thread] [--thread ID] [--zdx PATH] <list|validate|daemon|runs|set-model|run> ARGS`. Output is what the Rust commands printed. Rust is `--zdx`, else `$ZDX_BIN`, else `zdx` on PATH. The daemon starts each run as `<this binary> jobs [globals] run …`.
+- `gitview/cli`: `zdx-go git`, which `zdx git status|scope|diff` execs (`crates/zdx-cli/src/cli/commands/git.rs`): `--root ROOT [--zdx PATH] <status|scope|diff> [--thread ID] ARGS`, printing the Mini App route body as JSON. Without `--thread` the repository is the one at `--root`; with it, the `thread_root` view comes from `zdx --root ROOT views` (the running service answers, or zdx builds it), with `--root` as the fallback root.
 
 ## Rules
 
@@ -29,10 +29,8 @@ Shared Go module `github.com/tallesborges/zdx/apps/shared` (`go.mod`; Go and too
 
 ## Build and checks
 
-- `just jobs-build [OUT]` (default `apps/shared/bin/zdx-jobs`), `just jobs-install` (`~/.local/bin/zdx-jobs`, which `zdx jobs` runs; `just deploy` and `just safe-deploy` install it). Deploy it with `zdx`: the Rust commands it runs (`jobs attempt`, `jobs resolve`) and `zdx jobs` delegating to it ship together, and the daemon service runs `zdx jobs daemon`, so the next daemon restart after a deploy starts the Go scheduler.
-- Opt-in Rust check against a built jobs program: `ZDX_JOBS_TEST_BIN=<abs path to zdx-jobs> cargo test -p zdx --test integration jobs_go`.
-- `just shared-check`: `gofmt -l .`, `go vet ./...`, `go test -race ./...` from `apps/shared`. GHA runs the same commands on Linux (`go-shared` job, Go from this `go.mod`'s toolchain line), so keep tests portable.
-- `just quota-build [OUT]` (default `apps/shared/bin/zdx-quota`), `just quota-install` (`~/.local/bin/zdx-quota`, which `zdx quota` runs; `just deploy` and `just safe-deploy` install it), `just quota [ARGS]` (build, then `zdx quota` from this checkout).
-- Deploy together: Rust has no quota view, so an engine (`zdx`) installed without the new gateway, `zdx-quota`, and monitor leaves older installed Go binaries asking for the retired `subscription_quotas` view: their quotas stay `pending`/stale (gateway) or show an error (monitor). `just deploy` / `just safe-deploy` install `zdx`, the gateway, and `zdx-quota` and refresh an installed monitor in one step; use them, not `just install` alone.
-- Every build recipe of a program that reports a version passes `-ldflags "$(apps/shared/ldflags.sh)"`. With `go run`, add the same flag (from `apps/monitor`: `../shared/ldflags.sh`) or pass `--zdx-version`.
-- Opt-in Rust check against a built reader: `ZDX_QUOTA_TEST_BIN=<abs path to zdx-quota> cargo test -p zdx --test integration quota`.
+- `just shared-check`: `gofmt`, `go vet`, and `go test -race` for `./shared/...` and `./cmd/...` from `apps`; `just go-check` runs them for the whole module. GHA vets and builds the whole module and runs these tests on Linux (`go` job, Go from `apps/go.mod`'s toolchain line), so keep tests portable.
+- `just jobs [ARGS]`, `just quota [ARGS]`, `just git [ARGS]`: build `apps/bin/zdx-go` without the Mini App (`apps/build.sh --no-web`), then run the `zdx` command from this checkout with `ZDX_GO` pointing at it.
+- Deploy `zdx-go` with `zdx` (`just deploy` / `just safe-deploy`, never `just install` alone): the Rust commands jobs run (`jobs attempt`, `jobs resolve`) and `zdx jobs` delegating to it ship together, and Rust has no quota view, so a new `zdx` with an older Go binary leaves quotas `pending`/stale (gateway) or failing (monitor). The daemon service runs `zdx jobs daemon`, so its next restart after a deploy runs the new scheduler.
+- Every build passes `-ldflags "$(apps/shared/ldflags.sh)"` (`apps/build.sh` does). With `go run` from `apps`, add `-ldflags "$(shared/ldflags.sh)"` or pass `--zdx-version`.
+- Opt-in Rust checks against a built binary: `ZDX_GO_TEST_BIN=<abs path to zdx-go> cargo test -p zdx --test integration -- jobs_go quota git_go`.

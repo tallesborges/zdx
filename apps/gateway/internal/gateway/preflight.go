@@ -10,7 +10,7 @@ import (
 	"github.com/tallesborges/zdx/apps/gateway/internal/engine"
 )
 
-// PreflightResult is what `zdx-gateway preflight --json` prints for `zdx
+// PreflightResult is what `zdx-go gateway preflight --json` prints for `zdx
 // service install bot --program`: whether this build can serve as the bot
 // now. Problems make it not ready; warnings do not.
 type PreflightResult struct {

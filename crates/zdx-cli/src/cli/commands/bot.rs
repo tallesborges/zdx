@@ -8,18 +8,14 @@ use zdx_engine::config::{Config, TelegramProfileConfig};
 
 use super::go_program::{self, GoProgram};
 
-/// The Go gateway `zdx bot` starts: `$ZDX_GATEWAY` (absolute) or the
-/// installed `~/.local/bin/zdx-gateway`.
+/// The Go gateway `zdx bot` starts: `zdx-go gateway`.
 pub const GATEWAY: GoProgram = GoProgram {
-    name: "zdx-gateway",
-    env: "ZDX_GATEWAY",
-    role: "gateway",
+    command: "gateway",
     why: "the Telegram bot is the Go gateway",
-    install: "gateway-install",
 };
 
 /// `zdx bot [-- ARGS]`: replaces this process with the Go gateway, as
-/// `<gateway> --root ROOT bot ARGS`, the argv the bot service runs (see
+/// `zdx-go gateway --root ROOT bot ARGS`, the argv the bot service runs (see
 /// `go_program` for the environment and the checks).
 ///
 /// # Errors

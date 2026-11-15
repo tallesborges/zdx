@@ -1,14 +1,14 @@
 # apps/monitor
 
-Read-only ZDX dashboard in Go with Bubble Tea v2 (`charm.land/bubbletea/v2`, Lip Gloss v2). An independent Go module, not part of the Cargo workspace or `apps/gateway`: Rust builds never need Go, and this module never needs cargo. It requires the shared module `apps/shared` through a local `replace` (socket transport, wire types, quotas, build version). It is what `zdx monitor` runs; the Rust monitor crate it replaced is gone. Its scope is deliberately read-only (see Surfaces and gaps).
+Read-only ZDX dashboard in Go with Bubble Tea v2 (`charm.land/bubbletea/v2`, Lip Gloss v2). Part of the one Go module `apps/go.mod` (the `monitor` command of `zdx-go`), not part of the Cargo workspace: Rust builds never need Go, and the module never needs cargo. It imports `apps/shared` (socket transport, wire types, quotas, build version). It is what `zdx monitor` runs; the Rust monitor crate it replaced is gone. Its scope is deliberately read-only (see Surfaces and gaps).
 
 ## Running it
 
-- From the repo root: `just monitor [-- ARGS]` (build into `bin/zdx-monitor`, then `zdx monitor` execs it), `just monitor-build [OUT]`, `just monitor-install` (`~/.local/bin/zdx-monitor`), `just monitor-check`. `just deploy`/`safe-deploy` rebuild the installed copy only when it exists. CI does not run Go checks.
-- `zdx monitor [-- ARGS]` execs `$ZDX_MONITOR` (absolute) or `~/.local/bin/zdx-monitor` as `zdx-monitor --root ROOT ARGS`, with `ZDX_HOME` and `ZDX_BIN` set (`crates/zdx-cli/src/cli/commands/go_program.rs`, the same contract as `zdx bot`). Never a PATH lookup.
-- Layout preview without a home, service, or binary: `go run ./cmd/zdx-monitor-preview --scenario full|empty|down|loading|stale|scope` (synthetic `internal/fixture` data).
-- Run: `zdx-monitor [--root DIR] [--zdx-home DIR] [--zdx PATH] [--zdx-version V] [--cli-fallback]`. Defaults: root `.`, home `$ZDX_HOME` else `~/.zdx`, binary `$ZDX_BIN` else `zdx` on PATH (a missing binary only breaks the tabs that need the CLI). Pass the orchestrator service's own `--root` (its `views_root`); on a mismatch the Usage and Config footers show `! scope ROOT` and `?` help explains it, because those answers then belong to the service's root.
-- zdx version (quota user agent): `--zdx-version`, else the build-time `version.Zdx` (`apps/shared/version.Resolve`); nothing guesses it. Builds set it with `apps/shared/ldflags.sh` (the lead owns the `just` recipes). A plain `go build`/`go run` has none: the Usage tab then shows how to fix it in the quota section, and every other surface still works. Development runs: `just monitor`; from `apps/monitor`, `go run -ldflags "$(../shared/ldflags.sh)" ./cmd/zdx-monitor`, or `go run ./cmd/zdx-monitor --zdx-version <version>`.
+- From the repo root: `just monitor [-- ARGS]` (build `apps/bin/zdx-go`, then `zdx monitor` execs it), `just monitor-check`. `just deploy`/`safe-deploy` install `~/.local/bin/zdx-go`. CI vets and compiles the monitor but does not run its tests.
+- `zdx monitor [-- ARGS]` execs `$ZDX_GO` (absolute) or `~/.local/bin/zdx-go` as `zdx-go monitor --root ROOT ARGS`, with `ZDX_HOME` and `ZDX_BIN` set (`crates/zdx-cli/src/cli/commands/go_program.rs`, the same contract as `zdx bot`). Never a PATH lookup.
+- Layout preview without a home, service, or binary: from `apps`, `go run ./monitor/cmd/zdx-monitor-preview --scenario full|empty|down|loading|stale|scope` (synthetic `internal/fixture` data).
+- Run: `zdx-go monitor [--root DIR] [--zdx-home DIR] [--zdx PATH] [--zdx-version V] [--cli-fallback]`. Defaults: root `.`, home `$ZDX_HOME` else `~/.zdx`, binary `$ZDX_BIN` else `zdx` on PATH (a missing binary only breaks the tabs that need the CLI). Pass the orchestrator service's own `--root` (its `views_root`); on a mismatch the Usage and Config footers show `! scope ROOT` and `?` help explains it, because those answers then belong to the service's root.
+- zdx version (quota user agent): `--zdx-version`, else the build-time `version.Zdx` (`apps/shared/version.Resolve`); nothing guesses it. Builds set it with `apps/shared/ldflags.sh` (the lead owns the `just` recipes). A plain `go build`/`go run` has none: the Usage tab then shows how to fix it in the quota section, and every other surface still works. Development runs: `just monitor`; from `apps`, `go run -ldflags "$(shared/ldflags.sh)" ./cmd/zdx-go monitor`, or `go run ./cmd/zdx-go monitor --zdx-version <version>`.
 - It never starts a bot, an engine, or a service, and the monitor itself writes no ZDX state. Reading is not free of disk writes: the engine views it calls may bring derived caches (thread index, usage cache) up to date, and the service drops stale run markers. Quotas read `$ZDX_HOME/oauth.json` (read-only; no token refresh, no write) and `OPENCODE_API_KEY` from the monitor's own environment, then call each provider over HTTPS from the monitor process.
 
 ## Boundaries
@@ -59,7 +59,8 @@ Genuinely missing (each needs a JSON CLI or view in Rust):
 
 ## Layout
 
-- `cmd/zdx-monitor`: flags and `tea.NewProgram` with a cancellable context.
+- `cli`: `zdx-go monitor` (`Main`): flags and `tea.NewProgram` with a cancellable context.
+- `cmd/zdx-monitor-preview`: the layout preview on fixture data (a development command, not in `zdx-go`).
 - `internal/wire`: the monitor's read-only face of `apps/shared/socket` and `protocol` (aliases, `Status`, `View`; capability check, reply budgets, and cancel are the shared client's). It changes two error texts and keeps the shared error in the chain: a service error shows `code: message`, and a missing reply shows "the orchestrator service did not answer in time" (still `socket.ErrNoAnswer`, wrapping the context error).
 - `internal/data`: JSON body types, decode only. `Subscription` and `QuotaWindow` are aliases of the shared quota rows.
 - `internal/source`: the production backend: socket views, optional CLI fallback, direct quotas, CLI JSON, log tail.
@@ -70,12 +71,12 @@ Genuinely missing (each needs a JSON CLI or view in Rust):
 
 ## Checks
 
-From `apps/monitor`: `gofmt -l .`, `go vet ./...`, `go test -race ./...`.
+`just monitor-check` (from `apps`: `gofmt -l monitor`, `go vet ./monitor/...`, `go test -race ./monitor/...`). Commands below run from `apps/monitor`.
 
 - Tests use fakes only: `fakesvc` sockets, fake `zdx` scripts, a fake `Backend`, a fake clock. Quota tests (`internal/source/quota_test.go`) pass a synthetic version, an `httptest` server for every endpoint, an empty `LookupEnv`, and a temp `oauth.json` through `source.Config.Quota`; never a real `oauth.json` or a live provider. Every test package calls `sandbox.Main` in `TestMain`: fresh `HOME`/`ZDX_HOME`/`TMPDIR`, other `ZDX_` variables and `OPENCODE_API_KEY` dropped except `ZDX_MONITOR_TEST_*`, a failing `zdx` first on PATH, and a failed run when the real home's `oauth.json`/`oauth.lock` or a live file in its `run/` directory changed (size and time only).
 - Screen tests (`internal/ui/screens_test.go`): every screen of every fixture scenario at 60x16 to 200x50 must fill the height and stay within the width; `testdata/screens/*.txt` are text snapshots (time zone pinned to UTC). After an intended layout change: `ZDX_MONITOR_TEST_UPDATE=1 go test -run TestScreenSnapshots ./internal/ui`, then review the diff. `ZDX_MONITOR_TEST_DUMP_DIR=DIR go test -run TestDumpScreens ./internal/ui` writes every frame (`.ans` styled, `.txt` plain) for review.
 - Check real terminal rendering, not only snapshots: run the preview command, or record it with VHS (`unset NO_COLOR` first).
 - Create sockets under `os.MkdirTemp("", ...)` with short names: macOS limits socket paths to 104 bytes.
 - Opt-in checks against a prebuilt binary (never built by the tests). Copy it first so a concurrent cargo build cannot replace it mid-run: `cp ../../target/debug/zdx "$TMPDIR/zdx-test" && ZDX_MONITOR_TEST_ZDX="$TMPDIR/zdx-test" go test -race -run TestReal ./internal/source ./internal/ui`.
-  - `TestRealZdxShapes`: `zdx views`, `service status --json`, `jobs list --daemon --json` in the sandbox home with no service.
+  - `TestRealZdxShapes`: `zdx views`, `service status --json`, `jobs list --daemon --json` in the sandbox home with no service. It also needs `ZDX_MONITOR_TEST_GO`, a prebuilt `zdx-go` (`zdx jobs` execs it).
   - `TestRealServiceTranscript`: seeds thread JSONL (current `ThreadEvent` schema) and a run marker (`agent_activity::RunRecord`, the test's own PID) in a temp home, runs `zdx orchestrator serve` there (env: `PATH`, `TMPDIR`, `LANG`, `LC_*`, then `HOME`/`ZDX_HOME`; no provider, no turn), and checks the full load, the alias `source_id`, `after` deltas, a `tool_running` row, the finished-but-unsaved row, and its completion (merge equals a full load at each step), the trajectory, and the UI model over that backend.

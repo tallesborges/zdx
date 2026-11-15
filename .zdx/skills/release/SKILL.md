@@ -11,7 +11,7 @@ zdx releases are **manual and intentional** — cut one when a set of features/f
 
 - Version: root `Cargo.toml` → `[workspace.package] version`. All crates inherit it via `version.workspace = true`, and `zdx --version` reports it (clap reads `CARGO_PKG_VERSION`). Bump it in this one place.
 - Tag convention: `v<version>` (e.g. version `0.4.0` → tag `v0.4.0`).
-- Binaries built by the workflow: `aarch64-apple-darwin` (macOS), `x86_64-unknown-linux-gnu`. The Linux binary is built on Ubuntu 22.04, so it runs on glibc 2.35+ with OpenSSL 3 (`libssl3`) and without ALSA; the workflow's `Check Linux baseline` step fails the build otherwise. The release ships `zdx` only: the Go programs (`zdx-tui`, `zdx-gateway`, `zdx-monitor`, `zdx-quota`) are built from source (`just *-install`).
+- Binaries built by the workflow: `aarch64-apple-darwin` (macOS), `x86_64-unknown-linux-gnu`. The Linux binary is built on Ubuntu 22.04, so it runs on glibc 2.35+ with OpenSSL 3 (`libssl3`) and without ALSA; the workflow's `Check Linux baseline` step fails the build otherwise. The release ships `zdx` only: the Go binary `zdx-go` (chat TUI, gateway, monitor, quota, jobs, git views) is built from source (`just go-install`).
 
 ## Flow
 

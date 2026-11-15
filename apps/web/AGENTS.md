@@ -264,8 +264,8 @@ real one in `apps/web/.env.local` as `ZDX_DEV_INIT_DATA=...`.
 
 ## Serving
 
-`apps/gateway/build.sh` (`just gateway-build`, `just gateway-install`) runs the web build, copies
-`apps/web/dist` into the gateway and embeds it (`-tags webdist`), so the gateway binary is
+`apps/build.sh` (`just go-build`, `just go-install`) runs the web build, copies
+`apps/web/dist` into the gateway and embeds it (`-tags webdist`), so the `zdx-go` binary is
 self-contained. A gateway built without the tag needs `--web-dist DIR` and refuses to start when
 `index.html` is missing. The Rust build does not use `apps/web` at all.
 

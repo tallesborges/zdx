@@ -1,11 +1,10 @@
-// Command zdx-gateway is the Go Telegram bot and Mini App gateway for zdx.
-// It talks to the Rust orchestrator service over its Unix socket and owns
-// only Telegram transport, presentation and HTTP.
+// Package cli is `zdx-go gateway`, the Go Telegram bot and Mini App gateway
+// for zdx. It talks to the Rust orchestrator service over its Unix socket
+// and owns only Telegram transport, presentation and HTTP.
 //
-// This build is a foundation, not a bot: `serve` refuses to start until the
-// presentation parts and Rust capabilities listed by `check` exist. Never run
-// it next to the Rust bot for the same token.
-package main
+// `serve` refuses to start: the bot runs as the service argv
+// `--root ROOT bot`. Never run two bots for the same token.
+package cli
 
 import (
 	"context"
@@ -28,9 +27,9 @@ import (
 	"github.com/tallesborges/zdx/apps/gateway/internal/gateway"
 )
 
-const usage = `usage: zdx-gateway <check|serve> --settings FILE|- [--zdx-home DIR] [--socket PATH]
-       zdx-gateway --root ROOT bot [--zdx PATH] [--web-dist DIR]
-       zdx-gateway preflight --root ROOT --json [--zdx PATH] [--web-dist DIR]
+const usage = `usage: zdx-go gateway <check|serve> --settings FILE|- [--zdx-home DIR] [--socket PATH]
+       zdx-go gateway --root ROOT bot [--zdx PATH] [--web-dist DIR]
+       zdx-go gateway preflight --root ROOT --json [--zdx PATH] [--web-dist DIR]
 
   check   read the settings, ask the orchestrator service for its protocol
           and capabilities, and list what the gateway still lacks. Read-only;
@@ -39,20 +38,22 @@ const usage = `usage: zdx-gateway <check|serve> --settings FILE|- [--zdx-home DI
   preflight  read-only readiness check for ` + "`zdx service install bot --program`" + `:
           prints {"service":"bot","ready":bool,"problems":[],"warnings":[]}.
           Takes no pidfile, does not contact Telegram, runs no service command.
-  bot     the launchd form ` + "`zdx service install bot --program zdx-gateway`" + ` runs:
+  bot     the launchd form ` + "`zdx service install bot`" + ` runs:
           settings come from ` + "`zdx --root ROOT telegram settings --include-token`" + `,
           ZDX_HOME from the environment, --web-dist overrides the embedded
           Mini App. Refuses while parts are missing.
 
 Settings are the output of ` + "`zdx telegram settings --include-token`" + ` (always JSON),
-piped in: zdx telegram settings --include-token | zdx-gateway check --settings -
+piped in: zdx telegram settings --include-token | zdx-go gateway check --settings -
 `
 
-func main() {
-	if err := run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
-		fmt.Fprintln(os.Stderr, "zdx-gateway:", err)
-		os.Exit(2)
+// Main runs `zdx-go gateway ARGS` and returns the exit code.
+func Main(args []string) int {
+	if err := run(args, os.Stdin, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, "zdx-go gateway:", err)
+		return 2
 	}
+	return 0
 }
 
 func run(args []string, stdin io.Reader, stdout io.Writer) error {
@@ -95,7 +96,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 
 func notReady() error {
 	if len(gateway.Missing) == 0 {
-		return errors.New("serve is not available: run the gateway as the bot service, `zdx-gateway --root ROOT bot`")
+		return errors.New("serve is not available: run the gateway as the bot service, `zdx-go gateway --root ROOT bot`")
 	}
 	return fmt.Errorf("serve is not available in this build; missing:\n  - %s", strings.Join(gateway.Missing, "\n  - "))
 }
@@ -161,7 +162,7 @@ func runPreflight(args []string, stdout io.Writer) error {
 		return err
 	}
 	if *root == "" || !*asJSON || fs.NArg() != 0 {
-		return errors.New("usage: zdx-gateway preflight --root ROOT --json [--zdx PATH] [--web-dist DIR]")
+		return errors.New("usage: zdx-go gateway preflight --root ROOT --json [--zdx PATH] [--web-dist DIR]")
 	}
 	path, from, err := resolveZdx(*zdx)
 	if err != nil {

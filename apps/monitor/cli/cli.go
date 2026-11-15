@@ -1,9 +1,9 @@
-// Command zdx-monitor is a read-only terminal dashboard for ZDX: services,
+// Package cli is `zdx-go monitor`, a read-only terminal dashboard for ZDX: services,
 // active agents, threads and transcripts, jobs, usage, logs, background
 // processes, and config. It reads the orchestrator socket's views and a few
 // read-only CLI JSON commands; it never starts a bot, an engine, or a
 // service.
-package main
+package cli
 
 import (
 	"context"
@@ -23,7 +23,7 @@ import (
 	"github.com/tallesborges/zdx/apps/monitor/internal/ui"
 )
 
-const usage = `Usage: zdx-monitor [--root DIR] [--zdx-home DIR] [--zdx PATH] [--zdx-version V] [--cli-fallback]
+const usage = `Usage: zdx-go monitor [--root DIR] [--zdx-home DIR] [--zdx PATH] [--zdx-version V] [--cli-fallback]
 
 Read-only ZDX dashboard (Bubble Tea).
 
@@ -43,7 +43,7 @@ type options struct {
 }
 
 func parseArgs(args []string, getenv func(string) string, lookPath func(string) (string, error), stderr io.Writer) (options, error) {
-	fs := flag.NewFlagSet("zdx-monitor", flag.ContinueOnError)
+	fs := flag.NewFlagSet("zdx-go monitor", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 	var o options
@@ -95,19 +95,21 @@ func parseArgs(args []string, getenv func(string) string, lookPath func(string) 
 	return o, nil
 }
 
-func main() {
-	o, err := parseArgs(os.Args[1:], os.Getenv, exec.LookPath, os.Stderr)
+// Main runs `zdx-go monitor ARGS` and returns the exit code.
+func Main(args []string) int {
+	o, err := parseArgs(args, os.Getenv, exec.LookPath, os.Stderr)
 	if errors.Is(err, flag.ErrHelp) {
-		return
+		return 0
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "zdx-monitor:", err)
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "zdx-go monitor:", err)
+		return 2
 	}
 	if err := run(o); err != nil {
-		fmt.Fprintln(os.Stderr, "zdx-monitor:", err)
-		os.Exit(1)
+		fmt.Fprintln(os.Stderr, "zdx-go monitor:", err)
+		return 1
 	}
+	return 0
 }
 
 func run(o options) error {

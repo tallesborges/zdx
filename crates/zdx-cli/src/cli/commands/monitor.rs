@@ -6,18 +6,14 @@ use anyhow::Result;
 
 use super::go_program::{self, GoProgram};
 
-/// The Go monitor `zdx monitor` starts: `$ZDX_MONITOR` (absolute) or the
-/// installed `~/.local/bin/zdx-monitor`.
+/// The Go monitor `zdx monitor` starts: `zdx-go monitor`.
 pub const MONITOR: GoProgram = GoProgram {
-    name: "zdx-monitor",
-    env: "ZDX_MONITOR",
-    role: "monitor",
+    command: "monitor",
     why: "`zdx monitor` runs the Go monitor",
-    install: "monitor-install",
 };
 
 /// `zdx monitor [-- ARGS]`: replaces this process with the Go monitor, as
-/// `<monitor> --root ROOT ARGS` (see `go_program` for the environment and
+/// `zdx-go monitor --root ROOT ARGS` (see `go_program` for the environment and
 /// the checks).
 ///
 /// # Errors

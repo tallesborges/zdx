@@ -1,6 +1,6 @@
 //! Jobs: saved prompts that run unattended (docs/SPEC.md §8 Jobs).
 //!
-//! The Go jobs program (`apps/shared/jobs`, `zdx-jobs`) owns job files,
+//! The Go jobs program (`apps/shared/jobs`, `zdx-go jobs`) owns job files,
 //! schedules, state, the scheduler, and run bookkeeping. Rust owns what needs
 //! config, providers, or threads: this module resolves the root and model a
 //! job runs with ([`resolve_run_from`]), [`records`] reads the run log, and

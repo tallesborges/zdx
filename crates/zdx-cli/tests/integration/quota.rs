@@ -1,9 +1,9 @@
 //! `zdx quota` starts the Go quota reader in its own place (exec): the
-//! reader gets `--root ROOT --zdx-version VERSION [--json]`, this
+//! reader gets `quota --root ROOT --zdx-version VERSION [--json]`, this
 //! `ZDX_HOME`, and this binary as `ZDX_BIN`, and keeps the PID, so the exit
 //! status passes through unchanged. Every test uses a temp home. The
 //! exec tests use a fake reader script; the opt-in parity test runs a real
-//! `zdx-quota` named by `ZDX_QUOTA_TEST_BIN` on an empty home, so no
+//! `zdx-go` named by `ZDX_GO_TEST_BIN` on an empty home, so no
 //! credentials exist and no provider is called.
 
 #![cfg(unix)]
@@ -58,7 +58,7 @@ fn zdx_quota(sb: &Sandbox, reader: Option<&Path>, args: &[&str]) -> Command {
         .args(args)
         .stdin(Stdio::null());
     if let Some(reader) = reader {
-        cmd.env("ZDX_QUOTA", reader);
+        cmd.env("ZDX_GO", reader);
     }
     cmd
 }
@@ -106,6 +106,7 @@ fn test_quota_execs_the_go_reader_with_root_version_and_json() {
     assert_eq!(
         args,
         [
+            "quota",
             "--root",
             root,
             "--zdx-version",
@@ -134,7 +135,13 @@ fn test_quota_text_mode_sends_no_json_flag() {
     let root = sb.root.to_str().unwrap();
     assert_eq!(
         args,
-        ["--root", root, "--zdx-version", env!("CARGO_PKG_VERSION")],
+        [
+            "quota",
+            "--root",
+            root,
+            "--zdx-version",
+            env!("CARGO_PKG_VERSION")
+        ],
         "{out}"
     );
 }
@@ -150,23 +157,23 @@ fn test_quota_fails_closed_without_a_usable_reader() {
     };
 
     let installed = stderr(None);
-    assert!(installed.contains("zdx-quota not found"), "{installed}");
+    assert!(installed.contains("zdx-go not found"), "{installed}");
     assert!(
-        installed.contains(&sb.home.join(".local/bin/zdx-quota").display().to_string()),
+        installed.contains(&sb.home.join(".local/bin/zdx-go").display().to_string()),
         "{installed}"
     );
-    assert!(installed.contains("just quota-install"), "{installed}");
+    assert!(installed.contains("just go-install"), "{installed}");
 
-    let relative = stderr(Some(Path::new("zdx-quota")));
+    let relative = stderr(Some(Path::new("zdx-go")));
     assert!(relative.contains("must be an absolute path"), "{relative}");
 
     let missing = stderr(Some(&sb.home.join("nope")));
-    assert!(missing.contains("zdx-quota not found"), "{missing}");
+    assert!(missing.contains("zdx-go not found"), "{missing}");
 
     let zdx = PathBuf::from(env!("CARGO_BIN_EXE_zdx"));
     let itself = stderr(Some(&zdx));
     assert!(
-        itself.contains("is this zdx binary, not the quota reader"),
+        itself.contains("is this zdx binary, not zdx-go"),
         "{itself}"
     );
 }
@@ -180,13 +187,13 @@ fn test_quota_help_lists_json_flag() {
         .stdout(predicate::str::contains("--json"));
 }
 
-/// Opt-in: with `ZDX_QUOTA_TEST_BIN` naming a built `zdx-quota`, an empty
+/// Opt-in: with `ZDX_GO_TEST_BIN` naming a built `zdx-go`, an empty
 /// home reports every provider not logged in, with the JSON the Rust
 /// command printed before the move to Go.
 #[test]
 fn test_quota_real_reader_reports_all_providers_not_logged_in() {
-    let Some(bin) = std::env::var_os("ZDX_QUOTA_TEST_BIN").filter(|bin| !bin.is_empty()) else {
-        eprintln!("skipped: ZDX_QUOTA_TEST_BIN not set");
+    let Some(bin) = std::env::var_os("ZDX_GO_TEST_BIN").filter(|bin| !bin.is_empty()) else {
+        eprintln!("skipped: ZDX_GO_TEST_BIN not set");
         return;
     };
     let sb = sandbox();

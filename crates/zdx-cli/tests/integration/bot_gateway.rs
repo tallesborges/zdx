@@ -1,5 +1,5 @@
-//! `zdx bot` starts the Go gateway in its own place (exec): the gateway gets
-//! the bot service argv, this `ZDX_HOME`, and this binary as `ZDX_BIN`, and
+//! `zdx bot` starts the Go gateway (`zdx-go gateway`) in its own place
+//! (exec): the gateway gets the bot service argv, this `ZDX_HOME`, and this binary as `ZDX_BIN`, and
 //! keeps the PID, so signals and the exit status pass through unchanged.
 //! Every test uses a fake gateway script and a temp home; none starts a real
 //! gateway or contacts Telegram.
@@ -63,7 +63,7 @@ fn zdx_bot(sb: &Sandbox, gateway: Option<&Path>, args: &[&str]) -> Command {
         .args(args)
         .stdin(Stdio::null());
     if let Some(gateway) = gateway {
-        cmd.env("ZDX_GATEWAY", gateway);
+        cmd.env("ZDX_GO", gateway);
     }
     cmd
 }
@@ -115,7 +115,7 @@ exit 7"#,
     let root = sb.root.to_str().unwrap();
     assert_eq!(
         args,
-        ["--root", root, "bot", "--web-dist", "/dist dir"],
+        ["gateway", "--root", root, "bot", "--web-dist", "/dist dir"],
         "{out}"
     );
     assert!(
@@ -177,18 +177,18 @@ fn test_bot_fails_closed_without_a_usable_gateway() {
     };
 
     let installed = stderr(None);
-    assert!(installed.contains("zdx-gateway not found"), "{installed}");
+    assert!(installed.contains("zdx-go not found"), "{installed}");
     assert!(
-        installed.contains(&sb.home.join(".local/bin/zdx-gateway").display().to_string()),
+        installed.contains(&sb.home.join(".local/bin/zdx-go").display().to_string()),
         "{installed}"
     );
-    assert!(installed.contains("just gateway-install"), "{installed}");
+    assert!(installed.contains("just go-install"), "{installed}");
 
-    let relative = stderr(Some(Path::new("zdx-gateway")));
+    let relative = stderr(Some(Path::new("zdx-go")));
     assert!(relative.contains("must be an absolute path"), "{relative}");
 
     let missing = stderr(Some(&sb.home.join("nope")));
-    assert!(missing.contains("zdx-gateway not found"), "{missing}");
+    assert!(missing.contains("zdx-go not found"), "{missing}");
 
     let zdx = PathBuf::from(env!("CARGO_BIN_EXE_zdx"));
     let itself = stderr(Some(&zdx));

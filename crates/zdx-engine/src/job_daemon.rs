@@ -244,6 +244,7 @@ mod tests {
             root: root.to_path_buf(),
             working_directory: root.to_path_buf(),
             zdx_home: Some(zdx_home.to_path_buf()),
+            args: Vec::new(),
         }
     }
 

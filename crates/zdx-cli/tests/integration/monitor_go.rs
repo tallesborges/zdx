@@ -1,5 +1,5 @@
-//! `zdx monitor` starts the Go monitor in its own place (exec): the monitor
-//! gets `--root ROOT` and the extra arguments, this `ZDX_HOME`, and this
+//! `zdx monitor` starts the Go monitor in its own place (exec): it gets
+//! `monitor --root ROOT` and the extra arguments, this `ZDX_HOME`, and this
 //! binary as `ZDX_BIN`, and keeps the PID, so signals and the exit status
 //! pass through unchanged. Every test uses a fake monitor script and a temp
 //! home; none starts the real monitor.
@@ -56,7 +56,7 @@ fn zdx_monitor(sb: &Sandbox, monitor: Option<&Path>, args: &[&str]) -> Command {
         .args(args)
         .stdin(Stdio::null());
     if let Some(monitor) = monitor {
-        cmd.env("ZDX_MONITOR", monitor);
+        cmd.env("ZDX_GO", monitor);
     }
     cmd
 }
@@ -106,7 +106,7 @@ exit 5"#,
         .filter_map(|line| line.strip_prefix("arg="))
         .collect();
     let root = sb.root.to_str().unwrap();
-    assert_eq!(args, ["--root", root, "--cli-fallback"], "{out}");
+    assert_eq!(args, ["monitor", "--root", root, "--cli-fallback"], "{out}");
     assert!(
         out.contains(&format!("home={}\n", sb.zdx_home.display())),
         "{out}"
@@ -157,23 +157,23 @@ fn test_monitor_fails_closed_without_a_usable_binary() {
     };
 
     let installed = stderr(None);
-    assert!(installed.contains("zdx-monitor not found"), "{installed}");
+    assert!(installed.contains("zdx-go not found"), "{installed}");
     assert!(
-        installed.contains(&sb.home.join(".local/bin/zdx-monitor").display().to_string()),
+        installed.contains(&sb.home.join(".local/bin/zdx-go").display().to_string()),
         "{installed}"
     );
-    assert!(installed.contains("just monitor-install"), "{installed}");
+    assert!(installed.contains("just go-install"), "{installed}");
 
-    let relative = stderr(Some(Path::new("zdx-monitor")));
+    let relative = stderr(Some(Path::new("zdx-go")));
     assert!(relative.contains("must be an absolute path"), "{relative}");
 
     let missing = stderr(Some(&sb.home.join("nope")));
-    assert!(missing.contains("zdx-monitor not found"), "{missing}");
+    assert!(missing.contains("zdx-go not found"), "{missing}");
 
     let zdx = PathBuf::from(env!("CARGO_BIN_EXE_zdx"));
     let itself = stderr(Some(&zdx));
     assert!(
-        itself.contains("is this zdx binary, not the monitor"),
+        itself.contains("is this zdx binary, not zdx-go"),
         "{itself}"
     );
 }

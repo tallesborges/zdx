@@ -1,5 +1,5 @@
 //go:build !darwin && !linux
 
-package main
+package cli
 
 func terminalForeground() bool { return false }

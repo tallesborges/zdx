@@ -13,6 +13,7 @@ mod cli_help;
 mod config_path;
 mod custom_provider_api;
 mod exec_subagent;
+mod git_go;
 mod imagine;
 mod jobs_go;
 mod jobs_run;
