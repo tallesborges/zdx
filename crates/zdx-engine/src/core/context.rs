@@ -412,38 +412,52 @@ const CWD_TREE_MAX_TOTAL_BYTES: usize = 4096;
 /// the template can render the block conditionally.
 fn build_cwd_tree(root: &Path) -> String {
     use std::collections::BTreeMap;
+    use std::sync::Mutex;
 
-    use ignore::WalkBuilder;
+    use ignore::{WalkBuilder, WalkState};
 
-    let walker = WalkBuilder::new(root)
+    // Parallel for the same reason as `discover_scoped_context`: a root with
+    // thousands of subdirectories means one directory read per subdirectory.
+    // `render_cwd_tree` sorts every listing, so the output does not depend on
+    // the order entries arrive in.
+    let by_parent: Mutex<BTreeMap<PathBuf, Vec<(String, bool)>>> = Mutex::new(BTreeMap::new());
+    WalkBuilder::new(root)
         .hidden(false)
         .git_ignore(true)
         .git_global(false)
         .git_exclude(false)
         .require_git(false)
         .max_depth(Some(CWD_TREE_MAX_DEPTH))
-        .build();
-
-    let mut by_parent: BTreeMap<PathBuf, Vec<(String, bool)>> = BTreeMap::new();
-    for entry in walker.flatten() {
-        let path = entry.path();
-        if path == root {
-            continue;
-        }
-        let Some(parent) = path.parent() else {
-            continue;
-        };
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        let is_dir = entry
-            .file_type()
-            .map_or_else(|| path.is_dir(), |ft| ft.is_dir());
-        by_parent
-            .entry(parent.to_path_buf())
-            .or_default()
-            .push((name.to_string(), is_dir));
-    }
+        .build_parallel()
+        .run(|| {
+            Box::new(|entry| {
+                let Ok(entry) = entry else {
+                    return WalkState::Continue;
+                };
+                let path = entry.path();
+                if path == root {
+                    return WalkState::Continue;
+                }
+                let (Some(parent), Some(name)) =
+                    (path.parent(), path.file_name().and_then(|n| n.to_str()))
+                else {
+                    return WalkState::Continue;
+                };
+                let is_dir = entry
+                    .file_type()
+                    .map_or_else(|| path.is_dir(), |ft| ft.is_dir());
+                by_parent
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .entry(parent.to_path_buf())
+                    .or_default()
+                    .push((name.to_string(), is_dir));
+                WalkState::Continue
+            })
+        });
+    let by_parent = by_parent
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     let mut out = String::new();
     render_cwd_tree(root, 0, &by_parent, &mut out);
@@ -1162,41 +1176,57 @@ const SCOPED_CONTEXT_LIMIT: usize = 200;
 /// Returns files sorted by path for deterministic ordering.
 /// The root context file itself is excluded (it's handled as inline context).
 pub fn discover_scoped_context(root: &Path) -> Vec<ScopedContextFile> {
-    use ignore::WalkBuilder;
+    use std::sync::Mutex;
+
+    use ignore::{WalkBuilder, WalkState};
 
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let root_primary = canonical_root.join(PRIMARY_CONTEXT_FILE_NAME);
     let root_fallback = canonical_root.join(FALLBACK_CONTEXT_FILE_NAME);
-    let mut candidates: Vec<(String, PathBuf, u8)> = Vec::new();
+    let candidates: Mutex<Vec<(String, PathBuf, u8)>> = Mutex::new(Vec::new());
 
-    let walker = WalkBuilder::new(&canonical_root)
+    // Parallel: the walk costs about one directory read per directory, and a
+    // root with many directories (a temp dir with 180k of them) took about 50s
+    // serially. The sort below makes the order deterministic.
+    WalkBuilder::new(&canonical_root)
         .hidden(true)
         .git_ignore(true)
         .git_global(false)
         .git_exclude(false)
         .max_depth(Some(SCOPED_CONTEXT_MAX_DEPTH))
-        .build();
-
-    for entry in walker.flatten() {
-        let path = entry.path();
-        let Some(priority) = context_file_priority(path) else {
-            continue;
-        };
-        if !path.is_file() {
-            continue;
-        }
-        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        if canonical == root_primary || canonical == root_fallback {
-            continue;
-        }
-        if let Ok(relative) = canonical.strip_prefix(&canonical_root)
-            && let Some(scope_dir) = relative.parent()
-            && !scope_dir.as_os_str().is_empty()
-        {
-            let scope = scope_dir.display().to_string();
-            candidates.push((scope, canonical, priority));
-        }
-    }
+        .build_parallel()
+        .run(|| {
+            Box::new(|entry| {
+                let Ok(entry) = entry else {
+                    return WalkState::Continue;
+                };
+                let path = entry.path();
+                let Some(priority) = context_file_priority(path) else {
+                    return WalkState::Continue;
+                };
+                if !path.is_file() {
+                    return WalkState::Continue;
+                }
+                let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+                if canonical == root_primary || canonical == root_fallback {
+                    return WalkState::Continue;
+                }
+                if let Ok(relative) = canonical.strip_prefix(&canonical_root)
+                    && let Some(scope_dir) = relative.parent()
+                    && !scope_dir.as_os_str().is_empty()
+                {
+                    let scope = scope_dir.display().to_string();
+                    candidates
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push((scope, canonical, priority));
+                }
+                WalkState::Continue
+            })
+        });
+    let mut candidates = candidates
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     candidates.sort_by(
         |(scope_a, path_a, priority_a), (scope_b, path_b, priority_b)| {
@@ -1898,6 +1928,28 @@ mod tests {
     }
 
     #[test]
+    fn test_build_cwd_tree_output_is_stable() {
+        let root = tempdir().unwrap();
+        let base = root.path();
+        for dir in ["b-dir", "a-dir", "c-dir"] {
+            fs::create_dir(base.join(dir)).unwrap();
+            for file in ["z.txt", "m.txt", "a.txt"] {
+                fs::write(base.join(dir).join(file), b"x").unwrap();
+            }
+        }
+        fs::create_dir(base.join("a-dir").join("nested")).unwrap();
+        fs::write(base.join("top.md"), b"x").unwrap();
+        fs::write(base.join("Cargo.toml"), b"x").unwrap();
+
+        let canonical = base.canonicalize().unwrap();
+        let expected = "a-dir/\n  nested/\n  a.txt\n  m.txt\n  z.txt\nb-dir/\n  a.txt\n  m.txt\n  z.txt\n\
+                        c-dir/\n  a.txt\n  m.txt\n  z.txt\nCargo.toml\ntop.md";
+        for _ in 0..10 {
+            assert_eq!(build_cwd_tree(&canonical), expected);
+        }
+    }
+
+    #[test]
     fn test_build_cwd_tree_collapses_excess_entries() {
         let root = tempdir().unwrap();
         let base = root.path();
@@ -2280,6 +2332,35 @@ mod tests {
                 .iter()
                 .any(|path| path.ends_with("mixed-scope/CLAUDE.md"))
         );
+    }
+
+    #[test]
+    fn test_discover_scoped_context_is_sorted_depth_limited_and_ignore_aware() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        for (scope, file) in [
+            ("zeta", "AGENTS.md"),
+            ("alpha", "AGENTS.md"),
+            ("alpha/beta", "CLAUDE.md"),
+            ("alpha/beta/gamma", "AGENTS.md"),
+            ("alpha/beta/gamma/delta", "AGENTS.md"),
+            ("skipped", "AGENTS.md"),
+        ] {
+            fs::create_dir_all(root.join(scope)).unwrap();
+            fs::write(root.join(scope).join(file), scope).unwrap();
+        }
+        fs::write(root.join(".ignore"), "skipped/\n").unwrap();
+        for n in 0..40 {
+            fs::create_dir_all(root.join(format!("filler-{n}/inner"))).unwrap();
+        }
+
+        let scopes = |scoped: Vec<ScopedContextFile>| -> Vec<String> {
+            scoped.into_iter().map(|entry| entry.scope).collect()
+        };
+        let expected = vec!["alpha", "alpha/beta", "alpha/beta/gamma", "zeta"];
+        for _ in 0..10 {
+            assert_eq!(scopes(discover_scoped_context(root)), expected);
+        }
     }
 
     #[test]
