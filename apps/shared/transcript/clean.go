@@ -1,4 +1,4 @@
-package ui
+package transcript
 
 import (
 	"reflect"
@@ -8,14 +8,14 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// cleanText makes external text safe to lay out: it removes escape
+// Clean makes external text safe to lay out: it removes escape
 // sequences (SGR, hyperlinks, DCS/APC passthrough), C0 controls except
 // newline and tab, DEL, and C1 controls. A carriage return keeps what follows
 // it on its line, as a terminal would show it. Thread content, tool output,
 // logs, and error strings all come from outside the monitor; the renderer
 // would otherwise apply their styles, overwrite cells, or forward
 // passthrough sequences to the terminal.
-func cleanText(s string) string {
+func Clean(s string) string {
 	if !needsClean(s) {
 		return s
 	}
@@ -61,11 +61,11 @@ func needsClean(s string) bool {
 	return false
 }
 
-// cleanAll applies cleanText to every string reachable from ptr (struct
+// CleanAll applies Clean to every string reachable from ptr (struct
 // fields, pointers, slices, maps). Raw JSON ([]byte) is left alone: its
 // strings are still escaped, and the views that show it decode or clean it
 // first.
-func cleanAll(ptr any) {
+func CleanAll(ptr any) {
 	cleanValue(reflect.ValueOf(ptr))
 }
 
@@ -78,7 +78,7 @@ func cleanValue(v reflect.Value) {
 	case reflect.String:
 		if v.CanSet() {
 			if s := v.String(); needsClean(s) {
-				v.SetString(cleanText(s))
+				v.SetString(Clean(s))
 			}
 		}
 	case reflect.Struct:
@@ -100,7 +100,7 @@ func cleanValue(v reflect.Value) {
 		}
 		for _, k := range v.MapKeys() {
 			if s := v.MapIndex(k).String(); needsClean(s) {
-				v.SetMapIndex(k, reflect.ValueOf(cleanText(s)).Convert(v.Type().Elem()))
+				v.SetMapIndex(k, reflect.ValueOf(Clean(s)).Convert(v.Type().Elem()))
 			}
 		}
 	}

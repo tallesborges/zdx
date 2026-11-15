@@ -17,9 +17,10 @@ This monorepo now uses scoped `AGENTS.md` files per crate.
 - `crates/zdx-cli/AGENTS.md`: CLI routing/modes/commands map + CLI testing guidance
 - `crates/xtask/AGENTS.md`: maintainer task crate guidance
 - `apps/web/AGENTS.md`: Svelte Mini App frontend (design system + views, consumes the gateway's Mini App HTTP API)
+- `apps/tui/AGENTS.md`: Go chat TUI `zdx-tui` (independent Go module; every turn runs in the orchestrator service over its socket)
 - `apps/monitor/AGENTS.md`: Go monitor: the read-only dashboard `zdx monitor` runs (independent Go module; reads the orchestrator socket views and read-only CLI JSON)
 - `apps/gateway/AGENTS.md`: Go gateway: the Telegram bot and Mini App server (independent Go module; talks to Rust only through the orchestrator socket and CLI)
-- `apps/shared/AGENTS.md`: shared Go module the gateway, the monitor, `zdx-quota`, and `zdx-jobs` import (socket transport, wire types, quota, jobs, version); `zdx quota` execs its `zdx-quota`, and every `zdx jobs` subcommand but `history` execs its `zdx-jobs`
+- `apps/shared/AGENTS.md`: shared Go module the gateway, the monitor, the chat TUI, `zdx-quota`, and `zdx-jobs` import (socket transport, wire types, transcript layout, quota, jobs, version); `zdx quota` execs its `zdx-quota`, and every `zdx jobs` subcommand but `history` execs its `zdx-jobs`
 
 ### Scope and precedence
 
@@ -46,6 +47,8 @@ This monorepo now uses scoped `AGENTS.md` files per crate.
 All common tasks are available via `just` (see `justfile`). Run `just` to list all recipes.
 
 - `just run` (interactive TUI; pass extra args: `just run --help`)
+- `just tui [ARGS]` (Go chat TUI: builds `apps/tui/bin/zdx-tui` and runs it in the current directory; it needs a running orchestrator service, `just orchestrator` or the `orchestrator` launchd service, built with capability `chat_submit`)
+- `just tui-check` (Go chat TUI: `gofmt`, `go vet`, `go test -race`) / `just tui-build [OUT]` / `just tui-install` (`~/.local/bin/zdx-tui`)
 - `just monitor [-- ARGS]` (read-only dashboard: builds the Go monitor into `apps/monitor/bin/zdx-monitor`, then `zdx monitor` execs it. Outside `just`, `zdx monitor` runs `$ZDX_MONITOR` or the installed `~/.local/bin/zdx-monitor`, and fails when neither exists)
 - `just bot [-- ARGS]` (Telegram bot: builds the Go gateway and `zdx` from this checkout, then `zdx bot` execs the gateway on the global `[telegram]` config. The gateway's `bot.pid` refuses a second bot on one `ZDX_HOME`, so stop the bot service first. Outside `just`, `zdx bot` runs `$ZDX_GATEWAY` or the installed `~/.local/bin/zdx-gateway`, and fails when neither exists)
 - `just quota [ARGS]` (builds the Go quota reader into `apps/shared/bin/zdx-quota`, then `zdx quota` execs it. Outside `just`, `zdx quota` runs `$ZDX_QUOTA` or the installed `~/.local/bin/zdx-quota`, and fails when neither exists)

@@ -341,6 +341,7 @@ impl Orchestrator {
                     profile: None,
                     ordinary: kind == ThreadKind::Ordinary,
                     rerun: false,
+                    chat: false,
                     model: None,
                     route: Some(route),
                     text,

@@ -96,6 +96,7 @@ pub async fn send(options: SendOptions<'_>) -> Result<()> {
         profile: options.profile.map(str::to_string),
         ordinary: options.ordinary,
         rerun: options.rerun,
+        chat: false,
         model: options.model.map(str::to_string),
         route: options.route,
         text: options.prompt,

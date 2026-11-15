@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -35,7 +36,7 @@ func (p *parentBackend) fake() *fake {
 			defer p.mu.Unlock()
 			c := ""
 			if after != nil {
-				c = itoa(int(*after))
+				c = strconv.Itoa(int(*after))
 			}
 			p.calls = append(p.calls, id+"@"+c)
 			if err := p.errs[id]; err != nil {
@@ -73,7 +74,7 @@ func (p *parentBackend) callLog() string {
 }
 
 func usage(seq uint64, provider, model string) data.Activity {
-	return data.Activity{Type: "usage", Sequence: seq, Time: "09:0" + itoa(int(seq)), Model: ptr(model), Provider: ptr(provider)}
+	return data.Activity{Type: "usage", Sequence: seq, Time: "09:0" + strconv.Itoa(int(seq)), Model: ptr(model), Provider: ptr(provider)}
 }
 
 func parentThread(id, title string, acts ...data.Activity) data.Thread {
@@ -289,9 +290,9 @@ func TestIdleParentLookupsRotate(t *testing.T) {
 	pb := &parentBackend{threads: map[string]data.Thread{}}
 	const n = 20
 	for i := 0; i < n; i++ {
-		id := "p" + itoa(i)
-		pb.rows = append(pb.rows, run("w"+itoa(i), id, uint32(i+1), "worker"))
-		pb.threads[id] = parentThread(id, "T"+itoa(i), usage(0, "openai", "m"+itoa(i)))
+		id := "p" + strconv.Itoa(i)
+		pb.rows = append(pb.rows, run("w"+strconv.Itoa(i), id, uint32(i+1), "worker"))
+		pb.threads[id] = parentThread(id, "T"+strconv.Itoa(i), usage(0, "openai", "m"+strconv.Itoa(i)))
 	}
 	m, c := newModel(t, pb.fake())
 	pump(m, m.Init())
@@ -318,7 +319,7 @@ func TestIdleParentLookupsRotate(t *testing.T) {
 		}
 	}
 	for i := 0; i < n; i++ {
-		if p := m.agents.parents["p"+itoa(i)]; !p.loaded || p.model != "m"+itoa(i) {
+		if p := m.agents.parents["p"+strconv.Itoa(i)]; !p.loaded || p.model != "m"+strconv.Itoa(i) {
 			t.Fatalf("p%d: %+v", i, p)
 		}
 	}
@@ -346,7 +347,7 @@ func TestIdleParentStaleAnswerIsDropped(t *testing.T) {
 func TestIdleParentCacheIsBounded(t *testing.T) {
 	var ta agentsTab
 	for i := 0; i < maxKeptParents+10; i++ {
-		ta.tree = []agentNode{{thread: "p" + itoa(i), run: -1}}
+		ta.tree = []agentNode{{thread: "p" + strconv.Itoa(i), run: -1}}
 		ta.syncParents()
 	}
 	ta.tree = nil
@@ -357,7 +358,7 @@ func TestIdleParentCacheIsBounded(t *testing.T) {
 	if _, ok := ta.parents["p0"]; ok {
 		t.Fatal("the oldest hidden parent must go first")
 	}
-	if _, ok := ta.parents["p"+itoa(maxKeptParents+9)]; !ok {
+	if _, ok := ta.parents["p"+strconv.Itoa(maxKeptParents+9)]; !ok {
 		t.Fatal("the newest hidden parent must stay")
 	}
 }
@@ -365,9 +366,9 @@ func TestIdleParentCacheIsBounded(t *testing.T) {
 func TestIdleParentLookupsAreBounded(t *testing.T) {
 	pb := &parentBackend{threads: map[string]data.Thread{}}
 	for i := 0; i < 20; i++ {
-		id := "p" + itoa(i)
-		pb.rows = append(pb.rows, run("w"+itoa(i), id, uint32(i+1), "worker"))
-		pb.threads[id] = parentThread(id, "T"+itoa(i), usage(0, "openai", "m"))
+		id := "p" + strconv.Itoa(i)
+		pb.rows = append(pb.rows, run("w"+strconv.Itoa(i), id, uint32(i+1), "worker"))
+		pb.threads[id] = parentThread(id, "T"+strconv.Itoa(i), usage(0, "openai", "m"))
 	}
 	m, _ := newModel(t, pb.fake())
 	pump(m, m.Init())

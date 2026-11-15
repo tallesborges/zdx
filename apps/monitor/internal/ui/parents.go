@@ -11,6 +11,7 @@ import (
 	"github.com/tallesborges/zdx/apps/monitor/internal/data"
 	"github.com/tallesborges/zdx/apps/monitor/internal/source"
 	"github.com/tallesborges/zdx/apps/monitor/internal/wire"
+	"github.com/tallesborges/zdx/apps/shared/transcript"
 )
 
 // Idle parents: a context row of the agents tree is a thread with active
@@ -199,8 +200,8 @@ func (m *Model) applyParents(r parentsResult, lookups []parentLookup) {
 		if !kept || !sameCursor(old.cursor, l.cursor) || old.sourceID != l.sourceID {
 			continue
 		}
-		next.title, next.model, next.provider = cleanText(next.title), cleanText(next.model), cleanText(next.provider)
-		next.sourceID, next.usedAt = cleanText(next.sourceID), cleanText(next.usedAt)
+		next.title, next.model, next.provider = transcript.Clean(next.title), transcript.Clean(next.model), transcript.Clean(next.provider)
+		next.sourceID, next.usedAt = transcript.Clean(next.sourceID), transcript.Clean(next.usedAt)
 		t.parentLooks++
 		merged := mergeParent(old, next, l.cursor == nil)
 		merged.shown, merged.seen, merged.looked = old.shown, old.seen, t.parentLooks

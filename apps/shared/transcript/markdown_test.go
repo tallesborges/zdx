@@ -1,4 +1,4 @@
-package ui
+package transcript
 
 import (
 	"regexp"
@@ -7,13 +7,11 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
-
-	"github.com/tallesborges/zdx/apps/monitor/internal/data"
 )
 
 func mdPlain(src string, width int) []string {
 	var out []string
-	for _, l := range renderMarkdown(src, width, mdNormal) {
+	for _, l := range Markdown(src, width, Normal) {
 		out = append(out, ansi.Strip(l))
 	}
 	return out
@@ -23,7 +21,7 @@ func joined(lines []string) string { return strings.Join(lines, "\n") }
 
 func TestMarkdownBoldAndInlineCodeShowNoMarkers(t *testing.T) {
 	src := "**Both `:g` and `#` worked together.**\n\nUse `go vet` and *read* the ~~old~~ output."
-	styled := renderMarkdown(src, 80, mdNormal)
+	styled := Markdown(src, 80, Normal)
 	plain := joined(mdPlain(src, 80))
 	for _, raw := range []string{"**", "`", "~~", "*read*"} {
 		if strings.Contains(plain, raw) {
@@ -35,12 +33,12 @@ func TestMarkdownBoldAndInlineCodeShowNoMarkers(t *testing.T) {
 	}
 	all := joined(styled)
 	for _, want := range []string{
-		mdNormal.paint(fBold, "Both "),
-		mdNormal.paint(fBold|fCode, ":g"),
-		mdNormal.paint(fBold, " worked together."),
-		mdNormal.paint(fCode, "go vet"),
-		mdNormal.paint(fItalic, "read"),
-		mdNormal.paint(fStrike, "old"),
+		Normal.paint(fBold, "Both "),
+		Normal.paint(fBold|fCode, ":g"),
+		Normal.paint(fBold, " worked together."),
+		Normal.paint(fCode, "go vet"),
+		Normal.paint(fItalic, "read"),
+		Normal.paint(fStrike, "old"),
 	} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("missing styled %q in %q", want, all)
@@ -125,7 +123,7 @@ func TestMarkdownLinks(t *testing.T) {
 	if got != want {
 		t.Fatalf("got  %q\nwant %q", got, want)
 	}
-	styled := joined(renderMarkdown("[docs](https://example.com)", 80, mdNormal))
+	styled := joined(Markdown("[docs](https://example.com)", 80, Normal))
 	if strings.Contains(styled, "\x1b]8") {
 		t.Fatal("no hyperlinks are emitted")
 	}
@@ -179,8 +177,8 @@ func TestMarkdownNeverPassesControlSequences(t *testing.T) {
 		"| a\x1b[5m | b |\n|---|---|\n| \x1b]8;;x\x07c | d |",
 	}
 	for _, in := range inputs {
-		for _, theme := range []*mdTheme{mdNormal, mdMuted} {
-			for _, l := range renderMarkdown(in, 40, theme) {
+		for _, theme := range []*Theme{Normal, Muted} {
+			for _, l := range Markdown(in, 40, theme) {
 				rest := sgr.ReplaceAllString(l, "")
 				for _, r := range rest {
 					if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
@@ -204,7 +202,7 @@ func TestMarkdownFitsAnyWidth(t *testing.T) {
 	}
 	for _, src := range srcs {
 		for w := 2; w <= 60; w++ {
-			for _, l := range renderMarkdown(src, w, mdNormal) {
+			for _, l := range Markdown(src, w, Normal) {
 				if lw := ansi.StringWidth(l); lw > w {
 					t.Fatalf("width %d: line %q is %d wide (from %q)", w, ansi.Strip(l), lw, src)
 				}
@@ -220,7 +218,7 @@ func TestMarkdownLongWordSplitsInLinearTime(t *testing.T) {
 	for _, unit := range []string{"x", "日", "👨‍👩‍👧"} {
 		word := strings.Repeat(unit, 400_000/len(unit))
 		start := time.Now()
-		lines := renderMarkdown("see "+word+" end", 80, mdNormal)
+		lines := Markdown("see "+word+" end", 80, Normal)
 		if elapsed := time.Since(start); elapsed > 15*time.Second {
 			t.Fatalf("%q: %v", unit, elapsed)
 		}
@@ -265,74 +263,27 @@ func TestMarkdownEntityCarriageReturnKeepsText(t *testing.T) {
 }
 
 func TestMarkdownCacheReusesAndDrops(t *testing.T) {
-	var c mdCache
-	a := c.render(1, "**one**", 40, mdNormal)
-	b := c.render(1, "**one**", 40, mdNormal)
+	var c Cache
+	a := c.Render(1, "**one**", 40, Normal)
+	b := c.Render(1, "**one**", 40, Normal)
 	if &a[0] != &b[0] {
 		t.Fatal("same item, text, and width must reuse the lines")
 	}
-	c.done()
-	d := c.render(1, "**one**", 40, mdNormal)
+	c.Done()
+	d := c.Render(1, "**one**", 40, Normal)
 	if &a[0] != &d[0] {
 		t.Fatal("the next rebuild must reuse the lines")
 	}
-	if e := c.render(1, "**one** edited", 40, mdNormal); ansi.Strip(e[0]) != "one edited" {
+	if e := c.Render(1, "**one** edited", 40, Normal); ansi.Strip(e[0]) != "one edited" {
 		t.Fatalf("changed text must render again: %q", e)
 	}
-	if f := c.render(1, "**one**", 20, mdNormal); &f[0] == &a[0] {
+	if f := c.Render(1, "**one**", 20, Normal); &f[0] == &a[0] {
 		t.Fatal("another width must render again")
 	}
-	c.done()
-	c.done()
+	c.Done()
+	c.Done()
 	if len(c.prev) != 0 {
 		t.Fatalf("unused entries must be dropped, %d left", len(c.prev))
-	}
-}
-
-// TestTranscriptMarkdownKeepsToolRows: Markdown changes message heights;
-// tool rows, their selection, and the detail pane still point at the right
-// call, and a refresh with new text does not move them.
-func TestTranscriptMarkdownKeepsToolRows(t *testing.T) {
-	ok := true
-	th := &data.Thread{ID: "t", Activity: []data.Activity{
-		{Type: "message", Sequence: 0, Role: "assistant", Speaker: "Z", Text: "**Plan**\n\n- one\n- two\n\n```sh\necho hi\n```"},
-		{Type: "tool_use", Sequence: 1, ID: "c1", Name: "bash"},
-		{Type: "tool_result", Sequence: 2, ToolUseID: "c1", OK: &ok, View: &data.ToolView{Outcome: "ok", Head: &data.ToolHead{Kind: "shell", Command: "echo hi"}}},
-		{Type: "message", Sequence: 3, Role: "assistant", Speaker: "Z", Text: "Done. See `out.txt`."},
-		{Type: "tool_use", Sequence: 4, ID: "c2", Name: "read"},
-	}}
-	ts := &transcriptState{threadID: "t", thread: th, selTool: -1, viewRows: 20}
-	for _, w := range []int{40, 100} {
-		ts.rebuild(w)
-		if len(ts.tools) != 2 {
-			t.Fatalf("%d: tools %+v", w, ts.tools)
-		}
-		for i, id := range []string{"c1", "c2"} {
-			ref := ts.tools[i]
-			line := ansi.Strip(ts.lines[ref.start])
-			if ref.id != id || !strings.Contains(line, map[string]string{"c1": "bash $ echo hi", "c2": "read"}[id]) {
-				t.Fatalf("%d: tool %d at %d is %q", w, i, ref.start, line)
-			}
-		}
-		for _, l := range ts.lines {
-			if ansi.StringWidth(l) > w {
-				t.Fatalf("%d: line too wide: %q", w, ansi.Strip(l))
-			}
-		}
-	}
-	ts.selectTool(1, 20)
-	ts.selectTool(1, 20)
-	if ts.tools[ts.selTool].id != "c2" {
-		t.Fatalf("selected %d", ts.selTool)
-	}
-	// New text above does not change which call is selected.
-	th.Activity[0].Text += "\n\nOne more **bold** paragraph."
-	ts.rebuild(100)
-	if ts.tools[ts.selTool].id != "c2" || !strings.Contains(ansi.Strip(ts.lines[ts.tools[ts.selTool].start]), "read") {
-		t.Fatal("selection moved")
-	}
-	if !strings.Contains(ansi.Strip(joined(ts.lines)), "One more bold paragraph.") {
-		t.Fatal("edited text not rendered")
 	}
 }
 
@@ -346,30 +297,30 @@ func indexOf(lines []string, s string) int {
 }
 
 func BenchmarkTranscriptMarkdown(b *testing.B) {
-	var acts []data.Activity
+	var acts []Activity
 	for i := 0; i < 400; i++ {
-		acts = append(acts, data.Activity{Type: "message", Sequence: uint64(i), Role: "assistant", Text: strings.Repeat("**Heading**\n\n- item with `code` and a [link](https://example.com)\n\n```sh\necho hello\n```\n\n", 3)})
+		acts = append(acts, Activity{Type: "message", Sequence: uint64(i), Role: "assistant", Text: strings.Repeat("**Heading**\n\n- item with `code` and a [link](https://example.com)\n\n```sh\necho hello\n```\n\n", 3)})
 	}
-	th := &data.Thread{Activity: acts}
+	th := &Thread{Activity: acts}
 	b.Run("cold", func(b *testing.B) {
 		for b.Loop() {
-			renderActivity(th, 100, false, nil)
+			Render(th, 100, Options{}, nil)
 		}
 	})
 	b.Run("warm", func(b *testing.B) {
-		var c mdCache
-		renderActivity(th, 100, false, &c)
-		c.done()
+		var c Cache
+		Render(th, 100, Options{}, &c)
+		c.Done()
 		for b.Loop() {
-			renderActivity(th, 100, false, &c)
-			c.done()
+			Render(th, 100, Options{}, &c)
+			c.Done()
 		}
 	})
 }
 
 func TestMarkdownLinkUnderlineSpansSpaces(t *testing.T) {
-	got := joined(renderMarkdown("See [the vet docs](https://example.com) now.", 80, mdNormal))
-	if !strings.Contains(got, mdNormal.paint(fLink, "the vet docs")) {
+	got := joined(Markdown("See [the vet docs](https://example.com) now.", 80, Normal))
+	if !strings.Contains(got, Normal.paint(fLink, "the vet docs")) {
 		t.Fatalf("the link is not one run: %q", got)
 	}
 }

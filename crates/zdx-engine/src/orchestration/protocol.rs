@@ -85,10 +85,16 @@ pub const CAPABILITIES: &[&str] = &[
     CAPABILITY_TOPIC_START,
     CAPABILITY_CATALOG,
     CAPABILITY_SET_CHAT_MODEL,
+    CAPABILITY_CHAT_SUBMIT,
+    CAPABILITY_SUBSCRIBE_THREAD,
 ];
 
 /// `Submit::ordinary`: ordinary agent threads run in the service.
 pub const CAPABILITY_ORDINARY_SUBMIT: &str = "ordinary_submit";
+/// `Submit::chat`: an ordinary turn of an interactive terminal chat.
+pub const CAPABILITY_CHAT_SUBMIT: &str = "chat_submit";
+/// `Request::Subscribe::thread_id`: one thread's events only.
+pub const CAPABILITY_SUBSCRIBE_THREAD: &str = "subscribe_thread";
 /// [`Request::UpdateThread`].
 pub const CAPABILITY_UPDATE_THREAD: &str = "update_thread";
 /// [`Request::RecordDelivery`].
@@ -148,6 +154,8 @@ pub const VIEW_CAPABILITIES: &[&str] = &[
 
 /// One message for a thread the service runs: a persistent-profile thread,
 /// or with `ordinary` an ordinary agent thread.
+// Independent wire flags; clients send each one on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Submit {
     /// Thread to continue or create. `None` creates a new thread.
@@ -170,6 +178,11 @@ pub struct Submit {
     /// and `images` must be empty; never steered.
     #[serde(default)]
     pub rerun: bool,
+    /// Run the ordinary turn as an interactive terminal chat (the Go TUI):
+    /// the chat instruction layer instead of the non-interactive one, and
+    /// surface and activity kind `chat`. Needs `ordinary` and no `route`.
+    #[serde(default)]
+    pub chat: bool,
     /// Model spec stored on a new thread, so every later turn keeps it.
     #[serde(default)]
     pub model: Option<String>,
@@ -220,15 +233,18 @@ pub enum Request {
         #[serde(default)]
         force: bool,
     },
-    /// Streams every event. A `renderer` (the bot) holds Telegram-routed
-    /// threads after each turn until it releases them; only one renderer may
-    /// be subscribed. `replay`: give this renderer the holds whose owner went
-    /// away before it started delivering.
+    /// Streams every event, or with `thread_id` (capability
+    /// `subscribe_thread`) only that thread's. A `renderer` (the bot) holds
+    /// Telegram-routed threads after each turn until it releases them; only
+    /// one renderer may be subscribed. `replay`: give this renderer the holds
+    /// whose owner went away before it started delivering.
     Subscribe {
         #[serde(default)]
         renderer: bool,
         #[serde(default)]
         replay: bool,
+        #[serde(default)]
+        thread_id: Option<String>,
     },
     /// Managed workers, all or of one owner.
     Workers {

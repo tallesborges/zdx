@@ -24,7 +24,7 @@ use anyhow::{Context, Result, bail};
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use super::prompt::{prepare_turn, turn_config};
+use super::prompt::{OrdinaryLayer, prepare_turn, turn_config};
 use super::protocol::{
     Delivery, ErrorCode, Event, Follow, InputRef, ReplayStatus, Route, StatusReport, Submit,
     ThreadState, ThreadStatus, TurnKind,
@@ -48,6 +48,9 @@ use crate::tools::orchestrator::OrchestratorTool;
 /// persistent-profile thread from any other run, so this service is the one
 /// writer of those threads.
 pub const ACTIVITY_KIND: &str = "orchestrator";
+/// Surface and activity kind of an interactive terminal chat's turns
+/// ([`Submit::chat`]).
+pub const CHAT_ACTIVITY_KIND: &str = "chat";
 
 /// Longest a renderer may hold a thread after a turn before it continues.
 const RELEASE_TIMEOUT: Duration = Duration::from_mins(10);
@@ -69,6 +72,8 @@ pub struct TurnRequest {
     /// An ordinary agent thread ([`Submit::ordinary`]), not a persistent
     /// profile.
     pub ordinary: bool,
+    /// An ordinary turn of an interactive terminal chat ([`Submit::chat`]).
+    pub chat: bool,
     /// Run on the persisted history without recording a user message
     /// ([`Submit::rerun`]); `text` and `images` are empty.
     pub rerun: bool,
@@ -151,6 +156,7 @@ struct TurnSetup {
     route: Option<Route>,
     config_root: PathBuf,
     ordinary: bool,
+    chat: bool,
     run_lease: Option<Arc<ThreadRunLease>>,
 }
 
@@ -210,6 +216,9 @@ struct Running {
 struct ThreadEntry {
     /// Runs as an ordinary agent thread ([`Submit::ordinary`]).
     ordinary: bool,
+    /// Its ordinary turns are an interactive chat's ([`Submit::chat`]); the
+    /// latest submit decides.
+    chat: bool,
     config_root: PathBuf,
     route: Option<Route>,
     queue: VecDeque<Input>,
@@ -225,6 +234,7 @@ impl ThreadEntry {
     fn new(config_root: PathBuf) -> Self {
         Self {
             ordinary: false,
+            chat: false,
             config_root,
             route: None,
             queue: VecDeque::new(),
@@ -497,6 +507,12 @@ impl Orchestrator {
         } else if submit.text.trim().is_empty() && submit.images.is_empty() {
             return Err(coded(ErrorCode::Invalid, "message is empty"));
         }
+        if submit.chat && (!submit.ordinary || submit.route.is_some()) {
+            return Err(coded(
+                ErrorCode::Invalid,
+                "`chat` applies only to an ordinary thread without a route",
+            ));
+        }
         let root = submit
             .root
             .canonicalize()
@@ -523,6 +539,17 @@ impl Orchestrator {
                     },
                     if entry.ordinary { "with" } else { "without" },
                 ),
+            ));
+        }
+        // A chat turn must not take the route a Telegram submit left on the
+        // thread: its reply would be held for the bot.
+        if submit.chat
+            && let Some(id) = submit.thread_id.as_deref()
+            && threads.get(id).is_some_and(|entry| entry.route.is_some())
+        {
+            return Err(coded(
+                ErrorCode::Conflict,
+                format!("thread '{id}' answers in Telegram here; open it in its topic"),
             ));
         }
         // The run lease is taken when the first input is accepted, so no
@@ -562,6 +589,7 @@ impl Orchestrator {
             });
         }
         entry.ordinary = submit.ordinary;
+        entry.chat = submit.chat;
         entry.config_root = root;
         if submit.route.is_some() {
             entry.route = submit.route;
@@ -1073,11 +1101,13 @@ impl Orchestrator {
                             entry.route,
                             entry.config_root.clone(),
                             entry.ordinary,
+                            entry.chat,
                         ))
                     }
                 }
             };
-            let Some((turn_id, cancel, steer, batch, route, config_root, ordinary)) = next else {
+            let Some((turn_id, cancel, steer, batch, route, config_root, ordinary, chat)) = next
+            else {
                 let _ = self.control.send(Control::ThreadIdle(thread_id));
                 return;
             };
@@ -1114,6 +1144,7 @@ impl Orchestrator {
                         route,
                         config_root,
                         ordinary,
+                        chat,
                         run_lease: Some(run_lease),
                     },
                 )
@@ -1355,6 +1386,7 @@ impl Orchestrator {
             route,
             config_root,
             ordinary,
+            chat,
             run_lease,
         } = setup;
         let kind = if batch.iter().all(Input::is_worker_update) {
@@ -1397,6 +1429,7 @@ impl Orchestrator {
         let run = (self.runner)(TurnRequest {
             thread_id: thread_id.to_string(),
             ordinary,
+            chat,
             rerun,
             config_root,
             route,
@@ -1930,6 +1963,7 @@ async fn run_profile_turn(request: TurnRequest) {
     let TurnRequest {
         thread_id,
         ordinary: _,
+        chat: _,
         rerun: _,
         config_root,
         route,
@@ -2047,6 +2081,7 @@ async fn run_ordinary_turn(request: TurnRequest) {
     let TurnRequest {
         thread_id,
         ordinary: _,
+        chat,
         rerun,
         config_root,
         route,
@@ -2059,7 +2094,14 @@ async fn run_ordinary_turn(request: TurnRequest) {
         run_lease,
     } = request;
     let input = (!rerun).then_some((text, images.as_slice()));
-    let prepared = match prepare_ordinary_turn(&thread_id, &config_root, route, input, run_lease) {
+    let layer = if route.is_some() {
+        OrdinaryLayer::Telegram
+    } else if chat {
+        OrdinaryLayer::Chat
+    } else {
+        OrdinaryLayer::Exec
+    };
+    let prepared = match prepare_ordinary_turn(&thread_id, &config_root, layer, input, run_lease) {
         Ok(prepared) => prepared,
         Err(err) => {
             tracing::error!(thread = %thread_id, err = %format!("{err:#}"), "Failed to prepare ordinary turn");
@@ -2068,11 +2110,11 @@ async fn run_ordinary_turn(request: TurnRequest) {
         }
     };
     // Routed turns are the bot's topics and keep its surface and activity
-    // kind; others run as this service's turns.
-    let surface = if route.is_some() {
-        "telegram"
-    } else {
-        ACTIVITY_KIND
+    // kind, chat turns the terminal chat's; others run as this service's.
+    let surface = match layer {
+        OrdinaryLayer::Telegram => "telegram",
+        OrdinaryLayer::Chat => CHAT_ACTIVITY_KIND,
+        OrdinaryLayer::Exec => ACTIVITY_KIND,
     };
     let options = AgentOptions {
         conversation_id: None,
@@ -2115,7 +2157,7 @@ struct ReadyOrdinaryTurn {
 fn prepare_ordinary_turn(
     thread_id: &str,
     config_root: &Path,
-    route: Option<Route>,
+    layer: OrdinaryLayer,
     input: Option<(String, &[InputImage])>,
     run_lease: Option<Arc<ThreadRunLease>>,
 ) -> Result<ReadyOrdinaryTurn> {
@@ -2149,7 +2191,7 @@ fn prepare_ordinary_turn(
         // Tools get the run's ZDX_* values from their context; never the
         // process environment, which concurrent turns share.
         let _ = crate::skills::ensure_bundled_skills_materialized();
-        let prompt = super::prompt::prepare_ordinary_turn(&config, &run_root, route)?;
+        let prompt = super::prompt::prepare_ordinary_turn(&config, &run_root, layer)?;
         Ok((config, prompt))
     })();
     if stored_root.is_none() {
@@ -2339,6 +2381,7 @@ mod tests {
             profile: None,
             ordinary: false,
             rerun: false,
+            chat: false,
             model: None,
             route,
             text: text.to_string(),
@@ -2469,6 +2512,95 @@ mod tests {
                 .capabilities
                 .iter()
                 .any(|name| name == super::super::protocol::CAPABILITY_ORDINARY_SUBMIT)
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_submits_reach_the_runner_only_as_unrouted_ordinary_turns() {
+        let _home = crate::test_support::temp_zdx_home();
+        let root = tempfile::tempdir().unwrap();
+        let (workers, events) = instant_workers();
+        let chats: Arc<StdMutex<Vec<bool>>> = Arc::default();
+        let recorded = Arc::clone(&chats);
+        let runner: TurnRunner = Arc::new(move |request: TurnRequest| {
+            let recorded = Arc::clone(&recorded);
+            Box::pin(async move {
+                recorded.lock().unwrap().push(request.chat);
+                let _ = request.events.send(Arc::new(AgentEvent::TurnFinished {
+                    status: TurnStatus::Completed,
+                    final_text: String::new(),
+                    messages: Vec::new(),
+                    prior_message_count: 0,
+                }));
+            })
+        });
+        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        let chat = |id: &str| Submit {
+            ordinary: true,
+            chat: true,
+            ..submit(root.path(), Some(id), "hi", None)
+        };
+        let invalid = |submit: Submit| {
+            let err = orchestrator.submit(submit).unwrap_err();
+            assert_eq!(
+                super::super::thread_ops::error_code(&err),
+                Some(ErrorCode::Invalid)
+            );
+        };
+        invalid(Submit {
+            ordinary: false,
+            ..chat("chat-a")
+        });
+        invalid(Submit {
+            route: Some(Route {
+                chat: 1,
+                topic: None,
+            }),
+            ..chat("chat-a")
+        });
+
+        let mut subscription = orchestrator
+            .subscribe(Some("chat-a".to_string()), false, false)
+            .unwrap();
+        orchestrator.submit(chat("chat-a")).unwrap();
+        while !matches!(next_event(&mut subscription).await, Event::TurnEnded { .. }) {}
+        // The latest submit decides: a plain ordinary submit runs unchatted.
+        orchestrator
+            .submit(Submit {
+                chat: false,
+                ..chat("chat-a")
+            })
+            .unwrap();
+        while !matches!(next_event(&mut subscription).await, Event::TurnEnded { .. }) {}
+        assert_eq!(*chats.lock().unwrap(), vec![true, false]);
+
+        // A thread a Telegram submit routed refuses chat turns.
+        let mut routed = orchestrator
+            .subscribe(Some("chat-b".to_string()), false, false)
+            .unwrap();
+        orchestrator
+            .submit(Submit {
+                chat: false,
+                route: Some(Route {
+                    chat: 1,
+                    topic: None,
+                }),
+                ..chat("chat-b")
+            })
+            .unwrap();
+        while !matches!(next_event(&mut routed).await, Event::TurnEnded { .. }) {}
+        let err = orchestrator.submit(chat("chat-b")).unwrap_err();
+        assert_eq!(
+            super::super::thread_ops::error_code(&err),
+            Some(ErrorCode::Conflict)
+        );
+        assert!(
+            orchestrator
+                .status(None)
+                .await
+                .capabilities
+                .iter()
+                .any(|name| name == super::super::protocol::CAPABILITY_CHAT_SUBMIT)
         );
     }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/tallesborges/zdx/apps/monitor/internal/data"
 	"github.com/tallesborges/zdx/apps/monitor/internal/realsvc"
 	"github.com/tallesborges/zdx/apps/monitor/internal/source"
+	"github.com/tallesborges/zdx/apps/shared/transcript"
 )
 
 const (
@@ -155,7 +156,7 @@ func TestRealServiceTranscript(t *testing.T) {
 	if v := delta.Activity[0].View; v == nil || v.Outcome != "pending" {
 		t.Fatalf("a call with no result carries an input-only view: %+v", v)
 	}
-	merged := mergeThread(&full, delta)
+	merged := transcript.Merge(&full, delta)
 	fresh, _, err := src.Thread(ctx, seedMain, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -192,7 +193,7 @@ func TestRealServiceTranscript(t *testing.T) {
 	if err != nil || len(agents) != 1 || str(agents[0].ThreadID) != seedMain || agents[0].Run.RunningTools != 1 {
 		t.Fatalf("agents %+v %v", agents, err)
 	}
-	merged = mergeThread(&merged, live)
+	merged = transcript.Merge(&merged, live)
 	if types(merged) != "message,reasoning,usage,tool_use,tool_result,message,tool_use,tool_running" {
 		t.Fatalf("merged live %s", types(merged))
 	}
@@ -209,7 +210,7 @@ func TestRealServiceTranscript(t *testing.T) {
 	if done == nil || done.CompletedAt == nil || done.OK == nil || !*done.OK || done.DurationMS == nil || *done.DurationMS != 2000 {
 		t.Fatalf("finished live tool %+v", done)
 	}
-	finishedLine, _ := renderActivity(&finished, 120, false, nil)
+	finishedLine, _ := transcript.Render(&finished, 120, transcript.Options{}, nil)
 	if got := ansi.Strip(strings.Join(finishedLine, "\n")); !strings.Contains(got, "✓ bash $ sleep 30 finished 2s, not saved yet") || strings.Contains(got, "sleep 30 running") {
 		t.Fatalf("finished live tool renders as:\n%s", got)
 	}
@@ -228,7 +229,7 @@ func TestRealServiceTranscript(t *testing.T) {
 	if types(landed) != "tool_use,tool_result" || landed.Cursor != 10 {
 		t.Fatalf("landed %s cursor %d", types(landed), landed.Cursor)
 	}
-	merged = mergeThread(&merged, landed)
+	merged = transcript.Merge(&merged, landed)
 	realsvc.RemoveRunMarker(t, home, "seed-run")
 	final, _, err := src.Thread(ctx, seedMain, nil)
 	if err != nil {

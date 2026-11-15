@@ -8,6 +8,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/tallesborges/zdx/apps/shared/transcript"
 )
 
 var (
@@ -41,7 +42,7 @@ func pad(s string, width int) string {
 
 // oneLine is external text (cleaned) on one line.
 func oneLine(s string) string {
-	s = strings.ReplaceAll(cleanText(s), "\n", " ")
+	s = strings.ReplaceAll(transcript.Clean(s), "\n", " ")
 	return strings.Join(strings.Fields(s), " ")
 }
 

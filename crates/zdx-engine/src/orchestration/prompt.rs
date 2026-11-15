@@ -115,21 +115,31 @@ pub struct OrdinaryPrompt {
     pub runtime_context: Option<RuntimeContext>,
 }
 
+/// The instruction layer of an ordinary agent turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrdinaryLayer {
+    /// A routed turn: the bot's topic agent.
+    Telegram,
+    /// An interactive terminal chat ([`super::protocol::Submit::chat`]).
+    Chat,
+    /// Non-interactive: nobody answers while it runs.
+    Exec,
+}
+
 /// Builds the system prompt of an ordinary agent turn: project context,
-/// memory, and skills, plus the Telegram instruction layer on a routed turn
-/// (the bot's topic agent) or the non-interactive exec layer otherwise.
+/// memory, and skills, plus the instruction layer of its surface.
 ///
 /// # Errors
 /// Returns an error if the prompt cannot be built.
 pub fn prepare_ordinary_turn(
     config: &Config,
     root: &Path,
-    route: Option<Route>,
+    layer: OrdinaryLayer,
 ) -> Result<OrdinaryPrompt> {
-    let layer = if route.is_some() {
-        crate::prompts::TELEGRAM_INSTRUCTION_LAYER
-    } else {
-        crate::prompts::EXEC_INSTRUCTION_LAYER
+    let layer = match layer {
+        OrdinaryLayer::Telegram => crate::prompts::TELEGRAM_INSTRUCTION_LAYER,
+        OrdinaryLayer::Chat => crate::prompts::CHAT_INSTRUCTION_LAYER,
+        OrdinaryLayer::Exec => crate::prompts::EXEC_INSTRUCTION_LAYER,
     }
     .trim();
     let layers: Vec<&str> = (!layer.is_empty()).then_some(layer).into_iter().collect();

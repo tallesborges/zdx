@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/tallesborges/zdx/apps/monitor/internal/data"
+	"github.com/tallesborges/zdx/apps/shared/transcript"
 )
 
 type configTab struct {
@@ -73,7 +74,7 @@ func jsonValue(raw json.RawMessage) string {
 	}
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
-		return cleanText(s)
+		return transcript.Clean(s)
 	}
 	return oneLine(string(raw))
 }

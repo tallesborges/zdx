@@ -87,6 +87,13 @@ const (
 	CapPreparePhoto = "prepare_photo"
 	// CapTouchedWorkers: turn_ended.touched_workers.
 	CapTouchedWorkers = "touched_workers"
+	// CapCatalog: catalog (model picker, thread status card, ...).
+	CapCatalog = "catalog"
+	// CapChatSubmit: submit.chat, an ordinary turn of an interactive
+	// terminal chat (the chat instruction layer).
+	CapChatSubmit = "chat_submit"
+	// CapSubscribeThread: subscribe.thread_id, one thread's events only.
+	CapSubscribeThread = "subscribe_thread"
 )
 
 // StatusReport is the body of a status reply.

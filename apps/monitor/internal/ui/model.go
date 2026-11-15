@@ -13,6 +13,7 @@ import (
 	"github.com/tallesborges/zdx/apps/monitor/internal/data"
 	"github.com/tallesborges/zdx/apps/monitor/internal/source"
 	"github.com/tallesborges/zdx/apps/monitor/internal/wire"
+	"github.com/tallesborges/zdx/apps/shared/transcript"
 )
 
 type tab int
@@ -136,18 +137,18 @@ func (m *Model) applyResult(r resultMsg) tea.Cmd {
 	st.err, st.fetched, st.origin = nil, m.now(), r.origin
 	switch v := r.value.(type) {
 	case *wire.StatusReport:
-		cleanAll(v)
+		transcript.CleanAll(v)
 		m.status = v
 	case data.ServiceStatus:
-		cleanAll(&v)
+		transcript.CleanAll(&v)
 		m.services = &v
 		m.svcList.sync(serviceIDs(v.Services))
 	case data.Snapshot:
-		cleanAll(&v)
+		transcript.CleanAll(&v)
 		m.snapshot = &v
 		m.background.sync(backgroundIDs(v.BackgroundProcesses))
 	case []data.Agent:
-		cleanAll(&v)
+		transcript.CleanAll(&v)
 		m.agents.set(v)
 		if m.agents.syncParents() {
 			m.fetch[keyParents].force = true
@@ -156,37 +157,37 @@ func (m *Model) applyResult(r resultMsg) tea.Cmd {
 	case parentsAnswer:
 		m.applyParents(v.result, v.lookups)
 	case data.ThreadList:
-		cleanAll(&v)
+		transcript.CleanAll(&v)
 		m.threads.set(v)
 	case transcriptResult:
-		cleanAll(&v.thread)
+		transcript.CleanAll(&v.thread)
 		if m.transcript != nil && m.transcript.threadID == v.id && !m.transcript.apply(v, m.contentWidth()) {
 			m.invalidate(keyTranscript)
 			m.invalidate(keyTrajectory)
 			return m.refresh(m.now())
 		}
 	case trajectoryResult:
-		cleanAll(&v.report)
+		transcript.CleanAll(&v.report)
 		if t := m.transcript; t != nil && t.threadID == v.id && t.traj != nil {
 			t.traj.report = &v.report
 			t.traj.lines = trajectoryLines(v.report, m.contentWidth())
 		}
 	case data.Usage:
-		cleanAll(&v)
+		transcript.CleanAll(&v)
 		m.usage.data = &v
 	case []data.Subscription:
-		cleanAll(&v)
+		transcript.CleanAll(&v)
 		m.usage.quotas = v
 		m.usage.quotasLoaded = true
 	case data.Workspaces:
-		cleanAll(&v)
+		transcript.CleanAll(&v)
 		m.config.set(v)
 	case data.DaemonJobs:
-		cleanAll(&v)
+		transcript.CleanAll(&v)
 		m.jobs.set(v)
 	case source.LogTail:
-		cleanAll(&v.Files)
-		cleanAll(&v.Lines)
+		transcript.CleanAll(&v.Files)
+		transcript.CleanAll(&v.Lines)
 		m.logs.apply(v)
 	default:
 		return nil

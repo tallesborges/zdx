@@ -15,6 +15,10 @@ default:
 run *ARGS:
     cargo run -p zdx -- {{ARGS}}
 
+# Run the Go chat TUI from this checkout (turns run in the orchestrator service). TUI args go after the recipe name.
+tui *ARGS: tui-build
+    apps/tui/bin/zdx-tui {{ARGS}}
+
 # Run the read-only monitor from this checkout (builds the Go monitor; `zdx monitor` execs it). Monitor args go after `--`.
 monitor *ARGS: monitor-build
     ZDX_MONITOR="{{justfile_directory()}}/apps/monitor/bin/zdx-monitor" cargo run -p zdx -- monitor {{ARGS}}
@@ -121,7 +125,15 @@ monitor-check:
 monitor-build OUT=(justfile_directory() + "/apps/monitor/bin/zdx-monitor"):
     cd apps/monitor && go build -trimpath -ldflags "$(../shared/ldflags.sh)" -o "{{OUT}}" ./cmd/zdx-monitor
 
-# Shared Go module (apps/shared: socket, protocol, quota, zdx-quota): format, vet, race tests
+# Go chat TUI (apps/tui): format, vet, race tests (Go toolchain pinned in its go.mod)
+tui-check:
+    cd apps/tui && test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...
+
+# Build zdx-tui (Go only, no cargo; default output apps/tui/bin/zdx-tui)
+tui-build OUT=(justfile_directory() + "/apps/tui/bin/zdx-tui"):
+    cd apps/tui && go build -trimpath -o "{{OUT}}" ./cmd/zdx-tui
+
+# Shared Go module (apps/shared: socket, protocol, transcript, quota, zdx-quota): format, vet, race tests
 shared-check:
     cd apps/shared && test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...
 
@@ -176,6 +188,13 @@ monitor-install:
     cd apps/monitor && go build -trimpath -ldflags "$(../shared/ldflags.sh)" -o ~/.local/bin/.zdx-monitor.new ./cmd/zdx-monitor
     mv -f ~/.local/bin/.zdx-monitor.new ~/.local/bin/zdx-monitor
     @echo "Installed ~/.local/bin/zdx-monitor"
+
+# Build the Go chat TUI into ~/.local/bin/zdx-tui
+tui-install:
+    @mkdir -p ~/.local/bin
+    cd apps/tui && go build -trimpath -o ~/.local/bin/.zdx-tui.new ./cmd/zdx-tui
+    mv -f ~/.local/bin/.zdx-tui.new ~/.local/bin/zdx-tui
+    @echo "Installed ~/.local/bin/zdx-tui"
 
 # Build the Go quota reader into ~/.local/bin/zdx-quota, the path `zdx quota` runs
 quota-install:

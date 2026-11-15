@@ -142,8 +142,17 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
                 return follow_submit(orchestrator, submit, follow, lines, write).await;
             }
         }
-        Request::Subscribe { renderer, replay } => {
-            let mut subscription = match orchestrator.subscribe(None, renderer, replay) {
+        Request::Subscribe {
+            renderer,
+            replay,
+            thread_id,
+        } => {
+            if let Some(id) = thread_id.as_deref()
+                && let Err(err) = thread_ops::validate_thread_id(id)
+            {
+                return write_reply(&mut write, &error_reply(&err)).await;
+            }
+            let mut subscription = match orchestrator.subscribe(thread_id, renderer, replay) {
                 Ok(subscription) => subscription,
                 Err(err) => return write_reply(&mut write, &error_reply(&err)).await,
             };
@@ -679,6 +688,7 @@ mod tests {
             profile: None,
             ordinary: false,
             rerun: false,
+            chat: false,
             model: None,
             route: None,
             text: text.to_string(),
@@ -744,6 +754,7 @@ mod tests {
                 profile: None,
                 ordinary: false,
                 rerun: false,
+                chat: false,
                 model: None,
                 route: None,
                 text: "hello".to_string(),

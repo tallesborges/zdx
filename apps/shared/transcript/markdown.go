@@ -1,4 +1,4 @@
-package ui
+package transcript
 
 import (
 	"strings"
@@ -37,17 +37,17 @@ const (
 	fHeading1
 )
 
-// mdTheme styles one kind of prose. A muted theme (thinking) keeps the
+// Theme styles one kind of prose. A muted theme (thinking) keeps the
 // structure and formats but draws everything dim.
-type mdTheme struct {
+type Theme struct {
 	muted  bool
 	styles map[mdFlag]lipgloss.Style
 	paints map[mdFlag][2]string
 }
 
 var (
-	mdNormal = newMDTheme(false)
-	mdMuted  = newMDTheme(true)
+	Normal = newMDTheme(false)
+	Muted  = newMDTheme(true)
 
 	mdCodeColor  = lipgloss.ANSIColor(216)
 	mdLinkColor  = lipgloss.Blue
@@ -61,7 +61,7 @@ var (
 	tableBar       = mdTableLines.Render(" │ ")
 )
 
-func (t *mdTheme) style(f mdFlag) lipgloss.Style {
+func (t *Theme) style(f mdFlag) lipgloss.Style {
 	if s, ok := t.styles[f]; ok {
 		return s
 	}
@@ -94,8 +94,8 @@ func (t *mdTheme) style(f mdFlag) lipgloss.Style {
 	return s
 }
 
-func newMDTheme(muted bool) *mdTheme {
-	t := &mdTheme{muted: muted, styles: map[mdFlag]lipgloss.Style{}, paints: map[mdFlag][2]string{}}
+func newMDTheme(muted bool) *Theme {
+	t := &Theme{muted: muted, styles: map[mdFlag]lipgloss.Style{}, paints: map[mdFlag][2]string{}}
 	// Fill both maps now: the themes are shared, and tests render from
 	// several goroutines.
 	for f := mdFlag(0); f < fHeading1<<1; f++ {
@@ -107,12 +107,12 @@ func newMDTheme(muted bool) *mdTheme {
 	return t
 }
 
-func (t *mdTheme) text() lipgloss.Style { return t.style(0) }
+func (t *Theme) text() lipgloss.Style { return t.style(0) }
 
 // paint is style(f).Render(s) for one line of clean text, from the
 // sequences the style writes around a single character: a Render call per
 // word was most of the layout time.
-func (t *mdTheme) paint(f mdFlag, s string) string {
+func (t *Theme) paint(f mdFlag, s string) string {
 	if s == "" {
 		return ""
 	}
@@ -138,14 +138,14 @@ const (
 
 type mdRenderer struct {
 	src   []byte
-	theme *mdTheme
+	theme *Theme
 }
 
 // renderMarkdown lays src out as lines at most width cells wide.
-func renderMarkdown(src string, width int, theme *mdTheme) []string {
+func Markdown(src string, width int, theme *Theme) []string {
 	// Two cells hold any character, wide ones included.
 	width = max(width, 2)
-	src = cleanText(src)
+	src = Clean(src)
 	source := []byte(src)
 	doc := parser.New(parser.WithExtensions(extension.NewGFMParser())).Parse(source)
 	r := &mdRenderer{src: source, theme: theme}
@@ -163,13 +163,13 @@ func renderMarkdown(src string, width int, theme *mdTheme) []string {
 // carriage return here came from an entity (`&#13;`): it is a space, not a
 // return that would hide the text before it.
 func (r *mdRenderer) str(s string) string {
-	return cleanText(strings.ReplaceAll(s, "\r", " "))
+	return Clean(strings.ReplaceAll(s, "\r", " "))
 }
 
 // plain wraps text without Markdown, in the theme's text style.
 func (r *mdRenderer) plain(s string, width int) []string {
 	var out []string
-	for _, l := range wrapText(s, width) {
+	for _, l := range WrapText(s, width) {
 		out = append(out, r.theme.text().Render(l))
 	}
 	return out
@@ -569,7 +569,7 @@ func (r *mdRenderer) wrap(atoms []atom, width int) []string {
 // lineBuilder joins styled text, opening a style once per run of equal
 // formats.
 type lineBuilder struct {
-	theme *mdTheme
+	theme *Theme
 	b     strings.Builder
 	run   strings.Builder
 	f     mdFlag
@@ -815,35 +815,35 @@ func fitColumns(natural []int, room int) []int {
 	return widths
 }
 
-// mdCache keeps rendered Markdown per activity item and width across
+// Cache keeps rendered Markdown per activity item and width across
 // rebuilds: a poll that adds one message renders only that message. Each
 // rebuild keeps only the entries it used, so the cache never outgrows the
 // transcript.
-type mdCache struct {
-	prev, next map[mdKey]mdEntry
+type Cache struct {
+	prev, next map[cacheKey]cacheEntry
 }
 
-type mdKey struct {
+type cacheKey struct {
 	seq   uint64
 	width int
 	muted bool
 }
 
-type mdEntry struct {
+type cacheEntry struct {
 	text  string
 	lines []string
 }
 
-// render returns the lines for one item's text, from the cache when the
+// Render returns the lines for one item's text, from the cache when the
 // item, text, width, and theme match.
-func (c *mdCache) render(seq uint64, text string, width int, theme *mdTheme) []string {
+func (c *Cache) Render(seq uint64, text string, width int, theme *Theme) []string {
 	if c == nil {
-		return renderMarkdown(text, width, theme)
+		return Markdown(text, width, theme)
 	}
 	if c.next == nil {
-		c.next = map[mdKey]mdEntry{}
+		c.next = map[cacheKey]cacheEntry{}
 	}
-	k := mdKey{seq: seq, width: width, muted: theme.muted}
+	k := cacheKey{seq: seq, width: width, muted: theme.muted}
 	if e, ok := c.next[k]; ok && e.text == text {
 		return e.lines
 	}
@@ -851,13 +851,13 @@ func (c *mdCache) render(seq uint64, text string, width int, theme *mdTheme) []s
 		c.next[k] = e
 		return e.lines
 	}
-	lines := renderMarkdown(text, width, theme)
-	c.next[k] = mdEntry{text: text, lines: lines}
+	lines := Markdown(text, width, theme)
+	c.next[k] = cacheEntry{text: text, lines: lines}
 	return lines
 }
 
-// done ends a rebuild: entries not used by it are dropped.
-func (c *mdCache) done() {
+// Done ends a rebuild: entries not used by it are dropped.
+func (c *Cache) Done() {
 	if c == nil {
 		return
 	}

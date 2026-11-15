@@ -17,6 +17,7 @@ import (
 	"github.com/tallesborges/zdx/apps/monitor/internal/sandbox"
 	"github.com/tallesborges/zdx/apps/monitor/internal/source"
 	"github.com/tallesborges/zdx/apps/monitor/internal/wire"
+	"github.com/tallesborges/zdx/apps/shared/transcript"
 )
 
 func TestMain(m *testing.M) {
@@ -434,7 +435,7 @@ func TestMergeThreadKeepsPersistedAndReplacesRunningTools(t *testing.T) {
 	delta := data.Thread{Partial: true, Cursor: 4, Activity: []data.Activity{
 		{Type: "tool_result", Sequence: 3, ToolUseID: "c1"},
 	}}
-	got := mergeThread(old, delta)
+	got := transcript.Merge(old, delta)
 	var types []string
 	for _, a := range got.Activity {
 		types = append(types, a.Type)
@@ -442,7 +443,7 @@ func TestMergeThreadKeepsPersistedAndReplacesRunningTools(t *testing.T) {
 	if strings.Join(types, ",") != "message,tool_use,tool_result" || got.Cursor != 4 {
 		t.Fatalf("got %v cursor %d", types, got.Cursor)
 	}
-	full := mergeThread(old, data.Thread{Activity: []data.Activity{{Type: "message", Sequence: 1}}})
+	full := transcript.Merge(old, data.Thread{Activity: []data.Activity{{Type: "message", Sequence: 1}}})
 	if len(full.Activity) != 1 {
 		t.Fatal("a full answer replaces")
 	}
