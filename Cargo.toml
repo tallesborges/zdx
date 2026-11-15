@@ -85,7 +85,12 @@ codegen-units = 256
 [profile.dev.package."*"]
 debug = 0
 
-# The CLI crate is glue. Its release codegen runs last, after the engine, so it
-# adds straight to build time; opt-level 1 shortens it with no measured runtime cost.
+# Release builds of the engine and the CLI crate run at opt-level 1: no runtime
+# cost was measured (thread reindex, stats, search, exec). At opt-level 0-1 rustc
+# shares generic instantiations between crates, so the CLI crate reuses the
+# engine's instead of compiling its own; that halves the CLI step.
+[profile.release.package.zdx-engine]
+opt-level = 1
+
 [profile.release.package.zdx]
 opt-level = 1

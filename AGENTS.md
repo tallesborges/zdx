@@ -66,7 +66,7 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `just update-config` (maintainer: refresh default_config.toml)
 - `just codebase` (generate codebase.txt for entire workspace)
 - `just codebase crates/zdx-engine` (generate codebase.txt for specific crate)
-- `just build-release` (build the release `zdx` binary, not incremental; Rust only: it needs neither Go nor the Mini App build. The `zdx` CLI crate builds at `opt-level = 1` in release, see `Cargo.toml`)
+- `just build-release` (build the release `zdx` binary, not incremental; Rust only: it needs neither Go nor the Mini App build. The engine and the `zdx` CLI crate build at `opt-level = 1` in release, see `Cargo.toml`)
 - `just gateway-check` (Go gateway: `gofmt`, `go vet`, `go test -race`) / `just gateway-build [OUT]` (gateway binary with the Mini App embedded; runs the cached web build) / `just gateway-install` (build it into `~/.local/bin/zdx-gateway`, the bot service's program)
 - `just shared-check` (shared Go module: `gofmt`, `go vet`, `go test -race`) / `just quota-build [OUT]` / `just quota-install` (build `zdx-quota` into `~/.local/bin/zdx-quota`, what `zdx quota` runs) / `just jobs-build [OUT]` / `just jobs-install` (build `zdx-jobs` into `~/.local/bin/zdx-jobs`, what `zdx jobs` and the daemon service run). Go programs that report the zdx version build with `-ldflags "$(apps/shared/ldflags.sh)"`
 - `just monitor-check` (Go monitor: `gofmt`, `go vet`, `go test -race`) / `just monitor-build [OUT]` (Go only, no cargo) / `just monitor-install` (build it into `~/.local/bin/zdx-monitor`, what `zdx monitor` runs; deploys never install it, they only refresh an installed copy)
