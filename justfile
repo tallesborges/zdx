@@ -133,7 +133,7 @@ tui-check:
 tui-build OUT=(justfile_directory() + "/apps/tui/bin/zdx-tui"):
     cd apps/tui && go build -trimpath -o "{{OUT}}" ./cmd/zdx-tui
 
-# Shared Go module (apps/shared: socket, protocol, transcript, quota, zdx-quota): format, vet, race tests
+# Shared Go module (apps/shared: socket, protocol, transcript, quota, jobs, zdx-quota, zdx-jobs): format, vet, race tests
 shared-check:
     cd apps/shared && test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...
 
