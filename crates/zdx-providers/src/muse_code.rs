@@ -8,6 +8,8 @@
 //! does not predict expiry. The cached key is used as-is, and a rejection
 //! (HTTP 401/403) triggers exactly one re-mint from the stored identity token
 //! before the request is retried. A second rejection is surfaced to the user.
+//! A 403 `client_attestation_denied` is not a rejection of the key and is
+//! surfaced at once.
 //!
 //! ⚠️ Unsupported by Meta. Its documentation states a Muse Code subscription
 //! "only works through the Muse Code CLI". Whether a key minted outside that
@@ -40,12 +42,21 @@ pub fn resolve_api_key(account: Option<&str>) -> Result<String> {
     Ok(creds.access)
 }
 
+/// Error code of Meta's client gate: a 403 for a valid subscription key whose
+/// request Meta does not accept as coming from the Muse Code client.
+///
+/// Observed 2026-11-15: requests that declare tools named like Muse Code
+/// builtins (`bash`, `web_search`, ...) get it, others with the same key do
+/// not. A re-mint returns the same key, so it cannot help.
+const CLIENT_ATTESTATION_DENIED: &str = "client_attestation_denied";
+
 /// Whether Meta rejected the credential itself, as opposed to the request.
 fn is_credential_rejection(error: &anyhow::Error) -> bool {
-    error
-        .downcast_ref::<ProviderError>()
-        .and_then(|err| err.status)
-        .is_some_and(|status| status == 401 || status == 403)
+    error.downcast_ref::<ProviderError>().is_some_and(|err| {
+        err.status
+            .is_some_and(|status| status == 401 || status == 403)
+            && err.code.as_deref() != Some(CLIENT_ATTESTATION_DENIED)
+    })
 }
 
 fn build_headers(api_key: &str) -> Result<HeaderMap> {
@@ -239,6 +250,15 @@ mod tests {
             assert!(!is_credential_rejection(&err), "status {status}");
         }
         assert!(!is_credential_rejection(&anyhow::anyhow!("boom")));
+    }
+
+    #[test]
+    fn client_attestation_denial_is_not_a_credential_rejection() {
+        // The key is valid; re-minting returns the same key and burns a call
+        // on the rate-limited mint endpoint.
+        let body = r#"{"error":{"code":"client_attestation_denied","message":"Muse Code subscriptions cover requests from the Muse Code client only.","type":"permission_error"}}"#;
+        let err = anyhow::Error::new(ProviderError::http_status(403, body));
+        assert!(!is_credential_rejection(&err));
     }
 
     #[test]
