@@ -64,6 +64,8 @@ type Backend interface {
 	Threads(ctx context.Context) ([]transcript.ThreadListItem, error)
 	Thread(ctx context.Context, id string, after *uint64) (transcript.Thread, error)
 	PrepareImage(ctx context.Context, path string) (*engine.Image, error)
+	Followups(ctx context.Context, finalText string) ([]string, error)
+	RunningTurn(ctx context.Context, threadID string) (uint64, error)
 	TranscribeAudio(ctx context.Context, path, mime string) (string, error)
 }
 
@@ -123,7 +125,9 @@ type Model struct {
 	nextLocal uint64
 	pending   int
 
-	failed     bool
+	failed bool
+	// followups are the last reply's suggested replies (ctrl+f).
+	followups  []string
 	firstSent  bool
 	pendingSel *string
 
@@ -211,7 +215,10 @@ type (
 		err error
 	}
 	resubscribeMsg struct{ gen uint64 }
-	eventMsg       struct {
+	runningMsg     struct {
+		gen, turn uint64
+	}
+	eventMsg struct {
 		gen uint64
 		sub *engine.Subscription
 		ev  engine.Event
@@ -230,6 +237,10 @@ type (
 	titledMsg struct {
 		gen   uint64
 		title string
+	}
+	followupsMsg struct {
+		gen, sent uint64
+		items     []string
 	}
 	pickerMsg struct {
 		p    *picker
@@ -346,6 +357,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case subscribedMsg:
 		return m, m.applySubscribed(msg)
+	case runningMsg:
+		// A turn that started before the subscription: steer and interrupt
+		// apply to it until its turn_ended arrives.
+		if msg.gen == m.gen && msg.turn != 0 && m.turnID == 0 {
+			if t := m.findTurn(msg.turn); t == nil || !t.ended {
+				m.turnID = msg.turn
+			}
+		}
+		return m, nil
 	case resubscribeMsg:
 		if msg.gen != m.gen {
 			return m, nil
@@ -368,6 +388,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.applyEvent(msg)
 	case noticeMsg:
 		m.setNotice(msg.text, msg.ok)
+		return m, nil
+	case followupsMsg:
+		// Dropped once another message went out: they answered the last.
+		if msg.gen == m.gen && msg.sent == m.nextLocal {
+			m.followups = nil
+			for _, f := range msg.items {
+				if f = transcript.OneLine(f); f != "" {
+					m.followups = append(m.followups, f)
+				}
+			}
+			m.liveDirty = true
+		}
 		return m, nil
 	case titledMsg:
 		if msg.gen == m.gen && msg.title != "" {
@@ -437,17 +469,31 @@ func (m *Model) applySubscribed(msg subscribedMsg) tea.Cmd {
 		return m.resubscribeLater()
 	}
 	m.sub = msg.sub
-	cmds := []tea.Cmd{waitEvent(m.gen, msg.sub)}
+	cmds := []tea.Cmd{waitEvent(m.gen, msg.sub), m.loadRunning()}
 	if m.reconnecting {
-		// Events may have passed while disconnected: the saved thread is
-		// the truth again.
+		// Events may have passed while disconnected, and a restarted
+		// service numbers inputs anew: the saved thread is the truth again,
+		// and nothing sent before is waited for (it is in the thread if it
+		// ran; nothing is re-sent).
 		m.reconnecting = false
-		m.turns, m.turnID, m.liveDirty = nil, 0, true
+		m.turns, m.turnID, m.outbox, m.liveDirty = nil, 0, nil, true
+		m.early = map[uint64]uint64{}
 		m.setNotice("reconnected", true)
 		m.thread = nil
 		cmds = append(cmds, m.loadThread(nil), m.loadStatus())
 	}
 	return tea.Batch(cmds...)
+}
+
+func (m *Model) loadRunning() tea.Cmd {
+	ctx, be, id, gen := m.threadCtx, m.be, m.threadID, m.gen
+	return func() tea.Msg {
+		turn, err := be.RunningTurn(ctx, id)
+		if err != nil {
+			return nil
+		}
+		return runningMsg{gen: gen, turn: turn}
+	}
 }
 
 func (m *Model) resubscribeLater() tea.Cmd {
@@ -466,6 +512,12 @@ func (m *Model) applyThread(msg threadMsg) tea.Cmd {
 			return nil
 		}
 		m.setNotice("thread: "+errText(msg.err), false)
+		return nil
+	}
+	if msg.after != nil && !m.quiet() {
+		// The file may already hold part of a turn that is still live
+		// here: showing both would repeat it. The load after the last
+		// turn ends installs it.
 		return nil
 	}
 	m.appliedSeq = msg.seq
@@ -506,6 +558,22 @@ func (m *Model) applyThread(msg threadMsg) tea.Cmd {
 	return nil
 }
 
+// quiet reports no live turn still running and no message the service
+// queued: the saved thread then has everything the screen shows live.
+func (m *Model) quiet() bool {
+	for _, t := range m.turns {
+		if !t.ended {
+			return false
+		}
+	}
+	for _, o := range m.outbox {
+		if o.acked {
+			return false
+		}
+	}
+	return m.turnID == 0
+}
+
 func (m *Model) outIndex(match func(*outItem) bool) int {
 	for i := range m.outbox {
 		if match(&m.outbox[i]) {
@@ -540,6 +608,7 @@ func (m *Model) applySubmitted(msg submittedMsg) tea.Cmd {
 		return nil
 	}
 	sub := msg.sub
+	wasSaved := m.saved
 	m.saved = true
 	var cmds []tea.Cmd
 	if !m.firstSent {
@@ -556,7 +625,15 @@ func (m *Model) applySubmitted(msg submittedMsg) tea.Cmd {
 		m.dropOut(i)
 		if t := m.findTurn(turn); t != nil && turn != 0 {
 			t.prependUser(item.text, item.images)
+			if t.ended && !wasSaved {
+				// Its load was skipped while the thread had no file.
+				cmds = append(cmds, m.loadThread(nil), m.loadStatus())
+			}
 		}
+	}
+	if m.pending == 0 {
+		// Starts of inputs no receipt here waits for (other clients').
+		m.early = map[uint64]uint64{}
 	}
 	switch {
 	case sub.InTurn:
@@ -617,7 +694,7 @@ func (m *Model) applyEvent(msg eventMsg) tea.Cmd {
 			if i := m.outIndex(func(o *outItem) bool { return o.acked && o.inputID == in.InputID }); i >= 0 {
 				t.user(m.outbox[i].text, m.outbox[i].images)
 				m.dropOut(i)
-			} else {
+			} else if m.pending > 0 {
 				m.early[in.InputID] = ev.TurnID
 			}
 		}
@@ -629,6 +706,10 @@ func (m *Model) applyEvent(msg eventMsg) tea.Cmd {
 			return next
 		}
 		t := m.turnFor(ev.TurnID)
+		if m.turnID == 0 && !t.ended && a.Type != "turn_finished" {
+			// Joined after its start.
+			m.turnID = ev.TurnID
+		}
 		switch a.Type {
 		case "provider_retry":
 			m.setNotice(fmt.Sprintf("provider retry %d/%d: %s", a.Attempt, a.Max, transcript.OneLine(a.Message)), false)
@@ -636,7 +717,7 @@ func (m *Model) applyEvent(msg eventMsg) tea.Cmd {
 			if id, err := strconv.ParseUint(a.ID, 10, 64); err == nil {
 				if i := m.outIndex(func(o *outItem) bool { return o.acked && o.inputID == id }); i >= 0 {
 					m.dropOut(i)
-				} else {
+				} else if m.pending > 0 {
 					m.early[id] = 0
 				}
 			}
@@ -648,6 +729,9 @@ func (m *Model) applyEvent(msg eventMsg) tea.Cmd {
 			m.failed = t.failed
 			if a.Status != nil && a.Status.Status == "interrupted" {
 				m.setNotice("interrupted", true)
+			}
+			if a.FinalText != "" {
+				return tea.Batch(next, m.loadFollowups(a.FinalText))
 			}
 		}
 	case engine.EventTurnEnded:
@@ -665,13 +749,29 @@ func (m *Model) applyEvent(msg eventMsg) tea.Cmd {
 		for _, id := range ev.InputIDs {
 			if i := m.outIndex(func(o *outItem) bool { return o.acked && o.inputID == id }); i >= 0 {
 				m.dropOut(i)
-			} else {
+			} else if m.pending > 0 {
 				m.early[id] = 0
 			}
 		}
 		m.setNotice("the service dropped "+transcript.Count(len(ev.InputIDs), "message", "messages"), false)
+		if m.quiet() && m.thread != nil {
+			// A load deferred for the dropped message can run now.
+			c := m.thread.Cursor
+			return tea.Batch(next, m.loadThread(&c))
+		}
 	}
 	return next
+}
+
+func (m *Model) loadFollowups(finalText string) tea.Cmd {
+	ctx, be, gen, sent := m.threadCtx, m.be, m.gen, m.nextLocal
+	return func() tea.Msg {
+		items, err := be.Followups(ctx, finalText)
+		if err != nil {
+			return nil
+		}
+		return followupsMsg{gen: gen, sent: sent, items: items}
+	}
 }
 
 func (m *Model) autoTitle(text string) tea.Cmd {
@@ -731,6 +831,7 @@ func (m *Model) send(queue bool) tea.Cmd {
 	m.attachments = nil
 	m.scroll = 0
 	m.failed = false
+	m.followups = nil
 	m.setNotice("", true)
 	return m.submit(engine.SubmitRequest{ThreadID: m.threadID, Text: text, Images: images, Steer: steer}, m.nextLocal)
 }
@@ -933,6 +1034,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		return m.newThread(), true
 	case "ctrl+o":
 		m.openPalette()
+		return nil, true
+	case "ctrl+f":
+		m.openFollowups()
 		return nil, true
 	case "ctrl+space", "ctrl+@":
 		return m.toggleVoice(), true

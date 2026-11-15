@@ -150,6 +150,10 @@ func (f *fakeBackend) Thread(_ context.Context, id string, after *uint64) (trans
 func (f *fakeBackend) PrepareImage(context.Context, string) (*engine.Image, error) {
 	return &engine.Image{MimeType: "image/png", Data: "AA=="}, nil
 }
+func (f *fakeBackend) Followups(context.Context, string) ([]string, error) {
+	return []string{"Do the next thing"}, nil
+}
+func (f *fakeBackend) RunningTurn(context.Context, string) (uint64, error) { return 0, nil }
 func (f *fakeBackend) TranscribeAudio(context.Context, string, string) (string, error) {
 	return "spoken", nil
 }
@@ -276,7 +280,7 @@ func TestChatTurnStreamsAndSettles(t *testing.T) {
 		t.Fatalf("submits %+v", reqs)
 	}
 	f := checkFrame(t, m)
-	if !strings.Contains(f, "Hello world") || strings.Count(f, "hi there") != 1 {
+	if !strings.Contains(f, "Hello world") || strings.Count(f, "hi there") != 1 || !strings.Contains(f, "1. Do the next thing") {
 		t.Fatalf("frame:\n%s", f)
 	}
 	if m.busy() || len(m.turns) != 0 || m.title != "A title" {

@@ -271,6 +271,25 @@ func (m *Model) openPalette() {
 	m.overlay = p
 }
 
+// openFollowups lists the last reply's suggested replies; a pick goes to
+// the composer.
+func (m *Model) openFollowups() {
+	if len(m.followups) == 0 {
+		m.setNotice("no suggested replies", false)
+		return
+	}
+	p := &picker{title: "Suggested replies"}
+	var items []pickItem
+	for _, f := range m.followups {
+		items = append(items, pickItem{label: f, value: f})
+	}
+	p.install(pickerData{items: items, onPick: func(m *Model, value string) tea.Cmd {
+		m.composer.SetValue(value)
+		return nil
+	}}, nil)
+	m.overlay = p
+}
+
 func (m *Model) rename(name string) tea.Cmd {
 	if name == "" {
 		m.setNotice("usage: /rename TITLE", false)

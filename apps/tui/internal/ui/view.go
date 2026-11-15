@@ -147,7 +147,16 @@ func (m *Model) renderOpts() transcript.Options {
 func (m *Model) liveThread() *transcript.Thread {
 	var acts []transcript.Activity
 	for _, t := range m.turns {
-		acts = append(acts, t.items...)
+		for _, it := range t.items {
+			// The engine strips the suggested replies from saved text;
+			// a streaming reply hides them the same way.
+			if it.Type == "message" && it.Role == "assistant" {
+				if i := strings.Index(it.Text, "<followups>"); i >= 0 {
+					it.Text = strings.TrimRight(it.Text[:i], " \n")
+				}
+			}
+			acts = append(acts, it)
+		}
 	}
 	for _, o := range m.outbox {
 		speaker := "you (sending)"
@@ -184,7 +193,7 @@ func (m *Model) transcriptLines(width int) []string {
 		m.liveMD.Done()
 		m.liveDirty = false
 	}
-	if len(m.cachedLive) == 0 {
+	if len(m.cachedLive) == 0 && len(m.followups) == 0 {
 		return m.lines
 	}
 	out := make([]string, 0, len(m.lines)+len(m.cachedLive)+1)
@@ -192,7 +201,14 @@ func (m *Model) transcriptLines(width int) []string {
 	if len(out) > 0 {
 		out = append(out, "")
 	}
-	return append(out, m.cachedLive...)
+	out = append(out, m.cachedLive...)
+	if len(m.followups) > 0 {
+		out = append(out, "", transcript.Dim.Render("  suggested replies (ctrl+f)"))
+		for i, f := range m.followups {
+			out = append(out, transcript.Fit(transcript.Dim.Render(fmt.Sprintf("  %d. %s", i+1, f)), width))
+		}
+	}
+	return out
 }
 
 func (m *Model) viewport(rows int) []string {

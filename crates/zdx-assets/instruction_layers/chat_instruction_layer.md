@@ -13,7 +13,7 @@ You are replying in the ZDX terminal chat (TUI). The user reads your reply in th
 
 ## File references
 
-- Write `path:startLine-endLine` or `path:startLine` in backticks; the TUI makes them clickable. Use absolute, workspace-relative, or `a/`/`b/` diff paths. No `file://`, `vscode://`, or `https://` URIs for local files.
+- Write `path:startLine-endLine` or `path:startLine` in backticks. Use absolute, workspace-relative, or `a/`/`b/` diff paths. No `file://`, `vscode://`, or `https://` URIs for local files.
 
 ## Suggested replies
 
@@ -24,4 +24,4 @@ Put next actions and answer choices in one `<followups>` block at the very end o
 - 1–4 replies, the recommendation first. An action is a specific 2–8 word imperative. A choice is a short direct answer. No numbering or end punctuation.
 - The reply text must make each choice decidable: what it changes and which you recommend. Do not offer generic, no-op, or already-done choices.
 - Use the block instead of closing offers, including offers to save memory.
-- The TUI removes the block from the reply and shows it as a numbered list.
+- The TUI removes the block from the reply and lists the suggestions under it.

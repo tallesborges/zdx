@@ -59,6 +59,7 @@ type reply struct {
 	Event       json.RawMessage `json:"event"`
 	Text        string          `json:"text"`
 	Transcript  *string         `json:"transcript"`
+	Followups   []string        `json:"followups"`
 	ModelLabel  *string         `json:"model_label"`
 	Title       *string         `json:"title"`
 	Image       *Image          `json:"image"`
@@ -136,6 +137,32 @@ func (c *Client) TranscribeAudio(ctx context.Context, path, mime string) (string
 		return "", nil
 	}
 	return *r.Transcript, nil
+}
+
+// Followups are the suggested replies of a final answer (reply_parts).
+func (c *Client) Followups(ctx context.Context, finalText string) ([]string, error) {
+	if err := c.Require(ctx, protocol.CapReplyParts); err != nil {
+		return nil, err
+	}
+	r, err := c.call(ctx, "reply_parts", map[string]string{"final_text": finalText}, "reply_parts", 0)
+	if err != nil {
+		return nil, err
+	}
+	return r.Followups, nil
+}
+
+// RunningTurn is the turn the service runs on the thread now, or 0.
+func (c *Client) RunningTurn(ctx context.Context, threadID string) (uint64, error) {
+	report, err := c.sock.Status(ctx, &threadID)
+	if err != nil {
+		return 0, err
+	}
+	for _, t := range report.Threads {
+		if t.ThreadID == threadID && t.RunningTurn != nil {
+			return *t.RunningTurn, nil
+		}
+	}
+	return 0, nil
 }
 
 // Cancel stops the thread's running turn and, with clearQueue, its queued
@@ -369,6 +396,7 @@ type AgentEvent struct {
 		Kind    string `json:"kind"`
 		Message string `json:"message"`
 	} `json:"status"`
+	FinalText string `json:"final_text"`
 
 	InputTokens      uint64 `json:"input_tokens"`
 	OutputTokens     uint64 `json:"output_tokens"`

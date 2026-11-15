@@ -147,10 +147,20 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
             replay,
             thread_id,
         } => {
-            if let Some(id) = thread_id.as_deref()
-                && let Err(err) = thread_ops::validate_thread_id(id)
-            {
-                return write_reply(&mut write, &error_reply(&err)).await;
+            if let Some(id) = thread_id.as_deref() {
+                // A renderer holds every routed thread's turns; one that sees
+                // a single thread could never release the others.
+                let checked = if renderer {
+                    Err(thread_ops::coded(
+                        super::protocol::ErrorCode::Invalid,
+                        "a renderer subscribes to every thread; `thread_id` applies only to observers",
+                    ))
+                } else {
+                    thread_ops::validate_thread_id(id)
+                };
+                if let Err(err) = checked {
+                    return write_reply(&mut write, &error_reply(&err)).await;
+                }
             }
             let mut subscription = match orchestrator.subscribe(thread_id, renderer, replay) {
                 Ok(subscription) => subscription,
