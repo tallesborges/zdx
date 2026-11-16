@@ -237,7 +237,6 @@ func (m *Model) emptyLines() []string {
 	}
 	return []string{
 		transcript.Dim.Render("New thread in " + m.opts.Root),
-		transcript.Dim.Render("Turns run in the orchestrator service; this screen streams them."),
 	}
 }
 
