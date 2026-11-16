@@ -1,6 +1,6 @@
-// Package protocol is the shared Go side of the orchestrator socket wire
+// Package protocol is the shared Go side of the engine socket wire
 // format: newline-delimited JSON, one request per connection, at
-// $ZDX_HOME/run/orchestrator.sock. The Rust definitions in
+// $ZDX_HOME/run/engine.sock. The Rust definitions in
 // crates/zdx-engine/src/orchestration/protocol.rs and views.rs are the
 // source of truth. This package holds the types and encodings every Go
 // client shares (status, capabilities, views); it does no I/O. Package
@@ -16,7 +16,7 @@ import (
 
 // SocketPath is the service socket for a ZDX home directory.
 func SocketPath(zdxHome string) string {
-	return filepath.Join(zdxHome, "run", "orchestrator.sock")
+	return filepath.Join(zdxHome, "run", "engine.sock")
 }
 
 // EncodeLine renders one request line (without the newline): body's JSON
@@ -203,7 +203,7 @@ type ErrUnsupported struct {
 }
 
 func (e *ErrUnsupported) Error() string {
-	return fmt.Sprintf("the orchestrator service (protocol %d) does not support %s yet; update and restart the orchestrator service", e.Protocol, e.Capability)
+	return fmt.Sprintf("the engine service (protocol %d) does not support %s yet; update and restart the engine service", e.Protocol, e.Capability)
 }
 
 // Reply is the part of a reply line every client reads: its kind, an error

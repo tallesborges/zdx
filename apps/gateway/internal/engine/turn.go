@@ -23,8 +23,8 @@ type TurnEnd struct {
 
 // Messages for turns that never report a result, as in the Rust bot.
 const (
-	MsgInputDropped   = "The orchestrator service dropped this message before it ran."
-	MsgConnectionLost = "Lost the connection to the orchestrator service."
+	MsgInputDropped   = "The engine service dropped this message before it ran."
+	MsgConnectionLost = "Lost the connection to the engine service."
 )
 
 // KindConnectionLost is the status kind of a turn whose events stopped
@@ -169,7 +169,7 @@ func (c *Client) SubmitFollow(ctx context.Context, s Submit) (*Submission, error
 	}
 	if first.Kind != ReplySubmitted || first.InputID == nil {
 		stream.Close()
-		return nil, fmt.Errorf("unexpected reply %q from the orchestrator service", first.Kind)
+		return nil, fmt.Errorf("unexpected reply %q from the engine service", first.Kind)
 	}
 	sub := &Submission{ThreadID: first.ThreadID, InputID: *first.InputID, QueuedAhead: first.QueuedAhead, InTurn: first.InTurn, Holder: first.Holder}
 	if first.InTurn {
@@ -224,11 +224,11 @@ func firstReply(c *Client, s *Stream) (*Reply, error) {
 	select {
 	case res := <-ch:
 		if errors.Is(res.err, io.EOF) {
-			return nil, errors.New("the orchestrator service closed the connection")
+			return nil, errors.New("the engine service closed the connection")
 		}
 		return res.r, res.err
 	case <-time.After(c.timeout()):
-		return nil, errors.New("orchestrator service did not reply in time")
+		return nil, errors.New("engine service did not reply in time")
 	}
 }
 

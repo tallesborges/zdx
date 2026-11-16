@@ -20,5 +20,5 @@
   Process    pid 48213 · telegram · up 13m 25s
 
 
- ! Could not refresh agents: the orchestrator service did not answer within 30s…
+ ! Could not refresh agents: the engine service did not answer within 30s. Show…
  ↵ transcript  q quit  1-8 tabs              stale 10m · ○ unreachable · ? help

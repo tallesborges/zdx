@@ -1,5 +1,5 @@
 //! Model-facing text of a chat-surface turn, shared by every chat surface
-//! (the Telegram bot and gateway) through the orchestrator socket and the
+//! (the Telegram bot and gateway) through the engine socket and the
 //! `zdx telegram` CLI twins:
 //!
 //! - [`compose_user_text`]: one incoming chat message (reply context, text,

@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// fakeService is a synthetic orchestrator service on a temp Unix socket.
+// fakeService is a synthetic engine service on a temp Unix socket.
 // handle gets each connection's decoded request and the connection.
 type fakeService struct {
 	t      *testing.T

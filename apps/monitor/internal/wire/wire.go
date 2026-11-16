@@ -1,5 +1,5 @@
-// Package wire is the monitor's read-only client for the orchestrator
-// socket ($ZDX_HOME/run/orchestrator.sock, NDJSON, one request per
+// Package wire is the monitor's read-only client for the engine
+// socket ($ZDX_HOME/run/engine.sock, NDJSON, one request per
 // connection). The transport and wire types are the shared module's
 // (apps/shared: protocol, socket); this package re-exports what the monitor
 // uses and keeps its read-only surface: it sends only `status` and view ops,
@@ -58,7 +58,7 @@ var ErrNotRunning = socket.ErrNotRunning
 // ViewCapability is the capability a view op needs, or "" for an unknown op.
 func ViewCapability(op string) string { return protocol.ViewCapability(op) }
 
-// SocketPath is the orchestrator socket of a ZDX home.
+// SocketPath is the engine socket of a ZDX home.
 func SocketPath(home string) string { return protocol.SocketPath(home) }
 
 // DecodeViewReply reads a `{"reply":"view",...}` line (also the stdout of
@@ -122,5 +122,5 @@ func (e *codedError) Unwrap() error { return e.se }
 
 type noAnswer struct{ cause error }
 
-func (e *noAnswer) Error() string { return "the orchestrator service did not answer in time" }
+func (e *noAnswer) Error() string { return "the engine service did not answer in time" }
 func (e *noAnswer) Unwrap() error { return e.cause }

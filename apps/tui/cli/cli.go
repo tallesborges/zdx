@@ -1,5 +1,5 @@
 // Package cli is `zdx-go tui`, the interactive ZDX chat in the terminal. Every turn
-// runs in the orchestrator service: this program composes messages, sends
+// runs in the engine service: this program composes messages, sends
 // them over the service socket, and streams each turn's events. It reads
 // and writes no thread, index, config, or credential file itself.
 package cli
@@ -24,8 +24,8 @@ import (
 
 const usage = `Usage: zdx-go tui [--root DIR] [--zdx-home DIR] [--zdx PATH] [--thread ID] [--model SPEC]
 
-Interactive ZDX chat (Bubble Tea). Turns run in the orchestrator service
-(zdx service start orchestrator).
+Interactive ZDX chat (Bubble Tea). Turns run in the engine service
+(zdx service start engine).
 
   --root DIR       project root: config layers load from it, and a new
                    thread runs there (default: current directory)

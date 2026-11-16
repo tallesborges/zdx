@@ -20,7 +20,7 @@ func TestMissingNamesEveryUnwiredDependency(t *testing.T) {
 	ctx := context.Background()
 	d := Deps{
 		Telegram: telegram.NewClient("1:T", telegram.Options{BaseURL: "http://127.0.0.1:1", Logger: quiet}),
-		Engine:   engine.NewClient("/nonexistent/orchestrator.sock"),
+		Engine:   engine.NewClient("/nonexistent/engine.sock"),
 		Queues:   bot.NewTopicQueues(ctx), Home: t.TempDir(), Zdx: "zdx", Log: quiet,
 	}
 	d.Work, d.Admission, d.RequestExit, d.Idle = ctx, &bot.Admission{}, func() {}, func() bool { return true }

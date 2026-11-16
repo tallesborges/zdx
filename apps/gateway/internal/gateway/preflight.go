@@ -36,7 +36,7 @@ type PreflightOptions struct {
 
 // Preflight checks, without changing anything, what serve needs: no
 // missing parts, the Rust-resolved settings, the Mini App build when the
-// server is enabled, and the orchestrator service capabilities. It takes no
+// server is enabled, and the engine service capabilities. It takes no
 // pidfile, does not contact Telegram, and runs no service command; it reads
 // settings through `zdx telegram settings` and asks the service its status.
 func Preflight(ctx context.Context, o PreflightOptions) PreflightResult {
@@ -69,22 +69,22 @@ func Preflight(ctx context.Context, o PreflightOptions) PreflightResult {
 	cancel()
 	switch {
 	case err != nil:
-		// The orchestrator service may be installed after the bot; the
+		// The engine service may be installed after the bot; the
 		// gateway waits for it and answers nothing until it runs.
-		r.Warnings = append(r.Warnings, "orchestrator service not reachable: "+err.Error())
+		r.Warnings = append(r.Warnings, "engine service not reachable: "+err.Error())
 	default:
 		for _, c := range ServiceCapabilities {
 			if !report.Has(c) {
-				r.Problems = append(r.Problems, "orchestrator service lacks capability "+c+"; update and restart it")
+				r.Problems = append(r.Problems, "engine service lacks capability "+c+"; update and restart it")
 			}
 		}
 		// Mini App views (monitor, usage, Git) read the service's root; a
 		// gateway on another root would show another project's answers.
 		switch {
 		case report.ViewsRoot == nil:
-			r.Problems = append(r.Problems, "orchestrator service reports no views_root; update and restart it")
+			r.Problems = append(r.Problems, "engine service reports no views_root; update and restart it")
 		case !sameDir(*report.ViewsRoot, o.Root):
-			r.Problems = append(r.Problems, fmt.Sprintf("orchestrator service runs with root %s, not %s; install both services from the same root", *report.ViewsRoot, o.Root))
+			r.Problems = append(r.Problems, fmt.Sprintf("engine service runs with root %s, not %s; install both services from the same root", *report.ViewsRoot, o.Root))
 		}
 	}
 	r.Ready = len(r.Problems) == 0

@@ -70,7 +70,7 @@ func find(th data.Thread, kind, id string) *data.Activity {
 }
 
 // TestRealServiceTranscript seeds thread files in a temp home, starts the
-// real orchestrator service there, and checks the monitor's transcript
+// real engine service there, and checks the monitor's transcript
 // against what the engine sends: a full load, an alias, incremental polls
 // with the cursor, a running tool from a run marker and its completion,
 // and the trajectory view. Then it drives the UI model over the real

@@ -1,4 +1,4 @@
-//! Tests for `zdx orchestrator`: the service, its CLI client, and the rule
+//! Tests for `zdx engine`: the service, its CLI client, and the rule
 //! that only the service runs turns on a persistent-profile thread.
 
 use std::fs;
@@ -48,14 +48,14 @@ async fn test_orchestrator_send_wait_runs_the_turn_in_the_service() {
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .current_dir(root.path())
         .args(["--root", root.path().to_str().unwrap()])
-        .args(["orchestrator", "serve"])
+        .args(["engine", "serve"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(fs::File::create(&log).unwrap())
         .kill_on_drop(true)
         .spawn()
-        .expect("spawn zdx orchestrator serve");
-    let socket = zdx_home.path().join("run").join("orchestrator.sock");
+        .expect("spawn zdx engine serve");
+    let socket = zdx_home.path().join("run").join("engine.sock");
     let mut waited = Duration::ZERO;
     while !socket.exists() {
         assert!(
@@ -71,7 +71,7 @@ async fn test_orchestrator_send_wait_runs_the_turn_in_the_service() {
         .env("ZDX_HOME", zdx_home.path())
         .args(["--root", root.path().to_str().unwrap()])
         .args([
-            "orchestrator",
+            "engine",
             "send",
             "--thread",
             "issue-1",
@@ -139,12 +139,12 @@ async fn test_orchestrator_send_wait_runs_the_turn_in_the_service() {
         .assert()
         .failure()
         .stderr(predicates::str::contains(
-            "zdx orchestrator send --thread issue-1",
+            "zdx engine send --thread issue-1",
         ));
 
     let status = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
-        .args(["orchestrator", "status", "--thread", "issue-1", "--json"])
+        .args(["engine", "status", "--thread", "issue-1", "--json"])
         .assert()
         .success()
         .get_output()
@@ -165,10 +165,10 @@ fn test_orchestrator_send_without_service_names_the_fix() {
     let zdx_home = TempDir::new().unwrap();
     crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
-        .args(["orchestrator", "send", "-p", "hello"])
+        .args(["engine", "send", "-p", "hello"])
         .assert()
         .failure()
-        .stderr(predicates::str::contains("zdx service start orchestrator"));
+        .stderr(predicates::str::contains("zdx service start engine"));
 }
 
 /// `thread_root` names the thread a Git route means and that thread's stored
@@ -317,7 +317,7 @@ fn test_thread_root_view_answers_absolute_roots() {
     assert_eq!(absolute("root_path"), root.join("sub"));
 }
 
-/// Starts `zdx orchestrator serve` against a mock Anthropic endpoint and waits
+/// Starts `zdx engine serve` against a mock Anthropic endpoint and waits
 /// until its socket listens.
 async fn start_service(
     zdx_home: &TempDir,
@@ -332,14 +332,14 @@ async fn start_service(
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .current_dir(root.path())
         .args(["--root", root.path().to_str().unwrap()])
-        .args(["orchestrator", "serve"])
+        .args(["engine", "serve"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(fs::File::create(&log).unwrap())
         .kill_on_drop(true)
         .spawn()
-        .expect("spawn zdx orchestrator serve");
-    let socket = zdx_home.path().join("run").join("orchestrator.sock");
+        .expect("spawn zdx engine serve");
+    let socket = zdx_home.path().join("run").join("engine.sock");
     let mut waited = Duration::ZERO;
     while !socket.exists() {
         assert!(
@@ -383,7 +383,7 @@ async fn test_orchestrator_send_ordinary_runs_a_routed_agent_turn() {
 
     let status = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
-        .args(["orchestrator", "status", "--json"])
+        .args(["engine", "status", "--json"])
         .assert()
         .success()
         .get_output()
@@ -405,7 +405,7 @@ async fn test_orchestrator_send_ordinary_runs_a_routed_agent_turn() {
         .env("ZDX_HOME", zdx_home.path())
         .args(["--root", root.path().to_str().unwrap()])
         .args([
-            "orchestrator",
+            "engine",
             "send",
             "--ordinary",
             "--thread",
@@ -492,14 +492,7 @@ async fn test_orchestrator_send_ordinary_runs_a_routed_agent_turn() {
     // The thread stays ordinary: a persistent-profile submit is refused.
     crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
-        .args([
-            "orchestrator",
-            "send",
-            "--thread",
-            thread,
-            "-p",
-            "as profile",
-        ])
+        .args(["engine", "send", "--thread", thread, "-p", "as profile"])
         .assert()
         .failure()
         .stderr(predicates::str::contains("ordinary"));
@@ -577,7 +570,7 @@ async fn test_orchestrator_send_ordinary_runs_a_routed_agent_turn() {
         .stderr(predicates::str::contains("days must be between 1 and 365"));
     let status = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
-        .args(["orchestrator", "status", "--json"])
+        .args(["engine", "status", "--json"])
         .assert()
         .success()
         .get_output()
@@ -641,7 +634,7 @@ async fn test_thread_writes_go_through_the_running_service() {
         .env("ZDX_HOME", zdx_home.path())
         .args(["--root", root.path().to_str().unwrap()])
         .args([
-            "orchestrator",
+            "engine",
             "send",
             "--ordinary",
             "--thread",
@@ -745,7 +738,7 @@ async fn test_run_lease_refuses_a_second_writer_on_every_path() {
             .env("ZDX_HOME", zdx_home.path())
             .args(["--root", root.path().to_str().unwrap()])
             .args([
-                "orchestrator",
+                "engine",
                 "send",
                 "--ordinary",
                 "--thread",
@@ -764,7 +757,7 @@ async fn test_run_lease_refuses_a_second_writer_on_every_path() {
         .env("ZDX_HOME", zdx_home.path())
         .args(["--root", root.path().to_str().unwrap()])
         .args([
-            "orchestrator",
+            "engine",
             "send",
             "--ordinary",
             "--thread",
@@ -873,7 +866,7 @@ async fn test_run_lease_covers_the_delivery_hold() {
     let mut service = start_service(&zdx_home, &root, &mock_server).await;
     let thread = "telegram--100-topic-11";
 
-    let socket = zdx_home.path().join("run").join("orchestrator.sock");
+    let socket = zdx_home.path().join("run").join("engine.sock");
     let stream = tokio::net::UnixStream::connect(&socket).await.unwrap();
     let (read, mut write) = stream.into_split();
     write
@@ -890,7 +883,7 @@ async fn test_run_lease_covers_the_delivery_hold() {
         .env("ZDX_HOME", zdx_home.path())
         .args(["--root", root.path().to_str().unwrap()])
         .args([
-            "orchestrator",
+            "engine",
             "send",
             "--ordinary",
             "--thread",
@@ -943,7 +936,7 @@ async fn test_run_lease_covers_the_delivery_hold() {
     crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .args([
-            "orchestrator",
+            "engine",
             "release",
             "--thread",
             thread,
@@ -957,7 +950,7 @@ async fn test_run_lease_covers_the_delivery_hold() {
     crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
         .args([
-            "orchestrator",
+            "engine",
             "release",
             "--thread",
             thread,
@@ -1036,7 +1029,7 @@ async fn test_feedback_submit_queues_a_turn_once() {
         .env("ZDX_HOME", zdx_home.path())
         .args(["--root", root.path().to_str().unwrap()])
         .args([
-            "orchestrator",
+            "engine",
             "send",
             "--ordinary",
             "--thread",
@@ -1096,14 +1089,7 @@ async fn test_feedback_submit_queues_a_turn_once() {
         crate::fixtures::zdx_cmd()
             .env("ZDX_HOME", zdx_home.path())
             .args(["--root", root.path().to_str().unwrap()])
-            .args([
-                "orchestrator",
-                "feedback",
-                "--thread",
-                thread,
-                "--user-id",
-                user,
-            ])
+            .args(["engine", "feedback", "--thread", thread, "--user-id", user])
             .write_stdin(body.to_string())
             .timeout(Duration::from_mins(1))
             .output()
@@ -1181,7 +1167,7 @@ async fn test_feedback_submit_queues_a_turn_once() {
     // photo (a PNG becomes a JPEG; base64 data only when it changed).
     let status = crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", zdx_home.path())
-        .args(["orchestrator", "status", "--json"])
+        .args(["engine", "status", "--json"])
         .assert()
         .success()
         .get_output()
@@ -1219,7 +1205,7 @@ async fn test_feedback_submit_queues_a_turn_once() {
             .unwrap();
         fs::write(&photo, png.stdout).unwrap();
     }
-    let socket = zdx_home.path().join("run").join("orchestrator.sock");
+    let socket = zdx_home.path().join("run").join("engine.sock");
     let reply = {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         let stream = tokio::net::UnixStream::connect(&socket).await.unwrap();
@@ -1271,7 +1257,7 @@ async fn test_helper_ops_generate_seed_and_topic_start() {
         .env("ZDX_HOME", zdx_home.path())
         .args(["--root", root.path().to_str().unwrap()])
         .args([
-            "orchestrator",
+            "engine",
             "send",
             "--ordinary",
             "--thread",
@@ -1286,7 +1272,7 @@ async fn test_helper_ops_generate_seed_and_topic_start() {
         .assert()
         .success();
 
-    let socket = zdx_home.path().join("run").join("orchestrator.sock");
+    let socket = zdx_home.path().join("run").join("engine.sock");
     let call = |request: serde_json::Value| {
         let socket = socket.clone();
         async move {

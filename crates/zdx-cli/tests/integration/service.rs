@@ -27,7 +27,7 @@ fn test_service_status_json_reports_stopped_and_not_installed() {
         .iter()
         .filter_map(|s| s["service"].as_str())
         .collect();
-    assert_eq!(names, vec!["bot", "scheduler", "orchestrator"]);
+    assert_eq!(names, vec!["bot", "scheduler", "engine"]);
 
     for service in services {
         assert_eq!(service["status"], Value::String("stopped".to_string()));
@@ -36,7 +36,7 @@ fn test_service_status_json_reports_stopped_and_not_installed() {
     }
     assert_eq!(services[0]["label"], "dev.zdx.bot");
     assert_eq!(services[1]["label"], "dev.zdx.scheduler");
-    assert_eq!(services[2]["label"], "dev.zdx.orchestrator");
+    assert_eq!(services[2]["label"], "dev.zdx.engine");
 }
 
 /// Lifecycle commands reject unknown service targets instead of guessing.
@@ -142,6 +142,7 @@ fn test_a_service_installed_under_its_old_name() {
     let agents = home.join("Library").join("LaunchAgents");
     std::fs::create_dir_all(&agents).unwrap();
     std::fs::write(agents.join("dev.zdx.daemon.plist"), "<plist></plist>").unwrap();
+    std::fs::write(agents.join("dev.zdx.orchestrator.plist"), "<plist></plist>").unwrap();
     let zdx = |args: &[&str]| {
         let mut cmd = crate::fixtures::zdx_cmd();
         cmd.env("ZDX_HOME", home).env("HOME", home).args(args);
@@ -160,6 +161,8 @@ fn test_a_service_installed_under_its_old_name() {
     let parsed = status(&zdx);
     assert_eq!(parsed["services"][1]["service"], "scheduler");
     assert_eq!(parsed["services"][1]["installed"], true);
+    assert_eq!(parsed["services"][2]["service"], "engine");
+    assert_eq!(parsed["services"][2]["installed"], true);
 
     zdx(&["service", "start", "scheduler"])
         .assert()
@@ -167,16 +170,143 @@ fn test_a_service_installed_under_its_old_name() {
         .stderr(predicate::str::contains(
             "still installed under its old name `daemon`; `zdx service restart scheduler` moves it",
         ));
+    zdx(&["service", "stop", "engine"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "still installed under its old name `orchestrator`; `zdx service restart engine` moves it",
+        ));
     zdx(&["service", "restart", "daemon"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("now called scheduler"));
+    zdx(&["service", "restart", "orchestrator"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("now called engine"));
 
     supervised_bot(home);
-    write_queue(home, &["bot", "daemon"], None);
+    write_queue(home, &["bot", "daemon", "orchestrator"], None);
     assert_eq!(
         status(&zdx)["queued_restart"]["services"],
-        serde_json::json!(["bot", "scheduler"])
+        serde_json::json!(["bot", "scheduler", "engine"])
+    );
+}
+
+/// A restart moves a service off its old launchd name, and `uninstall`
+/// removes the old install. `launchctl` here is a fake on a `PATH` that has
+/// nothing else, so the real launchd is never reached: it records its
+/// arguments and reports every job as unloaded.
+#[cfg(unix)]
+#[allow(clippy::too_many_lines)] // one migration checked end to end
+#[test]
+fn test_restart_moves_a_service_off_its_old_name() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    let fake_bin = home.join("fake-bin");
+    std::fs::create_dir_all(&fake_bin).unwrap();
+    let calls = home.join("launchctl.log");
+    let launchctl = fake_bin.join("launchctl");
+    std::fs::write(
+        &launchctl,
+        format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\n[ \"$1\" = print ] && exit 1\nexit 0\n",
+            calls.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&launchctl, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let bin = home.join(".local").join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("zdx"), "").unwrap();
+    let root = home.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let agents = home.join("Library").join("LaunchAgents");
+    std::fs::create_dir_all(&agents).unwrap();
+    let old_plist = |name: &str, args: &str| {
+        format!(
+            "<plist><dict><key>Label</key><string>dev.zdx.{name}</string>\
+             <key>ProgramArguments</key><array><string>/bin/zsh</string><string>-c</string>\
+             <string>exec '{zdx}' '--root' '{root}' {args}</string></array>\
+             <key>WorkingDirectory</key><string>{root}</string>\
+             <key>EnvironmentVariables</key><dict><key>ZDX_HOME</key><string>{home}</string></dict>\
+             </dict></plist>",
+            zdx = bin.join("zdx").display(),
+            root = root.display(),
+            home = home.display(),
+        )
+    };
+    std::fs::write(
+        agents.join("dev.zdx.daemon.plist"),
+        old_plist("daemon", "'jobs' 'daemon'"),
+    )
+    .unwrap();
+    std::fs::write(
+        agents.join("dev.zdx.orchestrator.plist"),
+        old_plist("orchestrator", "'orchestrator' 'serve'"),
+    )
+    .unwrap();
+    let logs = home.join("run").join("logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    std::fs::write(logs.join("daemon.err"), "old scheduler log").unwrap();
+    std::fs::write(logs.join("orchestrator.err"), "old engine log").unwrap();
+    let zdx = |args: &[&str]| {
+        let mut cmd = crate::fixtures::zdx_cmd();
+        cmd.env("ZDX_HOME", &home)
+            .env("HOME", &home)
+            .env("PATH", &fake_bin)
+            .args(args);
+        cmd
+    };
+
+    zdx(&["service", "restart", "scheduler"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Moved daemon to scheduler and started it",
+        ));
+    assert!(!agents.join("dev.zdx.daemon.plist").exists());
+    let plist = std::fs::read_to_string(agents.join("dev.zdx.scheduler.plist")).unwrap();
+    assert!(
+        plist.contains(&format!("'--root' '{}' 'jobs' 'scheduler'", root.display())),
+        "{plist}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(logs.join("scheduler.err")).unwrap(),
+        "old scheduler log"
+    );
+
+    zdx(&["service", "uninstall", "engine"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Uninstalled engine"));
+    assert!(!agents.join("dev.zdx.orchestrator.plist").exists());
+    assert!(!agents.join("dev.zdx.engine.plist").exists());
+    assert_eq!(
+        std::fs::read_to_string(logs.join("engine.err")).unwrap(),
+        "old engine log"
+    );
+
+    let calls = std::fs::read_to_string(&calls).unwrap();
+    // SAFETY: getuid has no preconditions and cannot fail.
+    let uid = unsafe { libc::getuid() };
+    let lines: Vec<&str> = calls
+        .lines()
+        .filter(|line| !line.starts_with("print "))
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            format!("bootout gui/{uid}/dev.zdx.daemon"),
+            format!(
+                "bootstrap gui/{uid} {}",
+                agents.join("dev.zdx.scheduler.plist").display()
+            ),
+            format!("bootout gui/{uid}/dev.zdx.orchestrator"),
+        ],
+        "{calls}"
     );
 }
 
@@ -471,7 +601,7 @@ fn test_queue_restart_json_with_thread() {
     assert_eq!(first["request"]["thread_id"], "telegram--100-topic-7");
     assert_eq!(
         first["request"]["services"],
-        serde_json::json!(["bot", "scheduler", "orchestrator"])
+        serde_json::json!(["bot", "scheduler", "engine"])
     );
     let second = queue("telegram--100-topic-8");
     assert_eq!(second["already_pending"], true);

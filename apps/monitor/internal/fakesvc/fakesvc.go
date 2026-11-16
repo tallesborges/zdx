@@ -1,4 +1,4 @@
-// Package fakesvc is a fake orchestrator socket for tests: it answers
+// Package fakesvc is a fake engine socket for tests: it answers
 // `status` with a fixed report and each view op with a handler, and records
 // every request line.
 package fakesvc
@@ -26,7 +26,7 @@ type Server struct {
 	ln        net.Listener
 }
 
-// Start listens on <home>/run/orchestrator.sock and closes on cleanup.
+// Start listens on <home>/run/engine.sock and closes on cleanup.
 func Start(t *testing.T, home string, caps ...string) *Server {
 	t.Helper()
 	dir := filepath.Join(home, "run")
@@ -34,7 +34,7 @@ func Start(t *testing.T, home string, caps ...string) *Server {
 		t.Fatal(err)
 	}
 	two := 2
-	s := &Server{Socket: filepath.Join(dir, "orchestrator.sock"), caps: caps, protocol: &two, views: map[string]func(map[string]any) any{}}
+	s := &Server{Socket: filepath.Join(dir, "engine.sock"), caps: caps, protocol: &two, views: map[string]func(map[string]any) any{}}
 	ln, err := net.Listen("unix", s.Socket)
 	if err != nil {
 		t.Fatal(err)

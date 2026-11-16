@@ -1,4 +1,4 @@
-//! Unix-socket server of the orchestrator service. Only processes of the
+//! Unix-socket server of the engine service. Only processes of the
 //! same user may connect: the socket is created `0600` and every peer's uid
 //! is checked.
 
@@ -11,7 +11,7 @@ use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
 
 use super::protocol::{Event, Follow, Reply, Request};
-use super::runtime::{CancelTarget, Orchestrator};
+use super::runtime::{CancelTarget, Engine};
 use super::thread_ops;
 
 /// Serves requests until the listener fails. The caller owns process
@@ -20,7 +20,7 @@ use super::thread_ops;
 ///
 /// # Errors
 /// Returns an error if the socket cannot be bound or accepting fails.
-pub async fn serve(orchestrator: Arc<Orchestrator>, socket: PathBuf) -> Result<()> {
+pub async fn serve(engine: Arc<Engine>, socket: PathBuf) -> Result<()> {
     let socket = socket.as_path();
     if let Some(dir) = socket.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
@@ -33,18 +33,18 @@ pub async fn serve(orchestrator: Arc<Orchestrator>, socket: PathBuf) -> Result<(
     let listener =
         UnixListener::bind(socket).with_context(|| format!("bind {}", socket.display()))?;
     restrict_to_owner(socket)?;
-    tracing::info!(socket = %socket.display(), "Orchestrator service listening");
+    tracing::info!(socket = %socket.display(), "Engine service listening");
 
     loop {
         let (stream, _) = listener.accept().await.context("accept connection")?;
         if !same_user(&stream) {
-            tracing::warn!("Refused orchestrator connection from another user");
+            tracing::warn!("Refused engine connection from another user");
             continue;
         }
-        let orchestrator = Arc::clone(&orchestrator);
+        let engine = Arc::clone(&engine);
         tokio::spawn(async move {
-            if let Err(err) = handle_connection(orchestrator, stream).await {
-                tracing::debug!(err = %format!("{err:#}"), "Orchestrator connection ended with an error");
+            if let Err(err) = handle_connection(engine, stream).await {
+                tracing::debug!(err = %format!("{err:#}"), "Engine connection ended with an error");
             }
         });
     }
@@ -88,7 +88,7 @@ const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 const REQUEST_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(1);
 
 #[allow(clippy::too_many_lines)]
-async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) -> Result<()> {
+async fn handle_connection(engine: Arc<Engine>, stream: UnixStream) -> Result<()> {
     let (read, mut write) = stream.into_split();
     let mut reader = BufReader::new(read);
     let mut line = Vec::new();
@@ -137,9 +137,9 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
         Request::Submit(submit) => {
             let follow = submit.follow;
             if follow == Follow::None {
-                submitted(orchestrator.submit(submit), None)
+                submitted(engine.submit(submit), None)
             } else {
-                return follow_submit(orchestrator, submit, follow, lines, write).await;
+                return follow_submit(engine, submit, follow, lines, write).await;
             }
         }
         Request::Subscribe {
@@ -162,7 +162,7 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
                     return write_reply(&mut write, &error_reply(&err)).await;
                 }
             }
-            let mut subscription = match orchestrator.subscribe(thread_id, renderer, replay) {
+            let mut subscription = match engine.subscribe(thread_id, renderer, replay) {
                 Ok(subscription) => subscription,
                 Err(err) => return write_reply(&mut write, &error_reply(&err)).await,
             };
@@ -190,7 +190,7 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
             }
         }
         Request::Status { thread_id } => Reply::Status {
-            report: orchestrator.status(thread_id.as_deref()).await,
+            report: engine.status(thread_id.as_deref()).await,
         },
         Request::Cancel {
             thread_id,
@@ -203,7 +203,7 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
                 (None, Some(turn)) => CancelTarget::Turn(turn),
                 (None, None) => CancelTarget::Thread { clear_queue },
             };
-            let (cancelled_turn, dropped_inputs) = orchestrator.cancel(&thread_id, target);
+            let (cancelled_turn, dropped_inputs) = engine.cancel(&thread_id, target);
             Reply::Cancelled {
                 thread_id,
                 cancelled_turn,
@@ -215,12 +215,12 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
             turn_id,
             holder,
             force,
-        } => match orchestrator.release(&thread_id, turn_id, holder.as_deref(), force) {
+        } => match engine.release(&thread_id, turn_id, holder.as_deref(), force) {
             Ok(()) => Reply::Ok,
             Err(err) => error_reply(&err),
         },
         Request::Workers { owner_thread_id } => {
-            let workers = orchestrator.workers();
+            let workers = engine.workers();
             Reply::Workers {
                 workers: match owner_thread_id {
                     Some(owner) => workers.list_for_owner(&owner),
@@ -229,9 +229,9 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
             }
         }
         Request::Worker { thread_id } => Reply::Worker {
-            worker: orchestrator.workers().snapshot(&thread_id),
+            worker: engine.workers().snapshot(&thread_id),
         },
-        Request::CancelWorker { thread_id } => match orchestrator.workers().cancel(&thread_id) {
+        Request::CancelWorker { thread_id } => match engine.workers().cancel(&thread_id) {
             Ok(snapshot) => Reply::Worker {
                 worker: Some(snapshot),
             },
@@ -240,7 +240,7 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
         Request::EnqueueFromTopic {
             worker_thread_id,
             prompt,
-        } => match orchestrator
+        } => match engine
             .workers()
             .enqueue_from_topic(&worker_thread_id, &prompt)
         {
@@ -250,7 +250,7 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
             Err(err) => error_reply(&err),
         },
         Request::UpdateThread(update) => {
-            let service = Arc::clone(&orchestrator);
+            let service = Arc::clone(&engine);
             match tokio::task::spawn_blocking(move || service.update_thread(&update)).await {
                 Ok(Ok(updated)) => Reply::ThreadUpdated(updated),
                 Ok(Err(err)) => error_reply(&err),
@@ -262,7 +262,7 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
             record,
             turn_id,
             holder,
-        } => match orchestrator
+        } => match engine
             .record_delivery(thread_id, record, turn_id, holder)
             .await
         {
@@ -274,7 +274,7 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
             Err(err) => error_reply(&err),
         },
         Request::Catalog(query) => {
-            let workers = Arc::clone(orchestrator.workers());
+            let workers = Arc::clone(engine.workers());
             match tokio::task::spawn_blocking(move || {
                 super::catalog::catalog(query, Some(&workers))
             })
@@ -311,14 +311,14 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
         Request::FeedbackSubmit(request) => {
             // Its own task: a client that goes away cannot stop it between
             // marking the bundle queued and queueing it.
-            let orchestrator = Arc::clone(&orchestrator);
-            match tokio::spawn(async move { orchestrator.feedback_submit(request).await }).await {
+            let engine = Arc::clone(&engine);
+            match tokio::spawn(async move { engine.feedback_submit(request).await }).await {
                 Ok(Ok(receipt)) => Reply::Feedback(receipt),
                 Ok(Err(err)) => error_reply(&err),
                 Err(err) => error_reply(&anyhow::anyhow!("feedback task: {err}")),
             }
         }
-        Request::ResetThread { thread_id } => match orchestrator.reset_thread(&thread_id) {
+        Request::ResetThread { thread_id } => match engine.reset_thread(&thread_id) {
             Ok(()) => Reply::Ok,
             Err(err) => error_reply(&err),
         },
@@ -378,7 +378,7 @@ async fn handle_connection(orchestrator: Arc<Orchestrator>, stream: UnixStream) 
             Ok(transcript) => Reply::Transcript { transcript },
             Err(err) => error_reply(&err),
         },
-        Request::View(request) => match orchestrator.views() {
+        Request::View(request) => match engine.views() {
             Some(views) => match views.view(request).await {
                 Ok(output) => Reply::View(output),
                 Err(err) => Reply::Error {
@@ -509,7 +509,7 @@ fn error_reply(err: &anyhow::Error) -> Reply {
 /// thread settles (`Follow::Settled`). Ends early when the input is dropped
 /// by a cancel or the client goes away.
 async fn follow_submit(
-    orchestrator: Arc<Orchestrator>,
+    engine: Arc<Engine>,
     submit: super::protocol::Submit,
     follow: Follow,
     mut lines: tokio::io::Lines<BufReader<tokio::net::unix::OwnedReadHalf>>,
@@ -518,7 +518,7 @@ async fn follow_submit(
     // The thread id is known only after submit for a new thread, so the
     // subscription takes every event and filters here. A Telegram-routed
     // follower delivers the reply, so its subscription holds the turn.
-    let mut subscription = match orchestrator.subscribe(None, false, false) {
+    let mut subscription = match engine.subscribe(None, false, false) {
         Ok(subscription) => subscription,
         Err(err) => return write_reply(&mut write, &error_reply(&err)).await,
     };
@@ -527,7 +527,7 @@ async fn follow_submit(
         .is_some()
         .then(|| subscription.holder(submit.replay));
     let token = holder.as_ref().map(|holder| holder.token.clone());
-    let reply = submitted(orchestrator.submit_held(submit, holder), token.clone());
+    let reply = submitted(engine.submit_held(submit, holder), token.clone());
     write_reply(&mut write, &reply).await?;
     let Reply::Submitted {
         thread_id,
@@ -600,7 +600,7 @@ async fn follow_submit(
             // The hold is this connection's: keep it open until the client
             // releases the turn (or disconnects, which frees the hold).
             tokio::select! {
-                () = orchestrator.wait_released(&thread_id, turn_id) => {}
+                () = engine.wait_released(&thread_id, turn_id) => {}
                 () = drain_until_closed(&mut lines) => return Ok(()),
             }
         }
@@ -624,7 +624,7 @@ mod tests {
     use super::*;
     use crate::core::events::{AgentEvent, TurnStatus};
     use crate::core::workers::{WorkerManager, WorkerRunRequest};
-    use crate::orchestration::client::{OrchestratorClient, ok};
+    use crate::orchestration::client::{EngineClient, ok};
     use crate::orchestration::protocol::{Submit, TurnKind};
     use crate::orchestration::runtime::{TurnRequest, TurnRunner};
 
@@ -681,12 +681,12 @@ mod tests {
                 }));
             })
         });
-        let orchestrator = Orchestrator::start_with(workers, events, runner);
-        let mut started = orchestrator
+        let engine = Engine::start_with(workers, events, runner);
+        let mut started = engine
             .subscribe(Some("busy".to_string()), false, false)
             .unwrap();
-        tokio::spawn(serve(Arc::clone(&orchestrator), socket.clone()));
-        let client = OrchestratorClient::at(&socket);
+        tokio::spawn(serve(Arc::clone(&engine), socket.clone()));
+        let client = EngineClient::at(&socket);
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         while !socket.exists() {
             assert!(tokio::time::Instant::now() < deadline, "socket never bound");
@@ -742,9 +742,9 @@ mod tests {
         let (workers, events) = WorkerManager::with_runner(Arc::new(|_: WorkerRunRequest| {
             Box::pin(async { Ok(String::new()) })
         }));
-        let orchestrator = Orchestrator::start_with(workers, events, echo_turns());
-        let server = tokio::spawn(serve(orchestrator, socket.clone()));
-        let client = OrchestratorClient::at(&socket);
+        let engine = Engine::start_with(workers, events, echo_turns());
+        let server = tokio::spawn(serve(engine, socket.clone()));
+        let client = EngineClient::at(&socket);
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         while !socket.exists() {
             assert!(tokio::time::Instant::now() < deadline, "socket never bound");
@@ -842,8 +842,8 @@ mod tests {
         let (workers, events) = WorkerManager::with_runner(Arc::new(|_: WorkerRunRequest| {
             Box::pin(async { Ok(String::new()) })
         }));
-        let orchestrator = Orchestrator::start_with(workers, events, echo_turns());
-        let server = tokio::spawn(serve(orchestrator, socket.clone()));
+        let engine = Engine::start_with(workers, events, echo_turns());
+        let server = tokio::spawn(serve(engine, socket.clone()));
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         while !socket.exists() {
             assert!(tokio::time::Instant::now() < deadline, "socket never bound");
@@ -941,13 +941,13 @@ mod tests {
     #[tokio::test]
     async fn a_missing_service_names_the_command_to_start_it() {
         let dir = tempfile::tempdir().unwrap();
-        let client = OrchestratorClient::at(dir.path().join("none.sock"));
+        let client = EngineClient::at(dir.path().join("none.sock"));
         let err = client
             .call(&Request::Status { thread_id: None })
             .await
             .unwrap_err();
         assert!(
-            err.to_string().contains("zdx service start orchestrator"),
+            err.to_string().contains("zdx service start engine"),
             "{err}"
         );
         assert!(client.workers(None).await.is_empty());

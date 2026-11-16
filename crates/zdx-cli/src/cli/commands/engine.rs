@@ -1,4 +1,4 @@
-//! `zdx orchestrator`: the orchestrator service (`serve`) and its command-line
+//! `zdx engine`: the engine service (`serve`) and its command-line
 //! client (`send`, `status`, `cancel`). Thin wrappers over
 //! `zdx_engine::orchestration`.
 
@@ -8,14 +8,14 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use zdx_engine::core::interrupt;
-use zdx_engine::orchestration::client::{OrchestratorClient, ok};
+use zdx_engine::orchestration::client::{EngineClient, ok};
 use zdx_engine::orchestration::protocol::{
     Event, Follow, Reply, Request, Route, StatusReport, Submit, socket_path,
 };
 use zdx_engine::orchestration::updates::InputImage;
-use zdx_engine::orchestration::{Orchestrator, server};
+use zdx_engine::orchestration::{Engine, server};
 
-const SERVICE_NAME: &str = "orchestrator";
+const SERVICE_NAME: &str = "engine";
 
 /// Runs the service until interrupted. Workers it started stop with it.
 ///
@@ -23,34 +23,37 @@ const SERVICE_NAME: &str = "orchestrator";
 /// Returns an error when another instance runs or the socket cannot be bound.
 pub async fn serve(root: &Path) -> Result<()> {
     zdx_engine::pidfile::ensure_unique(SERVICE_NAME)?;
-    let _pid_guard =
-        zdx_engine::pidfile::write(SERVICE_NAME).context("write orchestrator PID file")?;
+    // The same service from before the rename (`orchestrator`) also counts.
+    if let Some(pid) = zdx_engine::service::state(zdx_engine::service::Service::Engine).pid {
+        bail!("the engine service is already running (PID {pid}); stop it first");
+    }
+    let _pid_guard = zdx_engine::pidfile::write(SERVICE_NAME).context("write engine PID file")?;
     if std::env::var(zdx_engine::service::SUPERVISOR_ENV).as_deref() == Ok("launchd")
         && let Err(err) = zdx_engine::pidfile::mark_supervised(SERVICE_NAME)
     {
-        tracing::warn!(err = %format!("{err:#}"), "Failed to mark orchestrator as launchd-supervised");
+        tracing::warn!(err = %format!("{err:#}"), "Failed to mark engine as launchd-supervised");
     }
     let socket = socket_path();
     let config = zdx_engine::config::Config::load_layered(
         &zdx_engine::config::paths::config_layer_paths_for(root),
     )
     .context("load config")?;
-    let orchestrator = Orchestrator::start(&config.workers).context("start worker runner")?;
-    orchestrator.install_views(Arc::new(
+    let engine = Engine::start(&config.workers).context("start worker runner")?;
+    engine.install_views(Arc::new(
         zdx_engine::orchestration::views::EngineViews::in_service(
             root.to_path_buf(),
-            Arc::clone(orchestrator.workers()),
+            Arc::clone(engine.workers()),
         ),
     ));
     tracing::info!(
         root = %root.display(),
         runner = ?config.workers.runner,
-        "Orchestrator service started"
+        "Engine service started"
     );
     let result = tokio::select! {
-        result = server::serve(orchestrator, socket.clone()) => result,
+        result = server::serve(engine, socket.clone()) => result,
         () = interrupt::wait_for_interrupt() => {
-            tracing::info!("Orchestrator service stopping");
+            tracing::info!("Engine service stopping");
             Ok(())
         }
     };
@@ -109,12 +112,12 @@ pub async fn send(options: SendOptions<'_>) -> Result<()> {
         delivery: options.delivery,
         replay: false,
     };
-    let client = OrchestratorClient::new();
+    let client = EngineClient::new();
     let mut stream = client.open(&Request::Submit(submit)).await?;
     let receipt = ok(stream
         .next()
         .await?
-        .context("the orchestrator service closed the connection")?)?;
+        .context("the engine service closed the connection")?)?;
     print_json(&receipt)?;
     if !options.wait {
         return Ok(());
@@ -134,7 +137,7 @@ pub async fn send(options: SendOptions<'_>) -> Result<()> {
             }
         };
         let Some(reply) = reply else {
-            bail!("the orchestrator service closed the connection before the thread settled");
+            bail!("the engine service closed the connection before the thread settled");
         };
         print_json(&reply)?;
         let Reply::Event { event } = reply else {
@@ -181,13 +184,13 @@ pub async fn send(options: SendOptions<'_>) -> Result<()> {
 /// # Errors
 /// Returns an error when the service is unreachable.
 pub async fn status(thread_id: Option<&str>, json: bool) -> Result<()> {
-    let reply = ok(OrchestratorClient::new()
+    let reply = ok(EngineClient::new()
         .call(&Request::Status {
             thread_id: thread_id.map(str::to_string),
         })
         .await?)?;
     let Reply::Status { report } = reply else {
-        bail!("unexpected reply from the orchestrator service");
+        bail!("unexpected reply from the engine service");
     };
     if json {
         return print_json(&report);
@@ -272,11 +275,11 @@ pub async fn cancel(options: CancelOptions<'_>) -> Result<()> {
         },
         _ => bail!("pass exactly one of --thread or --worker"),
     };
-    let reply = ok(OrchestratorClient::new().call(&request).await?)?;
+    let reply = ok(EngineClient::new().call(&request).await?)?;
     print_json(&reply)
 }
 
-/// `zdx orchestrator feedback`: the CLI twin of `feedback_submit`. The body
+/// `zdx engine feedback`: the CLI twin of `feedback_submit`. The body
 /// goes to the service unchanged.
 ///
 /// # Errors
@@ -304,7 +307,7 @@ pub async fn feedback(
         root: root.to_path_buf(),
         submission,
     });
-    let reply = ok(OrchestratorClient::new().call(&request).await?)?;
+    let reply = ok(EngineClient::new().call(&request).await?)?;
     print_json(&reply)
 }
 
@@ -319,7 +322,7 @@ pub async fn release(
     holder: Option<String>,
     force: bool,
 ) -> Result<()> {
-    let reply = ok(OrchestratorClient::new()
+    let reply = ok(EngineClient::new()
         .call(&Request::Release {
             thread_id: thread_id.to_string(),
             turn_id,
@@ -352,11 +355,9 @@ pub async fn view(root: &Path, file: &Path) -> Result<()> {
     };
     let request: zdx_engine::orchestration::views::ViewRequest =
         serde_json::from_str(&text).context("parse view request")?;
-    let reply = match zdx_engine::pidfile::status(SERVICE_NAME) {
-        zdx_engine::pidfile::ServiceStatus::Running { .. } => ok(OrchestratorClient::new()
-            .call(&Request::View(request))
-            .await?)?,
-        zdx_engine::pidfile::ServiceStatus::Stopped => {
+    let reply = match EngineClient::running() {
+        Some(client) => ok(client.call(&Request::View(request)).await?)?,
+        None => {
             match zdx_engine::orchestration::views::EngineViews::client(root.to_path_buf())
                 .view(request)
                 .await

@@ -1,6 +1,6 @@
 //! Thread operations a chat surface needs besides running turns: thread
 //! metadata, delivery records, and resetting a thread. One implementation,
-//! called by the orchestrator socket ([`super::protocol::Request`]) and by
+//! called by the engine socket ([`super::protocol::Request`]) and by
 //! their `zdx threads` CLI twins, so no surface writes thread files itself.
 
 // `Option<Option<T>>` is the wire contract: absent keeps, `null` clears.

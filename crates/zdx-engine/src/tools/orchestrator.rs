@@ -90,7 +90,7 @@ impl Tool for OrchestratorTool {
                     "orchestrator_unavailable",
                     "Orchestrator thread controls are not available on this surface",
                     Some(
-                        "These tools run only in turns of the orchestrator service (`zdx orchestrator send`)."
+                        "These tools run only in turns of the engine service (`zdx engine send`)."
                             .to_string(),
                     ),
                 );

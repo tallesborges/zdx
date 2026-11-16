@@ -327,7 +327,7 @@ websocket = false
 [notifications]
 osc = true
 
-# Where the orchestrator service runs worker turns (read when it starts).
+# Where the engine service runs worker turns (read when it starts).
 # "local": a child `zdx exec` in the worker's root (default).
 # "external": the launcher in [workers.external] runs each turn elsewhere
 # (container, VM, sandbox). Contract: docs/SPEC.md §18, External worker runner.

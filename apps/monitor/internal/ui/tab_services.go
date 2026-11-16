@@ -72,13 +72,13 @@ func (m *Model) renderServices(width, h int) []string {
 			out = append(out, "  "+warn.Render("Restart queued: ")+dim.Render(oneLine(q)))
 		}
 	}
-	out = append(out, "", rule("Orchestrator work", width))
-	return append(out, m.orchestratorWork(width, h-len(out))...)
+	out = append(out, "", rule("Engine work", width))
+	return append(out, m.engineWork(width, h-len(out))...)
 }
 
-// orchestratorWork lists the threads the service holds work for, from its
+// engineWork lists the threads the service holds work for, from its
 // status report.
-func (m *Model) orchestratorWork(width, h int) []string {
+func (m *Model) engineWork(width, h int) []string {
 	if m.status == nil {
 		if err := m.fetch[keyStatus].err; err != nil {
 			return []string{"  " + bad.Render("Not reachable: ") + oneLine(err.Error())}

@@ -235,7 +235,7 @@ func (d *Deliverer) postSummary(ctx context.Context, target ReplyTarget, summary
 
 // ErrDeliveryUnrecorded means a reply was not sent because its delivery
 // could not be recorded.
-var ErrDeliveryUnrecorded = errors.New("the reply was not sent: the orchestrator service cannot record deliveries")
+var ErrDeliveryUnrecorded = errors.New("the reply was not sent: the engine service cannot record deliveries")
 
 // recordItems maps plan items to pending delivery items, in plan order.
 func recordItems(items []render.Item) []engine.DeliveryItem {

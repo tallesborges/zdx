@@ -65,7 +65,7 @@ func CheckEnv(env []string) error {
 }
 
 // watched are the live-bot files a test must never change.
-var watched = []string{"bot.pid", "bot.supervised", "restart-queue.json", "orchestrator.sock"}
+var watched = []string{"bot.pid", "bot.supervised", "restart-queue.json", "engine.sock"}
 
 type stamp struct {
 	exists bool

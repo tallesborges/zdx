@@ -317,7 +317,7 @@ func TestUnavailableServiceSaysSoAndNamesTheFallback(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 200, Height: 80})
 	m.Update(key("?"))
 	help := plain(m)
-	for _, want := range []string{"state                   ○ disconnected", "need the orchestrator (or --cli-fallback)"} {
+	for _, want := range []string{"state                   ○ disconnected", "need the engine (or --cli-fallback)"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help lacks %q:\n%s", want, help)
 		}

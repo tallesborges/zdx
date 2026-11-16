@@ -55,7 +55,7 @@ pub async fn run(
 
     if thread_opts.no_save {
         anyhow::bail!(
-            "--no-thread does not apply to the chat TUI: the orchestrator service saves every turn"
+            "--no-thread does not apply to the chat TUI: the engine service saves every turn"
         );
     }
     tui(
@@ -66,7 +66,7 @@ pub async fn run(
 }
 
 /// The Go chat TUI bare `zdx` starts: `zdx-go tui`. Its turns run in the
-/// orchestrator service.
+/// engine service.
 pub const TUI: GoProgram = GoProgram {
     command: "tui",
     why: "the interactive chat is the Go TUI",

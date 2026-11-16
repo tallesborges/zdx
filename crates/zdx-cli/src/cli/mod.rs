@@ -327,7 +327,7 @@ enum Commands {
         #[command(subcommand)]
         command: BgCommands,
     },
-    /// Manage the long-lived `bot`, `scheduler`, and `orchestrator` services under launchd (macOS)
+    /// Manage the long-lived `bot`, `scheduler`, and `engine` services under launchd (macOS)
     Service {
         #[command(subcommand)]
         command: ServiceCommands,
@@ -348,10 +348,10 @@ enum Commands {
         #[command(subcommand)]
         command: JobCommands,
     },
-    /// Run the orchestrator service, or send to and inspect its threads
-    Orchestrator {
+    /// Run the engine service, or send to and inspect its threads
+    Engine {
         #[command(subcommand)]
-        command: OrchestratorCommands,
+        command: EngineCommands,
     },
     /// Inspect and call MCP servers through the internal helper CLI
     Mcp {
@@ -464,7 +464,7 @@ enum Commands {
 }
 
 #[derive(clap::Subcommand)]
-enum OrchestratorCommands {
+enum EngineCommands {
     /// Run the service: it owns persistent-profile threads and their workers,
     /// and continues a thread when one of its workers finishes
     Serve,
@@ -669,7 +669,7 @@ struct GitThread {
 enum ServiceCommands {
     /// Write the launchd plists and start the services
     Install {
-        /// Service to install: bot, scheduler, orchestrator, or all
+        /// Service to install: bot, scheduler, engine, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
 
@@ -680,34 +680,34 @@ enum ServiceCommands {
     },
     /// Stop the services and remove their launchd plists
     Uninstall {
-        /// Service to uninstall: bot, scheduler, orchestrator, or all
+        /// Service to uninstall: bot, scheduler, engine, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
     },
     /// Start a stopped service
     Start {
-        /// Service to start: bot, scheduler, orchestrator, or all
+        /// Service to start: bot, scheduler, engine, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
     },
     /// Stop a service until it is explicitly started again
     Stop {
-        /// Service to stop: bot, scheduler, orchestrator, or all
+        /// Service to stop: bot, scheduler, engine, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
 
-        /// Stop even when agent runs are active or the orchestrator service
+        /// Stop even when agent runs are active or the engine service
         /// has work in flight (that work is lost)
         #[arg(long)]
         force: bool,
     },
     /// Restart a service, picking up the currently installed binary
     Restart {
-        /// Service to restart: bot, scheduler, orchestrator, or all
+        /// Service to restart: bot, scheduler, engine, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
 
-        /// Restart even when agent runs are active or the orchestrator service
+        /// Restart even when agent runs are active or the engine service
         /// has work in flight (that work is lost)
         #[arg(long, conflicts_with = "queue")]
         force: bool,
@@ -727,7 +727,7 @@ enum ServiceCommands {
         json: bool,
     },
     /// Restart what the bot restarts before exiting itself (`/restart`): the
-    /// scheduler, plus the orchestrator service when installed
+    /// scheduler, plus the engine service when installed
     RestartPeers {
         /// Restart even when work would be lost
         #[arg(long)]
@@ -739,7 +739,7 @@ enum ServiceCommands {
     },
     /// Perform the queued restart once nothing would be lost (run by the bot
     /// service while its own queues are empty). Restarts scheduler and
-    /// orchestrator targets; reports `restart_bot` instead of restarting the
+    /// engine targets; reports `restart_bot` instead of restarting the
     /// bot, which must exit with code 42 itself.
     RunQueuedRestart {
         /// Emit machine-readable JSON instead of a text summary
@@ -754,7 +754,7 @@ enum ServiceCommands {
     },
     /// Show the tail of a service's captured output
     Logs {
-        /// Service to inspect: bot, scheduler, orchestrator, or all
+        /// Service to inspect: bot, scheduler, engine, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
 
@@ -1552,7 +1552,7 @@ struct DispatchContext<'a> {
     system_prompt: Option<&'a str>,
 }
 
-/// `zdx orchestrator send --delivery`.
+/// `zdx engine send --delivery`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum DeliveryArg {
     Queue,
@@ -1847,9 +1847,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
         }
         Commands::Memory { command } => dispatch_memory(command, context).await,
         Commands::Jobs { command } => Box::pin(dispatch_jobs(command, context)).await,
-        Commands::Orchestrator { command } => {
-            Box::pin(dispatch_orchestrator(command, context)).await
-        }
+        Commands::Engine { command } => Box::pin(dispatch_engine(command, context)).await,
         Commands::Mcp { command } => dispatch_mcp(command, context).await,
         Commands::Config { command } => dispatch_config(&command),
         Commands::Login {
@@ -1900,7 +1898,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
         Commands::Helper { file } => commands::telegram::helper(&file).await,
         Commands::Views { file } => {
             let root = resolve_root(context.root, context.worktree_id)?;
-            commands::orchestrator::view(&root, &file).await
+            commands::engine::view(&root, &file).await
         }
         Commands::Worktree { command } => dispatch_worktree(command, context),
     }
@@ -2095,14 +2093,11 @@ async fn dispatch_memory(command: MemoryCommands, context: &DispatchContext<'_>)
     }
 }
 
-async fn dispatch_orchestrator(
-    command: OrchestratorCommands,
-    context: &DispatchContext<'_>,
-) -> Result<()> {
+async fn dispatch_engine(command: EngineCommands, context: &DispatchContext<'_>) -> Result<()> {
     let root_path = resolve_root(context.root, context.worktree_id)?;
     match command {
-        OrchestratorCommands::Serve => commands::orchestrator::serve(&root_path).await,
-        OrchestratorCommands::Send {
+        EngineCommands::Serve => commands::engine::serve(&root_path).await,
+        EngineCommands::Send {
             thread,
             ordinary,
             route_chat,
@@ -2121,7 +2116,7 @@ async fn dispatch_orchestrator(
             } else {
                 resolve_exec_prompt(prompt, prompt_file.as_deref())?
             };
-            commands::orchestrator::send(commands::orchestrator::SendOptions {
+            commands::engine::send(commands::engine::SendOptions {
                 root: root_path,
                 thread_id: thread.as_deref(),
                 profile: profile.as_deref(),
@@ -2142,17 +2137,17 @@ async fn dispatch_orchestrator(
             })
             .await
         }
-        OrchestratorCommands::Status { thread, json } => {
-            commands::orchestrator::status(thread.as_deref(), json).await
+        EngineCommands::Status { thread, json } => {
+            commands::engine::status(thread.as_deref(), json).await
         }
-        OrchestratorCommands::Cancel {
+        EngineCommands::Cancel {
             thread,
             worker,
             keep_queue,
             input,
             turn,
         } => {
-            commands::orchestrator::cancel(commands::orchestrator::CancelOptions {
+            commands::engine::cancel(commands::engine::CancelOptions {
                 thread_id: thread.as_deref(),
                 worker: worker.as_deref(),
                 keep_queue,
@@ -2161,17 +2156,17 @@ async fn dispatch_orchestrator(
             })
             .await
         }
-        OrchestratorCommands::Feedback {
+        EngineCommands::Feedback {
             thread,
             user_id,
             file,
-        } => commands::orchestrator::feedback(&thread, user_id, &root_path, &file).await,
-        OrchestratorCommands::Release {
+        } => commands::engine::feedback(&thread, user_id, &root_path, &file).await,
+        EngineCommands::Release {
             thread,
             turn,
             holder,
             force,
-        } => commands::orchestrator::release(&thread, turn, holder, force).await,
+        } => commands::engine::release(&thread, turn, holder, force).await,
     }
 }
 

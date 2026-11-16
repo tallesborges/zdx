@@ -182,7 +182,7 @@ func (c *skipClock) Sleep(ctx context.Context, d time.Duration) error {
 }
 
 // realGateway is the whole gateway (BotComponents, as serve wires it)
-// against a real `zdx orchestrator serve` on a temp home, a mock model
+// against a real `zdx engine serve` on a temp home, a mock model
 // endpoint and the fake Bot API.
 type realGateway struct {
 	t       *testing.T
@@ -232,7 +232,7 @@ func startRealGateway(t *testing.T, config string) *realGateway {
 
 	logFile, _ := os.Create(g.logPath)
 	t.Cleanup(func() { logFile.Close() })
-	cmd := exec.Command(bin, "--root", g.root, "orchestrator", "serve")
+	cmd := exec.Command(bin, "--root", g.root, "engine", "serve")
 	cmd.Dir = g.root
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "TMPDIR=" + os.Getenv("TMPDIR"), "HOME=" + home, "ZDX_HOME=" + home,
 		"ANTHROPIC_API_KEY=test-api-key", "ANTHROPIC_BASE_URL=" + provider.URL}

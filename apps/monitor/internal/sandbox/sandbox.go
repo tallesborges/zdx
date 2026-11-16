@@ -25,7 +25,7 @@ const KeepPrefix = "ZDX_MONITOR_TEST_"
 // watched are files of the inherited home a test must never touch.
 var watched = []string{
 	"oauth.json", "oauth.lock",
-	"run/bot.pid", "run/bot.supervised", "run/orchestrator.sock", "run/orchestrator.pid", "run/restart-queue.json",
+	"run/bot.pid", "run/bot.supervised", "run/engine.sock", "run/engine.pid", "run/restart-queue.json",
 }
 
 // dropped are credential variables outside the ZDX_ prefix.

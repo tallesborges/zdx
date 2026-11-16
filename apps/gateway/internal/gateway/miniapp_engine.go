@@ -1,6 +1,6 @@
 // Package gateway wires the Go gateway together: Telegram client, polling
 // router, renderer bridge, and the Mini App HTTP handler over the Rust
-// orchestrator socket.
+// engine socket.
 package gateway
 
 import (
@@ -25,7 +25,7 @@ import (
 	"github.com/tallesborges/zdx/apps/shared/version"
 )
 
-// MiniAppEngine implements miniapp.Engine over the orchestrator socket.
+// MiniAppEngine implements miniapp.Engine over the engine socket.
 // Every read except quotas, job summaries, and Git is a Rust view (views.rs) whose body is
 // the route's JSON, passed through unchanged. A view whose capability the
 // service lacks answers miniapp.ErrUnavailable (HTTP 503) without sending

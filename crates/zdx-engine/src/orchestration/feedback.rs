@@ -19,7 +19,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::protocol::{Delivery, ErrorCode, Follow, Route, Submit};
-use super::runtime::Orchestrator;
+use super::runtime::Engine;
 use super::thread_ops::{self, ThreadKind, coded, validate_thread_id};
 use super::updates::InputImage;
 use crate::core::artifact_feedback::{
@@ -233,7 +233,7 @@ async fn compose_turn(saved: &SavedFeedback, root: &Path) -> (String, Vec<InputI
     (compose_user_text(&input), inline)
 }
 
-impl Orchestrator {
+impl Engine {
     /// Saves Mini App feedback and queues it as a turn in the conversation
     /// that owns `request.thread_id` (see the module docs for the order).
     ///

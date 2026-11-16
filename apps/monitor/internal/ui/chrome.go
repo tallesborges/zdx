@@ -108,7 +108,7 @@ func (m *Model) pending(k fetchKey, what string) []string {
 	if st.err != nil {
 		out := []string{"", "  " + bad.Render("✗ Could not load "+what+": ") + oneLine(st.err.Error())}
 		if errors.Is(st.err, wire.ErrNotRunning) {
-			out = append(out, "  "+dim.Render("This needs the orchestrator service. Start it, or run the monitor with --cli-fallback."))
+			out = append(out, "  "+dim.Render("This needs the engine service. Start it, or run the monitor with --cli-fallback."))
 		}
 		return out
 	}
@@ -118,7 +118,7 @@ func (m *Model) pending(k fetchKey, what string) []string {
 	return []string{"", "  " + dim.Render(spinner(m.now())+" Loading "+what+"…")}
 }
 
-// connection is the footer's state of the orchestrator service: whether
+// connection is the footer's state of the engine service: whether
 // the socket answers, not whether agents are busy (the Agents tab shows
 // that). short drops the words for narrow terminals.
 func (m *Model) connection(short bool) string {
@@ -414,14 +414,14 @@ func (m *Model) helpLines() []string {
 		line("capabilities", strings.Join(m.status.Capabilities, ", "))
 		line("tracked threads", fmt.Sprintf("%d (threads the service holds state for)", len(m.status.Threads)))
 		if missing := m.missingViews(); len(missing) > 0 {
-			line("", warn.Render("missing "+strings.Join(missing, ", ")+": update and restart the orchestrator"))
+			line("", warn.Render("missing "+strings.Join(missing, ", ")+": update and restart the engine"))
 		}
 	} else if err := m.fetch[keyStatus].err; err != nil {
 		line("status", bad.Render(oneLine(err.Error())))
 		if m.opts.CLIFallback {
 			line("", warn.Render("views run in this process through `zdx views`; this refreshes derived caches"))
 		} else {
-			line("", dim.Render("agents, threads, usage, and config need the orchestrator (or --cli-fallback);"))
+			line("", dim.Render("agents, threads, usage, and config need the engine (or --cli-fallback);"))
 			line("", dim.Render("services, jobs, and logs still work"))
 		}
 	}
@@ -439,7 +439,7 @@ func (m *Model) helpLines() []string {
 	line("cli fallback", fallback)
 	out = append(out, "",
 		"  "+bold.Render("Data sources"),
-		"    "+dim.Render("Views come from the orchestrator socket; Services and Jobs from `zdx service status --json`"),
+		"    "+dim.Render("Views come from the engine socket; Services and Jobs from `zdx service status --json`"),
 		"    "+dim.Render("and `zdx jobs list --scheduler --json`; Logs from $ZDX_HOME/logs. Nothing here writes."),
 		"    "+dim.Render("Not here yet: service start/stop/restart, bg kill, job model edit (use the zdx CLI),"),
 		"    "+dim.Render("full thread browse and filters, config edits."),

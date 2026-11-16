@@ -43,7 +43,7 @@ type Lifecycle interface {
 	// announced in threadID.
 	QueueRestart(ctx context.Context, threadID string) (QueuedRestart, error)
 	// RestartServices restarts the scheduler and, when installed, the
-	// orchestrator service, refusing while work is active unless force. An
+	// engine service, refusing while work is active unless force. An
 	// error means the restart failed and the gateway stays up.
 	RestartServices(ctx context.Context, force bool) (RestartResult, error)
 	// RequestExit asks the gateway to exit, for its supervisor to restart

@@ -1,4 +1,4 @@
-// Package socket is the shared transport to the orchestrator service: one
+// Package socket is the shared transport to the engine service: one
 // request line per Unix socket connection, newline-delimited JSON replies.
 // It moves raw lines and never merges, drops or reorders them, so a
 // streaming caller sees every reply the service wrote. It adds the checks
@@ -27,7 +27,7 @@ const ReplyTimeout = 30 * time.Second
 const MaxLine = 64 << 20
 
 // ErrNotRunning means no service listens on the socket.
-var ErrNotRunning = errors.New("orchestrator service is not running")
+var ErrNotRunning = errors.New("engine service is not running")
 
 // Request outcome classes, for callers that must not claim more than they
 // know about a write. Every transport error of Open and Call wraps exactly
@@ -45,7 +45,7 @@ var (
 // budget ended or the caller cancelled. The service may still complete it.
 // The returned error also wraps the context's error, so a caller can tell
 // its own cancellation (context.Canceled) from a timeout.
-var ErrNoAnswer = fmt.Errorf("%w: the orchestrator service did not answer in time; the request may still complete", ErrRequestOutcomeUnknown)
+var ErrNoAnswer = fmt.Errorf("%w: the engine service did not answer in time; the request may still complete", ErrRequestOutcomeUnknown)
 
 // noAnswer is ErrNoAnswer with the context error that ended the wait. Its
 // text is ErrNoAnswer's, so messages built from it do not change.
@@ -54,7 +54,7 @@ type noAnswer struct{ cause error }
 func (e noAnswer) Error() string   { return ErrNoAnswer.Error() }
 func (e noAnswer) Unwrap() []error { return []error{ErrNoAnswer, e.cause} }
 
-// Client talks to the orchestrator service at Socket. One request per
+// Client talks to the engine service at Socket. One request per
 // connection. A zero ReplyTimeout means ReplyTimeout.
 type Client struct {
 	Socket       string
@@ -79,7 +79,7 @@ func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 	conn, err := d.DialContext(ctx, "unix", c.Socket)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) {
-			return nil, fmt.Errorf("%w (no listener at %s); start it with `zdx service start orchestrator` or `zdx orchestrator serve`", ErrNotRunning, c.Socket)
+			return nil, fmt.Errorf("%w (no listener at %s); start it with `zdx service start engine` or `zdx engine serve`", ErrNotRunning, c.Socket)
 		}
 		if errors.Is(err, syscall.EINVAL) && len(c.Socket) > 100 {
 			return nil, fmt.Errorf("connect to %s: %w (the path is %d bytes; Unix socket paths are limited to about 104)", c.Socket, err, len(c.Socket))
@@ -173,7 +173,7 @@ func (c *Client) Call(ctx context.Context, line []byte, budget time.Duration) ([
 	case err == nil:
 		return reply, nil
 	case errors.Is(err, io.EOF):
-		return nil, fmt.Errorf("%w: orchestrator service closed the connection without a reply", ErrRequestOutcomeUnknown)
+		return nil, fmt.Errorf("%w: engine service closed the connection without a reply", ErrRequestOutcomeUnknown)
 	case ctx.Err() != nil:
 		return nil, noAnswer{cause: ctx.Err()}
 	default:

@@ -153,7 +153,7 @@ func (h *Handler) untilSent(ctx context.Context, stage string, f func() error) e
 		if left <= 0 {
 			return err
 		}
-		h.log().Info("orchestrator service unavailable; sending again", "stage", stage, "err", err)
+		h.log().Info("engine service unavailable; sending again", "stage", stage, "err", err)
 		select {
 		case <-ctx.Done():
 			return err

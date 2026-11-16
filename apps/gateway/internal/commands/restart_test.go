@@ -69,8 +69,8 @@ func TestRestart(t *testing.T) {
 	if got := run("/restart"); got != "⚠️ 2 agent runs are active.\n\n<code>/restart q</code> — restart automatically once it finishes\n<code>/restart f</code> — interrupt it and restart now" || lc.exits != 0 {
 		t.Fatalf("blocked %q", got)
 	}
-	lc.result = RestartResult{Outcome: RestartDone, Text: "Restarted scheduler, orchestrator"}
-	if got := run("/restart@zdx_bot f"); got != "🔄 Restarted scheduler, orchestrator.\n👋 Exiting bot… launchd will restart it shortly." || lc.exits != 1 {
+	lc.result = RestartResult{Outcome: RestartDone, Text: "Restarted scheduler, engine"}
+	if got := run("/restart@zdx_bot f"); got != "🔄 Restarted scheduler, engine.\n👋 Exiting bot… launchd will restart it shortly." || lc.exits != 1 {
 		t.Fatalf("restarted %q exits %d", got, lc.exits)
 	}
 	lc.restartErr = errors.New("launchctl failed")

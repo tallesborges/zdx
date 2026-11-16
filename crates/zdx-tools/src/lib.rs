@@ -90,7 +90,7 @@ impl ToolContext {
 
 /// Environment variables that belong to one run, not to the process.
 ///
-/// Several runs can share one process (the bot, the orchestrator service, a
+/// Several runs can share one process (the bot, the engine service, a
 /// TUI with background threads), so per-run values such as `ZDX_THREAD_ID`
 /// must not live in the process environment. Tools pass these to every child
 /// process they start, and `$VAR` expansion in tool paths reads them before

@@ -1,5 +1,5 @@
 // Package ui is the chat TUI's Bubble Tea model. It renders a thread with
-// the shared transcript layout and runs every turn through the orchestrator
+// the shared transcript layout and runs every turn through the engine
 // service: it owns presentation, composition, and key handling, never an
 // engine rule.
 package ui
@@ -465,7 +465,7 @@ func (m *Model) applySubscribed(msg subscribedMsg) tea.Cmd {
 		return nil
 	}
 	if msg.err != nil {
-		m.setNotice("orchestrator: "+errText(msg.err)+" (retrying)", false)
+		m.setNotice("engine: "+errText(msg.err)+" (retrying)", false)
 		return m.resubscribeLater()
 	}
 	m.sub = msg.sub
@@ -675,7 +675,7 @@ func (m *Model) applyEvent(msg eventMsg) tea.Cmd {
 		if m.threadCtx.Err() != nil {
 			return nil
 		}
-		text := "lost the orchestrator service connection; reconnecting"
+		text := "lost the engine service connection; reconnecting"
 		if err != nil {
 			text += " (" + errText(err) + ")"
 		}
@@ -814,7 +814,7 @@ func (m *Model) send(queue bool) tea.Cmd {
 		return nil
 	}
 	if m.sub == nil {
-		m.setNotice("not connected to the orchestrator service yet", false)
+		m.setNotice("not connected to the engine service yet", false)
 		return nil
 	}
 	images := make([]engine.Image, 0, len(m.attachments))
@@ -839,7 +839,7 @@ func (m *Model) send(queue bool) tea.Cmd {
 // rerun runs the saved history again after a failed turn.
 func (m *Model) rerun() tea.Cmd {
 	if m.sub == nil {
-		m.setNotice("not connected to the orchestrator service yet", false)
+		m.setNotice("not connected to the engine service yet", false)
 		return nil
 	}
 	m.failed = false

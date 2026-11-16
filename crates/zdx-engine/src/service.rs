@@ -1,5 +1,5 @@
 //! launchd-backed control for the long-lived `bot`, `scheduler`, and
-//! `orchestrator` services.
+//! `engine` services.
 //!
 //! launchd owns process lifetime (start at login, restart on crash, restart
 //! after the bot's `/restart`); this module owns the ergonomics. Status still comes
@@ -30,21 +30,23 @@ pub enum Service {
     // A restart request written before the rename names it `daemon`.
     #[serde(alias = "daemon")]
     Scheduler,
-    /// Hosts persistent-profile threads and their workers
-    /// (`zdx orchestrator serve`).
-    Orchestrator,
+    /// Runs every turn of persistent-profile threads and their workers, and
+    /// answers views (`zdx engine serve`).
+    // A restart request written before the rename names it `orchestrator`.
+    #[serde(alias = "orchestrator")]
+    Engine,
 }
 
 impl Service {
     /// Every managed service, in display order.
-    pub const ALL: [Self; 3] = [Self::Bot, Self::Scheduler, Self::Orchestrator];
+    pub const ALL: [Self; 3] = [Self::Bot, Self::Scheduler, Self::Engine];
 
     /// PID-file / log-file base name, also the user-facing service name.
     pub fn name(self) -> &'static str {
         match self {
             Self::Bot => "bot",
             Self::Scheduler => "scheduler",
-            Self::Orchestrator => "orchestrator",
+            Self::Engine => "engine",
         }
     }
 
@@ -65,10 +67,11 @@ impl Service {
     /// The name this service was installed under before it was renamed.
     /// Only the move off that install reads it ([`retire_legacy`]); remove
     /// it once no install uses the old name.
-    fn legacy_name(self) -> Option<&'static str> {
+    pub(crate) fn legacy_name(self) -> Option<&'static str> {
         match self {
             Self::Scheduler => Some("daemon"),
-            Self::Bot | Self::Orchestrator => None,
+            Self::Engine => Some("orchestrator"),
+            Self::Bot => None,
         }
     }
 
@@ -108,15 +111,15 @@ impl Service {
         match self {
             Self::Bot => vec!["gateway".into(), "--root".into(), root, "bot".into()],
             Self::Scheduler => vec!["--root".into(), root, "jobs".into(), "scheduler".into()],
-            Self::Orchestrator => {
-                vec!["--root".into(), root, "orchestrator".into(), "serve".into()]
+            Self::Engine => {
+                vec!["--root".into(), root, "engine".into(), "serve".into()]
             }
         }
     }
 
     /// Resolves a CLI target into the services it refers to.
     ///
-    /// Accepts `bot`, `scheduler`, `orchestrator`, or `all`.
+    /// Accepts `bot`, `scheduler`, `engine`, or `all`.
     ///
     /// # Errors
     /// Returns an error for any other value.
@@ -125,10 +128,11 @@ impl Service {
             "all" => Ok(Self::ALL.to_vec()),
             "bot" => Ok(vec![Self::Bot]),
             "scheduler" => Ok(vec![Self::Scheduler]),
-            "orchestrator" => Ok(vec![Self::Orchestrator]),
+            "engine" => Ok(vec![Self::Engine]),
             "daemon" => bail!("the daemon service is now called scheduler; use `scheduler`"),
+            "orchestrator" => bail!("the orchestrator service is now called engine; use `engine`"),
             other => {
-                bail!("unknown service '{other}' (expected: bot, scheduler, orchestrator, all)")
+                bail!("unknown service '{other}' (expected: bot, scheduler, engine, all)")
             }
         }
     }
@@ -141,14 +145,14 @@ impl fmt::Display for Service {
 }
 
 /// Restart or stop refused because work would be lost: active agent runs,
-/// or (when the orchestrator service is a target) its in-memory workers,
+/// or (when the engine service is a target) its in-memory workers,
 /// queues, and undelivered results.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestartBlocked {
     action: &'static str,
     active_runs: usize,
-    /// What the orchestrator service would lose, when it is a target.
-    orchestrator: Option<String>,
+    /// What the engine service would lose, when it is a target.
+    engine: Option<String>,
 }
 
 impl RestartBlocked {
@@ -172,12 +176,12 @@ impl fmt::Display for RestartBlocked {
                 "{} active agent {noun} {verb} still running",
                 self.active_runs
             )?;
-            if self.orchestrator.is_some() {
+            if self.engine.is_some() {
                 f.write_str("; ")?;
             }
         }
-        if let Some(lost) = &self.orchestrator {
-            write!(f, "the orchestrator service would lose {lost}")?;
+        if let Some(lost) = &self.engine {
+            write!(f, "the engine service would lose {lost}")?;
         }
         Ok(())
     }
@@ -248,11 +252,11 @@ pub fn default_go_program() -> PathBuf {
 
 /// The program `service` runs when none is given: `zdx-go` for the bot
 /// (as `zdx-go gateway`), the installed `zdx` for the scheduler and the
-/// orchestrator.
+/// engine.
 pub fn default_program_for(service: Service) -> PathBuf {
     match service {
         Service::Bot => default_go_program(),
-        Service::Scheduler | Service::Orchestrator => default_program(),
+        Service::Scheduler | Service::Engine => default_program(),
     }
 }
 
@@ -739,8 +743,8 @@ pub fn restart(service: Service, force: bool) -> Result<String> {
 
 /// Restarts multiple agents after one shared preflight: every service is
 /// installed, and (unless `force`) nothing would be lost — no agent run is
-/// active and, when the orchestrator service is a target, it has no work in
-/// flight. A restarted orchestrator service is waited for until it answers
+/// active and, when the engine service is a target, it has no work in
+/// flight. A restarted engine service is waited for until it answers
 /// on its socket, before the next service restarts.
 ///
 /// # Errors
@@ -762,13 +766,11 @@ pub fn restart_many(services: &[Service], force: bool) -> Result<Vec<String>> {
         let mut message = restart_unchecked(service)?;
         // The new process writes its PID file before it binds the socket, so
         // without this wait the bot (its preflight, then its first requests)
-        // would find no orchestrator service.
-        if service == Service::Orchestrator
-            && !wait_for_orchestrator(old_pid, ORCHESTRATOR_READY_TIMEOUT)
-        {
+        // would find no engine service.
+        if service == Service::Engine && !wait_for_engine(old_pid, ENGINE_READY_TIMEOUT) {
             message = format!(
                 "{message}; it did not answer on its socket within {}s",
-                ORCHESTRATOR_READY_TIMEOUT.as_secs()
+                ENGINE_READY_TIMEOUT.as_secs()
             );
         }
         messages.push(message);
@@ -776,8 +778,8 @@ pub fn restart_many(services: &[Service], force: bool) -> Result<Vec<String>> {
     Ok(messages)
 }
 
-/// How long a restart waits for the new orchestrator service to answer.
-const ORCHESTRATOR_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How long a restart waits for the new engine service to answer.
+const ENGINE_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 fn running_pid(service: Service) -> Option<u32> {
     match process_status(service) {
@@ -786,17 +788,16 @@ fn running_pid(service: Service) -> Option<u32> {
     }
 }
 
-/// Waits until an orchestrator process other than `old_pid` answers a
+/// Waits until an engine process other than `old_pid` answers a
 /// status request on its socket. Returns false after `timeout`.
-fn wait_for_orchestrator(old_pid: Option<u32>, timeout: std::time::Duration) -> bool {
-    use crate::orchestration::OrchestratorClient;
+fn wait_for_engine(old_pid: Option<u32>, timeout: std::time::Duration) -> bool {
+    use crate::orchestration::EngineClient;
     use crate::orchestration::protocol::{Reply, Request};
 
     let deadline = std::time::Instant::now() + timeout;
-    let client = OrchestratorClient::new();
+    let client = EngineClient::new();
     loop {
-        let new_process =
-            running_pid(Service::Orchestrator).is_some_and(|pid| Some(pid) != old_pid);
+        let new_process = running_pid(Service::Engine).is_some_and(|pid| Some(pid) != old_pid);
         if new_process
             && matches!(
                 client.request(&Request::Status { thread_id: None }),
@@ -812,10 +813,10 @@ fn wait_for_orchestrator(old_pid: Option<u32>, timeout: std::time::Duration) -> 
     }
 }
 
-/// The order services restart in: the orchestrator first, the bot last,
-/// because the bot needs the orchestrator socket for every message.
+/// The order services restart in: the engine first, the bot last,
+/// because the bot needs the engine socket for every message.
 fn restart_order(services: &[Service]) -> Vec<Service> {
-    [Service::Orchestrator, Service::Scheduler, Service::Bot]
+    [Service::Engine, Service::Scheduler, Service::Bot]
         .into_iter()
         .filter(|service| services.contains(service))
         .collect()
@@ -827,23 +828,23 @@ fn restart_order(services: &[Service]) -> Vec<Service> {
 const BOT_EXIT_TIMEOUT_SECS: u32 = 150;
 
 /// Restarts what the bot service restarts before it exits itself (Telegram
-/// `/restart`): the scheduler, plus the orchestrator service when it is
+/// `/restart`): the scheduler, plus the engine service when it is
 /// installed. Gated like [`restart_many`] unless `force`.
 ///
 /// # Errors
 /// As [`restart_many`]; a [`RestartBlocked`] error means work would be lost.
 pub fn restart_bot_peers(force: bool) -> Result<Vec<String>> {
     let mut services = vec![Service::Scheduler];
-    if state(Service::Orchestrator).installed {
-        services.push(Service::Orchestrator);
+    if state(Service::Engine).installed {
+        services.push(Service::Engine);
     }
     restart_many(&services, force)
 }
 
 /// The one guard for restarting or stopping services. Active agent runs
-/// count everywhere. The orchestrator service also loses what only lives in
+/// count everywhere. The engine service also loses what only lives in
 /// its memory: queued worker prompts, worker processes still starting,
-/// worker results not yet delivered, and queued or undelivered orchestrator
+/// worker results not yet delivered, and queued or undelivered engine
 /// turns. None of those has an agent run yet, so they are asked of the
 /// service itself.
 fn ensure_restart_allowed(action: &'static str, services: &[Service], force: bool) -> Result<()> {
@@ -851,35 +852,29 @@ fn ensure_restart_allowed(action: &'static str, services: &[Service], force: boo
         return Ok(());
     }
     let active_runs = agent_activity::list_active().len();
-    let orchestrator = services
-        .contains(&Service::Orchestrator)
-        .then(orchestrator_in_flight)
+    let engine = services
+        .contains(&Service::Engine)
+        .then(engine_in_flight)
         .flatten();
-    if active_runs > 0 || orchestrator.is_some() {
+    if active_runs > 0 || engine.is_some() {
         return Err(RestartBlocked {
             action,
             active_runs,
-            orchestrator,
+            engine,
         }
         .into());
     }
     Ok(())
 }
 
-/// What a restart of the running orchestrator service would lose, or `None`
+/// What a restart of the running engine service would lose, or `None`
 /// when it is not running or reports itself settled. A running service that
 /// does not answer counts as busy: its state is unknown.
-fn orchestrator_in_flight() -> Option<String> {
-    use crate::orchestration::OrchestratorClient;
+fn engine_in_flight() -> Option<String> {
+    use crate::orchestration::EngineClient;
     use crate::orchestration::protocol::{Reply, Request};
 
-    if !matches!(
-        pidfile::status(Service::Orchestrator.name()),
-        ServiceStatus::Running { .. }
-    ) {
-        return None;
-    }
-    let client = OrchestratorClient::new();
+    let client = EngineClient::running()?;
     let report = match client.request(&Request::Status { thread_id: None }) {
         Ok(Reply::Status { report }) => report,
         Ok(_) => return Some("unknown work (unexpected status reply)".to_string()),
@@ -1080,7 +1075,7 @@ pub fn queued_restart() -> Result<Option<QueuedRestart>> {
 pub enum QueuedRestartStatus {
     /// No request is pending (or a newer process already fulfilled it).
     None,
-    /// A request is pending, but an agent run is active or the orchestrator
+    /// A request is pending, but an agent run is active or the engine
     /// service has work in flight. Nothing changed; check again later.
     Waiting,
     /// The request was dropped without restarting anything.
@@ -1123,7 +1118,7 @@ impl QueuedRestartRun {
 /// step the bot service runs while its own chat queues are empty.
 ///
 /// The gates are the same as for `restart`: no active agent run anywhere and
-/// a settled (or stopped) orchestrator service. Scheduler and orchestrator
+/// a settled (or stopped) engine service. Scheduler and engine
 /// targets restart here; the bot target is never restarted here, it is
 /// reported as `restart_bot` so the bot exits itself. A request that needs
 /// the bot to restart is dropped when the bot is not supervised.
@@ -1145,7 +1140,7 @@ pub fn run_queued_restart() -> QueuedRestartRun {
         clear_queued_restart();
         return QueuedRestartRun::quiet(QueuedRestartStatus::None);
     }
-    if !agent_activity::list_active().is_empty() || orchestrator_in_flight().is_some() {
+    if !agent_activity::list_active().is_empty() || engine_in_flight().is_some() {
         return QueuedRestartRun::quiet(QueuedRestartStatus::Waiting);
     }
     let finish = |status, restart_bot, restarted, message: String| QueuedRestartRun {
@@ -1166,11 +1161,11 @@ pub fn run_queued_restart() -> QueuedRestartRun {
         );
     }
 
-    let services: Vec<Service> = [Service::Scheduler, Service::Orchestrator]
+    let services: Vec<Service> = [Service::Scheduler, Service::Engine]
         .into_iter()
         .filter(|svc| request.includes(*svc))
-        // `all` includes the orchestrator; skip it where it is not installed.
-        .filter(|svc| *svc != Service::Orchestrator || state(*svc).installed)
+        // `all` includes the engine; skip it where it is not installed.
+        .filter(|svc| *svc != Service::Engine || state(*svc).installed)
         .collect();
     let mut restarted = Vec::new();
     if !services.is_empty() {
@@ -1427,10 +1422,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_orchestrator_restarts_before_the_bot() {
+    fn the_engine_restarts_before_the_bot() {
         assert_eq!(
             restart_order(&Service::ALL),
-            [Service::Orchestrator, Service::Scheduler, Service::Bot]
+            [Service::Engine, Service::Scheduler, Service::Bot]
         );
         assert_eq!(restart_order(&[Service::Bot]), [Service::Bot]);
     }
@@ -1443,8 +1438,8 @@ mod tests {
             vec![Service::Scheduler]
         );
         assert_eq!(
-            Service::parse_target("orchestrator").unwrap(),
-            vec![Service::Orchestrator]
+            Service::parse_target("engine").unwrap(),
+            vec![Service::Engine]
         );
         assert_eq!(Service::parse_target("all").unwrap(), Service::ALL.to_vec());
         assert!(Service::parse_target("monitor").is_err());
@@ -1464,6 +1459,34 @@ mod tests {
         );
         assert_eq!(Service::Scheduler.legacy_name(), Some("daemon"));
         assert_eq!(Service::Bot.legacy_name(), None);
+
+        let err = Service::parse_target("orchestrator")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("now called engine"), "{err}");
+        assert_eq!(
+            serde_json::from_str::<Vec<Service>>(r#"["orchestrator"]"#).unwrap(),
+            [Service::Engine]
+        );
+        assert_eq!(Service::Engine.legacy_name(), Some("orchestrator"));
+    }
+
+    /// While only the process from before the rename runs, clients reach it
+    /// on its old socket.
+    #[test]
+    fn the_engine_client_finds_a_process_under_the_old_name() {
+        use crate::orchestration::EngineClient;
+
+        let home = crate::test_support::temp_zdx_home();
+        assert!(EngineClient::running().is_none());
+        let old = pidfile::write("orchestrator").unwrap();
+        let client = EngineClient::running().expect("the old process runs");
+        assert_eq!(client.socket(), home.path().join("run/orchestrator.sock"));
+        assert_eq!(state(Service::Engine).pid, Some(std::process::id()));
+        let new = pidfile::write(Service::Engine.name()).unwrap();
+        let client = EngineClient::running().expect("the new process runs");
+        assert_eq!(client.socket(), home.path().join("run/engine.sock"));
+        drop((old, new));
     }
 
     #[test]
@@ -1528,10 +1551,7 @@ mod tests {
             "zdx-go"
         );
         assert_eq!(default_program_for(Service::Scheduler), default_program());
-        assert_eq!(
-            default_program_for(Service::Orchestrator),
-            default_program()
-        );
+        assert_eq!(default_program_for(Service::Engine), default_program());
         assert_eq!(default_go_program().parent(), default_program().parent());
 
         let dir = tempfile::tempdir().unwrap();
@@ -1567,19 +1587,19 @@ mod tests {
     }
 
     #[test]
-    fn orchestrator_plist_runs_the_service() {
+    fn engine_plist_runs_the_service() {
         // The plist embeds ZDX_HOME, which other tests change.
         let _home = crate::test_support::temp_zdx_home();
         let plist = render_plist(
-            Service::Orchestrator,
+            Service::Engine,
             Path::new("/Users/x/.local/bin/zdx"),
             Path::new("/Users/x/projects/zdx"),
         );
-        assert!(plist.contains("<string>dev.zdx.orchestrator</string>"));
+        assert!(plist.contains("<string>dev.zdx.engine</string>"));
         assert!(plist.contains(
-            "<string>exec '/Users/x/.local/bin/zdx' '--root' '/Users/x/projects/zdx' 'orchestrator' 'serve'</string>"
+            "<string>exec '/Users/x/.local/bin/zdx' '--root' '/Users/x/projects/zdx' 'engine' 'serve'</string>"
         ));
-        assert!(plist.contains("orchestrator.err"));
+        assert!(plist.contains("engine.err"));
     }
 
     #[test]
@@ -1727,12 +1747,12 @@ mod tests {
         assert!(request.is_fulfilled());
     }
 
-    /// The guard asks a running orchestrator service what it would lose: a
+    /// The guard asks a running engine service what it would lose: a
     /// worker busy in it blocks a restart or stop of that service (but not of
     /// the others), names the worker, and `force` still overrides it. Once
     /// the work is delivered, the restart is allowed.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn the_guard_counts_work_in_flight_in_the_orchestrator_service() {
+    async fn the_guard_counts_work_in_flight_in_the_engine_service() {
         use std::sync::Arc;
 
         use tokio::sync::Notify;
@@ -1741,7 +1761,7 @@ mod tests {
         use crate::core::workers::{WorkerManager, WorkerRunRequest};
         use crate::orchestration::protocol::socket_path;
         use crate::orchestration::runtime::{TurnRequest, TurnRunner};
-        use crate::orchestration::{Orchestrator, server};
+        use crate::orchestration::{Engine, server};
 
         let home = crate::test_support::temp_zdx_home();
         let gate = Arc::new(Notify::new());
@@ -1763,10 +1783,10 @@ mod tests {
                 }));
             })
         });
-        let orchestrator = Orchestrator::start_with(Arc::clone(&workers), events, runner);
-        let _pid = pidfile::write(Service::Orchestrator.name()).unwrap();
+        let engine = Engine::start_with(Arc::clone(&workers), events, runner);
+        let _pid = pidfile::write(Service::Engine.name()).unwrap();
         let socket = socket_path();
-        tokio::spawn(server::serve(Arc::clone(&orchestrator), socket.clone()));
+        tokio::spawn(server::serve(Arc::clone(&engine), socket.clone()));
         while !socket.exists() {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
@@ -1777,7 +1797,7 @@ mod tests {
         let check = |services: Vec<Service>, force: bool| {
             tokio::task::spawn_blocking(move || ensure_restart_allowed("restart", &services, force))
         };
-        let err = check(vec![Service::Orchestrator], false)
+        let err = check(vec![Service::Engine], false)
             .await
             .unwrap()
             .expect_err("a busy worker blocks the restart");
@@ -1787,14 +1807,14 @@ mod tests {
         assert_eq!(blocked.active_runs(), 0);
         let text = blocked.to_string();
         assert!(
-            text.starts_with("restart blocked: the orchestrator service would lose"),
+            text.starts_with("restart blocked: the engine service would lose"),
             "{text}"
         );
         assert!(text.contains(&format!("worker {worker}")), "{text}");
         assert!(
             tokio::task::spawn_blocking(|| ensure_restart_allowed(
                 "stop",
-                &[Service::Orchestrator],
+                &[Service::Engine],
                 false
             ))
             .await
@@ -1807,39 +1827,33 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        check(vec![Service::Orchestrator], true)
-            .await
-            .unwrap()
-            .unwrap();
+        check(vec![Service::Engine], true).await.unwrap().unwrap();
 
         gate.notify_one();
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !orchestrator.settled(None).await {
+        while !engine.settled(None).await {
             assert!(tokio::time::Instant::now() < deadline, "never settled");
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        check(vec![Service::Orchestrator], false)
-            .await
-            .unwrap()
-            .unwrap();
+        check(vec![Service::Engine], false).await.unwrap().unwrap();
     }
 
-    /// A restart goes on only once a new orchestrator process answers: not
+    /// A restart goes on only once a new engine process answers: not
     /// while nothing listens, not while only the old process (same PID)
     /// answers, and as soon as a new one does.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn the_restart_waits_for_a_new_orchestrator_to_answer() {
+    async fn the_restart_waits_for_a_new_engine_to_answer() {
         use std::sync::Arc;
         use std::time::Duration;
 
         use crate::core::workers::{WorkerManager, WorkerRunRequest};
         use crate::orchestration::protocol::socket_path;
         use crate::orchestration::runtime::{TurnRequest, TurnRunner};
-        use crate::orchestration::{Orchestrator, server};
+        use crate::orchestration::{Engine, server};
 
         let _home = crate::test_support::temp_zdx_home();
         let wait = |old_pid: Option<u32>, timeout: Duration| {
-            tokio::task::spawn_blocking(move || wait_for_orchestrator(old_pid, timeout))
+            tokio::task::spawn_blocking(move || wait_for_engine(old_pid, timeout))
         };
         assert!(!wait(None, Duration::from_millis(300)).await.unwrap());
 
@@ -1849,15 +1863,15 @@ mod tests {
             Box::pin(async { Ok(String::new()) })
         }));
         let runner: TurnRunner = Arc::new(|_: TurnRequest| Box::pin(async {}));
-        let orchestrator = Orchestrator::start_with(workers, events, runner);
-        // As `zdx orchestrator serve`: the PID file first, the socket later.
-        let _pid = pidfile::write(Service::Orchestrator.name()).unwrap();
+        let engine = Engine::start_with(workers, events, runner);
+        // As `zdx engine serve`: the PID file first, the socket later.
+        let _pid = pidfile::write(Service::Engine.name()).unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(
             !pending.is_finished(),
             "returned before the socket was bound"
         );
-        tokio::spawn(server::serve(orchestrator, socket_path()));
+        tokio::spawn(server::serve(engine, socket_path()));
         assert!(pending.await.unwrap());
 
         let this_process = Some(std::process::id());

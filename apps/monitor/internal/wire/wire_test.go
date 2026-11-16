@@ -97,7 +97,7 @@ func TestErrorReplyIsAServiceError(t *testing.T) {
 }
 
 func TestNoListenerIsErrNotRunning(t *testing.T) {
-	c := wire.NewClient(filepath.Join(home(t), "run", "orchestrator.sock"))
+	c := wire.NewClient(filepath.Join(home(t), "run", "engine.sock"))
 	_, err := c.Status(context.Background())
 	if !errors.Is(err, wire.ErrNotRunning) {
 		t.Fatalf("want ErrNotRunning, got %v", err)

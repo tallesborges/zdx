@@ -82,7 +82,7 @@ func textIn(topic float64, prefix string) func(map[string]any) bool {
 	}
 }
 
-// The whole gateway against a real `zdx orchestrator serve` (temp home,
+// The whole gateway against a real `zdx engine serve` (temp home,
 // mock model endpoint, fake Bot API), wired as serve wires it: a polled
 // message runs a followed turn and its reply goes out; Mini App feedback
 // posted over HTTP gets the chat notice, and its unfollowed turn is
@@ -119,7 +119,7 @@ func TestRealGatewayEndToEnd(t *testing.T) {
 	socket := engine.SocketPath(home)
 	// startService runs the service and returns its stop.
 	startService := func() (stop func()) {
-		cmd := exec.Command(bin, "--root", root, "orchestrator", "serve")
+		cmd := exec.Command(bin, "--root", root, "engine", "serve")
 		cmd.Dir = root
 		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "TMPDIR=" + os.Getenv("TMPDIR"), "HOME=" + home, "ZDX_HOME=" + home,
 			"ANTHROPIC_API_KEY=test-api-key", "ANTHROPIC_BASE_URL=" + provider.URL}

@@ -2,7 +2,7 @@
 //! exact JSON bodies of its API routes, built in Rust so no surface
 //! re-derives them. The bodies are plain engine functions
 //! ([`super::view_bodies::EngineViews`]). The service serves them through a
-//! [`ViewProvider`] that the `zdx` binary installs (`zdx orchestrator
+//! [`ViewProvider`] that the `zdx` binary installs (`zdx engine
 //! serve`); the gateway's Mini App routes read them over the socket, and
 //! `zdx views` is their CLI twin.
 

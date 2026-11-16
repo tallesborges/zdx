@@ -55,7 +55,7 @@ type TurnRenderer interface {
 // and must not block.
 type EventObserver func(ev engine.Event)
 
-// Bridge holds the renderer subscription to the orchestrator service. Turns
+// Bridge holds the renderer subscription to the engine service. Turns
 // the service starts without a follower (worker updates, feedback, other
 // clients' unfollowed routed submits) are rendered here; followed turns are
 // rendered by their submitter.
@@ -99,7 +99,7 @@ type Bridge struct {
 // ErrRendererConflict: the service kept refusing the renderer subscription
 // because another renderer (the Rust bot or another gateway) is live. The
 // gateway must stop, not restart itself.
-var ErrRendererConflict = errors.New("another renderer is subscribed to the orchestrator service (the Rust bot or another gateway); stop it first")
+var ErrRendererConflict = errors.New("another renderer is subscribed to the engine service (the Rust bot or another gateway); stop it first")
 
 // Active is how many turns the bridge is rendering now.
 func (b *Bridge) Active() int64 { return b.active.Load() }
@@ -136,7 +136,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 			if err := b.Ready(ctx); err != nil {
 				if !reportedNotReady {
 					reportedNotReady = true
-					log.Error("not rendering routed turns: the orchestrator service cannot record deliveries", "err", err)
+					log.Error("not rendering routed turns: the engine service cannot record deliveries", "err", err)
 				}
 				wait(delay)
 				continue
@@ -153,7 +153,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 		if err != nil {
 			if !reportedDown {
 				reportedDown = true
-				log.Warn("orchestrator service unavailable; routed turns will not render until it runs", "err", err)
+				log.Warn("engine service unavailable; routed turns will not render until it runs", "err", err)
 			}
 			wait(delay)
 			continue
@@ -178,14 +178,14 @@ func (b *Bridge) Run(ctx context.Context) error {
 			continue
 		}
 		conflicts = 0
-		log.Info("connected to the orchestrator service as renderer")
+		log.Info("connected to the engine service as renderer")
 		if b.Connected != nil {
 			b.Connected()
 		}
 		b.run(ctx, stream, holder)
 		stream.Close()
 		if ctx.Err() == nil {
-			log.Warn("lost the connection to the orchestrator service")
+			log.Warn("lost the connection to the engine service")
 		}
 		wait(delay)
 	}
@@ -255,7 +255,7 @@ func (b *Bridge) run(ctx context.Context, stream *engine.Stream, holder string) 
 			// Status said no hold tokens, but the service restarted onto a
 			// build with them before the subscription: its holds need this
 			// token, so start over and read it.
-			b.log().Warn("the orchestrator service now hands out hold tokens; resubscribing")
+			b.log().Warn("the engine service now hands out hold tokens; resubscribing")
 			return
 		}
 		if reply.Kind != engine.ReplyEvent || reply.Event == nil {

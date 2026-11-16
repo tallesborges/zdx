@@ -64,7 +64,7 @@ type Poller struct {
 	// that outlives polling.
 	Work context.Context
 	// Ready, when set, must pass before a non-empty batch is handed off
-	// (the orchestrator service answers). While it fails the poller waits
+	// (the engine service answers). While it fails the poller waits
 	// and does not poll again, so Telegram keeps the batch unconfirmed: a
 	// service that is already down delays the batch instead of failing it,
 	// and a stop or crash meanwhile gets the batch again. It is one check,
@@ -96,7 +96,7 @@ func (p *Poller) waitReady(ctx context.Context, log *slog.Logger) bool {
 		err := p.Ready(ctx)
 		if err == nil {
 			if waiting {
-				log.Info("orchestrator service answers again; handing off held updates")
+				log.Info("engine service answers again; handing off held updates")
 			}
 			return true
 		}
@@ -104,7 +104,7 @@ func (p *Poller) waitReady(ctx context.Context, log *slog.Logger) bool {
 			return false
 		}
 		if !waiting {
-			log.Warn("orchestrator service unavailable; holding updates unconfirmed until it answers", "err", err)
+			log.Warn("engine service unavailable; holding updates unconfirmed until it answers", "err", err)
 			waiting = true
 		}
 		select {

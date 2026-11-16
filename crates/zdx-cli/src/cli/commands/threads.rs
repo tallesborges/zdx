@@ -425,20 +425,18 @@ fn print_reply(reply: &zdx_engine::orchestration::protocol::Reply) -> Result<()>
     Ok(())
 }
 
-/// Runs a thread write in the orchestrator service while it runs (it may own
+/// Runs a thread write in the engine service while it runs (it may own
 /// the thread's queue or a held turn), and directly only when no service is
 /// running. A running service that does not answer fails the command.
 async fn via_service(
     request: zdx_engine::orchestration::protocol::Request,
     direct: impl FnOnce() -> Result<zdx_engine::orchestration::protocol::Reply>,
 ) -> Result<()> {
-    use zdx_engine::orchestration::client::{OrchestratorClient, ok};
+    use zdx_engine::orchestration::client::{EngineClient, ok};
 
-    let reply = match zdx_engine::pidfile::status("orchestrator") {
-        zdx_engine::pidfile::ServiceStatus::Running { .. } => {
-            ok(OrchestratorClient::new().call(&request).await?)?
-        }
-        zdx_engine::pidfile::ServiceStatus::Stopped => direct()?,
+    let reply = match EngineClient::running() {
+        Some(client) => ok(client.call(&request).await?)?,
+        None => direct()?,
     };
     print_reply(&reply)
 }

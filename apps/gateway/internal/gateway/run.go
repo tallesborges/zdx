@@ -109,7 +109,7 @@ func ServiceParts(d Deps, settings Settings) Parts {
 var TurnCapabilities = []string{engine.CapRecordDelivery, engine.CapReplyParts, engine.CapHoldTokens}
 
 // ServiceCapabilities are every capability the gateway uses: preflight
-// refuses an orchestrator service that lacks one. Each operation still
+// refuses an engine service that lacks one. Each operation still
 // checks its own at the call (the service can restart onto another build).
 var ServiceCapabilities = append(slices.Clone(TurnCapabilities),
 	engine.CapOrdinarySubmit, engine.CapRerun, engine.CapUpdateThread, engine.CapResetThread, engine.CapResolveThread,
@@ -183,7 +183,7 @@ var AcceptanceChecks = []string{
 // Config is one gateway process.
 type Config struct {
 	Settings Settings
-	// Socket is the orchestrator service socket.
+	// Socket is the engine service socket.
 	Socket string
 	// Home is the ZDX home (Deps.Home).
 	Home string

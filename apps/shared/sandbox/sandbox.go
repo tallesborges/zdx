@@ -29,7 +29,7 @@ var credentialEnv = []string{"OPENCODE_API_KEY"}
 // their size and modification time are read, never their contents.
 var watched = []string{
 	"oauth.json", "oauth.lock",
-	"run/bot.pid", "run/bot.supervised", "run/orchestrator.sock", "run/orchestrator.pid", "run/restart-queue.json",
+	"run/bot.pid", "run/bot.supervised", "run/engine.sock", "run/engine.pid", "run/restart-queue.json",
 	"run/scheduler.pid", "run/scheduler.context.json",
 }
 

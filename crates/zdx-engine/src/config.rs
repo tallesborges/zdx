@@ -674,7 +674,7 @@ impl Default for NotificationsConfig {
     }
 }
 
-/// Where the orchestrator service runs worker turns. Read once when the
+/// Where the engine service runs worker turns. Read once when the
 /// service starts.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]

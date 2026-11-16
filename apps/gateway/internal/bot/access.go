@@ -1,6 +1,6 @@
 // Package bot is the gateway's Telegram lifecycle: update polling with a
 // memory-only offset, allowlist gates, per-topic intake ordering, and the
-// renderer bridge that follows routed turns of the Rust orchestrator service
+// renderer bridge that follows routed turns of the Rust engine service
 // and releases their holds. Engine work (queues, execution, persistence)
 // stays in Rust; this package only moves updates in and renders turns out.
 package bot

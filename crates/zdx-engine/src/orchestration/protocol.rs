@@ -1,5 +1,5 @@
-//! Wire protocol of the orchestrator service: newline-delimited JSON over a
-//! Unix socket at `$ZDX_HOME/run/orchestrator.sock`.
+//! Wire protocol of the engine service: newline-delimited JSON over a
+//! Unix socket at `$ZDX_HOME/run/engine.sock`.
 //!
 //! A connection carries one [`Request`]. Most requests get one [`Reply`] and
 //! the connection closes. `Submit` with a [`Follow`] mode and `Subscribe`
@@ -18,7 +18,7 @@ use crate::core::workers::{WorkerEvent, WorkerSnapshot};
 pub fn socket_path() -> PathBuf {
     crate::config::paths::zdx_home()
         .join("run")
-        .join("orchestrator.sock")
+        .join("engine.sock")
 }
 
 /// Telegram chat and topic a thread answers in. Turns with a route get the

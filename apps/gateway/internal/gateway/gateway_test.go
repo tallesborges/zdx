@@ -65,7 +65,7 @@ func TestSettingsValidationAndNoTokenInString(t *testing.T) {
 	}
 }
 
-// fakeService is a synthetic orchestrator service.
+// fakeService is a synthetic engine service.
 type fakeService struct {
 	socket      string
 	mu          sync.Mutex

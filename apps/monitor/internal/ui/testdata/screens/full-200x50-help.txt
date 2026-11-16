@@ -28,7 +28,7 @@
     state                   ● connected
     project root            /Users/example/Documents
     ZDX home                /Users/example/.zdx
-    socket                  /Users/example/.zdx/run/orchestrator.sock
+    socket                  /Users/example/.zdx/run/engine.sock
     protocol                2
     views root              /Users/example/Documents
     capabilities            thread_views, monitor_views
@@ -36,7 +36,7 @@
     cli fallback            off
 
   Data sources
-    Views come from the orchestrator socket; Services and Jobs from `zdx service status --json`
+    Views come from the engine socket; Services and Jobs from `zdx service status --json`
     and `zdx jobs list --scheduler --json`; Logs from $ZDX_HOME/logs. Nothing here writes.
     Not here yet: service start/stop/restart, bg kill, job model edit (use the zdx CLI),
     full thread browse and filters, config edits.

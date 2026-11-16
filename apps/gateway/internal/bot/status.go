@@ -19,7 +19,7 @@ const (
 // StatusConnectionLost replaces the status of a replayable turn whose
 // connection went away: the reply comes through the renderer subscription
 // if the turn finishes (the Rust bot has no replay, so no Rust text).
-const StatusConnectionLost = "Lost the connection to the orchestrator service. If this turn finishes, its reply will be posted here."
+const StatusConnectionLost = "Lost the connection to the engine service. If this turn finishes, its reply will be posted here."
 
 // StatusDebounce is the minimum interval between status edits.
 const StatusDebounce = 3 * time.Second

@@ -82,7 +82,7 @@ pub struct WorkersResponse {
 /// One worker of an orchestrator thread.
 ///
 /// Rows come from two sources that carry different amounts of truth. A live row
-/// is backed by the orchestrator service's in-memory worker state and has real
+/// is backed by the engine service's in-memory worker state and has real
 /// status and progress.
 /// A row recovered from persisted lineage after a restart knows only that the
 /// worker existed; `live` is false and `status` is `unknown` for those, and the
@@ -617,7 +617,7 @@ fn status_rank(status: &str) -> u8 {
 ///
 /// Two sources, deliberately not equivalent:
 ///
-/// - The orchestrator service holds live state, but only for its own process.
+/// - The engine service holds live state, but only for its own process.
 ///   Everything it knows disappears when it restarts.
 /// - `thread_meta.parent_thread_id` survives restarts, but records only that a
 ///   worker existed. It restores *discovery*, never status.

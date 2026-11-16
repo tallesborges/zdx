@@ -58,7 +58,7 @@ const RELEASE_TIMEOUT: Duration = Duration::from_mins(10);
 /// How often a drain retries the run lease another run holds.
 const LEASE_RETRY: Duration = Duration::from_millis(500);
 
-/// What [`Orchestrator::cancel`] stops.
+/// What [`Engine::cancel`] stops.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CancelTarget {
     Thread { clear_queue: bool },
@@ -96,7 +96,7 @@ pub struct TurnRequest {
     pub run_lease: Option<Arc<ThreadRunLease>>,
 }
 
-/// Result of [`Orchestrator::submit`].
+/// Result of [`Engine::submit`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Submitted {
     pub thread_id: String,
@@ -148,7 +148,7 @@ struct TurnOutcome {
     touched_workers: Vec<String>,
 }
 
-/// What [`Orchestrator::run_turn`] needs besides the thread and turn ids.
+/// What [`Engine::run_turn`] needs besides the thread and turn ids.
 struct TurnSetup {
     cancel: CancellationToken,
     steer: SteerInbox,
@@ -192,7 +192,7 @@ struct ReplayReply {
     error: Option<String>,
 }
 
-/// What [`Orchestrator::wait_for_release`] does about a hold whose owner is
+/// What [`Engine::wait_for_release`] does about a hold whose owner is
 /// gone.
 enum Orphan {
     Wait,
@@ -281,7 +281,7 @@ enum Control {
     ThreadIdle(String),
 }
 
-pub struct Orchestrator {
+pub struct Engine {
     workers: Arc<WorkerManager>,
     registry: ToolRegistry,
     runner: TurnRunner,
@@ -301,7 +301,7 @@ pub struct Orchestrator {
 
 /// Receives the events of one subscription; unsubscribes on drop.
 pub struct Subscription {
-    orchestrator: Arc<Orchestrator>,
+    orchestrator: Arc<Engine>,
     id: u64,
     token: String,
     pub events: mpsc::UnboundedReceiver<Event>,
@@ -337,7 +337,7 @@ impl Drop for Subscription {
     }
 }
 
-impl Orchestrator {
+impl Engine {
     /// Starts a runtime whose workers run through the configured runner
     /// (`[workers]`: `zdx --thread <id> exec` by default) and whose turns run
     /// the thread's persistent profile. Must run inside a Tokio runtime.
@@ -2433,7 +2433,7 @@ mod tests {
                 }));
             })
         });
-        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        let orchestrator = Engine::start_with(workers, events, runner);
         let ordinary = |id: &str| Submit {
             ordinary: true,
             ..submit(root.path(), Some(id), "hi", None)
@@ -2534,7 +2534,7 @@ mod tests {
                 }));
             })
         });
-        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        let orchestrator = Engine::start_with(workers, events, runner);
         let chat = |id: &str| Submit {
             ordinary: true,
             chat: true,
@@ -2612,7 +2612,7 @@ mod tests {
         let seen = Seen::default();
         let gate = Arc::new(Notify::new());
         let runner = fake_turns(&workers, root.path().to_path_buf(), &seen, &gate);
-        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        let orchestrator = Engine::start_with(workers, events, runner);
 
         let mut subscription = orchestrator
             .subscribe(Some("issue-1".to_string()), false, false)
@@ -2666,7 +2666,7 @@ mod tests {
         let seen = Seen::default();
         let gate = Arc::new(Notify::new());
         let runner = fake_turns(&workers, root.path().to_path_buf(), &seen, &gate);
-        let orchestrator = Orchestrator::start_with(Arc::clone(&workers), events, runner);
+        let orchestrator = Engine::start_with(Arc::clone(&workers), events, runner);
         let mut subscription = orchestrator
             .subscribe(Some("batch".to_string()), false, false)
             .unwrap();
@@ -2714,7 +2714,7 @@ mod tests {
         let seen = Seen::default();
         let gate = Arc::new(Notify::new());
         let runner = fake_turns(&workers, root.path().to_path_buf(), &seen, &gate);
-        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        let orchestrator = Engine::start_with(workers, events, runner);
         let mut renderer = orchestrator.subscribe(None, true, false).unwrap();
         let route = Some(Route {
             chat: -100,
@@ -2773,7 +2773,7 @@ mod tests {
         let seen = Seen::default();
         let gate = Arc::new(Notify::new());
         let runner = fake_turns(&workers, root.path().to_path_buf(), &seen, &gate);
-        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        let orchestrator = Engine::start_with(workers, events, runner);
         let mut watcher = orchestrator
             .subscribe(Some("late".to_string()), false, false)
             .unwrap();
@@ -2815,7 +2815,7 @@ mod tests {
         let seen = Seen::default();
         let gate = Arc::new(Notify::new());
         let runner = fake_turns(&workers, root.path().to_path_buf(), &seen, &gate);
-        let orchestrator = Orchestrator::start_with(Arc::clone(&workers), events, runner);
+        let orchestrator = Engine::start_with(Arc::clone(&workers), events, runner);
         let mut subscription = orchestrator
             .subscribe(Some("first".to_string()), false, false)
             .unwrap();
@@ -2860,7 +2860,7 @@ mod tests {
         let seen = Seen::default();
         let gate = Arc::new(Notify::new());
         let runner = fake_turns(&workers, root.path().to_path_buf(), &seen, &gate);
-        let orchestrator = Orchestrator::start_with(Arc::clone(&workers), events, runner);
+        let orchestrator = Engine::start_with(Arc::clone(&workers), events, runner);
         let mut owner = orchestrator
             .subscribe(Some("owner".to_string()), false, false)
             .unwrap();
@@ -2902,7 +2902,7 @@ mod tests {
         let seen = Seen::default();
         let gate = Arc::new(Notify::new());
         let runner = fake_turns(&workers, root.path().to_path_buf(), &seen, &gate);
-        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        let orchestrator = Engine::start_with(workers, events, runner);
         let mut follower = orchestrator
             .subscribe(Some("follow".to_string()), false, false)
             .unwrap();
@@ -2959,7 +2959,7 @@ mod tests {
         let seen = Seen::default();
         let gate = Arc::new(Notify::new());
         let runner = fake_turns(&workers, root.path().to_path_buf(), &seen, &gate);
-        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        let orchestrator = Engine::start_with(workers, events, runner);
         let mut watcher = orchestrator
             .subscribe(Some("gone".to_string()), false, false)
             .unwrap();
@@ -3008,7 +3008,7 @@ mod tests {
         let seen = Seen::default();
         let gate = Arc::new(Notify::new());
         let runner = fake_turns(&workers, root.path().to_path_buf(), &seen, &gate);
-        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        let orchestrator = Engine::start_with(workers, events, runner);
         let renderer = orchestrator.subscribe(None, true, false).unwrap();
         let second = orchestrator.subscribe(None, true, false);
         assert_eq!(
@@ -3089,7 +3089,7 @@ mod tests {
         let seen = Seen::default();
         let gate = Arc::new(Notify::new());
         let runner = fake_turns(&workers, root.path().to_path_buf(), &seen, &gate);
-        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        let orchestrator = Engine::start_with(workers, events, runner);
         let thread = "replayed";
         let mut watcher = orchestrator
             .subscribe(Some(thread.to_string()), false, false)
@@ -3166,7 +3166,7 @@ mod tests {
         let seen = Seen::default();
         let gate = Arc::new(Notify::new());
         let runner = fake_turns(&workers, root.path().to_path_buf(), &seen, &gate);
-        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        let orchestrator = Engine::start_with(workers, events, runner);
         let other = ThreadRunLease::try_acquire("leased").unwrap();
         let err = orchestrator
             .submit(submit(root.path(), Some("leased"), "hi", None))
@@ -3255,7 +3255,7 @@ mod tests {
                 }));
             })
         });
-        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        let orchestrator = Engine::start_with(workers, events, runner);
         let mut subscription = orchestrator
             .subscribe(Some("touch".to_string()), false, false)
             .unwrap();
@@ -3281,7 +3281,7 @@ mod tests {
         let seen = Seen::default();
         let gate = Arc::new(Notify::new());
         let runner = fake_turns(&workers, root.path().to_path_buf(), &seen, &gate);
-        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        let orchestrator = Engine::start_with(workers, events, runner);
         let mut subscription = orchestrator
             .subscribe(Some("cancel".to_string()), false, false)
             .unwrap();
@@ -3371,7 +3371,7 @@ mod tests {
         }
     }
 
-    async fn queued_inputs(orchestrator: &Arc<Orchestrator>, thread: &str) -> usize {
+    async fn queued_inputs(orchestrator: &Arc<Engine>, thread: &str) -> usize {
         orchestrator.status(Some(thread)).await.threads[0].queued_inputs
     }
 
@@ -3383,7 +3383,7 @@ mod tests {
         let seen = Seen::default();
         let gate = Arc::new(Notify::new());
         let runner = steering_turns(&workers, root.path().to_path_buf(), &seen, &gate);
-        let orchestrator = Orchestrator::start_with_delivery(
+        let orchestrator = Engine::start_with_delivery(
             Arc::clone(&workers),
             events,
             runner,
@@ -3460,7 +3460,7 @@ mod tests {
         let seen = Seen::default();
         let gate = Arc::new(Notify::new());
         let runner = steering_turns(&workers, root.path().to_path_buf(), &seen, &gate);
-        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        let orchestrator = Engine::start_with(workers, events, runner);
         let mut subscription = orchestrator
             .subscribe(Some("given".to_string()), false, false)
             .unwrap();
@@ -3501,7 +3501,7 @@ mod tests {
         let seen = Seen::default();
         let gate = Arc::new(Notify::new());
         let runner = fake_turns(&workers, root.path().to_path_buf(), &seen, &gate);
-        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        let orchestrator = Engine::start_with(workers, events, runner);
 
         let plain = Thread::new_with_root(root.path()).unwrap();
         let mut plain = plain;

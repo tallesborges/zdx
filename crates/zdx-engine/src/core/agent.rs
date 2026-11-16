@@ -1242,7 +1242,7 @@ async fn run_turn_inner(
     // Every exit closes the steer source; the explicit closes below run before
     // the terminal event, so an owner reacting to it sees the source closed.
     let _steer_close = crate::core::steer::CloseOnDrop(options.steer.as_ref());
-    // A persistent-profile thread has one writer: the orchestrator service.
+    // A persistent-profile thread has one writer: the engine service.
     // Any other run on it would interleave with the service's turns.
     if let Some(thread_id) = thread_id
         && options.activity_kind.as_deref() != Some(crate::orchestration::ACTIVITY_KIND)

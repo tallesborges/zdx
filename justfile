@@ -18,7 +18,7 @@ go_bin := justfile_directory() + "/apps/bin/zdx-go"
 run *ARGS: go-build-dev
     ZDX_GO="{{go_bin}}" cargo run -p zdx -- {{ARGS}}
 
-# Run the Go chat TUI directly, without zdx (turns run in the orchestrator service)
+# Run the Go chat TUI directly, without zdx (turns run in the engine service)
 tui *ARGS: go-build-dev
     "{{go_bin}}" tui {{ARGS}}
 
@@ -41,9 +41,9 @@ git *ARGS: go-build-dev
 bot *ARGS: go-build
     ZDX_GO="{{go_bin}}" cargo run -p zdx -- bot {{ARGS}}
 
-# Run the orchestrator service (orchestrator topics in the bot need it)
-orchestrator:
-    cargo run -p zdx -- orchestrator serve
+# Run the engine service (orchestrator topics in the bot need it)
+engine:
+    cargo run -p zdx -- engine serve
 
 # Run jobs commands from this checkout (`zdx jobs` execs zdx-go jobs; pass extra args: just jobs list)
 jobs *ARGS: go-build-dev

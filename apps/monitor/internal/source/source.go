@@ -1,5 +1,5 @@
 // Package source fetches what the monitor shows. Views come from the
-// orchestrator socket; with CLIFallback they come from `zdx views` while the
+// engine socket; with CLIFallback they come from `zdx views` while the
 // service is down. Subscription quotas are read here directly (shared quota
 // package: oauth.json read-only, then each provider over HTTPS), with or
 // without the service. Service state and scheduler jobs come from their
@@ -30,7 +30,7 @@ import (
 type Origin string
 
 const (
-	// OriginSocket: the running orchestrator service answered.
+	// OriginSocket: the running engine service answered.
 	OriginSocket Origin = "socket"
 	// OriginCLI: `zdx views` built the view in its own process.
 	OriginCLI Origin = "cli"
@@ -75,7 +75,7 @@ func New(cfg Config) *Source {
 	return &Source{cfg: cfg, client: wire.NewClient(SocketPath(cfg.Home))}
 }
 
-// SocketPath is the orchestrator socket of a ZDX home.
+// SocketPath is the engine socket of a ZDX home.
 func SocketPath(home string) string { return wire.SocketPath(home) }
 
 // Config returns the source's settings.
@@ -182,7 +182,7 @@ func decode[T any](body []byte, what string) (T, error) {
 }
 
 // Services runs `zdx service status --json`: launchd and pidfile state
-// without the orchestrator, so a stopped orchestrator still shows.
+// without the engine, so a stopped engine still shows.
 func (s *Source) Services(ctx context.Context) (data.ServiceStatus, error) {
 	out, err := s.run(ctx, nil, "service", "status", "--json")
 	if err != nil {

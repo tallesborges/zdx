@@ -26,7 +26,7 @@ import (
 	"github.com/tallesborges/zdx/apps/gateway/internal/telegram"
 )
 
-// realRust is one isolated `zdx orchestrator serve` with a scripted mock
+// realRust is one isolated `zdx engine serve` with a scripted mock
 // provider, plus the Go bot wired to it: handler, presenter, delivery, and
 // the renderer bridge. Telegram is the fake Bot API.
 type realRust struct {
@@ -97,7 +97,7 @@ func startRealRust(t *testing.T, reply providerReply) *realRust {
 
 	r.serve = func() func() {
 		logFile, _ := os.OpenFile(r.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-		cmd := exec.Command(bin, "--root", root, "orchestrator", "serve")
+		cmd := exec.Command(bin, "--root", root, "engine", "serve")
 		cmd.Dir = root
 		cmd.Env = childEnv(os.Environ(), home, "ANTHROPIC_API_KEY=test-api-key", "ANTHROPIC_BASE_URL="+provider.URL)
 		cmd.Stdout, cmd.Stderr = logFile, logFile
@@ -357,7 +357,7 @@ func TestRealRustSteerRunsAsNextTurnThroughTheRenderer(t *testing.T) {
 // ordinary; the profile turn answers like an ordinary one.
 func TestRealRustProfileTopic(t *testing.T) {
 	r := startRealRust(t, answer("PROFILE-ANSWER"))
-	// Create the profile thread the way `zdx orchestrator send` does.
+	// Create the profile thread the way `zdx engine send` does.
 	threadID := realThread
 	m := mockModel
 	setup, err := r.eng.SubmitFollow(context.Background(), engine.Submit{ThreadID: &threadID, Root: r.h.RootForChat(-100), Model: &m, Text: "setup"})

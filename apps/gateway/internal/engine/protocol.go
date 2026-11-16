@@ -1,6 +1,6 @@
-// Package engine is the gateway's side of the Rust orchestrator service
+// Package engine is the gateway's side of the Rust engine service
 // protocol: newline-delimited JSON over the Unix socket at
-// $ZDX_HOME/run/orchestrator.sock. The Rust definitions in
+// $ZDX_HOME/run/engine.sock. The Rust definitions in
 // crates/zdx-engine/src/orchestration/protocol.rs are the source of truth.
 // The shared module (apps/shared: protocol, socket) holds the transport and
 // the types every Go client shares; this package re-exports them and adds

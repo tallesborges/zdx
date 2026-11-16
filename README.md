@@ -28,11 +28,11 @@ The released Linux binary needs glibc 2.35 or newer and OpenSSL 3 (`libssl3`).
 
 ### Run
 
-The chat TUI, the Telegram bot, and the monitor live in one Go binary, `zdx-go` (`apps/`); `zdx` starts them. Build it with Go and `bun` installed (`bun` builds the Mini App it embeds). Chat turns run in the orchestrator service, so start that first:
+The chat TUI, the Telegram bot, and the monitor live in one Go binary, `zdx-go` (`apps/`); `zdx` starts them. Build it with Go and `bun` installed (`bun` builds the Mini App it embeds). Chat turns run in the engine service, so start that first:
 
 ```bash
 just go-install                     # builds ~/.local/bin/zdx-go
-zdx service start orchestrator      # or: zdx orchestrator serve
+zdx service start engine      # or: zdx engine serve
 zdx                                 # chat in the current directory
 ```
 
@@ -62,7 +62,7 @@ Just the ones I use — but that turns out to be a lot.
 
 ### Interfaces
 
-- **Interactive TUI** — the main terminal experience (`zdx`, Go and Bubble Tea; turns run in the orchestrator service)
+- **Interactive TUI** — the main terminal experience (`zdx`, Go and Bubble Tea; turns run in the engine service)
 - **Exec mode** — headless, scriptable one-shot runs (`zdx exec -p "..."`)
 - **Telegram bot** — drive the agent from your phone
 - **Monitor dashboard** — a read-only terminal dashboard (`zdx monitor`, Go) to watch agent runs, services, logs, and config

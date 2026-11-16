@@ -1,4 +1,4 @@
-// Package engine is the chat TUI's side of the orchestrator socket: the
+// Package engine is the chat TUI's side of the engine socket: the
 // requests an interactive terminal chat sends (submit, cancel,
 // update_thread, catalog, generate, transcribe_audio, prepare_image) and the
 // thread subscription it reads every event from. crates/zdx-engine/src/orchestration/protocol.rs is
@@ -495,7 +495,7 @@ func (c *Client) Subscribe(ctx context.Context, threadID string) (*Subscription,
 	if err != nil {
 		stream.Close()
 		if errors.Is(err, io.EOF) {
-			return nil, fmt.Errorf("%w: the orchestrator service closed the connection without a reply", socket.ErrRequestOutcomeUnknown)
+			return nil, fmt.Errorf("%w: the engine service closed the connection without a reply", socket.ErrRequestOutcomeUnknown)
 		}
 		return nil, fmt.Errorf("%w: %w", socket.ErrRequestOutcomeUnknown, err)
 	}

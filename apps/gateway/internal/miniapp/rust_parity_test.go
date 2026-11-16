@@ -40,7 +40,7 @@ import (
 
 // The real-route checks are opt-in: they run the prebuilt zdx binary named
 // by sandbox.RustBinaryEnv (never built here) as an isolated `zdx
-// orchestrator serve` on a temp HOME and ZDX_HOME with mock providers, and
+// engine serve` on a temp HOME and ZDX_HOME with mock providers, and
 // put the Mini App handler and the real gateway adapter in front of its
 // socket. Without a binary, or on one that lacks a capability they need,
 // they skip; with sandbox.RustStrictEnv set they fail instead.
@@ -269,7 +269,7 @@ func startParityWith(t *testing.T, opts parityOptions) *parity {
 		t.Fatalf("socket path is %d bytes, over the Unix socket limit: %s", n, engine.SocketPath(home))
 	}
 	logFile, _ := os.Create(p.logPath)
-	cmd := exec.Command(bin, "--root", p.root, "orchestrator", "serve")
+	cmd := exec.Command(bin, "--root", p.root, "engine", "serve")
 	cmd.Dir, cmd.Env = p.root, p.env
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {

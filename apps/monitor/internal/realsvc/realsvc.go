@@ -1,4 +1,4 @@
-// Package realsvc runs a prebuilt zdx orchestrator service for opt-in
+// Package realsvc runs a prebuilt zdx engine service for opt-in
 // integration tests. It never builds Rust: the binary comes from
 // ZDX_MONITOR_TEST_ZDX. The child gets only PATH, TMPDIR, LANG and LC_*
 // from the parent, then HOME and ZDX_HOME set to the test's temp home, so
@@ -59,7 +59,7 @@ func Home(t *testing.T) string {
 	return dir
 }
 
-// Start runs `zdx --root root orchestrator serve` with home and waits until
+// Start runs `zdx --root root engine serve` with home and waits until
 // a status call succeeds (the socket file appears before the listener
 // accepts). The service stops on cleanup.
 func Start(t *testing.T, bin, home, root string) {
@@ -69,7 +69,7 @@ func Start(t *testing.T, bin, home, root string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(bin, "--root", root, "orchestrator", "serve")
+	cmd := exec.Command(bin, "--root", root, "engine", "serve")
 	cmd.Dir = root
 	cmd.Env = Env(os.Environ(), home)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
@@ -91,7 +91,7 @@ func Start(t *testing.T, bin, home, root string) {
 		logFile.Close()
 	})
 	log := func() string { b, _ := os.ReadFile(logPath); return string(b) }
-	client := wire.NewClient(filepath.Join(home, "run", "orchestrator.sock"))
+	client := wire.NewClient(filepath.Join(home, "run", "engine.sock"))
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		select {

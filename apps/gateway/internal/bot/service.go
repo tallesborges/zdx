@@ -34,7 +34,7 @@ func (r ServiceResolver) ResolveTopic(ctx context.Context, chat int64, topic *in
 		info.Kind = TopicWorkerMirror
 		info.WorkerThreadID = route.EffectiveThreadID
 	default:
-		return TopicInfo{}, fmt.Errorf("the orchestrator service reported an unknown thread kind %q", route.Kind)
+		return TopicInfo{}, fmt.Errorf("the engine service reported an unknown thread kind %q", route.Kind)
 	}
 	return info, nil
 }

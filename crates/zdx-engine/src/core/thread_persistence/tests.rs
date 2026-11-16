@@ -3314,7 +3314,7 @@ fn test_search_threads_exclusion_does_not_underfill_limit() {
     );
 }
 
-/// Two writers on one thread, as the orchestrator service (appending a turn)
+/// Two writers on one thread, as the engine service (appending a turn)
 /// and the bot (renaming the thread, `/model`) are: every append survives the
 /// metadata rewrites, and the last rewrite wins. Each writer opens its own
 /// handle, so the lock is exercised between separate open files, as between

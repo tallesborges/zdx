@@ -202,7 +202,7 @@ impl BackgroundExecution {
 /// one of two ways:
 ///
 /// - it outlives the run: the interactive TUI (`chat`), the bot service
-///   (`telegram`), and the orchestrator service (`orchestrator`, which also
+///   (`telegram`), and the engine service (`orchestrator`, which also
 ///   runs Telegram-routed turns as `telegram`) keep running and can poll or
 ///   kill the job afterwards;
 /// - it drains before exiting: `zdx exec` — which is also how orchestrator
@@ -552,7 +552,7 @@ impl ToolRegistry {
         self.register_tool(Grep);
         self.register_tool(Glob);
         // Orchestrator thread controls: unbound stubs so schemas and tool-name
-        // validation exist everywhere; the orchestrator service rebinds them
+        // validation exist everywhere; the engine service rebinds them
         // to its live WorkerManager via `register_boxed`.
         for tool in orchestrator::OrchestratorTool::stubs() {
             self.register_tool(tool);

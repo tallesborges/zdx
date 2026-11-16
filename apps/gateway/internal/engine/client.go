@@ -14,7 +14,7 @@ import (
 // ReplyTimeout is the longest wait for a one-shot reply, as in the Rust client.
 const ReplyTimeout = socket.ReplyTimeout
 
-// Client talks to the orchestrator service. One request per connection.
+// Client talks to the engine service. One request per connection.
 // The transport is the shared socket package; this type adds the
 // gateway's request and reply types.
 type Client struct {
@@ -86,7 +86,7 @@ func (c *Client) CallWithin(ctx context.Context, req Request, budget time.Durati
 	}
 	var reply Reply
 	if err := json.Unmarshal(raw, &reply); err != nil {
-		return nil, fmt.Errorf("%w: decode orchestrator reply: %w", ErrRequestOutcomeUnknown, err)
+		return nil, fmt.Errorf("%w: decode engine reply: %w", ErrRequestOutcomeUnknown, err)
 	}
 	return &reply, nil
 }
@@ -130,7 +130,7 @@ func (s *Stream) Next() (*Reply, error) {
 	}
 	var r Reply
 	if err := json.Unmarshal(line, &r); err != nil {
-		return nil, fmt.Errorf("decode orchestrator reply: %w", err)
+		return nil, fmt.Errorf("decode engine reply: %w", err)
 	}
 	return &r, nil
 }

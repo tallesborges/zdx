@@ -1,6 +1,6 @@
 //! Bodies of the read-only views ([`super::views`]): the exact JSON the Mini
 //! App API answers, built from saved state by plain engine functions. The
-//! service's view provider (`zdx orchestrator serve`, `zdx views`) and the
+//! service's view provider (`zdx engine serve`, `zdx views`) and the
 //! bot's HTTP routes both call [`EngineViews`]; neither re-derives a body.
 //!
 //! Errors are [`ViewError`]s: the [`ErrorCode`] a surface maps to its HTTP
@@ -28,7 +28,7 @@ pub use self::threads::{
     ThreadActivity, ThreadListItem, ThreadListKind, ThreadListResponse, ThreadResponse, WorkerItem,
     WorkerRollup, WorkersResponse,
 };
-use super::OrchestratorClient;
+use super::EngineClient;
 use super::protocol::ErrorCode;
 use super::views::ViewError;
 use crate::core::workers::{WorkerManager, WorkerSnapshot, WorkerStatus};
@@ -62,7 +62,7 @@ pub struct EngineViews {
 }
 
 impl EngineViews {
-    /// Views inside the orchestrator service: live workers come from its own
+    /// Views inside the engine service: live workers come from its own
     /// manager.
     #[must_use]
     pub fn in_service(root: PathBuf, manager: Arc<WorkerManager>) -> Self {
@@ -73,12 +73,12 @@ impl EngineViews {
     /// socket, or none when it is not running.
     #[must_use]
     pub fn client(root: PathBuf) -> Self {
-        Self::with_client(root, OrchestratorClient::new())
+        Self::with_client(root, EngineClient::new())
     }
 
     /// Views that read live workers through `client`.
     #[must_use]
-    pub fn with_client(root: PathBuf, client: OrchestratorClient) -> Self {
+    pub fn with_client(root: PathBuf, client: EngineClient) -> Self {
         Self::new(root, LiveWorkers::Client(client))
     }
 
@@ -100,11 +100,11 @@ impl EngineViews {
 }
 
 /// Blocking reads of live worker state, for bodies that already run on the
-/// blocking pool: from the orchestrator service over its socket (an
+/// blocking pool: from the engine service over its socket (an
 /// unreachable service reads as no live workers), or, inside the service,
 /// from its own worker manager.
 pub enum LiveWorkers {
-    Client(OrchestratorClient),
+    Client(EngineClient),
     Manager(Arc<WorkerManager>),
 }
 

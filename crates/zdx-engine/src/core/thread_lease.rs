@@ -1,5 +1,5 @@
 //! The run lease: one writer of a thread's turns at a time, across every
-//! process and surface (TUI, `zdx exec`, the bot, the orchestrator service).
+//! process and surface (TUI, `zdx exec`, the bot, the engine service).
 //!
 //! A lease is an exclusive, non-blocking `flock` on
 //! `$ZDX_HOME/run/thread-runs/<thread id>.lock`, held from before the turn's

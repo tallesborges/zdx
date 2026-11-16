@@ -20,7 +20,7 @@ import (
 
 func TestMain(m *testing.M) { os.Exit(sandbox.Main(m.Run)) }
 
-// fake is a synthetic orchestrator service on a temp Unix socket. handle
+// fake is a synthetic engine service on a temp Unix socket. handle
 // gets each connection's request line and the connection.
 type fake struct {
 	socket string

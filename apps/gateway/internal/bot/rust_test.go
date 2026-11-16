@@ -82,7 +82,7 @@ func (p pinnedModel) SubmitFollow(ctx context.Context, s engine.Submit) (*engine
 }
 
 // TestRealRustPlainTextSlice runs one plain-text message through the Go
-// intake, presenter and delivery against a real `zdx orchestrator serve`
+// intake, presenter and delivery against a real `zdx engine serve`
 // (temp home, mock Anthropic endpoint, fake Bot API). Every engine call is
 // real: resolve_thread, compose_user_text, ordinary submit, the followed
 // turn, reply_parts, record_delivery, release. Telegram is fake, and only
@@ -110,7 +110,7 @@ func TestRealRustPlainTextSlice(t *testing.T) {
 
 	logPath := filepath.Join(home, "service.log")
 	logFile, _ := os.Create(logPath)
-	cmd := exec.Command(bin, "--root", root, "orchestrator", "serve")
+	cmd := exec.Command(bin, "--root", root, "engine", "serve")
 	cmd.Dir = root
 	cmd.Env = childEnv(os.Environ(), home, "ANTHROPIC_API_KEY=test-api-key", "ANTHROPIC_BASE_URL="+provider.URL)
 	cmd.Stdout, cmd.Stderr = logFile, logFile

@@ -241,15 +241,10 @@ pub async fn helper(file: &std::path::Path) -> Result<()> {
         },
         // The service knows its managed workers (never resumable, listed on
         // an orchestrator's card); without it nothing runs as a worker.
-        request @ Request::Catalog(_) => match zdx_engine::pidfile::status("orchestrator") {
-            zdx_engine::pidfile::ServiceStatus::Running { .. } => {
-                zdx_engine::orchestration::client::ok(
-                    zdx_engine::orchestration::OrchestratorClient::new()
-                        .call(&request)
-                        .await?,
-                )?
-            }
-            zdx_engine::pidfile::ServiceStatus::Stopped => {
+        request @ Request::Catalog(_) => {
+            if let Some(client) = zdx_engine::orchestration::EngineClient::running() {
+                zdx_engine::orchestration::client::ok(client.call(&request).await?)?
+            } else {
                 let Request::Catalog(query) = request else {
                     unreachable!()
                 };
@@ -257,7 +252,7 @@ pub async fn helper(file: &std::path::Path) -> Result<()> {
                     body: zdx_engine::orchestration::catalog::catalog(query, None)?,
                 }
             }
-        },
+        }
         _ => bail!(
             "`zdx helper` takes a `generate`, `btw_seed`, `topic_start`, `catalog`, or `set_chat_model` request"
         ),

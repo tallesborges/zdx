@@ -147,7 +147,7 @@ func (f *fakeTG) waitWithin(t *testing.T, limit time.Duration, what string, pred
 	}
 }
 
-// --- fake orchestrator service ---
+// --- fake engine service ---
 
 type svcConn struct {
 	req  map[string]any

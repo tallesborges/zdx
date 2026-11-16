@@ -1,4 +1,4 @@
-//! Client side of the orchestrator service protocol, shared by the CLI and
+//! Client side of the engine service protocol, shared by the CLI and
 //! the bot.
 
 use std::io::{BufRead, Write};
@@ -18,21 +18,43 @@ use crate::core::workers::WorkerSnapshot;
 const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
-pub struct OrchestratorClient {
+pub struct EngineClient {
     socket: PathBuf,
 }
 
-impl Default for OrchestratorClient {
+impl Default for EngineClient {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl OrchestratorClient {
+impl EngineClient {
     /// A client for the service of the current `ZDX_HOME`.
     #[must_use]
     pub fn new() -> Self {
         Self::at(socket_path())
+    }
+
+    /// A client for the running service, or `None` when it is not running.
+    /// While the process from before the service was renamed still runs,
+    /// the client uses that process's socket.
+    #[must_use]
+    pub fn running() -> Option<Self> {
+        use crate::pidfile::{self, ServiceStatus};
+        use crate::service::Service;
+
+        let running = |name| matches!(pidfile::status(name), ServiceStatus::Running { .. });
+        if running(Service::Engine.name()) {
+            return Some(Self::new());
+        }
+        let old = Service::Engine.legacy_name()?;
+        running(old).then(|| {
+            Self::at(
+                crate::config::paths::zdx_home()
+                    .join("run")
+                    .join(format!("{old}.sock")),
+            )
+        })
     }
 
     #[must_use]
@@ -53,7 +75,7 @@ impl OrchestratorClient {
             std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
         ) {
             anyhow::anyhow!(
-                "the orchestrator service is not running (no listener at {}); install it once with `zdx service install orchestrator`, then start it with `zdx service start orchestrator` (or run `zdx orchestrator serve` in the foreground)",
+                "the engine service is not running (no listener at {}); install it once with `zdx service install engine`, then start it with `zdx service start engine` (or run `zdx engine serve` in the foreground)",
                 self.socket.display()
             )
         } else {
@@ -89,8 +111,8 @@ impl OrchestratorClient {
         let mut stream = self.open(request).await?;
         tokio::time::timeout(REPLY_TIMEOUT, stream.next())
             .await
-            .context("orchestrator service did not reply in time")??
-            .context("orchestrator service closed the connection without a reply")
+            .context("engine service did not reply in time")??
+            .context("engine service closed the connection without a reply")
     }
 
     /// Sends a request whose reply is a stream (`Submit` with a follow mode,
@@ -159,9 +181,9 @@ fn workers_of(reply: Result<Reply>) -> Vec<WorkerSnapshot> {
 
 fn decode(line: &str) -> Result<Reply> {
     if line.trim().is_empty() {
-        bail!("orchestrator service closed the connection without a reply");
+        bail!("engine service closed the connection without a reply");
     }
-    serde_json::from_str(line).context("decode orchestrator reply")
+    serde_json::from_str(line).context("decode engine reply")
 }
 
 /// Replies of one streaming connection. Dropping it closes the connection.

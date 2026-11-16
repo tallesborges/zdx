@@ -361,7 +361,7 @@ impl Thread {
 ///
 /// Every write takes it: appends, and the meta rewrites (read, write a temp
 /// file, rename). Without it, a rewrite in one process (the bot renaming a
-/// thread) renames away lines another process (the orchestrator service)
+/// thread) renames away lines another process (the engine service)
 /// appended after the rewrite read the file. The lock is a separate file under
 /// `$ZDX_HOME/run/thread-locks/`, not the thread file itself: the rename
 /// replaces the thread file's inode, and a child run's `ChildThreadLock`

@@ -1,5 +1,5 @@
 // Package cli is `zdx-go gateway`, the Go Telegram bot and Mini App gateway
-// for zdx. It talks to the Rust orchestrator service over its Unix socket
+// for zdx. It talks to the Rust engine service over its Unix socket
 // and owns only Telegram transport, presentation and HTTP.
 //
 // `serve` refuses to start: the bot runs as the service argv
@@ -31,7 +31,7 @@ const usage = `usage: zdx-go gateway <check|serve> --settings FILE|- [--zdx-home
        zdx-go gateway --root ROOT bot [--zdx PATH] [--web-dist DIR]
        zdx-go gateway preflight --root ROOT --json [--zdx PATH] [--web-dist DIR]
 
-  check   read the settings, ask the orchestrator service for its protocol
+  check   read the settings, ask the engine service for its protocol
           and capabilities, and list what the gateway still lacks. Read-only;
           does not contact Telegram.
   serve   run the bot and Mini App. Refuses while parts are missing.
@@ -70,7 +70,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	settingsPath := fs.String("settings", "", "settings JSON file, or - for stdin")
 	zdxHome := fs.String("zdx-home", defaultHome(), "ZDX home directory")
-	socket := fs.String("socket", "", "orchestrator socket (default <zdx-home>/run/orchestrator.sock)")
+	socket := fs.String("socket", "", "engine socket (default <zdx-home>/run/engine.sock)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -227,9 +227,9 @@ func check(settings gateway.Settings, socket string, out io.Writer) error {
 	defer cancel()
 	report, err := engine.NewClient(socket).StatusReport(ctx, nil)
 	if err != nil {
-		fmt.Fprintln(out, "orchestrator service:", err)
+		fmt.Fprintln(out, "engine service:", err)
 	} else {
-		fmt.Fprintf(out, "orchestrator service: protocol %d, capabilities %v\n", report.Version(), report.Capabilities)
+		fmt.Fprintf(out, "engine service: protocol %d, capabilities %v\n", report.Version(), report.Capabilities)
 	}
 	fmt.Fprintln(out, "missing:")
 	for _, m := range gateway.Missing {

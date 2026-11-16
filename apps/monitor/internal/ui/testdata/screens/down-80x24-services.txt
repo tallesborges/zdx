@@ -1,13 +1,13 @@
  1 Agents  2 Threads  3 Svcs !  4 Jobs  5 Usage  6 Logs  7 Procs  8 Config
 
  Services  launchd · read only
-     SERVICE       STATUS     PID  UPTIME  LAUNCHD
-▌ ●  bot           running  48190  3h 14m  installed
-  ○  scheduler     stopped      —       —  not installed
-  ●  orchestrator  stopped      —       —  installed
+     SERVICE    STATUS     PID  UPTIME  LAUNCHD
+▌ ●  bot        running  48190  3h 14m  installed
+  ○  scheduler  stopped      —       —  not installed
+  ●  engine     stopped      —       —  installed
 
-── Orchestrator work ───────────────────────────────────────────────────────────
-  Not reachable: orchestrator service is not running (no listener at /Users/exa…
+── Engine work ─────────────────────────────────────────────────────────────────
+  Not reachable: engine service is not running (no listener at /Users/example/.…
 
 
 

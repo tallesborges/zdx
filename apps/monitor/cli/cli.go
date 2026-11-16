@@ -1,6 +1,6 @@
 // Package cli is `zdx-go monitor`, a read-only terminal dashboard for ZDX: services,
 // active agents, threads and transcripts, jobs, usage, logs, background
-// processes, and config. It reads the orchestrator socket's views and a few
+// processes, and config. It reads the engine socket's views and a few
 // read-only CLI JSON commands; it never starts a bot, an engine, or a
 // service.
 package cli
@@ -32,7 +32,7 @@ Read-only ZDX dashboard (Bubble Tea).
   --zdx PATH       zdx binary for read-only CLI JSON (default: $ZDX_BIN, else zdx on PATH)
   --zdx-version V  zdx version for provider requests (default: the version this
                    binary was built with; a plain go build or go run has none)
-  --cli-fallback   while the orchestrator service is down, build views with
+  --cli-fallback   while the engine service is down, build views with
                    'zdx views' in its own process (refreshes derived caches)
 `
 

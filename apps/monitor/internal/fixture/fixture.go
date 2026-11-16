@@ -23,7 +23,7 @@ const (
 	Full Scenario = "full"
 	// Empty: everything answers, with nothing to show.
 	Empty Scenario = "empty"
-	// Down: the orchestrator is not running; CLI and logs still answer.
+	// Down: the engine is not running; CLI and logs still answer.
 	Down Scenario = "down"
 	// Loading: no fetch ever answers.
 	Loading Scenario = "loading"
@@ -60,7 +60,7 @@ func New(s Scenario, now func() time.Time) *Backend {
 	return &Backend{Scenario: s, Now: now, calls: map[string]int{}}
 }
 
-var errDown = fmt.Errorf("%w (no listener at /Users/example/.zdx/run/orchestrator.sock)", wire.ErrNotRunning)
+var errDown = fmt.Errorf("%w (no listener at /Users/example/.zdx/run/engine.sock)", wire.ErrNotRunning)
 
 // gate applies the scenario: Loading blocks until ctx ends, Stale fails
 // after the first call of a surface, Down fails socket calls.
@@ -79,7 +79,7 @@ func (b *Backend) gate(ctx context.Context, name string, socket bool) error {
 		}
 	case Stale:
 		if n > 1 {
-			return errors.New("the orchestrator service did not answer within 30s")
+			return errors.New("the engine service did not answer within 30s")
 		}
 	}
 	return nil
@@ -121,12 +121,12 @@ func (b *Backend) Services(ctx context.Context) (data.ServiceStatus, error) {
 		return data.ServiceStatus{Services: []data.ServiceState{
 			{Service: "bot", Label: "dev.zdx.bot", Status: "stopped"},
 			{Service: "scheduler", Label: "dev.zdx.scheduler", Status: "stopped"},
-			{Service: "orchestrator", Label: "dev.zdx.orchestrator", Status: "stopped"},
+			{Service: "engine", Label: "dev.zdx.engine", Status: "stopped"},
 		}}, nil
 	}
-	orch := data.ServiceState{Service: "orchestrator", Label: "dev.zdx.orchestrator", Installed: true, Status: "running", PID: ptr(uint32(48213)), UptimeSecs: ptr(uint64(3*3600 + 12*60))}
+	orch := data.ServiceState{Service: "engine", Label: "dev.zdx.engine", Installed: true, Status: "running", PID: ptr(uint32(48213)), UptimeSecs: ptr(uint64(3*3600 + 12*60))}
 	if b.Scenario == Down {
-		orch = data.ServiceState{Service: "orchestrator", Label: "dev.zdx.orchestrator", Installed: true, Status: "stopped"}
+		orch = data.ServiceState{Service: "engine", Label: "dev.zdx.engine", Installed: true, Status: "stopped"}
 	}
 	return data.ServiceStatus{Services: []data.ServiceState{
 		{Service: "bot", Label: "dev.zdx.bot", Installed: true, Status: "running", PID: ptr(uint32(48190)), UptimeSecs: ptr(uint64(3*3600 + 14*60))},

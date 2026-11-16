@@ -288,7 +288,7 @@ func TestMediaGroupLateMemberOpensNewGroup(t *testing.T) {
 	}
 }
 
-// --- bridge against a fake orchestrator service ---
+// --- bridge against a fake engine service ---
 
 type renderLog struct {
 	mu       sync.Mutex
