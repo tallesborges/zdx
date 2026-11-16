@@ -364,6 +364,37 @@ func TestEnterWhileRunningSteersAndEscInterrupts(t *testing.T) {
 	}
 }
 
+// A failed turn keeps its error on screen after the turn ends and the
+// saved thread, which has no record of the failure, is loaded.
+func TestFailedTurnErrorStaysAfterTheThreadLoads(t *testing.T) {
+	be := newFake()
+	be.onSubmit = func(_ engine.SubmitRequest, input uint64) []engine.Event {
+		be.thread = transcript.Thread{Cursor: 1, Activity: []transcript.Activity{
+			{Type: "message", Sequence: 0, Role: "user", Speaker: "you", Text: "hi"},
+		}}
+		return []engine.Event{
+			started(1, input),
+			agent(1, `{"type":"turn_finished","status":{"status":"failed","kind":"provider","message":"HTTP 403: client_attestation_denied"},"final_text":"","messages":[]}`),
+			ended(1),
+		}
+	}
+	h := start(t, be, Options{Root: "/r"})
+	h.typeEnter("hi")
+	f := checkFrame(t, h.m)
+	if !strings.Contains(f, "client_attestation_denied") {
+		t.Fatalf("no error shown:\n%s", f)
+	}
+	if !h.m.failed {
+		t.Fatal("the turn is not marked failed, so enter does not retry")
+	}
+	// The next message clears it.
+	be.onSubmit = nil
+	h.typeEnter("again")
+	if f := checkFrame(t, h.m); strings.Contains(f, "client_attestation_denied") {
+		t.Fatalf("error still shown after a new message:\n%s", f)
+	}
+}
+
 func TestRetryReruns(t *testing.T) {
 	be := newFake()
 	h := start(t, be, Options{Root: "/r", ThreadID: "t"})
