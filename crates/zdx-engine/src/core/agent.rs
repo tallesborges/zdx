@@ -1660,11 +1660,10 @@ fn build_run_turn_setup(
         spec.base,
         Some(zdx_types::estimated_input_tokens(messages)),
     );
-    let thinking_level = if crate::models::model_supports_reasoning(spec.base) {
-        thinking_override.unwrap_or(config.thinking_level)
-    } else {
-        ThinkingLevel::Off
-    };
+    let thinking_level = crate::models::effective_thinking_level(
+        spec.base,
+        thinking_override.unwrap_or(config.thinking_level),
+    );
     let provider_config = config.providers.get(provider);
     let provider_ctx = ProviderBuildContext {
         model: &selection.model,

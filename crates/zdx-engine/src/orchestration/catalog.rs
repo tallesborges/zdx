@@ -167,7 +167,8 @@ pub struct PickerModel {
     pub id: String,
     /// The id without its thinking suffix.
     pub name: String,
-    /// The spec to pick per thinking level display name.
+    /// The spec to pick per thinking level display name. Empty for a model
+    /// without reasoning: pick `id` itself.
     pub specs: std::collections::BTreeMap<String, String>,
 }
 
@@ -238,15 +239,20 @@ pub fn picker(query: &PickerQuery) -> Result<Picker> {
         .into_iter()
         .map(|id| PickerModel {
             name: crate::models::ModelSpec::parse(&id).without_thinking(),
-            specs: ThinkingLevel::all()
-                .iter()
-                .map(|level| {
-                    (
-                        level.display_name().to_string(),
-                        crate::models::format_model_thinking(&id, *level),
-                    )
-                })
-                .collect(),
+            // A model without reasoning has no level to pick.
+            specs: if crate::models::model_supports_reasoning(&id) {
+                ThinkingLevel::all()
+                    .iter()
+                    .map(|level| {
+                        (
+                            level.display_name().to_string(),
+                            crate::models::format_model_thinking(&id, *level),
+                        )
+                    })
+                    .collect()
+            } else {
+                std::collections::BTreeMap::new()
+            },
             id,
         })
         .collect();
@@ -340,7 +346,10 @@ pub fn picker(query: &PickerQuery) -> Result<Picker> {
         }
     };
     picker.model.clone_from(&current.model);
-    picker.thinking = current.thinking_level.display_name().to_string();
+    picker.thinking =
+        crate::models::effective_thinking_level(&current.model, current.thinking_level)
+            .display_name()
+            .to_string();
     Ok(picker)
 }
 
@@ -765,7 +774,9 @@ pub fn thread_status(
         orchestrator,
         refused: profile_error.or_else(|| unresolved.map(|err| err.to_string())),
         mode: config.mode_selection(),
-        thinking: config.thinking_level.display_name().to_string(),
+        thinking: crate::models::effective_thinking_level(&config.model, config.thinking_level)
+            .display_name()
+            .to_string(),
         model_source,
         thinking_source,
         thread_id: thread_id.to_string(),
@@ -991,12 +1002,14 @@ mod tests {
             Some("anthropic:claude-sonnet-5@high")
         );
         assert_eq!(picker.thinking, "high");
-        assert!(
-            picker
-                .models
-                .iter()
-                .all(|model| model.specs.len() == ThinkingLevel::all().len())
-        );
+        for model in &picker.models {
+            let levels = if crate::models::model_supports_reasoning(&model.id) {
+                ThinkingLevel::all().len()
+            } else {
+                0
+            };
+            assert_eq!(model.specs.len(), levels, "{model:?}");
+        }
 
         let status = thread_status(&root, "topic", None).unwrap();
         assert_eq!(status.model_source, SelectionSource::Topic);
@@ -1015,5 +1028,38 @@ mod tests {
                 .is_some_and(|r| r.contains("mode:gone")),
             "{status:?}"
         );
+    }
+
+    /// A model without reasoning offers no thinking level, and reports `off`,
+    /// the level its requests are sent with, whatever level is stored.
+    #[test]
+    fn a_model_without_reasoning_has_no_thinking_levels() {
+        let home = crate::test_support::temp_zdx_home();
+        let root = home.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        let fixed = "google-antigravity:gemini-4-argon-high";
+        assert!(!crate::models::model_supports_reasoning(fixed));
+        let mut thread = thread_persistence::Thread::with_id("topic".to_string()).unwrap();
+        thread
+            .set_model_override(Some(format!("{fixed}@high")))
+            .unwrap();
+        let picker = picker(&PickerQuery {
+            root: root.clone(),
+            scope: PickerScope::Topic,
+            thread_id: Some("topic".to_string()),
+            profile: None,
+        })
+        .unwrap();
+        let listed = |reasoning: bool| {
+            picker
+                .models
+                .iter()
+                .find(|model| crate::models::model_supports_reasoning(&model.id) == reasoning)
+                .map(|model| model.specs.len())
+        };
+        assert_eq!(listed(false), Some(0), "{:?}", picker.models);
+        assert_eq!(listed(true), Some(ThinkingLevel::all().len()));
+        assert_eq!(picker.thinking, "off");
+        assert_eq!(thread_status(&root, "topic", None).unwrap().thinking, "off");
     }
 }

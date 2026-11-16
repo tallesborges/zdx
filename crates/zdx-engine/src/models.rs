@@ -360,6 +360,21 @@ pub fn model_supports_reasoning(id: &str) -> bool {
     ModelOption::find_by_id(id).is_none_or(|model| model.capabilities.reasoning)
 }
 
+/// The thinking level a request for `model` runs with: `level`, or `Off` for
+/// a model without reasoning (`reasoning = false`), whose effort, if any, is
+/// fixed by the model id.
+#[must_use]
+pub fn effective_thinking_level(
+    model: &str,
+    level: crate::config::ThinkingLevel,
+) -> crate::config::ThinkingLevel {
+    if model_supports_reasoning(model) {
+        level
+    } else {
+        crate::config::ThinkingLevel::Off
+    }
+}
+
 /// Returns true if the model accepts image input, defaulting to true when
 /// unknown.
 ///

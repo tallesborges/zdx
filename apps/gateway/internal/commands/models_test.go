@@ -281,3 +281,24 @@ func TestHandoffStagingPickerFollowsTheRole(t *testing.T) {
 		t.Fatal("a refused pick is not kept")
 	}
 }
+
+// A model without reasoning comes with no levels: picking it sets the model
+// itself, with no thinking step.
+func TestAModelWithoutLevelsSkipsTheThinkingStep(t *testing.T) {
+	tg, models, h := modelRig()
+	topic := models.pickers[ScopeTopic]
+	topic.Models = append(topic.Models, PickerModel{ID: "anthropic:claude-fixed", Name: "anthropic:claude-fixed", Specs: map[string]string{}})
+	models.pickers[ScopeTopic] = topic
+	h.HandleMessage(context.Background(), topicMsg(10, "/model"), ordinary())
+	open := tg.lastSend(t)
+	edits := len(tg.of("edit"))
+	tap(t, h, tg, ptr(topicID), open.id, "model_pick:anthropic:2:topic")
+	if len(models.topicSet) != 1 || models.topicSet[0] != threadOf7+"=anthropic:claude-fixed" {
+		t.Fatalf("set %v", models.topicSet)
+	}
+	for _, e := range tg.of("edit")[edits:] {
+		if strings.Contains(e.text, "Select thinking") {
+			t.Fatalf("thinking step shown: %q", e.text)
+		}
+	}
+}

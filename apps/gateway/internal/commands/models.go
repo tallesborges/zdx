@@ -341,6 +341,11 @@ func (h *Handler) pickModel(ctx context.Context, q *telegram.CallbackQuery, t pi
 		h.answer(ctx, q, problem)
 		return
 	}
+	// A model without reasoning has no thinking level to pick.
+	if len(m.Specs) == 0 {
+		h.applyPick(ctx, q, t, scope, p, m.ID)
+		return
+	}
 	h.edit(ctx, t.chat, t.message, "Select thinking for <code>"+esc(m.Name)+"</code>:", ThinkingKeyboard(provider, i, scope, p.Thinking))
 	h.answer(ctx, q, "")
 }
