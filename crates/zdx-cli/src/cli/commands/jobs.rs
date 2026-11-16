@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use zdx_engine::core::context::{EffectivePrompt, PromptContextInclusion};
 use zdx_engine::core::interrupt::InterruptedError;
 use zdx_engine::core::thread_persistence::ThreadPersistenceOptions;
-use zdx_engine::job_daemon::{self, JobResolution};
+use zdx_engine::job_scheduler::{self, JobResolution};
 use zdx_engine::jobs::records::JobsHome;
 use zdx_engine::jobs::{self, JobRunSettings, JobSpec};
 use zdx_engine::{config, prompts, subagents};
@@ -236,32 +236,32 @@ struct ResolveInput {
 
 #[derive(Debug, Serialize)]
 struct ResolveOutput {
-    /// The daemon context (`--daemon` only).
-    daemon: Option<job_daemon::DaemonContextState>,
+    /// The scheduler context (`--scheduler` only).
+    scheduler: Option<job_scheduler::SchedulerContextState>,
     results: Vec<JobResolution>,
 }
 
 /// Resolves the settings of the jobs on stdin and prints them: inherited
-/// from the caller, or from the scheduled daemon's context (`daemon`).
+/// from the caller, or from the scheduler's context (`scheduler`).
 /// `prepare` also renders each run's prompt, as an attempt does.
 ///
 /// # Errors
-/// Returns an error when the input cannot be read or `daemon` and `prepare`
+/// Returns an error when the input cannot be read or `scheduler` and `prepare`
 /// are combined. A job that does not resolve carries its error instead.
-pub fn resolve(caller: &Caller<'_>, daemon: bool, prepare: bool) -> Result<()> {
-    if daemon && prepare {
-        bail!("--prepare resolves for the caller; it cannot be combined with --daemon");
+pub fn resolve(caller: &Caller<'_>, scheduler: bool, prepare: bool) -> Result<()> {
+    if scheduler && prepare {
+        bail!("--prepare resolves for the caller; it cannot be combined with --scheduler");
     }
     let mut raw = String::new();
     std::io::stdin()
         .read_to_string(&mut raw)
         .context("read the jobs to resolve")?;
     let input: ResolveInput = serde_json::from_str(&raw).context("parse the jobs to resolve")?;
-    let output = if daemon {
-        let state = job_daemon::discover();
-        let results = job_daemon::resolve(&state, &input.jobs);
+    let output = if scheduler {
+        let state = job_scheduler::discover();
+        let results = job_scheduler::resolve(&state, &input.jobs);
         ResolveOutput {
-            daemon: Some(state),
+            scheduler: Some(state),
             results,
         }
     } else {
@@ -278,7 +278,7 @@ pub fn resolve(caller: &Caller<'_>, daemon: bool, prepare: bool) -> Result<()> {
             })
             .collect();
         ResolveOutput {
-            daemon: None,
+            scheduler: None,
             results,
         }
     };

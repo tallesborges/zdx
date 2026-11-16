@@ -79,7 +79,7 @@ func (l *Lifecycle) QueueRestart(ctx context.Context, threadID string) (commands
 }
 
 // RestartServices is `zdx service restart-peers [--force] --json`: the
-// daemon and an installed orchestrator service, never the bot.
+// scheduler and an installed orchestrator service, never the bot.
 func (l *Lifecycle) RestartServices(ctx context.Context, force bool) (commands.RestartResult, error) {
 	args := []string{"service", "restart-peers", "--json"}
 	if force {

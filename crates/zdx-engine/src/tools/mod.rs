@@ -201,7 +201,7 @@ impl BackgroundExecution {
 /// process must not exit while the job is still running. A surface qualifies in
 /// one of two ways:
 ///
-/// - it outlives the run: the interactive TUI (`chat`), the bot daemon
+/// - it outlives the run: the interactive TUI (`chat`), the bot service
 ///   (`telegram`), and the orchestrator service (`orchestrator`, which also
 ///   runs Telegram-routed turns as `telegram`) keep running and can poll or
 ///   kill the job afterwards;

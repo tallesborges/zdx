@@ -187,9 +187,9 @@ fn test_bot_help_shows_init_subcommand() {
 }
 
 #[test]
-fn test_daemon_help_shows_poll_interval() {
+fn test_scheduler_help_shows_poll_interval() {
     crate::fixtures::zdx_cmd()
-        .args(["jobs", "daemon", "--help"])
+        .args(["jobs", "scheduler", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("poll-interval-secs"));

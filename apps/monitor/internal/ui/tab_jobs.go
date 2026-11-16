@@ -9,7 +9,7 @@ import (
 )
 
 type jobsTab struct {
-	data *data.DaemonJobs
+	data *data.SchedulerJobs
 	list listState
 }
 
@@ -28,7 +28,7 @@ func (t *jobsTab) ids() []string {
 	return ids
 }
 
-func (t *jobsTab) set(v data.DaemonJobs) {
+func (t *jobsTab) set(v data.SchedulerJobs) {
 	t.data = &v
 	t.list.sync(t.ids())
 }
@@ -107,12 +107,12 @@ func (m *Model) renderJobs(width, h int) []string {
 		return append([]string{sectionTitle("Jobs", "")}, m.pending(keyJobs, "jobs")...)
 	}
 	meta := ""
-	d := t.data.Daemon
+	d := t.data.Scheduler
 	switch {
 	case d.Context != nil:
-		meta = fmt.Sprintf("resolved as the %s daemon does · root %s", d.Context.Source, tildePath(d.Context.Root))
+		meta = fmt.Sprintf("resolved as the %s scheduler does · root %s", d.Context.Source, tildePath(d.Context.Root))
 	case d.Reason != nil:
-		meta = "daemon " + d.Status + ": " + *d.Reason
+		meta = "scheduler " + d.Status + ": " + *d.Reason
 	}
 	out := []string{sectionTitle("Jobs", meta)}
 	if t.data.Error != nil {

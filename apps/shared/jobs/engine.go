@@ -157,18 +157,18 @@ type Resolved struct {
 
 // ResolveReply is the output of `zdx jobs resolve`.
 type ResolveReply struct {
-	// Daemon is the daemon context (`--daemon` only), passed through.
-	Daemon  json.RawMessage `json:"daemon"`
-	Results []Resolved      `json:"results"`
+	// Scheduler is the scheduler context (`--scheduler` only), passed through.
+	Scheduler json.RawMessage `json:"scheduler"`
+	Results   []Resolved      `json:"results"`
 }
 
 // Resolve resolves the settings of jobs, inherited from the caller or (with
-// daemon) from the scheduled daemon's context. prepare also renders each
+// scheduler) from the scheduler's context. prepare also renders each
 // run's prompt.
-func (e Engine) Resolve(ctx context.Context, jobs []ResolveJob, daemon, prepare bool) (ResolveReply, error) {
+func (e Engine) Resolve(ctx context.Context, jobs []ResolveJob, scheduler, prepare bool) (ResolveReply, error) {
 	sub := []string{"resolve"}
-	if daemon {
-		sub = append(sub, "--daemon")
+	if scheduler {
+		sub = append(sub, "--scheduler")
 	}
 	if prepare {
 		sub = append(sub, "--prepare")
@@ -194,8 +194,8 @@ func (e Engine) Resolve(ctx context.Context, jobs []ResolveJob, daemon, prepare 
 	if len(reply.Results) != len(jobs) {
 		return ResolveReply{}, fmt.Errorf("zdx jobs resolve: %d results for %d jobs", len(reply.Results), len(jobs))
 	}
-	if len(reply.Daemon) == 0 {
-		reply.Daemon = json.RawMessage("null")
+	if len(reply.Scheduler) == 0 {
+		reply.Scheduler = json.RawMessage("null")
 	}
 	for i := range reply.Results {
 		if len(reply.Results[i].Settings) == 0 {

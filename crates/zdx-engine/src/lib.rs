@@ -8,7 +8,7 @@ pub mod core;
 pub mod custom_commands;
 pub mod followups;
 pub mod images;
-pub mod job_daemon;
+pub mod job_scheduler;
 pub mod jobs;
 pub mod mcp;
 pub mod media;

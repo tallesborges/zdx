@@ -3,7 +3,7 @@
  Services  launchd · read only
      SERVICE       STATUS     PID  UPTIME  LAUNCHD        LABEL
 ▌ ●  bot           running  48190  3h 14m  installed      dev.zdx.bot
-  ○  daemon        stopped      —       —  not installed  dev.zdx.daemon
+  ○  scheduler     stopped      —       —  not installed  dev.zdx.scheduler
   ●  orchestrator  running  48213  3h 12m  installed      dev.zdx.orchestrator
 
 ── Orchestrator work ───────────────────────────────────────────────────────────────────────────────────────────────────

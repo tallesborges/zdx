@@ -1,4 +1,4 @@
-//! launchd-backed control for the long-lived `bot`, `daemon`, and
+//! launchd-backed control for the long-lived `bot`, `scheduler`, and
 //! `orchestrator` services.
 //!
 //! launchd owns process lifetime (start at login, restart on crash, restart
@@ -26,7 +26,10 @@ pub const SUPERVISOR_ENV: &str = "ZDX_SERVICE_SUPERVISOR";
 #[serde(rename_all = "lowercase")]
 pub enum Service {
     Bot,
-    Daemon,
+    /// Runs scheduled jobs (`zdx jobs scheduler`).
+    // A restart request written before the rename names it `daemon`.
+    #[serde(alias = "daemon")]
+    Scheduler,
     /// Hosts persistent-profile threads and their workers
     /// (`zdx orchestrator serve`).
     Orchestrator,
@@ -34,13 +37,13 @@ pub enum Service {
 
 impl Service {
     /// Every managed service, in display order.
-    pub const ALL: [Self; 3] = [Self::Bot, Self::Daemon, Self::Orchestrator];
+    pub const ALL: [Self; 3] = [Self::Bot, Self::Scheduler, Self::Orchestrator];
 
     /// PID-file / log-file base name, also the user-facing service name.
     pub fn name(self) -> &'static str {
         match self {
             Self::Bot => "bot",
-            Self::Daemon => "daemon",
+            Self::Scheduler => "scheduler",
             Self::Orchestrator => "orchestrator",
         }
     }
@@ -57,6 +60,32 @@ impl Service {
     /// launchd label for this service.
     pub fn label(self) -> String {
         format!("dev.zdx.{}", self.name())
+    }
+
+    /// The name this service was installed under before it was renamed.
+    /// Only the move off that install reads it ([`retire_legacy`]); remove
+    /// it once no install uses the old name.
+    fn legacy_name(self) -> Option<&'static str> {
+        match self {
+            Self::Scheduler => Some("daemon"),
+            Self::Bot | Self::Orchestrator => None,
+        }
+    }
+
+    fn legacy_label(self) -> Option<String> {
+        self.legacy_name().map(|name| format!("dev.zdx.{name}"))
+    }
+
+    /// The plist of an install under the old name, when one exists.
+    fn legacy_plist(self) -> Option<PathBuf> {
+        let label = self.legacy_label()?;
+        let path = self.plist_path().with_file_name(format!("{label}.plist"));
+        path.is_file().then_some(path)
+    }
+
+    /// Installed under its name, or still under its old one.
+    fn is_installed(self) -> bool {
+        self.plist_path().is_file() || self.legacy_plist().is_some()
     }
 
     /// `~/Library/LaunchAgents/<label>.plist`
@@ -78,7 +107,7 @@ impl Service {
         let root = root.to_string_lossy().to_string();
         match self {
             Self::Bot => vec!["gateway".into(), "--root".into(), root, "bot".into()],
-            Self::Daemon => vec!["--root".into(), root, "jobs".into(), "daemon".into()],
+            Self::Scheduler => vec!["--root".into(), root, "jobs".into(), "scheduler".into()],
             Self::Orchestrator => {
                 vec!["--root".into(), root, "orchestrator".into(), "serve".into()]
             }
@@ -87,7 +116,7 @@ impl Service {
 
     /// Resolves a CLI target into the services it refers to.
     ///
-    /// Accepts `bot`, `daemon`, `orchestrator`, or `all`.
+    /// Accepts `bot`, `scheduler`, `orchestrator`, or `all`.
     ///
     /// # Errors
     /// Returns an error for any other value.
@@ -95,9 +124,12 @@ impl Service {
         match target {
             "all" => Ok(Self::ALL.to_vec()),
             "bot" => Ok(vec![Self::Bot]),
-            "daemon" => Ok(vec![Self::Daemon]),
+            "scheduler" => Ok(vec![Self::Scheduler]),
             "orchestrator" => Ok(vec![Self::Orchestrator]),
-            other => bail!("unknown service '{other}' (expected: bot, daemon, orchestrator, all)"),
+            "daemon" => bail!("the daemon service is now called scheduler; use `scheduler`"),
+            other => {
+                bail!("unknown service '{other}' (expected: bot, scheduler, orchestrator, all)")
+            }
         }
     }
 }
@@ -169,7 +201,7 @@ impl ServiceState {
 
 /// Reads the current state of `service`.
 pub fn state(service: Service) -> ServiceState {
-    let (pid, uptime) = match pidfile::status(service.name()) {
+    let (pid, uptime) = match process_status(service) {
         ServiceStatus::Running { pid, started } => {
             (Some(pid), started.and_then(|s| s.elapsed().ok()))
         }
@@ -177,9 +209,20 @@ pub fn state(service: Service) -> ServiceState {
     };
     ServiceState {
         service,
-        installed: service.plist_path().is_file(),
+        installed: service.is_installed(),
         pid,
         uptime,
+    }
+}
+
+/// The service's process, by its PID file, else by the PID file of a
+/// process still running under the old name.
+fn process_status(service: Service) -> ServiceStatus {
+    match pidfile::status(service.name()) {
+        ServiceStatus::Stopped => service
+            .legacy_name()
+            .map_or(ServiceStatus::Stopped, pidfile::status),
+        running @ ServiceStatus::Running { .. } => running,
     }
 }
 
@@ -204,12 +247,12 @@ pub fn default_go_program() -> PathBuf {
 }
 
 /// The program `service` runs when none is given: `zdx-go` for the bot
-/// (as `zdx-go gateway`), the installed `zdx` for the daemon and the
+/// (as `zdx-go gateway`), the installed `zdx` for the scheduler and the
 /// orchestrator.
 pub fn default_program_for(service: Service) -> PathBuf {
     match service {
         Service::Bot => default_go_program(),
-        Service::Daemon | Service::Orchestrator => default_program(),
+        Service::Scheduler | Service::Orchestrator => default_program(),
     }
 }
 
@@ -493,6 +536,8 @@ pub fn install(service: Service, program: &Path, root: &Path) -> Result<String> 
         fs::create_dir_all(parent)
             .with_context(|| format!("create LaunchAgents dir {}", parent.display()))?;
     }
+    // One install per service: never the old name beside the new one.
+    retire_legacy(service)?;
     // Re-installing over a loaded agent leaves launchd holding the old plist.
     if plist.is_file() {
         let _ = launchctl(&["bootout".into(), service_target(service)]);
@@ -638,9 +683,14 @@ fn preflight(program: &Path, root: &Path) -> Result<Vec<String>> {
 /// # Errors
 /// Returns an error if the plist cannot be removed.
 pub fn uninstall(service: Service) -> Result<String> {
+    let retired = retire_legacy(service)?.is_some();
     let plist = service.plist_path();
     if !plist.is_file() {
-        return Ok(format!("{service} is not installed"));
+        return Ok(if retired {
+            format!("Uninstalled {service}")
+        } else {
+            format!("{service} is not installed")
+        });
     }
     let _ = launchctl(&["bootout".into(), service_target(service)]);
     fs::remove_file(&plist).with_context(|| format!("remove {}", plist.display()))?;
@@ -702,7 +752,9 @@ pub fn restart_many(services: &[Service], force: bool) -> Result<Vec<String>> {
     // Fail before any restart: restarting the bot onto a build that needs a
     // missing service would leave it half deployed.
     for service in services {
-        require_installed(*service)?;
+        if !service.is_installed() {
+            require_installed(*service)?;
+        }
     }
     let mut messages = Vec::new();
     for service in restart_order(services) {
@@ -728,7 +780,7 @@ pub fn restart_many(services: &[Service], force: bool) -> Result<Vec<String>> {
 const ORCHESTRATOR_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 fn running_pid(service: Service) -> Option<u32> {
-    match pidfile::status(service.name()) {
+    match process_status(service) {
         ServiceStatus::Running { pid, .. } => Some(pid),
         ServiceStatus::Stopped => None,
     }
@@ -763,7 +815,7 @@ fn wait_for_orchestrator(old_pid: Option<u32>, timeout: std::time::Duration) -> 
 /// The order services restart in: the orchestrator first, the bot last,
 /// because the bot needs the orchestrator socket for every message.
 fn restart_order(services: &[Service]) -> Vec<Service> {
-    [Service::Orchestrator, Service::Daemon, Service::Bot]
+    [Service::Orchestrator, Service::Scheduler, Service::Bot]
         .into_iter()
         .filter(|service| services.contains(service))
         .collect()
@@ -775,13 +827,13 @@ fn restart_order(services: &[Service]) -> Vec<Service> {
 const BOT_EXIT_TIMEOUT_SECS: u32 = 150;
 
 /// Restarts what the bot service restarts before it exits itself (Telegram
-/// `/restart`): the daemon, plus the orchestrator service when it is
+/// `/restart`): the scheduler, plus the orchestrator service when it is
 /// installed. Gated like [`restart_many`] unless `force`.
 ///
 /// # Errors
 /// As [`restart_many`]; a [`RestartBlocked`] error means work would be lost.
 pub fn restart_bot_peers(force: bool) -> Result<Vec<String>> {
-    let mut services = vec![Service::Daemon];
+    let mut services = vec![Service::Scheduler];
     if state(Service::Orchestrator).installed {
         services.push(Service::Orchestrator);
     }
@@ -882,6 +934,15 @@ fn in_flight_summary(
 }
 
 fn restart_unchecked(service: Service) -> Result<String> {
+    if let Some(root) = retire_legacy(service)?
+        && !service.plist_path().is_file()
+    {
+        install(service, &default_program_for(service), &root)?;
+        return Ok(format!(
+            "Moved {} to {service} and started it",
+            service.legacy_name().unwrap_or_default()
+        ));
+    }
     require_installed(service)?;
     if let Some(root) = outdated_definition(service)? {
         return reinstall(service, &root);
@@ -1062,7 +1123,7 @@ impl QueuedRestartRun {
 /// step the bot service runs while its own chat queues are empty.
 ///
 /// The gates are the same as for `restart`: no active agent run anywhere and
-/// a settled (or stopped) orchestrator service. Daemon and orchestrator
+/// a settled (or stopped) orchestrator service. Scheduler and orchestrator
 /// targets restart here; the bot target is never restarted here, it is
 /// reported as `restart_bot` so the bot exits itself. A request that needs
 /// the bot to restart is dropped when the bot is not supervised.
@@ -1105,7 +1166,7 @@ pub fn run_queued_restart() -> QueuedRestartRun {
         );
     }
 
-    let services: Vec<Service> = [Service::Daemon, Service::Orchestrator]
+    let services: Vec<Service> = [Service::Scheduler, Service::Orchestrator]
         .into_iter()
         .filter(|svc| request.includes(*svc))
         // `all` includes the orchestrator; skip it where it is not installed.
@@ -1197,8 +1258,12 @@ fn wait_for_new_pid(service: Service, old_pid: u32) -> Option<u32> {
 /// bootstrapping into a domain that still holds the old job fails with
 /// `Bootstrap failed: 5: Input/output error`.
 fn wait_until_unloaded(service: Service) {
+    wait_until_target_unloaded(&service_target(service));
+}
+
+fn wait_until_target_unloaded(target: &str) {
     for _ in 0..40 {
-        if !is_loaded(service) {
+        if !is_target_loaded(target) {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
@@ -1206,17 +1271,75 @@ fn wait_until_unloaded(service: Service) {
 }
 
 fn is_loaded(service: Service) -> bool {
+    is_target_loaded(&service_target(service))
+}
+
+fn is_target_loaded(target: &str) -> bool {
     Command::new("launchctl")
-        .args(["print", &service_target(service)])
+        .args(["print", target])
         .output()
         .is_ok_and(|out| out.status.success())
 }
 
 fn require_installed(service: Service) -> Result<()> {
     if service.plist_path().is_file() {
-        Ok(())
-    } else {
-        bail!("{service} is not installed — run `zdx service install {service}` first")
+        return Ok(());
+    }
+    if let (Some(_), Some(old)) = (service.legacy_plist(), service.legacy_name()) {
+        bail!(
+            "{service} is still installed under its old name `{old}`; `zdx service restart {service}` moves it"
+        );
+    }
+    bail!("{service} is not installed — run `zdx service install {service}` first")
+}
+
+/// Boots out and removes an install under the service's old name (see
+/// [`Service::legacy_name`]), and gives its log files the new name when
+/// no new ones exist yet. Returns the root it ran with, or `None` when
+/// there is no such install.
+fn retire_legacy(service: Service) -> Result<Option<PathBuf>> {
+    let (Some(plist), Some(label), Some(old)) = (
+        service.legacy_plist(),
+        service.legacy_label(),
+        service.legacy_name(),
+    ) else {
+        return Ok(None);
+    };
+    let launch = fs::read_to_string(&plist)
+        .with_context(|| format!("read {}", plist.display()))
+        .and_then(|text| {
+            parse_launch(&text).with_context(|| format!("parse {}", plist.display()))
+        })?;
+    if let Some(home) = &launch.zdx_home
+        && *home != paths::zdx_home()
+    {
+        bail!(
+            "{old} (now {service}) runs with ZDX_HOME {}, not {}; move it from that home",
+            home.display(),
+            paths::zdx_home().display()
+        );
+    }
+    let target = format!("{}/{label}", domain_target());
+    let _ = launchctl(&["bootout".into(), target.clone()]);
+    wait_until_target_unloaded(&target);
+    fs::remove_file(&plist).with_context(|| format!("remove {}", plist.display()))?;
+    move_legacy_logs(service);
+    Ok(Some(launch.root))
+}
+
+/// Gives the log files of the service's old name the new name, each only
+/// when no file has the new name yet.
+fn move_legacy_logs(service: Service) {
+    let Some(old) = service.legacy_name() else {
+        return;
+    };
+    for err in [false, true] {
+        let ext = if err { "err" } else { "out" };
+        let from = logs_dir().join(format!("{old}.{ext}"));
+        let to = service.log_path(err);
+        if from.is_file() && !to.exists() {
+            let _ = fs::rename(&from, &to);
+        }
     }
 }
 
@@ -1307,7 +1430,7 @@ mod tests {
     fn the_orchestrator_restarts_before_the_bot() {
         assert_eq!(
             restart_order(&Service::ALL),
-            [Service::Orchestrator, Service::Daemon, Service::Bot]
+            [Service::Orchestrator, Service::Scheduler, Service::Bot]
         );
         assert_eq!(restart_order(&[Service::Bot]), [Service::Bot]);
     }
@@ -1316,8 +1439,8 @@ mod tests {
     fn parses_targets() {
         assert_eq!(Service::parse_target("bot").unwrap(), vec![Service::Bot]);
         assert_eq!(
-            Service::parse_target("daemon").unwrap(),
-            vec![Service::Daemon]
+            Service::parse_target("scheduler").unwrap(),
+            vec![Service::Scheduler]
         );
         assert_eq!(
             Service::parse_target("orchestrator").unwrap(),
@@ -1328,9 +1451,45 @@ mod tests {
     }
 
     #[test]
+    fn the_old_service_names_are_read_but_not_accepted() {
+        let err = Service::parse_target("daemon").unwrap_err().to_string();
+        assert!(err.contains("now called scheduler"), "{err}");
+        assert_eq!(
+            serde_json::from_str::<Vec<Service>>(r#"["bot","daemon"]"#).unwrap(),
+            [Service::Bot, Service::Scheduler]
+        );
+        assert_eq!(
+            serde_json::to_string(&Service::Scheduler).unwrap(),
+            r#""scheduler""#
+        );
+        assert_eq!(Service::Scheduler.legacy_name(), Some("daemon"));
+        assert_eq!(Service::Bot.legacy_name(), None);
+    }
+
+    #[test]
+    fn the_old_logs_move_to_the_new_name_only_when_none_exist() {
+        let _home = crate::test_support::temp_zdx_home();
+        fs::create_dir_all(logs_dir()).unwrap();
+        fs::write(logs_dir().join("daemon.err"), "old err").unwrap();
+        fs::write(logs_dir().join("daemon.out"), "old out").unwrap();
+        fs::write(Service::Scheduler.log_path(false), "new out").unwrap();
+        move_legacy_logs(Service::Scheduler);
+        assert_eq!(
+            fs::read_to_string(Service::Scheduler.log_path(true)).unwrap(),
+            "old err"
+        );
+        assert!(!logs_dir().join("daemon.err").exists());
+        assert_eq!(
+            fs::read_to_string(Service::Scheduler.log_path(false)).unwrap(),
+            "new out"
+        );
+        assert!(logs_dir().join("daemon.out").exists());
+    }
+
+    #[test]
     fn labels_and_names() {
         assert_eq!(Service::Bot.label(), "dev.zdx.bot");
-        assert_eq!(Service::Daemon.label(), "dev.zdx.daemon");
+        assert_eq!(Service::Scheduler.label(), "dev.zdx.scheduler");
     }
 
     #[test]
@@ -1355,7 +1514,7 @@ mod tests {
         assert!(plist.contains("<key>ExitTimeOut</key>\n    <integer>150</integer>"));
         assert!(plist.contains("<key>ZDX_BIN</key>"));
         assert!(
-            !render_plist(Service::Daemon, Path::new("/x/zdx"), Path::new("/p"))
+            !render_plist(Service::Scheduler, Path::new("/x/zdx"), Path::new("/p"))
                 .contains("ExitTimeOut")
         );
         assert!(plist.contains("bot.out"));
@@ -1368,7 +1527,7 @@ mod tests {
             default_program_for(Service::Bot).file_name().unwrap(),
             "zdx-go"
         );
-        assert_eq!(default_program_for(Service::Daemon), default_program());
+        assert_eq!(default_program_for(Service::Scheduler), default_program());
         assert_eq!(
             default_program_for(Service::Orchestrator),
             default_program()
@@ -1380,7 +1539,7 @@ mod tests {
         std::fs::write(&zdx, "").unwrap();
         let refused = check_program(Service::Bot, &zdx).unwrap_err().to_string();
         assert!(refused.contains("runs the Go gateway"), "{refused}");
-        check_program(Service::Daemon, &zdx).unwrap();
+        check_program(Service::Scheduler, &zdx).unwrap();
 
         let missing = dir.path().join("zdx-go");
         let refused = check_program(Service::Bot, &missing)
@@ -1392,19 +1551,19 @@ mod tests {
     }
 
     #[test]
-    fn daemon_plist_runs_jobs_daemon() {
+    fn scheduler_plist_runs_jobs_scheduler() {
         // The plist embeds ZDX_HOME, which other tests change.
         let _home = crate::test_support::temp_zdx_home();
         let plist = render_plist(
-            Service::Daemon,
+            Service::Scheduler,
             Path::new("/Users/x/.local/bin/zdx"),
             Path::new("/Users/x/projects/zdx"),
         );
-        assert!(plist.contains("<string>dev.zdx.daemon</string>"));
+        assert!(plist.contains("<string>dev.zdx.scheduler</string>"));
         assert!(plist.contains(
-            "<string>exec '/Users/x/.local/bin/zdx' '--root' '/Users/x/projects/zdx' 'jobs' 'daemon'</string>"
+            "<string>exec '/Users/x/.local/bin/zdx' '--root' '/Users/x/projects/zdx' 'jobs' 'scheduler'</string>"
         ));
-        assert!(plist.contains("daemon.err"));
+        assert!(plist.contains("scheduler.err"));
     }
 
     #[test]
@@ -1433,7 +1592,7 @@ mod tests {
         // The plist embeds ZDX_HOME, which other tests change.
         let _home = crate::test_support::temp_zdx_home();
         let plist = render_plist(
-            Service::Daemon,
+            Service::Scheduler,
             Path::new("/Users/x/.local/bin/zdx"),
             Path::new("/Users/x/it's <work> & co"),
         );
@@ -1463,8 +1622,16 @@ mod tests {
         );
         assert_ne!(legacy, current);
         assert!(parse_launch(&legacy).unwrap().is_outdated(Service::Bot));
-        let daemon = render_plist(Service::Daemon, Path::new("/Users/x/.local/bin/zdx"), root);
-        assert!(!parse_launch(&daemon).unwrap().is_outdated(Service::Daemon));
+        let scheduler = render_plist(
+            Service::Scheduler,
+            Path::new("/Users/x/.local/bin/zdx"),
+            root,
+        );
+        assert!(
+            !parse_launch(&scheduler)
+                .unwrap()
+                .is_outdated(Service::Scheduler)
+        );
     }
 
     #[test]
@@ -1524,20 +1691,23 @@ mod tests {
         let _bot = pidfile::write("bot").unwrap();
         pidfile::mark_supervised("bot").unwrap();
 
-        let first = queue_restart(&[Service::Daemon], Some("telegram--100-topic-1")).unwrap();
+        let first = queue_restart(&[Service::Scheduler], Some("telegram--100-topic-1")).unwrap();
         assert!(!first.already_pending);
-        assert_eq!(first.request.services, vec![Service::Daemon]);
+        assert_eq!(first.request.services, vec![Service::Scheduler]);
 
         let second = queue_restart(&[Service::Bot], None).unwrap();
         assert!(second.already_pending);
-        assert_eq!(second.request.services, vec![Service::Bot, Service::Daemon]);
+        assert_eq!(
+            second.request.services,
+            vec![Service::Bot, Service::Scheduler]
+        );
         assert_eq!(
             second.request.thread_id.as_deref(),
             Some("telegram--100-topic-1")
         );
         assert!(second.request.requested_at >= first.request.requested_at);
         assert_eq!(queued_restart().unwrap(), Some(second.request.clone()));
-        // The daemon is not running, so the request is still owed.
+        // The scheduler is not running, so the request is still owed.
         assert!(!second.request.is_fulfilled());
 
         clear_queued_restart();
@@ -1633,7 +1803,10 @@ mod tests {
             .to_string()
             .starts_with("stop blocked:")
         );
-        check(vec![Service::Daemon], false).await.unwrap().unwrap();
+        check(vec![Service::Scheduler], false)
+            .await
+            .unwrap()
+            .unwrap();
         check(vec![Service::Orchestrator], true)
             .await
             .unwrap()

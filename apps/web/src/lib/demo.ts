@@ -1579,7 +1579,7 @@ export const demoMonitor: MonitorResponse = {
       next_run_at: "2026-09-21T12:00:00Z",
       last_run: {
         run_id: "demo-run-1",
-        trigger: "daemon",
+        trigger: "scheduler",
         outcome: "succeeded",
         scheduled_for: "2026-09-20T12:00:00Z",
         finished_at: "2026-09-20T12:04:10Z",
@@ -1603,7 +1603,7 @@ export const demoMonitor: MonitorResponse = {
       next_run_at: "2026-09-21T11:00:00Z",
       last_run: {
         run_id: "demo-run-2",
-        trigger: "daemon",
+        trigger: "scheduler",
         outcome: "failed",
         scheduled_for: "2026-09-14T11:00:00Z",
         finished_at: "2026-09-14T11:00:03Z",

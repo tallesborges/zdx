@@ -75,17 +75,17 @@ func TestServicesRunsTheReadOnlyStatusJSON(t *testing.T) {
 	}
 }
 
-func TestJobsDecodesTheDaemonView(t *testing.T) {
+func TestJobsDecodesTheSchedulerView(t *testing.T) {
 	home := tempDir(t, "h")
-	bin, record := fakeZdx(t, `{"daemon":{"status":"unavailable","reason":"daemon is not running"},"jobs":[{"name":"daily-report","path":"/j/daily-report.md","schedule":{"kind":"recurring","cron":"0 8 * * *"},"grace_secs":600,"status":"scheduled","next_run_at":"2026-11-14T11:00:00Z","last_run":null,"declared_root":null,"declared_model":"m","subagent":null,"timeout_secs":null,"max_retries":0,"settings":null,"error":"daemon settings unavailable"}],"error":null}`, 0)
+	bin, record := fakeZdx(t, `{"scheduler":{"status":"unavailable","reason":"scheduler is not running"},"jobs":[{"name":"daily-report","path":"/j/daily-report.md","schedule":{"kind":"recurring","cron":"0 8 * * *"},"grace_secs":600,"status":"scheduled","next_run_at":"2026-11-14T11:00:00Z","last_run":null,"declared_root":null,"declared_model":"m","subagent":null,"timeout_secs":null,"max_retries":0,"settings":null,"error":"scheduler settings unavailable"}],"error":null}`, 0)
 	got, err := source.New(source.Config{Root: home, Home: home, Zdx: bin}).Jobs(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Daemon.Status != "unavailable" || len(got.Jobs) != 1 || *got.Jobs[0].Schedule.Cron != "0 8 * * *" {
+	if got.Scheduler.Status != "unavailable" || len(got.Jobs) != 1 || *got.Jobs[0].Schedule.Cron != "0 8 * * *" {
 		t.Fatalf("got %+v", got)
 	}
-	if !strings.Contains(readRecord(t, record), "args: jobs list --daemon --json") {
+	if !strings.Contains(readRecord(t, record), "args: jobs list --scheduler --json") {
 		t.Fatal("wrong command")
 	}
 }

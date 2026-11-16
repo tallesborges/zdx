@@ -327,7 +327,7 @@ enum Commands {
         #[command(subcommand)]
         command: BgCommands,
     },
-    /// Manage the long-lived `bot`, `daemon`, and `orchestrator` services under launchd (macOS)
+    /// Manage the long-lived `bot`, `scheduler`, and `orchestrator` services under launchd (macOS)
     Service {
         #[command(subcommand)]
         command: ServiceCommands,
@@ -669,7 +669,7 @@ struct GitThread {
 enum ServiceCommands {
     /// Write the launchd plists and start the services
     Install {
-        /// Service to install: bot, daemon, orchestrator, or all
+        /// Service to install: bot, scheduler, orchestrator, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
 
@@ -680,19 +680,19 @@ enum ServiceCommands {
     },
     /// Stop the services and remove their launchd plists
     Uninstall {
-        /// Service to uninstall: bot, daemon, orchestrator, or all
+        /// Service to uninstall: bot, scheduler, orchestrator, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
     },
     /// Start a stopped service
     Start {
-        /// Service to start: bot, daemon, orchestrator, or all
+        /// Service to start: bot, scheduler, orchestrator, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
     },
     /// Stop a service until it is explicitly started again
     Stop {
-        /// Service to stop: bot, daemon, orchestrator, or all
+        /// Service to stop: bot, scheduler, orchestrator, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
 
@@ -703,7 +703,7 @@ enum ServiceCommands {
     },
     /// Restart a service, picking up the currently installed binary
     Restart {
-        /// Service to restart: bot, daemon, orchestrator, or all
+        /// Service to restart: bot, scheduler, orchestrator, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
 
@@ -727,7 +727,7 @@ enum ServiceCommands {
         json: bool,
     },
     /// Restart what the bot restarts before exiting itself (`/restart`): the
-    /// daemon, plus the orchestrator service when installed
+    /// scheduler, plus the orchestrator service when installed
     RestartPeers {
         /// Restart even when work would be lost
         #[arg(long)]
@@ -738,7 +738,7 @@ enum ServiceCommands {
         json: bool,
     },
     /// Perform the queued restart once nothing would be lost (run by the bot
-    /// service while its own queues are empty). Restarts daemon and
+    /// service while its own queues are empty). Restarts scheduler and
     /// orchestrator targets; reports `restart_bot` instead of restarting the
     /// bot, which must exit with code 42 itself.
     RunQueuedRestart {
@@ -754,7 +754,7 @@ enum ServiceCommands {
     },
     /// Show the tail of a service's captured output
     Logs {
-        /// Service to inspect: bot, daemon, orchestrator, or all
+        /// Service to inspect: bot, scheduler, orchestrator, or all
         #[arg(value_name = "SERVICE", default_value = "all")]
         target: String,
 
@@ -999,10 +999,10 @@ enum JobCommands {
         /// root/model per job
         #[arg(long)]
         json: bool,
-        /// Resolve settings the way the scheduled daemon does (its root and
+        /// Resolve settings the way the scheduler does (its root and
         /// config), instead of for this process's --root
         #[arg(long, conflicts_with = "archived")]
-        daemon: bool,
+        scheduler: bool,
         /// List archived once jobs (`$ZDX_HOME/jobs/archive`) with their
         /// final outcome, newest first
         #[arg(long)]
@@ -1010,9 +1010,9 @@ enum JobCommands {
     },
     /// Validate job files
     Validate,
-    /// Run the jobs scheduler daemon
-    Daemon {
-        /// Longest wait between checks, in seconds (minimum 1). The daemon
+    /// Run the jobs scheduler
+    Scheduler {
+        /// Longest wait between checks, in seconds (minimum 1). The scheduler
         /// also wakes when a job becomes due.
         #[arg(long, default_value_t = 30)]
         poll_interval_secs: u64,
@@ -1101,9 +1101,9 @@ enum JobCommands {
     /// program (`zdx-go jobs`)
     #[command(hide = true)]
     Resolve {
-        /// Resolve the way the scheduled daemon does
+        /// Resolve the way the scheduler does
         #[arg(long)]
-        daemon: bool,
+        scheduler: bool,
 
         /// Also render each run's prompt, as an attempt does
         #[arg(long)]
@@ -2190,24 +2190,24 @@ async fn dispatch_jobs(command: JobCommands, context: &DispatchContext<'_>) -> R
         JobCommands::Attempt { result, lock_fd } => {
             return Box::pin(commands::jobs::attempt(&caller, &result, lock_fd)).await;
         }
-        JobCommands::Resolve { daemon, prepare } => {
-            return commands::jobs::resolve(&caller, daemon, prepare);
+        JobCommands::Resolve { scheduler, prepare } => {
+            return commands::jobs::resolve(&caller, scheduler, prepare);
         }
         JobCommands::History { name, limit, json } => {
             return commands::jobs::history(&name, limit, json);
         }
         JobCommands::List {
             json,
-            daemon,
+            scheduler,
             archived,
         } => std::iter::once("list".into())
             .chain(flag(json, "--json"))
-            .chain(flag(daemon, "--daemon"))
+            .chain(flag(scheduler, "--scheduler"))
             .chain(flag(archived, "--archived"))
             .collect(),
         JobCommands::Validate => vec!["validate".into()],
-        JobCommands::Daemon { poll_interval_secs } => vec![
-            "daemon".into(),
+        JobCommands::Scheduler { poll_interval_secs } => vec![
+            "scheduler".into(),
             "--poll-interval-secs".into(),
             poll_interval_secs.to_string().into(),
         ],

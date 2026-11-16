@@ -9,7 +9,7 @@
 //	monitor  the read-only dashboard (`zdx monitor`)
 //	tui      the interactive chat (bare `zdx` on a terminal)
 //	quota    live subscription quotas (`zdx quota`)
-//	jobs     the jobs program (`zdx jobs`, the daemon service's scheduler)
+//	jobs     the jobs program (`zdx jobs`, and the scheduler service)
 //	git      the Git views as JSON (`zdx git`)
 //	version  print the zdx version this binary was built with
 package main
@@ -34,7 +34,7 @@ const usage = `usage: zdx-go <command> ARGS
   monitor  the read-only dashboard (zdx monitor)
   tui      the interactive chat (bare zdx on a terminal)
   quota    live subscription quotas (zdx quota)
-  jobs     the jobs program (zdx jobs, the daemon service's scheduler)
+  jobs     the jobs program (zdx jobs, and the scheduler service)
   git      the Git views as JSON (zdx git)
   version  print the zdx version this binary was built with
 

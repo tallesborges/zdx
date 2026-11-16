@@ -1,4 +1,4 @@
-//! `zdx service` — launchd control for the long-lived `bot`, `daemon`, and
+//! `zdx service` — launchd control for the long-lived `bot`, `scheduler`, and
 //! `orchestrator` services; thin wrapper over `zdx_engine::service`.
 
 use std::path::{Path, PathBuf};
@@ -142,7 +142,7 @@ pub fn queue_restart(target: &str, thread: Option<String>, json: bool) -> Result
 }
 
 /// `zdx service restart-peers [--force] [--json]` — the bot's `/restart`
-/// step before it exits: daemon, plus the orchestrator service when
+/// step before it exits: scheduler, plus the orchestrator service when
 /// installed. With `--json`, a gate refusal is a successful
 /// `{"outcome":"blocked","text"}`; a failed restart is an error.
 ///

@@ -107,7 +107,7 @@ func TestBusyJobWaitsInsteadOfStartingTwice(t *testing.T) {
 }
 
 func TestRecurringJobRunsOnlyTheLatestOccurrenceWithinGrace(t *testing.T) {
-	// Every 5 minutes, local UTC-3. 11:50 and 11:55 (UTC) ran; the daemon was
+	// Every 5 minutes, local UTC-3. 11:50 and 11:55 (UTC) ran; the scheduler was
 	// down from 11:58 to 12:07, so 12:00 and 12:05 passed while it was down.
 	j := planJob(t, "poll", ptr("*/5 * * * *"), nil, nil)
 	w := newWorld().claim("poll", "20261020T0850", ClaimFinished).claim("poll", "20261020T0855", ClaimFinished)

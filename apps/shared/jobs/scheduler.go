@@ -16,7 +16,7 @@ const (
 	// ClaimRetention is how long finished recurring claims are kept.
 	ClaimRetention = 8 * 24 * time.Hour
 	// RescanInterval is how often unfinished claims are rescanned, to catch
-	// runs that died in processes this daemon did not start.
+	// runs that died in processes this scheduler did not start.
 	RescanInterval = 10 * time.Minute
 )
 
@@ -31,7 +31,7 @@ type ChildExit struct {
 // Spawner starts one run child for an occurrence; done receives its exit.
 type Spawner func(job string, occ Occurrence, done chan<- ChildExit) (pid int, err error)
 
-// Scheduler is the jobs daemon's state between ticks. It writes only
+// Scheduler is the jobs scheduler's state between ticks. It writes only
 // missed, failed-to-start, and interrupted outcomes, each under the job's
 // lock; runs write their own.
 type Scheduler struct {
@@ -53,7 +53,7 @@ type Scheduler struct {
 }
 
 // Start loads (or begins) the scheduler state and recovers runs that died
-// with the previous daemon.
+// with the previous scheduler.
 func (s *Scheduler) Start(now time.Time) error {
 	s.live = map[string]Occurrence{}
 	s.attempted = map[[2]string]bool{}
@@ -257,7 +257,7 @@ func (s *Scheduler) apply(cat *Catalog, a Action) bool {
 			grace, _ := job.EffectiveGraceSecs()
 			s.Log.Warn("Once job missed", "name", a.Job, "run_at", a.Occurrence.At)
 			s.recordNotRun(job, a.Occurrence, Missed, fmt.Sprintf(
-				"did not start within its grace (%ds after run_at): the daemon was down, busy, or the job was already running", grace))
+				"did not start within its grace (%ds after run_at): the scheduler was down, busy, or the job was already running", grace))
 		}
 	case ActMissRecurring:
 		if job != nil {
@@ -319,7 +319,7 @@ func (s *Scheduler) HandleExit(exit ChildExit) {
 	default:
 		job := find(&cat, exit.Job)
 		recorded := job != nil && s.recordNotRun(job, exit.Occurrence, Failed, fmt.Sprintf(
-			"the run process exited (%s) before taking its occurrence; see the daemon log", exitLabel(exit.Code)))
+			"the run process exited (%s) before taking its occurrence; see the scheduler log", exitLabel(exit.Code)))
 		if !recorded {
 			delete(s.attempted, id)
 		}
@@ -345,7 +345,7 @@ func (s *Scheduler) recordRecurringMissed(job *Definition, latest Occurrence, co
 	s.Log.Warn("Recurring job missed", "name", job.Name, "count", count, "latest", latest.At)
 	runID := NewRunID()
 	text := fmt.Sprintf("%d occurrence(s) did not start within grace; latest scheduled for %s", count, offsetRFC3339(latest.At.UTC()))
-	if err := s.Home.AppendRunRecord(NotRunRecord(job.Name, runID, TriggerDaemon, job.Schedule, latest.At, Missed, text)); err != nil {
+	if err := s.Home.AppendRunRecord(NotRunRecord(job.Name, runID, TriggerScheduler, job.Schedule, latest.At, Missed, text)); err != nil {
 		s.Log.Error("Failed to record missed occurrences", "err", err)
 		return false
 	}
@@ -364,7 +364,7 @@ func (s *Scheduler) recordNotRun(job *Definition, occ Occurrence, outcome Outcom
 		return false
 	}
 	defer lock.Release()
-	claim := NewClaim(job.Name, occ.Key, TriggerDaemon, job.Schedule.Kind, occ.At).Finished(outcome, &text)
+	claim := NewClaim(job.Name, occ.Key, TriggerScheduler, job.Schedule.Kind, occ.At).Finished(outcome, &text)
 	created, err := s.Home.CreateClaim(claim)
 	if err != nil {
 		s.Log.Error("Failed to write job claim", "err", err)
@@ -373,7 +373,7 @@ func (s *Scheduler) recordNotRun(job *Definition, occ Occurrence, outcome Outcom
 	if !created {
 		return true
 	}
-	s.append(NotRunRecord(job.Name, claim.RunID, TriggerDaemon, job.Schedule, occ.At, outcome, text))
+	s.append(NotRunRecord(job.Name, claim.RunID, TriggerScheduler, job.Schedule, occ.At, outcome, text))
 	s.writeLast(job.Name, claim.RunID, &occ.At, outcome, text)
 	s.archive(job, occ.Key)
 	return true
@@ -465,7 +465,7 @@ func (s *Scheduler) writeLast(job, runID string, scheduledFor *time.Time, outcom
 		utc := scheduledFor.UTC()
 		at = &utc
 	}
-	last := LastRun{RunID: runID, Trigger: TriggerDaemon, Outcome: outcome, ScheduledFor: at,
+	last := LastRun{RunID: runID, Trigger: TriggerScheduler, Outcome: outcome, ScheduledFor: at,
 		FinishedAt: time.Now().UTC(), Error: &text}
 	if err := s.Home.WriteLastRun(job, last); err != nil {
 		s.Log.Warn("Failed to record the job's last run", "err", err)

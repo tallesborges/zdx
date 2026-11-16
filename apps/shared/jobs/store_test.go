@@ -15,11 +15,11 @@ var quiet = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 func TestAClaimIsCreatedOnceAndFinishedInPlace(t *testing.T) {
 	home := Home{Dir: t.TempDir()}
-	first := NewClaim("demo", "20261020T120000Z", TriggerDaemon, Once, time.Now())
+	first := NewClaim("demo", "20261020T120000Z", TriggerScheduler, Once, time.Now())
 	if ok, err := home.CreateClaim(first); !ok || err != nil {
 		t.Fatal(ok, err)
 	}
-	if ok, err := home.CreateClaim(NewClaim("demo", "20261020T120000Z", TriggerDaemon, Once, time.Now())); ok || err != nil {
+	if ok, err := home.CreateClaim(NewClaim("demo", "20261020T120000Z", TriggerScheduler, Once, time.Now())); ok || err != nil {
 		t.Fatal("the first claim wins", ok, err)
 	}
 	stored, err := home.ReadClaim("demo", "20261020T120000Z")
@@ -42,7 +42,8 @@ func TestAClaimIsCreatedOnceAndFinishedInPlace(t *testing.T) {
 }
 
 // The files keep the field names, order, and formats the Rust runner wrote
-// (docs/SPEC.md §8 Jobs, State files), so existing state is read as is.
+// (docs/SPEC.md §8 Jobs, State files), so existing state is read as is,
+// including the trigger `daemon` of runs from before the scheduler rename.
 func TestStateFilesKeepTheirFormat(t *testing.T) {
 	home := Home{Dir: t.TempDir()}
 	existing := `{
@@ -95,7 +96,7 @@ func TestStateFilesKeepTheirFormat(t *testing.T) {
 	var last LastRun
 	lastJSON := `{
   "run_id": "52f00b78-76f4-4f2f-a2b9-5e17f8f2bb8b",
-  "trigger": "daemon",
+  "trigger": "scheduler",
   "outcome": "succeeded",
   "scheduled_for": "2026-11-15T08:30:00Z",
   "finished_at": "2026-11-15T08:31:34.54121Z",
@@ -142,9 +143,9 @@ func TestTheLockIsExclusiveAndReleased(t *testing.T) {
 func TestPruningKeepsOnceClaimsAndRecentOrUnfinishedRecurringOnes(t *testing.T) {
 	home := Home{Dir: t.TempDir()}
 	old := time.Now().Add(-30 * 24 * time.Hour)
-	recurringOld := NewClaim("r", "20260901T0900", TriggerDaemon, Recurring, old).Finished(Succeeded, nil)
-	recurringRunning := NewClaim("r", "20260902T0900", TriggerDaemon, Recurring, old)
-	onceOld := NewClaim("o", "20260901T120000Z", TriggerDaemon, Once, old).Finished(Failed, nil)
+	recurringOld := NewClaim("r", "20260901T0900", TriggerScheduler, Recurring, old).Finished(Succeeded, nil)
+	recurringRunning := NewClaim("r", "20260902T0900", TriggerScheduler, Recurring, old)
+	onceOld := NewClaim("o", "20260901T120000Z", TriggerScheduler, Once, old).Finished(Failed, nil)
 	for _, c := range []Claim{recurringOld, recurringRunning, onceOld} {
 		if _, err := home.CreateClaim(c); err != nil {
 			t.Fatal(err)
@@ -255,7 +256,7 @@ func TestArchivedListsNewestFirstWithOutcomes(t *testing.T) {
 	writeFile(t, filepath.Join(home.ArchiveDir(), "b--20261002T120000Z-2.md"), "x")
 	writeFile(t, filepath.Join(home.ArchiveDir(), "stray.md"), "x")
 	for _, c := range []Claim{
-		NewClaim("a", "20261001T120000Z", TriggerDaemon, Once, utc(2026, 10, 1, 12, 0)).Finished(Missed, ptr("late")),
+		NewClaim("a", "20261001T120000Z", TriggerScheduler, Once, utc(2026, 10, 1, 12, 0)).Finished(Missed, ptr("late")),
 		NewClaim("b", "20261002T120000Z", TriggerManual, Once, utc(2026, 10, 2, 12, 0)).Finished(Succeeded, nil),
 	} {
 		if _, err := home.CreateClaim(c); err != nil {
@@ -280,17 +281,17 @@ func TestReconcileRepairsAStaleLastRunFromAFinalClaimOnly(t *testing.T) {
 	}
 	// "stale": the run finalized its claim, then died before last.json.
 	_ = home.WriteLastRun("stale", last("older", ago(60)))
-	done := NewClaim("stale", "k1", TriggerDaemon, Once, time.Now()).Finished(Failed, ptr("boom"))
+	done := NewClaim("stale", "k1", TriggerScheduler, Once, time.Now()).Finished(Failed, ptr("boom"))
 	finished := ago(5)
 	done.FinishedAt = &finished
 	// "newer": a later manual run (no claim) already wrote last.json.
 	_ = home.WriteLastRun("newer", last("manual", ago(1)))
-	old := NewClaim("newer", "k2", TriggerDaemon, Once, time.Now()).Finished(Succeeded, nil)
+	old := NewClaim("newer", "k2", TriggerScheduler, Once, time.Now()).Finished(Succeeded, nil)
 	oldAt := ago(30)
 	old.FinishedAt = &oldAt
 	// "busy": its lock is held, so its run will write last.json itself.
-	busy := NewClaim("busy", "k3", TriggerDaemon, Once, time.Now()).Finished(Succeeded, nil)
-	unfinished := NewClaim("missing", "k4", TriggerDaemon, Once, time.Now())
+	busy := NewClaim("busy", "k3", TriggerScheduler, Once, time.Now()).Finished(Succeeded, nil)
+	unfinished := NewClaim("missing", "k4", TriggerScheduler, Once, time.Now())
 	lock, _ := home.TryLock("busy")
 	defer lock.Release()
 

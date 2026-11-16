@@ -119,9 +119,9 @@ func (f *fake) Workspaces(context.Context) (data.Workspaces, source.Origin, erro
 	f.count("workspaces")
 	return data.Workspaces{}, source.OriginSocket, nil
 }
-func (f *fake) Jobs(context.Context) (data.DaemonJobs, error) {
+func (f *fake) Jobs(context.Context) (data.SchedulerJobs, error) {
 	f.count("jobs")
-	return data.DaemonJobs{}, nil
+	return data.SchedulerJobs{}, nil
 }
 func (f *fake) Log(_ context.Context, index, lines int, prev source.LogStamp) (source.LogTail, error) {
 	f.count("logs")

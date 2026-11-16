@@ -21,7 +21,9 @@ pub struct JobsHome {
 #[serde(rename_all = "lowercase")]
 pub enum RunTrigger {
     Manual,
-    Daemon,
+    /// Records written before the scheduler was renamed say `daemon`.
+    #[serde(alias = "daemon")]
+    Scheduler,
 }
 
 impl RunTrigger {
@@ -29,7 +31,7 @@ impl RunTrigger {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Manual => "manual",
-            Self::Daemon => "daemon",
+            Self::Scheduler => "scheduler",
         }
     }
 }

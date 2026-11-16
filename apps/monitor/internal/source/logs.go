@@ -39,7 +39,7 @@ type LogTail struct {
 func LogDir(home string) string { return filepath.Join(home, "logs") }
 
 // isZdxLog matches the rolling log names; the directory also holds other
-// logs (service stdout and stderr, the jobs daemon).
+// logs (service stdout and stderr, the jobs scheduler).
 func isZdxLog(name string) bool { return name == "zdx.log" || strings.HasPrefix(name, "zdx.log.") }
 
 // LogFiles lists `zdx.log*` newest first. The appender names files

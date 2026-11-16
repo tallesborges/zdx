@@ -68,7 +68,7 @@ func (r *Runner) Run(req RunRequest) error {
 	}
 	trigger := TriggerManual
 	if req.Scheduled != nil {
-		trigger = TriggerDaemon
+		trigger = TriggerScheduler
 	}
 	occ, skip := r.occurrenceToTake(job, req)
 	if skip {

@@ -14,7 +14,7 @@ const (
 	// DefaultRecurringGraceSecs is the grace of a recurring job's latest
 	// occurrence.
 	DefaultRecurringGraceSecs uint32 = 10 * 60
-	// MinGraceSecs is the smallest accepted grace_secs; below one daemon poll
+	// MinGraceSecs is the smallest accepted grace_secs; below one scheduler poll
 	// it would miss runs.
 	MinGraceSecs uint32 = 60
 	// MaxGraceSecs is the largest accepted grace_secs.
@@ -31,7 +31,7 @@ const (
 )
 
 // Schedule is when a job runs: manual only, a recurring cron expression in
-// the daemon's local time, or once at RunAt.
+// the scheduler's local time, or once at RunAt.
 type Schedule struct {
 	Kind ScheduleKind
 	// Cron is the expression as written (Recurring).

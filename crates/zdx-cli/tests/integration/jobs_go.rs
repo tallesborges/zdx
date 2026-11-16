@@ -96,14 +96,14 @@ fn test_jobs_subcommands_exec_the_go_program_with_their_flags() {
     let cases: [(&[&str], &[&str], Vec<&str>); 6] = [
         (
             &[],
-            &["list", "--json", "--daemon"],
-            vec!["list", "--json", "--daemon"],
+            &["list", "--json", "--scheduler"],
+            vec!["list", "--json", "--scheduler"],
         ),
         (&[], &["validate"], vec!["validate"]),
         (
             &["--system-prompt", "Be brief.", "--no-thread"],
-            &["daemon", "--poll-interval-secs", "5"],
-            vec!["daemon", "--poll-interval-secs", "5"],
+            &["scheduler", "--poll-interval-secs", "5"],
+            vec!["scheduler", "--poll-interval-secs", "5"],
         ),
         (
             &["--thread", "custom"],
@@ -248,11 +248,11 @@ async fn test_real_jobs_program_runs_a_once_job_through_rust() {
 }
 
 /// Opt-in: with `ZDX_GO_TEST_BIN` naming a built `zdx-go`, `zdx jobs
-/// daemon` runs the Go scheduler: it runs a due once job through a run child
-/// and a Rust attempt, marks a run that died with the previous daemon as
+/// scheduler` runs the Go scheduler: it runs a due once job through a run child
+/// and a Rust attempt, marks a run that died with the previous scheduler as
 /// interrupted, and removes its PID file and context record when stopped.
 #[tokio::test]
-async fn test_real_jobs_daemon_runs_and_recovers_once_jobs() {
+async fn test_real_jobs_scheduler_runs_and_recovers_once_jobs() {
     let Some(bin) = std::env::var_os("ZDX_GO_TEST_BIN").filter(|bin| !bin.is_empty()) else {
         eprintln!("skipped: ZDX_GO_TEST_BIN not set");
         return;
@@ -297,12 +297,12 @@ async fn test_real_jobs_daemon_runs_and_recovers_once_jobs() {
     )
     .unwrap();
 
-    let log = std::fs::File::create(sb.home.join("daemon.log")).unwrap();
-    let mut daemon = zdx_jobs(
+    let log = std::fs::File::create(sb.home.join("scheduler.log")).unwrap();
+    let mut scheduler = zdx_jobs(
         &sb,
         Some(Path::new(&bin)),
         &["--no-thread"],
-        &["daemon", "--poll-interval-secs", "1"],
+        &["scheduler", "--poll-interval-secs", "1"],
     )
     .env("ANTHROPIC_API_KEY", "test-api-key")
     .env("ANTHROPIC_BASE_URL", server.uri())
@@ -316,11 +316,11 @@ async fn test_real_jobs_daemon_runs_and_recovers_once_jobs() {
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
     let run = sb.zdx_home.join("run");
-    assert!(run.join("daemon.pid").exists() && run.join("daemon.context.json").exists());
-    // SAFETY: `daemon.id()` is the child spawned above, still running.
-    unsafe { libc::kill(daemon.id() as i32, libc::SIGTERM) };
-    let status = daemon.wait().unwrap();
-    let log = std::fs::read_to_string(sb.home.join("daemon.log")).unwrap();
+    assert!(run.join("scheduler.pid").exists() && run.join("scheduler.context.json").exists());
+    // SAFETY: `scheduler.id()` is the child spawned above, still running.
+    unsafe { libc::kill(scheduler.id() as i32, libc::SIGTERM) };
+    let status = scheduler.wait().unwrap();
+    let log = std::fs::read_to_string(sb.home.join("scheduler.log")).unwrap();
     assert!(done.exists(), "once job was not run and archived:\n{log}");
     assert!(status.success(), "{status}\n{log}");
 
@@ -337,6 +337,6 @@ async fn test_real_jobs_daemon_runs_and_recovers_once_jobs() {
             .join(format!("archive/crashed--{}.md", key(crashed)))
             .exists()
     );
-    assert!(!run.join("daemon.pid").exists(), "{log}");
-    assert!(!run.join("daemon.context.json").exists(), "{log}");
+    assert!(!run.join("scheduler.pid").exists(), "{log}");
+    assert!(!run.join("scheduler.context.json").exists(), "{log}");
 }

@@ -42,7 +42,7 @@ type Lifecycle interface {
 	// pending orchestrator turn is left (zdx service restart --queue),
 	// announced in threadID.
 	QueueRestart(ctx context.Context, threadID string) (QueuedRestart, error)
-	// RestartServices restarts the daemon and, when installed, the
+	// RestartServices restarts the scheduler and, when installed, the
 	// orchestrator service, refusing while work is active unless force. An
 	// error means the restart failed and the gateway stays up.
 	RestartServices(ctx context.Context, force bool) (RestartResult, error)

@@ -12,7 +12,7 @@ import (
 // TestRealZdxShapes runs a prebuilt zdx (ZDX_MONITOR_TEST_ZDX, never built
 // here) in the sandbox home, with no service running there, and decodes
 // every surface the monitor reads through the CLI: views via `zdx views`,
-// service status, and daemon jobs (which `zdx` runs with the prebuilt
+// service status, and scheduler jobs (which `zdx` runs with the prebuilt
 // zdx-go, ZDX_MONITOR_TEST_GO). It checks that the Go types match what the
 // programs write.
 func TestRealZdxShapes(t *testing.T) {
@@ -58,7 +58,7 @@ func TestRealZdxShapes(t *testing.T) {
 	}
 	jobs, err := s.Jobs(ctx)
 	if err != nil || len(jobs.Jobs) != 1 || jobs.Jobs[0].Name != "daily-report" || jobs.Jobs[0].Schedule == nil ||
-		jobs.Jobs[0].Schedule.Kind != "recurring" || jobs.Daemon.Status == "" {
+		jobs.Jobs[0].Schedule.Kind != "recurring" || jobs.Scheduler.Status == "" {
 		t.Fatalf("jobs: %+v %v", jobs, err)
 	}
 }

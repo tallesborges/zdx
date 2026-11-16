@@ -62,7 +62,7 @@ func newScheduler(t *testing.T, home Home, spawn Spawner, loc *time.Location) (*
 func unfinishedClaim(t *testing.T, home Home, job string, at time.Time) string {
 	t.Helper()
 	key := at.UTC().Format("20060102T150405Z")
-	c := Claim{Job: job, Key: key, RunID: "run-from-a-dead-daemon", Trigger: TriggerDaemon, ScheduleKind: Once,
+	c := Claim{Job: job, Key: key, RunID: "run-from-a-dead-scheduler", Trigger: TriggerScheduler, ScheduleKind: Once,
 		ScheduledFor: at.UTC(), ClaimedAt: at.UTC(), PID: 1}
 	if _, err := home.CreateClaim(c); err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func outcomesOf(t *testing.T, home Home, job string) string {
 	return strings.Join(out, ",")
 }
 
-func TestDaemonRunsMissesAndRecoversOnceJobs(t *testing.T) {
+func TestSchedulerRunsMissesAndRecoversOnceJobs(t *testing.T) {
 	home := Home{Dir: t.TempDir()}
 	bin, _ := fakeZdx(t)
 	now := time.Now().UTC().Truncate(time.Second)
@@ -109,7 +109,7 @@ func TestDaemonRunsMissesAndRecoversOnceJobs(t *testing.T) {
 	s.Tick(now.Add(time.Second))
 
 	dueKey := due.Format("20060102T150405Z")
-	if c, _ := home.ReadClaim("remind", dueKey); c == nil || *c.Outcome != Succeeded || c.Trigger != TriggerDaemon {
+	if c, _ := home.ReadClaim("remind", dueKey); c == nil || *c.Outcome != Succeeded || c.Trigger != TriggerScheduler {
 		t.Fatalf("%+v\n%s", c, logs)
 	}
 	for _, f := range []string{"remind--" + dueKey, "crashed--" + crashedKey, "late--" + late.Format("20060102T150405Z")} {
@@ -117,7 +117,7 @@ func TestDaemonRunsMissesAndRecoversOnceJobs(t *testing.T) {
 			t.Errorf("%s not archived", f)
 		}
 	}
-	if c, _ := home.ReadClaim("crashed", crashedKey); *c.Outcome != Interrupted || c.RunID != "run-from-a-dead-daemon" {
+	if c, _ := home.ReadClaim("crashed", crashedKey); *c.Outcome != Interrupted || c.RunID != "run-from-a-dead-scheduler" {
 		t.Fatalf("%+v", c)
 	}
 	if c, _ := home.ReadClaim("moved", crashedKey); *c.Outcome != Interrupted || !exists(filepath.Join(home.JobsDir(), "moved.md")) {
@@ -139,7 +139,7 @@ func TestDaemonRunsMissesAndRecoversOnceJobs(t *testing.T) {
 	}
 }
 
-func TestDaemonRecordsARecurringMissOnceAcrossRestarts(t *testing.T) {
+func TestSchedulerRecordsARecurringMissOnceAcrossRestarts(t *testing.T) {
 	home := Home{Dir: t.TempDir()}
 	loc := time.FixedZone("", -3*3600)
 	now := time.Date(2026, 10, 20, 15, 0, 0, 0, time.UTC)
@@ -257,26 +257,26 @@ func exists(path string) bool {
 	return err == nil
 }
 
-func TestTheDaemonFilesRefuseASecondDaemonAndAreRemovedOnRelease(t *testing.T) {
+func TestTheSchedulerFilesRefuseASecondSchedulerAndAreRemovedOnRelease(t *testing.T) {
 	home := Home{Dir: t.TempDir()}
 	root := t.TempDir()
-	files, err := AcquireDaemon(home, root, "/config/dir")
+	files, err := AcquireScheduler(home, root, "/config/dir")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rec DaemonRecord
-	if ok, err := readJSON(filepath.Join(home.Dir, "run", "daemon.context.json"), &rec); !ok || err != nil ||
+	var rec SchedulerRecord
+	if ok, err := readJSON(filepath.Join(home.Dir, "run", "scheduler.context.json"), &rec); !ok || err != nil ||
 		rec.PID != os.Getpid() || rec.ConfigDir != "/config/dir" || rec.Root == "" {
 		t.Fatalf("%+v %v", rec, err)
 	}
-	if pid, ok := readPID(filepath.Join(home.Dir, "run", "daemon.pid")); !ok || pid != os.Getpid() {
+	if pid, ok := readPID(filepath.Join(home.Dir, "run", "scheduler.pid")); !ok || pid != os.Getpid() {
 		t.Fatal(pid)
 	}
-	if _, err := AcquireDaemon(home, root, "/config/dir"); err == nil || !strings.Contains(err.Error(), "already running") {
+	if _, err := AcquireScheduler(home, root, "/config/dir"); err == nil || !strings.Contains(err.Error(), "already running") {
 		t.Fatal(err)
 	}
 	files.Release()
-	for _, name := range []string{"daemon.pid", "daemon.context.json"} {
+	for _, name := range []string{"scheduler.pid", "scheduler.context.json"} {
 		if exists(filepath.Join(home.Dir, "run", name)) {
 			t.Fatalf("%s left behind", name)
 		}

@@ -24,7 +24,7 @@ type Backend interface {
 	Usage(ctx context.Context, days uint32) (data.Usage, source.Origin, error)
 	Quotas(ctx context.Context) ([]data.Subscription, source.Origin, error)
 	Workspaces(ctx context.Context) (data.Workspaces, source.Origin, error)
-	Jobs(ctx context.Context) (data.DaemonJobs, error)
+	Jobs(ctx context.Context) (data.SchedulerJobs, error)
 	Log(ctx context.Context, index, maxLines int, prev source.LogStamp) (source.LogTail, error)
 }
 

@@ -440,7 +440,7 @@ func (m *Model) helpLines() []string {
 	out = append(out, "",
 		"  "+bold.Render("Data sources"),
 		"    "+dim.Render("Views come from the orchestrator socket; Services and Jobs from `zdx service status --json`"),
-		"    "+dim.Render("and `zdx jobs list --daemon --json`; Logs from $ZDX_HOME/logs. Nothing here writes."),
+		"    "+dim.Render("and `zdx jobs list --scheduler --json`; Logs from $ZDX_HOME/logs. Nothing here writes."),
 		"    "+dim.Render("Not here yet: service start/stop/restart, bg kill, job model edit (use the zdx CLI),"),
 		"    "+dim.Render("full thread browse and filters, config edits."),
 	)

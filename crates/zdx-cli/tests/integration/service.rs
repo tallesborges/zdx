@@ -27,7 +27,7 @@ fn test_service_status_json_reports_stopped_and_not_installed() {
         .iter()
         .filter_map(|s| s["service"].as_str())
         .collect();
-    assert_eq!(names, vec!["bot", "daemon", "orchestrator"]);
+    assert_eq!(names, vec!["bot", "scheduler", "orchestrator"]);
 
     for service in services {
         assert_eq!(service["status"], Value::String("stopped".to_string()));
@@ -35,7 +35,7 @@ fn test_service_status_json_reports_stopped_and_not_installed() {
         assert_eq!(service["pid"], Value::Null);
     }
     assert_eq!(services[0]["label"], "dev.zdx.bot");
-    assert_eq!(services[1]["label"], "dev.zdx.daemon");
+    assert_eq!(services[1]["label"], "dev.zdx.scheduler");
     assert_eq!(services[2]["label"], "dev.zdx.orchestrator");
 }
 
@@ -131,6 +131,55 @@ fn test_service_restart_all_names_the_missing_install() {
         ));
 }
 
+/// A service still installed under its old launchd name counts as installed
+/// for `status`, and `start` names the restart that moves it. The old name is
+/// no target, and a restart queued under it is read as the new one. Nothing
+/// here reaches `launchctl`.
+#[test]
+fn test_a_service_installed_under_its_old_name() {
+    let dir = tempdir().unwrap();
+    let home = dir.path();
+    let agents = home.join("Library").join("LaunchAgents");
+    std::fs::create_dir_all(&agents).unwrap();
+    std::fs::write(agents.join("dev.zdx.daemon.plist"), "<plist></plist>").unwrap();
+    let zdx = |args: &[&str]| {
+        let mut cmd = crate::fixtures::zdx_cmd();
+        cmd.env("ZDX_HOME", home).env("HOME", home).args(args);
+        cmd
+    };
+
+    let status = |zdx: &dyn Fn(&[&str]) -> assert_cmd::Command| -> Value {
+        let output = zdx(&["service", "status", "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&output).unwrap()
+    };
+    let parsed = status(&zdx);
+    assert_eq!(parsed["services"][1]["service"], "scheduler");
+    assert_eq!(parsed["services"][1]["installed"], true);
+
+    zdx(&["service", "start", "scheduler"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "still installed under its old name `daemon`; `zdx service restart scheduler` moves it",
+        ));
+    zdx(&["service", "restart", "daemon"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("now called scheduler"));
+
+    supervised_bot(home);
+    write_queue(home, &["bot", "daemon"], None);
+    assert_eq!(
+        status(&zdx)["queued_restart"]["services"],
+        serde_json::json!(["bot", "scheduler"])
+    );
+}
+
 /// Writes PID and supervision markers for a "bot" that is this test process,
 /// so `--queue` sees a live supervised bot without launchd.
 fn fake_supervised_bot(home: &std::path::Path) {
@@ -175,10 +224,10 @@ fn test_service_restart_queue_records_and_merges_request() {
         .env("ZDX_HOME", dir.path())
         .env("HOME", dir.path())
         .env("ZDX_THREAD_ID", "telegram--100-topic-7")
-        .args(["service", "restart", "daemon", "--queue"])
+        .args(["service", "restart", "scheduler", "--queue"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Restart queued for daemon"));
+        .stdout(predicate::str::contains("Restart queued for scheduler"));
 
     crate::fixtures::zdx_cmd()
         .env("ZDX_HOME", dir.path())
@@ -188,7 +237,7 @@ fn test_service_restart_queue_records_and_merges_request() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "already queued; it now covers bot, daemon",
+            "already queued; it now covers bot, scheduler",
         ));
 
     let output = crate::fixtures::zdx_cmd()
@@ -202,7 +251,7 @@ fn test_service_restart_queue_records_and_merges_request() {
         .clone();
     let parsed: Value = serde_json::from_slice(&output).unwrap();
     let queued = &parsed["queued_restart"];
-    assert_eq!(queued["services"], serde_json::json!(["bot", "daemon"]));
+    assert_eq!(queued["services"], serde_json::json!(["bot", "scheduler"]));
     assert_eq!(queued["thread_id"], "telegram--100-topic-7");
     assert!(queued["requested_at"].is_string());
 }
@@ -333,7 +382,7 @@ fn test_run_queued_restart_outcomes() {
     );
     assert!(!queue.exists());
 
-    write_queue(home, &["daemon"], None);
+    write_queue(home, &["scheduler"], None);
     let failed = run_queued(home);
     assert_eq!(failed["status"], "failed");
     assert_eq!(failed["restart_bot"], false);
@@ -422,7 +471,7 @@ fn test_queue_restart_json_with_thread() {
     assert_eq!(first["request"]["thread_id"], "telegram--100-topic-7");
     assert_eq!(
         first["request"]["services"],
-        serde_json::json!(["bot", "daemon", "orchestrator"])
+        serde_json::json!(["bot", "scheduler", "orchestrator"])
     );
     let second = queue("telegram--100-topic-8");
     assert_eq!(second["already_pending"], true);
@@ -471,7 +520,7 @@ fn test_install_bot_program_requires_a_ready_preflight() {
     let garbage = stderr(install("echo hello"));
     assert!(garbage.contains("no valid report"), "{garbage}");
     let args = stderr(install(
-        r#"[ "$1" = gateway ] && [ "$2" = preflight ] && [ "$5" = --json ] && [ "${ZDX_BIN##*/}" = zdx ] || exit 3; echo '{"service":"daemon","ready":true}'"#,
+        r#"[ "$1" = gateway ] && [ "$2" = preflight ] && [ "$5" = --json ] && [ "${ZDX_BIN##*/}" = zdx ] || exit 3; echo '{"service":"scheduler","ready":true}'"#,
     ));
     assert!(args.contains("not bot"), "{args}");
     assert!(

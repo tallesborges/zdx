@@ -567,7 +567,8 @@ export type JobOutcome = "succeeded" | "failed" | "retrying" | "missed" | "inter
 
 export interface MonitorJobLastRun {
   run_id: string;
-  trigger: "manual" | "daemon";
+  // `daemon`: a run from before the scheduler was renamed.
+  trigger: "manual" | "scheduler" | "daemon";
   outcome: JobOutcome;
   scheduled_for: string | null;
   finished_at: string;

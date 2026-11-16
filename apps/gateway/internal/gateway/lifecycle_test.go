@@ -62,8 +62,8 @@ func (f *fakeCLI) count(key string) int {
 func TestLifecycleMapsTheServiceCLI(t *testing.T) {
 	cli := &fakeCLI{answers: map[string][]string{
 		"service restart all --queue --thread telegram--100-topic-5 --json": {`{"already_pending":true,"active_runs":2,"request":{"services":["bot"]}}`, "ERR:the bot service is not running under a supervisor"},
-		"service restart-peers --json":                                      {`{"outcome":"blocked","text":"restart blocked: 1 active agent run"}`, "ERR:daemon is not installed", `{"outcome":"weird"}`},
-		"service restart-peers --force --json":                              {`{"outcome":"restarted","text":"Restarted daemon (PID 1 → 2)"}`},
+		"service restart-peers --json":                                      {`{"outcome":"blocked","text":"restart blocked: 1 active agent run"}`, "ERR:scheduler is not installed", `{"outcome":"weird"}`},
+		"service restart-peers --force --json":                              {`{"outcome":"restarted","text":"Restarted scheduler (PID 1 → 2)"}`},
 	}}
 	exits := 0
 	l := &Lifecycle{Home: t.TempDir(), Run: cli.run, Exit: func() { exits++ }}
@@ -115,7 +115,7 @@ func TestQueuedRestartsPollAnnounceAndExit(t *testing.T) {
 	cli := &fakeCLI{answers: map[string][]string{key: {
 		`{"status":"waiting","restart_bot":false,"restarted":[],"thread_id":null,"message":null}`,
 		`{"status":"failed","restart_bot":false,"restarted":[],"thread_id":"telegram--999-topic-1","message":"not <allowed>"}`,
-		`{"status":"done","restart_bot":true,"restarted":["daemon"],"thread_id":"telegram--100-topic-5","message":"Restarted daemon <1>"}`,
+		`{"status":"done","restart_bot":true,"restarted":["scheduler"],"thread_id":"telegram--100-topic-5","message":"Restarted scheduler <1>"}`,
 	}}}
 	exited := make(chan struct{})
 	l := &Lifecycle{Home: home, Run: cli.run, Exit: func() { close(exited) }}
@@ -151,7 +151,7 @@ func TestQueuedRestartsPollAnnounceAndExit(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(sent) != 1 || !strings.Contains(sent[0]["body"], `"chat_id":-100`) || !strings.Contains(sent[0]["body"], `"message_thread_id":5`) || !strings.Contains(sent[0]["body"], "Restarted daemon \\u0026lt;1\\u0026gt;") {
+	if len(sent) != 1 || !strings.Contains(sent[0]["body"], `"chat_id":-100`) || !strings.Contains(sent[0]["body"], `"message_thread_id":5`) || !strings.Contains(sent[0]["body"], "Restarted scheduler \\u0026lt;1\\u0026gt;") {
 		t.Fatalf("only the allowlisted announcement goes out, escaped: %v", sent)
 	}
 }

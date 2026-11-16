@@ -178,7 +178,7 @@ deploy: build-release go-install install
 safe-deploy: build-release go-install install
     ~/.local/bin/zdx service restart all --queue
 
-# Signed like `zdx` (the daemon's jobs run in it) so macOS TCC grants survive rebuilds; signed under a temp name, then renamed
+# Signed like `zdx` (the scheduler's jobs run in it) so macOS TCC grants survive rebuilds; signed under a temp name, then renamed
 # Build zdx-go (Mini App embedded) into ~/.local/bin/zdx-go, the path the bot service runs and `zdx` execs
 go-install:
     @mkdir -p ~/.local/bin

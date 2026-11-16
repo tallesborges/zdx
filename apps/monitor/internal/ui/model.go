@@ -182,7 +182,7 @@ func (m *Model) applyResult(r resultMsg) tea.Cmd {
 	case data.Workspaces:
 		transcript.CleanAll(&v)
 		m.config.set(v)
-	case data.DaemonJobs:
+	case data.SchedulerJobs:
 		transcript.CleanAll(&v)
 		m.jobs.set(v)
 	case source.LogTail:

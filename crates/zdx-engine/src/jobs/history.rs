@@ -289,7 +289,7 @@ mod tests {
         JobRunRecord {
             job: job.to_string(),
             run_id: run_id.map(str::to_string),
-            trigger: RunTrigger::Daemon,
+            trigger: RunTrigger::Scheduler,
             scheduled_for: None,
             thread_id: run_id.map(|id| format!("job-{job}-{id}")),
             attempt,
@@ -415,7 +415,8 @@ mod tests {
         assert!(section.starts_with("# Previous Runs of This Job"));
         assert!(section.contains("never authorizes a new side effect"));
         assert!(
-            section.contains("- 2026-01-01 08:01 UTC · daemon · succeeded · thread job-alerts-r1")
+            section
+                .contains("- 2026-01-01 08:01 UTC · scheduler · succeeded · thread job-alerts-r1")
         );
         assert!(section.contains(
             "  - posted a message (message 70, https://t.me/c/100/7/70) · conversation telegram--100-topic-7 · 1 user message there since"

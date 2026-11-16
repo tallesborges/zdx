@@ -16,12 +16,13 @@ import (
 	"time"
 )
 
-// Trigger is what started a run.
+// Trigger is what started a run. Runs from before the scheduler was
+// renamed say `daemon`; they are read and shown as stored.
 type Trigger string
 
 const (
-	TriggerManual Trigger = "manual"
-	TriggerDaemon Trigger = "daemon"
+	TriggerManual    Trigger = "manual"
+	TriggerScheduler Trigger = "scheduler"
 )
 
 // Outcome is the result of an attempt or an occurrence.
@@ -208,7 +209,7 @@ func (h Home) ReadClaim(job, key string) (*Claim, error) {
 	return &c, nil
 }
 
-// AllClaims scans every claim of every job: call it at daemon start and on
+// AllClaims scans every claim of every job: call it at scheduler start and on
 // its periodic rescan, not per tick. Unreadable claims are skipped.
 func (h Home) AllClaims(log *slog.Logger) ([]Claim, error) {
 	entries, err := os.ReadDir(h.stateDir())

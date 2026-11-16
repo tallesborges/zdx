@@ -2,8 +2,8 @@
 // orchestrator socket; with CLIFallback they come from `zdx views` while the
 // service is down. Subscription quotas are read here directly (shared quota
 // package: oauth.json read-only, then each provider over HTTPS), with or
-// without the service. Service state and daemon jobs come from their
-// read-only CLI JSON (`zdx service status --json`, `zdx jobs list --daemon
+// without the service. Service state and scheduler jobs come from their
+// read-only CLI JSON (`zdx service status --json`, `zdx jobs list --scheduler
 // --json`). Logs are read from the rolling log files. Nothing here writes,
 // starts, or stops anything.
 package source
@@ -191,13 +191,13 @@ func (s *Source) Services(ctx context.Context) (data.ServiceStatus, error) {
 	return decode[data.ServiceStatus](out, "service status")
 }
 
-// Jobs runs `zdx jobs list --daemon --json`.
-func (s *Source) Jobs(ctx context.Context) (data.DaemonJobs, error) {
-	out, err := s.run(ctx, nil, "jobs", "list", "--daemon", "--json")
+// Jobs runs `zdx jobs list --scheduler --json`.
+func (s *Source) Jobs(ctx context.Context) (data.SchedulerJobs, error) {
+	out, err := s.run(ctx, nil, "jobs", "list", "--scheduler", "--json")
 	if err != nil {
-		return data.DaemonJobs{}, err
+		return data.SchedulerJobs{}, err
 	}
-	return decode[data.DaemonJobs](out, "daemon jobs")
+	return decode[data.SchedulerJobs](out, "scheduler jobs")
 }
 
 // Snapshot is the `monitor_snapshot` view.

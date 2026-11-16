@@ -58,7 +58,7 @@ func homeWithJobs(t *testing.T) string {
 
 func TestListJSONMergesStatusAndRustSettings(t *testing.T) {
 	home := homeWithJobs(t)
-	bin, dir := fakeResolve(t, `{"daemon":null,"results":[{"settings":`+settings+`,"error":null}]}`)
+	bin, dir := fakeResolve(t, `{"scheduler":null,"results":[{"settings":`+settings+`,"error":null}]}`)
 	r := zdxJobs(t, home, "--root", "/caller", "--zdx", bin, "list", "--json")
 	if r.code != 0 {
 		t.Fatal(r)
@@ -93,34 +93,34 @@ func TestListJSONMergesStatusAndRustSettings(t *testing.T) {
 	}
 }
 
-func TestListDaemonPassesTheContextThroughAndSurvivesAResolveFailure(t *testing.T) {
+func TestListSchedulerPassesTheContextThroughAndSurvivesAResolveFailure(t *testing.T) {
 	home := homeWithJobs(t)
-	daemon := `{"status":"unavailable","reason":"daemon is not running"}`
-	bin, dir := fakeResolve(t, `{"daemon":`+daemon+`,"results":[{"settings":null,"error":"daemon settings unavailable: daemon is not running"}]}`)
-	r := zdxJobs(t, home, "--zdx", bin, "list", "--daemon", "--json")
+	scheduler := `{"status":"unavailable","reason":"scheduler is not running"}`
+	bin, dir := fakeResolve(t, `{"scheduler":`+scheduler+`,"results":[{"settings":null,"error":"scheduler settings unavailable: scheduler is not running"}]}`)
+	r := zdxJobs(t, home, "--zdx", bin, "list", "--scheduler", "--json")
 	var view struct {
-		Daemon json.RawMessage
-		Jobs   []map[string]any
-		Error  *string
+		Scheduler json.RawMessage
+		Jobs      []map[string]any
+		Error     *string
 	}
 	var compact bytes.Buffer
-	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &view) != nil || json.Compact(&compact, view.Daemon) != nil || compact.String() != daemon ||
-		len(view.Jobs) != 2 || view.Jobs[0]["error"] != "daemon settings unavailable: daemon is not running" || view.Error != nil {
+	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &view) != nil || json.Compact(&compact, view.Scheduler) != nil || compact.String() != scheduler ||
+		len(view.Jobs) != 2 || view.Jobs[0]["error"] != "scheduler settings unavailable: scheduler is not running" || view.Error != nil {
 		t.Fatal(r)
 	}
-	if args, _ := os.ReadFile(filepath.Join(dir, "args")); !strings.HasSuffix(strings.TrimSpace(string(args)), "jobs resolve --daemon") {
+	if args, _ := os.ReadFile(filepath.Join(dir, "args")); !strings.HasSuffix(strings.TrimSpace(string(args)), "jobs resolve --scheduler") {
 		t.Fatal(string(args))
 	}
 
-	broken := zdxJobs(t, home, "--zdx", filepath.Join(t.TempDir(), "missing"), "list", "--daemon", "--json")
-	if broken.code != 0 || !strings.Contains(broken.stdout, `"status": "unavailable"`) || !strings.Contains(broken.stdout, "cannot resolve daemon settings") {
+	broken := zdxJobs(t, home, "--zdx", filepath.Join(t.TempDir(), "missing"), "list", "--scheduler", "--json")
+	if broken.code != 0 || !strings.Contains(broken.stdout, `"status": "unavailable"`) || !strings.Contains(broken.stdout, "cannot resolve scheduler settings") {
 		t.Fatal(broken)
 	}
 }
 
 func TestValidateReportsEveryProblem(t *testing.T) {
 	home := homeWithJobs(t)
-	bin, _ := fakeResolve(t, `{"daemon":null,"results":[{"settings":null,"error":"prepare job run: load subagent 'missing'"}]}`)
+	bin, _ := fakeResolve(t, `{"scheduler":null,"results":[{"settings":null,"error":"prepare job run: load subagent 'missing'"}]}`)
 	r := zdxJobs(t, home, "--zdx", bin, "validate")
 	if r.code != 1 || !strings.Contains(r.stderr, "2 of 2 job(s) failed validation") || !strings.Contains(r.stderr, "- explicit: prepare job run") ||
 		!strings.Contains(r.stderr, "typo (") {
@@ -128,7 +128,7 @@ func TestValidateReportsEveryProblem(t *testing.T) {
 	}
 	ok := t.TempDir()
 	write(t, filepath.Join(ok, "jobs", "explicit.md"), "---\nschedule: \"0 8 * * *\"\n---\nReport.\n", 0o644)
-	bin, _ = fakeResolve(t, `{"daemon":null,"results":[{"settings":`+settings+`,"error":null}]}`)
+	bin, _ = fakeResolve(t, `{"scheduler":null,"results":[{"settings":`+settings+`,"error":null}]}`)
 	r = zdxJobs(t, ok, "--zdx", bin, "validate")
 	if r.code != 0 || !strings.Contains(r.stdout, "Validated 1 job(s).") ||
 		!strings.Contains(r.stdout, "- explicit (user): schedule=0 8 * * *, status=scheduled, grace_secs=600, model=fake:model@low [job], root=/caller [caller], subagent=<default>, timeout_secs=<default>, max_retries=0") {
@@ -140,12 +140,12 @@ func TestRunsFiltersByJobAndFinishedDate(t *testing.T) {
 	home := t.TempDir()
 	write(t, filepath.Join(home, "jobs_runs.jsonl"),
 		`{"job":"morning-report","trigger":"manual","attempt":1,"max_attempts":1,"started_at":"2026-02-11T08:00:00Z","finished_at":"2026-02-11T08:00:01Z","duration_ms":1000,"ok":true,"error":null,"schedule":"0 8 * * *","model":"gemini:gemini-2.5-flash"}
-{"job":"morning-report","run_id":"r2","trigger":"daemon","attempt":1,"max_attempts":1,"started_at":"2026-02-12T08:00:00+00:00","finished_at":"2026-02-12T08:00:01+00:00","duration_ms":1000,"ok":false,"outcome":"failed","error":"boom","scheduled_for":"2026-02-12T08:00:00+00:00"}
+{"job":"morning-report","run_id":"r2","trigger":"scheduler","attempt":1,"max_attempts":1,"started_at":"2026-02-12T08:00:00+00:00","finished_at":"2026-02-12T08:00:01+00:00","duration_ms":1000,"ok":false,"outcome":"failed","error":"boom","scheduled_for":"2026-02-12T08:00:00+00:00"}
 {"job":"other","trigger":"manual","attempt":1,"max_attempts":1,"started_at":"2026-02-11T08:00:00Z","finished_at":"2026-02-11T08:00:01Z","duration_ms":1,"ok":true}
 `, 0o644)
 	r := zdxJobs(t, home, "runs", "morning-report")
 	if r.code != 0 || !strings.Contains(r.stdout, "morning-report | manual | ok | 1000ms | attempt 1/1 | thread -") ||
-		!strings.Contains(r.stdout, "| daemon | failed |") || !strings.Contains(r.stdout, "  error: boom") || strings.Contains(r.stdout, "other") {
+		!strings.Contains(r.stdout, "| scheduler | failed |") || !strings.Contains(r.stdout, "  error: boom") || strings.Contains(r.stdout, "other") {
 		t.Fatal(r)
 	}
 	r = zdxJobs(t, home, "runs", "--date", "2026-02-12", "--json")

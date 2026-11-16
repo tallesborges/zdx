@@ -901,7 +901,7 @@ mod handoff_registry_tests {
         use crate::tools::surface_keeps_background_jobs as keeps;
 
         assert!(keeps(Some("chat")), "interactive TUI outlives the run");
-        assert!(keeps(Some("telegram")), "bot daemon outlives the run");
+        assert!(keeps(Some("telegram")), "bot service outlives the run");
         assert!(keeps(Some("exec")), "exec drains before exiting");
         assert!(!keeps(Some("unknown-surface")));
         assert!(!keeps(None));

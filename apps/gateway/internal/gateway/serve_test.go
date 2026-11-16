@@ -29,7 +29,7 @@ case "$*" in
 ` + settingsJSON + `
 JSON
 ;;
-*"service run-queued-restart --json"*) echo '{"status":"done","restart_bot":true,"restarted":["daemon"],"thread_id":"telegram--100-topic-5","message":"Restarted daemon"}' ;;
+*"service run-queued-restart --json"*) echo '{"status":"done","restart_bot":true,"restarted":["scheduler"],"thread_id":"telegram--100-topic-5","message":"Restarted scheduler"}' ;;
 *) echo "unexpected $*" >&2; exit 3 ;;
 esac
 `
@@ -102,7 +102,7 @@ func TestServeLifecycleIsolated(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("no exit")
 	}
-	if s := sent(); len(s) != 1 || !strings.Contains(s[0], "Restarted daemon") || !strings.Contains(s[0], `"message_thread_id":5`) {
+	if s := sent(); len(s) != 1 || !strings.Contains(s[0], "Restarted scheduler") || !strings.Contains(s[0], `"message_thread_id":5`) {
 		t.Fatalf("the restart is announced in its thread: %v", s)
 	}
 	if _, err := os.Stat(filepath.Join(home, "run", "bot.pid")); !os.IsNotExist(err) {

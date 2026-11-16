@@ -1,13 +1,13 @@
-//! Where the scheduled jobs daemon runs, and the settings it
+//! Where the jobs scheduler runs, and the settings it
 //! resolves for each job.
 //!
-//! Surfaces must show the daemon's context, never their own working
+//! Surfaces must show the scheduler's context, never their own working
 //! directory. The context comes from one of two sources, reported as-is:
-//! - `Running`: the live daemon (the Go jobs program) wrote
-//!   `run/daemon.context.json` at start, and its PID still owns the daemon
+//! - `Running`: the live scheduler (the Go jobs program) wrote
+//!   `run/scheduler.context.json` at start, and its PID still owns the scheduler
 //!   PID file.
 //! - `Installed`: the launchd plist, which applies at the next start. Used when
-//!   the daemon is stopped, or running without a context record (an older
+//!   the scheduler is stopped, or running without a context record (an older
 //!   build).
 //!
 //! Otherwise the context is `Unavailable` with a reason, and jobs that
@@ -26,60 +26,60 @@ use crate::jobs::{self, InheritedContext, JobRunSettings, JobSpec, SettingOrigin
 use crate::pidfile::{self, ServiceStatus};
 use crate::service::{self, InstalledLaunch, Service};
 
-const RECORD_FILE: &str = "daemon.context.json";
+const RECORD_FILE: &str = "scheduler.context.json";
 
-/// What the running daemon records about itself at start.
+/// What the running scheduler records about itself at start.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct DaemonRecord {
+pub struct SchedulerRecord {
     pub pid: u32,
-    /// `--root` the daemon resolves inherited jobs against.
+    /// `--root` the scheduler resolves inherited jobs against.
     pub root: PathBuf,
-    /// Working directory the daemon loads config layers from.
+    /// Working directory the scheduler loads config layers from.
     pub config_dir: PathBuf,
     pub started_at: DateTime<Utc>,
 }
 
-/// Where the daemon's settings come from.
+/// Where the scheduler's settings come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum DaemonContextSource {
-    /// Reported by the running daemon process.
+pub enum SchedulerContextSource {
+    /// Reported by the running scheduler process.
     Running,
     /// Read from the installed launchd service; applies at its next start.
     Installed,
 }
 
-/// The root and config directory the daemon resolves jobs with.
+/// The root and config directory the scheduler resolves jobs with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct DaemonContext {
-    pub source: DaemonContextSource,
+pub struct SchedulerContext {
+    pub source: SchedulerContextSource,
     pub root: PathBuf,
     pub config_dir: PathBuf,
-    /// PID of the running daemon, if one is running.
+    /// PID of the running scheduler, if one is running.
     pub pid: Option<u32>,
-    /// Start time reported by the running daemon (`Running` only).
+    /// Start time reported by the running scheduler (`Running` only).
     pub started_at: Option<DateTime<Utc>>,
     /// Why the context is not the running process's own report, if it is not.
     pub note: Option<String>,
 }
 
-/// Daemon context, or why it is not known.
+/// Scheduler context, or why it is not known.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
-pub enum DaemonContextState {
-    Available { context: DaemonContext },
+pub enum SchedulerContextState {
+    Available { context: SchedulerContext },
     Unavailable { reason: String },
 }
 
-/// Finds the daemon's context from the PID file, its record, and the
+/// Finds the scheduler's context from the PID file, its record, and the
 /// installed service.
 #[must_use]
-pub fn discover() -> DaemonContextState {
-    let running_pid = match pidfile::status(Service::Daemon.name()) {
+pub fn discover() -> SchedulerContextState {
+    let running_pid = match pidfile::status(Service::Scheduler.name()) {
         ServiceStatus::Running { pid, .. } => Some(pid),
         ServiceStatus::Stopped => None,
     };
-    let installed = service::installed_launch(Service::Daemon)
+    let installed = service::installed_launch(Service::Scheduler)
         .map(|launch| launch.map_err(|err| format!("{err:#}")));
     discover_from(DiscoveryInputs {
         running_pid,
@@ -93,24 +93,24 @@ pub fn discover() -> DaemonContextState {
 #[derive(Debug, Clone)]
 pub struct DiscoveryInputs {
     pub running_pid: Option<u32>,
-    pub record: Option<DaemonRecord>,
+    pub record: Option<SchedulerRecord>,
     /// `None` when no service is installed.
     pub installed: Option<std::result::Result<InstalledLaunch, String>>,
     /// `ZDX_HOME` of the process asking.
     pub zdx_home: PathBuf,
 }
 
-/// Decides the daemon context from already-read inputs.
+/// Decides the scheduler context from already-read inputs.
 #[must_use]
-pub fn discover_from(inputs: DiscoveryInputs) -> DaemonContextState {
-    let unavailable = |reason: String| DaemonContextState::Unavailable { reason };
+pub fn discover_from(inputs: DiscoveryInputs) -> SchedulerContextState {
+    let unavailable = |reason: String| SchedulerContextState::Unavailable { reason };
 
     if let (Some(pid), Some(record)) = (inputs.running_pid, inputs.record.as_ref())
         && record.pid == pid
     {
-        return DaemonContextState::Available {
-            context: DaemonContext {
-                source: DaemonContextSource::Running,
+        return SchedulerContextState::Available {
+            context: SchedulerContext {
+                source: SchedulerContextSource::Running,
                 root: record.root.clone(),
                 config_dir: record.config_dir.clone(),
                 pid: Some(pid),
@@ -122,23 +122,25 @@ pub fn discover_from(inputs: DiscoveryInputs) -> DaemonContextState {
 
     let note = match inputs.running_pid {
         Some(pid) => format!(
-            "daemon PID {pid} is running but did not report its settings (it predates \
+            "scheduler PID {pid} is running but did not report its settings (it predates \
              this report); showing the installed service, which applies at its next start"
         ),
-        None => "daemon is not running; showing the installed service, which applies when \
+        None => "scheduler is not running; showing the installed service, which applies when \
                  it starts"
             .to_string(),
     };
     let launch = match inputs.installed {
         Some(Ok(launch)) => launch,
-        Some(Err(err)) => return unavailable(format!("cannot read the daemon service: {err}")),
+        Some(Err(err)) => return unavailable(format!("cannot read the scheduler service: {err}")),
         None => {
             return unavailable(match inputs.running_pid {
                 Some(pid) => format!(
-                    "daemon PID {pid} is running but did not report its settings, and no \
-                     daemon service is installed"
+                    "scheduler PID {pid} is running but did not report its settings, and no \
+                     scheduler service is installed"
                 ),
-                None => "daemon is not running and no daemon service is installed".to_string(),
+                None => {
+                    "scheduler is not running and no scheduler service is installed".to_string()
+                }
             });
         }
     };
@@ -146,14 +148,14 @@ pub fn discover_from(inputs: DiscoveryInputs) -> DaemonContextState {
         && home != &inputs.zdx_home
     {
         return unavailable(format!(
-            "the daemon service uses ZDX_HOME {}, but this process uses {}",
+            "the scheduler service uses ZDX_HOME {}, but this process uses {}",
             home.display(),
             inputs.zdx_home.display()
         ));
     }
-    DaemonContextState::Available {
-        context: DaemonContext {
-            source: DaemonContextSource::Installed,
+    SchedulerContextState::Available {
+        context: SchedulerContext {
+            source: SchedulerContextSource::Installed,
             root: launch.root,
             config_dir: launch.working_directory,
             pid: inputs.running_pid,
@@ -185,37 +187,39 @@ impl From<Result<JobRunSettings>> for JobResolution {
     }
 }
 
-/// Resolves `jobs` the way the scheduled daemon resolves them: inherited
-/// values come from `daemon`'s root and config directory. When the context
+/// Resolves `jobs` the way the scheduler resolves them: inherited
+/// values come from `scheduler`'s root and config directory. When the context
 /// is unavailable or its config fails to load, a job without its own `root`
 /// stays unresolved with that reason.
 #[must_use]
-pub fn resolve(daemon: &DaemonContextState, jobs: &[JobSpec]) -> Vec<JobResolution> {
-    let config = match daemon {
-        DaemonContextState::Available { context } => Some(
+pub fn resolve(scheduler: &SchedulerContextState, jobs: &[JobSpec]) -> Vec<JobResolution> {
+    let config = match scheduler {
+        SchedulerContextState::Available { context } => Some(
             Config::load_layered(&paths::config_layer_paths_for(&context.config_dir))
-                .map_err(|err| format!("load daemon config: {err:#}")),
+                .map_err(|err| format!("load scheduler config: {err:#}")),
         ),
-        DaemonContextState::Unavailable { .. } => None,
+        SchedulerContextState::Unavailable { .. } => None,
     };
-    let missing = match (daemon, &config) {
-        (DaemonContextState::Unavailable { reason }, _) => {
-            Some(format!("daemon settings unavailable: {reason}"))
+    let missing = match (scheduler, &config) {
+        (SchedulerContextState::Unavailable { reason }, _) => {
+            Some(format!("scheduler settings unavailable: {reason}"))
         }
         (_, Some(Err(err))) => Some(err.clone()),
         _ => None,
     };
     jobs.iter()
         .map(|job| {
-            let inherited = match (daemon, &config, &missing) {
-                (DaemonContextState::Available { context }, Some(Ok(config)), None) => {
+            let inherited = match (scheduler, &config, &missing) {
+                (SchedulerContextState::Available { context }, Some(Ok(config)), None) => {
                     Ok(InheritedContext {
                         config,
                         root: &context.root,
-                        root_origin: SettingOrigin::Daemon,
+                        root_origin: SettingOrigin::Scheduler,
                     })
                 }
-                (_, _, reason) => Err(reason.as_deref().unwrap_or("daemon settings unavailable")),
+                (_, _, reason) => Err(reason
+                    .as_deref()
+                    .unwrap_or("scheduler settings unavailable")),
             };
             jobs::resolve_run_from(inherited, job)
                 .map(|run| run.settings)
@@ -228,7 +232,7 @@ fn record_path() -> PathBuf {
     paths::zdx_home().join("run").join(RECORD_FILE)
 }
 
-fn read_record_at(path: &Path) -> Option<DaemonRecord> {
+fn read_record_at(path: &Path) -> Option<SchedulerRecord> {
     let text = fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
 }
@@ -248,8 +252,8 @@ mod tests {
         }
     }
 
-    fn record(pid: u32, root: &Path) -> DaemonRecord {
-        DaemonRecord {
+    fn record(pid: u32, root: &Path) -> SchedulerRecord {
+        SchedulerRecord {
             pid,
             root: root.to_path_buf(),
             config_dir: root.to_path_buf(),
@@ -257,10 +261,10 @@ mod tests {
         }
     }
 
-    fn context(state: &DaemonContextState) -> &DaemonContext {
+    fn context(state: &SchedulerContextState) -> &SchedulerContext {
         match state {
-            DaemonContextState::Available { context } => context,
-            DaemonContextState::Unavailable { reason } => panic!("unavailable: {reason}"),
+            SchedulerContextState::Available { context } => context,
+            SchedulerContextState::Unavailable { reason } => panic!("unavailable: {reason}"),
         }
     }
 
@@ -274,7 +278,7 @@ mod tests {
             zdx_home: home.to_path_buf(),
         });
         let context = context(&state);
-        assert_eq!(context.source, DaemonContextSource::Running);
+        assert_eq!(context.source, SchedulerContextSource::Running);
         assert_eq!(context.root, PathBuf::from("/srv/live"));
         assert_eq!(context.pid, Some(42));
         assert!(context.note.is_none());
@@ -291,7 +295,7 @@ mod tests {
                 zdx_home: home.to_path_buf(),
             });
             let context = context(&state);
-            assert_eq!(context.source, DaemonContextSource::Installed);
+            assert_eq!(context.source, SchedulerContextSource::Installed);
             assert_eq!(context.root, PathBuf::from("/srv/installed"));
             assert_eq!(context.pid, Some(42));
             assert!(context.note.as_deref().unwrap().contains("next start"));
@@ -299,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn stopped_daemon_reports_installed_service() {
+    fn stopped_scheduler_reports_installed_service() {
         let home = Path::new("/home/example/.zdx");
         let state = discover_from(DiscoveryInputs {
             running_pid: None,
@@ -308,7 +312,7 @@ mod tests {
             zdx_home: home.to_path_buf(),
         });
         let context = context(&state);
-        assert_eq!(context.source, DaemonContextSource::Installed);
+        assert_eq!(context.source, SchedulerContextSource::Installed);
         assert_eq!(context.pid, None);
         assert!(context.note.as_deref().unwrap().contains("not running"));
     }
@@ -317,8 +321,8 @@ mod tests {
     fn unknown_context_is_unavailable_never_a_fallback() {
         let home = PathBuf::from("/home/example/.zdx");
         let cases = [
-            (None, None, "not running and no daemon service"),
-            (Some(42), None, "no daemon service is installed"),
+            (None, None, "not running and no scheduler service"),
+            (Some(42), None, "no scheduler service is installed"),
             (None, Some(Err("bad plist".to_string())), "bad plist"),
             (
                 None,
@@ -334,10 +338,10 @@ mod tests {
                 zdx_home: home.clone(),
             });
             match state {
-                DaemonContextState::Unavailable { reason } => {
+                SchedulerContextState::Unavailable { reason } => {
                     assert!(reason.contains(expected), "{reason}");
                 }
-                DaemonContextState::Available { .. } => panic!("expected unavailable"),
+                SchedulerContextState::Available { .. } => panic!("expected unavailable"),
             }
         }
     }
@@ -347,9 +351,9 @@ mod tests {
         fs::write(dir.join(".zdx").join("config.toml"), body).unwrap();
     }
 
-    fn available(root: &Path, source: DaemonContextSource) -> DaemonContextState {
-        DaemonContextState::Available {
-            context: DaemonContext {
+    fn available(root: &Path, source: SchedulerContextSource) -> SchedulerContextState {
+        SchedulerContextState::Available {
+            context: SchedulerContext {
                 source,
                 root: root.to_path_buf(),
                 config_dir: root.to_path_buf(),
@@ -370,18 +374,18 @@ mod tests {
     }
 
     #[test]
-    fn jobs_resolve_against_daemon_root_and_config() {
+    fn jobs_resolve_against_scheduler_root_and_config() {
         let _home = crate::test_support::temp_zdx_home();
-        let daemon_root = tempdir().unwrap();
+        let scheduler_root = tempdir().unwrap();
         write_config(
-            daemon_root.path(),
+            scheduler_root.path(),
             "model = \"claude-cli@work:claude-opus-5@high\"\n",
         );
         let own_root = tempdir().unwrap();
         write_config(own_root.path(), "model = \"openai-codex:gpt-5.4@low\"\n");
 
         let resolved = resolve(
-            &available(daemon_root.path(), DaemonContextSource::Running),
+            &available(scheduler_root.path(), SchedulerContextSource::Running),
             &[
                 spec("inherited", None, None),
                 spec("suffixless", Some("claude-cli:claude-sonnet-5"), None),
@@ -391,8 +395,8 @@ mod tests {
         let get = |i: usize| resolved[i].settings.clone().unwrap();
 
         let inherited = get(0);
-        assert_eq!(inherited.root.path, daemon_root.path());
-        assert_eq!(inherited.root.origin, SettingOrigin::Daemon);
+        assert_eq!(inherited.root.path, scheduler_root.path());
+        assert_eq!(inherited.root.origin, SettingOrigin::Scheduler);
         assert_eq!(inherited.model.spec, "claude-cli@work:claude-opus-5@high");
         assert_eq!(inherited.model.account.as_deref(), Some("work"));
         assert_eq!(inherited.model.thinking, "high");
@@ -411,21 +415,21 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_or_broken_daemon_leaves_only_inherited_jobs_unresolved() {
+    fn unavailable_or_broken_scheduler_leaves_only_inherited_jobs_unresolved() {
         let _home = crate::test_support::temp_zdx_home();
         let own_root = tempdir().unwrap();
         let broken_root = tempdir().unwrap();
         write_config(broken_root.path(), "model = [\n");
         let states = [
             (
-                DaemonContextState::Unavailable {
-                    reason: "daemon is not running".to_string(),
+                SchedulerContextState::Unavailable {
+                    reason: "scheduler is not running".to_string(),
                 },
-                "daemon settings unavailable: daemon is not running",
+                "scheduler settings unavailable: scheduler is not running",
             ),
             (
-                available(broken_root.path(), DaemonContextSource::Installed),
-                "load daemon config",
+                available(broken_root.path(), SchedulerContextSource::Installed),
+                "load scheduler config",
             ),
         ];
         for (state, expected) in states {

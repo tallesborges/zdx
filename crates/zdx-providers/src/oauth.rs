@@ -125,7 +125,7 @@ pub struct OAuthCache {
 /// Cross-process guard around read-modify-write access to `oauth.json`.
 ///
 /// Providers rotate the refresh token on every refresh, so two zdx processes
-/// (bot daemon, TUI, subagent runs) refreshing the same account concurrently
+/// (bot service, TUI, subagent runs) refreshing the same account concurrently
 /// would leave the loser persisting a token the provider already invalidated.
 /// The lock also keeps a login/logout from clobbering another account's entry,
 /// since the whole file is rewritten on every change.

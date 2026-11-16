@@ -120,7 +120,7 @@ func (b *Backend) Services(ctx context.Context) (data.ServiceStatus, error) {
 	if b.Scenario == Empty {
 		return data.ServiceStatus{Services: []data.ServiceState{
 			{Service: "bot", Label: "dev.zdx.bot", Status: "stopped"},
-			{Service: "daemon", Label: "dev.zdx.daemon", Status: "stopped"},
+			{Service: "scheduler", Label: "dev.zdx.scheduler", Status: "stopped"},
 			{Service: "orchestrator", Label: "dev.zdx.orchestrator", Status: "stopped"},
 		}}, nil
 	}
@@ -130,7 +130,7 @@ func (b *Backend) Services(ctx context.Context) (data.ServiceStatus, error) {
 	}
 	return data.ServiceStatus{Services: []data.ServiceState{
 		{Service: "bot", Label: "dev.zdx.bot", Installed: true, Status: "running", PID: ptr(uint32(48190)), UptimeSecs: ptr(uint64(3*3600 + 14*60))},
-		{Service: "daemon", Label: "dev.zdx.daemon", Installed: false, Status: "stopped"},
+		{Service: "scheduler", Label: "dev.zdx.scheduler", Installed: false, Status: "stopped"},
 		orch,
 	}, QueuedRestart: []byte("null")}, nil
 }
@@ -390,20 +390,20 @@ func (b *Backend) Workspaces(ctx context.Context) (data.Workspaces, source.Origi
 	}}, source.OriginSocket, nil
 }
 
-// Jobs is `zdx jobs list --daemon --json`.
-func (b *Backend) Jobs(ctx context.Context) (data.DaemonJobs, error) {
+// Jobs is `zdx jobs list --scheduler --json`.
+func (b *Backend) Jobs(ctx context.Context) (data.SchedulerJobs, error) {
 	if err := b.gate(ctx, "jobs", false); err != nil {
-		return data.DaemonJobs{}, err
+		return data.SchedulerJobs{}, err
 	}
 	if b.Scenario == Empty {
-		return data.DaemonJobs{Daemon: data.DaemonContextState{Status: "unavailable", Reason: ptr("daemon is not running and no daemon service is installed")}, Jobs: []data.JobOverview{}}, nil
+		return data.SchedulerJobs{Scheduler: data.SchedulerContextState{Status: "unavailable", Reason: ptr("scheduler is not running and no scheduler service is installed")}, Jobs: []data.JobOverview{}}, nil
 	}
-	root := data.ResolvedRoot{Path: "/Users/example/Documents", Origin: "daemon"}
+	root := data.ResolvedRoot{Path: "/Users/example/Documents", Origin: "scheduler"}
 	model := func(spec, origin string) data.ResolvedModel {
 		return data.ResolvedModel{Spec: spec, Origin: origin, Thinking: "high", ThinkingOrigin: origin}
 	}
-	return data.DaemonJobs{
-		Daemon: data.DaemonContextState{Status: "available", Context: &data.DaemonContext{Source: "running", Root: "/Users/example/Documents", PID: ptr(uint32(47001))}},
+	return data.SchedulerJobs{
+		Scheduler: data.SchedulerContextState{Status: "available", Context: &data.SchedulerContext{Source: "running", Root: "/Users/example/Documents", PID: ptr(uint32(47001))}},
 		Jobs: []data.JobOverview{
 			{Name: "daily-report", Path: "/Users/example/.zdx/jobs/daily-report.md", Schedule: &data.JobSchedule{Kind: "recurring", Cron: ptr("0 8 * * 1-5")}, GraceSecs: ptr(uint32(600)), Status: "scheduled",
 				NextRunAt: ptr(b.at(17*time.Hour + 30*time.Minute)), LastRun: &data.LastRun{Outcome: "succeeded", Trigger: "schedule", FinishedAt: b.at(-6*time.Hour - 28*time.Minute), ThreadID: ptr("job-daily-report-20261114")},

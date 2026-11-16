@@ -51,9 +51,9 @@ pub enum SettingOrigin {
     /// Inherited from the caller's root: the process that resolved the
     /// settings (the `--root` of `zdx jobs attempt` or `zdx jobs resolve`).
     Caller,
-    /// Inherited from the scheduled daemon's root (see
-    /// [`crate::job_daemon`]), whichever process asks.
-    Daemon,
+    /// Inherited from the scheduler's root (see
+    /// [`crate::job_scheduler`]), whichever process asks.
+    Scheduler,
 }
 
 impl SettingOrigin {
@@ -66,7 +66,7 @@ impl SettingOrigin {
             Self::SubagentOverride => "subagent_override",
             Self::Config => "config",
             Self::Caller => "caller",
-            Self::Daemon => "daemon",
+            Self::Scheduler => "scheduler",
         }
     }
 
@@ -74,7 +74,7 @@ impl SettingOrigin {
     /// or its subagent.
     #[must_use]
     pub const fn is_inherited(self) -> bool {
-        matches!(self, Self::Config | Self::Caller | Self::Daemon)
+        matches!(self, Self::Config | Self::Caller | Self::Scheduler)
     }
 }
 
@@ -83,7 +83,7 @@ impl SettingOrigin {
 pub struct ResolvedJobRoot {
     pub path: PathBuf,
     /// `Job` when set in frontmatter, otherwise the inherited context's
-    /// origin (`Caller` or `Daemon`).
+    /// origin (`Caller` or `Scheduler`).
     pub origin: SettingOrigin,
 }
 
@@ -130,7 +130,7 @@ pub struct ResolvedJobRun {
 pub struct InheritedContext<'a> {
     pub config: &'a Config,
     pub root: &'a Path,
-    /// Reported origin of an inherited root: `Caller` or `Daemon`.
+    /// Reported origin of an inherited root: `Caller` or `Scheduler`.
     pub root_origin: SettingOrigin,
 }
 
@@ -390,14 +390,14 @@ mod tests {
             Ok(InheritedContext {
                 config: &config,
                 root: caller.path(),
-                root_origin: SettingOrigin::Daemon,
+                root_origin: SettingOrigin::Scheduler,
             })
         };
 
         let plain = definition(Some("claude-cli:claude-opus-5@low"));
         let run = resolve_run_from(inherited(), &plain).unwrap();
         assert_eq!(run.settings.root.path, caller.path());
-        assert_eq!(run.settings.root.origin, SettingOrigin::Daemon);
+        assert_eq!(run.settings.root.origin, SettingOrigin::Scheduler);
 
         let mut scoped = definition(Some("claude-cli:claude-opus-5@low"));
         scoped.root = Some(declared.path().to_string_lossy().to_string());
@@ -405,10 +405,10 @@ mod tests {
         assert_eq!(run.settings.root.path, declared.path());
         assert_eq!(run.settings.root.origin, SettingOrigin::Job);
 
-        let unknown = Err("daemon not running");
+        let unknown = Err("scheduler not running");
         assert!(resolve_run_from(unknown, &scoped).is_ok());
         let err = resolve_run_from(unknown, &plain).unwrap_err();
-        assert!(format!("{err:#}").contains("daemon not running"));
+        assert!(format!("{err:#}").contains("scheduler not running"));
 
         scoped.root = Some(declared.path().join("gone").to_string_lossy().to_string());
         assert!(resolve_run_from(inherited(), &scoped).is_err());

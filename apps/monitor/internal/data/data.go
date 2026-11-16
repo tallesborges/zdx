@@ -1,6 +1,6 @@
 // Package data holds the JSON bodies the monitor reads, decoded as the
 // engine writes them (views.rs bodies, `zdx service status --json`,
-// `zdx jobs list --daemon --json`), and the quota rows of the shared quota
+// `zdx jobs list --scheduler --json`), and the quota rows of the shared quota
 // package. Types only: every value is derived in Rust or the shared Go
 // module, and the monitor shows it without re-deriving it.
 package data
@@ -224,24 +224,24 @@ type ServiceState struct {
 	UptimeSecs *uint64 `json:"uptime_secs"`
 }
 
-// DaemonJobs is `zdx jobs list --daemon --json` (the Go jobs program): jobs
-// resolved the way the scheduled daemon resolves them.
-type DaemonJobs struct {
-	Daemon DaemonContextState `json:"daemon"`
-	Jobs   []JobOverview      `json:"jobs"`
-	Error  *string            `json:"error"`
+// SchedulerJobs is `zdx jobs list --scheduler --json` (the Go jobs program): jobs
+// resolved the way the scheduled scheduler resolves them.
+type SchedulerJobs struct {
+	Scheduler SchedulerContextState `json:"scheduler"`
+	Jobs      []JobOverview         `json:"jobs"`
+	Error     *string               `json:"error"`
 }
 
-// DaemonContextState is `available` with a context or `unavailable` with
+// SchedulerContextState is `available` with a context or `unavailable` with
 // a reason.
-type DaemonContextState struct {
-	Status  string         `json:"status"`
-	Reason  *string        `json:"reason,omitempty"`
-	Context *DaemonContext `json:"context,omitempty"`
+type SchedulerContextState struct {
+	Status  string            `json:"status"`
+	Reason  *string           `json:"reason,omitempty"`
+	Context *SchedulerContext `json:"context,omitempty"`
 }
 
-// DaemonContext is the root and config the daemon resolves jobs with.
-type DaemonContext struct {
+// SchedulerContext is the root and config the scheduler resolves jobs with.
+type SchedulerContext struct {
 	Source    string  `json:"source"`
 	Root      string  `json:"root"`
 	ConfigDir string  `json:"config_dir"`

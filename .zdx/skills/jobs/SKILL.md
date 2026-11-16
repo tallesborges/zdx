@@ -16,12 +16,12 @@ A job is a headless agent run with no human in the loop. It always produces a vi
 - Keep jobs global-only in `$ZDX_HOME/jobs/` (usually `$HOME/.zdx/jobs/`). `jobs/archive/` holds finished once jobs; do not edit or add files there.
 - One file is one job. Its name is the file stem (no `id` field): `~/.zdx/jobs/morning-report.md` → `morning-report`.
 - Markdown with YAML frontmatter delimited by `---`, then a non-empty prompt body.
-- Write a new or changed file to a temp file in the same directory, then rename it into place. The daemon reads `jobs/` on every tick, so a half-written file would be read as invalid.
+- Write a new or changed file to a temp file in the same directory, then rename it into place. The scheduler reads `jobs/` on every tick, so a half-written file would be read as invalid.
 - Edits apply on the next tick. No restart is needed.
 
 ### Allowed frontmatter keys
 
-- `schedule` (string): 5-field cron (`minute hour day-of-month month day-of-week`) in the daemon's local time. Makes the job recurring.
+- `schedule` (string): 5-field cron (`minute hour day-of-month month day-of-week`) in the scheduler's local time. Makes the job recurring.
 - `run_at` (string): one instant in RFC 3339 **with an explicit offset**, for example `"2026-10-20T09:00:00-03:00"` or `"2026-10-20T12:00:00Z"`. Makes the job a once job. A value without an offset is rejected.
 - `grace_secs` (int, 60 to 604800): how late a run may still start. Defaults: once 6 h, recurring 10 min. Not allowed on a manual job.
 - `model` (string): `provider[@account]:model[@thinking][@fast]`.
@@ -36,7 +36,7 @@ Set `schedule` or `run_at`, never both. Neither means manual only. Do not add ot
 
 - Convert the user's time ("Monday 9am") into an absolute `run_at` with their UTC offset. State the date and offset you chose in your reply.
 - After it runs (or is missed or interrupted), the file moves to `jobs/archive/<name>--<UTC instant>.md`. To run it again, write a new file or set a new `run_at`.
-- If the daemon is down past the grace, the run is recorded as `missed` and is not run late.
+- If the scheduler is down past the grace, the run is recorded as `missed` and is not run late.
 - `zdx jobs run <name>` uses up the scheduled occurrence. Test with `zdx jobs run <name> --keep`, which leaves it scheduled.
 
 ### What runs can repeat
@@ -69,14 +69,14 @@ For Telegram topics, shell reliability, and multi-channel fallback, see `referen
 | Command | Description |
 |---------|-------------|
 | `zdx jobs list [--json]` | Jobs with schedule, status, next run, and last outcome. Invalid files are listed with their error |
-| `zdx jobs list --daemon` | Same, with model and root resolved the way the scheduled daemon resolves them |
+| `zdx jobs list --scheduler` | Same, with model and root resolved the way the scheduler resolves them |
 | `zdx jobs list --archived [--json]` | Finished once jobs in `jobs/archive/`, newest first, with their final outcome |
 | `zdx jobs validate` | Check every job file; reports all problems |
 | `zdx jobs run <name> [--keep]` | Run one job now. `--keep` tests a once job without using it up |
 | `zdx jobs runs [name]` | Run history (`--date`, `--date-start`, `--date-end`, `--json`). Outcomes: `succeeded`, `failed`, `retrying`, `missed`, `interrupted` |
 | `zdx jobs history <name> [--limit N] [--json]` | The job's recent runs (retries grouped), each with its thread and what it posted. Every run gets this list (last 10) in its runtime context, so a prompt can say "check what earlier runs sent" without extra setup |
 | `zdx jobs set-model <name> (<spec>\|--clear)` | Change only the `model:` line |
-| `zdx jobs daemon` | The scheduler (normally run by the `daemon` service) |
+| `zdx jobs scheduler` | The scheduler (normally run by the `scheduler` service) |
 
 **Latest run output:** `zdx jobs runs <name> | tail -2`, then read the thread ID it shows.
 

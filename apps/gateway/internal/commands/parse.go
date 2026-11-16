@@ -50,7 +50,7 @@ type commandDef struct {
 // auto-creation; the menu name is the Command value.
 var commandDefs = []commandDef{
 	{CmdNew, []string{"/new"}, "Start a new conversation"},
-	{CmdRestart, []string{"/restart"}, "Restart bot and daemon (f = force now, q = when idle)"},
+	{CmdRestart, []string{"/restart"}, "Restart bot and scheduler (f = force now, q = when idle)"},
 	{CmdStatus, []string{"/status"}, "Show thread, model, usage, and pricing"},
 	{CmdWhereAmI, []string{"/whereami"}, "Show chat ID, topic ID, and profile/cwd binding"},
 	{CmdWorktree, []string{"/worktree create", "/worktree", "/wt"}, "Enable worktree for this thread"},

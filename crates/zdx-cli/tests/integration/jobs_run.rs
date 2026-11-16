@@ -1,6 +1,6 @@
 //! Tests for the Rust side of jobs, which the Go jobs program runs:
 //! `zdx jobs attempt` (prompt layers, the runtime context, the optional
-//! per-job `root`, the result file), `zdx jobs resolve` (caller and daemon
+//! per-job `root`, the result file), `zdx jobs resolve` (caller and scheduler
 //! settings), and `zdx jobs history`.
 
 use std::fs;
@@ -88,7 +88,8 @@ fn resolve(
     serde_json::from_slice(&output).unwrap()
 }
 
-/// One earlier run of `job` (two attempts) that posted one message.
+/// One earlier run of `job` (two attempts) that posted one message, with
+/// the trigger `daemon` that records had before the scheduler rename.
 fn seed_previous_run(zdx_home: &std::path::Path, job: &str) {
     let attempt = |n: u32, outcome: &str, day: u32| {
         serde_json::json!({
@@ -255,7 +256,7 @@ fn test_jobs_resolve_reports_caller_settings_and_errors() {
             { "job": "broken", "root": "relative/path" },
         ]),
     );
-    assert!(view["daemon"].is_null());
+    assert!(view["scheduler"].is_null());
     let settings = &view["results"][0]["settings"];
     assert_eq!(settings["model"]["spec"], format!("{MOCK_MODEL}@low"));
     assert_eq!(settings["model"]["origin"], "job");
@@ -374,7 +375,7 @@ fn test_jobs_reject_global_model_flag() {
         ));
 }
 
-fn write_daemon_config(root: &std::path::Path, model: &str) {
+fn write_scheduler_config(root: &std::path::Path, model: &str) {
     fs::create_dir_all(root.join(".zdx")).unwrap();
     fs::write(
         root.join(".zdx").join("config.toml"),
@@ -383,43 +384,43 @@ fn write_daemon_config(root: &std::path::Path, model: &str) {
     .unwrap();
 }
 
-fn daemon_resolve(
+fn scheduler_resolve(
     zdx_home: &std::path::Path,
     home: &std::path::Path,
     caller_root: &std::path::Path,
     jobs: serde_json::Value,
 ) -> serde_json::Value {
-    resolve(zdx_home, Some(home), caller_root, &["--daemon"], jobs)
+    resolve(zdx_home, Some(home), caller_root, &["--scheduler"], jobs)
 }
 
-/// The caller's own root and config never stand in for the daemon's.
+/// The caller's own root and config never stand in for the scheduler's.
 #[test]
-fn test_resolve_daemon_uses_running_daemon_context_not_caller_root() {
+fn test_resolve_scheduler_uses_running_scheduler_context_not_caller_root() {
     let zdx_home = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
-    let daemon_root = TempDir::new().unwrap();
-    write_daemon_config(daemon_root.path(), "claude-cli@work:claude-opus-5@high");
+    let scheduler_root = TempDir::new().unwrap();
+    write_scheduler_config(scheduler_root.path(), "claude-cli@work:claude-opus-5@high");
     let caller_root = TempDir::new().unwrap();
-    write_daemon_config(caller_root.path(), "openai-codex:gpt-5.4@low");
+    write_scheduler_config(caller_root.path(), "openai-codex:gpt-5.4@low");
     let scoped_root = TempDir::new().unwrap();
 
     let run = zdx_home.path().join("run");
     fs::create_dir_all(&run).unwrap();
     let pid = std::process::id();
-    fs::write(run.join("daemon.pid"), pid.to_string()).unwrap();
+    fs::write(run.join("scheduler.pid"), pid.to_string()).unwrap();
     fs::write(
-        run.join("daemon.context.json"),
+        run.join("scheduler.context.json"),
         serde_json::json!({
             "pid": pid,
-            "root": daemon_root.path(),
-            "config_dir": daemon_root.path(),
+            "root": scheduler_root.path(),
+            "config_dir": scheduler_root.path(),
             "started_at": "2026-10-12T08:00:00Z",
         })
         .to_string(),
     )
     .unwrap();
 
-    let view = daemon_resolve(
+    let view = scheduler_resolve(
         zdx_home.path(),
         home.path(),
         caller_root.path(),
@@ -432,16 +433,16 @@ fn test_resolve_daemon_uses_running_daemon_context_not_caller_root() {
             },
         ]),
     );
-    assert_eq!(view["daemon"]["status"], "available");
-    assert_eq!(view["daemon"]["context"]["source"], "running");
-    assert_eq!(view["daemon"]["context"]["pid"], pid);
+    assert_eq!(view["scheduler"]["status"], "available");
+    assert_eq!(view["scheduler"]["context"]["source"], "running");
+    assert_eq!(view["scheduler"]["context"]["pid"], pid);
 
     let inherited = &view["results"][0]["settings"];
     assert_eq!(
         inherited["root"]["path"],
-        daemon_root.path().to_string_lossy().as_ref()
+        scheduler_root.path().to_string_lossy().as_ref()
     );
-    assert_eq!(inherited["root"]["origin"], "daemon");
+    assert_eq!(inherited["root"]["origin"], "scheduler");
     assert_eq!(
         inherited["model"]["spec"],
         "claude-cli@work:claude-opus-5@high"
@@ -461,22 +462,22 @@ fn test_resolve_daemon_uses_running_daemon_context_not_caller_root() {
 }
 
 #[test]
-fn test_resolve_daemon_reports_installed_service_when_stopped() {
+fn test_resolve_scheduler_reports_installed_service_when_stopped() {
     let zdx_home = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
-    let daemon_root = TempDir::new().unwrap();
-    write_daemon_config(daemon_root.path(), "claude-cli:claude-sonnet-5@low");
+    let scheduler_root = TempDir::new().unwrap();
+    write_scheduler_config(scheduler_root.path(), "claude-cli:claude-sonnet-5@low");
     let caller_root = TempDir::new().unwrap();
 
     let agents = home.path().join("Library").join("LaunchAgents");
     fs::create_dir_all(&agents).unwrap();
-    let root = daemon_root.path().display();
+    let root = scheduler_root.path().display();
     fs::write(
-        agents.join("dev.zdx.daemon.plist"),
+        agents.join("dev.zdx.scheduler.plist"),
         format!(
             "<plist><dict>\n<key>ProgramArguments</key><array>\n<string>/bin/zsh</string>\n\
              <string>-c</string>\n<string>exec '/bin/zdx' '--root' '{root}' 'jobs' \
-             'daemon'</string>\n</array>\n<key>WorkingDirectory</key>\n<string>{root}</string>\n\
+             'scheduler'</string>\n</array>\n<key>WorkingDirectory</key>\n<string>{root}</string>\n\
              <key>EnvironmentVariables</key><dict>\n<key>ZDX_HOME</key>\n<string>{}</string>\n\
              </dict></dict></plist>\n",
             zdx_home.path().display()
@@ -484,13 +485,13 @@ fn test_resolve_daemon_reports_installed_service_when_stopped() {
     )
     .unwrap();
 
-    let view = daemon_resolve(
+    let view = scheduler_resolve(
         zdx_home.path(),
         home.path(),
         caller_root.path(),
         serde_json::json!([{ "job": "inherited" }]),
     );
-    let context = &view["daemon"]["context"];
+    let context = &view["scheduler"]["context"];
     assert_eq!(context["source"], "installed");
     assert!(context["pid"].is_null());
     assert!(context["note"].as_str().unwrap().contains("not running"));
@@ -500,13 +501,13 @@ fn test_resolve_daemon_reports_installed_service_when_stopped() {
 }
 
 #[test]
-fn test_resolve_daemon_unavailable_never_falls_back_to_caller_root() {
+fn test_resolve_scheduler_unavailable_never_falls_back_to_caller_root() {
     let zdx_home = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
     let caller_root = TempDir::new().unwrap();
     let scoped_root = TempDir::new().unwrap();
 
-    let view = daemon_resolve(
+    let view = scheduler_resolve(
         zdx_home.path(),
         home.path(),
         caller_root.path(),
@@ -515,9 +516,9 @@ fn test_resolve_daemon_unavailable_never_falls_back_to_caller_root() {
             { "job": "scoped", "root": scoped_root.path().display().to_string() },
         ]),
     );
-    assert_eq!(view["daemon"]["status"], "unavailable");
+    assert_eq!(view["scheduler"]["status"], "unavailable");
     assert!(
-        view["daemon"]["reason"]
+        view["scheduler"]["reason"]
             .as_str()
             .unwrap()
             .contains("not running")
@@ -528,7 +529,7 @@ fn test_resolve_daemon_unavailable_never_falls_back_to_caller_root() {
         inherited["error"]
             .as_str()
             .unwrap()
-            .contains("daemon settings unavailable")
+            .contains("scheduler settings unavailable")
     );
     assert_eq!(
         view["results"][1]["settings"]["root"]["path"],
@@ -622,6 +623,8 @@ fn test_jobs_history_groups_attempts_and_lists_posts() {
     assert_eq!(runs[0]["outcome"], "succeeded");
     assert_eq!(runs[0]["attempts"], 2);
     assert_eq!(runs[0]["thread_id"], "job-alerts-earlier");
+    // The seeded records are from before the scheduler rename.
+    assert_eq!(runs[0]["trigger"], "scheduler");
     assert_eq!(
         runs[0]["posts"][0]["target_thread_id"],
         "telegram--100-topic-7"

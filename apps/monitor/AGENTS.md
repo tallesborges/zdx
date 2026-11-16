@@ -16,7 +16,7 @@ Read-only ZDX dashboard in Go with Bubble Tea v2 (`charm.land/bubbletea/v2`, Lip
 - Rust owns every rule: config resolution, usage accounting (`usage_report` stays a Rust view), worker and run state, job status, indexed thread queries, service control. Subscription quotas are the exception: `apps/shared/quota` owns them (`Fetch`, then `Subscriptions` for the rows). Go decodes and lays out what Rust or the shared module returns. Do not port engine rules here; ask for a socket view (with its `zdx views` twin) instead.
 - Views come from the orchestrator socket (`$ZDX_HOME/run/orchestrator.sock`, NDJSON, one request per connection; source of truth `crates/zdx-engine/src/orchestration/protocol.rs` and `views.rs`). The client checks the view capability with a `status` call before every view, as the gateway does. It sends only `status` and view ops.
 - `--cli-fallback` runs views through `zdx --root ROOT views --file -` while the socket has no listener. Off by default: an in-process view refreshes derived caches (thread index, usage cache) in that process. The footer marks such answers `via zdx views`, and `?` help says it is on.
-- Read-only CLI JSON: `zdx service status --json` (service state without the orchestrator; reads pidfiles and launchd) and `zdx jobs list --daemon --json` (`job_daemon::jobs()`). Children get `ZDX_HOME` set to the monitor's home.
+- Read-only CLI JSON: `zdx service status --json` (service state without the orchestrator; reads pidfiles and launchd) and `zdx jobs list --scheduler --json` (`job_scheduler::jobs()`). Children get `ZDX_HOME` set to the monitor's home.
 - Logs: the tail (at most 1 MiB, then the last 2000 lines) of `$ZDX_HOME/logs/zdx.log*`. No view exists for them; no other directory is listed.
 - No directory scans for corpus data and no fallback that invents data. Missing data stays unknown, stale, or an error on screen.
 - Code the Go programs share lives in `apps/shared` (`protocol`, `socket`, `transcript`, `quota`, `version`); coordinate changes there with its owner. Do not import `apps/gateway/internal/...`.
@@ -29,7 +29,7 @@ Read-only ZDX dashboard in Go with Bubble Tea v2 (`charm.land/bubbletea/v2`, Lip
 | Agents | `active_agents` as a tree + `thread_view` transcript (cursor polls, merged as `apps/web` merges) + `i` overlay over `thread_trajectory` | thinking toggles all blocks, not one; no mouse click on a tool; no expand/collapse |
 | Threads | `threads_list` (recent 50, `all`/`workers`) | indexed browse (500 rows, kind/project/text filters, project picker); `o` open JSONL |
 | Services | `zdx service status --json` + socket `status` threads | controls (not built; CLI exists, see below) |
-| Jobs | `zdx jobs list --daemon --json` | model edit, archived list (CLI exists) |
+| Jobs | `zdx jobs list --scheduler --json` | model edit, archived list (CLI exists) |
 | Usage | `usage_report` (`[`/`]` days) + in-process `apps/shared/quota` (`quota.Fetch`, on entry, `Q`, every 5 min) | charts are one sparkline |
 | Logs | rolling log files | target filter picker, copy, line overlay |
 | Background | `monitor_snapshot.background_processes` | detail log tails; kill (CLI exists) |
@@ -78,5 +78,5 @@ Genuinely missing (each needs a JSON CLI or view in Rust):
 - Check real terminal rendering, not only snapshots: run the preview command, or record it with VHS (`unset NO_COLOR` first).
 - Create sockets under `os.MkdirTemp("", ...)` with short names: macOS limits socket paths to 104 bytes.
 - Opt-in checks against a prebuilt binary (never built by the tests). Copy it first so a concurrent cargo build cannot replace it mid-run: `cp ../../target/debug/zdx "$TMPDIR/zdx-test" && ZDX_MONITOR_TEST_ZDX="$TMPDIR/zdx-test" go test -race -run TestReal ./internal/source ./internal/ui`.
-  - `TestRealZdxShapes`: `zdx views`, `service status --json`, `jobs list --daemon --json` in the sandbox home with no service. It also needs `ZDX_MONITOR_TEST_GO`, a prebuilt `zdx-go` (`zdx jobs` execs it).
+  - `TestRealZdxShapes`: `zdx views`, `service status --json`, `jobs list --scheduler --json` in the sandbox home with no service. It also needs `ZDX_MONITOR_TEST_GO`, a prebuilt `zdx-go` (`zdx jobs` execs it).
   - `TestRealServiceTranscript`: seeds thread JSONL (current `ThreadEvent` schema) and a run marker (`agent_activity::RunRecord`, the test's own PID) in a temp home, runs `zdx orchestrator serve` there (env: `PATH`, `TMPDIR`, `LANG`, `LC_*`, then `HOME`/`ZDX_HOME`; no provider, no turn), and checks the full load, the alias `source_id`, `after` deltas, a `tool_running` row, the finished-but-unsaved row, and its completion (merge equals a full load at each step), the trajectory, and the UI model over that backend.

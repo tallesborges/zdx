@@ -144,7 +144,7 @@ func TestQueuedRestartExitLeavesHeldWorkForTheNextProcess(t *testing.T) {
 	waitUntil(t, "the poll to fetch update 9", 5*time.Second, func() bool { return r.tg.times(9) >= 1 })
 	post := r.postFeedback(0)
 	time.Sleep(100 * time.Millisecond)
-	r.check.answer <- `{"status":"done","restart_bot":true,"restarted":["daemon"],"thread_id":null,"message":"Restarted daemon"}`
+	r.check.answer <- `{"status":"done","restart_bot":true,"restarted":["scheduler"],"thread_id":null,"message":"Restarted scheduler"}`
 	select {
 	case err := <-r.done:
 		if err != ErrExitRequested {

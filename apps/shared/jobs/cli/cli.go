@@ -5,7 +5,7 @@
 // each attempt's agent and for settings resolution.
 //
 // Usage: zdx-go jobs [--root ROOT] [--system-prompt TEXT] [--no-thread]
-// [--thread ID] [--zdx PATH] <list|validate|daemon|runs|set-model|run> ARGS
+// [--thread ID] [--zdx PATH] <list|validate|scheduler|runs|set-model|run> ARGS
 //
 // The ZDX home is $ZDX_HOME, else ~/.zdx. Rust is --zdx, else $ZDX_BIN,
 // else `zdx` on PATH.
@@ -73,7 +73,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if len(rest) == 0 {
-		fmt.Fprintln(stderr, "zdx-go jobs: missing subcommand (list, validate, daemon, runs, set-model, run)")
+		fmt.Fprintln(stderr, "zdx-go jobs: missing subcommand (list, validate, scheduler, runs, set-model, run)")
 		return 2
 	}
 	home, err := zdxHome()
@@ -85,7 +85,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		log: slog.New(slog.NewTextHandler(stderr, nil))}
 	sub, subArgs := rest[0], rest[1:]
 	commands := map[string]func([]string) error{
-		"list": a.list, "validate": a.validate, "daemon": a.daemon, "runs": a.runs,
+		"list": a.list, "validate": a.validate, "scheduler": a.scheduler, "runs": a.runs,
 		"set-model": a.setModel, "run": a.runJob,
 	}
 	cmd, ok := commands[sub]
@@ -336,18 +336,18 @@ func sortOverviews(out []overview) {
 }
 
 func (a *app) list(args []string) error {
-	f, err := parseFlags(args, []string{"json", "daemon", "archived"}, nil, 0)
+	f, err := parseFlags(args, []string{"json", "scheduler", "archived"}, nil, 0)
 	if err != nil {
 		return err
 	}
 	asJSON := f.bools["json"]
 	switch {
-	case f.bools["daemon"] && f.bools["archived"]:
-		return usagef("--daemon and --archived cannot be used together")
+	case f.bools["scheduler"] && f.bools["archived"]:
+		return usagef("--scheduler and --archived cannot be used together")
 	case f.bools["archived"]:
 		return a.listArchived(asJSON)
-	case f.bools["daemon"]:
-		return a.listDaemon(asJSON)
+	case f.bools["scheduler"]:
+		return a.listScheduler(asJSON)
 	}
 	cat, err := jobs.ReadCatalog(a.home)
 	if err != nil {
@@ -425,15 +425,15 @@ func (a *app) listArchived(asJSON bool) error {
 	return nil
 }
 
-// daemonJobs is `zdx jobs list --daemon --json`.
-type daemonJobs struct {
-	Daemon json.RawMessage `json:"daemon"`
-	Jobs   []overview      `json:"jobs"`
-	Error  *string         `json:"error"`
+// schedulerJobs is `zdx jobs list --scheduler --json`.
+type schedulerJobs struct {
+	Scheduler json.RawMessage `json:"scheduler"`
+	Jobs      []overview      `json:"jobs"`
+	Error     *string         `json:"error"`
 }
 
-func (a *app) listDaemon(asJSON bool) error {
-	view := daemonJobs{Jobs: []overview{}}
+func (a *app) listScheduler(asJSON bool) error {
+	view := schedulerJobs{Jobs: []overview{}}
 	cat, catErr := jobs.ReadCatalog(a.home)
 	var resolve []jobs.ResolveJob
 	if catErr == nil {
@@ -442,13 +442,13 @@ func (a *app) listDaemon(asJSON bool) error {
 	reply, err := a.engine().Resolve(context.Background(), resolve, true, false)
 	switch {
 	case err != nil:
-		reason := "cannot resolve daemon settings: " + err.Error()
-		view.Daemon, _ = json.Marshal(map[string]string{"status": "unavailable", "reason": reason})
+		reason := "cannot resolve scheduler settings: " + err.Error()
+		view.Scheduler, _ = json.Marshal(map[string]string{"status": "unavailable", "reason": reason})
 		if catErr == nil {
 			view.Jobs = a.overviews(&cat, nil, reason)
 		}
 	default:
-		view.Daemon = reply.Daemon
+		view.Scheduler = reply.Scheduler
 		if catErr == nil {
 			view.Jobs = a.overviews(&cat, reply.Results, "")
 		}
@@ -470,18 +470,18 @@ func (a *app) listDaemon(asJSON bool) error {
 			Note   *string `json:"note"`
 		} `json:"context"`
 	}
-	_ = json.Unmarshal(view.Daemon, &state)
+	_ = json.Unmarshal(view.Scheduler, &state)
 	if state.Status == "available" {
-		source := "running daemon"
+		source := "running scheduler"
 		if state.Context.Source == "installed" {
-			source = "installed daemon service"
+			source = "installed scheduler service"
 		}
-		fmt.Fprintf(a.stdout, "Daemon: %s, root %s\n", source, state.Context.Root)
+		fmt.Fprintf(a.stdout, "Scheduler: %s, root %s\n", source, state.Context.Root)
 		if state.Context.Note != nil {
 			fmt.Fprintf(a.stdout, "Note: %s\n", *state.Context.Note)
 		}
 	} else {
-		fmt.Fprintf(a.stdout, "Daemon: unavailable (%s)\n", state.Reason)
+		fmt.Fprintf(a.stdout, "Scheduler: unavailable (%s)\n", state.Reason)
 	}
 	if view.Error != nil {
 		return errors.New(*view.Error)
@@ -750,9 +750,9 @@ func (a *app) runJob(args []string) error {
 	return runner.Run(req)
 }
 
-// ---- daemon ----
+// ---- scheduler ----
 
-func (a *app) daemon(args []string) error {
+func (a *app) scheduler(args []string) error {
 	f, err := parseFlags(args, nil, []string{"poll-interval-secs"}, 0)
 	if err != nil {
 		return err
@@ -771,9 +771,9 @@ func (a *app) daemon(args []string) error {
 	}
 	configDir, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("read daemon working directory: %w", err)
+		return fmt.Errorf("read scheduler working directory: %w", err)
 	}
-	files, err := jobs.AcquireDaemon(a.home, a.g.root, configDir)
+	files, err := jobs.AcquireScheduler(a.home, a.g.root, configDir)
 	if err != nil {
 		return err
 	}
@@ -788,10 +788,10 @@ func (a *app) daemon(args []string) error {
 	if err := s.Start(time.Now()); err != nil {
 		return err
 	}
-	a.log.Info("Jobs daemon started", "root", a.g.root, "poll_secs", int(poll.Seconds()), "since", s.State().Since)
+	a.log.Info("Jobs scheduler started", "root", a.g.root, "poll_secs", int(poll.Seconds()), "since", s.State().Since)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	s.Loop(ctx, poll)
-	a.log.Info("Jobs daemon stopped")
+	a.log.Info("Jobs scheduler stopped")
 	return nil
 }
