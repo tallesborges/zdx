@@ -2211,6 +2211,9 @@ fn prepare_ordinary_turn(
             replay.trailing_note.as_deref(),
         )?;
     }
+    if let Err(err) = &prepared {
+        record_failure(&mut thread, err);
+    }
     let (config, prompt) = prepared?;
     Ok(ReadyOrdinaryTurn {
         run_lease,
@@ -2220,6 +2223,15 @@ fn prepare_ordinary_turn(
         thread,
         messages,
     })
+}
+
+/// Saves why a turn that could not start failed, as the agent's own
+/// failures are saved (a `turn_failed` notice).
+fn record_failure(thread: &mut Thread, err: &anyhow::Error) {
+    let notice = thread_persistence::ThreadEvent::turn_failed(&format!("{err:#}"));
+    if let Err(write_err) = thread.append(&notice) {
+        tracing::warn!(thread = %thread.id, err = %format!("{write_err:#}"), "Failed to save the turn failure");
+    }
 }
 
 /// The drain's lease for this thread, else a lease of the turn's own: this
@@ -2299,6 +2311,9 @@ fn prepare_profile_turn(
             .and_then(|prepared| prepared.runtime_context.as_ref()),
         replay.trailing_note.as_deref(),
     )?;
+    if let Err(err) = &prepared {
+        record_failure(&mut thread, err);
+    }
     let prepared = prepared?;
     Ok(ReadyTurn {
         run_lease,
@@ -2322,6 +2337,42 @@ mod tests {
 
     /// Texts each fake turn received, in run order.
     type Seen = Arc<StdMutex<Vec<String>>>;
+
+    /// A turn that cannot start keeps the message and saves why, after it.
+    #[test]
+    fn a_turn_that_cannot_start_saves_a_turn_failed_notice() {
+        let home = crate::test_support::temp_zdx_home();
+        let root = home.path().join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut thread = Thread::with_id("broken".to_string()).unwrap();
+        thread
+            .set_model_override(Some("mode:gone".to_string()))
+            .unwrap();
+        let err = prepare_ordinary_turn(
+            "broken",
+            &root,
+            OrdinaryLayer::Exec,
+            Some(("hello".to_string(), &[])),
+            None,
+        )
+        .err()
+        .expect("a mode that does not exist cannot run");
+        let events = thread_persistence::Thread::with_id("broken".to_string())
+            .unwrap()
+            .read_events()
+            .unwrap();
+        let user = events
+            .iter()
+            .position(|event| matches!(event, thread_persistence::ThreadEvent::Message { role, .. } if role == "user"))
+            .expect("the message is recorded");
+        match &events[user + 1..] {
+            [thread_persistence::ThreadEvent::Notice { kind, message, .. }] => {
+                assert_eq!(*kind, zdx_types::NoticeKind::TurnFailed);
+                assert_eq!(*message, format!("{err:#}"));
+            }
+            other => panic!("expected one notice after the message: {other:?}"),
+        }
+    }
 
     /// Worker runner that finishes at once with `done:<prompt>`.
     fn instant_workers() -> (Arc<WorkerManager>, mpsc::UnboundedReceiver<WorkerEvent>) {

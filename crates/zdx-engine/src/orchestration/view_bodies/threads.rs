@@ -929,6 +929,7 @@ fn project_thread(
                     NoticeKind::ContextWindowExceeded => "context_window_exceeded",
                     NoticeKind::OutputLimit => "output_limit",
                     NoticeKind::OutputLoop => "output_loop",
+                    NoticeKind::TurnFailed => "turn_failed",
                 };
                 activity.push(ThreadActivity::Notice {
                     sequence,

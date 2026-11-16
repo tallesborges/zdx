@@ -3446,3 +3446,88 @@ fn a_steer_replays_inside_its_turn_and_leaves_notes_for_the_next_user_message() 
     let thanks = content_texts(messages.last().unwrap());
     assert!(thanks[0].starts_with("<posted_messages>"), "{}", thanks[0]);
 }
+
+#[test]
+fn a_failed_turn_persists_as_a_turn_failed_notice() {
+    use crate::core::events::{AgentEvent, ErrorKind, TurnStatus};
+
+    let finished = |status| AgentEvent::TurnFinished {
+        status,
+        final_text: String::new(),
+        messages: Vec::new(),
+        prior_message_count: 0,
+    };
+    let failed = ThreadEvent::from_agent(&finished(TurnStatus::Failed {
+        kind: ErrorKind::HttpStatus,
+        message: "HTTP 403: client_attestation_denied".to_string(),
+        details: Some("the whole response body".to_string()),
+    }));
+    match failed {
+        Some(ThreadEvent::Notice { kind, message, .. }) => {
+            assert_eq!(kind, zdx_types::NoticeKind::TurnFailed);
+            assert_eq!(message, "HTTP 403: client_attestation_denied");
+        }
+        other => panic!("expected a notice, got {other:?}"),
+    }
+    assert!(matches!(
+        ThreadEvent::from_agent(&finished(TurnStatus::Interrupted)),
+        Some(ThreadEvent::Interrupted { .. })
+    ));
+    assert!(ThreadEvent::from_agent(&finished(TurnStatus::Completed)).is_none());
+}
+
+#[test]
+fn a_turn_failed_notice_is_bounded_and_redacted() {
+    let long = format!("HTTP 500: {}", "é".repeat(2000));
+    let ThreadEvent::Notice { message, .. } = ThreadEvent::turn_failed(&long) else {
+        panic!("not a notice");
+    };
+    assert_eq!(
+        message.chars().count(),
+        super::event::TURN_FAILED_MAX_CHARS + 1
+    );
+    assert!(message.ends_with('…'));
+
+    for (input, kept) in [
+        (
+            "Incorrect API key provided: sk-proj-abcdefgh12345678.",
+            "Incorrect API key provided: [redacted].",
+        ),
+        (
+            "Authorization: Bearer eyJhbGciOi.payload.sig rejected",
+            "Authorization: Bearer [redacted] rejected",
+        ),
+        (
+            "GET https://api.example.test/v1?key=AbCdEf123456 failed",
+            "GET https://api.example.test/v1?key=[redacted] failed",
+        ),
+        (
+            "token 0123456789abcdef0123456789abcdef01234567 expired",
+            "token [redacted] expired",
+        ),
+        (
+            "HTTP 429: rate limited for model gpt-6, retry in 30s",
+            "HTTP 429: rate limited for model gpt-6, retry in 30s",
+        ),
+        (
+            "thread 7b2388ee-f470-48da-afef-c886a1b2c3d4 not found",
+            "thread 7b2388ee-f470-48da-afef-c886a1b2c3d4 not found",
+        ),
+    ] {
+        assert_eq!(super::event::redact_secrets(input), kept, "{input}");
+    }
+}
+
+#[test]
+fn a_turn_failed_notice_is_not_replayed() {
+    let messages = thread_events_to_messages(vec![
+        ThreadEvent::user_message("hi"),
+        ThreadEvent::turn_failed("HTTP 403: denied"),
+        ThreadEvent::user_message("again"),
+    ]);
+    assert!(
+        messages
+            .iter()
+            .all(|m| !format!("{:?}", m.content).contains("denied"))
+    );
+}

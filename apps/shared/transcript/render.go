@@ -377,7 +377,11 @@ func Render(th *Thread, width int, opts Options, md *Cache) ([]string, []ToolRef
 				Tokens(a.InputTokens), Tokens(a.OutputTokens), Tokens(a.CacheReadTokens), Tokens(a.CacheWriteTokens), str(a.Model))))
 		case "notice":
 			gap()
-			lines = append(lines, Warn.Render("! "+a.Kind+": "+OneLine(a.Message)))
+			if a.Kind == "turn_failed" {
+				lines = append(lines, Bad.Render("✗ turn failed: "+OneLine(a.Message)))
+			} else {
+				lines = append(lines, Warn.Render("! "+a.Kind+": "+OneLine(a.Message)))
+			}
 		case "interrupted":
 			gap()
 			lines = append(lines, Bad.Render("⨯ interrupted ("+a.Role+")"))

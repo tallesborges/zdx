@@ -507,6 +507,10 @@ impl ThreadEvent {
                 status: crate::core::events::TurnStatus::Interrupted,
                 ..
             } => Some(Self::interrupted()),
+            AgentEvent::TurnFinished {
+                status: crate::core::events::TurnStatus::Failed { message, .. },
+                ..
+            } => Some(Self::turn_failed(message)),
             // Persist informational notices (refusal, context window
             // exceeded) as a non-replayable thread event so they survive
             // reload but are NEVER re-sent to the provider as part of
@@ -522,6 +526,95 @@ impl ThreadEvent {
             _ => None,
         }
     }
+}
+
+/// Longest error text a `turn_failed` notice keeps, in characters.
+pub const TURN_FAILED_MAX_CHARS: usize = 1000;
+
+impl ThreadEvent {
+    /// The notice saved for a failed turn: the error's message (never its
+    /// `details`, which can hold a whole response body), with credentials
+    /// redacted and cut to [`TURN_FAILED_MAX_CHARS`].
+    #[must_use]
+    pub fn turn_failed(message: &str) -> Self {
+        let mut text = redact_secrets(message.trim());
+        if let Some((cut, _)) = text.char_indices().nth(TURN_FAILED_MAX_CHARS) {
+            text.truncate(cut);
+            text.push('…');
+        }
+        Self::Notice {
+            kind: zdx_types::NoticeKind::TurnFailed,
+            message: text,
+            ts: chrono_timestamp(),
+        }
+    }
+}
+
+/// Key prefixes of the providers and services zdx talks to.
+const SECRET_PREFIXES: [&str; 9] = [
+    "sk-",
+    "xai-",
+    "AIza",
+    "ghp_",
+    "gho_",
+    "ghs_",
+    "github_pat_",
+    "xoxb-",
+    "glpat-",
+];
+
+/// Replaces what looks like a credential with `[redacted]`: the word after
+/// `Bearer`, a word with a known key prefix, a `key=`/`token=` value, and
+/// any word of 40 or more key characters.
+#[must_use]
+pub fn redact_secrets(text: &str) -> String {
+    let is_key_char =
+        |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | '+' | '=');
+    let mut out = String::with_capacity(text.len());
+    let mut after_bearer = false;
+    let mut rest = text;
+    while !rest.is_empty() {
+        let start = rest
+            .find(|c: char| !c.is_whitespace())
+            .unwrap_or(rest.len());
+        out.push_str(&rest[..start]);
+        rest = &rest[start..];
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let word = &rest[..end];
+        rest = &rest[end..];
+        if word.is_empty() {
+            continue;
+        }
+        let core = word.trim_matches(|c: char| !is_key_char(c) || c == '.');
+        let lower = core.to_ascii_lowercase();
+        let assigned = [
+            "key=",
+            "token=",
+            "secret=",
+            "password=",
+            "api_key=",
+            "access_token=",
+        ]
+        .iter()
+        .find_map(|label| lower.find(label).map(|at| at + label.len()))
+        .filter(|at| *at < core.len());
+        let secret = after_bearer
+            || SECRET_PREFIXES
+                .iter()
+                .any(|prefix| core.starts_with(prefix) && core.len() >= prefix.len() + 8)
+            || (core.len() >= 40
+                && core.chars().all(is_key_char)
+                && core.chars().any(|c| c.is_ascii_digit()));
+        after_bearer = lower == "bearer";
+        if secret && !core.is_empty() {
+            out.push_str(&word.replacen(core, "[redacted]", 1));
+        } else if let Some(at) = assigned {
+            out.push_str(&word.replacen(&core[at..], "[redacted]", 1));
+        } else {
+            out.push_str(word);
+        }
+    }
+    out
 }
 
 fn default_interrupted_role() -> String {

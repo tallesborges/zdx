@@ -158,13 +158,14 @@
             {/if}
           {:else if node.activity.type === "notice"}
             {@const n = node.activity}
-            {@const warn = n.kind !== "refusal" && n.kind !== "posted"}
+            {@const failed = n.kind === "refusal" || n.kind === "turn_failed"}
+            {@const warn = !failed && n.kind !== "posted"}
             <div
               class="rounded-md border px-2.5 py-1.5 text-xs"
               class:border-warning-border={warn}
               class:text-warning={warn}
-              class:border-destructive={n.kind === "refusal"}
-              class:text-destructive={n.kind === "refusal"}
+              class:border-destructive={failed}
+              class:text-destructive={failed}
               class:border-border={n.kind === "posted"}
               class:text-muted-foreground={n.kind === "posted"}
             >

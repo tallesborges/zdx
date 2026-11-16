@@ -192,7 +192,8 @@ func (l *live) apply(ev engine.AgentEvent) {
 			l.add(transcript.Activity{Type: "interrupted", Role: "assistant"})
 		case "failed":
 			l.failed = true
-			l.notice("failed", strings.TrimSpace(ev.Status.Kind+": "+ev.Status.Message))
+			// The same notice the engine saves, so the reload shows it alike.
+			l.notice("turn_failed", ev.Status.Message)
 		}
 	}
 }

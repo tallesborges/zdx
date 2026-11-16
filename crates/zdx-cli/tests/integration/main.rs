@@ -35,3 +35,4 @@ mod threads_list_show;
 mod tool_bash;
 mod tool_use_loop;
 mod transcribe;
+mod turn_failed_notice;

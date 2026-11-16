@@ -364,34 +364,34 @@ func TestEnterWhileRunningSteersAndEscInterrupts(t *testing.T) {
 	}
 }
 
-// A failed turn keeps its error on screen after the turn ends and the
-// saved thread, which has no record of the failure, is loaded.
-func TestFailedTurnErrorStaysAfterTheThreadLoads(t *testing.T) {
+// A failed turn shows its error once: live, then from the saved notice
+// after the thread loads; the status line only says it failed.
+func TestFailedTurnErrorShowsOnceAfterTheThreadLoads(t *testing.T) {
 	be := newFake()
 	be.onSubmit = func(_ engine.SubmitRequest, input uint64) []engine.Event {
-		be.thread = transcript.Thread{Cursor: 1, Activity: []transcript.Activity{
+		be.thread = transcript.Thread{Cursor: 2, Activity: []transcript.Activity{
 			{Type: "message", Sequence: 0, Role: "user", Speaker: "you", Text: "hi"},
+			{Type: "notice", Sequence: 1, Kind: "turn_failed", Message: "HTTP 403: client_attestation_denied"},
 		}}
 		return []engine.Event{
 			started(1, input),
-			agent(1, `{"type":"turn_finished","status":{"status":"failed","kind":"provider","message":"HTTP 403: client_attestation_denied"},"final_text":"","messages":[]}`),
+			agent(1, `{"type":"turn_finished","status":{"status":"failed","kind":"http_status","message":"HTTP 403: client_attestation_denied"},"final_text":"","messages":[]}`),
 			ended(1),
 		}
 	}
 	h := start(t, be, Options{Root: "/r"})
 	h.typeEnter("hi")
 	f := checkFrame(t, h.m)
-	if !strings.Contains(f, "client_attestation_denied") {
-		t.Fatalf("no error shown:\n%s", f)
+	if strings.Count(f, "client_attestation_denied") != 1 || !strings.Contains(f, "turn failed (enter retries)") {
+		t.Fatalf("frame:\n%s", f)
 	}
 	if !h.m.failed {
 		t.Fatal("the turn is not marked failed, so enter does not retry")
 	}
-	// The next message clears it.
 	be.onSubmit = nil
 	h.typeEnter("again")
-	if f := checkFrame(t, h.m); strings.Contains(f, "client_attestation_denied") {
-		t.Fatalf("error still shown after a new message:\n%s", f)
+	if f := checkFrame(t, h.m); strings.Contains(f, "enter retries") {
+		t.Fatalf("status still says failed after a new message:\n%s", f)
 	}
 }
 

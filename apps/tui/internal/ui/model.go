@@ -730,10 +730,10 @@ func (m *Model) applyEvent(msg eventMsg) tea.Cmd {
 			if a.Status != nil && a.Status.Status == "interrupted" {
 				m.setNotice("interrupted", true)
 			}
-			if t.failed && a.Status != nil {
-				// The live turn goes once the saved thread loads, and the
-				// thread keeps no record of the failure: say it here.
-				m.setNotice("turn failed: "+strings.TrimSpace(a.Status.Kind+": "+a.Status.Message)+" (enter retries)", false)
+			if t.failed {
+				// The error itself stays in the transcript: the live turn
+				// shows it, then the saved turn_failed notice.
+				m.setNotice("turn failed (enter retries)", false)
 			}
 			if a.FinalText != "" {
 				return tea.Batch(next, m.loadFollowups(a.FinalText))
