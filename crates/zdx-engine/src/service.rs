@@ -27,13 +27,9 @@ pub const SUPERVISOR_ENV: &str = "ZDX_SERVICE_SUPERVISOR";
 pub enum Service {
     Bot,
     /// Runs scheduled jobs (`zdx jobs scheduler`).
-    // A restart request written before the rename names it `daemon`.
-    #[serde(alias = "daemon")]
     Scheduler,
     /// Runs every turn of persistent-profile threads and their workers, and
     /// answers views (`zdx engine serve`).
-    // A restart request written before the rename names it `orchestrator`.
-    #[serde(alias = "orchestrator")]
     Engine,
 }
 
@@ -62,33 +58,6 @@ impl Service {
     /// launchd label for this service.
     pub fn label(self) -> String {
         format!("dev.zdx.{}", self.name())
-    }
-
-    /// The name this service was installed under before it was renamed.
-    /// Only the move off that install reads it ([`retire_legacy`]); remove
-    /// it once no install uses the old name.
-    pub(crate) fn legacy_name(self) -> Option<&'static str> {
-        match self {
-            Self::Scheduler => Some("daemon"),
-            Self::Engine => Some("orchestrator"),
-            Self::Bot => None,
-        }
-    }
-
-    fn legacy_label(self) -> Option<String> {
-        self.legacy_name().map(|name| format!("dev.zdx.{name}"))
-    }
-
-    /// The plist of an install under the old name, when one exists.
-    fn legacy_plist(self) -> Option<PathBuf> {
-        let label = self.legacy_label()?;
-        let path = self.plist_path().with_file_name(format!("{label}.plist"));
-        path.is_file().then_some(path)
-    }
-
-    /// Installed under its name, or still under its old one.
-    fn is_installed(self) -> bool {
-        self.plist_path().is_file() || self.legacy_plist().is_some()
     }
 
     /// `~/Library/LaunchAgents/<label>.plist`
@@ -129,8 +98,6 @@ impl Service {
             "bot" => Ok(vec![Self::Bot]),
             "scheduler" => Ok(vec![Self::Scheduler]),
             "engine" => Ok(vec![Self::Engine]),
-            "daemon" => bail!("the daemon service is now called scheduler; use `scheduler`"),
-            "orchestrator" => bail!("the orchestrator service is now called engine; use `engine`"),
             other => {
                 bail!("unknown service '{other}' (expected: bot, scheduler, engine, all)")
             }
@@ -205,7 +172,7 @@ impl ServiceState {
 
 /// Reads the current state of `service`.
 pub fn state(service: Service) -> ServiceState {
-    let (pid, uptime) = match process_status(service) {
+    let (pid, uptime) = match pidfile::status(service.name()) {
         ServiceStatus::Running { pid, started } => {
             (Some(pid), started.and_then(|s| s.elapsed().ok()))
         }
@@ -213,20 +180,9 @@ pub fn state(service: Service) -> ServiceState {
     };
     ServiceState {
         service,
-        installed: service.is_installed(),
+        installed: service.plist_path().is_file(),
         pid,
         uptime,
-    }
-}
-
-/// The service's process, by its PID file, else by the PID file of a
-/// process still running under the old name.
-fn process_status(service: Service) -> ServiceStatus {
-    match pidfile::status(service.name()) {
-        ServiceStatus::Stopped => service
-            .legacy_name()
-            .map_or(ServiceStatus::Stopped, pidfile::status),
-        running @ ServiceStatus::Running { .. } => running,
     }
 }
 
@@ -540,8 +496,6 @@ pub fn install(service: Service, program: &Path, root: &Path) -> Result<String> 
         fs::create_dir_all(parent)
             .with_context(|| format!("create LaunchAgents dir {}", parent.display()))?;
     }
-    // One install per service: never the old name beside the new one.
-    retire_legacy(service)?;
     // Re-installing over a loaded agent leaves launchd holding the old plist.
     if plist.is_file() {
         let _ = launchctl(&["bootout".into(), service_target(service)]);
@@ -687,14 +641,9 @@ fn preflight(program: &Path, root: &Path) -> Result<Vec<String>> {
 /// # Errors
 /// Returns an error if the plist cannot be removed.
 pub fn uninstall(service: Service) -> Result<String> {
-    let retired = retire_legacy(service)?.is_some();
     let plist = service.plist_path();
     if !plist.is_file() {
-        return Ok(if retired {
-            format!("Uninstalled {service}")
-        } else {
-            format!("{service} is not installed")
-        });
+        return Ok(format!("{service} is not installed"));
     }
     let _ = launchctl(&["bootout".into(), service_target(service)]);
     fs::remove_file(&plist).with_context(|| format!("remove {}", plist.display()))?;
@@ -756,9 +705,7 @@ pub fn restart_many(services: &[Service], force: bool) -> Result<Vec<String>> {
     // Fail before any restart: restarting the bot onto a build that needs a
     // missing service would leave it half deployed.
     for service in services {
-        if !service.is_installed() {
-            require_installed(*service)?;
-        }
+        require_installed(*service)?;
     }
     let mut messages = Vec::new();
     for service in restart_order(services) {
@@ -782,7 +729,7 @@ pub fn restart_many(services: &[Service], force: bool) -> Result<Vec<String>> {
 const ENGINE_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 fn running_pid(service: Service) -> Option<u32> {
-    match process_status(service) {
+    match pidfile::status(service.name()) {
         ServiceStatus::Running { pid, .. } => Some(pid),
         ServiceStatus::Stopped => None,
     }
@@ -929,15 +876,6 @@ fn in_flight_summary(
 }
 
 fn restart_unchecked(service: Service) -> Result<String> {
-    if let Some(root) = retire_legacy(service)?
-        && !service.plist_path().is_file()
-    {
-        install(service, &default_program_for(service), &root)?;
-        return Ok(format!(
-            "Moved {} to {service} and started it",
-            service.legacy_name().unwrap_or_default()
-        ));
-    }
     require_installed(service)?;
     if let Some(root) = outdated_definition(service)? {
         return reinstall(service, &root);
@@ -1253,12 +1191,8 @@ fn wait_for_new_pid(service: Service, old_pid: u32) -> Option<u32> {
 /// bootstrapping into a domain that still holds the old job fails with
 /// `Bootstrap failed: 5: Input/output error`.
 fn wait_until_unloaded(service: Service) {
-    wait_until_target_unloaded(&service_target(service));
-}
-
-fn wait_until_target_unloaded(target: &str) {
     for _ in 0..40 {
-        if !is_target_loaded(target) {
+        if !is_loaded(service) {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
@@ -1266,75 +1200,17 @@ fn wait_until_target_unloaded(target: &str) {
 }
 
 fn is_loaded(service: Service) -> bool {
-    is_target_loaded(&service_target(service))
-}
-
-fn is_target_loaded(target: &str) -> bool {
     Command::new("launchctl")
-        .args(["print", target])
+        .args(["print", &service_target(service)])
         .output()
         .is_ok_and(|out| out.status.success())
 }
 
 fn require_installed(service: Service) -> Result<()> {
     if service.plist_path().is_file() {
-        return Ok(());
-    }
-    if let (Some(_), Some(old)) = (service.legacy_plist(), service.legacy_name()) {
-        bail!(
-            "{service} is still installed under its old name `{old}`; `zdx service restart {service}` moves it"
-        );
-    }
-    bail!("{service} is not installed — run `zdx service install {service}` first")
-}
-
-/// Boots out and removes an install under the service's old name (see
-/// [`Service::legacy_name`]), and gives its log files the new name when
-/// no new ones exist yet. Returns the root it ran with, or `None` when
-/// there is no such install.
-fn retire_legacy(service: Service) -> Result<Option<PathBuf>> {
-    let (Some(plist), Some(label), Some(old)) = (
-        service.legacy_plist(),
-        service.legacy_label(),
-        service.legacy_name(),
-    ) else {
-        return Ok(None);
-    };
-    let launch = fs::read_to_string(&plist)
-        .with_context(|| format!("read {}", plist.display()))
-        .and_then(|text| {
-            parse_launch(&text).with_context(|| format!("parse {}", plist.display()))
-        })?;
-    if let Some(home) = &launch.zdx_home
-        && *home != paths::zdx_home()
-    {
-        bail!(
-            "{old} (now {service}) runs with ZDX_HOME {}, not {}; move it from that home",
-            home.display(),
-            paths::zdx_home().display()
-        );
-    }
-    let target = format!("{}/{label}", domain_target());
-    let _ = launchctl(&["bootout".into(), target.clone()]);
-    wait_until_target_unloaded(&target);
-    fs::remove_file(&plist).with_context(|| format!("remove {}", plist.display()))?;
-    move_legacy_logs(service);
-    Ok(Some(launch.root))
-}
-
-/// Gives the log files of the service's old name the new name, each only
-/// when no file has the new name yet.
-fn move_legacy_logs(service: Service) {
-    let Some(old) = service.legacy_name() else {
-        return;
-    };
-    for err in [false, true] {
-        let ext = if err { "err" } else { "out" };
-        let from = logs_dir().join(format!("{old}.{ext}"));
-        let to = service.log_path(err);
-        if from.is_file() && !to.exists() {
-            let _ = fs::rename(&from, &to);
-        }
+        Ok(())
+    } else {
+        bail!("{service} is not installed — run `zdx service install {service}` first")
     }
 }
 
@@ -1443,70 +1319,6 @@ mod tests {
         );
         assert_eq!(Service::parse_target("all").unwrap(), Service::ALL.to_vec());
         assert!(Service::parse_target("monitor").is_err());
-    }
-
-    #[test]
-    fn the_old_service_names_are_read_but_not_accepted() {
-        let err = Service::parse_target("daemon").unwrap_err().to_string();
-        assert!(err.contains("now called scheduler"), "{err}");
-        assert_eq!(
-            serde_json::from_str::<Vec<Service>>(r#"["bot","daemon"]"#).unwrap(),
-            [Service::Bot, Service::Scheduler]
-        );
-        assert_eq!(
-            serde_json::to_string(&Service::Scheduler).unwrap(),
-            r#""scheduler""#
-        );
-        assert_eq!(Service::Scheduler.legacy_name(), Some("daemon"));
-        assert_eq!(Service::Bot.legacy_name(), None);
-
-        let err = Service::parse_target("orchestrator")
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("now called engine"), "{err}");
-        assert_eq!(
-            serde_json::from_str::<Vec<Service>>(r#"["orchestrator"]"#).unwrap(),
-            [Service::Engine]
-        );
-        assert_eq!(Service::Engine.legacy_name(), Some("orchestrator"));
-    }
-
-    /// While only the process from before the rename runs, clients reach it
-    /// on its old socket.
-    #[test]
-    fn the_engine_client_finds_a_process_under_the_old_name() {
-        use crate::orchestration::EngineClient;
-
-        let home = crate::test_support::temp_zdx_home();
-        assert!(EngineClient::running().is_none());
-        let old = pidfile::write("orchestrator").unwrap();
-        let client = EngineClient::running().expect("the old process runs");
-        assert_eq!(client.socket(), home.path().join("run/orchestrator.sock"));
-        assert_eq!(state(Service::Engine).pid, Some(std::process::id()));
-        let new = pidfile::write(Service::Engine.name()).unwrap();
-        let client = EngineClient::running().expect("the new process runs");
-        assert_eq!(client.socket(), home.path().join("run/engine.sock"));
-        drop((old, new));
-    }
-
-    #[test]
-    fn the_old_logs_move_to_the_new_name_only_when_none_exist() {
-        let _home = crate::test_support::temp_zdx_home();
-        fs::create_dir_all(logs_dir()).unwrap();
-        fs::write(logs_dir().join("daemon.err"), "old err").unwrap();
-        fs::write(logs_dir().join("daemon.out"), "old out").unwrap();
-        fs::write(Service::Scheduler.log_path(false), "new out").unwrap();
-        move_legacy_logs(Service::Scheduler);
-        assert_eq!(
-            fs::read_to_string(Service::Scheduler.log_path(true)).unwrap(),
-            "old err"
-        );
-        assert!(!logs_dir().join("daemon.err").exists());
-        assert_eq!(
-            fs::read_to_string(Service::Scheduler.log_path(false)).unwrap(),
-            "new out"
-        );
-        assert!(logs_dir().join("daemon.out").exists());
     }
 
     #[test]

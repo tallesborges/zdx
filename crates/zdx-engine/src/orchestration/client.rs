@@ -36,25 +36,16 @@ impl EngineClient {
     }
 
     /// A client for the running service, or `None` when it is not running.
-    /// While the process from before the service was renamed still runs,
-    /// the client uses that process's socket.
     #[must_use]
     pub fn running() -> Option<Self> {
         use crate::pidfile::{self, ServiceStatus};
         use crate::service::Service;
 
-        let running = |name| matches!(pidfile::status(name), ServiceStatus::Running { .. });
-        if running(Service::Engine.name()) {
-            return Some(Self::new());
-        }
-        let old = Service::Engine.legacy_name()?;
-        running(old).then(|| {
-            Self::at(
-                crate::config::paths::zdx_home()
-                    .join("run")
-                    .join(format!("{old}.sock")),
-            )
-        })
+        matches!(
+            pidfile::status(Service::Engine.name()),
+            ServiceStatus::Running { .. }
+        )
+        .then(Self::new)
     }
 
     #[must_use]

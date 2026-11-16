@@ -23,10 +23,6 @@ const SERVICE_NAME: &str = "engine";
 /// Returns an error when another instance runs or the socket cannot be bound.
 pub async fn serve(root: &Path) -> Result<()> {
     zdx_engine::pidfile::ensure_unique(SERVICE_NAME)?;
-    // The same service from before the rename (`orchestrator`) also counts.
-    if let Some(pid) = zdx_engine::service::state(zdx_engine::service::Service::Engine).pid {
-        bail!("the engine service is already running (PID {pid}); stop it first");
-    }
     let _pid_guard = zdx_engine::pidfile::write(SERVICE_NAME).context("write engine PID file")?;
     if std::env::var(zdx_engine::service::SUPERVISOR_ENV).as_deref() == Ok("launchd")
         && let Err(err) = zdx_engine::pidfile::mark_supervised(SERVICE_NAME)
