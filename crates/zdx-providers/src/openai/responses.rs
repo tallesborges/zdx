@@ -11,6 +11,7 @@ pub use super::responses_types::{
 };
 use crate::debug_metrics::maybe_wrap_with_metrics;
 use crate::shared::classify_reqwest_error;
+use crate::tool_names::ToolNames;
 use crate::{
     ChatContentBlock, ChatMessage, DebugTrace, ProviderStream, ReasoningBlock, ReplayToken,
     wrap_stream,
@@ -54,7 +55,38 @@ pub async fn send_responses_stream(
     tools: &[ToolDefinition],
     system: Option<&str>,
 ) -> Result<ProviderStream> {
-    let request = build_request_body(config, messages, tools, system, None)?;
+    send_responses_stream_named(
+        provider,
+        http,
+        config,
+        headers,
+        messages,
+        tools,
+        system,
+        ToolNames::default(),
+    )
+    .await
+}
+
+/// [`send_responses_stream`] with the tool names of `names` on the wire:
+/// in the declared tools, in replayed tool calls, and back in streamed ones.
+///
+/// # Errors
+/// Returns an error if the operation fails.
+#[allow(clippy::too_many_arguments)] // the shared call plus its name table
+pub async fn send_responses_stream_named(
+    provider: &str,
+    http: &reqwest::Client,
+    config: &ResponsesConfig,
+    headers: HeaderMap,
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    system: Option<&str>,
+    names: ToolNames,
+) -> Result<ProviderStream> {
+    use futures_util::StreamExt as _;
+
+    let request = build_request_body_named(config, messages, tools, system, None, &names)?;
 
     let url = format!("{}{}", config.base_url, config.path);
 
@@ -84,7 +116,10 @@ pub async fn send_responses_stream(
     let byte_stream = wrap_stream(trace, response.bytes_stream());
     let event_stream = ResponsesSseParser::new(byte_stream, config.model.clone())
         .with_requested_service_tier(config.service_tier.clone());
-
+    if !names.renames() {
+        return Ok(maybe_wrap_with_metrics(event_stream));
+    }
+    let event_stream = event_stream.map(move |event| event.map(|event| names.restore(event)));
     Ok(maybe_wrap_with_metrics(event_stream))
 }
 
@@ -99,16 +134,39 @@ pub fn build_request_body(
     system: Option<&str>,
     previous_response_id: Option<String>,
 ) -> Result<RequestBody> {
-    let input = build_input(messages, system);
+    build_request_body_named(
+        config,
+        messages,
+        tools,
+        system,
+        previous_response_id,
+        &ToolNames::default(),
+    )
+}
+
+/// [`build_request_body`] with the tool names of `names`.
+///
+/// # Errors
+/// Returns an error when there are no input messages to send.
+pub fn build_request_body_named(
+    config: &ResponsesConfig,
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    system: Option<&str>,
+    previous_response_id: Option<String>,
+    names: &ToolNames,
+) -> Result<RequestBody> {
+    let input = build_input_named(messages, system, names);
     if input.is_empty() {
         bail!("No input messages provided for OpenAI request");
     }
 
-    Ok(build_request_body_from_input(
+    Ok(request_body(
         config,
         input,
         tools,
         previous_response_id,
+        names,
     ))
 }
 
@@ -120,10 +178,31 @@ pub(crate) fn build_request_body_from_input(
     tools: &[ToolDefinition],
     previous_response_id: Option<String>,
 ) -> RequestBody {
+    request_body(
+        config,
+        input,
+        tools,
+        previous_response_id,
+        &ToolNames::default(),
+    )
+}
+
+fn request_body(
+    config: &ResponsesConfig,
+    input: Vec<InputItem>,
+    tools: &[ToolDefinition],
+    previous_response_id: Option<String>,
+    names: &ToolNames,
+) -> RequestBody {
     let tool_defs = if tools.is_empty() {
         None
     } else {
-        Some(tools.iter().map(FunctionTool::from).collect())
+        Some(
+            tools
+                .iter()
+                .map(|tool| FunctionTool::named(tool, names.to_wire(&tool.name)))
+                .collect(),
+        )
     };
 
     RequestBody {
@@ -156,6 +235,14 @@ pub(crate) fn build_request_body_from_input(
 }
 
 pub(crate) fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Vec<InputItem> {
+    build_input_named(messages, system, &ToolNames::default())
+}
+
+fn build_input_named(
+    messages: &[ChatMessage],
+    system: Option<&str>,
+    names: &ToolNames,
+) -> Vec<InputItem> {
     let mut input = Vec::new();
     if let Some(prompt) = system {
         input.push(message_item(
@@ -172,13 +259,18 @@ pub(crate) fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Vec
     // the last `user` message"; earlier turns' items are ignored upstream.
     let replay = zdx_types::ReasoningReplay::for_messages(messages);
     for (index, msg) in messages.iter().enumerate() {
-        append_input_for_message(msg, replay.allows(index, msg), &mut input);
+        append_input_for_message(msg, replay.allows(index, msg), names, &mut input);
     }
 
     input
 }
 
-fn append_input_for_message(msg: &ChatMessage, replay_reasoning: bool, input: &mut Vec<InputItem>) {
+fn append_input_for_message(
+    msg: &ChatMessage,
+    replay_reasoning: bool,
+    names: &ToolNames,
+    input: &mut Vec<InputItem>,
+) {
     use crate::MessageContent;
 
     match (&msg.role[..], &msg.content) {
@@ -197,7 +289,7 @@ fn append_input_for_message(msg: &ChatMessage, replay_reasoning: bool, input: &m
             ));
         }
         ("assistant", MessageContent::Blocks(blocks)) => {
-            append_assistant_blocks(blocks, msg.phase.as_deref(), replay_reasoning, input);
+            append_assistant_blocks(blocks, msg.phase.as_deref(), replay_reasoning, names, input);
         }
         ("user", MessageContent::Blocks(blocks)) => append_user_blocks(blocks, input),
         _ => {}
@@ -208,6 +300,7 @@ fn append_assistant_blocks(
     blocks: &[ChatContentBlock],
     explicit_phase: Option<&str>,
     replay_reasoning: bool,
+    names: &ToolNames,
     input: &mut Vec<InputItem>,
 ) {
     let phase = explicit_phase.unwrap_or_else(|| assistant_phase_for_blocks(blocks));
@@ -233,7 +326,7 @@ fn append_assistant_blocks(
                 name,
                 input: arguments,
                 ..
-            } => input.push(function_call_item(id, name, arguments)),
+            } => input.push(function_call_item(id, &names.to_wire(name), arguments)),
             ChatContentBlock::ToolResult(result) => append_tool_result(result, input),
             ChatContentBlock::Image { .. } => {}
         }

@@ -3,6 +3,7 @@
 mod debug_metrics;
 mod debug_trace;
 pub mod thinking_parser;
+pub mod tool_names;
 
 pub mod alibaba;
 pub mod anthropic;

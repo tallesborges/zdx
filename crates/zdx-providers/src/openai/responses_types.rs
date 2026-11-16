@@ -127,12 +127,19 @@ pub struct FunctionTool {
 impl From<&ToolDefinition> for FunctionTool {
     fn from(tool: &ToolDefinition) -> Self {
         // Use lowercase tool names for OpenAI (Anthropic requires PascalCase, others prefer lowercase)
-        let tool = tool.with_lowercase_name();
+        Self::named(tool, tool.name.to_ascii_lowercase())
+    }
+}
+
+impl FunctionTool {
+    /// `tool` declared under its wire `name`.
+    #[must_use]
+    pub fn named(tool: &ToolDefinition, name: String) -> Self {
         Self {
             tool_type: "function",
-            name: tool.name,
-            description: tool.description,
-            parameters: tool.input_schema,
+            name,
+            description: tool.description.clone(),
+            parameters: tool.input_schema.clone(),
             // Disabled: strict mode requires all properties in `required` with nullable types,
             // but Gemini doesn't support `["type", "null"]` syntax. Cross-provider compatibility wins.
             strict: None,

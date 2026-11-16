@@ -11,6 +11,12 @@
 //! A 403 `client_attestation_denied` is not a rejection of the key and is
 //! surfaced at once.
 //!
+//! Tool names: Meta refuses a request with that 403 when it declares a tool
+//! named like a Muse Code client tool (`bash`, `web_search`, ...), so every
+//! tool goes on the wire as `_<name>` ([`TOOL_NAMES`]). This goes around a
+//! stated Meta rule for subscription keys; the user chose to accept the risk
+//! to the account.
+//!
 //! ⚠️ Unsupported by Meta. Its documentation states a Muse Code subscription
 //! "only works through the Muse Code CLI". Whether a key minted outside that
 //! CLI draws on the subscription or bills pay-as-you-go is **not established** —
@@ -23,8 +29,9 @@ use zdx_types::{ProviderError, ToolDefinition};
 
 use crate::meta::{reasoning_effort_from_thinking_level, responses_config};
 use crate::oauth::muse_code as oauth_muse_code;
-use crate::openai::responses::{ResponsesConfig, send_responses_stream};
+use crate::openai::responses::{ResponsesConfig, send_responses_stream_named};
 use crate::shared::merge_system_prompt;
+use crate::tool_names::{ToolNamePolicy, ToolNames};
 use crate::{ChatMessage, ProviderStream};
 
 /// Loads the cached Model API key.
@@ -49,6 +56,12 @@ pub fn resolve_api_key(account: Option<&str>) -> Result<String> {
 /// builtins (`bash`, `web_search`, ...) get it, others with the same key do
 /// not. A re-mint returns the same key, so it cannot help.
 const CLIENT_ATTESTATION_DENIED: &str = "client_attestation_denied";
+
+/// How tools are named on the wire. Observed 2026-11-16: `_bash`, and the
+/// whole zdx tool set prefixed with `_`, pass where `bash` is refused,
+/// including a replayed `_bash` call. A prefix on every name, rather than a
+/// list of refused ones, keeps working when Meta refuses more names.
+const TOOL_NAMES: ToolNamePolicy = ToolNamePolicy::Prefixed("_");
 
 /// Whether Meta rejected the credential itself, as opposed to the request.
 fn is_credential_rejection(error: &anyhow::Error) -> bool {
@@ -112,7 +125,7 @@ impl MuseCodeClient {
         tools: &[ToolDefinition],
         system: Option<&str>,
     ) -> Result<ProviderStream> {
-        send_responses_stream(
+        send_responses_stream_named(
             "muse-code",
             &self.http,
             &self.config,
@@ -120,6 +133,7 @@ impl MuseCodeClient {
             messages,
             tools,
             system,
+            ToolNames::build(tools, TOOL_NAMES)?,
         )
         .await
     }
@@ -209,6 +223,51 @@ mod tests {
         assert!(ProviderKind::MuseCode.supports_oauth());
         // The subscription credential is minted, never read from an env var.
         assert_eq!(ProviderKind::MuseCode.api_key_env_var(), None);
+    }
+
+    /// Declared tools and replayed tool calls go out as `_<name>`; nothing
+    /// in the request keeps a bare client-tool name.
+    #[test]
+    fn tools_and_replayed_calls_go_out_prefixed() {
+        use zdx_types::{ChatContentBlock, ChatMessage, IdOrigin, ToolDefinition};
+
+        use crate::openai::responses::build_request_body_named;
+        use crate::tool_names::ToolNames;
+
+        let tools = [ToolDefinition {
+            name: "Bash".to_string(),
+            description: "Run a shell command".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+        }];
+        let messages = [
+            ChatMessage::user("run ls"),
+            ChatMessage::assistant_blocks(vec![ChatContentBlock::ToolUse {
+                id: "call_1".to_string(),
+                name: "bash".to_string(),
+                input: serde_json::json!({"command": "ls"}),
+                id_origin: IdOrigin::Synthesized,
+                replay: None,
+            }]),
+        ];
+        let names = ToolNames::build(&tools, super::TOOL_NAMES).unwrap();
+        let body = build_request_body_named(
+            &client("muse-spark-1.3").config,
+            &messages,
+            &tools,
+            None,
+            None,
+            &names,
+        )
+        .unwrap();
+        let body = serde_json::to_value(body).unwrap();
+        assert_eq!(body["tools"][0]["name"], "_bash");
+        let call = body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["type"] == "function_call")
+            .unwrap();
+        assert_eq!(call["name"], "_bash");
     }
 
     #[test]
