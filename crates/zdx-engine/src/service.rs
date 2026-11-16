@@ -690,7 +690,8 @@ pub fn restart(service: Service, force: bool) -> Result<String> {
 /// Restarts multiple agents after one shared preflight: every service is
 /// installed, and (unless `force`) nothing would be lost — no agent run is
 /// active and, when the orchestrator service is a target, it has no work in
-/// flight.
+/// flight. A restarted orchestrator service is waited for until it answers
+/// on its socket, before the next service restarts.
 ///
 /// # Errors
 /// Returns an error before changing any service if one is not installed, or
@@ -703,10 +704,60 @@ pub fn restart_many(services: &[Service], force: bool) -> Result<Vec<String>> {
     for service in services {
         require_installed(*service)?;
     }
-    restart_order(services)
-        .into_iter()
-        .map(restart_unchecked)
-        .collect()
+    let mut messages = Vec::new();
+    for service in restart_order(services) {
+        let old_pid = running_pid(service);
+        let mut message = restart_unchecked(service)?;
+        // The new process writes its PID file before it binds the socket, so
+        // without this wait the bot (its preflight, then its first requests)
+        // would find no orchestrator service.
+        if service == Service::Orchestrator
+            && !wait_for_orchestrator(old_pid, ORCHESTRATOR_READY_TIMEOUT)
+        {
+            message = format!(
+                "{message}; it did not answer on its socket within {}s",
+                ORCHESTRATOR_READY_TIMEOUT.as_secs()
+            );
+        }
+        messages.push(message);
+    }
+    Ok(messages)
+}
+
+/// How long a restart waits for the new orchestrator service to answer.
+const ORCHESTRATOR_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn running_pid(service: Service) -> Option<u32> {
+    match pidfile::status(service.name()) {
+        ServiceStatus::Running { pid, .. } => Some(pid),
+        ServiceStatus::Stopped => None,
+    }
+}
+
+/// Waits until an orchestrator process other than `old_pid` answers a
+/// status request on its socket. Returns false after `timeout`.
+fn wait_for_orchestrator(old_pid: Option<u32>, timeout: std::time::Duration) -> bool {
+    use crate::orchestration::OrchestratorClient;
+    use crate::orchestration::protocol::{Reply, Request};
+
+    let deadline = std::time::Instant::now() + timeout;
+    let client = OrchestratorClient::new();
+    loop {
+        let new_process =
+            running_pid(Service::Orchestrator).is_some_and(|pid| Some(pid) != old_pid);
+        if new_process
+            && matches!(
+                client.request(&Request::Status { thread_id: None }),
+                Ok(Reply::Status { .. })
+            )
+        {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
 
 /// The order services restart in: the orchestrator first, the bot last,
@@ -1598,5 +1649,49 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    /// A restart goes on only once a new orchestrator process answers: not
+    /// while nothing listens, not while only the old process (same PID)
+    /// answers, and as soon as a new one does.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_restart_waits_for_a_new_orchestrator_to_answer() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use crate::core::workers::{WorkerManager, WorkerRunRequest};
+        use crate::orchestration::protocol::socket_path;
+        use crate::orchestration::runtime::{TurnRequest, TurnRunner};
+        use crate::orchestration::{Orchestrator, server};
+
+        let _home = crate::test_support::temp_zdx_home();
+        let wait = |old_pid: Option<u32>, timeout: Duration| {
+            tokio::task::spawn_blocking(move || wait_for_orchestrator(old_pid, timeout))
+        };
+        assert!(!wait(None, Duration::from_millis(300)).await.unwrap());
+
+        let pending = wait(None, Duration::from_secs(10));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let (workers, events) = WorkerManager::with_runner(Arc::new(|_: WorkerRunRequest| {
+            Box::pin(async { Ok(String::new()) })
+        }));
+        let runner: TurnRunner = Arc::new(|_: TurnRequest| Box::pin(async {}));
+        let orchestrator = Orchestrator::start_with(workers, events, runner);
+        // As `zdx orchestrator serve`: the PID file first, the socket later.
+        let _pid = pidfile::write(Service::Orchestrator.name()).unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            !pending.is_finished(),
+            "returned before the socket was bound"
+        );
+        tokio::spawn(server::serve(orchestrator, socket_path()));
+        assert!(pending.await.unwrap());
+
+        let this_process = Some(std::process::id());
+        assert!(
+            !wait(this_process, Duration::from_millis(300))
+                .await
+                .unwrap()
+        );
     }
 }
