@@ -238,6 +238,33 @@ pub struct Setting {
     /// workspace layer resolves to.
     pub inherited_value: Option<String>,
     pub inherited_source: Source,
+    /// For the `model_modes` setting: the effective modes, one entry each.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modes: Option<Vec<ModeView>>,
+}
+
+/// One `[[model_modes]]` entry as a settings view shows it.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ModeView {
+    pub name: String,
+    pub description: String,
+    /// The primary spec with its thinking level, as the file states it.
+    pub primary: String,
+    /// The thinking level display name (`off` when the spec has none).
+    pub thinking: String,
+    pub alternatives: Vec<String>,
+}
+
+impl ModeView {
+    fn from_mode(mode: &ModelMode) -> Self {
+        Self {
+            name: mode.name.clone(),
+            description: mode.description.clone(),
+            primary: mode.primary.clone(),
+            thinking: mode.thinking.display_name().to_string(),
+            alternatives: mode.alternatives.clone(),
+        }
+    }
 }
 
 impl Setting {
@@ -290,6 +317,28 @@ pub fn report(current_root: Option<&Path>) -> Result<Vec<WorkspaceReport>> {
             },
         )
         .collect())
+}
+
+/// The global config file's own settings, as every workspace inherits them.
+#[derive(Debug, Clone, Serialize)]
+pub struct GlobalReport {
+    pub path: PathBuf,
+    pub settings: Vec<Setting>,
+    pub error: Option<String>,
+}
+
+/// Loads the settings of the global scope, or the error that prevented it.
+#[must_use]
+pub fn global_report() -> GlobalReport {
+    let (settings, error) = match load_settings(Scope::Global) {
+        Ok(settings) => (settings, None),
+        Err(error) => (Vec::new(), Some(format!("{error:#}"))),
+    };
+    GlobalReport {
+        path: paths::config_path(),
+        settings,
+        error,
+    }
 }
 
 /// Loads the model settings of `scope` from its real config layers.
@@ -357,9 +406,17 @@ pub fn settings_from_layers(
             .and_then(|value| config.resolve_mode_ref(value))
             .and_then(Result::ok)
             .map(str::to_string);
+        let modes = (kind == SettingKind::Modes).then(|| {
+            config
+                .model_modes
+                .iter()
+                .map(ModeView::from_mode)
+                .collect::<Vec<_>>()
+        });
         settings.push(Setting {
             value,
             resolves_to,
+            modes,
             source: Source::classify(effective.sources.source(&key), global, own),
             inherited_value: base.value(&key),
             inherited_source: Source::classify(base.sources.source(&key), global, own),
@@ -730,6 +787,178 @@ pub fn set_setting(path: &Path, key: &str, value: SettingValue<'_>) -> Result<()
             Config::save_model_modes_to(path, modes)
         }
         _ => anyhow::bail!("value does not fit setting {key}"),
+    }
+}
+
+/// How the setting `key` is edited, or `None` when it is not a model setting.
+#[must_use]
+pub fn setting_kind(key: &str) -> Option<SettingKind> {
+    match key {
+        "transcription.model" => Some(SettingKind::Transcription),
+        "speech.model" => Some(SettingKind::Speech),
+        SUBAGENTS_ENABLED_KEY => Some(SettingKind::Toggle),
+        MODEL_MODES_KEY => Some(SettingKind::Modes),
+        _ if Config::EDITABLE_MODEL_FIELDS.contains(&key)
+            || subagent_override_name(key).is_some() =>
+        {
+            Some(SettingKind::Chat)
+        }
+        _ => None,
+    }
+}
+
+/// A parsed new value, owned.
+#[derive(Debug, Clone)]
+pub enum OwnedValue {
+    Spec(String),
+    Enabled(bool),
+    Modes(Vec<ModelMode>),
+}
+
+impl OwnedValue {
+    #[must_use]
+    pub fn as_value(&self) -> SettingValue<'_> {
+        match self {
+            Self::Spec(spec) => SettingValue::Spec(spec),
+            Self::Enabled(enabled) => SettingValue::Enabled(*enabled),
+            Self::Modes(modes) => SettingValue::Modes(modes),
+        }
+    }
+}
+
+/// Parses the text form of a new value for `key`: a spec for model
+/// settings, `on`/`off` for the subagents flag, and a JSON array of
+/// `{name, description, primary, alternatives}` for the mode list.
+///
+/// # Errors
+/// Returns an error for an unknown key or a value that does not fit it.
+pub fn parse_value(key: &str, raw: &str) -> Result<OwnedValue> {
+    let kind = setting_kind(key).with_context(|| format!("not a model setting: {key}"))?;
+    let raw = raw.trim();
+    match kind {
+        SettingKind::Chat | SettingKind::Transcription | SettingKind::Speech => {
+            anyhow::ensure!(
+                !raw.is_empty(),
+                "{key} needs a value; reset it to remove it"
+            );
+            Ok(OwnedValue::Spec(raw.to_string()))
+        }
+        SettingKind::Toggle => match raw {
+            "on" | "true" => Ok(OwnedValue::Enabled(true)),
+            "off" | "false" => Ok(OwnedValue::Enabled(false)),
+            other => anyhow::bail!("{key} is `on` or `off`, not `{other}`"),
+        },
+        SettingKind::Modes => {
+            let mut modes: Vec<ModelMode> =
+                serde_json::from_str(raw).context("model_modes is a JSON array of modes")?;
+            for mode in &mut modes {
+                anyhow::ensure!(
+                    !mode.name.trim().is_empty() && !mode.primary.trim().is_empty(),
+                    "every mode needs a name and a primary model"
+                );
+                mode.thinking = crate::models::ModelSpec::parse(&mode.primary)
+                    .thinking
+                    .unwrap_or_default();
+            }
+            Ok(OwnedValue::Modes(modes))
+        }
+    }
+}
+
+/// A change to one setting of a scope.
+#[derive(Debug, Clone, Copy)]
+pub enum Change<'a> {
+    Set(SettingValue<'a>),
+    /// Remove the key from the scope's own file.
+    Reset,
+}
+
+/// What [`change_setting`] did, or would do on a dry run.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChangeOutcome {
+    pub key: String,
+    /// The file written (or that would be).
+    pub file: PathBuf,
+    pub dry_run: bool,
+    /// Whether the file changes.
+    pub changed: bool,
+    /// Which listed workspaces read the file's value for the key.
+    pub reach: Reach,
+    /// The setting as the scope sees it after the write (not on a dry run).
+    pub setting: Option<Setting>,
+}
+
+/// Applies `change` to `scope`'s own file, after checking that every layer
+/// of the scope still loads with it. Nothing is written on a dry run or when
+/// the check fails. `workspaces` are the ones whose reach is reported.
+///
+/// # Errors
+/// Returns an error for an unknown key, a value that does not fit it, a
+/// change that would break the scope's config, or a failed write.
+pub fn change_setting(
+    scope: Scope<'_>,
+    key: &str,
+    change: Change<'_>,
+    dry_run: bool,
+    workspaces: &[Workspace],
+) -> Result<ChangeOutcome> {
+    anyhow::ensure!(is_setting_key(key), "not a model setting: {key}");
+    let file = scope.file();
+    let layers = match scope {
+        Scope::Global => vec![paths::config_path()],
+        Scope::Workspace(workspace) => layer_chain(&workspace.root),
+    };
+    let check = tempfile::Builder::new()
+        .prefix("zdx-config-check-")
+        .suffix(".toml")
+        .tempfile()
+        .context("create a file to check the change")?;
+    let original = std::fs::read(&file).ok();
+    if let Some(bytes) = &original {
+        std::fs::write(check.path(), bytes).context("copy the config to check the change")?;
+    }
+    apply(check.path(), key, change)?;
+    let checked: Vec<PathBuf> = layers
+        .iter()
+        .map(|layer| {
+            if same_file(layer, &file) {
+                check.path().to_path_buf()
+            } else {
+                layer.clone()
+            }
+        })
+        .collect();
+    Config::load_layered(&checked)
+        .with_context(|| format!("the change would break the config of {}", scope.name()))?;
+    let changed = std::fs::read(check.path()).ok() != original;
+
+    if !dry_run && changed {
+        apply(&file, key, change)?;
+    }
+    let setting = if dry_run {
+        None
+    } else {
+        load_settings(scope)?
+            .into_iter()
+            .find(|setting| setting.key == key)
+    };
+    let reach = reach(&file, &[key.to_string()], workspaces)
+        .remove(key)
+        .unwrap_or_default();
+    Ok(ChangeOutcome {
+        key: key.to_string(),
+        file,
+        dry_run,
+        changed,
+        reach,
+        setting,
+    })
+}
+
+fn apply(path: &Path, key: &str, change: Change<'_>) -> Result<()> {
+    match change {
+        Change::Set(value) => set_setting(path, key, value),
+        Change::Reset => reset_setting(path, key).map(|_| ()),
     }
 }
 

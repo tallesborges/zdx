@@ -259,6 +259,55 @@ func (s *Source) Quotas(ctx context.Context) ([]data.Subscription, Origin, error
 	return quota.Subscriptions(snap), OriginDirect, nil
 }
 
+// Picker runs `zdx helper` for the catalog model picker of root.
+func (s *Source) Picker(ctx context.Context, root string) (data.Picker, error) {
+	req, err := json.Marshal(map[string]string{"op": "catalog", "kind": "picker", "root": root, "scope": "general"})
+	if err != nil {
+		return data.Picker{}, err
+	}
+	out, err := s.run(ctx, req, "helper", "--file", "-")
+	if err != nil {
+		return data.Picker{}, err
+	}
+	reply, err := decode[struct {
+		Body data.Picker `json:"body"`
+	}](out, "model picker")
+	return reply.Body, err
+}
+
+// SettingChange is one change of a model setting.
+type SettingChange struct {
+	Key string
+	// Value is the new value; nil resets the key in the target file.
+	Value *string
+	// Workspace is the workspace root whose overlay is written; empty
+	// writes the global config.
+	Workspace string
+	DryRun    bool
+}
+
+// ChangeSetting runs `zdx config set-setting|reset-setting --json`: Rust
+// checks the change, writes it, and reports where it applies.
+func (s *Source) ChangeSetting(ctx context.Context, ch SettingChange) (data.ChangeOutcome, error) {
+	args := []string{"config", "reset-setting", ch.Key}
+	if ch.Value != nil {
+		args = []string{"config", "set-setting", ch.Key, *ch.Value}
+	}
+	if ch.Workspace == "" {
+		args = append(args, "--global")
+	} else {
+		args = append(args, "--workspace", ch.Workspace)
+	}
+	if ch.DryRun {
+		args = append(args, "--dry-run")
+	}
+	out, err := s.run(ctx, nil, append(args, "--json")...)
+	if err != nil {
+		return data.ChangeOutcome{}, err
+	}
+	return decode[data.ChangeOutcome](out, "setting change")
+}
+
 // Workspaces is the `workspaces` view.
 func (s *Source) Workspaces(ctx context.Context) (data.Workspaces, Origin, error) {
 	return viewAs[data.Workspaces](ctx, s, wire.View{Op: wire.ViewWorkspaces})

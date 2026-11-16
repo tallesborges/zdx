@@ -141,6 +141,8 @@ struct MonitorDailyUsage {
 #[derive(Serialize)]
 pub struct WorkspacesResponse {
     workspaces: Vec<WorkspaceReport>,
+    /// The global config file on its own: what a write to it changes.
+    global: workspace_config::GlobalReport,
 }
 
 impl EngineViews {
@@ -153,17 +155,20 @@ impl EngineViews {
     /// `Internal` when the workspaces cannot be read.
     pub async fn workspaces(&self) -> Result<WorkspacesResponse, ViewError> {
         let root = self.root.clone();
-        tokio::task::spawn_blocking(move || workspace_config::report(Some(&root)))
-            .await
-            .map_err(|error| {
-                tracing::warn!(%error, "Mini App workspaces task failed");
-                internal("Workspaces unavailable")
-            })?
-            .map(|workspaces| WorkspacesResponse { workspaces })
-            .map_err(|error| {
-                tracing::warn!(error = %format!("{error:#}"), "Failed to list Mini App workspaces");
-                internal("Workspaces unavailable")
-            })
+        tokio::task::spawn_blocking(move || {
+            workspace_config::report(Some(&root))
+                .map(|workspaces| (workspaces, workspace_config::global_report()))
+        })
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "Mini App workspaces task failed");
+            internal("Workspaces unavailable")
+        })?
+        .map(|(workspaces, global)| WorkspacesResponse { workspaces, global })
+        .map_err(|error| {
+            tracing::warn!(error = %format!("{error:#}"), "Failed to list Mini App workspaces");
+            internal("Workspaces unavailable")
+        })
     }
 
     /// Recorded usage for the last `days` days (default

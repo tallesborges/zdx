@@ -1,24 +1,22 @@
  1 Agents 6  2 Threads  3 Services  4 Jobs  5 Usage  6 Logs  7 Background 3  8 Config
 
- Config  read only
+ Config  ↵ edit · x reset · writes /Users/example/Documents/.zdx/config.toml
   Default    claude-cli:claude-opus-5-5@high via mode:deep · thinking high · 3 modes · subagents on
 
-── Workspace 1 of 2 · [ ] switch ───────────────────────────────────────────────────────────────────────────────────────
+── Scope 2 of 3 · [ ] switch ───────────────────────────────────────────────────────────────────────────────────────────
   Documents  current  /Users/example/Documents
-  Overlay    /Users/example/Documents/.zdx/config.toml
+  Writes     /Users/example/Documents/.zdx/config.toml
 
-  GROUP          SETTING              VALUE                            FROM       NOTE
-▌ core           model                claude-cli:claude-opus-5-5@high  workspace  overrides gpt-6-astra from global
-                 model_mode           mode:deep                        global     → claude-cli:claude-opus-5-5@max
-  helper models  title_model          gemini:gemini-3.5-flash-lite     default
-                 handoff_model        gemini:gemini-3.8-flash          global
-  audio          transcription.model  unset                            default
-
-
-
-
-
-
+  GROUP          SETTING              VALUE                                FROM       NOTE
+▌ core           model                claude-cli:claude-opus-5-5@high      workspace  overrides gpt-6-astra from gl…
+                 model_mode           mode:deep                            global     → claude-cli:claude-opus-5-5@…
+  helper models  title_model          gemini:gemini-3.5-flash-lite         default
+                 handoff_model        gemini:gemini-3.8-flash              global
+  audio          transcription.model  unset                                default
+  model modes    modes                2 modes                              global
+                   fast               claude-cli:claude-sonnet-5-5@medium             quick checks and exploration …
+                   deep               claude-cli:claude-opus-5-5@max                  hard debugging and design
+  subagents      enabled              on                                   global
 
 
 
@@ -31,4 +29,6 @@
 
 
 
- [ ] workspace  q quit    updated 0s ago · ! scope /Users/example/Documents/projects/example-app · ● connected · ? help
+
+
+ ↵ edit  x reset          updated 0s ago · ! scope /Users/example/Documents/projects/example-app · ● connected · ? help

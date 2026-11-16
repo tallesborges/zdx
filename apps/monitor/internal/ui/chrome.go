@@ -366,7 +366,10 @@ func (m *Model) hints(width int) string {
 	case tabLogs:
 		tabHints = []string{"l", "level", "/", "filter", "esc", "clear", "[ ]", "day", "G", "follow"}
 	case tabConfig:
-		tabHints = []string{"[ ]", "workspace"}
+		tabHints = []string{"↵", "edit", "x", "reset", "[ ]", "scope"}
+		if e := m.config.edit; e != nil {
+			tabHints = []string{"↵", "choose", "esc", "back"}
+		}
 	}
 	return hintFit(width, append(tabHints, "q", "quit", "1-8", "tabs")...)
 }

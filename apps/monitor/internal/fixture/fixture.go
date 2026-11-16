@@ -370,7 +370,7 @@ func (b *Backend) Workspaces(ctx context.Context) (data.Workspaces, source.Origi
 	}
 	src := func(label, layer string) data.SettingSource { return data.SettingSource{Label: label, Layer: layer} }
 	set := func(group, key, value string, s data.SettingSource) data.Setting {
-		return data.Setting{Group: group, Key: key, Label: key, Value: []byte(value), Source: s, InheritedValue: []byte("null"), ResolvesTo: []byte("null")}
+		return data.Setting{Group: group, Key: key, Label: key, Kind: "chat", Value: []byte(value), Source: s, InheritedValue: []byte("null"), ResolvesTo: []byte("null")}
 	}
 	global := src("global", "global")
 	ws := src("workspace", "workspace")
@@ -378,16 +378,62 @@ func (b *Backend) Workspaces(ctx context.Context) (data.Workspaces, source.Origi
 	model.InheritedValue, model.InheritedSource = []byte(`"gpt-6-astra"`), &global
 	mode := set("core", "model_mode", `"mode:deep"`, global)
 	mode.ResolvesTo = []byte(`"claude-cli:claude-opus-5-5@max"`)
-	return data.Workspaces{Workspaces: []data.Workspace{
+	modes := set("model modes", "model_modes", `"fast → claude-cli:claude-sonnet-5-5@medium, deep → claude-cli:claude-opus-5-5@max"`, global)
+	modes.Label, modes.Kind = "modes", "modes"
+	modes.Modes = []data.ModeView{
+		{Name: "fast", Description: "quick checks and exploration", Primary: "claude-cli:claude-sonnet-5-5@medium", Thinking: "medium", Alternatives: []string{"openai-codex:gpt-6@low"}},
+		{Name: "deep", Description: "hard debugging and design", Primary: "claude-cli:claude-opus-5-5@max", Thinking: "max"},
+	}
+	subagents := set("subagents", "subagents.enabled", `"on"`, global)
+	subagents.Label, subagents.Kind = "enabled", "toggle"
+	globalModel := set("core", "model", `"gpt-6-astra"`, global)
+	return data.Workspaces{Global: &data.GlobalConfig{Path: "/Users/example/.zdx/config.toml", Settings: []data.Setting{globalModel, modes, subagents}}, Workspaces: []data.Workspace{
 		{Name: "Documents", Root: "/Users/example/Documents", Current: true, OverlayPath: "/Users/example/Documents/.zdx/config.toml", HasOverlay: true,
 			Settings: []data.Setting{model, mode,
 				set("helper models", "title_model", `"gemini:gemini-3.5-flash-lite"`, src("default", "default")),
 				set("helper models", "handoff_model", `"gemini:gemini-3.8-flash"`, global),
 				set("audio", "transcription.model", "null", src("default", "default")),
+				modes, subagents,
 			}},
 		{Name: "zdx", Root: "/Users/example/Documents/projects/zdx", OverlayPath: "/Users/example/Documents/projects/zdx/.zdx/config.toml",
 			Error: ptr("parse .zdx/config.toml: expected `=` at line 4"), Settings: []data.Setting{set("core", "model", `"gpt-6-astra"`, global)}},
 	}}, source.OriginSocket, nil
+}
+
+// Picker is the catalog model picker.
+func (b *Backend) Picker(ctx context.Context, _ string) (data.Picker, error) {
+	if err := b.gate(ctx, "picker", false); err != nil {
+		return data.Picker{}, err
+	}
+	levels := func(id string) map[string]string {
+		out := map[string]string{}
+		for _, l := range []string{"off", "low", "medium", "high", "max"} {
+			out[l] = id + "@" + l
+		}
+		return out
+	}
+	return data.Picker{
+		Models: []data.PickerModel{
+			{ID: "claude-cli:claude-opus-5-5", Name: "claude-cli:claude-opus-5-5", Specs: levels("claude-cli:claude-opus-5-5")},
+			{ID: "claude-cli:claude-sonnet-5-5", Name: "claude-cli:claude-sonnet-5-5", Specs: levels("claude-cli:claude-sonnet-5-5")},
+			{ID: "google-antigravity:gemini-4-argon-high", Name: "google-antigravity:gemini-4-argon-high", Specs: map[string]string{}},
+		},
+		Modes: []data.PickerMode{{Name: "fast", Ref: "mode:fast"}, {Name: "deep", Ref: "mode:deep"}},
+	}, nil
+}
+
+// ChangeSetting reports a change it does not write.
+func (b *Backend) ChangeSetting(ctx context.Context, ch source.SettingChange) (data.ChangeOutcome, error) {
+	if err := b.gate(ctx, "change", false); err != nil {
+		return data.ChangeOutcome{}, err
+	}
+	file := "/Users/example/.zdx/config.toml"
+	if ch.Workspace != "" {
+		file = ch.Workspace + "/.zdx/config.toml"
+	}
+	out := data.ChangeOutcome{Key: ch.Key, File: file, DryRun: ch.DryRun, Changed: true}
+	out.Reach.Reads = []string{"Documents", "zdx"}
+	return out, nil
 }
 
 // Jobs is `zdx jobs list --scheduler --json`.

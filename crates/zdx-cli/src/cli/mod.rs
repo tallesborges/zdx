@@ -1197,6 +1197,30 @@ enum ConfigCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Set one model setting (as `config workspaces` lists them) in the
+    /// global config or a workspace's own overlay, checking that the config
+    /// still loads first
+    SetSetting {
+        /// Setting key (`model`, `title_model`, `transcription.model`,
+        /// `subagents.enabled`, `subagents.overrides.<name>.model`,
+        /// `model_modes`)
+        key: String,
+        /// New value: a model spec or `mode:<name>`, `on`/`off`, or for
+        /// `model_modes` a JSON array of `{name, description, primary,
+        /// alternatives}`
+        #[arg(allow_hyphen_values = true)]
+        value: String,
+        #[command(flatten)]
+        target: SettingTarget,
+    },
+    /// Remove one model setting from the global config or a workspace's own
+    /// overlay, so it falls back to the layers below
+    ResetSetting {
+        /// Setting key, as for `set-setting`
+        key: String,
+        #[command(flatten)]
+        target: SettingTarget,
+    },
     /// Unset/remove a configuration key
     Unset {
         /// Configuration key to remove
@@ -1205,6 +1229,23 @@ enum ConfigCommands {
         #[arg(long)]
         local: bool,
     },
+}
+
+#[derive(clap::Args)]
+struct SettingTarget {
+    /// Write the global config file
+    #[arg(long, conflicts_with = "workspace")]
+    global: bool,
+    /// Write the own overlay of the workspace at DIR (default: the current
+    /// directory's workspace)
+    #[arg(long, value_name = "DIR")]
+    workspace: Option<std::path::PathBuf>,
+    /// Check the change and report where it applies, without writing
+    #[arg(long)]
+    dry_run: bool,
+    /// Emit JSON
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(clap::Subcommand)]
@@ -2283,6 +2324,26 @@ fn dispatch_config(command: &ConfigCommands) -> Result<()> {
         } => commands::config::set(key, value, *local, *force_string),
         ConfigCommands::Workspaces { json } => commands::config::workspaces(*json),
         ConfigCommands::Unset { key, local } => commands::config::unset(key, *local),
+        ConfigCommands::SetSetting { key, value, target } => commands::config::change_setting(
+            key,
+            Some(value),
+            &commands::config::Target {
+                global: target.global,
+                workspace: target.workspace.as_deref(),
+                dry_run: target.dry_run,
+                json: target.json,
+            },
+        ),
+        ConfigCommands::ResetSetting { key, target } => commands::config::change_setting(
+            key,
+            None,
+            &commands::config::Target {
+                global: target.global,
+                workspace: target.workspace.as_deref(),
+                dry_run: target.dry_run,
+                json: target.json,
+            },
+        ),
     }
 }
 

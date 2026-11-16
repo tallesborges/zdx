@@ -175,6 +175,16 @@ type DailyUsage struct {
 // Workspaces is the `workspaces` view.
 type Workspaces struct {
 	Workspaces []Workspace `json:"workspaces"`
+	// Global is the global config file on its own; nil from a service
+	// built before it.
+	Global *GlobalConfig `json:"global"`
+}
+
+// GlobalConfig is the global config file's own settings.
+type GlobalConfig struct {
+	Path     string    `json:"path"`
+	Settings []Setting `json:"settings"`
+	Error    *string   `json:"error"`
 }
 
 // Workspace is one workspace's settings with provenance.
@@ -199,6 +209,62 @@ type Setting struct {
 	InheritedValue  json.RawMessage `json:"inherited_value"`
 	InheritedSource *SettingSource  `json:"inherited_source"`
 	ResolvesTo      json.RawMessage `json:"resolves_to"`
+	// Kind is how the setting is edited: chat, transcription, speech,
+	// toggle, or modes.
+	Kind string `json:"kind"`
+	// Modes are the effective modes of the `model_modes` setting.
+	Modes []ModeView `json:"modes"`
+}
+
+// ModeView is one `[[model_modes]]` entry.
+type ModeView struct {
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Primary      string   `json:"primary"`
+	Thinking     string   `json:"thinking"`
+	Alternatives []string `json:"alternatives"`
+}
+
+// Picker is the catalog model picker (`zdx helper`, kind picker): the
+// models with the spec per thinking level, and the configured modes.
+type Picker struct {
+	ConfigError *string       `json:"config_error"`
+	Models      []PickerModel `json:"models"`
+	Modes       []PickerMode  `json:"modes"`
+}
+
+// PickerModel is one picker model; Specs is empty for a model without
+// thinking levels.
+type PickerModel struct {
+	ID    string            `json:"id"`
+	Name  string            `json:"name"`
+	Specs map[string]string `json:"specs"`
+}
+
+// PickerMode is a configured mode and its `mode:<name>` reference.
+type PickerMode struct {
+	Name string `json:"name"`
+	Ref  string `json:"ref"`
+}
+
+// ChangeOutcome is `zdx config set-setting|reset-setting --json`.
+type ChangeOutcome struct {
+	Key     string   `json:"key"`
+	File    string   `json:"file"`
+	DryRun  bool     `json:"dry_run"`
+	Changed bool     `json:"changed"`
+	Reach   Reach    `json:"reach"`
+	Setting *Setting `json:"setting"`
+}
+
+// Reach is which workspaces read a file's value for a key.
+type Reach struct {
+	Reads []string `json:"reads"`
+	Skips []struct {
+		Workspace string `json:"workspace"`
+		By        string `json:"by"`
+	} `json:"skips"`
+	Unknown []string `json:"unknown"`
 }
 
 // SettingSource names a config layer.

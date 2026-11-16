@@ -68,6 +68,7 @@ type Model struct {
 	logs       logsTab
 	background listState
 	config     configTab
+	configGen  uint64
 	svcList    listState
 
 	transcript *transcriptState
@@ -108,6 +109,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.refresh(m.now()), tick())
 	case resultMsg:
 		return m, m.applyResult(msg)
+	case configPickerMsg:
+		m.applyConfigPicker(msg)
+		return m, nil
+	case configChangeMsg:
+		return m, m.applyConfigChange(msg)
 	case tea.KeyPressMsg:
 		return m, m.handleKey(msg)
 	case tea.MouseWheelMsg:
@@ -241,6 +247,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	if m.logs.editing {
 		return m.logs.editKey(msg)
+	}
+	if m.tab == tabConfig && m.config.edit != nil && !m.help {
+		return m.configEditKey(msg)
 	}
 	// Vim `gg`: the first g waits, a second goes to the top.
 	if key == "g" {
@@ -380,6 +389,10 @@ func (m *Model) tabKey(key string) tea.Cmd {
 		case "]", "[":
 			m.config.cycle(key == "]")
 			return nil
+		case "enter":
+			return m.startConfigEdit(false)
+		case "x", "delete":
+			return m.startConfigEdit(true)
 		}
 		m.config.list.key(key, m.config.rowCount(), m.config.list.pageSize())
 		m.config.list.remember(m.config.ids())

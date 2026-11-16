@@ -345,3 +345,93 @@ fn test_mcp_call_rejects_invalid_json() {
         .failure()
         .stderr(predicate::str::contains("parse --json input"));
 }
+
+/// `set-setting` checks the change against every layer before it writes, a
+/// dry run writes nothing, the JSON names the file and which workspaces read
+/// it, and `reset-setting` removes the key again. `workspaces --json` then
+/// lists each mode of `model_modes`.
+#[test]
+fn test_config_set_and_reset_setting() {
+    let home = tempdir().unwrap();
+    let zdx_home = home.path().join(".zdx");
+    let project = home.path().join("proj");
+    fs::create_dir_all(&zdx_home).unwrap();
+    fs::create_dir_all(project.join(".zdx")).unwrap();
+    fs::write(
+        zdx_home.join("config.toml"),
+        "model = \"openai:gpt-6@high\"\n\n[[model_modes]]\nname = \"fast\"\ndescription = \"quick\"\nprimary = \"openai:gpt-6@low\"\n",
+    )
+    .unwrap();
+    let overlay = project.join(".zdx").join("config.toml");
+    let zdx = |args: &[&str]| {
+        let mut cmd = crate::fixtures::zdx_cmd();
+        cmd.env("ZDX_HOME", &zdx_home)
+            .env("HOME", home.path())
+            .current_dir(&project)
+            .args(args);
+        cmd
+    };
+    let json = |args: &[&str]| -> Value {
+        serde_json::from_slice(&zdx(args).assert().success().get_output().stdout).unwrap()
+    };
+
+    zdx(&["config", "set-setting", "model", "mode:nope", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("names no configured model mode"));
+    let dry = json(&[
+        "config",
+        "set-setting",
+        "model",
+        "mode:fast",
+        "--dry-run",
+        "--json",
+    ]);
+    assert_eq!(dry["changed"], true);
+    assert_eq!(dry["reach"]["reads"], serde_json::json!(["proj"]));
+    assert!(!overlay.exists(), "a dry run writes nothing");
+
+    let wrote = json(&["config", "set-setting", "model", "mode:fast", "--json"]);
+    assert_eq!(wrote["setting"]["value"], "mode:fast");
+    assert_eq!(wrote["setting"]["resolves_to"], "openai:gpt-6@low");
+    assert_eq!(
+        fs::read_to_string(&overlay).unwrap().trim(),
+        "model = \"mode:fast\""
+    );
+
+    zdx(&["config", "set-setting", "subagents.enabled", "maybe"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("`on` or `off`"));
+
+    let reset = json(&["config", "reset-setting", "model", "--json"]);
+    assert_eq!(reset["changed"], true);
+    assert_eq!(reset["setting"]["value"], "openai:gpt-6@high");
+    assert_eq!(reset["setting"]["source"]["layer"], "global");
+
+    let modes = r#"[{"name":"fast","description":"quick","primary":"openai:gpt-6@medium","alternatives":[]}]"#;
+    json(&[
+        "config",
+        "set-setting",
+        "model_modes",
+        modes,
+        "--global",
+        "--json",
+    ]);
+    let global = fs::read_to_string(zdx_home.join("config.toml")).unwrap();
+    assert!(
+        global.contains("primary = \"openai:gpt-6@medium\""),
+        "{global}"
+    );
+
+    let reports = json(&["config", "workspaces", "--json"]);
+    let setting = reports[0]["settings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|setting| setting["key"] == "model_modes")
+        .unwrap()
+        .clone();
+    assert_eq!(setting["modes"][0]["name"], "fast");
+    assert_eq!(setting["modes"][0]["thinking"], "medium");
+}

@@ -49,8 +49,26 @@ func TestRealZdxShapes(t *testing.T) {
 	if u, _, err := s.Usage(ctx, 7); err != nil || u.Days != 7 {
 		t.Fatalf("usage: %+v %v", u, err)
 	}
-	if w, _, err := s.Workspaces(ctx); err != nil || len(w.Workspaces) == 0 || len(w.Workspaces[0].Settings) == 0 {
+	if w, _, err := s.Workspaces(ctx); err != nil || len(w.Workspaces) == 0 || len(w.Workspaces[0].Settings) == 0 || w.Global == nil || w.Workspaces[0].Settings[0].Kind != "chat" {
 		t.Fatalf("workspaces: %+v %v", w, err)
+	}
+	if p, err := s.Picker(ctx, root); err != nil || len(p.Models) == 0 {
+		t.Fatalf("picker: %+v %v", p, err)
+	}
+	spec := "anthropic:claude-sonnet-5@low"
+	dry, err := s.ChangeSetting(ctx, source.SettingChange{Key: "title_model", Value: &spec, Workspace: root, DryRun: true})
+	if err != nil || !dry.Changed || !dry.DryRun || dry.Setting != nil || len(dry.Reach.Reads) == 0 {
+		t.Fatalf("dry run: %+v %v", dry, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".zdx", "config.toml")); !os.IsNotExist(err) {
+		t.Fatalf("a dry run wrote the overlay: %v", err)
+	}
+	wrote, err := s.ChangeSetting(ctx, source.SettingChange{Key: "title_model", Value: &spec, Workspace: root})
+	if err != nil || wrote.Setting == nil || string(wrote.Setting.Value) != `"`+spec+`"` || wrote.Setting.Source.Layer != "workspace" {
+		t.Fatalf("write: %+v %v", wrote, err)
+	}
+	if reset, err := s.ChangeSetting(ctx, source.SettingChange{Key: "title_model", Workspace: root}); err != nil || !reset.Changed {
+		t.Fatalf("reset: %+v %v", reset, err)
 	}
 	svc, err := s.Services(ctx)
 	if err != nil || len(svc.Services) == 0 || svc.Services[0].Label == "" {

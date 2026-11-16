@@ -77,6 +77,64 @@ pub fn workspaces(json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Where `set-setting` and `reset-setting` write.
+pub struct Target<'a> {
+    pub global: bool,
+    pub workspace: Option<&'a Path>,
+    pub dry_run: bool,
+    pub json: bool,
+}
+
+/// `zdx config set-setting` (`value` set) and `reset-setting` (`None`).
+///
+/// # Errors
+/// Returns an error for an unknown key, a value that does not fit it, a
+/// change that would break the config, or a failed write.
+pub fn change_setting(key: &str, value: Option<&str>, target: &Target<'_>) -> Result<()> {
+    use zdx_engine::workspace_config::{self, Change, Scope};
+
+    let dir = match target.workspace {
+        Some(dir) => dir.to_path_buf(),
+        None => std::env::current_dir().context("determine current directory")?,
+    };
+    let workspaces = workspace_config::discover(Some(&dir))?;
+    let scope = if target.global {
+        Scope::Global
+    } else {
+        Scope::Workspace(
+            workspaces
+                .iter()
+                .find(|workspace| workspace.current)
+                .context("no workspace for the directory")?,
+        )
+    };
+    let parsed = value
+        .map(|value| workspace_config::parse_value(key, value))
+        .transpose()?;
+    let change = parsed
+        .as_ref()
+        .map_or(Change::Reset, |value| Change::Set(value.as_value()));
+    let outcome =
+        workspace_config::change_setting(scope, key, change, target.dry_run, &workspaces)?;
+    if target.json {
+        println!("{}", serde_json::to_string_pretty(&outcome)?);
+        return Ok(());
+    }
+    let verb = match (outcome.dry_run, outcome.changed) {
+        (_, false) => "No change to",
+        (true, true) => "Would write",
+        (false, true) => "Wrote",
+    };
+    println!("{verb} {key} in {}", outcome.file.display());
+    if !outcome.reach.reads.is_empty() {
+        println!("  read by: {}", outcome.reach.reads.join(", "));
+    }
+    for group in outcome.reach.skip_groups() {
+        println!("  not by: set in {}", group.by);
+    }
+    Ok(())
+}
+
 fn resolve_target_path(local: bool) -> Result<PathBuf> {
     if local {
         let cwd = std::env::current_dir().context("determine current directory")?;
