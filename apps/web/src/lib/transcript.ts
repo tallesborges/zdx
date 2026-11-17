@@ -144,6 +144,13 @@ function summarize(name: string, input: unknown, view?: ToolView): ToolSummary {
 
   switch (name) {
     case "bash": {
+      // The label is the model's short prose; the raw command stays for the
+      // expanded detail. Old calls without one fall back to the command.
+      const label =
+        view?.head?.kind === "shell"
+          ? view.head.label
+          : (str(args.description) || undefined);
+      if (label) return { ...base, verb: "$", subject: truncate(label, 72) };
       const command = view?.head?.kind === "shell" ? view.head.command : str(args.command);
       return { ...base, verb: "$", subject: truncate(command, 72), mono: true };
     }

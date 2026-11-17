@@ -102,6 +102,7 @@
     {@const h = view.head}
     <div class="head">
       {#if h.kind === "shell"}
+        {#if h.label}<div class="label">{h.label}</div>{/if}
         {#if h.cwd}<div class="cwd">in {h.cwd}</div>{/if}
         <div class="cmd"><span class="ps">$</span> {h.command}</div>
       {:else if h.kind === "path"}
@@ -291,6 +292,11 @@
   .cwd {
     font-size: 0.6875rem;
     color: var(--color-muted-foreground);
+    overflow-wrap: anywhere;
+  }
+  .label {
+    color: var(--color-muted-foreground);
+    font-size: 0.6875rem;
     overflow-wrap: anywhere;
   }
   .cmd {

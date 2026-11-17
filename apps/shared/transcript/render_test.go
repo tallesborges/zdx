@@ -28,6 +28,16 @@ func turns() *Thread {
 	}}
 }
 
+func TestHeadTextPrefersShellLabelOverCommand(t *testing.T) {
+	label := "Run the test suite"
+	if got := HeadText(&ToolHead{Kind: "shell", Command: "cargo test", Label: &label}); got != "$ Run the test suite" {
+		t.Fatalf("labeled shell head %q", got)
+	}
+	if got := HeadText(&ToolHead{Kind: "shell", Command: "cargo test"}); got != "$ cargo test" {
+		t.Fatalf("unlabeled shell head %q", got)
+	}
+}
+
 func plain(lines []string) string {
 	return ansi.Strip(strings.Join(lines, "\n"))
 }

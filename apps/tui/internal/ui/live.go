@@ -200,7 +200,8 @@ func (l *live) apply(ev engine.AgentEvent) {
 
 // liveView is the view of a call while its round is not saved: the engine
 // derives the real one (zdx_types::tool_view) when the thread view has it.
-// Until then the head is the call's first short string argument.
+// Until then the head is the call's first short string argument. A bash
+// call's `description` wins over its raw command.
 func liveView(outcome string, input json.RawMessage) *transcript.ToolView {
 	v := &transcript.ToolView{Outcome: outcome, Body: transcript.ToolBody{Kind: "empty"}}
 	if s := inputSummary(input); s != "" {
@@ -210,7 +211,7 @@ func liveView(outcome string, input json.RawMessage) *transcript.ToolView {
 }
 
 // summaryKeys are the arguments a live tool row shows, best first.
-var summaryKeys = []string{"command", "cmd", "file_path", "path", "pattern", "query", "url", "prompt", "goal"}
+var summaryKeys = []string{"description", "command", "cmd", "file_path", "path", "pattern", "query", "url", "prompt", "goal"}
 
 func inputSummary(input json.RawMessage) string {
 	var args map[string]any

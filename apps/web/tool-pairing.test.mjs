@@ -77,6 +77,28 @@ test("a result without its call is found only by its own sequence", () => {
   expect(findToolNode(activity, "nope", 9)).toBeUndefined();
 });
 
+test("a bash row prefers its description label over the raw command", () => {
+  const cmd = [
+    use("b1", 1, "Bash", {
+      input: { command: "cargo test", description: "Run the test suite" },
+      view: view("pending", {
+        head: { kind: "shell", command: "cargo test", label: "Run the test suite" },
+      }),
+    }),
+  ];
+  const [work] = buildNodes(cmd);
+  const [node] = work.items;
+  expect(node.summary.subject).toBe("Run the test suite");
+  expect(node.summary.mono).toBe(false);
+
+  // Old calls without a label still show the command in monospace.
+  const plain = [use("b2", 1, "Bash", { input: { command: "ls" } })];
+  const [pWork] = buildNodes(plain);
+  const [pNode] = pWork.items;
+  expect(pNode.summary.subject).toBe("ls");
+  expect(pNode.summary.mono).toBe(true);
+});
+
 test("edit line counts come from the view's diff", () => {
   const edit = [
     use("e", 1, "Edit", { input: { file_path: "a.rs", old_string: "x", new_string: "y" } }),

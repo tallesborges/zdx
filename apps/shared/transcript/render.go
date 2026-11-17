@@ -114,12 +114,18 @@ func HasRunning(th *Thread) bool {
 }
 
 // HeadText is a tool head on one line: the command, path, pattern, or prompt.
+// A shell head with a label shows the label, not the raw command; the detail
+// view prints the head, and the full input below it still carries the exact
+// command.
 func HeadText(h *ToolHead) string {
 	if h == nil {
 		return ""
 	}
 	switch h.Kind {
 	case "shell":
+		if h.Label != nil && *h.Label != "" {
+			return "$ " + *h.Label
+		}
 		return "$ " + h.Command
 	case "path":
 		return h.Path

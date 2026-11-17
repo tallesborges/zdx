@@ -285,7 +285,7 @@ export interface ToolFact {
 }
 
 export type ToolHead =
-  | { kind: "shell"; cwd?: string; command: string }
+  | { kind: "shell"; cwd?: string; label?: string; command: string }
   | { kind: "path"; path: string }
   | { kind: "search"; pattern: string; scope?: string }
   | { kind: "prompt"; agent?: string; prompt: string }

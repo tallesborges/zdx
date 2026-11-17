@@ -143,10 +143,12 @@ type ToolFact struct {
 }
 
 // ToolHead is the command or target (`kind`: shell, path, search, prompt,
-// text).
+// text). A shell head carries the bash call's `description` as `Label`
+// (collapsed rows show it) and the exact `Command` (the detail shows it).
 type ToolHead struct {
 	Kind    string  `json:"kind"`
 	Cwd     *string `json:"cwd,omitempty"`
+	Label   *string `json:"label,omitempty"`
 	Command string  `json:"command,omitempty"`
 	Path    string  `json:"path,omitempty"`
 	Pattern string  `json:"pattern,omitempty"`
