@@ -22,14 +22,28 @@ func (m *Model) inBody(x, y int) (transcript.Pos, bool) {
 	if bodyRow < 0 || bodyRow >= rows {
 		return transcript.Pos{}, false
 	}
-	if x < 1 || x >= m.width {
+	// Col == x: selLines and the highlighted body lines are
+	// rendered lines (leading space included), so mouse columns
+	// index them directly. The scrollbar column, when shown, is
+	// chrome and starts no selection.
+	linesLen := 0
+	if lines, _ := m.transcriptLinesAndTools(m.width - 1); len(lines) > 0 {
+		linesLen = len(lines)
+	} else {
+		linesLen = len(m.emptyLines())
+	}
+	width := m.width
+	if transcript.Scrollbar(linesLen, 0, rows) != nil {
+		width--
+	}
+	if x < 0 || x >= width {
 		return transcript.Pos{}, false
 	}
-	return transcript.Pos{Row: bodyRow, Col: x - 1}, true
+	return transcript.Pos{Row: bodyRow, Col: x}, true
 }
 
 func (m *Model) mouseClick(mouse tea.Mouse) tea.Cmd {
-	if m.overlay != nil || mouse.Button != tea.MouseLeft {
+	if m.overlay != nil || m.detail != nil || mouse.Button != tea.MouseLeft {
 		return nil
 	}
 	pos, ok := m.inBody(mouse.X, mouse.Y)
@@ -63,15 +77,41 @@ func (m *Model) mouseRelease(mouse tea.Mouse) tea.Cmd {
 	if m.sel == nil {
 		return nil
 	}
-	if m.sel.Empty() && m.detail == nil {
-		if j := m.hoverToolLine(mouse); j >= 0 {
-			_, tools := m.transcriptLinesAndTools(m.width - 1)
-			if ref, hit := transcript.ToolAt(tools, j); hit {
-				m.sel, m.selLines = nil, nil
-				m.openDetail(ref)
-				return nil
+	// A press and release on the same tool row with no drag is a
+	// click, not a copy: open the detail pane. A press and release
+	// with no drag anywhere else copies nothing.
+	press := m.sel.Start
+	release := press
+	if pos, ok := m.inBody(mouse.X, mouse.Y); ok {
+		release = pos
+	}
+	m.sel.End = release
+	if m.sel.Empty() {
+		m.sel, m.selLines = nil, nil
+		if m.detail == nil {
+			// Map the release body row to a data line the
+			// same way hover does (front padding aware).
+			lines, tools := m.transcriptLinesAndTools(m.width - 1)
+			if len(lines) == 0 {
+				lines = m.emptyLines()
+			}
+			rows := m.bodyRows()
+			maxScroll := max(len(lines)-rows, 0)
+			scroll := min(m.scroll, maxScroll)
+			end := len(lines) - scroll
+			start := max(end-rows, 0)
+			pad := rows - (end - start)
+			if release.Row >= pad {
+				j := start + (release.Row - pad)
+				if j >= start && j < end {
+					if ref, hit := transcript.ToolAt(tools, j); hit {
+						m.openDetail(ref)
+						return nil
+					}
+				}
 			}
 		}
+		return nil
 	}
 	text := strings.TrimRight(m.sel.Text(m.selLines), " \n")
 	m.sel = nil
@@ -124,8 +164,9 @@ func (m *Model) hoverAt(mouse tea.Mouse) {
 	m.hoverLine = m.hoverToolLine(mouse)
 }
 
-// viewportPlain is the current viewport body as plain lines, so the
-// selection text is read from what is on screen at drag start.
+// viewportPlain is the current viewport body as plain rendered
+// lines (leading space and scrollbar cell included), so mouse
+// columns index it directly: Col == x.
 func (m *Model) viewportPlain() []string {
 	body := m.viewport(m.bodyRows())
 	plain := make([]string, 0, len(body))

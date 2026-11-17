@@ -165,6 +165,9 @@ func (m *Model) transcriptKey(key string) tea.Cmd {
 		return m.refresh(m.now())
 	}
 	t.scroll.key(key, len(t.lines), rows)
+	// Scrolling moves the rows under a stationary pointer: hover
+	// goes stale until the next motion event.
+	t.hoverLine = -1
 	t.follow = t.scroll.offset >= max(len(t.lines)-rows, 0)
 	return nil
 }
@@ -185,6 +188,8 @@ func (t *transcriptState) selectTool(dir, rows int) {
 		t.scroll.offset = max(line-rows/2, 0)
 	}
 	t.scroll.clamp(len(t.lines), rows)
+	// The scroll moved the rows under the pointer.
+	t.hoverLine = -1
 	t.follow = false
 }
 
@@ -287,16 +292,16 @@ func (m *Model) renderTranscript() string {
 		}
 		lines = append(lines, line)
 		if t.sel != nil {
-			// Highlight the drag in body coordinates (row i is
-			// body row i, not j, so the highlight moves with the
-			// viewport, not the data).
+			// Highlight uses the same rendered-line coordinates as
+			// the copy source, so the range indexes the frame row
+			// directly: Col == x.
 			lines[len(lines)-1] = transcript.Highlight(lines[len(lines)-1], *t.sel, i)
 		}
-		if t.hoverLine >= 0 && j == t.hoverLine && t.pane == nil && t.traj == nil {
-			lines[len(lines)-1] = transcript.Hover(lines[len(lines)-1], i, t.tools, j, t.hoverLine)
+		if t.sel == nil && t.hoverLine >= 0 && j == t.hoverLine && t.pane == nil && t.traj == nil {
+			lines[len(lines)-1] = transcript.Hover(lines[len(lines)-1], t.tools, j, t.hoverLine)
 		}
 		if j == sel && t.pane == nil && t.traj == nil {
-			lines[len(lines)-1] = transcript.Selected(lines[len(lines)-1], i, t.tools, j, sel, w)
+			lines[len(lines)-1] = transcript.Selected(lines[len(lines)-1], t.tools, j, sel, w)
 		}
 	}
 	for _, l := range m.footerLines() {

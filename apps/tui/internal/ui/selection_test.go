@@ -46,6 +46,37 @@ func TestMouseDragSelectionCopiesVisibleText(t *testing.T) {
 	_, cmd = m.Update(tea.MouseReleaseMsg{X: 3, Y: 4, Button: tea.MouseLeft})
 }
 
+func TestPlainClickCopiesNothing(t *testing.T) {
+	be := newFake()
+	be.thread = transcript.Thread{Cursor: 2, Activity: []transcript.Activity{
+		{Type: "message", Sequence: 0, Role: "user", Speaker: "you", Text: "hello user"},
+	}}
+	h := start(t, be, Options{Root: "/r", ThreadID: "t"})
+	m := h.m
+	frame := strings.Split(checkFrame(t, m), "\n")
+	y := -1
+	for i, line := range frame {
+		if strings.Contains(line, "hello") {
+			y = i
+			break
+		}
+	}
+	if y < 0 {
+		t.Fatalf("no hello row:\n%s", checkFrame(t, m))
+	}
+	_, _ = m.Update(tea.MouseClickMsg{X: 5, Y: y, Button: tea.MouseLeft})
+	_, cmd := m.Update(tea.MouseReleaseMsg{X: 5, Y: y, Button: tea.MouseLeft})
+	if cmd != nil {
+		t.Fatal("plain click returned a clipboard command")
+	}
+	if m.sel != nil {
+		t.Fatal("plain click left a selection")
+	}
+	if strings.Contains(m.notice, "copied") {
+		t.Fatalf("plain click copied: %q", m.notice)
+	}
+}
+
 func TestMouseClickToolRowOpensDetail(t *testing.T) {
 	be := newFake()
 	be.thread = transcript.Thread{Cursor: 2, Activity: []transcript.Activity{
@@ -103,5 +134,48 @@ func TestMouseClickToolRowOpensDetail(t *testing.T) {
 	}
 	if !strings.Contains(checkFrame(t, m), "file.txt") {
 		t.Fatalf("detail lacks the output:\n%s", checkFrame(t, m))
+	}
+}
+
+func TestDetailResizeRewraps(t *testing.T) {
+	be := newFake()
+	be.thread = transcript.Thread{Cursor: 2, Activity: []transcript.Activity{
+		{Type: "message", Sequence: 0, Role: "assistant", Speaker: "assistant", Text: "work"},
+		{Type: "tool_use", Sequence: 1, ID: "c1", Name: "bash", View: &transcript.ToolView{
+			Outcome: "ok",
+			Head:    &transcript.ToolHead{Kind: "shell", Command: "a very long command that must wrap at a narrow width"},
+			Body:    transcript.ToolBody{Kind: "text", Text: "file.txt"},
+		}},
+	}}
+	h := start(t, be, Options{Root: "/r", ThreadID: "t"})
+	m := h.m
+	_, tools := m.transcriptLinesAndTools(m.width - 1)
+	ref := tools[0]
+	m.openDetail(ref)
+	// Shrink the terminal; detail lines must be rewritten at the
+	// new width, not just truncated on render.
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	if m.detail == nil {
+		t.Fatal("resize closed the detail")
+	}
+	for _, l := range m.detailLines {
+		if ansi.StringWidth(l) > 40 {
+			t.Fatalf("detail line wider than new width: %q", ansi.Strip(l))
+		}
+	}
+}
+
+func TestPickerWheelDoesNotScroll(t *testing.T) {
+	be := newFake()
+	h := start(t, be, Options{Root: "/r", ThreadID: "t"})
+	m := h.m
+	m.scroll = 5
+	m.openPalette()
+	if m.overlay == nil {
+		t.Fatal("no overlay")
+	}
+	_, _ = m.Update(tea.MouseWheelMsg{X: 3, Y: 3, Button: tea.MouseWheelDown})
+	if m.scroll != 5 {
+		t.Fatalf("wheel behind picker scrolled: %d", m.scroll)
 	}
 }

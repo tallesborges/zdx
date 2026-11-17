@@ -96,11 +96,21 @@ func (m *Model) mouseRelease(mouse tea.Mouse) tea.Cmd {
 		return nil
 	}
 	// A press and release on the same tool row with no drag is a
-	// click, not a copy: open the detail pane.
-	if t.sel.Empty() && t.pane == nil && t.traj == nil {
+	// click, not a copy: open the detail pane. A press and release
+	// with no drag anywhere else copies nothing.
+	if t.sel.Empty() {
+		press := t.sel.Start
+		release := press
 		if pos, ok := m.inTranscriptBody(mouse.X, mouse.Y); ok {
+			release = pos
+		}
+		// Normalize the release into the range so click vs drag
+		// uses the actual release cell, not the last motion.
+		t.sel.End = release
+		t.selLines = m.transcriptPlain()
+		if t.sel.Empty() && t.pane == nil && t.traj == nil {
 			body, offset := m.transcriptBody()
-			j := offset + pos.Row
+			j := offset + release.Row
 			if j >= 0 && j < len(body) {
 				if ref, hit := transcript.ToolAt(t.tools, j); hit {
 					t.sel, t.selLines = nil, nil
@@ -109,6 +119,18 @@ func (m *Model) mouseRelease(mouse tea.Mouse) tea.Cmd {
 					return nil
 				}
 			}
+		}
+		if t.sel.Empty() {
+			t.sel, t.selLines = nil, nil
+			return nil
+		}
+		// Release moved: treat as a drag and fall through to copy.
+	} else {
+		// Refresh end from the release cell so a drag that ended
+		// without a final motion still copies to the release.
+		if pos, ok := m.inTranscriptBody(mouse.X, mouse.Y); ok {
+			t.sel.End = pos
+			t.selLines = m.transcriptPlain()
 		}
 	}
 	text := strings.TrimRight(t.sel.Text(t.selLines), " \n")
@@ -126,14 +148,28 @@ func (m *Model) inTranscriptBody(x, y int) (transcript.Pos, bool) {
 	if bodyRow < 0 || bodyRow >= rows {
 		return transcript.Pos{}, false
 	}
-	if x < 1 || x >= m.contentWidth() {
+	w := m.contentWidth()
+	t := m.transcript
+	if t != nil {
+		body, offset := m.transcriptBody()
+		total, mapped := len(body), offset
+		if t.traj != nil && t.traj.report != nil {
+			total = len(t.traj.lines)
+			mapped = t.traj.scroll.offset
+		}
+		if transcript.Scrollbar(total, mapped, rows) != nil {
+			w--
+		}
+	}
+	if x < 0 || x >= w {
 		return transcript.Pos{}, false
 	}
-	return transcript.Pos{Row: bodyRow, Col: x - 1}, true
+	return transcript.Pos{Row: bodyRow, Col: x}, true
 }
 
-// transcriptPlain is the transcript body as plain lines, captured at
-// drag start so the copy matches what was on screen.
+// transcriptPlain is the transcript body as plain rendered lines
+// (leading space included), captured at drag start so the copy
+// matches what was on screen. Col == x.
 func (m *Model) transcriptPlain() []string {
 	t := m.transcript
 	if t == nil {
@@ -142,7 +178,7 @@ func (m *Model) transcriptPlain() []string {
 	body, offset := m.transcriptBody()
 	plain := make([]string, 0, len(body))
 	for _, l := range body[offset:] {
-		plain = append(plain, ansi.Strip(l))
+		plain = append(plain, " "+ansi.Strip(l))
 	}
 	return plain
 }

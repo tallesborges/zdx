@@ -47,37 +47,28 @@ func (r Range) Contains(row int) bool {
 // Text extracts the selected plain text from the visible lines,
 // which are indexed by viewport row. Styles are stripped, trailing
 // spaces on each row are trimmed, and blank rows in between stay
-// blank.
+// blank. Columns are display cells; grapheme clusters are never
+// split.
 func (r Range) Text(lines []string) string {
 	o := r.Ordered()
+	// Clamp to the visible rows: an absurd exported range must not
+	// build a giant join.
+	startRow := max(o.Start.Row, 0)
+	endRow := min(o.End.Row, len(lines)-1)
+	if startRow > endRow || len(lines) == 0 {
+		return ""
+	}
 	var out []string
-	for row := o.Start.Row; row <= o.End.Row; row++ {
-		if row < 0 || row >= len(lines) {
-			out = append(out, "")
-			continue
-		}
+	for row := startRow; row <= endRow; row++ {
 		plain := ansi.Strip(lines[row])
-		runes := []rune(plain)
-		col := 0
-		from, to := 0, max(ansi.StringWidth(plain), 0)
+		from, to := 0, ansi.StringWidth(plain)
 		if row == o.Start.Row {
 			from = o.Start.Col
 		}
 		if row == o.End.Row {
 			to = o.End.Col + 1
 		}
-		var b strings.Builder
-		for _, r2 := range runes {
-			next := col + ansi.StringWidth(string(r2))
-			if next > from && col < to {
-				b.WriteRune(r2)
-			}
-			col = next
-			if col >= to {
-				break
-			}
-		}
-		out = append(out, strings.TrimRight(b.String(), " "))
+		out = append(out, strings.TrimRight(sliceRunes(plain, from, to), " "))
 	}
 	return strings.Join(out, "\n")
 }
@@ -86,28 +77,37 @@ func (r Range) Text(lines []string) string {
 // span is cell columns [start, end]; the line's own styles outside
 // the span are dropped (the eye follows the span), so callers apply
 // it to plain or to already-styled lines alike. A row outside the
-// span is returned unchanged.
+// span, or a span that does not intersect the line, is returned
+// unchanged. A double-width rune straddling a span edge lands in
+// exactly one side.
 func Highlight(line string, r Range, row int) string {
 	if r.Empty() || !r.Contains(row) {
 		return line
 	}
 	o := r.Ordered()
-	start, end := 0, ansi.StringWidth(line)
+	width := ansi.StringWidth(line)
+	start, end := 0, width
 	if row == o.Start.Row {
 		start = o.Start.Col
 	}
 	if row == o.End.Row {
 		end = o.End.Col + 1
 	}
+	// Clamp the span to the line; a span entirely outside changes
+	// nothing (and must not strip styles by re-cutting).
+	start = max(start, 0)
+	end = min(end, width)
 	if end <= start {
 		return line
 	}
+	// ansi.Cut assigns a straddling cluster to one side only, so
+	// the three segments never duplicate a wide rune.
 	mid := selectionStyle.Render(sliceRunes(line, start, end))
-	return sliceRunes(line, 0, start) + mid + sliceRunes(line, end, ansi.StringWidth(line))
+	return sliceRunes(line, 0, start) + mid + sliceRunes(line, end, width)
 }
 
-// sliceRunes cuts a styled line to display cells [from, to), losing
-// its styles. Callers strip first when they need the styles kept.
+// sliceRunes cuts a styled line to display cells [from, to),
+// grapheme-aware via ansi.Cut. Styles are lost.
 func sliceRunes(s string, from, to int) string {
 	if from < 0 {
 		from = 0
@@ -115,24 +115,10 @@ func sliceRunes(s string, from, to int) string {
 	if to < from {
 		to = from
 	}
-	plain := ansi.Strip(s)
-	var b strings.Builder
-	col := 0
-	for _, r := range []rune(plain) {
-		w := ansi.StringWidth(string(r))
-		if w == 0 {
-			continue
-		}
-		next := col + w
-		if next > from && col < to {
-			b.WriteRune(r)
-		}
-		col = next
-		if col >= to {
-			break
-		}
+	if from == to {
+		return ""
 	}
-	return b.String()
+	return ansi.Cut(ansi.Strip(s), from, to)
 }
 
 // ToolAt returns the tool call on a data line, or the zero ToolRef
@@ -147,15 +133,15 @@ func ToolAt(tools []ToolRef, line int) (ToolRef, bool) {
 	return ToolRef{}, false
 }
 
-// HoverStyle marks the tool row under the pointer: a strong block
-// bar on the left edge plus a bold line, so one row reads as a
-// pointer and a tool group never lights up as a block.
+// HoverStyle marks the tool row under the pointer: bold text, so
+// one row reads as a pointer and a tool group never lights up as a
+// block.
 var HoverStyle = lipgloss.NewStyle().Bold(true)
 
 // Hover returns the line with only the hovered data line marked.
 // Every other line is unchanged, even when it is also a tool row, so
 // a tool group never lights up as a block.
-func Hover(line string, row int, tools []ToolRef, dataLine, hoverLine int) string {
+func Hover(line string, tools []ToolRef, dataLine, hoverLine int) string {
 	if dataLine != hoverLine {
 		return line
 	}
@@ -176,31 +162,25 @@ var SelectedStyle = lipgloss.NewStyle().Reverse(true)
 var SelectedBar = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Magenta)
 
 // Selected marks only the selected data line as the chosen row,
-// padding it to full width so the reverse bar spans the viewport.
-// Every other line is unchanged.
-func Selected(line string, row int, tools []ToolRef, dataLine, selectedLine, width int) string {
+// padding it to full width so the reverse bar spans that width. The
+// row's own text, including its outcome mark, is kept: the reverse
+// spans the text from cell 0 and the tail is padded instead of
+// truncating the head.
+func Selected(line string, tools []ToolRef, dataLine, selectedLine, width int) string {
+	if width < 2 {
+		width = 2
+	}
 	if dataLine != selectedLine {
 		return line
 	}
 	if _, ok := ToolAt(tools, dataLine); !ok {
 		return line
 	}
-	padded := line
-	if wd := ansi.StringWidth(line); wd < width {
-		padded = line + strings.Repeat(" ", width-wd)
-	}
-	// Reverse the text and keep the polished edge separate.
+	plain := ansi.Strip(line)
+	// Keep the text from cell 0; drop from the tail to fit beside
+	// the 2-cell bar. The outcome mark at the head survives.
 	bar := SelectedBar.Render("▌ ")
-	text := sliceRunes(padded, 2, ansi.StringWidth(padded))
-	return bar + SelectedStyle.Render(text) + SelectedStyle.Render(strings.Repeat(" ", max(width-ansi.StringWidth(text)-2, 0)))
-}
-
-// VisibleRows lists the rows a drag touches, in order.
-func (r Range) VisibleRows() []int {
-	o := r.Ordered()
-	rows := make([]int, 0, o.End.Row-o.Start.Row+1)
-	for row := o.Start.Row; row <= o.End.Row; row++ {
-		rows = append(rows, row)
-	}
-	return rows
+	text := sliceRunes(plain, 0, max(width-2, 0))
+	tail := max(width-2-ansi.StringWidth(text), 0)
+	return bar + SelectedStyle.Render(text) + SelectedStyle.Render(strings.Repeat(" ", tail))
 }

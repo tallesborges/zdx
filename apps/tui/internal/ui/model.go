@@ -363,6 +363,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.composer.SetWidth(max(m.width-2, 10))
+		if m.detail != nil {
+			m.detailLines = transcript.Detail(m.fullThread(), m.detail.ID, m.width-1)
+		}
 		return m, nil
 	case readyMsg:
 		if msg.err != nil {
@@ -457,6 +460,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.attachImage(path)
 		}
 	case tea.MouseWheelMsg:
+		if m.overlay != nil {
+			return m, nil
+		}
 		if m.detail != nil {
 			switch msg.Button {
 			case tea.MouseWheelUp:

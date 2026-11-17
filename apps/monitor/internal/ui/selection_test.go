@@ -73,3 +73,50 @@ func TestMouseClickToolRowOpensDetail(t *testing.T) {
 		t.Fatalf("click on a tool row did not open the detail; frame:\n%s", plain(m))
 	}
 }
+
+func TestPlainClickCopiesNothing(t *testing.T) {
+	f := &fake{thread: func(_ context.Context, id string, _ *uint64) (data.Thread, error) {
+		return data.Thread{ID: id, Title: "selection", Cursor: 1, Activity: []data.Activity{
+			{Type: "message", Sequence: 0, Role: "assistant", Speaker: "assistant", Text: "hello selection"},
+		}}, nil
+	}}
+	m, _ := newModel(t, f)
+	pump(m, m.openTranscript("t-1", "t-1"))
+	tr := m.transcript
+	if tr == nil {
+		t.Fatal("no transcript")
+	}
+	// Text row is frame row 4 (body starts at 3, header at body 0).
+	_, _ = m.Update(tea.MouseClickMsg{X: 5, Y: 4, Button: tea.MouseLeft})
+	_, cmd := m.Update(tea.MouseReleaseMsg{X: 5, Y: 4, Button: tea.MouseLeft})
+	if cmd != nil {
+		t.Fatal("plain click returned a clipboard command")
+	}
+	if tr.sel != nil {
+		t.Fatal("plain click left a selection")
+	}
+	if tr.pane != nil {
+		t.Fatal("plain click on text opened a pane")
+	}
+}
+
+func TestHoverResetsOnScroll(t *testing.T) {
+	f := &fake{thread: func(_ context.Context, id string, _ *uint64) (data.Thread, error) {
+		return data.Thread{ID: id, Title: "selection", Cursor: 1, Activity: []data.Activity{
+			{Type: "message", Sequence: 0, Role: "assistant", Speaker: "assistant", Text: "hello selection with enough lines to scroll a little"},
+			{Type: "tool_use", Sequence: 1, ID: "c1", Name: "bash"},
+		}}, nil
+	}}
+	m, _ := newModel(t, f)
+	pump(m, m.openTranscript("t-1", "t-1"))
+	tr := m.transcript
+	if tr == nil {
+		t.Fatal("no transcript")
+	}
+	tr.hoverLine = 2
+	// Keyboard scroll must drop the stale hover mark.
+	_, _ = m.Update(tea.KeyPressMsg{Code: 'j'})
+	if tr.hoverLine != -1 {
+		t.Fatalf("scroll left hoverLine %d", tr.hoverLine)
+	}
+}

@@ -25,18 +25,18 @@ func TestToolAt(t *testing.T) {
 func TestHover(t *testing.T) {
 	tools := []ToolRef{{ID: "a", Start: 1, End: 2}, {ID: "b", Start: 2, End: 3}}
 	line := "tool row"
-	out := Hover(line, 0, tools, 1, 1)
+	out := Hover(line, tools, 1, 1)
 	if ansi.StringWidth(out) != 8 {
 		t.Fatalf("width %d", ansi.StringWidth(out))
 	}
 	if !strings.Contains(ansi.Strip(out), "tool") {
 		t.Fatalf("stripped %q", ansi.Strip(out))
 	}
-	if Hover(line, 0, tools, 0, 1) != line {
+	if Hover(line, tools, 0, 1) != line {
 		t.Fatal("off-row should be unchanged")
 	}
 	// A neighbouring tool row is not the hovered row.
-	if Hover(line, 0, tools, 2, 1) != line {
+	if Hover(line, tools, 2, 1) != line {
 		t.Fatal("neighbour tool row should be unchanged")
 	}
 }

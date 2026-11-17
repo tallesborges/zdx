@@ -292,7 +292,7 @@ func (m *Model) viewport(rows int) []string {
 				continue
 			}
 			j := start + (i - pad)
-			body[i] = transcript.Hover(l, i, tools, j, m.hoverLine)
+			body[i] = transcript.Hover(l, tools, j, m.hoverLine)
 		}
 	}
 	return body

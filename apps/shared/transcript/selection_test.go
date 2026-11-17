@@ -61,4 +61,55 @@ func TestHighlightKeepsOutsideStyle(t *testing.T) {
 	if Highlight(line, Range{Start: Pos{Row: 5, Col: 0}, End: Pos{Row: 5, Col: 4}}, 0) != line {
 		t.Fatal("outside row changed")
 	}
+	// A span entirely outside the line changes nothing, even styles.
+	if Highlight(line, Range{Start: Pos{Row: 0, Col: 100}, End: Pos{Row: 0, Col: 101}}, 0) != line {
+		t.Fatal("outside span changed the line")
+	}
+}
+
+func TestRangeTextKeepsGraphemes(t *testing.T) {
+	// Decomposed accent: cells are [x][e+combining][y].
+	lines := []string{"xe\u0301y"}
+	if got := (Range{Start: Pos{Row: 0, Col: 0}, End: Pos{Row: 0, Col: 1}}).Text(lines); got != "xe\u0301" {
+		t.Fatalf("decomposed text %q", got)
+	}
+	// Full range keeps every cluster whole.
+	if got := (Range{Start: Pos{Row: 0, Col: 0}, End: Pos{Row: 0, Col: 2}}).Text(lines); got != "xe\u0301y" {
+		t.Fatalf("full decomposed %q", got)
+	}
+}
+
+func TestHighlightKeepsGraphemesAndWidth(t *testing.T) {
+	lines := []string{"a e\u0301 👍🏽 👨‍👩‍👧‍👦 ｱ normal"}
+	plain := lines[0]
+	out := Highlight(plain, Range{Start: Pos{Row: 0, Col: 2}, End: Pos{Row: 0, Col: 6}}, 0)
+	if got := ansi.Strip(out); got != plain {
+		t.Fatalf("stripped %q, want %q", got, plain)
+	}
+	if ansi.StringWidth(out) != ansi.StringWidth(plain) {
+		t.Fatalf("width %d, want %d", ansi.StringWidth(out), ansi.StringWidth(plain))
+	}
+	// Hover and selected preserve the full line too.
+	tools := []ToolRef{{ID: "a", Start: 0, End: 1}}
+	if got := ansi.Strip(Hover(plain, tools, 0, 0)); got != plain {
+		t.Fatalf("hover stripped %q", got)
+	}
+	sel := Selected("✓ "+plain, tools, 0, 0, 60)
+	if !strings.Contains(ansi.Strip(sel), "✓") {
+		t.Fatalf("selected lost the mark: %q", ansi.Strip(sel))
+	}
+	if ansi.StringWidth(sel) != 60 {
+		t.Fatalf("selected width %d, want 60", ansi.StringWidth(sel))
+	}
+}
+
+func TestHighlightWideCharNoDuplicate(t *testing.T) {
+	line := "ＡＢ"
+	out := Highlight(line, Range{Start: Pos{Row: 0, Col: 1}, End: Pos{Row: 0, Col: 2}}, 0)
+	if got := ansi.Strip(out); got != line {
+		t.Fatalf("stripped %q, want %q", got, line)
+	}
+	if ansi.StringWidth(out) != 4 {
+		t.Fatalf("width %d, want 4", ansi.StringWidth(out))
+	}
 }
