@@ -139,7 +139,7 @@ func (m *Model) footer() string {
 }
 
 func (m *Model) renderOpts() transcript.Options {
-	return transcript.Options{Thinking: m.thinking, ExpandKey: "alt+t", GroupTurns: true}
+	return transcript.Options{Thinking: m.thinking, ExpandKey: "alt+t"}
 }
 
 // liveThread is what the saved thread does not have yet: the turns seen

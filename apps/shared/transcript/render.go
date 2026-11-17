@@ -288,12 +288,6 @@ type Options struct {
 	Thinking bool
 	// ExpandKey is the key a collapsed thinking block names (default "t").
 	ExpandKey string
-	// GroupTurns shows each assistant turn (its thinking, tool calls, and
-	// messages up to the next user message, notice, or interruption) under
-	// one header, with one usage line summing its requests at its end.
-	// Off, every assistant message has its own header and every request its
-	// own usage line.
-	GroupTurns bool
 }
 
 // usageSum adds up the usage lines of one assistant turn.
@@ -314,14 +308,7 @@ func (u *usageSum) add(a *Activity) {
 	}
 }
 
-// usageLine is one request's usage (ungrouped layout).
-func usageLine(input, output, read, create uint64, model string) string {
-	line := fmt.Sprintf("  · usage in %s out %s cache %s/%s %s",
-		Tokens(input), Tokens(output), Tokens(read), Tokens(create), model)
-	return Dim.Render(strings.TrimRight(line, " "))
-}
-
-// divider is a grouped turn's closing line: a short rule, then the turn's
+// divider is a turn's closing line: a short rule, then the turn's
 // tokens in and out, cache reads and writes when there were any, the
 // request count when more than one, and the models when more than one
 // ran, cut to width.
@@ -357,8 +344,13 @@ func assistantSide(a *Activity) bool {
 }
 
 // Render lays the transcript out as lines and records each tool row's span.
-// Message, thinking, and interruption text is Markdown; tool rows and their
-// output are not. md may be nil.
+// Each assistant turn (its usage, thinking, tool calls, and messages up to
+// the next user message, notice, or interruption) shows under one header,
+// with one divider summing its requests at its end. A request's usage is
+// saved before its items, so usage opens a turn too: a turn whose requests
+// showed nothing still gets its header, never a divider under the user
+// message. Message, thinking, and interruption text is Markdown; tool rows
+// and their output are not. md may be nil.
 func Render(th *Thread, width int, opts Options, md *Cache) ([]string, []ToolRef) {
 	if th == nil {
 		return nil, nil
@@ -395,9 +387,12 @@ func Render(th *Thread, width int, opts Options, md *Cache) ([]string, []ToolRef
 		lines = append(lines, style.Bold(true).Render("▌ "+who)+Dim.Render("  "+time))
 		headerEnd = len(lines)
 	}
-	// Grouped turns: the turn's header is shown, and the usage of its
-	// requests waits for its end.
+	// The turn's header is shown, and the usage of its requests waits for
+	// its end.
 	inTurn := false
+	// lastWho is the last assistant speaker: the header of a turn with no
+	// message of its own.
+	lastWho := "assistant"
 	var pending usageSum
 	endTurn := func() {
 		if pending.requests > 0 {
@@ -420,32 +415,29 @@ func Render(th *Thread, width int, opts Options, md *Cache) ([]string, []ToolRef
 			}
 		}
 		if who == "" {
-			who = "assistant"
+			who = lastWho
 		}
+		lastWho = who
 		gap()
 		header(who, "assistant", time)
 		inTurn = true
 	}
 	for i := range th.Activity {
 		a := &th.Activity[i]
-		if opts.GroupTurns {
-			switch {
-			case assistantSide(a):
-				if !inTurn && a.Type != "usage" {
-					startTurn(i)
-				}
-			default:
-				endTurn()
-			}
+		switch {
+		case !assistantSide(a):
+			endTurn()
+		case !inTurn:
+			startTurn(i)
 		}
 		switch a.Type {
 		case "message":
 			gap()
-			who := a.Speaker
-			if who == "" {
-				who = a.Role
-			}
-			if !opts.GroupTurns || a.Role == "user" {
+			if a.Role == "user" {
+				who := a.Speaker
+				if who == "" {
+					who = a.Role
+				}
 				header(who, a.Role, a.Time)
 			}
 			if a.Text != "" {
@@ -489,11 +481,7 @@ func Render(th *Thread, width int, opts Options, md *Cache) ([]string, []ToolRef
 			tools = append(tools, ToolRef{ID: id, Start: len(lines), End: len(lines) + 1})
 			lines = append(lines, ToolLine(byID[id]))
 		case "usage":
-			if opts.GroupTurns {
-				pending.add(a)
-				continue
-			}
-			lines = append(lines, usageLine(a.InputTokens, a.OutputTokens, a.CacheReadTokens, a.CacheWriteTokens, str(a.Model)))
+			pending.add(a)
 		case "notice":
 			gap()
 			if a.Kind == "turn_failed" {
@@ -512,9 +500,7 @@ func Render(th *Thread, width int, opts Options, md *Cache) ([]string, []ToolRef
 			lines = append(lines, Dim.Render("["+a.Type+"]"))
 		}
 	}
-	if opts.GroupTurns {
-		endTurn()
-	}
+	endTurn()
 	return lines, tools
 }
 
