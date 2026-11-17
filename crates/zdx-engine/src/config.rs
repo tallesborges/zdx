@@ -1231,9 +1231,10 @@ impl Config {
     /// selection, so a surface shows both the tier and what it runs now.
     #[must_use]
     pub fn model_label(&self) -> String {
+        let model = crate::models::effective_model_spec(&self.model);
         match self.mode_selection() {
-            Some(reference) => format!("{reference} → {}", self.model),
-            None => self.model.clone(),
+            Some(reference) => format!("{reference} → {model}"),
+            None => model,
         }
     }
 

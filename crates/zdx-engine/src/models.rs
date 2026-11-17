@@ -375,6 +375,18 @@ pub fn effective_thinking_level(
     }
 }
 
+/// The spec a surface shows for `model`: unchanged, or without its thinking
+/// level for a model without reasoning, whose stored level (a thread picked
+/// it with one before) is never sent.
+#[must_use]
+pub fn effective_model_spec(model: &str) -> String {
+    if model_supports_reasoning(model) {
+        model.to_string()
+    } else {
+        ModelSpec::parse(model).without_thinking()
+    }
+}
+
 /// Returns true if the model accepts image input, defaulting to true when
 /// unknown.
 ///

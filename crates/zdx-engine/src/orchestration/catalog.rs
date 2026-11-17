@@ -345,7 +345,7 @@ pub fn picker(query: &PickerQuery) -> Result<Picker> {
             }
         }
     };
-    picker.model.clone_from(&current.model);
+    picker.model = crate::models::effective_model_spec(&current.model);
     picker.thinking =
         crate::models::effective_thinking_level(&current.model, current.thinking_level)
             .display_name()
@@ -788,7 +788,7 @@ pub fn thread_status(
         pricing,
         workers,
         parent_orchestrator,
-        model: config.model,
+        model: crate::models::effective_model_spec(&config.model),
     })
 }
 
@@ -1060,6 +1060,10 @@ mod tests {
         assert_eq!(listed(false), Some(0), "{:?}", picker.models);
         assert_eq!(listed(true), Some(ThinkingLevel::all().len()));
         assert_eq!(picker.thinking, "off");
-        assert_eq!(thread_status(&root, "topic", None).unwrap().thinking, "off");
+        assert_eq!(picker.model, fixed, "the stored @high is not shown");
+        let status = thread_status(&root, "topic", None).unwrap();
+        assert_eq!(status.thinking, "off");
+        assert_eq!(status.model, fixed);
+        assert_eq!(picker.label, fixed);
     }
 }
