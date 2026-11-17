@@ -681,12 +681,23 @@ fn update_thread(manager: &Arc<WorkerManager>, input: &Value) -> ToolOutput {
     }
 }
 
+/// `prompt_id` as the model sent it: an integer, or a numeric string
+/// (small models often send numbers as strings). `None` when absent or
+/// neither form.
+fn prompt_id_value(input: &Value) -> Option<u64> {
+    match input.get("prompt_id")? {
+        Value::Number(number) => number.as_u64(),
+        Value::String(text) => text.trim().parse().ok(),
+        _ => None,
+    }
+}
+
 fn remove_thread_prompt(manager: &Arc<WorkerManager>, input: &Value) -> ToolOutput {
     let thread_id = match required_str(input, "thread_id") {
         Ok(value) => value,
         Err(failure) => return failure,
     };
-    let Some(prompt_id) = input.get("prompt_id").and_then(Value::as_u64) else {
+    let Some(prompt_id) = prompt_id_value(input) else {
         return ToolOutput::failure(
             "invalid_input",
             "Missing required integer field: prompt_id",
@@ -986,6 +997,40 @@ mod tests {
             remove_thread_prompt(&manager, &json!({"thread_id": id, "prompt_id": prompt_id}));
         let (code, _, _) = again.error_info().unwrap();
         assert_eq!(code, "remove_thread_prompt_failed");
+        release_tx.send(true).unwrap();
+    }
+
+    #[tokio::test]
+    async fn remove_thread_prompt_accepts_a_numeric_string_prompt_id() {
+        let home = crate::test_support::temp_zdx_home();
+        let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+        let (manager, _events) = WorkerManager::with_runner(Arc::new(move |request| {
+            let mut release = release_rx.clone();
+            Box::pin(async move {
+                release.wait_for(|released| *released).await.unwrap();
+                Ok(request.prompt)
+            })
+        }));
+        let id = manager
+            .create_worker("owner", home.path(), "first", None, None, None)
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let sent = send_thread_message(
+            &manager,
+            "owner",
+            &json!({"thread_id": id, "message": "stale"}),
+        );
+        let prompt_id = sent.data().unwrap()["worker"]["queue"][0]["prompt_id"]
+            .as_u64()
+            .unwrap();
+
+        let removed = remove_thread_prompt(
+            &manager,
+            &json!({"thread_id": id, "prompt_id": prompt_id.to_string()}),
+        );
+        let data = removed.data().unwrap();
+        assert_eq!(data["removed"]["prompt_id"], prompt_id);
+        assert_eq!(data["worker"]["queue_depth"], 0);
         release_tx.send(true).unwrap();
     }
 
