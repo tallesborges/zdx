@@ -38,6 +38,30 @@ func TestHeadTextPrefersShellLabelOverCommand(t *testing.T) {
 	}
 }
 
+// User prose is tinted apart from assistant prose; assistant prose
+// and thinking stay default and dim. Tool rows stay muted.
+func TestRoleColoursSeparate(t *testing.T) {
+	lines, _ := Render(turns(), 100, Options{}, nil)
+	joined := strings.Join(lines, "\n")
+	user := User.paint(0, "what is it?")
+	assistant := Normal.paint(0, "Let me read it.")
+	if !strings.Contains(joined, user) {
+		t.Fatalf("user prose not tinted:\n%s", ansi.Strip(joined))
+	}
+	if !strings.Contains(joined, assistant) {
+		t.Fatalf("assistant prose not plain:\n%s", ansi.Strip(joined))
+	}
+	if user == assistant {
+		t.Fatal("user and assistant themes must differ")
+	}
+	if !strings.Contains(joined, ToolName.Render("read")) {
+		t.Fatalf("tool name not muted teal:\n%s", ansi.Strip(joined))
+	}
+	if strings.Contains(joined, Bold.Render("read")) {
+		t.Fatal("tool name should not be plain bold")
+	}
+}
+
 func plain(lines []string) string {
 	return ansi.Strip(strings.Join(lines, "\n"))
 }
@@ -82,6 +106,25 @@ func TestGroupedDividerParts(t *testing.T) {
 	}
 	if got := ansi.Strip(u.divider(14)); ansi.StringWidth(got) > 14 || !strings.HasSuffix(got, "…") {
 		t.Fatalf("narrow divider %q", got)
+	}
+}
+
+// The divider shows summed model time only when a terminal usage
+// carries a duration, and never calls it turn time.
+func TestGroupedDividerShowsModelTime(t *testing.T) {
+	d := uint64(12_300)
+	u := usageSum{requests: 2, input: 100, output: 10, durationMS: d, measured: 2}
+	if got := ansi.Strip(u.divider(100)); !strings.Contains(got, "12.3s/2") {
+		t.Fatalf("divider %q", got)
+	}
+	u.measured = 0
+	if got := ansi.Strip(u.divider(100)); strings.Contains(got, "/") {
+		t.Fatalf("unmeasured divider %q", got)
+	}
+	for v, want := range map[uint64]string{450: "450ms", 5_000: "5.0s", 64_000: "1m 04s"} {
+		if got := msText(v); got != want {
+			t.Fatalf("msText(%d) %q, want %q", v, got, want)
+		}
 	}
 }
 

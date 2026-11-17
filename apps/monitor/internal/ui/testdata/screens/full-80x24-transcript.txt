@@ -1,24 +1,24 @@
  ‹ Transcript  Go monitor: polish the Bubble Tea dashboard
  ⠋ tool bash: go test -race ./... · 3 messages · 14 events · worker of zdx orch…
 ────────────────────────────────────────────────────────────────────────────────
-   • go vet checks the whole module.
-   • The import was strings; nothing used it after the refactor.
-     ◦ The race tests run next.
-
-   How to check it
-
-   Run this in your terminal:
-
-   sh
-   ▎ go vet ./... && go test -race -count=1 ./internal/ui ./internal/source ./i
-   ┊ nternal/wire
-
-   See the vet docs (https://pkg.go.dev/cmd/vet) for the full list of checks.
-
-   ──  ↑48.2k ↓1.8k · 41.0k cached
-
- ! context: Context is 81% full; older tool output will be compacted.
-
- ▌ Z  14:21
- … bash $ go test -race ./... running 38s
+   • go vet checks the whole module.                                           │
+   • The import was strings; nothing used it after the refactor.               │
+     ◦ The race tests run next.                                                │
+                                                                               │
+   How to check it                                                             │
+                                                                               │
+   Run this in your terminal:                                                  │
+                                                                               │
+   sh                                                                          │
+   ▎ go vet ./... && go test -race -count=1 ./internal/ui ./internal/source ./i█
+   ┊ nternal/wire                                                              █
+                                                                               █
+   See the vet docs (https://pkg.go.dev/cmd/vet) for the full list of checks.  █
+                                                                               █
+   ──  ↑48.2k ↓1.8k · 41.0k cached                                             █
+                                                                               █
+ ! context: Context is 81% full; older tool output will be compacted.          █
+                                                                               █
+ ▌ Z  14:21                                                                    █
+ … bash $ go test -race ./... running 38s                                      █
  esc back  n/p tools  ↵ detail            updated 0s ago · ● connected · ? help

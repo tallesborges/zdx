@@ -13,12 +13,13 @@ import (
 // Styles of the transcript layout. Surfaces may use them for their own
 // chrome so a thread looks the same everywhere.
 var (
-	Dim    = lipgloss.NewStyle().Foreground(lipgloss.BrightBlack)
-	Bold   = lipgloss.NewStyle().Bold(true)
-	OK     = lipgloss.NewStyle().Foreground(lipgloss.Green)
-	Warn   = lipgloss.NewStyle().Foreground(lipgloss.Yellow)
-	Bad    = lipgloss.NewStyle().Foreground(lipgloss.Red)
-	Accent = lipgloss.NewStyle().Foreground(lipgloss.Magenta)
+	Dim      = lipgloss.NewStyle().Foreground(lipgloss.BrightBlack)
+	Bold     = lipgloss.NewStyle().Bold(true)
+	OK       = lipgloss.NewStyle().Foreground(lipgloss.Green)
+	Warn     = lipgloss.NewStyle().Foreground(lipgloss.Yellow)
+	Bad      = lipgloss.NewStyle().Foreground(lipgloss.Red)
+	Accent   = lipgloss.NewStyle().Foreground(lipgloss.Magenta)
+	ToolName = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.ANSIColor(66))
 
 	ok = OK
 )
@@ -267,14 +268,17 @@ func IsToolLine(tools []ToolRef, line int) bool {
 	return len(tools) > 0 && tools[len(tools)-1].End-1 == line
 }
 
-// ToolLine is the one-line row of a call.
+// ToolLine is the one-line row of a call. It is muted on purpose:
+// the assistant prose around it is what the reader follows, so the
+// row stays quiet and only the outcome mark and tool name carry
+// colour. Detail shows the full head and output.
 func ToolLine(c *Call) string {
 	v := c.View()
 	head := ""
 	if v != nil {
 		head = HeadText(v.Head)
 	}
-	line := fmt.Sprintf("%s %s %s", OutcomeMark(c.Outcome()), Bold.Render(c.Name()), OneLine(head))
+	line := fmt.Sprintf("%s %s %s", OutcomeMark(c.Outcome()), ToolName.Render(c.Name()), Dim.Render(OneLine(head)))
 	if c.FinishedLive() {
 		line += Dim.Render(" finished " + c.Running.RunningFor + ", not saved yet")
 	} else if c.Running != nil && c.Result == nil {
@@ -301,6 +305,10 @@ type usageSum struct {
 	requests                    int
 	input, output, read, create uint64
 	models                      []string
+	// durationMS sums the terminal usage durations. It is model time
+	// only, not the whole turn (tools run between requests).
+	durationMS uint64
+	measured   int
 }
 
 func (u *usageSum) add(a *Activity) {
@@ -309,6 +317,10 @@ func (u *usageSum) add(a *Activity) {
 	u.output += a.OutputTokens
 	u.read += a.CacheReadTokens
 	u.create += a.CacheWriteTokens
+	if a.DurationMS != nil {
+		u.durationMS += *a.DurationMS
+		u.measured++
+	}
 	if m := str(a.Model); m != "" && (len(u.models) == 0 || u.models[len(u.models)-1] != m) {
 		u.models = append(u.models, m)
 	}
@@ -316,8 +328,8 @@ func (u *usageSum) add(a *Activity) {
 
 // divider is a turn's closing line: a short rule, then the turn's
 // tokens in and out, cache reads and writes when there were any, the
-// request count when more than one, and the models when more than one
-// ran, cut to width.
+// request count when more than one, the model request time when
+// measured, and the models when more than one ran, cut to width.
 func (u *usageSum) divider(width int) string {
 	parts := []string{"↑" + Tokens(u.input) + " ↓" + Tokens(u.output)}
 	if u.read > 0 {
@@ -329,10 +341,24 @@ func (u *usageSum) divider(width int) string {
 	if u.requests > 1 {
 		parts = append(parts, fmt.Sprintf("%dx", u.requests))
 	}
+	if u.measured > 0 {
+		parts = append(parts, msText(u.durationMS)+"/"+fmt.Sprint(u.measured))
+	}
 	if len(u.models) > 1 {
 		parts = append(parts, strings.Join(u.models, ", "))
 	}
 	return Fit(ruleStyle.Render("  ──  ")+Dim.Render(strings.Join(parts, " · ")), width)
+}
+
+// msText formats a millisecond span short: 450ms, 12.3s, 1m 04s.
+func msText(v uint64) string {
+	switch {
+	case v < 1000:
+		return fmt.Sprintf("%dms", v)
+	case v < 60_000:
+		return fmt.Sprintf("%.1fs", float64(v)/1000)
+	}
+	return fmt.Sprintf("%dm %02ds", v/60_000, (v%60_000)/1000)
 }
 
 // ruleStyle is the divider's rule: fainter than the text after it.
@@ -374,6 +400,11 @@ func Render(th *Thread, width int, opts Options, md *Cache) ([]string, []ToolRef
 		}
 	}
 	prose := func(a *Activity, theme *Theme) []string {
+		// User messages keep a soft warm tint so they read apart
+		// from assistant prose, which stays default bright.
+		if a.Type == "message" && a.Role == "user" {
+			theme = User
+		}
 		return md.Render(a.Sequence, a.Text, width-4, theme)
 	}
 	indent := func(ls []string) {
@@ -523,7 +554,7 @@ func Detail(th *Thread, id string, width int) []string {
 	v := c.View()
 	var out []string
 	add := func(s ...string) { out = append(out, s...) }
-	add(fmt.Sprintf(" %s %s %s", OutcomeMark(c.Outcome()), Bold.Render(c.Name()), Dim.Render(id)))
+	add(fmt.Sprintf(" %s %s %s", OutcomeMark(c.Outcome()), ToolName.Render(c.Name()), Dim.Render(id)))
 	if c.FinishedLive() {
 		add(Dim.Render(" finished " + c.Running.RunningFor + "; the result is shown once its round is saved"))
 	}

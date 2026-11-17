@@ -38,22 +38,30 @@ const (
 )
 
 // Theme styles one kind of prose. A muted theme (thinking) keeps the
-// structure and formats but draws everything dim.
+// structure and formats but draws everything dim. The user theme
+// keeps the same structure but tints plain text a soft warm grey, so
+// user messages read apart from assistant prose without a new hue.
 type Theme struct {
 	muted  bool
+	user   bool
 	styles map[mdFlag]lipgloss.Style
 	paints map[mdFlag][2]string
 }
 
 var (
-	Normal = newMDTheme(false)
-	Muted  = newMDTheme(true)
+	Normal = newMDTheme(false, false)
+	Muted  = newMDTheme(true, false)
+	User   = newMDTheme(false, true)
 
 	mdCodeColor  = lipgloss.ANSIColor(216)
 	mdLinkColor  = lipgloss.Blue
-	mdGutter     = lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(240))
-	mdQuoteBar   = lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(242))
-	mdTableLines = lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(240))
+	mdUserText   = lipgloss.ANSIColor(223)
+	mdGutter     = lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(243))
+	mdQuoteBar   = lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(66))
+	mdTableLines = lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(243))
+	mdBullet     = lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(66))
+	mdCodeText   = lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(250))
+	mdItalic     = lipgloss.ANSIColor(244)
 
 	codeGutter     = mdGutter.Render("▎ ")
 	codeGutterMore = mdGutter.Render("┊ ")
@@ -69,6 +77,8 @@ func (t *Theme) style(f mdFlag) lipgloss.Style {
 	switch {
 	case t.muted:
 		s = s.Foreground(lipgloss.BrightBlack)
+	case t.user && f&(fCode|fLink|fURL|fHTML|fHeading|fHeading1) == 0:
+		s = s.Foreground(mdUserText)
 	case f&fHTML != 0 || f&fURL != 0:
 		s = s.Foreground(lipgloss.BrightBlack)
 	case f&fCode != 0:
@@ -83,6 +93,12 @@ func (t *Theme) style(f mdFlag) lipgloss.Style {
 	}
 	if f&fItalic != 0 {
 		s = s.Italic(true)
+		// Plain emphasis is quieter than body text, so it reads
+		// as aside without pulling focus. Bold, code, links and
+		// headings keep body brightness. User prose keeps its tint.
+		if f&(fBold|fCode|fLink|fURL|fHTML|fHeading|fHeading1|fStrike) == 0 && !t.muted && !t.user {
+			s = s.Foreground(mdItalic)
+		}
 	}
 	if f&(fLink|fHeading1) != 0 && !t.muted {
 		s = s.Underline(true)
@@ -94,8 +110,8 @@ func (t *Theme) style(f mdFlag) lipgloss.Style {
 	return s
 }
 
-func newMDTheme(muted bool) *Theme {
-	t := &Theme{muted: muted, styles: map[mdFlag]lipgloss.Style{}, paints: map[mdFlag][2]string{}}
+func newMDTheme(muted, user bool) *Theme {
+	t := &Theme{muted: muted, user: user, styles: map[mdFlag]lipgloss.Style{}, paints: map[mdFlag][2]string{}}
 	// Fill both maps now: the themes are shared, and tests render from
 	// several goroutines.
 	for f := mdFlag(0); f < fHeading1<<1; f++ {
@@ -280,7 +296,7 @@ func (r *mdRenderer) list(n *ast.List, width int) []string {
 		}
 		if width-markW < 6 {
 			// No room to indent: the marker gets its own line.
-			out = append(out, mdGutter.Render(ansi.Truncate(marker, width, "")))
+			out = append(out, mdBullet.Render(ansi.Truncate(marker, width, "")))
 			out = append(out, r.blocks(item, width)...)
 			continue
 		}
@@ -291,7 +307,7 @@ func (r *mdRenderer) list(n *ast.List, width int) []string {
 		indent := strings.Repeat(" ", markW)
 		for i, l := range body {
 			if i == 0 {
-				out = append(out, mdGutter.Render(marker)+" "+l)
+				out = append(out, mdBullet.Render(marker)+" "+l)
 			} else if l == "" {
 				out = append(out, "")
 			} else {
@@ -329,10 +345,10 @@ func itoa(n int) string {
 func (r *mdRenderer) code(n *ast.CodeBlock, width int) []string {
 	var out []string
 	if lang, ok := n.Language(r.src); ok {
-		out = append(out, mdGutter.Render(ansi.Truncate(r.str(lang), width, "…")))
+		out = append(out, mdBullet.Render(ansi.Truncate(r.str(lang), width, "…")))
 	}
 	text := strings.TrimSuffix(n.Value.Str(r.src), "\n")
-	paint := func(s string) string { return s }
+	paint := func(s string) string { return mdCodeText.Render(s) }
 	if r.theme.muted {
 		paint = func(s string) string { return r.theme.paint(0, s) }
 	}
@@ -827,6 +843,7 @@ type cacheKey struct {
 	seq   uint64
 	width int
 	muted bool
+	user  bool
 }
 
 type cacheEntry struct {
@@ -843,7 +860,7 @@ func (c *Cache) Render(seq uint64, text string, width int, theme *Theme) []strin
 	if c.next == nil {
 		c.next = map[cacheKey]cacheEntry{}
 	}
-	k := cacheKey{seq: seq, width: width, muted: theme.muted}
+	k := cacheKey{seq: seq, width: width, muted: theme.muted, user: theme.user}
 	if e, ok := c.next[k]; ok && e.text == text {
 		return e.lines
 	}

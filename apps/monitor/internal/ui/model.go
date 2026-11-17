@@ -119,6 +119,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseWheelMsg:
 		m.handleWheel(msg.Mouse())
 		return m, nil
+	case tea.MouseClickMsg:
+		return m, m.mouseClick(msg.Mouse())
+	case tea.MouseMotionMsg:
+		return m, m.mouseMotion(msg.Mouse())
+	case tea.MouseReleaseMsg:
+		return m, m.mouseRelease(msg.Mouse())
 	}
 	return m, nil
 }
@@ -427,7 +433,7 @@ func (m *Model) handleWheel(mouse tea.Mouse) {
 func (m *Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	v.MouseMode = tea.MouseModeAllMotion
 	v.WindowTitle = "zdx monitor"
 	return v
 }

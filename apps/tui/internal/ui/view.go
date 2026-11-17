@@ -16,7 +16,7 @@ import (
 func (m *Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	v.MouseMode = tea.MouseModeAllMotion
 	name := m.title
 	if name == "" {
 		name = "new thread"
@@ -205,6 +205,27 @@ func (m *Model) transcriptLines(width int) []string {
 	return append(out, m.followupLines(width)...)
 }
 
+// transcriptLinesAndTools is transcriptLines with the tool spans.
+// Persisted spans come from the render; live spans are offset past
+// the persisted length and the gap row.
+func (m *Model) transcriptLinesAndTools(width int) ([]string, []transcript.ToolRef) {
+	lines := m.transcriptLines(width)
+	_, tools := transcript.Render(m.thread, width, m.renderOpts(), &m.md)
+	m.md.Done()
+	base := len(m.lines)
+	if base > 0 {
+		base++
+	}
+	if len(m.cachedLive) > 0 {
+		_, liveTools := transcript.Render(m.liveThread(), width, m.renderOpts(), &m.liveMD)
+		m.liveMD.Done()
+		for _, t := range liveTools {
+			tools = append(tools, transcript.ToolRef{ID: t.ID, Start: t.Start + base, End: t.End + base})
+		}
+	}
+	return lines, tools
+}
+
 // followupLines are the last reply's suggested replies: a header that names
 // the key that picks one, then one reply per line.
 func (m *Model) followupLines(width int) []string {
@@ -219,8 +240,12 @@ func (m *Model) followupLines(width int) []string {
 }
 
 func (m *Model) viewport(rows int) []string {
+	if m.detail != nil {
+		return m.detailViewport(rows)
+	}
 	w := m.width - 1
 	lines := m.transcriptLines(w)
+	_, tools := m.transcriptLinesAndTools(w)
 	if len(lines) == 0 {
 		lines = m.emptyLines()
 	}
@@ -228,12 +253,47 @@ func (m *Model) viewport(rows int) []string {
 	m.scroll = min(m.scroll, maxScroll)
 	end := len(lines) - m.scroll
 	start := max(end-rows, 0)
+	bar := transcript.Scrollbar(len(lines), start, rows)
 	body := make([]string, 0, rows)
 	for _, l := range lines[start:end] {
-		body = append(body, transcript.Fit(" "+l, m.width))
+		line := transcript.Fit(" "+l, m.width)
+		if bar != nil {
+			// The scrollbar overlays the last column: cut it cleanly
+			// (no ellipsis) instead of re-wrapping the transcript, and
+			// pad short lines so the cell sits at the edge.
+			line = ansi.Truncate(line, m.width-1, "")
+			if wd := ansi.StringWidth(line); wd < m.width-1 {
+				line += strings.Repeat(" ", m.width-1-wd)
+			}
+			line += bar[len(body)]
+		}
+		body = append(body, line)
 	}
 	for len(body) < rows {
 		body = append([]string{""}, body...)
+	}
+	if m.sel != nil {
+		for i, l := range body {
+			// The range is in body coordinates; body row i is
+			// screen row m.bodyTop()+i, so the range row matches
+			// index i directly.
+			body[i] = transcript.Highlight(l, *m.sel, i)
+		}
+	}
+	// Hover marks only the tool row under the pointer. It is skipped
+	// while dragging so the two highlights never fight. The body is
+	// front-padded with empty rows when the transcript is shorter
+	// than the viewport, so body index i maps to data line
+	// start+(i-pad), not start+i.
+	pad := rows - (end - start)
+	if m.sel == nil {
+		for i, l := range body {
+			if i < pad {
+				continue
+			}
+			j := start + (i - pad)
+			body[i] = transcript.Hover(l, i, tools, j, m.hoverLine)
+		}
 	}
 	return body
 }

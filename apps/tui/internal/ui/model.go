@@ -153,6 +153,20 @@ type Model struct {
 	linesKey   string
 	liveDirty  bool
 	cachedLive []string
+
+	// mouse drag selection over the transcript viewport.
+	sel     *transcript.Range
+	selDrag bool
+	// selLines are the plain lines the selection maps to: the viewport
+	// body before highlight, in screen order.
+	selLines []string
+
+	// mouse hover over the transcript viewport (a data line, or -1),
+	// and the open tool detail (nil when closed).
+	hoverLine    int
+	detail       *transcript.ToolRef
+	detailScroll int
+	detailLines  []string
 }
 
 // New returns a chat model.
@@ -174,7 +188,7 @@ func New(ctx context.Context, be Backend, opts Options) *Model {
 	ta.KeyMap.PageDown = key.NewBinding()
 	ta.KeyMap.DeleteCharacterForward = key.NewBinding(key.WithKeys("delete"))
 	ta.Focus()
-	m := &Model{ctx: ctx, be: be, opts: opts, composer: ta, histPos: -1, early: map[uint64]uint64{}}
+	m := &Model{ctx: ctx, be: be, opts: opts, composer: ta, histPos: -1, early: map[uint64]uint64{}, hoverLine: -1}
 	if opts.ThreadID != "" {
 		m.threadID, m.saved = opts.ThreadID, true
 	} else {
@@ -443,6 +457,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.attachImage(path)
 		}
 	case tea.MouseWheelMsg:
+		if m.detail != nil {
+			switch msg.Button {
+			case tea.MouseWheelUp:
+				m.detailScroll--
+			case tea.MouseWheelDown:
+				m.detailScroll++
+			}
+			return m, nil
+		}
 		switch msg.Button {
 		case tea.MouseWheelUp:
 			m.scrollBy(3)
@@ -450,6 +473,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scrollBy(-3)
 		}
 		return m, nil
+	case tea.MouseClickMsg:
+		return m, m.mouseClick(msg.Mouse())
+	case tea.MouseMotionMsg:
+		return m, m.mouseMotion(msg.Mouse())
+	case tea.MouseReleaseMsg:
+		return m, m.mouseRelease(msg.Mouse())
 	case tea.KeyPressMsg:
 		if cmd, handled := m.handleKey(msg); handled {
 			return m, cmd
@@ -980,6 +1009,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	k := msg.String()
 	if m.overlay != nil {
 		return m.overlayKey(msg), true
+	}
+	if m.detail != nil {
+		return m.detailKey(msg), true
 	}
 	switch k {
 	case "ctrl+c":
