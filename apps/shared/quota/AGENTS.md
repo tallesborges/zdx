@@ -1,10 +1,10 @@
 # apps/shared/quota
 
-Live subscription quotas (Claude, Codex, Antigravity, Grok Build, OpenCode Go, Muse Code) and the shared CLI and view converters. Go port of the Rust quota readers (`crates/zdx-providers/src/subscription_quota.rs`), `zdx quota` output (`crates/zdx-cli/src/cli/commands/quota.rs`), and the subscription part of `crates/zdx-engine/src/orchestration/view_bodies/monitor.rs`, all at commit `aab08ba4`. The Rust readers are removed; that commit is the reference.
+Live subscription quotas (Claude, Codex, Antigravity, Grok Build, Muse Code) and the shared CLI and view converters. Go port of the Rust quota readers (`crates/zdx-providers/src/subscription_quota.rs`), `zdx quota` output (`crates/zdx-cli/src/cli/commands/quota.rs`), and the subscription part of `crates/zdx-engine/src/orchestration/view_bodies/monitor.rs`, all at commit `aab08ba4`. The Rust readers are removed; that commit is the reference.
 
 ## Rules
 
-- Credentials are read-only. Read `oauth.json` and `OPENCODE_API_KEY`; never refresh, mint, or write a token, never take `oauth.lock`, never write a file. Muse Code sends the stored identity token (the `refresh` field) and discards the key the mint call returns.
+- Credentials: Fetch reads `oauth.json` and refreshes expired or soon-to-expire (within 5 min) access tokens with their refresh tokens under `oauth.lock` (atomic rename), so the monitor never shows `expired` while a refresh token is valid. Muse Code re-mints its key on every quota fetch, so it is covered by the same invariant; a 401 from its mint maps to `KindExpired` (re-login).
 - Errors stay bounded: an account failure is an `Error` kind, a discovery failure wraps `ErrDiscovery` with the file path and a cause that never quotes file contents. Never put a response body, token, header value, or URL in an error or log.
 - `testdata/differential/` is the parity contract: 62 raw provider bodies with the output the Rust readers recorded. `recorder.rs.txt` there is the reconstructed recorder source with the commit, crate versions, and steps to re-record. Never rewrite a `.out.json` from Go. A parser change must keep every case passing.
 - Decoding (`wire.go`) follows serde derive plus `serde_json::from_slice` where the fixtures and tests pin it; the package comment there lists the rules. Do not swap it for `encoding/json` struct decoding.

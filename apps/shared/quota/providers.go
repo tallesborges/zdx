@@ -131,27 +131,13 @@ func (f *fetcher) grok(ctx context.Context, c *credentials) (*Quota, *Error) {
 	return incompatibleUnless(parseGrok(body))
 }
 
-// openCodeGo uses OPENCODE_API_KEY only (Rust resolves it with no config
-// key). A set but empty key is sent, as in Rust; the account is ignored.
-func (f *fetcher) openCodeGo(ctx context.Context) (*Quota, *Error) {
-	key, ok := f.lookupEnv("OPENCODE_API_KEY")
-	if !ok {
-		return nil, failure(KindNotAuthenticated)
-	}
-	body, err := f.do(ctx, request{method: "GET", url: f.urls.OpenCodeGoUsage, headers: [][2]string{
-		bearer(key),
-		{"Accept", "application/json"},
-	}})
-	if err != nil {
-		return nil, err
-	}
-	return incompatibleUnless(parseOpenCodeGo(body))
-}
-
 // museCode reads the allowance from the key-mint call, sent with the stored
 // identity token (the `refresh` field). The minted key in the answer is
 // discarded and nothing is written. No expiry check: the stored expiry is
-// the minted key's, not the identity token's.
+// the minted key's, not the identity token's. The key-mint call is itself
+// the refresh: every quota fetch re-mints, so Muse Code is auto-refreshed
+// on each monitor poll without a separate refresh-token flow. A 401 from
+// the mint means the identity token was rejected and the user must re-login.
 func (f *fetcher) museCode(ctx context.Context, c *credentials) (*Quota, *Error) {
 	if c == nil {
 		return nil, failure(KindNotAuthenticated)
@@ -164,6 +150,9 @@ func (f *fetcher) museCode(ctx context.Context, c *credentials) (*Quota, *Error)
 		{"user-agent", "zdx/" + f.version},
 	}, body: []byte("{}")})
 	if err != nil {
+		if err.Kind == KindUnauthorized {
+			return nil, failure(KindExpired)
+		}
 		return nil, err
 	}
 	return museOutcome(body)
@@ -638,56 +627,6 @@ func parseGrok(body []byte) (*Quota, error) {
 		}
 	}
 	return &Quota{Plan: tier, Windows: []Window{window(label, orZero(used), end, nil)}}, nil
-}
-
-// parseOpenCodeGo keeps windows whose status is "ok" and whose percent is
-// finite and within 0..=100.
-func parseOpenCodeGo(body []byte) (*Quota, error) {
-	doc, err := document(body)
-	if err != nil {
-		return nil, err
-	}
-	root, err := object(doc, "usage")
-	if err != nil {
-		return nil, err
-	}
-	usage, err := root.optObject("usage", "rolling", "weekly", "monthly")
-	if err != nil || usage == nil {
-		return nil, err
-	}
-	var windows []Window
-	for _, item := range [][2]string{{"rolling", "5h"}, {"weekly", "weekly"}, {"monthly", "monthly"}} {
-		w, err := usage.optObject(item[0], "status", "percent", "resetsAt")
-		if err != nil {
-			return nil, err
-		}
-		if w == nil {
-			continue
-		}
-		status, err := w.optString("status")
-		if err != nil {
-			return nil, err
-		}
-		percent, err := w.optFloat("percent")
-		if err != nil {
-			return nil, err
-		}
-		reset, err := w.optString("resetsAt")
-		if err != nil {
-			return nil, err
-		}
-		if status == nil || *status != "ok" || percent == nil {
-			continue
-		}
-		if math.IsInf(*percent, 0) || math.IsNaN(*percent) || *percent < 0 || *percent > 100 {
-			continue
-		}
-		windows = append(windows, window(item[1], *percent, reset, nil))
-	}
-	if len(windows) == 0 {
-		return nil, nil
-	}
-	return &Quota{Windows: windows}, nil
 }
 
 var museFields = []string{

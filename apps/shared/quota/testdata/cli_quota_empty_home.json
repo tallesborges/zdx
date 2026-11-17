@@ -23,11 +23,6 @@
     {
       "account": null,
       "error": "not logged in",
-      "provider": "opencode-go"
-    },
-    {
-      "account": null,
-      "error": "not logged in",
       "provider": "muse-code"
     }
   ]

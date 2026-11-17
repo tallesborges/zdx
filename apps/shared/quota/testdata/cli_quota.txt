@@ -14,6 +14,5 @@ Subscriptions (live quota)
   Grok [SuperGrok Heavy]
     weekly    12%   resets in 6d 10h
   Grok @busy   rate limited
-  OpenCode Go   HTTP 503
   Muse Code [Power Usage]
     5h        42%   resets in 185d 8h

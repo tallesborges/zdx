@@ -77,8 +77,6 @@ func runDifferential(provider string, body []byte) []byte {
 		q, e = incompatibleUnless(parseAntigravity(body))
 	case "grok":
 		q, e = incompatibleUnless(parseGrok(body))
-	case "opencode-go":
-		q, e = incompatibleUnless(parseOpenCodeGo(body))
 	case "muse-code":
 		q, e = museOutcome(body)
 	default:
@@ -127,8 +125,8 @@ func TestDifferentialFixturesMatchRecordedRustOutput(t *testing.T) {
 		}
 	}
 	sort.Strings(inputs)
-	if len(inputs) != 62 {
-		t.Errorf("%d differential cases, want the 62 Rust recorded", len(inputs))
+	if len(inputs) != 58 {
+		t.Errorf("%d differential cases, want the 58 Rust recorded", len(inputs))
 	}
 	providersSeen := map[string]bool{}
 	for _, in := range inputs {
@@ -146,7 +144,7 @@ func TestDifferentialFixturesMatchRecordedRustOutput(t *testing.T) {
 			t.Errorf("%s:\n--- go\n%s--- rust\n%s", in, got, want)
 		}
 	}
-	for _, p := range []string{"claude", "claude-profile", "codex", "antigravity", "grok", "opencode-go", "muse-code"} {
+	for _, p := range []string{"claude", "claude-profile", "codex", "antigravity", "grok", "muse-code"} {
 		if !providersSeen[p] {
 			t.Errorf("no cases for %s", p)
 		}

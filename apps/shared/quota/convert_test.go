@@ -61,9 +61,8 @@ func richSnapshot(t *testing.T) Snapshot {
 		}
 		serve(string(fixture(t, "codex_usage.json")))(w, r)
 	}
-	routes["/opencode"] = status(503)
 	f := newFake(t, routes)
-	snap, err := Fetch(context.Background(), options(home, f, map[string]string{"OPENCODE_API_KEY": "tok-oc"}))
+	snap, err := Fetch(context.Background(), options(home, f, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +161,7 @@ func TestErrorReasonsAreBoundedAndExact(t *testing.T) {
 }
 
 func TestDisplayNames(t *testing.T) {
-	want := []string{"Claude", "Codex", "Antigravity", "Grok", "OpenCode Go", "Muse Code"}
+	want := []string{"Claude", "Codex", "Antigravity", "Grok", "Muse Code"}
 	for i, p := range Providers() {
 		if ProviderDisplay(p) != want[i] {
 			t.Errorf("%s = %s", p, ProviderDisplay(p))

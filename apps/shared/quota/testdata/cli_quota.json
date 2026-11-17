@@ -95,11 +95,6 @@
     },
     {
       "account": null,
-      "error": "HTTP 503",
-      "provider": "opencode-go"
-    },
-    {
-      "account": null,
       "plan": "Power Usage",
       "provider": "muse-code",
       "windows": [

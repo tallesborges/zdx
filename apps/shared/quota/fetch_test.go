@@ -64,8 +64,10 @@ func (f *fakeProviders) endpoints() Endpoints {
 	u := f.server.URL
 	return Endpoints{
 		ClaudeUsage: u + "/claude/usage", ClaudeProfile: u + "/claude/profile", CodexUsage: u + "/codex",
-		AntigravityQuota: u + "/antigravity", GrokBilling: u + "/grok?format=credits", OpenCodeGoUsage: u + "/opencode",
+		AntigravityQuota: u + "/antigravity", GrokBilling: u + "/grok?format=credits",
 		MuseCodeKey: u + "/muse",
+		ClaudeToken: u + "/token/claude", CodexToken: u + "/token/codex",
+		AntigravityToken: u + "/token/antigravity", GrokToken: u + "/token/grok",
 	}
 }
 
@@ -152,7 +154,6 @@ func happyRoutes(t *testing.T) map[string]http.HandlerFunc {
 		"/codex":          serve(string(fixture(t, "codex_usage.json"))),
 		"/antigravity":    serve(string(fixture(t, "antigravity_usage.json"))),
 		"/grok":           serve(string(fixture(t, "grok_usage.json"))),
-		"/opencode":       serve(`{"usage":{"rolling":{"status":"ok","percent":12.5,"resetsAt":"2026-08-14T15:10:54.202Z"}}}`),
 		"/muse":           serve(`{"api_key":"LLM|fresh-minted","is_subs_active":true,"subs_tier_name":"Power Usage","subs_usage":{"window":{"used_percent":42,"resets_at":1800000000,"window_duration_mins":300}}}`),
 	}
 }
@@ -161,11 +162,11 @@ func TestFetchAllProvidersHeadersAndBodies(t *testing.T) {
 	home := t.TempDir()
 	writeCache(t, home, allCreds())
 	f := newFake(t, happyRoutes(t))
-	snap, err := Fetch(context.Background(), options(home, f, map[string]string{"OPENCODE_API_KEY": "tok-opencode"}))
+	snap, err := Fetch(context.Background(), options(home, f, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snap.Providers) != 6 {
+	if len(snap.Providers) != 5 {
 		t.Fatalf("results = %d", len(snap.Providers))
 	}
 	for i, r := range snap.Providers {
@@ -220,7 +221,6 @@ func TestFetchAllProvidersHeadersAndBodies(t *testing.T) {
 	check("/grok", "GET", map[string]string{
 		"Authorization": "Bearer tok-grok", "X-XAI-Token-Auth": "xai-grok-cli", "x-grok-client-version": "1.0.0", "x-grok-client-mode": "interactive", "Accept": "*/*",
 	}, "User-Agent")
-	check("/opencode", "GET", map[string]string{"Authorization": "Bearer tok-opencode", "Accept": "application/json"}, "User-Agent")
 	muse := check("/muse", "POST", map[string]string{
 		"Authorization": "Bearer id-muse", "Content-Type": "application/json", "Accept": "application/json", "x-api-version": "1.0.0", "User-Agent": "zdx/9.9.9-test",
 	})
@@ -304,7 +304,7 @@ func TestMissingCacheGivesDefaultNotLoggedInRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snap.Providers) != 6 {
+	if len(snap.Providers) != 5 {
 		t.Fatalf("rows = %d", len(snap.Providers))
 	}
 	for i, r := range snap.Providers {
@@ -322,7 +322,7 @@ func TestAccountDiscoveryOrderAndKeys(t *testing.T) {
 	c := cred{Type: "oauth", Refresh: "r", Access: "a", Expires: future}
 	writeCache(t, home, map[string]cred{
 		"claude-cli@work": c, "claude-cli@Alpha": c, "claude-cli": c, "claude-cli@": c, "claude-cli@a@b": c,
-		"grok-build@solo": c, "opencode-go@extra": c, "unknown-provider": c,
+		"grok-build@solo": c, "unknown-provider": c,
 	})
 	accounts, err := StoredAccounts(options(home, nil, nil))
 	if err != nil {
@@ -332,7 +332,7 @@ func TestAccountDiscoveryOrderAndKeys(t *testing.T) {
 	for _, a := range accounts {
 		got = append(got, AccountDisplay(a.Provider, a.Account))
 	}
-	want := []string{"Claude", "Claude @Alpha", "Claude @a@b", "Claude @work", "Codex", "Antigravity", "Grok @solo", "OpenCode Go @extra", "Muse Code"}
+	want := []string{"Claude", "Claude @Alpha", "Claude @a@b", "Claude @work", "Codex", "Antigravity", "Grok @solo", "Muse Code"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("accounts =\n%v\nwant\n%v", got, want)
 	}
@@ -386,7 +386,7 @@ func TestCredentialRules(t *testing.T) {
 		"/antigravity": serve(string(fixture(t, "antigravity_usage.json"))),
 		"/muse":        serve(`{"is_subs_active":false,"subs_usage":{"weekly":{"used_percent":1}}}`),
 	})
-	snap, err := Fetch(context.Background(), options(home, f, map[string]string{"OPENCODE_API_KEY": ""}))
+	snap, err := Fetch(context.Background(), options(home, f, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,11 +402,6 @@ func TestCredentialRules(t *testing.T) {
 	}
 	if body := f.requests("/antigravity")[0].body; body != `{"project":""}` {
 		t.Errorf("project body = %s", body)
-	}
-	// Set-but-empty OPENCODE_API_KEY is sent (Rust std::env::var), so the
-	// provider answers 404 here; unset would be not logged in.
-	if got := f.requests("/opencode"); len(got) != 1 || got[0].headers.Get("Authorization") != "Bearer" && got[0].headers.Get("Authorization") != "Bearer " {
-		t.Errorf("opencode requests = %+v", got)
 	}
 	if kinds[ProviderMuseCode] == nil || kinds[ProviderMuseCode].Kind != KindUnauthorized {
 		t.Errorf("muse inactive = %v", kinds[ProviderMuseCode])
@@ -675,7 +670,7 @@ func TestRedirectsDropCredentialsAcrossHosts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return []Result{snap.Providers[3], snap.Providers[5]}
+		return []Result{snap.Providers[3], snap.Providers[4]}
 	}
 	for name, to := range map[string]string{
 		"subdomain":                  "http://cdn.api.quota.test:" + srvPort + "/landing",
@@ -777,7 +772,7 @@ func TestFetchesRunConcurrently(t *testing.T) {
 			if inFlight > peak {
 				peak = inFlight
 			}
-			if inFlight == 7 {
+			if inFlight == 6 {
 				close(gate)
 			}
 			mu.Unlock()
@@ -794,11 +789,11 @@ func TestFetchesRunConcurrently(t *testing.T) {
 		routes[k] = slow(bodyOf(t, k))
 	}
 	f := newFake(t, routes)
-	if _, err := Fetch(context.Background(), options(home, f, map[string]string{"OPENCODE_API_KEY": "k"})); err != nil {
+	if _, err := Fetch(context.Background(), options(home, f, nil)); err != nil {
 		t.Fatal(err)
 	}
-	if peak != 7 {
-		t.Errorf("peak concurrent requests = %d, want 7 (6 providers + Claude profile)", peak)
+	if peak != 6 {
+		t.Errorf("peak concurrent requests = %d, want 6 (5 providers + Claude profile)", peak)
 	}
 }
 

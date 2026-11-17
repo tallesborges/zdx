@@ -718,7 +718,7 @@ func TestRealRouteParity(t *testing.T) {
 		}
 
 		// The Mini App reads quotas in process instead. The home has no
-		// credentials and the reader no OPENCODE_API_KEY: every account is
+		// credentials and the reader: every account is
 		// not logged in, which the recorded body drops, so it is `[]`.
 		noEnv := func(string) (string, bool) { return "", false }
 		goEngine := &gateway.MiniAppEngine{Quota: quota.Options{Home: p.home, LookupEnv: noEnv, Version: "0.0.0-test"}}

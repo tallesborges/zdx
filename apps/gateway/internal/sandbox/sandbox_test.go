@@ -38,7 +38,7 @@ func TestCheckHomeAndEnv(t *testing.T) {
 }
 
 // Enter drops every inherited ZDX_ variable except the real-Rust test
-// switches, and OPENCODE_API_KEY (the quota read's credential); other
+// switches; other
 // variables (fake provider settings a test passes on
 // explicitly) are left to the child allowlists.
 func TestEnterDropsInheritedZdxVariables(t *testing.T) {
@@ -47,7 +47,7 @@ func TestEnterDropsInheritedZdxVariables(t *testing.T) {
 	}
 	inherited := map[string]string{
 		"ZDX_BIN": "/real/zdx", "ZDX_TELEGRAM_BOT_TOKEN": "1:SECRET", "ZDX_SERVICE_SUPERVISOR": "launchd", "ZDX_THREAD_ID": "t",
-		"OPENCODE_API_KEY": "test-key", RustBinaryEnv: "/tmp/zdx-snapshot", RustStrictEnv: "1", "ANTHROPIC_BASE_URL": "http://127.0.0.1:1",
+		RustBinaryEnv: "/tmp/zdx-snapshot", RustStrictEnv: "1", "ANTHROPIC_BASE_URL": "http://127.0.0.1:1",
 	}
 	for k, v := range inherited {
 		t.Setenv(k, v)
@@ -57,7 +57,7 @@ func TestEnterDropsInheritedZdxVariables(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer check()
-	for _, k := range []string{"ZDX_BIN", "ZDX_TELEGRAM_BOT_TOKEN", "ZDX_SERVICE_SUPERVISOR", "ZDX_THREAD_ID", "OPENCODE_API_KEY"} {
+	for _, k := range []string{"ZDX_BIN", "ZDX_TELEGRAM_BOT_TOKEN", "ZDX_SERVICE_SUPERVISOR", "ZDX_THREAD_ID"} {
 		if v, ok := os.LookupEnv(k); ok {
 			t.Errorf("%s=%s survived", k, v)
 		}

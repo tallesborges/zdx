@@ -3,12 +3,16 @@
 // Mini App show. It replaces the removed Rust readers
 // (crates/zdx-providers/src/subscription_quota.rs at commit aab08ba4).
 //
-// Credentials are read-only: Fetch reads $ZDX_HOME/oauth.json and the
-// OPENCODE_API_KEY variable, never refreshes a token, and never writes a
-// file. The provider endpoints are undocumented; parsing follows the Rust
-// readers, checked against the recorded Rust output in testdata/differential
-// (known differences are listed in AGENTS.md). Every failure is a bounded
-// [Error] that carries no response body, token, or URL.
+// Credentials: Fetch reads $ZDX_HOME/oauth.json. When a stored access token
+// is expired or within 5 minutes of expiry, Fetch refreshes it with its
+// refresh token (under oauth.lock, atomic rename) before calling the quota
+// endpoint, so the monitor and `zdx quota` never need a manual re-login
+// while the refresh token is valid. Muse Code re-mints its key on every
+// quota fetch, so it is covered by the same invariant. The provider
+// endpoints are undocumented; parsing follows the Rust readers, checked
+// against the recorded Rust output in testdata/differential (known
+// differences are listed in AGENTS.md). Every failure is a bounded [Error]
+// that carries no response body, token, or URL.
 package quota
 
 import (
@@ -29,12 +33,11 @@ const (
 	ProviderCodex       = "openai-codex"
 	ProviderAntigravity = "google-antigravity"
 	ProviderGrok        = "grok-build"
-	ProviderOpenCodeGo  = "opencode-go"
 	ProviderMuseCode    = "muse-code"
 )
 
 var providers = []string{
-	ProviderClaude, ProviderCodex, ProviderAntigravity, ProviderGrok, ProviderOpenCodeGo, ProviderMuseCode,
+	ProviderClaude, ProviderCodex, ProviderAntigravity, ProviderGrok, ProviderMuseCode,
 }
 
 // Providers lists the supported provider ids in report order.
@@ -52,8 +55,6 @@ func ProviderDisplay(provider string) string {
 		return "Antigravity"
 	case ProviderGrok:
 		return "Grok"
-	case ProviderOpenCodeGo:
-		return "OpenCode Go"
 	case ProviderMuseCode:
 		return "Muse Code"
 	}
@@ -167,8 +168,12 @@ type Endpoints struct {
 	CodexUsage       string
 	AntigravityQuota string
 	GrokBilling      string
-	OpenCodeGoUsage  string
 	MuseCodeKey      string
+	// Token refresh URLs.
+	ClaudeToken      string
+	CodexToken       string
+	AntigravityToken string
+	GrokToken        string
 }
 
 // Production endpoints.
@@ -178,7 +183,6 @@ const (
 	CodexUsageURL       = "https://chatgpt.com/backend-api/wham/usage"
 	AntigravityQuotaURL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
 	GrokBillingURL      = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
-	OpenCodeGoUsageURL  = "https://opencode.ai/zen/go/v1/usage"
 	MuseCodeKeyURL      = "https://api.meta.ai/muse-code/key"
 )
 
@@ -193,9 +197,8 @@ func (e Endpoints) withDefaults() Endpoints {
 	set(&e.CodexUsage, CodexUsageURL)
 	set(&e.AntigravityQuota, AntigravityQuotaURL)
 	set(&e.GrokBilling, GrokBillingURL)
-	set(&e.OpenCodeGoUsage, OpenCodeGoUsageURL)
 	set(&e.MuseCodeKey, MuseCodeKeyURL)
-	return e
+	return e.withTokenDefaults()
 }
 
 // Per-request limits of the Rust readers.
@@ -216,7 +219,7 @@ type Options struct {
 	// variables read through LookupEnv. Fetch uses a copy with its own
 	// redirect policy; every client gets the MaxResponseBytes cap.
 	HTTP *http.Client
-	// LookupEnv reads ZDX_HOME, HOME, USERPROFILE, OPENCODE_API_KEY, and,
+	// LookupEnv reads ZDX_HOME, HOME, USERPROFILE, and,
 	// for the default client, the proxy variables. Nil is os.LookupEnv.
 	// Unset and empty differ, as in Rust.
 	LookupEnv func(string) (string, bool)
@@ -238,6 +241,8 @@ type Account struct {
 // failures stay on their Result; the error is only ErrVersion, ErrDiscovery
 // (oauth.json unreadable or malformed; a missing file is no accounts), or
 // the context's error when ctx ends before every fetch returns.
+// Expired or soon-to-expire (within 5 min) access tokens are refreshed
+// first when a refresh token is present.
 func Fetch(ctx context.Context, o Options) (Snapshot, error) {
 	if o.Version == "" {
 		return Snapshot{}, ErrVersion
@@ -252,6 +257,9 @@ func Fetch(ctx context.Context, o Options) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	accounts := cache.accounts()
+	// Proactive refresh: never show "expired" while refresh token is valid.
+	f.ensureFresh(ctx, cache, accounts)
+	accounts = cache.accounts()
 	results := make([]Result, len(accounts))
 	var wg sync.WaitGroup
 	for i, a := range accounts {
@@ -335,8 +343,6 @@ func (f *fetcher) fetch(ctx context.Context, cache *oauthCache, a Account) (*Quo
 		return f.antigravity(ctx, cache.get(a))
 	case ProviderGrok:
 		return f.grok(ctx, cache.get(a))
-	case ProviderOpenCodeGo:
-		return f.openCodeGo(ctx)
 	case ProviderMuseCode:
 		return f.museCode(ctx, cache.get(a))
 	}

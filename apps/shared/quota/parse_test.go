@@ -153,30 +153,6 @@ func TestGrokMissingUsagePercentIsZeroNotError(t *testing.T) {
 	}
 }
 
-func TestParsesOpenCodeGoWindows(t *testing.T) {
-	body := `{"usage":{
-		"rolling":{"status":"ok","percent":12.5,"resetsAt":"2026-08-14T15:10:54.202Z"},
-		"weekly":{"status":"ok","percent":34,"resetsAt":"2026-08-17T00:00:00.202Z"},
-		"monthly":{"status":"ok","percent":56,"resetsAt":"2026-08-24T12:32:08.202Z"}}}`
-	q, err := parseOpenCodeGo([]byte(body))
-	if err != nil || q == nil || len(q.Windows) != 3 {
-		t.Fatalf("%+v %v", q, err)
-	}
-	for i, label := range []string{"5h", "weekly", "monthly"} {
-		if q.Windows[i].Label != label || q.Windows[i].ResetsAt == nil {
-			t.Errorf("window %d = %+v", i, q.Windows[i])
-		}
-	}
-	if q.Windows[0].UsedPercent != 12.5 {
-		t.Errorf("used = %v", q.Windows[0].UsedPercent)
-	}
-	// Not-ok, missing, and out-of-range windows are skipped; none left is None.
-	q, err = parseOpenCodeGo([]byte(`{"usage":{"rolling":{"status":"limited","percent":1},"weekly":{"status":"ok","percent":101},"monthly":{"status":"ok"}}}`))
-	if q != nil || err != nil {
-		t.Errorf("skipped = %+v %v", q, err)
-	}
-}
-
 func TestParsesCodexBusinessSpendControlWhenRateLimitIsNull(t *testing.T) {
 	q, err := parseCodex(fixture(t, "codex_usage_business.json"))
 	if err != nil || q == nil {

@@ -3,7 +3,7 @@
 //
 // TestMain calls Main: it moves HOME, ZDX_HOME and TMPDIR into a fresh
 // directory, drops every other inherited ZDX_ variable (a real home, token,
-// engine path, or agent run) and OPENCODE_API_KEY, and puts a failing `zdx` first on PATH, so a
+// engine path, or agent run) and puts a failing `zdx` first on PATH, so a
 // test never reaches real credentials or the real binary. Variables that
 // start with KeepPrefix stay. After the tests it removes the sandbox and
 // fails the run when a live-service file or the OAuth cache of the
@@ -23,7 +23,7 @@ import (
 const KeepPrefix = "ZDX_SHARED_TEST_"
 
 // credentialEnv are provider credentials read from the environment.
-var credentialEnv = []string{"OPENCODE_API_KEY"}
+var credentialEnv = []string{}
 
 // watched are files of the inherited ZDX home a test must never touch. Only
 // their size and modification time are read, never their contents.

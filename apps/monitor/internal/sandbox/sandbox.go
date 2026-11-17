@@ -2,7 +2,7 @@
 //
 // TestMain calls Enter: it moves HOME, ZDX_HOME and TMPDIR into a fresh
 // directory, drops every other inherited ZDX_ variable and the provider
-// credentials the quota fetch reads (OPENCODE_API_KEY), and puts a failing
+// credentials the quota fetch reads, and puts a failing
 // `zdx` first on PATH, so a test that forgets its fake binary never runs the
 // real one. Variables starting with KeepPrefix stay. The returned check
 // removes the sandbox and fails the run when a live-service file or the
@@ -29,7 +29,7 @@ var watched = []string{
 }
 
 // dropped are credential variables outside the ZDX_ prefix.
-var dropped = []string{"OPENCODE_API_KEY"}
+var dropped = []string{}
 
 type stamp struct {
 	exists bool

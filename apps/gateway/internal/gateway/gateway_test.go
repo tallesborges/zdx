@@ -811,37 +811,6 @@ func TestMiniAppEngineReadsQuotasInProcess(t *testing.T) {
 	}
 }
 
-func TestMiniAppEngineQuotaBodyIsTheViewBody(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer test-key" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		w.Write([]byte(`{"usage":{"rolling":{"status":"ok","percent":12.5,"resetsAt":"2026-08-14T15:10:54.202Z"},"weekly":{"status":"limited","percent":1}}}`))
-	}))
-	defer srv.Close()
-	env := func(k string) (string, bool) {
-		if k == "OPENCODE_API_KEY" {
-			return "test-key", true
-		}
-		return "", false
-	}
-	e := &MiniAppEngine{Quota: quota.Options{
-		Home: t.TempDir(), LookupEnv: env, Version: "0.0.0-test", HTTP: srv.Client(),
-		Endpoints: quota.Endpoints{OpenCodeGoUsage: srv.URL},
-	}}
-	body, err := e.SubscriptionQuotas(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Byte for byte the body the Rust view sent: serde_json, sorted keys,
-	// chrono RFC 3339; the not-logged-in accounts are dropped.
-	want := `[{"error":null,"name":"OpenCode Go","plan":null,"provider":"opencode-go","windows":[{"label":"5h","resets_at":"2026-08-14T15:10:54.202+00:00","scope":null,"used_percent":12.5}]}]`
-	if string(body) != want {
-		t.Fatalf("body:\n%s\nwant:\n%s", body, want)
-	}
-}
-
 // Malformed resolve and canonical bodies are errors, never half-filled
 // values.
 func TestMiniAppEngineRefusesIncompleteBodies(t *testing.T) {

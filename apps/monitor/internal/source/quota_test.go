@@ -29,13 +29,23 @@ func quotaSource(t *testing.T, home, zdxVersion string, handler http.HandlerFunc
 	}))
 	t.Cleanup(srv.Close)
 	u := func(path string) string { return srv.URL + path }
+	// Token refresh endpoints point at a separate server that always
+	// rejects, so expired tokens stay expired in tests without touching
+	// the handler's call counter or real network.
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	t.Cleanup(tokenSrv.Close)
+	tu := func(path string) string { return tokenSrv.URL + path }
 	return source.New(source.Config{Home: home, ZdxVersion: zdxVersion, Quota: quota.Options{
 		HTTP:      srv.Client(),
 		LookupEnv: func(string) (string, bool) { return "", false },
 		Now:       func() time.Time { return time.Unix(1_700_000_000, 0) },
 		Endpoints: quota.Endpoints{
 			ClaudeUsage: u("/claude/usage"), ClaudeProfile: u("/claude/profile"), CodexUsage: u("/codex"),
-			AntigravityQuota: u("/antigravity"), GrokBilling: u("/grok"), OpenCodeGoUsage: u("/opencode"), MuseCodeKey: u("/muse"),
+			AntigravityQuota: u("/antigravity"), GrokBilling: u("/grok"), MuseCodeKey: u("/muse"),
+			ClaudeToken: tu("/token/claude"), CodexToken: tu("/token/codex"),
+			AntigravityToken: tu("/token/antigravity"), GrokToken: tu("/token/grok"),
 		},
 	}}), &calls
 }

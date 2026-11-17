@@ -21,8 +21,7 @@ func TestMain(m *testing.M) { os.Exit(sandbox.Main(m.Run)) }
 
 const testVersion = "0.0.0-test"
 
-// env is a synthetic environment: only ZDX_HOME is set, so no real home and
-// no OPENCODE_API_KEY are seen.
+// env is a synthetic environment: only ZDX_HOME is set, so no real home is seen.
 func env(home string, extra map[string]string) func(string) (string, bool) {
 	return func(k string) (string, bool) {
 		if k == "ZDX_HOME" {
@@ -67,11 +66,6 @@ const emptyJSON = `{
     {
       "account": null,
       "error": "not logged in",
-      "provider": "opencode-go"
-    },
-    {
-      "account": null,
-      "error": "not logged in",
       "provider": "muse-code"
     }
   ]
@@ -91,41 +85,9 @@ func TestEmptyHomeReportsEveryProviderNotLoggedIn(t *testing.T) {
 	code, out, _ = runQuota(t, base, "--zdx-version", testVersion)
 	want := "Subscriptions (live quota)\n" +
 		"  Claude   not logged in\n  Codex   not logged in\n  Antigravity   not logged in\n" +
-		"  Grok   not logged in\n  OpenCode Go   not logged in\n  Muse Code   not logged in\n"
+		"  Grok   not logged in\n  Muse Code   not logged in\n"
 	if code != 0 || out != want {
 		t.Fatalf("exit %d, text:\n%s", code, out)
-	}
-}
-
-func TestOpenCodeGoEmptyKeyIsSetNotMissing(t *testing.T) {
-	// An empty OPENCODE_API_KEY is set: Rust tries it rather than reporting
-	// "not logged in". The fake endpoint refuses it.
-	var hits int
-	var mu sync.Mutex
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		mu.Lock()
-		hits++
-		mu.Unlock()
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer srv.Close()
-	base := quota.Options{
-		LookupEnv: env(t.TempDir(), map[string]string{"OPENCODE_API_KEY": ""}),
-		Endpoints: quota.Endpoints{OpenCodeGoUsage: srv.URL},
-		HTTP:      srv.Client(),
-	}
-	code, out, errOut := runQuota(t, base, "--zdx-version", testVersion, "--json")
-	if code != 0 {
-		t.Fatalf("exit %d: %s", code, errOut)
-	}
-	var got struct{ Providers []map[string]any }
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
-		t.Fatal(err)
-	}
-	for _, p := range got.Providers {
-		if p["provider"] == "opencode-go" && p["error"] == "not logged in" {
-			t.Fatalf("an empty key must not read as missing: %v (hits %d)", p, hits)
-		}
 	}
 }
 
@@ -135,8 +97,7 @@ func TestMissingVersionFailsBeforeAnyRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 	base := quota.Options{
-		LookupEnv: env(t.TempDir(), map[string]string{"OPENCODE_API_KEY": "k"}),
-		Endpoints: quota.Endpoints{OpenCodeGoUsage: srv.URL},
+		LookupEnv: env(t.TempDir(), nil),
 	}
 	code, out, errOut := runQuota(t, base, "--json")
 	if code != 1 || out != "" || !strings.Contains(errOut, "zdx version unknown") || !strings.Contains(errOut, "--zdx-version") {
@@ -211,7 +172,11 @@ func TestReadsStoredAccountsReadOnly(t *testing.T) {
 	base := quota.Options{
 		LookupEnv: env(home, nil),
 		HTTP:      srv.Client(),
-		Endpoints: quota.Endpoints{ClaudeUsage: srv.URL + "/usage", ClaudeProfile: srv.URL + "/profile"},
+		Endpoints: quota.Endpoints{
+			ClaudeUsage: srv.URL + "/usage", ClaudeProfile: srv.URL + "/profile",
+			ClaudeToken: srv.URL + "/token", CodexToken: srv.URL + "/token/codex",
+			AntigravityToken: srv.URL + "/token/ag", GrokToken: srv.URL + "/token/grok",
+		},
 	}
 	code, out, errOut := runQuota(t, base, "--zdx-version", testVersion, "--json")
 	if code != 0 {
@@ -235,7 +200,7 @@ func TestReadsStoredAccountsReadOnly(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Providers) != 7 || got.Providers[0].Provider != "claude-cli" || got.Providers[1].Provider != "claude-cli" {
+	if len(got.Providers) != 6 || got.Providers[0].Provider != "claude-cli" || got.Providers[1].Provider != "claude-cli" {
 		t.Fatalf("default account first, then named, then the other providers: %s", out)
 	}
 	def, work := got.Providers[0], got.Providers[1]
@@ -259,11 +224,10 @@ func TestReadsStoredAccountsReadOnly(t *testing.T) {
 	}
 	after, _ := os.Stat(path)
 	if !after.ModTime().Equal(before.ModTime()) || after.Size() != before.Size() {
-		t.Fatal("oauth.json changed: quotas must never write credentials")
+		t.Fatal("oauth.json changed: failed refresh must not write credentials")
 	}
-	if _, err := os.Stat(filepath.Join(home, "oauth.lock")); err == nil {
-		t.Fatal("quotas must not create oauth.lock")
-	}
+	// oauth.lock is created when a refresh is attempted; it may exist.
+	// A failed refresh leaves oauth.json untouched (checked above).
 }
 
 func TestRejectsUnknownArguments(t *testing.T) {
