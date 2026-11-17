@@ -39,10 +39,10 @@ func TestGroupTurnsShowsOneHeaderAndOneUsagePerTurn(t *testing.T) {
 	}
 	want := []string{
 		"▌ Z  12:16",
-		"  · usage in 3.0k out 300 cache 2.0k/0 m-1 · 2 requests",
+		"  Short answer.\n\n  ──  ↑3.0k ↓300 · 2.0k cached · 2x\n",
 		"▌ you  12:17",
 		"▌ Z  12:18\n∴ thinking",
-		"  · usage in 10 out 5 cache 0/0 m-2",
+		"  Welcome.\n\n  ──  ↑10 ↓5",
 	}
 	for _, w := range want {
 		if !strings.Contains(got, w) {
@@ -51,12 +51,26 @@ func TestGroupTurnsShowsOneHeaderAndOneUsagePerTurn(t *testing.T) {
 	}
 	// The first turn's usage closes it: after its last message, before the
 	// next user message.
-	if strings.Index(got, "Short answer.") > strings.Index(got, "· 2 requests") ||
-		strings.Index(got, "· 2 requests") > strings.Index(got, "▌ you  12:17") {
+	if strings.HasSuffix(got, " ") || strings.Contains(got, "· usage") || strings.Contains(got, "m-1") {
+		t.Fatalf("grouped turns use the divider only:\n%s", got)
+	}
+	if strings.Index(got, "2x") > strings.Index(got, "▌ you  12:17") {
 		t.Fatalf("usage out of place:\n%s", got)
 	}
 	if len(tools) != 1 || !strings.Contains(ansi.Strip(lines[tools[0].Start]), "read SPEC.md") {
 		t.Fatalf("tool rows %+v", tools)
+	}
+}
+
+// The divider names cache writes only when there were any, and the models
+// only when more than one ran; it is cut to the width.
+func TestGroupedDividerParts(t *testing.T) {
+	u := usageSum{requests: 1, input: 1200, output: 30, create: 400, models: []string{"m-1", "m-2"}}
+	if got := ansi.Strip(u.divider(100)); got != "  ──  ↑1.2k ↓30 · 400 cache write · m-1, m-2" {
+		t.Fatalf("divider %q", got)
+	}
+	if got := ansi.Strip(u.divider(14)); ansi.StringWidth(got) > 14 || !strings.HasSuffix(got, "…") {
+		t.Fatalf("narrow divider %q", got)
 	}
 }
 
@@ -65,7 +79,7 @@ func TestUngroupedKeepsAHeaderPerMessageAndUsagePerRequest(t *testing.T) {
 	if n := strings.Count(got, "▌ Z"); n != 3 {
 		t.Fatalf("%d headers:\n%s", n, got)
 	}
-	if n := strings.Count(got, "· usage"); n != 3 || strings.Contains(got, "requests") {
+	if n := strings.Count(got, "· usage"); n != 3 || strings.Contains(got, "──") || !strings.Contains(got, "  · usage in 1.0k out 100 cache 500/0 m-1") {
 		t.Fatalf("usage lines:\n%s", got)
 	}
 }

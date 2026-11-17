@@ -314,14 +314,36 @@ func (u *usageSum) add(a *Activity) {
 	}
 }
 
-func usageLine(requests int, input, output, read, create uint64, models []string) string {
+// usageLine is one request's usage (ungrouped layout).
+func usageLine(input, output, read, create uint64, model string) string {
 	line := fmt.Sprintf("  · usage in %s out %s cache %s/%s %s",
-		Tokens(input), Tokens(output), Tokens(read), Tokens(create), strings.Join(models, ", "))
-	if requests > 1 {
-		line += fmt.Sprintf(" · %d requests", requests)
-	}
+		Tokens(input), Tokens(output), Tokens(read), Tokens(create), model)
 	return Dim.Render(strings.TrimRight(line, " "))
 }
+
+// divider is a grouped turn's closing line: a short rule, then the turn's
+// tokens in and out, cache reads and writes when there were any, the
+// request count when more than one, and the models when more than one
+// ran, cut to width.
+func (u *usageSum) divider(width int) string {
+	parts := []string{"↑" + Tokens(u.input) + " ↓" + Tokens(u.output)}
+	if u.read > 0 {
+		parts = append(parts, Tokens(u.read)+" cached")
+	}
+	if u.create > 0 {
+		parts = append(parts, Tokens(u.create)+" cache write")
+	}
+	if u.requests > 1 {
+		parts = append(parts, fmt.Sprintf("%dx", u.requests))
+	}
+	if len(u.models) > 1 {
+		parts = append(parts, strings.Join(u.models, ", "))
+	}
+	return Fit(ruleStyle.Render("  ──  ")+Dim.Render(strings.Join(parts, " · ")), width)
+}
+
+// ruleStyle is the divider's rule: fainter than the text after it.
+var ruleStyle = lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(240))
 
 // assistantSide reports an item an assistant turn is made of.
 func assistantSide(a *Activity) bool {
@@ -379,7 +401,8 @@ func Render(th *Thread, width int, opts Options, md *Cache) ([]string, []ToolRef
 	var pending usageSum
 	endTurn := func() {
 		if pending.requests > 0 {
-			lines = append(lines, usageLine(pending.requests, pending.input, pending.output, pending.read, pending.create, pending.models))
+			gap()
+			lines = append(lines, pending.divider(width))
 		}
 		pending, inTurn = usageSum{}, false
 	}
@@ -470,11 +493,7 @@ func Render(th *Thread, width int, opts Options, md *Cache) ([]string, []ToolRef
 				pending.add(a)
 				continue
 			}
-			var models []string
-			if m := str(a.Model); m != "" {
-				models = []string{m}
-			}
-			lines = append(lines, usageLine(1, a.InputTokens, a.OutputTokens, a.CacheReadTokens, a.CacheWriteTokens, models))
+			lines = append(lines, usageLine(a.InputTokens, a.OutputTokens, a.CacheReadTokens, a.CacheWriteTokens, str(a.Model)))
 		case "notice":
 			gap()
 			if a.Kind == "turn_failed" {
