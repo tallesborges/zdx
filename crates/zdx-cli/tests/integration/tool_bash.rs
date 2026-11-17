@@ -41,7 +41,7 @@ async fn test_bash_executes_command() {
     let first_response = tool_use_sse(
         "toolu_bash_001",
         "bash",
-        r#"{"command": "echo hello_from_bash"}"#,
+        r#"{"command": "echo hello_from_bash", "description": "test command"}"#,
     );
     let second_response = fixtures::text_sse("Bash executed successfully.");
 
@@ -112,7 +112,11 @@ async fn test_bash_runs_in_root_directory() {
     let second_request_body = Arc::new(std::sync::Mutex::new(String::new()));
     let second_request_body_clone = Arc::clone(&second_request_body);
 
-    let first_response = tool_use_sse("toolu_bash_002", "bash", r#"{"command": "ls"}"#);
+    let first_response = tool_use_sse(
+        "toolu_bash_002",
+        "bash",
+        r#"{"command": "ls", "description": "test command"}"#,
+    );
     let second_response = fixtures::text_sse("Listed files.");
 
     Mock::given(method("POST"))
@@ -181,7 +185,7 @@ async fn test_bash_per_call_timeout_relocates_instead_of_killing() {
     let first_response = tool_use_sse(
         "toolu_bash_timeout",
         "bash",
-        r#"{"command": "sleep 5", "timeout_secs": 1}"#,
+        r#"{"command": "sleep 5", "description": "test command", "timeout_secs": 1}"#,
     );
     let second_response = fixtures::text_sse("Done.");
 
@@ -250,7 +254,7 @@ async fn test_bash_does_not_inherit_open_stdin() {
     let first_response = tool_use_sse(
         "toolu_bash_stdin",
         "bash",
-        r#"{"command": "if read line; then echo inherited:$line; else echo stdin_closed; fi"}"#,
+        r#"{"command": "if read line; then echo inherited:$line; else echo stdin_closed; fi", "description": "test command"}"#,
     );
     let second_response = fixtures::text_sse("Done.");
 
@@ -346,7 +350,7 @@ async fn test_exec_drains_backgrounded_job_before_exiting() {
     let first_response = tool_use_sse(
         "toolu_bash_drain",
         "bash",
-        &serde_json::json!({ "command": command }).to_string(),
+        &serde_json::json!({ "command": command, "description": "test command" }).to_string(),
     );
     let second_response = fixtures::text_sse("Done.");
 
@@ -429,7 +433,11 @@ async fn test_exec_without_backgrounded_jobs_exits_immediately() {
     let call_count = Arc::new(AtomicUsize::new(0));
     let call_count_clone = Arc::clone(&call_count);
 
-    let first_response = tool_use_sse("toolu_bash_fast", "bash", r#"{"command": "echo quick"}"#);
+    let first_response = tool_use_sse(
+        "toolu_bash_fast",
+        "bash",
+        r#"{"command": "echo quick", "description": "test command"}"#,
+    );
     let second_response = fixtures::text_sse("Done.");
 
     Mock::given(method("POST"))
@@ -513,7 +521,7 @@ async fn test_exec_interrupt_during_drain_leaves_no_orphan() {
     let first_response = tool_use_sse(
         "toolu_bash_interrupt",
         "bash",
-        &serde_json::json!({ "command": command }).to_string(),
+        &serde_json::json!({ "command": command, "description": "test command" }).to_string(),
     );
     let second_response = fixtures::text_sse("Done.");
 
@@ -687,8 +695,12 @@ async fn test_exec_without_background_commands_runs_past_the_bound() {
     .unwrap();
 
     let command = "echo early-output; sleep 3; echo late-output";
-    let (tools, body, elapsed) =
-        exec_without_background(&zdx_home, &root, serde_json::json!({ "command": command })).await;
+    let (tools, body, elapsed) = exec_without_background(
+        &zdx_home,
+        &root,
+        serde_json::json!({ "command": command, "description": "test command" }),
+    )
+    .await;
 
     let names: Vec<String> = tools
         .iter()
@@ -775,7 +787,7 @@ async fn test_exec_without_background_commands_interrupt_stops_the_tree() {
     let first_response = tool_use_sse(
         "toolu_bash_tree",
         "bash",
-        &serde_json::json!({ "command": command }).to_string(),
+        &serde_json::json!({ "command": command, "description": "test command" }).to_string(),
     );
     let second_response = fixtures::text_sse("Done.");
     Mock::given(method("POST"))
@@ -883,6 +895,7 @@ async fn test_exec_without_background_commands_rejects_background_flag() {
         &root,
         serde_json::json!({
             "command": format!("touch {}", marker.display()),
+            "description": "test command",
             "background": true,
         }),
     )

@@ -44,6 +44,10 @@ static READ_SEQ: AtomicU64 = AtomicU64::new(0);
 struct BackgroundInput {
     #[serde(default)]
     command: String,
+    /// Short label of what the command does; required like the foreground
+    /// bash schema, validated non-empty below.
+    #[serde(default)]
+    description: String,
     #[serde(
         default,
         deserialize_with = "zdx_tools::u64_or_string::deserialize_optional"
@@ -53,6 +57,7 @@ struct BackgroundInput {
 
 /// Spawns + registers a background process. Called by `Bash` on `background: true`.
 #[allow(clippy::similar_names)] // pid / pgid are the natural names here
+#[allow(clippy::too_many_lines)] // input validation plus spawn/register/finish
 pub async fn run_background(input: &Value, ctx: &ToolContext) -> ToolOutput {
     let input: BackgroundInput = match serde_json::from_value(input.clone()) {
         Ok(i) => i,
@@ -68,6 +73,13 @@ pub async fn run_background(input: &Value, ctx: &ToolContext) -> ToolOutput {
     let command = input.command.trim();
     if command.is_empty() {
         return ToolOutput::failure("invalid_input", "command cannot be empty", None);
+    }
+    if input.description.trim().is_empty() {
+        return ToolOutput::failure(
+            "invalid_input",
+            "description is required: a short 3-8 word label of what the command does",
+            None,
+        );
     }
     // A detached process is never awaited, so there is no foreground wait for
     // `timeout_secs` to bound.
@@ -786,8 +798,11 @@ mod handoff_registry_tests {
             .with_env(crate::tools::ToolEnv::default().with("ZDX_THREAD_ID", "thread-bg"));
         ctx.current_thread_id = Some("thread-bg".to_string());
 
-        let output =
-            run_background(&json!({ "command": "printf %s \"$ZDX_THREAD_ID\"" }), &ctx).await;
+        let output = run_background(
+            &json!({ "command": "printf %s \"$ZDX_THREAD_ID\"", "description": "test command" }),
+            &ctx,
+        )
+        .await;
         let data = output.data().expect("spawned");
         let log = std::path::PathBuf::from(data["stdout_log"].as_str().unwrap());
 
@@ -825,7 +840,7 @@ mod handoff_registry_tests {
         let handoff = prepare_handoff(command, &ctx).expect("bound is configured");
         let leaf = ctx.as_leaf();
         let result = zdx_tools::bash::execute(
-            &json!({ "command": command }),
+            &json!({ "command": command, "description": "test command" }),
             &leaf,
             None,
             None,
@@ -945,8 +960,11 @@ mod handoff_registry_tests {
             ctx.config.as_ref().unwrap(),
         );
 
-        let result =
-            run_background(&json!({ "command": "sleep 60", "background": true }), &ctx).await;
+        let result = run_background(
+            &json!({ "command": "sleep 60", "description": "test command", "background": true }),
+            &ctx,
+        )
+        .await;
         let data = result.data().expect("should have data");
         let bg_id = data["bg_id"].as_str().unwrap().to_string();
 
@@ -992,7 +1010,11 @@ mod wait_tests {
         ctx.current_thread_id = Some("thread-wait".to_string());
         ctx.config = Some(Config::default());
 
-        let result = run_background(&json!({ "command": command, "background": true }), &ctx).await;
+        let result = run_background(
+            &json!({ "command": command, "description": "test command", "background": true }),
+            &ctx,
+        )
+        .await;
         let data = result.data().expect("spawned");
         let bg_id = data["bg_id"].as_str().unwrap().to_string();
         let pid = u32::try_from(data["pid"].as_u64().unwrap()).unwrap();
@@ -1348,7 +1370,7 @@ mod wait_tests {
         let handoff = prepare_handoff(command, &ctx).expect("bound is configured");
         let leaf = ctx.as_leaf();
         let backgrounded = zdx_tools::bash::execute(
-            &json!({ "command": command }),
+            &json!({ "command": command, "description": "test command" }),
             &leaf,
             None,
             None,
@@ -1403,7 +1425,7 @@ mod wait_tests {
         let handoff = prepare_handoff(command, &ctx).expect("bound is configured");
         let leaf = ctx.as_leaf();
         let backgrounded = zdx_tools::bash::execute(
-            &json!({ "command": command }),
+            &json!({ "command": command, "description": "test command" }),
             &leaf,
             None,
             None,

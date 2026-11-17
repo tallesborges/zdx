@@ -109,7 +109,7 @@ fn child_reply(body: &Value, root: &std::path::Path) -> (String, Duration) {
         (false, 0) | (true, 1) => tool_use_sse(
             &format!("toolu_child_{results}"),
             "bash",
-            &json!({ "command": record }).to_string(),
+            &json!({ "command": record, "description": "test command" }).to_string(),
         ),
         (false, _) => text_sse(FIRST_ANSWER),
         (true, _) if raw.contains(FIRST_ANSWER) => text_sse(REMEMBERED),

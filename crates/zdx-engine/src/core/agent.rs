@@ -4438,7 +4438,8 @@ mod tests {
                 "command": format!(
                     "trap '' TERM; echo $$ > {}; while :; do sleep 1; done",
                     pidfile.display()
-                )
+                ),
+                "description": "test command"
             }),
             id_origin: zdx_types::IdOrigin::Synthesized,
             replay: None,
@@ -6892,6 +6893,7 @@ mod tests {
             async move {
                 let echo = serde_json::json!({
                     "command": "sleep 0.3; printf '%s|%s|%s|%s' \"$ZDX_THREAD_ID\" \"$ZDX_ARTIFACT_DIR\" \"$ZDX_HOME\" \"$ZDX_MEMORY_ROOT\"",
+                    "description": "test command",
                 });
                 let write = serde_json::json!({ "file_path": "$ZDX_ARTIFACT_DIR/out.txt", "content": thread });
                 let read = serde_json::json!({ "file_path": "${ZDX_ARTIFACT_DIR}/out.txt" });

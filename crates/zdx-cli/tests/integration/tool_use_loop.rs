@@ -577,7 +577,11 @@ async fn test_bash_tool_shows_debug_lines() {
     }
     let zdx_home = temp_zdx_home();
     let mock_server = MockServer::start().await;
-    let first_response = tool_use_sse("toolu_bash", "bash", r#"{"command": "echo hello"}"#);
+    let first_response = tool_use_sse(
+        "toolu_bash",
+        "bash",
+        r#"{"command": "echo hello", "description": "test command"}"#,
+    );
     let second_response = text_sse("Command executed.");
 
     let call_count = Arc::new(AtomicUsize::new(0));
@@ -607,7 +611,7 @@ async fn test_bash_tool_shows_debug_lines() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "\"type\":\"tool_input_completed\",\"id\":\"toolu_bash\",\"name\":\"bash\",\"input\":{\"command\":\"echo hello\"}}",
+            "\"type\":\"tool_input_completed\",\"id\":\"toolu_bash\",\"name\":\"bash\",\"input\":{\"command\":\"echo hello\",\"description\":\"test command\"}}",
         ))
         .stdout(predicate::str::contains(
             "\"type\":\"tool_completed\",\"id\":\"toolu_bash\"",

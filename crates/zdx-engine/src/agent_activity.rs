@@ -81,10 +81,11 @@ impl ActiveToolCall {
     }
 
     /// Builds an entry from a tool call's name and input, summarizing the
-    /// primary command/target on one bounded line.
+    /// primary command/target on one bounded line. A `bash` call's
+    /// `description` is the summary when it has one.
     #[must_use]
     pub fn new(id: &str, name: &str, input: &serde_json::Value) -> Self {
-        let raw = zdx_types::tool_command_text(&name.to_ascii_lowercase(), input);
+        let raw = zdx_types::tool_summary_text(&name.to_ascii_lowercase(), input);
         let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
         let summary = if collapsed.chars().count() > TOOL_SUMMARY_MAX_CHARS {
             let mut truncated: String = collapsed.chars().take(TOOL_SUMMARY_MAX_CHARS).collect();
@@ -727,6 +728,24 @@ mod tests {
 
         let call = ActiveToolCall::new("id3", "todo_write", &serde_json::json!({}));
         assert!(call.summary.is_empty());
+    }
+
+    #[test]
+    fn active_tool_call_prefers_the_bash_description() {
+        let call = ActiveToolCall::new(
+            "id1",
+            "Bash",
+            &serde_json::json!({ "command": "cargo test", "description": "Run the test suite" }),
+        );
+        assert_eq!(call.summary, "Run the test suite");
+
+        // Old calls without a description keep summarizing the command.
+        let call = ActiveToolCall::new(
+            "id2",
+            "Bash",
+            &serde_json::json!({ "command": "cargo  build\n  --release" }),
+        );
+        assert_eq!(call.summary, "cargo build --release");
     }
 
     #[test]

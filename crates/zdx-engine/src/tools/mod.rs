@@ -1170,6 +1170,7 @@ mod tests {
             .with_background_execution(BackgroundExecution::Disabled);
         let input = json!({
             "command": format!("touch {}", marker.display()),
+            "description": "test command",
             "background": true,
         });
 
@@ -1199,7 +1200,7 @@ mod tests {
 
         let output = Bash
             .execute(
-                &json!({ "command": "echo started; sleep 2; echo finished" }),
+                &json!({ "command": "echo started; sleep 2; echo finished", "description": "test command" }),
                 &ctx,
             )
             .await;
@@ -1251,7 +1252,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), Some(Duration::from_secs(1)));
         let enabled = all_enabled_tools();
-        let input = json!({"command": "sleep 2"});
+        let input = json!({"command": "sleep 2", "description": "test command"});
 
         let (output, result) = execute_tool("bash", "toolu_timeout", &input, &ctx, &enabled).await;
         // Timeout is still a success envelope with timed_out=true

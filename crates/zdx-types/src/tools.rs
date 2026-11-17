@@ -53,6 +53,23 @@ fn value_as_string_list(input: &Value, key: &str) -> Vec<String> {
     }
 }
 
+/// One-line summary text for a tool call, for collapsed display.
+///
+/// For `bash` this is the caller-supplied `description` (a short label of
+/// what the command does) when present, otherwise the command itself, so a
+/// collapsed row shows prose instead of a raw command. For other tools it
+/// is the same as [`tool_command_text`]. Returns an empty string when the
+/// tool has no single obvious command.
+#[must_use]
+pub fn tool_summary_text(name: &str, input: &Value) -> String {
+    if name == "bash"
+        && let Some(label) = value_as_trimmed_str(input, "description")
+    {
+        return label.to_string();
+    }
+    tool_command_text(name, input)
+}
+
 /// Raw, untruncated primary command/target for a tool.
 ///
 /// Returns the underlying value verbatim (e.g. the `bash` command, the
@@ -206,13 +223,28 @@ impl ToolResult {
 mod tests {
     use serde_json::json;
 
-    use super::tool_command_text;
+    use super::{tool_command_text, tool_summary_text};
 
     #[test]
     fn glob_command_text_supports_alternative_patterns() {
         assert_eq!(
             tool_command_text("glob", &json!({"pattern": ["*.rs", "*.md", "config.*"]})),
             "*.rs\n*.md\nconfig.*"
+        );
+    }
+
+    #[test]
+    fn bash_summary_prefers_the_description_label() {
+        let input = json!({"command": "cargo test", "description": "Run the test suite"});
+        assert_eq!(tool_summary_text("bash", &input), "Run the test suite");
+        // The exact command stays available for copying.
+        assert_eq!(tool_command_text("bash", &input), "cargo test");
+
+        // Missing or blank descriptions fall back to the command.
+        assert_eq!(tool_summary_text("bash", &json!({"command": "ls"})), "ls");
+        assert_eq!(
+            tool_summary_text("bash", &json!({"command": "ls", "description": "  "})),
+            "ls"
         );
     }
 }

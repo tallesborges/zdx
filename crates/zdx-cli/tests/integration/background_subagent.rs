@@ -96,7 +96,11 @@ fn invoke_background_of(subagent: &str) -> String {
 }
 
 fn bash(id: &str, command: &str) -> String {
-    tool_use_sse(id, "bash", &json!({ "command": command }).to_string())
+    tool_use_sse(
+        id,
+        "bash",
+        &json!({ "command": command, "description": "test command" }).to_string(),
+    )
 }
 
 /// The first `bg-<uuid>` in a request body, i.e. the handle the parent got.
@@ -408,12 +412,14 @@ async fn turn_end_stops_the_subagent_but_not_an_unrelated_bash_job() {
         1 => tool_use_sse(
             "toolu_wait_pid",
             "bash",
-            &json!({ "command": wait_pid, "timeout_secs": 30 }).to_string(),
+            &json!({ "command": wait_pid, "description": "test command", "timeout_secs": 30 })
+                .to_string(),
         ),
         2 => tool_use_sse(
             "toolu_judge",
             "bash",
-            &json!({ "command": judge, "timeout_secs": 1 }).to_string(),
+            &json!({ "command": judge, "description": "test command", "timeout_secs": 1 })
+                .to_string(),
         ),
         _ => text_sse("parent done without collecting"),
     });
@@ -554,6 +560,7 @@ async fn answer_is_available_while_the_child_drains_and_after_it_is_stopped() {
     let pidfile = root.path().join("drained-command.pid");
     let slow = json!({
         "command": format!("echo $$ > {}; sleep 60", pidfile.display()),
+        "description": "test command",
         "timeout_secs": 1,
     })
     .to_string();
@@ -1173,6 +1180,7 @@ async fn handoff_after_the_answer_reports_it_and_says_not_to_wait() {
     // 1s, answers, and then stays alive draining that command.
     let slow = json!({
         "command": format!("echo $$ > {}; sleep 60", pidfile.display()),
+        "description": "test command",
         "timeout_secs": 1,
     })
     .to_string();
@@ -1245,6 +1253,7 @@ async fn handed_off_subagent_keeps_its_foreground_command_and_can_be_killed() {
              if kill -0 $(cat {0}) 2>/dev/null; then echo CHILD-CMD-ALIVE; fi",
             pidfile.display()
         ),
+        "description": "test command",
         "timeout_secs": 30,
     })
     .to_string();

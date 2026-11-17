@@ -367,7 +367,7 @@ async fn run(object: &Map<String, Value>, ctx: &ToolContext) -> ToolOutput {
         }
     };
 
-    let mut bash_input = json!({ "command": plan.command });
+    let mut bash_input = json!({ "command": plan.command, "description": format!("Run skill script {}", plan.skill) });
     if let Some(timeout) = plan.timeout_secs {
         bash_input["timeout_secs"] = Value::from(timeout);
     }

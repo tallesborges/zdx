@@ -893,7 +893,7 @@ fn interval_width(start: Option<i64>, end: Option<i64>) -> Option<u64> {
 }
 
 fn tool_detail(name: &str, input: &Value) -> String {
-    let detail = zdx_types::tool_command_text(&name.to_ascii_lowercase(), input);
+    let detail = zdx_types::tool_summary_text(&name.to_ascii_lowercase(), input);
     if detail.trim().is_empty() {
         name.to_ascii_lowercase()
     } else {

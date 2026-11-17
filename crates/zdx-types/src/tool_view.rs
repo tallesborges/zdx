@@ -102,10 +102,14 @@ pub enum FactKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolHead {
-    /// A shell command, with a leading `cd <dir> &&` moved to `cwd`.
+    /// A shell command. `label` is the `bash` call's `description` (short
+    /// prose), when the call carried one; collapsed rows show it, the
+    /// expanded head still shows `command`.
     Shell {
         #[serde(skip_serializing_if = "Option::is_none")]
         cwd: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
         command: String,
     },
     Path {
@@ -555,8 +559,22 @@ fn head_for(name: &str, input: &Value, b: &mut Builder) -> Option<ToolHead> {
     match name {
         "bash" => {
             let (cwd, command) = split_cd(str_field(input, "command")?);
+            // The model writes a short label (3-8 words) alongside the
+            // command; surfaces prefer it for collapsed rows. Collapse and
+            // bound it so one row stays one line.
+            let label = str_field(input, "description").map(|label| {
+                let flat = label.split_whitespace().collect::<Vec<_>>().join(" ");
+                if flat.chars().count() > 120 {
+                    let mut truncated: String = flat.chars().take(119).collect();
+                    truncated.push('…');
+                    truncated
+                } else {
+                    flat
+                }
+            });
             Some(ToolHead::Shell {
                 cwd,
+                label,
                 command: b.cap(&command),
             })
         }
@@ -1086,6 +1104,44 @@ mod tests {
     }
 
     #[test]
+    fn bash_head_carries_the_description_label() {
+        let input = json!({"command": "cargo test", "description": "Run the test suite"});
+        let view = tool_view("bash", &input, None, None, ViewLimits::DISPLAY);
+        assert_eq!(
+            view.head,
+            Some(ToolHead::Shell {
+                cwd: None,
+                label: Some("Run the test suite".into()),
+                command: "cargo test".into()
+            })
+        );
+
+        // Old calls without a description (and a blank one) carry no label.
+        let view = tool_view(
+            "bash",
+            &json!({"command": "ls"}),
+            None,
+            None,
+            ViewLimits::DISPLAY,
+        );
+        assert!(matches!(
+            view.head,
+            Some(ToolHead::Shell { label: None, .. })
+        ));
+        let view = tool_view(
+            "bash",
+            &json!({"command": "ls", "description": "   "}),
+            None,
+            None,
+            ViewLimits::DISPLAY,
+        );
+        assert!(matches!(
+            view.head,
+            Some(ToolHead::Shell { label: None, .. })
+        ));
+    }
+
+    #[test]
     fn bash_shows_stdout_not_the_envelope() {
         let input = json!({"command": "cd /repo/app && grep -n setsid run.sh"});
         let output = json!({"ok": true, "data": {
@@ -1100,6 +1156,7 @@ mod tests {
             view.head,
             Some(ToolHead::Shell {
                 cwd: Some("/repo/app".into()),
+                label: None,
                 command: "grep -n setsid run.sh".into()
             })
         );

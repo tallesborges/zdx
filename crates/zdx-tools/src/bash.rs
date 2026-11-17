@@ -46,6 +46,10 @@ pub fn definition() -> ToolDefinition {
                     "type": "string",
                     "description": "The shell command to execute"
                 },
+                "description": {
+                    "type": "string",
+                    "description": "Short 3-8 word label of what the command does"
+                },
                 "timeout_secs": {
                     "type": "integer",
                     "minimum": 0,
@@ -56,7 +60,7 @@ pub fn definition() -> ToolDefinition {
                     "description": "Run as a detached background process that OUTLIVES this turn (e.g. a dev server, watcher). Returns immediately with a bg_id instead of blocking. Output goes to log files; read it with background_output and stop it with background_kill. Do NOT use shell backgrounding (trailing &, nohup, setsid) for long-lived processes — use this flag instead."
                 }
             },
-            "required": ["command"],
+            "required": ["command", "description"],
             "additionalProperties": false
         }),
     }
@@ -82,13 +86,17 @@ pub fn definition_without_background() -> ToolDefinition {
                     "type": "string",
                     "description": "The shell command to execute"
                 },
+                "description": {
+                    "type": "string",
+                    "description": "Short 3-8 word label of what the command does"
+                },
                 "timeout_secs": {
                     "type": "integer",
                     "minimum": 0,
                     "description": "Optional time limit in seconds for this command. A command still running after it is stopped together with its process group and returns its partial output with timed_out: true. Omit it or pass 0 for no limit. A deadline an operator configured for the run still applies when it is earlier."
                 }
             },
-            "required": ["command"],
+            "required": ["command", "description"],
             "additionalProperties": false
         }),
     }
@@ -97,6 +105,11 @@ pub fn definition_without_background() -> ToolDefinition {
 #[derive(Debug, Deserialize)]
 struct BashInput {
     command: String,
+    /// Short label of what the command does, required so the model writes
+    /// text alongside the command. Validated non-empty below; unused
+    /// otherwise.
+    #[serde(default)]
+    description: String,
     /// With background execution, a foreground wait budget: it only ever
     /// tunes a handoff bound, so where there is no handoff it is inert and
     /// still never destructive. Without background execution there is
@@ -471,6 +484,14 @@ async fn execute_with(
 
     if input.command.trim().is_empty() {
         return ToolOutput::failure("invalid_input", "command cannot be empty", None);
+    }
+
+    if input.description.trim().is_empty() {
+        return ToolOutput::failure(
+            "invalid_input",
+            "description is required: a short 3-8 word label of what the command does",
+            None,
+        );
     }
 
     let plan = match mode {
@@ -1133,7 +1154,8 @@ mod tests {
         };
         let (ctx_a, ctx_b) = (ctx_for("thread-a"), ctx_for("thread-b"));
         let input = json!({
-            "command": "sleep 0.2; printf '%s|%s|%s' \"$ZDX_THREAD_ID\" \"$ZDX_ARTIFACT_DIR\" \"$HOME\"",
+            "command":"sleep 0.2; printf '%s|%s|%s' \"$ZDX_THREAD_ID\" \"$ZDX_ARTIFACT_DIR\" \"$HOME\"",
+            "description": "test command",
         });
 
         let (a, b) = tokio::join!(
@@ -1179,7 +1201,8 @@ mod tests {
         let pidfile = temp.path().join("child.pid");
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({
-            "command": format!("sleep 30 & echo $! > {}", pidfile.display()),
+            "command":format!("sleep 30 & echo $! > {}", pidfile.display()),
+            "description": "test command",
         });
 
         let result = execute_plain(&input, &ctx, None).await;
@@ -1209,10 +1232,11 @@ mod tests {
         let mut ctx = ToolContext::new(temp.path().to_path_buf(), None);
         ctx.cancel_token = Some(cancel.clone());
         let input = json!({
-            "command": format!(
+            "command":format!(
                 "trap '' TERM; echo $$ > {}; while :; do sleep 1; done",
                 pidfile.display()
             ),
+            "description": "test command",
         });
 
         let task = tokio::spawn(async move { execute_plain(&input, &ctx, None).await });
@@ -1266,7 +1290,7 @@ mod tests {
     async fn test_bash_executes_command() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"command": "echo hello"});
+        let input = json!({"command": "echo hello", "description": "test command"});
 
         let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
@@ -1282,7 +1306,7 @@ mod tests {
     async fn test_bash_captures_stderr() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"command": "echo error >&2"});
+        let input = json!({"command": "echo error >&2", "description": "test command"});
 
         let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
@@ -1294,7 +1318,7 @@ mod tests {
     async fn test_bash_captures_exit_code() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"command": "exit 42"});
+        let input = json!({"command": "exit 42", "description": "test command"});
 
         let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
@@ -1308,7 +1332,7 @@ mod tests {
         std::fs::write(temp.path().join("test.txt"), "content").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"command": "ls"});
+        let input = json!({"command": "ls", "description": "test command"});
 
         let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
@@ -1320,7 +1344,7 @@ mod tests {
     async fn test_bash_timeout() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"command": "sleep 5"});
+        let input = json!({"command": "sleep 5", "description": "test command"});
 
         let result = execute_plain(&input, &ctx, Some(Duration::from_millis(100))).await;
         assert!(result.is_ok()); // timed_out is success with timed_out=true
@@ -1355,7 +1379,7 @@ mod tests {
     async fn test_bash_timeout_secs_never_kills_without_a_handoff() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"command": "sleep 2; echo done", "timeout_secs": 1});
+        let input = json!({"command": "sleep 2; echo done", "description": "test command", "timeout_secs": 1});
 
         let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
@@ -1372,7 +1396,8 @@ mod tests {
     async fn test_bash_timeout_secs_zero_cannot_disable_configured_deadline() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"command": "sleep 30", "timeout_secs": "0"});
+        let input =
+            json!({"command": "sleep 30", "timeout_secs": "0", "description": "test command"});
 
         let result = execute_plain(&input, &ctx, Some(Duration::from_millis(100))).await;
         assert!(result.is_ok());
@@ -1464,7 +1489,7 @@ mod tests {
     async fn without_background_runs_until_the_command_finishes() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"command": "sleep 2; echo finished"});
+        let input = json!({"command": "sleep 2; echo finished", "description": "test command"});
 
         let result = execute_without_background(&input, &ctx, None, None).await;
         let data = result.data().unwrap();
@@ -1483,10 +1508,11 @@ mod tests {
         let pidfile = temp.path().join("group.pid");
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({
-            "command": format!(
+            "command":format!(
                 "echo partial-before; sleep 60 & echo $! > {}; sleep 60",
                 pidfile.display()
             ),
+            "description": "test command",
             "timeout_secs": 1,
         });
 
@@ -1523,7 +1549,8 @@ mod tests {
     async fn without_background_run_deadline_still_kills() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"command": "sleep 30", "timeout_secs": 600});
+        let input =
+            json!({"command": "sleep 30", "description": "test command", "timeout_secs": 600});
 
         let result =
             execute_without_background(&input, &ctx, Some(Duration::from_secs(1)), None).await;
@@ -1549,13 +1576,49 @@ mod tests {
     async fn test_bash_rejects_empty_command() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"command": "   "});
+        let input = json!({"command": "   ", "description": "test command"});
 
         let result = execute_plain(&input, &ctx, None).await;
         assert!(!result.is_ok());
         let payload = serde_json::to_value(result).unwrap();
         assert_eq!(payload["error"]["code"], "invalid_input");
         assert_eq!(payload["error"]["message"], "command cannot be empty");
+    }
+
+    #[tokio::test]
+    async fn test_bash_rejects_missing_description() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"command": "ls"});
+
+        let result = execute_plain(&input, &ctx, None).await;
+        assert!(!result.is_ok());
+        let payload = serde_json::to_value(result).unwrap();
+        assert_eq!(payload["error"]["code"], "invalid_input");
+        assert!(
+            payload["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("description")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bash_rejects_empty_description() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"command": "ls", "description": "   "});
+
+        let result = execute_plain(&input, &ctx, None).await;
+        assert!(!result.is_ok());
+        let payload = serde_json::to_value(result).unwrap();
+        assert_eq!(payload["error"]["code"], "invalid_input");
+        assert!(
+            payload["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("description")
+        );
     }
 
     #[tokio::test]
@@ -1577,7 +1640,7 @@ mod tests {
     async fn test_bash_binary_output_is_drained() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"command": "printf 'before\\n\\377\\376\\n'; i=0; while [ $i -lt 2000 ]; do echo \"line $i\"; i=$((i+1)); done; echo done >&2"});
+        let input = json!({"command": "printf 'before\\n\\377\\376\\n'; i=0; while [ $i -lt 2000 ]; do echo \"line $i\"; i=$((i+1)); done; echo done >&2", "description": "test command"});
 
         let result = execute_plain(&input, &ctx, None).await;
         let data = result.data().expect("should have data");
@@ -1590,7 +1653,7 @@ mod tests {
         assert!(stdout.ends_with("line 1999\n"));
         assert_eq!(data["stderr"], "done\n");
 
-        let big = json!({"command": "printf '\\377'; head -c 50000 /dev/zero | tr '\\\\0' 'x'"});
+        let big = json!({"command": "printf '\\377'; head -c 50000 /dev/zero | tr '\\\\0' 'x'", "description": "test command"});
         let result = execute_plain(&big, &ctx, None).await;
         let data = result.data().expect("should have data");
         let stdout_file = data["stdout_file"].as_str().expect("spill file");
@@ -1605,7 +1668,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         // Generate more than 40KB of output (50KB of 'x' characters)
-        let input = json!({"command": "head -c 51200 /dev/zero | tr '\\0' 'x'"});
+        let input = json!({"command": "head -c 51200 /dev/zero | tr '\\0' 'x'", "description": "test command"});
 
         let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
@@ -1631,7 +1694,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         // Generate more than 40KB of stderr output (50KB)
-        let input = json!({"command": "head -c 51200 /dev/zero | tr '\\0' 'y' >&2"});
+        let input = json!({"command": "head -c 51200 /dev/zero | tr '\\0' 'y' >&2", "description": "test command"});
 
         let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
@@ -1657,7 +1720,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         // Generate less than 40KB of output (1KB)
-        let input = json!({"command": "head -c 1024 /dev/zero | tr '\\0' 'z'"});
+        let input = json!({"command": "head -c 1024 /dev/zero | tr '\\0' 'z'", "description": "test command"});
 
         let result = execute_plain(&input, &ctx, None).await;
         assert!(result.is_ok());
@@ -1779,7 +1842,7 @@ mod handoff_tests {
     async fn bound_moves_command_to_background_with_partial_output() {
         let recorder = Recorder::new();
         let temp = TempDir::new().unwrap();
-        let input = json!({"command": "echo first; echo early >&2; sleep 30"});
+        let input = json!({"command": "echo first; echo early >&2; sleep 30", "description": "test command"});
 
         let result = run(
             &input,
@@ -1830,9 +1893,7 @@ mod handoff_tests {
         let temp = TempDir::new().unwrap();
         // Emits well before, across, and after the bound, then exits non-zero
         // so both the completion and its real status have to survive.
-        let input = json!({
-            "command": "for i in 1 2 3 4 5 6; do echo line-$i; sleep 0.2; done; exit 5"
-        });
+        let input = json!({"command": "for i in 1 2 3 4 5 6; do echo line-$i; sleep 0.2; done; exit 5", "description": "test command"});
 
         let result = run(
             &input,
@@ -1860,7 +1921,7 @@ mod handoff_tests {
     async fn adopted_job_is_cancellable_and_leaves_no_orphan() {
         let recorder = Recorder::new();
         let temp = TempDir::new().unwrap();
-        let input = json!({"command": "trap '' TERM; echo up; while :; do sleep 1; done"});
+        let input = json!({"command": "trap '' TERM; echo up; while :; do sleep 1; done", "description": "test command"});
 
         let result = run(
             &input,
@@ -1887,7 +1948,8 @@ mod handoff_tests {
         let recorder = Recorder::new();
         let temp = TempDir::new().unwrap();
         // A string, exactly as the incident sent it.
-        let input = json!({"command": "sleep 30", "timeout_secs": "1"});
+        let input =
+            json!({"command": "sleep 30", "timeout_secs": "1", "description": "test command"});
 
         let started = std::time::Instant::now();
         let result = run(
@@ -1928,7 +1990,7 @@ mod handoff_tests {
     async fn caller_timeout_raises_the_bound() {
         let recorder = Recorder::new();
         let temp = TempDir::new().unwrap();
-        let input = json!({"command": "sleep 1; echo done", "timeout_secs": 10});
+        let input = json!({"command": "sleep 1; echo done", "description": "test command", "timeout_secs": 10});
 
         let result = run(
             &input,
@@ -1954,7 +2016,8 @@ mod handoff_tests {
     async fn zero_string_keeps_the_configured_bound_and_still_relocates() {
         let recorder = Recorder::new();
         let temp = TempDir::new().unwrap();
-        let input = json!({"command": "sleep 30", "timeout_secs": "0"});
+        let input =
+            json!({"command": "sleep 30", "timeout_secs": "0", "description": "test command"});
 
         let result = run(
             &input,
@@ -1982,7 +2045,7 @@ mod handoff_tests {
         for caller_secs in [30, 1] {
             let recorder = Recorder::new();
             let temp = TempDir::new().unwrap();
-            let input = json!({"command": "sleep 30", "timeout_secs": caller_secs});
+            let input = json!({"command": "sleep 30", "description": "test command", "timeout_secs": caller_secs});
 
             let ctx = ToolContext::new(temp.path().to_path_buf(), None);
             let result = execute(
@@ -2011,7 +2074,8 @@ mod handoff_tests {
     async fn configured_deadline_still_kills_and_never_backgrounds() {
         let recorder = Recorder::new();
         let temp = TempDir::new().unwrap();
-        let input = json!({"command": "sleep 30", "timeout_secs": 0});
+        let input =
+            json!({"command": "sleep 30", "description": "test command", "timeout_secs": 0});
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let result = execute(
@@ -2041,7 +2105,7 @@ mod handoff_tests {
     #[tokio::test]
     async fn no_handoff_keeps_waiting_in_the_foreground() {
         let temp = TempDir::new().unwrap();
-        let input = json!({"command": "sleep 0.5; echo done"});
+        let input = json!({"command": "sleep 0.5; echo done", "description": "test command"});
 
         let result = run(&input, temp.path(), None).await;
         let data = result.data().expect("should have data");
@@ -2055,7 +2119,7 @@ mod handoff_tests {
     async fn fast_command_is_not_backgrounded() {
         let recorder = Recorder::new();
         let temp = TempDir::new().unwrap();
-        let input = json!({"command": "echo quick"});
+        let input = json!({"command": "echo quick", "description": "test command"});
 
         let result = run(
             &input,
@@ -2083,7 +2147,7 @@ mod handoff_tests {
         let mut handoff = recorder.handoff(Duration::from_millis(300));
         handoff.on_adopt = Box::new(|_| false);
 
-        let input = json!({"command": "sleep 30"});
+        let input = json!({"command": "sleep 30", "description": "test command"});
         let result = run(&input, temp.path(), Some(handoff)).await;
 
         assert!(result.is_ok());
@@ -2109,7 +2173,7 @@ mod handoff_tests {
         let temp = TempDir::new().unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"command": "echo streamed; sleep 30"});
+        let input = json!({"command": "echo streamed; sleep 30", "description": "test command"});
 
         let (result, chunks) = tokio::join!(
             execute(
@@ -2156,7 +2220,7 @@ mod handoff_tests {
         std::fs::create_dir(&blocked).unwrap();
         handoff.stdout_log = blocked;
 
-        let input = json!({"command": "echo before; sleep 30"});
+        let input = json!({"command": "echo before; sleep 30", "description": "test command"});
         let result = run(&input, temp.path(), Some(handoff)).await;
 
         assert!(result.is_ok(), "a lost log must not fail the handoff");
@@ -2204,7 +2268,8 @@ mod handoff_tests {
         assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
 
         let input = json!({
-            "command": r#"grep -rn "FR-005" --include=* . 2>/dev/null | grep -v "/build/" | head -20"#
+            "command":r#"grep -rn "FR-005" --include=* . 2>/dev/null | grep -v "/build/" | head -20"#,
+            "description": "test command"
         });
         let result = run(
             &input,
