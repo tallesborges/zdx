@@ -366,8 +366,11 @@ func (m *Model) hints(width int) string {
 	case tabLogs:
 		tabHints = []string{"l", "level", "/", "filter", "esc", "clear", "[ ]", "day", "G", "follow"}
 	case tabConfig:
-		tabHints = []string{"↵", "edit", "x", "reset", "[ ]", "scope"}
-		if e := m.config.edit; e != nil {
+		tabHints = []string{"↵", "edit", "x", "reset", "/", "find scope", "[ ]", "step scope"}
+		switch {
+		case m.config.pick != nil:
+			tabHints = []string{"↵", "switch", "esc", "cancel"}
+		case m.config.edit != nil:
 			tabHints = []string{"↵", "choose", "esc", "back"}
 		}
 	}
@@ -394,7 +397,7 @@ func (m *Model) helpLines() []string {
 		key("Threads  ↵  t", "open transcript · all threads or workers only"),
 		key("Usage  Q  [ ]", "fetch quotas now · token window 1/7/30/90/365 days"),
 		key("Logs  l / esc [ ] G", "level · filter text · clear · older/newer day · follow"),
-		key("Config  [ ]", "previous/next workspace"),
+		key("Config  ↵ x / [ ]", "edit · reset · find a scope by typing · previous/next scope"),
 		"",
 		"  " + bold.Render("Transcript"),
 		key("n p  tab", "next/previous tool"),

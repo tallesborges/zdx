@@ -177,3 +177,51 @@ func TestConfigEditModeToggleAndReset(t *testing.T) {
 		t.Fatalf("reset %+v", w)
 	}
 }
+
+// `/` opens the scope list; typing filters it by name, path, or `global`,
+// enter switches, esc keeps the shown scope; `[` `]` still step.
+func TestConfigScopePickerFiltersByTyping(t *testing.T) {
+	m, _ := configModel(t)
+	if m.config.scope().name != "proj" {
+		t.Fatalf("starts on %q", m.config.scope().name)
+	}
+	press(m, key("/"))
+	if got := plain(m); !strings.Contains(got, "type to filter") || !strings.Contains(got, "global") || !strings.Contains(got, "proj") {
+		t.Fatalf("picker:\n%s", got)
+	}
+	for _, r := range "glob" {
+		press(m, key(string(r)))
+	}
+	if n := len(m.config.scopeMatches()); n != 1 {
+		t.Fatalf("%d matches for glob", n)
+	}
+	press(m, special(tea.KeyEnter))
+	if m.config.pick != nil || !m.config.scope().global {
+		t.Fatalf("did not switch to global: %+v", m.config.scope())
+	}
+
+	press(m, key("/"))
+	for _, r := range "/r" {
+		press(m, key(string(r)))
+	}
+	press(m, special(tea.KeyEscape))
+	if m.config.pick != nil || !m.config.scope().global {
+		t.Fatal("esc must keep the shown scope")
+	}
+	press(m, key("/"))
+	for _, r := range "nothing" {
+		press(m, key(string(r)))
+	}
+	if !strings.Contains(plain(m), "no scope matches") {
+		t.Fatalf("empty filter:\n%s", plain(m))
+	}
+	press(m, special(tea.KeyEnter))
+	if m.config.pick == nil {
+		t.Fatal("enter with no match must keep the picker open")
+	}
+	press(m, special(tea.KeyEscape))
+	press(m, key("]"))
+	if m.config.scope().name != "proj" {
+		t.Fatalf("] steps to %q", m.config.scope().name)
+	}
+}

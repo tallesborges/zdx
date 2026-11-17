@@ -248,6 +248,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	if m.logs.editing {
 		return m.logs.editKey(msg)
 	}
+	if m.tab == tabConfig && m.config.pick != nil && !m.help {
+		return m.config.scopeKey(msg)
+	}
 	if m.tab == tabConfig && m.config.edit != nil && !m.help {
 		return m.configEditKey(msg)
 	}
@@ -388,6 +391,9 @@ func (m *Model) tabKey(key string) tea.Cmd {
 		switch key {
 		case "]", "[":
 			m.config.cycle(key == "]")
+			return nil
+		case "/":
+			m.config.openScopePicker()
 			return nil
 		case "enter":
 			return m.startConfigEdit(false)

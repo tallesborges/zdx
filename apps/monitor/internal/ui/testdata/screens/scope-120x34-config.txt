@@ -3,7 +3,7 @@
  Config  ↵ edit · x reset · writes /Users/example/Documents/.zdx/config.toml
   Default    claude-cli:claude-opus-5-5@high via mode:deep · thinking high · 3 modes · subagents on
 
-── Scope 2 of 3 · [ ] switch ───────────────────────────────────────────────────────────────────────────────────────────
+── Scope 2 of 3 · / find · [ ] step ────────────────────────────────────────────────────────────────────────────────────
   Documents  current  /Users/example/Documents
   Writes     /Users/example/Documents/.zdx/config.toml
 

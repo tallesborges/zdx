@@ -55,6 +55,8 @@ type configTab struct {
 	index  int
 	list   listState
 	edit   *configEdit
+	// pick is the scope picker (`/`), when open.
+	pick *scopePicker
 	// notice is the result of the last write, shown under the header.
 	notice    string
 	noticeBad bool
@@ -228,7 +230,7 @@ func (m *Model) renderConfig(width, h int) []string {
 		name = globalStyle.Bold(true).Render("global")
 		where = dim.Render("  every workspace inherits it")
 	}
-	out = append(out, "", rule(fmt.Sprintf("Scope %d of %d · [ ] switch", t.index+1, len(t.scopes)), width),
+	out = append(out, "", rule(fmt.Sprintf("Scope %d of %d · / find · [ ] step", t.index+1, len(t.scopes)), width),
 		"  "+name+cur+where,
 		kv("Writes", tildePath(s.file)+dim.Render(map[bool]string{true: "", false: " (created on the first edit)"}[s.hasFile])))
 	if s.err != nil {
@@ -240,6 +242,9 @@ func (m *Model) renderConfig(width, h int) []string {
 			style = bad
 		}
 		out = append(out, kv("Last edit", style.Render(oneLine(t.notice))))
+	}
+	if t.pick != nil {
+		return append(out, m.renderScopePicker(width, h-len(out))...)
 	}
 	if t.edit != nil {
 		return append(out, m.renderConfigEdit(width, h-len(out))...)

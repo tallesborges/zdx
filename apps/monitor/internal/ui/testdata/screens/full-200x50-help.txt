@@ -14,7 +14,7 @@
     Threads  ↵  t           open transcript · all threads or workers only
     Usage  Q  [ ]           fetch quotas now · token window 1/7/30/90/365 days
     Logs  l / esc [ ] G     level · filter text · clear · older/newer day · follow
-    Config  [ ]             previous/next workspace
+    Config  ↵ x / [ ]       edit · reset · find a scope by typing · previous/next scope
 
   Transcript
     n p  tab                next/previous tool
