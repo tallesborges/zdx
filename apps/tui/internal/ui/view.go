@@ -139,7 +139,7 @@ func (m *Model) footer() string {
 }
 
 func (m *Model) renderOpts() transcript.Options {
-	return transcript.Options{Thinking: m.thinking, ExpandKey: "alt+t"}
+	return transcript.Options{Thinking: m.thinking, ExpandKey: "alt+t", GroupTurns: true}
 }
 
 // liveThread is what the saved thread does not have yet: the turns seen
@@ -202,11 +202,18 @@ func (m *Model) transcriptLines(width int) []string {
 		out = append(out, "")
 	}
 	out = append(out, m.cachedLive...)
-	if len(m.followups) > 0 {
-		out = append(out, "", transcript.Dim.Render("  suggested replies (ctrl+f)"))
-		for i, f := range m.followups {
-			out = append(out, transcript.Fit(transcript.Dim.Render(fmt.Sprintf("  %d. %s", i+1, f)), width))
-		}
+	return append(out, m.followupLines(width)...)
+}
+
+// followupLines are the last reply's suggested replies: a header that names
+// the key that picks one, then one reply per line.
+func (m *Model) followupLines(width int) []string {
+	if len(m.followups) == 0 {
+		return nil
+	}
+	out := []string{"", "  " + transcript.Accent.Bold(true).Render("↳ Suggested replies") + transcript.Dim.Render("  ctrl+f pick")}
+	for _, f := range m.followups {
+		out = append(out, transcript.Fit("    "+transcript.Accent.Render("›")+" "+f, width))
 	}
 	return out
 }

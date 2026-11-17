@@ -280,7 +280,7 @@ func TestChatTurnStreamsAndSettles(t *testing.T) {
 		t.Fatalf("submits %+v", reqs)
 	}
 	f := checkFrame(t, m)
-	if !strings.Contains(f, "Hello world") || strings.Count(f, "hi there") != 1 || !strings.Contains(f, "1. Do the next thing") {
+	if !strings.Contains(f, "Hello world") || strings.Count(f, "hi there") != 1 || !strings.Contains(f, "› Do the next thing") || !strings.Contains(f, "Suggested replies  ctrl+f pick") {
 		t.Fatalf("frame:\n%s", f)
 	}
 	if m.busy() || len(m.turns) != 0 || m.title != "A title" {
