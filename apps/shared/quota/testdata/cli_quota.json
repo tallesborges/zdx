@@ -105,6 +105,19 @@
           "used_percent": 42.0
         }
       ]
+    },
+    {
+      "account": null,
+      "plan": "individual_pro",
+      "provider": "github-copilot",
+      "windows": [
+        {
+          "label": "premium",
+          "resets_at": "2026-08-01T00:00:00+00:00",
+          "scope": "375 of 1500",
+          "used_percent": 25.0
+        }
+      ]
     }
   ]
 }

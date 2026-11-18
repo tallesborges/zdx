@@ -470,3 +470,55 @@ func TestStringAndNestingChecksFollowSerde(t *testing.T) {
 		t.Errorf("valid skipped window: %+v %v", q, err)
 	}
 }
+
+func TestParsesCopilotPremiumAllowance(t *testing.T) {
+	q, err := parseCopilot(fixture(t, "copilot_user.json"))
+	if err != nil || q == nil {
+		t.Fatalf("%+v %v", q, err)
+	}
+	if *q.Plan != "individual_pro" || len(q.Windows) != 1 {
+		t.Fatalf("unlimited chat must have no window: %+v", q)
+	}
+	w := q.Windows[0]
+	if w.Label != "premium" || w.UsedPercent != 25 || *w.Scope != "375 of 1500" || FormatRFC3339(*w.ResetsAt) != "2026-08-01T00:00:00+00:00" {
+		t.Errorf("%+v", w)
+	}
+}
+
+func TestCopilotFreePlanMetersChatAndOverage(t *testing.T) {
+	body := `{"copilot_plan":"free","quota_reset_date":"2026-08-15","quota_snapshots":{
+		"premium_interactions":{"entitlement":50,"remaining":0,"percent_remaining":0,"unlimited":false,"overage_count":3},
+		"chat":{"entitlement":50,"remaining":38,"unlimited":false},
+		"completions":{"entitlement":2000,"remaining":1000,"percent_remaining":50,"unlimited":false}}}`
+	q, err := parseCopilot([]byte(body))
+	if err != nil || q == nil || len(q.Windows) != 2 {
+		t.Fatalf("%+v %v", q, err)
+	}
+	if w := q.Windows[0]; w.Label != "premium" || w.UsedPercent != 100 || *w.Scope != "50 of 50 +3" || FormatRFC3339(*w.ResetsAt) != "2026-08-15T00:00:00+00:00" {
+		t.Errorf("premium = %+v", w)
+	}
+	if w := q.Windows[1]; w.Label != "chat" || w.UsedPercent != 24 || *w.Scope != "12 of 50" {
+		t.Errorf("chat = %+v", w)
+	}
+}
+
+func TestCopilotWithoutMeteredAllowanceIsNone(t *testing.T) {
+	for _, body := range []string{
+		`{}`,
+		`{"quota_snapshots":null}`,
+		`{"quota_snapshots":{"premium_interactions":{"unlimited":true,"entitlement":0},"chat":{"unlimited":true}}}`,
+		`{"quota_snapshots":{"premium_interactions":{"entitlement":300}}}`,
+	} {
+		if q, err := parseCopilot([]byte(body)); q != nil || err != nil {
+			t.Errorf("%s = %+v %v", body, q, err)
+		}
+	}
+	// A wrong type in a read field fails the payload; an unknown reset is nil.
+	if _, err := parseCopilot([]byte(`{"quota_snapshots":{"premium_interactions":{"entitlement":"300"}}}`)); err == nil {
+		t.Error("string entitlement accepted")
+	}
+	q, _ := parseCopilot([]byte(`{"quota_reset_date":"soon","quota_snapshots":{"premium_interactions":{"entitlement":300,"percent_remaining":90}}}`))
+	if q == nil || q.Windows[0].ResetsAt != nil || *q.Windows[0].Scope != "30 of 300" {
+		t.Errorf("%+v", q)
+	}
+}

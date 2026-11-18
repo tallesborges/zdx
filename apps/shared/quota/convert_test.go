@@ -161,7 +161,7 @@ func TestErrorReasonsAreBoundedAndExact(t *testing.T) {
 }
 
 func TestDisplayNames(t *testing.T) {
-	want := []string{"Claude", "Codex", "Antigravity", "Grok", "Muse Code"}
+	want := []string{"Claude", "Codex", "Antigravity", "Grok", "Muse Code", "Copilot"}
 	for i, p := range Providers() {
 		if ProviderDisplay(p) != want[i] {
 			t.Errorf("%s = %s", p, ProviderDisplay(p))

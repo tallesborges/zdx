@@ -65,7 +65,7 @@ func (f *fakeProviders) endpoints() Endpoints {
 	return Endpoints{
 		ClaudeUsage: u + "/claude/usage", ClaudeProfile: u + "/claude/profile", CodexUsage: u + "/codex",
 		AntigravityQuota: u + "/antigravity", GrokBilling: u + "/grok?format=credits",
-		MuseCodeKey: u + "/muse",
+		MuseCodeKey: u + "/muse", CopilotUser: u + "/copilot",
 		ClaudeToken: u + "/token/claude", CodexToken: u + "/token/codex",
 		AntigravityToken: u + "/token/antigravity", GrokToken: u + "/token/grok",
 	}
@@ -144,6 +144,9 @@ func allCreds() map[string]cred {
 		"google-antigravity": {Type: "oauth", Refresh: "r-ag", Access: "tok-ag", Expires: future, AccountID: str("proj-<1>&")},
 		"grok-build":         {Type: "oauth", Refresh: "r-grok", Access: "tok-grok", Expires: future},
 		"muse-code":          {Type: "oauth", Refresh: "id-muse", Access: "LLM|minted", Expires: past},
+		// The stored expiry is the Copilot API token's; the quota call uses
+		// the GitHub token, so a past expiry neither blocks nor refreshes it.
+		"github-copilot": {Type: "oauth", Refresh: "gho-copilot", Access: "copilot-api-token", Expires: past},
 	}
 }
 
@@ -155,6 +158,7 @@ func happyRoutes(t *testing.T) map[string]http.HandlerFunc {
 		"/antigravity":    serve(string(fixture(t, "antigravity_usage.json"))),
 		"/grok":           serve(string(fixture(t, "grok_usage.json"))),
 		"/muse":           serve(`{"api_key":"LLM|fresh-minted","is_subs_active":true,"subs_tier_name":"Power Usage","subs_usage":{"window":{"used_percent":42,"resets_at":1800000000,"window_duration_mins":300}}}`),
+		"/copilot":        serve(string(fixture(t, "copilot_user.json"))),
 	}
 }
 
@@ -166,7 +170,7 @@ func TestFetchAllProvidersHeadersAndBodies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snap.Providers) != 5 {
+	if len(snap.Providers) != len(providers) {
 		t.Fatalf("results = %d", len(snap.Providers))
 	}
 	for i, r := range snap.Providers {
@@ -226,6 +230,13 @@ func TestFetchAllProvidersHeadersAndBodies(t *testing.T) {
 	})
 	if muse.body != "{}" {
 		t.Errorf("muse body = %s", muse.body)
+	}
+	check("/copilot", "GET", map[string]string{
+		"Authorization": "token gho-copilot", "Accept": "application/json", "User-Agent": "GitHubCopilotChat/0.35.0",
+		"Editor-Version": "vscode/1.107.0", "Editor-Plugin-Version": "copilot-chat/0.35.0",
+	})
+	if q := snap.Providers[5].Quota; q == nil || *q.Plan != "individual_pro" || len(q.Windows) != 1 || *q.Windows[0].Scope != "375 of 1500" {
+		t.Errorf("copilot = %+v", q)
 	}
 	if got := f.requests("/grok"); len(got) == 1 && got[0].headers.Get("Accept-Encoding") != "" {
 		t.Errorf("Accept-Encoding sent")
@@ -304,7 +315,7 @@ func TestMissingCacheGivesDefaultNotLoggedInRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snap.Providers) != 5 {
+	if len(snap.Providers) != len(providers) {
 		t.Fatalf("rows = %d", len(snap.Providers))
 	}
 	for i, r := range snap.Providers {
@@ -332,7 +343,7 @@ func TestAccountDiscoveryOrderAndKeys(t *testing.T) {
 	for _, a := range accounts {
 		got = append(got, AccountDisplay(a.Provider, a.Account))
 	}
-	want := []string{"Claude", "Claude @Alpha", "Claude @a@b", "Claude @work", "Codex", "Antigravity", "Grok @solo", "Muse Code"}
+	want := []string{"Claude", "Claude @Alpha", "Claude @a@b", "Claude @work", "Codex", "Antigravity", "Grok @solo", "Muse Code", "Copilot"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("accounts =\n%v\nwant\n%v", got, want)
 	}
@@ -735,7 +746,7 @@ func TestContextCancellationPassesThrough(t *testing.T) {
 		}
 		<-r.Context().Done()
 	}
-	f := newFake(t, map[string]http.HandlerFunc{"/claude/usage": block, "/claude/profile": block, "/codex": block, "/antigravity": block, "/grok": block, "/muse": block})
+	f := newFake(t, map[string]http.HandlerFunc{"/claude/usage": block, "/claude/profile": block, "/codex": block, "/antigravity": block, "/grok": block, "/muse": block, "/copilot": block})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
@@ -772,7 +783,7 @@ func TestFetchesRunConcurrently(t *testing.T) {
 			if inFlight > peak {
 				peak = inFlight
 			}
-			if inFlight == 6 {
+			if inFlight == 7 {
 				close(gate)
 			}
 			mu.Unlock()
@@ -792,8 +803,8 @@ func TestFetchesRunConcurrently(t *testing.T) {
 	if _, err := Fetch(context.Background(), options(home, f, nil)); err != nil {
 		t.Fatal(err)
 	}
-	if peak != 6 {
-		t.Errorf("peak concurrent requests = %d, want 6 (5 providers + Claude profile)", peak)
+	if peak != 7 {
+		t.Errorf("peak concurrent requests = %d, want 7 (6 providers + Claude profile)", peak)
 	}
 }
 

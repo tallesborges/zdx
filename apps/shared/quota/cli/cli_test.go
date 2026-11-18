@@ -40,7 +40,8 @@ func runQuota(t *testing.T, base quota.Options, args ...string) (int, string, st
 }
 
 // The exact stdout of the Rust `zdx quota --json` on a home without
-// credentials (serde_json pretty, sorted keys).
+// credentials (serde_json pretty, sorted keys), plus GitHub Copilot, which
+// was added after the Rust readers were removed.
 const emptyJSON = `{
   "providers": [
     {
@@ -67,6 +68,11 @@ const emptyJSON = `{
       "account": null,
       "error": "not logged in",
       "provider": "muse-code"
+    },
+    {
+      "account": null,
+      "error": "not logged in",
+      "provider": "github-copilot"
     }
   ]
 }
@@ -79,13 +85,13 @@ func TestEmptyHomeReportsEveryProviderNotLoggedIn(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
 	if out != emptyJSON {
-		t.Fatalf("json differs from the Rust output:\n%s", out)
+		t.Fatalf("json differs from the expected output:\n%s", out)
 	}
 
 	code, out, _ = runQuota(t, base, "--zdx-version", testVersion)
 	want := "Subscriptions (live quota)\n" +
 		"  Claude   not logged in\n  Codex   not logged in\n  Antigravity   not logged in\n" +
-		"  Grok   not logged in\n  Muse Code   not logged in\n"
+		"  Grok   not logged in\n  Muse Code   not logged in\n  Copilot   not logged in\n"
 	if code != 0 || out != want {
 		t.Fatalf("exit %d, text:\n%s", code, out)
 	}
@@ -200,7 +206,7 @@ func TestReadsStoredAccountsReadOnly(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Providers) != 6 || got.Providers[0].Provider != "claude-cli" || got.Providers[1].Provider != "claude-cli" {
+	if len(got.Providers) != 7 || got.Providers[0].Provider != "claude-cli" || got.Providers[1].Provider != "claude-cli" {
 		t.Fatalf("default account first, then named, then the other providers: %s", out)
 	}
 	def, work := got.Providers[0], got.Providers[1]

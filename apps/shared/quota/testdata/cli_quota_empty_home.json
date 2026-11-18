@@ -24,6 +24,11 @@
       "account": null,
       "error": "not logged in",
       "provider": "muse-code"
+    },
+    {
+      "account": null,
+      "error": "not logged in",
+      "provider": "github-copilot"
     }
   ]
 }

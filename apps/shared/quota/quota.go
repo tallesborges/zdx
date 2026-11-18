@@ -34,10 +34,11 @@ const (
 	ProviderAntigravity = "google-antigravity"
 	ProviderGrok        = "grok-build"
 	ProviderMuseCode    = "muse-code"
+	ProviderCopilot     = "github-copilot"
 )
 
 var providers = []string{
-	ProviderClaude, ProviderCodex, ProviderAntigravity, ProviderGrok, ProviderMuseCode,
+	ProviderClaude, ProviderCodex, ProviderAntigravity, ProviderGrok, ProviderMuseCode, ProviderCopilot,
 }
 
 // Providers lists the supported provider ids in report order.
@@ -57,6 +58,8 @@ func ProviderDisplay(provider string) string {
 		return "Grok"
 	case ProviderMuseCode:
 		return "Muse Code"
+	case ProviderCopilot:
+		return "Copilot"
 	}
 	return provider
 }
@@ -169,6 +172,7 @@ type Endpoints struct {
 	AntigravityQuota string
 	GrokBilling      string
 	MuseCodeKey      string
+	CopilotUser      string
 	// Token refresh URLs.
 	ClaudeToken      string
 	CodexToken       string
@@ -184,6 +188,7 @@ const (
 	AntigravityQuotaURL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
 	GrokBillingURL      = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
 	MuseCodeKeyURL      = "https://api.meta.ai/muse-code/key"
+	CopilotUserURL      = "https://api.github.com/copilot_internal/user"
 )
 
 func (e Endpoints) withDefaults() Endpoints {
@@ -198,6 +203,7 @@ func (e Endpoints) withDefaults() Endpoints {
 	set(&e.AntigravityQuota, AntigravityQuotaURL)
 	set(&e.GrokBilling, GrokBillingURL)
 	set(&e.MuseCodeKey, MuseCodeKeyURL)
+	set(&e.CopilotUser, CopilotUserURL)
 	return e.withTokenDefaults()
 }
 
@@ -345,6 +351,8 @@ func (f *fetcher) fetch(ctx context.Context, cache *oauthCache, a Account) (*Quo
 		return f.grok(ctx, cache.get(a))
 	case ProviderMuseCode:
 		return f.museCode(ctx, cache.get(a))
+	case ProviderCopilot:
+		return f.copilot(ctx, cache.get(a))
 	}
 	return nil, failure(KindNotAuthenticated)
 }

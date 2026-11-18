@@ -158,6 +158,36 @@ func (f *fetcher) museCode(ctx context.Context, c *credentials) (*Quota, *Error)
 	return museOutcome(body)
 }
 
+// Copilot identity: VS Code Copilot Chat, as zdx's Copilot model client sends
+// it (crates/zdx-providers/src/oauth.rs, github_copilot::identity_headers).
+// Keep the versions in step with that file.
+const (
+	copilotUserAgent           = "GitHubCopilotChat/0.35.0"
+	copilotEditorVersion       = "vscode/1.107.0"
+	copilotEditorPluginVersion = "copilot-chat/0.35.0"
+)
+
+// copilot reads copilot_internal/user with the stored GitHub OAuth token
+// (the `refresh` field). That token has no expiry of its own; the stored
+// expiry is the short-lived Copilot API token's (`access`), which this call
+// does not use, so there is no expiry check and no refresh.
+func (f *fetcher) copilot(ctx context.Context, c *credentials) (*Quota, *Error) {
+	if c == nil || c.refresh == "" {
+		return nil, failure(KindNotAuthenticated)
+	}
+	body, err := f.do(ctx, request{method: "GET", url: f.urls.CopilotUser, headers: [][2]string{
+		{"Authorization", "token " + c.refresh},
+		{"Accept", "application/json"},
+		{"user-agent", copilotUserAgent},
+		{"editor-version", copilotEditorVersion},
+		{"editor-plugin-version", copilotEditorPluginVersion},
+	}})
+	if err != nil {
+		return nil, err
+	}
+	return incompatibleUnless(parseCopilot(body))
+}
+
 // museOutcome is the Muse Code answer after a 2xx: an inactive subscription
 // is unauthorized, an idle one is a 0% rolling window, else the parsed
 // allowance.
@@ -760,4 +790,113 @@ func museReset(raw json.RawMessage) (*time.Time, error) {
 		return timestamp(saturatingInt64(secs)), nil
 	}
 	return nil, nil
+}
+
+// parseCopilot reads the metered monthly allowances of copilot_internal/user:
+// premium requests (`premium`) and chat (`chat`, metered only on Free). An
+// allowance that is unlimited or has no positive entitlement has no window.
+// The plan is copilot_plan. The reset is quota_reset_date_utc, else
+// quota_reset_date (a plain date is 00:00 UTC).
+func parseCopilot(body []byte) (*Quota, error) {
+	doc, err := document(body)
+	if err != nil {
+		return nil, err
+	}
+	root, err := object(doc, "copilot_plan", "quota_reset_date", "quota_reset_date_utc", "quota_snapshots")
+	if err != nil {
+		return nil, err
+	}
+	plan, err := root.optString("copilot_plan")
+	if err != nil {
+		return nil, err
+	}
+	resetUTC, err := root.optString("quota_reset_date_utc")
+	if err != nil {
+		return nil, err
+	}
+	resetDate, err := root.optString("quota_reset_date")
+	if err != nil {
+		return nil, err
+	}
+	reset := copilotReset(resetUTC, resetDate)
+	snapshots, err := root.optObject("quota_snapshots", "premium_interactions", "chat")
+	if err != nil || snapshots == nil {
+		return nil, err
+	}
+	var windows []Window
+	for _, item := range [][2]string{{"premium_interactions", "premium"}, {"chat", "chat"}} {
+		s, err := snapshots.optObject(item[0], "entitlement", "remaining", "percent_remaining", "unlimited", "overage_count")
+		if err != nil {
+			return nil, err
+		}
+		if s == nil {
+			continue
+		}
+		w, err := copilotWindow(item[1], s, reset)
+		if err != nil {
+			return nil, err
+		}
+		if w != nil {
+			windows = append(windows, *w)
+		}
+	}
+	if len(windows) == 0 {
+		return nil, nil
+	}
+	return &Quota{Plan: trimmedNonEmpty(plan, ""), Windows: windows}, nil
+}
+
+// copilotWindow is one quota snapshot. Used percent is 100 -
+// percent_remaining (else derived from remaining); the scope is the used
+// count of the entitlement, with any overage as ` +N`.
+func copilotWindow(label string, s fields, reset *time.Time) (*Window, error) {
+	unlimited, err := s.optBool("unlimited")
+	if err != nil {
+		return nil, err
+	}
+	var nums [4]*float64
+	for i, name := range []string{"entitlement", "remaining", "percent_remaining", "overage_count"} {
+		if nums[i], err = s.optFloat(name); err != nil {
+			return nil, err
+		}
+	}
+	entitlement, remaining, percent, overage := nums[0], nums[1], nums[2], nums[3]
+	if (unlimited != nil && *unlimited) || entitlement == nil || !(*entitlement > 0) {
+		return nil, nil
+	}
+	var used, count float64
+	switch {
+	case percent != nil:
+		used = 100 - *percent
+		count = *entitlement * used / 100
+		if remaining != nil {
+			count = *entitlement - *remaining
+		}
+	case remaining != nil:
+		count = *entitlement - *remaining
+		used = count / *entitlement * 100
+	default:
+		return nil, nil
+	}
+	scope := rustFixed(math.Max(count, 0), 0) + " of " + rustFixed(*entitlement, 0)
+	if overage != nil && *overage > 0 {
+		scope += " +" + rustFixed(*overage, 0)
+	}
+	return &Window{Label: label, UsedPercent: used, ResetsAt: reset, Scope: &scope}, nil
+}
+
+// copilotReset is the first reset text that parses: the UTC timestamp, the
+// date as sent, then the date at 00:00 UTC.
+func copilotReset(utc, date *string) *time.Time {
+	if t := parseRFC3339(utc); t != nil {
+		return t
+	}
+	if date == nil {
+		return nil
+	}
+	if t := parseRFC3339(date); t != nil {
+		return t
+	}
+	midnight := *date + "T00:00:00Z"
+	return parseRFC3339(&midnight)
 }

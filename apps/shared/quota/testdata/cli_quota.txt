@@ -16,3 +16,5 @@ Subscriptions (live quota)
   Grok @busy   rate limited
   Muse Code [Power Usage]
     5h        42%   resets in 185d 8h
+  Copilot [individual_pro]
+    premium   25%   resets in 18d 0h   · 375 of 1500

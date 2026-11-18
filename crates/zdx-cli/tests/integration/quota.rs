@@ -211,8 +211,8 @@ fn test_quota_real_reader_reports_all_providers_not_logged_in() {
         "openai-codex",
         "google-antigravity",
         "grok-build",
-        "opencode-go",
         "muse-code",
+        "github-copilot",
     ];
     let entries: Vec<Value> = providers
         .iter()

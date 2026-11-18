@@ -1,0 +1,50 @@
+{
+  "login": "octo-synthetic",
+  "access_type_sku": "plus_monthly_subscriber_quota",
+  "analytics_tracking_id": "synthetic",
+  "assigned_date": "2026-01-01T00:00:00Z",
+  "can_signup_for_limited": false,
+  "chat_enabled": true,
+  "copilot_plan": "individual_pro",
+  "organization_login_list": [],
+  "organization_list": [],
+  "endpoints": {
+    "api": "https://api.individual.githubcopilot.com",
+    "telemetry": "https://telemetry.individual.githubcopilot.com"
+  },
+  "quota_reset_date": "2026-08-01",
+  "quota_reset_date_utc": "2026-08-01T00:00:00.000Z",
+  "quota_snapshots": {
+    "chat": {
+      "entitlement": 0,
+      "overage_count": 0,
+      "overage_permitted": false,
+      "percent_remaining": 100.0,
+      "quota_id": "chat",
+      "quota_remaining": 0.0,
+      "remaining": 0,
+      "unlimited": true
+    },
+    "completions": {
+      "entitlement": 0,
+      "overage_count": 0,
+      "overage_permitted": false,
+      "percent_remaining": 100.0,
+      "quota_id": "completions",
+      "quota_remaining": 0.0,
+      "remaining": 0,
+      "unlimited": true
+    },
+    "premium_interactions": {
+      "entitlement": 1500,
+      "has_quota": true,
+      "overage_count": 0,
+      "overage_permitted": true,
+      "percent_remaining": 75.0,
+      "quota_id": "premium_interactions",
+      "quota_remaining": 1125.0,
+      "remaining": 1125,
+      "unlimited": false
+    }
+  }
+}
