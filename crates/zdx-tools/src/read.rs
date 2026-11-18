@@ -58,11 +58,6 @@ const MAX_LINES: usize = 2000;
 /// to prevent context window bloat from files with many lines or huge blobs.
 const MAX_PAGE_BYTES: usize = 40 * 1024; // 40KB
 
-/// Maximum image file size (3.75MB).
-/// Anthropic API limit is ~5MB for base64-encoded data.
-/// Base64 expands by ~33% (4/3 ratio), so: 5MB ÷ 1.33 ≈ 3.75MB raw.
-const MAX_IMAGE_BYTES: u64 = 3_932_160; // 3.75 * 1024 * 1024
-
 /// Detects supported image MIME type from path extension.
 fn image_mime_type(path: &Path) -> Option<&'static str> {
     crate::mime_type_for_extension(path.to_string_lossy().as_ref())
@@ -155,17 +150,9 @@ fn read_image(display_path: &str, path: &Path, mime_type: &str) -> ToolOutput {
     };
 
     let file_size = metadata.len();
-    if file_size > MAX_IMAGE_BYTES {
-        return ToolOutput::failure(
-            "image_too_large",
-            format!("Image file '{}' is too large", path.display()),
-            Some(format!(
-                "Size: {file_size} bytes, Maximum: 3932160 bytes (3.75 MB)"
-            )),
-        );
-    }
 
-    // Read binary content
+    // Read binary content. There is no size pre-check: an oversized but
+    // valid image is downscaled below, so only undecodable bytes fail.
     let data = match fs::read(path) {
         Ok(d) => d,
         Err(e) => {
@@ -184,11 +171,36 @@ fn read_image(display_path: &str, path: &Path, mime_type: &str) -> ToolOutput {
     let mime_type = zdx_types::sniff_raster_image_mime(&data).unwrap_or(mime_type);
 
     // An oversized `tool_result` image is rejected outright rather than
-    // downscaled by the provider, which fails the whole turn.
+    // downscaled by the provider, which fails the whole turn. Downscale here
+    // instead, so a large screenshot still yields a viewable image.
     let (data, mime_type) = match crate::image_downscale::downscale_for_provider(&data) {
         Some((resized, resized_mime)) => (resized, resized_mime),
         None => (data, mime_type),
     };
+
+    // Fail closed: magic bytes and a valid header do not prove the pixel
+    // data decodes, and an undecodable image in a tool result fails the whole
+    // provider turn. Never put such bytes into a request.
+    if !crate::image_downscale::is_decodable_image(&data) {
+        return ToolOutput::failure(
+            "image_invalid",
+            format!(
+                "Image file '{}' is invalid: its bytes do not decode as an image",
+                path.display()
+            ),
+            None,
+        );
+    }
+    if data.len() > crate::image_downscale::MAX_PROVIDER_IMAGE_BYTES {
+        return ToolOutput::failure(
+            "image_too_large",
+            format!("Image file '{}' is too large", path.display()),
+            Some(format!(
+                "Size: {} bytes, Maximum: 3932160 bytes (3.75 MB)",
+                data.len()
+            )),
+        );
+    }
 
     let base64_data = BASE64.encode(&data);
 
@@ -382,11 +394,18 @@ fn read_text_error(path: Option<&Path>, e: &std::io::Error) -> ToolOutput {
 #[cfg(test)]
 mod tests {
     use std::fmt::Write as _;
-    use std::io::Write;
 
     use tempfile::TempDir;
 
     use super::*;
+
+    fn encode_test_image(width: u32, height: u32, format: image::ImageFormat) -> Vec<u8> {
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(width, height));
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), format)
+            .unwrap();
+        buf
+    }
 
     #[test]
     fn test_read_file_success() {
@@ -861,22 +880,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("test.png");
 
-        // Minimal PNG
-        #[rustfmt::skip]
-        let png_bytes: &[u8] = &[
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-            0x00, 0x00, 0x00, 0x0D,
-            0x49, 0x48, 0x44, 0x52,
-            0x00, 0x00, 0x00, 0x01,
-            0x00, 0x00, 0x00, 0x01,
-            0x08, 0x02,
-            0x00, 0x00, 0x00,
-            0x90, 0x77, 0x53, 0xDE,
-            0x00, 0x00, 0x00, 0x00,
-            0x49, 0x45, 0x4E, 0x44,
-            0xAE, 0x42, 0x60, 0x82,
-        ];
-        fs::write(&path, png_bytes).unwrap();
+        let png_bytes = encode_test_image(4, 4, image::ImageFormat::Png);
+        fs::write(&path, &png_bytes).unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"file_path": "test.png"});
@@ -905,11 +910,8 @@ mod tests {
         // image/jpeg so the provider does not reject the tool_result.
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("actually_jpeg.png");
-        let jpeg_bytes: &[u8] = &[
-            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00,
-            0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9,
-        ];
-        fs::write(&path, jpeg_bytes).unwrap();
+        let jpeg_bytes = encode_test_image(4, 4, image::ImageFormat::Jpeg);
+        fs::write(&path, &jpeg_bytes).unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"file_path": "actually_jpeg.png"});
@@ -962,12 +964,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("test.jpg");
 
-        // Minimal JPEG
-        let jpeg_bytes: &[u8] = &[
-            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00,
-            0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9,
-        ];
-        fs::write(&path, jpeg_bytes).unwrap();
+        let jpeg_bytes = encode_test_image(4, 4, image::ImageFormat::Jpeg);
+        fs::write(&path, &jpeg_bytes).unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"file_path": "test.jpg"});
@@ -983,37 +981,67 @@ mod tests {
     }
 
     #[test]
-    fn test_read_image_too_large_returns_error() {
+    fn test_read_image_oversized_is_downscaled_not_rejected() {
+        use std::io::Cursor;
+
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("large.png");
 
-        // Create a file with PNG header but larger than 3.75MB
-        // We use a sparse approach: write PNG header then seek/write at end
-        let mut file = File::create(&path).unwrap();
-
-        // PNG header
-        #[rustfmt::skip]
-        let png_header: &[u8] = &[
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-            0x00, 0x00, 0x00, 0x0D,
-            0x49, 0x48, 0x44, 0x52,
-        ];
-        file.write_all(png_header).unwrap();
-
-        // Extend to 4MB (just over the 3.75MB limit)
-        file.set_len(4 * 1024 * 1024).unwrap();
-        drop(file);
+        // Noise does not compress, so this valid PNG exceeds the byte budget.
+        let mut img = image::RgbImage::new(1600, 1000);
+        let mut seed: u32 = 42;
+        for pixel in img.pixels_mut() {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *pixel = image::Rgb([(seed >> 16) as u8, (seed >> 8) as u8, seed as u8]);
+        }
+        let mut source = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut Cursor::new(&mut source), image::ImageFormat::Png)
+            .unwrap();
+        assert!(
+            source.len() > crate::image_downscale::MAX_PROVIDER_IMAGE_BYTES,
+            "fixture must exceed the budget"
+        );
+        fs::write(&path, &source).unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"file_path": "large.png"});
 
         let result = execute(&input, &ctx);
-        assert!(!result.is_ok());
+        assert!(result.is_ok(), "{}", result.to_json_string());
 
+        let image = result.image().expect("should have image content");
+        let decoded = BASE64.decode(&image.data).expect("should be valid base64");
+        assert!(decoded.len() <= crate::image_downscale::MAX_PROVIDER_IMAGE_BYTES);
+        assert!(crate::image_downscale::is_decodable_image(&decoded));
+        let (width, height) = image::ImageReader::new(Cursor::new(&decoded))
+            .with_guessed_format()
+            .unwrap()
+            .into_dimensions()
+            .unwrap();
+        assert!(width <= crate::image_downscale::MAX_PROVIDER_IMAGE_EDGE);
+        assert!(height <= crate::image_downscale::MAX_PROVIDER_IMAGE_EDGE);
+    }
+
+    #[test]
+    fn test_read_image_corrupt_returns_image_invalid_with_no_image() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("corrupt.png");
+
+        // A valid header with no pixel data: magic bytes pass, decode does not.
+        let mut corrupt = encode_test_image(4, 4, image::ImageFormat::Png);
+        corrupt.truncate(33);
+        fs::write(&path, &corrupt).unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"file_path": "corrupt.png"});
+
+        let result = execute(&input, &ctx);
+        assert!(!result.is_ok());
+        assert!(result.image().is_none(), "no image block may be attached");
         let json_str = result.to_json_string();
-        assert!(json_str.contains(r#""code":"image_too_large""#));
-        // Details now contains the size information
-        assert!(json_str.contains("3.75 MB"));
+        assert!(json_str.contains(r#""code":"image_invalid""#), "{json_str}");
+        assert!(json_str.contains("corrupt.png"), "{json_str}");
     }
 
     #[test]

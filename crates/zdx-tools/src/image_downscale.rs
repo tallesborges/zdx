@@ -40,9 +40,11 @@ const JPEG_QUALITY_LADDER: [u8; 3] = [90, 75, 60];
 /// aspect ratio.
 ///
 /// Returns the re-encoded bytes and their MIME type when the image was
-/// oversized, and `None` when it already fits or cannot be decoded. Leaving an
-/// undecodable image untouched is deliberate: the provider's own error names the
-/// real problem, where a local failure here would hide it.
+/// oversized, and `None` when it already fits or cannot be decoded. Callers
+/// that put the bytes into a provider request must check
+/// [`is_decodable_image`] on whatever bytes they end up sending: a `None` here
+/// that hides an undecodable image would otherwise reach the provider, which
+/// rejects the whole turn with an error that names no file.
 ///
 /// Opaque images re-encode to JPEG rather than PNG. PNG balloons on
 /// photographic content — a downscaled 2000x1333 noise frame measures ~6.4 MB
@@ -98,6 +100,22 @@ pub fn downscale_to_fit(
     }
 
     encode_within(&pixels, max_edge, max_bytes)
+}
+
+/// Returns true when `data` fully decodes to pixels.
+///
+/// Header and magic-byte checks are not enough: a file can have a valid
+/// header and CRCs while its pixel data is the wrong size for its declared
+/// color type, which a strict provider decoder rejects and fails the whole
+/// turn. Callers that place image bytes into a provider request must fail
+/// closed on `false` instead of sending the bytes.
+#[must_use]
+pub fn is_decodable_image(data: &[u8]) -> bool {
+    image::ImageReader::new(Cursor::new(data))
+        .with_guessed_format()
+        .ok()
+        .and_then(|reader| reader.into_decoder().ok())
+        .is_some_and(|decoder| image::DynamicImage::from_decoder(decoder).is_ok())
 }
 
 /// Encodes `decoded` within both an edge limit and a byte budget.
@@ -312,5 +330,15 @@ mod tests {
     #[test]
     fn passes_undecodable_bytes_through() {
         assert!(downscale_for_provider(b"not an image at all").is_none());
+    }
+
+    #[test]
+    fn decodability_requires_full_pixel_decode() {
+        assert!(is_decodable_image(&png_bytes(4, 4)));
+        assert!(!is_decodable_image(b"not an image at all"));
+        // Valid header, no pixel data: the shape a hand-rolled cropper emits.
+        let mut header_only = png_bytes(4, 4);
+        header_only.truncate(33);
+        assert!(!is_decodable_image(&header_only));
     }
 }

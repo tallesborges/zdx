@@ -239,6 +239,12 @@ impl InputImage {
             .with_context(|| {
                 format!("{} is not a PNG, JPEG, GIF, or WebP image", path.display())
             })?;
+        if !crate::images::is_decodable_image(&bytes) {
+            anyhow::bail!(
+                "{} is invalid: its bytes do not decode as an image",
+                path.display()
+            );
+        }
         Ok(Self {
             mime_type: mime_type.to_string(),
             data: base64::engine::general_purpose::STANDARD.encode(bytes),
@@ -320,6 +326,38 @@ mod tests {
             mirror_url: None,
             steers: Vec::new(),
         }
+    }
+
+    #[test]
+    fn from_file_rejects_images_that_do_not_decode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("corrupt.png");
+        // Valid PNG header, no pixel data.
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 4));
+        let mut bytes = Vec::new();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        bytes.truncate(33);
+        std::fs::write(&path, &bytes).unwrap();
+        let err = InputImage::from_file(&path).expect_err("corrupt image must fail");
+        assert!(format!("{err:#}").contains("do not decode"), "{err:#}");
+
+        let valid = dir.path().join("valid.png");
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 4));
+        let mut bytes = Vec::new();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        std::fs::write(&valid, &bytes).unwrap();
+        assert_eq!(
+            InputImage::from_file(&valid).unwrap().mime_type,
+            "image/png"
+        );
     }
 
     #[test]

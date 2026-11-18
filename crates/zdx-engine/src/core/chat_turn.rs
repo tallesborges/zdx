@@ -245,8 +245,8 @@ pub struct PreparedImage {
 }
 
 /// Shrinks an image to the inline limits, or explains why the model cannot
-/// see it. An image the decoder cannot read (GIF, for one) is sent as-is when
-/// it is a type providers accept and already within the byte limit.
+/// see it. Image data that does not fully decode is never sent inline: a
+/// corrupt image in a request fails the whole turn, so it stays saved-only.
 #[must_use]
 pub fn prepare_inline_image(local_path: &Path, bytes: &[u8]) -> PreparedImage {
     use base64::Engine as _;
@@ -266,6 +266,15 @@ pub fn prepare_inline_image(local_path: &Path, bytes: &[u8]) -> PreparedImage {
     let detected = infer::get(bytes).map(|kind| kind.mime_type());
     let reason = match detected {
         Some(mime) if SUPPORTED_IMAGE_MIMES.contains(&mime) => {
+            if !crate::images::is_decodable_image(bytes) {
+                return PreparedImage {
+                    delivery: ImageDelivery::SavedOnly {
+                        reason: "its image data is invalid and does not decode".to_string(),
+                        ask_media: false,
+                    },
+                    image: None,
+                };
+            }
             if bytes.len() <= INLINE_IMAGE_BYTES {
                 return PreparedImage {
                     delivery: ImageDelivery::Inline { downscaled: false },
@@ -564,6 +573,20 @@ mod tests {
         let copy = image::load_from_memory(&sent).unwrap();
         assert_eq!((copy.width(), copy.height()), (INLINE_IMAGE_EDGE, 49));
         assert!(prompt_for(path, prepared.delivery).contains("You see a downscaled copy"));
+    }
+
+    #[test]
+    fn corrupt_images_are_never_sent_inline() {
+        let mut corrupt = png(8, 8);
+        corrupt.truncate(33);
+        let path = Path::new("/tmp/corrupt.png");
+        let prepared = prepare_inline_image(path, &corrupt);
+        assert!(prepared.image.is_none());
+        let prompt = prompt_for(path, prepared.delivery);
+        assert!(
+            prompt.contains("its image data is invalid and does not decode"),
+            "{prompt}"
+        );
     }
 
     #[test]
