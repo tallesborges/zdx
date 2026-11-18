@@ -2002,6 +2002,495 @@ pub mod muse_code {
     }
 }
 
+/// GitHub Copilot device-flow login and Copilot token exchange.
+///
+/// Follows Pi (`badlogic/pi-mono`, `packages/ai/src/auth/oauth/github-copilot.ts`):
+/// a GitHub device flow with VS Code Copilot Chat's OAuth client, then an
+/// exchange of the GitHub token for a short-lived Copilot API token.
+///
+/// Two credentials are stored:
+/// - `refresh` holds the GitHub OAuth token (`gho_...`). It has no expiry of
+///   its own and is only replaced by a new login.
+/// - `access` holds the Copilot API token from `copilot_internal/v2/token`.
+///   It expires within the hour; zdx stores its `expires_at` minus 5 minutes
+///   and exchanges the GitHub token again when that passes.
+///
+/// The Copilot token carries the account's API host (`proxy-ep=`), so the
+/// base URL follows the account plan without being stored separately.
+///
+/// ⚠️ This presents VS Code's identity (client ID, editor headers, and
+/// `Copilot-Integration-Id: vscode-chat`). GitHub does not authorize this for
+/// third-party clients, and GitHub support has reportedly warned that
+/// spoofing the integration ID can get an account flagged. github.com only;
+/// GitHub Enterprise is not supported.
+pub mod github_copilot {
+    use std::time::{Duration, Instant};
+
+    use reqwest::header::{HeaderMap, HeaderValue};
+    use serde::Deserialize;
+
+    use super::{Context, OAuthCache, OAuthCredentials, Result};
+
+    /// Provider key for GitHub Copilot in the OAuth cache.
+    pub const PROVIDER_KEY: &str = "github-copilot";
+
+    /// VS Code Copilot Chat's public OAuth client ID (not a secret).
+    const CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
+    const SCOPE: &str = "read:user";
+
+    const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
+    const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
+    const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
+    const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
+
+    /// Fallback API host when the Copilot token carries no `proxy-ep`.
+    pub const DEFAULT_API_BASE_URL: &str = "https://api.individual.githubcopilot.com";
+
+    /// VS Code Copilot Chat identity, sent on every Copilot request.
+    pub const USER_AGENT: &str = "GitHubCopilotChat/0.35.0";
+    const EDITOR_VERSION: &str = "vscode/1.107.0";
+    const EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.35.0";
+    const INTEGRATION_ID: &str = "vscode-chat";
+    /// API version for the `/models` catalog and policy calls.
+    const API_VERSION: &str = "2026-06-01";
+
+    /// Margin taken off the Copilot token's `expires_at`.
+    const EXPIRY_MARGIN_MS: u64 = 5 * 60 * 1000;
+
+    const REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+    const DEFAULT_POLL_INTERVAL_SECS: u64 = 5;
+    const DEFAULT_EXPIRES_IN_SECS: u64 = 900;
+    const SLOW_DOWN_STEP_SECS: u64 = 5;
+
+    fn http_client() -> Result<reqwest::Client> {
+        reqwest::Client::builder()
+            .user_agent(USER_AGENT)
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .context("Failed to build the GitHub Copilot HTTP client")
+    }
+
+    /// The editor identity headers every Copilot API request carries.
+    #[must_use]
+    pub fn identity_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", HeaderValue::from_static(USER_AGENT));
+        headers.insert("editor-version", HeaderValue::from_static(EDITOR_VERSION));
+        headers.insert(
+            "editor-plugin-version",
+            HeaderValue::from_static(EDITOR_PLUGIN_VERSION),
+        );
+        headers.insert(
+            "copilot-integration-id",
+            HeaderValue::from_static(INTEGRATION_ID),
+        );
+        headers
+    }
+
+    /// The account's API base URL, read from the Copilot token.
+    ///
+    /// The token is a `;`-separated list such as
+    /// `tid=...;exp=...;proxy-ep=proxy.individual.githubcopilot.com;...`; the
+    /// API host is the proxy host with `proxy.` replaced by `api.`.
+    #[must_use]
+    pub fn api_base_url(copilot_token: &str) -> Option<String> {
+        let host = copilot_token
+            .split(';')
+            .find_map(|field| field.trim().strip_prefix("proxy-ep="))?
+            .trim();
+        if host.is_empty() || host.contains(['/', ':', ' ']) {
+            return None;
+        }
+        let host = host
+            .strip_prefix("proxy.")
+            .map_or_else(|| host.to_string(), |rest| format!("api.{rest}"));
+        Some(format!("https://{host}"))
+    }
+
+    /// A pending device authorization the user must approve in a browser.
+    #[derive(Debug, Clone)]
+    pub struct DeviceAuthorization {
+        pub device_code: String,
+        pub user_code: String,
+        pub verification_uri: String,
+        pub interval_secs: u64,
+        pub expires_in_secs: u64,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct DeviceCodeWire {
+        device_code: String,
+        user_code: String,
+        verification_uri: String,
+        interval: Option<u64>,
+        expires_in: Option<u64>,
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct AccessTokenWire {
+        access_token: Option<String>,
+        error: Option<String>,
+        error_description: Option<String>,
+        interval: Option<u64>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct CopilotTokenWire {
+        token: String,
+        expires_at: u64,
+    }
+
+    /// Starts the GitHub device flow and returns the code to show the user.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or the response is incomplete.
+    pub async fn start_device_authorization() -> Result<DeviceAuthorization> {
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("client_id", CLIENT_ID)
+            .append_pair("scope", SCOPE)
+            .finish();
+
+        let response = http_client()?
+            .post(DEVICE_CODE_URL)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("Accept", "application/json")
+            .body(body)
+            .send()
+            .await
+            .context("Failed to start the GitHub device flow")?;
+
+        if !response.status().is_success() {
+            anyhow::bail!(
+                "GitHub device flow failed to start (HTTP {})",
+                response.status()
+            );
+        }
+
+        let wire: DeviceCodeWire = response
+            .json()
+            .await
+            .context("Failed to parse the GitHub device code response")?;
+
+        Ok(DeviceAuthorization {
+            device_code: wire.device_code,
+            user_code: wire.user_code,
+            verification_uri: wire.verification_uri,
+            interval_secs: wire
+                .interval
+                .filter(|i| *i > 0)
+                .unwrap_or(DEFAULT_POLL_INTERVAL_SECS),
+            expires_in_secs: wire
+                .expires_in
+                .filter(|e| *e > 0)
+                .unwrap_or(DEFAULT_EXPIRES_IN_SECS),
+        })
+    }
+
+    /// Polls until the user approves, denies, or the code expires, and
+    /// returns the GitHub OAuth token.
+    ///
+    /// Every wait and request is bounded by the time left on the code, so the
+    /// loop cannot outlive the deadline shown to the user.
+    ///
+    /// # Errors
+    /// Returns an error if the login is denied, expires, or the endpoint fails.
+    pub async fn poll_for_github_token(auth: &DeviceAuthorization) -> Result<String> {
+        let client = http_client()?;
+        let mut interval = Duration::from_secs(auth.interval_secs);
+        let deadline = Instant::now() + Duration::from_secs(auth.expires_in_secs);
+
+        loop {
+            let Some(until_deadline) = deadline.checked_duration_since(Instant::now()) else {
+                anyhow::bail!("GitHub login timed out waiting for approval");
+            };
+            tokio::time::sleep(interval.min(until_deadline)).await;
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                anyhow::bail!("GitHub login timed out waiting for approval");
+            };
+
+            let body = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("client_id", CLIENT_ID)
+                .append_pair("device_code", &auth.device_code)
+                .append_pair("grant_type", DEVICE_CODE_GRANT)
+                .finish();
+            let request = client
+                .post(ACCESS_TOKEN_URL)
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .header("Accept", "application/json")
+                .body(body)
+                .send();
+            let exchange = async {
+                let response = request.await.ok()?;
+                Some(response.json::<AccessTokenWire>().await.unwrap_or_default())
+            };
+            let Ok(outcome) = tokio::time::timeout(remaining, exchange).await else {
+                anyhow::bail!("GitHub login timed out waiting for approval");
+            };
+            // A dropped poll is transient; the deadline bounds the retries.
+            let Some(wire) = outcome else {
+                continue;
+            };
+
+            match wire.error.as_deref() {
+                None => {
+                    if let Some(token) = wire.access_token.filter(|t| !t.is_empty()) {
+                        return Ok(token);
+                    }
+                }
+                Some("authorization_pending") => {}
+                Some("slow_down") => {
+                    interval = wire.interval.filter(|i| *i > 0).map_or_else(
+                        || interval + Duration::from_secs(SLOW_DOWN_STEP_SECS),
+                        Duration::from_secs,
+                    );
+                }
+                Some("access_denied") => anyhow::bail!("GitHub login was denied"),
+                Some("expired_token") => anyhow::bail!("GitHub login code expired"),
+                Some(other) => {
+                    let detail = wire.error_description.unwrap_or_default();
+                    if detail.is_empty() {
+                        anyhow::bail!("GitHub login failed: {other}");
+                    }
+                    anyhow::bail!("GitHub login failed: {other} ({detail})");
+                }
+            }
+        }
+    }
+
+    /// Exchanges the GitHub OAuth token for a Copilot API token.
+    ///
+    /// # Errors
+    /// Returns an error if GitHub refuses the token (for example, the account
+    /// has no Copilot access) or the response cannot be parsed.
+    pub async fn refresh_token(github_token: &str) -> Result<OAuthCredentials> {
+        let response = http_client()?
+            .get(COPILOT_TOKEN_URL)
+            .header("Accept", "application/json")
+            .header("Authorization", format!("Bearer {github_token}"))
+            .headers(identity_headers())
+            .send()
+            .await
+            .context("Failed to request a GitHub Copilot token")?;
+
+        let status = response.status();
+        if status.as_u16() == 401 {
+            anyhow::bail!(
+                "GitHub rejected the stored token (HTTP 401); run `zdx login --github-copilot` again"
+            );
+        }
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "GitHub Copilot token exchange failed (HTTP {status}): {}. Check that this GitHub account has a Copilot subscription.",
+                zdx_types::log_field(&body, 300)
+            );
+        }
+
+        let wire: CopilotTokenWire = response
+            .json()
+            .await
+            .context("Failed to parse the GitHub Copilot token response")?;
+        Ok(credentials_from_token(
+            github_token,
+            &wire.token,
+            wire.expires_at,
+        ))
+    }
+
+    fn credentials_from_token(
+        github_token: &str,
+        copilot_token: &str,
+        expires_at_secs: u64,
+    ) -> OAuthCredentials {
+        OAuthCredentials {
+            cred_type: "oauth".to_string(),
+            refresh: github_token.to_string(),
+            access: copilot_token.to_string(),
+            expires: expires_at_secs
+                .saturating_mul(1000)
+                .saturating_sub(EXPIRY_MARGIN_MS),
+            account_id: None,
+        }
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ModelsWire {
+        data: Vec<ModelWire>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ModelWire {
+        id: String,
+        #[serde(default)]
+        model_picker_enabled: bool,
+        policy: Option<PolicyWire>,
+        capabilities: Option<CapabilitiesWire>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct PolicyWire {
+        state: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct CapabilitiesWire {
+        supports: Option<SupportsWire>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct SupportsWire {
+        tool_calls: Option<bool>,
+    }
+
+    /// The account's chat models after login.
+    #[derive(Debug, Default)]
+    pub struct AccountModels {
+        /// Models the account can use with tools, sorted.
+        pub available: Vec<String>,
+        /// Models whose policy this login accepted.
+        pub enabled: Vec<String>,
+    }
+
+    /// Lists the account's models and accepts the policy of every picker
+    /// model still `unconfigured`. Copilot refuses some models (Claude, Grok)
+    /// until their policy is accepted, which VS Code does in its model picker.
+    ///
+    /// # Errors
+    /// Returns an error if the model list cannot be read.
+    pub async fn enable_account_models(copilot_token: &str) -> Result<AccountModels> {
+        let base = api_base_url(copilot_token).unwrap_or_else(|| DEFAULT_API_BASE_URL.into());
+        let client = http_client()?;
+        let response = client
+            .get(format!("{base}/models"))
+            .header("Accept", "application/json")
+            .header("Authorization", format!("Bearer {copilot_token}"))
+            .header("X-GitHub-Api-Version", API_VERSION)
+            .headers(identity_headers())
+            .send()
+            .await
+            .context("Failed to list GitHub Copilot models")?;
+        if !response.status().is_success() {
+            anyhow::bail!(
+                "Listing GitHub Copilot models failed (HTTP {})",
+                response.status()
+            );
+        }
+        let wire: ModelsWire = response
+            .json()
+            .await
+            .context("Failed to parse the GitHub Copilot model list")?;
+
+        let mut models = AccountModels::default();
+        for model in wire.data {
+            let tools = model
+                .capabilities
+                .as_ref()
+                .and_then(|c| c.supports.as_ref())
+                .and_then(|s| s.tool_calls);
+            if tools == Some(false) {
+                continue;
+            }
+            match model.policy.and_then(|p| p.state).as_deref() {
+                Some("disabled") => {}
+                Some("unconfigured") if model.model_picker_enabled => {
+                    let accepted = client
+                        .post(format!("{base}/models/{}/policy", model.id))
+                        .header("Content-Type", "application/json")
+                        .header("Authorization", format!("Bearer {copilot_token}"))
+                        .header("openai-intent", "chat-policy")
+                        .header("x-interaction-type", "chat-policy")
+                        .headers(identity_headers())
+                        .body(r#"{"state":"enabled"}"#)
+                        .send()
+                        .await
+                        .is_ok_and(|r| r.status().is_success());
+                    if accepted {
+                        models.enabled.push(model.id.clone());
+                        models.available.push(model.id);
+                    }
+                }
+                _ if model.model_picker_enabled => models.available.push(model.id),
+                _ => {}
+            }
+        }
+        models.available.sort();
+        models.enabled.sort();
+        Ok(models)
+    }
+
+    /// Loads the GitHub Copilot credentials for an account from cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn load_credentials(account: Option<&str>) -> Result<Option<OAuthCredentials>> {
+        let cache = OAuthCache::load()?;
+        Ok(cache
+            .get(&super::account_cache_key(PROVIDER_KEY, account))
+            .cloned())
+    }
+
+    /// Saves GitHub Copilot credentials for an account to cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn save_credentials(account: Option<&str>, creds: &OAuthCredentials) -> Result<()> {
+        OAuthCache::update(|cache| {
+            cache.set(
+                &super::account_cache_key(PROVIDER_KEY, account),
+                creds.clone(),
+            );
+        })
+    }
+
+    /// Removes the GitHub Copilot credentials for an account from cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn clear_credentials(account: Option<&str>) -> Result<bool> {
+        OAuthCache::update(|cache| {
+            cache
+                .remove(&super::account_cache_key(PROVIDER_KEY, account))
+                .is_some()
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{api_base_url, credentials_from_token};
+
+        #[test]
+        fn base_url_comes_from_the_token_proxy_endpoint() {
+            let token = "tid=abc;exp=1700000000;sku=plus;proxy-ep=proxy.individual.githubcopilot.com;st=dotcom";
+            assert_eq!(
+                api_base_url(token).as_deref(),
+                Some("https://api.individual.githubcopilot.com")
+            );
+            assert_eq!(
+                api_base_url("tid=1;proxy-ep=proxy.business.githubcopilot.com").as_deref(),
+                Some("https://api.business.githubcopilot.com")
+            );
+        }
+
+        #[test]
+        fn base_url_is_unknown_without_a_usable_proxy_endpoint() {
+            assert_eq!(api_base_url("tid=1;exp=2"), None);
+            assert_eq!(api_base_url("proxy-ep="), None);
+            assert_eq!(api_base_url("proxy-ep=evil.example/path"), None);
+        }
+
+        #[test]
+        fn copilot_token_expiry_keeps_a_five_minute_margin() {
+            let creds = credentials_from_token("gho_github", "copilot", 1_700_000_000);
+            assert_eq!(creds.refresh, "gho_github");
+            assert_eq!(creds.access, "copilot");
+            assert_eq!(creds.expires, 1_700_000_000_000 - 5 * 60 * 1000);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

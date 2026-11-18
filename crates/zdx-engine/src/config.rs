@@ -2275,6 +2275,8 @@ pub struct ProvidersConfig {
     pub xai: ProviderConfig,
     #[serde(default = "default_grok_build_provider")]
     pub grok_build: ProviderConfig,
+    #[serde(default = "default_github_copilot_provider")]
+    pub github_copilot: ProviderConfig,
     #[serde(default = "default_meta_provider")]
     pub meta: ProviderConfig,
     #[serde(default = "default_muse_code_provider")]
@@ -2318,6 +2320,7 @@ impl ProvidersConfig {
             id if id == ProviderKind::Zai.id() => &self.zai,
             id if id == ProviderKind::Xai.id() => &self.xai,
             id if id == ProviderKind::GrokBuild.id() => &self.grok_build,
+            id if id == ProviderKind::GithubCopilot.id() => &self.github_copilot,
             id if id == ProviderKind::MuseCode.id() => &self.muse_code,
             id if id == ProviderKind::Meta.id() => &self.meta,
             id if id == ProviderKind::ElevenLabs.id() => &self.elevenlabs,
@@ -2352,6 +2355,7 @@ impl ProvidersConfig {
             ProviderKind::Zai => &self.zai,
             ProviderKind::Xai => &self.xai,
             ProviderKind::GrokBuild => &self.grok_build,
+            ProviderKind::GithubCopilot => &self.github_copilot,
             ProviderKind::MuseCode => &self.muse_code,
             ProviderKind::Meta => &self.meta,
             ProviderKind::ElevenLabs => &self.elevenlabs,
@@ -2384,6 +2388,7 @@ impl ProvidersConfig {
             ProviderKind::Zai => &mut self.zai,
             ProviderKind::Xai => &mut self.xai,
             ProviderKind::GrokBuild => &mut self.grok_build,
+            ProviderKind::GithubCopilot => &mut self.github_copilot,
             ProviderKind::MuseCode => &mut self.muse_code,
             ProviderKind::Meta => &mut self.meta,
             ProviderKind::ElevenLabs => &mut self.elevenlabs,
@@ -2447,6 +2452,7 @@ impl Default for ProvidersConfig {
             zai: default_zai_provider(),
             xai: default_xai_provider(),
             grok_build: default_grok_build_provider(),
+            github_copilot: default_github_copilot_provider(),
             muse_code: default_muse_code_provider(),
             meta: default_meta_provider(),
             elevenlabs: default_elevenlabs_provider(),
@@ -2732,6 +2738,27 @@ fn default_grok_build_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec!["grok-4.7".to_string()],
+        ..Default::default()
+    }
+}
+
+/// GitHub Copilot defaults: models included in Copilot Pro (Pro+-only models
+/// such as Claude Opus and GPT-6 Astra are left out). Ids use Copilot's dotted
+/// names (`claude-sonnet-5.5`); the credential comes from
+/// `zdx login --github-copilot`.
+fn default_github_copilot_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec![
+            "mai-code-2".to_string(),
+            "mai-code-2-flash".to_string(),
+            "claude-sonnet-5.5".to_string(),
+            "claude-haiku-5.5".to_string(),
+            "gpt-6.1-terra".to_string(),
+            "gpt-6-luna".to_string(),
+            "gemini-4-hydrogen".to_string(),
+            "grok-4.7".to_string(),
+        ],
         ..Default::default()
     }
 }

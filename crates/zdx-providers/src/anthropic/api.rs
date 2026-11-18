@@ -85,6 +85,12 @@ impl AnthropicConfig {
     }
 }
 
+#[derive(Clone, Copy)]
+enum Credential<'a> {
+    ApiKey(&'a str),
+    Bearer(&'a str),
+}
+
 /// Anthropic API client.
 pub struct AnthropicClient {
     config: AnthropicConfig,
@@ -142,6 +148,53 @@ impl AnthropicClient {
         tools: &[ToolDefinition],
         system: Option<&str>,
     ) -> Result<ProviderStream> {
+        self.stream(
+            "anthropic",
+            Credential::ApiKey(&self.config.api_key),
+            &HeaderMap::new(),
+            messages,
+            tools,
+            system,
+        )
+        .await
+    }
+
+    /// Sends with a per-request bearer token and headers, for proxies that
+    /// serve the Messages API with a short-lived bearer (GitHub Copilot).
+    /// `request_headers` replace any header of the same name, including the
+    /// default `user-agent`.
+    ///
+    /// # Errors
+    /// Returns an error if the request cannot be built or fails.
+    pub async fn send_messages_stream_bearer(
+        &self,
+        client_label: &str,
+        token: &str,
+        request_headers: &HeaderMap,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+        system: Option<&str>,
+    ) -> Result<ProviderStream> {
+        self.stream(
+            client_label,
+            Credential::Bearer(token),
+            request_headers,
+            messages,
+            tools,
+            system,
+        )
+        .await
+    }
+
+    async fn stream(
+        &self,
+        client_label: &str,
+        credential: Credential<'_>,
+        request_headers: &HeaderMap,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+        system: Option<&str>,
+    ) -> Result<ProviderStream> {
         let request = self.build_streaming_request(messages, tools, system)?;
         let include_interleaved_beta = should_enable_interleaved_thinking_beta(
             &self.config.model,
@@ -151,19 +204,25 @@ impl AnthropicClient {
 
         let url = format!("{}/v1/messages", self.config.base_url);
 
-        send_streaming_request("anthropic", &self.http, &url, &request, |builder| {
-            let mut builder = builder
-                .header("anthropic-version", API_VERSION)
-                .header("x-api-key", &self.config.api_key);
+        send_streaming_request(client_label, &self.http, &url, &request, |builder| {
+            let mut builder = builder.header("anthropic-version", API_VERSION);
+            builder = match credential {
+                Credential::ApiKey(key) => builder.header("x-api-key", key),
+                Credential::Bearer(token) => builder.bearer_auth(token),
+            };
 
             for (name, value) in &self.config.extra_headers {
                 builder = builder.header(name, value);
             }
 
-            if beta_header.is_empty() {
+            if !beta_header.is_empty() {
+                builder = builder.header("anthropic-beta", beta_header);
+            }
+
+            if request_headers.is_empty() {
                 builder
             } else {
-                builder.header("anthropic-beta", beta_header)
+                builder.headers(request_headers.clone())
             }
         })
         .await

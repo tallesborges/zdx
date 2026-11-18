@@ -15,6 +15,7 @@ mod custom_provider_api;
 mod engine;
 mod exec_subagent;
 mod git_go;
+mod github_copilot;
 mod imagine;
 mod jobs_go;
 mod jobs_run;

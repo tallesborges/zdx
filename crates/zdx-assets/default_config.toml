@@ -252,6 +252,14 @@ enabled = true
 models = ["grok-4.7"]
 websocket = false
 
+[providers.github_copilot]
+# GitHub Copilot subscription. Log in with `zdx login --github-copilot`.
+# Model ids use Copilot's dotted names (claude-sonnet-5.5, gpt-6-luna).
+enabled = true
+# base_url = "https://api.individual.githubcopilot.com"  # Default comes from the Copilot token
+models = ["mai-code-2", "mai-code-2-flash", "claude-sonnet-5.5", "claude-haiku-5.5", "gpt-6.1-terra", "gpt-6-luna", "gemini-4-hydrogen", "grok-4.7"]
+websocket = false
+
 [providers.muse_code]
 enabled = true
 models = ["muse-wonder-full-1.0", "muse-wonder-1.0", "muse-spark-1.3"]

@@ -384,6 +384,9 @@ enum Commands {
         /// Provider to log in to (Muse Code / Meta subscription device login)
         #[arg(long = "muse-code")]
         muse_code: bool,
+        /// Provider to log in to (GitHub Copilot device login)
+        #[arg(long = "github-copilot")]
+        github_copilot: bool,
         /// Named OAuth account to log in as (omit for the default account)
         #[arg(long)]
         account: Option<String>,
@@ -409,6 +412,9 @@ enum Commands {
         /// Provider to log out from (Muse Code / Meta subscription device login)
         #[arg(long = "muse-code")]
         muse_code: bool,
+        /// Provider to log out from (GitHub Copilot device login)
+        #[arg(long = "github-copilot")]
+        github_copilot: bool,
         /// Named OAuth account to log out from (omit for the default account)
         #[arg(long)]
         account: Option<String>,
@@ -1898,17 +1904,19 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             antigravity,
             grok_build,
             muse_code,
+            github_copilot,
             account,
         } => {
             dispatch_login(
-                (
-                    anthropic,
-                    claude_cli,
-                    openai_codex,
-                    antigravity,
-                    grok_build,
-                    muse_code,
-                ),
+                [
+                    (anthropic, AuthProvider::Anthropic),
+                    (claude_cli, AuthProvider::ClaudeCli),
+                    (openai_codex, AuthProvider::OpenaiCodex),
+                    (antigravity, AuthProvider::Antigravity),
+                    (grok_build, AuthProvider::GrokBuild),
+                    (muse_code, AuthProvider::MuseCode),
+                    (github_copilot, AuthProvider::GithubCopilot),
+                ],
                 account.as_deref(),
             )
             .await
@@ -1920,16 +1928,18 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             antigravity,
             grok_build,
             muse_code,
+            github_copilot,
             account,
         } => dispatch_logout(
-            (
-                anthropic,
-                claude_cli,
-                openai_codex,
-                antigravity,
-                grok_build,
-                muse_code,
-            ),
+            [
+                (anthropic, AuthProvider::Anthropic),
+                (claude_cli, AuthProvider::ClaudeCli),
+                (openai_codex, AuthProvider::OpenaiCodex),
+                (antigravity, AuthProvider::Antigravity),
+                (grok_build, AuthProvider::GrokBuild),
+                (muse_code, AuthProvider::MuseCode),
+                (github_copilot, AuthProvider::GithubCopilot),
+            ],
             account.as_deref(),
         ),
         Commands::Models { command } => dispatch_models(command, context).await,
@@ -2347,18 +2357,12 @@ fn dispatch_config(command: &ConfigCommands) -> Result<()> {
     }
 }
 
-async fn dispatch_login(
-    flags: (bool, bool, bool, bool, bool, bool),
-    account: Option<&str>,
-) -> Result<()> {
+async fn dispatch_login(flags: [(bool, AuthProvider); 7], account: Option<&str>) -> Result<()> {
     let provider = select_auth_provider(flags)?;
     login_provider(provider, account).await
 }
 
-fn dispatch_logout(
-    flags: (bool, bool, bool, bool, bool, bool),
-    account: Option<&str>,
-) -> Result<()> {
+fn dispatch_logout(flags: [(bool, AuthProvider); 7], account: Option<&str>) -> Result<()> {
     let provider = select_auth_provider(flags)?;
     logout_provider(provider, account)
 }
@@ -2488,18 +2492,18 @@ enum AuthProvider {
     Antigravity,
     GrokBuild,
     MuseCode,
+    GithubCopilot,
 }
 
-fn select_auth_provider(flags: (bool, bool, bool, bool, bool, bool)) -> Result<AuthProvider> {
-    match flags {
-        (true, false, false, false, false, false) => Ok(AuthProvider::Anthropic),
-        (false, true, false, false, false, false) => Ok(AuthProvider::ClaudeCli),
-        (false, false, true, false, false, false) => Ok(AuthProvider::OpenaiCodex),
-        (false, false, false, true, false, false) => Ok(AuthProvider::Antigravity),
-        (false, false, false, false, true, false) => Ok(AuthProvider::GrokBuild),
-        (false, false, false, false, false, true) => Ok(AuthProvider::MuseCode),
+/// The one provider whose flag is set.
+fn select_auth_provider(flags: [(bool, AuthProvider); 7]) -> Result<AuthProvider> {
+    let mut selected = flags
+        .into_iter()
+        .filter_map(|(set, provider)| set.then_some(provider));
+    match (selected.next(), selected.next()) {
+        (Some(provider), None) => Ok(provider),
         _ => anyhow::bail!(
-            "Please specify a provider: --anthropic, --claude-cli, --openai-codex, --antigravity, --grok-build, or --muse-code"
+            "Please specify a provider: --anthropic, --claude-cli, --openai-codex, --antigravity, --grok-build, --muse-code, or --github-copilot"
         ),
     }
 }
@@ -2512,6 +2516,7 @@ async fn login_provider(provider: AuthProvider, account: Option<&str>) -> Result
         AuthProvider::Antigravity => commands::auth::login_antigravity(account).await,
         AuthProvider::GrokBuild => commands::auth::login_grok_build(account).await,
         AuthProvider::MuseCode => commands::auth::login_muse_code(account).await,
+        AuthProvider::GithubCopilot => commands::auth::login_github_copilot(account).await,
     }
 }
 
@@ -2526,6 +2531,7 @@ fn logout_provider(provider: AuthProvider, account: Option<&str>) -> Result<()> 
         AuthProvider::Antigravity => commands::auth::logout_antigravity(account),
         AuthProvider::GrokBuild => commands::auth::logout_grok_build(account),
         AuthProvider::MuseCode => commands::auth::logout_muse_code(account),
+        AuthProvider::GithubCopilot => commands::auth::logout_github_copilot(account),
     }
 }
 

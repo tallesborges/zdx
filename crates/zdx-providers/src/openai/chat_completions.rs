@@ -75,14 +75,43 @@ impl OpenAIChatCompletionsClient {
         tools: &[ToolDefinition],
         system: Option<&str>,
     ) -> Result<ProviderStream> {
+        self.send_messages_stream_with(
+            "chat-completions",
+            &self.config.api_key,
+            &HeaderMap::new(),
+            messages,
+            tools,
+            system,
+        )
+        .await
+    }
+
+    /// Sends with a per-request bearer token and headers, for proxies whose
+    /// token rotates (GitHub Copilot). `request_headers` are applied last and
+    /// replace any header of the same name.
+    ///
+    /// # Errors
+    /// Returns an error if the request cannot be built or fails.
+    pub async fn send_messages_stream_with(
+        &self,
+        client_label: &str,
+        api_key: &str,
+        request_headers: &HeaderMap,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+        system: Option<&str>,
+    ) -> Result<ProviderStream> {
         let request =
             ChatCompletionRequest::new(&self.config, &self.extra_body, messages, tools, system);
         let trace =
             DebugTrace::from_env(&self.config.model, self.config.prompt_cache_key.as_deref());
 
         let url = format!("{}{}", self.config.base_url, CHAT_COMPLETIONS_PATH);
-        let headers = build_headers(&self.config.api_key, &self.config.extra_headers)?;
-        crate::shared::log_request("chat-completions", &url);
+        let mut headers = build_headers(api_key, &self.config.extra_headers)?;
+        for (name, value) in request_headers {
+            headers.insert(name, value.clone());
+        }
+        crate::shared::log_request(client_label, &url);
 
         let response = if let Some(trace) = &trace {
             let body = serde_json::to_vec(&request)?;
@@ -104,7 +133,7 @@ impl OpenAIChatCompletionsClient {
                 .map_err(|e| classify_reqwest_error(&e))?
         };
 
-        let response = crate::shared::check_response_status("chat-completions", response).await?;
+        let response = crate::shared::check_response_status(client_label, response).await?;
 
         let byte_stream = wrap_stream(trace, response.bytes_stream());
         let event_stream = ChatCompletionsSseParser::new(byte_stream, self.config.model.clone());

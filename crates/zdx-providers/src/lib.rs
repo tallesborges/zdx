@@ -11,6 +11,7 @@ pub mod audio_chat;
 pub mod deepseek;
 pub mod embeddings;
 pub mod gemini;
+pub mod github_copilot;
 pub mod grok_build;
 pub mod lmstudio;
 pub mod meta;
@@ -100,6 +101,7 @@ impl_streaming_provider!(
     zai::ZaiClient,
     xai::XaiClient,
     grok_build::GrokBuildClient,
+    github_copilot::GithubCopilotClient,
     meta::MetaClient,
     muse_code::MuseCodeClient,
     opencode_go::OpencodeGoClient,
@@ -150,7 +152,7 @@ pub struct ProviderBuildContext<'a> {
     pub provider_text_verbosity: Option<TextVerbosity>,
     /// Per-provider websocket flag (`OpenAI`/`OpenAICodex`).
     pub websocket: bool,
-    /// API routing hint for the `opencode-go` meta-provider.
+    /// API routing hint for the `opencode-go` and `github-copilot` providers.
     pub api_hint: Option<String>,
     /// Named OAuth account for multi-account providers (`None` = default).
     pub account: Option<&'a str>,
@@ -178,6 +180,7 @@ pub enum ProviderKind {
     Zai,
     Xai,
     GrokBuild,
+    GithubCopilot,
     Meta,
     MuseCode,
     ElevenLabs,
@@ -412,6 +415,17 @@ impl ProviderKind {
                 supports_oauth: true,
                 is_subscription: true,
             },
+            Self::GithubCopilot => ProviderMeta {
+                id: "github-copilot",
+                aliases: &["copilot"],
+                label: "GitHub Copilot",
+                // The Copilot token comes from GitHub device-flow login.
+                api_key_env: None,
+                base_url: crate::oauth::github_copilot::DEFAULT_API_BASE_URL,
+                base_url_env: Some("GITHUB_COPILOT_BASE_URL"),
+                supports_oauth: true,
+                is_subscription: true,
+            },
             Self::Meta => ProviderMeta {
                 id: "meta",
                 aliases: &[],
@@ -489,6 +503,7 @@ impl ProviderKind {
             ProviderKind::Zai,
             ProviderKind::Xai,
             ProviderKind::GrokBuild,
+            ProviderKind::GithubCopilot,
             ProviderKind::Meta,
             ProviderKind::MuseCode,
             ProviderKind::ElevenLabs,
@@ -617,6 +632,7 @@ impl ProviderKind {
             Self::Zai => zai::build(ctx),
             Self::Xai => xai::build(ctx),
             Self::GrokBuild => grok_build::build(ctx),
+            Self::GithubCopilot => github_copilot::build(ctx),
             Self::Meta => meta::build(ctx),
             Self::MuseCode => muse_code::build(ctx),
             Self::Alibaba | Self::QwenCode => alibaba::build(ctx),

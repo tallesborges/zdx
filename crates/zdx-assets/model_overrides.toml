@@ -262,6 +262,28 @@ output_limit = 131072
 reasoning = true
 input_images = true
 
+# MAI Code 2 and MAI Code 2 Flash (GitHub Copilot, released 2026-11-17): not in
+# models.dev or OpenRouter, so the updater reuses the hand-written entries in
+# default_models.toml; pin the metadata here so it cannot drift. Model card:
+# 1,050,000-token context, 128,000 max output, text and image input, configurable
+# reasoning effort. Copilot serves both only on /responses. Subscription, so
+# pricing stays zeroed.
+# https://microsoft.ai/pdf/MAI-Code-2-And-MAI-Code-2-Flash-Model-Card.pdf,
+# https://github.blog/changelog/2026-11-17-mai-code-2-and-mai-code-2-flash-in-github-copilot/ — verified 2026-11-18
+[[override]]
+id = "github-copilot:mai-code-2"
+context_limit = 1050000
+output_limit = 128000
+reasoning = true
+input_images = true
+
+[[override]]
+id = "github-copilot:mai-code-2-flash"
+context_limit = 1050000
+output_limit = 128000
+reasoning = true
+input_images = true
+
 # Audio input for `ask_media` (`input_audio`, optional `audio_formats`).
 # These fields are read at call time from this file and then
 # `$ZDX_HOME/model_overrides.toml`; `zdx models update` never writes them to

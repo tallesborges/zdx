@@ -1309,6 +1309,150 @@ input_images = true
 output_limit = 500000
 
 [[model]]
+id = "github-copilot:claude-sonnet-5.5"
+provider = "github-copilot"
+display_name = "Claude Sonnet 5.5"
+context_limit = 1000000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+api = "anthropic-messages"
+
+[[model]]
+id = "github-copilot:claude-haiku-5.5"
+provider = "github-copilot"
+display_name = "Claude Haiku 5.5"
+context_limit = 1000000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+api = "anthropic-messages"
+
+[[model]]
+id = "github-copilot:gpt-6.1-terra"
+provider = "github-copilot"
+display_name = "GPT-6.1 Terra"
+context_limit = 1050000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+api = "openai-responses"
+
+[[model]]
+id = "github-copilot:gpt-6-luna"
+provider = "github-copilot"
+display_name = "GPT-6 Luna"
+context_limit = 1050000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+api = "openai-responses"
+
+[[model]]
+id = "github-copilot:gemini-4-hydrogen"
+provider = "github-copilot"
+display_name = "Gemini 4 Hydrogen"
+context_limit = 1048576
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 65536
+api = "openai-completions"
+
+[[model]]
+id = "github-copilot:grok-4.7"
+provider = "github-copilot"
+display_name = "Grok 4.7"
+context_limit = 500000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+api = "openai-responses"
+
+[[model]]
+id = "github-copilot:mai-code-2"
+provider = "github-copilot"
+display_name = "MAI Code 2"
+context_limit = 1050000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+api = "openai-responses"
+
+[[model]]
+id = "github-copilot:mai-code-2-flash"
+provider = "github-copilot"
+display_name = "MAI Code 2 Flash"
+context_limit = 1050000
+
+[model.pricing]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+api = "openai-responses"
+
+[[model]]
 id = "meta:muse-wonder-1.0"
 provider = "meta"
 display_name = "Muse Wonder"

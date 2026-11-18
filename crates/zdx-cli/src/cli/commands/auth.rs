@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use zdx_engine::providers::oauth::{
-    OAuthCache, claude_cli as oauth_claude_cli, google_antigravity as oauth_antigravity,
-    grok_build as oauth_grok_build, muse_code as oauth_muse_code, normalize_account,
-    openai_codex as oauth_codex,
+    OAuthCache, claude_cli as oauth_claude_cli, github_copilot as oauth_copilot,
+    google_antigravity as oauth_antigravity, grok_build as oauth_grok_build,
+    muse_code as oauth_muse_code, normalize_account, openai_codex as oauth_codex,
 };
 
 fn account_suffix(account: Option<&str>) -> String {
@@ -480,6 +480,98 @@ pub fn logout_muse_code(account: Option<&str>) -> Result<()> {
         println!("  Credentials removed from: {}", cache_path.display());
     } else {
         println!("Not logged in to Muse Code{suffix} (no credentials found).");
+    }
+
+    Ok(())
+}
+
+/// Logs in to GitHub Copilot with GitHub's device flow, then exchanges the
+/// GitHub token for a Copilot token and accepts pending model policies.
+pub async fn login_github_copilot(account: Option<&str>) -> Result<()> {
+    let account = normalize_account(account)?;
+    let account = account.as_deref();
+    let suffix = account_suffix(account);
+    if let Some(existing) = oauth_copilot::load_credentials(account)? {
+        println!(
+            "Already logged in to GitHub Copilot{suffix} (token: {})",
+            oauth_claude_cli::mask_token(&existing.refresh)
+        );
+        print!("Do you want to replace the existing credentials? [y/N] ");
+        io::stdout().flush()?;
+
+        let mut response = String::new();
+        io::stdin().lock().read_line(&mut response)?;
+        if !response.trim().eq_ignore_ascii_case("y") {
+            println!("Login cancelled.");
+            return Ok(());
+        }
+    }
+
+    println!("Note: zdx signs in as the VS Code Copilot Chat client. GitHub does");
+    println!("not authorize this for third-party tools and may flag the account.");
+    println!();
+
+    let authorization = oauth_copilot::start_device_authorization().await?;
+
+    println!("To log in to GitHub Copilot with your GitHub account:");
+    println!();
+    println!("  1. A browser window will open (or visit the URL below)");
+    println!("  2. Enter this code when prompted:");
+    println!();
+    println!("       {}", authorization.user_code);
+    println!();
+    println!("  3. Authorize the request, then return here. Login completes on its own.");
+    println!();
+    println!("Verification URL:");
+    println!("  {}", authorization.verification_uri);
+    println!();
+
+    if std::env::var("ZDX_NO_BROWSER").is_err() {
+        let _ = open::that(&authorization.verification_uri);
+    }
+
+    println!("Waiting for approval...");
+    let github_token = oauth_copilot::poll_for_github_token(&authorization).await?;
+
+    println!("Approved. Requesting a Copilot token...");
+    let credentials = oauth_copilot::refresh_token(&github_token).await?;
+    oauth_copilot::save_credentials(account, &credentials)?;
+
+    let cache_path = OAuthCache::cache_path();
+    println!();
+    println!(
+        "✓ Logged in to GitHub Copilot{suffix} (token: {})",
+        oauth_claude_cli::mask_token(&github_token)
+    );
+    println!("  Credentials saved to: {}", cache_path.display());
+
+    match oauth_copilot::enable_account_models(&credentials.access).await {
+        Ok(models) => {
+            if !models.enabled.is_empty() {
+                println!("  Enabled models: {}", models.enabled.join(", "));
+            }
+            if !models.available.is_empty() {
+                println!("  Account models: {}", models.available.join(", "));
+            }
+        }
+        Err(err) => println!("  Could not read the account's models: {err:#}"),
+    }
+
+    Ok(())
+}
+
+pub fn logout_github_copilot(account: Option<&str>) -> Result<()> {
+    let account = normalize_account(account)?;
+    let account = account.as_deref();
+    let suffix = account_suffix(account);
+    let had_creds = oauth_copilot::clear_credentials(account)?;
+
+    if had_creds {
+        let cache_path = OAuthCache::cache_path();
+        println!("✓ Logged out from GitHub Copilot{suffix}");
+        println!("  Credentials removed from: {}", cache_path.display());
+    } else {
+        println!("Not logged in to GitHub Copilot{suffix} (no credentials found).");
     }
 
     Ok(())

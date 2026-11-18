@@ -62,7 +62,7 @@ pub(crate) fn build_thinking_and_output_config(
     thinking_budget_tokens: u32,
     thinking_effort: Option<EffortLevel>,
 ) -> Result<(Option<ThinkingConfig>, Option<OutputConfig>)> {
-    let normalized_model = normalize_model_id(model);
+    let normalized_model = &*normalize_model_id(model);
 
     let thinking = if thinking_enabled {
         if supports_adaptive_thinking(normalized_model) {
@@ -108,7 +108,7 @@ pub(crate) fn should_enable_interleaved_thinking_beta(model: &str, thinking_enab
         return false;
     }
 
-    let model = normalize_model_id(model);
+    let model = &*normalize_model_id(model);
     if supports_adaptive_thinking(model) {
         return false;
     }
@@ -118,8 +118,16 @@ pub(crate) fn should_enable_interleaved_thinking_beta(model: &str, thinking_enab
         || model.starts_with("claude-haiku-4")
 }
 
-fn normalize_model_id(model: &str) -> &str {
-    model.rsplit(':').next().unwrap_or(model)
+/// Bare Anthropic model id for capability checks: any `provider:` prefix is
+/// stripped, and dotted versions (`claude-sonnet-4.6`, as GitHub Copilot
+/// names them) are read as Anthropic's dashed form (`claude-sonnet-4-6`).
+pub(crate) fn normalize_model_id(model: &str) -> std::borrow::Cow<'_, str> {
+    let bare = model.rsplit(':').next().unwrap_or(model);
+    if bare.contains('.') {
+        std::borrow::Cow::Owned(bare.replace('.', "-"))
+    } else {
+        std::borrow::Cow::Borrowed(bare)
+    }
 }
 
 /// Legacy Claude models that still use manual extended thinking
@@ -284,6 +292,35 @@ mod tests {
 
     use super::*;
     use crate::shared::{ChatContentBlock, MessageContent, ReasoningBlock, ReplayToken};
+
+    /// GitHub Copilot names Claude models with dots (`claude-haiku-4.5`);
+    /// capability checks must read them like Anthropic's dashed ids.
+    #[test]
+    fn dotted_model_ids_get_the_same_thinking_as_dashed_ids() {
+        let (thinking, _) =
+            build_thinking_and_output_config("claude-haiku-4.5", true, 2048, None).unwrap();
+        assert_eq!(
+            serde_json::to_value(thinking.unwrap()).unwrap(),
+            json!({"type": "enabled", "budget_tokens": 2048})
+        );
+        assert!(should_enable_interleaved_thinking_beta(
+            "github-copilot:claude-haiku-4.5",
+            true
+        ));
+        assert!(
+            build_thinking_and_output_config(
+                "claude-sonnet-4.6",
+                true,
+                0,
+                Some(EffortLevel::XHigh)
+            )
+            .is_err()
+        );
+        assert_eq!(
+            EffortLevel::from_thinking_level(zdx_types::ThinkingLevel::XHigh, "claude-sonnet-4.6"),
+            Some(EffortLevel::Max)
+        );
+    }
 
     #[test]
     fn thinking_and_effort_opus_46_uses_adaptive_and_allows_max() {

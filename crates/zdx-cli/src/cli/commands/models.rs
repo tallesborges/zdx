@@ -314,7 +314,7 @@ impl UpdateState {
 }
 
 #[allow(clippy::too_many_lines)]
-fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 22] {
+fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 23] {
     [
         ProviderSpec {
             provider_id: "anthropic",
@@ -423,6 +423,12 @@ fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 22] {
             api_id: "xai",
             prefix: Some("grok-build"),
             provider_cfg: &config.providers.grok_build,
+        },
+        ProviderSpec {
+            provider_id: "github-copilot",
+            api_id: "github-copilot",
+            prefix: Some("github-copilot"),
+            provider_cfg: &config.providers.github_copilot,
         },
         ProviderSpec {
             provider_id: "meta",
@@ -761,6 +767,15 @@ fn model_api_hint(
     source_provider_id: Option<&str>,
     model: &ModelEntry,
 ) -> Option<String> {
+    if provider_id == "github-copilot" {
+        // models.dev tags every Copilot model `@ai-sdk/openai-compatible`;
+        // Copilot actually serves each model on one API.
+        return Some(
+            zdx_engine::providers::github_copilot::api_for_model(&model.id)
+                .as_str()
+                .to_string(),
+        );
+    }
     if !is_meta_provider(provider_id) {
         return None;
     }
@@ -1679,5 +1694,33 @@ mod tests {
         };
 
         assert_eq!(model_api_hint("openai", Some("openai"), &model), None);
+    }
+
+    #[test]
+    fn test_model_api_hint_for_copilot_ignores_npm_and_routes_by_model() {
+        let model = |id: &str| ModelEntry {
+            id: id.to_string(),
+            name: id.to_string(),
+            tool_call: true,
+            reasoning: true,
+            cost: CostEntry::default(),
+            limit: LimitEntry::default(),
+            modalities: ModalitiesEntry::default(),
+            provider: Some(ModelProviderEntry {
+                npm: Some("@ai-sdk/openai-compatible".to_string()),
+            }),
+        };
+
+        for (id, api) in [
+            ("claude-sonnet-5.5", "anthropic-messages"),
+            ("gpt-6-luna", "openai-responses"),
+            ("gemini-4-hydrogen", "openai-completions"),
+        ] {
+            assert_eq!(
+                model_api_hint("github-copilot", Some("github-copilot"), &model(id)).as_deref(),
+                Some(api),
+                "{id}"
+            );
+        }
     }
 }

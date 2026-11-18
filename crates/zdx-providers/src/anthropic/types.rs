@@ -71,7 +71,7 @@ impl EffortLevel {
             return None;
         }
 
-        let normalized = model.rsplit(':').next().unwrap_or(model);
+        let normalized = &*super::shared::normalize_model_id(model);
 
         if normalized.starts_with("claude-opus-4-6") || normalized.starts_with("claude-sonnet-4-6")
         {

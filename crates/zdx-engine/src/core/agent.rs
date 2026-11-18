@@ -1945,8 +1945,11 @@ fn build_run_turn_setup(
         api_key: provider_config.effective_api_key(),
         provider_text_verbosity: provider_config.effective_text_verbosity(),
         websocket: provider_config.websocket,
-        api_hint: if provider == ProviderKind::OpencodeGo {
-            crate::models::ModelOption::find_by_provider_and_id("opencode-go", &selection.model)
+        api_hint: if matches!(
+            provider,
+            ProviderKind::OpencodeGo | ProviderKind::GithubCopilot
+        ) {
+            crate::models::ModelOption::find_by_provider_and_id(provider.id(), &selection.model)
                 .and_then(|m| m.capabilities.api)
                 .map(ToString::to_string)
         } else {
