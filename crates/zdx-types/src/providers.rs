@@ -230,6 +230,28 @@ impl ProviderError {
 
         RETRYABLE_PATTERNS.iter().any(|p| haystack.contains(p))
     }
+
+    /// Returns true when the provider rejected an image in the request as
+    /// invalid (HTTP 400 "invalid image data ...").
+    ///
+    /// This is a defense-in-depth signal for the agent loop: it strips the
+    /// offending image from live history and retries once, so a single
+    /// corrupt image cannot fail the whole turn. It never counts as
+    /// [`Self::is_retryable`]: retrying the same bytes would fail again.
+    pub fn is_invalid_image(&self) -> bool {
+        let haystack = format!(
+            "{} {} {}",
+            self.message.to_lowercase(),
+            self.details.as_deref().unwrap_or("").to_lowercase(),
+            self.code.as_deref().unwrap_or("").to_lowercase()
+        );
+        haystack.contains("invalid image")
+            && matches!(
+                self.kind,
+                ProviderErrorKind::HttpStatus | ProviderErrorKind::ApiError
+            )
+            && matches!(self.status, Some(400) | None)
+    }
 }
 
 fn extract_error_code(payload: &Value) -> Option<String> {
@@ -565,5 +587,22 @@ mod tests {
         assert!(!ProviderError::request("builder error").is_retryable());
         assert!(!ProviderError::new(ProviderErrorKind::Parse, "Invalid JSON").is_retryable());
         assert!(!ProviderError::api_error("invalid_request", "Bad model").is_retryable());
+    }
+
+    #[test]
+    fn test_invalid_image_classifier() {
+        let anthropic = ProviderError::http_status(
+            400,
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"invalid image data at input[493].content[0]"}}"#,
+        );
+        assert!(anthropic.is_invalid_image());
+        assert!(!anthropic.is_retryable());
+
+        let plain = ProviderError::http_status(400, "invalid image data");
+        assert!(plain.is_invalid_image());
+
+        assert!(!ProviderError::http_status(400, "bad model").is_invalid_image());
+        assert!(!ProviderError::http_status(429, "invalid image data").is_invalid_image());
+        assert!(!ProviderError::api_error("overloaded_error", "busy").is_invalid_image());
     }
 }

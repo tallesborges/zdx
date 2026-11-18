@@ -29,7 +29,7 @@ use crate::providers::{
 use crate::subagents;
 use crate::tools::{
     BACKGROUND_MANAGEMENT_TOOLS, BACKGROUND_STARTING_TOOLS, BackgroundExecution, ToolContext,
-    ToolDefinition, ToolRegistry, ToolResult, ToolSet,
+    ToolDefinition, ToolRegistry, ToolResult, ToolResultBlock, ToolResultContent, ToolSet,
 };
 
 /// Options for agent execution.
@@ -1042,6 +1042,228 @@ fn tool_call_signature(name: &str, input: &str, result: &str) -> u64 {
     hasher.finish()
 }
 
+/// Text that replaces an image a provider rejected as invalid, so the retry
+/// sends no image bytes for the file the provider already refused.
+fn omitted_invalid_image_text(path: Option<&str>) -> String {
+    match path {
+        Some(path) => format!("[image omitted: invalid image data at {path}]"),
+        None => "[image omitted: invalid image data]".to_string(),
+    }
+}
+
+/// The wire-message index a provider error names (`input[<n>]`), when it
+/// carries one. Wire messages are a 1:1 projection of the live history, so
+/// the index addresses the same message here.
+fn invalid_image_input_index(err: &ProviderError) -> Option<usize> {
+    let haystack = format!("{} {}", err.message, err.details.as_deref().unwrap_or(""));
+    let start = haystack.find("input[")? + "input[".len();
+    let rest = &haystack[start..];
+    let end = rest.find(']')?;
+    rest[..end].trim().parse().ok()
+}
+
+/// The file a tool-result image came from, from the JSON envelope in its
+/// text block, when the result carries one.
+fn tool_result_image_path(result: &ToolResult) -> Option<String> {
+    let value: Value = serde_json::from_str(result.content.as_text()?).ok()?;
+    let data = value.get("data").unwrap_or(&value);
+    data.get("file_path")
+        .or_else(|| data.get("resolved_file_path"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// Replaces every image in one message with omitted-image text, returning
+/// true when anything was replaced. Covers inline user images and images
+/// carried inside tool results (the `Read` path).
+fn strip_images_from_message(message: &mut ChatMessage) -> bool {
+    let MessageContent::Blocks(blocks) = &mut message.content else {
+        return false;
+    };
+    let mut stripped = false;
+    for block in blocks.iter_mut() {
+        match block {
+            ChatContentBlock::Image { .. } => {
+                *block = ChatContentBlock::text(omitted_invalid_image_text(None));
+                stripped = true;
+            }
+            ChatContentBlock::ToolResult(result) => {
+                let path = tool_result_image_path(result);
+                let ToolResultContent::Blocks(inner) = &mut result.content else {
+                    continue;
+                };
+                for inner_block in inner.iter_mut() {
+                    if matches!(inner_block, ToolResultBlock::Image { .. }) {
+                        *inner_block = ToolResultBlock::Text {
+                            text: omitted_invalid_image_text(path.as_deref()),
+                        };
+                        stripped = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    stripped
+}
+
+/// Strips the image a provider rejected as invalid from live history.
+///
+/// Targets the message the error names when it names one, and falls back to
+/// every image in history when it does not (or when that message holds no
+/// image). Returns true when an image was actually replaced.
+fn strip_invalid_images(messages: &mut [ChatMessage], err: &ProviderError) -> bool {
+    if let Some(index) = invalid_image_input_index(err)
+        && let Some(message) = messages.get_mut(index)
+        && strip_images_from_message(message)
+    {
+        return true;
+    }
+    messages.iter_mut().any(strip_images_from_message)
+}
+
+/// True when a tool-result JSON envelope carries a worker thread id, either
+/// at the top level (`create_thread`) or under `worker` (`send_thread_message`),
+/// inside or outside the envelope's `data` object.
+fn json_carries_thread_id(text: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return false;
+    };
+    let data = value.get("data").unwrap_or(&value);
+    [data, &value]
+        .into_iter()
+        .flat_map(|object| {
+            [
+                object.get("thread_id"),
+                object
+                    .get("worker")
+                    .and_then(|worker| worker.get("thread_id")),
+            ]
+        })
+        .any(|id| id.and_then(Value::as_str).is_some_and(|id| !id.is_empty()))
+}
+
+/// True when history shows a worker dispatch: a `create_thread` or
+/// `send_thread_message` call whose result returned a new thread id.
+///
+/// This is the only evidence a worker was started. Model text claiming a
+/// dispatch without it describes a worker that does not exist.
+fn has_worker_dispatch(messages: &[ChatMessage]) -> bool {
+    let mut dispatch_ids: HashSet<String> = HashSet::new();
+    for message in messages {
+        let MessageContent::Blocks(blocks) = &message.content else {
+            continue;
+        };
+        for block in blocks {
+            if let ChatContentBlock::ToolUse { id, name, .. } = block
+                && matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "create_thread" | "send_thread_message"
+                )
+            {
+                dispatch_ids.insert(id.clone());
+            }
+        }
+    }
+    if dispatch_ids.is_empty() {
+        return false;
+    }
+    messages.iter().any(|message| {
+        let MessageContent::Blocks(blocks) = &message.content else {
+            return false;
+        };
+        blocks.iter().any(|block| {
+            matches!(block, ChatContentBlock::ToolResult(result)
+                if dispatch_ids.contains(&result.tool_use_id)
+                    && !result.is_error
+                    && result.content.as_text().is_some_and(json_carries_thread_id))
+        })
+    })
+}
+
+/// True when one sentence claims a worker was started or relaunched.
+///
+/// Deliberately narrow: negations and conditionals are not claims, and a
+/// sentence must name a worker and a start verb together.
+fn is_worker_started_claim(sentence: &str) -> bool {
+    const NOT_CLAIMS: &[&str] = &[
+        "no worker",
+        "no new worker",
+        "not started",
+        "didn't start",
+        "did not start",
+        "hasn't started",
+        "haven't started",
+        "never started",
+        "without starting",
+        "failed to start",
+        "unable to start",
+        "if i started",
+        "if a worker",
+    ];
+    let lower = sentence.to_lowercase();
+    if NOT_CLAIMS.iter().any(|phrase| lower.contains(phrase)) {
+        return false;
+    }
+    let names_worker = lower.contains("worker") || lower.contains("subagent");
+    let starts_worker = [
+        "started",
+        "starting",
+        "launched",
+        "spawned",
+        "restarted",
+        "kicked off",
+        "new worker",
+        "fresh worker",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase));
+    names_worker && starts_worker
+}
+
+/// Drops worker-started claims from `text` when no dispatch backs them.
+///
+/// Sentences that claim a start are removed; every other sentence is kept.
+/// When nothing remains, a single correction sentence takes their place, so
+/// the turn never ends claiming a worker that was never started.
+fn suppress_unbacked_worker_claims(text: &str, backed: bool) -> String {
+    if backed || text.is_empty() {
+        return text.to_string();
+    }
+    let mut kept_lines: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let chars: Vec<char> = line.chars().collect();
+        let mut chunks: Vec<String> = Vec::new();
+        let mut chunk = String::new();
+        for (index, ch) in chars.iter().enumerate() {
+            chunk.push(*ch);
+            let at_boundary = chars.get(index + 1).is_none_or(|next| next.is_whitespace());
+            if matches!(ch, '.' | '!' | '?') && at_boundary {
+                chunks.push(std::mem::take(&mut chunk));
+            }
+        }
+        if !chunk.trim().is_empty() {
+            chunks.push(chunk);
+        }
+        let kept: Vec<&str> = chunks
+            .iter()
+            .map(String::as_str)
+            .filter(|chunk| !is_worker_started_claim(chunk))
+            .collect();
+        let joined = kept.join(" ");
+        let joined = joined.trim().to_string();
+        if !joined.is_empty() {
+            kept_lines.push(joined);
+        }
+    }
+    let suppressed = kept_lines.join("\n");
+    if suppressed.trim().is_empty() {
+        "No worker was started in this turn: no create_thread call ran.".to_string()
+    } else {
+        suppressed
+    }
+}
+
 /// Closes a turn early without an error: the loop guard stopped the model, and
 /// the user gets a notice plus a thread they can continue from.
 fn finish_turn_early(
@@ -1337,6 +1559,7 @@ async fn run_turn_inner(
         //      reasoning deltas.
         let mut stream_state = {
             let mut attempt: u32 = 0;
+            let mut invalid_image_retry_used = false;
             'retry: loop {
                 ensure_not_interrupted(None, cancel).map_err(|e| (e, messages.clone()))?;
 
@@ -1401,6 +1624,36 @@ async fn run_turn_inner(
                         break 'retry state;
                     }
                     Err((err, can_retry, state)) => {
+                        // A provider 400 "invalid image" is not transient:
+                        // retrying the same bytes would fail again. Strip the
+                        // offending image from live history and retry once.
+                        // Only when nothing user-visible has been emitted
+                        // (`state` is none), so the retry cannot rewind
+                        // partial output. Defense in depth: `Read` already
+                        // fails closed on undecodable images.
+                        if !invalid_image_retry_used
+                            && state.is_none()
+                            && let TurnError::Provider(provider_err) = &err
+                            && provider_err.is_invalid_image()
+                            && strip_invalid_images(&mut messages, provider_err)
+                        {
+                            invalid_image_retry_used = true;
+                            attempt += 1;
+                            tracing::warn!(
+                                attempt,
+                                error = %provider_err.message,
+                                "Provider rejected an image; stripped it and retrying once"
+                            );
+                            sender.send(AgentEvent::ProviderRetry {
+                                kind: ErrorKind::from(provider_err.kind.clone()),
+                                message: provider_err.message.clone(),
+                                details: provider_err.details.clone(),
+                                attempt,
+                                max_retries: MAX_RETRIES,
+                                delay_ms: 0,
+                            });
+                            continue 'retry;
+                        }
                         let retry_err = match &err {
                             TurnError::Provider(p) if p.is_retryable() && can_retry => {
                                 Some(p.clone())
@@ -2949,7 +3202,34 @@ fn finalize_non_tool_turn(
     sender: &EventSender,
     prior_message_count: usize,
 ) -> (String, Vec<ChatMessage>) {
-    let finalized = turn.finalize();
+    let mut finalized = turn.finalize();
+    // Phantom-worker guard: a worker is started only by a create_thread /
+    // send_thread_message call whose result returned a new thread id. When
+    // history shows no such dispatch, worker-started claims in the final
+    // text describe a worker that does not exist, so they are withheld
+    // instead of delivered and persisted. Legitimate confirmations (a
+    // dispatch exists in history) pass through unchanged.
+    let backed = has_worker_dispatch(messages);
+    let suppressed = suppress_unbacked_worker_claims(&finalized.final_text, backed);
+    if suppressed != finalized.final_text {
+        tracing::warn!("Withheld worker-started claim with no create_thread dispatch in history");
+        let text_at = finalized
+            .blocks
+            .iter()
+            .position(|block| matches!(block, ChatContentBlock::Text { .. }));
+        finalized
+            .blocks
+            .retain(|block| !matches!(block, ChatContentBlock::Text { .. }));
+        // Keep the replacement where the first text block was, so it stays
+        // ordered against any reasoning blocks around it.
+        let text_at = text_at
+            .unwrap_or(finalized.blocks.len())
+            .min(finalized.blocks.len());
+        finalized
+            .blocks
+            .insert(text_at, ChatContentBlock::text(suppressed.clone()));
+        finalized.final_text = suppressed;
+    }
     let final_text = finalized.final_text;
     emit_assistant_completed_if_present(sender, &final_text);
     if !finalized.blocks.is_empty() {
@@ -5030,6 +5310,133 @@ mod tests {
 
     /// Verifies mid-stream retryable errors (e.g. Anthropic `overloaded_error`
     /// before any stream events are emitted remain transparently retryable.
+    #[test]
+    fn strip_invalid_images_replaces_only_the_named_message() {
+        let mut messages = vec![
+            ChatMessage::user("look"),
+            ChatMessage {
+                role: "user".to_string(),
+                phase: None,
+                context: None,
+                context_key: None,
+                content: MessageContent::Blocks(vec![
+                    ChatContentBlock::text("see"),
+                    ChatContentBlock::Image {
+                        mime_type: "image/png".to_string(),
+                        data: "AAAA".to_string(),
+                    },
+                ]),
+            },
+            ChatMessage::user("other"),
+        ];
+        let err = ProviderError::http_status(
+            400,
+            r#"{"error":{"message":"invalid image data at input[1].content[0]"}}"#,
+        );
+        assert!(err.is_invalid_image());
+        assert!(strip_invalid_images(&mut messages, &err));
+        let MessageContent::Blocks(blocks) = &messages[1].content else {
+            panic!("expected blocks");
+        };
+        assert_eq!(
+            blocks[1],
+            ChatContentBlock::text("[image omitted: invalid image data]")
+        );
+        // Nothing left to strip: a second pass must not claim success.
+        assert!(!strip_invalid_images(&mut messages, &err));
+    }
+
+    #[test]
+    fn worker_dispatch_requires_a_thread_id_result() {
+        let dispatched = vec![
+            ChatMessage::assistant_blocks(vec![ChatContentBlock::tool_use(
+                "call-1",
+                "create_thread",
+                serde_json::json!({"prompt": "go"}),
+            )]),
+            ChatMessage::tool_results(vec![ToolResult {
+                tool_use_id: "call-1".to_string(),
+                content: ToolResultContent::Text(
+                    r#"{"ok":true,"data":{"thread_id":"w-1"}}"#.to_string(),
+                ),
+                is_error: false,
+            }]),
+        ];
+        assert!(has_worker_dispatch(&dispatched));
+
+        let failed = vec![
+            ChatMessage::assistant_blocks(vec![ChatContentBlock::tool_use(
+                "call-1",
+                "create_thread",
+                serde_json::json!({"prompt": "go"}),
+            )]),
+            ChatMessage::tool_results(vec![ToolResult {
+                tool_use_id: "call-1".to_string(),
+                content: ToolResultContent::Text(
+                    r#"{"ok":false,"error":{"code":"create_thread_failed","message":"boom"}}"#
+                        .to_string(),
+                ),
+                is_error: true,
+            }]),
+        ];
+        assert!(!has_worker_dispatch(&failed));
+        assert!(!has_worker_dispatch(&[ChatMessage::user("hi")]));
+    }
+
+    #[test]
+    fn unbacked_worker_claims_are_withheld_but_backed_ones_pass() {
+        let text = "I started a new worker to handle this. The screenshot was 10 MB.";
+        assert_eq!(
+            suppress_unbacked_worker_claims(text, false),
+            "The screenshot was 10 MB."
+        );
+        assert_eq!(suppress_unbacked_worker_claims(text, true), text);
+        assert_eq!(
+            suppress_unbacked_worker_claims("I started a fresh worker.", false),
+            "No worker was started in this turn: no create_thread call ran."
+        );
+        // Negations and discussion are not claims.
+        assert_eq!(
+            suppress_unbacked_worker_claims("No worker was started yet.", false),
+            "No worker was started yet."
+        );
+    }
+
+    #[test]
+    fn strip_invalid_images_falls_back_and_names_the_tool_result_path() {
+        let result = ToolResult {
+            tool_use_id: "tool-1".to_string(),
+            content: ToolResultContent::Blocks(vec![
+                ToolResultBlock::Text {
+                    text: r#"{"ok":true,"data":{"file_path":"/tmp/menu-crop.png"}}"#.to_string(),
+                },
+                ToolResultBlock::Image {
+                    mime_type: "image/png".to_string(),
+                    data: "AAAA".to_string(),
+                },
+            ]),
+            is_error: false,
+        };
+        let mut messages = vec![ChatMessage::tool_results(vec![result])];
+        let err = ProviderError::http_status(400, "invalid image data");
+        assert!(strip_invalid_images(&mut messages, &err));
+        let MessageContent::Blocks(blocks) = &messages[0].content else {
+            panic!("expected blocks");
+        };
+        let ChatContentBlock::ToolResult(stripped) = &blocks[0] else {
+            panic!("expected tool result");
+        };
+        let ToolResultContent::Blocks(inner) = &stripped.content else {
+            panic!("expected image blocks");
+        };
+        assert_eq!(
+            inner[1],
+            ToolResultBlock::Text {
+                text: "[image omitted: invalid image data at /tmp/menu-crop.png]".to_string()
+            }
+        );
+    }
+
     #[tokio::test]
     async fn test_consume_stream_returns_state_on_midstream_error() {
         use futures_util::stream;
