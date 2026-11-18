@@ -18,7 +18,7 @@
   12 rows have no known price: the cost is a lower bound.
   3 threads are not indexed: their project and run kind are unknown.
 
-  Daily  ▅▆▆▇██▃  8 Nov – 14 Nov
-
-  By provider
- Q refresh quotas  [ ] days  q quit       updated 0s ago · ● connected · ? help
+  Daily tokens  ▼ 72% vs 318.4M the 7 days before
+  ■ Claude 59.1M  ■ Codex 18.4M  ■ gemini 12.6M
+  Sun 8  ▕████████████████████████████████░░░░░░░░░░░░░░▏  13.6M   225 req
+ Q refresh quotas  [ ] days  m metric     updated 0s ago · ● connected · ? help

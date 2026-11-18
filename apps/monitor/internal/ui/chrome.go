@@ -362,7 +362,7 @@ func (m *Model) hints(width int) string {
 		}
 		tabHints = []string{"↵", "transcript", "t", "show " + other}
 	case tabUsage:
-		tabHints = []string{"Q", "refresh quotas", "[ ]", "days"}
+		tabHints = []string{"Q", "refresh quotas", "[ ]", "days", "m", "metric", "p", "split"}
 	case tabLogs:
 		tabHints = []string{"l", "level", "/", "filter", "esc", "clear", "[ ]", "day", "G", "follow"}
 	case tabConfig:
@@ -396,6 +396,7 @@ func (m *Model) helpLines() []string {
 		key("Agents  ↵", "open the selected run's transcript"),
 		key("Threads  ↵  t", "open transcript · all threads or workers only"),
 		key("Usage  Q  [ ]", "fetch quotas now · token window 1/7/30/90/365 days"),
+		key("Usage  m  p", "daily chart: tokens, tokens without cache reads, or requests · split by provider"),
 		key("Logs  l / esc [ ] G", "level · filter text · clear · older/newer day · follow"),
 		key("Config  ↵ x / [ ]", "edit · reset · find a scope by typing · previous/next scope"),
 		"",

@@ -18,17 +18,17 @@
   12 rows have no known price: the cost is a lower bound.
   3 threads are not indexed: their project and run kind are unknown.
 
-  Daily  ▅▆▆▇██▃  8 Nov – 14 Nov
+  Daily tokens  ▼ 72% vs 318.4M the 7 days before
+  ■ Claude 59.1M  ■ Codex 18.4M  ■ gemini 12.6M
+  Sun 8  ▕████████████████████████████████░░░░░░░░░░░░░░▏  13.6M   225 req
+  Mon 9  ▕████████████████████████████████████░░░░░░░░░░▏  15.6M   259 req
+  Tue 10 ▕████████████████████████████████░░░░░░░░░░░░░░▏  13.7M   227 req
+  Wed 11 ▕░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░┊░░░░░░░░░░░░░░░▏      ·
+  Thu 12 ▕█████████████████████████████████████████░░░░░▏  17.7M   293 req
+  Fri 13 ▕██████████████████████████████████████████████▏  19.7M   326 req ◆
+  Sat 14 ▕███████████████████████░░░░░░░┊░░░░░░░░░░░░░░░▏   9.9M   165 req
+                                        ▲ avg 12.9M/day
 
   By provider
   TOKENS  REQUESTS  COST          NAME
-  251.0M      9211  subscription  claude-cli
-  129.1M      6120  subscription  openai-codex
-   32.8M      3011  $38.27~       gemini
-
-  By model (top 8)
-  TOKENS  REQUESTS  COST          NAME
-  210.0M      7000  subscription  claude-opus-5-5  claude-cli
-  129.1M      6120  subscription  gpt-6-astra  openai-codex
-   30.0M      2900  $31.02        gemini-3.5-flash-lite  gemini
- Q refresh quotas  [ ] days  q quit  1-8 tabs                                     updated 0s ago · ● connected · ? help
+ Q refresh quotas  [ ] days  m metric  p split  q quit  1-8 tabs                  updated 0s ago · ● connected · ? help

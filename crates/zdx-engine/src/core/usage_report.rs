@@ -333,6 +333,7 @@ mod tests {
             by_provider: Vec::new(),
             by_model: Vec::new(),
             daily: Vec::new(),
+            previous: None,
             threads_scanned: 0,
             warnings: Vec::new(),
         }

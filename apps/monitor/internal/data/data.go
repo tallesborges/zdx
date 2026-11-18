@@ -135,6 +135,7 @@ type Usage struct {
 	ByProvider         []UsageRow     `json:"by_provider"`
 	ByModel            []UsageRow     `json:"by_model"`
 	Daily              []DailyUsage   `json:"daily"`
+	Previous           *UsageCounts   `json:"previous"`
 	ByProject          []ProjectUsage `json:"by_project"`
 	ByRun              []RunUsage     `json:"by_run"`
 	UnindexedThreads   int            `json:"unindexed_threads"`
@@ -166,10 +167,26 @@ type RunUsage struct {
 	Tokens  uint64  `json:"tokens"`
 }
 
-// DailyUsage is one UTC day's tokens; Day counts days since the Unix epoch.
+// UsageCounts are request and token counts. UncachedTokens leaves out
+// cache reads.
+type UsageCounts struct {
+	Requests       uint64 `json:"requests"`
+	Tokens         uint64 `json:"tokens"`
+	UncachedTokens uint64 `json:"uncached_tokens"`
+}
+
+// DailyUsage is one UTC day's usage; Day counts days since the Unix epoch.
+// The engine sends every day of the window, idle days with zero counts.
 type DailyUsage struct {
-	Day    int32  `json:"day"`
-	Tokens uint64 `json:"tokens"`
+	Day int32 `json:"day"`
+	UsageCounts
+	ByProvider []DailyProviderUsage `json:"by_provider"`
+}
+
+// DailyProviderUsage is one provider's usage on one day.
+type DailyProviderUsage struct {
+	Provider string `json:"provider"`
+	UsageCounts
 }
 
 // Workspaces is the `workspaces` view.

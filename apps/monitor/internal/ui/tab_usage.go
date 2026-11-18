@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/tallesborges/zdx/apps/monitor/internal/data"
 )
@@ -12,6 +11,8 @@ var usageWindows = []uint32{1, 7, 30, 90, 365}
 
 type usageTab struct {
 	days         uint32
+	metric       usageMetric
+	split        bool
 	data         *data.Usage
 	quotas       []data.Subscription
 	quotasLoaded bool
@@ -46,26 +47,6 @@ func tokens(n uint64) string {
 }
 
 var bars = []rune(" ▁▂▃▄▅▆▇█")
-
-func sparkline(days []data.DailyUsage) string {
-	var peak uint64
-	for _, d := range days {
-		peak = max(peak, d.Tokens)
-	}
-	var b strings.Builder
-	for _, d := range days {
-		i := 0
-		if peak > 0 {
-			i = int((d.Tokens*uint64(len(bars)-1) + peak - 1) / peak)
-		}
-		b.WriteRune(bars[i])
-	}
-	return b.String()
-}
-
-func dayLabel(day int32) string {
-	return time.Unix(int64(day)*86400, 0).UTC().Format("2 Jan")
-}
 
 func (m *Model) renderUsage(width, h int) []string {
 	lines := m.usageLines(width)
@@ -210,8 +191,9 @@ func (m *Model) usageLines(width int) []string {
 	if u.UnindexedThreads > 0 {
 		out = append(out, "  "+warn.Render(fmt.Sprintf("%d threads are not indexed: their project and run kind are unknown.", u.UnindexedThreads)))
 	}
-	if len(u.Daily) > 0 {
-		out = append(out, "", "  "+dim.Render("Daily  ")+accent.Render(sparkline(u.Daily))+dim.Render(fmt.Sprintf("  %s – %s", dayLabel(u.Daily[0].Day), dayLabel(u.Daily[len(u.Daily)-1].Day))))
+	if daily := m.dailyLines(u, width); len(daily) > 0 {
+		out = append(out, "")
+		out = append(out, daily...)
 	}
 	section := func(title string, tb table) {
 		out = append(out, "", "  "+bold.Render(title))

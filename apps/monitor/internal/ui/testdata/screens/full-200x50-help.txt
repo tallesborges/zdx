@@ -13,6 +13,7 @@
     Agents  ↵               open the selected run's transcript
     Threads  ↵  t           open transcript · all threads or workers only
     Usage  Q  [ ]           fetch quotas now · token window 1/7/30/90/365 days
+    Usage  m  p             daily chart: tokens, tokens without cache reads, or requests · split by provider
     Logs  l / esc [ ] G     level · filter text · clear · older/newer day · follow
     Config  ↵ x / [ ]       edit · reset · find a scope by typing · previous/next scope
 
@@ -40,7 +41,6 @@
     and `zdx jobs list --scheduler --json`; Logs from $ZDX_HOME/logs. Nothing here writes.
     Not here yet: service start/stop/restart, bg kill, job model edit (use the zdx CLI),
     full thread browse and filters, config edits.
-
 
 
 

@@ -31,7 +31,7 @@ ZDX dashboard in Go with Bubble Tea v2 (`charm.land/bubbletea/v2`, Lip Gloss v2)
 | Threads | `threads_list` (recent 50, `all`/`workers`) | indexed browse (500 rows, kind/project/text filters, project picker); `o` open JSONL |
 | Services | `zdx service status --json` + socket `status` threads | controls (not built; CLI exists, see below) |
 | Jobs | `zdx jobs list --scheduler --json` | model edit, archived list (CLI exists) |
-| Usage | `usage_report` (`[`/`]` days) + in-process `apps/shared/quota` (`quota.Fetch`, on entry, `Q`, every 5 min) | charts are one sparkline |
+| Usage | `usage_report` (`[`/`]` days; one bar per day up to 31 days, split by provider (`p`), metric `m`: tokens, tokens without cache reads, requests; longer windows are one compact line) + in-process `apps/shared/quota` (`quota.Fetch`, on entry, `Q`, every 5 min) | the vertical chart for long windows |
 | Logs | rolling log files | target filter picker, copy, line overlay |
 | Background | `monitor_snapshot.background_processes` | detail log tails; kill (CLI exists) |
 | Config | `workspaces` (global scope + workspaces, one row per mode; `/` finds a scope by typing, `[ ]` step) + `monitor_snapshot.config`; edits through `zdx config set-setting|reset-setting` | mode name, description, and alternatives edits; adding or removing a mode; override counts |

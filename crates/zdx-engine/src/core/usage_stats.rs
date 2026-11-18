@@ -87,13 +87,48 @@ impl UsageTotals {
     }
 }
 
-/// Total tokens on a single UTC day, for the daily usage chart.
-#[derive(Debug, Clone, serde::Serialize)]
+/// Request and token counts of some usage.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct UsageCounts {
+    pub requests: u64,
+    /// Tokens across all classes.
+    pub tokens: u64,
+    /// Tokens without cache reads: input, output, and cache writes.
+    pub uncached_tokens: u64,
+}
+
+impl UsageCounts {
+    fn add_bucket(&mut self, bucket: &RawBucket) {
+        self.requests += bucket.requests;
+        self.tokens += bucket.tokens();
+        self.uncached_tokens += bucket.input + bucket.output + bucket.cache_write;
+    }
+
+    fn add(&mut self, other: &UsageCounts) {
+        self.requests += other.requests;
+        self.tokens += other.tokens;
+        self.uncached_tokens += other.uncached_tokens;
+    }
+}
+
+/// Usage on one UTC day, for the daily usage chart.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DailyUsage {
     /// UTC day number (days since the Unix epoch).
     pub day: i32,
-    /// Total tokens across all classes on that day.
-    pub tokens: u64,
+    #[serde(flatten)]
+    pub counts: UsageCounts,
+    /// The day's usage per provider, sorted by provider id. Empty on a day
+    /// with no usage.
+    pub by_provider: Vec<DailyProviderUsage>,
+}
+
+/// One provider's usage on one day.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DailyProviderUsage {
+    pub provider: String,
+    #[serde(flatten)]
+    pub counts: UsageCounts,
 }
 
 /// Aggregated usage statistics ready for display.
@@ -104,9 +139,14 @@ pub struct UsageStats {
     pub by_provider: Vec<UsageRow>,
     /// Per provider+model rows, sorted by total tokens (descending).
     pub by_model: Vec<UsageRow>,
-    /// Per-day token totals within the active window, ascending by day.
-    /// Excludes usage with no parseable timestamp (`UNKNOWN_DAY`).
+    /// Per-day usage, ascending by day. A bounded window has one entry for
+    /// every day from its first day through today, idle days included; all
+    /// time has only the days with usage. Excludes usage with no parseable
+    /// timestamp (`UNKNOWN_DAY`).
     pub daily: Vec<DailyUsage>,
+    /// Usage in the same number of days just before a bounded window, for a
+    /// comparison. `None` for all time.
+    pub previous: Option<UsageCounts>,
     /// Number of thread files successfully scanned.
     pub threads_scanned: usize,
     /// Non-fatal issues (e.g. an unreadable thread file that was skipped).
@@ -263,9 +303,9 @@ fn thread_usage_stats_at(
     let path = threads_dir.join(format!("{thread_id}.jsonl"));
     let scan = scan_thread_file(&path)?;
     let day_buckets = resolve_thread_buckets(&scan, Some(default_model));
-    let daily = daily_from_buckets(&day_buckets, None);
+    let (daily, previous) = daily_series(day_rows(&day_buckets), None, today_utc());
     let buckets = collapse_days(day_buckets, None);
-    Ok(finalize(buckets, daily, 1, Vec::new()))
+    Ok(finalize(buckets, daily, previous, 1, Vec::new()))
 }
 
 fn aggregate_usage_at(
@@ -327,9 +367,12 @@ fn aggregate_scan_all(
         }
     }
 
-    let daily = daily_from_buckets(&all_days, since_day);
+    let (daily, previous) = daily_series(day_rows(&all_days), since_day, today_utc());
     let raw = collapse_days(all_days, since_day);
-    Ok((finalize(raw, daily, threads_scanned, warnings), thread_rows))
+    Ok((
+        finalize(raw, daily, previous, threads_scanned, warnings),
+        thread_rows,
+    ))
 }
 
 fn thread_row(
@@ -468,14 +511,27 @@ fn aggregate_cached(
     let tx = conn.unchecked_transaction()?;
     let default_key = default_attribution(default_model);
     let raw = load_all_buckets(&tx, since_day, &default_key)?;
-    let daily = load_daily(&tx, since_day)?;
+    let today = today_utc();
+    let rows = load_daily_rows(&tx, since_day.map(|since| previous_start(since, today)))?;
     let thread_rows = if by_thread {
         load_thread_rows(&tx, since_day, &default_key)?
     } else {
         Vec::new()
     };
     tx.commit()?;
-    Ok((finalize(raw, daily, threads_scanned, warnings), thread_rows))
+    let rows = rows.into_iter().map(|(day, provider, counts)| {
+        let provider = if provider == UNATTRIBUTED_PROVIDER {
+            default_key.0.clone()
+        } else {
+            provider
+        };
+        (day, provider, counts)
+    });
+    let (daily, previous) = daily_series(rows, since_day, today);
+    Ok((
+        finalize(raw, daily, previous, threads_scanned, warnings),
+        thread_rows,
+    ))
 }
 
 /// Changed threads parsed and written per write transaction during a sync.
@@ -558,24 +614,92 @@ fn collapse_days(
     out
 }
 
-/// Builds the per-day token series from day-keyed buckets, keeping only days on
-/// or after `since_day` and excluding unknown-day (`UNKNOWN_DAY`) usage. Sorted
-/// ascending by day.
-fn daily_from_buckets(
+/// `(day, provider, counts)` rows of day-keyed buckets.
+fn day_rows(
     day_buckets: &BTreeMap<(String, String, i32), RawBucket>,
+) -> impl Iterator<Item = (i32, String, UsageCounts)> + '_ {
+    day_buckets.iter().map(|((provider, _, day), bucket)| {
+        let mut counts = UsageCounts::default();
+        counts.add_bucket(bucket);
+        (*day, provider.clone(), counts)
+    })
+}
+
+/// First day of the span just before a window that starts on `since_day` and
+/// ends `today`: the span has the window's length.
+fn previous_start(since_day: i32, today: i32) -> i32 {
+    let len = today.saturating_sub(since_day).saturating_add(1).max(1);
+    since_day.saturating_sub(len)
+}
+
+/// Builds the daily series and the previous-span totals from
+/// `(day, provider, counts)` rows. With `since_day`, the series has every day
+/// from `since_day` through `today` (and any later day with usage), so idle
+/// days are present with zero counts, and the previous span is
+/// [`previous_start`] up to `since_day`. Without it, the series has only the
+/// days with usage and there is no previous span. Unknown-day usage
+/// (`UNKNOWN_DAY`) is never in either.
+fn daily_series(
+    rows: impl IntoIterator<Item = (i32, String, UsageCounts)>,
     since_day: Option<i32>,
-) -> Vec<DailyUsage> {
-    let mut by_day: BTreeMap<i32, u64> = BTreeMap::new();
-    for ((_, _, day), bucket) in day_buckets {
-        if *day == UNKNOWN_DAY || since_day.is_some_and(|min| *day < min) {
+    today: i32,
+) -> (Vec<DailyUsage>, Option<UsageCounts>) {
+    let mut by_day: BTreeMap<i32, BTreeMap<String, UsageCounts>> = BTreeMap::new();
+    let mut previous = since_day.map(|_| UsageCounts::default());
+    let previous_from = since_day.map(|since| previous_start(since, today));
+    for (day, provider, counts) in rows {
+        if day == UNKNOWN_DAY {
             continue;
         }
-        *by_day.entry(*day).or_default() += bucket.tokens();
+        match since_day {
+            Some(since) if day < since => {
+                if let (Some(previous), Some(from)) = (previous.as_mut(), previous_from)
+                    && day >= from
+                {
+                    previous.add(&counts);
+                }
+            }
+            _ => by_day
+                .entry(day)
+                .or_default()
+                .entry(provider)
+                .or_default()
+                .add(&counts),
+        }
     }
-    by_day
+    if let Some(since) = since_day {
+        let last = by_day
+            .keys()
+            .next_back()
+            .copied()
+            .unwrap_or(today)
+            .max(today);
+        for day in since..=last {
+            by_day.entry(day).or_default();
+        }
+    }
+    let daily = by_day
         .into_iter()
-        .map(|(day, tokens)| DailyUsage { day, tokens })
-        .collect()
+        .map(|(day, providers)| {
+            let mut counts = UsageCounts::default();
+            let by_provider = providers
+                .into_iter()
+                .map(|(provider, provider_counts)| {
+                    counts.add(&provider_counts);
+                    DailyProviderUsage {
+                        provider,
+                        counts: provider_counts,
+                    }
+                })
+                .collect();
+            DailyUsage {
+                day,
+                counts,
+                by_provider,
+            }
+        })
+        .collect();
+    (daily, previous)
 }
 
 /// Converts a file mtime to nanoseconds-since-epoch for the cache key.
@@ -892,17 +1016,28 @@ fn load_thread_rows(
 
 /// Loads the per-day token series from the cache, keeping only days on or after
 /// `since_day` and excluding unknown-day usage. Sorted ascending by day.
-fn load_daily(conn: &Connection, since_day: Option<i32>) -> Result<Vec<DailyUsage>> {
-    let min_day = since_day.unwrap_or(i32::MIN);
+/// Per `(day, provider)` counts on or after `min_day` (all days when `None`),
+/// summed in SQL, without unknown-day usage. Unattributed rows keep
+/// [`UNATTRIBUTED_PROVIDER`].
+fn load_daily_rows(
+    conn: &Connection,
+    min_day: Option<i32>,
+) -> Result<Vec<(i32, String, UsageCounts)>> {
     let mut stmt = conn.prepare(
-        "SELECT day, SUM(input + output + cache_read + cache_write) \
-         FROM thread_usage WHERE day >= ?1 AND day > ?2 GROUP BY day ORDER BY day ASC",
+        "SELECT day, provider, SUM(requests), SUM(input + output + cache_read + cache_write), \
+         SUM(input + output + cache_write) \
+         FROM thread_usage WHERE day >= ?1 AND day > ?2 GROUP BY day, provider",
     )?;
-    let rows = stmt.query_map([min_day, UNKNOWN_DAY], |r| {
-        Ok(DailyUsage {
-            day: r.get::<_, i32>(0)?,
-            tokens: u64_from(r.get::<_, i64>(1)?),
-        })
+    let rows = stmt.query_map([min_day.unwrap_or(i32::MIN), UNKNOWN_DAY], |r| {
+        Ok((
+            r.get::<_, i32>(0)?,
+            r.get::<_, String>(1)?,
+            UsageCounts {
+                requests: u64_from(r.get::<_, i64>(2)?),
+                tokens: u64_from(r.get::<_, i64>(3)?),
+                uncached_tokens: u64_from(r.get::<_, i64>(4)?),
+            },
+        ))
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
@@ -1044,6 +1179,7 @@ fn attribute_event(
 fn finalize(
     raw: BTreeMap<(String, String), RawBucket>,
     daily: Vec<DailyUsage>,
+    previous: Option<UsageCounts>,
     threads_scanned: usize,
     warnings: Vec<String>,
 ) -> UsageStats {
@@ -1150,6 +1286,7 @@ fn finalize(
         by_provider,
         by_model,
         daily,
+        previous,
         threads_scanned,
         warnings,
     }
@@ -1475,7 +1612,8 @@ mod tests {
             stats
                 .daily
                 .iter()
-                .map(|d| (d.day, d.tokens))
+                .filter(|d| d.counts.tokens > 0)
+                .map(|d| (d.day, d.counts.tokens))
                 .collect::<Vec<_>>()
         };
         assert_eq!(days(&a), vec![(today_utc(), 142)]);
@@ -1582,12 +1720,129 @@ mod tests {
         // Both spans read from the same synced cache without re-scanning.
         assert_eq!(recent.threads_scanned, 1);
 
-        // Daily series: all-time has both days; last-7d keeps only today's.
+        // Daily series: all-time has both days; last-7d has all 7 days, with
+        // usage only today.
         assert_eq!(all.daily.len(), 2);
-        assert_eq!(all.daily.iter().map(|d| d.tokens).sum::<u64>(), 2148);
-        assert_eq!(recent.daily.len(), 1);
-        assert_eq!(recent.daily[0].day, today_utc());
-        assert_eq!(recent.daily[0].tokens, 150);
+        assert_eq!(all.daily.iter().map(|d| d.counts.tokens).sum::<u64>(), 2148);
+        assert_eq!(recent.daily.len(), 7);
+        assert_eq!(recent.daily[6].day, today_utc());
+        assert_eq!(recent.daily[6].counts.tokens, 150);
+        assert!(recent.daily[..6].iter().all(|d| d.counts.tokens == 0));
+    }
+
+    #[test]
+    fn daily_series_fills_idle_days_and_sums_the_span_before() {
+        let counts = |requests, tokens, uncached_tokens| UsageCounts {
+            requests,
+            tokens,
+            uncached_tokens,
+        };
+        let rows = vec![
+            (100, "openai-codex".to_string(), counts(1, 10, 4)),
+            (100, "claude-cli".to_string(), counts(2, 30, 6)),
+            (102, "claude-cli".to_string(), counts(1, 5, 5)),
+            // The span before a 3-day window ending on day 102 is 97..=99.
+            (99, "claude-cli".to_string(), counts(4, 40, 8)),
+            (97, "openai-codex".to_string(), counts(1, 1, 1)),
+            (96, "claude-cli".to_string(), counts(9, 90, 9)),
+            (UNKNOWN_DAY, "claude-cli".to_string(), counts(7, 70, 7)),
+        ];
+
+        let (daily, previous) = daily_series(rows.clone(), Some(100), 102);
+        assert_eq!(
+            daily.iter().map(|d| d.day).collect::<Vec<_>>(),
+            vec![100, 101, 102]
+        );
+        assert_eq!(daily[0].counts, counts(3, 40, 10));
+        assert_eq!(
+            daily[0]
+                .by_provider
+                .iter()
+                .map(|p| (p.provider.as_str(), p.counts.tokens))
+                .collect::<Vec<_>>(),
+            vec![("claude-cli", 30), ("openai-codex", 10)]
+        );
+        assert_eq!(daily[1].counts, UsageCounts::default());
+        assert!(daily[1].by_provider.is_empty());
+        assert_eq!(previous, Some(counts(5, 41, 9)));
+
+        // All time: only days with usage, no span before, no unknown day.
+        let (daily, previous) = daily_series(rows, None, 102);
+        assert_eq!(
+            daily.iter().map(|d| d.day).collect::<Vec<_>>(),
+            vec![96, 97, 99, 100, 102]
+        );
+        assert_eq!(previous, None);
+    }
+
+    #[test]
+    fn cached_and_scanned_daily_series_agree() {
+        let dir = tempfile::tempdir().unwrap();
+        let threads = dir.path().join("threads");
+        std::fs::create_dir_all(&threads).unwrap();
+        let cache = dir.path().join("cache/usage.sqlite");
+        let cached_read = r#"{"type":"usage","input_tokens":3,"output_tokens":2,"cache_read_tokens":100,"cache_write_tokens":1,"ts":"TS"}"#
+            .replace("TS", &ts_days_ago(0));
+        write_thread(
+            &threads,
+            "t",
+            &[
+                usage_line_at(
+                    10,
+                    5,
+                    Some("gpt-5.5"),
+                    Some("openai-codex"),
+                    &ts_days_ago(0),
+                ),
+                cached_read,
+                usage_line_at(7, 1, Some("gpt-5.5"), Some("openai-codex"), &ts_days_ago(2)),
+                usage_line_at(
+                    50,
+                    0,
+                    Some("gpt-5.5"),
+                    Some("openai-codex"),
+                    &ts_days_ago(8),
+                ),
+                usage_line_at(
+                    900,
+                    0,
+                    Some("gpt-5.5"),
+                    Some("openai-codex"),
+                    &ts_days_ago(20),
+                ),
+            ],
+        );
+        let since = Some(today_utc() - 6);
+        let cached =
+            aggregate_usage_at(&threads, &cache, "claude-cli:claude-opus-4-8", since).unwrap();
+        let (scanned, _) =
+            aggregate_scan_all(&threads, "claude-cli:claude-opus-4-8", since, false).unwrap();
+        assert_eq!(cached.daily, scanned.daily);
+        assert_eq!(cached.previous, scanned.previous);
+
+        assert_eq!(cached.daily.len(), 7);
+        let today = &cached.daily[6];
+        assert_eq!(today.counts.requests, 2);
+        assert_eq!(today.counts.tokens, 121);
+        assert_eq!(today.counts.uncached_tokens, 21);
+        // The unattributed event goes to the caller's default provider.
+        assert_eq!(
+            today
+                .by_provider
+                .iter()
+                .map(|p| (p.provider.as_str(), p.counts.tokens))
+                .collect::<Vec<_>>(),
+            vec![("claude-cli", 106), ("openai-codex", 15)]
+        );
+        assert_eq!(cached.daily[4].counts.tokens, 8);
+        assert_eq!(
+            cached.previous,
+            Some(UsageCounts {
+                requests: 1,
+                tokens: 50,
+                uncached_tokens: 50
+            })
+        );
     }
 
     #[test]
@@ -1617,7 +1872,7 @@ mod tests {
         // Totals count both, but the daily chart omits the undated event.
         assert_eq!(all.totals.requests, 2);
         assert_eq!(all.daily.len(), 1);
-        assert_eq!(all.daily[0].tokens, 15);
+        assert_eq!(all.daily[0].counts.tokens, 15);
     }
 
     #[test]
@@ -1709,7 +1964,7 @@ mod tests {
             },
         );
 
-        let stats = finalize(raw, Vec::new(), 1, Vec::new());
+        let stats = finalize(raw, Vec::new(), None, 1, Vec::new());
 
         assert_eq!(stats.by_model.len(), 1);
         let row = &stats.by_model[0];
@@ -1745,7 +2000,7 @@ mod tests {
             },
         );
 
-        let stats = finalize(raw, Vec::new(), 1, Vec::new());
+        let stats = finalize(raw, Vec::new(), None, 1, Vec::new());
 
         let row = &stats.by_model[0];
         assert!(row.subscription);

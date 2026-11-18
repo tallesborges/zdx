@@ -83,6 +83,7 @@ func New(ctx context.Context, b Backend, opts Options) *Model {
 	m := &Model{ctx: ctx, backend: b, opts: opts, width: 80, height: 24}
 	m.threads.kind = "all"
 	m.usage.days = 7
+	m.usage.split = true
 	m.logs.maxLines = defaultLogLines
 	m.logs.follow = true
 	return m
@@ -380,6 +381,12 @@ func (m *Model) tabKey(key string) tea.Cmd {
 		case "Q":
 			m.fetch[keyQuotas].force = true
 			return m.refresh(m.now())
+		case "m":
+			m.usage.metric = (m.usage.metric + 1) % metricCount
+			return nil
+		case "p":
+			m.usage.split = !m.usage.split
+			return nil
 		}
 		m.usage.scroll.key(key, len(m.usageLines(m.contentWidth())), m.bodyHeight())
 	case tabLogs:

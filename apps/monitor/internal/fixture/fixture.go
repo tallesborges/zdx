@@ -335,8 +335,20 @@ func (b *Backend) Usage(ctx context.Context, days uint32) (data.Usage, source.Or
 	day := int32(Base.Unix() / 86400)
 	var daily []data.DailyUsage
 	for i := int32(int(days) - 1); i >= 0; i-- {
-		daily = append(daily, data.DailyUsage{Day: day - i, Tokens: uint64(4_000_000 + (int(i)*7919)%9*1_300_000)})
+		d := data.DailyUsage{Day: day - i}
+		if i%7 != 3 { // one idle day a week
+			for j, p := range []string{"claude-cli", "openai-codex", "gemini"} {
+				tok := uint64((4_000_000 + (int(i)*7919+j*31)%9*1_300_000) / (j*2 + 1))
+				c := data.UsageCounts{Requests: tok / 60_000, Tokens: tok, UncachedTokens: tok / 9}
+				d.ByProvider = append(d.ByProvider, data.DailyProviderUsage{Provider: p, UsageCounts: c})
+				d.Requests += c.Requests
+				d.Tokens += c.Tokens
+				d.UncachedTokens += c.UncachedTokens
+			}
+		}
+		daily = append(daily, d)
 	}
+	previous := &data.UsageCounts{Requests: 15_100, Tokens: 318_400_000, UncachedTokens: 35_000_000}
 	return data.Usage{Days: days, Requests: 18342, Tokens: 412_880_311, Input: 391_002_118, Output: 3_918_220, CacheRead: 301_440_000, CacheWrite: 17_960_000,
 		BilledUSD: 38.27, SubscriptionTokens: 380_112_004, UnknownPricingRows: 12, ThreadsScanned: 1844, UnindexedThreads: 3,
 		ByProvider: []data.UsageRow{{Provider: "claude-cli", Requests: 9211, Tokens: 251_000_000, Subscription: true}, {Provider: "openai-codex", Requests: 6120, Tokens: 129_112_004, Subscription: true},
@@ -345,7 +357,7 @@ func (b *Backend) Usage(ctx context.Context, days uint32) (data.Usage, source.Or
 			{Provider: "gemini", Model: ptr("gemini-3.5-flash-lite"), Requests: 2900, Tokens: 30_000_000, CostUSD: 31.02}},
 		ByProject: []data.ProjectUsage{{Project: ptr("/Users/example/Documents/projects/zdx"), Threads: 911, Tokens: 300_000_000}, {Project: ptr("/Users/example/Documents"), Threads: 820, Tokens: 100_000_000}, {Threads: 113, Tokens: 12_880_311}},
 		ByRun:     []data.RunUsage{{Kind: "orchestrator", Name: ptr("orchestrator"), Threads: 120, Tokens: 200_000_000}, {Kind: "worker", Threads: 300, Tokens: 150_000_000}, {Kind: "subagent", Name: ptr("explorer"), Threads: 700, Tokens: 50_000_000}, {Kind: "helper", Name: ptr("title"), Threads: 724, Tokens: 12_880_311}},
-		Daily:     daily}, source.OriginSocket, nil
+		Daily:     daily, Previous: previous}, source.OriginSocket, nil
 }
 
 // Quotas is the direct quota fetch; it needs no service.

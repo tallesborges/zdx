@@ -13,6 +13,7 @@ use crate::agent_activity::{self, RunStatus};
 use crate::background_activity;
 use crate::config::{Config, paths};
 use crate::core::usage_report::{self, ProjectUsage, RunUsage, UsageReport};
+use crate::core::usage_stats::{DailyUsage, UsageCounts};
 use crate::orchestration::views::ViewError;
 use crate::service::{self, Service};
 use crate::workspace_config::{self, WorkspaceReport};
@@ -107,7 +108,10 @@ pub struct UsageResponse {
     threads_scanned: usize,
     by_provider: Vec<MonitorUsageRow>,
     by_model: Vec<MonitorUsageRow>,
-    daily: Vec<MonitorDailyUsage>,
+    /// Every day of the window, idle days included, each split by provider.
+    daily: Vec<DailyUsage>,
+    /// The same number of days just before the window.
+    previous: Option<UsageCounts>,
     by_project: Vec<ProjectUsage>,
     by_run: Vec<RunUsage>,
     unindexed_threads: usize,
@@ -130,12 +134,6 @@ struct MonitorUsageRow {
     cost_usd: f64,
     subscription: bool,
     estimated: bool,
-}
-
-#[derive(Clone, Serialize)]
-struct MonitorDailyUsage {
-    day: i32,
-    tokens: u64,
 }
 
 #[derive(Serialize)]
@@ -380,14 +378,8 @@ fn usage_response(days: u32, report: UsageReport) -> UsageResponse {
         threads_scanned: stats.threads_scanned,
         by_provider: stats.by_provider.into_iter().map(row).collect(),
         by_model: stats.by_model.into_iter().take(8).map(row).collect(),
-        daily: stats
-            .daily
-            .into_iter()
-            .map(|day| MonitorDailyUsage {
-                day: day.day,
-                tokens: day.tokens,
-            })
-            .collect(),
+        daily: stats.daily,
+        previous: stats.previous,
         by_project: report.by_project,
         by_run: report.by_run,
         unindexed_threads: report.unindexed_threads,
