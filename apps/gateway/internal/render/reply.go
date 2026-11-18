@@ -140,8 +140,8 @@ const (
 //   - The text gets the worker links and the Open thread link, then is split
 //     into messages of at most MaxMessageLen (SplitHTML).
 //   - Text that fits one caption (VisibleUTF16Len <= MaxCaptionLen) plus a
-//     single photo, voice note or audio file go out as one captioned message
-//     carrying the file's Open artifact button and the follow-ups.
+//     single photo, voice note, audio or video file go out as one captioned
+//     message carrying the file's Open artifact button and the follow-ups.
 //   - Otherwise the text parts go first, the follow-ups on the last part,
 //     then every file as its own message with its own Open artifact button.
 //     An HTML file with a link is a file card, never uploaded. Documents are

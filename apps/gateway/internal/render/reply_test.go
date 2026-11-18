@@ -110,6 +110,17 @@ func TestShortTextAndOnePhotoAreOneCaptionedMessage(t *testing.T) {
 	}
 }
 
+func TestShortTextAndOneVideoAreOneCaptionedMessage(t *testing.T) {
+	p, f, res := run(t, Reply{HTML: "<b>Done</b>", Followups: []string{"Next"}, Files: []File{file("/a/clip.mp4", "video")}}, opts(), nil)
+	if len(f.calls) != 1 || !f.calls[0].caption || f.calls[0].method != MethodVideo || f.calls[0].text != threadLinked("<b>Done</b>") {
+		t.Fatalf("%+v", f.calls)
+	}
+	eqRows(t, p.Steps[0].Keyboard, [][]string{{OpenArtifactLabel + "|" + openURL()}, {"Next|fu:0"}, {"✕ Dismiss|fu:x"}})
+	if statuses(res) != "sent#100,sent#100" || res.FollowupsMessageID == nil || *res.FollowupsMessageID != 100 {
+		t.Fatalf("%s", statuses(res))
+	}
+}
+
 func TestDocumentNeverTakesTheCaption(t *testing.T) {
 	_, f, res := run(t, Reply{HTML: "Report attached", Followups: []string{"Next"}, Files: []File{file("/a/report.pdf", "document")}}, opts(), nil)
 	if len(f.calls) != 2 || f.calls[0].path != "" || f.calls[1].path != "/a/report.pdf" || f.calls[1].caption {
@@ -207,12 +218,12 @@ func TestFileWithoutAMethodFailsInsteadOfGoingOutAsADocument(t *testing.T) {
 }
 
 func TestMethodFromSendAs(t *testing.T) {
-	for in, want := range map[string]Method{"document": MethodDocument, "photo": MethodPhoto, "voice": MethodVoice, "audio": MethodAudio} {
+	for in, want := range map[string]Method{"document": MethodDocument, "photo": MethodPhoto, "voice": MethodVoice, "audio": MethodAudio, "video": MethodVideo} {
 		if got, err := MethodFromSendAs(in); err != nil || got != want {
 			t.Errorf("MethodFromSendAs(%q) = %v %v", in, got, err)
 		}
 	}
-	for _, in := range []string{"", "video", "Photo"} {
+	for _, in := range []string{"", "Video", "Photo"} {
 		if got, err := MethodFromSendAs(in); err == nil || got != MethodUnset {
 			t.Errorf("MethodFromSendAs(%q) = %v, want an error", in, got)
 		}

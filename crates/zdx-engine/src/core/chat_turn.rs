@@ -311,6 +311,7 @@ pub enum SendAs {
     Photo,
     Voice,
     Audio,
+    Video,
     Document,
 }
 
@@ -383,8 +384,8 @@ pub fn reply_parts(final_text: &str) -> ReplyParts {
     }
 }
 
-/// The Telegram method that fits a file: photo, voice note, audio, or
-/// document.
+/// The Telegram method that fits a file: photo, voice note, audio,
+/// video, or document.
 #[must_use]
 pub fn send_as(path: &Path) -> SendAs {
     let ext = path
@@ -396,6 +397,7 @@ pub fn send_as(path: &Path) -> SendAs {
         "png" | "jpg" | "jpeg" | "webp" => SendAs::Photo,
         "ogg" | "oga" | "opus" => SendAs::Voice,
         "mp3" | "m4a" | "wav" | "aac" | "flac" => SendAs::Audio,
+        "mp4" | "mov" | "m4v" | "webm" => SendAs::Video,
         _ => SendAs::Document,
     }
 }
@@ -477,6 +479,24 @@ mod tests {
         assert_eq!(parts.media[0].kind, ArtifactKind::Image);
         assert!(!parts.media[1].sendable);
         assert_eq!(parts.media[1].send_as, SendAs::Document);
+    }
+
+    #[test]
+    fn send_as_routes_video_and_leaves_other_video_on_document() {
+        for ext in ["mp4", "mov", "m4v", "webm", "MP4"] {
+            assert_eq!(
+                send_as(Path::new(&format!("clip.{ext}"))),
+                SendAs::Video,
+                "{ext}"
+            );
+        }
+        for ext in ["mkv", "avi", "mpg", "ogv", "pdf"] {
+            assert_eq!(
+                send_as(Path::new(&format!("clip.{ext}"))),
+                SendAs::Document,
+                "{ext}"
+            );
+        }
     }
 
     #[test]

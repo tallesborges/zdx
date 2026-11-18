@@ -96,7 +96,7 @@ func newFakeTelegram(t *testing.T, clock *fakeClock) *fakeTelegram {
 			return
 		}
 		switch method {
-		case "sendMessage", "sendDocument", "sendPhoto", "sendVoice", "sendAudio":
+		case "sendMessage", "sendDocument", "sendPhoto", "sendVoice", "sendAudio", "sendVideo":
 			io.WriteString(w, `{"ok":true,"result":{"message_id":42,"chat":{"id":-1001,"type":"supergroup"},"date":1}}`)
 		case "getUpdates":
 			io.WriteString(w, `{"ok":true,"result":[]}`)
@@ -454,6 +454,7 @@ func TestReadUploadNamesAndTypes(t *testing.T) {
 		return p
 	}
 	png := []byte("\x89PNG\r\n\x1a\n0000")
+	mp4 := []byte("\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isomiso2")
 	cases := []struct {
 		path string
 		m    FileMethod
@@ -465,6 +466,7 @@ func TestReadUploadNamesAndTypes(t *testing.T) {
 		{write("run.sh", []byte("#!/bin/sh\necho")), MethodDocument, "text/x-shellscript"},
 		{write("talk.ogg", []byte("anything")), MethodVoice, "audio/ogg"},
 		{write("song.mp3", []byte("no magic")), MethodAudio, "audio/mpeg"},
+		{write("clip.mp4", mp4), MethodVideo, "video/mp4"},
 	}
 	for _, c := range cases {
 		u, err := ReadUpload(c.path, c.m)
@@ -527,6 +529,29 @@ func TestFileSendCarriesReplyTargetAndCaptionFallback(t *testing.T) {
 	}
 	if _, ok := third["parse_mode"]; ok || third["caption"] != "<b>cap" {
 		t.Fatalf("unexpected plain request %v", third)
+	}
+}
+
+func TestVideoSendUsesTheVideoField(t *testing.T) {
+	f := newFakeTelegram(t, newFakeClock())
+	msg, err := f.client().Reliable().SendVideo(context.Background(), chat, Upload{Data: []byte("vid"), FileName: "clip.mp4", MimeType: "video/mp4"}, MediaSend{})
+	if err != nil || msg.ID != 42 {
+		t.Fatalf("msg=%v err=%v", msg, err)
+	}
+	calls := f.callsOf("sendVideo")
+	if len(calls) != 1 || calls[0].body["video"] != "clip.mp4|video/mp4" {
+		t.Fatalf("one sendVideo with the video field: %v", calls)
+	}
+}
+
+func TestOversizedVideoIsRefusedBeforeAnySend(t *testing.T) {
+	f := newFakeTelegram(t, newFakeClock())
+	_, err := f.client().Reliable().SendVideo(context.Background(), chat, Upload{Data: make([]byte, MaxDocumentBytes+1), FileName: "clip.mp4", MimeType: "video/mp4"}, MediaSend{})
+	if err == nil || !strings.Contains(err.Error(), "exceeds Telegram limit") {
+		t.Fatalf("want a size refusal, got %v", err)
+	}
+	if len(f.callsOf("sendVideo")) != 0 {
+		t.Fatal("no send may be attempted")
 	}
 }
 

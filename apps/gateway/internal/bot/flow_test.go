@@ -96,7 +96,7 @@ func newFakeTG(t *testing.T) *fakeTG {
 		switch method {
 		case "getFile":
 			fmt.Fprintf(w, `{"ok":true,"result":{"file_id":%q,"file_path":"docs/%s"}}`, body["file_id"], body["file_id"])
-		case "sendMessage", "sendDocument", "sendPhoto", "sendVoice", "sendAudio":
+		case "sendMessage", "sendDocument", "sendPhoto", "sendVoice", "sendAudio", "sendVideo":
 			fmt.Fprintf(w, `{"ok":true,"result":{"message_id":%d,"chat":{"id":1,"type":"private"},"date":1}}`, id)
 		default:
 			io.WriteString(w, `{"ok":true,"result":true}`)

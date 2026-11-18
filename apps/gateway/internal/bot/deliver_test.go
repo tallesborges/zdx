@@ -140,6 +140,75 @@ func TestAPhotoNeedingPreparationFailsAndTheTextStillGoesOut(t *testing.T) {
 	}
 }
 
+var mp4Bytes = []byte("\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isomiso2")
+
+func TestVideoGoesOutAsSendVideo(t *testing.T) {
+	tg := newFakeTG(t)
+	store := &memStore{}
+	clip := writeFile(t, "clip.mp4", mp4Bytes)
+	deliver(t, tg, store, plan(render.Reply{Files: []render.File{{Path: clip, Method: render.MethodVideo}}}))
+	v := tg.of("sendVideo")
+	if len(v) != 1 || len(tg.of("sendDocument")) != 0 || v[0].body["video"] != "clip.mp4|video/mp4" {
+		t.Fatalf("calls %+v", tg.calls)
+	}
+	if got := statuses(store.final()); got[0] != "sent" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestShortTextAndOneVideoGoAsOneCaptionedMessage(t *testing.T) {
+	tg := newFakeTG(t)
+	store := &memStore{}
+	clip := writeFile(t, "clip.mp4", mp4Bytes)
+	deliver(t, tg, store, plan(render.Reply{HTML: "watch", Files: []render.File{{Path: clip, Method: render.MethodVideo}}}))
+	v := tg.of("sendVideo")
+	if len(v) != 1 || len(tg.of("sendMessage")) != 0 || !strings.HasPrefix(v[0].body["caption"].(string), "watch") {
+		t.Fatalf("calls %+v", tg.calls)
+	}
+	f := store.final()
+	if got := statuses(f); got[0] != "sent" || got[1] != "sent" || *f.Items[0].MessageID != *f.Items[1].MessageID {
+		t.Fatalf("both items settle on one message: %+v", f.Items)
+	}
+}
+
+func TestAVideoTelegramCannotPlayFallsBackToADocument(t *testing.T) {
+	tg := newFakeTG(t)
+	tg.queue("sendVideo", `{"ok":false,"error_code":400,"description":"Bad Request: wrong file"}`)
+	store := &memStore{}
+	clip := writeFile(t, "clip.webm", []byte("no magic"))
+	deliver(t, tg, store, plan(render.Reply{HTML: "watch", Files: []render.File{{Path: clip, Method: render.MethodVideo}}}))
+	if len(tg.of("sendVideo")) != 1 || len(tg.of("sendMessage")) != 0 {
+		t.Fatalf("calls %+v", tg.calls)
+	}
+	docs := tg.of("sendDocument")
+	if len(docs) != 1 || docs[0].body["document"] != "clip.webm|application/octet-stream" {
+		t.Fatalf("the fallback is one document: %+v", tg.calls)
+	}
+	f := store.final()
+	if got := statuses(f); got[0] != "sent" || got[1] != "sent" {
+		t.Fatalf("both items settle on the document: %+v", f.Items)
+	}
+}
+
+func TestOversizedVideoFailsWithoutASend(t *testing.T) {
+	tg := newFakeTG(t)
+	store := &memStore{}
+	big := filepath.Join(t.TempDir(), "clip.mp4")
+	fh, _ := os.Create(big)
+	if err := fh.Truncate(50<<20 + 1); err != nil {
+		t.Fatal(err)
+	}
+	fh.Close()
+	deliver(t, tg, store, plan(render.Reply{HTML: "watch", Files: []render.File{{Path: big, Method: render.MethodVideo}}}))
+	if len(tg.of("sendVideo")) != 0 || len(tg.of("sendDocument")) != 0 {
+		t.Fatalf("nothing may be uploaded: %+v", tg.calls)
+	}
+	f := store.final()
+	if got := statuses(f); got[0] != "sent" || got[1] != "failed" || !strings.Contains(*f.Items[1].Error, "exceeds Telegram limit") {
+		t.Fatalf("unexpected record %+v", f.Items)
+	}
+}
+
 func TestVoiceAndAudioUseTheirMethods(t *testing.T) {
 	tg := newFakeTG(t)
 	store := &memStore{}

@@ -30,8 +30,8 @@ const (
 
 // FileMethod is how a file is sent.
 type FileMethod struct {
-	Method string // sendDocument, sendPhoto, sendVoice, sendAudio
-	Field  string // document, photo, voice, audio
+	Method string // sendDocument, sendPhoto, sendVoice, sendAudio, sendVideo
+	Field  string // document, photo, voice, audio, video
 	// DefaultName and DefaultMime apply when the path has no name or the
 	// content type is not recognised.
 	DefaultName string
@@ -45,6 +45,9 @@ var (
 	MethodPhoto    = FileMethod{Method: "sendPhoto", Field: "photo", DefaultName: "photo.png", DefaultMime: "application/octet-stream"}
 	MethodVoice    = FileMethod{Method: "sendVoice", Field: "voice", DefaultName: "voice.ogg", FixedMime: "audio/ogg"}
 	MethodAudio    = FileMethod{Method: "sendAudio", Field: "audio", DefaultName: "audio.mp3", DefaultMime: "audio/mpeg"}
+	// Videos share the document size limit (50 MiB): an oversized video is
+	// refused before it is read, as a document would be.
+	MethodVideo = FileMethod{Method: "sendVideo", Field: "video", DefaultName: "video.mp4", DefaultMime: "video/mp4"}
 )
 
 // Upload is one file's bytes.
@@ -225,4 +228,9 @@ func (c *Client) sendFileRaw(ctx context.Context, chatID int64, m FileMethod, fi
 // SendDocument uploads a document.
 func (c *Client) SendDocument(ctx context.Context, chatID int64, file Upload, opts MediaSend) (*Message, error) {
 	return c.SendFile(ctx, chatID, MethodDocument, file, opts)
+}
+
+// SendVideo uploads a video.
+func (c *Client) SendVideo(ctx context.Context, chatID int64, file Upload, opts MediaSend) (*Message, error) {
+	return c.SendFile(ctx, chatID, MethodVideo, file, opts)
 }

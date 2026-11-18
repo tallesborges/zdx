@@ -14,6 +14,7 @@ const (
 	MethodPhoto                  // sendPhoto
 	MethodVoice                  // sendVoice
 	MethodAudio                  // sendAudio
+	MethodVideo                  // sendVideo
 )
 
 func (m Method) String() string {
@@ -26,6 +27,8 @@ func (m Method) String() string {
 		return "sendVoice"
 	case MethodAudio:
 		return "sendAudio"
+	case MethodVideo:
+		return "sendVideo"
 	default:
 		return "unset"
 	}
@@ -44,16 +47,18 @@ func MethodFromSendAs(sendAs string) (Method, error) {
 		return MethodVoice, nil
 	case "audio":
 		return MethodAudio, nil
+	case "video":
+		return MethodVideo, nil
 	}
 	return MethodUnset, fmt.Errorf("unknown send_as %q", sendAs)
 }
 
 // valid reports a method PlanReply can send.
-func (m Method) valid() bool { return m >= MethodDocument && m <= MethodAudio }
+func (m Method) valid() bool { return m >= MethodDocument && m <= MethodVideo }
 
 // takesReplyCaption reports whether a lone reply file may carry the reply
-// text as its caption: photos, voice notes and audio. A document always goes
-// out on its own, after the text.
+// text as its caption: photos, voice notes, audio and videos. A document
+// always goes out on its own, after the text.
 func (m Method) takesReplyCaption() bool {
-	return m == MethodPhoto || m == MethodVoice || m == MethodAudio
+	return m == MethodPhoto || m == MethodVoice || m == MethodAudio || m == MethodVideo
 }

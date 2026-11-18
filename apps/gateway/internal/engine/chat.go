@@ -59,6 +59,7 @@ const (
 	SendAsPhoto    = "photo"
 	SendAsVoice    = "voice"
 	SendAsAudio    = "audio"
+	SendAsVideo    = "video"
 	SendAsDocument = "document"
 )
 
@@ -66,7 +67,7 @@ const (
 type ReplyMedia struct {
 	Path        string `json:"path"`
 	ArtifactKey string `json:"artifact_key"`
-	// Kind is the artifact kind: image, audio, html, markdown, text, other.
+	// Kind is the artifact kind: image, audio, video, html, markdown, text, other.
 	Kind              string `json:"kind"`
 	SendAs            string `json:"send_as"`
 	LexicalIsPhysical bool   `json:"lexical_is_physical"`

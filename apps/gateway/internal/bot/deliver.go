@@ -336,6 +336,7 @@ var fileMethods = map[render.Method]telegram.FileMethod{
 	render.MethodPhoto:    telegram.MethodPhoto,
 	render.MethodVoice:    telegram.MethodVoice,
 	render.MethodAudio:    telegram.MethodAudio,
+	render.MethodVideo:    telegram.MethodVideo,
 }
 
 func (s *sender) SendFile(ctx context.Context, f render.File, method render.Method, caption *string, kb *telegram.InlineKeyboardMarkup) (int64, error) {
@@ -361,6 +362,17 @@ func (s *sender) SendFile(ctx context.Context, f render.File, method render.Meth
 		opts.ReplyToMessageID, opts.ReplyParameters = nil, s.target.Quote
 	}
 	msg, err := s.client.SendFile(ctx, s.target.Chat, m, upload, opts)
+	if err != nil && method == render.MethodVideo {
+		// Telegram refuses a codec it cannot play (an unsupported video
+		// container or codec). The file still reaches the chat once, as
+		// a document. Only a refusal retries: an ambiguous failure may
+		// already be delivered, and a flood refusal stops the rest.
+		if class, _ := telegram.Classify(err); class == telegram.ClassRejected {
+			if docUpload, rerr := telegram.ReadUpload(f.Path, telegram.MethodDocument); rerr == nil {
+				msg, err = s.client.SendFile(ctx, s.target.Chat, telegram.MethodDocument, docUpload, opts)
+			}
+		}
+	}
 	if err != nil {
 		return 0, err
 	}
