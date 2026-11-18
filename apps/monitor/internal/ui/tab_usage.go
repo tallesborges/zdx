@@ -2,9 +2,11 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/tallesborges/zdx/apps/monitor/internal/data"
+	"github.com/tallesborges/zdx/apps/shared/quota"
 )
 
 var usageWindows = []uint32{1, 7, 30, 90, 365}
@@ -15,6 +17,7 @@ type usageTab struct {
 	split        bool
 	data         *data.Usage
 	quotas       []data.Subscription
+	history      []data.QuotaHistory
 	quotasLoaded bool
 	scroll       scrollState
 }
@@ -113,19 +116,26 @@ func (m *Model) quotaLines(width int) []string {
 		barW = 12
 	}
 	// One table for every account, so columns line up and the header
-	// names each figure once.
+	// names each figure once. The 7-day strip has no title: it is read
+	// as a picture.
+	strips := len(t.history) > 0
+	meterMin := 0
+	if strips {
+		meterMin = 70
+	}
 	tb := table{cols: []col{
 		{title: "WINDOW", max: 10},
-		{title: "", max: barW},
+		{title: "", max: barW, minWidth: meterMin},
 		{title: "USED", max: 6, right: true},
-		{title: "REMAINING", max: 9, right: true},
-		{title: "RESETS", flex: true, min: 6},
-		{title: "SCOPE", max: 16, minWidth: 90},
 	}}
+	if strips {
+		tb.cols = append(tb.cols, col{title: "", max: 13})
+	}
+	tb.cols = append(tb.cols, col{title: "RESETS", flex: true, min: 6}, col{title: "SCOPE", max: 16, minWidth: 90})
 	type rowAt struct{ account, row int }
 	var rows []rowAt
 	for a, s := range t.quotas {
-		for _, w := range s.Windows {
+		for i, w := range s.Windows {
 			reset := cs("unknown", dim)
 			if w.ResetsAt != nil {
 				if width < 110 {
@@ -135,11 +145,11 @@ func (m *Model) quotaLines(width int) []string {
 				}
 			}
 			style := quotaStyle(w.UsedPercent)
-			tb.rows = append(tb.rows, []cell{
-				c(w.Label), c(meter(w.UsedPercent, barW)),
-				c(style(fmt.Sprintf("%.1f%%", w.UsedPercent))), cs(fmt.Sprintf("%.1f%%", max(100-w.UsedPercent, 0)), dim),
-				reset, cs(str(w.Scope), dim),
-			})
+			row := []cell{c(w.Label), c(meter(w.UsedPercent, barW)), c(style(fmt.Sprintf("%.1f%%", w.UsedPercent)))}
+			if strips {
+				row = append(row, c(quotaStrip(quota.HistoryOf(t.history, s, i))))
+			}
+			tb.rows = append(tb.rows, append(row, reset, cs(str(w.Scope), dim)))
 			rows = append(rows, rowAt{a, len(tb.rows) - 1})
 		}
 	}
@@ -242,6 +252,50 @@ func (m *Model) usageLines(width int) []string {
 	}
 	section("By run kind", runs)
 	return out
+}
+
+// quotaStrip draws a window's last 7 days, one mark per day: the day's
+// highest reading for a window shorter than a day, else the share of the
+// window used that day (yellow above an even pace). `·` is no use, a blank
+// is no history, and `│` marks a reset.
+func quotaStrip(h *data.QuotaHistory) string {
+	if h == nil {
+		return ""
+	}
+	scale := 100.0
+	if !h.Peak {
+		scale = 2 * h.Pace
+		for _, d := range h.Days {
+			scale = max(scale, d.Percent)
+		}
+	}
+	var b strings.Builder
+	for i, d := range h.Days {
+		if i > 0 {
+			if d.Reset && !h.Peak {
+				b.WriteString(dim.Render("│"))
+			} else {
+				b.WriteString(" ")
+			}
+		}
+		switch {
+		case !d.Known:
+			b.WriteString(" ")
+		case d.Percent < 0.05 || scale <= 0:
+			b.WriteString(ruleStyle.Render("·"))
+		default:
+			level := min(max(int(math.Ceil(d.Percent/scale*8)), 1), 8)
+			style := ok.Render
+			switch {
+			case h.Peak:
+				style = quotaStyle(d.Percent)
+			case h.Pace > 0 && d.Percent > h.Pace:
+				style = warn.Render
+			}
+			b.WriteString(style(string(bars[level])))
+		}
+	}
+	return b.String()
 }
 
 func meter(percent float64, width int) string {

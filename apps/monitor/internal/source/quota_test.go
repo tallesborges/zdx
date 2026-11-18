@@ -163,3 +163,26 @@ func deref(s *string) string {
 	}
 	return *s
 }
+
+func TestQuotaHistoryReadsTheSchedulerHistory(t *testing.T) {
+	home := tempDir(t, "h")
+	s, _ := quotaSource(t, home, testVersion, unexpected(t))
+	now := time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)
+	if h, err := s.QuotaHistory(now); err != nil || len(h) != 0 {
+		t.Fatalf("no history file = %v, %v; want none", h, err)
+	}
+	reading := func(at time.Time, used float64) quota.Sample {
+		return quota.Sample{At: at, Provider: quota.ProviderCodex, Label: "weekly", UsedPercent: used}
+	}
+	samples := []quota.Sample{reading(now.Add(-30*time.Hour), 10), reading(now.Add(-time.Hour), 25)}
+	if err := quota.AppendHistory(quota.HistoryPath(home), samples, now); err != nil {
+		t.Fatal(err)
+	}
+	h, err := s.QuotaHistory(now)
+	if err != nil || len(h) != 1 {
+		t.Fatalf("history = %v, %v", h, err)
+	}
+	if h[0].Name != "Codex" || len(h[0].Days) != 7 || h[0].Days[6] != (quota.DayUse{Known: true, Percent: 15}) {
+		t.Fatalf("history = %+v", h[0])
+	}
+}

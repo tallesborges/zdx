@@ -13,6 +13,7 @@ import (
 	"github.com/tallesborges/zdx/apps/monitor/internal/data"
 	"github.com/tallesborges/zdx/apps/monitor/internal/source"
 	"github.com/tallesborges/zdx/apps/monitor/internal/wire"
+	"github.com/tallesborges/zdx/apps/shared/quota"
 )
 
 // Scenario names a backend state.
@@ -373,6 +374,23 @@ func (b *Backend) Quotas(ctx context.Context) ([]data.Subscription, source.Origi
 		{Provider: "openai-codex", Name: "ChatGPT", Plan: ptr("pro"), Windows: []data.QuotaWindow{{Label: "5h", UsedPercent: 7}}},
 		{Provider: "google-antigravity", Name: "Antigravity", Windows: []data.QuotaWindow{}, Error: ptr("expired · re-login in zdx")},
 	}, source.OriginDirect, nil
+}
+
+// QuotaHistory is a week of daily use for the full scenario's quota windows,
+// with a reset on the weekly window and two days before the history began.
+func (b *Backend) QuotaHistory(time.Time) ([]data.QuotaHistory, error) {
+	if b.Scenario == Empty {
+		return nil, nil
+	}
+	day := func(p float64) quota.DayUse { return quota.DayUse{Known: true, Percent: p} }
+	return []data.QuotaHistory{
+		{Provider: "claude-cli", Name: "Claude (work)", Label: "5h", Peak: true,
+			Days: []quota.DayUse{day(74), day(96), day(12), day(0), day(81), day(88), day(42)}},
+		{Provider: "claude-cli", Name: "Claude (work)", Label: "week", Pace: 100.0 / 7,
+			Days: []quota.DayUse{day(15), day(22), day(3), day(0), {Known: true, Percent: 21, Reset: true}, day(27), day(6)}},
+		{Provider: "openai-codex", Name: "ChatGPT", Label: "5h", Peak: true,
+			Days: []quota.DayUse{{}, {}, day(5), day(9), day(0), day(3), day(7)}},
+	}, nil
 }
 
 // Workspaces is `workspaces`.

@@ -119,6 +119,9 @@ type Subscription = quota.Subscription
 // QuotaWindow is one quota window.
 type QuotaWindow = quota.SubscriptionWindow
 
+// QuotaHistory is the daily use of one quota window (shared quota history).
+type QuotaHistory = quota.WindowHistory
+
 // Usage is `usage_report`.
 type Usage struct {
 	Days               uint32         `json:"days"`

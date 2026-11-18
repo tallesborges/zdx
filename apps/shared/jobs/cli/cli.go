@@ -30,6 +30,8 @@ import (
 	"time"
 
 	"github.com/tallesborges/zdx/apps/shared/jobs"
+	"github.com/tallesborges/zdx/apps/shared/quota"
+	"github.com/tallesborges/zdx/apps/shared/version"
 )
 
 // Main runs `zdx-go jobs ARGS` and returns the exit code.
@@ -791,6 +793,13 @@ func (a *app) scheduler(args []string) error {
 	a.log.Info("Jobs scheduler started", "root", a.g.root, "poll_secs", int(poll.Seconds()), "since", s.State().Since)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// The scheduler also keeps the quota history the monitor's daily strips
+	// read: it is the one long-lived process with a single instance per home.
+	if v, err := version.Resolve(""); err != nil {
+		a.log.Warn("Quota history is off", "error", err)
+	} else {
+		go quota.SampleLoop(ctx, quota.Options{Home: a.home.Dir, Version: v}, quota.HistoryPath(a.home.Dir), quota.SampleEvery, a.log)
+	}
 	s.Loop(ctx, poll)
 	a.log.Info("Jobs scheduler stopped")
 	return nil

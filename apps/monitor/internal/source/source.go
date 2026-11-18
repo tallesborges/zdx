@@ -259,6 +259,19 @@ func (s *Source) Quotas(ctx context.Context) ([]data.Subscription, Origin, error
 	return quota.Subscriptions(snap), OriginDirect, nil
 }
 
+// QuotaHistory is the daily use of each quota window over the last 7 days,
+// from the quota history the jobs scheduler keeps under the home. A missing
+// file is no history.
+func (s *Source) QuotaHistory(now time.Time) ([]data.QuotaHistory, error) {
+	const days = 7
+	// One day more, so the first day's share has an earlier reading.
+	samples, err := quota.ReadHistory(quota.HistoryPath(s.cfg.Home), now.Add(-(days+1)*24*time.Hour))
+	if err != nil {
+		return nil, err
+	}
+	return quota.DailyHistory(samples, now, days), nil
+}
+
 // Picker runs `zdx helper` for the catalog model picker of root.
 func (s *Source) Picker(ctx context.Context, root string) (data.Picker, error) {
 	req, err := json.Marshal(map[string]string{"op": "catalog", "kind": "picker", "root": root, "scope": "general"})

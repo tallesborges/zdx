@@ -6,6 +6,7 @@ import (
 
 	"github.com/tallesborges/zdx/apps/monitor/internal/data"
 	"github.com/tallesborges/zdx/apps/monitor/internal/fixture"
+	"github.com/tallesborges/zdx/apps/shared/quota"
 )
 
 func TestSplitCellsFillsTheBarAndKeepsSmallParts(t *testing.T) {
@@ -50,5 +51,23 @@ func TestDailyChartMetricAndSplitKeys(t *testing.T) {
 	m.Update(key("p"))
 	if got := frame(); strings.Contains(got, "■ Claude") {
 		t.Fatalf("p hides the provider split:\n%s", got)
+	}
+}
+
+func TestQuotaStrip(t *testing.T) {
+	share := &data.QuotaHistory{Pace: 10, Days: []quota.DayUse{
+		{}, {Known: true}, {Known: true, Percent: 40, Reset: true}, {Known: true, Percent: 5},
+	}}
+	// Scale is the largest day (40): 40 is full, 5 is one eighth.
+	if got := stripANSI(quotaStrip(share)); got != "  ·│█ ▁" {
+		t.Errorf("share strip = %q", got)
+	}
+	peak := &data.QuotaHistory{Peak: true, Days: []quota.DayUse{{Known: true, Percent: 100}, {Known: true, Percent: 50, Reset: true}}}
+	// A peak window shows no reset mark: a day holds several windows.
+	if got := stripANSI(quotaStrip(peak)); got != "█ ▄" {
+		t.Errorf("peak strip = %q", got)
+	}
+	if quotaStrip(nil) != "" {
+		t.Error("no history is no strip")
 	}
 }

@@ -1,13 +1,13 @@
  1 Agents 6  2 Threads  3 Services  4 Jobs  5 Usage  6 Logs  7 Background  8 Config
 
  Subscription quotas  fetched 0s ago · every 5m · Q refresh
-    WINDOW                             USED  REMAINING  RESETS                       SCOPE
+    WINDOW                             USED                 RESETS                       SCOPE
   Claude (work)  claude-cli · max plan
-    5h      ██████████░░░░░░░░░░░░░░  42.5%      57.5%  16:30 (in 2h)
-    week    ██████████████████████░░  91.0%       9.0%  Mon 16 Nov 16:30 (in 2d 2h)  Opus
+    5h      ██████████░░░░░░░░░░░░░░  42.5%  ▆ █ ▁ · ▇ █ ▄  16:30 (in 2h)
+    week    ██████████████████████░░  91.0%  ▅ ▇ ▁ ·│▆ █ ▂  Mon 16 Nov 16:30 (in 2d 2h)  Opus
 
   ChatGPT  openai-codex · pro plan
-    5h      ██░░░░░░░░░░░░░░░░░░░░░░   7.0%      93.0%  unknown
+    5h      ██░░░░░░░░░░░░░░░░░░░░░░   7.0%      ▁ ▁ · ▁ ▁  unknown
 
   Antigravity  google-antigravity
     ✗ expired · re-login in zdx

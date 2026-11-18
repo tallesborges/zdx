@@ -188,9 +188,11 @@ func (m *Model) applyResult(r resultMsg) tea.Cmd {
 	case data.Usage:
 		transcript.CleanAll(&v)
 		m.usage.data = &v
-	case []data.Subscription:
-		transcript.CleanAll(&v)
-		m.usage.quotas = v
+	case quotaResult:
+		transcript.CleanAll(&v.subs)
+		transcript.CleanAll(&v.history)
+		m.usage.quotas = v.subs
+		m.usage.history = v.history
 		m.usage.quotasLoaded = true
 	case data.Workspaces:
 		transcript.CleanAll(&v)

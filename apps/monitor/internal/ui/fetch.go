@@ -206,7 +206,20 @@ func (m *Model) fetcher(k fetchKey) fetchFunc {
 		days := m.usage.days
 		return func(ctx context.Context) (any, source.Origin, error) { return wrap(b.Usage(ctx, days)) }
 	case keyQuotas:
-		return func(ctx context.Context) (any, source.Origin, error) { return wrap(b.Quotas(ctx)) }
+		historian, _ := b.(QuotaHistorian)
+		now := m.now()
+		return func(ctx context.Context) (any, source.Origin, error) {
+			subs, origin, err := b.Quotas(ctx)
+			if err != nil {
+				return nil, origin, err
+			}
+			r := quotaResult{subs: subs}
+			if historian != nil {
+				// No history (none yet, or unreadable) is no strips: unknown, not zero.
+				r.history, _ = historian.QuotaHistory(now)
+			}
+			return r, origin, nil
+		}
 	case keyWorkspaces:
 		return func(ctx context.Context) (any, source.Origin, error) { return wrap(b.Workspaces(ctx)) }
 	case keyJobs:
@@ -226,6 +239,17 @@ func (m *Model) fetcher(k fetchKey) fetchFunc {
 
 func wrap[T any](v T, origin source.Origin, err error) (any, source.Origin, error) {
 	return v, origin, err
+}
+
+// QuotaHistorian is a backend that also reads the quota history: the daily
+// use of each quota window over the last days (optional).
+type QuotaHistorian interface {
+	QuotaHistory(now time.Time) ([]data.QuotaHistory, error)
+}
+
+type quotaResult struct {
+	subs    []data.Subscription
+	history []data.QuotaHistory
 }
 
 type trajectoryResult struct {
