@@ -1279,6 +1279,19 @@ export const demoArtifacts: ArtifactsResponse = {
       modified_at: "2026-09-20T17:10:00.000Z",
     },
     {
+      key: "7a8b9c0d1e2f3a4b",
+      name: "screen-recording.mp4",
+      path: "/Users/me/.zdx/artifacts/threads/demo/screen-recording.mp4",
+      rel: "screen-recording.mp4",
+      mime: "video/mp4",
+      kind: "video",
+      size_bytes: 24117248,
+      exists: true,
+      source: "generated",
+      message_sequences: [],
+      modified_at: "2026-09-20T17:06:00.000Z",
+    },
+    {
       key: "5e6f7a8b9c0d1e2f",
       name: "release-notes.md",
       path: "/Users/me/.zdx/artifacts/threads/demo/release-notes.md",
@@ -1446,8 +1459,8 @@ export async function demoArtifactVersion(path: string): Promise<ArtifactVersion
 
 /**
  * Demo bytes for artifact previews: a page, a PNG chart, a passive SVG,
- * Markdown and Rust text, and silence audio. A browser test can serve other bytes for a path through
- * `window.__zdxDemoArtifacts`.
+ * Markdown and Rust text, silence audio, and stand-in video bytes. A browser
+ * test can serve other bytes for a path through `window.__zdxDemoArtifacts`.
  */
 export async function demoArtifactBlob(path: string): Promise<Blob> {
   const override = demoOverride(path);
@@ -1459,6 +1472,9 @@ export async function demoArtifactBlob(path: string): Promise<Blob> {
   if (path.endsWith(".png")) return await demoChartPng();
   if (path.endsWith(".md")) return new Blob([DEMO_MARKDOWN], { type: "text/markdown" });
   if (path.endsWith(".rs")) return new Blob([DEMO_RUST], { type: "text/plain" });
+  // Demo video bytes are a stand-in, not a playable file: a browser test
+  // serves real bytes for a path through `window.__zdxDemoArtifacts`.
+  if (path.endsWith(".mp4")) return new Blob(["demo-video"], { type: "video/mp4" });
   if (/\.(png|jpg|jpeg|gif|webp|svg)$/.test(path)) {
     return new Blob(
       [

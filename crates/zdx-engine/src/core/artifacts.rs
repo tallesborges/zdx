@@ -32,13 +32,14 @@ const MAX_WALK_DEPTH: usize = 6;
 
 /// How an artifact is previewed. `markdown` renders as a document, `text`
 /// (plain text, data, and source code) as text with line numbers. `other`
-/// covers everything else (PDF, video, archives): the Mini App offers
-/// download, not a preview.
+/// covers everything else (PDF, archives): the Mini App offers download,
+/// not a preview.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ArtifactKind {
     Image,
     Audio,
+    Video,
     Html,
     Markdown,
     Text,
@@ -52,6 +53,7 @@ impl ArtifactKind {
         match self {
             Self::Image => "image",
             Self::Audio => "audio",
+            Self::Video => "video",
             Self::Html => "html",
             Self::Markdown => "markdown",
             Self::Text => "text",
@@ -190,22 +192,26 @@ pub fn mime_for_path(path: &Path) -> &'static str {
             | "cc" | "cpp" | "hpp" | "java" | "kt" | "swift" | "rb" | "php" | "lua" | "ini" | "cfg"
             | "conf",
         ) => "text/plain",
-        Some("mp4") => "video/mp4",
+        Some("mp4" | "m4v") => "video/mp4",
         Some("mov") => "video/quicktime",
         Some("webm") => "video/webm",
+        Some("ogv") => "video/ogg",
         _ => "application/octet-stream",
     }
 }
 
-/// Preview kind for a path: images and audio render inline, HTML gets the
-/// sandboxed full-screen preview, Markdown renders as a document, other text
-/// (plain text, data, source code) as text, everything else is download-only.
+/// Preview kind for a path: images, audio, and video render inline, HTML
+/// gets the sandboxed full-screen preview, Markdown renders as a document,
+/// other text (plain text, data, source code) as text, everything else is
+/// download-only.
 pub fn kind_for_path(path: &Path) -> ArtifactKind {
     let mime = mime_for_path(path);
     if mime.starts_with("image/") {
         ArtifactKind::Image
     } else if mime.starts_with("audio/") {
         ArtifactKind::Audio
+    } else if mime.starts_with("video/") {
+        ArtifactKind::Video
     } else if mime == "text/html" {
         ArtifactKind::Html
     } else if mime == "text/markdown" {
@@ -627,6 +633,15 @@ mod tests {
         assert_eq!(kind_for_path(Path::new("a.png")), ArtifactKind::Image);
         assert_eq!(kind_for_path(Path::new("a.ogg")), ArtifactKind::Audio);
         assert_eq!(kind_for_path(Path::new("a.mp3")), ArtifactKind::Audio);
+        for video in ["a.mp4", "a.M4V", "a.mov", "a.webm", "a.ogv"] {
+            assert_eq!(
+                kind_for_path(Path::new(video)),
+                ArtifactKind::Video,
+                "{video}"
+            );
+        }
+        // Containers browsers cannot play stay download-only.
+        assert_eq!(kind_for_path(Path::new("a.mkv")), ArtifactKind::Other);
         assert_eq!(kind_for_path(Path::new("a.html")), ArtifactKind::Html);
         assert_eq!(kind_for_path(Path::new("a.MD")), ArtifactKind::Markdown);
         for text in [

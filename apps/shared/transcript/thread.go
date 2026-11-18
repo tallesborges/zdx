@@ -113,7 +113,7 @@ type Activity struct {
 }
 
 // Attachment is core::artifacts::ArtifactAttachment (`kind`: image, audio,
-// html, markdown, text, other).
+// video, html, markdown, text, other).
 type Attachment struct {
 	Name      string `json:"name"`
 	Path      string `json:"path"`

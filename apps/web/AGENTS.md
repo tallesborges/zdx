@@ -57,8 +57,8 @@ has been removed.
   `RunStatusLine` (the running turn's label, turn age, last-event and heartbeat ages under the thread header),
   `WorkGroup` (the "Worked for 5m" turn divider), `GroupLine` (folded run), `ToolLine` (one call: row),
   `ToolDetail` (an open call: renders the server's `view` (head, body by kind, warnings, info, status) plus a `{ } JSON` toggle with the raw input and output; `omitFacts` drops fact kinds its host already shows),
-  `ArtifactAttachments` (inline image/audio/file-card rows under a message),
-  `ArtifactPreview` (full-screen preview overlay; the `markdown` kind renders through `Markdown` with a Preview/Source switch, the `text` kind through `TextView`; HTML goes through a sandboxed
+  `ArtifactAttachments` (inline image/audio/file-card rows under a message; video is a card that opens the preview player, never an eager fetch),
+  `ArtifactPreview` (full-screen preview overlay; the `markdown` kind renders through `Markdown` with a Preview/Source switch, the `text` kind through `TextView`; a `video` kind plays through a native `<video controls playsinline preload="metadata">` over the fetched blob URL, with a download button; HTML goes through a sandboxed
   iframe with an opaque origin, never the app's credentials; an image goes to the annotator as its
   canonical copy from `api.artifactImage` (`/artifacts/image`; identity from `X-Zdx-*` headers); a `422`
   (format, or over the 25 MiB / 40 MP limits on originals) shows the original as a passive `<img>` with the
@@ -99,7 +99,7 @@ has been removed.
   `ArtifactsPane` lists the shared `zdx-engine::core::artifacts` projection (`/api/threads/{id}/artifacts`),
   newest first as sent, under day headers with the time on each row and an optional sort chip (`lib/artifactList.ts`),
   with preview/open, download, and Go to message; `TranscriptPane` renders the same rows inline
-  (images, audio players, compact file cards) from the message `artifacts`.
+  (images, audio players, video cards that open the player, compact file cards) from the message `artifacts`.
   Artifact bytes come from `/api/threads/{id}/artifacts/file?path=…` as authenticated
   `Blob`s — never as credentialed iframe URLs.
   `TrajectoryPane` renders the shared `zdx-engine::core::thread_trajectory` projection returned by

@@ -154,7 +154,7 @@ export interface MessageActivity extends ActivityBase {
   artifacts?: ArtifactAttachment[];
 }
 
-export type ArtifactKind = "image" | "audio" | "html" | "markdown" | "text" | "other";
+export type ArtifactKind = "image" | "audio" | "video" | "html" | "markdown" | "text" | "other";
 export type ArtifactSource = "generated" | "sent" | "both";
 
 /** Inline file on a transcript message. `path` is passed back as `?path=`. */

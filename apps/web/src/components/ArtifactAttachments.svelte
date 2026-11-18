@@ -26,6 +26,8 @@
   // and writes `urls`/`failed`, so running it tracked would make this effect
   // re-run on its own writes and refetch the same files. The transcript poll
   // hands us a fresh array every few seconds, hence the `requested` guard.
+  // Video stays out on purpose: its bytes arrive only in the preview player,
+  // so opening a thread never downloads a recording.
   let inlinePaths = $derived(
     attachments
       .filter((a) => a.exists && (a.kind === "image" || a.kind === "audio"))
@@ -108,6 +110,25 @@
       {:else}
         <div class="thumb-loading">Loading audio…</div>
       {/if}
+    {:else if item.kind === "video"}
+      <!-- Video is not fetched inline like audio: a recording can be hundreds
+           of MB, and the transcript must not download it on open. The card
+           opens the preview player, which fetches the bytes on demand. -->
+      <div class="file-card-static">
+        <Icon name="film" />
+        <span class="min-w-0 flex-1">
+          <span class="block truncate font-mono text-xs">{item.name}</span>
+          <span class="block text-xxs text-muted-foreground">
+            Video · {formatBytes(item.size_bytes)}
+          </span>
+        </span>
+        <button type="button" onclick={() => (preview = item)} class="card-btn">
+          <span class="inline-flex items-center gap-1"><Icon name="play" size="0.75rem" />Play</span>
+        </button>
+        <button type="button" onclick={() => download(item)} class="card-btn" aria-label="Download {item.name}">
+          <Icon name="download" />
+        </button>
+      </div>
     {:else}
       <div class="file-card-static">
         <Icon name="file" />

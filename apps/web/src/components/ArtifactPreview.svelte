@@ -126,8 +126,12 @@
       loading = true;
       error = "";
       const text = kind === "markdown" || kind === "text";
-      // Images, audio, HTML, and text need bytes to render. Other kinds (and
-      // very large text) fetch lazily through the Download button instead.
+      // Images, audio, video, HTML, and text need bytes to render. Other
+      // kinds (and very large text) fetch lazily through the Download button
+      // instead. Video shares the audio path: one authenticated fetch, then
+      // a blob URL the player seeks inside. The whole file is fetched before
+      // playback starts, which the blob-URL pattern cannot avoid, so a large
+      // video shows the loading line until its bytes arrive.
       if (kind === "other" || !exists || (text && size > TEXT_FETCH_LIMIT)) {
         loading = false;
         return;
@@ -198,7 +202,7 @@
           <button type="button" class:on={markdownSource} aria-pressed={markdownSource} onclick={() => (markdownSource = true)}>Source</button>
         </div>
       {/if}
-      {#if artifact.kind === "other" || (isText && artifact.exists)}
+      {#if artifact.kind === "other" || artifact.kind === "video" || (isText && artifact.exists)}
         <button type="button" onclick={save} class="preview-btn" aria-label="Download {artifact.name}">
           <Icon name="download" />
           {#if artifact.kind === "other"}<span>Download</span>{/if}
@@ -231,6 +235,14 @@
         <div class="p-4">
           <audio controls src={url} class="w-full"></audio>
         </div>
+      {:else if artifact.kind === "video" && url}
+        <!-- One player for the artifact's own bytes: the blob carries the
+             server's video mime, so the browser picks the codec it can play.
+             `playsinline` keeps iOS from forcing fullscreen, and
+             `preload="metadata"` shows the first frame without autoplay. -->
+        <!-- svelte-ignore a11y_media_has_caption: artifact videos carry no
+             caption track; the native controls are the interface. -->
+        <video controls playsinline preload="metadata" src={url} class="preview-video"></video>
       {:else if isText && textPreview && !textPreview.binary}
         {#if textPreview.truncated}
           <p class="passive-note">
@@ -313,6 +325,16 @@
     max-height: calc(100dvh - 12rem);
     object-fit: contain;
     background: var(--color-accent);
+  }
+
+  /* Video fills the sheet width and keeps its aspect ratio; black behind the
+     letterbox, never the card colour, so a dark frame does not tint it. */
+  .preview-video {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: calc(100dvh - 12rem);
+    background: #000;
   }
 
   .passive-note {
